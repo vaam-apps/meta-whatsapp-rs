@@ -5,7 +5,7 @@ description: "Running wa-rs in production - the secrets (system user token, app 
 
 # wa-rs-production
 
-> **Verified against wa-rs 3a3db05aa425c1737d8bb9239206036dbc81969f (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/production.rs](examples/production.rs),
 compiled and tested by wa-rs's own gate. Longer walkthrough:
@@ -115,10 +115,11 @@ timeouts longer than your slowest sink.
 ## What wa-rs does not do
 
 Read [OPEN_QUESTIONS.md](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md)
-before going live: the OTP issue limit and whether the namespace becomes
-required, PIN policy, the provisional U+0000 replacement, the missing
-dead-letter path for webhook batches, token refresh, Redis TLS. No
-metrics exporter, no health endpoint, no secret manager integration.
+before going live: the OTP issue limit, PIN policy, the provisional
+U+0000 replacement, the missing dead-letter path for webhook batches,
+token refresh, Redis TLS. No metrics exporter, no health endpoint, no
+secret manager integration. ~~Whether the OTP namespace becomes
+required~~: decided in d67b3ac (2026-09-24), it is (`wa-rs-otp-login`).
 
 ## Related skills
 

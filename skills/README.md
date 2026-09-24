@@ -93,7 +93,7 @@ wa-rs has no releases (`publish = false`; you depend on a git `rev`). So
 each `SKILL.md` names the commit it was verified against, under its title:
 
 ```markdown
-> **Verified against wa-rs 3a3db05aa425c1737d8bb9239206036dbc81969f (2026-09-24).**
+> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).**
 ```
 
 "Verified" means: every Rust block is an excerpt of a file wa-rs compiles

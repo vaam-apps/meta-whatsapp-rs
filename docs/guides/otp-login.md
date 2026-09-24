@@ -122,7 +122,7 @@ let config = OtpConfig { code_length: 8, ..OtpConfig::new("brand-b") }; // not b
 Upgrading wa-rs from a revision before e40b86f changes every store key once:
 codes in flight at the deploy answer `NotFound` (the user asks for a new
 one) and the hourly issue limits start again. Deploy outside peak login
-hours. Upgrading across the revision that made the namespace required
+hours. Upgrading across d67b3ac, which made the namespace required
 (2026-09-24): a service that had `namespace: Some(ns)` keeps its keys with
 `OtpConfig::new(ns)`; one that had `None` needs a namespace, and its codes
 in flight answer `NotFound` once.

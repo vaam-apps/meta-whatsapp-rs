@@ -5,7 +5,7 @@ description: "WhatsApp OTP login and phone verification with wa-rs - creating th
 
 # wa-rs-otp-login
 
-> **Verified against wa-rs 3a3db05aa425c1737d8bb9239206036dbc81969f (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/otp.rs](examples/otp.rs), compiled and tested by
 wa-rs's own gate (issue → verify once, expiry with a `ManualClock`,
@@ -111,10 +111,10 @@ tenants sharing a number never see each other's codes. Changing a
 namespace invalidates outstanding codes.
 
 ~~`OtpConfig::namespace` is an `Option`, `None` by default (one shared
-scope per number)~~: true until 2026-09-24, now required. Crossing that
-change: a service that set `Some(ns)` keeps its keys and outstanding
-codes with `OtpConfig::new(ns)`; one that used `None` must pick a
-namespace, and its codes in flight become `NotFound` once.
+scope per number)~~: true until d67b3ac (2026-09-24), now required. Crossing
+it: a service that set `Some(ns)` keeps its keys and outstanding codes
+with `OtpConfig::new(ns)`; one that used `None` must pick a namespace,
+and its codes in flight become `NotFound` once.
 
 ~~Codes were keyed by the pepper, the recipient's digits and the purpose
 only~~: true until e40b86f (2026-09-24). Moving your `rev` across e40b86f

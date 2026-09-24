@@ -5,7 +5,7 @@ description: "The merchant-to-customer chat inbox of a multi-tenant CMS built on
 
 # wa-rs-cms-inbox
 
-> **Verified against wa-rs 3a3db05aa425c1737d8bb9239206036dbc81969f (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/inbox.rs](examples/inbox.rs), compiled and
 tested by wa-rs's own gate. The full server (webhook endpoint, SSE,
@@ -133,7 +133,8 @@ original `DeliveryStatus::Deleted`. Replies to a `wa_id` go to
 alone~~: until 4b47bf7 (2026-09-24, breaking). Custom stores now take the
 `phone_number_id` first. ~~A `wa_id` conversation replied without `+`~~:
 fixed in 2b2679a; on an older pin, `send` with `Recipient::phone` and the
-`+` yourself.
+`+` yourself. ~~Coexistence echoes and history are not recorded~~: true
+until a3582b8 (2026-09-24); on an older pin, handle them in your own sink.
 
 ## What wa-rs does not do
 

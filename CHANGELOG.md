@@ -9,6 +9,13 @@ All notable changes to this project are documented here. The format follows
 First feature set. See [docs/coverage.md](docs/coverage.md) for the full
 matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
 
+### Open questions closed
+
+- #17 (coexistence echoes and history not recorded by the inbox):
+  resolved in a3582b8; what that needs a port change for is #35.
+- #34 (should `OtpConfig::namespace` be required?): decided yes, done in
+  d67b3ac.
+
 ### Added
 
 - **Coexistence in the CMS inbox**: `InboxSink` records the merchant's
