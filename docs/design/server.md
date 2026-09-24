@@ -227,6 +227,41 @@ second merchant's token, also valid for that WABA; the binding stays);
 wins"); (c) share it (one vault token per WABA: both act with the last one
 stored). *Recommendation: (a)*, with an admin unbind.
 
+### Coexistence (merchants keeping the WhatsApp Business app)
+
+A merchant may onboard the number they already use in the WhatsApp Business
+app (Embedded Signup `featureType: whatsapp_business_app_onboarding`). It is
+the same tenant and the same inbox as any other onboarding; three streams
+share one conversation per customer:
+
+| Stream | Source | Where it lands |
+| --- | --- | --- |
+| customer → merchant | `messages` webhooks | inbox, inbound |
+| merchant's replies from the phone app | `smb_message_echoes` webhooks | inbox, outbound (never opens or extends the 24 h window) |
+| merchant's replies from the platform | `POST …/messages` / inbox reply (API, billed, window-bound) | inbox, outbound |
+| contacts and past chats | one-time `smb_app_data` sync → `smb_app_state_sync`, `history` | inbox (history import), contact list |
+
+Rules the service implements:
+
+- **Sync automatically (D7).** Right after a coexistence onboarding the
+  service triggers the contacts sync, then the history sync — Meta allows each
+  once, within 24 hours, after which only offboarding and a new signup
+  recovers. A failed trigger is retried within the window and surfaced to the
+  operator; a declined history share (error `2593109`) is recorded, not
+  retried.
+- **Subscribe the extra webhook fields** `history`, `smb_app_state_sync`,
+  `smb_message_echoes` on the Meta app (a startup check warns if they are
+  missing).
+- **Offboarding is the merchant's.** They disconnect from the phone app
+  (Settings → Account → Business Platform); the service marks the number
+  disconnected on the `account_update` offboarded event, stops sending, keeps
+  history, and restores it on the reconnected event.
+- **Tell merchants what changes**: fixed 20 messages/s; disappearing
+  messages, view-once, live location and broadcast lists turn off in the app;
+  companion devices are unlinked (re-link supported ones); groups, calls,
+  catalog and profile editing are not available through the API for that
+  number; phone-app messages stay free, API messages are billed.
+
 ## 4. The HTTP API
 
 ### 4.1 Conventions
@@ -735,7 +770,7 @@ atomically and are checked against the same commit.
 
 ## 10. Decisions for the owner
 
-D1–D4 were decided by the owner on 2026-09-24 (the recommended option in each case); D5 is settled as "support both modes, chosen per deployment". The rest are open and are asked at the milestone that needs them.
+D1–D4 and D7 were decided by the owner on 2026-09-24 (the recommended option in each case); D5 is settled as "support both modes, chosen per deployment". The rest are open and are asked at the milestone that needs them.
 
 | # | Question | Options | Recommendation | Needed by |
 | --- | --- | --- | --- | --- |
@@ -745,7 +780,7 @@ D1–D4 were decided by the owner on 2026-09-24 (the recommended option in each 
 | D4 | One WABA, several tenants (OQ #6) | refuse / move / share | **Decided 2026-09-24: refuse, admin unbind** | M3 |
 | D5 | Onboarding mode in production (OQ #3) | Tech Provider / Solution Partner | Tech Provider first, switch by configuration | M3 |
 | D6 | Two-step PIN (OQ #4) | per attempt, never stored / generated and stored | per attempt | M3 |
-| D7 | Coexistence sync (OQ #7) | endpoint / automatic / both, per tenant | both, automatic by default | M3 |
+| D7 | Coexistence sync (OQ #7) | endpoint / automatic / both, per tenant | **Decided 2026-09-24: automatic** (the service starts the one-time contacts + history sync right after a coexistence onboarding) | M3 |
 | D8 | Who sends a tenant's OTP codes | platform number / merchant's / per tenant | per tenant, platform number by default | M3 |
 | D9 | Image name and registry (with OQ #1) | public GHCR / private registry; the name | public on GHCR, name settled with OQ #1 | M4 |
 | D10 | Retention and erasure of customers' messages | keep / purge after N days; erasure or not | configurable, keep by default; erasure if required (L5) | M2 |
