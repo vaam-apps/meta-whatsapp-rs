@@ -54,29 +54,52 @@
 //! ([`EndpointStatus`]) and would otherwise have to match the root enum to
 //! do it. Both convert into [`wa_core::Error`] with `?`.
 //!
-//! ```no_run
-//! # fn handler(key: &wa_client::flows::endpoint::FlowEndpointKey, body: &[u8])
-//! #     -> Result<(u16, String), Box<dyn std::error::Error>> {
-//! use wa_client::flows::endpoint::{EncryptedFlowRequest, EndpointStatus, FlowAction, FlowResponse};
-//! use serde_json::json;
+//! # A full handler
 //!
-//! let encrypted: EncryptedFlowRequest = serde_json::from_slice(body)?;
-//! let Ok((request, sealer)) = key.decrypt_request(&encrypted) else {
-//!     // Tells the WhatsApp client to re-download the public key and retry.
-//!     return Ok((EndpointStatus::DecryptionFailed.code(), String::new()));
+//! Verify `X-Hub-Signature-256` **first**, on the raw body, before parsing
+//! or decrypting anything: your public key is public, so anyone can encrypt
+//! a well-formed `INIT` or `data_exchange` request to you, and only the
+//! signature proves Meta sent it. Then decrypt, answer, seal.
+//!
+//! ```no_run
+//! use serde_json::json;
+//! use wa_client::flows::endpoint::{
+//!     EncryptedFlowRequest, EndpointStatus, FlowAction, FlowEndpointKey, FlowResponse,
+//!     verify_request_signature,
 //! };
-//! let response = match &request.action {
-//!     FlowAction::Ping => FlowResponse::health_check(),
-//!     _ if request.error_notification().is_some() => FlowResponse::acknowledge_error(),
-//!     FlowAction::Init => FlowResponse::next_screen("WELCOME", json!({"name": "Ada"})),
-//!     FlowAction::DataExchange => {
-//!         FlowResponse::complete(request.flow_token.clone().unwrap_or_default())
+//! use wa_core::secret::AppSecret;
+//!
+//! /// `signature`: the `X-Hub-Signature-256` header; `body`: the request
+//! /// body exactly as received. Returns the HTTP status and the body to send.
+//! fn handler(
+//!     key: &FlowEndpointKey,
+//!     app_secrets: &[AppSecret],
+//!     signature: Option<&str>,
+//!     body: &[u8],
+//! ) -> Result<(u16, String), Box<dyn std::error::Error>> {
+//!     if verify_request_signature(body, signature, app_secrets).is_err() {
+//!         return Ok((EndpointStatus::SignatureMismatch.code(), String::new()));
 //!     }
-//!     _ => FlowResponse::next_screen("WELCOME", json!({})),
-//! };
-//! Ok((EndpointStatus::Ok.code(), sealer.seal(&response)?))
-//! # }
+//!     let encrypted: EncryptedFlowRequest = serde_json::from_slice(body)?;
+//!     let Ok((request, sealer)) = key.decrypt_request(&encrypted) else {
+//!         // Tells the WhatsApp client to re-download the public key and retry.
+//!         return Ok((EndpointStatus::DecryptionFailed.code(), String::new()));
+//!     };
+//!     let response = match &request.action {
+//!         FlowAction::Ping => FlowResponse::health_check(),
+//!         _ if request.error_notification().is_some() => FlowResponse::acknowledge_error(),
+//!         FlowAction::Init => FlowResponse::next_screen("WELCOME", json!({"name": "Ada"})),
+//!         FlowAction::DataExchange => {
+//!             FlowResponse::complete(request.flow_token.clone().unwrap_or_default())
+//!         }
+//!         _ => FlowResponse::next_screen("WELCOME", json!({})),
+//!     };
+//!     Ok((EndpointStatus::Ok.code(), sealer.seal(&response)?))
+//! }
 //! ```
+//!
+//! Uploaded media in a `data_exchange` request comes as a `cdn_url` to
+//! download yourself: check its host first ([`FlowMedia`]).
 
 mod media;
 mod pem;

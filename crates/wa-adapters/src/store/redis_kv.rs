@@ -25,9 +25,9 @@
 //! `get` (`HMGET`) and `delete` (`DEL`) are single commands, atomic on their
 //! own.
 //!
-//! What an operator needs to know (eviction policy, clock, Cluster, TLS) is
-//! on [`RedisKvStore`]'s own docs: this module is private, so its docs are
-//! not rendered.
+//! What an operator needs to know (eviction policy: `noeviction` only;
+//! clock, Cluster, TLS) is on [`RedisKvStore`]'s own docs: this module is
+//! private, so its docs are not rendered.
 
 use std::fmt;
 use std::sync::{Arc, LazyLock};
@@ -131,11 +131,26 @@ return version
 ///
 /// # Operating Redis for it
 ///
-/// - **Eviction policy: `noeviction` or `volatile-*`.** Versions come from
-///   one counter key per namespace (`{prefix}{<len>:<ns>}#version`) that has
-///   no TTL, so records can expire and vanish without leaving a key behind.
-///   An `allkeys-*` policy could evict a counter; a recreated counter
-///   restarts at 1, and old versions would be handed out again.
+/// - **Eviction policy: `noeviction`.** The policy is per instance, so use
+///   a Redis instance of its own rather than one shared with a cache that
+///   needs eviction. Under memory pressure Redis evicts keys *silently*, and
+///   every other policy evicts something this store relies on:
+///   - `volatile-*` evicts keys with a TTL, which here are the ones that
+///     enforce limits: OTP issue logs and challenges (an evicted issue log
+///     resets the per-number hourly issue limit, an evicted challenge the
+///     resend cooldown, so an attacker gets more codes sent and more
+///     guesses), webhook dedup claims and markers (an evicted marker lets
+///     Meta's retry be delivered twice), and Embedded Signup sessions.
+///   - `allkeys-*` evicts those and keys without a TTL too: token vault
+///     records (the merchant must onboard again) and a namespace's version
+///     counter (`{prefix}{<len>:<ns>}#version`, kept without a TTL so that
+///     records can expire and vanish without leaving a key behind). A
+///     recreated counter restarts at 1 and hands old versions out again,
+///     which breaks compare-and-swap.
+///
+///   With `noeviction`, a full Redis refuses writes with an error instead,
+///   which surfaces as `StorageError::Backend`: size `maxmemory` for the
+///   dedup markers (one per webhook event, kept 7 days) and alert on it.
 /// - **Clock.** Expiry uses the **Redis server's** clock (`TIME` inside the
 ///   script, key TTLs) at millisecond resolution: `expires_at` comes back
 ///   truncated to milliseconds. An `Expiry::After` that would land after

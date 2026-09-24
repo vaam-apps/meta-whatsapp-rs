@@ -83,13 +83,13 @@ implements five methods once and every feature works.
 `Client` = `Arc<Shared{transport, endpoint, retry, timeout, user_agent}>` +
 optional `AccessToken`. `client.with_token(t)` is the multi-tenant switch.
 
-Endpoint modules follow one pattern (see `src/messages/mod.rs` once
-implemented, or any module stub):
+Endpoint modules follow one pattern (`src/messages/mod.rs`, abridged):
 
 ```rust
 impl Client { pub fn messages(&self, id: impl Into<PhoneNumberId>) -> Messages }
 impl Messages {
     pub async fn send(&self, message: &OutboundMessage) -> Result<SendResponse> {
+        message.validate()?; // documented limits, before any request (rule 3)
         self.client.post_at(&[self.phone_number_id.as_str(), "messages"])
             .json(message)
             .context("send message response")
@@ -108,9 +108,13 @@ Rules for every endpoint module:
    `?` or `#` stays inside its segment; empty, `.` and `..` are refused).
 2. **Requests are typed structs with `Serialize`, responses typed with
    `Deserialize`.** Unknown response fields are ignored (never
-   `deny_unknown_fields`); enums Meta may extend get an `#[serde(other)]
-   Unknown` (or `Other(String)`) variant so a new value never breaks
-   parsing.
+   `deny_unknown_fields`); enums Meta may extend get a catch-all variant
+   so a new value never breaks parsing. Which name and shape all of them
+   should share, and the `#[non_exhaustive]` policy, are open
+   (`OPEN_QUESTIONS.md`). Until decided, follow the module you are in, and
+   add no new unit `#[serde(other)] Unknown` variants: they drop Meta's
+   value, and a type that also derives `Serialize` writes its own name
+   (e.g. `"UNKNOWN"`) back instead.
 3. **Validate locally what Meta documents as a hard limit** (lengths,
    counts, formats) and return `ValidationError` naming the field. Do not
    invent limits the docs do not state.
@@ -145,7 +149,7 @@ re-issues the original request with `after=` rather than following
 
 ### Messages (`wa_client::messages`)
 
-`OutboundMessage { recipient: Recipient (flattened), context?, biz_opaque_callback_data?, category? (Direct Send), content: MessageContent }`
+`OutboundMessage { recipient: Recipient (flattened), context?, biz_opaque_callback_data?, category? (Direct Send), ttl_seconds? (Direct Send), direct_send_config? (Direct Send), content: MessageContent }`
 where `MessageContent` is an internally tagged enum on `type`: text, image,
 audio, video, document, sticker, location, contacts, interactive (button,
 list, cta_url, location_request_message, flow, product, product_list,
@@ -229,14 +233,16 @@ message event (`FINISH` with `waba_id`, `phone_number_id`, `business_id`;
    (`GET /oauth/access_token?client_id&client_secret&code`, no bearer).
 2. Optionally `debug_token` (app token) to confirm granular scopes and the
    WABA ids the token can reach — used when the session info is missing.
-3. `waba(waba_id).subscribe_app()` (`POST /{waba}/subscribed_apps`) so
-   webhooks flow; optional per-WABA callback override.
-4. `phone_number(id).register(pin)` for Cloud API numbers (two-step PIN).
+3. `waba(waba_id).subscribe_app(Option<&CallbackOverride>)`
+   (`POST /{waba}/subscribed_apps`) so webhooks flow; `Some` sends this
+   WABA's webhooks to another callback.
+4. `phone_number(id).register(&TwoStepPin, Option<&DataLocalizationRegion>)`
+   for Cloud API numbers (two-step PIN; optional local storage).
 5. Persist the token in `TokenVault` (on `KvStore`, **encrypted at rest**
    with AES-256-GCM under an integrator-supplied key, key id recorded for
    rotation) keyed by WABA id, with a phone-number → WABA index.
 
-`EmbeddedSignup::onboard(OnboardingRequest) → Onboarded` runs, in order:
+`EmbeddedSignup::onboard(&request, &vault) → Onboarded` runs, in order:
 exchange code → `debug_token` → **verify** that the WABA id from the browser
 event is among the token's grants and that the phone number belongs to that
 WABA (browser-supplied ids are never trusted — otherwise one merchant could
@@ -248,9 +254,11 @@ token whenever subscribe or register fails (e.g. wrong PIN, `133005`).
 (`owner_business_info`); a `business_id` claimed by the browser is ignored
 (it is what credit-line sharing keys on). Every number Meta lists on the
 WABA is stored in the phone → WABA index, so onboarding a second number
-never unroutes the first. `resume()` loads the stored token and reruns
-subscribe/register, refusing a session that names another WABA or an
-unverified number. `SignupSessions::redeem(state, tenant)` checks the tenant
+never unroutes the first. `resume(&waba_id, &request, &vault)` loads the
+stored token and reruns subscribe/register, refusing a session that names
+another WABA or an unverified number; `request.code` is not used, but an
+`OnboardingRequest` cannot be built without one, so after a restart a
+caller passes a placeholder (`OPEN_QUESTIONS.md` #10). `SignupSessions::redeem(state, tenant)` checks the tenant
 inside the library, is single-use, and does not consume the state on a
 tenant mismatch. Each failure is
 `Error::in_step("exchange_code" | "debug_token" | "verify_assets" |
@@ -259,7 +267,7 @@ tenant mismatch. Each failure is
 `LaunchOptions` builds the JSON for `FB.login` `extras` (version,
 `featureType` — incl. coexistence `whatsapp_business_app_onboarding`,
 `setup` pre-fill). `SessionInfo` parses the message event.
-`SignupSession` (on `KvStore`) binds an opaque state id to the merchant that
+`SignupSessions` (on `KvStore`) binds an opaque state id to the merchant that
 started the flow, so a callback can't be attributed to another tenant.
 
 Coexistence: `smb_app_data` sync (contacts, history) within 24h.
@@ -325,7 +333,9 @@ Logs carry sizes, digests and field names only — never payload values.
 - `store::{MemoryKvStore, MemoryConversationStore}` (feature `memory`).
 - `store::{PostgresKvStore, PostgresConversationStore}` (feature
   `postgres`, sqlx, embedded migrations, `wa_` table prefix configurable).
-- `store::RedisKvStore` (feature `redis`; CAS via Lua).
+- `store::RedisKvStore` (feature `redis`; CAS via Lua). Requires the
+  `noeviction` policy: every key with a TTL here enforces a limit (OTP
+  issue logs, dedup markers), and Redis evicts silently.
 - `sink::{ChannelSink, BroadcastSink, FanoutSink, FilterSink, FnSink,
   TracingSink}` — feature `sinks`, generic over the event type, `Debug`
   redacted. (The inbox sink needs webhook event types, so it lives in the
@@ -358,6 +368,13 @@ status updates into a `ConversationStore`; `Inbox` (one per merchant phone
 number, built with that merchant's token) lists conversations and history,
 exposes the 24-hour `CustomerServiceWindow`, and sends replies.
 
+- The library knows WABAs and phone numbers, not the integrator's tenants.
+  Whoever builds an `Inbox` for a request first checks that the
+  authenticated tenant owns that phone number, *before* reading the token
+  vault (whose tokens belong to every merchant). The `cms_inbox` and
+  `embedded_signup` examples show where: a bearer-token stand-in for the
+  CMS's sessions, the tenant taken only from it, and a tenant → phone
+  number table.
 - Keys: business phone number id + contact, where contact is the BSUID
   when Meta sent one, else the `wa_id`, else (group messages) the group id.
 - Replies to a `wa_id` go to `+<wa_id>` (Meta prepends the business

@@ -41,7 +41,12 @@ tracing-subscriber.workspace = true
 wa-core = { workspace = true, features = ["testing"] }
 wa-adapters = { workspace = true, features = ["memory"] }
 serde_json.workspace = true
-# Examples and the in-process app test.
+# Examples and the in-process app tests. The examples and tests reach axum
+# through `wa_rs::webhooks::axum` and sqlx through
+# `wa_rs::adapters::store::postgres::sqlx`, as integrators should; this axum
+# entry only serves the facade's own rustdoc example (`src/lib.rs`), which
+# names `axum::Router`. Same features as wa-webhooks enables, so it is one
+# build of one crate.
 anyhow.workspace = true
 axum = { workspace = true, features = ["http1", "tokio", "json", "query"] }
 http-body-util.workspace = true
@@ -49,10 +54,10 @@ pretty_assertions.workspace = true
 serde.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "net", "sync", "time"] }
 tower = { workspace = true, features = ["util"] }
-# `cms_inbox` and `embedded_signup` build a `PgPool` when DATABASE_URL is set
-# (feature `postgres`). No features here: `wa-adapters/postgres` turns on the
-# ones the pool needs, and without it the examples never touch sqlx.
-sqlx.workspace = true
+# The examples' bearer-token stand-in for your authentication: tokens are
+# kept as SHA-256 digests and compared in constant time.
+sha2.workspace = true
+subtle.workspace = true
 
 # Examples. `required-features` keeps `cargo check -p wa-rs --examples` (default
 # features) green; `--all-features` (what `just check` and `just lint` use)

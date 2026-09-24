@@ -73,6 +73,16 @@ RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
 COPY init-firewall.sh /usr/local/bin/
+# GitHub's ranges as of the date inside the file: the firewall's fallback when
+# api.github.com/meta is unreachable or rate limited (60 requests/hour/IP).
+# Refresh it when you touch the firewall:
+#   curl -s https://api.github.com/meta | jq --arg d "$(date -u +%F)" \
+#     '{snapshot_date: $d, source: "https://api.github.com/meta (IPv4 entries of web, api and git only)",
+#       web: [.web[] | select(contains(":") | not)], api: [.api[] | select(contains(":") | not)],
+#       git: [.git[] | select(contains(":") | not)]}' > .devcontainer/github-meta-snapshot.json
+# Under /etc, root-owned: /usr/local/share belongs to `node` (npm globals), and
+# a snapshot `node` could replace would let it widen the allowlist.
+COPY github-meta-snapshot.json /etc/wa-rs-firewall/github-meta-snapshot.json
 USER root
 # Login shells (bash -l) reset PATH from /etc/profile; keep cargo and the npm
 # global bin (claude) reachable there too, not only in ENV-inheriting shells.

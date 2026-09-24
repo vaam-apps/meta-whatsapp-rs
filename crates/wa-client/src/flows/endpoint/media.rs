@@ -6,6 +6,9 @@
 //! AES-256-CBC (PKCS#7) and authenticated with HMAC-SHA256; the request
 //! carries the keys. You download `cdn_url` yourself — it is a plain
 //! download, not a Graph call — and hand the bytes to [`decrypt_media`].
+//! Check the URL before fetching it (HTTPS, a WhatsApp CDN host): the check
+//! is on [`FlowMedia`], whose docs are the ones rustdoc renders (this module
+//! is private).
 //!
 //! Meta also warns that uploaded files may be malicious: treat the
 //! decrypted bytes as untrusted input.
@@ -29,11 +32,57 @@ const HMAC_LEN: usize = 10;
 
 /// One uploaded file, as it appears in the request `data` (an array of these
 /// under the picker component's name).
+///
+/// # Downloading `cdn_url`
+///
+/// `cdn_url` is a URL your server will fetch, taken from a request body.
+/// Verify the request's signature first (see the [module docs](super)),
+/// and even then check the URL **before any network I/O**, so a forged or
+/// replayed request cannot point your server at an internal address
+/// (server-side request forgery):
+///
+/// - scheme `https`, the default port, no user name or password;
+/// - host `*.whatsapp.net`. Meta's example is `https://mmg.whatsapp.net/v/…`
+///   (`flows/guides/media_upload`); Meta publishes no list of CDN hosts, so
+///   this suffix is our rule, not Meta's: widen it deliberately, if at all,
+///   when you see another host in real requests.
+///
+/// Download with a plain HTTP client, not the Graph [`Client`]: the file
+/// needs no access token (and [`Client::request_url`] would attach one to
+/// `*.whatsapp.net`). Send no cookies, cap the size, and do not follow
+/// redirects to other hosts. The SHA-256 and HMAC checks in
+/// [`decrypt_media`] then reject any bytes that are not the uploaded file.
+///
+/// ```
+/// use url::Url;
+///
+/// /// Whether `cdn_url` may be downloaded.
+/// fn is_whatsapp_cdn(cdn_url: &str) -> bool {
+///     let Ok(url) = Url::parse(cdn_url) else { return false };
+///     url.scheme() == "https"
+///         && url.port().is_none()
+///         && url.username().is_empty()
+///         && url.password().is_none()
+///         && url.host_str().is_some_and(|host| host.ends_with(".whatsapp.net"))
+/// }
+///
+/// assert!(is_whatsapp_cdn("https://mmg.whatsapp.net/v/redacted"));
+/// assert!(!is_whatsapp_cdn("http://mmg.whatsapp.net/v/redacted")); // not HTTPS
+/// assert!(!is_whatsapp_cdn("https://mmg.whatsapp.net.evil.example/v")); // suffix trick
+/// assert!(!is_whatsapp_cdn("https://evilwhatsapp.net/v")); // not a subdomain
+/// assert!(!is_whatsapp_cdn("https://mmg.whatsapp.net@169.254.169.254/v")); // user info
+/// assert!(!is_whatsapp_cdn("https://169.254.169.254/latest/meta-data/")); // cloud metadata
+/// assert!(!is_whatsapp_cdn("https://mmg.whatsapp.net:8443/v")); // another port
+/// ```
+///
+/// [`Client`]: crate::Client
+/// [`Client::request_url`]: crate::Client::request_url
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FlowMedia {
     /// Id of the upload; use it as the key of a per-file `error-message`.
     pub media_id: String,
-    /// Where to download the encrypted file.
+    /// Where to download the encrypted file. Check it before fetching: see
+    /// [`FlowMedia`]'s docs.
     pub cdn_url: String,
     /// Original file name.
     #[serde(default, skip_serializing_if = "Option::is_none")]

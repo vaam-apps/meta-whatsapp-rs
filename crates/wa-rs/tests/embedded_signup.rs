@@ -1,7 +1,8 @@
 //! The `embedded_signup` example's app, driven in-process with
-//! `tower::ServiceExt::oneshot`: the launch page and options, the tenant
-//! binding of an attempt, a full onboarding against a scripted Graph API,
-//! and recovery with `/signup/resume`.
+//! `tower::ServiceExt::oneshot`: the launch page and options, who may call
+//! the `/signup` routes, the tenant binding of an attempt, a full onboarding
+//! against a scripted Graph API with the merchant's own PIN, and recovery
+//! with `/signup/resume`.
 //!
 //! Like `cms_inbox.rs`, this compiles the example file itself. The Graph
 //! responses are the ones `wa-client`'s onboarding tests take from the docs
@@ -17,18 +18,17 @@ mod example;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::Router;
-use axum::body::Body;
-use axum::http::{Method, Request, StatusCode, header};
 use http_body_util::{BodyExt, Limited};
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 use wa_rs::adapters::store::MemoryKvStore;
 use wa_rs::client::embedded_signup::{TokenVault, VaultKey, VaultKeys};
-use wa_rs::client::phone_numbers::TwoStepPin;
 use wa_rs::core::testing::ScriptedTransport;
 use wa_rs::prelude::*;
+use wa_rs::webhooks::axum::Router;
+use wa_rs::webhooks::axum::body::Body;
+use wa_rs::webhooks::axum::http::{Method, Request, StatusCode, header};
 
 const APP_ID: &str = "236484624622562";
 const APP_SECRET: &str = "614fc2afde15eee07a26b2fe3eaee9b9";
@@ -39,7 +39,12 @@ const TOKEN: &str = "EAAAN6tcBzAUBOwtDtTfmZCJ9n3FHpSDcDTH86ekf89Xnn";
 const WABA: &str = "524126980791429";
 const PHONE: &str = "106540352242922";
 const BUSINESS: &str = "2729063490586005";
+/// The merchant's own two-step verification PIN, typed into the page.
 const PIN: &str = "581063";
+
+/// The CMS's own logins (the example's stand-in for your authentication).
+const TENANT_A_BEARER: &str = "tenant-a-6b1f0e0d9c8b7a69584736251403f2e1";
+const TENANT_B_BEARER: &str = "tenant-b-0f1e2d3c4b5a69788796a5b4c3d2e1f0";
 
 const BODY_LIMIT: usize = 64 * 1024;
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
@@ -64,12 +69,17 @@ fn harness() -> Harness {
         VaultKeys::new(VaultKey::generate("test").unwrap()),
     )
     .unwrap();
+    let tenants = example::Tenants::default()
+        .tenant("merchant-a", TENANT_A_BEARER)
+        .unwrap()
+        .tenant("merchant-b", TENANT_B_BEARER)
+        .unwrap();
     let signup = example::Signup::new(
         client.embedded_signup(AppCredentials::new(APP_ID, APP_SECRET)),
         kv,
         vault.clone(),
         CONFIG_ID,
-        Some(TwoStepPin::new(PIN).unwrap()),
+        tenants,
     );
     Harness {
         app: example::app(signup.clone()),
@@ -99,25 +109,46 @@ async fn call_json(app: &Router, request: Request<Body>) -> (StatusCode, Value) 
     (status, json)
 }
 
+/// The bearer token that authenticates `tenant`.
+fn bearer(tenant: &str) -> &'static str {
+    match tenant {
+        "merchant-a" => TENANT_A_BEARER,
+        "merchant-b" => TENANT_B_BEARER,
+        other => panic!("no tenant {other}"),
+    }
+}
+
+/// A `GET` without credentials.
 fn get(uri: &str) -> Request<Body> {
     Request::get(uri).body(Body::empty()).unwrap()
 }
 
-fn post(uri: &str, body: &Value) -> Request<Body> {
-    Request::post(uri)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(body.to_string()))
+/// A `GET` as `tenant`.
+fn get_as(tenant: &str, uri: &str) -> Request<Body> {
+    Request::get(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {}", bearer(tenant)))
+        .body(Body::empty())
         .unwrap()
+}
+
+/// A `POST` as `tenant`, or without credentials.
+fn post_as(tenant: Option<&str>, uri: &str, body: &Value) -> Request<Body> {
+    let mut request = Request::post(uri).header(header::CONTENT_TYPE, "application/json");
+    if let Some(tenant) = tenant {
+        request = request.header(header::AUTHORIZATION, format!("Bearer {}", bearer(tenant)));
+    }
+    request.body(Body::from(body.to_string())).unwrap()
 }
 
 /// A new attempt for `tenant`; returns its state.
 async fn start(app: &Router, tenant: &str) -> String {
-    let (status, body) = call_json(app, get(&format!("/signup/start?tenant={tenant}"))).await;
+    let (status, body) = call_json(app, get_as(tenant, "/signup/start")).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     body["state"].as_str().unwrap().to_owned()
 }
 
-/// What the page posts after a successful Cloud API flow.
+/// What the page posts after a successful Cloud API flow, with the PIN the
+/// merchant typed.
 fn finished(state: &str) -> Value {
     json!({
         "state": state,
@@ -126,12 +157,17 @@ fn finished(state: &str) -> Value {
             "data": {"phone_number_id": PHONE, "waba_id": WABA, "business_id": BUSINESS},
             "type": "WA_EMBEDDED_SIGNUP",
             "event": "FINISH"
-        }
+        },
+        "pin": PIN
     })
 }
 
 fn complete(tenant: &str, body: &Value) -> Request<Body> {
-    post(&format!("/signup/complete?tenant={tenant}"), body)
+    post_as(Some(tenant), "/signup/complete", body)
+}
+
+fn resume(tenant: &str, body: &Value) -> Request<Body> {
+    post_as(Some(tenant), "/signup/resume", body)
 }
 
 /// The onboarding answers up to and including `verify_assets`.
@@ -171,7 +207,7 @@ async fn the_page_and_start_give_fb_login_what_it_needs() {
     assert!(page.contains("version: 'v25.0'"), "{page}");
     assert!(!page.contains("__"), "a placeholder was left: {page}");
 
-    let (status, body) = call_json(&app, get("/signup/start?tenant=merchant-a")).await;
+    let (status, body) = call_json(&app, get_as("merchant-a", "/signup/start")).await;
     assert_eq!(status, StatusCode::OK);
     // embedded-signup/implementation, "Launch method and callback registration".
     assert_eq!(
@@ -198,12 +234,17 @@ async fn a_finished_signup_is_onboarded_for_the_merchant_who_started_it() {
     } = harness();
     let state = start(&app, "merchant-a").await;
 
-    // Another merchant presenting it: refused, nothing sent, not burnt.
-    let (status, body) = call_json(&app, complete("merchant-b", &finished(&state))).await;
-    assert_eq!(
-        (status, body),
-        (StatusCode::FORBIDDEN, json!({"error": "stale_attempt"}))
-    );
+    // Another merchant presenting it: refused, nothing sent, not burnt —
+    // also when the query string names merchant A (it is not read).
+    for uri in ["/signup/complete", "/signup/complete?tenant=merchant-a"] {
+        let (status, body) =
+            call_json(&app, post_as(Some("merchant-b"), uri, &finished(&state))).await;
+        assert_eq!(
+            (status, body),
+            (StatusCode::FORBIDDEN, json!({"error": "stale_attempt"})),
+            "{uri}"
+        );
+    }
     assert!(graph.requests().is_empty());
 
     script_until_verified(&graph);
@@ -228,6 +269,7 @@ async fn a_finished_signup_is_onboarded_for_the_merchant_who_started_it() {
         !body.to_string().contains(TOKEN),
         "the token reached the page"
     );
+    assert!(!body.to_string().contains(PIN), "the PIN was echoed");
 
     let requests = graph.requests();
     assert_eq!(requests.len(), 6);
@@ -283,24 +325,38 @@ async fn a_wrong_pin_stops_at_register_and_resume_finishes_with_a_new_one() {
     );
 
     // A malformed PIN is refused locally and keeps the attempt resumable.
-    let resume = |body: Value| post("/signup/resume?tenant=merchant-a", &body);
-    let (status, _) = call(&app, resume(json!({"pin": "12"}))).await;
+    let (status, _) = call(&app, resume("merchant-a", &json!({"pin": "12"}))).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-    // Another merchant has nothing to resume.
+    // Another merchant cannot resume it with their own PIN, even naming
+    // merchant A in the query string: the tenant is who authenticated.
+    for uri in ["/signup/resume", "/signup/resume?tenant=merchant-a"] {
+        let (status, body) = call_json(
+            &app,
+            post_as(Some("merchant-b"), uri, &json!({"pin": "999999"})),
+        )
+        .await;
+        assert_eq!(
+            (status, body),
+            (StatusCode::NOT_FOUND, json!({"error": "nothing_to_resume"})),
+            "{uri}"
+        );
+    }
+    // Nor can anyone unauthenticated.
     let (status, _) = call(
         &app,
-        post(
-            "/signup/resume?tenant=merchant-b",
-            &json!({"pin": "123456"}),
+        post_as(
+            None,
+            "/signup/resume?tenant=merchant-a",
+            &json!({"pin": "999999"}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(graph.requests().len(), 6);
 
     graph.push_json(200, success()); // subscribe again
     graph.push_json(200, success()); // register with the new PIN
-    let (status, body) = call_json(&app, resume(json!({"pin": "123456"}))).await;
+    let (status, body) = call_json(&app, resume("merchant-a", &json!({"pin": "123456"}))).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
         body["steps_completed"],
@@ -324,7 +380,7 @@ async fn a_wrong_pin_stops_at_register_and_resume_finishes_with_a_new_one() {
     );
     assert_eq!(graph.remaining(), 0);
 
-    let (status, _) = call(&app, resume(json!({}))).await;
+    let (status, _) = call(&app, resume("merchant-a", &json!({}))).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "finished: nothing left");
 }
 
@@ -350,6 +406,14 @@ async fn cancelled_or_malformed_posts_do_not_burn_the_attempt() {
     not_an_event["event"]["type"] = json!("SOMETHING_ELSE");
     let (status, body) = call_json(&app, complete("merchant-a", &not_an_event)).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let mut bad_pin = finished(&state);
+    bad_pin["pin"] = json!("12345");
+    let (status, body) = call_json(&app, complete("merchant-a", &bad_pin)).await;
+    assert_eq!(
+        (status, &body["field"]),
+        (StatusCode::UNPROCESSABLE_ENTITY, &json!("pin")),
+        "{body}"
+    );
     assert!(graph.requests().is_empty());
 
     // The same state still completes.
@@ -359,4 +423,104 @@ async fn cancelled_or_malformed_posts_do_not_burn_the_attempt() {
     let (status, body) = call_json(&app, complete("merchant-a", &finished(&state))).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(graph.remaining(), 0);
+}
+
+#[tokio::test]
+async fn signup_routes_refuse_callers_without_a_tenant_token() {
+    let Harness { app, graph, .. } = harness();
+    let state = start(&app, "merchant-a").await;
+
+    // The page is public: it holds the app id and nothing secret.
+    assert_eq!(call(&app, get("/")).await.0, StatusCode::OK);
+
+    let no_tenant = [
+        get("/signup/start"),
+        get("/signup/start?tenant=merchant-a"),
+        Request::get("/signup/start")
+            .header(
+                header::AUTHORIZATION,
+                "Bearer not-a-tenant-token-000000000000000000",
+            )
+            .body(Body::empty())
+            .unwrap(),
+        Request::get("/signup/start")
+            .header(header::AUTHORIZATION, format!("Basic {TENANT_A_BEARER}"))
+            .body(Body::empty())
+            .unwrap(),
+        post_as(
+            None,
+            "/signup/complete?tenant=merchant-a",
+            &finished(&state),
+        ),
+        post_as(
+            None,
+            "/signup/resume?tenant=merchant-a",
+            &json!({"pin": PIN}),
+        ),
+    ];
+    for request in no_tenant {
+        let uri = request.uri().clone();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{uri}");
+        assert_eq!(response.headers()[header::WWW_AUTHENTICATE], "Bearer");
+    }
+    assert!(graph.requests().is_empty(), "nothing reached Meta");
+
+    // The attempt was not burnt by any of that.
+    script_until_verified(&graph);
+    graph.push_json(200, success());
+    graph.push_json(200, success());
+    let (status, body) = call_json(&app, complete("merchant-a", &finished(&state))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(graph.remaining(), 0);
+}
+
+#[tokio::test]
+async fn without_the_merchants_pin_the_number_is_left_unregistered() {
+    let Harness { app, graph, .. } = harness();
+    let state = start(&app, "merchant-a").await;
+    let mut no_pin = finished(&state);
+    no_pin.as_object_mut().unwrap().remove("pin");
+
+    script_until_verified(&graph);
+    graph.push_json(200, success()); // subscribe, and nothing after it
+    let (status, body) = call_json(&app, complete("merchant-a", &no_pin)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["steps_completed"],
+        json!([
+            "exchange_code",
+            "debug_token",
+            "verify_assets",
+            "store_token",
+            "subscribe_app"
+        ])
+    );
+    let requests = graph.requests();
+    assert_eq!(requests.len(), 5);
+    assert!(
+        requests.iter().all(|r| !r.path().ends_with("/register")),
+        "registered without the merchant's PIN"
+    );
+    assert_eq!(graph.remaining(), 0);
+}
+
+#[test]
+fn tenants_config_refuses_what_would_open_the_signup() {
+    use example::Tenants;
+    assert!(Tenants::from_json("{}").is_err());
+    assert!(Tenants::from_json(r#"{"a": {"token": "hunter2"}}"#).is_err());
+    let shared = format!(
+        r#"{{"a": {{"token": "{TENANT_A_BEARER}"}}, "b": {{"token": "{TENANT_A_BEARER}"}}}}"#
+    );
+    assert!(Tenants::from_json(&shared).is_err());
+    let error = Tenants::from_json(&format!(r#"{{"a": "{TENANT_A_BEARER}"}}"#))
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(!error.contains(TENANT_A_BEARER), "{error}");
+    // The `cms_inbox` example's value works as is.
+    let inbox_style =
+        format!(r#"{{"a": {{"token": "{TENANT_A_BEARER}", "phone_number_ids": ["{PHONE}"]}}}}"#);
+    assert!(Tenants::from_json(&inbox_style).is_ok());
 }
