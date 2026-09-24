@@ -116,13 +116,18 @@ impl ConversationStore for MemoryConversationStore {
 
     async fn update_status(
         &self,
+        phone_number_id: &PhoneNumberId,
         id: &MessageId,
         status: DeliveryStatus,
         at: OffsetDateTime,
         error: Option<serde_json::Value>,
     ) -> Result<bool, StorageError> {
         let mut st = self.state.lock().await;
-        let Some(message) = st.messages.get_mut(id) else {
+        let Some(message) = st
+            .messages
+            .get_mut(id)
+            .filter(|m| &m.conversation.phone_number_id == phone_number_id)
+        else {
             return Ok(false);
         };
         if !status.supersedes(message.status) {

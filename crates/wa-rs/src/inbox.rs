@@ -165,10 +165,12 @@ impl InboxSink {
         contact: Option<&Contact>,
         message: &InboundMessage,
     ) -> std::result::Result<(), SinkError> {
-        // A revoke is a status change of the original message, not a new row.
+        // A revoke is a status change of the original message, not a new row,
+        // and only ever of a message of the number the revoke arrived on.
         if let In::Revoke(r) = &message.content {
             self.store
                 .update_status(
+                    phone_number_id,
                     &r.original_message_id,
                     DeliveryStatus::Deleted,
                     message.timestamp,
@@ -220,7 +222,11 @@ impl EventSink<WebhookEvent> for InboxSink {
                 self.record_inbound(&phone_number_id, contact.as_ref(), &message)
                     .await
             }
-            WebhookEvent::StatusUpdated { status, .. } => {
+            WebhookEvent::StatusUpdated {
+                phone_number_id,
+                status,
+                ..
+            } => {
                 let Some(new) = DeliveryStatus::from_webhook(status.status.as_str()) else {
                     return Ok(());
                 };
@@ -232,7 +238,7 @@ impl EventSink<WebhookEvent> for InboxSink {
                         .map(json_without_nul)
                 };
                 self.store
-                    .update_status(&status.id, new, status.timestamp, error)
+                    .update_status(&phone_number_id, &status.id, new, status.timestamp, error)
                     .await
                     .map_err(delivery)?;
                 Ok(())
@@ -650,6 +656,7 @@ mod tests {
         }
         async fn update_status(
             &self,
+            phone_number_id: &PhoneNumberId,
             id: &MessageId,
             status: DeliveryStatus,
             at: OffsetDateTime,
@@ -658,7 +665,9 @@ mod tests {
             if error.as_ref().is_some_and(has_nul) {
                 return Err(refuse());
             }
-            self.inner.update_status(id, status, at, error).await
+            self.inner
+                .update_status(phone_number_id, id, status, at, error)
+                .await
         }
         async fn messages(
             &self,
@@ -742,6 +751,76 @@ mod tests {
             "keys and nested values: {}",
             unknown.payload
         );
+    }
+
+    /// A `messages` change on another business number.
+    fn on_number(pnid: &str, value: &serde_json::Value) -> Vec<WebhookEvent> {
+        let mut value = value.clone();
+        value["messaging_product"] = json!("whatsapp");
+        value["metadata"] = json!({"display_phone_number": "15550000002", "phone_number_id": pnid});
+        payload(&value)
+    }
+
+    /// Security review L1 (sec-probe `cross_number_probe`): statuses and
+    /// revokes were applied by message id alone, so a status or a revoke
+    /// delivered for one business number changed the row with that id on
+    /// another number (e.g. marked a merchant's message `Deleted`).
+    #[tokio::test]
+    async fn statuses_and_revokes_on_another_number_change_nothing() {
+        let store = Arc::new(MemoryConversationStore::new());
+        let sink = InboxSink::new(store.clone());
+        deliver_all(
+            &sink,
+            inbound(
+                "wamid.SHARED",
+                1_760_000_000,
+                Some("US.1"),
+                None,
+                "order 42",
+            ),
+        )
+        .await;
+        deliver_all(
+            &sink,
+            on_number(
+                "PNID_B",
+                &json!({
+                    "contacts": [{"profile": {"name": "x"}, "wa_id": "16505551234", "user_id": "US.1"}],
+                    "messages": [{"from": "16505551234", "from_user_id": "US.1", "id": "wamid.rev",
+                        "timestamp": "1760000001", "type": "revoke",
+                        "revoke": {"original_message_id": "wamid.SHARED"}}]
+                }),
+            ),
+        )
+        .await;
+        deliver_all(
+            &sink,
+            on_number(
+                "PNID_B",
+                &json!({"statuses": [{"id": "wamid.SHARED", "status": "failed",
+                    "timestamp": "1760000002", "recipient_id": "16505551234",
+                    "errors": [{"code": 131026, "title": "Message undeliverable"}]}]}),
+            ),
+        )
+        .await;
+        let key = ConversationKey::new(PNID, "US.1");
+        let row = store.messages(&key, None, 10).await.unwrap().remove(0);
+        assert_eq!(row.status, DeliveryStatus::Received, "{row:?}");
+        assert_eq!(row.error, None);
+        // The same events on the right number do apply.
+        deliver_all(&sink, status("wamid.SHARED", "read", 1_760_000_003)).await;
+        let row = store.messages(&key, None, 10).await.unwrap().remove(0);
+        assert_eq!(row.status, DeliveryStatus::Read);
+        deliver_all(
+            &sink,
+            one_message(&json!({
+                "from": "16505551234", "id": "wamid.rev2", "timestamp": "1760000004",
+                "type": "revoke", "revoke": {"original_message_id": "wamid.SHARED"}
+            })),
+        )
+        .await;
+        let row = store.messages(&key, None, 10).await.unwrap().remove(0);
+        assert_eq!(row.status, DeliveryStatus::Deleted);
     }
 
     #[tokio::test]
