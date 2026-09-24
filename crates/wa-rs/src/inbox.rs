@@ -98,9 +98,46 @@ fn delivery(e: StorageError) -> SinkError {
     SinkError::Delivery(anyhow::Error::new(e))
 }
 
+/// `s` with every U+0000 replaced by U+FFFD (the replacement character).
+///
+/// Postgres cannot store NUL in `TEXT` or `JSONB`, so one NUL typed by a
+/// customer would fail every delivery of its webhook batch: Meta retries it
+/// for 7 days, then drops the whole batch. Lossy on purpose — a stored
+/// message with a visible replacement character beats a lost one.
+fn without_nul(s: String) -> String {
+    if s.contains('\0') {
+        s.replace('\0', "\u{FFFD}")
+    } else {
+        s
+    }
+}
+
+/// [`without_nul`] applied to every string of `value`, object keys
+/// included. Two keys that differ only by NUL vs U+FFFD collapse into one
+/// (the later wins). Recursion depth is bounded by the parse that produced
+/// the value (`serde_json` refuses nesting deeper than 128).
+fn json_without_nul(value: serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match value {
+        Value::String(s) => Value::String(without_nul(s)),
+        Value::Array(items) => Value::Array(items.into_iter().map(json_without_nul).collect()),
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(k, v)| (without_nul(k), json_without_nul(v)))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
 /// Records inbound messages and status updates into a
 /// [`ConversationStore`]. Idempotent: the store ignores a message id it
 /// already has, and a status that does not supersede the stored one.
+///
+/// Content never makes a delivery fail: U+0000, which Postgres cannot
+/// store, is replaced by U+FFFD in the stored `kind`, `text`, `payload`
+/// (keys included) and status `error`. Storage errors still fail it (Meta
+/// redelivers).
 ///
 /// Put a `wa_webhooks::DedupGuard` in front of the handler anyway — it
 /// saves the store the work — and fan this sink out next to a broadcast
@@ -150,14 +187,15 @@ impl InboxSink {
         };
         let payload = serde_json::to_value(message)
             .map_err(|e| SinkError::Delivery(anyhow::Error::new(e)))?;
+        // Customer content never fails a delivery: see `without_nul`.
         self.store
             .append(StoredMessage {
                 id: message.id.clone(),
                 conversation,
                 direction: Direction::Inbound,
-                kind: message.message_type().unwrap_or("unknown").to_owned(),
-                text: preview(&message.content),
-                payload,
+                kind: without_nul(message.message_type().unwrap_or("unknown").to_owned()),
+                text: preview(&message.content).map(without_nul),
+                payload: json_without_nul(payload),
                 status: DeliveryStatus::Received,
                 timestamp: message.timestamp,
                 status_at: None,
@@ -189,7 +227,9 @@ impl EventSink<WebhookEvent> for InboxSink {
                 let error = if status.errors.is_empty() {
                     None
                 } else {
-                    serde_json::to_value(&status.errors).ok()
+                    serde_json::to_value(&status.errors)
+                        .ok()
+                        .map(json_without_nul)
                 };
                 self.store
                     .update_status(&status.id, new, status.timestamp, error)
@@ -348,7 +388,7 @@ impl Inbox {
             .await?;
         if let Some(sent) = response.messages.first() {
             let text = match &message.content {
-                MessageContent::Text(t) => Some(t.body.clone()),
+                MessageContent::Text(t) => Some(without_nul(t.body.clone())),
                 _ => None,
             };
             let payload =
@@ -361,9 +401,9 @@ impl Inbox {
                     id: sent.id.clone(),
                     conversation: key.clone(),
                     direction: Direction::Outbound,
-                    kind: message.content.message_type().to_owned(),
+                    kind: without_nul(message.content.message_type().to_owned()),
                     text,
-                    payload,
+                    payload: json_without_nul(payload),
                     status: DeliveryStatus::Accepted,
                     timestamp: self.clock.now(),
                     status_at: None,
@@ -571,6 +611,137 @@ mod tests {
             .unwrap();
         assert_eq!(rows.len(), 1, "the revoke itself is not a message");
         assert_eq!(rows[0].status, DeliveryStatus::Deleted);
+    }
+
+    /// A store that refuses U+0000 in any text or JSON it is given, the way
+    /// Postgres does (`TEXT` cannot hold NUL, `JSONB` rejects `\u0000`), and
+    /// delegates everything else to the memory store.
+    #[derive(Debug, Default)]
+    struct NulRefusingStore {
+        inner: MemoryConversationStore,
+    }
+
+    fn has_nul(v: &serde_json::Value) -> bool {
+        match v {
+            serde_json::Value::String(s) => s.contains('\0'),
+            serde_json::Value::Array(a) => a.iter().any(has_nul),
+            serde_json::Value::Object(o) => o.iter().any(|(k, v)| k.contains('\0') || has_nul(v)),
+            _ => false,
+        }
+    }
+
+    fn refuse() -> StorageError {
+        StorageError::Backend(anyhow::anyhow!(
+            "unsupported Unicode escape sequence: \\u0000 cannot be converted to text"
+        ))
+    }
+
+    #[async_trait]
+    impl ConversationStore for NulRefusingStore {
+        async fn append(&self, m: StoredMessage) -> std::result::Result<bool, StorageError> {
+            let texts = [Some(&m.kind), m.text.as_ref()];
+            if texts.into_iter().flatten().any(|t| t.contains('\0'))
+                || has_nul(&m.payload)
+                || m.error.as_ref().is_some_and(has_nul)
+            {
+                return Err(refuse());
+            }
+            self.inner.append(m).await
+        }
+        async fn update_status(
+            &self,
+            id: &MessageId,
+            status: DeliveryStatus,
+            at: OffsetDateTime,
+            error: Option<serde_json::Value>,
+        ) -> std::result::Result<bool, StorageError> {
+            if error.as_ref().is_some_and(has_nul) {
+                return Err(refuse());
+            }
+            self.inner.update_status(id, status, at, error).await
+        }
+        async fn messages(
+            &self,
+            key: &ConversationKey,
+            before: Option<(OffsetDateTime, MessageId)>,
+            limit: usize,
+        ) -> std::result::Result<Vec<StoredMessage>, StorageError> {
+            self.inner.messages(key, before, limit).await
+        }
+        async fn conversations(
+            &self,
+            phone_number_id: &PhoneNumberId,
+            before: Option<(OffsetDateTime, String)>,
+            limit: usize,
+        ) -> std::result::Result<Vec<ConversationSummary>, StorageError> {
+            self.inner
+                .conversations(phone_number_id, before, limit)
+                .await
+        }
+        async fn mark_read(&self, key: &ConversationKey) -> std::result::Result<(), StorageError> {
+            self.inner.mark_read(key).await
+        }
+        async fn last_inbound_at(
+            &self,
+            key: &ConversationKey,
+        ) -> std::result::Result<Option<OffsetDateTime>, StorageError> {
+            self.inner.last_inbound_at(key).await
+        }
+    }
+
+    /// Security review M1: one NUL in a customer's message made every
+    /// delivery of the batch fail on Postgres, so Meta retried it for 7
+    /// days and then dropped it, together with every other event in it.
+    /// Stored text and payload now carry U+FFFD instead.
+    #[tokio::test]
+    async fn a_nul_in_customer_content_is_replaced_not_refused() {
+        let store = Arc::new(NulRefusingStore::default());
+        let sink = InboxSink::new(store.clone());
+        deliver_all(
+            &sink,
+            one_message(&json!({
+                "from": "16505551234", "id": "wamid.nul", "timestamp": "1760000000",
+                "type": "text", "text": {"body": "order\u{0}42"}
+            })),
+        )
+        .await;
+        // A type this crate does not know keeps its raw properties, keys
+        // included, and its type name becomes the row's `kind`.
+        deliver_all(
+            &sink,
+            one_message(&json!({
+                "from": "16505551234", "id": "wamid.nul2", "timestamp": "1760000001",
+                "type": "fut\u{0}ure", "fut\u{0}ure": {"k\u{0}": ["a\u{0}", {"deep\u{0}": "b\u{0}"}]}
+            })),
+        )
+        .await;
+        let status = payload(&json!({
+            "messaging_product": "whatsapp",
+            "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
+            "statuses": [{"id": "wamid.nul", "status": "failed", "timestamp": "1760000100",
+                "recipient_id": "16505551234",
+                "errors": [{"code": 131026, "title": "bad\u{0}", "error_data": {"details": "x\u{0}"}}]}]
+        }));
+        deliver_all(&sink, status).await;
+        let rows = store
+            .messages(&ConversationKey::new(PNID, "US.1"), None, 10)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2, "both messages recorded");
+        let (unknown, text) = (&rows[0], &rows[1]);
+        assert_eq!(text.text.as_deref(), Some("order\u{FFFD}42"));
+        assert_eq!(text.payload["text"]["body"], "order\u{FFFD}42");
+        assert_eq!(text.status, DeliveryStatus::Failed);
+        let error = text.error.as_ref().unwrap();
+        assert!(!has_nul(error), "{error}");
+        assert_eq!(error[0]["title"], "bad\u{FFFD}");
+        assert_eq!(unknown.kind, "fut\u{FFFD}ure");
+        assert!(!has_nul(&unknown.payload), "{}", unknown.payload);
+        assert_eq!(
+            unknown.payload["fut\u{FFFD}ure"]["k\u{FFFD}"][1]["deep\u{FFFD}"], "b\u{FFFD}",
+            "keys and nested values: {}",
+            unknown.payload
+        );
     }
 
     #[tokio::test]
