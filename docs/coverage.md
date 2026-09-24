@@ -5,38 +5,43 @@ Doc paths are relative to
 `https://developers.facebook.com/documentation/business-messaging/whatsapp/`.
 
 Status: **done** = implemented and tested against the docs' request/response
-examples; **partial** = the listed subset only; **planned** = not yet; **out
-of scope** = deliberately not covered, with the reason.
+examples (each area went through an implementation pass and an adversarial
+review with mutation testing); **partial** = the listed subset only;
+**planned** = not yet; **out of scope** = deliberately not covered, with the
+reason. Verified against the docs as mirrored on 2026-09-24 (Graph API
+v25.0).
 
 | # | Feature | Priority | Module | Doc paths | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1 | Embedded Signup (v4): code exchange, business token, `debug_token`, subscribe app to WABA, register number, encrypted token vault, session binding, launch options, session-info parsing | **most requested** | `wa_client::embedded_signup` | `embedded-signup/*`, `access-tokens` | planned |
-| 2 | Webhooks: verification, `X-Hub-Signature-256`, every documented field, BSUID identities, normalized events, dedup, sinks, axum router, SSE | very requested | `wa-webhooks` | `webhooks/*`, `business-scoped-user-ids` | planned |
-| 3 | Templates: create/edit/delete/list/get, library, migrate, compare, named & positional params, media/carousel/LTO/coupon/call-permission, send-time components | very requested | `wa_client::templates` | `templates/*` | planned |
-| 4 | Authentication templates (copy code, one-tap, zero-tap), previews, bulk upsert, OTP service | very requested | `wa_client::authentication` | `templates/authentication-templates/*` | planned |
-| 5 | Catalogs & commerce: commerce settings, catalog ↔ WABA, catalog/SPM/MPM/product-carousel messages & templates, `order` webhooks | requested | `wa_client::commerce`, `messages`, `wa-webhooks` | `catalogs/*` | planned |
-| 6 | In-App Signup (opt-in deep links) | requested | `wa_client::signups` | `in-app-signup` | planned |
-| 7 | Messages: text, media, location, contacts, address, interactive (buttons, list, CTA URL, location request, flow, media carousel), reactions, stickers, contextual replies, mark read, typing indicators, link previews | core | `wa_client::messages` | `messages/*`, `typing-indicators` | planned |
-| 8 | Media: upload, URL, streaming download + SHA-256 check, delete, Resumable Upload (template header handles) | core | `wa_client::media` | `business-phone-numbers/media`, `reference/media/*` | planned |
-| 9 | Business-scoped user IDs & usernames: send by BSUID, identities in every webhook | core (mandatory 2026) | `wa_core::recipient`, `wa-webhooks` | `business-scoped-user-ids` | planned |
-| 10 | Phone numbers: list/get, request & verify code, register/deregister, two-step PIN, settings, display names, conversational components | core | `wa_client::phone_numbers` | `business-phone-numbers/*`, `display-names` | planned |
-| 11 | Business profile | core | `wa_client::business_profile` | `business-profiles` | planned |
-| 12 | WABA management: details, subscribed apps & callback override, assigned users, client/owned WABAs | core | `wa_client::waba` | `whatsapp-business-accounts`, `webhooks/override` | planned |
-| 13 | Marketing Messages API for WhatsApp (send, TTL, onboarding) | e-commerce | `wa_client::marketing` | `marketing-messages/*` | planned |
-| 14 | WhatsApp Flows: management API, send, data-endpoint crypto, business public key | CMS | `wa_client::flows` | `flows/*` | planned |
-| 15 | Analytics: messaging, pricing, template, call | marketing | `wa_client::analytics` | `analytics` | planned |
-| 16 | QR codes & short links | marketing | `wa_client::qr_codes` | `qr-codes` | planned |
-| 17 | Block users | CMS | `wa_client::block_users` | `block-users` | planned |
-| 18 | Groups API | CMS | `wa_client::groups` | `groups/*` | planned |
-| 19 | Calling API signalling (settings, permissions, connect/accept/reject/terminate) | later | `wa_client::calling` | `calling/*` | planned (WebRTC media out of scope) |
-| 20 | Direct Send (beta): `category` on free-form sends | later | `wa_client::messages` | `direct-send/*` | planned |
-| 21 | Coexistence (WhatsApp Business app users): onboarding, contacts/history sync, echoes | CMS | `embedded_signup`, `wa-webhooks` | `embedded-signup/onboarding-business-app-users` | planned |
-| 22 | Error codes → `ErrorKind` (retry, window, opt-out, throttling) | core | `wa_core::error` | `support/error-codes` | done |
-| 23 | Typst documents (invoice, receipt, voucher) for document/image messages | e-commerce | `wa-typst` | — | planned |
-| 24 | Pricing objects on status webhooks (per-message pricing) | analytics | `wa-webhooks` | `pricing` | planned |
-| 25 | Identity change check (`identity_key_hash`) | security | `wa-webhooks`, `phone_numbers` settings | `identity-change` | planned |
-| 26 | Solution partner APIs: credit lines, partner-led business verification, multi-partner solutions, WABA/number migration | partners | — | `solution-providers/*` | planned |
-| 27 | Conversation routing / handover (standby, thread control) | later | — | `conversation-routing/*` | planned |
-| 28 | Account model evolution (Messaging Accounts, beta) | later | — | `account-model-evolution/*` | planned |
-| 29 | CTWA welcome message sequences | later | — | `ctwa/welcome-message-sequences` | planned |
-| 30 | Payments (India UPI, Brazil Pix/Boleto) | — | — | `payments/*` | out of scope (market-specific; revisit on demand) |
+| 1 | Embedded Signup (v4): launch options, session-info events, code exchange, `debug_token`, id verification against the token's grants and Meta's owner lookup, encrypted token vault (AES-256-GCM, key rotation, phone → WABA index), tenant-bound signup sessions, subscribe app, register number, `resume` | **most requested** | `wa_client::embedded_signup` | `embedded-signup/*`, `access-tokens` | **done** for the Tech Provider flow. Solution Partner credit-line sharing, pre-verified number pools, multi-WABA onboarding and token refresh are not implemented (product decisions pending) |
+| 2 | Webhooks: verify token, `X-Hub-Signature-256` (multi-secret, fail-closed), every documented field, BSUID identities, normalized events, leased dedup, PII-free logs, axum router, SSE | very requested | `wa-webhooks` | `webhooks/*`, `business-scoped-user-ids` | **done**; messaging handovers / standby (docs unavailable) and `message_echoes` / `consumer_profile` (undocumented payloads) arrive as `Unknown` |
+| 3 | Templates: list/get/create/edit/delete, library, migrate, compare, unpause, TTL, named & positional params, media/carousel/LTO/coupon/call-permission/catalog/MPM/SPM/flow components, typed send-time components | very requested | `wa_client::templates` | `templates/*` | **done**; archive/unarchive has no documented endpoint |
+| 4 | Authentication templates (copy code, one-tap, zero-tap), previews, bulk upsert, OTP service (E.164-bound, hashed, CAS-counted attempts, cooldown + 5/hour issue limit) | very requested | `wa_client::authentication` | `templates/authentication-templates/*` | **done** |
+| 5 | Catalogs & commerce: commerce settings; catalog / single-product / multi-product / product-carousel messages; catalog, MPM, SPM and product-card-carousel templates; `order` webhooks | requested | `wa_client::commerce`, `messages`, `templates`, `wa-webhooks` | `catalogs/*` | **done**; uploading inventory happens in Meta's Catalog API / Commerce Manager, outside the WhatsApp API |
+| 6 | In-App Signup (opt-in deep links, ToS acceptance, promo codes) | requested | `wa_client::signups` | `in-app-signup` | **done** |
+| 7 | Messages: text, media, location, contacts, address, reactions, stickers, pin/unpin, interactive (buttons, list, CTA URL, location request, flow, media carousel, product carousel, voice call, call permission request, request contact info), contextual replies, mark read, typing indicators, link previews, group sends | core | `wa_client::messages` | `messages/*`, `typing-indicators` | **done**; payments interactive types via the `Raw` escape hatch |
+| 8 | Media: upload (MIME/size checked), URL, streaming download with SHA-256 verification, delete, Resumable Upload (template header handles) | core | `wa_client::media` | `business-phone-numbers/media`, `reference/media/*` | **done** |
+| 9 | Business-scoped user IDs & usernames: send by BSUID / parent BSUID, identities in every webhook, BSUID-keyed inbox | core (mandatory 2026) | `wa_core::recipient`, `wa-webhooks`, `wa_rs::inbox` | `business-scoped-user-ids` | **done** |
+| 10 | Phone numbers: list/get/create, request & verify code, register/deregister, two-step PIN, settings, display names, conversational components, per-number webhook override, coexistence `smb_app_data` sync | core | `wa_client::phone_numbers` | `business-phone-numbers/*`, `display-names` | **done**; payload-encryption settings not wrapped (no documented example) |
+| 11 | Business profile (phone number and profile-node APIs) | core | `wa_client::business_profile` | `business-profiles` | **done** |
+| 12 | WABA management: details, phone numbers, subscribed apps & callback override, assigned users, client/owned WABAs, customer bases | core | `wa_client::waba` | `whatsapp-business-accounts`, `webhooks/override` | **done**; WABA creation, activities and `system_users` not wrapped |
+| 13 | Marketing Messages API for WhatsApp: send (product policy, activity sharing, bid multiplier), onboarding status, Cloud API marketing switch, partner Intent API | e-commerce | `wa_client::marketing` | `marketing-messages/*` | **done**; max-price agreement, partner allowlist and reach estimates (beta) not wrapped |
+| 14 | WhatsApp Flows: management API, business public key, data-endpoint crypto (aws-lc-rs RSA-OAEP + AES-GCM, feature `flows-endpoint`), endpoint signature check, uploaded-media decryption | CMS | `wa_client::flows` | `flows/*` | **done**; Flows metrics API skipped (deprecated by Meta 2026-04-30) |
+| 15 | Analytics: messaging, conversation, pricing, template, template-group, call and group analytics; template insights; click-tracking opt-out | marketing | `wa_client::analytics` | `analytics` | **done** |
+| 16 | QR codes & short links | marketing | `wa_client::qr_codes` | `qr-codes` | **done** |
+| 17 | Block users (phone or BSUID, partial failures) | CMS | `wa_client::block_users` | `block-users` | **done** |
+| 18 | Groups API: create, info, list, update, delete, invite links, participants, join requests, pin, picture | CMS | `wa_client::groups` | `groups/*` | **done** |
+| 19 | Calling API signalling: settings, permissions, connect/pre-accept/accept/reject/terminate | later | `wa_client::calling` | `calling/*` | **done** (signalling only; WebRTC media out of scope; `media_update` undocumented) |
+| 20 | Direct Send (beta): `category`, TTL, direct-send config on free-form sends | later | `wa_client::messages` | `direct-send/*` | **done** |
+| 21 | Coexistence (WhatsApp Business app users): onboarding feature type, contacts/history sync, `history` / `smb_app_state_sync` / `smb_message_echoes` webhooks | CMS | `embedded_signup`, `phone_numbers`, `wa-webhooks` | `embedded-signup/onboarding-business-app-users` | **partial**: parsed and triggerable; the inbox does not yet record echoes or synced history |
+| 22 | Error codes → `ErrorKind` (retry safety, 24h window, opt-out, throttling, registration locks) | core | `wa_core::error` | `support/error-codes` | **done** |
+| 23 | Typst documents (invoice, receipt, voucher) → PDF/PNG, deterministic, sandboxed | e-commerce | `wa-typst` | — | **done** |
+| 24 | Pricing objects on status webhooks (per-message pricing) | analytics | `wa-webhooks` | `pricing` | **done** |
+| 25 | Identity change check (`identity_key_hash`, setting) | security | `wa-webhooks`, `phone_numbers` | `identity-change` | **done** |
+| 26 | CMS inbox: webhook events → `ConversationStore`, 24h-window-checked replies with the merchant's token | CMS | `wa_rs::inbox` | — | **done** |
+| 27 | Adapters: reqwest transport; memory, Postgres, Redis stores with executable conformance suites; channel/broadcast/fan-out/filter/fn/tracing sinks | core | `wa-adapters` | — | **done**; Postgres cannot store U+0000 (documented); Redis TLS needs an integrator-built connection |
+| 28 | Solution partner APIs: credit lines, partner-led business verification, multi-partner solutions, WABA/number migration | partners | — | `solution-providers/*` | planned |
+| 29 | Conversation routing / handover (standby, thread control) | later | — | `conversation-routing/*` | planned (docs pages unavailable at mirror time) |
+| 30 | Account model evolution (Messaging Accounts, beta) | later | — | `account-model-evolution/*` | planned |
+| 31 | CTWA welcome message sequences | later | — | `ctwa/welcome-message-sequences` | planned |
+| 32 | Payments (India UPI, Brazil Pix/Boleto) | — | — | `payments/*` | out of scope (market-specific; revisit on demand) |
