@@ -324,7 +324,7 @@ async fn verification_hashes_across_chunks_and_accepts_base64_digests() {
             info: info(&digest),
             body: stream(&[b"chunk-one|", b"chunk-two|", b"chunk-three"]),
         };
-        let items: Vec<_> = dl.verified().unwrap().body.collect().await;
+        let items: Vec<_> = dl.verified().unwrap().body.take(16).collect().await;
         assert_eq!(items.len(), 3, "{digest}: three chunks, no error");
         assert!(items.iter().all(Result::is_ok));
     }
@@ -333,7 +333,7 @@ async fn verification_hashes_across_chunks_and_accepts_base64_digests() {
         info: info(&sha_hex(whole)),
         body: stream(&[b"chunk-two|", b"chunk-one|", b"chunk-three"]),
     };
-    let items: Vec<_> = dl.verified().unwrap().body.collect().await;
+    let items: Vec<_> = dl.verified().unwrap().body.take(16).collect().await;
     assert_eq!(items.len(), 4);
     assert!(matches!(
         items[3],
@@ -344,7 +344,7 @@ async fn verification_hashes_across_chunks_and_accepts_base64_digests() {
         info: info(&sha_hex(whole)),
         body: stream(&[b"chunk-one|"]),
     };
-    let items: Vec<_> = dl.verified().unwrap().body.collect().await;
+    let items: Vec<_> = dl.verified().unwrap().body.take(16).collect().await;
     assert_eq!(items.len(), 2);
     assert!(matches!(
         items[1],
@@ -355,7 +355,7 @@ async fn verification_hashes_across_chunks_and_accepts_base64_digests() {
         info: info(&sha_hex(whole)),
         body: stream(&[]),
     };
-    let items: Vec<_> = dl.verified().unwrap().body.collect().await;
+    let items: Vec<_> = dl.verified().unwrap().body.take(16).collect().await;
     assert!(matches!(
         items[..],
         [Err(Error::Transport(TransportError::Integrity(_)))]
@@ -422,7 +422,7 @@ async fn transport_errors_mid_stream_surface_and_end_the_stream() {
         info: info(&sha_hex(b"ab")),
         body: Box::pin(futures::stream::iter(items)),
     };
-    let got: Vec<_> = dl.verified().unwrap().body.collect().await;
+    let got: Vec<_> = dl.verified().unwrap().body.take(16).collect().await;
     assert_eq!(got.len(), 2);
     assert!(matches!(
         got[1],
