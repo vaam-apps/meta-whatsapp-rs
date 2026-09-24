@@ -170,6 +170,19 @@ id_type!(
     /// (`allocation_config_id`).
     AllocationConfigId
 );
+id_type!(
+    /// A payment credential that funds a WABA: the WABA's
+    /// `primary_funding_id`, and a credit allocation's
+    /// `receiving_credential.id`. The two are equal once a Solution
+    /// Partner's credit line is attached to the WABA.
+    FundingId
+);
+id_type!(
+    /// A business system user id (`GET /{WABA_ID}/system_users`), e.g. the
+    /// Solution Partner's system user added to each customer's WABA. Not a
+    /// [`UserId`] (a WhatsApp user).
+    SystemUserId
+);
 
 #[cfg(test)]
 mod tests {

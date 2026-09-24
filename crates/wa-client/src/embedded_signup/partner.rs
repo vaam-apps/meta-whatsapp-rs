@@ -9,7 +9,7 @@
 
 use wa_core::Result;
 use wa_core::error::ValidationError;
-use wa_core::ids::{AllocationConfigId, CreditLineId, WabaId};
+use wa_core::ids::{AllocationConfigId, CreditLineId, SystemUserId, WabaId};
 use wa_core::secret::AccessToken;
 
 use super::EmbeddedSignup;
@@ -53,7 +53,7 @@ pub struct SolutionPartner {
     pub system_token: AccessToken,
     /// The id of the system user behind [`Self::system_token`], added to
     /// the customer's WABA before [`CreditSharing::ShareAndAttach`].
-    pub system_user_id: String,
+    pub system_user_id: SystemUserId,
     /// Your extended credit line
     /// ([`CreditLines::list`](crate::credit_lines::CreditLines::list)).
     pub credit_line_id: CreditLineId,
@@ -76,7 +76,7 @@ impl SolutionPartner {
     /// default currency.
     pub fn new(
         system_token: AccessToken,
-        system_user_id: impl Into<String>,
+        system_user_id: impl Into<SystemUserId>,
         credit_line_id: impl Into<CreditLineId>,
     ) -> Self {
         Self {
@@ -118,7 +118,7 @@ impl SolutionPartner {
             return Err(ValidationError::new("credit_line_id", "required"));
         }
         if self.method == CreditSharing::ShareAndAttach {
-            if self.system_user_id.trim().is_empty() {
+            if self.system_user_id.as_str().trim().is_empty() {
                 return Err(ValidationError::new(
                     "system_user_id",
                     "required: the system user is added to the customer's WABA before sharing",
@@ -264,7 +264,7 @@ pub(super) async fn assign_system_user(
     es.system_client(plan.partner)
         .waba(waba_id.clone())
         .assign_user(
-            &plan.partner.system_user_id,
+            plan.partner.system_user_id.as_str(),
             &plan.partner.system_user_tasks,
         )
         .await

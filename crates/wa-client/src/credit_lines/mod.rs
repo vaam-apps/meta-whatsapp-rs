@@ -84,7 +84,7 @@ use futures::Stream;
 use serde::de::{DeserializeOwned, Deserializer};
 use serde::{Deserialize, Serialize};
 use wa_core::error::{ValidationError, snippet};
-use wa_core::ids::{AllocationConfigId, BusinessId, CreditLineId, WabaId};
+use wa_core::ids::{AllocationConfigId, BusinessId, CreditLineId, FundingId, WabaId};
 use wa_core::paging::Page;
 use wa_core::{Error, Result};
 
@@ -266,7 +266,7 @@ pub struct AllocationConfig {
 pub struct ReceivingCredential {
     /// Compared with the WABA's `primary_funding_id` by [`is_shared`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
+    pub id: Option<FundingId>,
 }
 
 /// `request_status` of an allocation configuration.
@@ -314,7 +314,7 @@ pub struct WabaFunding {
     pub id: WabaId,
     /// What pays for the WABA's messages; absent until something does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub primary_funding_id: Option<String>,
+    pub primary_funding_id: Option<FundingId>,
 }
 
 /// Whether `allocation` funds the WABA of `funding`: its receiving
@@ -325,9 +325,9 @@ pub fn is_shared(allocation: &AllocationConfig, funding: &WabaFunding) -> bool {
     let credential = allocation
         .receiving_credential
         .as_ref()
-        .and_then(|c| c.id.as_deref());
-    match (credential, funding.primary_funding_id.as_deref()) {
-        (Some(c), Some(f)) => !c.is_empty() && c == f,
+        .and_then(|c| c.id.as_ref());
+    match (credential, funding.primary_funding_id.as_ref()) {
+        (Some(c), Some(f)) => !c.as_str().trim().is_empty() && c == f,
         _ => false,
     }
 }
@@ -854,19 +854,20 @@ mod tests {
         let allocation = |id: Option<&str>| AllocationConfig {
             id: None,
             receiving_credential: Some(ReceivingCredential {
-                id: id.map(str::to_owned),
+                id: id.map(FundingId::new),
             }),
             receiving_business: None,
             request_status: None,
         };
         let funding = |id: Option<&str>| WabaFunding {
             id: WabaId::new(WABA),
-            primary_funding_id: id.map(str::to_owned),
+            primary_funding_id: id.map(FundingId::new),
         };
         assert!(is_shared(&allocation(Some("1")), &funding(Some("1"))));
         assert!(!is_shared(&allocation(Some("1")), &funding(Some("2"))));
         assert!(!is_shared(&allocation(None), &funding(None)));
         assert!(!is_shared(&allocation(Some("")), &funding(Some(""))));
+        assert!(!is_shared(&allocation(Some(" ")), &funding(Some(" "))));
         assert!(!is_shared(&allocation(Some("1")), &funding(None)));
         assert!(!is_shared(&allocation(None), &funding(Some("1"))));
         let no_credential = AllocationConfig {

@@ -47,7 +47,12 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   `{"data": [...]}` page), `revoke`, `revoke_for_business` (only records
   naming that business), `allocation_status`, and `is_shared`;
   `WabaCurrency` (the six supported codes, `Other` only on purpose). New
-  ids `CreditLineId` and `AllocationConfigId` in `wa_core::ids`.
+  ids in `wa_core::ids`: `CreditLineId`, `AllocationConfigId`, `FundingId`
+  (both sides of the `is_shared` comparison: a receiving credential and a
+  WABA's `primary_funding_id`, so neither can be compared with an
+  allocation or WABA id by mistake) and `SystemUserId`
+  (`SolutionPartner::system_user_id`; `Waba::assign_user` still takes a
+  `&str`, as it assigns any business user).
 - **Coexistence in the CMS inbox**: `InboxSink` records the merchant's
   WhatsApp Business app messages (`MessageEchoed`: outbound, `Sent`, in the
   customer's conversation; an echoed revoke deletes the original) and the
