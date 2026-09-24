@@ -17,13 +17,17 @@ pub enum TransportError {
     /// Anything else the adapter reports.
     #[error("transport failure: {0}")]
     Backend(#[source] anyhow::Error),
+    /// A body arrived but failed an integrity check (e.g. a media SHA-256
+    /// mismatch). Retryable: a fresh download may be intact.
+    #[error("integrity check failed: {0}")]
+    Integrity(&'static str),
 }
 
 impl TransportError {
     /// Timeouts and connect failures are worth retrying (for idempotent
     /// requests); build errors are not.
     pub fn is_retryable(&self) -> bool {
-        matches!(self, Self::Timeout | Self::Connect(_))
+        matches!(self, Self::Timeout | Self::Connect(_) | Self::Integrity(_))
     }
 }
 

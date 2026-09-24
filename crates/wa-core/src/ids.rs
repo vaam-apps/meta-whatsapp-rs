@@ -133,6 +133,15 @@ id_type!(
     /// Calling API call id.
     CallId
 );
+id_type!(
+    /// Resumable Upload API session id, as returned (`upload:…`).
+    UploadSessionId
+);
+id_type!(
+    /// Resumable Upload API file handle (`h`), used as a template
+    /// `header_handle` or a `profile_picture_handle`.
+    UploadHandle
+);
 
 #[cfg(test)]
 mod tests {
