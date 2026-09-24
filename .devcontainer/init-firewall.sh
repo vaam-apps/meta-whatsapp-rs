@@ -66,15 +66,44 @@ while read -r cidr; do
         exit 1
     fi
     echo "Adding GitHub range $cidr"
-    ipset add allowed-domains "$cidr"
+    ipset add -exist allowed-domains "$cidr"
 done < <(echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | aggregate -q)
 
-# Resolve and add other allowed domains
+# Resolve and add other allowed domains.
+#
+# Two changes from the reference script, both found by running it behind an
+# ad-blocking resolver: sinkholed answers (0.0.0.0, 127.x) are skipped
+# instead of added, and `ipset add -exist` tolerates duplicates — the
+# reference aborted on the second 0.0.0.0, leaving NO rules applied while the
+# container carried on with unrestricted egress. Telemetry domains are
+# optional (warn if unresolvable); everything else is required (fail).
+add_domain() {
+    local domain="$1" required="$2"
+    echo "Resolving $domain..."
+    local ips
+    ips=$(dig +noall +answer A "$domain" | awk '$4 == "A" {print $5}' \
+        | grep -Ev '^(0\.0\.0\.0|127\.)' || true)
+    if [ -z "$ips" ]; then
+        if [ "$required" = "required" ]; then
+            echo "ERROR: Failed to resolve $domain"
+            exit 1
+        fi
+        echo "WARNING: $domain did not resolve to a routable address; skipping"
+        return 0
+    fi
+    while read -r ip; do
+        if [[ ! "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+            echo "ERROR: Invalid IP from DNS for $domain: $ip"
+            exit 1
+        fi
+        echo "Adding $ip for $domain"
+        ipset add -exist allowed-domains "$ip"
+    done < <(echo "$ips")
+}
+
 for domain in \
     "registry.npmjs.org" \
     "api.anthropic.com" \
-    "sentry.io" \
-    "statsig.com" \
     "marketplace.visualstudio.com" \
     "vscode.blob.core.windows.net" \
     "update.code.visualstudio.com" \
@@ -86,21 +115,10 @@ for domain in \
     "graph.facebook.com" \
     "developers.facebook.com" \
     "lookaside.fbsbx.com"; do
-    echo "Resolving $domain..."
-    ips=$(dig +noall +answer A "$domain" | awk '$4 == "A" {print $5}')
-    if [ -z "$ips" ]; then
-        echo "ERROR: Failed to resolve $domain"
-        exit 1
-    fi
-    
-    while read -r ip; do
-        if [[ ! "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-            echo "ERROR: Invalid IP from DNS for $domain: $ip"
-            exit 1
-        fi
-        echo "Adding $ip for $domain"
-        ipset add allowed-domains "$ip"
-    done < <(echo "$ips")
+    add_domain "$domain" required
+done
+for domain in "sentry.io" "statsig.com" "statsig.anthropic.com"; do
+    add_domain "$domain" optional
 done
 
 # Get host IP from default route

@@ -74,6 +74,10 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
 COPY init-firewall.sh /usr/local/bin/
 USER root
+# Login shells (bash -l) reset PATH from /etc/profile; keep cargo and the npm
+# global bin (claude) reachable there too, not only in ENV-inheriting shells.
+RUN printf 'export PATH="/home/node/.cargo/bin:/usr/local/share/npm-global/bin:$PATH"\n' \
+  > /etc/profile.d/wa-rs-path.sh
 RUN chmod +x /usr/local/bin/init-firewall.sh && \
   echo "node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/node-firewall && \
   chmod 0440 /etc/sudoers.d/node-firewall
