@@ -6,6 +6,12 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+# Unmaintained-crate advisories count only for our direct dependencies. typst
+# pulls unmaintained transitive crates (bincode, paste, rustybuzz, ttf-parser,
+# yaml-rust at the time of writing) that we cannot replace short of forking
+# typst. Vulnerability advisories are not affected by this: they still fail
+# the check for any crate in the graph.
+unmaintained = "workspace"
 
 [licenses]
 version = 2

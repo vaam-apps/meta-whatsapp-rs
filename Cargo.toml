@@ -91,6 +91,9 @@ redis = { version = "1", default-features = false }
 
 # Typst rendering.
 typst = "0.15"
+# `PagedDocument` (what `typst::compile` lays out and every exporter takes)
+# lives here and is not re-exported by `typst`.
+typst-layout = "0.15"
 typst-pdf = "0.15"
 typst-render = "0.15"
 typst-kit = { version = "0.15", default-features = false }
