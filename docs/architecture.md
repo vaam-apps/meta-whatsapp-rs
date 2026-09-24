@@ -1,7 +1,9 @@
 # wa-rs architecture
 
 This is the spec. Code that disagrees with it is a bug in one of the two;
-fix whichever is wrong, in the same PR.
+fix whichever is wrong, in the same PR. For task-oriented integration
+walkthroughs (Meta setup, onboarding, inbox, OTP, production), see the
+[integrator guides](guides/README.md).
 
 ## Goals
 

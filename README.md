@@ -224,6 +224,7 @@ workspace is `publish = false` until crate names are chosen.
 
 | Read | For |
 | --- | --- |
+| [docs/guides/](docs/guides/README.md) | integrator guides: Meta setup, Embedded Signup, webhooks, CMS inbox, marketing, OTP login, documents, production |
 | [docs/coverage.md](docs/coverage.md) | what is implemented, per Meta feature |
 | [docs/architecture.md](docs/architecture.md) | the design spec: ports, error tree, security rules |
 | [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) | product decisions still open (read before production) |
