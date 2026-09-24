@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn today_is_the_configured_date_whatever_the_offset() {
-        let date = time::macros::date!(2026 - 09 - 24);
+        let date = time::macros::date!(2031 - 02 - 03);
         let world = RenderWorld::new("", "{}".to_owned(), Some(date));
         assert_eq!(world.today(None), Some(Datetime::Date(date)));
         assert_eq!(

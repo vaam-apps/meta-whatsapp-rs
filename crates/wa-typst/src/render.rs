@@ -438,9 +438,10 @@ Before #data.token after";
 
     #[test]
     fn today_is_the_configured_date() {
+        // Not the real date, so reading the system clock cannot pass by luck.
         let template = Template::from_source("dated", "#datetime.today().display()");
-        let renderer = Renderer::new().with_today(time::macros::date!(2026 - 09 - 24));
+        let renderer = Renderer::new().with_today(time::macros::date!(2031 - 02 - 03));
         let pdf = pretty_pdf(renderer, &template, &json!({}));
-        assert!(pdf_text::contains(&pdf, "2026-09-24"));
+        assert!(pdf_text::contains(&pdf, "2031-02-03"));
     }
 }
