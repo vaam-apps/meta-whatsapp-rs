@@ -28,10 +28,36 @@
 //! - the inbox summary follows the newest message by `(timestamp, id)`, not
 //!   the most recently appended one;
 //! - unread counts inbound messages appended since the last `mark_read`, by
-//!   arrival, and concurrent appends are all counted.
+//!   arrival, and concurrent appends are all counted;
+//! - synced history (`append_synced`) is stored and ordered like any
+//!   message and moves the conversation's latest message, but never moves
+//!   `last_inbound_at` (the customer service window) nor the unread count,
+//!   even interleaved with concurrent live appends; the id rule spans
+//!   `append` and `append_synced`;
+//! - `append_synced` takes a batch and answers per message: an empty batch
+//!   is a no-op, a duplicate within the batch or an id already stored is
+//!   `false` and changes nothing, and each conversation's summary follows
+//!   its newest message across the batch, over hundreds of messages;
+//! - a revoke deletes only a message of its business number and of its
+//!   direction, never regresses a terminal status, and when its message is
+//!   not stored yet leaves a tombstone (kind `revoked`, no content,
+//!   `Deleted`) that keeps the message's content out when it arrives, live
+//!   or synced; whether a revoke must match the conversation too is not
+//!   checked (`OPEN_QUESTIONS.md` #37);
+//! - a tombstone is history but never part of the summary: in an existing
+//!   conversation the summary stays exactly as it was (latest message,
+//!   preview, window, unread), and a conversation with nothing but a
+//!   tombstone is not listed;
+//! - `fill_media_placeholder` rewrites the `kind`, `text` and `payload` of a
+//!   stored media placeholder of its business number, once, and nothing
+//!   else: not another number's row, not a message that is not (or no
+//!   longer) a placeholder, not a placeholder that was revoked, not the
+//!   window or the unread count; the conversation preview follows when the
+//!   placeholder is the latest message.
 
 use time::OffsetDateTime;
 use time::macros::datetime;
+use wa_core::error::StorageError;
 use wa_core::ids::{MessageId, PhoneNumberId};
 use wa_core::store::{
     ConversationKey, ConversationStore, ConversationSummary, DeliveryStatus, Direction,
@@ -59,6 +85,14 @@ pub async fn run<S: ConversationStore + ?Sized>(store: &S) {
     zero_limit(store).await;
     concurrent_appends(store).await;
     concurrent_status_updates(store).await;
+    synced_history_opens_no_window_and_is_never_unread(store).await;
+    concurrent_live_and_synced_appends(store).await;
+    a_media_placeholder_is_filled_once(store).await;
+    synced_batches_answer_per_message(store).await;
+    a_revoke_matches_its_number_and_direction(store).await;
+    a_revoke_before_its_message_leaves_a_tombstone(store).await;
+    a_tombstone_leaves_the_summary_alone(store).await;
+    a_revoked_placeholder_is_never_filled(store).await;
 }
 
 const T0: OffsetDateTime = datetime!(2026-09-24 12:00 UTC);
@@ -127,6 +161,16 @@ impl Run {
             error: None,
         }
     }
+}
+
+/// `append_synced` of one message.
+async fn synced<S: ConversationStore + ?Sized>(
+    store: &S,
+    message: StoredMessage,
+) -> Result<bool, StorageError> {
+    let inserted = store.append_synced(vec![message]).await?;
+    assert_eq!(inserted.len(), 1, "append_synced answers once per message");
+    Ok(inserted[0])
 }
 
 async fn summary<S: ConversationStore + ?Sized>(
@@ -803,5 +847,660 @@ async fn concurrent_status_updates<S: ConversationStore + ?Sized>(store: &S) {
         only_message(store, &r.key("c")).await.status,
         DeliveryStatus::Read,
         "concurrent updates end on the highest status"
+    );
+}
+
+/// Synced history (`append_synced`: messages from before the business was
+/// onboarded, which Meta opens no customer service window for and the
+/// merchant has read in the app) is history like any other message, but
+/// never moves `last_inbound_at` nor the unread count. An adapter that
+/// treats it like `append` fails here.
+async fn synced_history_opens_no_window_and_is_never_unread<S: ConversationStore + ?Sized>(
+    store: &S,
+) {
+    let r = Run::new("synced");
+    let key = r.key("c");
+    let first = r.msg("c", "s5", Direction::Inbound, 5, "from the app");
+    assert!(
+        synced(store, first.clone()).await.unwrap(),
+        "first synced append"
+    );
+    assert_eq!(
+        only_message(store, &key).await,
+        first,
+        "a synced message is stored verbatim"
+    );
+    let s = summary(store, &key)
+        .await
+        .expect("a synced message creates its conversation");
+    assert_eq!(
+        (s.last_inbound_at, s.unread),
+        (None, 0),
+        "a synced inbound message opens no window and is not unread"
+    );
+    assert_eq!(
+        (s.last_message_at, s.last_text.as_deref()),
+        (at(5), Some("from the app")),
+        "but it is the conversation's latest message"
+    );
+    assert_eq!(store.last_inbound_at(&key).await.unwrap(), None);
+
+    // A live inbound message, older: the window and the count follow it
+    // alone, and a newer synced one moves neither.
+    assert!(
+        store
+            .append(r.msg("c", "l1", Direction::Inbound, 1, "live"))
+            .await
+            .unwrap()
+    );
+    assert!(
+        synced(
+            store,
+            r.msg("c", "s9", Direction::Inbound, 9, "newer, synced")
+        )
+        .await
+        .unwrap()
+    );
+    let s = summary(store, &key).await.unwrap();
+    assert_eq!(
+        (s.last_inbound_at, s.unread),
+        (Some(at(1)), 1),
+        "only the live message counts"
+    );
+    assert_eq!(
+        (s.last_message_at, s.last_text.as_deref()),
+        (at(9), Some("newer, synced"))
+    );
+    assert_eq!(store.last_inbound_at(&key).await.unwrap(), Some(at(1)));
+
+    // One id rule across both methods: a replay by either changes nothing.
+    assert!(
+        !synced(
+            store,
+            r.msg("c", "l1", Direction::Inbound, 1, "again, synced")
+        )
+        .await
+        .unwrap(),
+        "a live message replayed as synced"
+    );
+    assert!(
+        !store
+            .append(r.msg("c", "s9", Direction::Inbound, 9, "again, live"))
+            .await
+            .unwrap(),
+        "a synced message replayed live"
+    );
+    assert!(
+        !synced(store, r.msg("c", "s5", Direction::Inbound, 5, "again"))
+            .await
+            .unwrap(),
+        "a synced message replayed as synced"
+    );
+    let s = summary(store, &key).await.unwrap();
+    assert_eq!(
+        (s.last_inbound_at, s.unread),
+        (Some(at(1)), 1),
+        "replays change neither the window nor the count"
+    );
+    let texts: Vec<_> = store
+        .messages(&key, None, 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|m| m.text.unwrap_or_default())
+        .collect();
+    assert_eq!(texts, ["newer, synced", "from the app", "live"]);
+
+    // After mark_read, synced messages still add nothing.
+    store.mark_read(&key).await.unwrap();
+    synced(
+        store,
+        r.msg("c", "s20", Direction::Inbound, 20, "latest, synced"),
+    )
+    .await
+    .unwrap();
+    let s = summary(store, &key).await.unwrap();
+    assert_eq!((s.last_inbound_at, s.unread), (Some(at(1)), 0));
+    assert_eq!(s.last_message_at, at(20));
+}
+
+/// Live and synced appends racing on one conversation: every live inbound
+/// message is counted and moves the window, no synced one does.
+async fn concurrent_live_and_synced_appends<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("synced-race");
+    let key = r.key("c");
+    let live = (0..8).map(|i| {
+        let m = r.msg("c", &format!("live{i}"), Direction::Inbound, 2 * i, "live");
+        store.append(m)
+    });
+    // Four batches of two synced messages each.
+    let batches = (0..4).map(|b| {
+        let batch = (0..2)
+            .map(|j| {
+                let i = 2 * b + j;
+                let at = 2 * i + 1;
+                r.msg("c", &format!("synced{i}"), Direction::Inbound, at, "synced")
+            })
+            .collect();
+        store.append_synced(batch)
+    });
+    let (live, batches) = futures::future::join(
+        futures::future::join_all(live),
+        futures::future::join_all(batches),
+    )
+    .await;
+    for appended in live {
+        assert!(appended.unwrap());
+    }
+    for batch in batches {
+        assert_eq!(batch.unwrap(), [true, true]);
+    }
+    assert_eq!(store.messages(&key, None, 100).await.unwrap().len(), 16);
+    let s = summary(store, &key).await.unwrap();
+    assert_eq!(s.unread, 8, "only live messages are unread");
+    assert_eq!(
+        s.last_inbound_at,
+        Some(at(14)),
+        "the window follows the latest live message"
+    );
+    assert_eq!(s.last_message_at, at(15), "a synced message is the latest");
+}
+
+/// `fill_media_placeholder` rewrites a stored placeholder's content once,
+/// on its own business number, and nothing else.
+async fn a_media_placeholder_is_filled_once<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("placeholder");
+    let other = Run::new("placeholder-other");
+    let key = r.key("c");
+    let placeholder = StoredMessage {
+        kind: StoredMessage::MEDIA_PLACEHOLDER.to_owned(),
+        text: None,
+        payload: serde_json::json!({
+            "type": "media_placeholder",
+            "history_context": {"status": "PLAYED"}
+        }),
+        status: DeliveryStatus::Played,
+        status_at: Some(at(4)),
+        ..r.msg("c", "p3", Direction::Outbound, 3, "")
+    };
+    assert!(synced(store, placeholder.clone()).await.unwrap());
+    let content = serde_json::json!({
+        "type": "image",
+        "image": {"id": "24230790383178626", "caption": "Black Prince echeveria"}
+    });
+    let fill = |pn, id, caption: &str| {
+        store.fill_media_placeholder(
+            pn,
+            id,
+            "image".to_owned(),
+            Some(caption.to_owned()),
+            content.clone(),
+        )
+    };
+    assert!(
+        !fill(&other.pn, &placeholder.id, "wrong number")
+            .await
+            .unwrap(),
+        "a placeholder is only filled on its own business number"
+    );
+    let unknown = r.id("never-appended");
+    assert!(
+        !fill(&r.pn, &unknown, "nobody").await.unwrap(),
+        "an unknown id fills nothing"
+    );
+    assert_eq!(only_message(store, &key).await, placeholder);
+
+    assert!(
+        fill(&r.pn, &placeholder.id, "Black Prince echeveria")
+            .await
+            .unwrap(),
+        "the placeholder is filled"
+    );
+    let filled = StoredMessage {
+        kind: "image".to_owned(),
+        text: Some("Black Prince echeveria".to_owned()),
+        payload: content.clone(),
+        ..placeholder.clone()
+    };
+    assert_eq!(
+        only_message(store, &key).await,
+        filled,
+        "only kind, text and payload change"
+    );
+    assert_eq!(
+        summary(store, &key).await.unwrap().last_text.as_deref(),
+        Some("Black Prince echeveria"),
+        "the preview of the latest message follows"
+    );
+    assert!(
+        !fill(&r.pn, &placeholder.id, "redelivered").await.unwrap(),
+        "a placeholder is filled once"
+    );
+    assert_eq!(only_message(store, &key).await, filled);
+
+    // A message that never was a placeholder is never rewritten, and a
+    // placeholder that is not the latest message leaves the preview (and
+    // the window, and the count) alone.
+    let live = r.msg("c", "t1", Direction::Inbound, 1, "hello");
+    assert!(store.append(live.clone()).await.unwrap());
+    assert!(!fill(&r.pn, &live.id, "not a placeholder").await.unwrap());
+    let older = StoredMessage {
+        kind: StoredMessage::MEDIA_PLACEHOLDER.to_owned(),
+        text: None,
+        ..r.msg("c", "p0", Direction::Inbound, 0, "")
+    };
+    assert!(synced(store, older.clone()).await.unwrap());
+    assert!(fill(&r.pn, &older.id, "older photo").await.unwrap());
+    let history = store.messages(&key, None, 10).await.unwrap();
+    let find = |id: &MessageId| history.iter().find(|m| &m.id == id).unwrap().clone();
+    assert_eq!(find(&live.id), live, "not a placeholder: unchanged");
+    assert_eq!(find(&older.id).text.as_deref(), Some("older photo"));
+    let s = summary(store, &key).await.unwrap();
+    assert_eq!(
+        s.last_text.as_deref(),
+        Some("Black Prince echeveria"),
+        "the preview stays the latest message's"
+    );
+    assert_eq!(
+        (s.last_inbound_at, s.unread),
+        (Some(at(1)), 1),
+        "filling moves neither the window nor the count"
+    );
+}
+
+/// `append_synced` is a batch: one answer per message, the first of an id
+/// wins, and each conversation's summary follows its newest message.
+async fn synced_batches_answer_per_message<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("synced-batch");
+    assert!(
+        store.append_synced(Vec::new()).await.unwrap().is_empty(),
+        "an empty batch"
+    );
+    assert!(
+        store
+            .conversations(&r.pn, None, 10)
+            .await
+            .unwrap()
+            .is_empty(),
+        "an empty batch creates nothing"
+    );
+    let known = r.msg("a", "known", Direction::Outbound, 0, "stored before");
+    assert!(store.append(known.clone()).await.unwrap());
+    let first = r.msg("a", "dup", Direction::Inbound, 3, "first copy");
+    let batch = vec![
+        r.msg("b", "b1", Direction::Outbound, 7, "b newest"),
+        first.clone(),
+        r.msg("a", "known", Direction::Inbound, 9, "replayed, newer"),
+        r.msg("a", "dup", Direction::Inbound, 4, "second copy"),
+        r.msg("a", "a2", Direction::Inbound, 2, "a older"),
+        r.msg("b", "b0", Direction::Inbound, 5, "b older"),
+    ];
+    assert_eq!(
+        store.append_synced(batch).await.unwrap(),
+        [true, true, false, false, true, true],
+        "one answer per message, in order"
+    );
+    let history = store.messages(&r.key("a"), None, 10).await.unwrap();
+    let texts: Vec<_> = history.iter().map(|m| m.text.clone().unwrap()).collect();
+    assert_eq!(texts, ["first copy", "a older", "stored before"]);
+    assert_eq!(
+        history.iter().find(|m| m.id == first.id),
+        Some(&first),
+        "the first copy of an id is stored verbatim"
+    );
+    let a = summary(store, &r.key("a")).await.unwrap();
+    assert_eq!(
+        (
+            a.last_message_at,
+            a.last_text.as_deref(),
+            a.last_inbound_at,
+            a.unread
+        ),
+        (at(3), Some("first copy"), None, 0),
+        "the replayed id changed nothing, the batch opened no window"
+    );
+    let b = summary(store, &r.key("b")).await.unwrap();
+    assert_eq!(
+        (b.last_message_at, b.last_text.as_deref(), b.unread),
+        (at(7), Some("b newest"), 0)
+    );
+
+    // A history sync can be thousands of messages in one webhook.
+    let big = Run::new("synced-big");
+    let messages: Vec<_> = (0..600)
+        .map(|i| {
+            let contact = format!("c{}", i % 3);
+            let direction = if i % 2 == 0 {
+                Direction::Inbound
+            } else {
+                Direction::Outbound
+            };
+            big.msg(&contact, &format!("{i:04}"), direction, i, &format!("m{i}"))
+        })
+        .collect();
+    let answers = store.append_synced(messages).await.unwrap();
+    assert_eq!(answers.len(), 600);
+    assert!(answers.iter().all(|inserted| *inserted));
+    for c in 0..3_i64 {
+        let key = big.key(&format!("c{c}"));
+        assert_eq!(store.messages(&key, None, 1000).await.unwrap().len(), 200);
+        let s = summary(store, &key).await.unwrap();
+        let newest = 597 + c;
+        assert_eq!(
+            (s.last_message_at, s.last_text, s.last_inbound_at, s.unread),
+            (at(newest), Some(format!("m{newest}")), None, 0)
+        );
+    }
+}
+
+/// A revoke deletes a message of its own business number and direction
+/// only: a customer revokes what they sent, the business what it sent.
+async fn a_revoke_matches_its_number_and_direction<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("revoke");
+    let other = Run::new("revoke-other");
+    let key = r.key("c");
+    let inbound = r.msg("c", "in", Direction::Inbound, 1, "from the customer");
+    let outbound = r.msg("c", "out", Direction::Outbound, 2, "from the business");
+    store.append(inbound.clone()).await.unwrap();
+    store.append(outbound.clone()).await.unwrap();
+
+    assert!(
+        !store
+            .revoke(&key, &inbound.id, Direction::Outbound, at(5))
+            .await
+            .unwrap(),
+        "the business cannot revoke the customer's message"
+    );
+    assert!(
+        !store
+            .revoke(&key, &outbound.id, Direction::Inbound, at(5))
+            .await
+            .unwrap(),
+        "the customer cannot revoke the business's message"
+    );
+    assert!(
+        !store
+            .revoke(&other.key("c"), &inbound.id, Direction::Inbound, at(5))
+            .await
+            .unwrap(),
+        "a revoke on another number changes nothing"
+    );
+    assert!(
+        store
+            .messages(&other.key("c"), None, 10)
+            .await
+            .unwrap()
+            .is_empty(),
+        "and leaves no tombstone there: the id is taken"
+    );
+    let history = store.messages(&key, None, 10).await.unwrap();
+    assert_eq!(
+        history,
+        [outbound.clone(), inbound.clone()],
+        "nothing changed"
+    );
+
+    assert!(
+        store
+            .revoke(&key, &inbound.id, Direction::Inbound, at(6))
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .revoke(&key, &outbound.id, Direction::Outbound, at(7))
+            .await
+            .unwrap()
+    );
+    let history = store.messages(&key, None, 10).await.unwrap();
+    let find = |id: &MessageId| history.iter().find(|m| &m.id == id).unwrap().clone();
+    assert_eq!(
+        find(&inbound.id),
+        StoredMessage {
+            status: DeliveryStatus::Deleted,
+            status_at: Some(at(6)),
+            ..inbound.clone()
+        }
+    );
+    assert_eq!(find(&outbound.id).status, DeliveryStatus::Deleted);
+    assert!(
+        !store
+            .revoke(&key, &inbound.id, Direction::Inbound, at(8))
+            .await
+            .unwrap(),
+        "a replayed revoke is a no-op"
+    );
+
+    // Terminal statuses do not supersede each other.
+    let failed = r.msg("c", "failed", Direction::Outbound, 3, "promo");
+    store.append(failed.clone()).await.unwrap();
+    store
+        .update_status(&r.pn, &failed.id, DeliveryStatus::Failed, at(4), None)
+        .await
+        .unwrap();
+    assert!(
+        !store
+            .revoke(&key, &failed.id, Direction::Outbound, at(9))
+            .await
+            .unwrap()
+    );
+    let s = summary(store, &key).await.unwrap();
+    assert_eq!(
+        (s.last_inbound_at, s.unread),
+        (Some(at(1)), 1),
+        "revokes move neither the window nor the count"
+    );
+}
+
+/// A revoke that arrives before its message leaves a tombstone, and the
+/// message, live or synced, is then never stored with its content.
+async fn a_revoke_before_its_message_leaves_a_tombstone<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("tombstone");
+    let key = r.key("c");
+    let deleted = r.msg("c", "gone", Direction::Inbound, 1, "my card number is 4111");
+    assert!(
+        store
+            .revoke(&key, &deleted.id, Direction::Inbound, at(30))
+            .await
+            .unwrap(),
+        "an unmatched revoke stores its tombstone"
+    );
+    let tombstone = StoredMessage::tombstone(&key, &deleted.id, Direction::Inbound, at(30));
+    assert_eq!(tombstone.kind, StoredMessage::REVOKED);
+    assert_eq!(
+        tombstone.payload,
+        serde_json::json!({}),
+        "a tombstone's payload is an empty object"
+    );
+    assert_eq!(only_message(store, &key).await, tombstone);
+    assert_eq!(
+        store.last_inbound_at(&key).await.unwrap(),
+        None,
+        "a tombstone opens no window"
+    );
+
+    assert!(
+        !store.append(deleted.clone()).await.unwrap(),
+        "the message arrives live after its revoke"
+    );
+    assert!(
+        !synced(store, deleted.clone()).await.unwrap(),
+        "or in the history"
+    );
+    assert_eq!(
+        only_message(store, &key).await,
+        tombstone,
+        "its content is never stored"
+    );
+    assert_eq!(
+        summary(store, &key).await,
+        None,
+        "nor does it create the summary the tombstone did not"
+    );
+    assert_eq!(store.last_inbound_at(&key).await.unwrap(), None);
+    assert!(
+        !store
+            .revoke(&key, &deleted.id, Direction::Inbound, at(31))
+            .await
+            .unwrap(),
+        "a replayed revoke changes nothing"
+    );
+    let outbound = r.id("gone-out");
+    assert!(
+        store
+            .revoke(&r.key("d"), &outbound, Direction::Outbound, at(40))
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        only_message(store, &r.key("d")).await,
+        StoredMessage::tombstone(&r.key("d"), &outbound, Direction::Outbound, at(40))
+    );
+}
+
+/// A tombstone is part of the history, never of the inbox summary: it
+/// cannot tell the merchant anything (no text, no content) and is not
+/// activity of the customer's at the time it carries.
+async fn a_tombstone_leaves_the_summary_alone<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("tombstone-summary");
+
+    // A conversation with nothing but a tombstone has no summary.
+    let fresh = r.key("fresh");
+    let early = r.id("early");
+    assert!(
+        store
+            .revoke(&fresh, &early, Direction::Inbound, at(50))
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        only_message(store, &fresh).await,
+        StoredMessage::tombstone(&fresh, &early, Direction::Inbound, at(50)),
+        "the tombstone is in the history"
+    );
+    assert_eq!(
+        summary(store, &fresh).await,
+        None,
+        "a conversation with only a tombstone is not listed"
+    );
+    assert_eq!(store.last_inbound_at(&fresh).await.unwrap(), None);
+    // Its first message, older than the tombstone, is its latest.
+    let first = r.msg("fresh", "first", Direction::Inbound, 10, "hello");
+    assert!(store.append(first).await.unwrap());
+    let s = summary(store, &fresh)
+        .await
+        .expect("the message creates it");
+    assert_eq!(
+        (
+            s.last_message_at,
+            s.last_text.as_deref(),
+            s.last_inbound_at,
+            s.unread
+        ),
+        (at(10), Some("hello"), Some(at(10)), 1),
+        "the tombstone, newer, is not the latest message"
+    );
+
+    // In an existing conversation, the summary stays exactly as it was,
+    // for a tombstone of either direction, newer than every message.
+    let key = r.key("known");
+    store
+        .append(r.msg("known", "in", Direction::Inbound, 1, "where is my order?"))
+        .await
+        .unwrap();
+    synced(
+        store,
+        r.msg("known", "out", Direction::Outbound, 2, "on its way"),
+    )
+    .await
+    .unwrap();
+    store
+        .append(r.msg("other", "x", Direction::Inbound, 5, "another customer"))
+        .await
+        .unwrap();
+    let before = summary(store, &key).await.unwrap();
+    assert_eq!(
+        (before.last_message_at, before.last_text.as_deref()),
+        (at(2), Some("on its way"))
+    );
+    for (local, direction, secs) in [
+        ("gone-in", Direction::Inbound, 40),
+        ("gone-out", Direction::Outbound, 41),
+    ] {
+        assert!(
+            store
+                .revoke(&key, &r.id(local), direction, at(secs))
+                .await
+                .unwrap()
+        );
+    }
+    assert_eq!(
+        summary(store, &key).await,
+        Some(before),
+        "a tombstone moves nothing in the summary"
+    );
+    assert_eq!(store.messages(&key, None, 10).await.unwrap().len(), 4);
+    let order: Vec<String> = store
+        .conversations(&r.pn, None, 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|s| s.key.contact)
+        .collect();
+    assert_eq!(
+        order,
+        ["fresh", "other", "known"],
+        "nor its place in the list"
+    );
+}
+
+/// A placeholder revoked before its content arrives is never filled: the
+/// content is what its sender deleted.
+async fn a_revoked_placeholder_is_never_filled<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("revoked-placeholder");
+    let key = r.key("c");
+    let placeholder = StoredMessage {
+        kind: StoredMessage::MEDIA_PLACEHOLDER.to_owned(),
+        text: None,
+        payload: serde_json::json!({"type": "media_placeholder"}),
+        status: DeliveryStatus::Received,
+        ..r.msg("c", "p", Direction::Inbound, 3, "")
+    };
+    assert!(synced(store, placeholder.clone()).await.unwrap());
+    assert!(
+        store
+            .revoke(&key, &placeholder.id, Direction::Inbound, at(5))
+            .await
+            .unwrap(),
+        "the live revoke deletes the placeholder"
+    );
+    let deleted = StoredMessage {
+        status: DeliveryStatus::Deleted,
+        status_at: Some(at(5)),
+        ..placeholder
+    };
+    assert_eq!(only_message(store, &key).await, deleted);
+    assert!(
+        !store
+            .fill_media_placeholder(
+                &r.pn,
+                &deleted.id,
+                "image".to_owned(),
+                Some("deleted caption".to_owned()),
+                serde_json::json!({"type": "image", "image": {"caption": "deleted caption"}}),
+            )
+            .await
+            .unwrap(),
+        "a revoked placeholder is never filled"
+    );
+    assert_eq!(
+        only_message(store, &key).await,
+        deleted,
+        "its content stays out"
+    );
+    assert_eq!(
+        summary(store, &key).await.unwrap().last_text,
+        None,
+        "and out of the preview"
     );
 }

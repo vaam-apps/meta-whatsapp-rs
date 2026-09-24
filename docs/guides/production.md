@@ -211,12 +211,32 @@ notification queue on top must be idempotent itself: tag each message with
 - Secrets from the secret manager, none in the repository or the database.
 - [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) read: several defaults there
   (OTP issue limit, PIN policy, the provisional NUL replacement, a
-  dead-letter path for webhook batches, token refresh, how synced
-  coexistence history counts in the inbox) are product decisions still
+  dead-letter path for webhook batches, token refresh, a revoked message
+  keeping its content in the inbox: #38) are product decisions still
   open. The OTP namespace is required since d67b3ac.
-- Upgrading from a wa-rs revision before e40b86f: outstanding OTP codes
-  become `NotFound` once (their store keys now include the sending number),
-  and issue limits restart ([otp-login.md](otp-login.md#3-wire-the-service)).
+- Upgrading from an older wa-rs revision, per commit crossed:
+  - e40b86f: outstanding OTP codes become `NotFound` once (their store
+    keys now include the sending number), and issue limits restart
+    ([otp-login.md](otp-login.md#3-wire-the-service)).
+  - 4b47bf7: a custom `ConversationStore`'s `update_status` takes the
+    business `phone_number_id` first.
+  - 6d50701 and a9593f3: a custom `ConversationStore` must implement
+    three new methods, `append_synced`, `fill_media_placeholder` and
+    `revoke`, and pass `conversation_conformance::run`
+    ([cms-inbox.md](cms-inbox.md#1-storage-postgres-and-migrations)).
+  - af5b1f8: that suite also fails a custom store that fills a revoked
+    placeholder or lets a revoke's tombstone into the conversation
+    summary.
+  - 8238853: OTP codes in flight answer `Invalid` once (the code hash
+    now covers its store key).
+  - 8238853 and 7e4801f: `OtpService::new` refuses a namespace with edge
+    whitespace, control or format characters (`Error::Config`); fixing
+    it changes the store keys, so codes in flight answer `NotFound` once
+    and limits restart ([otp-login.md](otp-login.md#3-wire-the-service)).
+  - Nothing is back-filled: rows and conversation summaries recorded
+    before an upgrade stay as they were written (synced history recorded
+    before 6d50701 keeps the unread count and window it moved, for
+    instance).
 
 ## The dev container
 

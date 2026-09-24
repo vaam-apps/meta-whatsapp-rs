@@ -5,7 +5,7 @@ description: "WhatsApp OTP login and phone verification with wa-rs - creating th
 
 # wa-rs-otp-login
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs 92f9692ed24b96c43bedcca2e7088cf196753064 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/otp.rs](examples/otp.rs), compiled and tested by
 wa-rs's own gate (issue → verify once, expiry with a `ManualClock`,
@@ -57,7 +57,8 @@ OtpConfig {
 
 `OtpService::new` checks the config (`OtpConfig::validate()` names the
 field: `code_length` 4–8, `ttl` up to 90 minutes, `max_attempts`,
-`issue_limit`, a blank `namespace`) as `Error::Config`.
+`issue_limit`, a blank `namespace` or one with edge whitespace, control
+or format characters: U+200B, U+FEFF, bidi controls) as `Error::Config`.
 
 ## 3. Issue, then verify
 
@@ -87,8 +88,9 @@ Ok(match otp.verify(&user, "login", typed.trim()).await? {
 ```
 
 `purpose` (`"login"`, `"reset_password"`, …) separates flows for one
-number. `verify` compares byte for byte: trim input. Every call with a
-live code counts as an attempt, counted atomically before comparing.
+number. It and the namespace are constants of your code or tenant table,
+never request input. `verify` compares byte for byte: trim input. Every
+call with a live code counts as an attempt, counted atomically first.
 
 ## Why E.164 with `+` is mandatory
 
@@ -110,17 +112,16 @@ the purpose: one store and one pepper serve any number of services, and
 tenants sharing a number never see each other's codes. Changing a
 namespace invalidates outstanding codes.
 
-~~`OtpConfig::namespace` is an `Option`, `None` by default (one shared
-scope per number)~~: true until d67b3ac (2026-09-24), now required. Crossing
-it: a service that set `Some(ns)` keeps its keys and outstanding codes
-with `OtpConfig::new(ns)`; one that used `None` must pick a namespace,
-and its codes in flight become `NotFound` once.
-
-~~Codes were keyed by the pepper, the recipient's digits and the purpose
-only~~: true until e40b86f (2026-09-24). Moving your `rev` across e40b86f
-changes every store key once: codes in flight become `NotFound` and issue
-limits restart; deploy outside peak login time. On an older pin, give
-every sending number its own pepper or store.
+Upgrades (codes in flight answer as said, once): ~~`OtpConfig::namespace`
+is an `Option`~~: until d67b3ac; `Some(ns)` keeps its keys with
+`OtpConfig::new(ns)`, a `None` service must pick one (`NotFound`). ~~Codes
+were keyed by the pepper, the digits and the purpose only~~: until e40b86f
+(`NotFound`, limits restart). ~~The code hash left out the store key~~ (a
+store writer could copy their record over another key): until 8238853
+(2026-09-24; `Invalid`). ~~A namespace with edge whitespace, control or
+format characters works~~: until 8238853 (format characters: 7e4801f,
+2026-09-25). Breaking: such a service fails `OtpService::new`, and fixing
+the namespace changes its keys (`NotFound`, limits restart).
 
 ## Pitfalls
 

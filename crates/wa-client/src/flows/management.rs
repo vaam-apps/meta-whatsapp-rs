@@ -14,6 +14,7 @@ use super::types::{
     ListFlows, UpdateFlow, validate_flow_json_len,
 };
 use crate::Client;
+use crate::request::{paginate_or_error, reject_cursors};
 
 /// Every field `GET /{FLOW_ID}` documents except `preview` (which has its own
 /// call, [`Flow::preview`], because asking for it mints a link) and the
@@ -99,12 +100,20 @@ impl Flows {
             .await
     }
 
-    /// Every Flow of this account, following cursors page by page.
-    pub fn list_stream(&self) -> impl Stream<Item = Result<FlowDetails>> + Send + 'static {
-        self.client
-            .get_at(&[self.waba_id.as_str(), "flows"])
-            .context("list flows response")
-            .paginate()
+    /// Every Flow of this account, following cursors page by page. The
+    /// stream manages them itself: a query with `after` or `before` set is
+    /// refused (the stream's single item is that validation error).
+    pub fn list_stream(
+        &self,
+        query: &ListFlows,
+    ) -> impl Stream<Item = Result<FlowDetails>> + Send + 'static {
+        paginate_or_error(
+            reject_cursors(query.after.as_deref(), query.before.as_deref()).map(|()| {
+                self.client
+                    .get_at(&[self.waba_id.as_str(), "flows"])
+                    .context("list flows response")
+            }),
+        )
     }
 }
 
@@ -202,12 +211,20 @@ impl Flow {
             .await
     }
 
-    /// Every asset of the Flow, following cursors.
-    pub fn assets_stream(&self) -> impl Stream<Item = Result<FlowAsset>> + Send + 'static {
-        self.client
-            .get_at(&[self.flow_id.as_str(), "assets"])
-            .context("flow assets response")
-            .paginate()
+    /// Every asset of the Flow, following cursors. The stream manages them
+    /// itself: a query with `after` or `before` set is refused (the
+    /// stream's single item is that validation error).
+    pub fn assets_stream(
+        &self,
+        query: &ListFlowAssets,
+    ) -> impl Stream<Item = Result<FlowAsset>> + Send + 'static {
+        paginate_or_error(
+            reject_cursors(query.after.as_deref(), query.before.as_deref()).map(|()| {
+                self.client
+                    .get_at(&[self.flow_id.as_str(), "assets"])
+                    .context("flow assets response")
+            }),
+        )
     }
 
     /// Publish the Flow (`POST /{FLOW_ID}/publish`). Irreversible: a

@@ -32,6 +32,12 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
 - `CustomerServiceWindowClosed` (131047): send a template instead.
 - New leaf variants need a reason in `docs/architecture.md`. Prefer an
   existing leaf.
+- **Every new `Error` variant decides `Error::may_have_been_sent`** (the
+  match is exhaustive on purpose): `false` only if Meta provably did
+  nothing, `true` if a send may have gone out. It is the shared rule:
+  integrators branch on it ("fix and resend" vs "reconcile first") and
+  the OTP service removes a challenge only when it is `false`. Add a row
+  per new arm to `may_have_been_sent_only_when_meta_could_have_acted`.
 - `anyhow` only wraps errors from code we don't own
   (`TransportError::Backend`, `StorageError::Backend`, `SinkError::Delivery`,
   `Error::Other`).

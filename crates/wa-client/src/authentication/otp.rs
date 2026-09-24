@@ -19,11 +19,14 @@
 //! - **Storage**: namespace `wa.otp`, key = hex HMAC-SHA256(pepper,
 //!   `"wa.otp.key|" + scope + "|" + digits + "|" + purpose`). No phone
 //!   number or code is ever stored or used as a key. The record holds the
-//!   challenge id, HMAC-SHA256(pepper, `"wa.otp.code|" + challenge id + "|" +
-//!   code`), the attempt count, the expiry and the send time. The two HMAC
-//!   inputs carry different prefixes so a key can never be replayed as a
-//!   code hash. The issue log (`wa.otp.rate`, same key) holds send times
-//!   only.
+//!   challenge id, HMAC-SHA256(pepper, `"wa.otp.code|" + key + "|" +
+//!   challenge id + "|" + code`), the attempt count, the expiry and the
+//!   send time. The two HMAC inputs carry different prefixes so a key can
+//!   never be replayed as a code hash, and the code hash covers the key it
+//!   is stored under: whoever can write the store but lacks the pepper
+//!   cannot copy their own record over someone else's key (another number,
+//!   purpose or namespace) and verify there with their own code. The issue
+//!   log (`wa.otp.rate`, same key) holds send times only.
 //! - **Scope**: the sending `phone_number_id` and the required
 //!   [`OtpConfig::namespace`] (the tenant), length-prefixed (netstrings, so
 //!   neither can be shifted into the other). Services that share a store
@@ -64,6 +67,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use time::{OffsetDateTime, PrimitiveDateTime};
+use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 use wa_core::clock::Clock;
 use wa_core::error::{ConfigError, CryptoError, StorageError, ValidationError};
 use wa_core::ids::{MessageId, PhoneNumberId};
@@ -227,7 +231,12 @@ pub struct OtpConfig {
     /// per-number limit is enforced in front of this service.
     pub issue_limit: Option<IssueLimit>,
     /// Tenant (or app) this service issues codes for — the tenant id of
-    /// your platform, for instance. Required, and must not be blank.
+    /// your platform, for instance. Required: not blank, without leading or
+    /// trailing whitespace, without control (`Cc`) or format (`Cf`: U+200B,
+    /// U+FEFF, bidi controls, …) characters. A server-side
+    /// constant (from your configuration or your tenant table), never a
+    /// value taken from the request: a caller who picks the namespace picks
+    /// whose codes, cooldowns and limits they get.
     ///
     /// A code, cooldown or issue limit of one namespace is invisible to
     /// every other, on top of the binding to the sending `phone_number_id`:
@@ -275,6 +284,20 @@ impl OtpConfig {
             return bad(
                 "namespace",
                 "must not be blank: name the tenant (or app) the service issues codes for",
+            );
+        }
+        // `" shop"`, `"shop\u{200B}"` and `"shop"` would be three tenants
+        // that print alike.
+        if self.namespace.trim() != self.namespace
+            || self
+                .namespace
+                .chars()
+                .any(|c| c.is_control() || c.general_category() == GeneralCategory::Format)
+        {
+            return bad(
+                "namespace",
+                "must not have leading or trailing whitespace, control characters or \
+                 format characters (U+200B, U+FEFF, bidi controls, …)",
             );
         }
         Ok(())
@@ -587,6 +610,20 @@ impl OtpService {
         Ok(mac.finalize().into_bytes().into())
     }
 
+    /// The code hash of challenge `id` stored under `key`. The key is part
+    /// of it: a record copied to another key never verifies there. The
+    /// input is unambiguous about the key because `key` comes first and is
+    /// always 64 hex characters this service computed: whatever `id` (at
+    /// verify, `record.id`, read back from the store) and `code` (the
+    /// user's input) contain, `|` included, two different keys never hash
+    /// the same bytes.
+    fn code_mac(&self, key: &str, id: &str, code: &str) -> Result<[u8; 32]> {
+        self.mac(
+            CODE_DOMAIN,
+            &[key.as_bytes(), id.as_bytes(), code.as_bytes()],
+        )
+    }
+
     /// Store key for a phone number and purpose, bound to this service's
     /// scope. The scope is prefix-free and digits contain no `|`, so
     /// `scope|digits|purpose` is unambiguous.
@@ -608,7 +645,9 @@ impl OtpService {
 
     /// Generate a code, store its hash, and send it to `recipient` with the
     /// authentication template. `purpose` separates independent flows for
-    /// the same number (`"login"`, `"reset_password"`, …).
+    /// the same number (`"login"`, `"reset_password"`, …): a constant of
+    /// your code, never a value from the request, or a caller could verify
+    /// one flow with a code sent for another.
     ///
     /// `recipient` must carry an E.164 phone number with its leading `+`
     /// (spaces, hyphens and parentheses are ignored): that exact number is
@@ -644,7 +683,7 @@ impl OtpService {
         let code = random_code(self.config.code_length)?;
         let expires_at = plus(now, self.config.ttl);
         let record = StoredChallenge {
-            mac: hex::encode(self.mac(CODE_DOMAIN, &[id.as_bytes(), code.as_bytes()])?),
+            mac: hex::encode(self.code_mac(&key, &id, &code)?),
             id: id.clone(),
             attempts: 0,
             expires_at: to_ms(expires_at),
@@ -846,7 +885,7 @@ impl OtpService {
                     "OTP record `{NAMESPACE}/{key}` has a malformed hash"
                 )))
             })?;
-            let candidate = self.mac(CODE_DOMAIN, &[record.id.as_bytes(), code.as_bytes()])?;
+            let candidate = self.code_mac(&key, &record.id, code)?;
             if bool::from(candidate.as_slice().ct_eq(expected.as_slice())) {
                 return self.consume(&key, &record.id, counted).await;
             }

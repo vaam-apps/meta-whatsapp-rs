@@ -292,8 +292,10 @@ pub struct CreatedFlow {
 /// Which page of [`Flows::list`](super::Flows::list) to read
 /// (`flows/guides/flowsapi#list`). The stream,
 /// [`Flows::list_stream`](super::Flows::list_stream), manages the cursors
-/// itself and takes no query.
+/// itself and refuses a query that sets one. Build it with
+/// [`ListFlows::new`] and the builders.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ListFlows {
     /// Cursor from a previous page's `paging.cursors.after`
     /// ([`Page::next_cursor`](wa_core::paging::Page::next_cursor)).
@@ -326,8 +328,10 @@ impl ListFlows {
 /// Which page of [`Flow::assets`](super::Flow::assets) to read
 /// (`flows/guides/flowsapi#asset-list`). The stream,
 /// [`Flow::assets_stream`](super::Flow::assets_stream), manages the cursors
-/// itself and takes no query.
+/// itself and refuses a query that sets one. Build it with
+/// [`ListFlowAssets::new`] and the builders.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ListFlowAssets {
     /// Cursor from a previous page's `paging.cursors.after`
     /// ([`Page::next_cursor`](wa_core::paging::Page::next_cursor)).

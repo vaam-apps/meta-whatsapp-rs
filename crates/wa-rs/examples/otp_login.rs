@@ -26,11 +26,12 @@
 //! | `WA_OTP_TEMPLATE` | yes | an approved authentication template (copy code or one-tap) |
 //! | `WA_OTP_LANGUAGE` | no | the language it was approved in (default `en_US`) |
 //! | `WA_OTP_PEPPER` | yes | at least 32 random bytes (`openssl rand -base64 32`); keep it out of the database |
-//! | `WA_OTP_NAMESPACE` | no | the tenant (or app) the codes are for (default `otp-login-example`); changing it invalidates outstanding codes |
+//! | `WA_OTP_NAMESPACE` | yes | the tenant (or app) the codes are for, a constant of your deployment; changing it invalidates outstanding codes |
 //!
 //! ```text
 //! WA_TOKEN=… WA_PHONE_NUMBER_ID=… WA_TO=+16505551234 WA_OTP_TEMPLATE=login_code \
-//!   WA_OTP_PEPPER="$(openssl rand -base64 32)" cargo run -p wa-rs --example otp_login
+//!   WA_OTP_NAMESPACE=my-shop WA_OTP_PEPPER="$(openssl rand -base64 32)" \
+//!   cargo run -p wa-rs --example otp_login
 //! ```
 
 use std::sync::Arc;
@@ -62,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(MemoryKvStore::new()), // Postgres or Redis with several instances
         Arc::new(SystemClock),
         OtpPepper::new(env("WA_OTP_PEPPER")?)?, // >= 32 bytes, not stored with the codes
-        OtpConfig::new(env_or("WA_OTP_NAMESPACE", "otp-login-example")), // the tenant, never blank
+        OtpConfig::new(env("WA_OTP_NAMESPACE")?), // the tenant: required, never a default
     )?;
     let user = Recipient::phone(env("WA_TO")?); // strict E.164, with `+`
 

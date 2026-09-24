@@ -5,7 +5,7 @@ description: "Choosing and running wa-rs storage - the KvStore (token vault, OTP
 
 # wa-rs-storage
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs 92f9692ed24b96c43bedcca2e7088cf196753064 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/stores.rs](examples/stores.rs), compiled by
 wa-rs's own gate; its tests run the conformance suites on the memory
@@ -96,7 +96,17 @@ A store that expires on a server's clock runs
 `conformance::run_with_real_time(&store, tick)`; a conversation store
 runs `conversation_conformance::run(&store)`. `update_status` takes the
 business `phone_number_id` first: a status only changes a message of the
-number it arrived on.
+number it arrived on. `append_synced` (a batch of coexistence history:
+one round trip if you can) must not move `last_inbound_at` nor the unread
+count; `fill_media_placeholder` rewrites only a row whose `kind` is
+`StoredMessage::MEDIA_PLACEHOLDER` and whose status is not `Deleted`;
+`revoke` matches number and direction and stores
+`StoredMessage::tombstone` when the id is unknown, as history only (the
+summary never sees it). The suite checks all three.
+~~Six methods to implement~~: until 6d50701 and a9593f3 (2026-09-24),
+which added `append_synced`, `fill_media_placeholder` and `revoke`.
+~~A tombstone is part of the summary; a revoked placeholder may be
+filled~~: until af5b1f8 (2026-09-25).
 
 ## Pitfalls
 

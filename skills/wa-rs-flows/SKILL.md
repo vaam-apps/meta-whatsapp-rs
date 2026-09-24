@@ -5,7 +5,7 @@ description: "WhatsApp Flows with wa-rs - creating a Flow from its JSON (CreateF
 
 # wa-rs-flows
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs 92f9692ed24b96c43bedcca2e7088cf196753064 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/flows.rs](examples/flows.rs), compiled and
 tested by wa-rs's own gate.
@@ -76,15 +76,20 @@ let Ok((request, sealer)) = key.decrypt_request(&encrypted) else {
     return (EndpointStatus::DecryptionFailed.code(), String::new()); // 421
 };
 let response = match &request.action {
-    FlowAction::Ping => FlowResponse::health_check(),
+    EndpointAction::Ping => FlowResponse::health_check(),
     _ if request.error_notification().is_some() => FlowResponse::acknowledge_error(),
-    FlowAction::Init => FlowResponse::next_screen("SLOTS", json!({"slots": ["9:00", "14:00"]})),
-    FlowAction::DataExchange => {
+    EndpointAction::Init => {
+        FlowResponse::next_screen("SLOTS", json!({"slots": ["9:00", "14:00"]}))
+    }
+    EndpointAction::DataExchange => {
         FlowResponse::complete(request.flow_token.clone().unwrap_or_default())
     }
     _ => FlowResponse::next_screen("SLOTS", json!({})),
 };
 ```
+
+~~`flows::endpoint::FlowAction`~~: renamed `EndpointAction` in 6909be3
+(2026-09-25); `Flows::list_stream` and `Flow::assets_stream` take a query.
 
 Answer 200 with `sealer.seal(&response)?` as `text/plain`
 (`RESPONSE_CONTENT_TYPE`): the same AES key, the bit-flipped IV.

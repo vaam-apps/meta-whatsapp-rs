@@ -569,10 +569,28 @@ async fn a_namespace_separates_tenants_on_one_number() {
 }
 
 /// There is no default namespace to forget: a blank one is refused when
-/// the service is built.
+/// the service is built, and so is one that only looks like another (edge
+/// whitespace, control characters, invisible format characters).
 #[test]
 fn a_blank_namespace_is_a_config_error() {
-    for blank in ["", " ", "\t\n"] {
+    for blank in [
+        "",
+        " ",
+        "\t\n",
+        " shop-a",
+        "shop-a ",
+        "shop-a\n",
+        "shop\u{7}-a",
+        // Format characters (general category Cf): invisible, so each of
+        // these prints as `shop-a`.
+        "shop\u{200B}-a",
+        "\u{FEFF}shop-a",
+        "shop-a\u{200D}",
+        "shop\u{AD}-a",
+        "shop-a\u{202E}",
+        "\u{2066}shop-a\u{2069}",
+        "shop-a\u{E0041}",
+    ] {
         let t = ScriptedTransport::new();
         let e = OtpService::new(
             client(&t, RetryPolicy::NONE),
@@ -588,6 +606,25 @@ fn a_blank_namespace_is_a_config_error() {
         assert_eq!(
             OtpConfig::new(blank).validate().unwrap_err().field,
             "namespace"
+        );
+    }
+}
+
+/// The namespace check refuses what prints alike, nothing more: inner
+/// spaces, punctuation and any script are accepted.
+#[test]
+fn a_namespace_may_use_any_visible_text() {
+    for namespace in [
+        "shop a",
+        "boutique-é",
+        "店舗 42",
+        "متجر",
+        "tenant|42",
+        "🛍️ shop",
+    ] {
+        assert!(
+            OtpConfig::new(namespace).validate().is_ok(),
+            "{namespace:?}"
         );
     }
 }
@@ -622,6 +659,64 @@ fn the_key_derivation_is_pinned() {
     let expected = hex::encode(mac.finalize().into_bytes());
     let phone = Phone::of(&user()).unwrap();
     assert_eq!(f.otp.key(&phone, "login").unwrap(), expected);
+}
+
+/// The code hash, recomputed from its specification: HMAC-SHA256(pepper,
+/// `wa.otp.code | key | challenge id | code`). The key is in it (security
+/// review L6), so a record is only good under the key it was written to.
+#[tokio::test]
+async fn the_code_hash_is_pinned_and_covers_the_key() {
+    let f = fixture(OtpConfig::new(TENANT));
+    let (challenge, code) = issue(&f).await;
+    let key = f.otp.key(&Phone::of(&user()).unwrap(), "login").unwrap();
+    let mut mac = Hmac::<Sha256>::new_from_slice(PEPPER).unwrap();
+    mac.update(format!("wa.otp.code|{key}|{}|{code}", challenge.id).as_bytes());
+    assert_eq!(
+        stored(&f).await.unwrap().mac,
+        hex::encode(mac.finalize().into_bytes())
+    );
+}
+
+/// Security review L6: someone who can write the store (a shared Redis)
+/// but lacks the pepper asks for a code for their own number, then copies
+/// their record over the victim's key. The code hash used to cover the
+/// challenge id and the code only, so their own code verified as the
+/// victim; across purposes and namespaces too.
+#[tokio::test]
+async fn a_record_copied_to_another_key_never_verifies() {
+    let f = fixture(OtpConfig::new(TENANT));
+    let attacker = Recipient::phone("+12015550000");
+    accept(&f.transport);
+    assert!(matches!(
+        f.otp.issue(&attacker, "login").await.unwrap(),
+        IssueOutcome::Sent(_)
+    ));
+    let code = code_in(&f.transport.last_request().unwrap());
+    let own = f.otp.key(&Phone::of(&attacker).unwrap(), "login").unwrap();
+    let (record, _, _) = f.otp.challenges.get(&own).await.unwrap().unwrap();
+    let (other_tenant, _) = neighbour(&f, "105954558954427", OtpConfig::new("shop-b"));
+    for (service, victim, purpose) in [
+        (&f.otp, user(), "login"),
+        (&f.otp, attacker.clone(), "reset_password"),
+        (&other_tenant, attacker.clone(), "login"),
+    ] {
+        let key = service.key(&Phone::of(&victim).unwrap(), purpose).unwrap();
+        service
+            .challenges
+            .put(&key, &record, Expiry::After(Duration::from_mins(10)))
+            .await
+            .unwrap();
+        let outcome = service.verify(&victim, purpose, &code).await.unwrap();
+        assert!(
+            matches!(outcome, VerifyOutcome::Invalid { .. }),
+            "{purpose}: a copied record verified: {outcome:?}"
+        );
+    }
+    // Under its own key it still does.
+    assert_eq!(
+        f.otp.verify(&attacker, "login", &code).await.unwrap(),
+        VerifyOutcome::Verified
+    );
 }
 
 #[tokio::test]
@@ -907,6 +1002,32 @@ async fn a_send_that_may_have_arrived_keeps_the_challenge() {
     let err = f.otp.issue(&user(), "login").await.unwrap_err();
     assert!(matches!(err, Error::Http { status: 502, .. }), "{err}");
     assert!(stored(&f).await.is_some());
+
+    // Neither a rejection nor a success (da39cf0: this used to drop it).
+    let f = fixture(OtpConfig::new(TENANT));
+    f.transport
+        .push_bytes(302, "text/html", "<html>moved</html>");
+    let err = f.otp.issue(&user(), "login").await.unwrap_err();
+    assert!(matches!(err, Error::Http { status: 302, .. }), "{err}");
+    assert!(stored(&f).await.is_some());
+}
+
+/// Throttling proves Meta did nothing, whatever the HTTP status: the
+/// challenge goes, and no cooldown is left behind.
+#[tokio::test]
+async fn a_throttled_send_removes_the_challenge_on_any_status() {
+    for status in [400, 503] {
+        let f = fixture(OtpConfig::new(TENANT));
+        f.transport.push_json(
+            status,
+            json!({"error": {"message": "(#130429) Rate limit hit", "type": "OAuthException",
+                "code": 130_429}}),
+        );
+        let err = f.otp.issue(&user(), "login").await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::RateLimited, "{status}: {err}");
+        assert!(stored(&f).await.is_none(), "{status}");
+        let _ = issue(&f).await;
+    }
 }
 
 #[test]

@@ -16,8 +16,13 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   below.
 - #17 (coexistence echoes and history not recorded by the inbox):
   resolved in a3582b8; what that needs a port change for is #35.
-- #34 (should `OtpConfig::namespace` be required?): decided yes, done in
-  d67b3ac.
+- #34 (should `OtpConfig::namespace` be required?): decided yes by the
+  maintainer, done in d67b3ac.
+- #35 (synced coexistence history went through `append` like live
+  messages): resolved by the `ConversationStore` port change below. Not
+  decided by the maintainer: the coordinating agent decided it on
+  2026-09-24, told the maintainer in that session, and the maintainer may
+  still revert it.
 
 ### Added
 
@@ -86,9 +91,9 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   declined sync records nothing). One malformed history item is skipped
   and logged by position instead of failing the delivery, including when
   it made the whole `history` value arrive as `WebhookEvent::Unknown`.
-  Synced inbound history still counts towards the local window and unread
-  count, and media contents are not merged into recorded placeholders:
-  both need a `ConversationStore` port change (`OPEN_QUESTIONS.md` #35).
+  Synced history opens no local reply window and is never unread, and the
+  media content Meta sends after a `media_placeholder` fills it (see
+  "Changed", `ConversationStore`).
 - **Adoption helpers**: `Error::may_have_been_sent()` (whether a failed send
   could still have been delivered — the line between "fix and resend" and
   "reconcile first"), `Inbox::window_is_open` (the reply window by the
@@ -101,7 +106,12 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   `#[cfg(not(feature = …))]` arms of `crates/wa-rs/examples/*.rs`); and
   every `references/*.md` must carry a well-formed stamp under its title,
   like its `SKILL.md` (`just skills-check` alone passed a malformed date
-  and missed a misspelled stamp).
+  and missed a misspelled stamp). After the security review of b805dac:
+  raw C strings (`cr"…"`, `cr#"…"#`) are strings to both lexers; a
+  `cfg(` inside a `cfg_attr` removes its item; `cfg(test)` never holds in
+  `crates/wa-rs/examples/*.rs` (built as examples), whose files are now
+  checked for block comments, `macro_rules!` and any `cfg` but the
+  `postgres` arms like the skills' own examples.
 - **Granular consumer skills**: 24 task-shaped skills with compiled example
   files, and a gate (`crates/wa-rs/tests/skills.rs`, `just skills-check`)
   that keeps snippets, API names, links, frontmatter and stamps true. The
@@ -170,7 +180,41 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   the `dedup_key` of an `account_update` delivered before the upgrade and
   redelivered after it differs once. The partner fixtures assert every
   documented `waba_info` field.
-- **Breaking — one type per concept** (conventions review #9):
+- **Breaking — `ConversationStore` records coexistence history as history**
+  (`OPEN_QUESTIONS.md` #35), and revokes are their own method; three
+  required methods. `append_synced` stores a batch of messages, each like
+  `append` (same id rule across both, same order, same latest-message
+  preview; one answer per message), but never moves `last_inbound_at` nor
+  the unread count: Meta opens no customer service window for a message
+  sent before onboarding, and the merchant read it in the app. `revoke`
+  (below, Security) replaces `update_status(.., Deleted, ..)` for
+  revokes; a revoke that arrives before its message stores a tombstone,
+  a row of the new kind `StoredMessage::REVOKED` (`"revoked"`, this
+  crate's own, not a Meta type: no text, `{}` as payload, `Deleted`),
+  which is history only: it never moves nor creates the conversation's
+  summary (since af5b1f8; from a9593f3, a tombstone newer than the latest
+  message took its place in the summary, with no preview, and gave a
+  contact with no other message an inbox entry).
+  `fill_media_placeholder` gives a stored
+  `StoredMessage::MEDIA_PLACEHOLDER` row the media content Meta sends
+  later (kind, text, payload; the preview follows when it is the latest
+  message), once, on its own business number, and never to a revoked one
+  (since af5b1f8). `InboxSink` uses all three, for `HistorySynced` and
+  for revokes; the memory and Postgres adapters implement them (Postgres
+  without a schema change; a history batch is one statement), and `conversation_conformance::run` checks them, so a
+  custom store that treats synced history like live messages fails it.
+  Custom stores must implement the three methods. `InboxSink::with_clock`
+  is new. Upgrading back-fills nothing: rows and summaries recorded
+  before stay as they were written. Synced history recorded through
+  `append` (from a3582b8 until 6d50701) keeps the unread count it added
+  (until the next `mark_read`) and the `last_inbound_at` it moved; a
+  placeholder whose content arrived then stays a placeholder (Meta does
+  not send the content again); a message a revoke of the other direction
+  marked `Deleted` before a9593f3 stays `Deleted`; a summary a tombstone
+  moved before af5b1f8 keeps that until a newer message, and one it
+  created stays listed.
+- **Breaking — one type per concept** (finding 9 of the conventions
+  review, not an `OPEN_QUESTIONS.md` entry):
   `wa_client::common` defines `MediaSource`, `FlowAction` and
   `QualityRating` once; `messages`, `templates` and `phone_numbers`
   re-export them, so the old paths still name them. The Flow message's
@@ -178,10 +222,15 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   (`Other(String)`, case-insensitive, not `Copy`). The phone number's
   `QualityRating` was `Copy` and turned any unknown value into `Unknown`;
   `Unknown` is now only the documented `UNKNOWN`, anything else is
-  `Other(String)`. `marketing::OnboardingRequest` (the Intent API's
+  `Other(String)`. The template's `QualityRating` now reads `NA` as
+  `NotApplicable` (it was `Other("NA")`). `flows::endpoint::FlowAction`
+  (why WhatsApp called a Flow endpoint: `Ping`, `Init`, `Back`,
+  `DataExchange`) is now `flows::endpoint::EndpointAction`, so it no
+  longer shares a name with `common::FlowAction`. `marketing::OnboardingRequest` (the Intent API's
   answer) is now `marketing::OnboardingRequested`, so it no longer shares a
   name with `embedded_signup::OnboardingRequest`.
-- **Breaking — typed ids** (conventions review #17): `FlowButton::flow_id`
+- **Breaking — typed ids** (finding 17 of the conventions review):
+  `FlowButton::flow_id`
   is an `Option<FlowId>` and `FlowButton::by_id` takes `impl Into<FlowId>`;
   `FlowMedia::media_id` is a new `FlowMediaId` (a Flow upload's UUID, not a
   Graph `MediaId`); `TemplateGroupAnalyticsQuery::template_group_ids` and
@@ -189,22 +238,37 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   `Client::business_profile_node` takes `impl Into<BusinessProfileId>` (new),
   and `BusinessProfileNode::id`, `Profile::id` and `ProfileNodeUpdated::id`
   return it.
-- **Breaking — every list takes its cursor the same way** (conventions
-  review #7): `after`/`before` in the list's query, sent by the one-page
-  method and refused by its stream (which manages them; the stream's
-  single item is a `ValidationError`). New query types: `ListSignups`
-  (`Signups::list`/`list_stream` took an `Option<u32>`),
-  `AssignedUsersQuery` (`Waba::assigned_users`/`_stream` took a
-  `&BusinessId`), `ListFlows` and `ListFlowAssets` (`Flows::list` and
-  `Flow::assets` took an `Option<&str>`), `ListClientWabas`
+- **Breaking — every list takes its cursor the same way** (finding 7 of
+  the conventions review): `after`/`before` in the list's query, sent by
+  the one-page method and refused by its stream (which manages them; the
+  stream's single item is a `ValidationError`), and every stream takes
+  its query. New query types, named `List*` (the older `*Query` names
+  stay): `ListSignups` (`Signups::list`/`list_stream` took an
+  `Option<u32>`), `ListAssignedUsers` (`Waba::assigned_users`/`_stream`
+  took a `&BusinessId`), `ListFlows` and `ListFlowAssets` (both
+  `#[non_exhaustive]`, built with `new()`; `Flows::list` and `Flow::assets`
+  took an `Option<&str>`, `Flows::list_stream` and `Flow::assets_stream`
+  took nothing), `ListClientWabas`
   (`MarketingBusiness::client_wabas_with_status` took
   `(&[OnboardingStatus], Option<&str>)`, its stream `&[OnboardingStatus]`).
   `PhoneNumbersQuery`, `WabaListQuery` (both with `after`/`before`
   builders), `TemplateAnalyticsQuery`, `TemplateGroupAnalyticsQuery` and
-  `GroupAnalyticsQuery` (now with a `new`) gained the two fields.
+  `GroupAnalyticsQuery` (now with a `new`) gained the two fields: a struct
+  literal of any of the three analytics queries no longer compiles
+  without them (use `new` or `..`).
   `Templates::list_stream` refuses a cursor it used to ignore.
   `Waba::subscribed_apps` and `Templates::library` take none: their pages
   document no pagination.
+- **Breaking — a stricter OTP namespace** (security review of b805dac,
+  8238853; format characters since 7e4801f): `OtpConfig::validate`, and
+  so `OtpService::new` (as `Error::Config`), refuses a namespace with
+  leading or trailing whitespace, a control character (`Cc`) or a format
+  character (`Cf`: U+200B, U+FEFF, bidi controls, …), which printed like
+  another tenant's. Migration: a service whose namespace has one no
+  longer starts. Fixing the namespace (trimming it, removing the
+  character) changes its store keys like any namespace change: codes in
+  flight answer `NotFound` once, and cooldowns and issue limits restart.
+  Deploy it outside peak login hours.
 - **Breaking — the OTP namespace is required** (decided for
   `OPEN_QUESTIONS.md` #34, now closed): `OtpConfig::namespace` is a
   `String` (was `Option<String>`), `OtpConfig::new(namespace)` builds the
@@ -214,7 +278,8 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   ..OtpConfig::default() }` becomes `OtpConfig::new(ns)` and derives the
   same store keys (outstanding codes stay valid); a service that used
   `None` must pick a namespace, and its codes in flight become `NotFound`
-  once. The `otp_login` example reads `WA_OTP_NAMESPACE`.
+  once. The `otp_login` example requires `WA_OTP_NAMESPACE` (a default
+  there would have brought the forgotten namespace back).
 - `Error::may_have_been_sent` is `false` for a throttling Graph error
   (`ErrorKind::is_rejected_before_processing`) on any status, as the retry
   policy already assumed when it replays a send; the OTP service uses it
@@ -224,7 +289,8 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
 
 Breaking for anyone pinned to an earlier revision (nothing is released
 yet): `ConversationStore::update_status(phone_number_id, id, status, at,
-error)`; the `validate()` of `TemplateDefinition`, `TemplateEdit`,
+error)`; for a pin from 6034804 on (b805dac included) and before 6909be3,
+`AssignedUsersQuery` is now `ListAssignedUsers`; the `validate()` of `TemplateDefinition`, `TemplateEdit`,
 `TemplateMessage`, `AuthenticationTemplate`, `AuthenticationUpsert` and
 `OtpConfig` returns `Result<(), ValidationError>` like every other public
 `validate()`; `OtpConfig` has a `namespace` field; `.xtask` is a workspace
@@ -282,9 +348,9 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   pepper (several merchants of one integrator) shared records: a code
   merchant A sent verified at merchant B for the same number and purpose,
   an issue at A replaced B's code, and cooldowns and issue limits were
-  pooled. Codes are now bound to the sending `phone_number_id` and an
-  optional `OtpConfig::namespace` (new field; a blank one is a config
-  error). Upgrading changes every key once: outstanding codes answer
+  pooled. Codes are now bound to the sending `phone_number_id` and to
+  `OtpConfig::namespace` (a new field, optional at first and required
+  since d67b3ac; a blank one is a config error). Upgrading changes every key once: outstanding codes answer
   `NotFound` and issue logs restart.
 - **M1 — one NUL in a customer's message blocked the whole webhook batch on
   Postgres.** Postgres cannot store U+0000, so `InboxSink` failed every
@@ -310,6 +376,48 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
 - **OTP codes go through `Messages::send`.** `OtpService` posted its own
   body, so `OutboundMessage::validate` never ran on it and it kept a
   private copy of the response decoding.
+- The security review of b805dac found (all Low or informational), and
+  fixed:
+  - **A revoke could delete a message of the other direction.** Revokes
+    were applied by message id and business number; the customer's could
+    delete the business's message and an echoed one the customer's.
+    `ConversationStore::revoke` also matches the direction. It does not
+    match the conversation (asked for too): see `OPEN_QUESTIONS.md` #37.
+  - **A revoke that arrived before its message was dropped**, and the
+    message, when it came (a later history chunk, a redelivery), was
+    stored with the content its sender had deleted. The revoke now leaves
+    a tombstone under the message's id (`StoredMessage::tombstone`, kind
+    `StoredMessage::REVOKED`), which keeps the content out. The final
+    review of 0f81e98 found the same leak one step later: a media
+    placeholder revoked before its content arrived was still filled with
+    it. `fill_media_placeholder` now refuses a revoked row (af5b1f8).
+  - **History was stored one round trip per message** while the webhook
+    request waited: a large sync could outlast the 60-second dedup lease,
+    and Meta's retry then ran a second pass concurrently. Each chunk is
+    now one `append_synced` batch (one Postgres statement), and media
+    contents find their contact in an index instead of a scan per item.
+  - **A device clock in the future pinned a conversation to the top.**
+    Synced device timestamps are bounded by `InboxSink`'s clock plus 5
+    minutes (the payload keeps Meta's value).
+  - **A storage error named a message id** (Meta's ids encode the
+    customer's phone number) in text the webhook handler logs. The
+    Postgres adapter's status errors no longer carry it.
+  - **L6 — an OTP record copied to another key verified there.** The code
+    hash covered the challenge id and the code, not the store key, so
+    whoever could write the store (a shared Redis) without the pepper
+    could ask for a code for their own number, copy their record over the
+    victim's key (another number, purpose or namespace) and verify as the
+    victim. The code hash now covers the store key. Upgrading: codes in
+    flight answer `Invalid` once (10-minute TTL by default).
+  - `OtpConfig::validate` refuses a namespace with edge whitespace or
+    control characters (two tenants that print alike), and since 7e4801f
+    format characters too; breaking, see "Changed" for the upgrade. The
+    rustdoc and guides say the namespace and the purpose are server-side
+    constants, never request input.
+  - `Error::may_have_been_sent` said "`true` for any non-4xx status" but
+    answered `false` for a Graph error on a 1xx–3xx response; it now
+    answers `true` there too (unknown), so the OTP service keeps the
+    challenge. A Graph error built without a status stays `false`.
 - **Send decode errors no longer quote the recipient.** An unreadable
   response of `Messages::send` or `Marketing::send` (which echo the
   recipient's number) is reported without the body snippet and without

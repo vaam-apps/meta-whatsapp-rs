@@ -161,7 +161,7 @@ impl PhoneNumbersQuery {
 /// (`reference/whatsapp-business-account/assigned-users-management-api`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct AssignedUsersQuery {
+pub struct ListAssignedUsers {
     /// The business portfolio the assignments are read for (`business`,
     /// required).
     pub business: BusinessId,
@@ -174,7 +174,7 @@ pub struct AssignedUsersQuery {
     pub before: Option<String>,
 }
 
-impl AssignedUsersQuery {
+impl ListAssignedUsers {
     /// The users assigned for `business`, Meta's page size.
     pub fn new(business: impl Into<BusinessId>) -> Self {
         Self {
@@ -365,7 +365,7 @@ impl Waba {
             .await
     }
 
-    fn assigned_users_request(&self, query: &AssignedUsersQuery) -> Result<GraphRequest> {
+    fn assigned_users_request(&self, query: &ListAssignedUsers) -> Result<GraphRequest> {
         if let Some(limit) = query.limit
             && !(1..=100).contains(&limit)
         {
@@ -382,7 +382,7 @@ impl Waba {
     /// `GET /{WABA_ID}/assigned_users?business=…`, one page. The next page:
     /// the same query with `after` set to this page's
     /// [`Page::next_cursor`].
-    pub async fn assigned_users(&self, query: &AssignedUsersQuery) -> Result<Page<AssignedUser>> {
+    pub async fn assigned_users(&self, query: &ListAssignedUsers) -> Result<Page<AssignedUser>> {
         self.assigned_users_request(query)?
             .query_opt("after", query.after.as_deref())
             .query_opt("before", query.before.as_deref())
@@ -395,7 +395,7 @@ impl Waba {
     /// stream's single item is that validation error).
     pub fn assigned_users_stream(
         &self,
-        query: &AssignedUsersQuery,
+        query: &ListAssignedUsers,
     ) -> impl Stream<Item = Result<AssignedUser>> + Send + 'static + use<> {
         paginate_or_error(
             reject_cursors(query.after.as_deref(), query.before.as_deref())
@@ -590,7 +590,7 @@ mod tests {
         w.phone_numbers(&PhoneNumbersQuery::new().before("QVFIB"))
             .await
             .unwrap();
-        w.assigned_users(&AssignedUsersQuery::new("B").limit(100).after("MjQZD"))
+        w.assigned_users(&ListAssignedUsers::new("B").limit(100).after("MjQZD"))
             .await
             .unwrap();
         let reqs = t.requests();
@@ -612,7 +612,7 @@ mod tests {
             "{refused:?}"
         );
         let refused: Vec<_> = w
-            .assigned_users_stream(&AssignedUsersQuery::new("B").before("x"))
+            .assigned_users_stream(&ListAssignedUsers::new("B").before("x"))
             .collect()
             .await;
         assert!(
@@ -621,7 +621,7 @@ mod tests {
         );
         for limit in [0, 101] {
             let err = w
-                .assigned_users(&AssignedUsersQuery::new("B").limit(limit))
+                .assigned_users(&ListAssignedUsers::new("B").limit(limit))
                 .await
                 .unwrap_err();
             assert!(
@@ -647,7 +647,7 @@ mod tests {
         );
         let users: Vec<String> = client(&t)
             .waba("W")
-            .assigned_users_stream(&AssignedUsersQuery::new("B"))
+            .assigned_users_stream(&ListAssignedUsers::new("B"))
             .map(|u| u.unwrap().id)
             .collect()
             .await;
@@ -809,7 +809,7 @@ mod tests {
         t.push_json(200, json!({"success": true}));
         let w = client(&t).waba("W");
         let users = w
-            .assigned_users(&AssignedUsersQuery::new("B"))
+            .assigned_users(&ListAssignedUsers::new("B"))
             .await
             .unwrap();
         assert_eq!(users.data[0].tasks, vec![WabaTask::Manage]);

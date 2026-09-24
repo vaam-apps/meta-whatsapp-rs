@@ -38,18 +38,46 @@
 //!   payload carries no status), in the customer's conversation: BSUID
 //!   (`to_user_id`, else the contact's `user_id`), else the phone number
 //!   (the contact's `wa_id`, else `to`, without `+`). An echoed revoke marks
-//!   the original [`DeliveryStatus::Deleted`], like a customer's.
+//!   the original [`DeliveryStatus::Deleted`] if the business sent it.
 //! - Synchronized chat history arrives as `WebhookEvent::HistorySynced`
 //!   (`history`), in chunks that may come in any order; each message is
-//!   recorded with its own device timestamp, so the order of the chunks
-//!   does not matter, and a redelivered chunk changes nothing (a message
-//!   id is stored once). A message whose `from` is the business number is
+//!   recorded with its own device timestamp (bounded, see
+//!   [`InboxSink::with_clock`]), so the order of the chunks does not
+//!   change the thread (one exception: a revoke in a chunk that arrives
+//!   before the chunk carrying its message leaves a tombstone in the
+//!   message's place, see below), and a redelivered chunk changes nothing
+//!   (a message id is stored once). Each chunk is one [`ConversationStore::append_synced`]
+//!   batch, then its revokes. A message whose `from` is the business number is
 //!   outbound, with the status its `history_context` names (`PENDING` is
 //!   [`DeliveryStatus::Accepted`], `ERROR` is [`DeliveryStatus::Failed`],
 //!   none or an unknown one is [`DeliveryStatus::Sent`]); any other is
 //!   inbound ([`DeliveryStatus::Received`]). The conversation is the
 //!   thread's BSUID, else its phone number. A declined sync (error
 //!   `2593109`) records nothing.
+//! - Synced history is recorded with [`ConversationStore::append_synced`]:
+//!   it is part of the conversation (and may be its latest message), but a
+//!   synced *inbound* message neither opens the customer service window
+//!   ([`Inbox::window`]) nor counts as unread. Meta opens no window for a
+//!   message sent before the business was onboarded, and the merchant has
+//!   read these in the app.
+//! - A media message arrives in the history as a `media_placeholder`
+//!   without its media; its content follows in a later `history` webhook
+//!   (`messages` for the customer's, `message_echoes` for the business's).
+//!   That content replaces the placeholder's kind, text and payload
+//!   ([`ConversationStore::fill_media_placeholder`]); the row keeps its
+//!   conversation, direction, status and timestamp from the thread. A
+//!   placeholder revoked in the meantime never gets it (the content is
+//!   what its sender deleted). A content whose placeholder was never
+//!   recorded becomes a row of its own.
+//! - A revoke (live, echoed or synced) deletes only a message of its
+//!   business number sent in its direction: a customer's revoke an inbound
+//!   message, the business's an outbound one
+//!   ([`ConversationStore::revoke`]). A revoke that arrives before its
+//!   message leaves a tombstone ([`StoredMessage::REVOKED`]) under the
+//!   message's id, so the message, when it comes, is never stored with the
+//!   content its sender deleted. The tombstone is in the conversation's
+//!   history, never in its summary ([`Inbox::conversations`]). A revoke
+//!   whose sender (or recipient) has no usable id is skipped.
 //! - One malformed history item never fails the delivery: an item without
 //!   a direction or a conversation, with U+0000 in an id, or (when the
 //!   whole `history` value failed its typed parse and arrived as
@@ -57,14 +85,11 @@
 //!   skipped with a `tracing` warning that names its position, never its
 //!   content. Storage errors still fail it, so Meta redelivers.
 //!
-//! Known gaps (`OPEN_QUESTIONS.md`): synced *inbound* messages count like
-//! live ones towards [`Inbox::window`] and the unread count, although Meta
-//! opens no window for messages received before onboarding; and the media
-//! content Meta sends after a `media_placeholder` is not merged into the
-//! stored placeholder (a stored message is never rewritten). History is
-//! recorded while the webhook request waits; Meta advises capturing large
-//! history bodies first and processing them asynchronously.
+//! History is recorded while the webhook request waits; Meta advises
+//! capturing large history bodies first and processing them
+//! asynchronously.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -182,13 +207,23 @@ fn json_without_nul(value: serde_json::Value) -> serde_json::Value {
 /// (and logged without its content). Storage errors still fail the
 /// delivery (Meta redelivers).
 ///
+/// Synced history opens no customer service window and is never unread
+/// ([`ConversationStore::append_synced`]), and a later media content fills
+/// its recorded `media_placeholder`
+/// ([`ConversationStore::fill_media_placeholder`]).
+///
 /// Put a `wa_webhooks::DedupGuard` in front of the handler anyway — it
 /// saves the store the work — and fan this sink out next to a broadcast
 /// sink for live updates.
 #[derive(Clone)]
 pub struct InboxSink {
     store: Arc<dyn ConversationStore>,
+    clock: Arc<dyn Clock>,
 }
+
+/// How far past the sink's clock a synced message's device timestamp may
+/// be; later ones are recorded at that bound.
+const DEVICE_CLOCK_SKEW: time::Duration = time::Duration::minutes(5);
 
 impl fmt::Debug for InboxSink {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -200,10 +235,15 @@ impl fmt::Debug for InboxSink {
 enum Record {
     /// A new row.
     Append(Box<StoredMessage>),
-    /// A revoke: the original message, of the business number the revoke
-    /// arrived on, becomes [`DeliveryStatus::Deleted`]. Never a new row.
+    /// A revoke ([`ConversationStore::revoke`]): the original message, of
+    /// the business number the revoke arrived on and sent in `direction`
+    /// (a customer revokes what they sent, the business what it sent),
+    /// becomes [`DeliveryStatus::Deleted`]; when it is not stored yet, a
+    /// tombstone in `key` keeps its content out. Never a row of its own.
     Revoke {
+        key: ConversationKey,
         original: MessageId,
+        direction: Direction,
         at: OffsetDateTime,
     },
     /// Nothing to record, and why (logged without content).
@@ -241,15 +281,17 @@ fn inbound_record(
     contact: Option<&Contact>,
     message: &InboundMessage,
 ) -> serde_json::Result<Record> {
-    if let In::Revoke(r) = &message.content {
-        return Ok(Record::Revoke {
-            original: r.original_message_id.clone(),
-            at: message.timestamp,
-        });
-    }
     let Some(conversation) = conversation_key(phone_number_id, contact, message) else {
         return Ok(Record::Skip("inbound message without a usable sender id"));
     };
+    if let In::Revoke(r) = &message.content {
+        return Ok(Record::Revoke {
+            key: conversation,
+            original: r.original_message_id.clone(),
+            direction: Direction::Inbound,
+            at: message.timestamp,
+        });
+    }
     Ok(row(
         &message.id,
         conversation,
@@ -268,15 +310,17 @@ fn echo_record(
     contact: Option<&Contact>,
     echo: &MessageEcho,
 ) -> serde_json::Result<Record> {
-    if let In::Revoke(r) = &echo.content {
-        return Ok(Record::Revoke {
-            original: r.original_message_id.clone(),
-            at: echo.timestamp,
-        });
-    }
     let Some(conversation) = echo_conversation_key(phone_number_id, contact, echo) else {
         return Ok(Record::Skip("message echo without a usable recipient id"));
     };
+    if let In::Revoke(r) = &echo.content {
+        return Ok(Record::Revoke {
+            key: conversation,
+            original: r.original_message_id.clone(),
+            direction: Direction::Outbound,
+            at: echo.timestamp,
+        });
+    }
     // The echo carries no status: the app sent it.
     Ok(row(
         &echo.id,
@@ -304,12 +348,6 @@ fn history_record(
     thread: &Thread<'_>,
     message: &HistoryMessage,
 ) -> serde_json::Result<Record> {
-    if let In::Revoke(r) = &message.content {
-        return Ok(Record::Revoke {
-            original: r.original_message_id.clone(),
-            at: message.timestamp,
-        });
-    }
     let Some(direction) = history_direction(business_number, message) else {
         return Ok(Record::Skip(
             "history message whose `from` and `to` do not say who sent it",
@@ -319,6 +357,14 @@ fn history_record(
     else {
         return Ok(Record::Skip("history message without a usable customer id"));
     };
+    if let In::Revoke(r) = &message.content {
+        return Ok(Record::Revoke {
+            key: conversation,
+            original: r.original_message_id.clone(),
+            direction,
+            at: message.timestamp,
+        });
+    }
     let status = match direction {
         Direction::Inbound => DeliveryStatus::Received,
         Direction::Outbound => synced_status(message),
@@ -375,9 +421,10 @@ fn synced_status(message: &HistoryMessage) -> DeliveryStatus {
 /// Two phone numbers are the same when their digits are (Meta prints them
 /// with and without `+`).
 fn same_number(a: &str, b: &str) -> bool {
-    let digits = |s: &str| s.chars().filter(char::is_ascii_digit).collect::<String>();
-    let a = digits(a);
-    !a.is_empty() && a == digits(b)
+    fn digits(s: &str) -> impl Iterator<Item = char> + '_ {
+        s.chars().filter(char::is_ascii_digit)
+    }
+    digits(a).next().is_some() && digits(a).eq(digits(b))
 }
 
 /// A phone number as a conversation contact: without `+` (the `wa_id`
@@ -437,22 +484,38 @@ fn history_conversation_key(
     Some(ConversationKey::new(phone_number_id.clone(), who))
 }
 
-/// The contact of `contacts` an item names: by BSUID, then by phone number.
-fn matching_contact<'a>(
-    contacts: &'a [Contact],
-    user_id: Option<&UserId>,
-    phone: Option<&str>,
-) -> Option<&'a Contact> {
-    user_id
-        .and_then(|u| contacts.iter().find(|c| c.user_id.as_ref() == Some(u)))
-        .or_else(|| {
-            let phone = phone?;
-            contacts.iter().find(|c| {
-                c.wa_id
-                    .as_ref()
-                    .is_some_and(|w| same_number(w.as_str(), phone))
-            })
-        })
+/// The `contacts` of a history value by the digits of their `wa_id`,
+/// indexed once: a media content item without a BSUID of its own finds
+/// its customer's BSUID there, and a value can carry many items. (An item
+/// that has a BSUID is keyed by it; its contact would add nothing.)
+struct Contacts<'a> {
+    by_phone: HashMap<String, &'a Contact>,
+}
+
+impl<'a> Contacts<'a> {
+    fn new(contacts: &'a [Contact]) -> Self {
+        let mut by_phone = HashMap::new();
+        for contact in contacts {
+            if let Some(wa_id) = &contact.wa_id {
+                let digits = phone_digits(wa_id.as_str());
+                if !digits.is_empty() {
+                    // The first contact of a number wins, as Meta lists them.
+                    by_phone.entry(digits).or_insert(contact);
+                }
+            }
+        }
+        Self { by_phone }
+    }
+
+    /// The contact of phone number `phone`, in any format.
+    fn find(&self, phone: Option<&str>) -> Option<&'a Contact> {
+        self.by_phone.get(&phone_digits(phone?)).copied()
+    }
+}
+
+/// The digits of a phone number.
+fn phone_digits(phone: &str) -> String {
+    phone.chars().filter(char::is_ascii_digit).collect()
 }
 
 /// A history item must not fail the delivery: skip it when a Meta-assigned
@@ -465,8 +528,10 @@ fn guard_synced(record: Record) -> Record {
         {
             Record::Skip("history message with U+0000 in its id or its customer's id")
         }
-        Record::Revoke { original, .. } if original.as_str().contains('\0') => {
-            Record::Skip("history revoke with U+0000 in the revoked message id")
+        Record::Revoke { key, original, .. }
+            if original.as_str().contains('\0') || key.contact.contains('\0') =>
+        {
+            Record::Skip("history revoke with U+0000 in the revoked id or its customer's id")
         }
         _ => record,
     }
@@ -487,16 +552,61 @@ fn serialization(e: serde_json::Error) -> SinkError {
     SinkError::Delivery(anyhow::Error::new(e))
 }
 
+/// Where a history item sits in its change: indexes, never content.
+#[derive(Debug, Clone, Copy)]
+enum At {
+    /// `history[c].threads[t].messages[m]`.
+    Thread(usize, usize, usize),
+    /// `<list>[i]`: `messages` or `message_echoes`.
+    List(&'static str, usize),
+}
+
+impl fmt::Display for At {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Thread(c, t, m) => write!(f, "history[{c}].threads[{t}].messages[{m}]"),
+            Self::List(list, i) => write!(f, "{list}[{i}]"),
+        }
+    }
+}
+
+/// The items of one history chunk (or of a value's media contents), ready
+/// for the store: one batch of rows, then the revokes, which then find a
+/// message of the same chunk.
+#[derive(Default)]
+struct Batch {
+    rows: Vec<StoredMessage>,
+    revokes: Vec<(ConversationKey, MessageId, Direction, OffsetDateTime)>,
+}
+
 impl InboxSink {
     /// Record into `store`.
     pub fn new(store: Arc<dyn ConversationStore>) -> Self {
-        Self { store }
+        Self {
+            store,
+            clock: Arc::new(SystemClock),
+        }
     }
 
-    /// Apply `record` of an item of type `kind` to the store.
-    async fn apply(
+    /// Use `clock` to bound synced device timestamps (tests): a synced
+    /// message dated more than 5 minutes past it is recorded at that bound,
+    /// so a phone with a wrong clock cannot pin a conversation to the top
+    /// of the inbox. The payload keeps Meta's timestamp.
+    #[must_use]
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// The latest timestamp a synced item is recorded with.
+    fn synced_bound(&self) -> OffsetDateTime {
+        self.clock.now().saturating_add(DEVICE_CLOCK_SKEW)
+    }
+
+    /// Apply the `record` of a live item (`messages`, `smb_message_echoes`)
+    /// of type `kind`: an inbound message opens the window and is unread.
+    async fn apply_live(
         &self,
-        phone_number_id: &PhoneNumberId,
         kind: Option<&str>,
         record: Record,
     ) -> std::result::Result<(), SinkError> {
@@ -504,16 +614,14 @@ impl InboxSink {
             Record::Append(message) => {
                 self.store.append(*message).await.map_err(delivery)?;
             }
-            // Only ever a message of the number the revoke arrived on.
-            Record::Revoke { original, at } => {
+            Record::Revoke {
+                key,
+                original,
+                direction,
+                at,
+            } => {
                 self.store
-                    .update_status(
-                        phone_number_id,
-                        &original,
-                        DeliveryStatus::Deleted,
-                        at,
-                        None,
-                    )
+                    .revoke(&key, &original, direction, at)
                     .await
                     .map_err(delivery)?;
             }
@@ -528,45 +636,131 @@ impl InboxSink {
         Ok(())
     }
 
-    /// Apply a history item, which fails the delivery only on a storage
-    /// error. `item` locates it in the change (indexes, never content).
-    async fn apply_synced(
-        &self,
-        phone_number_id: &PhoneNumberId,
+    /// Add a history item of type `kind` to `batch`, or skip it with a
+    /// warning that names its position `at`: a history item never fails the
+    /// delivery on its own. Timestamps are bounded (see
+    /// [`InboxSink::with_clock`]).
+    fn collect(
+        batch: &mut Batch,
         kind: Option<&str>,
-        item: &str,
+        at: At,
         record: serde_json::Result<Record>,
-    ) -> std::result::Result<(), SinkError> {
+        bound: OffsetDateTime,
+    ) {
         let record = match record {
             Ok(record) => guard_synced(record),
             Err(e) => {
                 tracing::warn!(
-                    item,
+                    item = %at,
                     category = ?e.classify(),
                     "history item could not be serialized; skipped"
                 );
-                return Ok(());
+                return;
             }
         };
-        if let Record::Skip(reason) = record {
-            tracing::warn!(
-                item,
+        match record {
+            Record::Append(mut message) => {
+                message.timestamp = message.timestamp.min(bound);
+                batch.rows.push(*message);
+            }
+            Record::Revoke {
+                key,
+                original,
+                direction,
+                at: revoked_at,
+            } => batch
+                .revokes
+                .push((key, original, direction, revoked_at.min(bound))),
+            Record::Skip(reason) => tracing::warn!(
+                item = %at,
                 kind = kind.unwrap_or("unknown"),
                 reason,
                 "history item skipped"
-            );
-            return Ok(());
+            ),
         }
-        self.apply(phone_number_id, kind, record).await
+    }
+
+    /// Store the revokes of a batch whose rows are stored.
+    async fn store_revokes(
+        &self,
+        revokes: Vec<(ConversationKey, MessageId, Direction, OffsetDateTime)>,
+    ) -> std::result::Result<(), SinkError> {
+        for (key, original, direction, at) in revokes {
+            self.store
+                .revoke(&key, &original, direction, at)
+                .await
+                .map_err(delivery)?;
+        }
+        Ok(())
+    }
+
+    /// Store a history chunk: its messages in one
+    /// [`ConversationStore::append_synced`] call, then its revokes.
+    async fn store_chunk(&self, batch: Batch) -> std::result::Result<(), SinkError> {
+        if !batch.rows.is_empty() {
+            self.store
+                .append_synced(batch.rows)
+                .await
+                .map_err(delivery)?;
+        }
+        self.store_revokes(batch.revokes).await
+    }
+
+    /// Store media contents: in one [`ConversationStore::append_synced`]
+    /// call, then, for each whose id was stored already (the placeholder a
+    /// thread recorded), [`ConversationStore::fill_media_placeholder`].
+    /// Append first: whichever of a placeholder and its content arrives
+    /// first, the row ends with the content.
+    async fn store_contents(
+        &self,
+        phone_number_id: &PhoneNumberId,
+        batch: Batch,
+    ) -> std::result::Result<(), SinkError> {
+        if !batch.rows.is_empty() {
+            let contents: Vec<_> = batch
+                .rows
+                .iter()
+                .map(|m| {
+                    (
+                        m.id.clone(),
+                        m.kind.clone(),
+                        m.text.clone(),
+                        m.payload.clone(),
+                    )
+                })
+                .collect();
+            let inserted = self
+                .store
+                .append_synced(batch.rows)
+                .await
+                .map_err(delivery)?;
+            if inserted.len() != contents.len() {
+                return Err(SinkError::Delivery(anyhow::anyhow!(
+                    "the conversation store answered {} times for {} messages",
+                    inserted.len(),
+                    contents.len()
+                )));
+            }
+            for ((id, kind, text, payload), inserted) in contents.into_iter().zip(inserted) {
+                if !inserted {
+                    self.store
+                        .fill_media_placeholder(phone_number_id, &id, kind, text, payload)
+                        .await
+                        .map_err(delivery)?;
+                }
+            }
+        }
+        self.store_revokes(batch.revokes).await
     }
 
     /// A `history` change: chat threads, media contents, or the error of a
-    /// declined sync.
+    /// declined sync. One store round trip per chunk.
     async fn record_history(
         &self,
         phone_number_id: &PhoneNumberId,
         history: &HistoryValue,
     ) -> std::result::Result<(), SinkError> {
+        let bound = self.synced_bound();
         let business_number = history.metadata.display_phone_number.as_str();
         for (c, chunk) in history.history.iter().enumerate() {
             for error in &chunk.errors {
@@ -587,18 +781,19 @@ impl InboxSink {
                     "recording a history chunk"
                 );
             }
+            let mut batch = Batch::default();
             for (t, thread) in chunk.threads.iter().enumerate() {
                 let view = Thread {
                     id: thread.id.as_deref(),
                     context: thread.context.as_ref(),
                 };
                 for (m, message) in thread.messages.iter().enumerate() {
-                    let item = format!("history[{c}].threads[{t}].messages[{m}]");
                     let record = history_record(phone_number_id, business_number, &view, message);
-                    self.apply_synced(phone_number_id, message.content.type_name(), &item, record)
-                        .await?;
+                    let kind = message.content.type_name();
+                    Self::collect(&mut batch, kind, At::Thread(c, t, m), record, bound);
                 }
             }
+            self.store_chunk(batch).await?;
         }
         self.record_media_contents(
             phone_number_id,
@@ -618,29 +813,31 @@ impl InboxSink {
         messages: &[InboundMessage],
         echoes: &[MessageEcho],
     ) -> std::result::Result<(), SinkError> {
+        if messages.is_empty() && echoes.is_empty() {
+            return Ok(());
+        }
+        let bound = self.synced_bound();
+        let contacts = Contacts::new(contacts);
+        let mut batch = Batch::default();
         for (i, message) in messages.iter().enumerate() {
-            let contact = matching_contact(
-                contacts,
-                message.from_user_id.as_ref(),
-                message.from.as_ref().map(WaId::as_str),
-            );
+            let contact = contacts.find(message.from.as_ref().map(WaId::as_str));
             let record = inbound_record(phone_number_id, contact, message);
-            let item = format!("messages[{i}]");
-            self.apply_synced(phone_number_id, message.message_type(), &item, record)
-                .await?;
+            let kind = message.message_type();
+            Self::collect(&mut batch, kind, At::List("messages", i), record, bound);
         }
         for (i, echo) in echoes.iter().enumerate() {
-            let contact = matching_contact(
-                contacts,
-                echo.to_user_id.as_ref(),
-                echo.to.as_ref().map(WaId::as_str),
-            );
+            let contact = contacts.find(echo.to.as_ref().map(WaId::as_str));
             let record = echo_record(phone_number_id, contact, echo);
-            let item = format!("message_echoes[{i}]");
-            self.apply_synced(phone_number_id, echo.content.type_name(), &item, record)
-                .await?;
+            let kind = echo.content.type_name();
+            Self::collect(
+                &mut batch,
+                kind,
+                At::List("message_echoes", i),
+                record,
+                bound,
+            );
         }
-        Ok(())
+        self.store_contents(phone_number_id, batch).await
     }
 
     /// A `history` value that failed its typed parse as a whole (one
@@ -654,9 +851,11 @@ impl InboxSink {
             tracing::warn!("history value without a usable `metadata`; nothing recorded");
             return Ok(());
         };
+        let bound = self.synced_bound();
         let phone_number_id = &metadata.phone_number_id;
         let business_number = metadata.display_phone_number.as_str();
         for (c, chunk) in items(raw, "history").enumerate() {
+            let mut batch = Batch::default();
             for (t, thread) in items(chunk, "threads").enumerate() {
                 // A thread whose customer cannot be read is skipped whole:
                 // guessing its conversation could split or mix customers.
@@ -681,23 +880,22 @@ impl InboxSink {
                     context: context.as_ref(),
                 };
                 for (m, message) in items(thread, "messages").enumerate() {
-                    let item = format!("history[{c}].threads[{t}].messages[{m}]");
                     match serde_json::from_value::<HistoryMessage>(message.clone()) {
                         Ok(message) => {
                             let record =
                                 history_record(phone_number_id, business_number, &view, &message);
                             let kind = message.content.type_name();
-                            self.apply_synced(phone_number_id, kind, &item, record)
-                                .await?;
+                            Self::collect(&mut batch, kind, At::Thread(c, t, m), record, bound);
                         }
                         Err(e) => tracing::warn!(
-                            item,
+                            item = %At::Thread(c, t, m),
                             category = ?e.classify(),
                             "history message does not parse; skipped"
                         ),
                     }
                 }
             }
+            self.store_chunk(batch).await?;
         }
         let contacts: Vec<Contact> = items(raw, "contacts")
             .filter_map(|c| serde_json::from_value(c.clone()).ok())
@@ -723,9 +921,9 @@ impl InboxSink {
 
 /// Log a skipped history item by position and error category: serde's
 /// message would quote the offending value.
-fn unparsable(list: &str, index: usize, e: &serde_json::Error) {
+fn unparsable(list: &'static str, index: usize, e: &serde_json::Error) {
     tracing::warn!(
-        item = %format!("{list}[{index}]"),
+        item = %At::List(list, index),
         category = ?e.classify(),
         "history item does not parse; skipped"
     );
@@ -743,8 +941,7 @@ impl EventSink<WebhookEvent> for InboxSink {
             } => {
                 let record = inbound_record(&phone_number_id, contact.as_ref(), &message)
                     .map_err(serialization)?;
-                self.apply(&phone_number_id, message.message_type(), record)
-                    .await
+                self.apply_live(message.message_type(), record).await
             }
             WebhookEvent::MessageEchoed {
                 phone_number_id,
@@ -754,8 +951,7 @@ impl EventSink<WebhookEvent> for InboxSink {
             } => {
                 let record = echo_record(&phone_number_id, contact.as_ref(), &echo)
                     .map_err(serialization)?;
-                self.apply(&phone_number_id, echo.content.type_name(), record)
-                    .await
+                self.apply_live(echo.content.type_name(), record).await
             }
             WebhookEvent::HistorySynced {
                 phone_number_id,
@@ -1201,6 +1397,20 @@ mod tests {
         }
     }
 
+    /// Whether Postgres would refuse `m` (U+0000 in a text or a JSON value).
+    fn refused(m: &StoredMessage) -> bool {
+        let texts = [
+            Some(m.kind.as_str()),
+            m.text.as_deref(),
+            Some(m.conversation.contact.as_str()),
+            Some(m.conversation.phone_number_id.as_str()),
+            Some(m.id.as_str()),
+        ];
+        texts.into_iter().flatten().any(|t| t.contains('\0'))
+            || has_nul(&m.payload)
+            || m.error.as_ref().is_some_and(has_nul)
+    }
+
     fn refuse() -> StorageError {
         StorageError::Backend(anyhow::anyhow!(
             "unsupported Unicode escape sequence: \\u0000 cannot be converted to text"
@@ -1213,20 +1423,60 @@ mod tests {
             if self.down {
                 return Err(StorageError::Backend(anyhow::anyhow!("connection refused")));
             }
-            let texts = [
-                Some(&m.kind),
-                m.text.as_ref(),
-                Some(&m.conversation.contact),
-                Some(&m.conversation.phone_number_id.as_str().to_owned()),
-                Some(&m.id.as_str().to_owned()),
-            ];
-            if texts.into_iter().flatten().any(|t| t.contains('\0'))
-                || has_nul(&m.payload)
-                || m.error.as_ref().is_some_and(has_nul)
-            {
+            if refused(&m) {
                 return Err(refuse());
             }
             self.inner.append(m).await
+        }
+        async fn append_synced(
+            &self,
+            messages: Vec<StoredMessage>,
+        ) -> std::result::Result<Vec<bool>, StorageError> {
+            if self.down {
+                return Err(StorageError::Backend(anyhow::anyhow!("connection refused")));
+            }
+            // Postgres refuses the whole statement.
+            if messages.iter().any(refused) {
+                return Err(refuse());
+            }
+            self.inner.append_synced(messages).await
+        }
+        async fn revoke(
+            &self,
+            key: &ConversationKey,
+            id: &MessageId,
+            direction: Direction,
+            at: OffsetDateTime,
+        ) -> std::result::Result<bool, StorageError> {
+            if self.down {
+                return Err(StorageError::Backend(anyhow::anyhow!("connection refused")));
+            }
+            if id.as_str().contains('\0') || key.contact.contains('\0') {
+                return Err(refuse());
+            }
+            self.inner.revoke(key, id, direction, at).await
+        }
+        async fn fill_media_placeholder(
+            &self,
+            phone_number_id: &PhoneNumberId,
+            id: &MessageId,
+            kind: String,
+            text: Option<String>,
+            payload: serde_json::Value,
+        ) -> std::result::Result<bool, StorageError> {
+            if self.down {
+                return Err(StorageError::Backend(anyhow::anyhow!("connection refused")));
+            }
+            if kind.contains('\0')
+                || text.as_ref().is_some_and(|t| t.contains('\0'))
+                || has_nul(&payload)
+                || id.as_str().contains('\0')
+            {
+                return Err(refuse());
+            }
+            self.inner
+                .fill_media_placeholder(phone_number_id, id, kind, text, payload)
+                .await
         }
         async fn update_status(
             &self,
@@ -1753,6 +2003,19 @@ mod tests {
     const HISTORY_BSUID: &str =
         include_str!("../../wa-webhooks/tests/fixtures/bsuid/history_thread_context.json");
 
+    /// The summary of one conversation.
+    async fn summary_of(
+        store: &dyn ConversationStore,
+        key: &ConversationKey,
+    ) -> Option<ConversationSummary> {
+        store
+            .conversations(&key.phone_number_id, None, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|s| &s.key == key)
+    }
+
     /// The whole conversation, oldest first.
     async fn thread(store: &dyn ConversationStore, contact: &str) -> Vec<StoredMessage> {
         let mut rows = store
@@ -1989,27 +2252,199 @@ mod tests {
         assert_eq!(rows[0].text.as_deref(), Some("Do you ship to Canada?"));
     }
 
-    /// The media content of a customer's message (`history` `messages`),
-    /// here without an earlier placeholder, is an inbound row; after a
-    /// placeholder it changes nothing (a stored row is never rewritten).
+    /// The media content of a customer's message (`history` `messages`)
+    /// without an earlier placeholder is an inbound row of its own, recorded
+    /// once and opening no window.
     #[tokio::test]
-    async fn history_media_contents_are_recorded_once() {
+    async fn a_media_content_without_its_placeholder_is_a_row_of_its_own() {
         let store = Arc::new(MemoryConversationStore::new());
         let sink = InboxSink::new(store.clone());
         deliver_all(&sink, body(HISTORY_MEDIA)).await;
+        deliver_all(&sink, body(HISTORY_MEDIA)).await; // Meta retry
         let rows = thread(store.as_ref(), "16505551234").await;
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].direction, Direction::Inbound);
         assert_eq!(rows[0].kind, "image");
         assert_eq!(rows[0].text.as_deref(), Some("Black Prince echeveria"));
+        let key = ConversationKey::new(PNID, "16505551234");
+        assert_eq!(store.last_inbound_at(&key).await.unwrap(), None);
+        assert_eq!(summary_of(store.as_ref(), &key).await.unwrap().unread, 0);
+    }
 
+    /// Former `OPEN_QUESTIONS.md` #35: the media content Meta sends after a
+    /// `media_placeholder` (Meta's two `history` examples, same message id)
+    /// replaces the placeholder's content. The row keeps what the thread
+    /// said: its conversation, direction, status and timestamp (Meta's
+    /// examples disagree on the sender; the thread's is kept).
+    #[tokio::test]
+    async fn a_late_media_content_fills_its_placeholder() {
+        let placeholder = "wamid.QyNUEHBgLMTY0NjcwNDM1OTUVAgARGBI1Rj3NEYxMzAzMzQ5MkEA";
         let store = Arc::new(MemoryConversationStore::new());
         let sink = InboxSink::new(store.clone());
         deliver_all(&sink, body(HISTORY_THREADS)).await;
+        let before = thread(store.as_ref(), "16505551234").await;
+        let recorded = before
+            .iter()
+            .find(|r| r.id.as_str() == placeholder)
+            .unwrap()
+            .clone();
+        assert_eq!(recorded.kind, StoredMessage::MEDIA_PLACEHOLDER);
+        deliver_all(&sink, body(HISTORY_MEDIA)).await;
+        deliver_all(&sink, body(HISTORY_MEDIA)).await; // Meta retry
+        let rows = thread(store.as_ref(), "16505551234").await;
+        assert_eq!(rows.len(), 3, "filled, not added: {rows:?}");
+        let filled = rows.iter().find(|r| r.id.as_str() == placeholder).unwrap();
+        assert_eq!(filled.kind, "image");
+        assert_eq!(filled.text.as_deref(), Some("Black Prince echeveria"));
+        assert_eq!(filled.payload["image"]["id"], "24230790383178626");
+        assert_eq!(
+            (
+                &filled.conversation,
+                filled.direction,
+                filled.status,
+                filled.timestamp,
+            ),
+            (
+                &recorded.conversation,
+                Direction::Outbound,
+                DeliveryStatus::Played,
+                recorded.timestamp,
+            ),
+            "only the content changes"
+        );
+        // The same through a `history` value that fell to
+        // `WebhookEvent::Unknown`, and for the business's own media
+        // (`message_echoes`).
+        let store = Arc::new(NulRefusingStore::default());
+        let sink = InboxSink::new(store.clone());
+        deliver_all(
+            &sink,
+            history_with(
+                &json!({"from": "15550783881", "id": "wamid.p", "timestamp": "1739230950",
+                "type": "media_placeholder", "history_context": {"status": "READ"}}),
+            ),
+        )
+        .await;
+        let content = change(
+            "history",
+            &json!({
+                "messaging_product": "whatsapp",
+                "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
+                "message_echoes": [{"from": "15550783881", "to": "16505551234", "id": "wamid.p",
+                    "timestamp": "1739231000", "type": "image",
+                    "image": {"id": "1", "caption": "catalogue", "mime_type": "image/jpeg"}}],
+                "messages": [{"from": "16505551234", "id": "wamid.bad", "timestamp": "never",
+                    "type": "text", "text": {"body": "x"}}]
+            }),
+        );
+        assert!(
+            matches!(content[0], WebhookEvent::Unknown { .. }),
+            "{:?}",
+            content[0].kind()
+        );
+        deliver_all(&sink, content).await;
+        let rows = thread(&store.inner, "16505551234").await;
+        let got: Vec<_> = rows
+            .iter()
+            .map(|r| (r.id.as_str(), r.kind.as_str(), r.text.as_deref(), r.status))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("wamid.a", "text", Some("before"), DeliveryStatus::Received),
+                ("wamid.p", "image", Some("catalogue"), DeliveryStatus::Read),
+                ("wamid.b", "text", Some("after"), DeliveryStatus::Received),
+            ]
+        );
+    }
+
+    /// A placeholder the thread recorded, then revoked live (by the
+    /// business, which sent it: an echoed revoke), never gets the media
+    /// content Meta sends later: that content is what its sender deleted.
+    #[tokio::test]
+    async fn a_revoked_placeholder_never_gets_its_content() {
+        let placeholder = "wamid.QyNUEHBgLMTY0NjcwNDM1OTUVAgARGBI1Rj3NEYxMzAzMzQ5MkEA";
+        let store = Arc::new(MemoryConversationStore::new());
+        let sink = InboxSink::new(store.clone());
+        deliver_all(&sink, body(HISTORY_THREADS)).await;
+        deliver_all(
+            &sink,
+            change(
+                "smb_message_echoes",
+                &json!({
+                    "messaging_product": "whatsapp",
+                    "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
+                    "message_echoes": [{"from": "15550783881", "to": "16505551234",
+                        "id": "wamid.revoke", "timestamp": "1739231000", "type": "revoke",
+                        "revoke": {"original_message_id": placeholder}}]
+                }),
+            ),
+        )
+        .await;
+        let revoked = thread(store.as_ref(), "16505551234")
+            .await
+            .into_iter()
+            .find(|r| r.id.as_str() == placeholder)
+            .unwrap();
+        assert_eq!(
+            (revoked.kind.as_str(), revoked.status),
+            (StoredMessage::MEDIA_PLACEHOLDER, DeliveryStatus::Deleted)
+        );
         deliver_all(&sink, body(HISTORY_MEDIA)).await;
         let rows = thread(store.as_ref(), "16505551234").await;
-        assert_eq!(rows.len(), 3);
-        assert_eq!(rows[2].kind, "media_placeholder", "{rows:?}");
+        assert_eq!(rows.len(), 3, "{rows:?}");
+        let after = rows.iter().find(|r| r.id.as_str() == placeholder).unwrap();
+        assert_eq!(after, &revoked, "the revoked placeholder is not filled");
+        assert!(
+            !format!("{rows:?}").contains("Black Prince"),
+            "the deleted caption is stored nowhere: {rows:?}"
+        );
+    }
+
+    /// Former `OPEN_QUESTIONS.md` #35: Meta opens no customer service window for a
+    /// message received before onboarding, and the merchant has read the
+    /// synced history in the app. Neither the typed nor the recovered
+    /// (`WebhookEvent::Unknown`) path may open the window or count unread;
+    /// a live message afterwards does both.
+    #[tokio::test]
+    async fn synced_history_opens_no_window_and_is_never_unread() {
+        let store = Arc::new(MemoryConversationStore::new());
+        let sink = InboxSink::new(store.clone());
+        let key = ConversationKey::new(PNID, "16505551234");
+        // "Thanks!" was received at 1739230970 (2025-02-10 23:42:50 UTC).
+        deliver_all(&sink, body(HISTORY_THREADS)).await;
+        let clock = ManualClock::new(datetime!(2025-02-10 23:50 UTC));
+        let inbox = inbox(&ScriptedTransport::new(), store.clone(), &clock);
+        assert_eq!(store.last_inbound_at(&key).await.unwrap(), None);
+        assert!(!inbox.window_is_open(&key).await.unwrap());
+        let s = summary_of(store.as_ref(), &key).await.unwrap();
+        assert_eq!(s.unread, 0);
+        assert_eq!(s.last_message_at.unix_timestamp(), 1_739_230_970);
+
+        // The recovered path (one malformed item): same rule.
+        deliver_all(
+            &sink,
+            history_with(&json!({"from": "16505551234", "timestamp": "1739230950"})),
+        )
+        .await;
+        assert_eq!(store.last_inbound_at(&key).await.unwrap(), None);
+        assert_eq!(summary_of(store.as_ref(), &key).await.unwrap().unread, 0);
+        assert_eq!(thread(store.as_ref(), "16505551234").await.len(), 5);
+
+        // A live message opens the window and is unread.
+        deliver_all(
+            &sink,
+            inbound(
+                "wamid.live",
+                1_739_231_000,
+                None,
+                Some("16505551234"),
+                "still there?",
+            ),
+        )
+        .await;
+        assert!(inbox.window_is_open(&key).await.unwrap());
+        assert_eq!(summary_of(store.as_ref(), &key).await.unwrap().unread, 1);
     }
 
     /// A revoke in the synced history deletes the original, of this
@@ -2027,12 +2462,49 @@ mod tests {
         )
         .await;
         let rows = thread(store.as_ref(), "16505551234").await;
-        let got: Vec<_> = rows.iter().map(|r| (r.id.as_str(), r.status)).collect();
+        let got: Vec<_> = rows
+            .iter()
+            .map(|r| (r.id.as_str(), r.kind.as_str(), r.status))
+            .collect();
         assert_eq!(
             got,
             [
-                ("wamid.a", DeliveryStatus::Deleted),
-                ("wamid.b", DeliveryStatus::Received)
+                ("wamid.a", "text", DeliveryStatus::Deleted),
+                ("wamid.b", "text", DeliveryStatus::Received)
+            ],
+            "the revoke of a message earlier in the chunk deletes it, not a tombstone"
+        );
+        // The business revokes what it sent, and only that.
+        let store = Arc::new(MemoryConversationStore::new());
+        let sink = InboxSink::new(store.clone());
+        deliver_all(
+            &sink,
+            one_thread(
+                Some("16505551234"),
+                None,
+                &json!([
+                    {"from": "16505551234", "id": "wamid.c", "timestamp": "1739230900",
+                        "type": "text", "text": {"body": "customer"}},
+                    {"from": "15550783881", "id": "wamid.o", "timestamp": "1739230901",
+                        "type": "text", "text": {"body": "business"}},
+                    {"from": "15550783881", "id": "wamid.r1", "timestamp": "1739230902",
+                        "type": "revoke", "revoke": {"original_message_id": "wamid.o"}},
+                    {"from": "15550783881", "id": "wamid.r2", "timestamp": "1739230903",
+                        "type": "revoke", "revoke": {"original_message_id": "wamid.c"}}
+                ]),
+            ),
+        )
+        .await;
+        let got: Vec<_> = thread(store.as_ref(), "16505551234")
+            .await
+            .into_iter()
+            .map(|r| (r.id.as_str().to_owned(), r.status))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("wamid.c".to_owned(), DeliveryStatus::Received),
+                ("wamid.o".to_owned(), DeliveryStatus::Deleted)
             ]
         );
     }
@@ -2131,6 +2603,598 @@ mod tests {
                 .collect();
             assert_eq!(texts, ["before", "after"], "{case}");
         }
+    }
+
+    /// One `history` change of one thread (`id` and optional `context`).
+    fn one_thread(
+        id: Option<&str>,
+        context: Option<&serde_json::Value>,
+        messages: &serde_json::Value,
+    ) -> Vec<WebhookEvent> {
+        let mut thread = json!({"messages": messages});
+        if let Some(id) = id {
+            thread["id"] = json!(id);
+        }
+        if let Some(context) = context {
+            thread["context"] = context.clone();
+        }
+        change(
+            "history",
+            &json!({
+                "messaging_product": "whatsapp",
+                "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
+                "history": [{"threads": [thread]}]
+            }),
+        )
+    }
+
+    /// Every documented `history_context.status` of a message the business
+    /// sent, a missing one, one Meta may add later, and the case Meta does
+    /// not use.
+    #[tokio::test]
+    async fn synced_outbound_statuses_follow_history_context() {
+        let store = Arc::new(MemoryConversationStore::new());
+        let sink = InboxSink::new(store.clone());
+        let cases = [
+            ("PENDING", DeliveryStatus::Accepted),
+            ("SENT", DeliveryStatus::Sent),
+            ("DELIVERED", DeliveryStatus::Delivered),
+            ("READ", DeliveryStatus::Read),
+            ("PLAYED", DeliveryStatus::Played),
+            ("ERROR", DeliveryStatus::Failed),
+            ("QUEUED_SOMEWHERE", DeliveryStatus::Sent),
+            ("read", DeliveryStatus::Read),
+            ("", DeliveryStatus::Sent),
+        ];
+        let mut messages: Vec<_> = cases
+            .iter()
+            .enumerate()
+            .map(|(i, (status, _))| {
+                json!({"from": "15550783881", "id": format!("wamid.{i}"),
+                    "timestamp": (1_739_230_900 + i).to_string(), "type": "text",
+                    "text": {"body": "x"}, "history_context": {"status": status}})
+            })
+            .collect();
+        messages.pop();
+        messages.push(json!({"from": "15550783881", "id": "wamid.8",
+            "timestamp": "1739230908", "type": "text", "text": {"body": "x"}}));
+        let events = one_thread(Some("16505551234"), None, &json!(messages));
+        assert!(matches!(events[0], WebhookEvent::HistorySynced { .. }));
+        deliver_all(&sink, events).await;
+        let got: Vec<_> = thread(store.as_ref(), "16505551234")
+            .await
+            .into_iter()
+            .map(|r| (r.direction, r.status))
+            .collect();
+        let want: Vec<_> = cases
+            .iter()
+            .map(|(_, status)| (Direction::Outbound, *status))
+            .collect();
+        assert_eq!(got, want);
+    }
+
+    /// Who sent a synced message: `from` is the business number in any
+    /// format; without a `from`, `to` (set only on the business's messages)
+    /// makes it outbound, a sender BSUID inbound.
+    #[tokio::test]
+    async fn synced_direction_follows_from_and_to() {
+        let store = Arc::new(MemoryConversationStore::new());
+        let sink = InboxSink::new(store.clone());
+        let messages = json!([
+            {"from": "+1 555-078-3881", "id": "wamid.formatted", "timestamp": "1739230901",
+                "type": "text", "text": {"body": "formatted business number"}},
+            {"to": "16505551234", "id": "wamid.to-only", "timestamp": "1739230902",
+                "type": "text", "text": {"body": "no from, a to"}},
+            {"from": " ", "to": "16505551234", "id": "wamid.blank-from", "timestamp": "1739230903",
+                "type": "text", "text": {"body": "a blank from, a to"}},
+            {"from": "16505551234", "id": "wamid.customer", "timestamp": "1739230904",
+                "type": "text", "text": {"body": "the customer"}}
+        ]);
+        deliver_all(&sink, one_thread(Some("16505551234"), None, &messages)).await;
+        let got: Vec<_> = thread(store.as_ref(), "16505551234")
+            .await
+            .into_iter()
+            .map(|r| (r.id.as_str().to_owned(), r.direction))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("wamid.formatted".to_owned(), Direction::Outbound),
+                ("wamid.to-only".to_owned(), Direction::Outbound),
+                ("wamid.blank-from".to_owned(), Direction::Outbound),
+                ("wamid.customer".to_owned(), Direction::Inbound),
+            ]
+        );
+        assert!(!same_number("", ""), "no digits is no number");
+        assert!(!same_number("+", "-"));
+        assert!(same_number("+15550783881", "1 (555) 078-3881"));
+    }
+
+    /// BSUID era: the thread's `context.user_id` is the conversation of
+    /// the business's messages too, not their `to` phone number; and an
+    /// echo carrying both a BSUID and a phone number joins the BSUID one.
+    #[tokio::test]
+    async fn the_customers_bsuid_wins_over_a_phone_number() {
+        let store = Arc::new(MemoryConversationStore::new());
+        let sink = InboxSink::new(store.clone());
+        let context = json!({"user_id": "US.13491208655302741918", "wa_id": "16505551234"});
+        let messages = json!([{"from": "15550783881", "to": "16505551234", "id": "wamid.out",
+            "timestamp": "1739230901", "type": "text", "text": {"body": "hello"}}]);
+        deliver_all(
+            &sink,
+            one_thread(Some("16505551234"), Some(&context), &messages),
+        )
+        .await;
+        deliver_all(
+            &sink,
+            change(
+                "smb_message_echoes",
+                &json!({
+                    "messaging_product": "whatsapp",
+                    "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
+                    "message_echoes": [{"from": "15550783881", "to": "16505551234",
+                        "to_user_id": "US.13491208655302741918",
+                        "id": "wamid.echo", "timestamp": "1739231024", "type": "text",
+                        "text": {"body": "from the app"}}]
+                }),
+            ),
+        )
+        .await;
+        let ids: Vec<_> = thread(store.as_ref(), "US.13491208655302741918")
+            .await
+            .into_iter()
+            .map(|r| r.id.as_str().to_owned())
+            .collect();
+        assert_eq!(ids, ["wamid.out", "wamid.echo"]);
+        assert!(thread(store.as_ref(), "16505551234").await.is_empty());
+    }
+
+    /// When the whole `history` value fell to `WebhookEvent::Unknown`: a
+    /// thread whose `context` is malformed is skipped whole (guessing its
+    /// customer could mix two), the other threads are recorded with their
+    /// thread id as the conversation, and a value without `metadata` is
+    /// acknowledged with nothing recorded.
+    #[tokio::test]
+    async fn the_recovered_history_path_skips_what_it_cannot_place() {
+        let store = Arc::new(MemoryConversationStore::new());
+        let sink = InboxSink::new(store.clone());
+        let events = change(
+            "history",
+            &json!({
+                "messaging_product": "whatsapp",
+                "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
+                "history": [{"threads": [
+                    {"id": "16505551234", "context": {"user_id": 5},
+                        "messages": [{"from": "16505551234", "id": "wamid.hidden",
+                            "timestamp": "1739230901", "type": "text", "text": {"body": "?"}}]},
+                    {"id": "12125557890",
+                        "messages": [{"from": "15550783881", "id": "wamid.kept",
+                            "timestamp": "1739230902", "type": "text", "text": {"body": "kept"}}]}
+                ]}]
+            }),
+        );
+        assert!(
+            matches!(events[0], WebhookEvent::Unknown { .. }),
+            "{:?}",
+            events[0].kind()
+        );
+        deliver_all(&sink, events).await;
+        assert!(thread(store.as_ref(), "16505551234").await.is_empty());
+        let kept = thread(store.as_ref(), "12125557890").await;
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].direction, Direction::Outbound);
+
+        let events = change(
+            "history",
+            &json!({"messaging_product": "whatsapp", "history": [{"threads": [{"id": "1",
+                "messages": [{"from": "1", "id": "wamid.x", "timestamp": "1", "type": "text",
+                    "text": {"body": "x"}}]}]}]}),
+        );
+        assert!(matches!(events[0], WebhookEvent::Unknown { .. }));
+        deliver_all(&sink, events).await;
+        assert_eq!(
+            store
+                .conversations(&PNID.into(), None, 10)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    /// A revoke deletes only a message sent in its direction: a customer
+    /// revokes what they sent, the business (an echo) what it sent.
+    #[tokio::test]
+    async fn a_revoke_only_deletes_a_message_of_its_direction() {
+        let store = Arc::new(MemoryConversationStore::new());
+        let sink = InboxSink::new(store.clone());
+        deliver_all(
+            &sink,
+            inbound("wamid.in", 1_760_000_000, None, Some("16505551234"), "hi"),
+        )
+        .await;
+        let echo = |id: &str, ts: &str, content: &serde_json::Value| {
+            let mut echo = json!({"from": "15550783881", "to": "16505551234", "id": id,
+                "timestamp": ts});
+            for (k, v) in content.as_object().unwrap() {
+                echo[k] = v.clone();
+            }
+            change(
+                "smb_message_echoes",
+                &json!({
+                    "messaging_product": "whatsapp",
+                    "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
+                    "message_echoes": [echo]
+                }),
+            )
+        };
+        deliver_all(
+            &sink,
+            echo(
+                "wamid.out",
+                "1760000001",
+                &json!({"type": "text", "text": {"body": "hello"}}),
+            ),
+        )
+        .await;
+        // The business "revokes" the customer's message, the customer the
+        // business's: neither applies.
+        deliver_all(
+            &sink,
+            echo(
+                "wamid.r1",
+                "1760000002",
+                &json!({"type": "revoke", "revoke": {"original_message_id": "wamid.in"}}),
+            ),
+        )
+        .await;
+        deliver_all(
+            &sink,
+            payload(&json!({
+                "messaging_product": "whatsapp",
+                "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
+                "contacts": [{"profile": {"name": "Sheena"}, "wa_id": "16505551234"}],
+                "messages": [{"from": "16505551234", "id": "wamid.r2", "timestamp": "1760000003",
+                    "type": "revoke", "revoke": {"original_message_id": "wamid.out"}}]
+            })),
+        )
+        .await;
+        let statuses: Vec<_> = thread(store.as_ref(), "16505551234")
+            .await
+            .into_iter()
+            .map(|r| (r.id.as_str().to_owned(), r.status))
+            .collect();
+        assert_eq!(
+            statuses,
+            [
+                ("wamid.in".to_owned(), DeliveryStatus::Received),
+                ("wamid.out".to_owned(), DeliveryStatus::Sent),
+            ]
+        );
+        // Each in its own direction does.
+        deliver_all(
+            &sink,
+            echo(
+                "wamid.r3",
+                "1760000004",
+                &json!({"type": "revoke", "revoke": {"original_message_id": "wamid.out"}}),
+            ),
+        )
+        .await;
+        let rows = thread(store.as_ref(), "16505551234").await;
+        assert_eq!(rows[1].status, DeliveryStatus::Deleted);
+    }
+
+    /// A revoke that arrives before its message (live, then the history
+    /// chunk that carries the original) leaves a tombstone: the content the
+    /// customer deleted is never stored.
+    #[tokio::test]
+    async fn a_revoke_before_its_message_keeps_the_content_out() {
+        let store = Arc::new(MemoryConversationStore::new());
+        let sink = InboxSink::new(store.clone());
+        deliver_all(
+            &sink,
+            one_message(&json!({"from": "16505551234", "id": "wamid.rev",
+                "timestamp": "1749854575", "type": "revoke",
+                "revoke": {"original_message_id": "wamid.a"}})),
+        )
+        .await;
+        deliver_all(
+            &sink,
+            one_thread(
+                Some("16505551234"),
+                Some(&json!({"user_id": "US.1", "wa_id": "16505551234"})),
+                &json!([{"from": "16505551234", "from_user_id": "US.1", "id": "wamid.a",
+                    "timestamp": "1749854000", "type": "text",
+                    "text": {"body": "my card number is 4111"}}]),
+            ),
+        )
+        .await;
+        let rows = thread(store.as_ref(), "US.1").await;
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(
+            (
+                rows[0].kind.as_str(),
+                rows[0].text.as_deref(),
+                rows[0].status
+            ),
+            (StoredMessage::REVOKED, None, DeliveryStatus::Deleted)
+        );
+        assert!(
+            !rows[0].payload.to_string().contains("4111"),
+            "{}",
+            rows[0].payload
+        );
+        let key = ConversationKey::new(PNID, "US.1");
+        assert_eq!(store.last_inbound_at(&key).await.unwrap(), None);
+    }
+
+    /// A phone with a wrong clock must not pin a conversation to the top of
+    /// the inbox: synced device timestamps are bounded by the sink's clock
+    /// (plus 5 minutes); the payload keeps Meta's.
+    #[tokio::test]
+    async fn synced_device_timestamps_are_bounded_by_the_clock() {
+        let store = Arc::new(MemoryConversationStore::new());
+        let clock = ManualClock::new(datetime!(2025-02-11 00:00 UTC));
+        let sink = InboxSink::new(store.clone()).with_clock(Arc::new(clock.clone()));
+        // 4102444800 is 2100-01-01.
+        deliver_all(
+            &sink,
+            one_thread(
+                Some("16505551234"),
+                None,
+                &json!([{"from": "16505551234", "id": "wamid.future", "timestamp": "4102444800",
+                    "type": "text", "text": {"body": "from the future"}},
+                    {"from": "15550783881", "id": "wamid.past", "timestamp": "1739230900",
+                    "type": "text", "text": {"body": "on time"}}]),
+            ),
+        )
+        .await;
+        let rows = thread(store.as_ref(), "16505551234").await;
+        assert_eq!(rows[0].timestamp.unix_timestamp(), 1_739_230_900);
+        assert_eq!(
+            rows[1].timestamp,
+            datetime!(2025-02-11 00:05 UTC),
+            "bounded at the clock plus the skew"
+        );
+        assert_eq!(rows[1].payload["timestamp"], "4102444800");
+        // A synced revoke from the future leaves its tombstone at the bound.
+        deliver_all(
+            &sink,
+            one_thread(
+                Some("16505551234"),
+                None,
+                &json!([{"from": "16505551234", "id": "wamid.rev", "timestamp": "4102444800",
+                    "type": "revoke", "revoke": {"original_message_id": "wamid.unknown"}}]),
+            ),
+        )
+        .await;
+        let tombstone = thread(store.as_ref(), "16505551234")
+            .await
+            .into_iter()
+            .find(|r| r.id.as_str() == "wamid.unknown")
+            .unwrap();
+        assert_eq!(tombstone.timestamp, datetime!(2025-02-11 00:05 UTC));
+        // A later live message is the conversation's latest again.
+        clock.set(datetime!(2025-02-11 01:00 UTC));
+        deliver_all(
+            &sink,
+            inbound(
+                "wamid.live",
+                1_739_235_600,
+                None,
+                Some("16505551234"),
+                "now",
+            ),
+        )
+        .await;
+        let key = ConversationKey::new(PNID, "16505551234");
+        assert_eq!(
+            summary_of(store.as_ref(), &key)
+                .await
+                .unwrap()
+                .last_text
+                .as_deref(),
+            Some("now")
+        );
+    }
+
+    /// A store that counts its write calls.
+    #[derive(Debug, Default)]
+    struct CountingStore {
+        inner: MemoryConversationStore,
+        appends: std::sync::atomic::AtomicUsize,
+        synced_calls: std::sync::atomic::AtomicUsize,
+        /// Answer `append_synced` with one answer too few (a broken store).
+        short: bool,
+    }
+
+    #[async_trait]
+    impl ConversationStore for CountingStore {
+        async fn append(&self, m: StoredMessage) -> std::result::Result<bool, StorageError> {
+            self.appends
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.inner.append(m).await
+        }
+        async fn append_synced(
+            &self,
+            messages: Vec<StoredMessage>,
+        ) -> std::result::Result<Vec<bool>, StorageError> {
+            self.synced_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mut answers = self.inner.append_synced(messages).await?;
+            if self.short {
+                answers.pop();
+            }
+            Ok(answers)
+        }
+        async fn fill_media_placeholder(
+            &self,
+            phone_number_id: &PhoneNumberId,
+            id: &MessageId,
+            kind: String,
+            text: Option<String>,
+            payload: serde_json::Value,
+        ) -> std::result::Result<bool, StorageError> {
+            self.inner
+                .fill_media_placeholder(phone_number_id, id, kind, text, payload)
+                .await
+        }
+        async fn revoke(
+            &self,
+            key: &ConversationKey,
+            id: &MessageId,
+            direction: Direction,
+            at: OffsetDateTime,
+        ) -> std::result::Result<bool, StorageError> {
+            self.inner.revoke(key, id, direction, at).await
+        }
+        async fn update_status(
+            &self,
+            phone_number_id: &PhoneNumberId,
+            id: &MessageId,
+            status: DeliveryStatus,
+            at: OffsetDateTime,
+            error: Option<serde_json::Value>,
+        ) -> std::result::Result<bool, StorageError> {
+            self.inner
+                .update_status(phone_number_id, id, status, at, error)
+                .await
+        }
+        async fn messages(
+            &self,
+            key: &ConversationKey,
+            before: Option<(OffsetDateTime, MessageId)>,
+            limit: usize,
+        ) -> std::result::Result<Vec<StoredMessage>, StorageError> {
+            self.inner.messages(key, before, limit).await
+        }
+        async fn conversations(
+            &self,
+            phone_number_id: &PhoneNumberId,
+            before: Option<(OffsetDateTime, String)>,
+            limit: usize,
+        ) -> std::result::Result<Vec<ConversationSummary>, StorageError> {
+            self.inner
+                .conversations(phone_number_id, before, limit)
+                .await
+        }
+        async fn mark_read(&self, key: &ConversationKey) -> std::result::Result<(), StorageError> {
+            self.inner.mark_read(key).await
+        }
+        async fn last_inbound_at(
+            &self,
+            key: &ConversationKey,
+        ) -> std::result::Result<Option<OffsetDateTime>, StorageError> {
+            self.inner.last_inbound_at(key).await
+        }
+    }
+
+    /// A history webhook can carry thousands of messages: a chunk is one
+    /// store call, not one per message (security review L5: one round trip
+    /// per item outlived the dedup lease, and Meta's retry ran a second
+    /// pass concurrently), on the typed and on the recovered path; the
+    /// media contents of a value are one call too.
+    #[tokio::test]
+    async fn a_history_chunk_is_one_store_call() {
+        let store = Arc::new(CountingStore::default());
+        let sink = InboxSink::new(store.clone());
+        let messages: Vec<_> = (0..500)
+            .map(|i| {
+                json!({"from": if i % 2 == 0 { "16505551234" } else { "15550783881" },
+                    "id": format!("wamid.{i}"), "timestamp": (1_739_230_000 + i).to_string(),
+                    "type": "text", "text": {"body": format!("m{i}")}})
+            })
+            .collect();
+        deliver_all(
+            &sink,
+            one_thread(Some("16505551234"), None, &json!(messages)),
+        )
+        .await;
+        let calls = |s: &CountingStore| {
+            (
+                s.appends.load(std::sync::atomic::Ordering::Relaxed),
+                s.synced_calls.load(std::sync::atomic::Ordering::Relaxed),
+            )
+        };
+        assert_eq!(calls(&store), (0, 1));
+        let key = ConversationKey::new(PNID, "16505551234");
+        assert_eq!(
+            store.inner.messages(&key, None, 1000).await.unwrap().len(),
+            500
+        );
+
+        let mut two_chunks = messages[..10].to_vec();
+        two_chunks.push(json!({"from": "16505551234", "timestamp": "1"}));
+        deliver_all(
+            &sink,
+            change(
+                "history",
+                &json!({
+                    "messaging_product": "whatsapp",
+                    "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
+                    "history": [
+                        {"threads": [{"id": "16505551234", "messages": two_chunks}]},
+                        {"threads": [{"id": "12125557890", "messages": messages[10..20]}]}
+                    ],
+                    "messages": [{"from": "16505551234", "id": "wamid.m1", "timestamp": "1739231000",
+                        "type": "image", "image": {"id": "1"}},
+                        {"from": "16505551234", "id": "wamid.m2", "timestamp": "1739231001",
+                        "type": "image", "image": {"id": "2"}}]
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(
+            calls(&store),
+            (0, 4),
+            "two chunks and one batch of contents"
+        );
+
+        // A store that answers for fewer messages than it was given fails
+        // the delivery (Meta redelivers) instead of mismatching the fills.
+        let broken = Arc::new(CountingStore {
+            short: true,
+            ..CountingStore::default()
+        });
+        let sink = InboxSink::new(broken);
+        for event in body(HISTORY_MEDIA) {
+            assert!(sink.deliver(event).await.is_err());
+        }
+    }
+
+    /// Media content items name their customer through the value's
+    /// `contacts`: by BSUID, else by phone number in any format.
+    #[tokio::test]
+    async fn media_contents_find_their_customer_in_the_contacts() {
+        let store = Arc::new(MemoryConversationStore::new());
+        let sink = InboxSink::new(store.clone());
+        deliver_all(
+            &sink,
+            change(
+                "history",
+                &json!({
+                    "messaging_product": "whatsapp",
+                    "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
+                    "contacts": [
+                        {"profile": {"name": "A"}, "wa_id": "16505551234", "user_id": "US.A"},
+                        {"profile": {"name": "B"}, "wa_id": "12125557890", "user_id": "US.B"},
+                        {"profile": {"name": "A?"}, "wa_id": "+1 650 555 1234", "user_id": "US.C"}
+                    ],
+                    "messages": [{"from": "+1 650-555-1234", "id": "wamid.a", "timestamp": "1739231000",
+                        "type": "image", "image": {"id": "1"}}],
+                    "message_echoes": [{"from": "15550783881", "to": "12125557890", "id": "wamid.b",
+                        "timestamp": "1739231001", "type": "image", "image": {"id": "2"}}]
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(
+            thread(store.as_ref(), "US.A").await.len(),
+            1,
+            "the first contact of a number wins"
+        );
+        assert_eq!(thread(store.as_ref(), "US.B").await.len(), 1);
     }
 
     /// Content in history and echoes follows the inbound NUL rule.

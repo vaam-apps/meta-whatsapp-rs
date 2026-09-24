@@ -86,11 +86,15 @@ Say in the PR description what happened to each, with a link or
   `crates/wa-rs/examples/*.rs`): edit the example, run `just fmt`, then
   copy the lines. The test names the block that drifted. Label every
   fence with its language (Rust is exactly `rust`); keep example files
-  free of block comments, `macro_rules!` and any `cfg` but `cfg(test)`,
-  whose code a block could quote without it ever compiling. A block may
-  not quote lines inside a string or a comment of any example, nor an
-  item under a `cfg` that `--all-features` never enables (the
-  `#[cfg(not(feature = …))]` arms of `crates/wa-rs/examples/*.rs`).
+  free of block comments, `macro_rules!` and any `cfg` but `cfg(test)`
+  (in `crates/wa-rs/examples/*.rs`: but the `postgres` arms; they are
+  built as examples, so `cfg(test)` never holds there), whose code a
+  block could quote without it ever compiling. A block may not quote
+  lines inside a string (plain, raw, byte or C) or a block comment of any
+  example (a line comment is quoted as a comment, which is harmless), nor
+  an item under a `cfg` that `--all-features` never enables (the
+  `#[cfg(not(feature = …))]` arms of `crates/wa-rs/examples/*.rs`) or
+  under a `cfg_attr` that carries a `cfg`.
 - Each `references/*.md` carries a `Verified against wa-rs <full
   sha> (<date>)` stamp under its title, like its `SKILL.md`, checked the same
   way.

@@ -49,7 +49,7 @@ leaks its library's types through a port.
 | --- | --- | --- |
 | `transport::HttpTransport` | `send`, `send_streaming` | rustdoc; non-2xx is *not* an error at this layer |
 | `store::KvStore` | `get`, `put`, `put_if_absent`, `compare_and_swap`, `delete` | `wa_adapters::store::conformance` (executable) |
-| `store::ConversationStore` | `append`, `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at` | `wa_adapters::store::conversation_conformance` (executable) |
+| `store::ConversationStore` | `append`, `append_synced` (a batch of coexistence history: no window, never unread), `fill_media_placeholder`, `revoke` (number and direction scoped; a tombstone, history only, when the message is not stored yet), `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at` | `wa_adapters::store::conversation_conformance` (executable) |
 | `sink::EventSink<E>` | `deliver` | rustdoc |
 | `clock::Clock` | `now` | — |
 
@@ -149,8 +149,31 @@ Rules for every endpoint module:
    of serde's message (which quotes the offending value).
 9. **One type per concept.** A type two endpoint families share is
    defined once in `wa_client::common` (`MediaSource`, `FlowAction`,
-   `QualityRating`) and re-exported by each module that uses it; ids are
-   `wa_core::ids` newtypes, never plain strings.
+   `QualityRating`) and re-exported by each module that uses it; a type
+   of one module never shares its name with a type of another
+   (`flows::endpoint::EndpointAction` is the endpoint request's `action`,
+   `common::FlowAction` the `flow_action` a Flow starts with). New code
+   types every Graph id with a `wa_core::ids` newtype. Known exceptions,
+   still `String` (typing them is a breaking change each): the groups'
+   `request_id` and `join_request_id`; `MessagingCustomerBase::id`,
+   `CreatedMessagingCustomerBase::messaging_customer_base_id` and the
+   signups' `default_messaging_customer_base_id`; `OnboardingRequested::request_id`;
+   the calling settings' `app_id`; `SubscribedAppData::id` and
+   `AssignedUser::id`; `CommerceSettings::id`; `LibraryTemplate::id`; the
+   template's `ad_*_id`s; `preverified_id`; the phone number
+   `request_id`; the ids of an Embedded Signup session event
+   (`ad_account_ids`, `page_ids`, `dataset_ids`, `catalog_ids`,
+   `instagram_account_ids`, `session_id`), the launch's `solution_id` and
+   the token's `user_id`. Merchant-chosen ids (product retailer ids,
+   button ids) and our own (an OTP challenge id) are strings on purpose.
+10. **List queries are named `List*`** (`ListQrCodes`, `ListSignups`,
+   `ListFlows`, `ListFlowAssets`, `ListAssignedUsers`, `ListClientWabas`,
+   `ListGroups`, `ListBlockedUsers`, …) and carry `after`/`before`; the
+   one-page method sends them, the `…_stream(&query)` refuses them. The
+   older `*Query` names stay as they are (renaming them would break
+   integrators for no gain): `PhoneNumbersQuery`, `WabaListQuery`,
+   `TemplateListQuery`, `LibraryQuery`, `TemplateAnalyticsQuery`,
+   `TemplateGroupAnalyticsQuery`, `GroupAnalyticsQuery`.
 
 ### Retries
 
@@ -243,15 +266,20 @@ Authentication template definitions (copy code, one-tap with
   netstring-encoded so neither can be shifted into the other. Services
   sharing a store and a pepper (several merchants of one integrator) never
   see each other's codes, cooldowns or issue limits, on their own numbers
-  or on a shared one. A blank namespace is a config error; changing the
+  or on a shared one. A blank namespace (or one with edge whitespace,
+  control characters or format characters, `Cf`) is a config error;
+  changing the
   scope (or upgrading across the commit that introduced it) invalidates
   outstanding codes. Making the namespace required kept the encoding: a
   service that had set one derives the same keys.
 - `issue(recipient, purpose) → IssueOutcome { Sent(Challenge{id, expires_at,
   message_id}), CoolingDown{retry_after}, RateLimited{retry_after} }`:
   CSPRNG numeric code (length 4–8), only an HMAC-SHA256 of it stored under a
-  server pepper (`SecretBytes`), keys are HMACs too (no raw phone number in
-  the store). The code goes out through `Messages::send`
+  server pepper (`SecretBytes`): HMAC(pepper, `"wa.otp.code" | key |
+  challenge id | code`), so a record copied to another key (by anyone who
+  can write the store but lacks the pepper) never verifies there. Keys are
+  HMACs too (no raw phone number in the store); the namespace and the
+  purpose are server-side constants, never request input. The code goes out through `Messages::send`
   (`OutboundMessage::template`), so the send checks and the private
   response decoding apply. Resend cooldown (30 s) and a per-recipient
   issue limit (default 5 per sliding hour per number and purpose, per
@@ -511,14 +539,25 @@ exposes the 24-hour `CustomerServiceWindow`, and sends replies.
   window is computed from recorded inbound *messages*: a customer's call,
   which reopens it on Meta's side, is not seen (`OPEN_QUESTIONS.md` #32).
 - Statuses and revokes change only a message of the business number they
-  arrived on (`update_status` takes the `phone_number_id`).
+  arrived on (`update_status` takes the `phone_number_id`); a revoke also
+  only a message of its direction (`ConversationStore::revoke`: a customer
+  revokes what they sent, the business what it sent).
 - Content never fails a delivery: U+0000 in recorded content is stored as
   U+FFFD (see Adapters). Storage errors still do (500, Meta redelivers the
   batch).
 - A storage (or serialization) failure *after* a successful send is
   logged without the message's content, never returned — an error would
   invite a retry that sends twice.
-- Revokes mark the original `Deleted`.
+- Revokes mark the original `Deleted` (its content is kept,
+  `OPEN_QUESTIONS.md` #38) if it was stored for the revoke's number and
+  in its direction; the conversation is not matched (#37). A revoke that
+  arrives before its message stores a tombstone (kind `revoked`, no
+  content, `Deleted`) under the message's id, so the message, live or
+  synced, is never stored with the content its sender deleted. The
+  tombstone is history only, never in the conversation's summary (no
+  latest message, preview, window or unread count, and no summary of its
+  own). A media placeholder revoked before its content arrives is never
+  filled.
 - Coexistence (a merchant who keeps the WhatsApp Business app): echoes
   (`MessageEchoed`, messages the merchant sent from the app) are recorded
   as `Outbound`, status `Sent` (the payload has none), in the customer's
@@ -526,18 +565,32 @@ exposes the 24-hour `CustomerServiceWindow`, and sends replies.
   deletes the original. Synced history (`HistorySynced`) is recorded
   message by message in its documented direction (`from` = the business
   number → `Outbound` with its `history_context` status; else `Inbound`),
-  each with its own device timestamp, so chunks may arrive in any order
-  and a redelivered one is a no-op (ids are stored once). A declined sync
+  each with its own device timestamp (bounded by the sink's clock plus 5
+  minutes, so a phone with a wrong clock cannot pin a conversation to the
+  top), so chunks may arrive in any order and a redelivered one is a no-op
+  (ids are stored once); the exception is a revoke in a chunk that arrives
+  before the chunk carrying its message, which leaves a tombstone in the
+  message's place. Each chunk is one `append_synced` batch (the Postgres
+  adapter: one statement), then its revokes: a history webhook can carry
+  thousands of messages, and one round trip each could outlast the
+  webhook's dedup lease. A declined sync
   (`2593109`) records nothing. One malformed history item never fails the
   delivery: an item without a direction or customer, with U+0000 in an
   id, or that does not parse on its own (when one bad item turned the
   whole value into `WebhookEvent::Unknown`) is skipped and logged by
   position, without content; storage errors still fail it.
-  Two known gaps need a port change (`OPEN_QUESTIONS.md` #35): synced
-  inbound messages move `last_inbound_at` and the unread count like live
-  ones (Meta opens no window for messages from before onboarding), and a
-  media content that follows a recorded `media_placeholder` is not merged
-  into it.
+  Synced history goes through `ConversationStore::append_synced`: an
+  inbound synced message neither moves `last_inbound_at` (Meta opens no
+  window for a message sent before onboarding,
+  `embedded-signup/onboarding-business-app-users`) nor counts as unread
+  (the merchant read it in the app). The media content Meta sends after a
+  `media_placeholder` (`history`'s `messages` / `message_echoes`) replaces
+  the placeholder's kind, text and payload through
+  `ConversationStore::fill_media_placeholder`; the row keeps the thread's
+  conversation, direction, status and timestamp. Both are part of the
+  executable conformance suite, so every adapter proves them. The Postgres
+  adapter needs no schema change: the summary is maintained when a row is
+  written, so the difference lives in the write.
 
 ## Typst (`wa-typst`)
 

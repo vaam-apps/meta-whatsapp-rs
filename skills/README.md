@@ -93,7 +93,7 @@ wa-rs has no releases (`publish = false`; you depend on a git `rev`). So
 each `SKILL.md` names the commit it was verified against, under its title:
 
 ```markdown
-> **Verified against wa-rs 8bc676747a09a3c9225a53954030ed7d4eb44adf (2026-09-24).**
+> **Verified against wa-rs 6909be3b54768abc3d5f9b04543a49f32b072669 (2026-09-25).**
 ```
 
 "Verified" means: every Rust block is an excerpt of a file wa-rs compiles
@@ -120,11 +120,13 @@ there. The rules:
 - `crates/wa-rs/tests/skills.rs` (in `just test`): every
   `skills/*/examples/*.rs` compiles and its tests pass, and hides no code
   that is never compiled (no block comments, `macro_rules!` or `cfg`
-  but the tests' `#[cfg(test)]`); every Rust block is a verbatim excerpt
-  of a compiled file, and of its compiled code only: never lines inside a
-  string or a comment, nor an item under a `cfg` that `--all-features`
-  never enables (such as the `#[cfg(not(feature = …))]` arms of the crate's
-  own examples),
+  but the tests' `#[cfg(test)]`, and in the crate's own examples only the
+  `postgres` arms); every Rust block is a verbatim excerpt of a compiled
+  file, and of its compiled code only: never lines inside a string (raw,
+  byte or C strings included) or a block comment, nor an item under a
+  `cfg` that `--all-features` never enables (such as the
+  `#[cfg(not(feature = …))]` arms of the crate's own examples, or their
+  `#[cfg(test)]` items) or under a `#[cfg_attr(…, cfg(…))]`,
   and every fence carries a known language, so no Rust escapes the check
   as an `rs` or `rust,ignore` fence, a `~~~` one or an unlabeled block;
   frontmatter parses the way
