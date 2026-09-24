@@ -5,7 +5,7 @@ description: "Start here for wa-rs, the Rust toolkit for Meta's WhatsApp Busines
 
 # wa-rs
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page (see "Versioning" below).
+> **Verified against wa-rs 8bc676747a09a3c9225a53954030ed7d4eb44adf (2026-09-24).** On another revision, trust the code over this page (see "Versioning" below).
 
 wa-rs is a Cargo workspace for Meta's WhatsApp Business Platform: a typed
 client for the Cloud API and the Business Management API (Graph API

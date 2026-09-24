@@ -1,6 +1,6 @@
 # Solution Partner deployments
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** Also checked against Meta's
+> **Verified against wa-rs 8bc676747a09a3c9225a53954030ed7d4eb44adf (2026-09-24).** Also checked against Meta's
 > `solution-providers/share-and-revoke-credit-lines` and
 > `solution-providers/manage-system-users` pages as fetched on 2026-09-24.
 > Code: [examples/solution_partner.rs](../examples/solution_partner.rs).

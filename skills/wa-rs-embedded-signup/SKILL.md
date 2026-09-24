@@ -5,7 +5,7 @@ description: "Letting each merchant of a multi-tenant CMS connect their own What
 
 # wa-rs-embedded-signup
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs 8bc676747a09a3c9225a53954030ed7d4eb44adf (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/onboarding.rs](examples/onboarding.rs) and, for
 a Solution Partner, [examples/solution_partner.rs](examples/solution_partner.rs),
@@ -144,6 +144,7 @@ a malformed post spent the attempt. Check everything local first.
 
 ## What wa-rs does not do
 
+- ~~Only the Tech Provider flow~~ (before 581f9b1): no credit lines.
 - No pre-verified number pools or multi-WABA onboarding; no token
   refresh (an expired token means running the flow again)
   ([open questions 4–12](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)).
