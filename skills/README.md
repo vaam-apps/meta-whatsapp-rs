@@ -57,7 +57,7 @@ GitHub), so any subset works.
 
 | Skill | Load it when |
 | --- | --- |
-| [`wa-rs-embedded-signup`](wa-rs-embedded-signup/) | the "Connect WhatsApp" flow and its callback |
+| [`wa-rs-embedded-signup`](wa-rs-embedded-signup/) | the "Connect WhatsApp" flow and its callback; Solution Partner credit lines |
 | [`wa-rs-token-vault`](wa-rs-token-vault/) | merchants' tokens, key rotation, acting as a merchant |
 | [`wa-rs-phone-numbers`](wa-rs-phone-numbers/) | registration, PIN, business profile, webhook subscriptions |
 

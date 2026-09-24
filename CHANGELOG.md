@@ -11,6 +11,9 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
 
 ### Open questions closed
 
+- #3 (Tech Provider or Solution Partner?): decided by the owner on
+  2026-09-24, "support both, per deployment"; Solution Partner mode is
+  below.
 - #17 (coexistence echoes and history not recorded by the inbox):
   resolved in a3582b8; what that needs a port change for is #35.
 - #34 (should `OtpConfig::namespace` be required?): decided yes, done in
@@ -18,6 +21,33 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
 
 ### Added
 
+- **Solution Partner onboarding** (per deployment): configure
+  `EmbeddedSignup::solution_partner(SolutionPartner::new(system_token,
+  system_user_id, credit_line_id))` and every onboarding shares your
+  credit line between `subscribe_app` and `register_phone`, Meta's
+  order. `CreditSharing::ShareAndAttach` (default, Meta's current method)
+  first adds your system user to the WABA (`assign_system_user`), then
+  calls `whatsapp_credit_sharing_and_attach` with the system user token;
+  `CreditSharing::ShareThenAttach` shares with the verified owner business
+  and attaches with the merchant's token. The currency
+  (`OnboardingRequest::currency`, else `SolutionPartner::default_currency`)
+  is required before the code is exchanged. `share_credit_line` checks
+  whether the line already funds the WABA before posting, in `onboard`
+  and `resume` alike, so a timed-out share is resumed without posting it
+  twice. The allocation id is returned (`Onboarded::allocation_config_id`)
+  and sealed into the vault record (`StoredBusinessToken::allocation_config_id`;
+  omitted when unset, so Tech Provider records are written as before).
+  `EmbeddedSignup::revoke_credit_line` revokes from the stored owner
+  business after `PARTNER_REMOVED`. The Tech Provider flow is unchanged,
+  request for request.
+- **`wa_client::credit_lines`**: `CreditLines` (`Client::credit_lines`)
+  with `list`/`list_stream` (`extendedcredits`), `share_and_attach`,
+  `share`, `attach`, `receiving_credential`, `primary_funding`,
+  `allocations_for` (accepts the page's single object and a
+  `{"data": [...]}` page), `revoke`, `revoke_for_business` (only records
+  naming that business), `allocation_status`, and `is_shared`;
+  `WabaCurrency` (the six supported codes, `Other` only on purpose). New
+  ids `CreditLineId` and `AllocationConfigId` in `wa_core::ids`.
 - **Coexistence in the CMS inbox**: `InboxSink` records the merchant's
   WhatsApp Business app messages (`MessageEchoed`: outbound, `Sent`, in the
   customer's conversation; an echoed revoke deletes the original) and the
@@ -88,8 +118,22 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   Claude Code dev container with a fail-closed default-deny firewall,
   project skills and agents, consumer skills (`npx skills add vaam-apps/wa-rs`).
 
+### Deprecated
+
+- `EsVersion::V2`, `V3`, `V2PublicPreview` and `V3PublicPreview`: Meta
+  deprecates Embedded Signup v2 and v3, including their public previews,
+  on 2026-10-15 (`embedded-signup/onboarding-customers-as-a-solution-partner`).
+  Use v4, which needs no `version`.
+
 ### Changed
 
+- **`account_update` partner fixtures** assert every documented
+  `waba_info` field (`waba_id`, `owner_business_id`, `partner_app_id`,
+  `solution_id`, `solution_partner_business_ids`); the models already had
+  them. In Meta's `PARTNER_*` examples the entry id is a business
+  portfolio id, so `WebhookEvent::waba_id()` is not the merchant's WABA
+  for those events: read `update.waba_info.waba_id` (the guide and the
+  embedded-signup skill say so).
 - **Breaking — one type per concept** (conventions review #9):
   `wa_client::common` defines `MediaSource`, `FlowAction` and
   `QualityRating` once; `messages`, `templates` and `phone_numbers`

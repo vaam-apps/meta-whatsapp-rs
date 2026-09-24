@@ -171,8 +171,10 @@ notification queue on top must be idempotent itself: tag each message with
 - Before moving: read Meta's changelog for the new version, rerun your
   integration tests against a test WABA, and watch the `Unknown` count:
   webhook fields Meta adds arrive as `Unknown` instead of failing.
-- Embedded Signup v2 is deprecated on 2026-10-15; `LaunchOptions` targets
-  v4 (the login configuration selects it).
+- Embedded Signup v2 and v3, including their public previews, are
+  deprecated on 2026-10-15 (the matching `EsVersion` values are
+  `#[deprecated]`); `LaunchOptions` targets v4 (the login configuration
+  selects it).
 
 ## 6. Several instances
 
@@ -201,6 +203,10 @@ notification queue on top must be idempotent itself: tag each message with
   merchant's); templates approved in every language you send.
 - Tech Provider: App Review passed with Advanced access; Embedded Signup
   domains and configuration set ([embedded-signup.md](embedded-signup.md)).
+- Solution Partner: the system user's token, id and your credit line id in
+  the secret manager and configuration; a currency for every merchant (or
+  a default); `PartnerRemoved` wired to `revoke_credit_line`
+  ([embedded-signup.md](embedded-signup.md#solution-partner-mode)).
 - Webhook fields subscribed; alerts wired ([webhooks.md](webhooks.md#8-operational-alerts)).
 - Secrets from the secret manager, none in the repository or the database.
 - [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) read: several defaults there

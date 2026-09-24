@@ -38,7 +38,8 @@ Notes that save a day of debugging:
   as Graph error `200` (`ErrorKind::Permission`), not HTTP 403.
 - The webhook callback must be HTTPS with a valid certificate; self-signed
   ones are not supported. In development, put a tunnel in front.
-- A CMS that onboards **other businesses** is a Tech Provider and needs more
+- A CMS that onboards **other businesses** is a Tech Provider (or a
+  Solution Partner paying for them with its credit line) and needs more
   (business verification, App Review for Advanced access, a Facebook Login
   for Business configuration): see [embedded-signup.md](embedded-signup.md).
 
@@ -218,5 +219,5 @@ any other origin, `*.whatsapp.net` included, is refused with
 - No job queue, outbox or retry scheduler for sends.
 - No opt-in or opt-out registry: recording consent is yours
   ([marketing-and-commerce.md](marketing-and-commerce.md)).
-- Payments, Solution Partner credit lines, conversation routing:
-  [coverage.md](../coverage.md) rows 28–32.
+- Payments, Solution Partner APIs other than credit lines, conversation
+  routing: [coverage.md](../coverage.md) rows 28–32.

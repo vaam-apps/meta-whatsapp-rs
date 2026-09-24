@@ -12,7 +12,14 @@ metadata:
    and endpoint-specific error codes.
 2. **Pick the module** by the object the path hangs off: `/{PHONE_NUMBER_ID}/…`
    → a phone-number-scoped module (`messages`, `media`, `phone_numbers`, …),
-   `/{WABA_ID}/…` → `waba`, `templates`, `flows`, `analytics`, `signups`.
+   `/{WABA_ID}/…` → `waba`, `templates`, `flows`, `analytics`, `signups`;
+   Solution Partner credit lines (`/{CREDIT_LINE_ID}/…`,
+   `/{ALLOCATION_CONFIG_ID}`) → `credit_lines`. When one family mixes
+   tokens (the partner's system user token for most credit line calls, the
+   merchant's business token for `attach` and `primary_funding`), take the
+   token from the `Client` the caller built and say which one in the
+   module docs and each method's rustdoc; never store a second token in
+   the API struct.
 3. **Types**: request struct `#[derive(Serialize)]` with
    `#[serde(skip_serializing_if = "Option::is_none")]` on optionals;
    response `#[derive(Deserialize)]`, no `deny_unknown_fields`. Ids use

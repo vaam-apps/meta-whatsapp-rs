@@ -15,12 +15,6 @@ entry by deciding it in an issue/PR and deleting it here.
 
 ## Embedded Signup (onboarding merchants)
 
-3. **Tech Provider or Solution Partner?** Only the Tech Provider flow is
-   implemented (exchange → verify → store → subscribe → register). A
-   Solution Partner must also share its credit line with each onboarded
-   business (system user token, `receiving_business_id` = the verified owner
-   business id, which is already stored). Merchants of a Tech Provider must
-   add their own payment method before they can message.
 4. **Two-step PIN policy.** The caller supplies the 6-digit PIN on every
    `onboard`/`resume`; nothing generates or stores PINs. Numbers that already
    have a PIN need the merchant's current one.

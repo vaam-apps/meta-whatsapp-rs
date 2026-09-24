@@ -58,6 +58,15 @@ pub async fn start(signup: &Signup, merchant_id: &str) -> wa_rs::Result<serde_js
     Ok(serde_json::json!({"state": state.as_str(), "options": options}))
 }
 
+/// The steps after `store_token`: the token is kept, `resume` redoes them
+/// (the two credit steps run for a Solution Partner only).
+pub const AFTER_STORE: [&str; 4] = [
+    steps::SUBSCRIBE_APP,
+    steps::ASSIGN_SYSTEM_USER,
+    steps::SHARE_CREDIT_LINE,
+    steps::REGISTER_PHONE,
+];
+
 /// How the callback ended.
 #[derive(Debug)]
 pub enum Completion {
@@ -96,21 +105,18 @@ pub async fn complete(
     // Never retry `onboard`: its first step spends the code.
     match signup.es.onboard(&request, &signup.vault).await {
         Ok(done) => Ok(Completion::Connected(Box::new(done))), // save done.waba_id for merchant_id
-        Err(
-            e @ Error::Step {
-                step: steps::SUBSCRIBE_APP | steps::REGISTER_PHONE,
-                ..
-            },
-        ) => match request.session.primary_waba_id() {
-            Some(waba) => Ok(Completion::Resumable(waba.clone(), Box::new(e))),
-            None => Ok(Completion::StartOver(Box::new(e))),
-        },
+        Err(e @ Error::Step { step, .. }) if AFTER_STORE.contains(&step) => {
+            match request.session.primary_waba_id() {
+                Some(waba) => Ok(Completion::Resumable(waba.clone(), Box::new(e))),
+                None => Ok(Completion::StartOver(Box::new(e))),
+            }
+        }
         Err(e) => Ok(Completion::StartOver(Box::new(e))),
     }
 }
 
-/// Redo `subscribe_app` and `register_phone` with the stored token, e.g.
-/// after a wrong PIN (`ErrorKind::TwoStepVerification`). Check first that
+/// Redo the steps after `store_token` with the stored token, e.g. after a
+/// wrong PIN (`ErrorKind::TwoStepVerification`). Check first that
 /// `waba_id` belongs to the calling merchant: `resume` acts with whatever
 /// token is stored for the WABA it is given.
 pub async fn resume_after_restart(

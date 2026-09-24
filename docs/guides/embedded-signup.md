@@ -5,7 +5,10 @@ Meta's popup, and your backend ends up holding their business token,
 encrypted, routable by phone number id, with webhooks flowing and the
 number registered.
 
-wa-rs implements the **Tech Provider** flow of Embedded Signup v4.
+wa-rs implements Embedded Signup v4 for a **Tech Provider** (each merchant
+adds a payment method and pays Meta) or a **Solution Partner** (your
+credit line pays for every merchant you onboard), chosen once per
+deployment: see [Solution Partner mode](#solution-partner-mode).
 Example: [`embedded_signup.rs`](../../crates/wa-rs/examples/embedded_signup.rs).
 Agent skills:
 [`wa-rs-embedded-signup`](../../skills/wa-rs-embedded-signup/SKILL.md),
@@ -31,7 +34,9 @@ POST /whatsapp/connect/callback {state, code, event, pin}
                                                ► redeem(state, merchant)
                                                  EmbeddedSignup::onboard ─────────► exchange code, debug_token,
                                                    └► TokenVault (by WABA, by number)  verify WABA + number,
-                                                                                      subscribe app, register
+                                                                                      subscribe app,
+                                                                                      [share credit line],
+                                                                                      register
 ```
 
 ## 1. On Meta's side
@@ -42,7 +47,7 @@ POST /whatsapp/connect/callback {state, code, event, pin}
 | 2 | Facebook Login for Business → Settings → Client OAuth settings: switch on client OAuth login, web OAuth login, enforce HTTPS, embedded browser OAuth login, strict mode for redirect URIs and login with the JavaScript SDK. List every domain that serves the connect page (development ones too, HTTPS only) under **Allowed domains** and **Valid OAuth redirect URIs**; otherwise the popup never hands the code back. | [embedded-signup/implementation](https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/implementation) |
 | 3 | Facebook Login for Business → Configurations: create a configuration from Meta's WhatsApp Embedded Signup template (or a custom one using the WhatsApp Embedded Signup login variation). Ask only for the assets you use: every extra screen loses merchants. Keep the **configuration id**. | same |
 | 4 | Configure your app's webhook callback ([webhooks.md](webhooks.md)) and subscribe to `messages` and `account_update` (Meta requires the latter for Embedded Signup). | [webhooks/overview](https://developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/overview) |
-| 5 | Tell each merchant to add a payment method in WhatsApp Manager after connecting: until then their number cannot send. | [onboarding-customers-as-a-tech-provider](https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/onboarding-customers-as-a-tech-provider) |
+| 5 | Tech Provider: tell each merchant to add a payment method in WhatsApp Manager after connecting; until then their number cannot send. A Solution Partner shares its credit line instead ([below](#solution-partner-mode)). | [onboarding-customers-as-a-tech-provider](https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/onboarding-customers-as-a-tech-provider) |
 
 The page needs only the **app id** and the **configuration id**; the **app
 secret** stays on the server.
@@ -170,7 +175,12 @@ pub async fn complete(
             save_merchant_waba(merchant_id, &onboarded.waba_id).await; // your tenant ↔ WABA table
             Ok(Completed::Connected(onboarded))
         }
-        Err(error @ Error::Step { step: steps::SUBSCRIBE_APP | steps::REGISTER_PHONE, .. }) => {
+        // Every step after store_token: the token is kept, `resume` redoes them.
+        Err(error @ Error::Step {
+            step: steps::SUBSCRIBE_APP | steps::ASSIGN_SYSTEM_USER | steps::SHARE_CREDIT_LINE
+                | steps::REGISTER_PHONE,
+            ..
+        }) => {
             let Some(waba_id) = request.session.primary_waba_id().cloned() else { return Err(error) };
             save_merchant_waba(merchant_id, &waba_id).await;
             Ok(Completed::Resumable { waba_id, request, error })
@@ -199,9 +209,11 @@ with the names in `embedded_signup::steps`:
 | `verify_assets` | the WABA is among the token's grants, its owner is read from Meta, the number belongs to the WABA | start over; a mismatch means the browser's ids were wrong |
 | `store_token` | encrypts the token into the vault, indexes every number of the WABA | fix the store, start over |
 | `subscribe_app` | `POST /{waba}/subscribed_apps` | fix, then `resume` |
+| `assign_system_user` | Solution Partner, share-and-attach only: your system user on the merchant's WABA | fix, then `resume` |
+| `share_credit_line` | Solution Partner only: checks, then shares your credit line | fix, then `resume` (it checks before it posts) |
 | `register_phone` | `POST /{number}/register` with the PIN | fix (often the PIN), then `resume` |
 
-The token is stored **before** the last two steps on purpose: a wrong PIN
+The token is stored **before** the steps after it on purpose: a wrong PIN
 (`ErrorKind::TwoStepVerification`, 133005) must not cost the merchant the
 whole popup again. Registration counts against 10 per 72 hours; 133016
 locks the number for 72 hours and is never retried automatically.
@@ -270,10 +282,96 @@ always go to the app's callback
   app) or `AccountDeleted`: delete the vault entry. `AccountOffboarded` and
   `PartnerRemoved` with disconnection details concern coexistence numbers
   that changed device or number: ask the merchant to reconnect.
+  `PartnerRemoved` without them means the merchant unshared the WABA: a
+  Solution Partner revokes its credit line at once ([below](#solution-partner-mode)).
+  For every `Partner*` event, take the merchant's WABA from
+  `update.waba_info.waba_id`: in Meta's examples the entry id, which is
+  what `event.waba_id()` returns, is a business portfolio id, not the WABA.
 - **The token stops working:** `ErrorKind::Authentication` (190) on a
   merchant's calls. Nothing refreshes tokens; the merchant runs Embedded
   Signup again. `StoredBusinessToken::is_expired(now)` tells you ahead of
   time when Meta reported an expiry.
+
+## Solution Partner mode
+
+A Solution Partner pays Meta for its merchants through its own credit
+line (and invoices them); wa-rs shares that line with every merchant it
+onboards. It is one choice per deployment (the owner's decision on
+2026-09-24): configure it at startup, or leave it out for the Tech
+Provider flow, whose requests are unchanged.
+
+On Meta's side: Solution Partner status and a credit line (its id:
+`client.with_token(system_token).credit_lines().list(&your_business_id, &[])`);
+a system user with the business_management permission and an Admin or
+Financial Editor role on your portfolio, its token and its id.
+
+```rust
+use wa_rs::client::credit_lines::WabaCurrency;
+use wa_rs::client::embedded_signup::{CreditSharing, SolutionPartner};
+
+let es = client
+    .embedded_signup(AppCredentials::new(app_id, app_secret))
+    .solution_partner(
+        SolutionPartner::new(system_token, system_user_id, credit_line_id)
+            .method(CreditSharing::ShareAndAttach) // Meta's current method, the default
+            .default_currency(WabaCurrency::Usd), // AUD, EUR, GBP, IDR, INR or USD
+    );
+// Per merchant, when theirs differs: checked before the code is exchanged.
+let request = request.currency("EUR".parse::<WabaCurrency>()?);
+```
+
+`onboard` then runs, following Meta's Solution Partner order (subscribe,
+share the credit line, register):
+
+| After `subscribe_app` | Request | Token |
+| --- | --- | --- |
+| `assign_system_user` (share-and-attach only) | `POST /{waba}/assigned_users?user=<system user>&tasks=["MANAGE"]` | your system user's |
+| `share_credit_line`, share-and-attach | `GET /{credit line}/owning_credit_allocation_configs?receiving_business_id=<owner>`, then `POST /{credit line}/whatsapp_credit_sharing_and_attach?waba_currency=…&waba_id=…` | your system user's |
+| `share_credit_line`, share-then-attach | the same lookup, `POST /{credit line}/whatsapp_credit_sharing?receiving_business_id=<owner>`, then `POST /{credit line}/whatsapp_credit_attach?waba_currency=…&waba_id=…` | yours, then the **merchant's** for the attach |
+
+- The owner is the business Meta reports for the WABA
+  (`owner_business_info`, read in `verify_assets`), never the
+  `business_id` the browser sent.
+- **The currency** must be the merchant's billing currency: a credit line
+  cannot be changed once attached (only a new WABA gets another one).
+  Without one on the request or as the default, `onboard` refuses before
+  spending the code; a Tech Provider request naming one is refused too.
+- **It checks before it posts.** When the lookup (or a stored allocation)
+  finds a record whose receiving credential is the WABA's
+  `primary_funding_id`, nothing is posted. So a timed-out share (which
+  may have gone through: `Error::may_have_been_sent`) is safe to `resume`,
+  and so is onboarding a WABA that is already funded. A resumed step that
+  cannot check (Meta reported no owner and no allocation is stored)
+  refuses rather than share blindly.
+- The allocation id comes back as `Onboarded::allocation_config_id` and
+  is stored with the token (`StoredBusinessToken::allocation_config_id`).
+- Under a Multi-Partner Solution without messaging permission, `MANAGE`
+  is refused on the merchant's WABA: set
+  `SolutionPartner::system_user_tasks` to granular tasks including
+  `WabaTask::ManageBilling`.
+
+**When a merchant removes you** (`AccountUpdateEvent::PartnerRemoved`):
+messaging on the WABA is blocked, its owner can no longer be read, and
+Meta recommends revoking the credit line at once:
+
+```rust
+let revoked = es.revoke_credit_line(&waba_id, &vault).await?; // waba_id from update.waba_info
+```
+
+It looks the allocation up by the owner business stored at onboarding
+(never by reading the WABA again) and deletes every record naming that
+business, or, when none is found, the allocation id stored at onboarding;
+revocation applies to **every** WABA of that business shared with you. The vault entry stays
+until you delete it. The lower-level calls (`CreditLines::share`,
+`attach`, `receiving_credential`, `primary_funding`, `allocations_for`,
+`revoke_for_business`, `allocation_status`) are in
+`wa_rs::client::credit_lines`, with the token each needs in their rustdoc.
+
+Not settled by Meta's pages (the code's choice in brackets): whether the
+share-then-attach method also needs the system user on the WABA [not
+added]; whether adding the system user again is harmless [repeated on
+`resume`]; whether the lookup lists revoked records [a found record
+counts as shared for share-then-attach, which then only attaches].
 
 ## Coexistence (merchants keeping the WhatsApp Business app)
 
@@ -302,11 +400,12 @@ records the echoes and the synced history in the merchant's conversations
 ## Open decisions
 
 Read [OPEN_QUESTIONS.md § Embedded Signup](../../OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)
-before production. Each is a product call; today the code does this:
+before production. Each is a product call; today the code does this
+(#3, Tech Provider or Solution Partner, was decided on 2026-09-24: both,
+one per deployment):
 
 | # | Question | Today |
 | --- | --- | --- |
-| 3 | Tech Provider or Solution Partner? | Tech Provider only; no credit-line sharing |
 | 4 | Two-step PIN policy | you pass a 6-digit PIN on every `onboard`/`resume`; nothing generates or stores it (the example asks the merchant each time) |
 | 5 | Multi-WABA signups | only the claimed (or first, or newest granted) WABA is onboarded |
 | 6 | One WABA shared by several tenants | the vault is keyed by WABA; the last onboarding wins |
@@ -319,6 +418,8 @@ before production. Each is a product call; today the code does this:
 
 ## Not handled
 
-Solution Partner APIs and credit lines, pre-verified number pools, token
-refresh, PIN storage and recovery, your tenant model, and the merchant's
-billing setup ([coverage.md](../coverage.md) rows 1 and 28).
+Solution Partner APIs other than credit lines (partner-led business
+verification, Multi-Partner Solutions, migration), pre-verified number
+pools, token refresh, PIN storage and recovery, your tenant model, and a
+Tech Provider merchant's billing setup ([coverage.md](../coverage.md) rows
+1 and 28).
