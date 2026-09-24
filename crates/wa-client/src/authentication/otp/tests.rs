@@ -38,6 +38,8 @@ enum Interference {
     SetAttempts(u32),
     /// Another verifier consumed the challenge.
     Consume,
+    /// A new code was issued: same key, another challenge.
+    Replace,
 }
 
 #[derive(Debug)]
@@ -92,6 +94,14 @@ impl RecordingKv {
             }
             Interference::Consume => {
                 assert!(self.inner.delete(key).await.unwrap());
+            }
+            Interference::Replace => {
+                let current = self.inner.get(key).await.unwrap().unwrap();
+                let mut record: StoredChallenge = serde_json::from_slice(&current.value).unwrap();
+                record.id = "f".repeat(32);
+                record.attempts = 0;
+                let bytes = serde_json::to_vec(&record).unwrap();
+                self.inner.put(key, bytes, Expiry::Keep).await.unwrap();
             }
         }
     }
@@ -878,6 +888,22 @@ async fn a_code_consumed_by_a_concurrent_guess_does_not_verify_again() {
 }
 
 #[tokio::test]
+async fn a_code_replaced_while_it_is_consumed_does_not_verify() {
+    // This guess is counted, then a new code replaces the challenge before
+    // the consume: the old code must not verify, nor delete the new one.
+    let f = fixture(OtpConfig::default());
+    let (_, code) = issue(&f).await;
+    f.kv.arm(1, Interference::Replace);
+    assert_eq!(
+        f.otp.verify(&user(), "login", &code).await.unwrap(),
+        VerifyOutcome::NotFound
+    );
+    let left = stored(&f).await.expect("the new challenge survives");
+    assert_eq!(left.id, "f".repeat(32));
+    assert_eq!(left.attempts, 0);
+}
+
+#[tokio::test]
 async fn the_store_never_sees_the_code_or_the_phone_number() {
     let f = fixture(OtpConfig {
         code_length: 8,
@@ -904,6 +930,39 @@ async fn the_store_never_sees_the_code_or_the_phone_number() {
         );
         assert!(!text.contains(DIGITS), "{text}");
     }
+}
+
+#[tokio::test]
+async fn every_hmac_is_keyed_by_the_pepper() {
+    // Same store, same clock, another pepper: the record is not found (the
+    // key is keyed), and with the other pepper's key it still does not
+    // match (the code hash is keyed).
+    let f = fixture(OtpConfig::default());
+    let (_, code) = issue(&f).await;
+    let other = OtpService {
+        pepper: OtpPepper::new(vec![7u8; 32]).unwrap(),
+        ..f.otp.clone()
+    };
+    assert_eq!(
+        other.verify(&user(), "login", &code).await.unwrap(),
+        VerifyOutcome::NotFound
+    );
+    let phone = Phone::of(&user()).unwrap();
+    let (mine, theirs) = (
+        f.otp.key(&phone, "login").unwrap(),
+        other.key(&phone, "login").unwrap(),
+    );
+    assert_ne!(mine, theirs);
+    let (record, _, expiry) = f.otp.challenges.get(&mine).await.unwrap().unwrap();
+    f.otp
+        .challenges
+        .put(&theirs, &record, expiry.map_or(Expiry::Never, Expiry::At))
+        .await
+        .unwrap();
+    assert_eq!(
+        other.verify(&user(), "login", &code).await.unwrap(),
+        VerifyOutcome::Invalid { attempts_left: 4 }
+    );
 }
 
 #[tokio::test]
