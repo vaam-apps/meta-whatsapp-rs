@@ -2,20 +2,24 @@
 //!
 //! # Format
 //!
-//! Namespace `wa.token`. Two kinds of keys:
+//! Namespace `wa.token`. Two kinds of keys for the tokens:
 //!
 //! - `waba/<WABA_ID>` → a JSON record
 //!   `{v, kid, nonce, ciphertext, waba_id, business_id?, phone_number_ids,
-//!   created_at, expires_at?, allocation_config_id?}`. `nonce` and
-//!   `ciphertext` are standard base64; timestamps are unix seconds.
-//!   `allocation_config_id` (Solution Partner onboarding only: the credit
-//!   line's allocation for this WABA) is omitted when unset, so a Tech
-//!   Provider record is written exactly as before it existed.
+//!   created_at, expires_at?}`. `nonce` and `ciphertext` are standard
+//!   base64; timestamps are unix seconds.
 //! - `phone/<PHONE_NUMBER_ID>` → `{"waba_id": …}`, the index behind
 //!   [`TokenVault::get_by_phone_number`] (webhooks carry the phone number
 //!   id; this finds the token to answer with). Keyed by Meta's phone number
 //!   *id*, never by a phone number, so there is no E.164 normalisation to get
 //!   wrong.
+//!
+//! And, for Solution Partner onboarding only, the credit ledger
+//! (`credit/<WABA_ID>`, `revoked/<BUSINESS_ID>`, `credit-lease/<WABA_ID>`,
+//! see [`StoredCredit`](super::StoredCredit)): records `{v, kid, nonce,
+//! ciphertext}` sealed with the same keys, whose associated data binds each
+//! to its own store key. [`TokenVault::delete`] leaves them: they are what
+//! revoking a credit line needs once the token is gone.
 //!
 //! # Cryptography, and why each choice
 //!
@@ -75,7 +79,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use wa_core::clock::{Clock, SystemClock};
 use wa_core::error::{CryptoError, StorageError, ValidationError};
-use wa_core::ids::{AllocationConfigId, BusinessId, PhoneNumberId, WabaId};
+use wa_core::ids::{BusinessId, PhoneNumberId, WabaId};
 use wa_core::secret::{AccessToken, SecretBytes};
 use wa_core::store::{Expiry, KvStore, StoreKey, Versioned};
 use wa_core::{Error, Result};
@@ -232,10 +236,6 @@ pub struct StoredBusinessToken {
     pub created_at: Option<OffsetDateTime>,
     /// When the token expires, if it does.
     pub expires_at: Option<OffsetDateTime>,
-    /// The partner's credit line allocation that funds this WABA, recorded
-    /// by Solution Partner onboarding (`share_credit_line`). `None` for a
-    /// Tech Provider.
-    pub allocation_config_id: Option<AllocationConfigId>,
 }
 
 impl StoredBusinessToken {
@@ -248,7 +248,6 @@ impl StoredBusinessToken {
             phone_number_ids: Vec::new(),
             created_at: None,
             expires_at: None,
-            allocation_config_id: None,
         }
     }
 
@@ -274,13 +273,6 @@ impl StoredBusinessToken {
     #[must_use]
     pub fn expires_at(mut self, at: OffsetDateTime) -> Self {
         self.expires_at = Some(at);
-        self
-    }
-
-    /// Set the credit line allocation that funds the WABA.
-    #[must_use]
-    pub fn allocation_config_id(mut self, id: impl Into<AllocationConfigId>) -> Self {
-        self.allocation_config_id = Some(id.into());
         self
     }
 
@@ -348,8 +340,6 @@ struct Record {
     created_at: OffsetDateTime,
     #[serde(default, with = "time::serde::timestamp::option")]
     expires_at: Option<OffsetDateTime>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    allocation_config_id: Option<AllocationConfigId>,
 }
 
 /// The encrypted part, as written: borrows the token instead of copying it
@@ -364,8 +354,6 @@ struct SealedRef<'a> {
     created_at: OffsetDateTime,
     #[serde(with = "time::serde::timestamp::option")]
     expires_at: Option<OffsetDateTime>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    allocation_config_id: Option<&'a AllocationConfigId>,
 }
 
 /// The encrypted part, as read back. The token moves straight into an
@@ -383,8 +371,6 @@ struct Sealed {
     created_at: OffsetDateTime,
     #[serde(default, with = "time::serde::timestamp::option")]
     expires_at: Option<OffsetDateTime>,
-    #[serde(default)]
-    allocation_config_id: Option<AllocationConfigId>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -518,6 +504,12 @@ impl TokenVault {
 
     /// Delete the token of `waba_id` and the phone index entries that point
     /// to it. Returns whether a record was removed.
+    ///
+    /// The Solution Partner credit ledger of the WABA and its business is
+    /// kept: revoking the credit line needs it after the token is gone. In
+    /// Solution Partner mode, offboard with
+    /// [`EmbeddedSignup::offboard`](super::EmbeddedSignup::offboard), which
+    /// revokes first and deletes second.
     pub async fn delete(&self, waba_id: &WabaId) -> Result<bool> {
         let key = waba_key(waba_id);
         let record = self.read_record(&key).await.ok().flatten();
@@ -531,18 +523,21 @@ impl TokenVault {
     }
 
     /// Re-encrypt the record of `waba_id` under the active key if it is
-    /// under an older one. Returns whether it was rewritten (`false` also
-    /// when a concurrent write got there first, or there is no record).
+    /// under an older one, and likewise its Solution Partner credit record
+    /// and its business's revocation marker. Returns whether anything was
+    /// rewritten (`false` also when a concurrent write got there first, or
+    /// there is no record).
     pub async fn rotate(&self, waba_id: &WabaId) -> Result<bool> {
+        let ledger = self.rotate_ledger(waba_id).await?;
         let key = waba_key(waba_id);
         let Some((record, version)) = self.read_record(&key).await? else {
-            return Ok(false);
+            return Ok(ledger);
         };
         if record.kid == self.keys.active.id {
-            return Ok(false);
+            return Ok(ledger);
         }
         let token = self.open(waba_id, &record)?;
-        self.reseal(&key, &token, version).await
+        Ok(self.reseal(&key, &token, version).await? || ledger)
     }
 
     async fn reseal(
@@ -594,7 +589,6 @@ impl TokenVault {
             phone_number_ids: &token.phone_number_ids,
             created_at,
             expires_at: token.expires_at,
-            allocation_config_id: token.allocation_config_id.as_ref(),
         })
         .map(SecretBytes::new)
         .map_err(|_| CryptoError::Encrypt)?;
@@ -620,7 +614,6 @@ impl TokenVault {
             phone_number_ids: token.phone_number_ids.clone(),
             created_at,
             expires_at: token.expires_at,
-            allocation_config_id: token.allocation_config_id.clone(),
         })
     }
 
@@ -664,9 +657,108 @@ impl TokenVault {
             phone_number_ids: sealed.phone_number_ids,
             created_at: Some(sealed.created_at),
             expires_at: sealed.expires_at,
-            allocation_config_id: sealed.allocation_config_id,
         })
     }
+}
+
+/// Domain separation for the ledger records' associated data.
+const LEDGER_AAD_TAG: &[u8] = b"wa-rs/token-vault/ledger/v1";
+
+/// A sealed credit ledger record, as stored.
+#[derive(Serialize, Deserialize)]
+pub(super) struct SealedBlob {
+    v: u8,
+    kid: String,
+    nonce: String,
+    ciphertext: String,
+}
+
+impl TokenVault {
+    /// The store the vault writes to.
+    pub(super) fn kv(&self) -> &dyn KvStore {
+        self.kv.as_ref()
+    }
+
+    /// Seal `plaintext` for `key` under the active key: the associated data
+    /// binds it to that store key, so it cannot be moved to another WABA's
+    /// or business's entry.
+    pub(super) fn seal_blob(&self, key: &StoreKey, plaintext: &[u8]) -> Result<SealedBlob> {
+        let vault_key = &self.keys.active;
+        let mut nonce = [0u8; NONCE_LEN];
+        getrandom::fill(&mut nonce).map_err(|_| CryptoError::Rng)?;
+        let ciphertext = vault_key
+            .cipher()?
+            .encrypt(
+                &Nonce::from(nonce),
+                Payload {
+                    msg: plaintext,
+                    aad: &ledger_aad(key, &vault_key.id),
+                },
+            )
+            .map_err(|_| CryptoError::Encrypt)?;
+        Ok(SealedBlob {
+            v: RECORD_VERSION,
+            kid: vault_key.id.clone(),
+            nonce: B64.encode(nonce),
+            ciphertext: B64.encode(ciphertext),
+        })
+    }
+
+    /// Open a blob read from `key` (any configured key).
+    pub(super) fn open_blob(&self, key: &StoreKey, blob: &SealedBlob) -> Result<Vec<u8>> {
+        if blob.v != RECORD_VERSION {
+            return Err(CryptoError::Malformed("unsupported credit ledger record version").into());
+        }
+        let vault_key = self.keys.find(&blob.kid).ok_or(CryptoError::InvalidKey(
+            "the record was encrypted with a key id that is not configured",
+        ))?;
+        let nonce: [u8; NONCE_LEN] = B64
+            .decode(&blob.nonce)
+            .ok()
+            .and_then(|n| <[u8; NONCE_LEN]>::try_from(n.as_slice()).ok())
+            .ok_or(CryptoError::Malformed("nonce"))?;
+        let ciphertext = B64
+            .decode(&blob.ciphertext)
+            .map_err(|_| CryptoError::Malformed("ciphertext"))?;
+        vault_key
+            .cipher()?
+            .decrypt(
+                &Nonce::from(nonce),
+                Payload {
+                    msg: &ciphertext,
+                    aad: &ledger_aad(key, &blob.kid),
+                },
+            )
+            .map_err(|_| CryptoError::Decrypt.into())
+    }
+
+    /// Whether `blob` is sealed under the active key.
+    pub(super) fn is_current(&self, blob: &SealedBlob) -> bool {
+        blob.kid == self.keys.active.id
+    }
+}
+
+/// `tag || len(ns) ns || len(key) key || len(kid) kid`, lengths as u64 BE.
+fn ledger_aad(key: &StoreKey, kid: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(LEDGER_AAD_TAG.len() + 96);
+    out.extend_from_slice(LEDGER_AAD_TAG);
+    for part in [key.namespace(), key.key(), kid] {
+        let len = u64::try_from(part.len()).unwrap_or(u64::MAX);
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(part.as_bytes());
+    }
+    out
+}
+
+pub(super) fn encode_json<T: Serialize>(key: &StoreKey, value: &T) -> Result<Vec<u8>> {
+    encode(key, value)
+}
+
+pub(super) fn decode_json<T: serde::de::DeserializeOwned>(
+    key: &StoreKey,
+    v: &Versioned,
+) -> Result<T> {
+    decode(key, v)
 }
 
 fn waba_key(waba_id: &WabaId) -> StoreKey {
@@ -892,51 +984,45 @@ pub(crate) mod tests {
         );
     }
 
-    /// The Solution Partner allocation id is sealed like the rest, the
-    /// clear copy is only for operators, and a record without one (a Tech
-    /// Provider's, or any written before the field existed) is unchanged.
+    /// The token record keeps the shape it had before Solution Partner mode
+    /// (the credit ledger lives under its own keys), clear part and sealed
+    /// part alike, and a sealed payload of that shape opens.
     #[tokio::test]
-    async fn the_allocation_id_is_sealed_and_optional() {
+    async fn the_token_record_keeps_its_pre_solution_partner_shape() {
         let kv = kv();
         let v = vault(&kv, VaultKeys::new(key("k1", 7)));
-        v.store(&sample("W1").allocation_config_id("58501441721238"))
-            .await
-            .unwrap();
-        let got = v.get(&WabaId::new("W1")).await.unwrap().unwrap();
-        assert_eq!(
-            got.allocation_config_id,
-            Some(AllocationConfigId::new("58501441721238"))
-        );
-        let mut rec = raw_json(&kv, "waba/W1").await;
-        assert_eq!(rec["allocation_config_id"], "58501441721238");
-        rec["allocation_config_id"] = "EDITED".into();
-        put_json(&kv, "waba/W1", &rec).await;
-        assert_eq!(
-            v.get(&WabaId::new("W1"))
-                .await
-                .unwrap()
-                .unwrap()
-                .allocation_config_id,
-            Some(AllocationConfigId::new("58501441721238")),
-            "the authenticated copy wins"
-        );
-
         v.store(&sample("W2")).await.unwrap();
         let rec = raw_json(&kv, "waba/W2").await;
-        assert!(
-            rec.get("allocation_config_id").is_none(),
-            "no key when unset: {rec}"
-        );
+        let mut fields: Vec<&str> = rec
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        fields.sort_unstable();
         assert_eq!(
-            v.get(&WabaId::new("W2"))
-                .await
-                .unwrap()
-                .unwrap()
-                .allocation_config_id,
-            None
+            fields,
+            [
+                "business_id",
+                "ciphertext",
+                "created_at",
+                "expires_at",
+                "kid",
+                "nonce",
+                "phone_number_ids",
+                "v",
+                "waba_id"
+            ]
+        );
+        let sealed = v
+            .open(&WabaId::new("W2"), &serde_json::from_value(rec).unwrap())
+            .unwrap();
+        assert_eq!(
+            sealed.business_id,
+            Some(BusinessId::new("2729063490586005"))
         );
 
-        // A sealed payload written before the field existed still opens.
+        // A sealed payload of the pre-Solution-Partner shape opens.
         let k = key("k1", 7);
         let plaintext = serde_json::to_vec(&serde_json::json!({
             "access_token": TOKEN, "waba_id": "W3", "business_id": null,
@@ -962,7 +1048,7 @@ pub(crate) mod tests {
         put_json(&kv, "waba/W3", &record).await;
         let old = v.get(&WabaId::new("W3")).await.unwrap().unwrap();
         assert_eq!(old.token.expose_secret(), TOKEN);
-        assert_eq!(old.allocation_config_id, None);
+        assert_eq!(old.business_id, None);
     }
 
     /// A record exactly as the vault wrote it before Solution Partner mode
@@ -1217,7 +1303,6 @@ pub(crate) mod tests {
             phone_number_ids: Vec::new(),
             created_at: datetime!(2026-09-24 12:00 UTC),
             expires_at: None,
-            allocation_config_id: None,
         };
         let plaintext = serde_json::to_vec(&sealed).unwrap();
         let nonce = [5u8; NONCE_LEN];

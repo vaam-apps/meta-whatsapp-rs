@@ -26,7 +26,7 @@
 //! | [`EmbeddedSignupEvent`] | parses the `WA_EMBEDDED_SIGNUP` message event the page forwards |
 //! | [`EmbeddedSignup::onboard`] | code → verified, stored, subscribed, (credit line shared,) registered business |
 //! | [`TokenVault`] | business tokens encrypted at rest, by WABA and by phone number |
-//! | [`SolutionPartner`] | per deployment: onboard as a Solution Partner, funding each customer with your credit line |
+//! | [`SolutionPartner`] | per deployment: onboard as a Solution Partner, funding each customer with your credit line; [`EmbeddedSignup::offboard`], [`EmbeddedSignup::revoke_credit_line`] |
 //!
 //! # End to end
 //!
@@ -101,10 +101,11 @@
 //! | `exchange_code` | `GET oauth/access_token` | **No**: the code is single-use and lives 30 s |
 //! | `debug_token` | `GET debug_token` on the new token | yes (read-only) |
 //! | `verify_assets` | WABA ∈ the token's grants; `GET /{WABA}?fields=owner_business_info`; the claimed number ∈ `GET /{WABA}/phone_numbers` | yes (read-only) |
+//! | `approve` | [`EmbeddedSignup::onboard_with_approval`] only: your check of the verified WABA, owner and numbers; a refusal stops here, before anything is written | yours to say |
 //! | `store_token` | encrypt into the [`TokenVault`], indexing every number of the WABA | yes (overwrites) |
 //! | `subscribe_app` | `POST /{WABA}/subscribed_apps` | yes, with the same override argument |
 //! | `assign_system_user` | Solution Partner, [`CreditSharing::ShareAndAttach`] only: `POST /{WABA}/assigned_users` (system user token) | yes (sets the same grant) |
-//! | `share_credit_line` | Solution Partner only: check, then share the credit line (see below) | yes: it checks before it posts |
+//! | `share_credit_line` | Solution Partner only: check, then share the credit line (see below) | yes: it checks before it posts, and refuses a business whose line was revoked |
 //! | `register_phone` | `POST /{PHONE}/register` | yes, but counts against 10 per 72 h |
 //!
 //! **Retrying a failed `onboard` is not safe**: the code is spent by the
@@ -136,8 +137,10 @@
 //! - The WABA's currency comes from [`OnboardingRequest::currency`], else
 //!   [`SolutionPartner::default_currency`]; with neither, `onboard` fails
 //!   with a [`ValidationError`](wa_core::error::ValidationError) before the
-//!   code is exchanged. A Tech Provider request naming a currency is refused
-//!   the same way.
+//!   code is exchanged. A Tech Provider request naming a currency (or a
+//!   re-share) is refused the same way. Take it from your billing records,
+//!   never from the browser. The first currency is sealed before the first
+//!   share is posted; another one is refused later.
 //! - [`CreditSharing::ShareAndAttach`] (default, Meta's current method)
 //!   adds your system user to the WABA (`assign_system_user`), then calls
 //!   `whatsapp_credit_sharing_and_attach` with your system user token.
@@ -145,19 +148,37 @@
 //!   `whatsapp_credit_sharing` with the **verified** owner business (never
 //!   the browser's `business_id`) and your system user token, then
 //!   `whatsapp_credit_attach` with the merchant's business token.
+//! - **Gate first.** A credit line cannot be taken back from a WABA once
+//!   attached, so refuse a signup (a WABA bound to another tenant, …) in
+//!   [`EmbeddedSignup::onboard_with_approval`], which runs before
+//!   anything is stored, subscribed or shared, not after `onboard`.
 //! - `share_credit_line` **checks before it posts**, in `onboard` and in
-//!   `resume` alike: the records of your line shared with the customer
-//!   business (`owning_credit_allocation_configs`) and any stored allocation
-//!   are compared with the WABA's `primary_funding_id`; when one already
-//!   funds it, nothing is posted. A share that timed out may have succeeded,
-//!   and Meta refuses to change a line once attached, so a share is never
-//!   posted again blindly: a resumed step that cannot check refuses instead.
-//! - The allocation id is returned in [`Onboarded::allocation_config_id`]
-//!   and stored with the token ([`StoredBusinessToken::allocation_config_id`]).
-//! - [`EmbeddedSignup::revoke_credit_line`] revokes from the stored owner
-//!   business id, for when the customer removes you
-//!   (`account_update` `PARTNER_REMOVED`) and the WABA can no longer be
-//!   read. It revokes for every WABA of that business.
+//!   `resume` alike, holding a short per-WABA lease (a concurrent attempt is
+//!   [`refusals::CREDIT_STEP_BUSY`]): the records of your line shared with
+//!   the customer business (`owning_credit_allocation_configs`) and the
+//!   allocation recorded in the vault, each with its `request_status`; an
+//!   active one whose receiving credential is the WABA's
+//!   `primary_funding_id` means nothing is posted. A share that timed out
+//!   may have succeeded, and Meta refuses to change a line once attached,
+//!   so a share is never posted again blindly: a resumed step that cannot
+//!   check refuses instead.
+//! - **A revoked business stays revoked.** When
+//!   [`EmbeddedSignup::revoke_credit_line`] marked the business revoked, or
+//!   Meta reports only `DELETED` records for it, `share_credit_line`
+//!   refuses ([`refusals::CREDIT_LINE_REVOKED`]) unless the request says
+//!   [`OnboardingRequest::reshare_after_revocation`]: funding a merchant
+//!   again is a product decision.
+//! - The allocation is returned in [`Onboarded::allocation_config_id`] and
+//!   recorded in the vault's credit ledger ([`TokenVault::credit`],
+//!   [`StoredCredit`]), which outlives the token.
+//! - [`EmbeddedSignup::revoke_credit_line`] revokes from the owner business
+//!   recorded at onboarding (or a signed webhook's `owner_business_id` when
+//!   nothing is recorded), for when the customer removes you (`account_update`
+//!   `PARTNER_REMOVED`) and the WABA can no longer be read. It revokes for
+//!   every WABA of that business. [`EmbeddedSignup::offboard`] revokes first
+//!   and deletes the token second (a CMS disconnect,
+//!   `PARTNER_APP_UNINSTALLED`); either order with `PARTNER_REMOVED` ends
+//!   revoked.
 //!
 //! The lower-level calls are in [`crate::credit_lines`].
 //!
@@ -205,6 +226,7 @@
 
 mod event;
 mod launch;
+mod ledger;
 mod onboard;
 mod partner;
 mod session;
@@ -220,8 +242,9 @@ pub use launch::{
     LaunchOptions, MAX_BUSINESS_NAME_CHARS, MAX_PHONE_DESCRIPTION_CHARS, PhoneProfilePrefill,
     PreVerifiedPhone, Setup, WabaPrefill,
 };
-pub use onboard::{Onboarded, OnboardingRequest, steps};
-pub use partner::{CreditSharing, SolutionPartner};
+pub use ledger::{RevokedBusiness, StoredCredit, refusals};
+pub use onboard::{Onboarded, OnboardingRequest, VerifiedOnboarding, steps};
+pub use partner::{CreditSharing, Offboarded, SolutionPartner};
 pub use session::{SESSION_NAMESPACE, SignupSessions, SignupState};
 pub use token::{
     BusinessToken, GranularScope, SignupCode, TokenDebug, TokenType, WHATSAPP_BUSINESS_MANAGEMENT,
