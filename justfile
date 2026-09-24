@@ -112,7 +112,7 @@ skills-check:
         exit 1
     fi
     for sha in $stamps; do
-        files=$(grep -rlE "Verified against wa-rs $sha" skills | wc -l)
+        files=$(grep -rlE "Verified against wa-rs $sha([^0-9a-f]|$)" skills | wc -l)
         if [ "${#sha}" -ne 40 ]; then
             echo "stamp $sha: not a full 40-character commit id ($files files)"
             status=1

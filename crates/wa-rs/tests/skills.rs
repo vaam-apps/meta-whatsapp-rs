@@ -1021,6 +1021,16 @@ impl Index {
             return Ok(());
         };
         let scope = self.scope(file.as_deref(), &dir);
+        // A lowercase segment with more after it is a module path: one that
+        // is neither a file nor a directory must be a re-exported crate or
+        // module (`wa_rs::webhooks::axum::…`), whose insides are not ours.
+        if item.starts_with(|c: char| c.is_ascii_lowercase()) && !members.is_empty() {
+            return if scope.iter().any(|f| f.reexports.contains(*item)) {
+                Ok(())
+            } else {
+                Err(format!("`{item}` is not a module of `{krate}`"))
+            };
+        }
         if !scope.iter().any(|f| f.words.contains(*item)) {
             if !(self.declared(item) || self.function(item) || self.constant(item)) {
                 return Err(format!("`{item}` is not defined in `{krate}`"));
@@ -1367,6 +1377,9 @@ fn the_checks_reject_known_bad_input() {
     for good in [
         "ErrorKind::CustomerServiceWindowClosed",
         "wa_rs::client::messages::OutboundMessage",
+        // Re-exported crates: their insides are not checked.
+        "wa_rs::webhooks::axum::routing",
+        "wa_rs::adapters::store::postgres::sqlx",
         "Recipient::phone(\"+1\")",
         "client.messages(pnid).send(&msg)",
         "DEFAULT_TIMEOUT",
@@ -1377,6 +1390,7 @@ fn the_checks_reject_known_bad_input() {
     for wrong in [
         "ErrorKind::WindowClosed",
         "wa_rs::client::messages::OutboundMesage",
+        "wa_rs::client::message::OutboundMessage",
         "Recipient::telephone(\"+1\")",
         "client.messages(pnid).transmit(&msg)",
         "DEFAULT_TIMEOUT_MS",
