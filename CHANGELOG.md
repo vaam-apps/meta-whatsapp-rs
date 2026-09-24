@@ -11,6 +11,18 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
 
 ### Added
 
+- **Adoption helpers**: `Error::may_have_been_sent()` (whether a failed send
+  could still have been delivered — the line between "fix and resend" and
+  "reconcile first"), `Inbox::window_is_open` (the reply window by the
+  inbox's own clock, the same check `reply` makes), a `testing` feature on
+  `wa-rs` (no second pinned `wa-core` dev-dependency), and a `redis`
+  re-export next to the `sqlx` one.
+- **Granular consumer skills**: 23 task-shaped skills with compiled example
+  files, and a gate (`crates/wa-rs/tests/skills.rs`, `just skills-check`)
+  that keeps snippets, API names, links, frontmatter and stamps true. The
+  developer skills in `.claude/skills/` are marked internal so
+  `npx skills add vaam-apps/wa-rs` offers only the consumer skills.
+
 - **Workspace**: `wa-core` (error tree, ids, ports), `wa-client`,
   `wa-webhooks`, `wa-adapters`, `wa-typst`, and the `wa-rs` facade with a
   prelude and a `client(token)` shortcut. Graph API v25.0 by default.

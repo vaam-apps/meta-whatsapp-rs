@@ -179,6 +179,34 @@ impl Error {
     }
 }
 
+impl Error {
+    /// Whether a failed **send** (message, OTP, marketing message) may
+    /// nonetheless have been delivered, so resending risks a duplicate.
+    ///
+    /// `false` means Meta provably did nothing — a Graph error on a 4xx
+    /// response, a local validation/configuration/crypto error, or a
+    /// connection that never opened — so it is safe to fix and resend.
+    /// `true` for a timeout, a 5xx, an unreadable success response, or
+    /// anything unknown: reconcile with status webhooks (match on
+    /// `biz_opaque_callback_data`) before sending again.
+    pub fn may_have_been_sent(&self) -> bool {
+        match self {
+            Self::Api(e) => e.http_status.is_some_and(|s| s >= 500),
+            Self::Http { status, .. } => !(400..500).contains(status),
+            Self::Transport(e) => match e {
+                TransportError::Connect(_)
+                | TransportError::Build(_)
+                | TransportError::Integrity(_) => false,
+                // Timeout, Backend, and variants added later.
+                _ => true,
+            },
+            Self::Decode { .. } | Self::Other(_) => true,
+            Self::Step { source, .. } => source.may_have_been_sent(),
+            _ => false,
+        }
+    }
+}
+
 /// Truncate a body for inclusion in an error message (512 bytes, lossy UTF-8).
 pub fn snippet(body: &[u8]) -> String {
     const MAX: usize = 512;
@@ -225,6 +253,48 @@ mod tests {
             Error::from(ValidationError::new("body", "x")).kind(),
             ErrorKind::InvalidParameter
         );
+    }
+
+    #[test]
+    fn may_have_been_sent_only_when_meta_could_have_acted() {
+        let api = |status: Option<u16>| {
+            let mut g = GraphApiError::new(131047, "x");
+            g.http_status = status;
+            Error::from(g)
+        };
+        let http = |status| Error::Http {
+            status,
+            body_snippet: String::new(),
+        };
+        let decode = Error::decode("send", serde_json::from_str::<u8>("x").unwrap_err(), b"x");
+        for (err, sent) in [
+            (api(Some(400)), false),
+            (api(Some(429)), false),
+            (api(Some(500)), true),
+            (api(None), false),
+            (http(404), false),
+            (http(502), true),
+            (Error::Transport(TransportError::Timeout), true),
+            (
+                Error::Transport(TransportError::Connect(anyhow::anyhow!("refused"))),
+                false,
+            ),
+            (
+                Error::Transport(TransportError::Backend(anyhow::anyhow!("reset"))),
+                true,
+            ),
+            (decode, true),
+            (ValidationError::new("to", "bad").into(), false),
+            (ConfigError::new("no transport").into(), false),
+            (Error::Other(anyhow::anyhow!("?")), true),
+            (
+                Error::Transport(TransportError::Timeout).in_step("send_code"),
+                true,
+            ),
+            (api(Some(400)).in_step("send_code"), false),
+        ] {
+            assert_eq!(err.may_have_been_sent(), sent, "{err}");
+        }
     }
 
     #[test]

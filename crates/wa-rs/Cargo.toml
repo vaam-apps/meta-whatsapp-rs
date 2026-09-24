@@ -22,6 +22,9 @@ redis = ["wa-adapters/redis"]
 axum = ["wa-webhooks/axum"]
 typst = ["dep:wa-typst"]
 flows-endpoint = ["wa-client/flows-endpoint"]
+# Test doubles for your own tests (`wa_rs::core::testing::ScriptedTransport`),
+# so you don't need a second dependency pinned to the same revision.
+testing = ["wa-core/testing"]
 full = ["reqwest", "memory", "sinks", "postgres", "redis", "axum", "typst", "flows-endpoint"]
 
 [dependencies]

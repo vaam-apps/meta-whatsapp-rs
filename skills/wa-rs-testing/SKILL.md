@@ -18,13 +18,16 @@ verifies codes. wa-rs's own tests use exactly these doubles.
 
 ## Set up
 
-`ScriptedTransport` is behind wa-core's `testing` feature. Add wa-core as
-a dev-dependency **at the same `rev` as wa-rs**, so Cargo unifies the two
-and `wa_rs::core::testing` exists in test builds:
+`ScriptedTransport` is behind wa-rs's `testing` feature. Enable it for
+test builds only, on the same wa-rs dependency (no second pin to keep in
+step), and `wa_rs::core::testing` exists in your tests:
 
 ```toml
+[dependencies]
+wa-rs = { git = "https://github.com/vaam-apps/wa-rs", rev = "<rev>" }
+
 [dev-dependencies]
-wa-core = { git = "https://github.com/vaam-apps/wa-rs", rev = "<the rev of your wa-rs>", features = ["testing"] }
+wa-rs = { git = "https://github.com/vaam-apps/wa-rs", rev = "<rev>", features = ["testing"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```

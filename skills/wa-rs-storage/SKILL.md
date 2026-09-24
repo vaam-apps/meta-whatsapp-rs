@@ -70,9 +70,12 @@ forgets every merchant's token. Only with `maxmemory-policy noeviction`,
 on an instance of its own: every key with a TTL enforces a limit (OTP
 issue logs and cooldowns, dedup markers, sessions), and a `volatile-*`
 policy evicts them silently. Size `maxmemory` for 7 days of dedup markers.
-No `ConversationStore` on Redis. For `rediss://`, enable
-`redis/tokio-rustls-comp` in your crate, install a rustls crypto provider
-once at startup, and hand the connection to `RedisKvStore::new`.
+No `ConversationStore` on Redis. `redis` here is wa-rs's re-export
+(`wa_rs::adapters::store::redis`, feature `redis`), so the connection types
+always match `RedisKvStore::new` — no redis dependency of your own. For
+`rediss://`, add your own `redis` with `tokio-rustls-comp` at the same
+version, install a rustls crypto provider once at startup, and hand the
+connection to `RedisKvStore::new`.
 
 ~~`noeviction` or `volatile-*`~~: wrong until 1a3cfc6 (2026-09-24);
 `volatile-*` evicts OTP limits and dedup markers.

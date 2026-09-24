@@ -11,7 +11,6 @@ use std::sync::Arc;
 
 use wa_rs::client::embedded_signup::TokenVault;
 use wa_rs::client::messages::{MessageContent, OutboundMessage, Text};
-use wa_rs::core::clock::{Clock, SystemClock};
 use wa_rs::core::store::StoredMessage;
 use wa_rs::prelude::*;
 
@@ -67,7 +66,8 @@ pub async fn reply_or_template(
     body: &str,
 ) -> wa_rs::Result<SendResponse> {
     let key = inbox.key(contact);
-    let content: MessageContent = if inbox.window(&key).await?.is_open(SystemClock.now()) {
+    // `window_is_open` uses the inbox's own clock: the same check `reply` makes.
+    let content: MessageContent = if inbox.window_is_open(&key).await? {
         Text::new(body).into()
     } else {
         TemplateMessage::new("reopen_conversation", "en_US").into() // an approved template

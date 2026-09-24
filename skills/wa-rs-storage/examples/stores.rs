@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use wa_rs::adapters::store::postgres::{self, PostgresKvStore, TablePrefix, sqlx};
-use wa_rs::adapters::store::{PostgresConversationStore, RedisKvStore};
+use wa_rs::adapters::store::{PostgresConversationStore, RedisKvStore, redis};
 use wa_rs::prelude::*;
 
 /// Postgres for everything: one pool, migrated at startup.
@@ -41,8 +41,7 @@ pub async fn prefixed(pool: sqlx::PgPool) -> anyhow::Result<PostgresKvStore> {
 }
 
 /// Redis: persistence on, `maxmemory-policy noeviction`, an instance of its
-/// own. Your `redis` dependency must be 1.x with `tokio-comp` and
-/// `connection-manager`.
+/// own. `redis` is wa-rs's re-export: no redis dependency of your own.
 pub async fn redis_kv(url: &str) -> anyhow::Result<Arc<dyn KvStore>> {
     let client = redis::Client::open(url)?; // `rediss://`: see the skill (your TLS feature and provider)
     let conn = client.get_connection_manager().await?;

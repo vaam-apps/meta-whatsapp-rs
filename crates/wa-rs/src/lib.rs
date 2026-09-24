@@ -154,6 +154,7 @@
 //! | `axum` | | `webhooks::router` (`GET`/`POST` webhook endpoint) and `webhooks::sse` (live inbox stream) |
 //! | `typst` | | the `typst` module: invoice, receipt and voucher templates → PDF/PNG |
 //! | `flows-endpoint` | | `client::flows::endpoint`: WhatsApp Flows data-endpoint crypto (aws-lc-rs) |
+//! | `testing` | | `core::testing::ScriptedTransport` for your own tests (enable in `[dev-dependencies]`) |
 //! | `full` | | all of the above |
 //!
 //! What is implemented, and what is not, is in `docs/coverage.md`; the

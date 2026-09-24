@@ -34,18 +34,10 @@ pub async fn notify_shipped(messages: &Messages, to: Recipient, order_no: &str) 
             ErrorKind::MarketingOptedOut | ErrorKind::EcosystemEngagementLimit => {
                 Next::StopMarketing
             }
-            _ if refused_by_meta(&e) => Next::Rejected(e),
+            _ if !e.may_have_been_sent() => Next::Rejected(e),
             _ => Next::Reconcile,
         },
     }
-}
-
-/// A Graph error on a 4xx response is a refusal; a 5xx, a timeout or an
-/// unreadable 2xx may hide a message that went out.
-pub fn refused_by_meta(e: &Error) -> bool {
-    e.graph()
-        .and_then(|g| g.http_status)
-        .is_some_and(|s| (400..500).contains(&s))
 }
 
 /// A job queue's decision for a send that failed.
@@ -61,7 +53,7 @@ pub fn after_failed_send(e: &Error) -> Resend {
     if matches!(e, Error::Validation(_)) {
         return Resend::Never; // refused locally: nothing was sent
     }
-    if !refused_by_meta(e) {
+    if e.may_have_been_sent() {
         return Resend::ReconcileFirst;
     }
     if e.is_retryable() {

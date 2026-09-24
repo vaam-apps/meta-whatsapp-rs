@@ -75,7 +75,8 @@ exclusive. Blue ticks are `client.messages(pnid).mark_read(&id)`.
 
 ```rust
 let key = inbox.key(contact);
-let content: MessageContent = if inbox.window(&key).await?.is_open(SystemClock.now()) {
+// `window_is_open` uses the inbox's own clock: the same check `reply` makes.
+let content: MessageContent = if inbox.window_is_open(&key).await? {
     Text::new(body).into()
 } else {
     TemplateMessage::new("reopen_conversation", "en_US").into() // an approved template

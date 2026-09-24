@@ -4,7 +4,7 @@
 //!
 //! wa-rs compiles this file and runs its tests in its own gate
 //! (`crates/wa-rs/tests/skills.rs`). In your crate, `ScriptedTransport`
-//! needs wa-core's `testing` feature as a dev-dependency (see the skill).
+//! needs wa-rs's `testing` feature in dev-dependencies (see the skill).
 
 use std::sync::Arc;
 use std::time::Duration;

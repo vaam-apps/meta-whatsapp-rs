@@ -142,18 +142,16 @@ async fn notify_shipped(messages: &Messages, to: Recipient, order_no: &str) -> N
         Err(Error::Validation(v)) => Next::FixInput(v.field),
         Err(e) => match e.kind() {
             ErrorKind::TemplateNotFound | ErrorKind::TemplateParameterMismatch => Next::FixTemplate,
-            _ if refused_by_meta(&e) => Next::Rejected(e),
+            _ if !e.may_have_been_sent() => Next::Rejected(e),
             _ => Next::Reconcile,
         },
     }
 }
-
-/// A Graph error on a 4xx response is a refusal; a 5xx, a timeout or an
-/// unreadable 2xx may hide a message that went out.
-fn refused_by_meta(e: &Error) -> bool {
-    e.graph().and_then(|g| g.http_status).is_some_and(|s| (400..500).contains(&s))
-}
 ```
+
+`Error::may_have_been_sent()` is `false` when Meta provably did nothing (a
+Graph error on a 4xx response, a local validation error, a connection that
+never opened) and `true` for a timeout, a 5xx or an unreadable response.
 
 ### Retries: "could succeed later" is not "safe to repeat"
 
@@ -167,7 +165,8 @@ fn refused_by_meta(e: &Error) -> bool {
 - `err.is_retryable()` answers "could the same request succeed later", not
   "is it safe to send again". It is deliberately `false` for 131049
   (per-user marketing limit) and 131048 (spam rate limit).
-- To retry a send from a job queue, follow `refused_by_meta` above, and for
+- To retry a send from a job queue, resend only when
+  `!err.may_have_been_sent()` (and the cause is fixed or transient); for
   anything else first look for a status webhook carrying your
   `callback_data`.
 

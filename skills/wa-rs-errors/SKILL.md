@@ -51,22 +51,17 @@ match messages.send(&msg).await {
         ErrorKind::MarketingOptedOut | ErrorKind::EcosystemEngagementLimit => {
             Next::StopMarketing
         }
-        _ if refused_by_meta(&e) => Next::Rejected(e),
+        _ if !e.may_have_been_sent() => Next::Rejected(e),
         _ => Next::Reconcile,
     },
 }
 ```
 
-```rust
-pub fn refused_by_meta(e: &Error) -> bool {
-    e.graph()
-        .and_then(|g| g.http_status)
-        .is_some_and(|s| (400..500).contains(&s))
-}
-```
-
-A Graph error on a 4xx response is a refusal: nothing went out. A 5xx, a
-timeout or an unreadable 2xx may hide a message that did.
+`Error::may_have_been_sent()` is the line between the two: `false` for a
+Graph error on a 4xx response, a local validation or configuration error,
+or a connection that never opened — nothing went out, fix and resend.
+`true` for a timeout, a 5xx, an unreadable 2xx or anything unknown — the
+message may be on its way; reconcile before resending.
 
 ## Retries: "could succeed later" is not "safe to repeat"
 
@@ -89,7 +84,7 @@ pub fn after_failed_send(e: &Error) -> Resend {
     if matches!(e, Error::Validation(_)) {
         return Resend::Never; // refused locally: nothing was sent
     }
-    if !refused_by_meta(e) {
+    if e.may_have_been_sent() {
         return Resend::ReconcileFirst;
     }
     if e.is_retryable() {
