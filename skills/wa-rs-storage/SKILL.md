@@ -5,7 +5,7 @@ description: "Choosing and running wa-rs storage - the KvStore (token vault, OTP
 
 # wa-rs-storage
 
-> **Verified against wa-rs 6909be3b54768abc3d5f9b04543a49f32b072669 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against wa-rs 92f9692ed24b96c43bedcca2e7088cf196753064 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/stores.rs](examples/stores.rs), compiled by
 wa-rs's own gate; its tests run the conformance suites on the memory
