@@ -234,7 +234,7 @@ Agents: see [AGENTS.md](AGENTS.md). Claude Code project skills and agents
 live in `.claude/`.
 
 Coding agents in the repositories that *use* wa-rs (the store, the CMS) get
-consumer skills from [`skills/`](skills/README.md): 23 small, task-shaped
+consumer skills from [`skills/`](skills/README.md): 24 small, task-shaped
 skills (`wa-rs` is the map; `wa-rs-send-messages`, `wa-rs-webhook-endpoint`,
 `wa-rs-otp-login`, `wa-rs-cms-inbox`, …). Install all of them with
 `npx skills add vaam-apps/wa-rs`, or a subset with

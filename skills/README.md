@@ -69,6 +69,7 @@ GitHub), so any subset works.
 | [`wa-rs-webhook-events`](wa-rs-webhook-events/) | what each event means and what to do with it |
 | [`wa-rs-live-updates`](wa-rs-live-updates/) | sinks, fan-out, SSE, background workers |
 | [`wa-rs-cms-inbox`](wa-rs-cms-inbox/) | the merchant ↔ customer inbox of a CMS |
+| [`wa-rs-groups-and-calling`](wa-rs-groups-and-calling/) | blocking a customer, group chats, WhatsApp calls |
 
 **Business features**
 

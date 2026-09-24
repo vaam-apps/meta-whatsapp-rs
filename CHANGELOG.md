@@ -17,7 +17,7 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   inbox's own clock, the same check `reply` makes), a `testing` feature on
   `wa-rs` (no second pinned `wa-core` dev-dependency), and a `redis`
   re-export next to the `sqlx` one.
-- **Granular consumer skills**: 23 task-shaped skills with compiled example
+- **Granular consumer skills**: 24 task-shaped skills with compiled example
   files, and a gate (`crates/wa-rs/tests/skills.rs`, `just skills-check`)
   that keeps snippets, API names, links, frontmatter and stamps true. The
   developer skills in `.claude/skills/` are marked internal so
@@ -77,7 +77,7 @@ is_customer_service_window_closed}`,
 `MarketingBusiness::client_wabas_with_status_stream`, and
 `wa_webhooks::SIGNATURE_HEADER` without the `axum` feature.
 
-Consumer skills: the seven broad skills became 23 task-shaped ones
+Consumer skills: the seven broad skills became 24 task-shaped ones
 (`wa-rs` routes to the others; `wa-rs-messaging`, `wa-rs-templates-otp` and
 `wa-rs-webhooks` are gone, split into `wa-rs-send-messages`,
 `wa-rs-interactive-messages`, `wa-rs-media`, `wa-rs-templates`,

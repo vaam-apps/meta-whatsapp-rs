@@ -79,6 +79,7 @@ the inbox. It leaves out `Result`: write `wa_rs::Result`.
 | What each webhook event means and what to do with it | `wa-rs-webhook-events` |
 | Fan-out, live views over SSE, background workers | `wa-rs-live-updates` |
 | The merchant ↔ customer chat inbox of a CMS | `wa-rs-cms-inbox` |
+| Blocking a customer, group chats, WhatsApp calls | `wa-rs-groups-and-calling` |
 | Campaigns, opt-ins and opt-outs, analytics, QR codes | `wa-rs-marketing` |
 | Catalogs, product messages, carts | `wa-rs-commerce` |
 | Invoices, receipts, vouchers as PDF/PNG | `wa-rs-documents` |
@@ -86,10 +87,8 @@ the inbox. It leaves out `Result`: write `wa_rs::Result`.
 | Memory, Postgres or Redis stores, your own adapter | `wa-rs-storage` |
 | Secrets, logs, limits, several instances, going live | `wa-rs-production` |
 
-Also wrapped, without a skill yet: `wa_rs::client::groups` (Groups API),
-`wa_rs::client::calling` (Calling API signalling) and
-`wa_rs::client::block_users` — read their rustdoc
-(`cargo doc -p wa-rs --all-features --open`).
+Anything else the client wraps: its rustdoc
+(`cargo doc -p wa-rs --all-features --open`), starting at `wa_rs::client`.
 
 ## Rules every integration follows
 

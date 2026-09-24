@@ -17,6 +17,8 @@ mod wa_rs_embedded_signup_onboarding;
 mod wa_rs_errors_handle;
 #[path = "../../../../skills/wa-rs-flows/examples/flows.rs"]
 mod wa_rs_flows_flows;
+#[path = "../../../../skills/wa-rs-groups-and-calling/examples/groups_calls.rs"]
+mod wa_rs_groups_and_calling_groups_calls;
 #[path = "../../../../skills/wa-rs-interactive-messages/examples/interactive.rs"]
 mod wa_rs_interactive_messages_interactive;
 #[path = "../../../../skills/wa-rs-live-updates/examples/sinks.rs"]

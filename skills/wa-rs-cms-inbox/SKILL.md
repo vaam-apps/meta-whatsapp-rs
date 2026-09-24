@@ -141,4 +141,5 @@ fixed in 2b2679a; on an older pin, `send` with `Recipient::phone` and the
 
 `wa-rs-embedded-signup`, `wa-rs-token-vault`, `wa-rs-webhook-endpoint`,
 `wa-rs-live-updates`, `wa-rs-send-templates` (the fallback),
-`wa-rs-storage`, `wa-rs-testing` (the window with a `ManualClock`).
+`wa-rs-storage`, `wa-rs-testing` (the window with a `ManualClock`),
+`wa-rs-groups-and-calling` (blocking a customer, groups, calls).
