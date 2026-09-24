@@ -65,7 +65,11 @@ its records: iterate **your** merchant table.
 ## Offboard
 
 `vault.delete(&waba_id)` removes the token and unlinks its numbers.
-Re-onboarding a WABA replaces its record.
+Re-onboarding a WABA replaces its record. A Solution Partner offboards
+with `EmbeddedSignup::offboard` instead, which revokes the credit line
+before it deletes; `delete` leaves the credit ledger (`vault.credit`,
+`vault.revoked_business`) that revocation needs once the token is gone,
+and `rotate` re-seals it with the token.
 
 ## Pitfalls
 

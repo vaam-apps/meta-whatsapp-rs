@@ -25,7 +25,7 @@ field module). Payloads are boxed.
 | `FlowUpdated` | `flows` | `time`, `update: Box<FlowsValue>` |
 | `AccountAlert` | `account_alerts` | `time`, `alert` |
 | `AccountReviewUpdated` | `account_review_update` | `time`, `update` |
-| `AccountUpdated` | `account_update` | `time`, `update` |
+| `AccountUpdated` | `account_update` | `waba_id` is an **`Option`**: `waba_info.waba_id` for updates with a `waba_info` (Meta's PARTNER_* events, whose entry id is a business portfolio), the entry id otherwise; `entry_id` (verbatim), `time`, `update` |
 | `AccountSettingsUpdated` | `account_settings_update` | `time`, `update` |
 | `BusinessCapabilityUpdated` | `business_capability_update` | `time`, `update` |
 | `BusinessUsernameUpdated` | `business_username_updates` | `time`, `update` |
@@ -50,7 +50,7 @@ messaging handovers / standby, `message_echoes`, `consumer_profile`.
 | Method | Returns |
 | --- | --- |
 | `kind()` | the snake-case tag, stable, for logs and metrics |
-| `waba_id()` | `Option<&WabaId>`; `None` for `PartnerSolutionUpdated` and `Unparsed` |
+| `waba_id()` | `Option<&WabaId>`; `None` for `PartnerSolutionUpdated`, `Unparsed`, and an `AccountUpdated` whose `waba_info` names no WABA |
 | `phone_number_id()` | `Option<&PhoneNumberId>` when the field has one (not for fields that only carry a display number) |
 | `contact()` | `Option<&Contact>` |
 | `dedup_key()` | what `DedupGuard` keys on; `None` for `ErrorReported` and `Unparsed` |

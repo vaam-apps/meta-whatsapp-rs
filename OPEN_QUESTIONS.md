@@ -21,7 +21,9 @@ entry by deciding it in an issue/PR and deleting it here.
 5. **Multi-WABA signups.** Only the claimed `waba_id` (else the first of
    `waba_ids`; with no claim, the newest granted WABA) is onboarded.
 6. **One WABA shared by several tenants.** The vault is keyed by WABA and
-   knows no tenants; the last onboarding wins.
+   knows no tenants; the last onboarding wins. `onboard_with_approval`
+   lets an integrator refuse (or apply any other policy) before anything
+   is stored; which policy wa-rs itself should default to is open.
 7. **Coexistence sync.** Contacts/history sync (`smb_app_data`) must happen
    once, within 24 h of onboarding. `onboard` only flags it
    (`needs_coexistence_sync()`); should it trigger it?

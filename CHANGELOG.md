@@ -31,21 +31,44 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   `CreditSharing::ShareThenAttach` shares with the verified owner business
   and attaches with the merchant's token. The currency
   (`OnboardingRequest::currency`, else `SolutionPartner::default_currency`)
-  is required before the code is exchanged. `share_credit_line` checks
-  whether the line already funds the WABA before posting, in `onboard`
-  and `resume` alike, so a timed-out share is resumed without posting it
-  twice. The allocation id is returned (`Onboarded::allocation_config_id`)
-  and sealed into the vault record (`StoredBusinessToken::allocation_config_id`;
-  omitted when unset, so Tech Provider records are written as before).
-  `EmbeddedSignup::revoke_credit_line` revokes from the stored owner
-  business after `PARTNER_REMOVED`. The Tech Provider flow is unchanged,
-  request for request.
+  is required before the code is exchanged, and the first one is sealed:
+  another is refused later. `share_credit_line` checks before it posts,
+  in `onboard` and `resume` alike (the owner's records and the recorded
+  allocation, each with its `request_status`, against the WABA's
+  `primary_funding_id`), under a per-WABA lease, so a timed-out share is
+  resumed without posting it twice and two concurrent onboardings cannot
+  both post (`refusals::CREDIT_STEP_BUSY`). **A revoked business is not
+  funded again** (marked by `revoke_credit_line`, or only `DELETED`
+  records on Meta's side: `refusals::CREDIT_LINE_REVOKED`,
+  `EmbeddedSignup::is_credit_line_revoked`) unless the request says
+  `OnboardingRequest::reshare_after_revocation()`. The allocation is
+  returned (`Onboarded::allocation_config_id`) and kept in a sealed credit
+  ledger (`TokenVault::credit` → `StoredCredit`,
+  `TokenVault::revoked_business` → `RevokedBusiness`) that
+  `TokenVault::delete` leaves, so the token record keeps its previous
+  format. `EmbeddedSignup::revoke_credit_line(&waba, owner_business_id,
+  &vault)` revokes from the recorded owner (or, when nothing is recorded,
+  a signed webhook's `owner_business_id`; a contradicting one revokes
+  nothing), and `EmbeddedSignup::offboard` revokes first and deletes the
+  token second (`Offboarded`), so `PARTNER_APP_UNINSTALLED` and
+  `PARTNER_REMOVED` end revoked in either order. The Tech Provider flow is
+  unchanged, request for request. `SolutionPartner`'s system token is
+  private and never in `Debug`.
+- **`EmbeddedSignup::onboard_with_approval`**: your check of the verified
+  WABA, owner business and numbers (`VerifiedOnboarding`) runs after
+  `verify_assets` and before `store_token`; a refusal is step `approve`
+  and nothing is stored, subscribed or shared. For a Solution Partner it
+  is where tenant checks belong: after `onboard` the line is attached.
 - **`wa_client::credit_lines`**: `CreditLines` (`Client::credit_lines`)
   with `list`/`list_stream` (`extendedcredits`), `share_and_attach`,
   `share`, `attach`, `receiving_credential`, `primary_funding`,
   `allocations_for` (accepts the page's single object and a
-  `{"data": [...]}` page), `revoke`, `revoke_for_business` (only records
-  naming that business), `allocation_status`, and `is_shared`;
+  `{"data": [...]}` page, follows cursors, never quotes the business name
+  in an error), `revoke`, `revoke_for_business` (→ `CreditRevocation`:
+  only active records naming that business, each confirmed `DELETED`,
+  every one attempted before a failure is returned, records naming no
+  business reported rather than revoked), `allocation_status`, and
+  `is_shared`;
   `WabaCurrency` (the six supported codes, `Other` only on purpose). New
   ids in `wa_core::ids`: `CreditLineId`, `AllocationConfigId`, `FundingId`
   (both sides of the `is_shared` comparison: a receiving credential and a

@@ -207,16 +207,27 @@ with the names in `embedded_signup::steps`:
 | `exchange_code` | code → business token | start over (the code is spent) |
 | `debug_token` | inspects the new token | start over |
 | `verify_assets` | the WABA is among the token's grants, its owner is read from Meta, the number belongs to the WABA | start over; a mismatch means the browser's ids were wrong |
+| `approve` | `onboard_with_approval` only: your check of what Meta verified | nothing was stored, subscribed or shared; the merchant starts again if you allow it |
 | `store_token` | encrypts the token into the vault, indexes every number of the WABA | fix the store, start over |
 | `subscribe_app` | `POST /{waba}/subscribed_apps` | fix, then `resume` |
 | `assign_system_user` | Solution Partner, share-and-attach only: your system user on the merchant's WABA | fix, then `resume` |
-| `share_credit_line` | Solution Partner only: checks, then shares your credit line | fix, then `resume` (it checks before it posts) |
+| `share_credit_line` | Solution Partner only: checks, then shares your credit line | fix, then `resume` (it checks before it posts); a business whose line was revoked is refused unless the request opts in |
 | `register_phone` | `POST /{number}/register` with the PIN | fix (often the PIN), then `resume` |
 
 The token is stored **before** the steps after it on purpose: a wrong PIN
 (`ErrorKind::TwoStepVerification`, 133005) must not cost the merchant the
 whole popup again. Registration counts against 10 per 72 hours; 133016
 locks the number for 72 hours and is never retried automatically.
+
+**Checks on the verified ids belong before the store.** To refuse a WABA
+that another of your merchants already connected (or a business you do
+not serve), use `es.onboard_with_approval(&request, &vault, |verified| async move { … })`
+instead of `onboard`: the closure receives the `VerifiedOnboarding` (WABA,
+owner business, numbers, all checked with Meta) right after
+`verify_assets`, and an error from it stops the flow at step `approve`
+with nothing stored, subscribed or shared. Checking after `onboard`
+returns is too late for a Solution Partner: the credit line is attached by
+then, and an attached line cannot be taken back from the WABA.
 
 ## 6. Resume
 
@@ -225,7 +236,7 @@ locks the number for 72 hours and is never retried automatically.
 // check that it belongs to the calling merchant first.
 if !merchant_owns_waba(&merchant_id, &waba_id).await { return Err(forbidden()) }
 let request = request.register_with_pin(TwoStepPin::new(corrected_pin)?);
-let done = es.resume(&waba_id, &request, &vault).await?; // subscribe + register only
+let done = es.resume(&waba_id, &request, &vault).await?; // the steps after store_token only
 ```
 
 After a restart you no longer have the `OnboardingRequest`; rebuild one with
@@ -273,20 +284,26 @@ always go to the app's callback
 
 ## 9. Offboarding
 
-- **The merchant disconnects in your CMS:** with their token, stop the
-  webhooks, then forget the token:
-  `client.with_token(stored.token).waba(stored.waba_id.clone()).unsubscribe_app().await?`,
-  then `vault.delete(&stored.waba_id).await?` and your own mapping.
-- **Meta tells you:** `WebhookEvent::AccountUpdated` whose `update.event`
-  is `AccountUpdateEvent::PartnerAppUninstalled` (the business removed your
-  app) or `AccountDeleted`: delete the vault entry. `AccountOffboarded` and
-  `PartnerRemoved` with disconnection details concern coexistence numbers
+- **The merchant disconnects in your CMS:** while their token still
+  works, stop the webhooks with it
+  (`client.with_token(stored.token).waba(stored.waba_id.clone()).unsubscribe_app().await?`),
+  then `es.offboard(&waba_id, None, &vault).await?`, then your own
+  mapping. `offboard` deletes the token and its phone index; a Solution
+  Partner's `offboard` revokes the credit line **first** and deletes
+  nothing if that fails.
+- **Meta tells you:** `WebhookEvent::AccountUpdated`, with the merchant's
+  WABA in `event.waba_id()` (for the `Partner*` events wa-rs takes it from
+  `waba_info.waba_id`: Meta's entry id there is a business portfolio, kept
+  as `entry_id`). On `AccountUpdateEvent::PartnerAppUninstalled` (the
+  business removed your app) call `es.offboard(waba_id, owner, &vault)`,
+  with `owner` the event's `waba_info.owner_business_id`; on
+  `AccountDeleted`, `vault.delete`. `AccountOffboarded`, and
+  `PartnerRemoved` with disconnection details, concern coexistence numbers
   that changed device or number: ask the merchant to reconnect.
   `PartnerRemoved` without them means the merchant unshared the WABA: a
-  Solution Partner revokes its credit line at once ([below](#solution-partner-mode)).
-  For every `Partner*` event, take the merchant's WABA from
-  `update.waba_info.waba_id`: in Meta's examples the entry id, which is
-  what `event.waba_id()` returns, is a business portfolio id, not the WABA.
+  Solution Partner revokes its credit line ([below](#solution-partner-mode)).
+  Pass `owner_business_id` only from a delivery whose signature was
+  checked.
 - **The token stops working:** `ErrorKind::Authentication` (190) on a
   merchant's calls. Nothing refreshes tokens; the merchant runs Embedded
   Signup again. `StoredBusinessToken::is_expired(now)` tells you ahead of
@@ -296,9 +313,11 @@ always go to the app's callback
 
 A Solution Partner pays Meta for its merchants through its own credit
 line (and invoices them); wa-rs shares that line with every merchant it
-onboards. It is one choice per deployment (the owner's decision on
-2026-09-24): configure it at startup, or leave it out for the Tech
-Provider flow, whose requests are unchanged.
+onboards. You are liable to Meta for every message sent on a shared line,
+and a line cannot be changed or taken back from a WABA once attached. It
+is one choice per deployment (the owner's decision on 2026-09-24):
+configure it at startup, or leave it out for the Tech Provider flow, whose
+requests are unchanged.
 
 On Meta's side: Solution Partner status and a credit line (its id:
 `client.with_token(system_token).credit_lines().list(&your_business_id, &[])`);
@@ -316,8 +335,13 @@ let es = client
             .method(CreditSharing::ShareAndAttach) // Meta's current method, the default
             .default_currency(WabaCurrency::Usd), // AUD, EUR, GBP, IDR, INR or USD
     );
-// Per merchant, when theirs differs: checked before the code is exchanged.
+// Per merchant, from your billing records (never the browser): checked
+// before the code is exchanged.
 let request = request.currency("EUR".parse::<WabaCurrency>()?);
+// Gate on the verified ids before anything is stored or shared (§5).
+let done = es.onboard_with_approval(&request, &vault, |verified| async move {
+    refuse_if_bound_to_another_tenant(&verified.waba_id).await
+}).await?;
 ```
 
 `onboard` then runs, following Meta's Solution Partner order (subscribe,
@@ -326,25 +350,37 @@ share the credit line, register):
 | After `subscribe_app` | Request | Token |
 | --- | --- | --- |
 | `assign_system_user` (share-and-attach only) | `POST /{waba}/assigned_users?user=<system user>&tasks=["MANAGE"]` | your system user's |
-| `share_credit_line`, share-and-attach | `GET /{credit line}/owning_credit_allocation_configs?receiving_business_id=<owner>`, then `POST /{credit line}/whatsapp_credit_sharing_and_attach?waba_currency=…&waba_id=…` | your system user's |
-| `share_credit_line`, share-then-attach | the same lookup, `POST /{credit line}/whatsapp_credit_sharing?receiving_business_id=<owner>`, then `POST /{credit line}/whatsapp_credit_attach?waba_currency=…&waba_id=…` | yours, then the **merchant's** for the attach |
+| `share_credit_line`: the check | `GET /{credit line}/owning_credit_allocation_configs?receiving_business_id=<owner>`; per record found (and the one recorded in the vault) `GET /{allocation}?fields=receiving_business,request_status`, `GET /{allocation}?fields=receiving_credential`; `GET /{waba}?fields=primary_funding_id` | yours; the merchant's for `primary_funding_id` |
+| `share_credit_line`, share-and-attach | `POST /{credit line}/whatsapp_credit_sharing_and_attach?waba_currency=…&waba_id=…` | your system user's |
+| `share_credit_line`, share-then-attach | `POST /{credit line}/whatsapp_credit_sharing?receiving_business_id=<owner>` (only when no active record exists), then `POST /{credit line}/whatsapp_credit_attach?waba_currency=…&waba_id=…` | yours, then the **merchant's** for the attach |
 
 - The owner is the business Meta reports for the WABA
   (`owner_business_info`, read in `verify_assets`), never the
   `business_id` the browser sent.
-- **The currency** must be the merchant's billing currency: a credit line
-  cannot be changed once attached (only a new WABA gets another one).
-  Without one on the request or as the default, `onboard` refuses before
-  spending the code; a Tech Provider request naming one is refused too.
-- **It checks before it posts.** When the lookup (or a stored allocation)
-  finds a record whose receiving credential is the WABA's
-  `primary_funding_id`, nothing is posted. So a timed-out share (which
-  may have gone through: `Error::may_have_been_sent`) is safe to `resume`,
-  and so is onboarding a WABA that is already funded. A resumed step that
-  cannot check (Meta reported no owner and no allocation is stored)
-  refuses rather than share blindly.
-- The allocation id comes back as `Onboarded::allocation_config_id` and
-  is stored with the token (`StoredBusinessToken::allocation_config_id`).
+- **The currency** must be the merchant's billing currency, from your
+  records: it sets what Meta charges you, and a credit line cannot be
+  changed once attached (only a new WABA gets another one). Without one on
+  the request or as the default, `onboard` refuses before spending the
+  code; a Tech Provider request naming one is refused too. The first
+  currency is sealed in the vault before the first share is posted; a
+  `resume` or a later onboarding of the WABA naming another is refused.
+- **It checks before it posts.** When an active record (its
+  `request_status` is not `DELETED`) has the WABA's `primary_funding_id`
+  as its receiving credential, nothing is posted. So a timed-out share
+  (which may have gone through: `Error::may_have_been_sent`) is safe to
+  `resume`, and so is onboarding a WABA that is already funded. A resumed
+  step that cannot check (Meta reported no owner and nothing is recorded)
+  refuses rather than share blindly. Two onboardings of one WABA at once:
+  the second is refused (`EmbeddedSignup::is_credit_step_busy`) and
+  resumes later.
+- **A revoked business stays revoked.** When `revoke_credit_line` marked
+  the business revoked, or Meta reports only `DELETED` records for it,
+  `onboard` and `resume` refuse (`EmbeddedSignup::is_credit_line_revoked`)
+  unless the request says `.reshare_after_revocation()`. Funding a
+  merchant again is your decision, taken per onboarding.
+- The allocation comes back as `Onboarded::allocation_config_id` and is
+  recorded, with the owner and the currency, in the vault's credit ledger
+  (`vault.credit(&waba_id)`), which `vault.delete` leaves in place.
 - Under a Multi-Partner Solution without messaging permission, `MANAGE`
   is refused on the merchant's WABA: set
   `SolutionPartner::system_user_tasks` to granular tasks including
@@ -355,23 +391,44 @@ messaging on the WABA is blocked, its owner can no longer be read, and
 Meta recommends revoking the credit line at once:
 
 ```rust
-let revoked = es.revoke_credit_line(&waba_id, &vault).await?; // waba_id from update.waba_info
+let waba_id = event.waba_id().ok_or(…)?; // waba_info.waba_id for Partner* events
+let owner = update.waba_info.as_ref().and_then(|i| i.owner_business_id.as_ref());
+let report = es.revoke_credit_line(waba_id, owner, &vault).await?; // report.revoked, report.already_revoked
 ```
 
-It looks the allocation up by the owner business stored at onboarding
-(never by reading the WABA again) and deletes every record naming that
-business, or, when none is found, the allocation id stored at onboarding;
-revocation applies to **every** WABA of that business shared with you. The vault entry stays
-until you delete it. The lower-level calls (`CreditLines::share`,
-`attach`, `receiving_credential`, `primary_funding`, `allocations_for`,
+- It marks the business revoked in the vault first, then revokes every
+  active record of your line naming the business, plus the allocation
+  recorded at onboarding, confirming each with `request_status`; records
+  already `DELETED` are skipped, one naming another business is never
+  touched, and one naming no business makes the call fail with its id
+  rather than be revoked blindly. Every record is tried before a failure
+  is returned. Safe to repeat.
+- The owner comes from what onboarding recorded (the token record, else
+  the credit ledger); the webhook's `owner_business_id` is used only when
+  nothing is recorded, and if it contradicts the record nothing is
+  revoked.
+- **Revocation is per business**: every WABA of that business shared with
+  you loses the line.
+- When to revoke after `PartnerRemoved` is your call: at once, as Meta
+  recommends, or later for a coexistence number that may reconnect. A
+  reconnect then needs `.reshare_after_revocation()`.
+- `es.offboard(&waba_id, owner, &vault)` revokes the same way and then
+  deletes the token (§9). The credit ledger outlives the token, so
+  `PartnerAppUninstalled` and `PartnerRemoved` end with the line revoked
+  in either order.
+
+The lower-level calls (`CreditLines::share`, `attach`,
+`receiving_credential`, `primary_funding`, `allocations_for`,
 `revoke_for_business`, `allocation_status`) are in
 `wa_rs::client::credit_lines`, with the token each needs in their rustdoc.
 
 Not settled by Meta's pages (the code's choice in brackets): whether the
 share-then-attach method also needs the system user on the WABA [not
 added]; whether adding the system user again is harmless [repeated on
-`resume`]; whether the lookup lists revoked records [a found record
-counts as shared for share-then-attach, which then only attaches].
+`resume`]; whether the lookup lists revoked records [each record's
+`request_status` is read]; whether a business can attach a line shared
+with it to other WABAs itself [not controlled: reconcile your credit line
+invoice against the WABAs you onboarded].
 
 ## Coexistence (merchants keeping the WhatsApp Business app)
 
@@ -408,7 +465,7 @@ one per deployment):
 | --- | --- | --- |
 | 4 | Two-step PIN policy | you pass a 6-digit PIN on every `onboard`/`resume`; nothing generates or stores it (the example asks the merchant each time) |
 | 5 | Multi-WABA signups | only the claimed (or first, or newest granted) WABA is onboarded |
-| 6 | One WABA shared by several tenants | the vault is keyed by WABA; the last onboarding wins |
+| 6 | One WABA shared by several tenants | the vault is keyed by WABA; the last onboarding wins unless your `onboard_with_approval` refuses it |
 | 7 | Coexistence sync | flagged by `needs_coexistence_sync()`, not triggered |
 | 8 | Token expiry and refresh | expiry recorded, nothing refreshes |
 | 9 | Vault key custody and rotation cadence | you supply keys; rotation supported, not scheduled |

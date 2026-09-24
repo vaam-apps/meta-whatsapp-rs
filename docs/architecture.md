@@ -292,7 +292,10 @@ message event (`FINISH` with `waba_id`, `phone_number_id`, `business_id`;
 exchange code → `debug_token` → **verify** that the WABA id from the browser
 event is among the token's grants and that the phone number belongs to that
 WABA (browser-supplied ids are never trusted — otherwise one merchant could
-overwrite another's vault entry) → **store** the token → subscribe app →
+overwrite another's vault entry) → [`onboard_with_approval` only: the
+integrator's **approval** of the verified WABA, owner and numbers, whose
+refusal stops the flow before anything is written] → **store** the token →
+subscribe app →
 [Solution Partner mode: add the partner's system user to the WABA → share
 the credit line] → register number. The token is stored *before* the
 fallible later steps because the code is single-use and short-lived:
@@ -310,8 +313,9 @@ caller passes a placeholder (`OPEN_QUESTIONS.md` #10). `SignupSessions::redeem(s
 inside the library, is single-use, and does not consume the state on a
 tenant mismatch. Each failure is
 `Error::in_step("exchange_code" | "debug_token" | "verify_assets" |
-"store_token" | "subscribe_app" | "assign_system_user" |
-"share_credit_line" | "register_phone")`. **Retrying the whole
+"approve" | "store_token" | "subscribe_app" | "assign_system_user" |
+"share_credit_line" | "register_phone")`; `offboard` adds
+`"revoke_credit_line" | "delete_token"`. **Retrying the whole
 `onboard` call is not safe** (the code is spent); retry with `resume()`.
 `LaunchOptions` builds the JSON for `FB.login` `extras` (version,
 `featureType` — incl. coexistence `whatsapp_business_app_onboarding`,
@@ -322,14 +326,21 @@ started the flow, so a callback can't be attributed to another tenant.
 **Tech Provider or Solution Partner, per deployment** (owner's decision,
 2026-09-24). Without `EmbeddedSignup::solution_partner(SolutionPartner)`,
 onboarding is the Tech Provider flow above, request for request. With it
-(`SolutionPartner { system_token, system_user_id, credit_line_id, method,
-default_currency, system_user_tasks }`), following Meta's Solution Partner
-order (subscribe → share the credit line → register):
+(`SolutionPartner { system_token (private), system_user_id, credit_line_id,
+method, default_currency, system_user_tasks }`), following Meta's Solution
+Partner order (subscribe → share the credit line → register). The partner
+is liable to Meta for every message on a shared line and an attached line
+cannot be taken back, so the design is fail-closed:
 
 - The WABA currency (`WabaCurrency`: AUD EUR GBP IDR INR USD, `Other`
   only on purpose) comes from `OnboardingRequest::currency`, else the
   default; missing, it is a `ValidationError` before the code is
-  exchanged. A Tech Provider request naming one is refused the same way.
+  exchanged. A Tech Provider request naming one (or a re-share) is refused
+  the same way. The first currency is sealed before the first share is
+  posted; another one is refused later.
+- **Gate before sharing**: tenant checks on the verified ids go in
+  `onboard_with_approval`, which runs before `store_token`; a check after
+  `onboard` would come after the line is attached.
 - `CreditSharing::ShareAndAttach` (default, Meta's current method):
   `assign_system_user` (`POST /{waba}/assigned_users`, system user token,
   the method's documented prerequisite), then
@@ -338,19 +349,30 @@ order (subscribe → share the credit line → register):
   `whatsapp_credit_sharing` with the **verified** owner business (system
   user token), then `whatsapp_credit_attach` with the merchant's business
   token.
-- `share_credit_line` checks before it posts, in `onboard` and `resume`
-  alike: the line's records for the owner business
-  (`owning_credit_allocation_configs`, only records naming that business)
-  plus any stored allocation, compared with the WABA's
-  `primary_funding_id`. A POST that timed out may have succeeded and Meta
-  refuses a second attach, so a share is never posted again without that
-  check; a resumed step that cannot check refuses. The allocation id is
-  returned on `Onboarded` and sealed into the vault record
-  (`allocation_config_id`, omitted when unset so Tech Provider records are
-  unchanged).
-- `revoke_credit_line(&waba_id, &vault)` revokes by the owner business
-  stored at onboarding (after `PARTNER_REMOVED` the WABA can no longer be
-  read), falling back to the stored allocation id.
+- `share_credit_line` holds a per-WABA lease (`put_if_absent` with
+  expiry) and checks before it posts, in `onboard` and `resume` alike: the
+  line's records for the owner business (`owning_credit_allocation_configs`,
+  only records naming that business) plus the recorded allocation, each
+  with its `request_status` (the lookup does not say whether a record was
+  revoked); an active one whose receiving credential is the WABA's
+  `primary_funding_id` means nothing is posted. A POST that timed out may
+  have succeeded and Meta refuses a second attach, so a share is never
+  posted again without that check; a resumed step that cannot check
+  refuses. A business marked revoked, or with only `DELETED` records, is
+  refused unless `OnboardingRequest::reshare_after_revocation` opts in.
+- **The credit ledger** (`TokenVault::credit`, `revoked_business`):
+  `credit/<WABA>` holds the owner, the allocation and the currency,
+  written by compare-and-swap; `revoked/<BUSINESS>` marks a revoked
+  business; both sealed with the vault keys (AAD bound to the store key)
+  and left by `TokenVault::delete`, so revocation works after the token
+  is gone. The token record keeps its pre-Solution-Partner format.
+- `revoke_credit_line(&waba_id, owner_business_id, &vault)` marks the
+  business revoked, then revokes every active record naming the owner
+  recorded at onboarding (or, when nothing is recorded, a signed
+  webhook's `owner_business_id`; a contradicting one revokes nothing) plus
+  the recorded allocation, confirming each; every record is attempted
+  before a failure is returned. `offboard` revokes first and deletes the
+  token second.
 
 The calls themselves are `wa_client::credit_lines` (list, share-and-attach,
 share, attach, receiving credential, primary funding, find records,

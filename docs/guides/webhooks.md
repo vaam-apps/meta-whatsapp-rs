@@ -208,7 +208,7 @@ every time.
 | `StatusUpdated` (`messages`) | delivery of order updates; `errors` carry 131049/131050 | ticks in the inbox |
 | `UserPreferenceChanged` (`user_preferences`) | marketing stop/resume | — |
 | `TemplateStatusUpdated`, `TemplateQualityUpdated`, `TemplateCategoryUpdated` | template health | merchants' templates |
-| `AccountUpdated` (`account_update`) | restrictions, violations | also onboarding and offboarding |
+| `AccountUpdated` (`account_update`) | restrictions, violations | also onboarding and offboarding; for `Partner*` events `waba_id` comes from `waba_info` (the entry id is a business portfolio, kept as `entry_id`) |
 | `PhoneNumberQualityUpdated`, `BusinessCapabilityUpdated`, `AccountAlert` | limits and quality | per merchant |
 | `UserIdChanged` (`user_id_update`) | a customer's BSUID changed | merge conversations yourself |
 | `Unknown`, `Unparsed` | a field or shape this version does not type | same |
@@ -261,7 +261,8 @@ let alerts = FnSink::new(|event: WebhookEvent| async move {
         WebhookEvent::AccountUpdated { waba_id, update, .. }
             if matches!(update.event, AccountUpdateEvent::AccountRestriction | AccountUpdateEvent::AccountViolation) =>
         {
-            tracing::error!(waba = %waba_id, "account restricted or in violation");
+            // `Option`: an update whose `waba_info` names no WABA has none.
+            tracing::error!(waba = ?waba_id, "account restricted or in violation");
         }
         WebhookEvent::Unknown { field, .. } => tracing::warn!(%field, "field not typed by this wa-rs version"),
         WebhookEvent::Unparsed { .. } => tracing::error!("signed body that is not a webhook payload"),
