@@ -87,7 +87,10 @@ fn resolve(
 ) -> Option<OffsetDateTime> {
     match expiry {
         Expiry::Never => None,
-        Expiry::After(d) => Some(now + d),
+        // An expiry beyond the representable range is, in practice, never.
+        Expiry::After(d) => time::Duration::try_from(d)
+            .ok()
+            .and_then(|d| now.checked_add(d)),
         Expiry::At(t) => Some(t),
         Expiry::Keep => existing.and_then(|e| e.expires_at),
     }
@@ -219,6 +222,17 @@ mod tests {
         let rendered = format!("{store:?}");
         assert!(rendered.contains("entries: 1"), "{rendered}");
         assert!(!rendered.contains("69, 65, 65, 71"), "{rendered}"); // b"EAAG"
+    }
+
+    #[tokio::test]
+    async fn huge_ttl_means_never_instead_of_panicking() {
+        let store = MemoryKvStore::new();
+        let k = StoreKey::new("t", "huge");
+        store
+            .put(&k, b"a".to_vec(), Expiry::After(std::time::Duration::MAX))
+            .await
+            .unwrap();
+        assert_eq!(store.get(&k).await.unwrap().unwrap().expires_at, None);
     }
 
     #[tokio::test]
