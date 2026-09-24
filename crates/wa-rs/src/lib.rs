@@ -58,7 +58,7 @@
 //! #     verify_token: wa_rs::core::secret::VerifyToken,
 //! #     kv: std::sync::Arc<dyn wa_rs::core::store::KvStore>,
 //! #     conversations: std::sync::Arc<dyn wa_rs::core::store::ConversationStore>,
-//! # ) -> wa_rs::Result<axum::Router> {
+//! # ) -> wa_rs::Result<wa_rs::webhooks::axum::Router> {
 //! use std::sync::Arc;
 //! use wa_rs::adapters::sink::{BroadcastSink, FanoutSink};
 //! use wa_rs::prelude::*;
@@ -74,7 +74,8 @@
 //! )
 //! .dedup(DedupGuard::new(kv))
 //! .build();
-//! let router = axum::Router::new().nest("/webhook", wa_rs::webhooks::router(Arc::new(handler)));
+//! // The axum the router is built with, re-exported: no axum dependency of your own.
+//! let router = wa_rs::webhooks::axum::Router::new().nest("/webhook", wa_rs::webhooks::router(Arc::new(handler)));
 //! # let _ = live; Ok(router) }
 //! ```
 //!

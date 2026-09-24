@@ -5,7 +5,7 @@ description: "Rendering invoices, receipts and vouchers to PDF or PNG with wa-rs
 
 # wa-rs-documents
 
-> **Verified against wa-rs 91431ae (2026-09-24).** On another revision, trust
+> **Verified against wa-rs 7940d15 (2026-09-24).** On another revision, trust
 > the code over this page (see `skills/README.md`).
 
 Enable the `typst` feature of `wa-rs`; the crate is `wa_rs::typst`.

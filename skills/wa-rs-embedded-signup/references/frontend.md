@@ -1,6 +1,6 @@
 # The page side of Embedded Signup
 
-> Verified against wa-rs 91431ae (2026-09-24), and against Meta's
+> Verified against wa-rs 7940d15 (2026-09-24), and against Meta's
 > `embedded-signup/implementation` page as fetched on 2026-09-24. Meta owns
 > this part: re-read that page (append `.md` to its URL for Markdown) before
 > changing it.
@@ -8,7 +8,8 @@
 The backend gives the page two things from the "start" call: an opaque
 `state` (from `SignupSessions::start`) and `options` (from
 `LaunchOptions::to_json`). The page gives the backend three things back:
-`state`, the `code`, and the raw message event.
+`state`, the `code`, and the raw message event — plus, for a Cloud API
+number, the two-step verification PIN the merchant types into your page.
 
 ```js
 // Assumes the Facebook JS SDK is loaded and FB.init({ appId, version, ... }) ran.
@@ -23,10 +24,12 @@ async function connectWhatsApp() {
     if (!code || !sessionEvent) return;
     window.removeEventListener('message', onMessage);
     // Post at once: the code is single-use and expires after 30 seconds.
+    // pin: the number's two-step verification PIN, typed by the merchant in your page
+    const pin = document.getElementById('pin').value || null;
     fetch('/whatsapp/connect/callback', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ state, code, event: sessionEvent }),
+      headers: { 'Content-Type': 'application/json' }, // your session cookie authenticates the merchant
+      body: JSON.stringify({ state, code, event: sessionEvent, pin }),
     });
   }
 
@@ -58,7 +61,12 @@ Notes:
 - A `CANCEL` or `ERROR` event without a code is worth posting too (for
   analytics, `CancelInfo::current_step`), but there is nothing to onboard.
 - The callback endpoint must be authenticated as the same merchant that
-  called "start"; `SignupSessions::redeem(&state, merchant_id)` enforces the
-  binding.
+  called "start" (your session, never a tenant id the page sends);
+  `SignupSessions::redeem(&state, merchant_id)` enforces the binding.
+- The PIN field belongs to your page (`<input id="pin" type="password"
+  inputmode="numeric" maxlength="6" autocomplete="off">`); send it with the
+  attempt and nowhere else. The backend parses it before `redeem`, never
+  logs or stores it. ~~`body: JSON.stringify({ state, code, event })`~~
+  (until 2026-09-24): the PIN had no path from the merchant to the backend.
 - Everything in the event is a claim. The backend verifies it with Meta
   (`EmbeddedSignup::onboard`); the page must not decide anything from it.

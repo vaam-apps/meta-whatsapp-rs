@@ -1,11 +1,11 @@
 ---
 name: wa-rs-templates-otp
-description: "WhatsApp message templates and OTP login with wa-rs - template lifecycle (create, list, get, edit, delete; categories; positional vs named parameters; media header handles; status and quality webhooks) and one-time passcodes over authentication templates with OtpService (why recipients must be E.164 with a plus sign, IssueOutcome and VerifyOutcome, attempt limits, resend cooldown, per-number issue limit, pepper custody). Load when defining or managing templates, or building phone-number login or verification."
+description: "WhatsApp message templates and OTP login with wa-rs - template lifecycle (create, list, get, edit, delete; categories; positional vs named parameters; media header handles; status and quality webhooks) and one-time passcodes over authentication templates with OtpService (why recipients must be E.164 with a plus sign, IssueOutcome and VerifyOutcome, attempt limits, resend cooldown, per-number issue limit, codes scoped to the sending number and an optional namespace, pepper custody). Load when defining or managing templates, or building phone-number login or verification."
 ---
 
 # wa-rs-templates-otp
 
-> **Verified against wa-rs 91431ae (2026-09-24).** On another revision, trust
+> **Verified against wa-rs 7940d15 (2026-09-24).** On another revision, trust
 > the code over this page (see `skills/README.md`).
 
 Modules: `wa_rs::client::templates` (definitions and management) and
@@ -41,7 +41,9 @@ let named = TemplateDefinition::new("welcome", "en_US", TemplateCategory::Market
 let approved = templates.list(&TemplateListQuery::new().status(TemplateStatus::Approved)).await?;
 ```
 
-- `create` validates locally first (`TemplateDefinition::validate`): names,
+- `create` validates locally first (`TemplateDefinition::validate`, which you
+  can also call yourself; like every public `validate()` it returns
+  `Result<(), ValidationError>`): names,
   lengths, button counts, placeholders **against the declared format**.
   Omitted format = positional; `{{first_name}}` without
   `.parameter_format(ParameterFormat::Named)` is a `Validation` error.
@@ -116,7 +118,7 @@ let otp = OtpService::new(
     kv.clone(),                                   // shared KvStore (Postgres/Redis)
     Arc::new(SystemClock),
     OtpPepper::new(pepper_bytes)?,                // ≥ 32 random bytes, from your secret manager
-    OtpConfig::default(),                         // 6 digits, 10 min, 5 attempts, 30 s, 5/hour
+    OtpConfig::default(),                         // 6 digits, 10 min, 5 attempts, 30 s, 5/hour, no namespace
 )?;
 
 let user = Recipient::phone("+16505551234");      // E.164 WITH the plus sign
@@ -133,6 +135,42 @@ match otp.verify(&user, "login", typed_code.trim()).await? {
 }
 ```
 
+`OtpService::new` checks the config (`OtpConfig::validate()` returns
+`Result<(), ValidationError>` naming the field: `code_length`, `ttl`,
+`max_attempts`, `issue_limit`, `namespace`) and reports a bad one as
+`Error::Config`. `issue` sends through `client.messages(pnid).send(..)`, so
+the message passes `OutboundMessage::validate`, and an unreadable send
+response is reported without quoting the user's number.
+
+### Several services on one store: codes are scoped
+
+Every code, cooldown and issue limit is bound to the service's **sending
+`phone_number_id`** and its optional **`OtpConfig::namespace`**, on top of
+the recipient's digits and the `purpose`. So one `KvStore` and one pepper
+can serve any number of services — e.g. one per merchant, each sending from
+the merchant's own number: a code merchant A sent never verifies at
+merchant B, and A's cooldowns and limits never block B.
+
+- Different sending numbers need nothing more.
+- **One number sending codes for several merchants, tenants or apps: set
+  the namespace to the tenant id, always.** Services on the same number
+  with the default config (`namespace: None`) share one scope: a code sent
+  for one tenant verifies at another, and cooldowns and limits are pooled.
+  `OtpConfig { namespace: Some("tenant-42".into()), ..OtpConfig::default() }`
+  (not blank). Changing a service's namespace invalidates its outstanding
+  codes. (Whether to make it required: `OPEN_QUESTIONS.md` #34.)
+- **Moving your `rev` from before e40b86f to e40b86f or later changes every
+  store key once**: codes in flight at the deploy come back `NotFound` (users
+  request a new one) and issue limits restart. Deploy outside peak login
+  time.
+
+~~Codes were keyed by the pepper, the recipient's digits and the purpose
+only~~: true until e40b86f (2026-09-24). Two services sharing a store and a
+pepper (several merchants of one integrator) shared records: a code
+merchant A sent verified at merchant B for the same number and purpose, an
+issue at A replaced B's code, and cooldowns and limits were pooled. On an
+older pin, give every sending number its own pepper or its own store.
+
 ### Why E.164 with `+` is mandatory (the takeover it prevents)
 
 Meta prepends **your sending number's country code** to a number without `+`.
@@ -140,8 +178,8 @@ If codes were keyed by digits alone, a code sent to `"12015553931"` (delivered
 to `+91 12015553931` from an Indian number) would verify `"+12015553931"` —
 the owner of the first number logs in as the second. So `issue`/`verify`
 refuse anything but `+` followed by up to 15 digits (spaces, `-`, `(`, `)`
-ignored; no leading 0), bind the code to exactly those digits, and send to
-exactly `+<digits>`. Normalize user input to E.164 **with the country code**
+ignored; no leading 0), bind the code to exactly those digits (and to the
+sending number, above), and send to exactly `+<digits>`. Normalize user input to E.164 **with the country code**
 yourself (a phone-number library, a country picker); from a webhook `wa_id`,
 prepend `+`. Never "fix" a validation error by stripping the `+`.
 
@@ -155,7 +193,8 @@ A BSUID-only or group recipient is refused locally (`Error::Validation` on
   atomically (compare-and-swap) **before** comparing, so concurrent guesses
   cannot exceed it. A match consumes the code.
 - `resend_cooldown` (30 s) stops accidental resends; the **issue limit** (5
-  codes per number and purpose per rolling hour, `IssueLimit::DEFAULT`) is what
+  codes per recipient number and purpose per rolling hour, per service,
+  `IssueLimit::DEFAULT`) is what
   bounds brute force (≈0.06 %/day at 6 digits). It is on by default;
   `issue_limit: None` is an explicit opt-out for when an equivalent
   per-number limit sits in front. The attacker chooses the victim's number,
@@ -169,8 +208,9 @@ A BSUID-only or group recipient is refused locally (`Error::Validation` on
 
 ### Pepper and storage custody
 
-- `OtpPepper` keys every HMAC (store keys and code hashes). No phone number
-  or code is stored. At least 32 bytes from a CSPRNG (e.g. the text of a
+- `OtpPepper` keys every HMAC (store keys and code hashes); a store key is
+  HMAC(pepper, scope | digits | purpose), the scope being the sending
+  `phone_number_id` and the namespace. No phone number or code is stored. At least 32 bytes from a CSPRNG (e.g. the text of a
   `openssl rand -base64 32` string is fine); keep it **outside** the database
   that holds the challenges, or a dump can be brute-forced (6 digits = 10⁶).
 - Rotating the pepper invalidates outstanding codes and resets issue logs.

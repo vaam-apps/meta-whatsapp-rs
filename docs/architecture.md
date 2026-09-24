@@ -33,7 +33,9 @@ crates/
   wa-typst      Typst → PDF/PNG for document and image messages.
   wa-rs         facade: re-exports, prelude, `client(token)`, the CMS inbox,
                 feature flags, runnable examples. What integrators depend on.
-.xtask          repo automation (`cargo xtask meta-docs`).
+.xtask          repo automation (`cargo xtask meta-docs`): a workspace of its own,
+                with its own Cargo.lock, excluded from the root one, so its ureq
+                (rustls with `ring`) never enters a library or test build.
 ```
 
 Dependency rule: everything depends on `wa-core`; nothing depends on
@@ -47,7 +49,7 @@ leaks its library's types through a port.
 | --- | --- | --- |
 | `transport::HttpTransport` | `send`, `send_streaming` | rustdoc; non-2xx is *not* an error at this layer |
 | `store::KvStore` | `get`, `put`, `put_if_absent`, `compare_and_swap`, `delete` | `wa_adapters::store::conformance` (executable) |
-| `store::ConversationStore` | `append`, `update_status`, `messages`, `conversations`, `mark_read`, `last_inbound_at` | rustdoc + adapter tests |
+| `store::ConversationStore` | `append`, `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at` | `wa_adapters::store::conversation_conformance` (executable) |
 | `sink::EventSink<E>` | `deliver` | rustdoc |
 | `clock::Clock` | `now` | — |
 
@@ -62,8 +64,9 @@ implements five methods once and every feature works.
 
 - Every public fallible function returns `wa_core::Result<T>`, with one
   exception: pure, I/O-free functions (signature/token verification,
-  Flows endpoint crypto, Typst rendering) may return their precise error
-  (`CryptoError`, `WebhookError`, `wa_typst::RenderError`); `?` lifts them
+  Flows endpoint crypto, Typst rendering, and every public `validate()`)
+  may return their precise error (`CryptoError`, `WebhookError`,
+  `wa_typst::RenderError`, `Result<(), ValidationError>`); `?` lifts them
   into `wa_core::Error`.
 - `thiserror` for every typed node. `anyhow::Error` only as the opaque leaf
   for failures raised by code we do not own (adapters, integrators):
@@ -71,7 +74,11 @@ implements five methods once and every feature works.
   `SinkError::Delivery`, `Error::Other`.
 - Branch on `Error::kind()` → `ErrorKind` (classified from Graph error
   `code`, per Meta's guidance) and `Error::is_retryable()`. Never on message
-  text, HTTP status, or subcode.
+  text, HTTP status, or subcode. One local refusal has a Graph kind: the
+  inbox's closed-window refusal
+  (`ValidationError::customer_service_window_closed()`) is
+  `CustomerServiceWindowClosed`, like Meta's `131047`, so one condition has
+  one kind.
 - Multi-step flows (Embedded Signup onboarding) wrap failures with
   `Error::in_step("stable_step_name")` so callers know how far they got.
 - Examples and binaries use `anyhow::Result` at the edge.
@@ -92,8 +99,8 @@ impl Messages {
         message.validate()?; // documented limits, before any request (rule 3)
         self.client.post_at(&[self.phone_number_id.as_str(), "messages"])
             .json(message)
-            .context("send message response")
-            .send()
+            .context(SEND_CONTEXT)
+            .send_private() // the response names the recipient: see rule 8
             .await
     }
 }
@@ -130,6 +137,11 @@ Rules for every endpoint module:
 7. **Docs**: every public item has rustdoc; each module doc names the Meta
    doc paths it implements (relative to
    `https://developers.facebook.com/documentation/business-messaging/whatsapp/`).
+8. **Responses that name people** (the send responses of `Messages::send`
+   and `Marketing::send` echo the recipient's number) decode with
+   `GraphRequest::send_private`: a decode error carries a placeholder
+   instead of the body snippet, and the error category and position instead
+   of serde's message (which quotes the offending value).
 
 ### Retries
 
@@ -140,8 +152,17 @@ replayed — a duplicate OTP or order confirmation is worse than an error.
 
 ### Credentials never leave Meta
 
-`GraphRequest` refuses to attach a token to any URL that is not the
-configured Graph endpoint or Meta's media CDN over HTTPS. Pagination
+`GraphRequest` attaches a token to exactly two origins: the configured
+Graph endpoint (same scheme, host and port; `https://graph.facebook.com`
+unless `ClientBuilder::endpoint` names a proxy, in which case production
+Graph is just another host) and `https://lookaside.fbsbx.com` on the default
+port, where media download URLs point. Any other URL with a token (another
+Meta host such as `*.whatsapp.net` or `*.fbcdn.net`, a subdomain, a
+look-alike — the host is compared exactly after URL parsing, so suffixes,
+trailing dots and IDN homographs do not match —, another port, plain HTTP)
+fails with `ValidationError` on `url` before the transport sees it. Inside the
+library, the only request to an absolute URL is `Media::download_with_info`;
+integrators reach the same check through `Client::request_url`. Pagination
 re-issues the original request with `after=` rather than following
 `paging.next`.
 
@@ -206,13 +227,27 @@ Authentication template definitions (copy code, one-tap with
   an account takeover. The code is sent to exactly `+<digits>` and keyed by
   those digits. BSUID-only recipients are refused locally (OTP buttons need
   a phone number; Meta's `131062`).
+- Challenges are **scoped to the service**: the store key is
+  HMAC(pepper, `"wa.otp.key" | scope | digits | purpose`), where the scope is
+  the sending `phone_number_id` and the optional `OtpConfig::namespace`,
+  netstring-encoded so neither can be shifted into the other. Services
+  sharing a store and a pepper (several merchants of one integrator) never
+  see each other's codes, cooldowns or issue limits — as long as their
+  scopes differ: services on the **same** number must set the namespace
+  (the tenant id); with the default `None` they share one scope
+  (`OPEN_QUESTIONS.md` #34: make it required?). A blank namespace is a
+  config error; changing the scope (or upgrading across the commit that
+  introduced it) invalidates outstanding codes.
 - `issue(recipient, purpose) → IssueOutcome { Sent(Challenge{id, expires_at,
   message_id}), CoolingDown{retry_after}, RateLimited{retry_after} }`:
   CSPRNG numeric code (length 4–8), only an HMAC-SHA256 of it stored under a
   server pepper (`SecretBytes`), keys are HMACs too (no raw phone number in
-  the store). Resend cooldown (30 s) and a per-recipient issue limit
-  (default 5 per sliding hour per number and purpose; opting out is explicit)
-  bound brute force to ~0.06 %/day for 6 digits. A challenge is removed only
+  the store). The code goes out through `Messages::send`
+  (`OutboundMessage::template`), so the send checks and the private
+  response decoding apply. Resend cooldown (30 s) and a per-recipient
+  issue limit (default 5 per sliding hour per number and purpose, per
+  service scope; opting out is explicit) bound brute force to ~0.06 %/day
+  for 6 digits. A challenge is removed only
   when the send was provably rejected (4xx, throttling); after a timeout or
   5xx it stays, because the code may have been delivered.
 - `verify(recipient, purpose, code) → VerifyOutcome { Verified, Invalid {
@@ -323,7 +358,12 @@ Logs carry sizes, digests and field names only — never payload values.
 - `axum` feature: `router(handler)` with `GET` verify + `POST` receive
   (raw bytes, body limit), and an SSE helper that turns a broadcast
   subscription (filtered by phone number id) into `text/event-stream` for
-  a live inbox.
+  a live inbox. The `POST` route checks that `X-Hub-Signature-256` is
+  present and well-formed (`sha256=` + 64 hex; no secret or body needed)
+  before reading the body, so an unsigned request is a `401` without being
+  buffered; `SIGNATURE_HEADER` is defined outside the `axum` feature for
+  framework-free integrations. Every SSE subscriber's broadcast receiver
+  clones every event before its filter runs (`OPEN_QUESTIONS.md` #31).
 
 ## Adapters (`wa-adapters`)
 
@@ -344,8 +384,14 @@ Logs carry sizes, digests and field names only — never payload values.
   after purge); deleted keys leave marker rows purged after 10 minutes;
   migrations are templates with a validated table prefix and a per-prefix
   history table, applied under a database-wide lock. **Limitation:** Postgres
-  cannot store U+0000; a payload containing it is refused (memory and Redis
-  accept it).
+  cannot store U+0000; the stores refuse a value containing it (memory and
+  Redis accept it). `InboxSink` and `Inbox::send` replace U+0000 with
+  U+FFFD in the content they record (kind, text, payload, status error;
+  ids and contacts are stored as Meta sent them, so a NUL there is still
+  refused). Lossy, and provisional: `OPEN_QUESTIONS.md` #18 records it as a
+  maintainer decision taken without asking. `messages.id` is the primary key on its own, so
+  a message id is stored once per store whatever the business number (the
+  memory store does the same; `OPEN_QUESTIONS.md` #33).
 - Redis: per-namespace version counter (a per-key counter would leak one key
   per dedup marker forever); every mutating op is one Lua script. **TLS**
   (`rediss://`) is not wired: redis-rs uses the process-wide rustls provider,
@@ -381,9 +427,18 @@ exposes the 24-hour `CustomerServiceWindow`, and sends replies.
   number's country code to numbers without `+`). `Inbox::send` refuses a
   message not addressed to the conversation's contact.
 - Free-form replies outside the window are refused locally
-  (`customer_service_window`); templates and Direct Send are exempt.
-- A storage failure *after* a successful send is logged, never returned —
-  an error would invite a retry that sends twice.
+  (`ValidationError::customer_service_window_closed()`, kind
+  `CustomerServiceWindowClosed`); templates and Direct Send are exempt. The
+  window is computed from recorded inbound *messages*: a customer's call,
+  which reopens it on Meta's side, is not seen (`OPEN_QUESTIONS.md` #32).
+- Statuses and revokes change only a message of the business number they
+  arrived on (`update_status` takes the `phone_number_id`).
+- Content never fails a delivery: U+0000 in recorded content is stored as
+  U+FFFD (see Adapters). Storage errors still do (500, Meta redelivers the
+  batch).
+- A storage (or serialization) failure *after* a successful send is
+  logged without the message's content, never returned — an error would
+  invite a retry that sends twice.
 - Revokes mark the original `Deleted`; coexistence echoes and history sync
   are not recorded yet.
 

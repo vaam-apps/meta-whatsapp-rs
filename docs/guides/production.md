@@ -27,12 +27,17 @@ Everything stateful sits on two ports. The typed stores are built on
 | `ConversationStore` | `MemoryConversationStore` | `PostgresConversationStore` | — |
 | survives restarts, shared by instances | no | yes | yes, with persistence on |
 | expiry clock | the process | the database server | the Redis server |
-| maintenance | — | `migrate` at startup; `purge_expired()` every few minutes to hourly | eviction policy `noeviction` or `volatile-*` |
-| limits | one instance | no U+0000 in any stored text | no built-in TLS |
+| maintenance | — | `migrate` at startup; `purge_expired()` every few minutes to hourly | eviction policy `noeviction`, on an instance of its own |
+| limits | one instance | refuses U+0000 in stored text (the inbox stores it as U+FFFD) | no built-in TLS |
 
 Postgres alone covers everything and is the simplest choice. Put the vault
 on Redis only with persistence (AOF or RDB): a Redis that forgets on
-restart forgets every merchant's token.
+restart forgets every merchant's token. And only with `noeviction`: every
+key with a TTL there enforces a limit (OTP issue logs and cooldowns, dedup
+markers, signup sessions), and a `volatile-*` policy evicts them silently
+under memory pressure, handing out more OTP codes and delivering Meta's
+retries twice. A full Redis then fails writes (`StorageError::Backend`):
+size `maxmemory` for 7 days of dedup markers.
 
 ```rust
 use std::sync::Arc;
@@ -75,12 +80,19 @@ runs it against real Postgres and Redis.
 | vault key(s) | encrypting merchants' tokens | secret manager, **not** the vault's database | `VaultKeys::new(new).with_previous(old)`, `vault.rotate(&waba_id)` for each WABA, drop the old key |
 | OTP pepper | keyed hashes of codes and numbers | secret manager, not the OTP database | invalidates outstanding codes and resets limits |
 | merchants' business tokens | acting as a merchant | the vault only | merchant reconnects (no refresh) |
-| two-step PINs | registering numbers | not stored by wa-rs | your policy ([open question](../../OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants) 4) |
+| two-step PINs | registering numbers | not stored by wa-rs; the examples ask the merchant per attempt | your policy ([open question](../../OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants) 4) |
 
 `AccessToken`, `AppSecret`, `VerifyToken`, `SecretBytes`, `SignupCode`,
 `TwoStepPin`, `OtpPepper` and `VaultKey` print `[REDACTED]` (or only an id)
 in `Debug`; the value comes out only through `expose_secret()`. Call it at
 the boundary that needs it and nowhere near a log line.
+
+The client attaches a token to two origins only: the configured Graph
+endpoint (scheme, host and port) and `https://lookaside.fbsbx.com`, Meta's
+media download host. A request to any other URL with a token fails locally
+(`Error::Validation` on `url`). Behind a Graph proxy
+(`ClientBuilder::endpoint`), the token goes to the proxy and the media host,
+not to `graph.facebook.com`.
 
 ## 3. Logs and observability
 
@@ -103,9 +115,12 @@ tracing_subscriber::fmt()
 **Never logged:** tokens, the app secret, Embedded Signup codes, PINs, OTP
 codes, request query strings (they can carry `client_secret` or a code),
 and webhook payload values. Errors from the code exchange drop any text
-that could contain the URL. Keep it that way in your code: do not log
-request bodies, the signature header, `WebhookEvent`'s `Debug`, or anything
-from `expose_secret()`. `TracingSink::new()` logs event kinds only;
+that could contain the URL, and an unreadable send response
+(`Error::Decode` from `Messages::send`, `Marketing::send` or an OTP issue)
+carries neither the body nor serde's message: the response names the
+recipient. Keep it that way in your code: do not log request bodies, the
+signature header, `WebhookEvent`'s `Debug`, or anything from
+`expose_secret()`. `TracingSink::new()` logs event kinds only;
 `with_payload(true)` logs customer data. Request paths at `debug` contain
 WABA and phone number ids: identifiers, not secrets.
 
@@ -188,16 +203,20 @@ notification queue on top must be idempotent itself: tag each message with
 - Webhook fields subscribed; alerts wired ([webhooks.md](webhooks.md#8-operational-alerts)).
 - Secrets from the secret manager, none in the repository or the database.
 - [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) read: several defaults there
-  (OTP issue limit, PIN policy, NUL handling, token refresh) are product
-  decisions still open.
+  (OTP issue limit, a required OTP namespace, PIN policy, the provisional
+  NUL replacement, a dead-letter path for webhook batches, token refresh)
+  are product decisions still open.
+- Upgrading from a wa-rs revision before e40b86f: outstanding OTP codes
+  become `NotFound` once (their store keys now include the sending number),
+  and issue limits restart ([otp-login.md](otp-login.md#3-wire-the-service)).
 
 ## The dev container
 
 The repository's `.devcontainer/` is for working **on** wa-rs, not for
 deploying it: the pinned Rust toolchain, `just`, `cargo-deny`, the `typst`
-CLI, Postgres and Redis sidecars, and a default-deny egress firewall that
-still lets `graph.facebook.com` through. Inside it, `just ci` and
-`just test-live` use the sidecars. Details:
+CLI, Postgres and Redis sidecars, and a default-deny egress firewall (it
+fails closed) that still lets `graph.facebook.com` through. Inside it,
+`just ci` and `just test-live` use the sidecars. Details:
 [dev-environment.md](../dev-environment.md). To run the examples against
 Meta from inside it, pass the tokens as environment variables; nothing in
 the container stores them.

@@ -4726,7 +4726,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "axum",
  "http-body-util",
  "pretty_assertions",
  "serde",

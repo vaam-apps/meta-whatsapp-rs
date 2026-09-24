@@ -1,13 +1,19 @@
 # `ErrorKind` reference
 
-> Verified against wa-rs 91431ae (2026-09-24): `crates/wa-core/src/error/graph.rs`
-> (`ErrorKind::from_code`, `is_retryable`, `is_rejected_before_processing`).
+> Verified against wa-rs 7940d15 (2026-09-24): `crates/wa-core/src/error/graph.rs`
+> (`ErrorKind::from_code`, `is_retryable`, `is_rejected_before_processing`) and
+> `crates/wa-core/src/error/mod.rs` (`Error::kind`: the local-refusal rule below).
 > `ErrorKind` is `#[non_exhaustive]`: always keep a `_ =>` arm.
 
 `err.kind()` classifies `Error::Api` by Graph error `code`. Other variants map
 to the closest kind: `Http` 5xx and `Transport` → `ServiceUnavailable`, `Http`
-429 → `RateLimited`, `Validation` → `InvalidParameter`, `Step` → its source's
+429 → `RateLimited`, `Validation` → `InvalidParameter` — except the inbox's
+local 24-hour refusal (`ValidationError::customer_service_window_closed()`,
+field `customer_service_window`; nothing was sent) →
+`CustomerServiceWindowClosed`, like Meta's 131047 — `Step` → its source's
 kind, everything else → `Unknown`.
+~~`Validation` → `InvalidParameter`, without exception~~: true until fe49aa5
+(2026-09-24).
 
 "Auto-retry" = `ErrorKind::is_retryable()`. "Replay a send" =
 `is_rejected_before_processing()`: the only kinds for which the client replays
@@ -25,7 +31,7 @@ a non-idempotent request.
 | `CountryRestricted` | 130497 | no | no | Cannot message users in that country |
 | `InvalidParameter` | 33, 100, 131008, 131009, 131021, 135000, 2494166–2494168, 2494176, 2494177, 2494179 | no | no | Fix the request; `GraphApiError::code` tells In-App Signup errors apart |
 | `UnsupportedMessageType` | 131051 | no | no | — |
-| `CustomerServiceWindowClosed` | 131047 | no | no | >24 h since the user's last message: send a template |
+| `CustomerServiceWindowClosed` | 131047; also the inbox's local refusal (nothing sent) | no | no | >24 h since the user's last message: send a template |
 | `EcosystemEngagementLimit` | 131049 | **no** | no | Per-user marketing limit; do not retry for at least 24 h |
 | `MarketingOptedOut` | 131050 | no | no | User stopped marketing: record the opt-out, never retry |
 | `MarketingNotAllowed` | 131055, 131063, 134100 | no | no | Not a marketing template on the MM API, or marketing disabled on this API |

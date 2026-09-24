@@ -5,7 +5,7 @@ description: "Sending WhatsApp messages with wa-rs - OutboundMessage constructor
 
 # wa-rs-messaging
 
-> **Verified against wa-rs 91431ae (2026-09-24).** On another revision, trust
+> **Verified against wa-rs 7940d15 (2026-09-24).** On another revision, trust
 > the code over this page (see `skills/README.md`).
 
 Modules: `wa_rs::client::{messages, media, templates, marketing, signups}`.
@@ -43,8 +43,16 @@ messages.send(&OutboundMessage::new(to, Image::new(media_id).caption("Your vouch
   full send-time checks (`TemplateMessage::validate`: name, language, and
   coupon, carousel and MPM limits); what depends on the approved definition
   (parameter counts) is only checked by Meta (`132000`).
+  ~~For templates it only checks the name: call `template.validate()?`
+  yourself to check coupon, carousel and MPM limits before sending.~~ True
+  until 2b2679a (2026-09-24); on an older pin, still do it yourself. Every
+  public `validate()` returns `Result<(), ValidationError>` (48e2851).
 - **Not idempotent.** A timeout or 5xx is returned, not replayed (see `wa-rs`).
   Correlate with status webhooks via `callback_data` before re-sending.
+- An `Error::Decode` from `send` means Meta answered 2xx with a body of an
+  unexpected shape: treat the message as sent. Its snippet is withheld and
+  serde's message replaced by the error category and position, because the
+  response echoes the recipient's number (same for `Marketing::send`).
 - Outside the 24-hour window only templates go through
   (`ErrorKind::CustomerServiceWindowClosed`, 131047).
 - Read receipts for a **received** message: `messages.mark_read(&inbound_id)`
@@ -124,8 +132,12 @@ while let Some(chunk) = dl.body.next().await {
   JPEG/PNG 5 MB, documents (PDF, Office, text) 100 MB, audio/video 16 MB,
   WebP only as stickers. Anything else is refused before upload.
 - Uploaded ids live 30 days; ids from webhooks 7 days; a media URL 5 minutes.
-- The token is only sent to Meta hosts over HTTPS; a download URL elsewhere
-  fails with a validation error.
+- The token is only sent to the configured Graph endpoint and
+  `https://lookaside.fbsbx.com` on the default port (where Meta's media
+  URLs point); a download URL anywhere else, `*.whatsapp.net` included, is
+  refused with `Error::Validation` on `url` before a byte is sent. ~~"only sent to Meta hosts over HTTPS"~~: until 4db6546
+  (2026-09-24) that meant any `*.fbsbx.com`, `*.facebook.com` or
+  `*.whatsapp.net` host, on any port.
 - A hash mismatch is `TransportError::Integrity` (retryable: fetch again).
 - `media.restrict_to_phone_number()` makes Meta refuse media not uploaded on
   that number — a tenant guard for multi-merchant setups.
@@ -150,6 +162,10 @@ Two routes for a **marketing template**:
   131062); by BSUID alone, delivery optimization is off.
 - `set_cloud_api_marketing_disabled(true)` on the WABA makes Cloud API refuse
   marketing templates (131063) — only do that once MM API works.
+- Partners: `client.marketing_business(business_id).client_wabas_with_status(&[OnboardingStatus::Eligible], None)`
+  lists client WABAs by MM API onboarding status, one `Page` at a time;
+  `client_wabas_with_status_stream(&statuses)` follows the cursors
+  (`wa_rs::client::marketing::OnboardingStatus`).
 
 ### Opt-outs and engagement limits — never retry these
 

@@ -5,7 +5,7 @@ description: "Receiving WhatsApp webhooks with wa-rs - the endpoint (verify toke
 
 # wa-rs-webhooks
 
-> **Verified against wa-rs 91431ae (2026-09-24).** On another revision, trust
+> **Verified against wa-rs 7940d15 (2026-09-24).** On another revision, trust
 > the code over this page (see `skills/README.md`).
 
 Crate: `wa_rs::webhooks` (`router`/`sse` need the `axum` feature). One app =
@@ -15,9 +15,14 @@ tenants by `event.phone_number_id()` (e.g. `TokenVault::get_by_phone_number`
 or your own mapping).
 
 ```text
-POST ─► size limit ─► X-Hub-Signature-256 over the raw bytes (any of N app secrets)
+POST ─► X-Hub-Signature-256 present and well-formed? (else 401, body never read)
+     ─► body, size-limited ─► signature over the raw bytes (any of N app secrets)
      ─► parse ─► Vec<WebhookEvent> ─► per event: dedup claim ─► your EventSink ─► dedup done
 ```
+
+~~`POST ─► size limit ─► signature`~~: until 1529720 (2026-09-24) `router`
+read the body (up to the limit) before looking at the header, so an unsigned
+request made the server buffer it.
 
 ## The endpoint
 
@@ -34,7 +39,8 @@ let handler = WebhookHandler::builder(
 .dedup(DedupGuard::new(kv.clone()))                            // shared KvStore in production
 .build();
 
-let app = axum::Router::new()
+// The axum the router is built with, re-exported (feature `axum`).
+let app = wa_rs::webhooks::axum::Router::new()
     .nest("/webhooks/whatsapp", router(Arc::new(handler)));
 ```
 
@@ -54,8 +60,13 @@ let app = axum::Router::new()
 ### Status codes (what `router` answers; do the same in another framework)
 
 Not axum? Call `handler.verify(&VerificationQuery { .. })` for `GET` (returns
-the challenge to echo as `text/plain`) and
-`handler.deliver(signature_header, &body)` for `POST`, then map:
+the challenge to echo as `text/plain`). For `POST`, do what `router` does:
+read the `wa_rs::webhooks::SIGNATURE_HEADER` header (`x-hub-signature-256`;
+available without the `axum` feature) first and answer `401` **before
+reading the body** when it is missing; then read the raw body with a limit
+of `handler.max_body_bytes()` (`413` over it) and call
+`handler.deliver(Some(signature), &body)` (`deliver` takes
+`Option<&str>`). Map its result:
 
 | Outcome | Answer | Meta then |
 | --- | --- | --- |
@@ -66,7 +77,12 @@ the challenge to echo as `text/plain`) and
 | `Error::Sink(..)` / `Error::Storage(..)` / anything else | `500` | retries (up to 7 days) |
 | `GET`: `Error::Webhook(InvalidVerificationRequest(_) \| VerifyTokenMismatch)` or `Error::Config(_)` | `403` | — |
 
-Anything but `200` makes Meta redeliver the **whole batch** for up to 7 days.
+Anything but `200` makes Meta redeliver the **whole batch** for up to 7 days,
+then drop it: one event whose sink fails every time holds back the events
+after it in the same body until all are lost (a dead-letter design is
+`OPEN_QUESTIONS.md` #30). Make permanent sink failures impossible where you
+can; `InboxSink` does this for content Postgres cannot store (see
+`wa-rs-cms-inbox`).
 
 ## Events
 
@@ -151,7 +167,7 @@ The handler answers `200` only after your sink returns `Ok`. Keep it fast.
 | Sink | Behaviour | Watch out |
 | --- | --- | --- |
 | `FanoutSink::new().with(a).with(b)` | delivers to all, concurrently; returns the first error | the ones that succeeded see the event again on redelivery |
-| `BroadcastSink` | live fan-out to subscribers; **never fails** | no subscriber = dropped; slow subscribers get `Lagged` |
+| `BroadcastSink::new(cap)` (or `from_sender(tx)`) | live fan-out to subscribers; **never fails**; `.receiver()` is a tokio receiver for `sse` | no subscriber = dropped; slow subscribers get `Lagged`; each subscriber clones every event |
 | `channel(cap)` → `ChannelSink` + `mpsc::Receiver` | hands events to a worker task | `Ok` once **enqueued**: a crash loses what is queued. `ChannelMode::TryOrFail` answers `500` when full instead of waiting |
 | `FilterSink::new(inner, pred)` | filtered-out events count as handled | — |
 | `FnSink::new(\|e\| async move { … })` | a closure | — |
@@ -166,15 +182,18 @@ errors).
 ## Live updates over SSE
 
 `sse(receiver, filter)` takes a **tokio `broadcast::Receiver<WebhookEvent>`**,
-not a `BroadcastSubscription`. Create the channel yourself and share its
-sender with a `BroadcastSink`:
+not a `BroadcastSubscription`. `BroadcastSink::receiver()` hands out exactly
+that:
 
 ```rust
-let (tx, _) = tokio::sync::broadcast::channel::<WebhookEvent>(256);
-let live = BroadcastSink::from_sender(tx.clone()); // goes into the FanoutSink
-// in an authenticated handler for merchant-owned `pnid`:
-wa_rs::webhooks::sse(tx.subscribe(), move |e| e.phone_number_id() == Some(&pnid))
+let live = BroadcastSink::<WebhookEvent>::new(256); // a clone goes into the FanoutSink
+// in an authenticated handler, after checking the caller owns `pnid`:
+wa_rs::webhooks::sse(live.receiver(), move |e| e.phone_number_id() == Some(&pnid))
 ```
+
+(Creating the channel yourself and passing `tx.subscribe()`, with
+`BroadcastSink::from_sender(tx.clone())`, still works; the `cms_inbox`
+example does that.)
 
 - Mount it **behind your own auth**, and make the filter an **allow-list**.
   `Unknown` and `Unparsed` have no phone number id and carry raw bodies that
@@ -182,6 +201,11 @@ wa_rs::webhooks::sse(tx.subscribe(), move |e| e.phone_number_id() == Some(&pnid)
 - Each event is `event: whatsapp` with the event JSON as data; when the
   receiver falls behind, `event: lagged` with the count arrives — reload
   history from the store.
+- **Cost:** a broadcast receiver clones every event before the filter sees
+  it, so each open stream copies every merchant's events, including
+  multi-megabyte `HistorySynced` bodies. Fine for a handful of open
+  inboxes; with many, see `OPEN_QUESTIONS.md` #31 (`Arc` events or one
+  channel per phone number id).
 
 ## Forward compatibility
 

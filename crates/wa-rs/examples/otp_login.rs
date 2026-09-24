@@ -12,6 +12,14 @@
 //! can reach someone else. A BSUID alone is refused (OTP buttons need a phone
 //! number).
 //!
+//! Codes, cooldowns and issue limits are scoped to the sending phone number
+//! id and `OtpConfig::namespace`. One tenant per number, as here, needs
+//! nothing more; when one number sends codes for several merchants or
+//! tenants, give each tenant's service its own namespace (the tenant id):
+//! `OtpConfig { namespace: Some(tenant_id), ..OtpConfig::default() }`.
+//! With the default `None` they share one scope, and a code sent for one
+//! tenant verifies at another.
+//!
 //! | Variable | Required | What |
 //! | --- | --- | --- |
 //! | `WA_TOKEN` | yes | a system user access token with `whatsapp_business_messaging` |
