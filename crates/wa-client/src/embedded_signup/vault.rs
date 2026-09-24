@@ -965,6 +965,51 @@ pub(crate) mod tests {
         assert_eq!(old.allocation_config_id, None);
     }
 
+    /// A record exactly as the vault wrote it before Solution Partner mode
+    /// (b805dac: `sample("W1")` under `key("k1", 7)`, bytes captured from
+    /// that build), so a change to the record format, the sealed payload or
+    /// the AAD that would strand stored tokens fails here. The fixture above
+    /// seals with today's code and cannot catch that.
+    #[tokio::test]
+    async fn a_record_written_before_solution_partner_mode_still_opens() {
+        const B805DAC_RECORD: &str = r#"{"v":1,"kid":"k1","nonce":"yjeUqJLkV07hoZVu","ciphertext":"FZCl/j7gKKrv9admo8XlB0Jds7ooceKrFI4SIHOEec3+9m1GTwPglmmmh/UXCWBtVEvbGeBqnXZasSWTTCN+ocJrFXji1Hhhz5owLB5KfRc9+m1P/zxWCkiGVFVPZBorFt4K48bE5X8+vIIZdnEx8Odk6tpsCQFN4sJ8PAA1t5XaUbM9GOBev/Ju557PfGTT4MlNsz7EqA23me/ifd2TFX8YVitV+MGYh7d3iZWYkr1Ty2SK3rjA89KsA7oT56tox3MtbAnJe7OUha2wjGUrOZZIfNR95w0TfMkrUtTk+OUcP/+1QPR8JrFL7oa30y0=","waba_id":"W1","business_id":"2729063490586005","phone_number_ids":["106540352242922"],"created_at":1790251200,"expires_at":1795435200}"#;
+        let kv = kv();
+        kv.put(
+            &StoreKey::new(TOKEN_NAMESPACE, "waba/W1"),
+            B805DAC_RECORD.as_bytes().to_vec(),
+            Expiry::Never,
+        )
+        .await
+        .unwrap();
+        put_json(
+            &kv,
+            "phone/106540352242922",
+            &serde_json::json!({"waba_id": "W1"}),
+        )
+        .await;
+        let v = vault(&kv, VaultKeys::new(key("k1", 7)));
+        let got = v.get(&WabaId::new("W1")).await.unwrap().unwrap();
+        assert_eq!(got.token.expose_secret(), format!("{TOKEN}-W1"));
+        assert_eq!(got.business_id, Some(BusinessId::new("2729063490586005")));
+        assert_eq!(
+            got.phone_number_ids,
+            [PhoneNumberId::new("106540352242922")]
+        );
+        assert_eq!(got.created_at, Some(datetime!(2026-09-24 12:00 UTC)));
+        assert_eq!(got.expires_at, Some(datetime!(2026-11-23 12:00 UTC)));
+        let by_phone = v
+            .get_by_phone_number(&PhoneNumberId::new("106540352242922"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_phone.token.expose_secret(), format!("{TOKEN}-W1"));
+        // Not rewritten on read: the active key is the one it was sealed with.
+        assert_eq!(
+            raw(&kv, "waba/W1").await.unwrap().value,
+            B805DAC_RECORD.as_bytes()
+        );
+    }
+
     #[tokio::test]
     async fn no_write_ever_contains_the_token() {
         // Every path that writes: store (record + index), re-store with a
