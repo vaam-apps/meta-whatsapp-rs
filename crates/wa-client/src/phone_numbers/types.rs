@@ -1,8 +1,11 @@
 //! Response types for business phone numbers.
 //!
-//! Every enum here has a catch-all (`Unknown`): Meta adds values (messaging
-//! limit tiers are being reworked, v4 Embedded Signup added statuses), and a
-//! new value must never fail a whole `GET`.
+//! Every enum here has a catch-all: Meta adds values (messaging limit tiers
+//! are being reworked, v4 Embedded Signup added statuses), and a new value
+//! must never fail a whole `GET`. For the enums defined here it is a unit
+//! `Unknown`; [`QualityRating`] (shared, from `crate::common`) keeps the
+//! value in `Other(String)`, and its `Unknown` is Meta's documented
+//! `UNKNOWN` (`OPEN_QUESTIONS.md` #27).
 
 use serde::{Deserialize, Serialize};
 use wa_core::ids::PhoneNumberId;

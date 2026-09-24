@@ -8,7 +8,7 @@
 
 use serde_json::json;
 use wa_rs::client::flows::endpoint::{
-    EncryptedFlowRequest, EndpointStatus, FlowAction, FlowEndpointKey, FlowResponse,
+    EncryptedFlowRequest, EndpointAction, EndpointStatus, FlowEndpointKey, FlowResponse,
     verify_request_signature,
 };
 use wa_rs::client::flows::{CreateFlow, FlowCategory};
@@ -73,10 +73,12 @@ pub fn flow_endpoint(
         return (EndpointStatus::DecryptionFailed.code(), String::new()); // 421
     };
     let response = match &request.action {
-        FlowAction::Ping => FlowResponse::health_check(),
+        EndpointAction::Ping => FlowResponse::health_check(),
         _ if request.error_notification().is_some() => FlowResponse::acknowledge_error(),
-        FlowAction::Init => FlowResponse::next_screen("SLOTS", json!({"slots": ["9:00", "14:00"]})),
-        FlowAction::DataExchange => {
+        EndpointAction::Init => {
+            FlowResponse::next_screen("SLOTS", json!({"slots": ["9:00", "14:00"]}))
+        }
+        EndpointAction::DataExchange => {
             FlowResponse::complete(request.flow_token.clone().unwrap_or_default())
         }
         _ => FlowResponse::next_screen("SLOTS", json!({})),

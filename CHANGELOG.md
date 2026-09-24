@@ -115,7 +115,8 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   custom store that treats synced history like live messages fails it.
   Custom stores must implement the three methods. `InboxSink::with_clock`
   is new.
-- **Breaking — one type per concept** (conventions review #9):
+- **Breaking — one type per concept** (finding 9 of the conventions
+  review, not an `OPEN_QUESTIONS.md` entry):
   `wa_client::common` defines `MediaSource`, `FlowAction` and
   `QualityRating` once; `messages`, `templates` and `phone_numbers`
   re-export them, so the old paths still name them. The Flow message's
@@ -123,10 +124,15 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   (`Other(String)`, case-insensitive, not `Copy`). The phone number's
   `QualityRating` was `Copy` and turned any unknown value into `Unknown`;
   `Unknown` is now only the documented `UNKNOWN`, anything else is
-  `Other(String)`. `marketing::OnboardingRequest` (the Intent API's
+  `Other(String)`. The template's `QualityRating` now reads `NA` as
+  `NotApplicable` (it was `Other("NA")`). `flows::endpoint::FlowAction`
+  (why WhatsApp called a Flow endpoint: `Ping`, `Init`, `Back`,
+  `DataExchange`) is now `flows::endpoint::EndpointAction`, so it no
+  longer shares a name with `common::FlowAction`. `marketing::OnboardingRequest` (the Intent API's
   answer) is now `marketing::OnboardingRequested`, so it no longer shares a
   name with `embedded_signup::OnboardingRequest`.
-- **Breaking — typed ids** (conventions review #17): `FlowButton::flow_id`
+- **Breaking — typed ids** (finding 17 of the conventions review):
+  `FlowButton::flow_id`
   is an `Option<FlowId>` and `FlowButton::by_id` takes `impl Into<FlowId>`;
   `FlowMedia::media_id` is a new `FlowMediaId` (a Flow upload's UUID, not a
   Graph `MediaId`); `TemplateGroupAnalyticsQuery::template_group_ids` and
@@ -134,19 +140,24 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   `Client::business_profile_node` takes `impl Into<BusinessProfileId>` (new),
   and `BusinessProfileNode::id`, `Profile::id` and `ProfileNodeUpdated::id`
   return it.
-- **Breaking — every list takes its cursor the same way** (conventions
-  review #7): `after`/`before` in the list's query, sent by the one-page
-  method and refused by its stream (which manages them; the stream's
-  single item is a `ValidationError`). New query types: `ListSignups`
-  (`Signups::list`/`list_stream` took an `Option<u32>`),
-  `AssignedUsersQuery` (`Waba::assigned_users`/`_stream` took a
-  `&BusinessId`), `ListFlows` and `ListFlowAssets` (`Flows::list` and
-  `Flow::assets` took an `Option<&str>`), `ListClientWabas`
+- **Breaking — every list takes its cursor the same way** (finding 7 of
+  the conventions review): `after`/`before` in the list's query, sent by
+  the one-page method and refused by its stream (which manages them; the
+  stream's single item is a `ValidationError`), and every stream takes
+  its query. New query types, named `List*` (the older `*Query` names
+  stay): `ListSignups` (`Signups::list`/`list_stream` took an
+  `Option<u32>`), `ListAssignedUsers` (`Waba::assigned_users`/`_stream`
+  took a `&BusinessId`), `ListFlows` and `ListFlowAssets` (both
+  `#[non_exhaustive]`, built with `new()`; `Flows::list` and `Flow::assets`
+  took an `Option<&str>`, `Flows::list_stream` and `Flow::assets_stream`
+  took nothing), `ListClientWabas`
   (`MarketingBusiness::client_wabas_with_status` took
   `(&[OnboardingStatus], Option<&str>)`, its stream `&[OnboardingStatus]`).
   `PhoneNumbersQuery`, `WabaListQuery` (both with `after`/`before`
   builders), `TemplateAnalyticsQuery`, `TemplateGroupAnalyticsQuery` and
-  `GroupAnalyticsQuery` (now with a `new`) gained the two fields.
+  `GroupAnalyticsQuery` (now with a `new`) gained the two fields: a struct
+  literal of any of the three analytics queries no longer compiles
+  without them (use `new` or `..`).
   `Templates::list_stream` refuses a cursor it used to ignore.
   `Waba::subscribed_apps` and `Templates::library` take none: their pages
   document no pagination.
@@ -159,7 +170,8 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   ..OtpConfig::default() }` becomes `OtpConfig::new(ns)` and derives the
   same store keys (outstanding codes stay valid); a service that used
   `None` must pick a namespace, and its codes in flight become `NotFound`
-  once. The `otp_login` example reads `WA_OTP_NAMESPACE`.
+  once. The `otp_login` example requires `WA_OTP_NAMESPACE` (a default
+  there would have brought the forgotten namespace back).
 - `Error::may_have_been_sent` is `false` for a throttling Graph error
   (`ErrorKind::is_rejected_before_processing`) on any status, as the retry
   policy already assumed when it replays a send; the OTP service uses it

@@ -212,8 +212,8 @@ impl Analytics {
             .await
     }
 
-    /// Every page of [`Self::template`]. A validation failure is yielded as
-    /// the stream's single item.
+    /// Every page of [`Self::template`].
+    ///
     /// The stream manages the cursors itself: a query with `after` or
     /// `before` set is refused, like any other validation failure, as the
     /// stream's single item.
@@ -262,6 +262,7 @@ impl Analytics {
     }
 
     /// Every page of [`Self::template_group`].
+    ///
     /// The stream manages the cursors itself: a query with `after` or
     /// `before` set is refused, like any other validation failure, as the
     /// stream's single item.
@@ -306,6 +307,7 @@ impl Analytics {
     }
 
     /// Every page of [`Self::groups`].
+    ///
     /// The stream manages the cursors itself: a query with `after` or
     /// `before` set is refused, like any other validation failure, as the
     /// stream's single item.

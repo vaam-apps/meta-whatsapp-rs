@@ -15,6 +15,8 @@
 //! Layout: [`Client`] owns the transport, endpoint, retry policy and token;
 //! each endpoint family is a module with an accessor on [`Client`]; all of
 //! them build [`GraphRequest`]s, which own auth, retries and error decoding.
+//! [`common`] is the exception: no endpoints, only the types several
+//! families share (each re-exports the ones it uses).
 
 mod client;
 mod request;

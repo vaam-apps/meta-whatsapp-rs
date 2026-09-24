@@ -163,7 +163,7 @@ let otp = OtpService::new(
     Arc::new(MemoryKvStore::new()), // Postgres or Redis with several instances
     Arc::new(SystemClock),
     OtpPepper::new(env("WA_OTP_PEPPER")?)?, // >= 32 bytes, not stored with the codes
-    OtpConfig::new(env_or("WA_OTP_NAMESPACE", "otp-login-example")), // the tenant, never blank
+    OtpConfig::new(env("WA_OTP_NAMESPACE")?), // the tenant: required, never a default
 )?;
 let user = Recipient::phone(env("WA_TO")?); // strict E.164, with `+`
 

@@ -48,7 +48,7 @@ fn decrypts_the_node_vector_and_seals_byte_identical_responses() {
     let (request, sealer) = key.decrypt_request(&kat_request()).unwrap();
     let expected: FlowRequest = serde_json::from_str(&kat_str("request_plaintext")).unwrap();
     assert_eq!(request, expected);
-    assert_eq!(request.action, FlowAction::DataExchange);
+    assert_eq!(request.action, EndpointAction::DataExchange);
     assert_eq!(request.screen.as_deref(), Some("APPOINTMENT"));
     assert_eq!(request.flow_token.as_deref(), Some("flowtoken-1234"));
     assert_eq!(
@@ -174,7 +174,7 @@ fn round_trip_with_a_generated_key() {
     let client = SimulatedClient::new();
 
     let (request, sealer) = key.decrypt_request(&client.encrypt(&public, PING)).unwrap();
-    assert_eq!(request.action, FlowAction::Ping);
+    assert_eq!(request.action, EndpointAction::Ping);
     assert_eq!(request.version, "3.0");
     assert_eq!(request.screen, None);
 
@@ -462,11 +462,14 @@ fn parses_the_documented_request_payloads() {
         "flow_token": "FLOW-TOKEN"
     }))
     .unwrap();
-    assert_eq!(data_exchange.action, FlowAction::DataExchange);
+    assert_eq!(data_exchange.action, EndpointAction::DataExchange);
     assert_eq!(data_exchange.error_notification(), None);
 
     // INIT and BACK may omit screen and data.
-    for (wire, action) in [("INIT", FlowAction::Init), ("BACK", FlowAction::Back)] {
+    for (wire, action) in [
+        ("INIT", EndpointAction::Init),
+        ("BACK", EndpointAction::Back),
+    ] {
         let r: FlowRequest =
             serde_json::from_value(json!({"version": "3.0", "action": wire, "flow_token": "t"}))
                 .unwrap();
@@ -493,12 +496,12 @@ fn parses_the_documented_request_payloads() {
     // Health check sample.
     let ping: FlowRequest =
         serde_json::from_value(json!({"version": "3.0", "action": "ping"})).unwrap();
-    assert_eq!(ping.action, FlowAction::Ping);
+    assert_eq!(ping.action, EndpointAction::Ping);
 
     // An action Meta adds later still parses.
     let future: FlowRequest =
         serde_json::from_value(json!({"version": "4.0", "action": "navigate"})).unwrap();
-    assert_eq!(future.action, FlowAction::Unknown("navigate".into()));
+    assert_eq!(future.action, EndpointAction::Unknown("navigate".into()));
 }
 
 #[test]

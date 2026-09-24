@@ -149,8 +149,31 @@ Rules for every endpoint module:
    of serde's message (which quotes the offending value).
 9. **One type per concept.** A type two endpoint families share is
    defined once in `wa_client::common` (`MediaSource`, `FlowAction`,
-   `QualityRating`) and re-exported by each module that uses it; ids are
-   `wa_core::ids` newtypes, never plain strings.
+   `QualityRating`) and re-exported by each module that uses it; two
+   types of one module never share a name with a type of another
+   (`flows::endpoint::EndpointAction` is the endpoint request's `action`,
+   `common::FlowAction` the `flow_action` a Flow starts with). New code
+   types every Graph id with a `wa_core::ids` newtype. Known exceptions,
+   still `String` (typing them is a breaking change each): the groups'
+   `request_id` and `join_request_id`; `MessagingCustomerBase::id`,
+   `CreatedMessagingCustomerBase::messaging_customer_base_id` and the
+   signups' `default_messaging_customer_base_id`; `OnboardingRequested::request_id`;
+   the calling settings' `app_id`; `SubscribedAppData::id` and
+   `AssignedUser::id`; `CommerceSettings::id`; `LibraryTemplate::id`; the
+   template's `ad_*_id`s; `preverified_id`; the phone number
+   `request_id`; the ids of an Embedded Signup session event
+   (`ad_account_ids`, `page_ids`, `dataset_ids`, `catalog_ids`,
+   `instagram_account_ids`, `session_id`), the launch's `solution_id` and
+   the token's `user_id`. Merchant-chosen ids (product retailer ids,
+   button ids) and our own (an OTP challenge id) are strings on purpose.
+10. **List queries are named `List*`** (`ListQrCodes`, `ListSignups`,
+   `ListFlows`, `ListFlowAssets`, `ListAssignedUsers`, `ListClientWabas`,
+   `ListGroups`, `ListBlockedUsers`, …) and carry `after`/`before`; the
+   one-page method sends them, the `…_stream(&query)` refuses them. The
+   older `*Query` names stay as they are (renaming them would break
+   integrators for no gain): `PhoneNumbersQuery`, `WabaListQuery`,
+   `TemplateListQuery`, `LibraryQuery`, `TemplateAnalyticsQuery`,
+   `TemplateGroupAnalyticsQuery`, `GroupAnalyticsQuery`.
 
 ### Retries
 

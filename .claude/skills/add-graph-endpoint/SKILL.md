@@ -94,12 +94,18 @@ metadata:
    `crate::request::reject_cursors` first. Reference: `qr_codes`
    (`ListQrCodes`, `list`, `list_stream`) and `block_users`. Every list
    follows this since the conventions follow-up (`ListSignups`,
-   `AssignedUsersQuery`, `ListFlows`, `ListClientWabas`, the analytics
-   queries…), except `waba.subscribed_apps` and `templates.library`,
+   `ListAssignedUsers`, `ListFlows`, `ListFlowAssets`, `ListClientWabas`,
+   the analytics queries…), except `waba.subscribed_apps` and
+   `templates.library`,
    whose pages document no pagination: add a cursor only where the docs
    show `after`/`before` or a `paging.cursors` object, and say so in the
-   method's rustdoc when there is none. Follow the module's struct style
-   (builders on `#[non_exhaustive]` queries, pub fields elsewhere).
+   method's rustdoc when there is none. Name a new query `List<Things>`
+   (`docs/architecture.md`, rule 10); the older `*Query` names
+   (`PhoneNumbersQuery`, `WabaListQuery`, `TemplateListQuery`,
+   `LibraryQuery`, the three analytics `*Query`s) are known exceptions
+   that stay. Follow the module's struct style (builders on
+   `#[non_exhaustive]` queries, pub fields elsewhere); a stream always
+   takes the query, even when it has nothing but cursors.
 6. **Tests** (in the module, `#[cfg(test)]`), with the docs' examples:
 
    ```rust

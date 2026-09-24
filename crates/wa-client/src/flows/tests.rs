@@ -250,7 +250,7 @@ async fn list_stream_follows_cursors() {
     );
     let ids: Vec<String> = client(&t)
         .flows("W")
-        .list_stream()
+        .list_stream(&ListFlows::new())
         .map(|f| f.unwrap().id.into_inner())
         .collect()
         .await;
@@ -259,6 +259,28 @@ async fn list_stream_follows_cursors() {
     assert_eq!(reqs[1].path(), "/v25.0/W/flows");
     assert_eq!(reqs[1].query("after").as_deref(), Some("c1"));
     assert_eq!(t.remaining(), 0);
+}
+
+/// The streams manage the cursors: a query that sets one is refused before
+/// any request, as the stream's single item.
+#[tokio::test]
+async fn flow_streams_refuse_caller_cursors() {
+    let t = ScriptedTransport::new();
+    let c = client(&t);
+    for query in [ListFlows::new().after("c1"), ListFlows::new().before("c0")] {
+        let items: Vec<_> = c.flows("W").list_stream(&query).collect().await;
+        assert_eq!(items.len(), 1);
+        assert!(matches!(&items[0], Err(Error::Validation(_))), "{items:?}");
+    }
+    for query in [
+        ListFlowAssets::new().after("c1"),
+        ListFlowAssets::new().before("c0"),
+    ] {
+        let items: Vec<_> = c.flow("F").assets_stream(&query).collect().await;
+        assert_eq!(items.len(), 1);
+        assert!(matches!(&items[0], Err(Error::Validation(_))), "{items:?}");
+    }
+    assert!(t.requests().is_empty());
 }
 
 #[tokio::test]
@@ -436,7 +458,11 @@ async fn assets_parse_the_documented_page() {
         Some("QVFIU...")
     );
     // The documented page has no `next` link, so the stream stops after one.
-    let all: Vec<FlowAsset> = flow.assets_stream().map(|a| a.unwrap()).collect().await;
+    let all: Vec<FlowAsset> = flow
+        .assets_stream(&ListFlowAssets::new())
+        .map(|a| a.unwrap())
+        .collect()
+        .await;
     assert_eq!(all.len(), 1);
     assert_eq!(t.remaining(), 0);
 }
