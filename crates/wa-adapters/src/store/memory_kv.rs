@@ -208,6 +208,103 @@ mod tests {
         conformance::run(&store, &|d| clock.advance(d)).await;
     }
 
+    /// Wraps a system-clock `MemoryKvStore` to test the real-time suite
+    /// itself: reads of the suite's `ttl-real` key can stall (a loaded
+    /// machine), and writes to it can expire at once (a broken backend).
+    #[derive(Debug)]
+    struct RealTimeProbe {
+        inner: MemoryKvStore,
+        stalled_reads: std::sync::atomic::AtomicU32,
+        stall: std::time::Duration,
+        expire_at_once: bool,
+    }
+
+    fn ttl_real(key: &StoreKey) -> bool {
+        key.key().starts_with("ttl-real-")
+    }
+
+    #[async_trait]
+    impl KvStore for RealTimeProbe {
+        async fn get(&self, key: &StoreKey) -> Result<Option<Versioned>, StorageError> {
+            let stall = ttl_real(key)
+                && self
+                    .stalled_reads
+                    .fetch_update(
+                        std::sync::atomic::Ordering::SeqCst,
+                        std::sync::atomic::Ordering::SeqCst,
+                        |n| n.checked_sub(1),
+                    )
+                    .is_ok();
+            if stall {
+                tokio::time::sleep(self.stall).await;
+            }
+            self.inner.get(key).await
+        }
+        async fn put(&self, key: &StoreKey, v: Vec<u8>, e: Expiry) -> Result<u64, StorageError> {
+            let e = match e {
+                Expiry::After(_) if self.expire_at_once && ttl_real(key) => {
+                    Expiry::After(std::time::Duration::ZERO)
+                }
+                e => e,
+            };
+            self.inner.put(key, v, e).await
+        }
+        async fn put_if_absent(
+            &self,
+            key: &StoreKey,
+            v: Vec<u8>,
+            e: Expiry,
+        ) -> Result<Option<u64>, StorageError> {
+            self.inner.put_if_absent(key, v, e).await
+        }
+        async fn compare_and_swap(
+            &self,
+            key: &StoreKey,
+            expected: u64,
+            new: Option<Vec<u8>>,
+            e: Expiry,
+        ) -> Result<Option<u64>, StorageError> {
+            self.inner.compare_and_swap(key, expected, new, e).await
+        }
+        async fn delete(&self, key: &StoreKey) -> Result<bool, StorageError> {
+            self.inner.delete(key).await
+        }
+    }
+
+    /// The failure `just test-live` hit under load: a read that comes more
+    /// than `tick` after the write sees an expired record. The suite must
+    /// retry with a longer TTL instead of failing.
+    #[tokio::test]
+    async fn real_time_suite_retries_a_read_stalled_past_the_ttl() {
+        let probe = RealTimeProbe {
+            inner: MemoryKvStore::new(),
+            stalled_reads: 2.into(),
+            stall: std::time::Duration::from_millis(250),
+            expire_at_once: false,
+        };
+        conformance::run_with_real_time(&probe, std::time::Duration::from_millis(100)).await;
+        assert_eq!(
+            probe
+                .stalled_reads
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "both stalls were hit"
+        );
+    }
+
+    /// ...while a backend that expires records early still fails it.
+    #[tokio::test]
+    #[should_panic(expected = "was already invisible")]
+    async fn real_time_suite_still_fails_a_record_that_expires_early() {
+        let probe = RealTimeProbe {
+            inner: MemoryKvStore::new(),
+            stalled_reads: 0.into(),
+            stall: std::time::Duration::ZERO,
+            expire_at_once: true,
+        };
+        conformance::run_with_real_time(&probe, std::time::Duration::from_millis(500)).await;
+    }
+
     #[tokio::test]
     async fn debug_shows_counts_not_values() {
         let store = MemoryKvStore::new();
