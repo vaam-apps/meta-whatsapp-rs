@@ -29,10 +29,23 @@ struct State {
 }
 
 /// In-memory key/value store.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MemoryKvStore {
     state: Arc<Mutex<State>>,
     clock: Arc<dyn Clock>,
+}
+
+impl std::fmt::Debug for MemoryKvStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Counts only: a derived Debug prints every stored value (encrypted
+        // tokens, OTP hashes) through tokio's Mutex Debug.
+        let mut d = f.debug_struct("MemoryKvStore");
+        match self.state.try_lock() {
+            Ok(st) => d.field("entries", &st.entries.len()),
+            Err(_) => d.field("entries", &format_args!("<locked>")),
+        };
+        d.field("clock", &self.clock).finish()
+    }
 }
 
 impl Default for MemoryKvStore {
@@ -190,6 +203,22 @@ mod tests {
         let clock = ManualClock::new(time::macros::datetime!(2026-09-24 12:00 UTC));
         let store = MemoryKvStore::with_clock(Arc::new(clock.clone()));
         conformance::run(&store, &|d| clock.advance(d)).await;
+    }
+
+    #[tokio::test]
+    async fn debug_shows_counts_not_values() {
+        let store = MemoryKvStore::new();
+        store
+            .put(
+                &StoreKey::new("wa.token", "waba-1"),
+                b"EAAG-secret-token".to_vec(),
+                Expiry::Never,
+            )
+            .await
+            .unwrap();
+        let rendered = format!("{store:?}");
+        assert!(rendered.contains("entries: 1"), "{rendered}");
+        assert!(!rendered.contains("69, 65, 65, 71"), "{rendered}"); // b"EAAG"
     }
 
     #[tokio::test]
