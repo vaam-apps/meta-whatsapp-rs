@@ -43,6 +43,11 @@ Postgres and Redis sidecars.
 Agents: see [AGENTS.md](AGENTS.md). Claude Code project skills and agents
 live in `.claude/`.
 
+Coding agents in the repositories that *use* wa-rs (the store, the CMS) get
+consumer skills from [`skills/`](skills/README.md):
+`npx skills add vaam-apps/wa-rs`. Each is stamped with the wa-rs commit it was
+verified against; a public API change updates them in the same PR.
+
 ## Naming
 
 `wa-rs` is already taken on crates.io by an unrelated project, so the
