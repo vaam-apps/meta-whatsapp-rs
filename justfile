@@ -86,8 +86,50 @@ deny:
     # .xtask is its own workspace (own Cargo.lock): check it too.
     cargo deny --manifest-path .xtask/Cargo.toml --config deny.toml check
 
+# Everything else about the consumer skills (compiled examples, excerpts,
+# frontmatter, links, names) is crates/wa-rs/tests/skills.rs, run by `test`.
+# This needs the git history: CI checks out with fetch-depth 0, and a shallow
+# clone fails here.
+#
+# Consumer skills: every `Verified against wa-rs <sha>` stamp is a commit in HEAD's history
+skills-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+        echo "shallow clone: the stamps' commits cannot be checked (fetch the full history)"
+        exit 1
+    fi
+    status=0
+    for skill in skills/*/SKILL.md; do
+        if ! grep -qE 'Verified against wa-rs [0-9a-f]{40} ' "$skill"; then
+            echo "$skill: no 'Verified against wa-rs <full sha>' stamp"
+            status=1
+        fi
+    done
+    stamps=$(grep -rhoE 'Verified against wa-rs [0-9a-f]+' skills | awk '{print $4}' | sort -u)
+    if [ -z "$stamps" ]; then
+        echo "no stamps found under skills/"
+        exit 1
+    fi
+    for sha in $stamps; do
+        files=$(grep -rlE "Verified against wa-rs $sha" skills | wc -l)
+        if [ "${#sha}" -ne 40 ]; then
+            echo "stamp $sha: not a full 40-character commit id ($files files)"
+            status=1
+        elif ! git cat-file -e "$sha^{commit}" 2>/dev/null; then
+            echo "stamp $sha: no such commit ($files files)"
+            status=1
+        elif ! git merge-base --is-ancestor "$sha" HEAD; then
+            echo "stamp $sha: not an ancestor of HEAD ($files files)"
+            status=1
+        else
+            echo "stamp $sha: ok ($files files)"
+        fi
+    done
+    exit "$status"
+
 # The gate. CI runs exactly this.
-ci: lint check test doc features deny test-live
+ci: lint check test skills-check doc features deny test-live
 
 # Mirror Meta's WhatsApp docs as Markdown into .meta-docs/ (gitignored; the
 # docs are Meta's, never commit them). Agents grep this instead of guessing.

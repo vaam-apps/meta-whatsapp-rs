@@ -219,7 +219,7 @@ in the second (list the connected number under that tenant's
 
 ```bash
 just            # list recipes
-just ci         # the gate CI runs: lint, check, test, doc, features, deny, test-live
+just ci         # the gate CI runs: lint, check, test, skills-check, doc, features, deny, test-live
 just test       # unit and in-process tests (live adapter tests skip)
 just test-live  # adapter tests against real Postgres and Redis
 just meta-docs  # mirror Meta's docs locally (gitignored) for grep

@@ -1,6 +1,6 @@
 ---
 name: verify-gate
-description: "What counts as verified in wa-rs — running `just ci` (lint, check, test, doc, per-feature builds, cargo-deny, live Postgres/Redis tests), reading its exit code, and the traps (skipped live tests, reconstructed commands, agent self-reports). Use before claiming anything passes, before committing, and when reviewing a sub-agent's result."
+description: "What counts as verified in wa-rs — running `just ci` (lint, check, test, consumer-skill stamps, doc, per-feature builds, cargo-deny, live Postgres/Redis tests), reading its exit code, and the traps (skipped live tests, reconstructed commands, agent self-reports). Use before claiming anything passes, before committing, and when reviewing a sub-agent's result."
 metadata:
   internal: true
 ---
@@ -12,7 +12,8 @@ just ci > /tmp/ci.log 2>&1; echo $? > /tmp/ci.exit
 cat /tmp/ci.exit   # 0 or it is not verified
 ```
 
-`ci` = `lint check test doc features deny test-live`.
+`ci` = `lint check test skills-check doc features deny test-live`. `skills-check`
+needs the git history (a shallow clone fails it).
 
 ## Traps
 
