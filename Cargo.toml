@@ -101,6 +101,8 @@ typst-kit = { version = "0.15", default-features = false }
 typst-assets = "0.15"
 
 # Dev.
+# Examples only: makes the library's `tracing` output visible (RUST_LOG).
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
 pretty_assertions = "1"
 tokio-test = "0.4"
 tower = "0.5"

@@ -103,6 +103,10 @@ pub mod server;
 pub mod signature;
 pub mod verify;
 
+/// The `axum` the router is built against; mount [`router`] with this
+/// re-export rather than pinning axum yourself.
+#[cfg(feature = "axum")]
+pub use axum;
 pub use dedup::{
     Claim, ClaimTicket, DEDUP_NAMESPACE, DEFAULT_CLAIM_LEASE, DEFAULT_DEDUP_TTL, DedupGuard,
 };

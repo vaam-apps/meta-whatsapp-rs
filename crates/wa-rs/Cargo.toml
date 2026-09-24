@@ -37,6 +37,7 @@ wa-adapters = { workspace = true, default-features = false }
 wa-typst = { workspace = true, optional = true }
 
 [dev-dependencies]
+tracing-subscriber.workspace = true
 wa-core = { workspace = true, features = ["testing"] }
 wa-adapters = { workspace = true, features = ["memory"] }
 serde_json.workspace = true

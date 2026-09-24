@@ -51,6 +51,10 @@
 mod conversation;
 mod kv;
 
+/// The `sqlx` this adapter is built against — `PgPool` is part of its API,
+/// so build pools with this re-export rather than pinning sqlx yourself.
+pub use sqlx;
+
 use std::borrow::Cow;
 use std::fmt;
 

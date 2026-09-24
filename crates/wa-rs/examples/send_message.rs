@@ -26,6 +26,10 @@ use wa_rs::prelude::*;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // RUST_LOG=info (or debug) shows what the library logs.
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
     let client = wa_rs::client(env("WA_TOKEN")?)?;
     let messages = client.messages(env("WA_PHONE_NUMBER_ID")?);
     let to = Recipient::phone(env("WA_TO")?); // E.164, with `+`

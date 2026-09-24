@@ -417,6 +417,10 @@ const PAGE: &str = r#"<!doctype html>
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // RUST_LOG=info (or debug) shows what the library logs.
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
     let app_id = env("WA_APP_ID")?;
     // It is written into a script: digits only.
     anyhow::ensure!(

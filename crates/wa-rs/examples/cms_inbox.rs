@@ -271,6 +271,10 @@ impl IntoResponse for ApiError {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // RUST_LOG=info (or debug) shows what the library logs.
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
     let app_secret = AppSecret::new(env("WA_APP_SECRET")?);
     let verify_token = VerifyToken::new(env("WA_VERIFY_TOKEN")?);
     let (kv, conversations) = stores().await?;

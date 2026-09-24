@@ -41,6 +41,10 @@ const PURPOSE: &str = "login";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // RUST_LOG=info (or debug) shows what the library logs.
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
     // The default config: 6 digits, valid 10 minutes (keep it equal to the
     // template's code_expiration_minutes), 5 attempts, 30 s between codes,
     // at most 5 codes per number and hour.

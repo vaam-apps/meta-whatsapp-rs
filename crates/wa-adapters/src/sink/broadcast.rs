@@ -40,6 +40,12 @@ impl<E: Clone + Send + 'static> BroadcastSink<E> {
         Self { tx }
     }
 
+    /// A raw tokio receiver, for APIs that take one (e.g. `wa_webhooks::sse`).
+    /// Sees events delivered from now on.
+    pub fn receiver(&self) -> broadcast::Receiver<E> {
+        self.tx.subscribe()
+    }
+
     /// A new subscription, seeing events delivered from now on.
     pub fn subscribe(&self) -> BroadcastSubscription<E> {
         BroadcastSubscription {

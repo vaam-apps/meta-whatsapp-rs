@@ -150,6 +150,12 @@ impl Error {
             Self::Http { status, .. } if *status >= 500 => ErrorKind::ServiceUnavailable,
             Self::Http { status: 429, .. } => ErrorKind::RateLimited,
             Self::Transport(_) => ErrorKind::ServiceUnavailable,
+            // The inbox refuses free-form replies outside the 24h window
+            // locally; report it like Meta's own 131047 so one condition has
+            // one kind.
+            Self::Validation(v) if v.field == "customer_service_window" => {
+                ErrorKind::CustomerServiceWindowClosed
+            }
             Self::Validation(_) => ErrorKind::InvalidParameter,
             Self::Step { source, .. } => source.kind(),
             _ => ErrorKind::Unknown,
@@ -195,6 +201,17 @@ mod tests {
         assert_eq!(err.graph().map(|g| g.code), Some(131047));
         assert_eq!(err.kind(), ErrorKind::CustomerServiceWindowClosed);
         assert!(err.to_string().starts_with("step `send_welcome` failed"));
+    }
+
+    #[test]
+    fn a_local_window_refusal_has_the_same_kind_as_131047() {
+        let local = Error::from(ValidationError::new("customer_service_window", "closed"));
+        let remote = Error::from(GraphApiError::new(131047, "Re-engagement message"));
+        assert_eq!(local.kind(), remote.kind());
+        assert_eq!(
+            Error::from(ValidationError::new("body", "x")).kind(),
+            ErrorKind::InvalidParameter
+        );
     }
 
     #[test]
