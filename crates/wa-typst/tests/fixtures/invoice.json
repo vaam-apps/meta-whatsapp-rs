@@ -1,0 +1,42 @@
+{
+  "invoice_number": "INV-2026-0042",
+  "issue_date": "24 September 2026",
+  "due_date": "8 October 2026",
+  "seller": {
+    "name": "Vymalo Boutique GmbH",
+    "address": ["Friedrichstraße 12", "10117 Berlin", "Germany"],
+    "tax_id": "DE123456789",
+    "email": "billing@vymalo.example",
+    "phone": "+49 30 1234567"
+  },
+  "buyer": {
+    "name": "Amélie Laurent",
+    "address": ["12 rue de la Paix", "75002 Paris", "France"],
+    "tax_id": "FR98765432101",
+    "email": "amelie@example.com",
+    "phone": "+33 1 23 45 67 89"
+  },
+  "currency": "EUR",
+  "items": [
+    {
+      "description": "Linen shirt, navy, size M",
+      "quantity": 2,
+      "unit_price": "49.90",
+      "amount": "99.80"
+    },
+    {
+      "description": "Leather belt, brown",
+      "quantity": 1,
+      "unit_price": "35.00",
+      "amount": "35.00"
+    }
+  ],
+  "subtotal": "134.80",
+  "adjustments": [
+    { "label": "Discount WELCOME10", "amount": "-13.48" },
+    { "label": "VAT 19% (included)", "amount": "19.37" }
+  ],
+  "total": "121.32",
+  "payment_terms": "Bank transfer within 14 days to IBAN DE89 3704 0044 0532 0130 00.",
+  "notes": "Thank you for shopping with us. Returns are accepted within 30 days."
+}

@@ -1,6 +1,6 @@
 [package]
 name = "wa-typst"
-description = "Render Typst templates (invoices, receipts, tickets, vouchers) to PDF/PNG for WhatsApp document and image messages."
+description = "Render Typst templates (invoices, receipts, vouchers) to PDF/PNG for WhatsApp document and image messages."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,15 +11,21 @@ publish.workspace = true
 
 [dependencies]
 wa-core.workspace = true
+anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-anyhow.workspace = true
+time.workspace = true
 typst.workspace = true
+typst-layout.workspace = true
 typst-pdf.workspace = true
 typst-render.workspace = true
-typst-kit.workspace = true
-typst-assets.workspace = true
+# `fonts` is off by default, and without it `typst_assets::fonts()` is an empty
+# iterator: every glyph would be missing from the output.
+typst-assets = { workspace = true, features = ["fonts"] }
+
+[dev-dependencies]
+pretty_assertions.workspace = true
 
 [lints]
 workspace = true

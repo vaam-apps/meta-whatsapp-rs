@@ -1,43 +1,78 @@
+// Invoice, A4. Input: `wa_typst::InvoiceInput` as JSON in `sys.inputs.data`.
+// Amounts and dates arrive formatted; this template never computes either.
+// Fonts: only those bundled by typst-assets (see the crate docs).
 #let data = json(bytes(sys.inputs.data))
 
-#set page(margin: 1cm)
-#set text(font: "Noto Sans")
+#set document(title: "Invoice " + data.invoice_number, author: data.seller.name)
+#set page(paper: "a4", margin: 2cm)
+#set text(font: "Libertinus Serif", size: 10pt)
 
-= Invoice
+// Name, address lines, then whichever optional contact fields are present.
+#let party(p) = {
+  strong(p.name)
+  for line in p.address {
+    linebreak()
+    line
+  }
+  if p.tax_id != none {
+    linebreak()
+    [Tax ID: #p.tax_id]
+  }
+  if p.email != none {
+    linebreak()
+    p.email
+  }
+  if p.phone != none {
+    linebreak()
+    p.phone
+  }
+}
 
-*Invoice #:* #data.invoice_number \
-*Date:* #data.invoice_date
-
-== Bill To
-#data.buyer_name
-#if "buyer_contact" in data and data.buyer_contact != none [
-  \ #data.buyer_contact
-]
-
-== From
-#data.seller_name
-#if "seller_contact" in data and data.seller_contact != none [
-  \ #data.seller_contact
-]
-
-== Items
-
-#table(
-  columns: (2fr, 1fr, 1fr, 1fr),
-  [*Description*], [*Qty*], [*Unit Price*], [*Total*],
-  ..data.items.map(item => (item.description, item.quantity, item.unit_price, item.total)).flatten()
+#grid(
+  columns: (1fr, auto),
+  party(data.seller),
+  align(right)[
+    #text(size: 20pt, weight: "bold")[Invoice] \
+    No. #data.invoice_number \
+    Issued #data.issue_date
+    #if data.due_date != none [ \ Due #data.due_date ]
+  ],
 )
 
-== Summary
+#v(1.5em)
+#text(weight: "bold")[Bill to] \
+#party(data.buyer)
 
+#v(1.5em)
 #table(
-  columns: (3fr, 1fr),
+  columns: (1fr, auto, auto, auto),
+  align: (left, right, right, right),
+  stroke: none,
+  table.header(
+    [*Description*], [*Qty*], [*Unit price (#data.currency)*], [*Amount (#data.currency)*],
+  ),
+  table.hline(),
+  ..data.items.map(item => (item.description, str(item.quantity), item.unit_price, item.amount)).flatten(),
+  table.hline(),
+)
+
+#align(right, table(
+  columns: (auto, auto),
+  align: (left, right),
+  stroke: none,
   [Subtotal], data.subtotal,
-  [Tax], data.tax,
-  [*Total*], [*#data.total #data.currency*],
-)
+  ..data.adjustments.map(line => (line.label, line.amount)).flatten(),
+  table.hline(),
+  [*Total due*], [*#data.total #data.currency*],
+))
 
-#if "notes" in data and data.notes != none [
-  == Notes
-  #data.notes
+#if data.payment_terms != none [
+  #v(1.5em)
+  *Payment terms* \
+  #data.payment_terms
+]
+
+#if data.notes != none [
+  #v(1em)
+  #text(size: 9pt, data.notes)
 ]

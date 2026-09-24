@@ -1,59 +1,90 @@
-//! Render Typst documents to PDF and PNG for WhatsApp media messages.
+//! Render Typst templates to PDF and PNG for WhatsApp document and image
+//! messages.
 //!
-//! # Overview
+//! A [`Template`] is Typst source; its input is any [`serde::Serialize`] value,
+//! handed to the template as JSON in `sys.inputs.data`. A [`Renderer`]
+//! compiles the two in a sandbox and exports with `typst-pdf` or
+//! `typst-render`. The result is a [`RenderedDocument`] (bytes, MIME type,
+//! filename) ready for `media().upload()` and a document or image message, or
+//! a template header.
 //!
-//! This crate provides a minimal Typst rendering pipeline for e-commerce documents
-//! (invoices, receipts, vouchers). Templates are Typst source files embedded in the
-//! binary. JSON inputs are passed through `sys.inputs` and read with the Typst standard
-//! library's `json()` function.
+//! Built-in templates, each with a typed input: [`Template::invoice`]
+//! ([`InvoiceInput`]), [`Template::receipt`] ([`ReceiptInput`]),
+//! [`Template::voucher`] ([`VoucherInput`]). Sample inputs live in
+//! `crates/wa-typst/tests/fixtures/`.
 //!
-//! # Output
+//! # Never render OTPs or secrets
 //!
-//! Rendered documents are returned as bytes with MIME type and filename, ready for
-//! uploading via the WhatsApp Graph API media endpoint.
+//! Authentication codes, PINs, passwords and access tokens must never be
+//! rendered into a document or image. Media is stored by Meta and on the
+//! customer's phone, forwarded, and screenshotted; none of that can be taken
+//! back. OTPs go only through authentication templates.
 //!
-//! # Security
+//! # Sandbox and determinism
 //!
-//! - No OTP codes or secrets are rendered (they go through authentication templates only).
-//! - No network access; `@preview` package imports are rejected.
-//! - No file system access; templates are embedded in the binary.
-//! - Deterministic output: `today()` is fixed so identical inputs produce identical bytes.
+//! - Fonts are the ones bundled by `typst-assets`, never system fonts. Set
+//!   them by family:
+//!   `"Libertinus Serif"` (typst's default),
+//!   `"New Computer Modern"`,
+//!   `"New Computer Modern Math"`,
+//!   `"DejaVu Sans Mono"`.
+//!   Any other family silently falls back to these.
+//! - No file system and no network: a template reads nothing but its input,
+//!   and `@preview` package imports fail with a
+//!   [`RenderError::Compile`] saying packages are disabled.
+//! - No clock: `datetime.today()` is the date given to
+//!   [`Renderer::with_today`] and an error otherwise.
+//!
+//! The same template, input and date therefore produce byte-identical files
+//! everywhere.
+//!
+//! Input strings placed with `#data.field` (as the built-in templates do) are
+//! text, not markup: an input value of `*bold* #panic()` is printed exactly as
+//! written. Only a template that passes input to `eval` would run it.
 //!
 //! # Example
 //!
 //! ```no_run
-//! use serde::Serialize;
-//! use wa_typst::{Renderer, Template, RenderedDocument};
+//! use wa_typst::{InvoiceInput, Renderer, Template};
 //!
-//! #[derive(Serialize)]
-//! struct InvoiceInput {
-//!     invoice_number: String,
-//!     buyer_name: String,
-//!     // ... more fields
-//! }
+//! # fn run(input: InvoiceInput) -> wa_core::Result<()> {
+//! let renderer = Renderer::new();
+//! let pdf = renderer.render_pdf(&Template::invoice(), &input)?;
+//! assert_eq!(pdf.mime_type, "application/pdf");
+//! // Upload `pdf.bytes` as `pdf.filename`, then send a document message.
+//! # Ok(())
+//! # }
+//! ```
 //!
-//! async fn render_invoice() -> Result<(), Box<dyn std::error::Error>> {
-//!     let renderer = Renderer::new();
-//!     let template = Template::invoice();
-//!     let input = InvoiceInput {
-//!         invoice_number: "INV-001".to_string(),
-//!         buyer_name: "Acme Corp".to_string(),
-//!     };
+//! A custom template:
 //!
-//!     let pdf = renderer.render_pdf(&template, &input)?;
-//!     // pdf.bytes can be uploaded via wa_client
-//!     Ok(())
-//! }
+//! ```
+//! use wa_typst::{Renderer, Template};
+//!
+//! # fn main() -> Result<(), wa_typst::RenderError> {
+//! let template = Template::from_source(
+//!     "greeting",
+//!     r#"#let data = json(bytes(sys.inputs.data))
+//! #set page(width: 200pt, height: 100pt)
+//! Hello, #data.name!"#,
+//! );
+//! let png = Renderer::new().render_png(&template, &serde_json::json!({ "name": "Ada" }), 144.0)?;
+//! assert_eq!(png.filename, "greeting.png");
+//! assert!(png.bytes.starts_with(b"\x89PNG"));
+//! # Ok(())
+//! # }
 //! ```
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
-
 mod error;
+mod input;
 mod render;
 mod templates;
 mod world;
 
-pub use error::{RenderError, Result};
-pub use render::{RenderedDocument, Renderer};
+#[cfg(test)]
+mod pdf_text;
+
+pub use error::{Diagnostic, RenderError};
+pub use input::{InvoiceInput, LineItem, Party, ReceiptInput, SummaryLine, VoucherInput};
+pub use render::{MAX_PNG_PIXELS, RenderedDocument, Renderer};
 pub use templates::Template;

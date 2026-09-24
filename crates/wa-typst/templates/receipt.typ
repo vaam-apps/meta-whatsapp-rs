@@ -1,37 +1,60 @@
+// Order confirmation / receipt, A5. Input: `wa_typst::ReceiptInput` as JSON in
+// `sys.inputs.data`. Amounts and dates arrive formatted; this template never
+// computes either. Fonts: only those bundled by typst-assets.
 #let data = json(bytes(sys.inputs.data))
 
-#set page(margin: 1cm)
-#set text(font: "Noto Sans")
+#set document(title: data.merchant_name + " order " + data.order_number)
+#set page(paper: "a5", margin: 1.5cm)
+#set text(font: "Libertinus Serif", size: 10pt)
 
-= Order Confirmation
-
-*Order #:* #data.order_id \
-*Date:* #data.order_date
-
-== Order Summary
-
-#table(
-  columns: (2fr, 1fr, 1fr, 1fr),
-  [*Item*], [*Qty*], [*Unit Price*], [*Total*],
-  ..data.items.map(item => (item.name, item.quantity, item.unit_price, item.total)).flatten()
-)
-
-== Totals
-
-#table(
-  columns: (3fr, 1fr),
-  [Subtotal], data.subtotal,
-  [Shipping], data.shipping,
-  [Tax], data.tax,
-  [*Total*], [*#data.total #data.currency*],
-)
-
-== Delivery Details
-
-*Method:* #data.payment_method \
-*Address:* #data.delivery_address
-#if "delivery_eta" in data and data.delivery_eta != none [
-  \ *Estimated Delivery:* #data.delivery_eta
+#align(center)[
+  #text(size: 16pt, weight: "bold", data.merchant_name) \
+  Order confirmation
 ]
 
-Thank you for your order!
+#v(1em)
+#grid(
+  columns: (1fr, 1fr),
+  [Order *#data.order_number* \ #data.order_date],
+  align(right)[Customer \ *#data.customer_name*],
+)
+
+#v(1em)
+#table(
+  columns: (1fr, auto, auto),
+  align: (left, right, right),
+  stroke: none,
+  table.header([*Item*], [*Qty × price*], [*Amount (#data.currency)*]),
+  table.hline(),
+  ..data.items.map(item => (item.description, [#item.quantity × #item.unit_price], item.amount)).flatten(),
+  table.hline(),
+)
+
+#align(right, table(
+  columns: (auto, auto),
+  align: (left, right),
+  stroke: none,
+  [Subtotal], data.subtotal,
+  ..data.adjustments.map(line => (line.label, line.amount)).flatten(),
+  table.hline(),
+  [*Total paid*], [*#data.total #data.currency*],
+))
+
+Paid with #data.payment_method
+
+#if data.delivery_address.len() > 0 [
+  #v(0.5em)
+  *Delivery address* \
+  #data.delivery_address.join(linebreak())
+]
+
+#if data.estimated_delivery != none [
+  #v(0.5em)
+  Estimated delivery: #data.estimated_delivery
+]
+
+#v(1fr)
+#align(center)[
+  Thank you for your order!
+  #if data.support_contact != none [ \ Questions? #data.support_contact ]
+]
