@@ -99,3 +99,64 @@ entry by deciding it in an issue/PR and deleting it here.
 26. **In-App Signup Terms of Service.** Creating the first signup accepts
     Meta's marketing messages terms on the business's behalf — a legal
     decision, not a technical one.
+
+## API conventions
+
+Found by the conventions review of 8ee6fab; counts are from that commit.
+
+27. **One catch-all variant for every open enum.** Enums Meta may extend
+    have a catch-all so a new value never fails parsing, but it comes in
+    several shapes: `Other(String)` from `open_enum!` (wa-webhooks) and
+    `string_enum!` (templates, case-insensitive); `Unknown(String)` from
+    `wire_enum!` (flows and marketing, two copies of the macro) and in
+    `business_profile::Vertical`; hand-written `#[serde(untagged)]
+    Other(String)` (analytics, calling); and a unit `#[serde(other)]
+    Unknown` (14 enums in phone_numbers, waba, signups, embedded_signup,
+    and the send response's message status). The unit form drops Meta's
+    value, and where the enum also derives `Serialize` it writes its own
+    name back instead. Pick one name and one shape (and whether one macro
+    in wa-core generates them all) before integrators pin a revision:
+    changing it later breaks their `match`es. Until then new code follows
+    its module and adds no new unit `Unknown`.
+28. **`#[non_exhaustive]` policy.** 25 of the 144 `Deserialize` structs in
+    wa-client have it (all in the onboarding modules), none of the 104 in
+    wa-webhooks; every macro-generated enum has it, the hand-written
+    `Other(String)` enums in analytics and calling do not, so naming a new
+    value there is a breaking change. The attribute lets Meta's additions
+    land without a major version, but integrators then cannot build these
+    types with struct literals (for example in their own tests). Decide per
+    kind (response structs, webhook payloads, enums) and write the rule in
+    `docs/architecture.md`.
+29. **axum and sqlx: re-exports or your own pins?** Both are re-exported
+    (`wa_rs::webhooks::axum`, `wa_rs::adapters::store::postgres::sqlx`)
+    and their rustdoc says to use the re-export; the README and examples
+    now do the same, and the examples no longer pin sqlx. A consumer's own
+    `axum = "0.8"` still unifies with it. The alternative, telling
+    integrators to pin their own versions and dropping the re-exports, was
+    not taken; confirm the direction.
+
+## Webhooks and live updates
+
+Found by the security review of 8ee6fab.
+
+30. **One permanent sink error fails the whole delivery.** When a sink
+    fails, `WebhookHandler` answers 500 and Meta redelivers the whole POST
+    (every event in it, possibly for several WABAs) for up to 7 days, then
+    drops it. An event that can never be stored (U+0000 on Postgres, #18)
+    therefore holds back the events after it in the same body until all
+    are lost. A dead-letter design would classify sink errors as
+    transient or permanent, acknowledge a permanent one after writing the
+    event (raw, size-bounded) to a dead-letter store with an alert and a
+    replay path, and deliver the rest of the batch. Today the whole batch
+    fails and Meta retries it.
+31. **SSE fan-out cost.** `webhooks::sse` reads a
+    `broadcast::Receiver<WebhookEvent>`, and a broadcast receiver clones
+    every event it receives: each open inbox copies every merchant's
+    events before its filter drops them, including multi-megabyte
+    `HistorySynced` bodies, so one coexistence history sync costs its size
+    times the number of open inboxes. (The rustdoc of `sse` says rejected
+    events "cost nothing"; they cost a clone.) Options: broadcast
+    `Arc<WebhookEvent>` (changes `sse`'s and `BroadcastSink`'s types), or
+    one channel per phone number id, created with its first subscriber.
+    Today: a clone per event per subscriber, fine for a handful of open
+    inboxes.
