@@ -11,15 +11,19 @@
 //!   inserted row, without the inbound effects (`last_inbound_at`,
 //!   `unread`). Nothing about a message's origin is stored: the summary is
 //!   maintained when a row is written, so synced history needs no column.
-//! - `revoke` first tries to store the tombstone (the synced single-row
-//!   insert: the primary key serializes it against a concurrent append of
-//!   the message), and only when the id is taken runs the status
+//! - `revoke` first tries to store the tombstone (a message insert alone,
+//!   `ON CONFLICT (id) DO NOTHING`: a tombstone is never part of the
+//!   summary, and the primary key serializes it against a concurrent append
+//!   of the message), and only when the id is taken runs the status
 //!   compare-and-swap below, restricted to the revoke's direction. A
 //!   separate statement, so it sees a row a concurrent append committed.
 //! - `fill_media_placeholder` is one statement too: the content update of
-//!   a row whose `kind` is still the placeholder, and the preview of its
-//!   conversation when it is the latest message. Two concurrent fills
-//!   cannot both apply: the second finds the row no longer a placeholder.
+//!   a row whose `kind` is still the placeholder and whose status is not
+//!   `deleted` (a revoked placeholder never gets its content), and the
+//!   preview of its conversation when it is the latest message. Two
+//!   concurrent fills cannot both apply: the second finds the row no longer
+//!   a placeholder, and a concurrent revoke either comes first (the fill
+//!   finds it deleted) or marks the filled row deleted.
 //! - `update_status` (and `revoke`) applies [`DeliveryStatus::supersedes`] — the rule lives
 //!   in `wa-core`, not re-encoded in SQL — as a compare-and-swap on the
 //!   stored status: read it, decide in Rust, then `UPDATE … WHERE status =
@@ -169,21 +173,21 @@ impl Sql {
                 "CASE WHEN direction = 'inbound' THEN 1 ELSE 0 END",
             )),
             append_synced: arc(append_synced_sql(&messages, &conversations)),
-            // GREATEST ignores the NULL and `unread` grows by 0: a tombstone
-            // leaves both as they were, and a conversation it creates
-            // starts with neither.
-            tombstone: arc(append_sql(
-                &messages,
-                &conversations,
-                "NULL::timestamptz",
-                "0",
+            // The history row alone: a tombstone never touches (nor creates)
+            // its conversation's summary.
+            tombstone: arc(format!(
+                "INSERT INTO {messages} ({MESSAGE_COLUMNS}) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+                 ON CONFLICT (id) DO NOTHING \
+                 RETURNING 1 AS appended"
             )),
             // Data-modifying CTEs always run to completion, whether or not
-            // the final SELECT reads them.
+            // the final SELECT reads them. `$7`: the `deleted` status, which
+            // a placeholder is never filled in.
             fill_placeholder: arc(format!(
                 "WITH filled AS ( \
                    UPDATE {messages} SET kind = $3, text = $4, payload = $5 \
-                   WHERE id = $1 AND phone_number_id = $2 AND kind = $6 \
+                   WHERE id = $1 AND phone_number_id = $2 AND kind = $6 AND status <> $7 \
                    RETURNING id, phone_number_id, contact, text \
                  ), preview AS ( \
                    UPDATE {conversations} AS c SET last_text = f.text \
@@ -506,6 +510,7 @@ impl ConversationStore for PostgresConversationStore {
             .bind(text)
             .bind(payload)
             .bind(StoredMessage::MEDIA_PLACEHOLDER)
+            .bind(status_str(DeliveryStatus::Deleted)?)
             .fetch_one(&self.pool)
             .await
             .map_err(backend)?;

@@ -72,7 +72,8 @@ pub enum DeliveryStatus {
     Played,
     /// `failed` webhook.
     Failed,
-    /// The user deleted/revoked the message.
+    /// Deleted for everyone by its sender, the customer or the business
+    /// (a revoke: [`ConversationStore::revoke`]).
     Deleted,
 }
 
@@ -118,7 +119,10 @@ pub struct StoredMessage {
     pub conversation: ConversationKey,
     /// Direction.
     pub direction: Direction,
-    /// Message type as Meta names it: `text`, `image`, `template`, …
+    /// Message type as Meta names it (`text`, `image`, `template`,
+    /// `media_placeholder`, …), except [`StoredMessage::REVOKED`], which is
+    /// this crate's own: the tombstone of a revoke that arrived before its
+    /// message.
     pub kind: String,
     /// Plain-text rendering for list previews and search, when there is one.
     pub text: Option<String>,
@@ -145,14 +149,17 @@ impl StoredMessage {
 
     /// The `kind` of the row [`ConversationStore::revoke`] stores for a
     /// revoke whose message is not stored (yet): it holds the message's id,
-    /// conversation and direction, no text, an empty payload, and status
-    /// [`DeliveryStatus::Deleted`].
+    /// the revoke's conversation and direction, no text, an empty JSON
+    /// object as payload (`{}`), and status [`DeliveryStatus::Deleted`].
+    /// Not a Meta message type: this crate's own. It is part of the history
+    /// ([`ConversationStore::messages`]), never of the inbox summary.
     pub const REVOKED: &'static str = "revoked";
 
     /// The tombstone [`ConversationStore::revoke`] stores for message `id`
     /// of conversation `key` when the revoke arrives first: kind
-    /// [`Self::REVOKED`], no text, an empty payload, status
-    /// [`DeliveryStatus::Deleted`], timestamped (and deleted) at `at`.
+    /// [`Self::REVOKED`], no text, an empty JSON object as payload (`{}`),
+    /// status [`DeliveryStatus::Deleted`], timestamped (and deleted) at
+    /// `at`.
     pub fn tombstone(
         key: &ConversationKey,
         id: &MessageId,
@@ -175,6 +182,11 @@ impl StoredMessage {
 }
 
 /// Inbox row.
+///
+/// Built from the messages stored with [`ConversationStore::append`] and
+/// [`ConversationStore::append_synced`]; a revoke's tombstone
+/// ([`StoredMessage::REVOKED`]) never counts: it moves nothing here, and a
+/// conversation whose only rows are tombstones has no summary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationSummary {
     /// Conversation.
@@ -184,7 +196,7 @@ pub struct ConversationSummary {
     pub last_message_at: OffsetDateTime,
     /// Latest inbound message recorded with [`ConversationStore::append`];
     /// drives the customer service window. Synced history
-    /// ([`ConversationStore::append_synced`]) never moves it.
+    /// ([`ConversationStore::append_synced`]) and tombstones never move it.
     #[serde(with = "time::serde::rfc3339::option")]
     pub last_inbound_at: Option<OffsetDateTime>,
     /// Text preview of the latest message.
@@ -230,14 +242,15 @@ pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
 
     /// Record the content of message `id` of business number
     /// `phone_number_id` if it is stored as a
-    /// [media placeholder](StoredMessage::MEDIA_PLACEHOLDER): its `kind`,
-    /// `text` and `payload` become the given ones, and so does the
-    /// conversation's `last_text` when it is the latest message. Its
-    /// conversation, direction, status, timestamps and error stay, and so
-    /// do `last_inbound_at` and the unread count. Returns whether it
-    /// changed: `false` when no message `id` is stored for that number or
-    /// it is not (or no longer) a placeholder, so a redelivered content
-    /// changes nothing.
+    /// [media placeholder](StoredMessage::MEDIA_PLACEHOLDER) that is not
+    /// [`DeliveryStatus::Deleted`]: its `kind`, `text` and `payload` become
+    /// the given ones, and so does the conversation's `last_text` when it
+    /// is the latest message. Its conversation, direction, status,
+    /// timestamps and error stay, and so do `last_inbound_at` and the
+    /// unread count. Returns whether it changed: `false` when no message
+    /// `id` is stored for that number, it is not (or no longer) a
+    /// placeholder, so a redelivered content changes nothing, or it was
+    /// revoked: the content its sender deleted is never stored.
     async fn fill_media_placeholder(
         &self,
         phone_number_id: &PhoneNumberId,
@@ -247,22 +260,34 @@ pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
         payload: serde_json::Value,
     ) -> Result<bool, StorageError>;
 
-    /// Apply a revoke (its sender deleted message `id` for everyone) that
-    /// arrived on business number `key.phone_number_id`: the message, if
-    /// stored for that number **and** in `direction` (a customer revokes
+    /// Apply a revoke (its sender deleted message `id` for everyone,
+    /// [`webhooks/reference/messages/revoke`](https://developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/reference/messages/revoke))
+    /// that arrived on business number `key.phone_number_id`: the message,
+    /// if stored for that number **and** in `direction` (a customer revokes
     /// what they sent, the business what it sent), becomes
     /// [`DeliveryStatus::Deleted`] at `at` when that
-    /// [supersedes](DeliveryStatus::supersedes) its status. A message `id`
-    /// of another number or of the other direction is not touched.
+    /// [supersedes](DeliveryStatus::supersedes) its status; its content
+    /// stays. A message `id` of another number or of the other direction is
+    /// not touched.
+    ///
+    /// Whether the revoke must also match the message's conversation
+    /// (`key.contact`) is unspecified until `OPEN_QUESTIONS.md` #37 is
+    /// settled: the adapters in this repository do not match it, and the
+    /// conformance suite requires neither answer.
     ///
     /// A revoke can arrive before its message (a live revoke, then the
     /// history chunk that carries the original; or redeliveries out of
     /// order). When no message `id` is stored at all, a tombstone takes its
-    /// place: a row of kind [`StoredMessage::REVOKED`] in conversation `key`
-    /// with `direction`, no text, an empty payload, status `Deleted`,
-    /// timestamped `at`, which neither moves `last_inbound_at` nor counts as
-    /// unread. The message then finds its id taken, so the content its
-    /// sender deleted is never stored.
+    /// place: [`StoredMessage::tombstone`], a row of kind
+    /// [`StoredMessage::REVOKED`] in conversation `key` with `direction`,
+    /// no text, `{}` as payload, status `Deleted`, timestamped `at`. It is
+    /// in the conversation's history ([`messages`](Self::messages)) but
+    /// never in its summary: it moves neither `last_message_at`,
+    /// `last_text`, `last_inbound_at` nor the unread count, and a
+    /// conversation with no other row gets no summary
+    /// ([`conversations`](Self::conversations) does not list it). The
+    /// message then finds its id taken, so the content its sender deleted
+    /// is never stored.
     ///
     /// Returns whether anything changed (a message deleted, or a tombstone
     /// stored).
@@ -302,6 +327,7 @@ pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
 
     /// Conversations on a business number, most recent activity first,
     /// strictly older than `before` (a `(last_message_at, contact)` cursor).
+    /// See [`ConversationSummary`] for what a summary counts.
     async fn conversations(
         &self,
         phone_number_id: &PhoneNumberId,
@@ -312,7 +338,11 @@ pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
     /// Reset the unread count of a conversation.
     async fn mark_read(&self, key: &ConversationKey) -> Result<(), StorageError>;
 
-    /// Timestamp of the latest inbound message, if any.
+    /// The conversation's [`ConversationSummary::last_inbound_at`]: the
+    /// timestamp of the latest inbound message recorded with
+    /// [`append`](Self::append), if any. Synced history
+    /// ([`append_synced`](Self::append_synced)) and tombstones
+    /// ([`StoredMessage::REVOKED`]) never count.
     async fn last_inbound_at(
         &self,
         key: &ConversationKey,

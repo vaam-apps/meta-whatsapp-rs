@@ -41,14 +41,19 @@
 //! - a revoke deletes only a message of its business number and of its
 //!   direction, never regresses a terminal status, and when its message is
 //!   not stored yet leaves a tombstone (kind `revoked`, no content,
-//!   `Deleted`, no window, not unread) that keeps the message's content
-//!   out when it arrives, live or synced;
+//!   `Deleted`) that keeps the message's content out when it arrives, live
+//!   or synced; whether a revoke must match the conversation too is not
+//!   checked (`OPEN_QUESTIONS.md` #37);
+//! - a tombstone is history but never part of the summary: in an existing
+//!   conversation the summary stays exactly as it was (latest message,
+//!   preview, window, unread), and a conversation with nothing but a
+//!   tombstone is not listed;
 //! - `fill_media_placeholder` rewrites the `kind`, `text` and `payload` of a
 //!   stored media placeholder of its business number, once, and nothing
 //!   else: not another number's row, not a message that is not (or no
-//!   longer) a placeholder, not the window or the unread count; the
-//!   conversation preview follows when the placeholder is the latest
-//!   message.
+//!   longer) a placeholder, not a placeholder that was revoked, not the
+//!   window or the unread count; the conversation preview follows when the
+//!   placeholder is the latest message.
 
 use time::OffsetDateTime;
 use time::macros::datetime;
@@ -86,6 +91,8 @@ pub async fn run<S: ConversationStore + ?Sized>(store: &S) {
     synced_batches_answer_per_message(store).await;
     a_revoke_matches_its_number_and_direction(store).await;
     a_revoke_before_its_message_leaves_a_tombstone(store).await;
+    a_tombstone_leaves_the_summary_alone(store).await;
+    a_revoked_placeholder_is_never_filled(store).await;
 }
 
 const T0: OffsetDateTime = datetime!(2026-09-24 12:00 UTC);
@@ -1300,12 +1307,16 @@ async fn a_revoke_before_its_message_leaves_a_tombstone<S: ConversationStore + ?
     );
     let tombstone = StoredMessage::tombstone(&key, &deleted.id, Direction::Inbound, at(30));
     assert_eq!(tombstone.kind, StoredMessage::REVOKED);
-    assert_eq!(only_message(store, &key).await, tombstone);
-    let s = summary(store, &key).await.unwrap();
     assert_eq!(
-        (s.last_inbound_at, s.unread, s.last_text),
-        (None, 0, None),
-        "a tombstone opens no window, is not unread, has no preview"
+        tombstone.payload,
+        serde_json::json!({}),
+        "a tombstone's payload is an empty object"
+    );
+    assert_eq!(only_message(store, &key).await, tombstone);
+    assert_eq!(
+        store.last_inbound_at(&key).await.unwrap(),
+        None,
+        "a tombstone opens no window"
     );
 
     assert!(
@@ -1321,8 +1332,12 @@ async fn a_revoke_before_its_message_leaves_a_tombstone<S: ConversationStore + ?
         tombstone,
         "its content is never stored"
     );
-    let s = summary(store, &key).await.unwrap();
-    assert_eq!((s.last_inbound_at, s.unread), (None, 0));
+    assert_eq!(
+        summary(store, &key).await,
+        None,
+        "nor does it create the summary the tombstone did not"
+    );
+    assert_eq!(store.last_inbound_at(&key).await.unwrap(), None);
     assert!(
         !store
             .revoke(&key, &deleted.id, Direction::Inbound, at(31))
@@ -1340,5 +1355,152 @@ async fn a_revoke_before_its_message_leaves_a_tombstone<S: ConversationStore + ?
     assert_eq!(
         only_message(store, &r.key("d")).await,
         StoredMessage::tombstone(&r.key("d"), &outbound, Direction::Outbound, at(40))
+    );
+}
+
+/// A tombstone is part of the history, never of the inbox summary: it
+/// cannot tell the merchant anything (no text, no content) and is not
+/// activity of the customer's at the time it carries.
+async fn a_tombstone_leaves_the_summary_alone<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("tombstone-summary");
+
+    // A conversation with nothing but a tombstone has no summary.
+    let fresh = r.key("fresh");
+    let early = r.id("early");
+    assert!(
+        store
+            .revoke(&fresh, &early, Direction::Inbound, at(50))
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        only_message(store, &fresh).await,
+        StoredMessage::tombstone(&fresh, &early, Direction::Inbound, at(50)),
+        "the tombstone is in the history"
+    );
+    assert_eq!(
+        summary(store, &fresh).await,
+        None,
+        "a conversation with only a tombstone is not listed"
+    );
+    assert_eq!(store.last_inbound_at(&fresh).await.unwrap(), None);
+    // Its first message, older than the tombstone, is its latest.
+    let first = r.msg("fresh", "first", Direction::Inbound, 10, "hello");
+    assert!(store.append(first).await.unwrap());
+    let s = summary(store, &fresh)
+        .await
+        .expect("the message creates it");
+    assert_eq!(
+        (
+            s.last_message_at,
+            s.last_text.as_deref(),
+            s.last_inbound_at,
+            s.unread
+        ),
+        (at(10), Some("hello"), Some(at(10)), 1),
+        "the tombstone, newer, is not the latest message"
+    );
+
+    // In an existing conversation, the summary stays exactly as it was,
+    // for a tombstone of either direction, newer than every message.
+    let key = r.key("known");
+    store
+        .append(r.msg("known", "in", Direction::Inbound, 1, "where is my order?"))
+        .await
+        .unwrap();
+    synced(
+        store,
+        r.msg("known", "out", Direction::Outbound, 2, "on its way"),
+    )
+    .await
+    .unwrap();
+    store
+        .append(r.msg("other", "x", Direction::Inbound, 5, "another customer"))
+        .await
+        .unwrap();
+    let before = summary(store, &key).await.unwrap();
+    assert_eq!(
+        (before.last_message_at, before.last_text.as_deref()),
+        (at(2), Some("on its way"))
+    );
+    for (local, direction, secs) in [
+        ("gone-in", Direction::Inbound, 40),
+        ("gone-out", Direction::Outbound, 41),
+    ] {
+        assert!(
+            store
+                .revoke(&key, &r.id(local), direction, at(secs))
+                .await
+                .unwrap()
+        );
+    }
+    assert_eq!(
+        summary(store, &key).await,
+        Some(before),
+        "a tombstone moves nothing in the summary"
+    );
+    assert_eq!(store.messages(&key, None, 10).await.unwrap().len(), 4);
+    let order: Vec<String> = store
+        .conversations(&r.pn, None, 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|s| s.key.contact)
+        .collect();
+    assert_eq!(
+        order,
+        ["fresh", "other", "known"],
+        "nor its place in the list"
+    );
+}
+
+/// A placeholder revoked before its content arrives is never filled: the
+/// content is what its sender deleted.
+async fn a_revoked_placeholder_is_never_filled<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("revoked-placeholder");
+    let key = r.key("c");
+    let placeholder = StoredMessage {
+        kind: StoredMessage::MEDIA_PLACEHOLDER.to_owned(),
+        text: None,
+        payload: serde_json::json!({"type": "media_placeholder"}),
+        status: DeliveryStatus::Received,
+        ..r.msg("c", "p", Direction::Inbound, 3, "")
+    };
+    assert!(synced(store, placeholder.clone()).await.unwrap());
+    assert!(
+        store
+            .revoke(&key, &placeholder.id, Direction::Inbound, at(5))
+            .await
+            .unwrap(),
+        "the live revoke deletes the placeholder"
+    );
+    let deleted = StoredMessage {
+        status: DeliveryStatus::Deleted,
+        status_at: Some(at(5)),
+        ..placeholder
+    };
+    assert_eq!(only_message(store, &key).await, deleted);
+    assert!(
+        !store
+            .fill_media_placeholder(
+                &r.pn,
+                &deleted.id,
+                "image".to_owned(),
+                Some("deleted caption".to_owned()),
+                serde_json::json!({"type": "image", "image": {"caption": "deleted caption"}}),
+            )
+            .await
+            .unwrap(),
+        "a revoked placeholder is never filled"
+    );
+    assert_eq!(
+        only_message(store, &key).await,
+        deleted,
+        "its content stays out"
+    );
+    assert_eq!(
+        summary(store, &key).await.unwrap().last_text,
+        None,
+        "and out of the preview"
     );
 }

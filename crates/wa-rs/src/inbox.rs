@@ -66,16 +66,18 @@
 //!   That content replaces the placeholder's kind, text and payload
 //!   ([`ConversationStore::fill_media_placeholder`]); the row keeps its
 //!   conversation, direction, status and timestamp from the thread. A
-//!   content whose placeholder was never recorded becomes a row of its
-//!   own.
+//!   placeholder revoked in the meantime never gets it (the content is
+//!   what its sender deleted). A content whose placeholder was never
+//!   recorded becomes a row of its own.
 //! - A revoke (live, echoed or synced) deletes only a message of its
 //!   business number sent in its direction: a customer's revoke an inbound
 //!   message, the business's an outbound one
 //!   ([`ConversationStore::revoke`]). A revoke that arrives before its
 //!   message leaves a tombstone ([`StoredMessage::REVOKED`]) under the
 //!   message's id, so the message, when it comes, is never stored with the
-//!   content its sender deleted. A revoke whose sender (or recipient) has
-//!   no usable id is skipped.
+//!   content its sender deleted. The tombstone is in the conversation's
+//!   history, never in its summary ([`Inbox::conversations`]). A revoke
+//!   whose sender (or recipient) has no usable id is skipped.
 //! - One malformed history item never fails the delivery: an item without
 //!   a direction or a conversation, with U+0000 in an id, or (when the
 //!   whole `history` value failed its typed parse and arrived as
@@ -2353,6 +2355,49 @@ mod tests {
                 ("wamid.p", "image", Some("catalogue"), DeliveryStatus::Read),
                 ("wamid.b", "text", Some("after"), DeliveryStatus::Received),
             ]
+        );
+    }
+
+    /// A placeholder the thread recorded, then revoked live (by the
+    /// business, which sent it: an echoed revoke), never gets the media
+    /// content Meta sends later: that content is what its sender deleted.
+    #[tokio::test]
+    async fn a_revoked_placeholder_never_gets_its_content() {
+        let placeholder = "wamid.QyNUEHBgLMTY0NjcwNDM1OTUVAgARGBI1Rj3NEYxMzAzMzQ5MkEA";
+        let store = Arc::new(MemoryConversationStore::new());
+        let sink = InboxSink::new(store.clone());
+        deliver_all(&sink, body(HISTORY_THREADS)).await;
+        deliver_all(
+            &sink,
+            change(
+                "smb_message_echoes",
+                &json!({
+                    "messaging_product": "whatsapp",
+                    "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
+                    "message_echoes": [{"from": "15550783881", "to": "16505551234",
+                        "id": "wamid.revoke", "timestamp": "1739231000", "type": "revoke",
+                        "revoke": {"original_message_id": placeholder}}]
+                }),
+            ),
+        )
+        .await;
+        let revoked = thread(store.as_ref(), "16505551234")
+            .await
+            .into_iter()
+            .find(|r| r.id.as_str() == placeholder)
+            .unwrap();
+        assert_eq!(
+            (revoked.kind.as_str(), revoked.status),
+            (StoredMessage::MEDIA_PLACEHOLDER, DeliveryStatus::Deleted)
+        );
+        deliver_all(&sink, body(HISTORY_MEDIA)).await;
+        let rows = thread(store.as_ref(), "16505551234").await;
+        assert_eq!(rows.len(), 3, "{rows:?}");
+        let after = rows.iter().find(|r| r.id.as_str() == placeholder).unwrap();
+        assert_eq!(after, &revoked, "the revoked placeholder is not filled");
+        assert!(
+            !format!("{rows:?}").contains("Black Prince"),
+            "the deleted caption is stored nowhere: {rows:?}"
         );
     }
 
