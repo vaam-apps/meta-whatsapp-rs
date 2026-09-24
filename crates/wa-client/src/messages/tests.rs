@@ -1244,18 +1244,22 @@ fn envelope_features_match_the_docs() {
     );
 }
 
-/// The doc examples set nearly every optional field, so on their own they
-/// cannot tell "omitted when absent" from "sent as null / [] / {}". These
-/// shapes leave each optional field out at least once.
+/// The object a message sends under its `type` key, from the wire bytes.
+#[track_caller]
+fn content(m: &OutboundMessage) -> Value {
+    let wire = serde_json::to_vec(m).unwrap();
+    assert_no_duplicate_keys(&wire);
+    let mut v: Value = serde_json::from_slice(&wire).unwrap();
+    let kind = v["type"].as_str().unwrap().to_owned();
+    v[kind].take()
+}
+
+// The doc examples set nearly every optional field, so on their own they
+// cannot tell "omitted when absent" from "sent as null / [] / {}". The two
+// `sparse_*` tests leave each optional field out at least once.
+
 #[test]
-fn sparse_shapes_omit_what_is_absent() {
-    let content = |m: OutboundMessage| {
-        let wire = serde_json::to_vec(&m).unwrap();
-        assert_no_duplicate_keys(&wire);
-        let mut v: Value = serde_json::from_slice(&wire).unwrap();
-        let kind = v["type"].as_str().unwrap().to_owned();
-        v[kind].take()
-    };
+fn sparse_contacts_media_and_headers_omit_what_is_absent() {
     // Contacts: a bare card, and one whose nested objects are all empty.
     let sparse = Contact {
         addresses: vec![ContactAddress::default()],
@@ -1277,7 +1281,7 @@ fn sparse_shapes_omit_what_is_absent() {
         }],
     };
     assert_eq!(
-        content(OutboundMessage::contacts(
+        content(&OutboundMessage::contacts(
             phone(),
             [Contact::new("A"), sparse]
         )),
@@ -1289,22 +1293,22 @@ fn sparse_shapes_omit_what_is_absent() {
     );
     // Media without caption, file name or voice flag.
     assert_eq!(
-        content(OutboundMessage::video_link(phone(), "https://x/v.mp4")),
+        content(&OutboundMessage::video_link(phone(), "https://x/v.mp4")),
         json!({"link": "https://x/v.mp4"})
     );
     assert_eq!(
-        content(OutboundMessage::audio_id(phone(), "1")),
+        content(&OutboundMessage::audio_id(phone(), "1")),
         json!({"id": "1"})
     );
     assert_eq!(
-        content(OutboundMessage::new(
+        content(&OutboundMessage::new(
             phone(),
             Document::new(MediaSource::id("1"))
         )),
         json!({"id": "1"})
     );
     assert_eq!(
-        content(OutboundMessage::location(phone(), 1.5, -2.0)),
+        content(&OutboundMessage::location(phone(), 1.5, -2.0)),
         json!({"latitude": "1.5", "longitude": "-2"})
     );
     // Headers: document without file name; text with the reference's sub_text.
@@ -1320,9 +1324,13 @@ fn sparse_shapes_omit_what_is_absent() {
         }),
         json!({"type": "text", "text": "T", "sub_text": "S"})
     );
+}
+
+#[test]
+fn sparse_interactive_shapes_omit_what_is_absent() {
     // A one-section list without section title or row description.
     assert_eq!(
-        content(list(vec![ListSection {
+        content(&list(vec![ListSection {
             title: None,
             rows: vec![ListRow::new("r", "Row")],
         }])),
@@ -1345,7 +1353,7 @@ fn sparse_shapes_omit_what_is_absent() {
     );
     // Call button: no parameters, then one of three.
     assert_eq!(
-        content(OutboundMessage::new(phone(), VoiceCall::new("b"))),
+        content(&OutboundMessage::new(phone(), VoiceCall::new("b"))),
         json!({"type": "voice_call", "body": {"text": "b"}, "action": {"name": "voice_call"}})
     );
     assert_eq!(
@@ -1367,7 +1375,7 @@ fn sparse_shapes_omit_what_is_absent() {
     );
     // A one-section product list without section title.
     assert_eq!(
-        content(OutboundMessage::product_list(
+        content(&OutboundMessage::product_list(
             phone(),
             "H",
             "B",
@@ -1388,7 +1396,7 @@ fn sparse_shapes_omit_what_is_absent() {
         },
     );
     assert_eq!(
-        content(OutboundMessage::new(
+        content(&OutboundMessage::new(
             phone(),
             MediaCarousel::new("b", vec![card; 2])
         ))["action"]["cards"][1],
