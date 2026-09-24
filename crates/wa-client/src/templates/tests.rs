@@ -671,10 +671,7 @@ fn ttl_example_contradicts_its_own_table() {
     let def: TemplateDefinition = serde_json::from_value(doc.clone()).unwrap();
     assert_eq!(serde_json::to_value(&def).unwrap(), doc);
     let e = def.validate().unwrap_err();
-    assert!(
-        matches!(e, wa_core::Error::Validation(ref v) if v.field == "message_send_ttl_seconds"),
-        "{e}"
-    );
+    assert!(e.field == "message_send_ttl_seconds", "{e}");
 }
 
 #[test]
@@ -869,10 +866,7 @@ fn send_carousels_take_at_most_ten_cards() {
     };
     cards(10).validate().unwrap();
     let e = cards(11).validate().unwrap_err();
-    assert!(
-        matches!(e, wa_core::Error::Validation(ref v) if v.field == "template.components[0].cards"),
-        "{e}"
-    );
+    assert!(e.field == "template.components[0].cards", "{e}");
 }
 
 #[test]

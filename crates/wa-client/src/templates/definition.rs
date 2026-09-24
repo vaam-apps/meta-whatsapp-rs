@@ -26,6 +26,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use wa_core::Result;
+use wa_core::error::ValidationError;
 
 use super::macros::string_enum;
 use super::types::{
@@ -134,8 +135,8 @@ impl TemplateDefinition {
 
     /// Check every limit the docs state (see `validate.rs` for the list,
     /// each with the page it comes from).
-    pub fn validate(&self) -> Result<()> {
-        validate::definition(self).map_err(Into::into)
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        validate::definition(self)
     }
 }
 
@@ -195,8 +196,8 @@ impl TemplateEdit {
 
     /// Check the documented limits that can be checked without knowing the
     /// template's current state.
-    pub fn validate(&self) -> Result<()> {
-        validate::edit(self).map_err(Into::into)
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        validate::edit(self)
     }
 }
 

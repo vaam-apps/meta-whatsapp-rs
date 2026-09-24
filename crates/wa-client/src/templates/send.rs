@@ -187,25 +187,29 @@ impl TemplateMessage {
 
     /// Check the documented limits that do not depend on the approved
     /// template (whose definition is not known here).
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<(), ValidationError> {
         super::validate::name(&self.name, "template.name")?;
         if self.language.code.trim().is_empty() {
-            return Err(ValidationError::new("template.language.code", "must not be empty").into());
+            return Err(ValidationError::new(
+                "template.language.code",
+                "must not be empty",
+            ));
         }
         validate_components(&self.components, "template.components")
     }
 }
 
-fn validate_components(list: &[SendComponent], path: &str) -> Result<()> {
+fn validate_components(list: &[SendComponent], path: &str) -> Result<(), ValidationError> {
     for (i, c) in list.iter().enumerate() {
         let field = format!("{path}[{i}]");
         match c {
             SendComponent::Carousel { cards } => {
                 // Media and product card carousels: "up to 10" cards.
                 if cards.len() > 10 {
-                    return Err(
-                        ValidationError::new(format!("{field}.cards"), "at most 10 cards").into(),
-                    );
+                    return Err(ValidationError::new(
+                        format!("{field}.cards"),
+                        "at most 10 cards",
+                    ));
                 }
                 for (j, card) in cards.iter().enumerate() {
                     validate_components(
@@ -227,8 +231,8 @@ fn validate_components(list: &[SendComponent], path: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_parameter(p: &Parameter, field: &str) -> Result<()> {
-    let fail = |f: String, r: &str| Err(ValidationError::new(f, r).into());
+fn validate_parameter(p: &Parameter, field: &str) -> Result<(), ValidationError> {
+    let fail = |f: String, r: &str| Err(ValidationError::new(f, r));
     match p {
         // `templates/marketing-templates/coupon-templates`: "Maximum 20 characters".
         Parameter::CouponCode { coupon_code } if coupon_code.chars().count() > 20 => fail(

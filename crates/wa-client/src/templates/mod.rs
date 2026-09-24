@@ -91,10 +91,10 @@ pub use types::{
 use futures::Stream;
 use futures::future::Either;
 use serde::{Deserialize, Serialize};
+use wa_core::Result;
 use wa_core::error::ValidationError;
 use wa_core::ids::{TemplateId, WabaId};
 use wa_core::paging::Page;
-use wa_core::{Error, Result};
 
 use crate::{Client, GraphRequest};
 
@@ -425,12 +425,9 @@ impl Templates {
 }
 
 /// Reject an empty or blank required string.
-pub(crate) fn not_empty(value: &str, field: &str) -> Result<()> {
+pub(crate) fn not_empty(value: &str, field: &str) -> std::result::Result<(), ValidationError> {
     if value.trim().is_empty() {
-        return Err(Error::from(ValidationError::new(
-            field,
-            "must not be empty",
-        )));
+        return Err(ValidationError::new(field, "must not be empty"));
     }
     Ok(())
 }

@@ -263,7 +263,7 @@ impl AuthenticationTemplate {
     }
 
     /// Check the documented limits.
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> std::result::Result<(), ValidationError> {
         self.to_definition().validate()
     }
 }
@@ -326,9 +326,9 @@ impl AuthenticationUpsert {
     }
 
     /// Check the documented limits.
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> std::result::Result<(), ValidationError> {
         if self.languages.is_empty() {
-            return Err(ValidationError::new("languages", "at least one language").into());
+            return Err(ValidationError::new("languages", "at least one language"));
         }
         for (i, l) in self.languages.iter().enumerate() {
             crate::templates::not_empty(l, &format!("languages[{i}]"))?;
@@ -352,8 +352,7 @@ impl AuthenticationUpsert {
             return Err(ValidationError::new(
                 "components.buttons[0]",
                 "text and autofill_text are not supported by upsert",
-            )
-            .into());
+            ));
         }
         let mut d = TemplateDefinition::new(
             self.name.clone(),

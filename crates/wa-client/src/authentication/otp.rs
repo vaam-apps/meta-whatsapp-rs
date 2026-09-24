@@ -233,29 +233,31 @@ impl Default for OtpConfig {
 }
 
 impl OtpConfig {
-    /// Check the settings.
-    pub fn validate(&self) -> Result<()> {
-        let bad = |msg: &str| Err(ConfigError::new(format!("OtpConfig: {msg}")).into());
+    /// Check the settings; the error names the offending field.
+    /// [`OtpService::new`] reports the same failure as
+    /// [`Error::Config`].
+    pub fn validate(&self) -> std::result::Result<(), ValidationError> {
+        let bad = |field: &str, reason: &str| Err(ValidationError::new(field, reason));
         if !(4..=8).contains(&self.code_length) {
-            return bad("code_length must be 4 to 8");
+            return bad("code_length", "must be 4 to 8");
         }
         if self.ttl.is_zero() || self.ttl > Duration::from_mins(90) {
-            return bad("ttl must be between 1 second and 90 minutes");
+            return bad("ttl", "must be between 1 second and 90 minutes");
         }
         if self.max_attempts == 0 {
-            return bad("max_attempts must be at least 1");
+            return bad("max_attempts", "must be at least 1");
         }
         if let Some(limit) = self.issue_limit
             && (limit.max_issues == 0 || limit.window.is_zero())
         {
-            return bad("issue_limit needs max_issues >= 1 and a non-zero window");
+            return bad("issue_limit", "needs max_issues >= 1 and a non-zero window");
         }
         if self
             .namespace
             .as_deref()
             .is_some_and(|ns| ns.trim().is_empty())
         {
-            return bad("namespace must not be blank (use None for no namespace)");
+            return bad("namespace", "must not be blank (use None for no namespace)");
         }
         Ok(())
     }
@@ -555,7 +557,9 @@ impl OtpService {
         pepper: OtpPepper,
         config: OtpConfig,
     ) -> Result<Self> {
-        config.validate()?;
+        config
+            .validate()
+            .map_err(|e| ConfigError::new(format!("OtpConfig: {e}")))?;
         let phone_number_id = phone_number_id.into();
         // Fail now rather than on the first send: an id that is empty, `.`
         // or `..` cannot be a path segment.

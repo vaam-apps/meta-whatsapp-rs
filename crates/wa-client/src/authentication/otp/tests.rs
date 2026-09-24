@@ -1298,43 +1298,51 @@ fn an_rng_failure_is_a_crypto_error() {
 
 #[test]
 fn config_and_pepper_are_checked() {
-    for bad in [
-        OtpConfig {
-            code_length: 3,
-            ..OtpConfig::default()
-        },
-        OtpConfig {
-            code_length: 9,
-            ..OtpConfig::default()
-        },
-        OtpConfig {
-            ttl: Duration::ZERO,
-            ..OtpConfig::default()
-        },
-        OtpConfig {
-            ttl: Duration::from_mins(91),
-            ..OtpConfig::default()
-        },
-        OtpConfig {
-            max_attempts: 0,
-            ..OtpConfig::default()
-        },
-        OtpConfig {
-            issue_limit: Some(IssueLimit {
-                max_issues: 0,
-                window: Duration::from_secs(1),
+    let with = |f: fn(&mut OtpConfig)| {
+        let mut c = OtpConfig::default();
+        f(&mut c);
+        c
+    };
+    for (field, bad) in [
+        ("code_length", with(|c| c.code_length = 3)),
+        ("code_length", with(|c| c.code_length = 9)),
+        ("ttl", with(|c| c.ttl = Duration::ZERO)),
+        ("ttl", with(|c| c.ttl = Duration::from_mins(91))),
+        ("max_attempts", with(|c| c.max_attempts = 0)),
+        (
+            "issue_limit",
+            with(|c| {
+                c.issue_limit = Some(IssueLimit {
+                    max_issues: 0,
+                    window: Duration::from_secs(1),
+                });
             }),
-            ..OtpConfig::default()
-        },
-        OtpConfig {
-            issue_limit: Some(IssueLimit {
-                max_issues: 1,
-                window: Duration::ZERO,
+        ),
+        (
+            "issue_limit",
+            with(|c| {
+                c.issue_limit = Some(IssueLimit {
+                    max_issues: 1,
+                    window: Duration::ZERO,
+                });
             }),
-            ..OtpConfig::default()
-        },
+        ),
+        ("namespace", with(|c| c.namespace = Some(" ".into()))),
     ] {
-        assert!(matches!(bad.validate(), Err(Error::Config(_))), "{bad:?}");
+        let e = bad.validate().unwrap_err();
+        assert_eq!(e.field, field, "{bad:?}");
+        // Building a service with it is a configuration error.
+        let t = ScriptedTransport::new();
+        let built = OtpService::new(
+            client(&t, RetryPolicy::NONE),
+            "105954558954427",
+            OtpTemplate::new("verification_code", "en_US"),
+            Arc::new(MemoryKvStore::new()),
+            Arc::new(ManualClock::new(datetime!(2026-09-24 12:00 UTC))),
+            OtpPepper::new(PEPPER).unwrap(),
+            bad.clone(),
+        );
+        assert!(matches!(built, Err(Error::Config(_))), "{bad:?}");
     }
     assert!(OtpConfig::default().validate().is_ok());
     assert!(OtpPepper::new(vec![7u8; 31]).is_err());
