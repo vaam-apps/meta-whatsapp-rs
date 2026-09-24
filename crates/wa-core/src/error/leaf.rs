@@ -139,6 +139,9 @@ pub enum CryptoError {
     /// Encoded input (base64, envelope framing) is malformed.
     #[error("malformed ciphertext: {0}")]
     Malformed(&'static str),
+    /// The operating system's random number generator failed.
+    #[error("random number generator failed")]
+    Rng,
 }
 
 /// Missing or invalid configuration.
