@@ -89,7 +89,7 @@ let response = match &request.action {
 ```
 
 ~~`flows::endpoint::FlowAction`~~: renamed `EndpointAction` in 6909be3
-(2026-09-24); `Flows::list_stream` and `Flow::assets_stream` take a query.
+(2026-09-25); `Flows::list_stream` and `Flow::assets_stream` take a query.
 
 Answer 200 with `sealer.seal(&response)?` as `text/plain`
 (`RESPONSE_CONTENT_TYPE`): the same AES key, the bit-flipped IV.

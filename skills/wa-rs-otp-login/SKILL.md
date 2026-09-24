@@ -57,8 +57,8 @@ OtpConfig {
 
 `OtpService::new` checks the config (`OtpConfig::validate()` names the
 field: `code_length` 4–8, `ttl` up to 90 minutes, `max_attempts`,
-`issue_limit`, a blank `namespace` or one with edge whitespace or control
-characters) as `Error::Config`.
+`issue_limit`, a blank `namespace` or one with edge whitespace, control
+or format characters: U+200B, U+FEFF, bidi controls) as `Error::Config`.
 
 ## 3. Issue, then verify
 
@@ -112,15 +112,16 @@ the purpose: one store and one pepper serve any number of services, and
 tenants sharing a number never see each other's codes. Changing a
 namespace invalidates outstanding codes.
 
-~~`OtpConfig::namespace` is an optional `Option`~~: until d67b3ac. Crossing
-it, `Some(ns)` keeps its keys with `OtpConfig::new(ns)`; a `None` service
-must pick a namespace, and its codes in flight become `NotFound` once.
-
-~~Codes were keyed by the pepper, the digits and the purpose only~~:
-until e40b86f; crossing it, codes in flight become `NotFound` and limits
-restart. ~~The code hash left out the store key~~ (a store writer could
-copy their record over another key): until 8238853 (2026-09-24);
-crossing it, codes in flight answer `Invalid` once.
+Upgrades (codes in flight answer as said, once): ~~`OtpConfig::namespace`
+is an `Option`~~: until d67b3ac; `Some(ns)` keeps its keys with
+`OtpConfig::new(ns)`, a `None` service must pick one (`NotFound`). ~~Codes
+were keyed by the pepper, the digits and the purpose only~~: until e40b86f
+(`NotFound`, limits restart). ~~The code hash left out the store key~~ (a
+store writer could copy their record over another key): until 8238853
+(2026-09-24; `Invalid`). ~~A namespace with edge whitespace, control or
+format characters works~~: until 8238853 (format characters: 7e4801f,
+2026-09-25). Breaking: such a service fails `OtpService::new`, and fixing
+the namespace changes its keys (`NotFound`, limits restart).
 
 ## Pitfalls
 

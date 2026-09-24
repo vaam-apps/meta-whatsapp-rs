@@ -99,11 +99,14 @@ business `phone_number_id` first: a status only changes a message of the
 number it arrived on. `append_synced` (a batch of coexistence history:
 one round trip if you can) must not move `last_inbound_at` nor the unread
 count; `fill_media_placeholder` rewrites only a row whose `kind` is
-`StoredMessage::MEDIA_PLACEHOLDER`; `revoke` matches number and direction
-and stores `StoredMessage::tombstone` when the id is unknown. The suite
-checks all three.
+`StoredMessage::MEDIA_PLACEHOLDER` and whose status is not `Deleted`;
+`revoke` matches number and direction and stores
+`StoredMessage::tombstone` when the id is unknown, as history only (the
+summary never sees it). The suite checks all three.
 ~~Six methods to implement~~: until 6d50701 and a9593f3 (2026-09-24),
 which added `append_synced`, `fill_media_placeholder` and `revoke`.
+~~A tombstone is part of the summary; a revoked placeholder may be
+filled~~: until af5b1f8 (2026-09-25).
 
 ## Pitfalls
 

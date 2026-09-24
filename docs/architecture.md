@@ -49,7 +49,7 @@ leaks its library's types through a port.
 | --- | --- | --- |
 | `transport::HttpTransport` | `send`, `send_streaming` | rustdoc; non-2xx is *not* an error at this layer |
 | `store::KvStore` | `get`, `put`, `put_if_absent`, `compare_and_swap`, `delete` | `wa_adapters::store::conformance` (executable) |
-| `store::ConversationStore` | `append`, `append_synced` (a batch of coexistence history: no window, never unread), `fill_media_placeholder`, `revoke` (number and direction scoped; a tombstone when the message is not stored yet), `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at` | `wa_adapters::store::conversation_conformance` (executable) |
+| `store::ConversationStore` | `append`, `append_synced` (a batch of coexistence history: no window, never unread), `fill_media_placeholder`, `revoke` (number and direction scoped; a tombstone, history only, when the message is not stored yet), `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at` | `wa_adapters::store::conversation_conformance` (executable) |
 | `sink::EventSink<E>` | `deliver` | rustdoc |
 | `clock::Clock` | `now` | — |
 
@@ -149,8 +149,8 @@ Rules for every endpoint module:
    of serde's message (which quotes the offending value).
 9. **One type per concept.** A type two endpoint families share is
    defined once in `wa_client::common` (`MediaSource`, `FlowAction`,
-   `QualityRating`) and re-exported by each module that uses it; two
-   types of one module never share a name with a type of another
+   `QualityRating`) and re-exported by each module that uses it; a type
+   of one module never shares its name with a type of another
    (`flows::endpoint::EndpointAction` is the endpoint request's `action`,
    `common::FlowAction` the `flow_action` a Flow starts with). New code
    types every Graph id with a `wa_core::ids` newtype. Known exceptions,
@@ -266,8 +266,9 @@ Authentication template definitions (copy code, one-tap with
   netstring-encoded so neither can be shifted into the other. Services
   sharing a store and a pepper (several merchants of one integrator) never
   see each other's codes, cooldowns or issue limits, on their own numbers
-  or on a shared one. A blank namespace (or one with edge whitespace or
-  control characters) is a config error; changing the
+  or on a shared one. A blank namespace (or one with edge whitespace,
+  control characters or format characters, `Cf`) is a config error;
+  changing the
   scope (or upgrading across the commit that introduced it) invalidates
   outstanding codes. Making the namespace required kept the encoding: a
   service that had set one derives the same keys.
@@ -481,10 +482,15 @@ exposes the 24-hour `CustomerServiceWindow`, and sends replies.
   logged without the message's content, never returned — an error would
   invite a retry that sends twice.
 - Revokes mark the original `Deleted` (its content is kept,
-  `OPEN_QUESTIONS.md` #38). A revoke that arrives before its message
-  stores a tombstone (kind `revoked`, no content, `Deleted`, no window,
-  not unread) under the message's id, so the message, live or synced, is
-  never stored with the content its sender deleted.
+  `OPEN_QUESTIONS.md` #38) if it was stored for the revoke's number and
+  in its direction; the conversation is not matched (#37). A revoke that
+  arrives before its message stores a tombstone (kind `revoked`, no
+  content, `Deleted`) under the message's id, so the message, live or
+  synced, is never stored with the content its sender deleted. The
+  tombstone is history only, never in the conversation's summary (no
+  latest message, preview, window or unread count, and no summary of its
+  own). A media placeholder revoked before its content arrives is never
+  filled.
 - Coexistence (a merchant who keeps the WhatsApp Business app): echoes
   (`MessageEchoed`, messages the merchant sent from the app) are recorded
   as `Outbound`, status `Sent` (the payload has none), in the customer's

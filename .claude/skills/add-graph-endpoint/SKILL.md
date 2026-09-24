@@ -102,8 +102,9 @@ metadata:
    method's rustdoc when there is none. Name a new query `List<Things>`
    (`docs/architecture.md`, rule 10); the older `*Query` names
    (`PhoneNumbersQuery`, `WabaListQuery`, `TemplateListQuery`,
-   `LibraryQuery`, the three analytics `*Query`s) are known exceptions
-   that stay. Follow the module's struct style (builders on
+   `LibraryQuery`, and the three paged analytics queries,
+   `TemplateAnalyticsQuery`, `TemplateGroupAnalyticsQuery` and
+   `GroupAnalyticsQuery`) are known exceptions that stay. Follow the module's struct style (builders on
    `#[non_exhaustive]` queries, pub fields elsewhere); a stream always
    takes the query, even when it has nothing but cursors.
 6. **Tests** (in the module, `#[cfg(test)]`), with the docs' examples:

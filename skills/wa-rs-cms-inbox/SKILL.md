@@ -40,14 +40,13 @@ backwards). Statuses and revokes only change a message of the business
 number they arrived on. Run `postgres::migrate(&pool)` at startup for
 `PostgresConversationStore` (`wa-rs-storage`).
 
-Coexistence (the merchant keeps the WhatsApp Business app):
-`MessageEchoed` (sent from the app) is outbound `Sent`, in the customer's
-BSUID (else phone) conversation; `HistorySynced` is recorded message by
-message, outbound when `from` is the business number (status from
-`history_context`), else inbound, and opens no reply window, never
-unread (`ConversationStore::append_synced`); a later media content fills
-its `media_placeholder` (`fill_media_placeholder`). A declined sync
-(2593109) records nothing; a malformed item is skipped, logged by position.
+Coexistence (the merchant keeps the WhatsApp Business app): `MessageEchoed`
+(sent from the app) is outbound `Sent`, in the customer's BSUID (else phone)
+conversation; `HistorySynced` is recorded message by message, outbound when
+`from` is the business number (status from `history_context`), else inbound,
+opens no reply window, never unread (`append_synced`); a later media content
+fills its placeholder unless revoked (`fill_media_placeholder`). A declined
+sync (2593109) records nothing; a malformed item is skipped, logged by position.
 
 ## Read and reply: ownership first
 
@@ -108,13 +107,13 @@ inbox.send(&key, message).await // any other recipient is refused
 
 ## Conversation keys
 
-`ConversationKey { phone_number_id, contact }`: the contact is the group
-id for group messages, else the BSUID, else the `wa_id` (digits). A
-message with none is acknowledged and not recorded. A revoke marks the
-original `DeliveryStatus::Deleted` if it went the same way (customer or
-business), content kept; one that arrives first leaves a tombstone
-(`StoredMessage::REVOKED`) that keeps the content out. Replies to a `wa_id` go to
-`+<digits>`; a contact with a `.` is a BSUID. The rules are public:
+`ConversationKey { phone_number_id, contact }`: the contact is the group id
+for group messages, else the BSUID, else the `wa_id` (digits). A message
+with none is acknowledged and not recorded. A revoke of the same number and
+direction (not conversation: open question 37) marks the original `Deleted`,
+content kept; one that comes first leaves a history-only tombstone
+(`StoredMessage::REVOKED`) that keeps the content out. Replies to a `wa_id`
+go to `+<digits>`; a contact with a `.` is a BSUID. The rules are public:
 `wa_rs::inbox::conversation_key`, `wa_rs::inbox::preview`.
 
 ## Pitfalls
@@ -138,8 +137,9 @@ older pin, `send` with `Recipient::phone` and the `+`). ~~Echoes and
 history are not recorded~~: until a3582b8. ~~Synced history opens the
 window, is unread, keeps its placeholders~~: until 6d50701. ~~A revoke
 deletes any message of its number; one before its message is lost~~:
-until a9593f3 (all 2026-09-24; 4b47bf7, 6d50701 and a9593f3 change the
-`ConversationStore` port).
+until a9593f3 (all 2026-09-24). ~~A tombstone moves the summary; a
+revoked placeholder is filled~~: until af5b1f8 (2026-09-25). 4b47bf7,
+6d50701, a9593f3 and af5b1f8 change the `ConversationStore` contract.
 
 ## What wa-rs does not do
 

@@ -13,10 +13,13 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
 
 - #17 (coexistence echoes and history not recorded by the inbox):
   resolved in a3582b8; what that needs a port change for is #35.
-- #34 (should `OtpConfig::namespace` be required?): decided yes, done in
-  d67b3ac.
+- #34 (should `OtpConfig::namespace` be required?): decided yes by the
+  maintainer, done in d67b3ac.
 - #35 (synced coexistence history went through `append` like live
-  messages): resolved by the `ConversationStore` port change below.
+  messages): resolved by the `ConversationStore` port change below. Not
+  decided by the maintainer: the coordinating agent decided it on
+  2026-09-24, told the maintainer in that session, and the maintainer may
+  still revert it.
 
 ### Added
 
@@ -105,16 +108,31 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   the unread count: Meta opens no customer service window for a message
   sent before onboarding, and the merchant read it in the app. `revoke`
   (below, Security) replaces `update_status(.., Deleted, ..)` for
-  revokes. `fill_media_placeholder`
-  gives a stored `StoredMessage::MEDIA_PLACEHOLDER` row the media content
-  Meta sends later (kind, text, payload; the preview follows when it is
-  the latest message), once, on its own business number. `InboxSink`
-  uses both for `HistorySynced`; the memory and Postgres adapters
-  implement them (Postgres without a schema change; a history batch is
-  one statement), and `conversation_conformance::run` checks them, so a
+  revokes; a revoke that arrives before its message stores a tombstone,
+  a row of the new kind `StoredMessage::REVOKED` (`"revoked"`, this
+  crate's own, not a Meta type: no text, `{}` as payload, `Deleted`),
+  which is history only: it never moves nor creates the conversation's
+  summary (since af5b1f8; from a9593f3, a tombstone newer than the latest
+  message took its place in the summary, with no preview, and gave a
+  contact with no other message an inbox entry).
+  `fill_media_placeholder` gives a stored
+  `StoredMessage::MEDIA_PLACEHOLDER` row the media content Meta sends
+  later (kind, text, payload; the preview follows when it is the latest
+  message), once, on its own business number, and never to a revoked one
+  (since af5b1f8). `InboxSink` uses all three, for `HistorySynced` and
+  for revokes; the memory and Postgres adapters implement them (Postgres
+  without a schema change; a history batch is one statement), and `conversation_conformance::run` checks them, so a
   custom store that treats synced history like live messages fails it.
   Custom stores must implement the three methods. `InboxSink::with_clock`
-  is new.
+  is new. Upgrading back-fills nothing: rows and summaries recorded
+  before stay as they were written. Synced history recorded through
+  `append` (from a3582b8 until 6d50701) keeps the unread count it added
+  (until the next `mark_read`) and the `last_inbound_at` it moved; a
+  placeholder whose content arrived then stays a placeholder (Meta does
+  not send the content again); a message a revoke of the other direction
+  marked `Deleted` before a9593f3 stays `Deleted`; a summary a tombstone
+  moved before af5b1f8 keeps that until a newer message, and one it
+  created stays listed.
 - **Breaking — one type per concept** (finding 9 of the conventions
   review, not an `OPEN_QUESTIONS.md` entry):
   `wa_client::common` defines `MediaSource`, `FlowAction` and
@@ -161,6 +179,16 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   `Templates::list_stream` refuses a cursor it used to ignore.
   `Waba::subscribed_apps` and `Templates::library` take none: their pages
   document no pagination.
+- **Breaking — a stricter OTP namespace** (security review of b805dac,
+  8238853; format characters since 7e4801f): `OtpConfig::validate`, and
+  so `OtpService::new` (as `Error::Config`), refuses a namespace with
+  leading or trailing whitespace, a control character (`Cc`) or a format
+  character (`Cf`: U+200B, U+FEFF, bidi controls, …), which printed like
+  another tenant's. Migration: a service whose namespace has one no
+  longer starts. Fixing the namespace (trimming it, removing the
+  character) changes its store keys like any namespace change: codes in
+  flight answer `NotFound` once, and cooldowns and issue limits restart.
+  Deploy it outside peak login hours.
 - **Breaking — the OTP namespace is required** (decided for
   `OPEN_QUESTIONS.md` #34, now closed): `OtpConfig::namespace` is a
   `String` (was `Option<String>`), `OtpConfig::new(namespace)` builds the
@@ -181,7 +209,8 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
 
 Breaking for anyone pinned to an earlier revision (nothing is released
 yet): `ConversationStore::update_status(phone_number_id, id, status, at,
-error)`; the `validate()` of `TemplateDefinition`, `TemplateEdit`,
+error)`; for a pin from 6034804 on (b805dac included) and before 6909be3,
+`AssignedUsersQuery` is now `ListAssignedUsers`; the `validate()` of `TemplateDefinition`, `TemplateEdit`,
 `TemplateMessage`, `AuthenticationTemplate`, `AuthenticationUpsert` and
 `OtpConfig` returns `Result<(), ValidationError>` like every other public
 `validate()`; `OtpConfig` has a `namespace` field; `.xtask` is a workspace
@@ -277,8 +306,11 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   - **A revoke that arrived before its message was dropped**, and the
     message, when it came (a later history chunk, a redelivery), was
     stored with the content its sender had deleted. The revoke now leaves
-    a tombstone under the message's id (`StoredMessage::tombstone`), which
-    keeps the content out.
+    a tombstone under the message's id (`StoredMessage::tombstone`, kind
+    `StoredMessage::REVOKED`), which keeps the content out. The final
+    review of 0f81e98 found the same leak one step later: a media
+    placeholder revoked before its content arrived was still filled with
+    it. `fill_media_placeholder` now refuses a revoked row (af5b1f8).
   - **History was stored one round trip per message** while the webhook
     request waited: a large sync could outlast the 60-second dedup lease,
     and Meta's retry then ran a second pass concurrently. Each chunk is
@@ -298,8 +330,9 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
     victim. The code hash now covers the store key. Upgrading: codes in
     flight answer `Invalid` once (10-minute TTL by default).
   - `OtpConfig::validate` refuses a namespace with edge whitespace or
-    control characters (two tenants that print alike), and the rustdoc
-    and guides say the namespace and the purpose are server-side
+    control characters (two tenants that print alike), and since 7e4801f
+    format characters too; breaking, see "Changed" for the upgrade. The
+    rustdoc and guides say the namespace and the purpose are server-side
     constants, never request input.
   - `Error::may_have_been_sent` said "`true` for any non-4xx status" but
     answered `false` for a Graph error on a 1xx–3xx response; it now

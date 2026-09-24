@@ -108,16 +108,25 @@ timeouts longer than your slowest sink.
 
 - A blank secret read from an unset variable: fail at boot (the example's
   `required`), not on the first webhook.
-- Upgrading across e40b86f invalidates OTP codes in flight once
-  (`wa-rs-otp-login`); across 4b47bf7, custom `ConversationStore`s change
-  signature (`wa-rs-cms-inbox`).
+- Upgrade crossings (read the skill named before moving the `rev`):
+  e40b86f invalidates OTP codes in flight once (`wa-rs-otp-login`);
+  4b47bf7 changes a custom `ConversationStore`'s `update_status`
+  signature (`wa-rs-cms-inbox`); 6d50701 and a9593f3 add three required
+  `ConversationStore` methods, `append_synced`, `fill_media_placeholder`
+  and `revoke` (`wa-rs-storage`), and af5b1f8 tightens their conformance
+  suite; 8238853 makes OTP codes in flight
+  answer `Invalid` once; 8238853 and 7e4801f refuse a namespace with edge
+  whitespace, control or format characters at `OtpService::new`, and
+  fixing it restarts codes and limits (`wa-rs-otp-login`). Upgrades
+  back-fill nothing: rows and summaries recorded before stay as written.
 
 ## What wa-rs does not do
 
 Read [OPEN_QUESTIONS.md](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md)
 before going live: the OTP issue limit, PIN policy, the provisional
 U+0000 replacement, the missing dead-letter path for webhook batches,
-token refresh, Redis TLS. No metrics exporter, no health endpoint, no
+token refresh, Redis TLS, a revoked message keeping its content in the
+inbox (38). No metrics exporter, no health endpoint, no
 secret manager integration. ~~Whether the OTP namespace becomes
 required~~: decided in d67b3ac (2026-09-24), it is (`wa-rs-otp-login`).
 

@@ -112,10 +112,11 @@ top of the user's number and the `purpose`. Several services can share one
 store and one pepper: a code sent by one never verifies at another, and
 their limits never mix, whether they send from their own numbers or from
 the same one. The namespace is required (`OtpConfig::new` takes it; there
-is no `Default`) and must not be blank, nor have edge whitespace or
-control characters: use the tenant id, from your configuration or tenant
-table, never from the request (the same goes for `purpose`). Other
-settings change with struct update syntax:
+is no `Default`) and must not be blank, nor have edge whitespace, control
+characters or invisible format characters (U+200B, U+FEFF, bidi
+controls: Unicode category `Cf`): use the tenant id, from your
+configuration or tenant table, never from the request (the same goes
+for `purpose`). Other settings change with struct update syntax:
 
 ```rust
 let config = OtpConfig { code_length: 8, ..OtpConfig::new("brand-b") }; // not blank
@@ -131,6 +132,15 @@ in flight answer `NotFound` once. Upgrading across 8238853, which binds
 the code hash to its store key (2026-09-24, security review L6): codes in
 flight answer `Invalid` once; the user asks for a new one after the
 cooldown.
+
+**Breaking: the namespace check is stricter** since 8238853 (edge
+whitespace, control characters; 2026-09-24) and 7e4801f (format
+characters; 2026-09-25). A namespace that passed before and has one of
+these now makes `OtpService::new` fail with `Error::Config`, so the
+service does not start. Fixing the namespace (trimming it, removing the
+character) changes its store keys like any namespace change: codes in
+flight answer `NotFound` once, and cooldowns and issue limits restart.
+Deploy it outside peak login hours.
 
 ## 4. Numbers must be E.164 with `+`
 

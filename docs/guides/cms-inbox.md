@@ -279,17 +279,27 @@ matches the one on the merchant's phone:
   recorded in its direction (from the business number: outbound, with the
   status Meta reports; otherwise inbound), under its own timestamp (at
   most 5 minutes past `InboxSink`'s clock: a phone with a wrong clock
-  cannot pin a conversation to the top). Chunks may arrive in any order and
-  be redelivered; nothing is stored twice, and each chunk is stored in one
-  batch. A declined sync (error `2593109`) records nothing. One malformed
+  cannot pin a conversation to the top). Chunks may arrive in any order
+  (one exception: a revoke in a chunk that arrives before the chunk
+  carrying its message leaves a tombstone in the message's place, below)
+  and be redelivered; nothing is stored twice, and each chunk is stored
+  in one batch. A declined sync (error `2593109`) records nothing. One malformed
   item is skipped and logged by position, never failing the delivery.
 
 A revoke (live, echoed or synced) that arrives before its message leaves
 a tombstone under the message's id: a row of kind `revoked`
-(`StoredMessage::REVOKED`), without text or payload, `Deleted`, at the
-revoke's time. The message then never gets its content stored. A revoke
-that finds its message marks it `Deleted` and keeps its content
-([open question](../../OPEN_QUESTIONS.md#cms-inbox) 38).
+(`StoredMessage::REVOKED`, this crate's own kind), without text, with an
+empty object (`{}`) as payload, `Deleted`, at the revoke's time. It is in
+the conversation's history but never in its summary: it moves neither
+the inbox order, the preview, the window nor the unread count, and a
+conversation with nothing but a tombstone is not listed. The message then
+never gets its content stored. A revoke that finds its message marks it
+`Deleted` and keeps its content
+([open question](../../OPEN_QUESTIONS.md#cms-inbox) 38), except that a
+media placeholder revoked before its content arrived never gets that
+content. Whether a revoke must also match the conversation it arrived in
+is open ([open question](../../OPEN_QUESTIONS.md#cms-inbox) 37); today it
+matches the business number and the direction only.
 
 Synced history is part of the conversation (it can be its latest
 message), but a synced *inbound* message neither opens the reply window
@@ -303,8 +313,9 @@ its media; Meta sends the content (with the media id) in a later
 `history` webhook, for media from the 14 days before onboarding. That
 content replaces the placeholder's kind, text and payload
 (`ConversationStore::fill_media_placeholder`); the row keeps the thread's
-conversation, direction, status and timestamp. A content whose
-placeholder never arrived becomes a row of its own.
+conversation, direction, status and timestamp. A placeholder revoked in
+the meantime keeps no content. A content whose placeholder never arrived
+becomes a row of its own.
 
 Meta advises capturing large history webhooks and processing them
 asynchronously; `InboxSink` records them while the request waits, so a
