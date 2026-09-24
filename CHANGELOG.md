@@ -11,6 +11,17 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
 
 ### Added
 
+- **Coexistence in the CMS inbox**: `InboxSink` records the merchant's
+  WhatsApp Business app messages (`MessageEchoed`: outbound, `Sent`, in the
+  customer's conversation; an echoed revoke deletes the original) and the
+  synchronized chat history (`HistorySynced`: each message in its documented
+  direction and status, idempotent by message id, chunks in any order, a
+  declined sync records nothing). One malformed history item is skipped
+  and logged by position instead of failing the delivery, including when
+  it made the whole `history` value arrive as `WebhookEvent::Unknown`.
+  Synced inbound history still counts towards the local window and unread
+  count, and media contents are not merged into recorded placeholders:
+  both need a `ConversationStore` port change (`OPEN_QUESTIONS.md` #35).
 - **Adoption helpers**: `Error::may_have_been_sent()` (whether a failed send
   could still have been delivered — the line between "fix and resend" and
   "reconcile first"), `Inbox::window_is_open` (the reply window by the

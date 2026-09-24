@@ -91,8 +91,9 @@ let handler = WebhookHandler::builder(verifier, verify_token, Arc::new(sink))
 let webhook = wa_rs::webhooks::router(Arc::new(handler)); // public: Meta authenticates by signature
 ```
 
-`InboxSink` records inbound messages and status updates and ignores every
-other event. It is idempotent on its own (known message ids and statuses
+`InboxSink` records inbound messages, status updates, and the coexistence
+echoes and history ([below](#coexistence-the-merchant-also-uses-the-whatsapp-business-app)),
+and ignores every other event. It is idempotent on its own (known message ids and statuses
 that do not move a message forward are ignored); the dedup guard saves it
 the work. A status or a revoke only changes a message of the business
 number it arrived on: `ConversationStore::update_status` takes the
@@ -260,10 +261,37 @@ events.addEventListener('lagged', () => reloadHistory()); // the browser fell be
 - Sending a reply with the platform's own token instead of the merchant's:
   it comes from the wrong business, or fails.
 
-## Not recorded (as of 7940d15)
+## Coexistence: the merchant also uses the WhatsApp Business app
 
-Coexistence echoes (`MessageEchoed`: messages the merchant sent from the
-WhatsApp Business app) and history sync (`HistorySynced`)
-([open question](../../OPEN_QUESTIONS.md#webhooks) 17); BSUID changes;
-media bytes; calls; every event other than messages and statuses. Handle
-those in your own sink if you need them.
+`InboxSink` records both coexistence feeds, so the thread in your CMS
+matches the one on the merchant's phone:
+
+- **Echoes** (`MessageEchoed`, field `smb_message_echoes`: what the
+  merchant sent from the app or a linked device) become outbound rows with
+  status `Sent` in the customer's conversation (BSUID, else the phone
+  number without `+`). An echoed revoke marks the original `Deleted`.
+  Echoes open no customer service window, as on Meta's side.
+- **History** (`HistorySynced`, field `history`, after
+  `sync_smb_app_data(SmbSyncType::History)`): every synced message is
+  recorded in its direction (from the business number: outbound, with the
+  status Meta reports; otherwise inbound), under its own timestamp. Chunks
+  may arrive in any order and be redelivered; nothing is stored twice. A
+  declined sync (error `2593109`) records nothing. One malformed item is
+  skipped and logged by position, never failing the delivery.
+
+Two gaps remain ([open question](../../OPEN_QUESTIONS.md#cms-inbox) 35):
+synced *inbound* messages count towards `Inbox::window_is_open` and the
+unread count like live ones, although Meta opens no window for messages
+from before onboarding (Meta then refuses a free-form reply with 131047,
+the same `ErrorKind`); and the media content Meta sends after a
+`media_placeholder` is not merged into the recorded placeholder (handle
+`HistorySynced`'s `messages` / `message_echoes` in your own sink if you
+need it). Meta advises capturing large history webhooks and processing
+them asynchronously; `InboxSink` records them while the request waits,
+so a very large sync can take several of Meta's redeliveries to finish.
+
+## Not recorded
+
+BSUID changes; media bytes; calls; the contacts sync
+(`smb_app_state_sync`); every event other than messages, statuses, echoes
+and history. Handle those in your own sink if you need them.

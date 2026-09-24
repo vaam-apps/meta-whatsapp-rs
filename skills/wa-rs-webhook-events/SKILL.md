@@ -108,9 +108,9 @@ To answer by phone, prepend `+` to the `wa_id`.
 
 - Messaging handovers, `message_echoes` and `consumer_profile` have no
   documented payload: they arrive as `Unknown`.
-- It does not merge conversations when a BSUID changes, nor record
-  coexistence echoes and history in the inbox
-  ([open question 17](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#webhooks)).
+- It does not merge conversations when a BSUID changes. The inbox records
+  `MessageEchoed` and `HistorySynced` (`wa-rs-cms-inbox`), but not the
+  contacts of `AppStateSynced`.
 
 ## Related skills
 

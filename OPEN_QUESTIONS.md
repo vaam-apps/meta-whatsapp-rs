@@ -73,8 +73,6 @@ entry by deciding it in an issue/PR and deleting it here.
     finds another request mid-delivery gets 503 and Meta retries.
 16. **Blank verify token** fails when a verification request arrives, not at
     startup — failing early would change the handler builder's API.
-17. **Coexistence echoes and history** are parsed but not recorded by the
-    inbox.
 
 ## Storage
 
@@ -221,3 +219,27 @@ Found while writing the integrator guides and checking them against
     Options: key messages by `(phone_number_id, id)` (a migration of the
     primary key; history cursors are already per conversation), or keep it
     and document it (what the guides and skills do today).
+35. **Synced coexistence history goes through `append` like live
+    messages.** `InboxSink` records `HistorySynced` messages with
+    `ConversationStore::append`, the only way the port adds a row. Two
+    consequences, both documented today:
+    - A synced *inbound* message moves `last_inbound_at` and the unread
+      count like a live one. Meta opens no customer service window for
+      messages received before the business was onboarded
+      (`embedded-signup/onboarding-business-app-users`, "Customer service
+      window"), so for a customer who wrote in the 24 hours before
+      onboarding `Inbox::window_is_open` reads open while Meta's window is
+      closed: a free-form reply is then refused by Meta (131047, the same
+      `ErrorKind` as the local refusal) instead of locally. And a sync of
+      thousands of messages the merchant already read in the app shows as
+      unread.
+    - The media content of a synced media message arrives in a later
+      `history` webhook, after its `media_placeholder` was recorded, and
+      `append` never changes a stored message: the row keeps the
+      placeholder (the content still reaches every other sink).
+
+    Options: a port method that records a synced message without touching
+    `last_inbound_at` or `unread` (for Postgres no schema change: the
+    summary is maintained on append), and one that replaces a stored
+    placeholder's content; or keep `append` and the documentation. Either
+    way it is a `ConversationStore` port change, left to the maintainer.

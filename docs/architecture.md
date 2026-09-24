@@ -409,8 +409,9 @@ Logs carry sizes, digests and field names only — never payload values.
 
 ## CMS inbox (`wa_rs::inbox`)
 
-`InboxSink` (an `EventSink<WebhookEvent>`) records inbound messages and
-status updates into a `ConversationStore`; `Inbox` (one per merchant phone
+`InboxSink` (an `EventSink<WebhookEvent>`) records inbound messages,
+status updates, and coexistence echoes and history into a
+`ConversationStore`; `Inbox` (one per merchant phone
 number, built with that merchant's token) lists conversations and history,
 exposes the 24-hour `CustomerServiceWindow`, and sends replies.
 
@@ -439,8 +440,26 @@ exposes the 24-hour `CustomerServiceWindow`, and sends replies.
 - A storage (or serialization) failure *after* a successful send is
   logged without the message's content, never returned — an error would
   invite a retry that sends twice.
-- Revokes mark the original `Deleted`; coexistence echoes and history sync
-  are not recorded yet.
+- Revokes mark the original `Deleted`.
+- Coexistence (a merchant who keeps the WhatsApp Business app): echoes
+  (`MessageEchoed`, messages the merchant sent from the app) are recorded
+  as `Outbound`, status `Sent` (the payload has none), in the customer's
+  conversation (BSUID, else `wa_id`/`to` without `+`); an echoed revoke
+  deletes the original. Synced history (`HistorySynced`) is recorded
+  message by message in its documented direction (`from` = the business
+  number → `Outbound` with its `history_context` status; else `Inbound`),
+  each with its own device timestamp, so chunks may arrive in any order
+  and a redelivered one is a no-op (ids are stored once). A declined sync
+  (`2593109`) records nothing. One malformed history item never fails the
+  delivery: an item without a direction or customer, with U+0000 in an
+  id, or that does not parse on its own (when one bad item turned the
+  whole value into `WebhookEvent::Unknown`) is skipped and logged by
+  position, without content; storage errors still fail it.
+  Two known gaps need a port change (`OPEN_QUESTIONS.md` #35): synced
+  inbound messages move `last_inbound_at` and the unread count like live
+  ones (Meta opens no window for messages from before onboarding), and a
+  media content that follows a recorded `media_placeholder` is not merged
+  into it.
 
 ## Typst (`wa-typst`)
 

@@ -111,8 +111,8 @@ number.sync_smb_app_data(SmbSyncType::History).await?; // a second call: SyncNot
 - No PIN policy (who chooses it, storage, recovery)
   ([open question 4](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)).
 - Not wrapped: payload-encryption settings, WABA creation, system users.
-- The inbox does not record coexistence echoes or synced history
-  ([open question 17](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#webhooks)).
+- Nothing stores the synced contacts (`smb_app_state_sync`); the inbox
+  records the synced history and the app's echoes (`wa-rs-cms-inbox`).
 
 ## Related skills
 
