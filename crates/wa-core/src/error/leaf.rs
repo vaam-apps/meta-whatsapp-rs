@@ -17,13 +17,17 @@ pub enum TransportError {
     /// Anything else the adapter reports.
     #[error("transport failure: {0}")]
     Backend(#[source] anyhow::Error),
+    /// A body arrived but failed an integrity check (e.g. a media SHA-256
+    /// mismatch). Retryable: a fresh download may be intact.
+    #[error("integrity check failed: {0}")]
+    Integrity(&'static str),
 }
 
 impl TransportError {
     /// Timeouts and connect failures are worth retrying (for idempotent
     /// requests); build errors are not.
     pub fn is_retryable(&self) -> bool {
-        matches!(self, Self::Timeout | Self::Connect(_))
+        matches!(self, Self::Timeout | Self::Connect(_) | Self::Integrity(_))
     }
 }
 
@@ -108,6 +112,14 @@ pub enum WebhookError {
     /// Signed body is not a payload we understand.
     #[error("webhook payload could not be parsed: {0}")]
     Parse(#[source] serde_json::Error),
+    /// Body exceeds the configured size limit (answer `413`).
+    #[error("webhook body of {size} bytes exceeds the {limit}-byte limit")]
+    PayloadTooLarge {
+        /// Body size in bytes.
+        size: usize,
+        /// Configured limit in bytes.
+        limit: usize,
+    },
 }
 
 /// Encryption or decryption failed. Deliberately carries no detail that
@@ -127,6 +139,9 @@ pub enum CryptoError {
     /// Encoded input (base64, envelope framing) is malformed.
     #[error("malformed ciphertext: {0}")]
     Malformed(&'static str),
+    /// The operating system's random number generator failed.
+    #[error("random number generator failed")]
+    Rng,
 }
 
 /// Missing or invalid configuration.
