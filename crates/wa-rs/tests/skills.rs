@@ -722,6 +722,11 @@ const CRATE_EXAMPLE_CFGS: &[&str] = &[
     "cfg(not(feature = \"postgres\"))",
 ];
 
+/// What `cfg(test)` is in `crates/wa-rs/examples/*.rs`: they are built as
+/// examples, never as tests. One constant for the gate and its own test,
+/// so the two cannot disagree.
+const CRATE_EXAMPLE_TEST: Built = Built::Never;
+
 /// Constructs of an example file whose code is never compiled, so a skill
 /// could quote it as if it were: block comments, `macro_rules!` (an arm
 /// that never matches is never compiled as written), and any `cfg(` but
@@ -729,7 +734,14 @@ const CRATE_EXAMPLE_CFGS: &[&str] = &[
 /// `just test` builds with every feature, so `cfg(not(feature = …))` and
 /// `cfg(any())` never build.
 fn uncompiled_code(source: &str, allowed: &[&str]) -> Vec<String> {
+    scan_example(source, allowed).0
+}
+
+/// [`uncompiled_code`], and the `allowed` `cfg`s the scan met on the way
+/// (proof that it read the file).
+fn scan_example(source: &str, allowed: &[&str]) -> (Vec<String>, BTreeSet<String>) {
     let mut problems = Vec::new();
+    let mut seen = BTreeSet::new();
     for (i, line) in source.lines().enumerate() {
         let n = i + 1;
         if line.contains("/*") {
@@ -742,13 +754,16 @@ fn uncompiled_code(source: &str, allowed: &[&str]) -> Vec<String> {
         }
         let mut rest = line;
         while let Some(at) = rest.find("cfg(") {
-            if !allowed.iter().any(|ok| rest[at..].starts_with(ok)) {
-                problems.push(format!("line {n}: a `cfg` other than {allowed:?}"));
+            match allowed.iter().find(|ok| rest[at..].starts_with(**ok)) {
+                Some(ok) => {
+                    seen.insert((*ok).to_owned());
+                }
+                None => problems.push(format!("line {n}: a `cfg` other than {allowed:?}")),
             }
             rest = &rest[at + 4..];
         }
     }
-    problems
+    (problems, seen)
 }
 
 #[test]
@@ -764,12 +779,20 @@ fn example_files_hide_no_uncompiled_code() {
     // Skills quote the crate's examples too.
     let crate_examples = rust_files(&repo().join("crates/wa-rs/examples"));
     assert!(crate_examples.len() >= 4, "no crate examples found");
+    let mut seen = BTreeSet::new();
     for example in crate_examples {
-        for problem in uncompiled_code(&read(&example), CRATE_EXAMPLE_CFGS) {
+        let (problems, allowed) = scan_example(&read(&example), CRATE_EXAMPLE_CFGS);
+        seen.extend(allowed);
+        for problem in problems {
             writeln!(failures, "{}: {problem}", rel(&example)).unwrap();
         }
     }
     assert!(failures.is_empty(), "\n{failures}");
+    // The scan read them: `stores()` in cms_inbox.rs has this arm.
+    assert!(
+        seen.contains("cfg(not(feature = \"postgres\"))"),
+        "the crate examples' scan saw only {seen:?}"
+    );
 }
 
 // ─── What an excerpt may quote ───────────────────────────────────────────
@@ -949,8 +972,8 @@ enum Built {
 
 /// Evaluate a `cfg(...)` predicate. `feature = "x"` is on when `x` is a
 /// feature, `test` is `test` (`Sometimes` for a skill's examples, compiled
-/// into a test binary; `Never` for the crate's examples, built as
-/// examples), and anything else (`unix`, `doc`, `debug_assertions`, a
+/// into a test binary; [`CRATE_EXAMPLE_TEST`] for the crate's examples,
+/// built as examples), and anything else (`unix`, `doc`, `debug_assertions`, a
 /// typo, a predicate that does not parse) is `Never`: the gate only vouches
 /// for what `--all-features` builds.
 fn eval_cfg(predicate: &str, features: &HashSet<String>, test: Built) -> Built {
@@ -1326,7 +1349,7 @@ fn rust_blocks_are_excerpts_of_compiled_files() {
     };
     let crate_examples: Vec<Vec<String>> = rust_files(&repo().join("crates/wa-rs/examples"))
         .into_iter()
-        .map(|p| quotable(read(&p), Built::Never))
+        .map(|p| quotable(read(&p), CRATE_EXAMPLE_TEST))
         .collect();
     let mut checked = 0;
     let mut failures = String::new();
@@ -2632,7 +2655,7 @@ fn excerpts_quote_compiled_code_only() {
     };
     let quotes_crate = |source: &str, block: &[&str]| {
         is_excerpt(
-            &quotable_lines(source, &features, Built::Never),
+            &quotable_lines(source, &features, CRATE_EXAMPLE_TEST),
             &[block.to_vec()],
         )
     };
