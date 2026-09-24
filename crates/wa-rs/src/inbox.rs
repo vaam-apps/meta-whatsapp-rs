@@ -21,10 +21,12 @@
 //!
 //! **The 24-hour window.** Free-form replies are only accepted within 24
 //! hours of the customer's last message; [`Inbox::reply`] checks the store
-//! first and refuses (with a validation error on
-//! `customer_service_window`) instead of paying for a request Meta would
-//! reject with `131047`. Templates and Direct Send (`category`) messages are
-//! exempt. Use [`Inbox::window`] to decide up front.
+//! first and refuses (with
+//! [`ValidationError::customer_service_window_closed`], whose
+//! [`Error::kind`] is `CustomerServiceWindowClosed`, like Meta's `131047`)
+//! instead of paying for a request Meta would reject. Templates and Direct
+//! Send (`category`) messages are exempt. Use [`Inbox::window`] to decide up
+//! front.
 //!
 //! **Not recorded yet:** coexistence message echoes (messages the merchant
 //! sent from the WhatsApp Business app) and history sync; handle
@@ -343,8 +345,8 @@ impl Inbox {
     /// Send `content` to the conversation's contact and record it.
     ///
     /// Free-form content outside the 24-hour window is refused locally
-    /// (validation error on `customer_service_window`); templates are always
-    /// allowed. The recorded row has status
+    /// ([`ValidationError::customer_service_window_closed`]); templates are
+    /// always allowed. The recorded row has status
     /// [`DeliveryStatus::Accepted`] until status webhooks move it on.
     pub async fn reply(
         &self,
@@ -381,11 +383,7 @@ impl Inbox {
         let exempt =
             matches!(message.content, MessageContent::Template(_)) || message.category.is_some();
         if !exempt && !self.window(key).await?.is_open(self.clock.now()) {
-            return Err(ValidationError::new(
-                "customer_service_window",
-                "more than 24 hours since the customer's last message; send a template",
-            )
-            .into());
+            return Err(ValidationError::customer_service_window_closed().into());
         }
         let response = self
             .client
@@ -959,7 +957,11 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(matches!(&err, Error::Validation(v) if v.field == "customer_service_window"));
+        assert!(
+            matches!(&err, Error::Validation(v) if v.is_customer_service_window_closed()),
+            "{err}"
+        );
+        assert_eq!(err.kind(), wa_core::ErrorKind::CustomerServiceWindowClosed);
         assert!(t.requests().is_empty(), "refused before any request");
 
         t.push_json(200, sent("wamid.tpl"));
