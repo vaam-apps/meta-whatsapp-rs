@@ -149,7 +149,8 @@ pub struct ConversationSummary {
     pub last_inbound_at: Option<OffsetDateTime>,
     /// Text preview of the latest message.
     pub last_text: Option<String>,
-    /// Inbound messages newer than the last [`ConversationStore::mark_read`].
+    /// Inbound messages appended since the last [`ConversationStore::mark_read`],
+    /// counted by arrival: a late webhook for an older message still counts.
     pub unread: u64,
 }
 
@@ -167,6 +168,7 @@ pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
     /// Apply a status update if it [supersedes](DeliveryStatus::supersedes)
     /// the stored one. Returns whether anything changed; `false` also when
     /// the message is unknown (a status for a message sent elsewhere).
+    /// When applied, `error: None` keeps any error already stored.
     async fn update_status(
         &self,
         id: &MessageId,

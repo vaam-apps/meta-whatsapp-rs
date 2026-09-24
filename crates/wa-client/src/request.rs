@@ -50,8 +50,6 @@ enum BodySpec {
     Multipart(Vec<PartSpec>),
     /// Streams cannot be replayed; taken on the first attempt.
     Stream(Option<RequestBody>),
-    /// Serialization failed while building; surfaced on send.
-    Invalid(Error),
 }
 
 #[derive(Clone)]
@@ -87,12 +85,6 @@ impl BodySpec {
                     "streamed request body cannot be replayed".into(),
                 ))
             })?,
-            Self::Invalid(_) => {
-                if let Self::Invalid(e) = std::mem::replace(self, Self::Empty) {
-                    return Err(e);
-                }
-                RequestBody::Empty
-            }
         })
     }
 
@@ -109,6 +101,10 @@ pub struct GraphRequest {
     url: Url,
     headers: HeaderMap,
     body: BodySpec,
+    /// First builder error (bad path segment, unserializable body/query,
+    /// bad header). Kept apart from `body` so a later setter can't erase
+    /// it; surfaced on send before anything reaches the transport.
+    error: Option<Error>,
     auth: Auth,
     idempotent: bool,
     timeout: Option<Duration>,
@@ -126,6 +122,20 @@ impl fmt::Debug for GraphRequest {
 }
 
 impl GraphRequest {
+    /// A request that fails with `error` when sent (deferred builder error).
+    pub(crate) fn invalid(client: Client, method: Method, url: Url, error: Error) -> Self {
+        let mut req = Self::new(client, method, url);
+        req.fail(error);
+        req
+    }
+
+    /// Record a builder error; the first one wins.
+    fn fail(&mut self, error: Error) {
+        if self.error.is_none() {
+            self.error = Some(error);
+        }
+    }
+
     pub(crate) fn new(client: Client, method: Method, url: Url) -> Self {
         let idempotent = matches!(method, Method::GET | Method::DELETE | Method::HEAD);
         Self {
@@ -134,6 +144,7 @@ impl GraphRequest {
             url,
             headers: HeaderMap::new(),
             body: BodySpec::Empty,
+            error: None,
             auth: Auth::Client,
             idempotent,
             timeout: None,
@@ -165,9 +176,7 @@ impl GraphRequest {
                 self.url.query_pairs_mut().append_pair(key, &s);
             }
             Err(e) => {
-                self.body = BodySpec::Invalid(
-                    ValidationError::new(key, format!("not serializable: {e}")).into(),
-                );
+                self.fail(ValidationError::new(key, format!("not serializable: {e}")).into());
             }
         }
         self
@@ -179,9 +188,7 @@ impl GraphRequest {
         let value = match serde_json::to_value(params) {
             Ok(v) => v,
             Err(e) => {
-                self.body = BodySpec::Invalid(
-                    ValidationError::new("query", format!("not serializable: {e}")).into(),
-                );
+                self.fail(ValidationError::new("query", format!("not serializable: {e}")).into());
                 return self;
             }
         };
@@ -204,15 +211,17 @@ impl GraphRequest {
 
     /// JSON body.
     pub fn json(mut self, body: &impl Serialize) -> Self {
-        self.body = match serde_json::to_vec(body) {
-            Ok(data) => BodySpec::Bytes {
-                content_type: "application/json".into(),
-                data: Bytes::from(data),
-            },
-            Err(e) => BodySpec::Invalid(
-                ValidationError::new("body", format!("not serializable: {e}")).into(),
-            ),
-        };
+        match serde_json::to_vec(body) {
+            Ok(data) => {
+                self.body = BodySpec::Bytes {
+                    content_type: "application/json".into(),
+                    data: Bytes::from(data),
+                };
+            }
+            Err(e) => {
+                self.fail(ValidationError::new("body", format!("not serializable: {e}")).into());
+            }
+        }
         self
     }
 
@@ -253,10 +262,7 @@ impl GraphRequest {
             Ok(v) => {
                 self.headers.insert(HeaderName::from_static(name), v);
             }
-            Err(_) => {
-                self.body =
-                    BodySpec::Invalid(ValidationError::new(name, "invalid header value").into());
-            }
+            Err(_) => self.fail(ValidationError::new(name, "invalid header value").into()),
         }
         self
     }
@@ -306,6 +312,9 @@ impl GraphRequest {
     }
 
     fn build_attempt(&mut self) -> Result<HttpRequest> {
+        if let Some(e) = self.error.take() {
+            return Err(e);
+        }
         let body = self.body.materialize()?;
         let mut headers = self.headers.clone();
         if let Ok(ua) = HeaderValue::from_str(&self.client.shared.user_agent) {
@@ -366,7 +375,16 @@ impl GraphRequest {
                 return Err(error);
             }
             let delay = policy.delay(attempt, retry_after);
-            tracing::debug!(error = %error, ?delay, attempt, "retrying graph request");
+            // Log the classification, not the error text: a transport
+            // error's message can embed the request URL, whose query may
+            // carry `client_secret` or an Embedded Signup `code`.
+            tracing::debug!(
+                kind = ?error.kind(),
+                code = error.graph().map(|g| g.code),
+                ?delay,
+                attempt,
+                "retrying graph request"
+            );
             tokio::time::sleep(delay).await;
             attempt += 1;
         }
@@ -441,6 +459,10 @@ impl GraphRequest {
                 if st.done {
                     return None;
                 }
+                if let Some(e) = st.base.error.take() {
+                    st.done = true;
+                    return Some((Err(e), st));
+                }
                 if st.base.method != Method::GET {
                     st.done = true;
                     let err = ValidationError::new("method", "only GET requests can be paginated");
@@ -474,6 +496,7 @@ impl GraphRequest {
             url: self.url.clone(),
             headers: self.headers.clone(),
             body: BodySpec::Empty,
+            error: None,
             auth: self.auth.clone(),
             idempotent: self.idempotent,
             timeout: self.timeout,
@@ -729,6 +752,34 @@ mod tests {
             t.requests().len(),
             1,
             "refused requests never reach the transport"
+        );
+    }
+
+    #[tokio::test]
+    async fn segment_paths_cannot_be_escaped() {
+        let t = ScriptedTransport::new();
+        t.push_json(200, json!({}));
+        let c = client(&t);
+        let _: serde_json::Value = c
+            .post_at(&["123/subscribed_apps", "messages"])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            t.last_request().unwrap().path(),
+            "/v25.0/123%2Fsubscribed_apps/messages"
+        );
+        let err = c
+            .post_at(&["..", "messages"])
+            .json(&json!({"a": 1}))
+            .send::<serde_json::Value>()
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Validation(_)));
+        assert_eq!(
+            t.requests().len(),
+            1,
+            "invalid path never reaches the transport"
         );
     }
 

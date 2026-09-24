@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::{ExposeSecret, SecretSlice, SecretString};
 
 macro_rules! secret_type {
     ($(#[$meta:meta])* $name:ident) => {
@@ -65,6 +65,39 @@ secret_type!(
     VerifyToken
 );
 
+/// Secret key material as bytes (OTP pepper, vault keys). Zeroized on
+/// drop; `Debug` is redacted; reading takes `expose_secret()`.
+#[derive(Clone)]
+pub struct SecretBytes(SecretSlice<u8>);
+
+impl SecretBytes {
+    /// Wrap secret bytes.
+    pub fn new(bytes: impl Into<Vec<u8>>) -> Self {
+        Self(SecretSlice::from(bytes.into()))
+    }
+
+    /// Read the secret. Keep the borrow short; never log it.
+    pub fn expose_secret(&self) -> &[u8] {
+        self.0.expose_secret()
+    }
+
+    /// Length in bytes (not secret).
+    pub fn len(&self) -> usize {
+        self.0.expose_secret().len()
+    }
+
+    /// Whether there are no bytes.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl fmt::Debug for SecretBytes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SecretBytes([REDACTED])")
+    }
+}
+
 impl AccessToken {
     /// An app access token, `app_id|app_secret`, for endpoints that require
     /// one (e.g. `debug_token`, app subscriptions).
@@ -82,6 +115,15 @@ mod tests {
         let t = AccessToken::new("EAAJBsecret");
         assert_eq!(format!("{t:?}"), "AccessToken([REDACTED])");
         assert_eq!(t.expose_secret(), "EAAJBsecret");
+    }
+
+    #[test]
+    fn secret_bytes_redact_and_clone() {
+        let b = SecretBytes::new(vec![1u8, 2, 3]);
+        let c = b.clone();
+        assert_eq!(format!("{c:?}"), "SecretBytes([REDACTED])");
+        assert_eq!(c.expose_secret(), &[1, 2, 3]);
+        assert_eq!(b.len(), 3);
     }
 
     #[test]
