@@ -1412,6 +1412,13 @@ mod tests {
     /// carry text (errors).
     #[tokio::test]
     async fn secrets_never_reach_the_store_logs_or_errors() {
+        // tracing-core treats a single registered dispatcher as the only
+        // one: a callsite another test thread registers first then gets its
+        // interest from that thread's default (none, so "never", cached for
+        // every thread), and the capture sees nothing (1 run in 5 to 10 of
+        // the whole suite). With a second dispatcher registered, every
+        // registration consults all of them, this capture included.
+        let _second = tracing::Dispatch::new(Capture::default());
         let capture = Capture::default();
         let _guard = tracing::subscriber::set_default(capture.clone());
         let rec = Arc::new(RecordingKv::default());
