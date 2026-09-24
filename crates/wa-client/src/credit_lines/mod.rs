@@ -1,0 +1,1131 @@
+//! Solution Partner credit lines: find your extended credit line, share it
+//! with an onboarded customer, check that it funds the customer's WABA, and
+//! revoke it.
+//!
+//! Docs: `solution-providers/share-and-revoke-credit-lines`, with the
+//! prerequisite of the one-call method in
+//! `solution-providers/manage-system-users`.
+//!
+//! Doc paths are relative to
+//! `https://developers.facebook.com/documentation/business-messaging/whatsapp/`
+//! (append `.md` for Markdown; `just meta-docs` mirrors them locally).
+//!
+//! # Which token
+//!
+//! Every method authenticates with the token of the [`Client`] it was
+//! built from. Meta requires the **partner's system user token** (with
+//! `business_management`, and an Admin or Financial Editor role on the
+//! partner's business portfolio) for everything here except two calls that
+//! take the **customer's business token**:
+//!
+//! | Method | Token |
+//! | --- | --- |
+//! | [`CreditLines::list`], [`CreditLines::share_and_attach`], [`CreditLines::share`], [`CreditLines::receiving_credential`], [`CreditLines::allocations_for`], [`CreditLines::revoke`], [`CreditLines::revoke_for_business`], [`CreditLines::allocation_status`] | the partner's system user token |
+//! | [`CreditLines::attach`], [`CreditLines::primary_funding`] | the customer's business token |
+//!
+//! ```no_run
+//! # async fn demo(client: wa_client::Client, business_token: wa_core::secret::AccessToken) -> wa_core::Result<()> {
+//! use wa_client::credit_lines::{WabaCurrency, is_shared};
+//! use wa_core::ids::{CreditLineId, WabaId};
+//! use wa_core::secret::AccessToken;
+//!
+//! let system = client.with_token(AccessToken::new("<SYSTEM_USER_TOKEN>"));
+//! let business = client.with_token(business_token);
+//! let line = CreditLineId::new("1972385232742146");
+//! let waba = WabaId::new("102290129340398");
+//!
+//! let shared = system
+//!     .credit_lines()
+//!     .share_and_attach(&line, &waba, &WabaCurrency::Usd)
+//!     .await?;
+//! // Verify: the allocation's receiving credential funds the WABA.
+//! let allocation = system
+//!     .credit_lines()
+//!     .receiving_credential(&shared.allocation_config_id)
+//!     .await?;
+//! let funding = business.credit_lines().primary_funding(&waba).await?;
+//! assert!(is_shared(&allocation, &funding));
+//! # Ok(()) }
+//! ```
+//!
+//! # Two ways to share
+//!
+//! - **One call** ([`CreditLines::share_and_attach`], Meta's current method):
+//!   `POST /{CREDIT_LINE_ID}/whatsapp_credit_sharing_and_attach` with the
+//!   WABA and its currency, system token. The Solution Partner onboarding
+//!   page requires the partner's system user to be added to the customer's
+//!   WABA first ([`Waba::assign_user`](crate::waba::Waba::assign_user)).
+//! - **Two calls** (Meta's "alternate method", being tested to replace the
+//!   first): [`CreditLines::share`] with the customer's business portfolio
+//!   id (system token), then [`CreditLines::attach`] with the WABA and its
+//!   currency (the customer's business token). Whether this method also
+//!   needs the system user on the WABA is not stated.
+//!
+//! A credit line **cannot be changed** once attached to a WABA; a different
+//! line needs a new WABA. Revoking ([`CreditLines::revoke_for_business`])
+//! applies to **every** WABA of that customer business shared with you.
+//!
+//! # Where Meta's page is loose (decided here)
+//!
+//! - `owning_credit_allocation_configs` is an edge, which normally answers
+//!   `{"data": [...]}`, but the page's example is a single object.
+//!   [`CreditLines::allocations_for`] accepts both.
+//! - The revocation status example has no `id`, so
+//!   [`AllocationConfig::id`] is optional.
+//! - Only `DELETED` is documented for `request_status`
+//!   ([`AllocationRequestStatus`] keeps any other value).
+//! - The page's examples mix API versions (v21.0, v24.0, v25.0); the
+//!   client's configured version is used for all of them.
+
+use std::fmt;
+use std::str::FromStr;
+
+use futures::Stream;
+use serde::de::{DeserializeOwned, Deserializer};
+use serde::{Deserialize, Serialize};
+use wa_core::error::{ValidationError, snippet};
+use wa_core::ids::{AllocationConfigId, BusinessId, CreditLineId, WabaId};
+use wa_core::paging::Page;
+use wa_core::{Error, Result};
+
+use crate::phone_numbers::fields_param;
+use crate::request::decode_json;
+use crate::waba::BusinessRef;
+use crate::{Client, GraphRequest};
+
+/// Entry point, see [`Client::credit_lines`].
+#[derive(Debug, Clone)]
+pub struct CreditLines {
+    client: Client,
+}
+
+impl Client {
+    /// Credit line operations, authenticated with this client's token (see
+    /// the [module docs](crate::credit_lines) for which token each needs).
+    pub fn credit_lines(&self) -> CreditLines {
+        CreditLines {
+            client: self.clone(),
+        }
+    }
+}
+
+/// The currency a customer's WABA is invoiced in (`waba_currency`).
+///
+/// Meta supports six today; [`Self::Other`] exists so a currency Meta adds
+/// later can be sent without a new release, and must be chosen explicitly:
+/// parsing a string (`"USD".parse()`) accepts only the six.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum WabaCurrency {
+    /// Australian dollar.
+    Aud,
+    /// Euro.
+    Eur,
+    /// Pound sterling.
+    Gbp,
+    /// Indonesian rupiah.
+    Idr,
+    /// Indian rupee.
+    Inr,
+    /// US dollar.
+    Usd,
+    /// A three-letter code Meta did not list on 2026-09-24. Checked for
+    /// shape only (three uppercase ASCII letters).
+    Other(String),
+}
+
+impl WabaCurrency {
+    /// The currencies `share-and-revoke-credit-lines` lists as supported.
+    pub const SUPPORTED: [&'static str; 6] = ["AUD", "EUR", "GBP", "IDR", "INR", "USD"];
+
+    /// The code as sent to Meta.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Aud => "AUD",
+            Self::Eur => "EUR",
+            Self::Gbp => "GBP",
+            Self::Idr => "IDR",
+            Self::Inr => "INR",
+            Self::Usd => "USD",
+            Self::Other(code) => code,
+        }
+    }
+
+    /// Check the shape of an [`Self::Other`] code (the six named variants
+    /// are always valid).
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        match self {
+            Self::Other(code)
+                if code.len() != 3 || !code.bytes().all(|b| b.is_ascii_uppercase()) =>
+            {
+                Err(ValidationError::new(
+                    "waba_currency",
+                    "must be a three-letter uppercase currency code",
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+impl FromStr for WabaCurrency {
+    type Err = ValidationError;
+
+    /// One of [`WabaCurrency::SUPPORTED`], exactly as Meta spells it.
+    fn from_str(code: &str) -> Result<Self, Self::Err> {
+        Ok(match code {
+            "AUD" => Self::Aud,
+            "EUR" => Self::Eur,
+            "GBP" => Self::Gbp,
+            "IDR" => Self::Idr,
+            "INR" => Self::Inr,
+            "USD" => Self::Usd,
+            _ => {
+                return Err(ValidationError::new(
+                    "waba_currency",
+                    "Meta supports AUD, EUR, GBP, IDR, INR and USD (use WabaCurrency::Other for another code on purpose)",
+                ));
+            }
+        })
+    }
+}
+
+impl fmt::Display for WabaCurrency {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// One of a business's extended credit lines, from
+/// `GET /{BUSINESS_ID}/extendedcredits`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[non_exhaustive]
+pub struct ExtendedCredit {
+    /// The credit line id.
+    pub id: CreditLineId,
+    /// Legal entity name, when requested (`fields=id,legal_entity_name`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legal_entity_name: Option<String>,
+}
+
+/// Response of `whatsapp_credit_sharing_and_attach`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[non_exhaustive]
+pub struct SharedAndAttached {
+    /// The allocation configuration id: keep it to verify or revoke.
+    pub allocation_config_id: AllocationConfigId,
+    /// The customer's WABA.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waba_id: Option<WabaId>,
+}
+
+/// Response of `whatsapp_credit_sharing` (step 2 of the two-call method).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[non_exhaustive]
+pub struct CreditShared {
+    /// The allocation configuration id.
+    pub allocation_config_id: AllocationConfigId,
+}
+
+/// Response of `whatsapp_credit_attach` (step 3 of the two-call method).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[non_exhaustive]
+pub struct CreditAttached {
+    /// The allocation configuration id: keep it to verify or revoke.
+    pub allocation_config_id: AllocationConfigId,
+    /// The customer's WABA.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waba_id: Option<WabaId>,
+}
+
+/// An extended credit allocation configuration: one credit line shared with
+/// one customer business. Which fields are present depends on the call.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[non_exhaustive]
+pub struct AllocationConfig {
+    /// The allocation configuration id (absent from the page's revocation
+    /// status example).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<AllocationConfigId>,
+    /// The credential that pays for the customer's WABA once attached
+    /// (`fields=receiving_credential`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiving_credential: Option<ReceivingCredential>,
+    /// The customer business the line is shared with
+    /// (`fields=receiving_business`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiving_business: Option<BusinessRef>,
+    /// `DELETED` once revoked (`fields=request_status`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_status: Option<AllocationRequestStatus>,
+}
+
+/// `receiving_credential` of an allocation configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[non_exhaustive]
+pub struct ReceivingCredential {
+    /// Compared with the WABA's `primary_funding_id` by [`is_shared`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+}
+
+/// `request_status` of an allocation configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AllocationRequestStatus {
+    /// Revoked.
+    Deleted,
+    /// Any other value, verbatim (the page documents only `DELETED`).
+    Other(String),
+}
+
+impl AllocationRequestStatus {
+    /// The value as Meta sends it.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Deleted => "DELETED",
+            Self::Other(s) => s,
+        }
+    }
+}
+
+impl Serialize for AllocationRequestStatus {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for AllocationRequestStatus {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Ok(if s == "DELETED" {
+            Self::Deleted
+        } else {
+            Self::Other(s)
+        })
+    }
+}
+
+/// A WABA's `primary_funding_id`, read with the customer's business token.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[non_exhaustive]
+pub struct WabaFunding {
+    /// The WABA.
+    pub id: WabaId,
+    /// What pays for the WABA's messages; absent until something does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_funding_id: Option<String>,
+}
+
+/// Whether `allocation` funds the WABA of `funding`: its receiving
+/// credential is the WABA's primary funding
+/// (`share-and-revoke-credit-lines`, "Verifying shared status"). `false`
+/// when either id is missing or empty.
+pub fn is_shared(allocation: &AllocationConfig, funding: &WabaFunding) -> bool {
+    let credential = allocation
+        .receiving_credential
+        .as_ref()
+        .and_then(|c| c.id.as_deref());
+    match (credential, funding.primary_funding_id.as_deref()) {
+        (Some(c), Some(f)) => !c.is_empty() && c == f,
+        _ => false,
+    }
+}
+
+/// `{"success": false}` from a call that answers `success` next to its
+/// payload is an error, as in [`GraphRequest::send_success`].
+async fn send_checked<T: DeserializeOwned>(
+    request: GraphRequest,
+    context: &'static str,
+) -> Result<T> {
+    #[derive(Deserialize)]
+    struct Success {
+        #[serde(default)]
+        success: Option<bool>,
+    }
+    let resp = request.context(context).send_raw().await?;
+    let flag: Success = decode_json(context, &resp.body)?;
+    if flag.success == Some(false) {
+        return Err(Error::Http {
+            status: resp.status.as_u16(),
+            body_snippet: snippet(&resp.body),
+        });
+    }
+    decode_json(context, &resp.body)
+}
+
+fn required<'a>(field: &'static str, id: &'a str) -> Result<&'a str> {
+    if id.trim().is_empty() {
+        return Err(ValidationError::new(field, "required").into());
+    }
+    Ok(id)
+}
+
+impl CreditLines {
+    /// The client this API uses.
+    pub fn client(&self) -> &Client {
+        &self.client
+    }
+
+    fn list_request(&self, business_id: &BusinessId, fields: &[&str]) -> GraphRequest {
+        self.client
+            .get_at(&[business_id.as_str(), "extendedcredits"])
+            .query_opt("fields", fields_param(fields))
+            .context("extended credits")
+    }
+
+    /// `GET /{BUSINESS_ID}/extendedcredits`: your business portfolio's
+    /// credit lines (`fields` empty = Meta's defaults; the revocation guide
+    /// asks for `id,legal_entity_name`). System user token.
+    ///
+    /// Takes no cursor: the page shows neither `after`/`before` nor a
+    /// `paging` object. Should Meta page it anyway, [`Self::list_stream`]
+    /// follows the cursors.
+    pub async fn list(
+        &self,
+        business_id: &BusinessId,
+        fields: &[&str],
+    ) -> Result<Page<ExtendedCredit>> {
+        self.list_request(business_id, fields).send().await
+    }
+
+    /// Every credit line, following cursors.
+    pub fn list_stream(
+        &self,
+        business_id: &BusinessId,
+        fields: &[&str],
+    ) -> impl Stream<Item = Result<ExtendedCredit>> + Send + 'static + use<> {
+        self.list_request(business_id, fields).paginate()
+    }
+
+    /// `POST /{CREDIT_LINE_ID}/whatsapp_credit_sharing_and_attach?waba_currency=…&waba_id=…`:
+    /// share the credit line with the customer and attach it to their WABA
+    /// in one call (Meta's current method). System user token; the system
+    /// user must already be on the WABA.
+    ///
+    /// Not replayed after a timeout or a server error: the line may already
+    /// be attached, and Meta refuses to change an attached line. Check with
+    /// [`Self::allocations_for`], [`Self::receiving_credential`] and
+    /// [`Self::primary_funding`] before trying again.
+    pub async fn share_and_attach(
+        &self,
+        credit_line: &CreditLineId,
+        waba_id: &WabaId,
+        currency: &WabaCurrency,
+    ) -> Result<SharedAndAttached> {
+        currency.validate()?;
+        let waba_id = required("waba_id", waba_id.as_str())?;
+        let request = self
+            .client
+            .post_at(&[credit_line.as_str(), "whatsapp_credit_sharing_and_attach"])
+            .query("waba_currency", currency)
+            .query("waba_id", waba_id);
+        send_checked(request, "credit sharing and attach response").await
+    }
+
+    /// `POST /{CREDIT_LINE_ID}/whatsapp_credit_sharing?receiving_business_id=…`:
+    /// step 2 of the two-call method, the intent to share with the
+    /// customer's business portfolio (the WABA's verified owner, never an id
+    /// from the browser). System user token.
+    pub async fn share(
+        &self,
+        credit_line: &CreditLineId,
+        receiving_business_id: &BusinessId,
+    ) -> Result<CreditShared> {
+        let business = required("receiving_business_id", receiving_business_id.as_str())?;
+        let request = self
+            .client
+            .post_at(&[credit_line.as_str(), "whatsapp_credit_sharing"])
+            .query("receiving_business_id", business);
+        send_checked(request, "credit sharing response").await
+    }
+
+    /// `POST /{CREDIT_LINE_ID}/whatsapp_credit_attach?waba_currency=…&waba_id=…`:
+    /// step 3 of the two-call method. **The customer's business token**,
+    /// not the system user token. Not replayed after a timeout or a server
+    /// error (an attached line cannot be changed).
+    pub async fn attach(
+        &self,
+        credit_line: &CreditLineId,
+        waba_id: &WabaId,
+        currency: &WabaCurrency,
+    ) -> Result<CreditAttached> {
+        currency.validate()?;
+        let waba_id = required("waba_id", waba_id.as_str())?;
+        let request = self
+            .client
+            .post_at(&[credit_line.as_str(), "whatsapp_credit_attach"])
+            .query("waba_currency", currency)
+            .query("waba_id", waba_id);
+        send_checked(request, "credit attach response").await
+    }
+
+    /// `GET /{ALLOCATION_CONFIG_ID}?fields=receiving_credential`. System
+    /// user token.
+    pub async fn receiving_credential(
+        &self,
+        allocation: &AllocationConfigId,
+    ) -> Result<AllocationConfig> {
+        self.client
+            .get_at(&[allocation.as_str()])
+            .query("fields", "receiving_credential")
+            .context("credit allocation")
+            .send()
+            .await
+    }
+
+    /// `GET /{WABA_ID}?fields=primary_funding_id`. **The customer's
+    /// business token.**
+    pub async fn primary_funding(&self, waba_id: &WabaId) -> Result<WabaFunding> {
+        self.client
+            .get_at(&[waba_id.as_str()])
+            .query("fields", "primary_funding_id")
+            .context("WABA primary funding")
+            .send()
+            .await
+    }
+
+    /// `GET /{CREDIT_LINE_ID}/owning_credit_allocation_configs?receiving_business_id=…&fields=id,receiving_business`:
+    /// the records of this line shared with a customer business. System
+    /// user token.
+    ///
+    /// Accepts both `{"data": [...]}` and the single object the page's
+    /// example shows. Reads one page (the page documents no pagination).
+    /// Nothing here checks that each record's `receiving_business` is the
+    /// one asked for; [`Self::revoke_for_business`] does.
+    pub async fn allocations_for(
+        &self,
+        credit_line: &CreditLineId,
+        receiving_business_id: &BusinessId,
+    ) -> Result<Vec<AllocationConfig>> {
+        const CONTEXT: &str = "owning credit allocation configs";
+        let business = required("receiving_business_id", receiving_business_id.as_str())?;
+        let resp = self
+            .client
+            .get_at(&[credit_line.as_str(), "owning_credit_allocation_configs"])
+            .query("receiving_business_id", business)
+            .query("fields", "id,receiving_business")
+            .context(CONTEXT)
+            .send_raw()
+            .await?;
+        let value: serde_json::Value = decode_json(CONTEXT, &resp.body)?;
+        if value.get("data").is_some() {
+            decode_json(CONTEXT, &resp.body).map(|page: Page<AllocationConfig>| page.data)
+        } else {
+            decode_json(CONTEXT, &resp.body).map(|one: AllocationConfig| vec![one])
+        }
+    }
+
+    /// `DELETE /{ALLOCATION_CONFIG_ID}`: stop sharing the line with that
+    /// customer business, for **all** of its WABAs shared with you. System
+    /// user token.
+    pub async fn revoke(&self, allocation: &AllocationConfigId) -> Result<()> {
+        self.client
+            .delete_at(&[allocation.as_str()])
+            .context("revoke credit sharing response")
+            .send_success()
+            .await
+    }
+
+    /// Revoke every record of `credit_line` shared with `business_id`
+    /// ([`Self::allocations_for`], then [`Self::revoke`] each), and return
+    /// the ids revoked (empty when nothing was shared). System user token.
+    ///
+    /// Only records whose `receiving_business.id` is `business_id` are
+    /// revoked: a record that names another business, or none, is left
+    /// alone, whatever the lookup returned.
+    ///
+    /// Works when the WABA is no longer shared with you and its
+    /// `owner_business_info` cannot be read any more: pass the business id
+    /// stored at onboarding (or the `owner_business_id` of the
+    /// `PARTNER_REMOVED` webhook).
+    pub async fn revoke_for_business(
+        &self,
+        credit_line: &CreditLineId,
+        business_id: &BusinessId,
+    ) -> Result<Vec<AllocationConfigId>> {
+        let mut revoked = Vec::new();
+        for id in owned_by(
+            self.allocations_for(credit_line, business_id).await?,
+            business_id,
+        ) {
+            self.revoke(&id).await?;
+            revoked.push(id);
+        }
+        Ok(revoked)
+    }
+
+    /// `GET /{ALLOCATION_CONFIG_ID}?fields=receiving_business,request_status`:
+    /// e.g. to confirm a revocation (`request_status` `DELETED`). System
+    /// user token.
+    pub async fn allocation_status(
+        &self,
+        allocation: &AllocationConfigId,
+    ) -> Result<AllocationConfig> {
+        self.client
+            .get_at(&[allocation.as_str()])
+            .query("fields", "receiving_business,request_status")
+            .context("credit allocation status")
+            .send()
+            .await
+    }
+}
+
+/// The ids of `records` that name `business_id` as their receiving
+/// business, in order, without duplicates.
+pub(crate) fn owned_by(
+    records: Vec<AllocationConfig>,
+    business_id: &BusinessId,
+) -> Vec<AllocationConfigId> {
+    let mut ids: Vec<AllocationConfigId> = Vec::new();
+    for record in records {
+        let names_business = record
+            .receiving_business
+            .as_ref()
+            .and_then(|b| b.id.as_ref())
+            .is_some_and(|b| b == business_id);
+        if let (true, Some(id)) = (names_business, record.id)
+            && !ids.contains(&id)
+        {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::StreamExt;
+    use http::Method;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use wa_core::ErrorKind;
+    use wa_core::error::TransportError;
+    use wa_core::testing::{RecordedBody, ScriptedTransport};
+
+    use super::*;
+    use crate::RetryPolicy;
+
+    const LINE: &str = "1972385232742146";
+    const WABA: &str = "102290129340398";
+    const ALLOCATION: &str = "58501441721238";
+    const CUSTOMER: &str = "2729063490586005";
+
+    fn client(t: &ScriptedTransport, token: &str) -> Client {
+        Client::builder()
+            .transport(t.clone())
+            .access_token(token)
+            .retry(RetryPolicy::NONE)
+            .build()
+            .unwrap()
+    }
+
+    fn system(t: &ScriptedTransport) -> CreditLines {
+        client(t, "SYSTEM_TOKEN").credit_lines()
+    }
+
+    fn line() -> CreditLineId {
+        CreditLineId::new(LINE)
+    }
+
+    #[tokio::test]
+    async fn list_parses_both_examples_of_the_page() {
+        let t = ScriptedTransport::new();
+        // "Get your credit line ID".
+        t.push_json(200, json!({"data": [{"id": "1972385232742146"}]}));
+        // "Revoke a shared credit line", step 1.
+        t.push_json(
+            200,
+            json!({"data": [{"id": "1972385232742146", "legal_entity_name": "Your Legal Entity"}]}),
+        );
+        let lines = system(&t);
+        let page = lines
+            .list(&BusinessId::new("102289599326934"), &[])
+            .await
+            .unwrap();
+        assert_eq!(page.data[0].id, line());
+        assert_eq!(page.data[0].legal_entity_name, None);
+        let page = lines
+            .list(
+                &BusinessId::new("105954558954427"),
+                &["id", "legal_entity_name"],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            page.data[0].legal_entity_name.as_deref(),
+            Some("Your Legal Entity")
+        );
+        let reqs = t.requests();
+        assert_eq!(reqs[0].method, Method::GET);
+        assert_eq!(reqs[0].path(), "/v25.0/102289599326934/extendedcredits");
+        assert_eq!(reqs[0].query("fields"), None);
+        assert_eq!(reqs[0].bearer(), Some("SYSTEM_TOKEN"));
+        assert_eq!(reqs[1].path(), "/v25.0/105954558954427/extendedcredits");
+        assert_eq!(
+            reqs[1].query("fields").as_deref(),
+            Some("id,legal_entity_name")
+        );
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn list_stream_follows_cursors() {
+        let t = ScriptedTransport::new();
+        t.push_json(
+            200,
+            json!({"data": [{"id": "1"}], "paging": {"cursors": {"after": "c1"}, "next": "https://graph.facebook.com/x"}}),
+        );
+        t.push_json(200, json!({"data": [{"id": "2"}]}));
+        let ids: Vec<String> = system(&t)
+            .list_stream(&BusinessId::new("B"), &[])
+            .map(|c| c.unwrap().id.into_inner())
+            .collect()
+            .await;
+        assert_eq!(ids, ["1", "2"]);
+        assert_eq!(t.requests()[1].query("after").as_deref(), Some("c1"));
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn share_and_attach_sends_currency_and_waba_in_the_query() {
+        let t = ScriptedTransport::new();
+        t.push_json(
+            200,
+            json!({"allocation_config_id": "58501441721238", "waba_id": "102290129340398"}),
+        );
+        let done = system(&t)
+            .share_and_attach(&line(), &WabaId::new(WABA), &WabaCurrency::Usd)
+            .await
+            .unwrap();
+        assert_eq!(done.allocation_config_id.as_str(), ALLOCATION);
+        assert_eq!(done.waba_id, Some(WabaId::new(WABA)));
+        let req = t.last_request().unwrap();
+        assert_eq!(req.method, Method::POST);
+        assert_eq!(
+            req.path(),
+            "/v25.0/1972385232742146/whatsapp_credit_sharing_and_attach"
+        );
+        assert_eq!(req.query("waba_currency").as_deref(), Some("USD"));
+        assert_eq!(req.query("waba_id").as_deref(), Some(WABA));
+        assert_eq!(req.bearer(), Some("SYSTEM_TOKEN"));
+        assert_eq!(req.body, RecordedBody::Empty);
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn share_then_attach_parse_the_examples() {
+        let t = ScriptedTransport::new();
+        // Step 2.
+        t.push_json(
+            200,
+            json!({"success": true, "allocation_config_id": "58501441721238"}),
+        );
+        // Step 3.
+        t.push_json(
+            200,
+            json!({"success": true, "waba_id": "102290129340398", "allocation_config_id": "58501441721238"}),
+        );
+        let shared = system(&t)
+            .share(
+                &CreditLineId::new("5985499441566032"),
+                &BusinessId::new(CUSTOMER),
+            )
+            .await
+            .unwrap();
+        assert_eq!(shared.allocation_config_id.as_str(), ALLOCATION);
+        let attached = client(&t, "BUSINESS_TOKEN")
+            .credit_lines()
+            .attach(
+                &CreditLineId::new("5985499441566032"),
+                &WabaId::new(WABA),
+                &WabaCurrency::Usd,
+            )
+            .await
+            .unwrap();
+        assert_eq!(attached.allocation_config_id.as_str(), ALLOCATION);
+        assert_eq!(attached.waba_id, Some(WabaId::new(WABA)));
+
+        let reqs = t.requests();
+        assert_eq!(reqs[0].method, Method::POST);
+        assert_eq!(
+            reqs[0].path(),
+            "/v25.0/5985499441566032/whatsapp_credit_sharing"
+        );
+        assert_eq!(
+            reqs[0].query("receiving_business_id").as_deref(),
+            Some(CUSTOMER)
+        );
+        assert_eq!(reqs[0].bearer(), Some("SYSTEM_TOKEN"));
+        assert_eq!(reqs[0].body, RecordedBody::Empty);
+        assert_eq!(reqs[1].method, Method::POST);
+        assert_eq!(
+            reqs[1].path(),
+            "/v25.0/5985499441566032/whatsapp_credit_attach"
+        );
+        assert_eq!(reqs[1].query("waba_currency").as_deref(), Some("USD"));
+        assert_eq!(reqs[1].query("waba_id").as_deref(), Some(WABA));
+        assert_eq!(reqs[1].bearer(), Some("BUSINESS_TOKEN"));
+        assert_eq!(reqs[1].body, RecordedBody::Empty);
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn success_false_is_an_error_even_with_an_id() {
+        let t = ScriptedTransport::new();
+        t.push_json(
+            200,
+            json!({"success": false, "allocation_config_id": "58501441721238"}),
+        );
+        let err = system(&t)
+            .share(&line(), &BusinessId::new(CUSTOMER))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Http { status: 200, .. }), "{err}");
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn sharing_posts_are_not_replayed_after_a_timeout() {
+        let t = ScriptedTransport::new();
+        t.push_error(|| TransportError::Timeout);
+        let retrying = Client::builder()
+            .transport(t.clone())
+            .access_token("SYSTEM_TOKEN")
+            .retry(RetryPolicy {
+                max_retries: 3,
+                base_delay: std::time::Duration::ZERO,
+                max_delay: std::time::Duration::ZERO,
+            })
+            .build()
+            .unwrap();
+        let err = retrying
+            .credit_lines()
+            .share_and_attach(&line(), &WabaId::new(WABA), &WabaCurrency::Eur)
+            .await
+            .unwrap_err();
+        assert!(err.may_have_been_sent());
+        assert_eq!(t.requests().len(), 1, "a timed-out share is never replayed");
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn verification_reads_both_sides_and_compares() {
+        let t = ScriptedTransport::new();
+        t.push_json(
+            200,
+            json!({"receiving_credential": {"id": "7011"}, "id": "58501441721238"}),
+        );
+        t.push_json(
+            200,
+            json!({"primary_funding_id": "7011", "id": "102290129340398"}),
+        );
+        let allocation = system(&t)
+            .receiving_credential(&AllocationConfigId::new(ALLOCATION))
+            .await
+            .unwrap();
+        let funding = client(&t, "BUSINESS_TOKEN")
+            .credit_lines()
+            .primary_funding(&WabaId::new(WABA))
+            .await
+            .unwrap();
+        assert!(is_shared(&allocation, &funding));
+        assert_eq!(allocation.id, Some(AllocationConfigId::new(ALLOCATION)));
+        let reqs = t.requests();
+        assert_eq!(reqs[0].method, Method::GET);
+        assert_eq!(reqs[0].path(), "/v25.0/58501441721238");
+        assert_eq!(
+            reqs[0].query("fields").as_deref(),
+            Some("receiving_credential")
+        );
+        assert_eq!(reqs[0].bearer(), Some("SYSTEM_TOKEN"));
+        assert_eq!(reqs[1].method, Method::GET);
+        assert_eq!(reqs[1].path(), "/v25.0/102290129340398");
+        assert_eq!(
+            reqs[1].query("fields").as_deref(),
+            Some("primary_funding_id")
+        );
+        assert_eq!(reqs[1].bearer(), Some("BUSINESS_TOKEN"));
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[test]
+    fn is_shared_needs_two_equal_non_empty_ids() {
+        let allocation = |id: Option<&str>| AllocationConfig {
+            id: None,
+            receiving_credential: Some(ReceivingCredential {
+                id: id.map(str::to_owned),
+            }),
+            receiving_business: None,
+            request_status: None,
+        };
+        let funding = |id: Option<&str>| WabaFunding {
+            id: WabaId::new(WABA),
+            primary_funding_id: id.map(str::to_owned),
+        };
+        assert!(is_shared(&allocation(Some("1")), &funding(Some("1"))));
+        assert!(!is_shared(&allocation(Some("1")), &funding(Some("2"))));
+        assert!(!is_shared(&allocation(None), &funding(None)));
+        assert!(!is_shared(&allocation(Some("")), &funding(Some(""))));
+        assert!(!is_shared(&allocation(Some("1")), &funding(None)));
+        assert!(!is_shared(&allocation(None), &funding(Some("1"))));
+        let no_credential = AllocationConfig {
+            receiving_credential: None,
+            ..allocation(None)
+        };
+        assert!(!is_shared(&no_credential, &funding(Some("1"))));
+    }
+
+    #[tokio::test]
+    async fn allocations_for_accepts_the_single_object_and_the_page() {
+        let t = ScriptedTransport::new();
+        // The page's example: one object.
+        t.push_json(
+            200,
+            json!({"id": "1972385232742140", "receiving_business": {"name": "Client Business Name", "id": "1972385232742147"}}),
+        );
+        // What an edge normally answers.
+        t.push_json(
+            200,
+            json!({"data": [
+                {"id": "1972385232742140", "receiving_business": {"name": "Client Business Name", "id": "1972385232742147"}},
+                {"id": "1972385232742141", "receiving_business": {"id": "1972385232742147"}}
+            ]}),
+        );
+        t.push_json(200, json!({"data": []}));
+        let lines = system(&t);
+        let business = BusinessId::new("1972385232742147");
+        let one = lines.allocations_for(&line(), &business).await.unwrap();
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].id, Some(AllocationConfigId::new("1972385232742140")));
+        assert_eq!(
+            one[0].receiving_business.as_ref().unwrap().id,
+            Some(business.clone())
+        );
+        let two = lines.allocations_for(&line(), &business).await.unwrap();
+        assert_eq!(two.len(), 2);
+        assert_eq!(two[1].id, Some(AllocationConfigId::new("1972385232742141")));
+        assert!(
+            lines
+                .allocations_for(&line(), &business)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let req = t.last_request().unwrap();
+        assert_eq!(req.method, Method::GET);
+        assert_eq!(
+            req.path(),
+            "/v25.0/1972385232742146/owning_credit_allocation_configs"
+        );
+        assert_eq!(
+            req.query("receiving_business_id").as_deref(),
+            Some("1972385232742147")
+        );
+        assert_eq!(
+            req.query("fields").as_deref(),
+            Some("id,receiving_business")
+        );
+        assert_eq!(req.bearer(), Some("SYSTEM_TOKEN"));
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn revoke_and_status_parse_the_examples() {
+        let t = ScriptedTransport::new();
+        t.push_json(200, json!({"success": true}));
+        t.push_json(
+            200,
+            json!({"receiving_business": {"name": "Customer Business Name", "id": "1972385232742147"}, "request_status": "DELETED"}),
+        );
+        let lines = system(&t);
+        let id = AllocationConfigId::new("1972385232742140");
+        lines.revoke(&id).await.unwrap();
+        let status = lines.allocation_status(&id).await.unwrap();
+        assert_eq!(
+            status.request_status,
+            Some(AllocationRequestStatus::Deleted)
+        );
+        assert_eq!(status.id, None, "the example has no id");
+        let reqs = t.requests();
+        assert_eq!(reqs[0].method, Method::DELETE);
+        assert_eq!(reqs[0].path(), "/v25.0/1972385232742140");
+        assert_eq!(reqs[0].bearer(), Some("SYSTEM_TOKEN"));
+        assert_eq!(reqs[1].method, Method::GET);
+        assert_eq!(reqs[1].path(), "/v25.0/1972385232742140");
+        assert_eq!(
+            reqs[1].query("fields").as_deref(),
+            Some("receiving_business,request_status")
+        );
+        assert_eq!(t.remaining(), 0);
+
+        let other: AllocationConfig =
+            serde_json::from_value(json!({"request_status": "SOMETHING_NEW"})).unwrap();
+        assert_eq!(
+            other.request_status,
+            Some(AllocationRequestStatus::Other("SOMETHING_NEW".into()))
+        );
+    }
+
+    #[tokio::test]
+    async fn revoke_for_business_deletes_only_that_business_records() {
+        let t = ScriptedTransport::new();
+        t.push_json(
+            200,
+            json!({"data": [
+                {"id": "A1", "receiving_business": {"id": CUSTOMER}},
+                {"id": "OTHER", "receiving_business": {"id": "SOMEONE_ELSE"}},
+                {"id": "UNNAMED"},
+                {"receiving_business": {"id": CUSTOMER}},
+                {"id": "A1", "receiving_business": {"id": CUSTOMER}},
+                {"id": "A2", "receiving_business": {"id": CUSTOMER}}
+            ]}),
+        );
+        t.push_json(200, json!({"success": true}));
+        t.push_json(200, json!({"success": true}));
+        let revoked = system(&t)
+            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER))
+            .await
+            .unwrap();
+        assert_eq!(
+            revoked,
+            [AllocationConfigId::new("A1"), AllocationConfigId::new("A2")]
+        );
+        let reqs = t.requests();
+        assert_eq!(reqs.len(), 3);
+        assert_eq!(
+            reqs[0].query("receiving_business_id").as_deref(),
+            Some(CUSTOMER)
+        );
+        assert_eq!(reqs[1].method, Method::DELETE);
+        assert_eq!(reqs[1].path(), "/v25.0/A1");
+        assert_eq!(reqs[2].method, Method::DELETE);
+        assert_eq!(reqs[2].path(), "/v25.0/A2");
+        assert_eq!(t.remaining(), 0);
+
+        // Nothing shared: nothing deleted.
+        t.push_json(200, json!({"data": []}));
+        let revoked = system(&t)
+            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER))
+            .await
+            .unwrap();
+        assert!(revoked.is_empty());
+        assert_eq!(t.requests().len(), 4);
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn graph_errors_are_classified() {
+        let t = ScriptedTransport::new();
+        t.push_json(
+            403,
+            json!({"error": {"message": "(#200) Permissions error", "type": "OAuthException", "code": 200, "fbtrace_id": "A"}}),
+        );
+        let err = system(&t)
+            .share_and_attach(&line(), &WabaId::new(WABA), &WabaCurrency::Inr)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Permission);
+        assert!(!err.may_have_been_sent());
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn inputs_are_checked_before_any_request() {
+        let t = ScriptedTransport::new();
+        let lines = system(&t);
+        let err = lines
+            .share_and_attach(
+                &line(),
+                &WabaId::new(WABA),
+                &WabaCurrency::Other("usd".into()),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, Error::Validation(v) if v.field == "waba_currency"),
+            "{err}"
+        );
+        let err = lines
+            .attach(&line(), &WabaId::new(" "), &WabaCurrency::Usd)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, Error::Validation(v) if v.field == "waba_id"),
+            "{err}"
+        );
+        let err = lines
+            .share(&line(), &BusinessId::new(""))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, Error::Validation(v) if v.field == "receiving_business_id"),
+            "{err}"
+        );
+        let err = lines
+            .allocations_for(&line(), &BusinessId::new(""))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Validation(_)));
+        assert!(t.requests().is_empty());
+    }
+
+    #[test]
+    fn currencies_parse_strictly_and_other_is_deliberate() {
+        for (code, currency) in [
+            ("AUD", WabaCurrency::Aud),
+            ("EUR", WabaCurrency::Eur),
+            ("GBP", WabaCurrency::Gbp),
+            ("IDR", WabaCurrency::Idr),
+            ("INR", WabaCurrency::Inr),
+            ("USD", WabaCurrency::Usd),
+        ] {
+            assert_eq!(code.parse::<WabaCurrency>().unwrap(), currency);
+            assert_eq!(currency.to_string(), code);
+            assert!(currency.validate().is_ok());
+            assert!(WabaCurrency::SUPPORTED.contains(&code));
+        }
+        for bad in ["usd", "BRL", "", "US", " USD"] {
+            assert!(bad.parse::<WabaCurrency>().is_err(), "{bad}");
+        }
+        assert!(WabaCurrency::Other("BRL".into()).validate().is_ok());
+        for bad in ["brl", "BR", "BRLX", "B1L", ""] {
+            assert!(WabaCurrency::Other(bad.into()).validate().is_err(), "{bad}");
+        }
+    }
+
+    /// An id taken from data must not address another Graph object with
+    /// the partner's token.
+    #[tokio::test]
+    async fn ids_stay_in_their_segment() {
+        let t = ScriptedTransport::new();
+        t.push_json(200, json!({"allocation_config_id": "1"}));
+        t.push_json(200, json!({"success": true}));
+        let lines = system(&t);
+        lines
+            .share_and_attach(
+                &CreditLineId::new("OTHER/whatsapp_credit_sharing"),
+                &WabaId::new(WABA),
+                &WabaCurrency::Usd,
+            )
+            .await
+            .unwrap();
+        lines
+            .revoke(&AllocationConfigId::new(
+                "1/owning_credit_allocation_configs",
+            ))
+            .await
+            .unwrap();
+        let paths: Vec<String> = t.requests().iter().map(|r| r.path().to_owned()).collect();
+        assert_eq!(
+            paths,
+            [
+                "/v25.0/OTHER%2Fwhatsapp_credit_sharing/whatsapp_credit_sharing_and_attach",
+                "/v25.0/1%2Fowning_credit_allocation_configs",
+            ]
+        );
+        assert!(lines.revoke(&AllocationConfigId::new("..")).await.is_err());
+        assert_eq!(t.requests().len(), 2, "refused before the wire");
+        assert_eq!(t.remaining(), 0);
+    }
+}

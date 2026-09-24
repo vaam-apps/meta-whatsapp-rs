@@ -7,21 +7,25 @@ use std::pin::pin;
 use futures::StreamExt;
 use time::OffsetDateTime;
 use wa_core::error::ValidationError;
-use wa_core::ids::{AppId, BusinessId, PhoneNumberId, WabaId};
+use wa_core::ids::{AllocationConfigId, AppId, BusinessId, PhoneNumberId, WabaId};
 use wa_core::secret::AccessToken;
 use wa_core::{Error, Result};
 
 use super::EmbeddedSignup;
 use super::event::{EmbeddedSignupEvent, FinishKind, SessionInfo};
+use super::partner::{CreditPlan, CreditSharing, assign_system_user, share_credit_line};
 use super::token::{SignupCode, TokenDebug, WHATSAPP_BUSINESS_MANAGEMENT};
 use super::vault::{StoredBusinessToken, TokenVault};
 use crate::Client;
+use crate::credit_lines::WabaCurrency;
 use crate::phone_numbers::{DataLocalizationRegion, TwoStepPin};
 use crate::waba::{CallbackOverride, PhoneNumbersQuery, Waba};
 
 /// Stable step names used in [`wa_core::Error::Step`] by
-/// [`EmbeddedSignup::onboard`] and [`EmbeddedSignup::resume`]. The first six
-/// are the ones `docs/architecture.md` lists for `onboard`, in order.
+/// [`EmbeddedSignup::onboard`] and [`EmbeddedSignup::resume`]. All but
+/// `load_token` are the ones `docs/architecture.md` lists for `onboard`,
+/// in order; `assign_system_user` and `share_credit_line` run only in
+/// [Solution Partner mode](super#solution-partner-mode).
 pub mod steps {
     /// `GET oauth/access_token`.
     pub const EXCHANGE_CODE: &str = "exchange_code";
@@ -36,6 +40,13 @@ pub mod steps {
     pub const STORE_TOKEN: &str = "store_token";
     /// `POST /{WABA_ID}/subscribed_apps`.
     pub const SUBSCRIBE_APP: &str = "subscribe_app";
+    /// `POST /{WABA_ID}/assigned_users` with the partner's system user token:
+    /// the system user on the customer's WABA, the prerequisite of
+    /// [`CreditSharing::ShareAndAttach`](super::CreditSharing::ShareAndAttach).
+    pub const ASSIGN_SYSTEM_USER: &str = "assign_system_user";
+    /// Checking whether the partner's credit line already funds the WABA,
+    /// sharing it if not, and storing the allocation id with the token.
+    pub const SHARE_CREDIT_LINE: &str = "share_credit_line";
     /// `POST /{PHONE_NUMBER_ID}/register`.
     pub const REGISTER_PHONE: &str = "register_phone";
     /// Reading the token back from the vault ([`EmbeddedSignup::resume`](super::EmbeddedSignup::resume)
@@ -44,8 +55,8 @@ pub mod steps {
 }
 
 use steps::{
-    DEBUG_TOKEN, EXCHANGE_CODE, LOAD_TOKEN, REGISTER_PHONE, STORE_TOKEN, SUBSCRIBE_APP,
-    VERIFY_ASSETS,
+    ASSIGN_SYSTEM_USER, DEBUG_TOKEN, EXCHANGE_CODE, LOAD_TOKEN, REGISTER_PHONE, SHARE_CREDIT_LINE,
+    STORE_TOKEN, SUBSCRIBE_APP, VERIFY_ASSETS,
 };
 
 /// Most phone numbers read from one WABA while verifying. Not a Meta limit:
@@ -78,6 +89,9 @@ pub struct OnboardingRequest {
     pub data_localization_region: Option<DataLocalizationRegion>,
     /// Send this WABA's supported webhooks to another callback.
     pub subscribe_override: Option<CallbackOverride>,
+    /// The customer's currency for the credit line (Solution Partner mode
+    /// only; falls back to [`SolutionPartner::default_currency`](super::SolutionPartner::default_currency)).
+    pub currency: Option<WabaCurrency>,
 }
 
 impl OnboardingRequest {
@@ -92,6 +106,7 @@ impl OnboardingRequest {
             pin: None,
             data_localization_region: None,
             subscribe_override: None,
+            currency: None,
         }
     }
 
@@ -130,6 +145,16 @@ impl OnboardingRequest {
     #[must_use]
     pub fn subscribe_override(mut self, callback: CallbackOverride) -> Self {
         self.subscribe_override = Some(callback);
+        self
+    }
+
+    /// Invoice this customer's WABA in `currency` (Solution Partner mode
+    /// only: a Tech Provider onboarding naming one is refused). Must match
+    /// the customer's billing; a credit line cannot be changed once
+    /// attached.
+    #[must_use]
+    pub fn currency(mut self, currency: WabaCurrency) -> Self {
+        self.currency = Some(currency);
         self
     }
 
@@ -191,6 +216,10 @@ pub struct Onboarded {
     pub token: AccessToken,
     /// When the token expires, if it does.
     pub token_expires_at: Option<OffsetDateTime>,
+    /// The partner's credit line allocation funding the WABA (Solution
+    /// Partner mode; also stored with the token). `None` for a Tech
+    /// Provider.
+    pub allocation_config_id: Option<AllocationConfigId>,
     /// Steps that ran, in order (see [`steps`]).
     pub steps_completed: Vec<&'static str>,
 }
@@ -233,7 +262,8 @@ impl EmbeddedSignup {
         vault: &TokenVault,
     ) -> Result<Onboarded> {
         request.validate()?;
-        let mut done = Vec::with_capacity(6);
+        let plan = self.credit_plan(request.currency.as_ref())?;
+        let mut done = Vec::with_capacity(8);
 
         let token = self
             .exchange_code(&request.code)
@@ -270,20 +300,24 @@ impl EmbeddedSignup {
         stored.business_id.clone_from(&assets.business_id);
         stored.phone_number_ids.clone_from(&assets.phone_number_ids);
         stored.expires_at = expires_at;
+        // What `store` would pick; set here so a later re-store keeps it.
+        stored.created_at = Some(vault.now());
         vault
             .store(&stored)
             .await
             .map_err(|e| e.in_step(STORE_TOKEN))?;
         done.push(STORE_TOKEN);
 
-        setup(
-            &business,
-            &assets.waba_id,
-            assets.phone_number_id.as_ref(),
+        let tail = Tail {
+            es: self,
+            business: &business,
+            vault,
             request,
-            &mut done,
-        )
-        .await?;
+            plan: plan.as_ref(),
+            resuming: false,
+        };
+        tail.run(&mut stored, assets.phone_number_id.as_ref(), &mut done)
+            .await?;
 
         Ok(Onboarded {
             waba_id: assets.waba_id,
@@ -293,13 +327,19 @@ impl EmbeddedSignup {
             finish_kind: request.finish_kind,
             token: token.access_token,
             token_expires_at: expires_at,
+            allocation_config_id: stored.allocation_config_id,
             steps_completed: done,
         })
     }
 
-    /// Redo the repeatable tail of [`Self::onboard`] (subscribe, register)
-    /// for a WABA whose token is already in `vault`, e.g. after
-    /// `register_phone` failed on a wrong PIN. `request.code` is not used.
+    /// Redo the repeatable tail of [`Self::onboard`] (subscribe, in
+    /// Solution Partner mode the credit line steps, register) for a WABA
+    /// whose token is already in `vault`, e.g. after `register_phone` failed
+    /// on a wrong PIN. `request.code` is not used.
+    ///
+    /// In Solution Partner mode, `share_credit_line` first checks whether
+    /// the credit line already funds the WABA (a share that failed with a
+    /// timeout may have gone through) and posts nothing when it does.
     ///
     /// The number registered is `request.session.phone_number_id` if it is
     /// one of the numbers verified and stored at onboarding, else the first
@@ -317,7 +357,8 @@ impl EmbeddedSignup {
         vault: &TokenVault,
     ) -> Result<Onboarded> {
         request.validate()?;
-        let stored = vault
+        let plan = self.credit_plan(request.currency.as_ref())?;
+        let mut stored = vault
             .get(waba_id)
             .await
             .map_err(|e| e.in_step(LOAD_TOKEN))?
@@ -333,14 +374,16 @@ impl EmbeddedSignup {
             .map_err(|e| Error::from(e).in_step(VERIFY_ASSETS))?;
         done.push(VERIFY_ASSETS);
         let business = self.client.with_token(stored.token.clone());
-        setup(
-            &business,
-            waba_id,
-            phone_number_id.as_ref(),
+        let tail = Tail {
+            es: self,
+            business: &business,
+            vault,
             request,
-            &mut done,
-        )
-        .await?;
+            plan: plan.as_ref(),
+            resuming: true,
+        };
+        tail.run(&mut stored, phone_number_id.as_ref(), &mut done)
+            .await?;
         Ok(Onboarded {
             waba_id: waba_id.clone(),
             phone_number_id,
@@ -349,26 +392,68 @@ impl EmbeddedSignup {
             finish_kind: request.finish_kind,
             token: stored.token,
             token_expires_at: stored.expires_at,
+            allocation_config_id: stored.allocation_config_id,
             steps_completed: done,
         })
     }
 }
 
-/// `subscribe_app`, then `register_phone` if requested.
-async fn setup(
+/// The steps after `store_token`, shared by `onboard` and `resume`.
+struct Tail<'a> {
+    es: &'a EmbeddedSignup,
+    /// Authenticated with the merchant's business token.
+    business: &'a Client,
+    vault: &'a TokenVault,
+    request: &'a OnboardingRequest,
+    /// `None` for a Tech Provider: no credit line step runs.
+    plan: Option<&'a CreditPlan<'a>>,
+    resuming: bool,
+}
+
+impl Tail<'_> {
+    /// `subscribe_app`; in Solution Partner mode `assign_system_user`
+    /// (share-and-attach only) and `share_credit_line`; then
+    /// `register_phone` if requested.
+    async fn run(
+        &self,
+        stored: &mut StoredBusinessToken,
+        phone_number_id: Option<&PhoneNumberId>,
+        done: &mut Vec<&'static str>,
+    ) -> Result<()> {
+        let waba_id = stored.waba_id.clone();
+        let business = self.business;
+        let request = self.request;
+        business
+            .waba(waba_id.clone())
+            .subscribe_app(request.subscribe_override.as_ref())
+            .await
+            .map_err(|e| e.in_step(SUBSCRIBE_APP))?;
+        done.push(SUBSCRIBE_APP);
+
+        if let Some(plan) = self.plan {
+            if plan.partner.method == CreditSharing::ShareAndAttach {
+                assign_system_user(self.es, plan, &waba_id)
+                    .await
+                    .map_err(|e| e.in_step(ASSIGN_SYSTEM_USER))?;
+                done.push(ASSIGN_SYSTEM_USER);
+            }
+            share_credit_line(self.es, plan, business, self.vault, stored, self.resuming)
+                .await
+                .map_err(|e| e.in_step(SHARE_CREDIT_LINE))?;
+            done.push(SHARE_CREDIT_LINE);
+        }
+
+        register(business, phone_number_id, request, done).await
+    }
+}
+
+/// `register_phone`, if requested.
+async fn register(
     business: &Client,
-    waba_id: &WabaId,
     phone_number_id: Option<&PhoneNumberId>,
     request: &OnboardingRequest,
     done: &mut Vec<&'static str>,
 ) -> Result<()> {
-    business
-        .waba(waba_id.clone())
-        .subscribe_app(request.subscribe_override.as_ref())
-        .await
-        .map_err(|e| e.in_step(SUBSCRIBE_APP))?;
-    done.push(SUBSCRIBE_APP);
-
     if request.register {
         let register = async {
             let pin = request

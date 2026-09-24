@@ -9,6 +9,7 @@ mod common;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use time::OffsetDateTime;
+use wa_core::ids::BusinessId;
 use wa_webhooks::fields::{
     AccountUpdateEvent, AlertEntityType, AlertSeverity, AlertStatus, AlertType, AutomaticEventName,
     BusinessUsernameStatus, CallDirection, CallEventType, CallStatusValue, CallTerminateStatus,
@@ -163,19 +164,39 @@ fn account_update_every_example() {
     assert_eq!(u.event, AccountUpdateEvent::MmLiteTermsSigned);
 
     let u = account_update("fields/account_update_partner_added.json");
+    assert_eq!(u.event, AccountUpdateEvent::PartnerAdded);
     let info = u.waba_info.unwrap();
+    assert_eq!(info.waba_id.unwrap().as_str(), "980198427658004");
+    assert_eq!(info.owner_business_id.unwrap().as_str(), "2329417887457253");
     assert_eq!(info.solution_id.as_deref(), Some("1715120619246906"));
-    assert_eq!(info.solution_partner_business_ids.len(), 2);
+    assert_eq!(
+        info.solution_partner_business_ids,
+        [
+            BusinessId::new("2949482758682047"),
+            BusinessId::new("520744086200222")
+        ]
+    );
 
     let u = account_update("fields/account_update_partner_app_installed.json");
     assert_eq!(u.event, AccountUpdateEvent::PartnerAppInstalled);
-    assert_eq!(
-        u.waba_info.unwrap().partner_app_id.unwrap().as_str(),
-        "5731794616896507"
-    );
+    let info = u.waba_info.unwrap();
+    assert_eq!(info.partner_app_id.unwrap().as_str(), "5731794616896507");
+    assert_eq!(info.waba_id.unwrap().as_str(), "1191624265890717");
+    assert_eq!(info.owner_business_id.unwrap().as_str(), "2329417887457253");
+    assert_eq!(info.solution_id.as_deref(), Some("1715120619246906"));
+    assert_eq!(info.solution_partner_business_ids.len(), 2);
 
     let u = account_update("fields/account_update_partner_app_uninstalled.json");
     assert_eq!(u.event, AccountUpdateEvent::PartnerAppUninstalled);
+    let info = u.waba_info.unwrap();
+    assert_eq!(info.waba_id.unwrap().as_str(), "184943124712545");
+    assert_eq!(info.owner_business_id.unwrap().as_str(), "1284923862322270");
+    assert_eq!(info.partner_app_id.unwrap().as_str(), "869361281603019");
+    assert_eq!(
+        info.solution_id, None,
+        "omitted from PARTNER_APP_UNINSTALLED"
+    );
+    assert!(info.solution_partner_business_ids.is_empty());
 
     let u = account_update("fields/account_update_certification.json");
     let cert = u.partner_client_certification_info.unwrap();
@@ -189,6 +210,10 @@ fn account_update_every_example() {
     let u = account_update("fields/account_update_partner_removed.json");
     assert_eq!(u.event, AccountUpdateEvent::PartnerRemoved);
     assert!(u.disconnection_info.is_none());
+    // What a Solution Partner revokes its credit line for.
+    let info = u.waba_info.unwrap();
+    assert_eq!(info.waba_id.unwrap().as_str(), "980198427658004");
+    assert_eq!(info.owner_business_id.unwrap().as_str(), "2329417887457253");
 
     let u = account_update("fields/account_update_partner_removed_disconnection.json");
     let d = u.disconnection_info.unwrap();

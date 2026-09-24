@@ -10,7 +10,8 @@
 //! onboarding-customers-as-a-solution-partner, onboarding-business-app-users,
 //! reconnect-offboarded-coexistence-clients}`, `access-tokens`,
 //! `permissions`, `solution-providers/{manage-accounts, manage-webhooks,
-//! registering-phone-numbers}`, `webhooks/override`.
+//! registering-phone-numbers, share-and-revoke-credit-lines,
+//! manage-system-users}`, `webhooks/override`.
 //!
 //! Doc paths are relative to
 //! `https://developers.facebook.com/documentation/business-messaging/whatsapp/`
@@ -23,8 +24,9 @@
 //! | [`LaunchOptions`] | JSON for `FB.login` (config id, `featureType` incl. coexistence, pre-fill) |
 //! | [`SignupSessions`] | binds an attempt to the merchant that started it (single-use state) |
 //! | [`EmbeddedSignupEvent`] | parses the `WA_EMBEDDED_SIGNUP` message event the page forwards |
-//! | [`EmbeddedSignup::onboard`] | code → verified, stored, subscribed, registered business |
+//! | [`EmbeddedSignup::onboard`] | code → verified, stored, subscribed, (credit line shared,) registered business |
 //! | [`TokenVault`] | business tokens encrypted at rest, by WABA and by phone number |
+//! | [`SolutionPartner`] | per deployment: onboard as a Solution Partner, funding each customer with your credit line |
 //!
 //! # End to end
 //!
@@ -101,24 +103,63 @@
 //! | `verify_assets` | WABA ∈ the token's grants; `GET /{WABA}?fields=owner_business_info`; the claimed number ∈ `GET /{WABA}/phone_numbers` | yes (read-only) |
 //! | `store_token` | encrypt into the [`TokenVault`], indexing every number of the WABA | yes (overwrites) |
 //! | `subscribe_app` | `POST /{WABA}/subscribed_apps` | yes, with the same override argument |
+//! | `assign_system_user` | Solution Partner, [`CreditSharing::ShareAndAttach`] only: `POST /{WABA}/assigned_users` (system user token) | yes (sets the same grant) |
+//! | `share_credit_line` | Solution Partner only: check, then share the credit line (see below) | yes: it checks before it posts |
 //! | `register_phone` | `POST /{PHONE}/register` | yes, but counts against 10 per 72 h |
 //!
 //! **Retrying a failed `onboard` is not safe**: the code is spent by the
-//! first step. The token is stored **before** subscribing and registering,
-//! and only after Meta confirmed which WABA it grants. That order is
-//! deliberate: a failure in the last two steps (a wrong PIN on a number that
-//! already has two-step verification, a callback override that fails
-//! verification, a Meta hiccup) would otherwise lose the token and send the
-//! merchant through the whole flow again. Fix the cause and call
-//! [`EmbeddedSignup::resume`] with the same request: it loads the stored
-//! token (`load_token`), checks the request against what onboarding
-//! verified (`verify_assets`), and redoes only those two steps.
+//! first step. The token is stored **before** the steps after it, and only
+//! after Meta confirmed which WABA it grants. That order is deliberate: a
+//! failure in a later step (a wrong PIN on a number that already has
+//! two-step verification, a callback override that fails verification, a
+//! credit line Meta refuses, a Meta hiccup) would otherwise lose the token
+//! and send the merchant through the whole flow again. Fix the cause and
+//! call [`EmbeddedSignup::resume`] with the same request: it loads the
+//! stored token (`load_token`), checks the request against what onboarding
+//! verified (`verify_assets`), and redoes only the steps after
+//! `store_token`.
 //!
 //! Meta does not document an "already registered" success response for
 //! `register` (its "already registered or invalid state" example shares
 //! code `100` with other errors), so none is treated as success. `133016`
 //! (too many (de)registrations: the number is locked for 72 hours) is
 //! [`wa_core::ErrorKind::Registration`] and is never retried automatically.
+//!
+//! # Solution Partner mode
+//!
+//! One choice per deployment. Without [`EmbeddedSignup::solution_partner`]
+//! onboarding is the Tech Provider flow: no credit line calls, and the
+//! merchant adds a payment method in WhatsApp Manager. With it, following
+//! `embedded-signup/onboarding-customers-as-a-solution-partner` (subscribe,
+//! share the credit line, register):
+//!
+//! - The WABA's currency comes from [`OnboardingRequest::currency`], else
+//!   [`SolutionPartner::default_currency`]; with neither, `onboard` fails
+//!   with a [`ValidationError`](wa_core::error::ValidationError) before the
+//!   code is exchanged. A Tech Provider request naming a currency is refused
+//!   the same way.
+//! - [`CreditSharing::ShareAndAttach`] (default, Meta's current method)
+//!   adds your system user to the WABA (`assign_system_user`), then calls
+//!   `whatsapp_credit_sharing_and_attach` with your system user token.
+//!   [`CreditSharing::ShareThenAttach`] (Meta's alternate method) calls
+//!   `whatsapp_credit_sharing` with the **verified** owner business (never
+//!   the browser's `business_id`) and your system user token, then
+//!   `whatsapp_credit_attach` with the merchant's business token.
+//! - `share_credit_line` **checks before it posts**, in `onboard` and in
+//!   `resume` alike: the records of your line shared with the customer
+//!   business (`owning_credit_allocation_configs`) and any stored allocation
+//!   are compared with the WABA's `primary_funding_id`; when one already
+//!   funds it, nothing is posted. A share that timed out may have succeeded,
+//!   and Meta refuses to change a line once attached, so a share is never
+//!   posted again blindly: a resumed step that cannot check refuses instead.
+//! - The allocation id is returned in [`Onboarded::allocation_config_id`]
+//!   and stored with the token ([`StoredBusinessToken::allocation_config_id`]).
+//! - [`EmbeddedSignup::revoke_credit_line`] revokes from the stored owner
+//!   business id, for when the customer removes you
+//!   (`account_update` `PARTNER_REMOVED`) and the WABA can no longer be
+//!   read. It revokes for every WABA of that business.
+//!
+//! The lower-level calls are in [`crate::credit_lines`].
 //!
 //! # The session info is a claim
 //!
@@ -165,6 +206,7 @@
 mod event;
 mod launch;
 mod onboard;
+mod partner;
 mod session;
 mod token;
 mod vault;
@@ -179,6 +221,7 @@ pub use launch::{
     PreVerifiedPhone, Setup, WabaPrefill,
 };
 pub use onboard::{Onboarded, OnboardingRequest, steps};
+pub use partner::{CreditSharing, SolutionPartner};
 pub use session::{SESSION_NAMESPACE, SignupSessions, SignupState};
 pub use token::{
     BusinessToken, GranularScope, SignupCode, TokenDebug, TokenType, WHATSAPP_BUSINESS_MANAGEMENT,
@@ -204,6 +247,7 @@ pub struct EmbeddedSignup {
     client: Client,
     app: AppCredentials,
     inspector: Option<AccessToken>,
+    partner: Option<SolutionPartner>,
 }
 
 impl Client {
@@ -213,6 +257,7 @@ impl Client {
             client: self.clone(),
             app,
             inspector: None,
+            partner: None,
         }
     }
 }

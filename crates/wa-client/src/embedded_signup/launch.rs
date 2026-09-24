@@ -325,18 +325,32 @@ fn ser_feature_name<S: Serializer>(name: &FeatureName, s: S) -> Result<S::Ok, S:
 
 /// `extras.version`. Plain v4 has no value: the login configuration selects
 /// it.
+///
+/// Meta deprecates Embedded Signup v2 and v3, **including their public
+/// previews**, on 2026-10-15
+/// (`embedded-signup/onboarding-customers-as-a-solution-partner`, updated
+/// 2026-08-05; the other pages still name only v2). Those four variants are
+/// `#[deprecated]`: migrate to v4, which needs no `version` at all.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum EsVersion {
     /// `v4-public-preview` (phone-number-first flow).
     V4PublicPreview,
     /// `v3-public-preview`.
+    #[deprecated(
+        note = "Embedded Signup v3 and its public preview are deprecated on 2026-10-15: use v4 (no `version`)"
+    )]
     V3PublicPreview,
     /// `v2-public-preview`.
+    #[deprecated(
+        note = "Embedded Signup v2 and its public preview are deprecated on 2026-10-15: use v4 (no `version`)"
+    )]
     V2PublicPreview,
     /// `v3`.
+    #[deprecated(note = "Embedded Signup v3 is deprecated on 2026-10-15: use v4 (no `version`)")]
     V3,
-    /// `v2` (deprecated on 2026-10-15).
+    /// `v2`.
+    #[deprecated(note = "Embedded Signup v2 is deprecated on 2026-10-15: use v4 (no `version`)")]
     V2,
     /// Any other value.
     Other(String),
@@ -344,6 +358,7 @@ pub enum EsVersion {
 
 impl EsVersion {
     /// The string Meta expects.
+    #[allow(deprecated)] // it still has to spell them
     pub fn as_str(&self) -> &str {
         match self {
             Self::V4PublicPreview => "v4-public-preview",
@@ -397,7 +412,8 @@ impl LaunchOptions {
         self
     }
 
-    /// Set `version` (only for v2/v3/previews).
+    /// Set `version` (only for the v4 public preview, and the deprecated
+    /// v2/v3 and their previews).
     #[must_use]
     pub fn version(mut self, version: EsVersion) -> Self {
         self.extras.version = Some(version);
@@ -671,6 +687,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // the app-only-install page's example is v3
     fn bypass_and_app_only_install_shapes() {
         // bypass-phone-addition.
         let v = LaunchOptions::new("C")
@@ -702,6 +719,22 @@ mod tests {
               }
             })
         );
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn deprecated_versions_still_spell_what_meta_expects() {
+        for (version, wire) in [
+            (EsVersion::V4PublicPreview, "v4-public-preview"),
+            (EsVersion::V3PublicPreview, "v3-public-preview"),
+            (EsVersion::V2PublicPreview, "v2-public-preview"),
+            (EsVersion::V3, "v3"),
+            (EsVersion::V2, "v2"),
+            (EsVersion::Other("v5".into()), "v5"),
+        ] {
+            let v = LaunchOptions::new("C").version(version).to_json().unwrap();
+            assert_eq!(v["extras"]["version"], wire);
+        }
     }
 
     #[test]

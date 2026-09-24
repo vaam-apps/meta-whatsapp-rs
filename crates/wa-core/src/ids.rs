@@ -159,6 +159,17 @@ id_type!(
     /// `header_handle` or a `profile_picture_handle`.
     UploadHandle
 );
+id_type!(
+    /// A Solution Partner's extended credit line id ("credit line ID",
+    /// `GET /{BUSINESS_ID}/extendedcredits`).
+    CreditLineId
+);
+id_type!(
+    /// An extended credit allocation configuration id: the record of one
+    /// credit line shared with one customer business
+    /// (`allocation_config_id`).
+    AllocationConfigId
+);
 
 #[cfg(test)]
 mod tests {

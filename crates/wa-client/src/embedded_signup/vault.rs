@@ -6,8 +6,11 @@
 //!
 //! - `waba/<WABA_ID>` → a JSON record
 //!   `{v, kid, nonce, ciphertext, waba_id, business_id?, phone_number_ids,
-//!   created_at, expires_at?}`. `nonce` and `ciphertext` are standard
-//!   base64; timestamps are unix seconds.
+//!   created_at, expires_at?, allocation_config_id?}`. `nonce` and
+//!   `ciphertext` are standard base64; timestamps are unix seconds.
+//!   `allocation_config_id` (Solution Partner onboarding only: the credit
+//!   line's allocation for this WABA) is omitted when unset, so a Tech
+//!   Provider record is written exactly as before it existed.
 //! - `phone/<PHONE_NUMBER_ID>` → `{"waba_id": …}`, the index behind
 //!   [`TokenVault::get_by_phone_number`] (webhooks carry the phone number
 //!   id; this finds the token to answer with). Keyed by Meta's phone number
@@ -72,7 +75,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use wa_core::clock::{Clock, SystemClock};
 use wa_core::error::{CryptoError, StorageError, ValidationError};
-use wa_core::ids::{BusinessId, PhoneNumberId, WabaId};
+use wa_core::ids::{AllocationConfigId, BusinessId, PhoneNumberId, WabaId};
 use wa_core::secret::{AccessToken, SecretBytes};
 use wa_core::store::{Expiry, KvStore, StoreKey, Versioned};
 use wa_core::{Error, Result};
@@ -229,6 +232,10 @@ pub struct StoredBusinessToken {
     pub created_at: Option<OffsetDateTime>,
     /// When the token expires, if it does.
     pub expires_at: Option<OffsetDateTime>,
+    /// The partner's credit line allocation that funds this WABA, recorded
+    /// by Solution Partner onboarding (`share_credit_line`). `None` for a
+    /// Tech Provider.
+    pub allocation_config_id: Option<AllocationConfigId>,
 }
 
 impl StoredBusinessToken {
@@ -241,6 +248,7 @@ impl StoredBusinessToken {
             phone_number_ids: Vec::new(),
             created_at: None,
             expires_at: None,
+            allocation_config_id: None,
         }
     }
 
@@ -266,6 +274,13 @@ impl StoredBusinessToken {
     #[must_use]
     pub fn expires_at(mut self, at: OffsetDateTime) -> Self {
         self.expires_at = Some(at);
+        self
+    }
+
+    /// Set the credit line allocation that funds the WABA.
+    #[must_use]
+    pub fn allocation_config_id(mut self, id: impl Into<AllocationConfigId>) -> Self {
+        self.allocation_config_id = Some(id.into());
         self
     }
 
@@ -333,6 +348,8 @@ struct Record {
     created_at: OffsetDateTime,
     #[serde(default, with = "time::serde::timestamp::option")]
     expires_at: Option<OffsetDateTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    allocation_config_id: Option<AllocationConfigId>,
 }
 
 /// The encrypted part, as written: borrows the token instead of copying it
@@ -347,6 +364,8 @@ struct SealedRef<'a> {
     created_at: OffsetDateTime,
     #[serde(with = "time::serde::timestamp::option")]
     expires_at: Option<OffsetDateTime>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    allocation_config_id: Option<&'a AllocationConfigId>,
 }
 
 /// The encrypted part, as read back. The token moves straight into an
@@ -364,6 +383,8 @@ struct Sealed {
     created_at: OffsetDateTime,
     #[serde(default, with = "time::serde::timestamp::option")]
     expires_at: Option<OffsetDateTime>,
+    #[serde(default)]
+    allocation_config_id: Option<AllocationConfigId>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -573,6 +594,7 @@ impl TokenVault {
             phone_number_ids: &token.phone_number_ids,
             created_at,
             expires_at: token.expires_at,
+            allocation_config_id: token.allocation_config_id.as_ref(),
         })
         .map(SecretBytes::new)
         .map_err(|_| CryptoError::Encrypt)?;
@@ -598,6 +620,7 @@ impl TokenVault {
             phone_number_ids: token.phone_number_ids.clone(),
             created_at,
             expires_at: token.expires_at,
+            allocation_config_id: token.allocation_config_id.clone(),
         })
     }
 
@@ -641,6 +664,7 @@ impl TokenVault {
             phone_number_ids: sealed.phone_number_ids,
             created_at: Some(sealed.created_at),
             expires_at: sealed.expires_at,
+            allocation_config_id: sealed.allocation_config_id,
         })
     }
 }
@@ -868,6 +892,79 @@ pub(crate) mod tests {
         );
     }
 
+    /// The Solution Partner allocation id is sealed like the rest, the
+    /// clear copy is only for operators, and a record without one (a Tech
+    /// Provider's, or any written before the field existed) is unchanged.
+    #[tokio::test]
+    async fn the_allocation_id_is_sealed_and_optional() {
+        let kv = kv();
+        let v = vault(&kv, VaultKeys::new(key("k1", 7)));
+        v.store(&sample("W1").allocation_config_id("58501441721238"))
+            .await
+            .unwrap();
+        let got = v.get(&WabaId::new("W1")).await.unwrap().unwrap();
+        assert_eq!(
+            got.allocation_config_id,
+            Some(AllocationConfigId::new("58501441721238"))
+        );
+        let mut rec = raw_json(&kv, "waba/W1").await;
+        assert_eq!(rec["allocation_config_id"], "58501441721238");
+        rec["allocation_config_id"] = "EDITED".into();
+        put_json(&kv, "waba/W1", &rec).await;
+        assert_eq!(
+            v.get(&WabaId::new("W1"))
+                .await
+                .unwrap()
+                .unwrap()
+                .allocation_config_id,
+            Some(AllocationConfigId::new("58501441721238")),
+            "the authenticated copy wins"
+        );
+
+        v.store(&sample("W2")).await.unwrap();
+        let rec = raw_json(&kv, "waba/W2").await;
+        assert!(
+            rec.get("allocation_config_id").is_none(),
+            "no key when unset: {rec}"
+        );
+        assert_eq!(
+            v.get(&WabaId::new("W2"))
+                .await
+                .unwrap()
+                .unwrap()
+                .allocation_config_id,
+            None
+        );
+
+        // A sealed payload written before the field existed still opens.
+        let k = key("k1", 7);
+        let plaintext = serde_json::to_vec(&serde_json::json!({
+            "access_token": TOKEN, "waba_id": "W3", "business_id": null,
+            "phone_number_ids": [], "created_at": 1790251200, "expires_at": null
+        }))
+        .unwrap();
+        let nonce = [6u8; NONCE_LEN];
+        let ciphertext = k
+            .cipher()
+            .unwrap()
+            .encrypt(
+                &Nonce::from(nonce),
+                Payload {
+                    msg: &plaintext,
+                    aad: &aad(&WabaId::new("W3"), "k1"),
+                },
+            )
+            .unwrap();
+        let record = serde_json::json!({
+            "v": 1, "kid": "k1", "nonce": B64.encode(nonce), "ciphertext": B64.encode(ciphertext),
+            "waba_id": "W3", "phone_number_ids": [], "created_at": 1790251200
+        });
+        put_json(&kv, "waba/W3", &record).await;
+        let old = v.get(&WabaId::new("W3")).await.unwrap().unwrap();
+        assert_eq!(old.token.expose_secret(), TOKEN);
+        assert_eq!(old.allocation_config_id, None);
+    }
+
     #[tokio::test]
     async fn no_write_ever_contains_the_token() {
         // Every path that writes: store (record + index), re-store with a
@@ -1075,6 +1172,7 @@ pub(crate) mod tests {
             phone_number_ids: Vec::new(),
             created_at: datetime!(2026-09-24 12:00 UTC),
             expires_at: None,
+            allocation_config_id: None,
         };
         let plaintext = serde_json::to_vec(&sealed).unwrap();
         let nonce = [5u8; NONCE_LEN];
