@@ -136,6 +136,14 @@ pub struct StoredMessage {
     pub error: Option<serde_json::Value>,
 }
 
+impl StoredMessage {
+    /// The `kind` of a media message in a coexistence history sync
+    /// (`webhooks/reference/history`): Meta sends it without its media and
+    /// sends the content in a later `history` webhook, which
+    /// [`ConversationStore::fill_media_placeholder`] records into it.
+    pub const MEDIA_PLACEHOLDER: &'static str = "media_placeholder";
+}
+
 /// Inbox row.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationSummary {
@@ -144,13 +152,17 @@ pub struct ConversationSummary {
     /// Latest message of either direction.
     #[serde(with = "time::serde::rfc3339")]
     pub last_message_at: OffsetDateTime,
-    /// Latest inbound message; drives the customer service window.
+    /// Latest inbound message recorded with [`ConversationStore::append`];
+    /// drives the customer service window. Synced history
+    /// ([`ConversationStore::append_synced`]) never moves it.
     #[serde(with = "time::serde::rfc3339::option")]
     pub last_inbound_at: Option<OffsetDateTime>,
     /// Text preview of the latest message.
     pub last_text: Option<String>,
-    /// Inbound messages appended since the last [`ConversationStore::mark_read`],
-    /// counted by arrival: a late webhook for an older message still counts.
+    /// Inbound messages recorded with [`ConversationStore::append`] since
+    /// the last [`ConversationStore::mark_read`], counted by arrival: a late
+    /// webhook for an older message still counts. Synced history
+    /// ([`ConversationStore::append_synced`]) never does.
     pub unread: u64,
 }
 
@@ -162,8 +174,43 @@ pub struct ConversationSummary {
 #[async_trait]
 pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
     /// Insert a message. Returns `false` (and changes nothing) if a message
-    /// with the same id exists — webhook retries make this common.
+    /// with the same id exists — webhook retries make this common. An
+    /// inbound message moves the conversation's `last_inbound_at` (the
+    /// customer service window) to its timestamp if later, and counts as
+    /// unread.
     async fn append(&self, message: StoredMessage) -> Result<bool, StorageError>;
+
+    /// Insert a message synchronized from the WhatsApp Business app
+    /// (coexistence history): like [`append`](Self::append) — the same id
+    /// rule, history order and conversation `last_message_at` /
+    /// `last_text` — except that an inbound one neither moves
+    /// `last_inbound_at` nor counts as unread. Meta opens no customer
+    /// service window for a message sent before the business was onboarded
+    /// (`embedded-signup/onboarding-business-app-users`, "Customer service
+    /// window"), and the merchant has seen these messages in the app.
+    ///
+    /// The id rule spans both methods: a message stored by one is never
+    /// changed by the other.
+    async fn append_synced(&self, message: StoredMessage) -> Result<bool, StorageError>;
+
+    /// Record the content of message `id` of business number
+    /// `phone_number_id` if it is stored as a
+    /// [media placeholder](StoredMessage::MEDIA_PLACEHOLDER): its `kind`,
+    /// `text` and `payload` become the given ones, and so does the
+    /// conversation's `last_text` when it is the latest message. Its
+    /// conversation, direction, status, timestamps and error stay, and so
+    /// do `last_inbound_at` and the unread count. Returns whether it
+    /// changed: `false` when no message `id` is stored for that number or
+    /// it is not (or no longer) a placeholder, so a redelivered content
+    /// changes nothing.
+    async fn fill_media_placeholder(
+        &self,
+        phone_number_id: &PhoneNumberId,
+        id: &MessageId,
+        kind: String,
+        text: Option<String>,
+        payload: serde_json::Value,
+    ) -> Result<bool, StorageError>;
 
     /// Apply a status update to message `id` of business number
     /// `phone_number_id` if it [supersedes](DeliveryStatus::supersedes) the

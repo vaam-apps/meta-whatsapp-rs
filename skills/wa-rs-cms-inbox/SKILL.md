@@ -40,13 +40,14 @@ backwards). Statuses and revokes only change a message of the business
 number they arrived on. Run `postgres::migrate(&pool)` at startup for
 `PostgresConversationStore` (`wa-rs-storage`).
 
-Coexistence (the merchant keeps the WhatsApp Business app) is recorded
-too: `MessageEchoed` (sent from the app) as outbound `Sent`, in the
-customer's BSUID (else phone) conversation; `HistorySynced` message by
+Coexistence (the merchant keeps the WhatsApp Business app):
+`MessageEchoed` (sent from the app) is outbound `Sent`, in the customer's
+BSUID (else phone) conversation; `HistorySynced` is recorded message by
 message, outbound when `from` is the business number (status from
-`history_context`), else inbound. Chunks may come in any order; a
-declined sync (2593109) records nothing; a malformed item is skipped and
-logged by position, never failing the delivery.
+`history_context`), else inbound, and opens no reply window, never
+unread (`ConversationStore::append_synced`); a later media content fills
+its `media_placeholder` (`fill_media_placeholder`). A declined sync
+(2593109) records nothing; a malformed item is skipped, logged by position.
 
 ## Read and reply: ownership first
 
@@ -133,19 +134,17 @@ original `DeliveryStatus::Deleted`. Replies to a `wa_id` go to
 alone~~: until 4b47bf7 (2026-09-24, breaking). Custom stores now take the
 `phone_number_id` first. ~~A `wa_id` conversation replied without `+`~~:
 fixed in 2b2679a; on an older pin, `send` with `Recipient::phone` and the
-`+` yourself. ~~Coexistence echoes and history are not recorded~~: true
-until a3582b8 (2026-09-24); on an older pin, handle them in your own sink.
+`+` yourself. ~~Coexistence echoes and history are not recorded~~: until
+a3582b8. ~~Synced history opens the window, counts as unread, keeps its
+placeholders~~: until the `append_synced` port change (2026-09-24).
 
 ## What wa-rs does not do
 
 - Not recorded: calls (a call reopens the window on Meta's side but
-  `Inbox::window` cannot see it), media bytes (rows keep the media id;
-  download within 7 days), BSUID merges, synced contacts
-  ([open questions 32, 33, 35](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)).
-- Synced *inbound* history counts towards the window and unread count
-  like live messages (Meta opens no window for pre-onboarding messages:
-  its 131047 is then the refusal), and a synced media content is not
-  merged into its recorded `media_placeholder` (open question 35).
+  `Inbox::window` cannot see it:
+  [open question 32](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)),
+  media bytes (rows keep the media id; download within 7 days), BSUID
+  merges, the synced contacts (`smb_app_state_sync`).
 - Message ids are unique per store, not per business number (open
   question 33). No Redis `ConversationStore`.
 

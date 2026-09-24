@@ -4,6 +4,14 @@
 //!   DO NOTHING`) feeds the inbox-summary upsert through a data-modifying
 //!   CTE, so a duplicate id changes nothing and the summary can never
 //!   disagree with the history, without a client-side transaction.
+//!   `append_synced` is the same statement with the inbound effects
+//!   (`last_inbound_at`, `unread`) left out: nothing about a message's
+//!   origin is stored, because the summary is maintained when it is
+//!   written, so synced history needs no column of its own.
+//! - `fill_media_placeholder` is one statement too: the content update of
+//!   a row whose `kind` is still the placeholder, and the preview of its
+//!   conversation when it is the latest message. Two concurrent fills
+//!   cannot both apply: the second finds the row no longer a placeholder.
 //! - `update_status` applies [`DeliveryStatus::supersedes`] — the rule lives
 //!   in `wa-core`, not re-encoded in SQL — as a compare-and-swap on the
 //!   stored status: read it, decide in Rust, then `UPDATE … WHERE status =
@@ -36,8 +44,8 @@ const MAX_STATUS_ROUNDS: usize = 16;
 /// `ConversationStore` over a Postgres pool. Cheap to clone.
 ///
 /// Unread counts are by **arrival** (inbound messages appended since the
-/// last `mark_read`), like the in-memory store. Timestamps are stored with
-/// microsecond precision.
+/// last `mark_read`; synced history never counts), like the in-memory
+/// store. Timestamps are stored with microsecond precision.
 #[derive(Clone)]
 pub struct PostgresConversationStore {
     pool: PgPool,
@@ -55,6 +63,8 @@ impl fmt::Debug for PostgresConversationStore {
 
 struct Sql {
     append: Arc<str>,
+    append_synced: Arc<str>,
+    fill_placeholder: Arc<str>,
     status_get: Arc<str>,
     status_swap: Arc<str>,
     messages: Arc<str>,
@@ -71,37 +81,71 @@ const MESSAGE_COLUMNS: &str =
 const SUMMARY_COLUMNS: &str =
     "phone_number_id, contact, last_message_at, last_inbound_at, last_text, unread";
 
+/// The `append` statement. `inbound_at` and `unread` are the SQL
+/// expressions an inserted row contributes to its conversation's
+/// `last_inbound_at` and `unread`.
+fn append_sql(messages: &str, conversations: &str, inbound_at: &str, unread: &str) -> String {
+    // The summary's "newest message" is the max by (ts, id), the same order
+    // the history pages in.
+    let newer = "(EXCLUDED.last_message_at, EXCLUDED.last_message_id) \
+                 > (c.last_message_at, c.last_message_id)";
+    format!(
+        "WITH inserted AS ( \
+           INSERT INTO {messages} ({MESSAGE_COLUMNS}) \
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+           ON CONFLICT (id) DO NOTHING \
+           RETURNING id, phone_number_id, contact, direction, text, ts \
+         ) \
+         INSERT INTO {conversations} AS c \
+           (phone_number_id, contact, last_message_at, last_message_id, last_text, \
+            last_inbound_at, unread) \
+         SELECT phone_number_id, contact, ts, id, text, {inbound_at}, {unread} \
+         FROM inserted \
+         ON CONFLICT (phone_number_id, contact) DO UPDATE SET \
+           last_message_at = CASE WHEN {newer} THEN EXCLUDED.last_message_at ELSE c.last_message_at END, \
+           last_message_id = CASE WHEN {newer} THEN EXCLUDED.last_message_id ELSE c.last_message_id END, \
+           last_text = CASE WHEN {newer} THEN EXCLUDED.last_text ELSE c.last_text END, \
+           last_inbound_at = GREATEST(c.last_inbound_at, EXCLUDED.last_inbound_at), \
+           unread = c.unread + EXCLUDED.unread \
+         RETURNING 1 AS appended"
+    )
+}
+
 impl Sql {
     fn new(prefix: &TablePrefix) -> Self {
         let messages = prefix.table("messages");
         let conversations = prefix.table("conversations");
-        // The summary's "newest message" is the max by (ts, id), the same
-        // order the history pages in.
-        let newer = "(EXCLUDED.last_message_at, EXCLUDED.last_message_id) \
-                     > (c.last_message_at, c.last_message_id)";
         let arc = |s: String| -> Arc<str> { Arc::from(s) };
         Self {
-            append: arc(format!(
-                "WITH inserted AS ( \
-                   INSERT INTO {messages} ({MESSAGE_COLUMNS}) \
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
-                   ON CONFLICT (id) DO NOTHING \
-                   RETURNING id, phone_number_id, contact, direction, text, ts \
+            append: arc(append_sql(
+                &messages,
+                &conversations,
+                "CASE WHEN direction = 'inbound' THEN ts END",
+                "CASE WHEN direction = 'inbound' THEN 1 ELSE 0 END",
+            )),
+            // GREATEST ignores the NULL and `unread` grows by 0: a synced
+            // message leaves both as they were, and a conversation it
+            // creates starts with neither.
+            append_synced: arc(append_sql(
+                &messages,
+                &conversations,
+                "NULL::timestamptz",
+                "0",
+            )),
+            // Data-modifying CTEs always run to completion, whether or not
+            // the final SELECT reads them.
+            fill_placeholder: arc(format!(
+                "WITH filled AS ( \
+                   UPDATE {messages} SET kind = $3, text = $4, payload = $5 \
+                   WHERE id = $1 AND phone_number_id = $2 AND kind = $6 \
+                   RETURNING id, phone_number_id, contact, text \
+                 ), preview AS ( \
+                   UPDATE {conversations} AS c SET last_text = f.text \
+                   FROM filled f \
+                   WHERE c.phone_number_id = f.phone_number_id AND c.contact = f.contact \
+                     AND c.last_message_id = f.id \
                  ) \
-                 INSERT INTO {conversations} AS c \
-                   (phone_number_id, contact, last_message_at, last_message_id, last_text, \
-                    last_inbound_at, unread) \
-                 SELECT phone_number_id, contact, ts, id, text, \
-                   CASE WHEN direction = 'inbound' THEN ts END, \
-                   CASE WHEN direction = 'inbound' THEN 1 ELSE 0 END \
-                 FROM inserted \
-                 ON CONFLICT (phone_number_id, contact) DO UPDATE SET \
-                   last_message_at = CASE WHEN {newer} THEN EXCLUDED.last_message_at ELSE c.last_message_at END, \
-                   last_message_id = CASE WHEN {newer} THEN EXCLUDED.last_message_id ELSE c.last_message_id END, \
-                   last_text = CASE WHEN {newer} THEN EXCLUDED.last_text ELSE c.last_text END, \
-                   last_inbound_at = GREATEST(c.last_inbound_at, EXCLUDED.last_inbound_at), \
-                   unread = c.unread + EXCLUDED.unread \
-                 RETURNING 1 AS appended"
+                 SELECT count(*) FROM filled"
             )),
             status_get: arc(format!(
                 "SELECT status FROM {messages} WHERE id = $1 AND phone_number_id = $2"
@@ -236,11 +280,11 @@ fn summary_from_row(row: &PgRow) -> Result<ConversationSummary, StorageError> {
     })
 }
 
-#[async_trait]
-impl ConversationStore for PostgresConversationStore {
-    async fn append(&self, message: StoredMessage) -> Result<bool, StorageError> {
+impl PostgresConversationStore {
+    /// Run an append statement (`sql`) for `message`.
+    async fn insert(&self, sql: &Arc<str>, message: &StoredMessage) -> Result<bool, StorageError> {
         let status = status_str(message.status)?;
-        let row = sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.append)))
+        let row = sqlx::query(AssertSqlSafe(Arc::clone(sql)))
             .bind(message.id.as_str())
             .bind(message.conversation.phone_number_id.as_str())
             .bind(message.conversation.contact.as_str())
@@ -256,6 +300,38 @@ impl ConversationStore for PostgresConversationStore {
             .await
             .map_err(backend)?;
         Ok(row.is_some())
+    }
+}
+
+#[async_trait]
+impl ConversationStore for PostgresConversationStore {
+    async fn append(&self, message: StoredMessage) -> Result<bool, StorageError> {
+        self.insert(&self.sql.append, &message).await
+    }
+
+    async fn append_synced(&self, message: StoredMessage) -> Result<bool, StorageError> {
+        self.insert(&self.sql.append_synced, &message).await
+    }
+
+    async fn fill_media_placeholder(
+        &self,
+        phone_number_id: &PhoneNumberId,
+        id: &MessageId,
+        kind: String,
+        text: Option<String>,
+        payload: serde_json::Value,
+    ) -> Result<bool, StorageError> {
+        let filled: i64 = sqlx::query_scalar(AssertSqlSafe(Arc::clone(&self.sql.fill_placeholder)))
+            .bind(id.as_str())
+            .bind(phone_number_id.as_str())
+            .bind(kind)
+            .bind(text)
+            .bind(payload)
+            .bind(StoredMessage::MEDIA_PLACEHOLDER)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(filled > 0)
     }
 
     async fn update_status(

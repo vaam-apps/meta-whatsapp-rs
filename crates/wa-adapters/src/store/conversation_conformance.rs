@@ -28,7 +28,18 @@
 //! - the inbox summary follows the newest message by `(timestamp, id)`, not
 //!   the most recently appended one;
 //! - unread counts inbound messages appended since the last `mark_read`, by
-//!   arrival, and concurrent appends are all counted.
+//!   arrival, and concurrent appends are all counted;
+//! - synced history (`append_synced`) is stored and ordered like any
+//!   message and moves the conversation's latest message, but never moves
+//!   `last_inbound_at` (the customer service window) nor the unread count,
+//!   even interleaved with concurrent live appends; the id rule spans
+//!   `append` and `append_synced`;
+//! - `fill_media_placeholder` rewrites the `kind`, `text` and `payload` of a
+//!   stored media placeholder of its business number, once, and nothing
+//!   else: not another number's row, not a message that is not (or no
+//!   longer) a placeholder, not the window or the unread count; the
+//!   conversation preview follows when the placeholder is the latest
+//!   message.
 
 use time::OffsetDateTime;
 use time::macros::datetime;
@@ -59,6 +70,9 @@ pub async fn run<S: ConversationStore + ?Sized>(store: &S) {
     zero_limit(store).await;
     concurrent_appends(store).await;
     concurrent_status_updates(store).await;
+    synced_history_opens_no_window_and_is_never_unread(store).await;
+    concurrent_live_and_synced_appends(store).await;
+    a_media_placeholder_is_filled_once(store).await;
 }
 
 const T0: OffsetDateTime = datetime!(2026-09-24 12:00 UTC);
@@ -803,5 +817,254 @@ async fn concurrent_status_updates<S: ConversationStore + ?Sized>(store: &S) {
         only_message(store, &r.key("c")).await.status,
         DeliveryStatus::Read,
         "concurrent updates end on the highest status"
+    );
+}
+
+/// Synced history (`append_synced`: messages from before the business was
+/// onboarded, which Meta opens no customer service window for and the
+/// merchant has read in the app) is history like any other message, but
+/// never moves `last_inbound_at` nor the unread count. An adapter that
+/// treats it like `append` fails here.
+async fn synced_history_opens_no_window_and_is_never_unread<S: ConversationStore + ?Sized>(
+    store: &S,
+) {
+    let r = Run::new("synced");
+    let key = r.key("c");
+    let first = r.msg("c", "s5", Direction::Inbound, 5, "from the app");
+    assert!(
+        store.append_synced(first.clone()).await.unwrap(),
+        "first synced append"
+    );
+    assert_eq!(
+        only_message(store, &key).await,
+        first,
+        "a synced message is stored verbatim"
+    );
+    let s = summary(store, &key)
+        .await
+        .expect("a synced message creates its conversation");
+    assert_eq!(
+        (s.last_inbound_at, s.unread),
+        (None, 0),
+        "a synced inbound message opens no window and is not unread"
+    );
+    assert_eq!(
+        (s.last_message_at, s.last_text.as_deref()),
+        (at(5), Some("from the app")),
+        "but it is the conversation's latest message"
+    );
+    assert_eq!(store.last_inbound_at(&key).await.unwrap(), None);
+
+    // A live inbound message, older: the window and the count follow it
+    // alone, and a newer synced one moves neither.
+    assert!(
+        store
+            .append(r.msg("c", "l1", Direction::Inbound, 1, "live"))
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .append_synced(r.msg("c", "s9", Direction::Inbound, 9, "newer, synced"))
+            .await
+            .unwrap()
+    );
+    let s = summary(store, &key).await.unwrap();
+    assert_eq!(
+        (s.last_inbound_at, s.unread),
+        (Some(at(1)), 1),
+        "only the live message counts"
+    );
+    assert_eq!(
+        (s.last_message_at, s.last_text.as_deref()),
+        (at(9), Some("newer, synced"))
+    );
+    assert_eq!(store.last_inbound_at(&key).await.unwrap(), Some(at(1)));
+
+    // One id rule across both methods: a replay by either changes nothing.
+    assert!(
+        !store
+            .append_synced(r.msg("c", "l1", Direction::Inbound, 1, "again, synced"))
+            .await
+            .unwrap(),
+        "a live message replayed as synced"
+    );
+    assert!(
+        !store
+            .append(r.msg("c", "s9", Direction::Inbound, 9, "again, live"))
+            .await
+            .unwrap(),
+        "a synced message replayed live"
+    );
+    assert!(
+        !store
+            .append_synced(r.msg("c", "s5", Direction::Inbound, 5, "again"))
+            .await
+            .unwrap(),
+        "a synced message replayed as synced"
+    );
+    let s = summary(store, &key).await.unwrap();
+    assert_eq!(
+        (s.last_inbound_at, s.unread),
+        (Some(at(1)), 1),
+        "replays change neither the window nor the count"
+    );
+    let texts: Vec<_> = store
+        .messages(&key, None, 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|m| m.text.unwrap_or_default())
+        .collect();
+    assert_eq!(texts, ["newer, synced", "from the app", "live"]);
+
+    // After mark_read, synced messages still add nothing.
+    store.mark_read(&key).await.unwrap();
+    store
+        .append_synced(r.msg("c", "s20", Direction::Inbound, 20, "latest, synced"))
+        .await
+        .unwrap();
+    let s = summary(store, &key).await.unwrap();
+    assert_eq!((s.last_inbound_at, s.unread), (Some(at(1)), 0));
+    assert_eq!(s.last_message_at, at(20));
+}
+
+/// Live and synced appends racing on one conversation: every live inbound
+/// message is counted and moves the window, no synced one does.
+async fn concurrent_live_and_synced_appends<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("synced-race");
+    let key = r.key("c");
+    let live = (0..8).map(|i| {
+        let m = r.msg("c", &format!("live{i}"), Direction::Inbound, 2 * i, "live");
+        store.append(m)
+    });
+    let synced = (0..8).map(|i| {
+        let m = r.msg(
+            "c",
+            &format!("synced{i}"),
+            Direction::Inbound,
+            2 * i + 1,
+            "synced",
+        );
+        store.append_synced(m)
+    });
+    let (live, synced) = futures::future::join(
+        futures::future::join_all(live),
+        futures::future::join_all(synced),
+    )
+    .await;
+    for appended in live.into_iter().chain(synced) {
+        assert!(appended.unwrap());
+    }
+    assert_eq!(store.messages(&key, None, 100).await.unwrap().len(), 16);
+    let s = summary(store, &key).await.unwrap();
+    assert_eq!(s.unread, 8, "only live messages are unread");
+    assert_eq!(
+        s.last_inbound_at,
+        Some(at(14)),
+        "the window follows the latest live message"
+    );
+    assert_eq!(s.last_message_at, at(15), "a synced message is the latest");
+}
+
+/// `fill_media_placeholder` rewrites a stored placeholder's content once,
+/// on its own business number, and nothing else.
+async fn a_media_placeholder_is_filled_once<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("placeholder");
+    let other = Run::new("placeholder-other");
+    let key = r.key("c");
+    let placeholder = StoredMessage {
+        kind: StoredMessage::MEDIA_PLACEHOLDER.to_owned(),
+        text: None,
+        payload: serde_json::json!({
+            "type": "media_placeholder",
+            "history_context": {"status": "PLAYED"}
+        }),
+        status: DeliveryStatus::Played,
+        status_at: Some(at(4)),
+        ..r.msg("c", "p3", Direction::Outbound, 3, "")
+    };
+    assert!(store.append_synced(placeholder.clone()).await.unwrap());
+    let content = serde_json::json!({
+        "type": "image",
+        "image": {"id": "24230790383178626", "caption": "Black Prince echeveria"}
+    });
+    let fill = |pn, id, caption: &str| {
+        store.fill_media_placeholder(
+            pn,
+            id,
+            "image".to_owned(),
+            Some(caption.to_owned()),
+            content.clone(),
+        )
+    };
+    assert!(
+        !fill(&other.pn, &placeholder.id, "wrong number")
+            .await
+            .unwrap(),
+        "a placeholder is only filled on its own business number"
+    );
+    let unknown = r.id("never-appended");
+    assert!(
+        !fill(&r.pn, &unknown, "nobody").await.unwrap(),
+        "an unknown id fills nothing"
+    );
+    assert_eq!(only_message(store, &key).await, placeholder);
+
+    assert!(
+        fill(&r.pn, &placeholder.id, "Black Prince echeveria")
+            .await
+            .unwrap(),
+        "the placeholder is filled"
+    );
+    let filled = StoredMessage {
+        kind: "image".to_owned(),
+        text: Some("Black Prince echeveria".to_owned()),
+        payload: content.clone(),
+        ..placeholder.clone()
+    };
+    assert_eq!(
+        only_message(store, &key).await,
+        filled,
+        "only kind, text and payload change"
+    );
+    assert_eq!(
+        summary(store, &key).await.unwrap().last_text.as_deref(),
+        Some("Black Prince echeveria"),
+        "the preview of the latest message follows"
+    );
+    assert!(
+        !fill(&r.pn, &placeholder.id, "redelivered").await.unwrap(),
+        "a placeholder is filled once"
+    );
+    assert_eq!(only_message(store, &key).await, filled);
+
+    // A message that never was a placeholder is never rewritten, and a
+    // placeholder that is not the latest message leaves the preview (and
+    // the window, and the count) alone.
+    let live = r.msg("c", "t1", Direction::Inbound, 1, "hello");
+    assert!(store.append(live.clone()).await.unwrap());
+    assert!(!fill(&r.pn, &live.id, "not a placeholder").await.unwrap());
+    let older = StoredMessage {
+        kind: StoredMessage::MEDIA_PLACEHOLDER.to_owned(),
+        text: None,
+        ..r.msg("c", "p0", Direction::Inbound, 0, "")
+    };
+    assert!(store.append_synced(older.clone()).await.unwrap());
+    assert!(fill(&r.pn, &older.id, "older photo").await.unwrap());
+    let history = store.messages(&key, None, 10).await.unwrap();
+    let find = |id: &MessageId| history.iter().find(|m| &m.id == id).unwrap().clone();
+    assert_eq!(find(&live.id), live, "not a placeholder: unchanged");
+    assert_eq!(find(&older.id).text.as_deref(), Some("older photo"));
+    let s = summary(store, &key).await.unwrap();
+    assert_eq!(
+        s.last_text.as_deref(),
+        Some("Black Prince echeveria"),
+        "the preview stays the latest message's"
+    );
+    assert_eq!(
+        (s.last_inbound_at, s.unread),
+        (Some(at(1)), 1),
+        "filling moves neither the window nor the count"
     );
 }

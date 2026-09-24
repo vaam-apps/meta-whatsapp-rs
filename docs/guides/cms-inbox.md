@@ -152,7 +152,8 @@ let older = messages.last().map(|m| (m.timestamp, m.id.clone()));
   the group id for group messages, else the customer's business-scoped user
   id (BSUID, e.g. `US.1349…`), else the `wa_id` (digits, no `+`).
 - `ConversationSummary.unread` counts inbound messages since the last
-  `inbox.mark_read(&key)`.
+  `inbox.mark_read(&key)`; synced coexistence history never counts
+  ([below](#coexistence-the-merchant-also-uses-the-whatsapp-business-app)).
 - `StoredMessage.payload` keeps the webhook's message JSON (media ids
   included); `text` is a plain preview. Download media while the id is valid
   (7 days for ids from webhooks):
@@ -279,16 +280,24 @@ matches the one on the merchant's phone:
   declined sync (error `2593109`) records nothing. One malformed item is
   skipped and logged by position, never failing the delivery.
 
-Two gaps remain ([open question](../../OPEN_QUESTIONS.md#cms-inbox) 35):
-synced *inbound* messages count towards `Inbox::window_is_open` and the
-unread count like live ones, although Meta opens no window for messages
-from before onboarding (Meta then refuses a free-form reply with 131047,
-the same `ErrorKind`); and the media content Meta sends after a
-`media_placeholder` is not merged into the recorded placeholder (handle
-`HistorySynced`'s `messages` / `message_echoes` in your own sink if you
-need it). Meta advises capturing large history webhooks and processing
-them asynchronously; `InboxSink` records them while the request waits,
-so a very large sync can take several of Meta's redeliveries to finish.
+Synced history is part of the conversation (it can be its latest
+message), but a synced *inbound* message neither opens the reply window
+(`Inbox::window_is_open` stays closed: Meta opens no window for a message
+sent before onboarding, and refuses a free-form reply with 131047) nor
+counts as unread (the merchant read it in the app). The store records it
+with `ConversationStore::append_synced`.
+
+A media message arrives in the history as a `media_placeholder` without
+its media; Meta sends the content (with the media id) in a later
+`history` webhook, for media from the 14 days before onboarding. That
+content replaces the placeholder's kind, text and payload
+(`ConversationStore::fill_media_placeholder`); the row keeps the thread's
+conversation, direction, status and timestamp. A content whose
+placeholder never arrived becomes a row of its own.
+
+Meta advises capturing large history webhooks and processing them
+asynchronously; `InboxSink` records them while the request waits, so a
+very large sync can take several of Meta's redeliveries to finish.
 
 ## Not recorded
 

@@ -49,7 +49,7 @@ leaks its library's types through a port.
 | --- | --- | --- |
 | `transport::HttpTransport` | `send`, `send_streaming` | rustdoc; non-2xx is *not* an error at this layer |
 | `store::KvStore` | `get`, `put`, `put_if_absent`, `compare_and_swap`, `delete` | `wa_adapters::store::conformance` (executable) |
-| `store::ConversationStore` | `append`, `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at` | `wa_adapters::store::conversation_conformance` (executable) |
+| `store::ConversationStore` | `append`, `append_synced` (coexistence history: no window, never unread), `fill_media_placeholder`, `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at` | `wa_adapters::store::conversation_conformance` (executable) |
 | `sink::EventSink<E>` | `deliver` | rustdoc |
 | `clock::Clock` | `now` | — |
 
@@ -466,11 +466,18 @@ exposes the 24-hour `CustomerServiceWindow`, and sends replies.
   id, or that does not parse on its own (when one bad item turned the
   whole value into `WebhookEvent::Unknown`) is skipped and logged by
   position, without content; storage errors still fail it.
-  Two known gaps need a port change (`OPEN_QUESTIONS.md` #35): synced
-  inbound messages move `last_inbound_at` and the unread count like live
-  ones (Meta opens no window for messages from before onboarding), and a
-  media content that follows a recorded `media_placeholder` is not merged
-  into it.
+  Synced history goes through `ConversationStore::append_synced`: an
+  inbound synced message neither moves `last_inbound_at` (Meta opens no
+  window for a message sent before onboarding,
+  `embedded-signup/onboarding-business-app-users`) nor counts as unread
+  (the merchant read it in the app). The media content Meta sends after a
+  `media_placeholder` (`history`'s `messages` / `message_echoes`) replaces
+  the placeholder's kind, text and payload through
+  `ConversationStore::fill_media_placeholder`; the row keeps the thread's
+  conversation, direction, status and timestamp. Both are part of the
+  executable conformance suite, so every adapter proves them. The Postgres
+  adapter needs no schema change: the summary is maintained when a row is
+  written, so the difference lives in the write.
 
 ## Typst (`wa-typst`)
 

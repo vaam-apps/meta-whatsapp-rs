@@ -205,9 +205,8 @@ notification queue on top must be idempotent itself: tag each message with
 - Secrets from the secret manager, none in the repository or the database.
 - [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) read: several defaults there
   (OTP issue limit, PIN policy, the provisional NUL replacement, a
-  dead-letter path for webhook batches, token refresh, how synced
-  coexistence history counts in the inbox) are product decisions still
-  open. The OTP namespace is required since d67b3ac.
+  dead-letter path for webhook batches, token refresh) are product
+  decisions still open. The OTP namespace is required since d67b3ac.
 - Upgrading from a wa-rs revision before e40b86f: outstanding OTP codes
   become `NotFound` once (their store keys now include the sending number),
   and issue limits restart ([otp-login.md](otp-login.md#3-wire-the-service)).

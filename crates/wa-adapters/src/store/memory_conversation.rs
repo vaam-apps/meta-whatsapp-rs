@@ -1,7 +1,8 @@
 //! In-process [`ConversationStore`]. Honours the full contract (dedup on id,
 //! the [`DeliveryStatus::supersedes`] rule, `(timestamp, id)` ordering with
-//! exclusive cursors, unread counting) within one process; history is lost
-//! on restart. Use it for tests, development and demos.
+//! exclusive cursors, unread counting, synced history that opens no window,
+//! media placeholders filled once) within one process; history is lost on
+//! restart. Use it for tests, development and demos.
 
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
@@ -42,7 +43,8 @@ struct State {
 ///
 /// Unread counts are by **arrival**: an inbound message appended after the
 /// last [`ConversationStore::mark_read`] counts even if its timestamp is
-/// older (a late webhook the merchant has not seen yet). The Postgres
+/// older (a late webhook the merchant has not seen yet); synced history
+/// ([`ConversationStore::append_synced`]) never counts. The Postgres
 /// adapter counts the same way.
 #[derive(Clone, Default)]
 pub struct MemoryConversationStore {
@@ -69,18 +71,17 @@ impl MemoryConversationStore {
     pub fn new() -> Self {
         Self::default()
     }
-}
 
-#[async_trait]
-impl ConversationStore for MemoryConversationStore {
-    async fn append(&self, message: StoredMessage) -> Result<bool, StorageError> {
+    /// Insert `message` unless its id is known. `live` messages (not synced
+    /// history) move the window and count as unread when inbound.
+    async fn insert(&self, message: StoredMessage, live: bool) -> Result<bool, StorageError> {
         let mut st = self.state.lock().await;
         if st.messages.contains_key(&message.id) {
             return Ok(false);
         }
         let key = message.conversation.clone();
         let at = message.timestamp;
-        let inbound = message.direction == Direction::Inbound;
+        let opens_window = live && message.direction == Direction::Inbound;
         st.history
             .entry(key.clone())
             .or_default()
@@ -92,7 +93,7 @@ impl ConversationStore for MemoryConversationStore {
                     s.last_message_id = message.id.clone();
                     s.last_text.clone_from(&message.text);
                 }
-                if inbound {
+                if opens_window {
                     s.last_inbound_at = Some(s.last_inbound_at.map_or(at, |t| t.max(at)));
                     s.unread += 1;
                 }
@@ -104,13 +105,51 @@ impl ConversationStore for MemoryConversationStore {
                         last_message_at: at,
                         last_message_id: message.id.clone(),
                         last_text: message.text.clone(),
-                        last_inbound_at: inbound.then_some(at),
-                        unread: u64::from(inbound),
+                        last_inbound_at: opens_window.then_some(at),
+                        unread: u64::from(opens_window),
                     },
                 );
             }
         }
         st.messages.insert(message.id.clone(), message);
+        Ok(true)
+    }
+}
+
+#[async_trait]
+impl ConversationStore for MemoryConversationStore {
+    async fn append(&self, message: StoredMessage) -> Result<bool, StorageError> {
+        self.insert(message, true).await
+    }
+
+    async fn append_synced(&self, message: StoredMessage) -> Result<bool, StorageError> {
+        self.insert(message, false).await
+    }
+
+    async fn fill_media_placeholder(
+        &self,
+        phone_number_id: &PhoneNumberId,
+        id: &MessageId,
+        kind: String,
+        text: Option<String>,
+        payload: serde_json::Value,
+    ) -> Result<bool, StorageError> {
+        let mut guard = self.state.lock().await;
+        let st = &mut *guard;
+        let Some(message) = st.messages.get_mut(id).filter(|m| {
+            &m.conversation.phone_number_id == phone_number_id
+                && m.kind == StoredMessage::MEDIA_PLACEHOLDER
+        }) else {
+            return Ok(false);
+        };
+        message.kind = kind;
+        message.text = text;
+        message.payload = payload;
+        if let Some(s) = st.conversations.get_mut(&message.conversation)
+            && &s.last_message_id == id
+        {
+            s.last_text.clone_from(&message.text);
+        }
         Ok(true)
     }
 

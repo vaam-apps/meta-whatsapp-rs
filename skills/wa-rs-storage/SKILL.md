@@ -96,7 +96,12 @@ A store that expires on a server's clock runs
 `conformance::run_with_real_time(&store, tick)`; a conversation store
 runs `conversation_conformance::run(&store)`. `update_status` takes the
 business `phone_number_id` first: a status only changes a message of the
-number it arrived on.
+number it arrived on. `append_synced` (coexistence history) must not move
+`last_inbound_at` nor the unread count, and `fill_media_placeholder`
+rewrites only a row whose `kind` is `StoredMessage::MEDIA_PLACEHOLDER`:
+the suite checks both.
+~~Six methods to implement~~: until the coexistence port change
+(2026-09-24), which added `append_synced` and `fill_media_placeholder`.
 
 ## Pitfalls
 

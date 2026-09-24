@@ -15,6 +15,8 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   resolved in a3582b8; what that needs a port change for is #35.
 - #34 (should `OtpConfig::namespace` be required?): decided yes, done in
   d67b3ac.
+- #35 (synced coexistence history went through `append` like live
+  messages): resolved by the `ConversationStore` port change below.
 
 ### Added
 
@@ -26,9 +28,9 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   declined sync records nothing). One malformed history item is skipped
   and logged by position instead of failing the delivery, including when
   it made the whole `history` value arrive as `WebhookEvent::Unknown`.
-  Synced inbound history still counts towards the local window and unread
-  count, and media contents are not merged into recorded placeholders:
-  both need a `ConversationStore` port change (`OPEN_QUESTIONS.md` #35).
+  Synced history opens no local reply window and is never unread, and the
+  media content Meta sends after a `media_placeholder` fills it (see
+  "Changed", `ConversationStore`).
 - **Adoption helpers**: `Error::may_have_been_sent()` (whether a failed send
   could still have been delivered — the line between "fix and resend" and
   "reconcile first"), `Inbox::window_is_open` (the reply window by the
@@ -90,6 +92,20 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
 
 ### Changed
 
+- **Breaking — `ConversationStore` records coexistence history as history**
+  (`OPEN_QUESTIONS.md` #35): two required methods. `append_synced` stores
+  a message like `append` (same id rule across both, same order, same
+  latest-message preview) but never moves `last_inbound_at` nor the unread
+  count: Meta opens no customer service window for a message sent before
+  onboarding, and the merchant read it in the app. `fill_media_placeholder`
+  gives a stored `StoredMessage::MEDIA_PLACEHOLDER` row the media content
+  Meta sends later (kind, text, payload; the preview follows when it is
+  the latest message), once, on its own business number. `InboxSink`
+  uses both for `HistorySynced`; the memory and Postgres adapters
+  implement them (Postgres without a schema change), and
+  `conversation_conformance::run` checks them, so a custom store that
+  treats synced history like live messages fails it. Custom stores must
+  implement the two methods.
 - **Breaking — one type per concept** (conventions review #9):
   `wa_client::common` defines `MediaSource`, `FlowAction` and
   `QualityRating` once; `messages`, `templates` and `phone_numbers`
