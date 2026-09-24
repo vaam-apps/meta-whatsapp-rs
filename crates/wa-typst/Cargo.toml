@@ -14,6 +14,12 @@ wa-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+anyhow.workspace = true
+typst.workspace = true
+typst-pdf.workspace = true
+typst-render.workspace = true
+typst-kit.workspace = true
+typst-assets.workspace = true
 
 [lints]
 workspace = true
