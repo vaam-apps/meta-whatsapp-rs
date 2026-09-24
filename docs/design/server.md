@@ -735,12 +735,14 @@ atomically and are checked against the same commit.
 
 ## 10. Decisions for the owner
 
+D1–D4 were decided by the owner on 2026-09-24 (the recommended option in each case); D5 is settled as "support both modes, chosen per deployment". The rest are open and are asked at the milestone that needs them.
+
 | # | Question | Options | Recommendation | Needed by |
 | --- | --- | --- | --- | --- |
-| D1 | Tenancy per deployment | per tenant / per Meta app / per product | one multi-tenant deployment per Meta app | M1 |
-| D2 | Credentials | tenant keys / platform key + header / both | both | M1 |
-| D3 | Browser access | never (the CMS relays) / stream tokens + CORS | never, in v1 | M2 |
-| D4 | One WABA, several tenants (OQ #6) | refuse / move / share | refuse, admin unbind | M3 |
+| D1 | Tenancy per deployment | per tenant / per Meta app / per product | **Decided 2026-09-24: one multi-tenant deployment per Meta app** | M1 |
+| D2 | Credentials | tenant keys / platform key + header / both | **Decided 2026-09-24: both** | M1 |
+| D3 | Browser access | never (the CMS relays) / stream tokens + CORS | **Decided 2026-09-24: never, in v1** | M2 |
+| D4 | One WABA, several tenants (OQ #6) | refuse / move / share | **Decided 2026-09-24: refuse, admin unbind** | M3 |
 | D5 | Onboarding mode in production (OQ #3) | Tech Provider / Solution Partner | Tech Provider first, switch by configuration | M3 |
 | D6 | Two-step PIN (OQ #4) | per attempt, never stored / generated and stored | per attempt | M3 |
 | D7 | Coexistence sync (OQ #7) | endpoint / automatic / both, per tenant | both, automatic by default | M3 |
