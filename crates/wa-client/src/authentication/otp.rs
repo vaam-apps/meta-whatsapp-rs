@@ -28,9 +28,10 @@
 //! - **Issue**: cooldown check, then a slot in the issue log
 //!   (compare-and-swap), then the record, written with compare-and-swap
 //!   against what was read (so two concurrent issues cannot both send), then
-//!   the send. A send Meta provably did not accept removes the record again;
-//!   one that may have been accepted (unreadable 2xx, timeout, 5xx without a
-//!   Graph error) keeps it, because the code may be on its way.
+//!   the send. A send Meta provably did not accept (a 4xx, throttling, a
+//!   local refusal) removes the record again; one that may have been
+//!   accepted (unreadable 2xx, timeout, any non-throttling 5xx) keeps it,
+//!   because the code may be on its way.
 //! - **Verify**: counts the attempt with compare-and-swap *before*
 //!   comparing, so concurrent guesses cannot exceed `max_attempts`;
 //!   compares the HMACs in constant time (`subtle`); a match deletes the
@@ -437,18 +438,24 @@ impl Phone {
 /// nobody received gives a guesser nothing it would not have had anyway
 /// (the attempts and the issue slot are counted either way).
 ///
+/// The split follows the retry policy's (`crate::retry`): a 4xx or a
+/// throttling error is a rejection; a 5xx, with or without a Graph error
+/// object (`1`, `2`, `131000`, …), proves nothing about whether the message
+/// went out, which is also why such a send is never replayed.
+///
 /// `TransportError::Connect` counts as "never left" because its contract is
 /// a failure to connect (DNS, TCP, TLS); a transport adapter that reported
 /// a mid-request reset as `Connect` would break that contract, not this.
 fn may_have_been_sent(error: &Error) -> bool {
     match error {
-        // Meta answered with an error object, or a non-5xx without one:
-        // rejected. Refused locally: never left.
-        Error::Api(_)
-        | Error::Validation(_)
+        Error::Api(e) => {
+            e.http_status.is_some_and(|s| s >= 500) && !e.kind().is_rejected_before_processing()
+        }
+        Error::Http { status, .. } => *status >= 500,
+        // Refused locally: never left.
+        Error::Validation(_)
         | Error::Config(_)
         | Error::Transport(TransportError::Build(_) | TransportError::Connect(_)) => false,
-        Error::Http { status, .. } => *status >= 500,
         // An unreadable 2xx, a timeout, anything else: unknown.
         _ => true,
     }
@@ -565,8 +572,8 @@ impl OtpService {
     /// which Meta would return for the same send: handle both the same way.
     ///
     /// Returns an error, with the code still verifiable, when the send may
-    /// have been accepted (an unreadable 2xx, a timeout, a 5xx without a
-    /// Graph error); the cooldown then applies to a retry.
+    /// have been accepted (an unreadable 2xx, a timeout, a non-throttling
+    /// 5xx); the cooldown then applies to a retry.
     pub async fn issue(&self, recipient: &Recipient, purpose: &str) -> Result<IssueOutcome> {
         let phone = Phone::of(recipient)?;
         let key = self.key(&phone, purpose)?;

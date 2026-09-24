@@ -710,8 +710,21 @@ fn only_provable_rejections_count_as_not_sent() {
         status,
         body_snippet: String::new(),
     };
+    let graph = |code, status| {
+        let mut e = GraphApiError::new(code, "x");
+        e.http_status = Some(status);
+        Error::from(e)
+    };
     for (error, sent) in [
-        (GraphApiError::new(131026, "undeliverable").into(), false),
+        (graph(131026, 400), false),
+        (graph(132001, 404), false),
+        // Throttled before processing, whatever the status.
+        (graph(130429, 400), false),
+        (graph(130429, 503), false),
+        // A 5xx Graph error proves nothing (also never replayed).
+        (graph(131000, 500), true),
+        (graph(2, 503), true),
+        (GraphApiError::new(131026, "no status").into(), false),
         (ValidationError::new("path", "bad").into(), false),
         (TransportError::Build("bad header".into()).into(), false),
         (
