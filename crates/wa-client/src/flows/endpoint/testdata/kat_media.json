@@ -1,0 +1,16 @@
+{
+  "cdn_file": "PIVI1c+0+3Nt403UD3oCbq2eWSlmsUnWNL532dyrgSOcA8Nkb69I2v4oyPcNo3m+d4ze28E0cg1BNw==",
+  "plaintext": "/9j/4CBub3QgcmVhbGx5IGEgSlBFRywgYnV0IGl0IHdpbGwgZG8g/9k=",
+  "media": {
+    "media_id": "790aba14-5f4a-4dbd-aa9e-0d75401da14b",
+    "cdn_url": "https://mmg.whatsapp.net/v/redacted",
+    "file_name": "IMG_5237.jpg",
+    "encryption_metadata": {
+      "encrypted_hash": "85aqeRz2m8zDh7DPwNdCHC1R6hCjx/HESpqxY28SzQc=",
+      "iv": "EAkY1FlSrvg/JS/8LaX5sg==",
+      "encryption_key": "wuxITdX/pjPK2J+R0mDLrMesIhr879tBhlkkuDUXRf0=",
+      "hmac_key": "RRYR0UqVKprIP1kgh4OzMpVJtaHsZ8P4twbn1Nt3QFU=",
+      "plaintext_hash": "ERE3ec+CCwt4Fcimp8Kv1R/9A51nIOE/rvO2k3DpZKs="
+    }
+  }
+}
