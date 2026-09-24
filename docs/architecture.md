@@ -208,11 +208,20 @@ message event (`FINISH` with `waba_id`, `phone_number_id`, `business_id`;
    with AES-256-GCM under an integrator-supplied key, key id recorded for
    rotation) keyed by WABA id, with a phone-number → WABA index.
 
-`EmbeddedSignup::onboard(OnboardingRequest) → Onboarded` runs 1–5; each
-step failure is `Error::in_step("exchange_code" | "subscribe_app" |
-"register_phone" | "store_token" …)`. Steps are idempotent so a retry of the
-whole call is safe. `LaunchOptions` builds the JSON for `FB.login` `extras`
-(version, `featureType` — incl. coexistence `whatsapp_business_app_onboarding`,
+`EmbeddedSignup::onboard(OnboardingRequest) → Onboarded` runs, in order:
+exchange code → `debug_token` → **verify** that the WABA id from the browser
+event is among the token's grants and that the phone number belongs to that
+WABA (browser-supplied ids are never trusted — otherwise one merchant could
+overwrite another's vault entry) → **store** the token → subscribe app →
+register number. The token is stored *before* the fallible later steps
+because the code is single-use and short-lived: storing last would lose the
+token whenever subscribe or register fails (e.g. wrong PIN, `133005`).
+`resume()` reruns subscribe/register from the stored token. Each failure is
+`Error::in_step("exchange_code" | "debug_token" | "verify_assets" |
+"store_token" | "subscribe_app" | "register_phone")`. **Retrying the whole
+`onboard` call is not safe** (the code is spent); retry with `resume()`.
+`LaunchOptions` builds the JSON for `FB.login` `extras` (version,
+`featureType` — incl. coexistence `whatsapp_business_app_onboarding`,
 `setup` pre-fill). `SessionInfo` parses the message event.
 `SignupSession` (on `KvStore`) binds an opaque state id to the merchant that
 started the flow, so a callback can't be attributed to another tenant.

@@ -375,7 +375,16 @@ impl GraphRequest {
                 return Err(error);
             }
             let delay = policy.delay(attempt, retry_after);
-            tracing::debug!(error = %error, ?delay, attempt, "retrying graph request");
+            // Log the classification, not the error text: a transport
+            // error's message can embed the request URL, whose query may
+            // carry `client_secret` or an Embedded Signup `code`.
+            tracing::debug!(
+                kind = ?error.kind(),
+                code = error.graph().map(|g| g.code),
+                ?delay,
+                attempt,
+                "retrying graph request"
+            );
             tokio::time::sleep(delay).await;
             attempt += 1;
         }
