@@ -910,6 +910,10 @@ fn only_provable_rejections_count_as_not_sent() {
         (http(404), false),
         (http(429), false),
         (http(502), true),
+        // Neither a rejection nor a success: unknown, so the challenge
+        // stays (this service used its own rule until the unification with
+        // `Error::may_have_been_sent`, and dropped it).
+        (http(302), true),
         (TransportError::Timeout.into(), true),
         (
             TransportError::Backend(anyhow::anyhow!("reset")).into(),
@@ -924,7 +928,7 @@ fn only_provable_rejections_count_as_not_sent() {
             true,
         ),
     ] {
-        assert_eq!(may_have_been_sent(&error), sent, "{error}");
+        assert_eq!(error.may_have_been_sent(), sent, "{error}");
     }
 }
 

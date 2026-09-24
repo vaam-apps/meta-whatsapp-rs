@@ -58,10 +58,12 @@ match messages.send(&msg).await {
 ```
 
 `Error::may_have_been_sent()` is the line between the two: `false` for a
-Graph error on a 4xx response, a local validation or configuration error,
-or a connection that never opened — nothing went out, fix and resend.
-`true` for a timeout, a 5xx, an unreadable 2xx or anything unknown — the
-message may be on its way; reconcile before resending.
+Graph error on a 4xx response, a throttling error on any status, a local
+validation or configuration error, or a connection that never opened —
+nothing went out, fix and resend. `true` for a timeout, any other 5xx, an
+unreadable 2xx or anything unknown — the message may be on its way;
+reconcile before resending. The OTP service keeps a code verifiable by the
+same rule.
 
 ## Retries: "could succeed later" is not "safe to repeat"
 

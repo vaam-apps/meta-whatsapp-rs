@@ -76,6 +76,13 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
 
 ### Changed
 
+- `Error::may_have_been_sent` is `false` for a throttling Graph error
+  (`ErrorKind::is_rejected_before_processing`) on any status, as the retry
+  policy already assumed when it replays a send; the OTP service uses it
+  instead of a private copy. The only difference a send could reach is
+  gone: a 1xx–3xx answer without a Graph error used to drop the challenge
+  and now keeps it (unknown, so the code may be on its way).
+
 Breaking for anyone pinned to an earlier revision (nothing is released
 yet): `ConversationStore::update_status(phone_number_id, id, status, at,
 error)`; the `validate()` of `TemplateDefinition`, `TemplateEdit`,

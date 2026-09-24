@@ -249,7 +249,9 @@ Authentication template definitions (copy code, one-tap with
   service scope; opting out is explicit) bound brute force to ~0.06 %/day
   for 6 digits. A challenge is removed only
   when the send was provably rejected (4xx, throttling); after a timeout or
-  5xx it stays, because the code may have been delivered.
+  5xx it stays, because the code may have been delivered. The line is
+  `Error::may_have_been_sent`, the one integrators use for their own
+  sends.
 - `verify(recipient, purpose, code) → VerifyOutcome { Verified, Invalid {
   attempts_left }, Expired, TooManyAttempts, NotFound }`: constant-time
   compare; attempts counted with `compare_and_swap` before comparing, so

@@ -37,8 +37,9 @@
 //!   against what was read (so two concurrent issues cannot both send), then
 //!   the send. A send Meta provably did not accept (a 4xx, throttling, a
 //!   local refusal) removes the record again; one that may have been
-//!   accepted (unreadable 2xx, timeout, any non-throttling 5xx) keeps it,
-//!   because the code may be on its way.
+//!   accepted (unreadable 2xx, timeout, any non-throttling 5xx, any other
+//!   status) keeps it, because the code may be on its way. The line is
+//!   [`Error::may_have_been_sent`], the same one integrators use.
 //! - **Verify**: counts the attempt with compare-and-swap *before*
 //!   comparing, so concurrent guesses cannot exceed `max_attempts`;
 //!   compares the HMACs in constant time (`subtle`); a match deletes the
@@ -63,7 +64,7 @@ use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use time::{OffsetDateTime, PrimitiveDateTime};
 use wa_core::clock::Clock;
-use wa_core::error::{ConfigError, CryptoError, StorageError, TransportError, ValidationError};
+use wa_core::error::{ConfigError, CryptoError, StorageError, ValidationError};
 use wa_core::ids::{MessageId, PhoneNumberId};
 use wa_core::recipient::Recipient;
 use wa_core::secret::SecretBytes;
@@ -458,35 +459,6 @@ impl Phone {
     }
 }
 
-/// Whether a failed send may still have been accepted by Meta. If so, the
-/// code may be on its way and its challenge stays verifiable: dropping it
-/// would turn a code the user receives into a dead one, and keeping a code
-/// nobody received gives a guesser nothing it would not have had anyway
-/// (the attempts and the issue slot are counted either way).
-///
-/// The split follows the retry policy's (`crate::retry`): a 4xx or a
-/// throttling error is a rejection; a 5xx, with or without a Graph error
-/// object (`1`, `2`, `131000`, …), proves nothing about whether the message
-/// went out, which is also why such a send is never replayed.
-///
-/// `TransportError::Connect` counts as "never left" because its contract is
-/// a failure to connect (DNS, TCP, TLS); a transport adapter that reported
-/// a mid-request reset as `Connect` would break that contract, not this.
-fn may_have_been_sent(error: &Error) -> bool {
-    match error {
-        Error::Api(e) => {
-            e.http_status.is_some_and(|s| s >= 500) && !e.kind().is_rejected_before_processing()
-        }
-        Error::Http { status, .. } => *status >= 500,
-        // Refused locally: never left.
-        Error::Validation(_)
-        | Error::Config(_)
-        | Error::Transport(TransportError::Build(_) | TransportError::Connect(_)) => false,
-        // An unreadable 2xx, a timeout, anything else: unknown.
-        _ => true,
-    }
-}
-
 /// Append `bytes` as a netstring (`<len>:<bytes>,`), a self-delimiting
 /// encoding: no sequence of netstrings can be re-split differently.
 fn netstring(out: &mut Vec<u8>, bytes: &[u8]) {
@@ -709,7 +681,13 @@ impl OtpService {
                 }))
             }
             Err(error) => {
-                if !may_have_been_sent(&error)
+                // Only a provable rejection removes the challenge. If the
+                // send may have been accepted, the code may be on its way
+                // and stays verifiable: dropping it would turn a code the
+                // user receives into a dead one, and keeping a code nobody
+                // received gives a guesser nothing (the attempt and the
+                // issue slot are counted either way).
+                if !error.may_have_been_sent()
                     && let Err(cleanup) = self.remove(&key, &id).await
                 {
                     tracing::warn!(challenge = %id, error = %cleanup, "could not remove unsent OTP challenge");

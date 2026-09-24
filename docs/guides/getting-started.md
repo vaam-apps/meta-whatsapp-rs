@@ -151,8 +151,9 @@ async fn notify_shipped(messages: &Messages, to: Recipient, order_no: &str) -> N
 ```
 
 `Error::may_have_been_sent()` is `false` when Meta provably did nothing (a
-Graph error on a 4xx response, a local validation error, a connection that
-never opened) and `true` for a timeout, a 5xx or an unreadable response.
+Graph error on a 4xx response, a throttling error on any status, a local
+validation error, a connection that never opened) and `true` for a timeout,
+any other 5xx or an unreadable response.
 
 ### Retries: "could succeed later" is not "safe to repeat"
 
