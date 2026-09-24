@@ -122,7 +122,11 @@ mod tests {
         let (sink, mut rx) = channel(1);
         let sink = sink.with_mode(ChannelMode::TryOrFail);
         sink.deliver(1).await.unwrap();
-        assert!(matches!(sink.deliver(2).await, Err(SinkError::Full)));
+        // Bounded: a TryOrFail that waited would hang here forever.
+        let full = tokio::time::timeout(Duration::from_secs(5), sink.deliver(2))
+            .await
+            .expect("TryOrFail never waits for room");
+        assert!(matches!(full, Err(SinkError::Full)));
         assert_eq!(rx.recv().await, Some(1));
         sink.deliver(3).await.unwrap();
         assert_eq!(rx.recv().await, Some(3));
