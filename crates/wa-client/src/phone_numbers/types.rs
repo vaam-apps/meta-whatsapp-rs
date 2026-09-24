@@ -85,24 +85,10 @@ pub struct PhoneNumberInfo {
     pub webhook_configuration: Option<WebhookConfiguration>,
 }
 
-/// Quality rating of a business phone number.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-#[non_exhaustive]
-pub enum QualityRating {
-    /// High quality.
-    Green,
-    /// Medium quality.
-    Yellow,
-    /// Low quality.
-    Red,
-    /// Not determined yet (new numbers).
-    #[serde(rename = "NA")]
-    NotApplicable,
-    /// `UNKNOWN`, or a value this crate does not know yet.
-    #[serde(other)]
-    Unknown,
-}
+/// Quality rating of a business phone number; the same type template
+/// quality scores use (see [`crate::common`]). A value Meta adds later is
+/// kept in `QualityRating::Other`.
+pub use crate::common::QualityRating;
 
 /// Whether the number's ownership was verified with a code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]

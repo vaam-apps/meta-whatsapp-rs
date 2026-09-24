@@ -241,6 +241,48 @@ pub enum SignupStatus {
     Unknown,
 }
 
+/// Options of [`Signups::list`] (`in-app-signup`, "List signups").
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ListSignups {
+    /// Page size (at least 1); Meta's default when `None`.
+    pub limit: Option<u32>,
+    /// Cursor from a previous page's `paging.cursors.after`
+    /// ([`Page::next_cursor`]); for [`Signups::list`] only, the stream
+    /// manages its own.
+    pub after: Option<String>,
+    /// Cursor from a previous page's `paging.cursors.before`.
+    pub before: Option<String>,
+}
+
+impl ListSignups {
+    /// The first page, Meta's page size.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Page size (at least 1).
+    #[must_use]
+    pub fn limit(mut self, limit: u32) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
+    /// Continue after this cursor.
+    #[must_use]
+    pub fn after(mut self, cursor: impl Into<String>) -> Self {
+        self.after = Some(cursor.into());
+        self
+    }
+
+    /// Go back before this cursor.
+    #[must_use]
+    pub fn before(mut self, cursor: impl Into<String>) -> Self {
+        self.before = Some(cursor.into());
+        self
+    }
+}
+
 /// Body of `POST /signups/{SIGNUP_ID}`; only the fields set are changed.
 /// `privacy_policy_url` cannot be updated.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -468,29 +510,38 @@ impl Signups {
             .await
     }
 
-    fn list_request(&self, limit: Option<u32>) -> Result<GraphRequest> {
-        if limit == Some(0) {
+    fn list_request(&self, query: &ListSignups) -> Result<GraphRequest> {
+        if query.limit == Some(0) {
             return Err(ValidationError::new("limit", "must be at least 1").into());
         }
         Ok(self
             .client
             .get_at(&[self.waba_id.as_str(), "signups"])
-            .query_opt("limit", limit)
+            .query_opt("limit", query.limit)
             .context("signups"))
     }
 
-    /// `GET /{WABA_ID}/signups`, one page of `limit` (Meta's default when
-    /// `None`).
-    pub async fn list(&self, limit: Option<u32>) -> Result<Page<SignupInfo>> {
-        self.list_request(limit)?.send().await
+    /// `GET /{WABA_ID}/signups`, one page. The next page: the same query
+    /// with `after` set to this page's [`Page::next_cursor`].
+    pub async fn list(&self, query: &ListSignups) -> Result<Page<SignupInfo>> {
+        self.list_request(query)?
+            .query_opt("after", query.after.as_deref())
+            .query_opt("before", query.before.as_deref())
+            .send()
+            .await
     }
 
-    /// All signups, following cursors.
+    /// All signups, following cursors. The stream manages them itself: a
+    /// query with `after` or `before` set is refused (the stream's single
+    /// item is that validation error).
     pub fn list_stream(
         &self,
-        limit: Option<u32>,
+        query: &ListSignups,
     ) -> impl Stream<Item = Result<SignupInfo>> + Send + 'static + use<> {
-        crate::request::paginate_or_error(self.list_request(limit))
+        crate::request::paginate_or_error(
+            crate::request::reject_cursors(query.after.as_deref(), query.before.as_deref())
+                .and_then(|()| self.list_request(query)),
+        )
     }
 
     /// `POST /signups/{SIGNUP_ID}`: change the fields set in `update`.
@@ -770,7 +821,7 @@ mod tests {
             one.waba_id.as_ref().map(WabaId::as_str),
             Some("102290129340398")
         );
-        let page = s.list(Some(10)).await.unwrap();
+        let page = s.list(&ListSignups::new().limit(10)).await.unwrap();
         assert_eq!(page.data.len(), 2);
         assert_eq!(page.next_cursor(), Some("abc123"));
         let reqs = t.requests();
@@ -778,7 +829,40 @@ mod tests {
         assert_eq!(reqs[0].path(), "/v25.0/signups/9876543210123456");
         assert_eq!(reqs[1].path(), "/v25.0/102290129340398/signups");
         assert_eq!(reqs[1].query("limit").as_deref(), Some("10"));
+        assert_eq!(reqs[1].query("after"), None);
         assert_eq!(t.remaining(), 0);
+    }
+
+    /// The docs' `next` link continues with `limit=10&after=abc123`: the
+    /// same page, by cursor, through the query.
+    #[tokio::test]
+    async fn list_takes_the_cursor_in_its_query_and_the_stream_refuses_it() {
+        let t = ScriptedTransport::new();
+        t.push_json(200, json!({"data": []}));
+        t.push_json(200, json!({"data": []}));
+        let s = client(&t).signups("102290129340398");
+        s.list(&ListSignups::new().limit(10).after("abc123"))
+            .await
+            .unwrap();
+        s.list(&ListSignups::new().before("xyz789")).await.unwrap();
+        let reqs = t.requests();
+        assert_eq!(reqs[0].query("limit").as_deref(), Some("10"));
+        assert_eq!(reqs[0].query("after").as_deref(), Some("abc123"));
+        assert_eq!(reqs[1].query("before").as_deref(), Some("xyz789"));
+        assert_eq!(t.remaining(), 0);
+        for query in [
+            ListSignups::new().after("abc123"),
+            ListSignups::new().before("xyz789"),
+        ] {
+            let refused: Vec<_> = s.list_stream(&query).collect().await;
+            assert!(
+                matches!(&refused[..], [Err(wa_core::Error::Validation(_))]),
+                "{refused:?}"
+            );
+        }
+        let refused: Vec<_> = s.list_stream(&ListSignups::new().limit(0)).collect().await;
+        assert!(matches!(&refused[..], [Err(wa_core::Error::Validation(v))] if v.field == "limit"));
+        assert_eq!(t.requests().len(), 2);
     }
 
     #[tokio::test]
@@ -791,7 +875,7 @@ mod tests {
         t.push_json(200, json!({"data": [{"id": "2", "status": "DISABLED"}]}));
         let items: Vec<SignupInfo> = client(&t)
             .signups("W")
-            .list_stream(Some(10))
+            .list_stream(&ListSignups::new().limit(10))
             .map(Result::unwrap)
             .collect()
             .await;

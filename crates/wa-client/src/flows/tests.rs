@@ -217,7 +217,7 @@ async fn list_parses_the_documented_page_and_passes_the_cursor() {
     );
     t.push_json(200, json!({"data": []}));
     let flows = client(&t).flows("WABA-ID");
-    let page = flows.list(None).await.unwrap();
+    let page = flows.list(&ListFlows::new()).await.unwrap();
     assert_eq!(page.data.len(), 3);
     assert_eq!(page.data[1].status, Some(FlowStatus::Published));
     assert_eq!(page.data[2].categories, vec![FlowCategory::LeadGeneration]);
@@ -227,11 +227,13 @@ async fn list_parses_the_documented_page_and_passes_the_cursor() {
     assert_eq!(first.path(), "/v25.0/WABA-ID/flows");
     assert_eq!(first.url.query(), None);
 
-    flows.list(Some("QVFI...")).await.unwrap();
-    assert_eq!(
-        t.last_request().unwrap().query("after").as_deref(),
-        Some("QVFI...")
-    );
+    flows
+        .list(&ListFlows::new().after("QVFI...").before("QVFB..."))
+        .await
+        .unwrap();
+    let next = t.last_request().unwrap();
+    assert_eq!(next.query("after").as_deref(), Some("QVFI..."));
+    assert_eq!(next.query("before").as_deref(), Some("QVFB..."));
     assert_eq!(t.remaining(), 0);
 }
 
@@ -419,14 +421,16 @@ async fn assets_parse_the_documented_page() {
     t.push_json(200, doc.clone());
     t.push_json(200, doc);
     let flow = client(&t).flow("FLOW-ID");
-    let page = flow.assets(None).await.unwrap();
+    let page = flow.assets(&ListFlowAssets::new()).await.unwrap();
     assert_eq!(page.data[0].asset_type, FlowAssetType::FlowJson);
     assert_eq!(page.data[0].name, "flow.json");
     let req = t.last_request().unwrap();
     assert_eq!(req.method, Method::GET);
     assert_eq!(req.path(), "/v25.0/FLOW-ID/assets");
     assert_eq!(req.url.query(), None);
-    flow.assets(Some("QVFIU...")).await.unwrap();
+    flow.assets(&ListFlowAssets::new().after("QVFIU..."))
+        .await
+        .unwrap();
     assert_eq!(
         t.last_request().unwrap().query("after").as_deref(),
         Some("QVFIU...")

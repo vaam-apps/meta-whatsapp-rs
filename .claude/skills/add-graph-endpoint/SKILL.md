@@ -90,11 +90,16 @@ metadata:
    returning `request.paginate::<T>()`: it manages the cursors itself
    (re-issuing the request with `after=`, never following `paging.next`),
    so it refuses a query that already has `after`/`before` with a
-   `ValidationError`, yielded as the stream's single item. Reference:
-   `qr_codes` (`ListQrCodes`, `list`, `list_stream`) and `block_users`.
-   Some older lists do not follow this yet (at 8ee6fab: `signups.list` and
-   `waba.phone_numbers` take no cursor, `flows.list` a bare
-   `after: Option<&str>`); do not copy them.
+   `ValidationError`, yielded as the stream's single item: call
+   `crate::request::reject_cursors` first. Reference: `qr_codes`
+   (`ListQrCodes`, `list`, `list_stream`) and `block_users`. Every list
+   follows this since the conventions follow-up (`ListSignups`,
+   `AssignedUsersQuery`, `ListFlows`, `ListClientWabas`, the analytics
+   queries…), except `waba.subscribed_apps` and `templates.library`,
+   whose pages document no pagination: add a cursor only where the docs
+   show `after`/`before` or a `paging.cursors` object, and say so in the
+   method's rustdoc when there is none. Follow the module's struct style
+   (builders on `#[non_exhaustive]` queries, pub fields elsewhere).
 6. **Tests** (in the module, `#[cfg(test)]`), with the docs' examples:
 
    ```rust

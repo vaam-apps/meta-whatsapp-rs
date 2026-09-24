@@ -528,7 +528,7 @@ async fn lists_eligible_client_wabas_with_the_documented_filter() {
     );
     let page = client(&t)
         .marketing_business("19502398688333")
-        .client_wabas_with_status(&[OnboardingStatus::Eligible], None)
+        .client_wabas_with_status(&ListClientWabas::new([OnboardingStatus::Eligible]))
         .await
         .unwrap();
     let req = t.last_request().unwrap();
@@ -551,13 +551,14 @@ async fn lists_eligible_client_wabas_with_the_documented_filter() {
     client(&t)
         .marketing_business("19502398688333")
         .client_wabas_with_status(
-            &[OnboardingStatus::Eligible, OnboardingStatus::Onboarded],
-            Some("QVFI..."),
+            &ListClientWabas::new([OnboardingStatus::Eligible, OnboardingStatus::Onboarded])
+                .after("QVFI..."),
         )
         .await
         .unwrap();
     let req = t.last_request().unwrap();
     assert_eq!(req.query("after").as_deref(), Some("QVFI..."));
+    assert_eq!(req.query("before"), None);
     let filtering: serde_json::Value =
         serde_json::from_str(&req.query("filtering").unwrap()).unwrap();
     assert_eq!(filtering[0]["value"], json!(["ELIGIBLE", "ONBOARDED"]));
@@ -579,7 +580,7 @@ async fn client_wabas_with_status_stream_follows_cursors_with_the_filter() {
     t.push_json(200, json!({"data": [{"id": "46302397361991"}]}));
     let ids: Vec<String> = client(&t)
         .marketing_business("19502398688333")
-        .client_wabas_with_status_stream(&[OnboardingStatus::Eligible])
+        .client_wabas_with_status_stream(&ListClientWabas::new([OnboardingStatus::Eligible]))
         .map(|w| w.unwrap().id.as_str().to_owned())
         .collect()
         .await;
@@ -602,6 +603,22 @@ async fn client_wabas_with_status_stream_follows_cursors_with_the_filter() {
         assert_eq!(req.query("after").as_deref(), after);
     }
     assert_eq!(t.remaining(), 0);
+    // A caller's cursor is refused: the stream manages them.
+    for query in [
+        ListClientWabas::new([OnboardingStatus::Eligible]).after("QVFI1"),
+        ListClientWabas::new([OnboardingStatus::Eligible]).before("QVFI0"),
+    ] {
+        let refused: Vec<_> = client(&t)
+            .marketing_business("19502398688333")
+            .client_wabas_with_status_stream(&query)
+            .collect()
+            .await;
+        assert!(
+            matches!(&refused[..], [Err(wa_core::Error::Validation(_))]),
+            "{refused:?}"
+        );
+    }
+    assert_eq!(t.requests().len(), 2);
 }
 
 #[tokio::test]

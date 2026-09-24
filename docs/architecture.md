@@ -128,8 +128,13 @@ Rules for every endpoint module:
 4. **Idempotency**: POSTs are non-idempotent by default. Mark a POST
    `.idempotent(true)` only when replaying it cannot duplicate an effect
    (e.g. setting a field to a value).
-5. **Lists** return `Page<T>` and offer a `…_stream()` via
-   `GraphRequest::paginate`.
+5. **Lists** return `Page<T>` and take their cursors in their query
+   struct (`after`, `before`: the next page is the same query with
+   `after = page.next_cursor()`); each offers a `…_stream()` via
+   `GraphRequest::paginate`, which manages the cursors and refuses a query
+   that already holds one (a `ValidationError`, the stream's single item).
+   A list whose page documents no pagination (`waba.subscribed_apps`,
+   `templates.library`) takes no cursor and says so.
 6. **Tests** use `wa_core::testing::ScriptedTransport`: assert method, path,
    query, auth header and exact JSON body; feed responses copied from the
    docs' examples. Every test that scripts N responses asserts
@@ -142,6 +147,10 @@ Rules for every endpoint module:
    `GraphRequest::send_private`: a decode error carries a placeholder
    instead of the body snippet, and the error category and position instead
    of serde's message (which quotes the offending value).
+9. **One type per concept.** A type two endpoint families share is
+   defined once in `wa_client::common` (`MediaSource`, `FlowAction`,
+   `QualityRating`) and re-exported by each module that uses it; ids are
+   `wa_core::ids` newtypes, never plain strings.
 
 ### Retries
 

@@ -872,10 +872,14 @@ fn flow_button(flow: &FlowButton, field: &str) -> Check {
     if flow.text.trim().is_empty() {
         return Err(err(format!("{field}.text"), "must not be empty"));
     }
-    let sources = [&flow.flow_id, &flow.flow_name, &flow.flow_json]
-        .iter()
-        .filter(|s| s.is_some())
-        .count();
+    let sources = [
+        flow.flow_id.is_some(),
+        flow.flow_name.is_some(),
+        flow.flow_json.is_some(),
+    ]
+    .into_iter()
+    .filter(|&set| set)
+    .count();
     if sources != 1 {
         return Err(err(
             field,

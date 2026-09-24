@@ -95,7 +95,7 @@ use wa_core::error::ValidationError;
 use wa_core::ids::{TemplateId, WabaId};
 use wa_core::paging::Page;
 
-use crate::request::paginate_or_error;
+use crate::request::{paginate_or_error, reject_cursors};
 use crate::{Client, GraphRequest};
 
 /// Entry point, see [`Client::templates`].
@@ -159,7 +159,7 @@ impl Templates {
         &self.client
     }
 
-    fn list_request(&self, query: &TemplateListQuery, cursors: bool) -> GraphRequest {
+    fn list_request(&self, query: &TemplateListQuery) -> GraphRequest {
         let mut req = self
             .client
             .get_at(&[self.waba_id.as_str(), "message_templates"])
@@ -173,27 +173,34 @@ impl Templates {
             .query_opt("status", query.status.as_ref())
             .query_opt("source", query.source.as_ref())
             .query_opt("correct_category", query.correct_category.as_ref());
-        if cursors {
-            req = req
-                .query_opt("after", query.after.as_deref())
-                .query_opt("before", query.before.as_deref());
-        }
         req
     }
 
-    /// One page of templates (`GET /{waba}/message_templates`).
+    /// One page of templates (`GET /{waba}/message_templates`). The next
+    /// page: the same query with `after` set to this page's
+    /// [`Page::next_cursor`].
     pub async fn list(&self, query: &TemplateListQuery) -> Result<Page<TemplateInfo>> {
         check_limit(query.limit)?;
-        self.list_request(query, true).send().await
+        self.list_request(query)
+            .query_opt("after", query.after.as_deref())
+            .query_opt("before", query.before.as_deref())
+            .send()
+            .await
     }
 
-    /// Every template matching `query`, page after page. `after`/`before`
-    /// in `query` are ignored: the stream starts at the first page.
+    /// Every template matching `query`, page after page. The stream manages
+    /// the cursors itself: a query with `after` or `before` set is refused
+    /// (the stream's single item is that validation error), like a bad
+    /// `limit`.
     pub fn list_stream(
         &self,
         query: &TemplateListQuery,
     ) -> impl Stream<Item = Result<TemplateInfo>> + Send + 'static {
-        paginate_or_error(check_limit(query.limit).map(|()| self.list_request(query, false)))
+        paginate_or_error(
+            check_limit(query.limit)
+                .and_then(|()| reject_cursors(query.after.as_deref(), query.before.as_deref()))
+                .map(|()| self.list_request(query)),
+        )
     }
 
     /// One template with Meta's default fields (`GET /{template_id}`).
@@ -300,6 +307,10 @@ impl Templates {
 
     /// Browse the Template Library (`GET /message_template_library`). Not
     /// WABA-scoped; offered here next to [`Self::create_from_library`].
+    ///
+    /// Unlike the other lists, [`LibraryQuery`] has no cursor: the library
+    /// page documents neither `after`/`before` nor a `paging` object. Should
+    /// Meta page it anyway, [`Self::library_stream`] follows the cursors.
     pub async fn library(&self, query: &LibraryQuery) -> Result<Page<LibraryTemplate>> {
         Self::library_request(query, &self.client).send().await
     }

@@ -99,8 +99,25 @@ id_type!(
     TemplateId
 );
 id_type!(
+    /// Template group id (`template_group_ids` of template group analytics).
+    TemplateGroupId
+);
+id_type!(
     /// WhatsApp Flow id.
     FlowId
+);
+id_type!(
+    /// A file a user uploaded through a Flow's `PhotoPicker` or
+    /// `DocumentPicker`, as the Flow data endpoint receives it (`media_id`,
+    /// a UUID in Meta's example; the key of a per-file `error-message`).
+    /// Not a [`MediaId`]: the file is fetched from its `cdn_url`, and the
+    /// Flow's response message carries a separate media `id`.
+    FlowMediaId
+);
+id_type!(
+    /// WhatsApp Business Profile id: the profile node itself
+    /// (`GET /{whatsapp-business-profile-id}`), not the phone number id.
+    BusinessProfileId
 );
 id_type!(
     /// Commerce catalog id.

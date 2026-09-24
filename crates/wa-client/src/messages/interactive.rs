@@ -730,15 +730,8 @@ pub enum FlowMode {
     Published,
 }
 
-/// `flow_action`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FlowAction {
-    /// Open `flow_action_payload.screen` directly (Meta's default).
-    Navigate,
-    /// Ask your Flow endpoint for the first screen.
-    DataExchange,
-}
+/// `flow_action`; shared with Flow template buttons (see [`crate::common`]).
+pub use crate::common::FlowAction;
 
 /// `flow_action_payload`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -858,7 +851,7 @@ impl Serialize for FlowParameters {
             #[serde(skip_serializing_if = "Option::is_none")]
             mode: Option<FlowMode>,
             #[serde(skip_serializing_if = "Option::is_none")]
-            flow_action: Option<FlowAction>,
+            flow_action: Option<&'a FlowAction>,
             #[serde(skip_serializing_if = "Option::is_none")]
             flow_action_payload: Option<&'a FlowActionPayload>,
         }
@@ -868,7 +861,7 @@ impl Serialize for FlowParameters {
             flow: &self.flow,
             flow_cta: &self.flow_cta,
             mode: self.mode,
-            flow_action: self.flow_action,
+            flow_action: self.flow_action.as_ref(),
             flow_action_payload: self.flow_action_payload.as_ref(),
         }
         .serialize(serializer)

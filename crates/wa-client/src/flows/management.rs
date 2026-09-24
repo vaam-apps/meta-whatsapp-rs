@@ -10,8 +10,8 @@ use wa_core::paging::Page;
 use wa_core::transport::Multipart;
 
 use super::types::{
-    CreateFlow, CreatedFlow, FlowAsset, FlowDetails, FlowJsonUpload, FlowPreview, UpdateFlow,
-    validate_flow_json_len,
+    CreateFlow, CreatedFlow, FlowAsset, FlowDetails, FlowJsonUpload, FlowPreview, ListFlowAssets,
+    ListFlows, UpdateFlow, validate_flow_json_len,
 };
 use crate::Client;
 
@@ -87,12 +87,13 @@ impl Flows {
     }
 
     /// One page of this account's Flows (`GET /{WABA_ID}/flows`), with the
-    /// default fields. Pass the previous page's
-    /// [`Page::next_cursor`] as `after` to continue.
-    pub async fn list(&self, after: Option<&str>) -> Result<Page<FlowDetails>> {
+    /// default fields. The next page: `ListFlows::new().after(..)` with
+    /// this page's [`Page::next_cursor`].
+    pub async fn list(&self, query: &ListFlows) -> Result<Page<FlowDetails>> {
         self.client
             .get_at(&[self.waba_id.as_str(), "flows"])
-            .query_opt("after", after)
+            .query_opt("after", query.after.as_deref())
+            .query_opt("before", query.before.as_deref())
             .context("list flows response")
             .send()
             .await
@@ -188,11 +189,14 @@ impl Flow {
             .await
     }
 
-    /// One page of the Flow's assets (`GET /{FLOW_ID}/assets`).
-    pub async fn assets(&self, after: Option<&str>) -> Result<Page<FlowAsset>> {
+    /// One page of the Flow's assets (`GET /{FLOW_ID}/assets`). The next
+    /// page: `ListFlowAssets::new().after(..)` with this page's
+    /// [`Page::next_cursor`].
+    pub async fn assets(&self, query: &ListFlowAssets) -> Result<Page<FlowAsset>> {
         self.client
             .get_at(&[self.flow_id.as_str(), "assets"])
-            .query_opt("after", after)
+            .query_opt("after", query.after.as_deref())
+            .query_opt("before", query.before.as_deref())
             .context("flow assets response")
             .send()
             .await

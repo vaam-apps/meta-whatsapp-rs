@@ -23,7 +23,7 @@ use wa_core::ids::{PhoneNumberId, QrCodeId};
 use wa_core::paging::Page;
 use wa_core::{Error, Result};
 
-use crate::request::paginate_or_error;
+use crate::request::{paginate_or_error, reject_cursors};
 use crate::{Client, GraphRequest};
 
 /// Maximum length of a prefilled message, in characters (`qr-codes`,
@@ -223,18 +223,6 @@ fn validate_code(field: &str, code: &QrCodeId) -> Result<()> {
             format!("must be {QR_CODE_ID_LEN} ASCII letters or digits"),
         )
         .into());
-    }
-    Ok(())
-}
-
-fn reject_cursors(after: Option<&str>, before: Option<&str>) -> Result<()> {
-    if after.is_some() {
-        return Err(ValidationError::new("after", "streams manage cursors; leave it unset").into());
-    }
-    if before.is_some() {
-        return Err(
-            ValidationError::new("before", "streams manage cursors; leave it unset").into(),
-        );
     }
     Ok(())
 }

@@ -1318,6 +1318,30 @@ async fn list_sends_the_documented_filters() {
 }
 
 #[tokio::test]
+async fn list_sends_the_callers_cursors() {
+    let t = ScriptedTransport::new();
+    t.push_json(200, json!({"data": []}));
+    t.push_json(200, json!({"data": []}));
+    let templates = client(&t).templates("102290129340398");
+    let next = TemplateListQuery {
+        after: Some("QVFIU...".into()),
+        ..TemplateListQuery::new().limit(5)
+    };
+    let previous = TemplateListQuery {
+        before: Some("QVFIB...".into()),
+        ..TemplateListQuery::new()
+    };
+    templates.list(&next).await.unwrap();
+    templates.list(&previous).await.unwrap();
+    let reqs = t.requests();
+    assert_eq!(reqs[0].query("after").as_deref(), Some("QVFIU..."));
+    assert_eq!(reqs[0].query("limit").as_deref(), Some("5"));
+    assert_eq!(reqs[1].query("before").as_deref(), Some("QVFIB..."));
+    assert_eq!(reqs[1].query("after"), None);
+    assert_eq!(t.remaining(), 0);
+}
+
+#[tokio::test]
 async fn list_stream_follows_cursors_and_limit_zero_is_refused() {
     let t = ScriptedTransport::new();
     t.push_json(
@@ -1330,10 +1354,7 @@ async fn list_stream_follows_cursors_and_limit_zero_is_refused() {
         json!({"data": [{"id": "3"}], "paging": {"cursors": {"after": "c2"}}}),
     );
     let templates = client(&t).templates("102290129340398");
-    let q = TemplateListQuery {
-        after: Some("ignored".into()),
-        ..TemplateListQuery::new().limit(2)
-    };
+    let q = TemplateListQuery::new().limit(2);
     let ids: Vec<String> = templates
         .list_stream(&q)
         // Bounded: a broken paginator must fail the test, not loop forever.
@@ -1354,6 +1375,16 @@ async fn list_stream_follows_cursors_and_limit_zero_is_refused() {
         items.as_slice(),
         [Err(wa_core::Error::Validation(_))]
     ));
+    // The stream manages the cursors: a caller's is refused, not ignored.
+    let resumed = TemplateListQuery {
+        after: Some("c1".into()),
+        ..TemplateListQuery::new().limit(2)
+    };
+    let items: Vec<_> = templates.list_stream(&resumed).take(10).collect().await;
+    assert!(
+        matches!(items.as_slice(), [Err(wa_core::Error::Validation(v))] if v.field == "after"),
+        "{items:?}"
+    );
     assert_eq!(t.requests().len(), 2, "no request for an invalid query");
 }
 

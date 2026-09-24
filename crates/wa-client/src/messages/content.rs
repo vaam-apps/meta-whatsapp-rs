@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 use serde::ser::{SerializeMap, Serializer};
-use wa_core::ids::{MediaId, MessageId};
+use wa_core::ids::MessageId;
 
 use super::validate::{self, Check};
 
@@ -41,45 +41,9 @@ impl Text {
     }
 }
 
-/// Where a media asset comes from. Serializes to `{"id": …}` or
-/// `{"link": …}`.
-///
-/// Meta recommends uploaded ids (`Media::upload`, which also avoids Meta
-/// fetching from your server under load); links are cached by Meta for 10
-/// minutes per URL (`messages/send-messages`, "Media caching").
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum MediaSource {
-    /// An uploaded media id.
-    Id(MediaId),
-    /// A public URL on your server.
-    Link(String),
-}
-
-impl MediaSource {
-    /// Uploaded media.
-    pub fn id(id: impl Into<MediaId>) -> Self {
-        Self::Id(id.into())
-    }
-
-    /// Hosted media.
-    pub fn link(url: impl Into<String>) -> Self {
-        Self::Link(url.into())
-    }
-
-    fn validate(&self, field: &str) -> Check {
-        match self {
-            Self::Id(id) => validate::non_empty(&format!("{field}.id"), id.as_str()),
-            Self::Link(url) => validate::non_empty(&format!("{field}.link"), url),
-        }
-    }
-}
-
-impl From<MediaId> for MediaSource {
-    fn from(id: MediaId) -> Self {
-        Self::Id(id)
-    }
-}
+/// Where a media asset comes from; shared with templates (see
+/// [`crate::common`]).
+pub use crate::common::MediaSource;
 
 /// Caption limit shared by image, video and document messages
 /// (`messages/image-messages`, `messages/video-messages`,

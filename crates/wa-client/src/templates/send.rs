@@ -825,16 +825,9 @@ pub struct DateTime {
     pub fallback_value: String,
 }
 
-/// Media by uploaded id (`{"id": ..}`) or public link (`{"link": ..}`).
-/// Meta recommends uploading (`templates/template-media`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum MediaSource {
-    /// Uploaded media id.
-    Id(MediaId),
-    /// Publicly reachable URL.
-    Link(String),
-}
+/// Media by uploaded id (`{"id": ..}`) or public link (`{"link": ..}`);
+/// the same type messages use (see [`crate::common`]).
+pub use crate::common::MediaSource;
 
 /// `document` parameter object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

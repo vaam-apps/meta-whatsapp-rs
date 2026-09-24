@@ -76,6 +76,41 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
 
 ### Changed
 
+- **Breaking — one type per concept** (conventions review #9):
+  `wa_client::common` defines `MediaSource`, `FlowAction` and
+  `QualityRating` once; `messages`, `templates` and `phone_numbers`
+  re-export them, so the old paths still name them. The Flow message's
+  `FlowAction` was a closed `Copy` enum and is now the templates' open one
+  (`Other(String)`, case-insensitive, not `Copy`). The phone number's
+  `QualityRating` was `Copy` and turned any unknown value into `Unknown`;
+  `Unknown` is now only the documented `UNKNOWN`, anything else is
+  `Other(String)`. `marketing::OnboardingRequest` (the Intent API's
+  answer) is now `marketing::OnboardingRequested`, so it no longer shares a
+  name with `embedded_signup::OnboardingRequest`.
+- **Breaking — typed ids** (conventions review #17): `FlowButton::flow_id`
+  is an `Option<FlowId>` and `FlowButton::by_id` takes `impl Into<FlowId>`;
+  `FlowMedia::media_id` is a new `FlowMediaId` (a Flow upload's UUID, not a
+  Graph `MediaId`); `TemplateGroupAnalyticsQuery::template_group_ids` and
+  `TemplateGroupDataPoint::template_group_id` use a new `TemplateGroupId`;
+  `Client::business_profile_node` takes `impl Into<BusinessProfileId>` (new),
+  and `BusinessProfileNode::id`, `Profile::id` and `ProfileNodeUpdated::id`
+  return it.
+- **Breaking — every list takes its cursor the same way** (conventions
+  review #7): `after`/`before` in the list's query, sent by the one-page
+  method and refused by its stream (which manages them; the stream's
+  single item is a `ValidationError`). New query types: `ListSignups`
+  (`Signups::list`/`list_stream` took an `Option<u32>`),
+  `AssignedUsersQuery` (`Waba::assigned_users`/`_stream` took a
+  `&BusinessId`), `ListFlows` and `ListFlowAssets` (`Flows::list` and
+  `Flow::assets` took an `Option<&str>`), `ListClientWabas`
+  (`MarketingBusiness::client_wabas_with_status` took
+  `(&[OnboardingStatus], Option<&str>)`, its stream `&[OnboardingStatus]`).
+  `PhoneNumbersQuery`, `WabaListQuery` (both with `after`/`before`
+  builders), `TemplateAnalyticsQuery`, `TemplateGroupAnalyticsQuery` and
+  `GroupAnalyticsQuery` (now with a `new`) gained the two fields.
+  `Templates::list_stream` refuses a cursor it used to ignore.
+  `Waba::subscribed_apps` and `Templates::library` take none: their pages
+  document no pagination.
 - **Breaking — the OTP namespace is required** (decided for
   `OPEN_QUESTIONS.md` #34, now closed): `OtpConfig::namespace` is a
   `String` (was `Option<String>`), `OtpConfig::new(namespace)` builds the

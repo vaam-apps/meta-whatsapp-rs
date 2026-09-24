@@ -83,9 +83,11 @@ while let Some(template) = stream.next().await {
 }
 ```
 
-- `list(&query)` returns one `Page<TemplateInfo>`; `list_stream` follows
-  the cursors. `get(&id)`, `get_fields(&id, &["status"])`. Cache the list:
-  management endpoints are rate limited per WABA.
+- `list(&query)` returns one `Page<TemplateInfo>` (the next page: the
+  same query with `after` = `page.next_cursor()`); `list_stream` follows
+  the cursors itself and refuses a query that sets `after` or `before`.
+  `get(&id)`, `get_fields(&id, &["status"])`. Cache the list: management
+  endpoints are rate limited per WABA.
 - `edit(&id, &TemplateEdit::components(vec![..]))` **replaces every
   component**. Only `APPROVED`, `REJECTED` or `PAUSED` templates can be
   edited; an approved one keeps its category and allows 10 edits in 30

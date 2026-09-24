@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use wa_core::error::CryptoError;
+use wa_core::ids::FlowMediaId;
 
 use super::BASE64;
 use super::pem::Scrubbed;
@@ -80,7 +81,8 @@ const HMAC_LEN: usize = 10;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FlowMedia {
     /// Id of the upload; use it as the key of a per-file `error-message`.
-    pub media_id: String,
+    /// Not a Graph media id (see [`FlowMediaId`]).
+    pub media_id: FlowMediaId,
     /// Where to download the encrypted file. Check it before fetching: see
     /// [`FlowMedia`]'s docs.
     pub cdn_url: String,

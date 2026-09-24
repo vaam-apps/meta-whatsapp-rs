@@ -32,7 +32,7 @@ use wa_core::paging::Page;
 use wa_core::recipient::Recipient;
 use wa_core::{GraphApiError, Result};
 
-use crate::request::paginate_or_error;
+use crate::request::{paginate_or_error, reject_cursors};
 use crate::{Client, GraphRequest};
 
 /// Most users one block or unblock request may carry (`block-users`,
@@ -116,19 +116,10 @@ impl BlockUsers {
         &self,
         query: &ListBlockedUsers,
     ) -> impl Stream<Item = Result<BlockedUser>> + Send + 'static {
-        let cursor = if query.after.is_some() {
-            Some("after")
-        } else if query.before.is_some() {
-            Some("before")
-        } else {
-            None
-        };
-        paginate_or_error(match cursor {
-            None => Ok(self.list_request(query)),
-            Some(field) => {
-                Err(ValidationError::new(field, "streams manage cursors; leave it unset").into())
-            }
-        })
+        paginate_or_error(
+            reject_cursors(query.after.as_deref(), query.before.as_deref())
+                .map(|()| self.list_request(query)),
+        )
     }
 
     fn list_request(&self, query: &ListBlockedUsers) -> GraphRequest {

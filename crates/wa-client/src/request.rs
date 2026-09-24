@@ -522,6 +522,21 @@ impl GraphRequest {
     }
 }
 
+/// The check every `…_stream(&query)` makes first: the stream manages the
+/// cursors itself (re-issuing the request with `after`), so a query that
+/// already carries one is refused with a [`ValidationError`] naming it,
+/// yielded as the stream's single item.
+pub(crate) fn reject_cursors(after: Option<&str>, before: Option<&str>) -> Result<()> {
+    for (field, cursor) in [("after", after), ("before", before)] {
+        if cursor.is_some() {
+            return Err(
+                ValidationError::new(field, "streams manage cursors; leave it unset").into(),
+            );
+        }
+    }
+    Ok(())
+}
+
 /// `stream`, or — when it could not be built — a stream whose single item
 /// is the error. The one way a `…_stream()` method reports a request that
 /// failed before sending (a bad `limit`, a cursor the stream manages

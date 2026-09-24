@@ -26,6 +26,7 @@ pub mod block_users;
 pub mod business_profile;
 pub mod calling;
 pub mod commerce;
+pub mod common;
 pub mod embedded_signup;
 pub mod flows;
 pub mod groups;
