@@ -94,10 +94,13 @@ typst = "0.15"
 typst-pdf = "0.15"
 typst-render = "0.15"
 typst-kit = { version = "0.15", default-features = false }
+typst-assets = "0.15"
 
 # Dev.
 pretty_assertions = "1"
 tokio-test = "0.4"
+tower = "0.5"
+http-body-util = "0.1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
