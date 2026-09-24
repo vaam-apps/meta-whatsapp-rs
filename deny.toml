@@ -12,6 +12,17 @@ yanked = "deny"
 # typst. Vulnerability advisories are not affected by this: they still fail
 # the check for any crate in the graph.
 unmaintained = "workspace"
+# quick-xml 0.38 DoS advisories, reached only through typst-library →
+# hayagriva → citationberg (CSL citation styles); no patched citationberg
+# release exists yet. Exposure: typst parses CSL only for `bibliography` /
+# `cite(style: ..)`. wa-typst templates are trusted integrator code, inputs
+# arrive as JSON, the World refuses file reads, and wa-typst is an opt-in
+# feature. Both advisories need attacker-controlled XML. Remove these ignores
+# as soon as typst ships citationberg on quick-xml >= 0.41.
+ignore = [
+  { id = "RUSTSEC-2026-0194", reason = "quick-xml via typst CSL parsing; templates are trusted, no untrusted XML reaches it" },
+  { id = "RUSTSEC-2026-0195", reason = "quick-xml via typst CSL parsing; templates are trusted, no untrusted XML reaches it" },
+]
 
 [licenses]
 version = 2

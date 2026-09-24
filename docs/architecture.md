@@ -59,8 +59,9 @@ implements five methods once and every feature works.
 
 - Every public fallible function returns `wa_core::Result<T>`, with one
   exception: pure, I/O-free functions (signature/token verification,
-  Flows endpoint crypto) may return their precise leaf error
-  (`CryptoError`, `WebhookError`); `?` lifts them into `wa_core::Error`.
+  Flows endpoint crypto, Typst rendering) may return their precise error
+  (`CryptoError`, `WebhookError`, `wa_typst::RenderError`); `?` lifts them
+  into `wa_core::Error`.
 - `thiserror` for every typed node. `anyhow::Error` only as the opaque leaf
   for failures raised by code we do not own (adapters, integrators):
   `TransportError::{Connect, Backend}`, `StorageError::Backend`,
