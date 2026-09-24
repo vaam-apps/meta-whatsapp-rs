@@ -44,6 +44,10 @@ pub async fn run<S: KvStore + ?Sized>(store: &S, advance: &(dyn Fn(Duration) + S
 
 /// Run the suite against a backend that expires on real time, sleeping for
 /// `tick` (keep it small, e.g. 1.2s for second-granularity TTLs).
+///
+/// It also checks that `Expiry::After(1h)` lands within a minute of this
+/// machine's clock + 1h, so the backend's clock must be within a minute of
+/// the test runner's (true for local containers and NTP-synced servers).
 pub async fn run_with_real_time<S: KvStore + ?Sized>(store: &S, tick: Duration) {
     basic(store).await;
     versions_never_reused(store).await;

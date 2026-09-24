@@ -109,6 +109,52 @@ async fn live_postgres_conversation_conformance() {
     db.drop().await;
 }
 
+/// The history and inbox order must be byte order whatever the server's
+/// default collation. Alpine (musl) Postgres collates `en_US.utf8` byte-wise
+/// anyway, so the test above cannot tell; a database created with an ICU
+/// locale orders `a` before `B` and can.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_conversation_order_ignores_the_database_collation() {
+    let Some(url) = common::service_url("WA_RS_TEST_POSTGRES_URL") else {
+        return;
+    };
+    let name = format!("wa_test_icu_{}", common::unique());
+    let admin = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&url)
+        .await
+        .unwrap();
+    sqlx::query(AssertSqlSafe(format!(
+        "CREATE DATABASE {name} TEMPLATE template0 \
+         LOCALE_PROVIDER icu ICU_LOCALE 'en-US' LOCALE 'C.UTF-8'"
+    )))
+    .execute(&admin)
+    .await
+    .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(10)
+        .connect_with(PgConnectOptions::from_str(&url).unwrap().database(&name))
+        .await
+        .unwrap();
+    let locale_orders_a_first: bool = sqlx::query_scalar("SELECT 'a'::text < 'B'::text")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        locale_orders_a_first,
+        "the probe database must use a non-byte collation"
+    );
+
+    postgres::migrate(&pool).await.unwrap();
+    conversation_conformance::run(&PostgresConversationStore::new(pool.clone())).await;
+
+    pool.close().await;
+    sqlx::query(AssertSqlSafe(format!("DROP DATABASE {name} WITH (FORCE)")))
+        .execute(&admin)
+        .await
+        .unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn live_postgres_races_across_independent_pools() {
     let Some(db) = TestDb::new().await else {

@@ -4,6 +4,7 @@
 //! on restart. Use it for tests, development and demos.
 
 use std::collections::{BTreeSet, HashMap};
+use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -43,9 +44,24 @@ struct State {
 /// last [`ConversationStore::mark_read`] counts even if its timestamp is
 /// older (a late webhook the merchant has not seen yet). The Postgres
 /// adapter counts the same way.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct MemoryConversationStore {
     state: Arc<Mutex<State>>,
+}
+
+impl fmt::Debug for MemoryConversationStore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Counts only: a derived Debug would print every stored message
+        // (customer text, payloads) into whatever log formats the store.
+        let mut d = f.debug_struct("MemoryConversationStore");
+        match self.state.try_lock() {
+            Ok(st) => d
+                .field("messages", &st.messages.len())
+                .field("conversations", &st.conversations.len()),
+            Err(_) => d.field("state", &format_args!("<locked>")),
+        };
+        d.finish()
+    }
 }
 
 impl MemoryConversationStore {
@@ -201,5 +217,29 @@ mod tests {
     #[tokio::test]
     async fn passes_conversation_conformance_suite() {
         conversation_conformance::run(&MemoryConversationStore::new()).await;
+    }
+
+    #[tokio::test]
+    async fn debug_shows_counts_not_messages() {
+        let store = MemoryConversationStore::new();
+        store
+            .append(StoredMessage {
+                id: MessageId::new("wamid.1"),
+                conversation: ConversationKey::new("pn", "US.1"),
+                direction: Direction::Inbound,
+                kind: "text".to_owned(),
+                text: Some("my card number is 4111".to_owned()),
+                payload: serde_json::json!({"text": {"body": "my card number is 4111"}}),
+                status: DeliveryStatus::Received,
+                timestamp: time::macros::datetime!(2026-09-24 12:00 UTC),
+                status_at: None,
+                error: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            format!("{store:?}"),
+            "MemoryConversationStore { messages: 1, conversations: 1 }"
+        );
     }
 }
