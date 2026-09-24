@@ -5,7 +5,7 @@ use std::str::FromStr;
 
 use url::Url;
 
-use crate::error::ConfigError;
+use crate::error::{ConfigError, ValidationError};
 
 /// A Graph API version, `vMAJOR.MINOR`.
 ///
@@ -121,6 +121,35 @@ impl GraphEndpoint {
         url
     }
 
+    /// Versioned URL from path segments taken **verbatim**: each segment is
+    /// percent-encoded as a whole, so an id containing `/`, `?` or `#`
+    /// cannot escape it and address a different Graph object. Empty, `.`
+    /// and `..` segments are rejected (URL normalization would otherwise
+    /// drop or pop them).
+    ///
+    /// Use this whenever a segment comes from data (ids from a database, a
+    /// webhook or a request); [`Self::url`] is for literal paths.
+    pub fn url_segments<S: AsRef<str>>(&self, segments: &[S]) -> Result<Url, ValidationError> {
+        for seg in segments {
+            let seg = seg.as_ref();
+            if seg.is_empty() || seg == "." || seg == ".." {
+                return Err(ValidationError::new(
+                    "path",
+                    format!("invalid path segment `{seg}`"),
+                ));
+            }
+        }
+        let mut url = self.base.clone();
+        if let Ok(mut segs) = url.path_segments_mut() {
+            segs.pop_if_empty();
+            segs.push(&self.version.to_string());
+            for seg in segments {
+                segs.push(seg.as_ref());
+            }
+        }
+        Ok(url)
+    }
+
     /// Unversioned URL, for the few endpoints that take none (media
     /// download URLs are absolute and handled separately).
     pub fn unversioned_url(&self, path: &str) -> Url {
@@ -174,6 +203,24 @@ mod tests {
             ep.url("12?x=1/messages").as_str(),
             "https://graph.facebook.com/v25.0/12%3Fx=1/messages"
         );
+    }
+
+    #[test]
+    fn url_segments_keep_ids_inside_their_segment() {
+        let ep = GraphEndpoint::default();
+        assert_eq!(
+            ep.url_segments(&["123/subscribed_apps", "messages"])
+                .unwrap()
+                .as_str(),
+            "https://graph.facebook.com/v25.0/123%2Fsubscribed_apps/messages"
+        );
+        assert_eq!(
+            ep.url_segments(&["US.123", "x?y#z"]).unwrap().as_str(),
+            "https://graph.facebook.com/v25.0/US.123/x%3Fy%23z"
+        );
+        for bad in ["", ".", ".."] {
+            assert!(ep.url_segments(&[bad, "messages"]).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

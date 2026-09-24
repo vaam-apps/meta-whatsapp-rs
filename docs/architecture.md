@@ -57,6 +57,10 @@ implements five methods once and every feature works.
 `wa_core::Error` is the root; every public fallible function returns
 `wa_core::Result<T>`. See `crates/wa-core/src/error/mod.rs` for the tree.
 
+- Every public fallible function returns `wa_core::Result<T>`, with one
+  exception: pure, I/O-free functions (signature/token verification,
+  Flows endpoint crypto) may return their precise leaf error
+  (`CryptoError`, `WebhookError`); `?` lifts them into `wa_core::Error`.
 - `thiserror` for every typed node. `anyhow::Error` only as the opaque leaf
   for failures raised by code we do not own (adapters, integrators):
   `TransportError::{Connect, Backend}`, `StorageError::Backend`,

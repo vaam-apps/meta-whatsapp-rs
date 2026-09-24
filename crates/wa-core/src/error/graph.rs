@@ -27,7 +27,7 @@ pub struct ErrorData {
 
 /// A Graph API error, as found under `error` in a response body or in the
 /// `errors` arrays of a webhook.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, thiserror::Error)]
 #[error("Graph API error #{code}: {}{}", self.summary(), self.details().map(|d| format!(" ({d})")).unwrap_or_default())]
 pub struct GraphApiError {
     /// Error code. The only field to branch on.
@@ -178,6 +178,10 @@ pub enum ErrorKind {
     BlockedByBusiness,
     /// `130472`: held back as part of a Meta experiment.
     ExperimentHoldout,
+    /// `131062`: this message cannot go to a business-scoped user id (e.g. a
+    /// marketing template with `bid_spec`, or an authentication template).
+    /// Address the user by phone number instead.
+    RecipientNotSupported,
 
     // ── Media ─────────────────────────────────────────────────────────────
     /// `131052`: media sent by the user could not be downloaded.
@@ -260,6 +264,7 @@ impl ErrorKind {
             131026 => Self::Undeliverable,
             130403 => Self::BlockedByBusiness,
             130472 => Self::ExperimentHoldout,
+            131062 => Self::RecipientNotSupported,
             131052 => Self::MediaDownloadFailed,
             131053 => Self::MediaUploadFailed,
             132000 | 132012 | 132018 => Self::TemplateParameterMismatch,
@@ -376,6 +381,7 @@ mod tests {
             (131048, K::SpamRateLimited),
             (131049, K::EcosystemEngagementLimit),
             (131050, K::MarketingOptedOut),
+            (131062, K::RecipientNotSupported),
             (132001, K::TemplateNotFound),
             (132015, K::TemplatePaused),
             (133005, K::TwoStepVerification),

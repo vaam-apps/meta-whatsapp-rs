@@ -98,22 +98,54 @@ impl Client {
         &self.shared.endpoint
     }
 
-    /// Start a request to an arbitrary versioned Graph path.
+    /// Start a request to a versioned Graph path built from `segments`,
+    /// each taken verbatim (see [`GraphEndpoint::url_segments`]). **Use this
+    /// for any path containing an id**: `client.post_at(&[phone_number_id.as_str(),
+    /// "messages"])`. An invalid segment surfaces as a validation error when
+    /// the request is sent, before anything reaches the network.
+    pub fn request_at<S: AsRef<str>>(&self, method: Method, segments: &[S]) -> GraphRequest {
+        match self.shared.endpoint.url_segments(segments) {
+            Ok(url) => GraphRequest::new(self.clone(), method, url),
+            Err(e) => {
+                GraphRequest::invalid(self.clone(), method, self.shared.endpoint.url(""), e.into())
+            }
+        }
+    }
+
+    /// `GET` a segment path, see [`Client::request_at`].
+    pub fn get_at<S: AsRef<str>>(&self, segments: &[S]) -> GraphRequest {
+        self.request_at(Method::GET, segments)
+    }
+
+    /// `POST` a segment path, see [`Client::request_at`].
+    pub fn post_at<S: AsRef<str>>(&self, segments: &[S]) -> GraphRequest {
+        self.request_at(Method::POST, segments)
+    }
+
+    /// `DELETE` a segment path, see [`Client::request_at`].
+    pub fn delete_at<S: AsRef<str>>(&self, segments: &[S]) -> GraphRequest {
+        self.request_at(Method::DELETE, segments)
+    }
+
+    /// Start a request to a **literal** versioned Graph path (split on
+    /// `/`). Never interpolate ids into it — an id containing `/` would
+    /// address a different object with your token. Use
+    /// [`Client::request_at`] for ids.
     pub fn request(&self, method: Method, path: &str) -> GraphRequest {
         GraphRequest::new(self.clone(), method, self.shared.endpoint.url(path))
     }
 
-    /// `GET {version}/{path}`.
+    /// `GET {version}/{path}` for a literal path; see [`Client::request`].
     pub fn get(&self, path: &str) -> GraphRequest {
         self.request(Method::GET, path)
     }
 
-    /// `POST {version}/{path}`.
+    /// `POST {version}/{path}` for a literal path; see [`Client::request`].
     pub fn post(&self, path: &str) -> GraphRequest {
         self.request(Method::POST, path)
     }
 
-    /// `DELETE {version}/{path}`.
+    /// `DELETE {version}/{path}` for a literal path; see [`Client::request`].
     pub fn delete(&self, path: &str) -> GraphRequest {
         self.request(Method::DELETE, path)
     }
