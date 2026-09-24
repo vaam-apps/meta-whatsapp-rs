@@ -1,0 +1,34 @@
+{
+  "entry": [
+    {
+      "id": "106181168862417",
+      "time": 1674160476,
+      "changes": [
+        {
+          "value": {
+            "event": "ENDPOINT_ERROR_RATE",
+            "message": "The flow endpoint request error rate has reached the 10% threshold in the last 30 minutes. A higher error rate will make it harder for users to complete the flow, resulting in drop-offs.",
+            "flow_id": "691244242662581",
+            "error_rate": 14.28,
+            "threshold": 10,
+            "alert_state": "ACTIVATED",
+            "errors": [
+              {
+                "error_type": "CAPABILITY_ERROR",
+                "error_rate": 66.66,
+                "error_count": 2
+              },
+              {
+                "error_type": "TIMEOUT",
+                "error_rate": 33.33,
+                "error_count": 1
+              }
+            ]
+          },
+          "field": "flows"
+        }
+      ]
+    }
+  ],
+  "object": "whatsapp_business_account"
+}

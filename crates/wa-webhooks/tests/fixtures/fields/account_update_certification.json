@@ -1,0 +1,24 @@
+{
+  "entry": [
+    {
+      "id": "102290129340398",
+      "time": 1743138982,
+      "changes": [
+        {
+          "value": {
+            "event": "PARTNER_CLIENT_CERTIFICATION_STATUS_UPDATE",
+            "partner_client_certification_info": {
+              "client_business_id": "2729063490586005",
+              "status": "APPROVED",
+              "rejection_reasons": [
+                "NONE"
+              ]
+            }
+          },
+          "field": "account_update"
+        }
+      ]
+    }
+  ],
+  "object": "whatsapp_business_account"
+}

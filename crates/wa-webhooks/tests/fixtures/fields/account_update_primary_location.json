@@ -1,0 +1,18 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "time": 1743138982,
+      "changes": [
+        {
+          "value": {
+            "country": "IN",
+            "event": "BUSINESS_PRIMARY_LOCATION_COUNTRY_UPDATE"
+          },
+          "field": "account_update"
+        }
+      ]
+    }
+  ]
+}

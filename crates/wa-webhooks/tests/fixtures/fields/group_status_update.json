@@ -1,0 +1,32 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550783881",
+              "phone_number_id": "106540352242922"
+            },
+            "groups": [
+              {
+                "timestamp": "1750100800",
+                "type": "group_suspend",
+                "group_id": "Y2FwaV9ncm91cDoxNzA1NTU1MDEzOToxMjAzNjM0MDQ2OTQyMzM4MjAZD"
+              },
+              {
+                "timestamp": "1750100900",
+                "type": "group_suspend_cleared",
+                "group_id": "Y2FwaV9ncm91cDoxNzA1NTU1MDEzOToxMjAzNjM0MDQ2OTQyMzM4MjAZD"
+              }
+            ]
+          },
+          "field": "group_status_update"
+        }
+      ]
+    }
+  ]
+}
