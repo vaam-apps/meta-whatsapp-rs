@@ -25,6 +25,11 @@ flows-endpoint = ["wa-client/flows-endpoint"]
 full = ["reqwest", "memory", "sinks", "postgres", "redis", "axum", "typst", "flows-endpoint"]
 
 [dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+serde_json.workspace = true
+time.workspace = true
+tracing.workspace = true
 wa-core.workspace = true
 wa-client.workspace = true
 wa-webhooks.workspace = true

@@ -2,6 +2,8 @@
 //!
 //! Facade over the workspace crates; see the README for the map.
 
+pub mod inbox;
+
 pub use wa_adapters as adapters;
 pub use wa_client as client;
 pub use wa_core as core;
