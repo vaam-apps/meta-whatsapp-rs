@@ -67,6 +67,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use time::{OffsetDateTime, PrimitiveDateTime};
+use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 use wa_core::clock::Clock;
 use wa_core::error::{ConfigError, CryptoError, StorageError, ValidationError};
 use wa_core::ids::{MessageId, PhoneNumberId};
@@ -231,7 +232,8 @@ pub struct OtpConfig {
     pub issue_limit: Option<IssueLimit>,
     /// Tenant (or app) this service issues codes for — the tenant id of
     /// your platform, for instance. Required: not blank, without leading or
-    /// trailing whitespace, without control characters. A server-side
+    /// trailing whitespace, without control (`Cc`) or format (`Cf`: U+200B,
+    /// U+FEFF, bidi controls, …) characters. A server-side
     /// constant (from your configuration or your tenant table), never a
     /// value taken from the request: a caller who picks the namespace picks
     /// whose codes, cooldowns and limits they get.
@@ -284,11 +286,18 @@ impl OtpConfig {
                 "must not be blank: name the tenant (or app) the service issues codes for",
             );
         }
-        // `" shop"` and `"shop"` would be two tenants that print alike.
-        if self.namespace.trim() != self.namespace || self.namespace.chars().any(char::is_control) {
+        // `" shop"`, `"shop\u{200B}"` and `"shop"` would be three tenants
+        // that print alike.
+        if self.namespace.trim() != self.namespace
+            || self
+                .namespace
+                .chars()
+                .any(|c| c.is_control() || c.general_category() == GeneralCategory::Format)
+        {
             return bad(
                 "namespace",
-                "must not have leading or trailing whitespace or control characters",
+                "must not have leading or trailing whitespace, control characters or \
+                 format characters (U+200B, U+FEFF, bidi controls, …)",
             );
         }
         Ok(())
@@ -602,9 +611,12 @@ impl OtpService {
     }
 
     /// The code hash of challenge `id` stored under `key`. The key is part
-    /// of it: a record copied to another key never verifies there. `key`
-    /// is 64 hex characters, `id` 32, `code` digits: none contains the `|`
-    /// separator.
+    /// of it: a record copied to another key never verifies there. The
+    /// input is unambiguous about the key because `key` comes first and is
+    /// always 64 hex characters this service computed: whatever `id` (at
+    /// verify, `record.id`, read back from the store) and `code` (the
+    /// user's input) contain, `|` included, two different keys never hash
+    /// the same bytes.
     fn code_mac(&self, key: &str, id: &str, code: &str) -> Result<[u8; 32]> {
         self.mac(
             CODE_DOMAIN,

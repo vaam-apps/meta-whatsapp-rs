@@ -570,7 +570,7 @@ async fn a_namespace_separates_tenants_on_one_number() {
 
 /// There is no default namespace to forget: a blank one is refused when
 /// the service is built, and so is one that only looks like another (edge
-/// whitespace, control characters).
+/// whitespace, control characters, invisible format characters).
 #[test]
 fn a_blank_namespace_is_a_config_error() {
     for blank in [
@@ -581,6 +581,15 @@ fn a_blank_namespace_is_a_config_error() {
         "shop-a ",
         "shop-a\n",
         "shop\u{7}-a",
+        // Format characters (general category Cf): invisible, so each of
+        // these prints as `shop-a`.
+        "shop\u{200B}-a",
+        "\u{FEFF}shop-a",
+        "shop-a\u{200D}",
+        "shop\u{AD}-a",
+        "shop-a\u{202E}",
+        "\u{2066}shop-a\u{2069}",
+        "shop-a\u{E0041}",
     ] {
         let t = ScriptedTransport::new();
         let e = OtpService::new(
@@ -597,6 +606,25 @@ fn a_blank_namespace_is_a_config_error() {
         assert_eq!(
             OtpConfig::new(blank).validate().unwrap_err().field,
             "namespace"
+        );
+    }
+}
+
+/// The namespace check refuses what prints alike, nothing more: inner
+/// spaces, punctuation and any script are accepted.
+#[test]
+fn a_namespace_may_use_any_visible_text() {
+    for namespace in [
+        "shop a",
+        "boutique-é",
+        "店舗 42",
+        "متجر",
+        "tenant|42",
+        "🛍️ shop",
+    ] {
+        assert!(
+            OtpConfig::new(namespace).validate().is_ok(),
+            "{namespace:?}"
         );
     }
 }

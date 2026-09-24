@@ -87,6 +87,9 @@ base64 = "0.22"
 # Observability.
 tracing = "0.1"
 
+# Unicode general categories (the OTP namespace refuses format characters).
+unicode-properties = { version = "0.1", default-features = false, features = ["general-category"] }
+
 # Adapters (optional behind features in wa-adapters / wa-webhooks).
 reqwest = { version = "0.13", default-features = false }
 axum = { version = "0.8", default-features = false }

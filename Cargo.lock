@@ -4696,6 +4696,7 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+ "unicode-properties",
  "url",
  "wa-adapters",
  "wa-core",
