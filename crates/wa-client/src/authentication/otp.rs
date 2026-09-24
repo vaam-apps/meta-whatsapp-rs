@@ -17,12 +17,19 @@
 //!   (`getrandom`), one byte per digit with rejection sampling — bytes
 //!   `250..=255` are discarded so every digit is exactly 1/10 likely.
 //! - **Storage**: namespace `wa.otp`, key = hex HMAC-SHA256(pepper,
-//!   `"wa.otp.key|" + digits + "|" + purpose`). No phone number or code is
-//!   ever stored or used as a key. The record holds the challenge id,
-//!   HMAC-SHA256(pepper, `"wa.otp.code|" + challenge id + "|" + code`), the
-//!   attempt count, the expiry and the send time. The two HMAC inputs carry
-//!   different prefixes so a key can never be replayed as a code hash. The
-//!   issue log (`wa.otp.rate`, same key) holds send times only.
+//!   `"wa.otp.key|" + scope + "|" + digits + "|" + purpose`). No phone
+//!   number or code is ever stored or used as a key. The record holds the
+//!   challenge id, HMAC-SHA256(pepper, `"wa.otp.code|" + challenge id + "|" +
+//!   code`), the attempt count, the expiry and the send time. The two HMAC
+//!   inputs carry different prefixes so a key can never be replayed as a
+//!   code hash. The issue log (`wa.otp.rate`, same key) holds send times
+//!   only.
+//! - **Scope**: the sending `phone_number_id` and the optional
+//!   [`OtpConfig::namespace`], length-prefixed (netstrings, so neither can be
+//!   shifted into the other). Services that share a store and a pepper —
+//!   several merchants of one integrator — therefore never see each other's
+//!   codes, cooldowns or issue limits: without it, a code merchant A sent
+//!   verified at merchant B for the same phone number and purpose.
 //! - **Rate limits**: see [`OtpConfig::resend_cooldown`] and
 //!   [`OtpConfig::issue_limit`] for the brute-force arithmetic behind them.
 //! - **Issue**: cooldown check, then a slot in the issue log
@@ -65,6 +72,7 @@ use wa_core::{Error, Result};
 
 use super::otp_template_message;
 use crate::Client;
+use crate::messages::OutboundMessage;
 use crate::templates::TemplateMessage;
 
 const NAMESPACE: &str = "wa.otp";
@@ -201,6 +209,14 @@ pub struct OtpConfig {
     /// `None` is the explicit opt-out: set it only when an equivalent
     /// per-number limit is enforced in front of this service.
     pub issue_limit: Option<IssueLimit>,
+    /// Tenant (or app) this service issues codes for, when one sending
+    /// number serves several: a code, cooldown or issue limit of one
+    /// namespace is invisible to every other. Not needed to separate
+    /// merchants with their own numbers — challenges are always bound to
+    /// the sending `phone_number_id`. Must not be blank; `None` (the
+    /// default) is its own namespace. Changing it invalidates outstanding
+    /// codes.
+    pub namespace: Option<String>,
 }
 
 impl Default for OtpConfig {
@@ -211,27 +227,37 @@ impl Default for OtpConfig {
             max_attempts: 5,
             resend_cooldown: Duration::from_secs(30),
             issue_limit: Some(IssueLimit::DEFAULT),
+            namespace: None,
         }
     }
 }
 
 impl OtpConfig {
-    /// Check the settings.
-    pub fn validate(&self) -> Result<()> {
-        let bad = |msg: &str| Err(ConfigError::new(format!("OtpConfig: {msg}")).into());
+    /// Check the settings; the error names the offending field.
+    /// [`OtpService::new`] reports the same failure as
+    /// [`Error::Config`].
+    pub fn validate(&self) -> std::result::Result<(), ValidationError> {
+        let bad = |field: &str, reason: &str| Err(ValidationError::new(field, reason));
         if !(4..=8).contains(&self.code_length) {
-            return bad("code_length must be 4 to 8");
+            return bad("code_length", "must be 4 to 8");
         }
         if self.ttl.is_zero() || self.ttl > Duration::from_mins(90) {
-            return bad("ttl must be between 1 second and 90 minutes");
+            return bad("ttl", "must be between 1 second and 90 minutes");
         }
         if self.max_attempts == 0 {
-            return bad("max_attempts must be at least 1");
+            return bad("max_attempts", "must be at least 1");
         }
         if let Some(limit) = self.issue_limit
             && (limit.max_issues == 0 || limit.window.is_zero())
         {
-            return bad("issue_limit needs max_issues >= 1 and a non-zero window");
+            return bad("issue_limit", "needs max_issues >= 1 and a non-zero window");
+        }
+        if self
+            .namespace
+            .as_deref()
+            .is_some_and(|ns| ns.trim().is_empty())
+        {
+            return bad("namespace", "must not be blank (use None for no namespace)");
         }
         Ok(())
     }
@@ -461,11 +487,40 @@ fn may_have_been_sent(error: &Error) -> bool {
     }
 }
 
+/// Append `bytes` as a netstring (`<len>:<bytes>,`), a self-delimiting
+/// encoding: no sequence of netstrings can be re-split differently.
+fn netstring(out: &mut Vec<u8>, bytes: &[u8]) {
+    out.extend_from_slice(bytes.len().to_string().as_bytes());
+    out.push(b':');
+    out.extend_from_slice(bytes);
+    out.push(b',');
+}
+
+/// What every store key of a service is bound to: its sending number and
+/// its namespace. Prefix-free: a netstring, then `-` (no namespace; a
+/// netstring never starts with `-`) or a second netstring.
+fn scope(phone_number_id: &PhoneNumberId, namespace: Option<&str>) -> Vec<u8> {
+    let mut out = Vec::new();
+    netstring(&mut out, phone_number_id.as_str().as_bytes());
+    match namespace {
+        Some(ns) => netstring(&mut out, ns.as_bytes()),
+        None => out.push(b'-'),
+    }
+    out
+}
+
 /// Issues and verifies one-time passcodes. Cheap to clone.
+///
+/// Every code, cooldown and issue limit is bound to this service's sending
+/// `phone_number_id` (and [`OtpConfig::namespace`]): services that share a
+/// store and a pepper cannot verify, cancel or rate-limit each other's
+/// codes.
 #[derive(Clone)]
 pub struct OtpService {
     client: Client,
     phone_number_id: PhoneNumberId,
+    /// [`scope`] of `phone_number_id` and the namespace, computed once.
+    scope: Arc<[u8]>,
     template: OtpTemplate,
     challenges: JsonStore<StoredChallenge>,
     issue_log: JsonStore<IssueLog>,
@@ -489,6 +544,10 @@ impl OtpService {
     /// Build a service that sends `template` from `phone_number_id`, keeps
     /// challenges in `store` (namespaces `wa.otp` and `wa.otp.rate`) and
     /// reads time from `clock` (use the same clock for the store in tests).
+    ///
+    /// Challenges are bound to `phone_number_id` and
+    /// [`OtpConfig::namespace`]: one store and one pepper can serve any
+    /// number of services.
     pub fn new(
         client: Client,
         phone_number_id: impl Into<PhoneNumberId>,
@@ -498,7 +557,9 @@ impl OtpService {
         pepper: OtpPepper,
         config: OtpConfig,
     ) -> Result<Self> {
-        config.validate()?;
+        config
+            .validate()
+            .map_err(|e| ConfigError::new(format!("OtpConfig: {e}")))?;
         let phone_number_id = phone_number_id.into();
         // Fail now rather than on the first send: an id that is empty, `.`
         // or `..` cannot be a path segment.
@@ -508,9 +569,11 @@ impl OtpService {
             .map_err(|e| ConfigError::new(format!("OTP phone_number_id: {}", e.reason)))?;
         crate::templates::validate::name(&template.name, "template.name")?;
         crate::templates::not_empty(&template.language, "template.language")?;
+        let scope = scope(&phone_number_id, config.namespace.as_deref()).into();
         Ok(Self {
             client,
             phone_number_id,
+            scope,
             template,
             challenges: JsonStore::new(Arc::clone(&store), NAMESPACE),
             issue_log: JsonStore::new(store, ISSUE_LOG_NAMESPACE),
@@ -536,15 +599,16 @@ impl OtpService {
         Ok(mac.finalize().into_bytes().into())
     }
 
-    /// Store key for a phone number and purpose. Digits contain no `|`, so
-    /// `digits|purpose` is unambiguous.
+    /// Store key for a phone number and purpose, bound to this service's
+    /// scope. The scope is prefix-free and digits contain no `|`, so
+    /// `scope|digits|purpose` is unambiguous.
     fn key(&self, phone: &Phone, purpose: &str) -> Result<String> {
         if purpose.is_empty() {
             return Err(ValidationError::new("purpose", "must not be empty").into());
         }
         Ok(hex::encode(self.mac(
             KEY_DOMAIN,
-            &[phone.digits.as_bytes(), purpose.as_bytes()],
+            &[&self.scope[..], phone.digits.as_bytes(), purpose.as_bytes()],
         )?))
     }
 
@@ -635,7 +699,7 @@ impl OtpService {
 
         let message = otp_template_message(&self.template.name, &self.template.language, &code);
         drop(code);
-        match self.send(&phone, &message).await {
+        match self.send(&phone, message).await {
             Ok(message_id) => {
                 tracing::debug!(challenge = %id, "OTP challenge issued");
                 Ok(IssueOutcome::Sent(Challenge {
@@ -729,57 +793,25 @@ impl OtpService {
         Err(contention("removal"))
     }
 
-    async fn send(&self, phone: &Phone, template: &TemplateMessage) -> Result<MessageId> {
-        // The send body of the authentication pages; built here because the
-        // messages module is developed separately.
-        #[derive(Serialize)]
-        struct Body<'a> {
-            messaging_product: &'static str,
-            #[serde(flatten)]
-            recipient: &'a Recipient,
-            #[serde(rename = "type")]
-            kind: &'static str,
-            template: &'a TemplateMessage,
-        }
-        #[derive(Deserialize)]
-        struct Sent {
-            #[serde(default)]
-            messages: Vec<SentMessage>,
-        }
-        #[derive(Deserialize)]
-        struct SentMessage {
-            id: MessageId,
-        }
-        const CONTEXT: &str = "send OTP message response";
-        // Decoded here rather than with `send()`: its decode error quotes
-        // the body, and this one echoes the recipient's number
-        // (`contacts[].input`), which has no place in an error message.
-        const WITHHELD: &[u8] = b"(withheld: names the recipient)";
-        let response = self
+    /// Send the code with [`Messages::send`](crate::messages::Messages::send):
+    /// the authentication pages' send body, checked by
+    /// [`OutboundMessage::validate`], and a decode error that never quotes
+    /// the response (it names the recipient).
+    async fn send(&self, phone: &Phone, template: TemplateMessage) -> Result<MessageId> {
+        let message = OutboundMessage::template(Recipient::Phone(phone.e164()), template);
+        let sent = self
             .client
-            .post_at(&[self.phone_number_id.as_str(), "messages"])
-            .json(&Body {
-                messaging_product: "whatsapp",
-                recipient: &Recipient::Phone(phone.e164()),
-                kind: "template",
-                template,
-            })
-            .context(CONTEXT)
-            .send_raw()
+            .messages(self.phone_number_id.clone())
+            .send(&message)
             .await?;
-        let sent: Sent = serde_json::from_slice(&response.body)
-            .map_err(|e| Error::decode(CONTEXT, e, WITHHELD))?;
         sent.messages
             .into_iter()
             .next()
             .map(|m| m.id)
             .ok_or_else(|| {
-                Error::decode(
-                    CONTEXT,
-                    <serde_json::Error as serde::de::Error>::custom(
-                        "no `messages[0].id` in the response",
-                    ),
-                    WITHHELD,
+                crate::request::withheld_decode_error(
+                    crate::messages::SEND_CONTEXT,
+                    "no `messages[0].id` in the response",
                 )
             })
     }

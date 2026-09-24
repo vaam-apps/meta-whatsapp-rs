@@ -21,10 +21,13 @@
 //!
 //! **The 24-hour window.** Free-form replies are only accepted within 24
 //! hours of the customer's last message; [`Inbox::reply`] checks the store
-//! first and refuses (with a validation error on
-//! `customer_service_window`) instead of paying for a request Meta would
-//! reject with `131047`. Templates and Direct Send (`category`) messages are
-//! exempt. Use [`Inbox::window`] to decide up front.
+//! first and refuses (with
+//! [`ValidationError::customer_service_window_closed`], whose
+//! [`Error::kind`](wa_core::Error::kind) is `CustomerServiceWindowClosed`,
+//! like Meta's `131047`)
+//! instead of paying for a request Meta would reject. Templates and Direct
+//! Send (`category`) messages are exempt. Use [`Inbox::window`] to decide up
+//! front.
 //!
 //! **Not recorded yet:** coexistence message echoes (messages the merchant
 //! sent from the WhatsApp Business app) and history sync; handle
@@ -37,6 +40,7 @@ use async_trait::async_trait;
 use time::OffsetDateTime;
 use wa_client::Client;
 use wa_client::messages::{MessageContent, OutboundMessage, SendResponse};
+use wa_core::Result;
 use wa_core::clock::{Clock, SystemClock};
 use wa_core::error::{SinkError, StorageError, ValidationError};
 use wa_core::ids::{MessageId, PhoneNumberId, UserId};
@@ -46,7 +50,6 @@ use wa_core::store::{
     ConversationKey, ConversationStore, ConversationSummary, CustomerServiceWindow, DeliveryStatus,
     Direction, StoredMessage,
 };
-use wa_core::{Error, Result};
 use wa_webhooks::WebhookEvent;
 use wa_webhooks::fields::common::Contact;
 use wa_webhooks::fields::messages::{InboundMessage, InteractiveReply, MessageContent as In};
@@ -98,9 +101,46 @@ fn delivery(e: StorageError) -> SinkError {
     SinkError::Delivery(anyhow::Error::new(e))
 }
 
+/// `s` with every U+0000 replaced by U+FFFD (the replacement character).
+///
+/// Postgres cannot store NUL in `TEXT` or `JSONB`, so one NUL typed by a
+/// customer would fail every delivery of its webhook batch: Meta retries it
+/// for 7 days, then drops the whole batch. Lossy on purpose — a stored
+/// message with a visible replacement character beats a lost one.
+fn without_nul(s: String) -> String {
+    if s.contains('\0') {
+        s.replace('\0', "\u{FFFD}")
+    } else {
+        s
+    }
+}
+
+/// [`without_nul`] applied to every string of `value`, object keys
+/// included. Two keys that differ only by NUL vs U+FFFD collapse into one
+/// (the later wins). Recursion depth is bounded by the parse that produced
+/// the value (`serde_json` refuses nesting deeper than 128).
+fn json_without_nul(value: serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match value {
+        Value::String(s) => Value::String(without_nul(s)),
+        Value::Array(items) => Value::Array(items.into_iter().map(json_without_nul).collect()),
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(k, v)| (without_nul(k), json_without_nul(v)))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
 /// Records inbound messages and status updates into a
 /// [`ConversationStore`]. Idempotent: the store ignores a message id it
 /// already has, and a status that does not supersede the stored one.
+///
+/// Content never makes a delivery fail: U+0000, which Postgres cannot
+/// store, is replaced by U+FFFD in the stored `kind`, `text`, `payload`
+/// (keys included) and status `error`. Storage errors still fail it (Meta
+/// redelivers).
 ///
 /// Put a `wa_webhooks::DedupGuard` in front of the handler anyway — it
 /// saves the store the work — and fan this sink out next to a broadcast
@@ -128,10 +168,12 @@ impl InboxSink {
         contact: Option<&Contact>,
         message: &InboundMessage,
     ) -> std::result::Result<(), SinkError> {
-        // A revoke is a status change of the original message, not a new row.
+        // A revoke is a status change of the original message, not a new row,
+        // and only ever of a message of the number the revoke arrived on.
         if let In::Revoke(r) = &message.content {
             self.store
                 .update_status(
+                    phone_number_id,
                     &r.original_message_id,
                     DeliveryStatus::Deleted,
                     message.timestamp,
@@ -150,14 +192,15 @@ impl InboxSink {
         };
         let payload = serde_json::to_value(message)
             .map_err(|e| SinkError::Delivery(anyhow::Error::new(e)))?;
+        // Customer content never fails a delivery: see `without_nul`.
         self.store
             .append(StoredMessage {
                 id: message.id.clone(),
                 conversation,
                 direction: Direction::Inbound,
-                kind: message.message_type().unwrap_or("unknown").to_owned(),
-                text: preview(&message.content),
-                payload,
+                kind: without_nul(message.message_type().unwrap_or("unknown").to_owned()),
+                text: preview(&message.content).map(without_nul),
+                payload: json_without_nul(payload),
                 status: DeliveryStatus::Received,
                 timestamp: message.timestamp,
                 status_at: None,
@@ -182,17 +225,23 @@ impl EventSink<WebhookEvent> for InboxSink {
                 self.record_inbound(&phone_number_id, contact.as_ref(), &message)
                     .await
             }
-            WebhookEvent::StatusUpdated { status, .. } => {
+            WebhookEvent::StatusUpdated {
+                phone_number_id,
+                status,
+                ..
+            } => {
                 let Some(new) = DeliveryStatus::from_webhook(status.status.as_str()) else {
                     return Ok(());
                 };
                 let error = if status.errors.is_empty() {
                     None
                 } else {
-                    serde_json::to_value(&status.errors).ok()
+                    serde_json::to_value(&status.errors)
+                        .ok()
+                        .map(json_without_nul)
                 };
                 self.store
-                    .update_status(&status.id, new, status.timestamp, error)
+                    .update_status(&phone_number_id, &status.id, new, status.timestamp, error)
                     .await
                     .map_err(delivery)?;
                 Ok(())
@@ -297,8 +346,8 @@ impl Inbox {
     /// Send `content` to the conversation's contact and record it.
     ///
     /// Free-form content outside the 24-hour window is refused locally
-    /// (validation error on `customer_service_window`); templates are always
-    /// allowed. The recorded row has status
+    /// ([`ValidationError::customer_service_window_closed`]); templates are
+    /// always allowed. The recorded row has status
     /// [`DeliveryStatus::Accepted`] until status webhooks move it on.
     pub async fn reply(
         &self,
@@ -335,11 +384,7 @@ impl Inbox {
         let exempt =
             matches!(message.content, MessageContent::Template(_)) || message.category.is_some();
         if !exempt && !self.window(key).await?.is_open(self.clock.now()) {
-            return Err(ValidationError::new(
-                "customer_service_window",
-                "more than 24 hours since the customer's last message; send a template",
-            )
-            .into());
+            return Err(ValidationError::customer_service_window_closed().into());
         }
         let response = self
             .client
@@ -347,34 +392,48 @@ impl Inbox {
             .send(&message)
             .await?;
         if let Some(sent) = response.messages.first() {
-            let text = match &message.content {
-                MessageContent::Text(t) => Some(t.body.clone()),
-                _ => None,
-            };
-            let payload =
-                serde_json::to_value(&message).map_err(|e| Error::Other(anyhow::Error::new(e)))?;
-            // The message is already sent: a storage failure here must not
-            // read as a send failure (a retry would send it twice).
-            if let Err(e) = self
-                .store
-                .append(StoredMessage {
-                    id: sent.id.clone(),
-                    conversation: key.clone(),
-                    direction: Direction::Outbound,
-                    kind: message.content.message_type().to_owned(),
-                    text,
-                    payload,
-                    status: DeliveryStatus::Accepted,
-                    timestamp: self.clock.now(),
-                    status_at: None,
-                    error: None,
-                })
-                .await
-            {
-                tracing::error!(error = %e, "message sent but not recorded in the inbox");
-            }
+            self.record_sent(key, &message, sent.id.clone()).await;
         }
         Ok(response)
+    }
+
+    /// Record a message Meta accepted. Never fails: the message is already
+    /// sent, so neither a serialization nor a storage failure may read as a
+    /// send failure (a retry would send it twice). Both are logged, without
+    /// the message's content.
+    async fn record_sent(&self, key: &ConversationKey, message: &OutboundMessage, id: MessageId) {
+        let payload = match serde_json::to_value(message) {
+            Ok(payload) => json_without_nul(payload),
+            Err(e) => {
+                tracing::error!(
+                    category = ?e.classify(),
+                    "message sent but not recorded in the inbox: it could not be serialized"
+                );
+                return;
+            }
+        };
+        let text = match &message.content {
+            MessageContent::Text(t) => Some(without_nul(t.body.clone())),
+            _ => None,
+        };
+        if let Err(e) = self
+            .store
+            .append(StoredMessage {
+                id,
+                conversation: key.clone(),
+                direction: Direction::Outbound,
+                kind: without_nul(message.content.message_type().to_owned()),
+                text,
+                payload,
+                status: DeliveryStatus::Accepted,
+                timestamp: self.clock.now(),
+                status_at: None,
+                error: None,
+            })
+            .await
+        {
+            tracing::error!(error = %e, "message sent but not recorded in the inbox");
+        }
     }
 
     fn check_key(&self, key: &ConversationKey) -> Result<()> {
@@ -418,6 +477,7 @@ mod tests {
     use wa_webhooks::{WebhookPayload, events};
 
     use super::*;
+    use wa_core::Error;
 
     const PNID: &str = "106540352242922";
 
@@ -573,6 +633,215 @@ mod tests {
         assert_eq!(rows[0].status, DeliveryStatus::Deleted);
     }
 
+    /// A store that refuses U+0000 in any text or JSON it is given, the way
+    /// Postgres does (`TEXT` cannot hold NUL, `JSONB` rejects `\u0000`), and
+    /// delegates everything else to the memory store. With `down`, every
+    /// append fails (the database is unreachable).
+    #[derive(Debug, Default)]
+    struct NulRefusingStore {
+        inner: MemoryConversationStore,
+        down: bool,
+    }
+
+    fn has_nul(v: &serde_json::Value) -> bool {
+        match v {
+            serde_json::Value::String(s) => s.contains('\0'),
+            serde_json::Value::Array(a) => a.iter().any(has_nul),
+            serde_json::Value::Object(o) => o.iter().any(|(k, v)| k.contains('\0') || has_nul(v)),
+            _ => false,
+        }
+    }
+
+    fn refuse() -> StorageError {
+        StorageError::Backend(anyhow::anyhow!(
+            "unsupported Unicode escape sequence: \\u0000 cannot be converted to text"
+        ))
+    }
+
+    #[async_trait]
+    impl ConversationStore for NulRefusingStore {
+        async fn append(&self, m: StoredMessage) -> std::result::Result<bool, StorageError> {
+            if self.down {
+                return Err(StorageError::Backend(anyhow::anyhow!("connection refused")));
+            }
+            let texts = [Some(&m.kind), m.text.as_ref()];
+            if texts.into_iter().flatten().any(|t| t.contains('\0'))
+                || has_nul(&m.payload)
+                || m.error.as_ref().is_some_and(has_nul)
+            {
+                return Err(refuse());
+            }
+            self.inner.append(m).await
+        }
+        async fn update_status(
+            &self,
+            phone_number_id: &PhoneNumberId,
+            id: &MessageId,
+            status: DeliveryStatus,
+            at: OffsetDateTime,
+            error: Option<serde_json::Value>,
+        ) -> std::result::Result<bool, StorageError> {
+            if error.as_ref().is_some_and(has_nul) {
+                return Err(refuse());
+            }
+            self.inner
+                .update_status(phone_number_id, id, status, at, error)
+                .await
+        }
+        async fn messages(
+            &self,
+            key: &ConversationKey,
+            before: Option<(OffsetDateTime, MessageId)>,
+            limit: usize,
+        ) -> std::result::Result<Vec<StoredMessage>, StorageError> {
+            self.inner.messages(key, before, limit).await
+        }
+        async fn conversations(
+            &self,
+            phone_number_id: &PhoneNumberId,
+            before: Option<(OffsetDateTime, String)>,
+            limit: usize,
+        ) -> std::result::Result<Vec<ConversationSummary>, StorageError> {
+            self.inner
+                .conversations(phone_number_id, before, limit)
+                .await
+        }
+        async fn mark_read(&self, key: &ConversationKey) -> std::result::Result<(), StorageError> {
+            self.inner.mark_read(key).await
+        }
+        async fn last_inbound_at(
+            &self,
+            key: &ConversationKey,
+        ) -> std::result::Result<Option<OffsetDateTime>, StorageError> {
+            self.inner.last_inbound_at(key).await
+        }
+    }
+
+    /// Security review M1: one NUL in a customer's message made every
+    /// delivery of the batch fail on Postgres, so Meta retried it for 7
+    /// days and then dropped it, together with every other event in it.
+    /// Stored text and payload now carry U+FFFD instead.
+    #[tokio::test]
+    async fn a_nul_in_customer_content_is_replaced_not_refused() {
+        let store = Arc::new(NulRefusingStore::default());
+        let sink = InboxSink::new(store.clone());
+        deliver_all(
+            &sink,
+            one_message(&json!({
+                "from": "16505551234", "id": "wamid.nul", "timestamp": "1760000000",
+                "type": "text", "text": {"body": "order\u{0}42"}
+            })),
+        )
+        .await;
+        // A type this crate does not know keeps its raw properties, keys
+        // included, and its type name becomes the row's `kind`.
+        deliver_all(
+            &sink,
+            one_message(&json!({
+                "from": "16505551234", "id": "wamid.nul2", "timestamp": "1760000001",
+                "type": "fut\u{0}ure", "fut\u{0}ure": {"k\u{0}": ["a\u{0}", {"deep\u{0}": "b\u{0}"}]}
+            })),
+        )
+        .await;
+        let status = payload(&json!({
+            "messaging_product": "whatsapp",
+            "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
+            "statuses": [{"id": "wamid.nul", "status": "failed", "timestamp": "1760000100",
+                "recipient_id": "16505551234",
+                "errors": [{"code": 131026, "title": "bad\u{0}", "error_data": {"details": "x\u{0}"}}]}]
+        }));
+        deliver_all(&sink, status).await;
+        let rows = store
+            .messages(&ConversationKey::new(PNID, "US.1"), None, 10)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2, "both messages recorded");
+        let (unknown, text) = (&rows[0], &rows[1]);
+        assert_eq!(text.text.as_deref(), Some("order\u{FFFD}42"));
+        assert_eq!(text.payload["text"]["body"], "order\u{FFFD}42");
+        assert_eq!(text.status, DeliveryStatus::Failed);
+        let error = text.error.as_ref().unwrap();
+        assert!(!has_nul(error), "{error}");
+        assert_eq!(error[0]["title"], "bad\u{FFFD}");
+        assert_eq!(unknown.kind, "fut\u{FFFD}ure");
+        assert!(!has_nul(&unknown.payload), "{}", unknown.payload);
+        assert_eq!(
+            unknown.payload["fut\u{FFFD}ure"]["k\u{FFFD}"][1]["deep\u{FFFD}"], "b\u{FFFD}",
+            "keys and nested values: {}",
+            unknown.payload
+        );
+    }
+
+    /// A `messages` change on another business number.
+    fn on_number(pnid: &str, value: &serde_json::Value) -> Vec<WebhookEvent> {
+        let mut value = value.clone();
+        value["messaging_product"] = json!("whatsapp");
+        value["metadata"] = json!({"display_phone_number": "15550000002", "phone_number_id": pnid});
+        payload(&value)
+    }
+
+    /// Security review L1 (sec-probe `cross_number_probe`): statuses and
+    /// revokes were applied by message id alone, so a status or a revoke
+    /// delivered for one business number changed the row with that id on
+    /// another number (e.g. marked a merchant's message `Deleted`).
+    #[tokio::test]
+    async fn statuses_and_revokes_on_another_number_change_nothing() {
+        let store = Arc::new(MemoryConversationStore::new());
+        let sink = InboxSink::new(store.clone());
+        deliver_all(
+            &sink,
+            inbound(
+                "wamid.SHARED",
+                1_760_000_000,
+                Some("US.1"),
+                None,
+                "order 42",
+            ),
+        )
+        .await;
+        deliver_all(
+            &sink,
+            on_number(
+                "PNID_B",
+                &json!({
+                    "contacts": [{"profile": {"name": "x"}, "wa_id": "16505551234", "user_id": "US.1"}],
+                    "messages": [{"from": "16505551234", "from_user_id": "US.1", "id": "wamid.rev",
+                        "timestamp": "1760000001", "type": "revoke",
+                        "revoke": {"original_message_id": "wamid.SHARED"}}]
+                }),
+            ),
+        )
+        .await;
+        deliver_all(
+            &sink,
+            on_number(
+                "PNID_B",
+                &json!({"statuses": [{"id": "wamid.SHARED", "status": "failed",
+                    "timestamp": "1760000002", "recipient_id": "16505551234",
+                    "errors": [{"code": 131026, "title": "Message undeliverable"}]}]}),
+            ),
+        )
+        .await;
+        let key = ConversationKey::new(PNID, "US.1");
+        let row = store.messages(&key, None, 10).await.unwrap().remove(0);
+        assert_eq!(row.status, DeliveryStatus::Received, "{row:?}");
+        assert_eq!(row.error, None);
+        // The same events on the right number do apply.
+        deliver_all(&sink, status("wamid.SHARED", "read", 1_760_000_003)).await;
+        let row = store.messages(&key, None, 10).await.unwrap().remove(0);
+        assert_eq!(row.status, DeliveryStatus::Read);
+        deliver_all(
+            &sink,
+            one_message(&json!({
+                "from": "16505551234", "id": "wamid.rev2", "timestamp": "1760000004",
+                "type": "revoke", "revoke": {"original_message_id": "wamid.SHARED"}
+            })),
+        )
+        .await;
+        let row = store.messages(&key, None, 10).await.unwrap().remove(0);
+        assert_eq!(row.status, DeliveryStatus::Deleted);
+    }
+
     #[tokio::test]
     async fn group_messages_are_keyed_by_the_group() {
         let store = Arc::new(MemoryConversationStore::new());
@@ -685,6 +954,43 @@ mod tests {
         assert_eq!(rows[0].text.as_deref(), Some("hello"));
     }
 
+    /// Conventions review #18: once Meta accepted a message, nothing about
+    /// recording it may turn the send into an error — the caller would
+    /// retry and the customer would get it twice.
+    #[tokio::test]
+    async fn a_recording_failure_after_the_send_is_not_the_callers_error() {
+        let store = Arc::new(NulRefusingStore {
+            down: true,
+            ..NulRefusingStore::default()
+        });
+        let clock = ManualClock::new(datetime!(2025-10-09 08:00 UTC));
+        let t = ScriptedTransport::new();
+        t.push_json(200, sent("wamid.out"));
+        let client = Client::builder()
+            .transport(t.clone())
+            .access_token("MERCHANT_TOKEN")
+            .retry(RetryPolicy::NONE)
+            .build()
+            .unwrap();
+        let inbox = Inbox::new(client, PNID, store.clone()).with_clock(Arc::new(clock));
+        let key = inbox.key("US.1");
+        let message = OutboundMessage::template(
+            inbox.recipient(&key),
+            TemplateMessage::new("order_update", "en_US"),
+        );
+        let response = inbox.send(&key, message).await.unwrap();
+        assert_eq!(response.message_id(), Some(&MessageId::new("wamid.out")));
+        assert_eq!(t.requests().len(), 1, "sent exactly once");
+        assert!(
+            store
+                .inner
+                .messages(&key, None, 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     #[tokio::test]
     async fn free_form_outside_the_window_is_refused_but_templates_go() {
         let store = Arc::new(MemoryConversationStore::new());
@@ -709,7 +1015,11 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(matches!(&err, Error::Validation(v) if v.field == "customer_service_window"));
+        assert!(
+            matches!(&err, Error::Validation(v) if v.is_customer_service_window_closed()),
+            "{err}"
+        );
+        assert_eq!(err.kind(), wa_core::ErrorKind::CustomerServiceWindowClosed);
         assert!(t.requests().is_empty(), "refused before any request");
 
         t.push_json(200, sent("wamid.tpl"));

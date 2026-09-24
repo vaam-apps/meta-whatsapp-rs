@@ -165,6 +165,9 @@ use wa_core::recipient::Recipient;
 
 use crate::{Client, GraphRequest};
 
+/// [`Error::Decode`](wa_core::Error::Decode) context of [`Messages::send`].
+pub(crate) const SEND_CONTEXT: &str = "send message response";
+
 /// Entry point, see [`Client::messages`].
 #[derive(Debug, Clone)]
 pub struct Messages {
@@ -225,12 +228,16 @@ impl Messages {
     /// Validates it first ([`OutboundMessage::validate`]). Not idempotent:
     /// a timeout is surfaced, never replayed, because the message may have
     /// been sent.
+    ///
+    /// The response names the recipient, so an unreadable one is reported
+    /// as [`Error::Decode`](wa_core::Error::Decode) without the body or
+    /// serde's message (which would quote the phone number).
     pub async fn send(&self, message: &OutboundMessage) -> Result<SendResponse> {
         message.validate()?;
         self.post_messages()
             .json(message)
-            .context("send message response")
-            .send()
+            .context(SEND_CONTEXT)
+            .send_private()
             .await
     }
 

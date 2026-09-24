@@ -24,7 +24,7 @@
 //! `https://developers.facebook.com/documentation/business-messaging/whatsapp/`
 //! (append `.md` for Markdown; `just meta-docs` mirrors them locally).
 
-use futures::{Stream, StreamExt, future, stream};
+use futures::Stream;
 use serde::{Deserialize, Serialize};
 use wa_core::error::ValidationError;
 use wa_core::ids::{PhoneNumberId, UserId, WaId};
@@ -32,6 +32,7 @@ use wa_core::paging::Page;
 use wa_core::recipient::Recipient;
 use wa_core::{GraphApiError, Result};
 
+use crate::request::paginate_or_error;
 use crate::{Client, GraphRequest};
 
 /// Most users one block or unblock request may carry (`block-users`,
@@ -122,18 +123,12 @@ impl BlockUsers {
         } else {
             None
         };
-        match cursor {
-            None => self
-                .list_request(query)
-                .paginate::<BlockedUser>()
-                .left_stream(),
-            Some(field) => stream::once(future::ready(Err(ValidationError::new(
-                field,
-                "streams manage cursors; leave it unset",
-            )
-            .into())))
-            .right_stream(),
-        }
+        paginate_or_error(match cursor {
+            None => Ok(self.list_request(query)),
+            Some(field) => {
+                Err(ValidationError::new(field, "streams manage cursors; leave it unset").into())
+            }
+        })
     }
 
     fn list_request(&self, query: &ListBlockedUsers) -> GraphRequest {

@@ -490,7 +490,7 @@ impl Signups {
         &self,
         limit: Option<u32>,
     ) -> impl Stream<Item = Result<SignupInfo>> + Send + 'static + use<> {
-        crate::waba::stream_or_error(self.list_request(limit))
+        crate::request::paginate_or_error(self.list_request(limit))
     }
 
     /// `POST /signups/{SIGNUP_ID}`: change the fields set in `update`.

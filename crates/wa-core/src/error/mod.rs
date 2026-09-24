@@ -153,7 +153,7 @@ impl Error {
             // The inbox refuses free-form replies outside the 24h window
             // locally; report it like Meta's own 131047 so one condition has
             // one kind.
-            Self::Validation(v) if v.field == "customer_service_window" => {
+            Self::Validation(v) if v.is_customer_service_window_closed() => {
                 ErrorKind::CustomerServiceWindowClosed
             }
             Self::Validation(_) => ErrorKind::InvalidParameter,
@@ -205,9 +205,22 @@ mod tests {
 
     #[test]
     fn a_local_window_refusal_has_the_same_kind_as_131047() {
-        let local = Error::from(ValidationError::new("customer_service_window", "closed"));
+        let local = Error::from(ValidationError::customer_service_window_closed());
         let remote = Error::from(GraphApiError::new(131047, "Re-engagement message"));
         assert_eq!(local.kind(), remote.kind());
+        assert_eq!(
+            local.kind(),
+            ErrorKind::CustomerServiceWindowClosed,
+            "{local}"
+        );
+        // One definition: the field the constructor sets is the one kind()
+        // and the predicate recognise.
+        let Error::Validation(v) = &local else {
+            panic!("{local}")
+        };
+        assert_eq!(v.field, ValidationError::CUSTOMER_SERVICE_WINDOW);
+        assert!(v.is_customer_service_window_closed());
+        assert!(!ValidationError::new("to", "x").is_customer_service_window_closed());
         assert_eq!(
             Error::from(ValidationError::new("body", "x")).kind(),
             ErrorKind::InvalidParameter

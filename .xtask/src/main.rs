@@ -19,10 +19,12 @@ const PREFIX: &str = "/documentation/business-messaging/whatsapp";
 /// Pages whose HTML embeds the documentation navigation tree.
 const SEEDS: &[&str] = &["/overview/", "/flows/"];
 
+const USAGE: &str = "usage: cargo xtask meta-docs [--out DIR] [--force]";
+
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     if args.next().as_deref() != Some("meta-docs") {
-        eprintln!("usage: cargo xtask meta-docs [--out DIR] [--force]");
+        eprintln!("{USAGE}");
         std::process::exit(2);
     }
     let mut out = PathBuf::from(".meta-docs");
@@ -31,6 +33,10 @@ fn main() -> Result<()> {
         match a.as_str() {
             "--out" => out = PathBuf::from(args.next().context("--out needs a value")?),
             "--force" => force = true,
+            "-h" | "--help" => {
+                println!("{USAGE}");
+                return Ok(());
+            }
             other => bail!("unknown argument `{other}`"),
         }
     }

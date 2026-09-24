@@ -18,6 +18,8 @@
 //!   never move a message backwards, replays are no-ops, `failed`/`deleted`
 //!   win, and concurrent updates end on the highest status;
 //! - an applied status update with `error: None` keeps a stored error;
+//! - a status update is scoped to its business number: the same message id
+//!   on another number changes nothing;
 //! - history is `(timestamp, id)` descending in **byte order of the id**
 //!   (the order of Rust's `str`), and paging with the exclusive cursor
 //!   neither repeats nor skips rows, even when every timestamp collides;
@@ -47,6 +49,7 @@ pub async fn run<S: ConversationStore + ?Sized>(store: &S) {
     terminal_statuses_win(store).await;
     stored_error_survives_updates_without_one(store).await;
     unknown_message_status_update_is_false(store).await;
+    status_for_the_same_id_on_another_number_changes_nothing(store).await;
     history_order_and_exclusive_cursor(store).await;
     paging_with_identical_timestamps(store).await;
     conversation_list_paging(store).await;
@@ -183,7 +186,7 @@ async fn statuses_never_regress<S: ConversationStore + ?Sized>(store: &S) {
     let id = m.id.clone();
     store.append(m).await.unwrap();
 
-    let update = |status, secs| store.update_status(&id, status, at(secs), None);
+    let update = |status, secs| store.update_status(&r.pn, &id, status, at(secs), None);
     assert!(update(DeliveryStatus::Sent, 1).await.unwrap(), "sent");
     assert!(update(DeliveryStatus::Read, 3).await.unwrap(), "read");
     assert!(
@@ -227,13 +230,14 @@ async fn terminal_statuses_win<S: ConversationStore + ?Sized>(store: &S) {
     let error = serde_json::json!({"code": 131049, "title": "Per-user marketing limit"});
     assert!(
         store
-            .update_status(&failed_id, DeliveryStatus::Sent, at(1), None)
+            .update_status(&r.pn, &failed_id, DeliveryStatus::Sent, at(1), None)
             .await
             .unwrap()
     );
     assert!(
         store
             .update_status(
+                &r.pn,
                 &failed_id,
                 DeliveryStatus::Failed,
                 at(2),
@@ -250,7 +254,7 @@ async fn terminal_statuses_win<S: ConversationStore + ?Sized>(store: &S) {
     ] {
         assert!(
             !store
-                .update_status(&failed_id, late, at(3), None)
+                .update_status(&r.pn, &failed_id, late, at(3), None)
                 .await
                 .unwrap(),
             "{late:?} never overrides failed"
@@ -259,20 +263,20 @@ async fn terminal_statuses_win<S: ConversationStore + ?Sized>(store: &S) {
 
     assert!(
         store
-            .update_status(&deleted_id, DeliveryStatus::Read, at(2), None)
+            .update_status(&r.pn, &deleted_id, DeliveryStatus::Read, at(2), None)
             .await
             .unwrap()
     );
     assert!(
         store
-            .update_status(&deleted_id, DeliveryStatus::Deleted, at(3), None)
+            .update_status(&r.pn, &deleted_id, DeliveryStatus::Deleted, at(3), None)
             .await
             .unwrap(),
         "deleted supersedes read"
     );
     assert!(
         !store
-            .update_status(&deleted_id, DeliveryStatus::Failed, at(4), None)
+            .update_status(&r.pn, &deleted_id, DeliveryStatus::Failed, at(4), None)
             .await
             .unwrap(),
         "terminal states do not supersede each other"
@@ -300,13 +304,13 @@ async fn stored_error_survives_updates_without_one<S: ConversationStore + ?Sized
     let first = serde_json::json!({"code": 131026, "title": "Message undeliverable"});
     assert!(
         store
-            .update_status(&id, DeliveryStatus::Sent, at(1), Some(first.clone()))
+            .update_status(&r.pn, &id, DeliveryStatus::Sent, at(1), Some(first.clone()))
             .await
             .unwrap()
     );
     assert!(
         store
-            .update_status(&id, DeliveryStatus::Delivered, at(2), None)
+            .update_status(&r.pn, &id, DeliveryStatus::Delivered, at(2), None)
             .await
             .unwrap()
     );
@@ -320,13 +324,20 @@ async fn stored_error_survives_updates_without_one<S: ConversationStore + ?Sized
     let second = serde_json::json!({"code": 131049, "title": "Per-user marketing limit"});
     assert!(
         store
-            .update_status(&id, DeliveryStatus::Failed, at(3), Some(second.clone()))
+            .update_status(
+                &r.pn,
+                &id,
+                DeliveryStatus::Failed,
+                at(3),
+                Some(second.clone())
+            )
             .await
             .unwrap()
     );
     assert!(
         !store
             .update_status(
+                &r.pn,
                 &id,
                 DeliveryStatus::Read,
                 at(4),
@@ -347,7 +358,13 @@ async fn unknown_message_status_update_is_false<S: ConversationStore + ?Sized>(s
     let r = Run::new("unknown");
     assert!(
         !store
-            .update_status(&r.id("never-appended"), DeliveryStatus::Read, at(0), None)
+            .update_status(
+                &r.pn,
+                &r.id("never-appended"),
+                DeliveryStatus::Read,
+                at(0),
+                None
+            )
             .await
             .unwrap(),
         "a status for an unknown message changes nothing"
@@ -359,6 +376,50 @@ async fn unknown_message_status_update_is_false<S: ConversationStore + ?Sized>(s
             .unwrap()
             .is_empty(),
         "and creates nothing"
+    );
+}
+
+/// A status (or revoke) delivered for one business number never changes a
+/// message of another, even under the same id: the update is scoped to
+/// `phone_number_id`, not matched on the id alone.
+async fn status_for_the_same_id_on_another_number_changes_nothing<S: ConversationStore + ?Sized>(
+    store: &S,
+) {
+    let r = Run::new("cross-number");
+    let other = Run::new("cross-number-other");
+    let m = r.msg("c", "1", Direction::Outbound, 0, "order shipped");
+    let id = m.id.clone();
+    store.append(m.clone()).await.unwrap();
+    let error = serde_json::json!({"code": 131026, "title": "Message undeliverable"});
+    for status in [
+        DeliveryStatus::Sent,
+        DeliveryStatus::Read,
+        DeliveryStatus::Failed,
+        DeliveryStatus::Deleted,
+    ] {
+        assert!(
+            !store
+                .update_status(&other.pn, &id, status, at(1), Some(error.clone()))
+                .await
+                .unwrap(),
+            "{status:?} for the same id on another number was applied"
+        );
+    }
+    assert_eq!(
+        only_message(store, &r.key("c")).await,
+        m,
+        "a status for the same id on another number changes nothing"
+    );
+    assert!(
+        store
+            .update_status(&r.pn, &id, DeliveryStatus::Read, at(2), None)
+            .await
+            .unwrap(),
+        "the message's own number still updates it"
+    );
+    assert_eq!(
+        only_message(store, &r.key("c")).await.status,
+        DeliveryStatus::Read
     );
 }
 
@@ -728,7 +789,7 @@ async fn concurrent_status_updates<S: ConversationStore + ?Sized>(store: &S) {
     let updates = statuses
         .iter()
         .enumerate()
-        .map(|(i, s)| store.update_status(&id, *s, at(i64::try_from(i).unwrap() + 1), None));
+        .map(|(i, s)| store.update_status(&r.pn, &id, *s, at(i64::try_from(i).unwrap() + 1), None));
     let applied = futures::future::join_all(updates)
         .await
         .into_iter()

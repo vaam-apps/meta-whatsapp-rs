@@ -7,6 +7,7 @@
 //! `marketing-messages/send-marketing-messages` ("Disable marketing messages
 //! on Cloud API"), `support/error-codes` (MM API section).
 
+use futures::Stream;
 use serde::{Deserialize, Serialize};
 use wa_core::error::snippet;
 use wa_core::ids::{BusinessId, WabaId};
@@ -14,7 +15,7 @@ use wa_core::paging::Page;
 use wa_core::{Error, Result};
 
 use super::wire_enum;
-use crate::Client;
+use crate::{Client, GraphRequest};
 
 /// MM API settings and status of one WhatsApp Business Account. See
 /// [`Client::marketing_account`].
@@ -273,6 +274,22 @@ impl MarketingBusiness {
         statuses: &[OnboardingStatus],
         after: Option<&str>,
     ) -> Result<Page<ClientWaba>> {
+        self.client_wabas_request(statuses)
+            .query_opt("after", after)
+            .send()
+            .await
+    }
+
+    /// Every page of [`Self::client_wabas_with_status`], following
+    /// `paging.cursors.after` on the configured endpoint.
+    pub fn client_wabas_with_status_stream(
+        &self,
+        statuses: &[OnboardingStatus],
+    ) -> impl Stream<Item = Result<ClientWaba>> + Send + 'static + use<> {
+        self.client_wabas_request(statuses).paginate()
+    }
+
+    fn client_wabas_request(&self, statuses: &[OnboardingStatus]) -> GraphRequest {
         let filtering = serde_json::json!([{
             "field": "marketing_messages_onboarding_status",
             "operator": "IN",
@@ -284,10 +301,7 @@ impl MarketingBusiness {
                 "client_whatsapp_business_accounts",
             ])
             .query_json("filtering", &filtering)
-            .query_opt("after", after)
             .context("client whatsapp business accounts response")
-            .send()
-            .await
     }
 
     /// Partner Intent API (`POST /{END_BUSINESS_ID}/onboard_partners_to_mm_lite`):

@@ -20,7 +20,11 @@ use wa_adapters::store::postgres::{self, TablePrefix};
 use wa_adapters::store::{
     PostgresConversationStore, PostgresKvStore, conformance, conversation_conformance,
 };
-use wa_core::store::{ConversationStore, Expiry, KvStore, StoreKey};
+use wa_core::ids::MessageId;
+use wa_core::store::{
+    ConversationKey, ConversationStore, DeliveryStatus, Direction, Expiry, KvStore, StoreKey,
+    StoredMessage,
+};
 
 /// A schema of our own on the test database.
 struct TestDb {
@@ -106,6 +110,52 @@ async fn live_postgres_conversation_conformance() {
     postgres::migrate(&db.pool).await.unwrap();
     let store = PostgresConversationStore::new(db.pool.clone());
     conversation_conformance::run(&store).await;
+    db.drop().await;
+}
+
+/// Postgres cannot store U+0000 in `TEXT` or `JSONB` (keys included); it
+/// can store U+FFFD. `wa_rs::inbox::InboxSink` relies on both — it replaces
+/// one with the other before `append` — and its unit tests use a store
+/// double that refuses NUL: this pins that double to the real server.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_refuses_nul_and_stores_the_replacement_character() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let store = PostgresConversationStore::new(db.pool.clone());
+    let message = |id: &str, text: &str, payload: serde_json::Value| StoredMessage {
+        id: MessageId::new(id),
+        conversation: ConversationKey::new("pn-nul", "US.1"),
+        direction: Direction::Inbound,
+        kind: "text".to_owned(),
+        text: Some(text.to_owned()),
+        payload,
+        status: DeliveryStatus::Received,
+        timestamp: datetime!(2026-09-24 12:00 UTC),
+        status_at: None,
+        error: None,
+    };
+    for (id, text, payload) in [
+        ("wamid.nul-text", "a\0b", serde_json::json!({})),
+        ("wamid.nul-value", "ab", serde_json::json!({"t": "a\0b"})),
+        ("wamid.nul-key", "ab", serde_json::json!({"a\0": 1})),
+    ] {
+        assert!(
+            store.append(message(id, text, payload)).await.is_err(),
+            "{id}: Postgres accepted a NUL"
+        );
+    }
+    let clean = message(
+        "wamid.fffd",
+        "a\u{FFFD}b",
+        serde_json::json!({"a\u{FFFD}": ["b\u{FFFD}"]}),
+    );
+    assert!(store.append(clean.clone()).await.unwrap());
+    assert_eq!(
+        store.messages(&clean.conversation, None, 10).await.unwrap(),
+        vec![clean]
+    );
     db.drop().await;
 }
 

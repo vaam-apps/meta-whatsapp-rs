@@ -115,5 +115,5 @@ pub use handler::{DEFAULT_MAX_BODY_BYTES, DeliveryReport, WebhookHandler, Webhoo
 pub use payload::{Change, ChangeValue, Entry, WebhookPayload};
 #[cfg(feature = "axum")]
 pub use server::{router, sse};
-pub use signature::{SignatureVerifier, sign};
+pub use signature::{SIGNATURE_HEADER, SignatureVerifier, sign};
 pub use verify::{VerificationQuery, verify_subscription};

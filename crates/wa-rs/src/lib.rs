@@ -135,7 +135,17 @@
 //!
 //! | Feature | Default | Adds |
 //! | --- | --- | --- |
-//! | `reqwest` | yes | `adapters::http::ReqwestTransport` (rustls, HTTP/2) and the [`client()`] / [`client_builder()`] shortcuts |
+// `client` is both a module (the `wa-client` re-export) and a function (the
+// shortcut, feature `reqwest`): link the function with `fn@`, and only when
+// it exists, so `cargo doc --no-default-features` has no broken link.
+#![cfg_attr(
+    feature = "reqwest",
+    doc = "| `reqwest` | yes | `adapters::http::ReqwestTransport` (rustls, HTTP/2) and the [`client()`](fn@client) / [`client_builder()`](fn@client_builder) shortcuts |"
+)]
+#![cfg_attr(
+    not(feature = "reqwest"),
+    doc = "| `reqwest` | yes | `adapters::http::ReqwestTransport` (rustls, HTTP/2) and the `client()` / `client_builder()` shortcuts |"
+)]
 //! | `memory` | yes | `adapters::store::{MemoryKvStore, MemoryConversationStore}`: tests, development, one instance |
 //! | `sinks` | yes | `adapters::sink`: channel, broadcast, fan-out, filter, fn and tracing sinks |
 //! | `postgres` | | `adapters::store::{PostgresKvStore, PostgresConversationStore}` and `adapters::store::postgres::migrate` (sqlx) |

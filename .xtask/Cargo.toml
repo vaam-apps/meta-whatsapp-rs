@@ -1,15 +1,34 @@
 [package]
 name = "xtask"
 description = "Repository automation (`cargo xtask …`). Not part of the library."
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98.1"
+license = "MIT"
 publish = false
 
+# A workspace of its own, excluded from the root one: ureq brings rustls with
+# the `ring` provider, and as a member it was resolved into every
+# `--workspace` build, so tests linked both ring and aws-lc-rs while
+# production (reqwest, sqlx: aws-lc-rs only) did not. Own Cargo.lock too.
+# Run it with `cargo xtask …` (alias in .cargo/config.toml) or `just meta-docs`.
+[workspace]
+
 [dependencies]
-anyhow.workspace = true
+anyhow = "1"
 ureq = "3"
 
-[lints]
-workspace = true
+# The root workspace's lints, restated (a separate workspace cannot inherit
+# them). `just lint` runs clippy on this crate with `-D warnings`.
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+must_use_candidate = "allow"
+module_name_repetitions = "allow"
+unreadable_literal = "allow"
+unwrap_used = "warn"
+expect_used = "warn"

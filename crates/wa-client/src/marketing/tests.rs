@@ -239,6 +239,30 @@ async fn local_validation_happens_before_any_request() {
     assert!(t.requests().is_empty());
 }
 
+/// Like `Messages::send`: the response names the recipient, so an
+/// unreadable one is reported without its body or serde's quoted values.
+#[tokio::test]
+async fn an_unreadable_send_response_never_quotes_the_recipient() {
+    let t = ScriptedTransport::new();
+    t.push_bytes(
+        200,
+        "application/json",
+        r#"{"contacts":["+16505551234"],"messages":[{"id":"wamid.1"}]}"#,
+    );
+    let err = client(&t)
+        .marketing("P")
+        .send(
+            &Recipient::phone("+16505551234"),
+            &TemplateMessage::new("t", "en"),
+            &MarketingOptions::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Decode { .. }), "{err}");
+    assert!(!format!("{err} {err:?}").contains("6505551234"), "{err:?}");
+    assert_eq!(t.remaining(), 0);
+}
+
 #[tokio::test]
 async fn sends_are_never_replayed_after_a_timeout() {
     let t = ScriptedTransport::new();
@@ -537,6 +561,46 @@ async fn lists_eligible_client_wabas_with_the_documented_filter() {
     let filtering: serde_json::Value =
         serde_json::from_str(&req.query("filtering").unwrap()).unwrap();
     assert_eq!(filtering[0]["value"], json!(["ELIGIBLE", "ONBOARDED"]));
+    assert_eq!(t.remaining(), 0);
+}
+
+/// Conventions review #7: the one list here without a `…_stream()`.
+#[tokio::test]
+async fn client_wabas_with_status_stream_follows_cursors_with_the_filter() {
+    use futures::StreamExt;
+    let t = ScriptedTransport::new();
+    t.push_json(
+        200,
+        json!({
+            "data": [{"id": "46302397361990", "name": "San Andreas Roofing"}],
+            "paging": {"cursors": {"after": "QVFI1"}, "next": "https://graph.facebook.com/x"}
+        }),
+    );
+    t.push_json(200, json!({"data": [{"id": "46302397361991"}]}));
+    let ids: Vec<String> = client(&t)
+        .marketing_business("19502398688333")
+        .client_wabas_with_status_stream(&[OnboardingStatus::Eligible])
+        .map(|w| w.unwrap().id.as_str().to_owned())
+        .collect()
+        .await;
+    assert_eq!(ids, ["46302397361990", "46302397361991"]);
+    let reqs = t.requests();
+    assert_eq!(reqs.len(), 2);
+    for (req, after) in reqs.iter().zip([None, Some("QVFI1")]) {
+        assert_eq!(req.method, Method::GET);
+        assert_eq!(
+            req.path(),
+            "/v25.0/19502398688333/client_whatsapp_business_accounts"
+        );
+        assert_eq!(req.bearer(), Some("TOKEN"));
+        let filtering: serde_json::Value =
+            serde_json::from_str(&req.query("filtering").unwrap()).unwrap();
+        assert_eq!(
+            filtering,
+            json!([{"field": "marketing_messages_onboarding_status", "operator": "IN", "value": ["ELIGIBLE"]}])
+        );
+        assert_eq!(req.query("after").as_deref(), after);
+    }
     assert_eq!(t.remaining(), 0);
 }
 

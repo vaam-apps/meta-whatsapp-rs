@@ -4,7 +4,7 @@
 //! [`HttpTransport`]. The shipped adapter is `wa_adapters::http::ReqwestTransport`;
 //! write your own to route through a corporate proxy, add mTLS, record
 //! traffic, or use a different client. Tests use
-//! [`crate::testing::ScriptedTransport`].
+//! `wa_core::testing::ScriptedTransport` (feature `testing`).
 //!
 //! The port is deliberately dumb: no retries, no auth, no JSON. Those live in
 //! the client, once, instead of in every adapter.

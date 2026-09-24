@@ -9,7 +9,9 @@
 //!   stored status: read it, decide in Rust, then `UPDATE … WHERE status =
 //!   <what we read>`. A concurrent update makes the swap miss and we re-read.
 //!   Every successful update strictly raises the status rank, so the loop is
-//!   bounded by the number of ranks.
+//!   bounded by the number of ranks. Both statements match `id` *and*
+//!   `phone_number_id`, so an event of one business number never changes a
+//!   row of another.
 
 use std::fmt;
 use std::sync::Arc;
@@ -101,10 +103,12 @@ impl Sql {
                    unread = c.unread + EXCLUDED.unread \
                  RETURNING 1 AS appended"
             )),
-            status_get: arc(format!("SELECT status FROM {messages} WHERE id = $1")),
+            status_get: arc(format!(
+                "SELECT status FROM {messages} WHERE id = $1 AND phone_number_id = $2"
+            )),
             status_swap: arc(format!(
-                "UPDATE {messages} SET status = $3, status_at = $4, error = COALESCE($5, error) \
-                 WHERE id = $1 AND status = $2"
+                "UPDATE {messages} SET status = $4, status_at = $5, error = COALESCE($6, error) \
+                 WHERE id = $1 AND phone_number_id = $2 AND status = $3"
             )),
             messages: arc(format!(
                 "SELECT {MESSAGE_COLUMNS} FROM {messages} \
@@ -256,6 +260,7 @@ impl ConversationStore for PostgresConversationStore {
 
     async fn update_status(
         &self,
+        phone_number_id: &PhoneNumberId,
         id: &MessageId,
         status: DeliveryStatus,
         at: OffsetDateTime,
@@ -266,17 +271,21 @@ impl ConversationStore for PostgresConversationStore {
             let current: Option<String> =
                 sqlx::query_scalar(AssertSqlSafe(Arc::clone(&self.sql.status_get)))
                     .bind(id.as_str())
+                    .bind(phone_number_id.as_str())
                     .fetch_optional(&self.pool)
                     .await
                     .map_err(backend)?;
             let Some(current) = current else {
-                return Ok(false); // a status for a message sent elsewhere
+                // A status for a message sent elsewhere, or for another
+                // business number's message.
+                return Ok(false);
             };
             if !status.supersedes(parse_status(current.clone(), id.as_str())?) {
                 return Ok(false);
             }
             let done = sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.status_swap)))
                 .bind(id.as_str())
+                .bind(phone_number_id.as_str())
                 .bind(&current)
                 .bind(&new)
                 .bind(at)

@@ -151,9 +151,11 @@ impl Client {
     }
 
     /// A request to an absolute URL (media download links). The token is
-    /// only attached for the configured Graph endpoint and Meta's media CDN
-    /// (`https://*.fbsbx.com`, `*.facebook.com`, `*.whatsapp.net`); any other
-    /// host fails with a validation error before a byte is sent.
+    /// only attached for the configured Graph endpoint and
+    /// `https://lookaside.fbsbx.com` (where media download URLs point); any
+    /// other origin fails with a validation error (field `url`) before a
+    /// byte is sent. Call [`GraphRequest::no_auth`] on the returned request
+    /// for a URL that needs no token.
     pub fn request_url(&self, method: Method, url: url::Url) -> GraphRequest {
         GraphRequest::new(self.clone(), method, url)
     }

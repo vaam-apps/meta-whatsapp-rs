@@ -197,10 +197,7 @@ impl MessageContent {
             Self::Reaction(r) => r.validate(),
             // Full send-time checks (components, carousel/coupon/MPM limits),
             // not just the name.
-            Self::Template(t) => t.validate().map_err(|e| match e {
-                wa_core::Error::Validation(v) => v,
-                other => ValidationError::new("template", other.to_string()),
-            }),
+            Self::Template(t) => t.validate(),
             Self::Interactive(i) => i.validate(direct_send),
             Self::Pin(p) => p.validate(),
             Self::Raw { message_type, .. } => {

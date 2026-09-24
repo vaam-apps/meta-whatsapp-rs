@@ -197,6 +197,44 @@ async fn post_with_bad_or_missing_signature_is_401() {
     assert_eq!(sink.calls(), 0);
 }
 
+/// Security review L3: a delivery without a well-formed
+/// `X-Hub-Signature-256` is refused before a byte of its body is read or
+/// buffered (the router used to buffer up to the 3 MiB limit first).
+#[tokio::test]
+async fn post_without_a_well_formed_signature_is_401_before_the_body_is_read() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let sink = Arc::new(RecordingSink::default());
+    for signature in [
+        None,
+        Some(""),
+        Some("sha256=xyz"),
+        Some("md5=0123"),
+        Some("sha256= "),
+    ] {
+        let polled = Arc::new(AtomicBool::new(false));
+        let flag = polled.clone();
+        let body = Body::from_stream(futures::stream::poll_fn(move |_| {
+            flag.store(true, Ordering::SeqCst);
+            std::task::Poll::Ready(None::<Result<axum::body::Bytes, std::io::Error>>)
+        }));
+        let mut request = Request::post("/");
+        if let Some(signature) = signature {
+            request = request.header(SIGNATURE_HEADER, signature);
+        }
+        let (status, _, _) = send(app(sink.clone(), None), request.body(body).unwrap()).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{signature:?}");
+        assert!(
+            !polled.load(Ordering::SeqCst),
+            "{signature:?}: the body was read"
+        );
+    }
+    // Unsigned and over the limit: refused for the signature, so the size
+    // is never learnt.
+    let (status, _, _) = send(app(sink.clone(), Some(64)), post(vec![b'x'; 1024], None)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(sink.calls(), 0);
+}
+
 #[tokio::test]
 async fn post_over_the_limit_is_413() {
     let sink = Arc::new(RecordingSink::default());

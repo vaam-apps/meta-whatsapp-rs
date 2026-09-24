@@ -75,12 +75,36 @@ pub struct ValidationError {
 }
 
 impl ValidationError {
+    /// The `field` of [`Self::customer_service_window_closed`]. Match on
+    /// [`Self::is_customer_service_window_closed`] (or on
+    /// [`Error::kind`](crate::Error::kind) being
+    /// [`ErrorKind::CustomerServiceWindowClosed`](crate::ErrorKind::CustomerServiceWindowClosed))
+    /// rather than comparing the string yourself.
+    pub const CUSTOMER_SERVICE_WINDOW: &'static str = "customer_service_window";
+
     /// Build a validation error.
     pub fn new(field: impl Into<String>, reason: impl Into<String>) -> Self {
         Self {
             field: field.into(),
             reason: reason.into(),
         }
+    }
+
+    /// A free-form message refused locally because the 24-hour customer
+    /// service window is closed (Meta would answer `131047`). Its
+    /// [`Error::kind`](crate::Error::kind) is
+    /// [`ErrorKind::CustomerServiceWindowClosed`](crate::ErrorKind::CustomerServiceWindowClosed),
+    /// the same as Meta's.
+    pub fn customer_service_window_closed() -> Self {
+        Self::new(
+            Self::CUSTOMER_SERVICE_WINDOW,
+            "more than 24 hours since the customer's last message; send a template",
+        )
+    }
+
+    /// Whether this is [`Self::customer_service_window_closed`].
+    pub fn is_customer_service_window_closed(&self) -> bool {
+        self.field == Self::CUSTOMER_SERVICE_WINDOW
     }
 }
 
