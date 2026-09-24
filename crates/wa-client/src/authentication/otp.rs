@@ -1120,6 +1120,33 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_issues_send_once() {
+        let f = fixture(OtpConfig::default());
+        accept(&f.transport);
+        let tasks: Vec<_> = (0..8)
+            .map(|_| {
+                let otp = f.otp.clone();
+                tokio::spawn(async move { otp.issue(&user(), "login").await.unwrap() })
+            })
+            .collect();
+        let mut sent = 0;
+        for t in tasks {
+            match t.await.unwrap() {
+                IssueOutcome::Sent(_) => sent += 1,
+                IssueOutcome::CoolingDown { .. } => {}
+                other @ IssueOutcome::RateLimited { .. } => panic!("{other:?}"),
+            }
+        }
+        assert_eq!(sent, 1);
+        assert_eq!(f.transport.requests().len(), 1);
+        let code = code_in(&f.transport.last_request().unwrap());
+        assert_eq!(
+            f.otp.verify(&user(), "login", &code).await.unwrap(),
+            VerifyOutcome::Verified
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_right_guesses_verify_exactly_once() {
         let f = fixture(OtpConfig {
             max_attempts: 50,
