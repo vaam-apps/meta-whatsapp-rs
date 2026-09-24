@@ -180,14 +180,26 @@ Authentication template definitions (copy code, one-tap with
 
 `OtpService` on `KvStore` + `Clock`:
 
-- `issue(recipient, purpose) → Challenge{id, expires_at}`: generates a
-  CSPRNG numeric code (length configurable 4–8), stores **only an HMAC-SHA256
-  of it under a server pepper**, sends it with the authentication template,
-  enforces a resend cooldown and a per-recipient issue rate.
+- Recipients are **strict E.164 with `+`**. Meta prepends the sending
+  number's country code to a number without `+`, so a digits-only key would
+  let `12015553931` (delivered to `+91 12015553931`) verify `+12015553931` —
+  an account takeover. The code is sent to exactly `+<digits>` and keyed by
+  those digits. BSUID-only recipients are refused locally (OTP buttons need
+  a phone number; Meta's `131062`).
+- `issue(recipient, purpose) → IssueOutcome { Sent(Challenge{id, expires_at,
+  message_id}), CoolingDown{retry_after}, RateLimited{retry_after} }`:
+  CSPRNG numeric code (length 4–8), only an HMAC-SHA256 of it stored under a
+  server pepper (`SecretBytes`), keys are HMACs too (no raw phone number in
+  the store). Resend cooldown (30 s) and a per-recipient issue limit
+  (default 5 per sliding hour per number and purpose; opting out is explicit)
+  bound brute force to ~0.06 %/day for 6 digits. A challenge is removed only
+  when the send was provably rejected (4xx, throttling); after a timeout or
+  5xx it stays, because the code may have been delivered.
 - `verify(recipient, purpose, code) → VerifyOutcome { Verified, Invalid {
   attempts_left }, Expired, TooManyAttempts, NotFound }`: constant-time
-  compare; attempts counted with `compare_and_swap` so concurrent guesses
-  cannot exceed the limit; a verified challenge is consumed (single use).
+  compare; attempts counted with `compare_and_swap` before comparing, so
+  concurrent guesses cannot exceed the limit; a verified challenge is
+  consumed (single use).
 - The code never appears in logs, errors, or `Debug` output.
 
 ### Embedded Signup (`wa_client::embedded_signup`)
