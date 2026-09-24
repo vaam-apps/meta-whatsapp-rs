@@ -744,7 +744,11 @@ impl OtpService {
             id: MessageId,
         }
         const CONTEXT: &str = "send OTP message response";
-        let sent: Sent = self
+        // Decoded here rather than with `send()`: its decode error quotes
+        // the body, and this one echoes the recipient's number
+        // (`contacts[].input`), which has no place in an error message.
+        const WITHHELD: &[u8] = b"(withheld: names the recipient)";
+        let response = self
             .client
             .post_at(&[self.phone_number_id.as_str(), "messages"])
             .json(&Body {
@@ -754,8 +758,10 @@ impl OtpService {
                 template,
             })
             .context(CONTEXT)
-            .send()
+            .send_raw()
             .await?;
+        let sent: Sent = serde_json::from_slice(&response.body)
+            .map_err(|e| Error::decode(CONTEXT, e, WITHHELD))?;
         sent.messages
             .into_iter()
             .next()
@@ -766,7 +772,7 @@ impl OtpService {
                     <serde_json::Error as serde::de::Error>::custom(
                         "no `messages[0].id` in the response",
                     ),
-                    b"",
+                    WITHHELD,
                 )
             })
     }

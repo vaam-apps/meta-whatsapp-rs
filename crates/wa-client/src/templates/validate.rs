@@ -897,7 +897,11 @@ fn flow_button(flow: &FlowButton, field: &str) -> Check {
 /// Carousels: `templates/marketing-templates/media-card-carousel-templates`
 /// and `catalogs/product-card-carousel-template-messages`.
 fn carousel(cards: &[CarouselCard], ctx: &Ctx<'_>, field: &str) -> Check {
-    // Media cards: "minimum 2, maximum 10". Product cards: "up to 10".
+    // Media cards: "minimum 2, maximum 10", and a send must carry exactly
+    // that many. Product cards: "Define only two product cards when you
+    // create the template" (a send may then carry up to 10). That reads as
+    // guidance rather than a stated rejection, so product carousels get the
+    // same 2–10 bound here instead of an exact 2.
     if !(2..=10).contains(&cards.len()) {
         return Err(err(
             format!("{field}.cards"),

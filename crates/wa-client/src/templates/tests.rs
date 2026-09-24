@@ -859,6 +859,23 @@ fn media_card_carousel_send() {
 }
 
 #[test]
+fn send_carousels_take_at_most_ten_cards() {
+    // media-card-carousel-templates and product-card-carousel-template-messages:
+    // up to 10 cards.
+    let cards = |n: u32| {
+        TemplateMessage::new("carousel_template_media_cards_v1", "en_US").carousel((0..n).map(
+            |i| CarouselCardParameters::new(i, [SendComponent::header(Parameter::image_id("1"))]),
+        ))
+    };
+    cards(10).validate().unwrap();
+    let e = cards(11).validate().unwrap_err();
+    assert!(
+        matches!(e, wa_core::Error::Validation(ref v) if v.field == "template.components[0].cards"),
+        "{e}"
+    );
+}
+
+#[test]
 fn product_card_carousel_send() {
     // catalogs/product-card-carousel-template-messages, send example.
     let card = |i: u32, id: &str| {

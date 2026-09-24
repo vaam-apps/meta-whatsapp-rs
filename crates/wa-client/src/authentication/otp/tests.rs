@@ -40,6 +40,8 @@ enum Interference {
     Consume,
     /// A new code was issued: same key, another challenge.
     Replace,
+    /// A concurrent issue wrote its challenge, sent at this UNIX ms.
+    Reissue(i64),
 }
 
 #[derive(Debug)]
@@ -95,11 +97,14 @@ impl RecordingKv {
             Interference::Consume => {
                 assert!(self.inner.delete(key).await.unwrap());
             }
-            Interference::Replace => {
+            Interference::Replace | Interference::Reissue(_) => {
                 let current = self.inner.get(key).await.unwrap().unwrap();
                 let mut record: StoredChallenge = serde_json::from_slice(&current.value).unwrap();
                 record.id = "f".repeat(32);
                 record.attempts = 0;
+                if let Interference::Reissue(sent_at) = what {
+                    record.sent_at = sent_at;
+                }
                 let bytes = serde_json::to_vec(&record).unwrap();
                 self.inner.put(key, bytes, Expiry::Keep).await.unwrap();
             }
@@ -674,6 +679,22 @@ async fn a_send_that_may_have_arrived_keeps_the_challenge() {
         VerifyOutcome::Verified
     );
 
+    // An unparseable 2xx: kept too, and the error does not quote the body,
+    // which names the recipient.
+    let f = fixture(OtpConfig::default());
+    f.transport.push_bytes(
+        200,
+        "application/json",
+        format!(r#"{{"contacts":[{{"input":"{PHONE}","wa_id":"{DIGITS}"}}],"messages":"#),
+    );
+    let err = f.otp.issue(&user(), "login").await.unwrap_err();
+    let Error::Decode { body_snippet, .. } = &err else {
+        panic!("{err}")
+    };
+    assert!(!body_snippet.contains(DIGITS), "{body_snippet}");
+    assert!(!format!("{err} {err:?}").contains(DIGITS), "{err:?}");
+    assert!(stored(&f).await.is_some());
+
     // A gateway 5xx without a Graph error: unknown, kept.
     let f = fixture(OtpConfig::default());
     f.transport
@@ -799,6 +820,53 @@ async fn concurrent_issues_send_once() {
     }
     assert_eq!(sent, 1);
     assert_eq!(f.transport.requests().len(), 1);
+    let code = code_in(&f.transport.last_request().unwrap());
+    assert_eq!(
+        f.otp.verify(&user(), "login", &code).await.unwrap(),
+        VerifyOutcome::Verified
+    );
+}
+
+#[tokio::test]
+async fn a_reissue_that_loses_the_race_cools_down_instead_of_overwriting() {
+    // A code exists and its cooldown is over. Between this issue's read and
+    // its write, a concurrent issue writes a fresh challenge: this one must
+    // back off, not overwrite it and send a second code.
+    let f = fixture(OtpConfig::default());
+    let _ = issue(&f).await;
+    f.clock.advance(Duration::from_secs(30));
+    f.kv.arm(0, Interference::Reissue(to_ms(f.clock.now())));
+    assert_eq!(
+        f.otp.issue(&user(), "login").await.unwrap(),
+        IssueOutcome::CoolingDown {
+            retry_after: Duration::from_secs(30)
+        }
+    );
+    assert_eq!(f.transport.requests().len(), 1, "no second message");
+    assert_eq!(stored(&f).await.unwrap().id, "f".repeat(32));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_reissues_send_once() {
+    let f = fixture(OtpConfig::default());
+    let _ = issue(&f).await;
+    f.clock.advance(Duration::from_secs(30));
+    accept(&f.transport);
+    let tasks: Vec<_> = (0..8)
+        .map(|_| {
+            let otp = f.otp.clone();
+            tokio::spawn(async move { otp.issue(&user(), "login").await.unwrap() })
+        })
+        .collect();
+    let mut sent = 0;
+    for t in tasks {
+        match t.await.unwrap() {
+            IssueOutcome::Sent(_) => sent += 1,
+            IssueOutcome::CoolingDown { .. } | IssueOutcome::RateLimited { .. } => {}
+        }
+    }
+    assert_eq!(sent, 1);
+    assert_eq!(f.transport.requests().len(), 2);
     let code = code_in(&f.transport.last_request().unwrap());
     assert_eq!(
         f.otp.verify(&user(), "login", &code).await.unwrap(),
