@@ -229,15 +229,15 @@ Authentication template definitions (copy code, one-tap with
   a phone number; Meta's `131062`).
 - Challenges are **scoped to the service**: the store key is
   HMAC(pepper, `"wa.otp.key" | scope | digits | purpose`), where the scope is
-  the sending `phone_number_id` and the optional `OtpConfig::namespace`,
+  the sending `phone_number_id` and the required `OtpConfig::namespace`
+  (the tenant; `OtpConfig::new(namespace)`, no `Default`),
   netstring-encoded so neither can be shifted into the other. Services
   sharing a store and a pepper (several merchants of one integrator) never
-  see each other's codes, cooldowns or issue limits — as long as their
-  scopes differ: services on the **same** number must set the namespace
-  (the tenant id); with the default `None` they share one scope
-  (`OPEN_QUESTIONS.md` #34: make it required?). A blank namespace is a
-  config error; changing the scope (or upgrading across the commit that
-  introduced it) invalidates outstanding codes.
+  see each other's codes, cooldowns or issue limits, on their own numbers
+  or on a shared one. A blank namespace is a config error; changing the
+  scope (or upgrading across the commit that introduced it) invalidates
+  outstanding codes. Making the namespace required kept the encoding: a
+  service that had set one derives the same keys.
 - `issue(recipient, purpose) → IssueOutcome { Sent(Challenge{id, expires_at,
   message_id}), CoolingDown{retry_after}, RateLimited{retry_after} }`:
   CSPRNG numeric code (length 4–8), only an HMAC-SHA256 of it stored under a

@@ -24,10 +24,11 @@
 //!   inputs carry different prefixes so a key can never be replayed as a
 //!   code hash. The issue log (`wa.otp.rate`, same key) holds send times
 //!   only.
-//! - **Scope**: the sending `phone_number_id` and the optional
-//!   [`OtpConfig::namespace`], length-prefixed (netstrings, so neither can be
-//!   shifted into the other). Services that share a store and a pepper —
-//!   several merchants of one integrator — therefore never see each other's
+//! - **Scope**: the sending `phone_number_id` and the required
+//!   [`OtpConfig::namespace`] (the tenant), length-prefixed (netstrings, so
+//!   neither can be shifted into the other). Services that share a store
+//!   and a pepper — several merchants of one integrator, on their own
+//!   numbers or on one shared number — therefore never see each other's
 //!   codes, cooldowns or issue limits: without it, a code merchant A sent
 //!   verified at merchant B for the same phone number and purpose.
 //! - **Rate limits**: see [`OtpConfig::resend_cooldown`] and
@@ -154,7 +155,7 @@ pub struct IssueLimit {
 }
 
 impl IssueLimit {
-    /// 5 codes per rolling hour, the [`OtpConfig::default`] limit.
+    /// 5 codes per rolling hour, the [`OtpConfig::new`] limit.
     pub const DEFAULT: Self = Self {
         max_issues: 5,
         window: Duration::from_hours(1),
@@ -167,8 +168,23 @@ impl Default for IssueLimit {
     }
 }
 
-/// Service settings. [`OtpConfig::default`]: 6 digits, 10 minutes, 5
-/// attempts, 30 s cooldown, at most 5 codes per rolling hour.
+/// Service settings. [`OtpConfig::new`] takes the one setting without a
+/// default, the [namespace](Self::namespace), and sets the rest: 6 digits,
+/// 10 minutes, 5 attempts, 30 s cooldown, at most 5 codes per rolling hour.
+/// Change any of them with struct update syntax:
+///
+/// ```
+/// use wa_client::authentication::OtpConfig;
+///
+/// let config = OtpConfig {
+///     code_length: 8,
+///     ..OtpConfig::new("tenant-42")
+/// };
+/// assert!(config.validate().is_ok());
+/// ```
+///
+/// There is no `Default`: a namespace nobody chose would let every service
+/// that forgot it share one scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OtpConfig {
     /// Digits per code, 4 to 8. (iOS keyboard suggestions pick up numeric
@@ -210,30 +226,32 @@ pub struct OtpConfig {
     /// `None` is the explicit opt-out: set it only when an equivalent
     /// per-number limit is enforced in front of this service.
     pub issue_limit: Option<IssueLimit>,
-    /// Tenant (or app) this service issues codes for, when one sending
-    /// number serves several: a code, cooldown or issue limit of one
-    /// namespace is invisible to every other. Not needed to separate
-    /// merchants with their own numbers — challenges are always bound to
-    /// the sending `phone_number_id`. Must not be blank; `None` (the
-    /// default) is its own namespace. Changing it invalidates outstanding
-    /// codes.
-    pub namespace: Option<String>,
+    /// Tenant (or app) this service issues codes for — the tenant id of
+    /// your platform, for instance. Required, and must not be blank.
+    ///
+    /// A code, cooldown or issue limit of one namespace is invisible to
+    /// every other, on top of the binding to the sending `phone_number_id`:
+    /// two tenants that send from the same number (a platform's own
+    /// number) can never verify or rate-limit each other's codes. Keep it
+    /// stable: changing it invalidates outstanding codes and resets the
+    /// issue limits.
+    pub namespace: String,
 }
 
-impl Default for OtpConfig {
-    fn default() -> Self {
+impl OtpConfig {
+    /// The default settings for the service of `namespace` (see
+    /// [`Self::namespace`]; checked by [`Self::validate`]).
+    pub fn new(namespace: impl Into<String>) -> Self {
         Self {
             code_length: 6,
             ttl: Duration::from_mins(10),
             max_attempts: 5,
             resend_cooldown: Duration::from_secs(30),
             issue_limit: Some(IssueLimit::DEFAULT),
-            namespace: None,
+            namespace: namespace.into(),
         }
     }
-}
 
-impl OtpConfig {
     /// Check the settings; the error names the offending field.
     /// [`OtpService::new`] reports the same failure as
     /// [`Error::Config`].
@@ -253,12 +271,11 @@ impl OtpConfig {
         {
             return bad("issue_limit", "needs max_issues >= 1 and a non-zero window");
         }
-        if self
-            .namespace
-            .as_deref()
-            .is_some_and(|ns| ns.trim().is_empty())
-        {
-            return bad("namespace", "must not be blank (use None for no namespace)");
+        if self.namespace.trim().is_empty() {
+            return bad(
+                "namespace",
+                "must not be blank: name the tenant (or app) the service issues codes for",
+            );
         }
         Ok(())
     }
@@ -469,15 +486,14 @@ fn netstring(out: &mut Vec<u8>, bytes: &[u8]) {
 }
 
 /// What every store key of a service is bound to: its sending number and
-/// its namespace. Prefix-free: a netstring, then `-` (no namespace; a
-/// netstring never starts with `-`) or a second netstring.
-fn scope(phone_number_id: &PhoneNumberId, namespace: Option<&str>) -> Vec<u8> {
+/// its namespace, as two netstrings (prefix-free, so neither can be shifted
+/// into the other). The same bytes a service with that namespace derived
+/// when the namespace was optional, so its outstanding codes survived the
+/// change.
+fn scope(phone_number_id: &PhoneNumberId, namespace: &str) -> Vec<u8> {
     let mut out = Vec::new();
     netstring(&mut out, phone_number_id.as_str().as_bytes());
-    match namespace {
-        Some(ns) => netstring(&mut out, ns.as_bytes()),
-        None => out.push(b'-'),
-    }
+    netstring(&mut out, namespace.as_bytes());
     out
 }
 
@@ -541,7 +557,7 @@ impl OtpService {
             .map_err(|e| ConfigError::new(format!("OTP phone_number_id: {}", e.reason)))?;
         crate::templates::validate::name(&template.name, "template.name")?;
         crate::templates::not_empty(&template.language, "template.language")?;
-        let scope = scope(&phone_number_id, config.namespace.as_deref()).into();
+        let scope = scope(&phone_number_id, &config.namespace).into();
         Ok(Self {
             client,
             phone_number_id,

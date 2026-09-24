@@ -76,6 +76,16 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
 
 ### Changed
 
+- **Breaking — the OTP namespace is required** (decided for
+  `OPEN_QUESTIONS.md` #34, now closed): `OtpConfig::namespace` is a
+  `String` (was `Option<String>`), `OtpConfig::new(namespace)` builds the
+  defaults, and `OtpConfig` no longer implements `Default`, so no service
+  can share a scope with another by forgetting it; a blank one is still an
+  `Error::Config`. Migration: `OtpConfig { namespace: Some(ns),
+  ..OtpConfig::default() }` becomes `OtpConfig::new(ns)` and derives the
+  same store keys (outstanding codes stay valid); a service that used
+  `None` must pick a namespace, and its codes in flight become `NotFound`
+  once. The `otp_login` example reads `WA_OTP_NAMESPACE`.
 - `Error::may_have_been_sent` is `false` for a throttling Graph error
   (`ErrorKind::is_rejected_before_processing`) on any status, as the retry
   policy already assumed when it replays a send; the OTP service uses it

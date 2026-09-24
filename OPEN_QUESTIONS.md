@@ -55,17 +55,6 @@ entry by deciding it in an issue/PR and deleting it here.
     one scope. Confirm or tune; opting out is explicit.
 14. **Pepper custody.** The HMAC pepper (`SecretBytes`) is supplied by the
     integrator; changing it invalidates outstanding codes.
-34. **Should `OtpConfig::namespace` be required?** Codes are scoped to the
-    sending `phone_number_id` plus the namespace, which is optional
-    (`None` by default). Two `OtpService`s that send from the *same* number
-    with the default config therefore share a scope: a code one merchant's
-    service sent verifies at the other's, and their cooldowns and limits
-    are pooled. Today the docs tell integrators to set the namespace to the
-    tenant id whenever one number sends codes for several merchants or
-    tenants. Making it required (or a constructor argument) would make
-    that impossible to forget, at the cost of a breaking API change and a
-    one-time key change for everyone (outstanding codes become `NotFound`).
-    An API decision for the maintainer.
 
 ## Webhooks
 

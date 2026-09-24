@@ -1,6 +1,6 @@
 ---
 name: wa-rs-otp-login
-description: "WhatsApp OTP login and phone verification with wa-rs - creating the authentication template (copy code, one-tap, zero-tap), OtpService issuing and verifying one-time passcodes (IssueOutcome, VerifyOutcome), why recipients must be E.164 with a plus sign, the per-number issue limit, resend cooldown and attempt limits, OtpConfig::namespace when one number serves several tenants, the pepper and store custody, and what to do after a timeout. Load when building sign-in, sign-up, password reset or phone-number verification with WhatsApp codes."
+description: "WhatsApp OTP login and phone verification with wa-rs - creating the authentication template (copy code, one-tap, zero-tap), OtpService issuing and verifying one-time passcodes (IssueOutcome, VerifyOutcome), why recipients must be E.164 with a plus sign, the per-number issue limit, resend cooldown and attempt limits, the required OtpConfig::namespace (the tenant), the pepper and store custody, and what to do after a timeout. Load when building sign-in, sign-up, password reset or phone-number verification with WhatsApp codes."
 ---
 
 # wa-rs-otp-login
@@ -31,7 +31,7 @@ Meta fixes the text ("*{{1}}* is your verification code.").
 `AuthenticationTemplate::zero_tap(name, language, apps, terms_accepted)`
 add Android autofill (`SupportedApp::new(package_name, signature_hash)`).
 
-## 2. One service per sending number
+## 2. One service per sending number and tenant
 
 ```rust
 OtpService::new(
@@ -41,16 +41,23 @@ OtpService::new(
     kv,
     Arc::new(SystemClock),
     OtpPepper::new(pepper)?,
-    OtpConfig {
-        namespace: tenant, // default config: 6 digits, 10 min, 5 attempts, 30 s, 5/hour
-        ..OtpConfig::default()
-    },
+    OtpConfig::new(tenant), // 6 digits, 10 min, 5 attempts, 30 s, 5/hour
 )
+```
+
+The namespace (your tenant id) is required: `OtpConfig` has no `Default`.
+Other settings take struct update syntax:
+
+```rust
+OtpConfig {
+    code_length: 8,
+    ..OtpConfig::new(tenant)
+}
 ```
 
 `OtpService::new` checks the config (`OtpConfig::validate()` names the
 field: `code_length` 4–8, `ttl` up to 90 minutes, `max_attempts`,
-`issue_limit`, `namespace`) and reports a bad one as `Error::Config`.
+`issue_limit`, a blank `namespace`) as `Error::Config`.
 
 ## 3. Issue, then verify
 
@@ -98,12 +105,16 @@ authentication templates cannot go to a BSUID (Meta's 131062).
 ## Several services on one store: namespaces
 
 Codes, cooldowns and issue limits are bound to the sending
-`phone_number_id` and the optional `OtpConfig::namespace`, on top of the
-digits and the purpose. One store and one pepper can serve any number of
-services. **One number sending codes for several tenants: set the
-namespace to the tenant id, always** — with the default `None` they share
-one scope, and a code sent for one tenant verifies at another. Changing a
+`phone_number_id` and `OtpConfig::namespace`, on top of the digits and
+the purpose: one store and one pepper serve any number of services, and
+tenants sharing a number never see each other's codes. Changing a
 namespace invalidates outstanding codes.
+
+~~`OtpConfig::namespace` is an `Option`, `None` by default (one shared
+scope per number)~~: true until 2026-09-24, now required. Crossing that
+change: a service that set `Some(ns)` keeps its keys and outstanding
+codes with `OtpConfig::new(ns)`; one that used `None` must pick a
+namespace, and its codes in flight become `NotFound` once.
 
 ~~Codes were keyed by the pepper, the recipient's digits and the purpose
 only~~: true until e40b86f (2026-09-24). Moving your `rev` across e40b86f
@@ -137,9 +148,9 @@ every sending number its own pepper or store.
 - No session or JWT after `Verified`, no account linking, no SMS fallback
   when WhatsApp is undeliverable (`ErrorKind::Undeliverable`, 131026), no
   per-IP or per-device throttle in front of `issue`.
-- The namespace is optional; whether it becomes required, and the default
-  issue limit, are open
-  ([open questions 13, 14, 34](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#authentication-otp)).
+- It does not choose the namespace: your tenant model does. The default
+  issue limit and pepper custody are open
+  ([open questions 13, 14](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#authentication-otp)).
 
 ## Related skills
 
