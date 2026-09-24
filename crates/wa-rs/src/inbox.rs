@@ -404,7 +404,7 @@ mod tests {
 
     const PNID: &str = "106540352242922";
 
-    fn payload(value: serde_json::Value) -> Vec<WebhookEvent> {
+    fn payload(value: &serde_json::Value) -> Vec<WebhookEvent> {
         let body = json!({
             "object": "whatsapp_business_account",
             "entry": [{"id": "102290129340398", "changes": [{"field": "messages", "value": value}]}]
@@ -431,7 +431,7 @@ mod tests {
             contact["wa_id"] = json!(w);
             message["from"] = json!(w);
         }
-        payload(json!({
+        payload(&json!({
             "messaging_product": "whatsapp",
             "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
             "contacts": [contact],
@@ -440,7 +440,7 @@ mod tests {
     }
 
     fn status(id: &str, st: &str, ts: i64) -> Vec<WebhookEvent> {
-        payload(json!({
+        payload(&json!({
             "messaging_product": "whatsapp",
             "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
             "statuses": [{"id": id, "status": st, "timestamp": ts.to_string(), "recipient_id": "16505551234"}]
@@ -521,8 +521,8 @@ mod tests {
         assert_eq!(rows[0].status, DeliveryStatus::Read);
     }
 
-    fn one_message(message: serde_json::Value) -> Vec<WebhookEvent> {
-        payload(json!({
+    fn one_message(message: &serde_json::Value) -> Vec<WebhookEvent> {
+        payload(&json!({
             "messaging_product": "whatsapp",
             "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
             "contacts": [{"profile": {"name": "Sheena"}, "wa_id": "16505551234", "user_id": "US.1"}],
@@ -542,7 +542,7 @@ mod tests {
         // Shape from webhooks/reference/messages/revoke.
         deliver_all(
             &sink,
-            one_message(json!({
+            one_message(&json!({
                 "from": "16505551234", "id": "wamid.rev", "timestamp": "1749854575",
                 "type": "revoke", "revoke": {"original_message_id": "wamid.orig"}
             })),
@@ -563,7 +563,7 @@ mod tests {
         // Shape from groups/groups-messaging (group_text fixture).
         deliver_all(
             &sink,
-            one_message(json!({
+            one_message(&json!({
                 "from": "16505551234", "group_id": "HBgLMTY1MDM4Nzk0MzkVAgASGBQ",
                 "id": "wamid.g1", "timestamp": "1744344496",
                 "text": {"body": "What does everyone think?"}, "type": "text"
