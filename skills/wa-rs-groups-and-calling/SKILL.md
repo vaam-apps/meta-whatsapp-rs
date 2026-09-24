@@ -5,7 +5,7 @@ description: "What a merchant inbox built on wa-rs needs beyond one-to-one text 
 
 # wa-rs-groups-and-calling
 
-> **Verified against wa-rs a9433415cff14aed9cb196c5b4aef1c402b0a6de (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs 3a3db05aa425c1737d8bb9239206036dbc81969f (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/groups_calls.rs](examples/groups_calls.rs),
 compiled and tested by wa-rs's own gate (Meta-shaped answers and

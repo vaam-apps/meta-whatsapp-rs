@@ -1,6 +1,6 @@
 # The page side of Embedded Signup
 
-> **Verified against wa-rs 4eb93c9bd63812221e75ad0920b6e2cb98ea0dd6 (2026-09-24).** Also checked against Meta's
+> **Verified against wa-rs 3a3db05aa425c1737d8bb9239206036dbc81969f (2026-09-24).** Also checked against Meta's
 > `embedded-signup/implementation` page as fetched on 2026-09-24. Meta owns
 > this part: re-read that page (append `.md` to its URL for Markdown) before
 > changing it.

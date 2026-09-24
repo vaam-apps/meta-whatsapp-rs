@@ -1,6 +1,6 @@
 # `ErrorKind` reference
 
-> **Verified against wa-rs 4eb93c9bd63812221e75ad0920b6e2cb98ea0dd6 (2026-09-24).** Source: `crates/wa-core/src/error/graph.rs`
+> **Verified against wa-rs 3a3db05aa425c1737d8bb9239206036dbc81969f (2026-09-24).** Source: `crates/wa-core/src/error/graph.rs`
 > (`ErrorKind::from_code`, `is_retryable`, `is_rejected_before_processing`) and
 > `crates/wa-core/src/error/mod.rs` (`Error::kind`: the local-refusal rule below).
 > `ErrorKind` is `#[non_exhaustive]`: always keep a `_ =>` arm.
