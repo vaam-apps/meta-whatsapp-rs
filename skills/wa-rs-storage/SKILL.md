@@ -5,7 +5,7 @@ description: "Choosing and running wa-rs storage - the KvStore (token vault, OTP
 
 # wa-rs-storage
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs 6909be3b54768abc3d5f9b04543a49f32b072669 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/stores.rs](examples/stores.rs), compiled by
 wa-rs's own gate; its tests run the conformance suites on the memory
@@ -102,9 +102,8 @@ count; `fill_media_placeholder` rewrites only a row whose `kind` is
 `StoredMessage::MEDIA_PLACEHOLDER`; `revoke` matches number and direction
 and stores `StoredMessage::tombstone` when the id is unknown. The suite
 checks all three.
-~~Six methods to implement~~: until the coexistence port change
-(2026-09-24), which added `append_synced`, `fill_media_placeholder` and
-`revoke`.
+~~Six methods to implement~~: until 6d50701 and a9593f3 (2026-09-24),
+which added `append_synced`, `fill_media_placeholder` and `revoke`.
 
 ## Pitfalls
 

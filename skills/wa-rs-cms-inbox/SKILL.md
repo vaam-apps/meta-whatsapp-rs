@@ -5,7 +5,7 @@ description: "The merchant-to-customer chat inbox of a multi-tenant CMS built on
 
 # wa-rs-cms-inbox
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs 6909be3b54768abc3d5f9b04543a49f32b072669 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/inbox.rs](examples/inbox.rs), compiled and
 tested by wa-rs's own gate. The full server (webhook endpoint, SSE,
@@ -132,13 +132,14 @@ business), content kept; one that arrives first leaves a tombstone
   Meta-assigned ids are stored as sent. A store of your own must pass
   `conversation_conformance::run` (`wa-rs-storage`).
 
-~~`update_status(id, status, at, error)`, matched on the message id
-alone~~: until 4b47bf7 (2026-09-24, breaking). Custom stores now take the
-`phone_number_id` first. ~~A `wa_id` conversation replied without `+`~~:
-fixed in 2b2679a; on an older pin, `send` with `Recipient::phone` and the
-`+` yourself. ~~Coexistence echoes and history are not recorded~~: until
-a3582b8. ~~Synced history opens the window, counts as unread, keeps its
-placeholders~~: until the `append_synced` port change (2026-09-24).
+~~`update_status` matched on the message id alone~~: until 4b47bf7.
+~~A `wa_id` conversation replied without `+`~~: until 2b2679a (on an
+older pin, `send` with `Recipient::phone` and the `+`). ~~Echoes and
+history are not recorded~~: until a3582b8. ~~Synced history opens the
+window, is unread, keeps its placeholders~~: until 6d50701. ~~A revoke
+deletes any message of its number; one before its message is lost~~:
+until a9593f3 (all 2026-09-24; 4b47bf7, 6d50701 and a9593f3 change the
+`ConversationStore` port).
 
 ## What wa-rs does not do
 

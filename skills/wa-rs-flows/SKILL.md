@@ -5,7 +5,7 @@ description: "WhatsApp Flows with wa-rs - creating a Flow from its JSON (CreateF
 
 # wa-rs-flows
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs 6909be3b54768abc3d5f9b04543a49f32b072669 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/flows.rs](examples/flows.rs), compiled and
 tested by wa-rs's own gate.
@@ -87,6 +87,9 @@ let response = match &request.action {
     _ => FlowResponse::next_screen("SLOTS", json!({})),
 };
 ```
+
+~~`flows::endpoint::FlowAction`~~: renamed `EndpointAction` in 6909be3
+(2026-09-24); `Flows::list_stream` and `Flow::assets_stream` take a query.
 
 Answer 200 with `sealer.seal(&response)?` as `text/plain`
 (`RESPONSE_CONTENT_TYPE`): the same AES key, the bit-flipped IV.

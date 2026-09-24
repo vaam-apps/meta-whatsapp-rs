@@ -5,7 +5,7 @@ description: "WhatsApp OTP login and phone verification with wa-rs - creating th
 
 # wa-rs-otp-login
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs 6909be3b54768abc3d5f9b04543a49f32b072669 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/otp.rs](examples/otp.rs), compiled and tested by
 wa-rs's own gate (issue → verify once, expiry with a `ManualClock`,
@@ -119,8 +119,8 @@ must pick a namespace, and its codes in flight become `NotFound` once.
 ~~Codes were keyed by the pepper, the digits and the purpose only~~:
 until e40b86f; crossing it, codes in flight become `NotFound` and limits
 restart. ~~The code hash left out the store key~~ (a store writer could
-copy their record over another key): until the OTP key-binding commit
-(2026-09-24); crossing it, codes in flight answer `Invalid` once.
+copy their record over another key): until 8238853 (2026-09-24);
+crossing it, codes in flight answer `Invalid` once.
 
 ## Pitfalls
 

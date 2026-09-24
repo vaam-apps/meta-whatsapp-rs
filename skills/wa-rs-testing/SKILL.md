@@ -5,7 +5,7 @@ description: "Testing code that uses wa-rs without Meta, a network or a database
 
 # wa-rs-testing
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs 6909be3b54768abc3d5f9b04543a49f32b072669 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/integration.rs](examples/integration.rs) — four
 tests wa-rs runs in its own gate. Every other skill's `examples/*.rs` ends
@@ -98,7 +98,8 @@ body without a handler. To drive an axum app, see the tests of
 
 `ManualClock::new(at)` only moves on `advance(d)` or `set(at)`. Pass the
 same clock to everything that reads time: `MemoryKvStore::with_clock`,
-`OtpService::new`, `Inbox::with_clock`, `TokenVault::with_clock`:
+`OtpService::new`, `Inbox::with_clock`, `InboxSink::with_clock` (it bounds
+synced history timestamps), `TokenVault::with_clock`:
 
 ```rust
 let transport = ScriptedTransport::new(); // nothing scripted: no request may leave

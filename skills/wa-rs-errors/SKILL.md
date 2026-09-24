@@ -5,7 +5,7 @@ description: "Handling wa-rs errors correctly - the Error tree (Api, Http, Trans
 
 # wa-rs-errors
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs 6909be3b54768abc3d5f9b04543a49f32b072669 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/handle.rs](examples/handle.rs), compiled and
 tested by wa-rs's own gate. Every code, its `ErrorKind` and what to do:
@@ -65,7 +65,7 @@ non-4xx status, an unreadable 2xx or anything unknown — the message may be
 on its way; reconcile before resending. The OTP service keeps a code
 verifiable by the same rule. ~~A throttling error on a 5xx is `true`~~:
 until da39cf0; `false` now, as the retry policy assumed. ~~A Graph error
-on a 1xx–3xx is `false`~~: until the OTP key-binding commit (2026-09-24).
+on a 1xx–3xx is `false`~~: until 8238853 (2026-09-24).
 
 ## Retries: "could succeed later" is not "safe to repeat"
 
