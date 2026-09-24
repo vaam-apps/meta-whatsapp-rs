@@ -332,6 +332,15 @@ async fn typing_indicator_matches_the_docs_and_is_not_replayed() {
             .await,
         Err(Error::Validation(_))
     ));
+
+    // A 200 that says `success: false` is not a success.
+    let t = ScriptedTransport::new();
+    t.push_json(200, json!({"success": false}));
+    t.push_json(200, json!({"success": false}));
+    let m = client(&t).messages("1");
+    assert!(m.mark_read(&id).await.is_err());
+    assert!(m.mark_read_with_typing_indicator(&id).await.is_err());
+    assert_eq!(t.remaining(), 0);
 }
 
 #[tokio::test]
@@ -432,6 +441,11 @@ fn parses_the_legacy_flow_sample_response() {
     .unwrap();
     assert_eq!(r.message_id().unwrap().as_str(), "gHTRETHRTHTRTH-av4Y");
     assert_eq!(r.contacts[0].input, "");
+
+    // Every top-level field is optional in the reference schema.
+    let r: SendResponse = serde_json::from_value(json!({})).unwrap();
+    assert_eq!(r.message_id(), None);
+    assert!(r.contacts.is_empty() && r.messaging_product.is_empty());
 }
 
 // ─── Every message type against its documented body ──────────────────────
@@ -1230,6 +1244,151 @@ fn envelope_features_match_the_docs() {
     );
 }
 
+/// The doc examples set nearly every optional field, so on their own they
+/// cannot tell "omitted when absent" from "sent as null / [] / {}". These
+/// shapes leave each optional field out at least once.
+#[test]
+fn sparse_shapes_omit_what_is_absent() {
+    let content = |m: OutboundMessage| {
+        let wire = serde_json::to_vec(&m).unwrap();
+        assert_no_duplicate_keys(&wire);
+        let mut v: Value = serde_json::from_slice(&wire).unwrap();
+        let kind = v["type"].as_str().unwrap().to_owned();
+        v[kind].take()
+    };
+    // Contacts: a bare card, and one whose nested objects are all empty.
+    let sparse = Contact {
+        addresses: vec![ContactAddress::default()],
+        birthday: None,
+        emails: vec![ContactEmail {
+            email: "a@example.com".into(),
+            kind: None,
+        }],
+        name: ContactName::new("B"),
+        org: Some(ContactOrg::default()),
+        phones: vec![ContactPhone {
+            phone: "+1".into(),
+            kind: None,
+            wa_id: None,
+        }],
+        urls: vec![ContactUrl {
+            url: "https://x.example".into(),
+            kind: None,
+        }],
+    };
+    assert_eq!(
+        content(OutboundMessage::contacts(
+            phone(),
+            [Contact::new("A"), sparse]
+        )),
+        json!([
+            {"name": {"formatted_name": "A"}},
+            {"addresses": [{}], "emails": [{"email": "a@example.com"}], "name": {"formatted_name": "B"},
+             "org": {}, "phones": [{"phone": "+1"}], "urls": [{"url": "https://x.example"}]}
+        ])
+    );
+    // Media without caption, file name or voice flag.
+    assert_eq!(
+        content(OutboundMessage::video_link(phone(), "https://x/v.mp4")),
+        json!({"link": "https://x/v.mp4"})
+    );
+    assert_eq!(
+        content(OutboundMessage::audio_id(phone(), "1")),
+        json!({"id": "1"})
+    );
+    assert_eq!(
+        content(OutboundMessage::new(
+            phone(),
+            Document::new(MediaSource::id("1"))
+        )),
+        json!({"id": "1"})
+    );
+    assert_eq!(
+        content(OutboundMessage::location(phone(), 1.5, -2.0)),
+        json!({"latitude": "1.5", "longitude": "-2"})
+    );
+    // Headers: document without file name; text with the reference's sub_text.
+    let header = |h: Header| serde_json::to_value(h).unwrap();
+    assert_eq!(
+        header(Header::document_id("1")),
+        json!({"type": "document", "document": {"id": "1"}})
+    );
+    assert_eq!(
+        header(Header::Text {
+            text: "T".into(),
+            sub_text: Some("S".into())
+        }),
+        json!({"type": "text", "text": "T", "sub_text": "S"})
+    );
+    // A one-section list without section title or row description.
+    assert_eq!(
+        content(list(vec![ListSection {
+            title: None,
+            rows: vec![ListRow::new("r", "Row")],
+        }])),
+        json!({"type": "list", "body": {"text": "body"}, "action": {"button": "Options", "sections": [
+            {"rows": [{"id": "r", "title": "Row"}]}
+        ]}})
+    );
+    // Flow: bare parameters, and navigate without data.
+    assert_eq!(
+        serde_json::to_value(FlowParameters::new(FlowRef::Name("f".into()), "Go")).unwrap(),
+        json!({"flow_message_version": "3", "flow_name": "f", "flow_cta": "Go"})
+    );
+    assert_eq!(
+        serde_json::to_value(
+            FlowParameters::new(FlowRef::Name("f".into()), "Go").navigate("S", None)
+        )
+        .unwrap(),
+        json!({"flow_message_version": "3", "flow_name": "f", "flow_cta": "Go",
+               "flow_action": "navigate", "flow_action_payload": {"screen": "S"}})
+    );
+    // Call button: no parameters, then one of three.
+    assert_eq!(
+        content(OutboundMessage::new(phone(), VoiceCall::new("b"))),
+        json!({"type": "voice_call", "body": {"text": "b"}, "action": {"name": "voice_call"}})
+    );
+    assert_eq!(
+        serde_json::to_value(VoiceCallParameters {
+            ttl_minutes: Some(60),
+            ..Default::default()
+        })
+        .unwrap(),
+        json!({"ttl_minutes": 60})
+    );
+    // A one-section product list without section title.
+    assert_eq!(
+        content(OutboundMessage::product_list(
+            phone(),
+            "H",
+            "B",
+            "C",
+            [ProductSection {
+                title: None,
+                product_retailer_ids: vec!["S".into()],
+            }],
+        ))["action"],
+        json!({"catalog_id": "C", "sections": [{"product_items": [{"product_retailer_id": "S"}]}]})
+    );
+    // A carousel card without body.
+    let card = MediaCard::new(
+        CardHeader::Video("https://x/v.mp4".into()),
+        CardAction::Url {
+            display_text: "Go".into(),
+            url: "https://x".into(),
+        },
+    );
+    assert_eq!(
+        content(OutboundMessage::new(
+            phone(),
+            MediaCarousel::new("b", vec![card; 2])
+        ))["action"]["cards"][1],
+        json!({"card_index": 1, "type": "cta_url",
+               "header": {"type": "video", "video": {"link": "https://x/v.mp4"}},
+               "action": {"name": "cta_url", "parameters": {"display_text": "Go", "url": "https://x"}}})
+    );
+}
+
 #[test]
 fn direct_send_matches_the_docs() {
     // direct-send/send-utility-and-authentication-messages.
@@ -1301,6 +1460,13 @@ fn text_and_caption_limits() {
     assert_limit("text.body", 4096, |n| OutboundMessage::text(phone(), s(n)));
     assert_limit("text.body", 1024, |n| {
         OutboundMessage::text(phone(), s(n)).category(DirectSendCategory::Utility)
+    });
+    assert_limit("text.body", 1024, |n| {
+        OutboundMessage::text(phone(), s(n)).category(DirectSendCategory::Authentication)
+    });
+    // `service` is the normal flow: the normal limit.
+    assert_limit("text.body", 4096, |n| {
+        OutboundMessage::text(phone(), s(n)).category(DirectSendCategory::Service)
     });
     assert_limit("image.caption", 1024, |n| {
         OutboundMessage::new(phone(), Image::new(MediaSource::id("1")).caption(s(n)))

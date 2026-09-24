@@ -363,6 +363,40 @@ async fn verification_hashes_across_chunks_and_accepts_base64_digests() {
 }
 
 #[tokio::test]
+async fn a_verified_stream_stays_finished_and_tolerates_padded_digests() {
+    let body = b"payload";
+    // A digest carried with stray whitespace (hand-built from a webhook).
+    let dl = MediaDownload {
+        info: info(&format!(" {}\n", sha_hex(body))),
+        body: stream(&[b"pay", b"load"]),
+    };
+    let mut verified = dl.verified().unwrap().body;
+    while let Some(chunk) = verified.next().await {
+        chunk.unwrap();
+    }
+    // Polling a finished stream again must not re-run the check on an
+    // empty hasher and invent a mismatch.
+    assert!(verified.next().await.is_none());
+    assert!(verified.next().await.is_none());
+}
+
+#[test]
+fn media_info_tolerates_missing_optional_fields() {
+    // Only `url` and `id` are needed to download; nothing else may be
+    // required to parse.
+    let info: MediaInfo = serde_json::from_value(json!({"url": LOOKASIDE, "id": "1"})).unwrap();
+    assert_eq!(
+        (
+            info.messaging_product.as_str(),
+            info.mime_type.as_str(),
+            info.sha256.as_str(),
+            info.file_size
+        ),
+        ("", "", "", None)
+    );
+}
+
+#[tokio::test]
 async fn a_reported_size_is_not_trusted_for_allocation() {
     // `collect(u64::MAX)` with a hostile `file_size` must neither abort the
     // process (allocation failure) nor stop the real bytes from arriving.
