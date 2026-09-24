@@ -1,0 +1,43 @@
+[package]
+name = "wa-webhooks"
+description = "WhatsApp webhook verification (hub.challenge, X-Hub-Signature-256), typed payloads, normalized events, dedup and dispatch to sinks."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# axum router (GET verify, POST deliver) and an SSE helper for live inboxes.
+axum = ["dep:axum", "dep:tokio", "tokio/sync"]
+
+[dependencies]
+wa-core.workspace = true
+
+async-trait.workspace = true
+bytes.workspace = true
+futures.workspace = true
+hex.workspace = true
+hmac.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tracing.workspace = true
+
+axum = { workspace = true, optional = true, features = ["json", "query", "tokio", "http1"] }
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+wa-core = { workspace = true, features = ["testing"] }
+wa-adapters = { workspace = true, features = ["memory", "sinks"] }
+pretty_assertions.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

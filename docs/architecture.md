@@ -1,0 +1,289 @@
+# wa-rs architecture
+
+This is the spec. Code that disagrees with it is a bug in one of the two;
+fix whichever is wrong, in the same PR.
+
+## Goals
+
+A Rust toolkit for Meta's WhatsApp Business Platform that serves three
+concrete products:
+
+1. **E-commerce marketing** — templates (create, get approved, send), the
+   Marketing Messages API, In-App Signup opt-ins, catalogs and product
+   messages, delivery/read analytics, respecting opt-outs (`131050`) and
+   per-user marketing limits (`131049`).
+2. **CMS in-app chat** — each merchant onboards *their own* WhatsApp number
+   through **Embedded Signup**; their customers' messages arrive by
+   webhook, are stored per conversation, streamed live to the merchant's
+   inbox UI, and answered with the merchant's business token, inside the
+   24-hour customer service window (templates outside it).
+3. **Authentication** — OTP over authentication templates (copy code,
+   one-tap, zero-tap), issued, stored hashed, verified with attempt limits.
+
+## Layout
+
+```
+crates/
+  wa-core       error tree, ids, config, ports (traits). No I/O, no runtime.
+  wa-client     Graph API client; one module per endpoint family.
+  wa-webhooks   verify, parse, normalize, dedup, dispatch; axum router (feature).
+  wa-adapters   port implementations: reqwest, memory/Postgres/Redis stores, sinks.
+  wa-typst      Typst → PDF/PNG for document and image messages.
+  wa-rs         facade: re-exports + feature flags. What integrators depend on.
+.xtask          repo automation (`cargo xtask meta-docs`).
+```
+
+Dependency rule: everything depends on `wa-core`; nothing depends on
+`wa-rs`; `wa-client` and `wa-webhooks` never depend on each other or on
+`wa-adapters` (except as a dev-dependency for tests). An adapter never
+leaks its library's types through a port.
+
+## Ports (`wa-core`)
+
+| Port | Methods | Contract lives in |
+| --- | --- | --- |
+| `transport::HttpTransport` | `send`, `send_streaming` | rustdoc; non-2xx is *not* an error at this layer |
+| `store::KvStore` | `get`, `put`, `put_if_absent`, `compare_and_swap`, `delete` | `wa_adapters::store::conformance` (executable) |
+| `store::ConversationStore` | `append`, `update_status`, `messages`, `conversations`, `mark_read`, `last_inbound_at` | rustdoc + adapter tests |
+| `sink::EventSink<E>` | `deliver` | rustdoc |
+| `clock::Clock` | `now` | — |
+
+Typed stores are built **on `KvStore`**, never as new ports: token vault,
+OTP challenges, webhook dedup, Embedded Signup sessions. An adapter author
+implements five methods once and every feature works.
+
+## Error tree
+
+`wa_core::Error` is the root; every public fallible function returns
+`wa_core::Result<T>`. See `crates/wa-core/src/error/mod.rs` for the tree.
+
+- `thiserror` for every typed node. `anyhow::Error` only as the opaque leaf
+  for failures raised by code we do not own (adapters, integrators):
+  `TransportError::{Connect, Backend}`, `StorageError::Backend`,
+  `SinkError::Delivery`, `Error::Other`.
+- Branch on `Error::kind()` → `ErrorKind` (classified from Graph error
+  `code`, per Meta's guidance) and `Error::is_retryable()`. Never on message
+  text, HTTP status, or subcode.
+- Multi-step flows (Embedded Signup onboarding) wrap failures with
+  `Error::in_step("stable_step_name")` so callers know how far they got.
+- Examples and binaries use `anyhow::Result` at the edge.
+- No module adds a variant to the root for its own convenience; a new leaf
+  needs a reason in this document.
+
+## Client (`wa-client`)
+
+`Client` = `Arc<Shared{transport, endpoint, retry, timeout, user_agent}>` +
+optional `AccessToken`. `client.with_token(t)` is the multi-tenant switch.
+
+Endpoint modules follow one pattern (see `src/messages/mod.rs` once
+implemented, or any module stub):
+
+```rust
+impl Client { pub fn messages(&self, id: impl Into<PhoneNumberId>) -> Messages }
+impl Messages {
+    pub async fn send(&self, message: &OutboundMessage) -> Result<SendResponse> {
+        self.client.post(&format!("{}/messages", self.phone_number_id))
+            .json(message)
+            .context("send message response")
+            .send()
+            .await
+    }
+}
+```
+
+Rules for every endpoint module:
+
+1. **Build requests only through `GraphRequest`** (`client.get/post/delete`).
+   It owns auth, retries, error decoding, the credential host allowlist.
+2. **Requests are typed structs with `Serialize`, responses typed with
+   `Deserialize`.** Unknown response fields are ignored (never
+   `deny_unknown_fields`); enums Meta may extend get an `#[serde(other)]
+   Unknown` (or `Other(String)`) variant so a new value never breaks
+   parsing.
+3. **Validate locally what Meta documents as a hard limit** (lengths,
+   counts, formats) and return `ValidationError` naming the field. Do not
+   invent limits the docs do not state.
+4. **Idempotency**: POSTs are non-idempotent by default. Mark a POST
+   `.idempotent(true)` only when replaying it cannot duplicate an effect
+   (e.g. setting a field to a value).
+5. **Lists** return `Page<T>` and offer a `…_stream()` via
+   `GraphRequest::paginate`.
+6. **Tests** use `wa_core::testing::ScriptedTransport`: assert method, path,
+   query, auth header and exact JSON body; feed responses copied from the
+   docs' examples. Every test that scripts N responses asserts
+   `remaining() == 0`.
+7. **Docs**: every public item has rustdoc; each module doc names the Meta
+   doc paths it implements (relative to
+   `https://developers.facebook.com/documentation/business-messaging/whatsapp/`).
+
+### Retries
+
+`RetryPolicy` (`src/retry.rs`): idempotent requests retry on any retryable
+error; non-idempotent requests only when the error proves Meta rejected the
+request before processing (throttling). A timeout on a send is never
+replayed — a duplicate OTP or order confirmation is worse than an error.
+
+### Credentials never leave Meta
+
+`GraphRequest` refuses to attach a token to any URL that is not the
+configured Graph endpoint or Meta's media CDN over HTTPS. Pagination
+re-issues the original request with `after=` rather than following
+`paging.next`.
+
+## Feature modules
+
+### Messages (`wa_client::messages`)
+
+`OutboundMessage { recipient: Recipient (flattened), context?, biz_opaque_callback_data?, category? (Direct Send), content: MessageContent }`
+where `MessageContent` is an internally tagged enum on `type`: text, image,
+audio, video, document, sticker, location, contacts, interactive (button,
+list, cta_url, location_request_message, flow, product, product_list,
+catalog_message, carousel), reaction, template. Constructors cover the
+common cases (`OutboundMessage::text(to, body)`, …). `mark_read(message_id,
+typing_indicator: bool)`. `SendResponse { contacts: [{input, wa_id?, user_id?}], messages: [{id, message_status?}] }`.
+
+Recipient addressing follows the BSUID rules in `wa_core::recipient`.
+
+### Media (`wa_client::media`)
+
+Upload (multipart: `file`, `type`, `messaging_product`), `url(media_id)` →
+`{url, mime_type, sha256, file_size, id}`, `download(media_id)` → streaming
+body (`StreamingResponse`) with SHA-256 verification helper, `delete`.
+Resumable Upload API (`/{app_id}/uploads` → `/{upload_session}` with
+`file_offset`, `Authorization: OAuth`) returning the handle used as
+`header_handle` in template examples.
+
+### Templates (`wa_client::templates`)
+
+CRUD + library + migrate + compare. Two builder families that must not be
+confused:
+
+- **Definition** (creating/editing a template): `TemplateDefinition { name,
+  language, category, parameter_format, components: [Header|Body|Footer|Buttons|Carousel|LimitedTimeOffer…] }` with examples.
+- **Invocation** (sending): `TemplateMessage { name, language, components:
+  [header params, body params, button params by index/sub_type] }`, embedded
+  in `MessageContent::Template`.
+
+Named and positional parameters are both supported (`parameter_format`).
+
+### Authentication (`wa_client::authentication`)
+
+Authentication template definitions (copy code, one-tap with
+`supported_apps` package/signature hash, zero-tap with
+`zero_tap_terms_accepted`), `add_security_recommendation`,
+`code_expiration_minutes`, previews, bulk upsert.
+
+`OtpService` on `KvStore` + `Clock`:
+
+- `issue(recipient, purpose) → Challenge{id, expires_at}`: generates a
+  CSPRNG numeric code (length configurable 4–8), stores **only an HMAC-SHA256
+  of it under a server pepper**, sends it with the authentication template,
+  enforces a resend cooldown and a per-recipient issue rate.
+- `verify(recipient, purpose, code) → VerifyOutcome { Verified, Invalid {
+  attempts_left }, Expired, TooManyAttempts, NotFound }`: constant-time
+  compare; attempts counted with `compare_and_swap` so concurrent guesses
+  cannot exceed the limit; a verified challenge is consumed (single use).
+- The code never appears in logs, errors, or `Debug` output.
+
+### Embedded Signup (`wa_client::embedded_signup`)
+
+The most important flow. Frontend (Facebook JS SDK) runs `FB.login` with
+the app's configuration id; the page receives a `WA_EMBEDDED_SIGNUP`
+message event (`FINISH` with `waba_id`, `phone_number_id`, `business_id`;
+`CANCEL` with `current_step`; `ERROR`) and a short-lived `code`. The backend:
+
+1. `exchange_code(code)` → business integration system user token
+   (`GET /oauth/access_token?client_id&client_secret&code`, no bearer).
+2. Optionally `debug_token` (app token) to confirm granular scopes and the
+   WABA ids the token can reach — used when the session info is missing.
+3. `waba(waba_id).subscribe_app()` (`POST /{waba}/subscribed_apps`) so
+   webhooks flow; optional per-WABA callback override.
+4. `phone_number(id).register(pin)` for Cloud API numbers (two-step PIN).
+5. Persist the token in `TokenVault` (on `KvStore`, **encrypted at rest**
+   with AES-256-GCM under an integrator-supplied key, key id recorded for
+   rotation) keyed by WABA id, with a phone-number → WABA index.
+
+`EmbeddedSignup::onboard(OnboardingRequest) → Onboarded` runs 1–5; each
+step failure is `Error::in_step("exchange_code" | "subscribe_app" |
+"register_phone" | "store_token" …)`. Steps are idempotent so a retry of the
+whole call is safe. `LaunchOptions` builds the JSON for `FB.login` `extras`
+(version, `featureType` — incl. coexistence `whatsapp_business_app_onboarding`,
+`setup` pre-fill). `SessionInfo` parses the message event.
+`SignupSession` (on `KvStore`) binds an opaque state id to the merchant that
+started the flow, so a callback can't be attributed to another tenant.
+
+Coexistence: `smb_app_data` sync (contacts, history) within 24h.
+
+### In-App Signup (`wa_client::signups`), WABA (`waba`), phone numbers (`phone_numbers`), business profile, QR codes, block users, commerce, analytics, marketing (MM API), flows, groups, calling
+
+Typed endpoint wrappers per the rules above. Flows additionally provides
+the data-endpoint crypto (feature `flows-endpoint`): decrypt
+`{encrypted_flow_data, encrypted_aes_key, initial_vector}` with the business
+RSA private key (RSA-OAEP-SHA256 → AES-128-GCM), and encrypt the response
+with the same key and the bit-flipped IV. RSA goes through `aws-lc-rs`
+(constant-time), never the `rsa` crate (RUSTSEC-2023-0071, Marvin timing
+attack, unfixed) — the endpoint decrypts attacker-supplied ciphertext.
+
+## Webhooks (`wa-webhooks`)
+
+```
+POST body ─► verify X-Hub-Signature-256 (HMAC-SHA256, constant-time, any of N app secrets)
+         ─► parse WebhookPayload{object, entry[{id, time?, changes[{field, value}]}]}
+         ─► normalize into Vec<WebhookEvent> (one per message/status/change)
+         ─► optional DedupGuard (KvStore put_if_absent, TTL ≥ 7 days — Meta retries for 7)
+         ─► EventSink<WebhookEvent>
+```
+
+- `verify_subscription(query, &VerifyToken) -> Result<String /*challenge*/>`
+  (constant-time token compare, `hub.mode == "subscribe"`).
+- Typed values for every documented field (`messages` — all inbound types,
+  statuses with pricing, errors; template status/quality/category/components
+  updates; phone number name/quality; account update/review/alerts;
+  business capability; security; user preferences (marketing opt-out);
+  history, smb app state sync, smb message echoes (coexistence); partner
+  solutions; payment configuration; calls; flows; groups;
+  business_username_updates, user_id_update). Unknown fields and unknown
+  message types parse into `Unknown { … raw: serde_json::Value }` — **a new
+  Meta field must never fail a delivery**.
+- `WebhookEvent` carries `waba_id`, `phone_number_id` (when the field has
+  one), and the user identity (`wa_id?`, `user_id?` BSUID, `parent_user_id?`,
+  `username?`).
+- A body that verifies but fails to parse is acknowledged (so Meta stops
+  retrying for 7 days) and surfaced as `WebhookEvent::Unparsed{raw}` +
+  a `tracing::error!`. A bad signature is rejected (401).
+- `axum` feature: `router(handler)` with `GET` verify + `POST` receive
+  (raw bytes, body limit), and an SSE helper that turns a broadcast
+  subscription (filtered by phone number id) into `text/event-stream` for
+  a live inbox.
+
+## Adapters (`wa-adapters`)
+
+- `http::ReqwestTransport` (feature `reqwest`, rustls): streaming download,
+  multipart, per-request timeout, error mapping (timeout → `Timeout`,
+  connect → `Connect`, else `Backend`).
+- `store::{MemoryKvStore, MemoryConversationStore}` (feature `memory`).
+- `store::{PostgresKvStore, PostgresConversationStore}` (feature
+  `postgres`, sqlx, embedded migrations, `wa_` table prefix configurable).
+- `store::RedisKvStore` (feature `redis`; CAS via Lua).
+- `sink::{ChannelSink, BroadcastSink, FanoutSink, FilterSink, FnSink,
+  TracingSink}` and `sink::InboxSink` (records messages/statuses into a
+  `ConversationStore`) — feature `sinks`.
+- Live tests are named `live_*`, read `WA_RS_TEST_POSTGRES_URL` /
+  `WA_RS_TEST_REDIS_URL`, skip when unset, and **fail** when unset under
+  `WA_RS_REQUIRE_LIVE=1` (`just test-live` sets it). Every `KvStore`
+  adapter runs `store::conformance`.
+
+## Typst (`wa-typst`)
+
+Render a Typst source with JSON inputs (`sys.inputs`) to PDF or PNG, with
+bundled fonts so output is identical on every machine. Ships templates for
+e-commerce: `invoice`, `receipt` (order confirmation), `voucher` (coupon /
+gift card image for marketing headers). Output is bytes + MIME + filename,
+ready for `media().upload()` and a document/image message or template
+header. Never renders OTP codes (those go through authentication
+templates only).
+
+## Verification
+
+`just ci` is the gate (lint, check, test, doc, per-feature builds, deny,
+live adapter tests). CI runs exactly it. See `AGENTS.md`.

@@ -1,0 +1,51 @@
+# Dev container services. `dev` is where you (and Claude Code) work; the
+# sidecars back `just test-live` (WA_RS_TEST_* point at them).
+name: wa-rs-dev
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TZ: ${TZ:-UTC}
+        CLAUDE_CODE_VERSION: latest
+    command: sleep infinity
+    cap_add: [NET_ADMIN, NET_RAW]
+    volumes:
+      - ..:/workspace:cached
+      - claude-code-bashhistory:/commandhistory
+      - claude-code-config:/home/node/.claude
+      - cargo-registry:/home/node/.cargo/registry
+      - cargo-git:/home/node/.cargo/git
+    environment:
+      CLAUDE_CONFIG_DIR: /home/node/.claude
+      NODE_OPTIONS: --max-old-space-size=4096
+      POWERLEVEL9K_DISABLE_GITSTATUS: "true"
+      WA_RS_TEST_POSTGRES_URL: postgres://wa:wa@postgres:5432/wa
+      WA_RS_TEST_REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: wa
+      POSTGRES_PASSWORD: wa
+      POSTGRES_DB: wa
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wa -d wa"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  redis:
+    image: redis:8-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+volumes:
+  claude-code-bashhistory:
+  claude-code-config:
+  cargo-registry:
+  cargo-git:

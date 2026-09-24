@@ -1,0 +1,118 @@
+[workspace]
+resolver = "3"
+# Hexagonal layout: `wa-core` owns the error tree and the ports (traits);
+# everything else depends on it and never the reverse. See docs/architecture.md.
+members = [
+  "crates/wa-core",
+  "crates/wa-client",
+  "crates/wa-webhooks",
+  "crates/wa-adapters",
+  "crates/wa-typst",
+  "crates/wa-rs",
+  ".xtask",
+]
+default-members = [
+  "crates/wa-core",
+  "crates/wa-client",
+  "crates/wa-webhooks",
+  "crates/wa-adapters",
+  "crates/wa-typst",
+  "crates/wa-rs",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# Equal to the pinned toolchain on purpose: the brief is "latest stable", and
+# typst 0.15 (1.92) and sqlx 0.9 (1.94) already sit close to it.
+rust-version = "1.98.1"
+license = "MIT"
+repository = "https://github.com/vaam-apps/wa-rs"
+authors = ["Vymalo"]
+# `wa-rs` is already taken on crates.io (an unrelated WhatsApp Web client), so
+# nothing here is publishable until the crate names are decided.
+publish = false
+
+[workspace.dependencies]
+# Internal crates.
+wa-core = { path = "crates/wa-core" }
+wa-client = { path = "crates/wa-client" }
+wa-webhooks = { path = "crates/wa-webhooks" }
+# default-features off here so the facade can choose; members that want the
+# defaults name the features they use.
+wa-adapters = { path = "crates/wa-adapters", default-features = false }
+wa-typst = { path = "crates/wa-typst" }
+
+# Errors. `thiserror` shapes the typed tree; `anyhow` is the opaque leaf for
+# failures an adapter or integrator raises that have no typed home.
+anyhow = "1"
+thiserror = "2"
+
+# Serialization.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Async plumbing.
+async-trait = "0.1"
+futures = "0.3"
+tokio = { version = "1", default-features = false }
+tokio-stream = "0.1"
+
+# HTTP vocabulary shared by every transport.
+bytes = "1"
+http = "1"
+url = { version = "2", features = ["serde"] }
+
+# Secrets and time.
+secrecy = { version = "0.10", features = ["serde"] }
+time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
+
+# Crypto. RustCrypto's digest-0.10 generation for HMAC/SHA-2/AES-GCM.
+# RSA-OAEP (Flows data endpoint) uses aws-lc-rs, not `rsa`: `rsa` 0.9 carries
+# RUSTSEC-2023-0071 (Marvin timing side channel) with no fixed release, and a
+# Flows endpoint decrypts attacker-supplied ciphertext by design.
+hmac = "0.12"
+sha2 = "0.10"
+aes-gcm = "0.10"
+aws-lc-rs = "1"
+subtle = "2"
+getrandom = "0.3"
+hex = "0.4"
+base64 = "0.22"
+
+# Observability.
+tracing = "0.1"
+
+# Adapters (optional behind features in wa-adapters / wa-webhooks).
+reqwest = { version = "0.13", default-features = false }
+axum = { version = "0.8", default-features = false }
+sqlx = { version = "0.9", default-features = false }
+redis = { version = "1", default-features = false }
+
+# Typst rendering.
+typst = "0.15"
+typst-pdf = "0.15"
+typst-render = "0.15"
+typst-kit = { version = "0.15", default-features = false }
+
+# Dev.
+pretty_assertions = "1"
+tokio-test = "0.4"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Every public fallible function returns the crate `Result`; its variants are
+# the documentation. A per-fn `# Errors` section would restate them.
+missing_errors_doc = "allow"
+must_use_candidate = "allow"
+module_name_repetitions = "allow"
+# Graph error codes and ids are written exactly as Meta's docs print them
+# (`131047`, not `131_047`) so a grep for a code finds its handling.
+unreadable_literal = "allow"
+# Library code never panics on input it did not construct itself.
+unwrap_used = "warn"
+expect_used = "warn"

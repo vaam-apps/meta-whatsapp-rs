@@ -1,0 +1,41 @@
+{
+  // Claude Code sandbox for wa-rs, adapted from Anthropic's reference
+  // devcontainer (github.com/anthropics/claude-code/.devcontainer): same
+  // default-deny egress firewall, plus the Rust toolchain pinned in
+  // rust-toolchain.toml and Postgres/Redis sidecars for `just test-live`.
+  // Inside it, `claude --dangerously-skip-permissions` is reasonable: the
+  // firewall, not the prompt, is the boundary.
+  "name": "wa-rs (Claude Code sandbox)",
+  "dockerComposeFile": ["compose.yaml"],
+  "service": "dev",
+  "runServices": ["dev", "postgres", "redis"],
+  "workspaceFolder": "/workspace",
+  "shutdownAction": "stopCompose",
+  "remoteUser": "node",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "anthropic.claude-code",
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "vadimcn.vscode-lldb",
+        "myriad-dreamin.tinymist",
+        "skellock.just",
+        "eamodio.gitlens"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "rust-analyzer.check.command": "clippy",
+        "rust-analyzer.cargo.features": "all",
+        "terminal.integrated.defaultProfile.linux": "zsh",
+        "terminal.integrated.profiles.linux": {
+          "bash": { "path": "bash", "icon": "terminal-bash" },
+          "zsh": { "path": "zsh" }
+        }
+      }
+    }
+  },
+  "postCreateCommand": "cargo fetch --locked || cargo fetch",
+  "postStartCommand": "sudo /usr/local/bin/init-firewall.sh",
+  "waitFor": "postStartCommand"
+}

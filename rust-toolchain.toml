@@ -1,0 +1,7 @@
+# Pinned to the latest stable at scaffold time (2026-09-24). CI reads this file
+# too (dtolnay/rust-toolchain with `toolchain: 1.98.1`), so a bump is one PR
+# that touches both, and `rust-version` in Cargo.toml moves with it.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

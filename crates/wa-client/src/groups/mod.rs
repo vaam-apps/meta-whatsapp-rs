@@ -1,0 +1,40 @@
+//! Groups API: create groups, invite links, participants, join requests.
+//!
+//! Docs: `groups/*`, `reference/groups/*`, `reference/whatsapp-business-phone-number/groups-management-api`.
+//!
+//! Doc paths are relative to
+//! `https://developers.facebook.com/documentation/business-messaging/whatsapp/`
+//! (append `.md` for Markdown; `just meta-docs` mirrors them locally).
+
+use wa_core::ids::PhoneNumberId;
+
+use crate::Client;
+
+/// Entry point, see [`Client::groups`].
+#[derive(Debug, Clone)]
+pub struct Groups {
+    client: Client,
+    phone_number_id: PhoneNumberId,
+}
+
+impl Client {
+    /// [`Groups`] API for `phone_number_id`.
+    pub fn groups(&self, phone_number_id: impl Into<PhoneNumberId>) -> Groups {
+        Groups {
+            client: self.clone(),
+            phone_number_id: phone_number_id.into(),
+        }
+    }
+}
+
+impl Groups {
+    /// The id this API is scoped to.
+    pub fn id(&self) -> &PhoneNumberId {
+        &self.phone_number_id
+    }
+
+    /// The client this API uses.
+    pub fn client(&self) -> &Client {
+        &self.client
+    }
+}

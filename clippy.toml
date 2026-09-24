@@ -1,0 +1,6 @@
+# Test code may unwrap/expect; library code may not (see workspace lints).
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+# Proper nouns that doc_markdown would otherwise want in backticks.
+doc-valid-idents = ["WhatsApp", "ToS", "OAuth", "PostgreSQL", "JavaScript", ".."]

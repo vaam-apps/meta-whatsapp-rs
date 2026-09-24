@@ -1,0 +1,15 @@
+/target
+**/*.rs.bk
+.env
+.env.*
+!.env.example
+# Local mirror of Meta's docs (`just meta-docs`). Meta's docs are copyrighted;
+# fetch them locally for grep, never commit them.
+/.meta-docs/
+# Rendered typst output from examples
+*.pdf
+!crates/wa-typst/tests/fixtures/*.pdf
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store

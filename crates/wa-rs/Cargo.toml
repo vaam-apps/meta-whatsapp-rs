@@ -1,0 +1,35 @@
+[package]
+name = "wa-rs"
+description = "WhatsApp Business Platform for Rust: client, webhooks, adapters and Typst rendering behind one dependency."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "wa_rs"
+
+[features]
+default = ["reqwest", "memory", "sinks"]
+reqwest = ["wa-adapters/reqwest"]
+memory = ["wa-adapters/memory"]
+sinks = ["wa-adapters/sinks"]
+postgres = ["wa-adapters/postgres"]
+redis = ["wa-adapters/redis"]
+axum = ["wa-webhooks/axum"]
+typst = ["dep:wa-typst"]
+flows-endpoint = ["wa-client/flows-endpoint"]
+full = ["reqwest", "memory", "sinks", "postgres", "redis", "axum", "typst", "flows-endpoint"]
+
+[dependencies]
+wa-core.workspace = true
+wa-client.workspace = true
+wa-webhooks.workspace = true
+wa-adapters = { workspace = true, default-features = false }
+wa-typst = { workspace = true, optional = true }
+
+[lints]
+workspace = true
