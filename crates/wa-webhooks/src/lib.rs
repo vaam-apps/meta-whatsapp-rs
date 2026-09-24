@@ -104,8 +104,7 @@ pub mod signature;
 pub mod verify;
 
 pub use dedup::{
-    Claim, ClaimInFlight, ClaimTicket, DEDUP_NAMESPACE, DEFAULT_CLAIM_LEASE, DEFAULT_DEDUP_TTL,
-    DedupGuard,
+    Claim, ClaimTicket, DEDUP_NAMESPACE, DEFAULT_CLAIM_LEASE, DEFAULT_DEDUP_TTL, DedupGuard,
 };
 pub use event::{WebhookEvent, events};
 pub use handler::{DEFAULT_MAX_BODY_BYTES, DeliveryReport, WebhookHandler, WebhookHandlerBuilder};

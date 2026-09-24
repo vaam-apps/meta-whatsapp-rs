@@ -112,6 +112,11 @@ pub enum WebhookError {
     /// Signed body is not a payload we understand.
     #[error("webhook payload could not be parsed: {0}")]
     Parse(#[source] serde_json::Error),
+    /// An event of this delivery is being delivered by another request right
+    /// now (webhook dedup lease). Answer non-`200` (`503`) so Meta retries;
+    /// answering `200` could lose the event if that other request dies.
+    #[error("a webhook event in this delivery is being delivered by another request")]
+    ClaimInFlight,
     /// Body exceeds the configured size limit (answer `413`).
     #[error("webhook body of {size} bytes exceeds the {limit}-byte limit")]
     PayloadTooLarge {

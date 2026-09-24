@@ -244,9 +244,18 @@ attack, unfixed) — the endpoint decrypts attacker-supplied ciphertext.
 POST body ─► verify X-Hub-Signature-256 (HMAC-SHA256, constant-time, any of N app secrets)
          ─► parse WebhookPayload{object, entry[{id, time?, changes[{field, value}]}]}
          ─► normalize into Vec<WebhookEvent> (one per message/status/change)
-         ─► optional DedupGuard (KvStore put_if_absent, TTL ≥ 7 days — Meta retries for 7)
-         ─► EventSink<WebhookEvent>
+         ─► optional DedupGuard: lease a claim (pending, 60 s) → EventSink<WebhookEvent>
+             → confirm (done, TTL 7 days + 1 h — Meta retries for 7) or release on sink error
 ```
+
+Dedup is a **lease, not a marker**: a marker written before delivery would
+swallow Meta's retry if the request died between marking and delivering
+(timeout, crash, deploy), losing the event for 7 days. A retry that finds a
+live lease gets `WebhookError::ClaimInFlight` (answered `503`, Meta retries
+later). Every claim transition is a version-checked `compare_and_swap`, so an
+expired lease can't overwrite a newer claim. Dedup keys are hashed before
+they reach the store (group status keys contain participants' phone numbers).
+Logs carry sizes, digests and field names only — never payload values.
 
 - `verify_subscription(query, &VerifyToken) -> Result<String /*challenge*/>`
   (constant-time token compare, `hub.mode == "subscribe"`).
@@ -264,7 +273,9 @@ POST body ─► verify X-Hub-Signature-256 (HMAC-SHA256, constant-time, any of 
   `username?`).
 - A body that verifies but fails to parse is acknowledged (so Meta stops
   retrying for 7 days) and surfaced as `WebhookEvent::Unparsed{raw}` +
-  a `tracing::error!`. A bad signature is rejected (401).
+  a `tracing::error!` carrying only size and digest. A bad signature is
+  rejected (401); blank app secrets and blank verify tokens fail closed.
+  Default body limit: 3 MiB (Meta: payloads up to 3 MB).
 - `axum` feature: `router(handler)` with `GET` verify + `POST` receive
   (raw bytes, body limit), and an SSE helper that turns a broadcast
   subscription (filtered by phone number id) into `text/event-stream` for

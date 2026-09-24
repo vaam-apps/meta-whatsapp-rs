@@ -17,7 +17,7 @@ use wa_core::error::WebhookError;
 use wa_core::secret::VerifyToken;
 use wa_core::sink::EventSink;
 
-use crate::dedup::{Claim, ClaimInFlight, DedupGuard};
+use crate::dedup::{Claim, DedupGuard};
 use crate::event::WebhookEvent;
 use crate::payload::WebhookPayload;
 use crate::redact;
@@ -132,7 +132,7 @@ impl WebhookHandler {
     ///   [`WebhookError::SignatureMismatch`] → `401`.
     /// - [`wa_core::Error::Sink`] / [`wa_core::Error::Storage`]: the sink or the
     ///   dedup store failed → `500`.
-    /// - [`wa_core::Error::Other`] holding [`ClaimInFlight`]: another request
+    /// - [`wa_core::error::WebhookError::ClaimInFlight`]: another request
     ///   is delivering one of the events right now → `503`.
     ///
     /// With a [`DedupGuard`], each event is claimed just before it goes to
@@ -228,7 +228,7 @@ impl WebhookHandler {
                             "webhook event is being delivered by another request; \
                              answering non-200 so Meta retries"
                         );
-                        return Err(wa_core::Error::Other(ClaimInFlight.into()));
+                        return Err(wa_core::error::WebhookError::ClaimInFlight.into());
                     }
                     // `Untracked`, or a variant added later: deliver.
                     _ => None,

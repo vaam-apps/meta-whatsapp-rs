@@ -23,8 +23,8 @@ use wa_core::sink::EventSink;
 use wa_core::store::{Expiry, KvStore, StoreKey, Versioned};
 use wa_webhooks::dedup::store_key;
 use wa_webhooks::{
-    Claim, ClaimInFlight, DEFAULT_CLAIM_LEASE, DedupGuard, DeliveryReport, SignatureVerifier,
-    VerificationQuery, WebhookEvent, WebhookHandler, WebhookPayload, sign,
+    Claim, DEFAULT_CLAIM_LEASE, DedupGuard, DeliveryReport, SignatureVerifier, VerificationQuery,
+    WebhookEvent, WebhookHandler, WebhookPayload, sign,
 };
 
 use common::RecordingSink;
@@ -95,7 +95,10 @@ fn done() -> Vec<u8> {
 }
 
 fn is_in_flight(err: &Error) -> bool {
-    matches!(err, Error::Other(e) if e.downcast_ref::<ClaimInFlight>().is_some())
+    matches!(
+        err,
+        Error::Webhook(wa_core::error::WebhookError::ClaimInFlight)
+    )
 }
 
 fn clock() -> ManualClock {

@@ -9,7 +9,7 @@
 //! | `POST /` missing, malformed or wrong signature | `401` |
 //! | `POST /` body over the limit | `413` |
 //! | `POST /` sink or dedup store failure | `500` (Meta redelivers) |
-//! | `POST /` an event is being delivered by another request ([`ClaimInFlight`]) | `503` (Meta redelivers) |
+//! | `POST /` an event is being delivered by another request ([`WebhookError::ClaimInFlight`]) | `503` (Meta redelivers) |
 //!
 //! Mount the router wherever your callback URL points
 //! (`Router::new().nest("/webhooks/whatsapp", router(handler))`).
@@ -32,7 +32,6 @@ use tokio::sync::broadcast::error::RecvError;
 use wa_core::Error;
 use wa_core::error::WebhookError;
 
-use crate::dedup::ClaimInFlight;
 use crate::event::WebhookEvent;
 use crate::handler::WebhookHandler;
 use crate::verify::VerificationQuery;
@@ -119,9 +118,7 @@ fn status_for(error: &Error) -> StatusCode {
         // Behind the router's body limit layer this is a backstop, not the
         // usual path; both answer 413.
         Error::Webhook(WebhookError::PayloadTooLarge { .. }) => StatusCode::PAYLOAD_TOO_LARGE,
-        Error::Other(other) if other.downcast_ref::<ClaimInFlight>().is_some() => {
-            StatusCode::SERVICE_UNAVAILABLE
-        }
+        Error::Webhook(WebhookError::ClaimInFlight) => StatusCode::SERVICE_UNAVAILABLE,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
@@ -210,7 +207,7 @@ mod tests {
                 StatusCode::INTERNAL_SERVER_ERROR,
             ),
             (
-                Error::Other(ClaimInFlight.into()),
+                WebhookError::ClaimInFlight.into(),
                 StatusCode::SERVICE_UNAVAILABLE,
             ),
             (

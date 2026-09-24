@@ -25,7 +25,7 @@
 //!
 //! A retry that finds a live `pending` marker is not acknowledged: another
 //! request is delivering that event right now and may still fail, so the
-//! handler answers non-`200` ([`ClaimInFlight`]) and Meta tries again later,
+//! handler answers non-`200` ([`wa_core::error::WebhookError::ClaimInFlight`]) and Meta tries again later,
 //! by which time the marker is `done` (a duplicate, `200`), released, or
 //! expired (delivered then).
 //!
@@ -123,18 +123,6 @@ impl fmt::Debug for ClaimTicket {
             .finish()
     }
 }
-
-/// Returned (inside [`wa_core::Error::Other`]) by
-/// [`crate::WebhookHandler::deliver`] when an event of the delivery is being
-/// delivered by another request right now. Answer non-`200` (the axum
-/// router answers `503`) so Meta retries; see the [module docs](self).
-///
-/// Carries no event data: dedup keys can contain phone numbers.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error(
-    "a webhook event in this delivery is being delivered by another request; answer non-200 so Meta retries"
-)]
-pub struct ClaimInFlight;
 
 impl DedupGuard {
     /// Guard on `kv`, with [`DEFAULT_DEDUP_TTL`] and [`DEFAULT_CLAIM_LEASE`].
