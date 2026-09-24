@@ -5,7 +5,7 @@ description: "Managing WhatsApp business phone numbers and their WABA with wa-rs
 
 # wa-rs-phone-numbers
 
-> **Verified against wa-rs 41fe5f9c963f4718db1362663a62de97244846ee (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs 4eb93c9bd63812221e75ad0920b6e2cb98ea0dd6 (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/numbers.rs](examples/numbers.rs), compiled and
 tested by wa-rs's own gate.

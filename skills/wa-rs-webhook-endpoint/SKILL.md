@@ -5,7 +5,7 @@ description: "The WhatsApp webhook endpoint with wa-rs - WebhookHandler with the
 
 # wa-rs-webhook-endpoint
 
-> **Verified against wa-rs 41fe5f9c963f4718db1362663a62de97244846ee (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs 4eb93c9bd63812221e75ad0920b6e2cb98ea0dd6 (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/endpoint.rs](examples/endpoint.rs), compiled and
 tested by wa-rs's own gate (axum through `tower::ServiceExt::oneshot`,

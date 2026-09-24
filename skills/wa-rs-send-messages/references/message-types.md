@@ -1,6 +1,6 @@
 # Outbound message types
 
-> **Verified against wa-rs 41fe5f9c963f4718db1362663a62de97244846ee (2026-09-24).** Source: `crates/wa-client/src/messages/*`.
+> **Verified against wa-rs 4eb93c9bd63812221e75ad0920b6e2cb98ea0dd6 (2026-09-24).** Source: `crates/wa-client/src/messages/*`.
 
 All in `wa_rs::client::messages`. `recipient` is `impl Into<Recipient>`
 (a `Recipient`, `UserId` or `GroupId` — not a `&str`).

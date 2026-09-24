@@ -5,7 +5,7 @@ description: "Start here for wa-rs, the Rust toolkit for Meta's WhatsApp Busines
 
 # wa-rs
 
-> **Verified against wa-rs 41fe5f9c963f4718db1362663a62de97244846ee (2026-09-24).** On another revision, trust the code over this page (see "Versioning" below).
+> **Verified against wa-rs 4eb93c9bd63812221e75ad0920b6e2cb98ea0dd6 (2026-09-24).** On another revision, trust the code over this page (see "Versioning" below).
 
 wa-rs is a Cargo workspace for Meta's WhatsApp Business Platform: a typed
 client for the Cloud API and the Business Management API (Graph API
@@ -27,7 +27,7 @@ others. It is not on crates.io (the name is taken there; the workspace is
 
 ```toml
 [dependencies]
-wa-rs = { git = "https://github.com/vaam-apps/wa-rs", rev = "41fe5f9c963f4718db1362663a62de97244846ee", features = ["axum", "postgres"] }
+wa-rs = { git = "https://github.com/vaam-apps/wa-rs", rev = "4eb93c9bd63812221e75ad0920b6e2cb98ea0dd6", features = ["axum", "postgres"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 anyhow = "1"
 ```

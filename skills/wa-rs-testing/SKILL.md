@@ -5,7 +5,7 @@ description: "Testing code that uses wa-rs without Meta, a network or a database
 
 # wa-rs-testing
 
-> **Verified against wa-rs 41fe5f9c963f4718db1362663a62de97244846ee (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs 4eb93c9bd63812221e75ad0920b6e2cb98ea0dd6 (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/integration.rs](examples/integration.rs) — four
 tests wa-rs runs in its own gate. Every other skill's `examples/*.rs` ends
