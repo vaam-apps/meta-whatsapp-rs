@@ -8,6 +8,7 @@
 mod common;
 
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use wa_webhooks::fields::MessageContent;
 use wa_webhooks::{ChangeValue, WebhookEvent, WebhookPayload};
 
@@ -151,6 +152,97 @@ fn every_message_type_has_a_fixture() {
         "video",
     ] {
         assert!(seen.contains(ty), "no fixture for message type `{ty}`");
+    }
+}
+
+/// Every key in every fixture (i.e. every property Meta's examples show)
+/// survives parse → serialize: nothing documented is silently dropped by a
+/// struct that forgot the field. Values may be normalized (ids, timestamps
+/// as strings), keys may not vanish.
+#[test]
+fn no_documented_property_is_dropped() {
+    fn walk(orig: &Value, typed: &Value, path: &str, out: &mut Vec<String>) {
+        match (orig, typed) {
+            (Value::Object(a), Value::Object(b)) => {
+                for (k, v) in a {
+                    let p = format!("{path}.{k}");
+                    match b.get(k) {
+                        None if !v.is_null() => out.push(p),
+                        None => {}
+                        Some(w) => walk(v, w, &p, out),
+                    }
+                }
+            }
+            (Value::Array(a), Value::Array(b)) => {
+                assert_eq!(a.len(), b.len(), "{path}");
+                for (i, (v, w)) in a.iter().zip(b).enumerate() {
+                    walk(v, w, &format!("{path}[{i}]"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+    // Spellings accepted as aliases and written back under the canonical
+    // name `recipient_participant_id` (see the `fields::messages` docs).
+    let aliases = [".participant_recipient_id"];
+    for name in common::all_fixtures() {
+        let orig: Value = serde_json::from_slice(&common::fixture_bytes(&name)).unwrap();
+        let typed = serde_json::to_value(common::payload(&name)).unwrap();
+        let mut dropped = Vec::new();
+        walk(&orig, &typed, "", &mut dropped);
+        dropped.retain(|p| !aliases.iter().any(|alias| p.ends_with(alias)));
+        assert!(dropped.is_empty(), "{name}: dropped {dropped:?}");
+    }
+}
+
+/// Forward compatibility: Meta adds properties without notice. Inject an
+/// unknown property into every object of every fixture; each must still
+/// parse fully typed into the same kinds of events.
+#[test]
+fn unknown_properties_anywhere_are_ignored() {
+    fn inject(v: &mut Value) {
+        match v {
+            Value::Object(map) => {
+                for child in map.values_mut() {
+                    inject(child);
+                }
+                map.insert(
+                    "zz_added_by_meta_later".into(),
+                    serde_json::json!({"nested": [1, "two", null]}),
+                );
+            }
+            Value::Array(items) => items.iter_mut().for_each(inject),
+            _ => {}
+        }
+    }
+    let kinds = |p: WebhookPayload| -> Vec<&'static str> {
+        p.into_events().iter().map(WebhookEvent::kind).collect()
+    };
+    for name in common::all_fixtures() {
+        let mut v: Value = serde_json::from_slice(&common::fixture_bytes(&name)).unwrap();
+        inject(&mut v);
+        let payload = WebhookPayload::from_slice(&serde_json::to_vec(&v).unwrap())
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        for entry in &payload.entry {
+            for change in &entry.changes {
+                assert!(
+                    !change.value.is_unknown(),
+                    "{name}: `{}` fell back: {:?}",
+                    change.field,
+                    change.parse_error
+                );
+            }
+        }
+        assert_eq!(
+            kinds(payload.clone()),
+            kinds(common::payload(&name)),
+            "{name}"
+        );
+        for event in payload.into_events() {
+            if let WebhookEvent::MessageReceived { message, .. } = &event {
+                assert!(content_is_typed(&message.content), "{name}: {message:?}");
+            }
+        }
     }
 }
 

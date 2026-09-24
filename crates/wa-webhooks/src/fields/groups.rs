@@ -145,7 +145,11 @@ pub struct GroupUpdate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_description: Option<GroupSettingChange>,
     /// Why the request (partially) failed.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_ext::graph_errors::deserialize",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub errors: Vec<GraphApiError>,
 }
 
@@ -169,7 +173,11 @@ pub struct GroupParticipant {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
     /// Why this participant failed.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_ext::graph_errors::deserialize",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub errors: Vec<GraphApiError>,
 }
 
@@ -189,6 +197,10 @@ pub struct GroupSettingChange {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update_successful: Option<bool>,
     /// Why it did not.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_ext::graph_errors::deserialize",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub errors: Vec<GraphApiError>,
 }

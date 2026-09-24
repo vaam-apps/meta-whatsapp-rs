@@ -76,6 +76,51 @@ fn account_update(name: &str) -> wa_webhooks::fields::AccountUpdateValue {
     }
 }
 
+fn account_update_value(value: &serde_json::Value) -> wa_webhooks::fields::AccountUpdateValue {
+    let body = json!({"object": "whatsapp_business_account", "entry": [{
+        "id": "102290129340398", "time": 1739321024,
+        "changes": [{"field": "account_update", "value": value}]
+    }]});
+    let mut events = WebhookPayload::from_slice(body.to_string().as_bytes())
+        .unwrap()
+        .into_events();
+    match events.remove(0) {
+        WebhookEvent::AccountUpdated { update, .. } => *update,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// `embedded-signup/website-optional` and `marketing-messages/onboarding`
+/// document `account_update` shapes the reference page does not show.
+#[test]
+fn account_update_shapes_from_other_pages() {
+    let u = account_update_value(&json!({
+        "event": "PARTNER_CLIENT_CERTIFICATION_NEEDED",
+        "partner_client_certification_needed_info": {"client_business_id": "2729063490586005"}
+    }));
+    assert_eq!(
+        u.event,
+        AccountUpdateEvent::PartnerClientCertificationNeeded
+    );
+    assert_eq!(
+        u.partner_client_certification_needed_info
+            .unwrap()
+            .client_business_id
+            .unwrap()
+            .as_str(),
+        "2729063490586005"
+    );
+
+    let u = account_update_value(&json!({
+        "event": "AD_ACCOUNT_LINKED",
+        "waba_info": {"waba_id": "980198427658004", "ad_account_id": "633456882212545",
+                      "owner_business_id": "131426832456945"}
+    }));
+    let info = u.waba_info.unwrap();
+    assert_eq!(info.ad_account_id.as_deref(), Some("633456882212545"));
+    assert_eq!(info.ad_account_linked, None);
+}
+
 #[test]
 fn account_update_every_example() {
     let u = account_update("fields/account_update_deleted.json");

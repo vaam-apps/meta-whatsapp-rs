@@ -59,7 +59,11 @@ pub struct MessagesValue {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub statuses: Vec<Status>,
     /// System-, app- or account-level errors (`webhooks/reference/messages/errors`).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_ext::graph_errors::deserialize",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub errors: Vec<GraphApiError>,
 }
 
@@ -82,6 +86,12 @@ pub struct InboundMessage {
     /// Group the message was sent in (Groups API), if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_id: Option<GroupId>,
+    /// Present in the button-reply examples of
+    /// `templates/authentication-templates/*` and
+    /// `payments/payments-br/one-click-payments`; Meta does not describe
+    /// it. Kept verbatim so it is not silently dropped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_logical_id: Option<String>,
     /// WhatsApp message id (`wamid.…`).
     pub id: MessageId,
     /// When the webhook was triggered (reactions: when the user reacted).
@@ -94,7 +104,11 @@ pub struct InboundMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub referral: Option<Referral>,
     /// Message-level errors; set on `unsupported` messages.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_ext::graph_errors::deserialize",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub errors: Vec<GraphApiError>,
     /// The `type` and its matching payload object.
     #[serde(flatten)]
@@ -304,7 +318,13 @@ impl MessageContent {
                 raw: Value::Object(map),
             };
         };
-        let payload = map.get(ty.as_str()).unwrap_or(&Value::Null);
+        // A type whose object is absent parses as an empty object: the
+        // all-optional payloads (`unsupported`, `button`, `system`, …) are
+        // then typed, and the ones with required properties still fall to
+        // `Invalid`. `groups/groups-messaging` shows an `unsupported` group
+        // message with no `unsupported` object at all.
+        let empty = Value::Object(Map::new());
+        let payload = map.get(ty.as_str()).unwrap_or(&empty);
         let parsed = match ty.as_str() {
             "text" => TextContent::deserialize(payload).map(Self::Text),
             "image" => MediaContent::deserialize(payload).map(Self::Image),
@@ -945,7 +965,11 @@ pub struct Status {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing: Option<Pricing>,
     /// Why a `failed` message failed.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_ext::graph_errors::deserialize",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub errors: Vec<GraphApiError>,
 }
 

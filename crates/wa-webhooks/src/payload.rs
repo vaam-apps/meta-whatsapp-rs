@@ -53,7 +53,10 @@ impl WebhookPayload {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Entry {
     /// The WhatsApp Business Account id for every field except
-    /// `partner_solutions`, where it is a business portfolio id.
+    /// `partner_solutions`, where it is a business portfolio id. Accepted
+    /// as a JSON number too: an envelope that fails to parse makes the
+    /// whole batch (up to 1000 updates) `Unparsed`.
+    #[serde(deserialize_with = "crate::serde_ext::id::deserialize")]
     pub id: String,
     /// When the change happened; sent by the management fields, not by
     /// `messages`.
@@ -370,5 +373,15 @@ mod tests {
         assert!(WebhookPayload::from_slice(b"not json").is_err());
         let p = WebhookPayload::from_slice(br#"{"object": "x", "entry": []}"#).unwrap();
         assert!(p.entry.is_empty());
+    }
+
+    #[test]
+    fn a_numeric_entry_id_does_not_unparse_the_whole_batch() {
+        let p = WebhookPayload::from_slice(
+            br#"{"object": "whatsapp_business_account",
+                 "entry": [{"id": 102290129340398, "changes": []}]}"#,
+        )
+        .unwrap();
+        assert_eq!(p.entry[0].id, "102290129340398");
     }
 }

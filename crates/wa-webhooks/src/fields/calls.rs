@@ -44,7 +44,11 @@ pub struct CallsValue {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub statuses: Vec<CallStatus>,
     /// Errors (terminate webhooks).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_ext::graph_errors::deserialize",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub errors: Vec<GraphApiError>,
 }
 

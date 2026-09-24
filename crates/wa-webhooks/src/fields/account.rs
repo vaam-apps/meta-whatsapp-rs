@@ -149,6 +149,10 @@ open_enum! {
         PartnerAppInstalled => "PARTNER_APP_INSTALLED",
         /// A business customer uninstalled the app.
         PartnerAppUninstalled => "PARTNER_APP_UNINSTALLED",
+        /// A business customer who could not add a website finished
+        /// Embedded Signup; verify their business
+        /// (`embedded-signup/website-optional`).
+        PartnerClientCertificationNeeded => "PARTNER_CLIENT_CERTIFICATION_NEEDED",
         /// Partner-led business verification status changed.
         PartnerClientCertificationStatusUpdate => "PARTNER_CLIENT_CERTIFICATION_STATUS_UPDATE",
         /// WABA unshared from a Solution Partner.
@@ -195,6 +199,10 @@ pub struct AccountUpdateValue {
     /// Partner-led business verification (`PARTNER_CLIENT_CERTIFICATION_STATUS_UPDATE`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partner_client_certification_info: Option<PartnerClientCertificationInfo>,
+    /// Whose business to verify (`PARTNER_CLIENT_CERTIFICATION_NEEDED`,
+    /// `embedded-signup/website-optional`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partner_client_certification_needed_info: Option<PartnerClientCertificationNeededInfo>,
     /// Restrictions (`ACCOUNT_RESTRICTION`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub restriction_info: Vec<RestrictionInfo>,
@@ -209,9 +217,15 @@ pub struct WabaInfo {
     /// Owning business portfolio.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_business_id: Option<BusinessId>,
-    /// Ad account shared with the partner (`AD_ACCOUNT_LINKED`).
+    /// Ad account shared with the partner (`AD_ACCOUNT_LINKED`, as the
+    /// `account_update` reference spells it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ad_account_linked: Option<String>,
+    /// The same ad account as `marketing-messages/onboarding` spells it.
+    /// A separate field rather than a serde alias: an alias would make a
+    /// body carrying both spellings a duplicate-field error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ad_account_id: Option<String>,
     /// Partner app (`PARTNER_APP_INSTALLED`, `PARTNER_APP_UNINSTALLED`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partner_app_id: Option<AppId>,
@@ -375,6 +389,14 @@ pub struct PartnerClientCertificationInfo {
     /// Rejection reasons, e.g. `LEGAL NAME NOT MATCHING`, or `NONE`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rejection_reasons: Vec<String>,
+}
+
+/// `account_update.partner_client_certification_needed_info`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PartnerClientCertificationNeededInfo {
+    /// The business customer's portfolio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_business_id: Option<BusinessId>,
 }
 
 open_enum! {

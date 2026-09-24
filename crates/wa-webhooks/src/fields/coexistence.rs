@@ -95,7 +95,11 @@ pub struct HistoryChunk {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub threads: Vec<HistoryThread>,
     /// Set instead of `threads` when sharing was declined (code `2593109`).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_ext::graph_errors::deserialize",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub errors: Vec<GraphApiError>,
 }
 

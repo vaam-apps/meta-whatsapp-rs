@@ -588,6 +588,80 @@ fn unknown_message_type_parses_to_unknown_and_keeps_its_payload() {
     assert_eq!(events[0].dedup_key().as_deref(), Some("wamid.P"));
 }
 
+/// `groups/groups-messaging` shows an `unsupported` group message with no
+/// `unsupported` object at all; the draft turned it into `Invalid`.
+#[test]
+fn a_type_without_its_object_is_typed_when_the_object_is_all_optional() {
+    let m: InboundMessage = serde_json::from_value(json!({
+        "from": "16505551234", "group_id": "Y2FwaV9ncm91cDoxNjUwNTU1MTIzNDoxMjAzNjM0MDQ2OTQyMzM4MjAZD",
+        "id": "wamid.G", "timestamp": "1750030073",
+        "errors": [{"code": 130501, "message": "Message type is not currently supported",
+                    "title": "Unsupported message type",
+                    "error_data": {"details": "Message type is not currently supported"}}],
+        "type": "unsupported"
+    }))
+    .unwrap();
+    assert_eq!(
+        m.content,
+        MessageContent::Unsupported(wa_webhooks::fields::UnsupportedContent::default())
+    );
+    assert_eq!(m.errors[0].code, 130501);
+    assert!(m.group_id.is_some());
+
+    // A payload with required properties still cannot come from nothing.
+    let m: InboundMessage = serde_json::from_value(json!({
+        "id": "wamid.T", "timestamp": "1750030073", "type": "text"
+    }))
+    .unwrap();
+    assert!(
+        matches!(&m.content, MessageContent::Invalid { message_type, .. } if message_type == "text"),
+        "{:?}",
+        m.content
+    );
+}
+
+/// Authentication-template button replies carry `from_logical_id`
+/// (`templates/authentication-templates/copy-code-button-authentication-templates`).
+#[test]
+fn from_logical_id_is_kept() {
+    let m: InboundMessage = serde_json::from_value(json!({
+        "context": {"from": "12345678", "id": "wamid.C"},
+        "from": "12345678", "id": "wamid.B", "timestamp": "1753919111",
+        "from_logical_id": "131063108133020",
+        "type": "button", "button": {"payload": "DID_NOT_REQUEST_CODE", "text": "I didn't request a code"}
+    }))
+    .unwrap();
+    assert_eq!(m.from_logical_id.as_deref(), Some("131063108133020"));
+    assert!(matches!(m.content, MessageContent::Button(_)));
+}
+
+/// `groups/*` pages print error codes quoted; one quoted code must not
+/// turn the whole change (and its other statuses) into `Unknown`.
+#[test]
+fn quoted_error_codes_do_not_untype_the_change() {
+    let body = json!({"object": "whatsapp_business_account", "entry": [{"id": "1", "changes": [{
+        "field": "messages",
+        "value": {"messaging_product": "whatsapp",
+                  "metadata": {"display_phone_number": "15550783881", "phone_number_id": "106540352242922"},
+                  "statuses": [
+                      {"id": "wamid.A", "status": "failed", "timestamp": "1750030073",
+                       "recipient_id": "Y2FwaV9ncm91cA", "recipient_type": "group",
+                       "errors": [{"code": "131049", "title": "Not delivered"}]},
+                      {"id": "wamid.B", "status": "read", "timestamp": "1750030073",
+                       "recipient_id": "16505551234"}
+                  ]}
+    }]}]});
+    let events = WebhookPayload::from_slice(body.to_string().as_bytes())
+        .unwrap()
+        .into_events();
+    assert_eq!(events.len(), 2, "{events:?}");
+    let WebhookEvent::StatusUpdated { status, .. } = &events[0] else {
+        panic!("{events:?}")
+    };
+    assert_eq!(status.errors[0].code, 131049);
+    assert_eq!(status.errors[0].kind(), ErrorKind::EcosystemEngagementLimit);
+}
+
 #[test]
 fn unknown_status_value_is_kept() {
     let s: Status = serde_json::from_value(json!({
