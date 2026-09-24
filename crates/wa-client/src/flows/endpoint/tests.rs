@@ -8,8 +8,10 @@ use aws_lc_rs::rsa::{
 };
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use hmac::{Hmac, Mac};
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
+use sha2::Sha256;
 use wa_core::error::{CryptoError, WebhookError};
 use wa_core::secret::AppSecret;
 
@@ -377,6 +379,76 @@ fn debug_output_carries_no_key_material_or_tokens() {
     }
 }
 
+#[test]
+fn debug_hides_the_media_keys_of_uploaded_files() {
+    // A data_exchange carrying a PhotoPicker upload, shaped like the
+    // `media_upload` example: the per-file AES and HMAC keys sit next to the
+    // CDN URL, so printing them would let a log reader decrypt the file.
+    let request: FlowRequest = serde_json::from_value(json!({
+        "version": "3.0",
+        "action": "data_exchange",
+        "screen": "UPLOAD",
+        "flow_token": "flowtoken-1234",
+        "data": {
+            "full_name": "Ada",
+            "my_photos": [{
+                "media_id": "790aba14-5f4a-4dbd-aa9e-0d75401da14b",
+                "cdn_url": "https://mmg.whatsapp.net/v/redacted",
+                "file_name": "IMG_5237.jpg",
+                "encryption_metadata": {
+                    "encrypted_hash": "/QvkBvpBED2q2AHPIFuhXfLpkn22zj2kO6ggzjvhHv0=",
+                    "iv": "5SHjLrrsfPXTSJTcbrVSkg==",
+                    "encryption_key": "lPa4SXcWbk3sy2so3OxjyXmpV4aE6CcIKd+4byr5hBw=",
+                    "hmac_key": "15l+E9Z5gcL15WH9OQ8GgK7VVCKkfbVigoSiM9djvGU=",
+                    "plaintext_hash": "AOF2dHXVEpm9efk9udNy3R1cUJWnpjFwQKGBEdALqXI="
+                }
+            }]
+        }
+    }))
+    .unwrap();
+    let shown = format!("{request:?}");
+    for secret in ["lPa4SXcW", "15l+E9Z5", "flowtoken-1234"] {
+        assert!(!shown.contains(secret), "{secret} leaked: {shown}");
+    }
+    for kept in ["Ada", "790aba14", "IMG_5237.jpg", "5SHjLrrs"] {
+        assert!(shown.contains(kept), "{kept} missing: {shown}");
+    }
+    // Only Debug is redacted: the payload still carries the keys.
+    let media: Vec<FlowMedia> =
+        serde_json::from_value(request.data.unwrap()["my_photos"].clone()).unwrap();
+    assert_eq!(
+        media[0].encryption_metadata.hmac_key,
+        "15l+E9Z5gcL15WH9OQ8GgK7VVCKkfbVigoSiM9djvGU="
+    );
+}
+
+#[test]
+fn endpoint_errors_convert_into_the_root_error() {
+    // The endpoint functions return leaf errors on purpose (a handler maps
+    // each to an HTTP status); `?` must still lift them into wa_core::Error.
+    fn signature(body: &[u8]) -> wa_core::Result<()> {
+        verify_request_signature(body, None, &[])?;
+        Ok(())
+    }
+    fn decrypt(key: &FlowEndpointKey) -> wa_core::Result<FlowRequest> {
+        let (request, _) = key.decrypt_request(&EncryptedFlowRequest {
+            encrypted_flow_data: String::new(),
+            encrypted_aes_key: String::new(),
+            initial_vector: String::new(),
+        })?;
+        Ok(request)
+    }
+    assert!(matches!(
+        signature(b"{}"),
+        Err(wa_core::Error::Webhook(WebhookError::MissingSignature))
+    ));
+    let key = FlowEndpointKey::from_pem(PKCS8).unwrap();
+    assert!(matches!(
+        decrypt(&key),
+        Err(wa_core::Error::Crypto(CryptoError::Decrypt))
+    ));
+}
+
 // ── Payload shapes from the docs ──────────────────────────────────────────
 
 #[test]
@@ -536,6 +608,35 @@ fn signature_failures_are_classified() {
     assert_eq!(check(RFC4231_BODY, Some("sha1=abcd"), &jefe), malformed);
 }
 
+#[test]
+fn an_empty_app_secret_never_verifies_anything() {
+    // HMAC under the empty key is public knowledge: a forger can compute it.
+    let body = br#"{"encrypted_flow_data":"x","encrypted_aes_key":"y","initial_vector":"z"}"#;
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(b"").unwrap();
+    mac.update(body);
+    let forged = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
+
+    let unset = AppSecret::new("");
+    assert!(matches!(
+        verify_request_signature(body, Some(&forged), std::slice::from_ref(&unset)),
+        Err(WebhookError::SignatureMismatch)
+    ));
+    // Next to a real secret it is ignored rather than accepted.
+    assert!(matches!(
+        verify_request_signature(body, Some(&forged), &[AppSecret::new("Jefe"), unset]),
+        Err(WebhookError::SignatureMismatch)
+    ));
+    assert!(
+        verify_request_signature(
+            RFC4231_BODY,
+            Some(RFC4231_HEADER),
+            &[AppSecret::new(""), AppSecret::new("Jefe")]
+        )
+        .is_ok(),
+        "an empty entry does not stop the real secret from matching"
+    );
+}
+
 // ── Uploaded media (PhotoPicker / DocumentPicker) ─────────────────────────
 
 fn media_kat() -> (Vec<u8>, Vec<u8>, FlowMedia) {
@@ -548,6 +649,10 @@ fn media_kat() -> (Vec<u8>, Vec<u8>, FlowMedia) {
     )
 }
 
+/// `kat_media.json` is our own vector (Meta publishes none), built by
+/// `kat_media.py` from our reading of `media_upload`: HMAC over the IV, then
+/// the ciphertext. It pins the code to that reading; it cannot prove Meta
+/// means that order. See `hmac_input_order_is_iv_then_ciphertext`.
 #[test]
 fn decrypts_the_python_media_vector() {
     let (cdn_file, plaintext, media) = media_kat();
@@ -556,6 +661,49 @@ fn decrypts_the_python_media_vector() {
         decrypt_media(&cdn_file, &media.encryption_metadata).unwrap(),
         plaintext
     );
+}
+
+/// The docs list the HMAC inputs as "`hmac_key`, initialization vector and
+/// ciphertext" without a byte order. We read it as `iv || ciphertext` (the
+/// order listed, and WhatsApp's usual media format). This test pins that
+/// reading: a file whose HMAC was taken in any other order is rejected. If
+/// Meta ever shows otherwise, this is the test to change, deliberately.
+#[test]
+fn hmac_input_order_is_iv_then_ciphertext() {
+    let (cdn_file, plaintext, media) = media_kat();
+    let meta = media.encryption_metadata;
+    let hmac_key = STANDARD.decode(&meta.hmac_key).unwrap();
+    let iv = STANDARD.decode(&meta.iv).unwrap();
+    let ciphertext = &cdn_file[..cdn_file.len() - 10];
+
+    let file_with_hmac_over = |parts: &[&[u8]]| {
+        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&hmac_key).unwrap();
+        for part in parts {
+            mac.update(part);
+        }
+        let mut file = ciphertext.to_vec();
+        file.extend_from_slice(&mac.finalize().into_bytes()[..10]);
+        let mut m = meta.clone();
+        m.encrypted_hash = sha256_b64(&file);
+        (file, m)
+    };
+
+    // Rebuilding the file our way reproduces the vector exactly...
+    let (ours, m) = file_with_hmac_over(&[&iv, ciphertext]);
+    assert_eq!(ours, cdn_file);
+    assert_eq!(decrypt_media(&ours, &m).unwrap(), plaintext);
+    // ...and every other reading of the sentence is refused.
+    for (case, parts) in [
+        ("ciphertext then iv", vec![ciphertext, iv.as_slice()]),
+        ("ciphertext only", vec![ciphertext]),
+    ] {
+        let (file, m) = file_with_hmac_over(&parts);
+        assert_eq!(
+            decrypt_media(&file, &m),
+            Err(CryptoError::Decrypt),
+            "{case}"
+        );
+    }
 }
 
 #[test]

@@ -5,6 +5,11 @@ Implements the documented *encryption* side independently of the Rust code
 iv || ciphertext truncated to 10 bytes and appended, SHA-256 of the CDN file
 and of the plaintext.
 
+Meta publishes no media test vector, and its steps only say "calculate HMAC
+with hmac_key, initialization vector and ciphertext": the iv-then-ciphertext
+byte order is our reading of that list (and WhatsApp's usual media format),
+not something this vector can prove. It pins the Rust code to that reading.
+
 Run: python3 kat_media.py > kat_media.json
 """
 import hashlib

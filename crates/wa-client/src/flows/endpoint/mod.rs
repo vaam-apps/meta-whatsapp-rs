@@ -35,6 +35,25 @@
 //! the same [`EndpointStatus::DecryptionFailed`]. Nothing about *why* it
 //! failed leaves the process.
 //!
+//! Timing is not uniform, and does not need to be. Framing checks (base64,
+//! IV length, a body shorter than the tag) return before the RSA step, and a
+//! wrapped key that fails OAEP returns before the AES-GCM step, so a caller
+//! can tell "RSA not attempted", "OAEP rejected" and "OAEP accepted" apart.
+//! The first depends only on the caller's own bytes. The second is not an
+//! oracle for OAEP, unlike PKCS#1 v1.5: a mauled ciphertext decodes to valid
+//! OAEP only if its 256-bit label hash matches, and aws-lc does the padding
+//! check itself in constant time, so the *reason* for an OAEP failure (the
+//! Manger-style "leading byte not zero") never shows. Anything past OAEP needs
+//! the AES key, which only whoever encrypted the request has.
+//!
+//! # Errors are leaf types
+//!
+//! These functions do no I/O and return [`CryptoError`] (decryption, keys)
+//! or [`WebhookError`](wa_core::error::WebhookError) (signatures) rather
+//! than [`wa_core::Error`]: a handler has to map each to its own HTTP status
+//! ([`EndpointStatus`]) and would otherwise have to match the root enum to
+//! do it. Both convert into [`wa_core::Error`] with `?`.
+//!
 //! ```no_run
 //! # fn handler(key: &wa_client::flows::endpoint::FlowEndpointKey, body: &[u8])
 //! #     -> Result<(u16, String), Box<dyn std::error::Error>> {
@@ -186,6 +205,11 @@ wire_enum! {
 /// (`INIT`/`BACK`/`data_exchange`), error notification (`data.error` set, see
 /// [`FlowRequest::error_notification`]) and health check (`ping`, nothing
 /// but `version` and `action`).
+///
+/// `Debug` hides `flow_token`, `flow_token_signature` and the media keys
+/// (`encryption_key`, `hmac_key`) of uploaded files anywhere in `data`; the
+/// rest of `data` is the user's form input and is shown as is. `Serialize`
+/// is not redacted.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct FlowRequest {
     /// Data API version, `3.0` today.
@@ -208,14 +232,44 @@ pub struct FlowRequest {
     pub flow_token_signature: Option<String>,
 }
 
+/// Keys whose values are secrets wherever they appear in a request's `data`:
+/// the per-file AES and HMAC keys of media a `PhotoPicker` or
+/// `DocumentPicker` uploaded (`flows/guides/media_upload`). They sit next to
+/// the file's `cdn_url`, so a logged request would let anyone with log access
+/// download and decrypt the user's photo or document for up to 20 days.
+const SECRET_DATA_KEYS: [&str; 2] = ["encryption_key", "hmac_key"];
+
+/// Replace every [`SECRET_DATA_KEYS`] value in `value`, at any depth. The
+/// picker's media array lives under a component name the business chose, so
+/// the keys cannot be found by a fixed path.
+fn redact_secret_keys(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, item) in map.iter_mut() {
+                if SECRET_DATA_KEYS.contains(&key.as_str()) {
+                    *item = serde_json::Value::String("[REDACTED]".to_owned());
+                } else {
+                    redact_secret_keys(item);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(redact_secret_keys),
+        _ => {}
+    }
+}
+
 impl fmt::Debug for FlowRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let redacted = |v: &Option<String>| v.as_ref().map(|_| "[REDACTED]");
+        let mut data = self.data.clone();
+        if let Some(data) = data.as_mut() {
+            redact_secret_keys(data);
+        }
         f.debug_struct("FlowRequest")
             .field("version", &self.version)
             .field("action", &self.action)
             .field("screen", &self.screen)
-            .field("data", &self.data)
+            .field("data", &data)
             .field("flow_token", &redacted(&self.flow_token))
             .field(
                 "flow_token_signature",

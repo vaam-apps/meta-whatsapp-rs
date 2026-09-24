@@ -19,3 +19,8 @@ used anywhere else. Do not reuse them.
   cross-checked against the Python example on the same page. RSA-OAEP is
   randomized, so re-running the script yields a different, equally valid
   vector.
+- `kat_media.json`: produced by `kat_media.py` (Python `cryptography`),
+  following the steps in `flows/guides/media_upload`. Meta publishes no
+  media vector; the HMAC input order (IV, then ciphertext) is our reading of
+  those steps, so this vector pins the code to that reading rather than
+  proving it against Meta.

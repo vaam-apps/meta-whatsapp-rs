@@ -23,12 +23,18 @@ pub const SIGNATURE_HEADER: &str = "x-hub-signature-256";
 /// Answer a failure with
 /// [`EndpointStatus::SignatureMismatch`](super::EndpointStatus::SignatureMismatch).
 ///
+/// An empty secret is skipped, never used as an HMAC key: HMAC under the
+/// empty key is something anyone can compute, so an app secret read from an
+/// unset environment variable would otherwise accept forged requests
+/// silently. With only empty secrets every request fails, which is the
+/// failure you want to notice.
+///
 /// # Errors
 ///
 /// [`WebhookError::MissingSignature`] when `signature_header` is `None`,
 /// [`WebhookError::MalformedSignature`] when it is not `sha256=` followed by
-/// 64 hex digits, [`WebhookError::SignatureMismatch`] when no secret (or an
-/// empty list) produces it.
+/// 64 hex digits, [`WebhookError::SignatureMismatch`] when no non-empty
+/// secret (or an empty list) produces it.
 pub fn verify_request_signature(
     body: &[u8],
     signature_header: Option<&str>,
@@ -44,7 +50,11 @@ pub fn verify_request_signature(
         .map_err(|_| WebhookError::MalformedSignature)?;
 
     for secret in app_secrets {
-        let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(secret.expose_secret().as_bytes()) else {
+        let key = secret.expose_secret().as_bytes();
+        if key.is_empty() {
+            continue;
+        }
+        let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(key) else {
             continue;
         };
         mac.update(body);

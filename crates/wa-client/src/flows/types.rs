@@ -435,9 +435,11 @@ pub struct FlowAsset {
     pub name: String,
     /// Asset kind.
     pub asset_type: FlowAssetType,
-    /// Short-lived CDN link to the asset's content. It is not on the Graph
-    /// host, so the client will not attach a token to it; fetch it with a
-    /// plain HTTP GET.
+    /// Short-lived CDN link to the asset's content (`*.fbcdn.net` in the
+    /// docs' example). It needs no token, and it is not a host
+    /// [`Client::request_url`](crate::Client::request_url) will send one to:
+    /// a client that has a token refuses the request. Fetch it with a plain
+    /// HTTP GET instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub download_url: Option<String>,
 }
@@ -553,10 +555,13 @@ mod tests {
                 .field,
             "categories"
         );
-        assert_eq!(
-            UpdateFlow::new().name("").validate().unwrap_err().field,
-            "name"
-        );
+        for blank in ["", "   "] {
+            assert_eq!(
+                UpdateFlow::new().name(blank).validate().unwrap_err().field,
+                "name",
+                "{blank:?}"
+            );
+        }
         assert!(
             UpdateFlow::new()
                 .endpoint_uri("https://x")

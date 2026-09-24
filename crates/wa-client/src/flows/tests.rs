@@ -416,6 +416,7 @@ async fn assets_parse_the_documented_page() {
         "paging": {"cursors": {"before": "QVFIU...", "after": "QVFIU..."}}
     });
     t.push_json(200, doc.clone());
+    t.push_json(200, doc.clone());
     t.push_json(200, doc);
     let flow = client(&t).flow("FLOW-ID");
     let page = flow.assets(None).await.unwrap();
@@ -424,6 +425,12 @@ async fn assets_parse_the_documented_page() {
     let req = t.last_request().unwrap();
     assert_eq!(req.method, Method::GET);
     assert_eq!(req.path(), "/v25.0/FLOW-ID/assets");
+    assert_eq!(req.url.query(), None);
+    flow.assets(Some("QVFIU...")).await.unwrap();
+    assert_eq!(
+        t.last_request().unwrap().query("after").as_deref(),
+        Some("QVFIU...")
+    );
     // The documented page has no `next` link, so the stream stops after one.
     let all: Vec<FlowAsset> = flow.assets_stream().map(|a| a.unwrap()).collect().await;
     assert_eq!(all.len(), 1);

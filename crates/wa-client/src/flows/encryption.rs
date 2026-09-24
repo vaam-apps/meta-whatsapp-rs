@@ -63,12 +63,18 @@ pub struct BusinessPublicKey {
     pub business_public_key_signature_status: Option<PublicKeySignatureStatus>,
 }
 
-/// The two documented response shapes of `GET …/whatsapp_business_encryption`.
+/// The two documented response shapes of `GET …/whatsapp_business_encryption`:
+/// `{"data": [key]}` (reference) or the key's fields at the top level (guide).
+///
+/// Not an untagged enum: every field of the flat shape is optional, so an
+/// untagged `Flat` variant would swallow a `data` array it failed to parse
+/// and report "no key stored" instead of a decode error.
 #[derive(Deserialize)]
-#[serde(untagged)]
-enum GetResponse {
-    Wrapped { data: Vec<BusinessPublicKey> },
-    Flat(BusinessPublicKey),
+struct GetResponse {
+    #[serde(default)]
+    data: Option<Vec<BusinessPublicKey>>,
+    #[serde(flatten)]
+    flat: BusinessPublicKey,
 }
 
 impl BusinessEncryption {
@@ -126,12 +132,12 @@ impl BusinessEncryption {
             .context("business public key response")
             .send()
             .await?;
-        Ok(match response {
-            GetResponse::Flat(key) => key,
-            GetResponse::Wrapped { data } => data.into_iter().next().unwrap_or(BusinessPublicKey {
+        Ok(match response.data {
+            Some(data) => data.into_iter().next().unwrap_or(BusinessPublicKey {
                 business_public_key: None,
                 business_public_key_signature_status: None,
             }),
+            None => response.flat,
         })
     }
 }
@@ -278,6 +284,40 @@ mod tests {
         );
         let none = enc.get().await.unwrap();
         assert_eq!(none.business_public_key, None);
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_malformed_data_array_is_a_decode_error_not_a_missing_key() {
+        let t = ScriptedTransport::new();
+        t.push_json(200, json!({"data": [{"business_public_key": 42}]}));
+        let err = client(&t).business_encryption("1").get().await.unwrap_err();
+        assert!(matches!(err, wa_core::Error::Decode { .. }), "{err}");
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn the_upload_is_replayed_after_a_timeout() {
+        // Uploading the same key twice leaves the same key stored.
+        let t = ScriptedTransport::new();
+        t.push_error(|| wa_core::error::TransportError::Timeout);
+        t.push_json(200, json!({"success": true}));
+        let retrying = Client::builder()
+            .transport(t.clone())
+            .access_token("TOKEN")
+            .retry(RetryPolicy {
+                max_retries: 1,
+                base_delay: std::time::Duration::ZERO,
+                max_delay: std::time::Duration::ZERO,
+            })
+            .build()
+            .unwrap();
+        retrying
+            .business_encryption("1")
+            .set_public_key(PEM)
+            .await
+            .unwrap();
+        assert_eq!(t.requests().len(), 2);
         assert_eq!(t.remaining(), 0);
     }
 
