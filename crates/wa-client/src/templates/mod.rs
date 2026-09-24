@@ -33,15 +33,14 @@
 //! ```no_run
 //! # async fn demo(client: wa_client::Client) -> wa_core::Result<()> {
 //! use wa_client::templates::{
-//!     Button, Parameter, ParameterFormat, TemplateCategory, TemplateComponent,
-//!     TemplateDefinition, TemplateMessage,
+//!     Button, Parameter, TemplateCategory, TemplateComponent, TemplateDefinition,
+//!     TemplateMessage,
 //! };
 //!
 //! let definition = TemplateDefinition::new("order_update", "en_US", TemplateCategory::Utility)
-//!     .parameter_format(ParameterFormat::Named)
-//!     .component(TemplateComponent::body_named(
-//!         "Hi {{first_name}}, order {{order_number}} has shipped.",
-//!         [("first_name", "Pablo"), ("order_number", "860198")],
+//!     .component(TemplateComponent::body_positional(
+//!         "Hi {{1}}, order {{2}} has shipped.",
+//!         ["Pablo", "860198"],
 //!     ))
 //!     .component(TemplateComponent::buttons([Button::url_with_example(
 //!         "Track",
@@ -52,10 +51,7 @@
 //!
 //! // Later, once approved, the invocation for a send request:
 //! let message = TemplateMessage::new("order_update", "en_US")
-//!     .body([
-//!         Parameter::named("first_name", "Jessica"),
-//!         Parameter::named("order_number", "SKBUP2"),
-//!     ])
+//!     .body([Parameter::text("Jessica"), Parameter::text("SKBUP2")])
 //!     .url_button(0, "SKBUP2");
 //! # let _ = (created, message); Ok(()) }
 //! ```

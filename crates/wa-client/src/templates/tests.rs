@@ -1776,6 +1776,27 @@ fn id_lists_quote_non_numeric_ids() {
 }
 
 #[test]
+fn module_doc_example_is_valid() {
+    // Mirrors the `no_run` example in the module docs, which compiles but
+    // never executes there.
+    let definition = TemplateDefinition::new("order_update", "en_US", TemplateCategory::Utility)
+        .component(TemplateComponent::body_positional(
+            "Hi {{1}}, order {{2}} has shipped.",
+            ["Pablo", "860198"],
+        ))
+        .component(TemplateComponent::buttons([Button::url_with_example(
+            "Track",
+            "https://shop.example/track/{{1}}",
+            "860198",
+        )]));
+    definition.validate().unwrap();
+    let message = TemplateMessage::new("order_update", "en_US")
+        .body([Parameter::text("Jessica"), Parameter::text("SKBUP2")])
+        .url_button(0, "SKBUP2");
+    message.validate().unwrap();
+}
+
+#[test]
 fn template_info_tolerates_nulls_empties_and_new_fields() {
     let info: TemplateInfo = serde_json::from_value(json!({
         "id": "1",

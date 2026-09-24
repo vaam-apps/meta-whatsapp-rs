@@ -390,3 +390,22 @@ fn otp_message_is_the_documented_send_payload() {
         "Debug must not print the code"
     );
 }
+
+#[test]
+fn module_doc_example_is_valid() {
+    // Mirrors the `no_run` example in the module docs.
+    let template = AuthenticationTemplate::one_tap(
+        "login_code",
+        "en_US",
+        [SupportedApp::new("com.example.luckyshrub", "K8a/AINcGX7")],
+    )
+    .security_recommendation(true)
+    .code_expiration_minutes(10)
+    .message_send_ttl_seconds(600);
+    template.validate().unwrap();
+    assert_eq!(
+        OtpConfig::default().ttl,
+        std::time::Duration::from_secs(u64::from(template.code_expiration_minutes.unwrap()) * 60),
+        "the doc pairs code_expiration_minutes with the default OTP ttl"
+    );
+}
