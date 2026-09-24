@@ -448,6 +448,30 @@ mod tests {
         assert!(v.credit(&WabaId::new("W1")).await.unwrap().is_some());
     }
 
+    /// The associated data binds a sealed record to its store key: opened
+    /// under any other key it fails, whatever its plaintext says.
+    #[test]
+    fn a_sealed_record_opens_only_under_its_own_key() {
+        let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
+        let v = vault(&kv, VaultKeys::new(key("k1", 7)));
+        let here = StoreKey::new(TOKEN_NAMESPACE, "credit/W1");
+        let blob = v.seal_blob(&here, b"{}").unwrap();
+        assert_eq!(v.open_blob(&here, &blob).unwrap(), b"{}");
+        for elsewhere in [
+            StoreKey::new(TOKEN_NAMESPACE, "credit/W2"),
+            StoreKey::new(TOKEN_NAMESPACE, "revoked/W1"),
+            StoreKey::new("wa.other", "credit/W1"),
+        ] {
+            assert!(
+                matches!(
+                    v.open_blob(&elsewhere, &blob),
+                    Err(Error::Crypto(CryptoError::Decrypt))
+                ),
+                "{elsewhere}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn the_revocation_marker_merges_and_keeps_its_first_date() {
         let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
