@@ -710,8 +710,10 @@ mod tests {
     const PEPPER: &[u8] = b"0123456789abcdef0123456789abcdef-test-pepper";
 
     /// A `MemoryKvStore` that records every written value and yields after
-    /// every read, so concurrent callers interleave between their read and
-    /// their write (the window a non-atomic implementation would lose in).
+    /// every read and compare-and-swap, so concurrent callers interleave
+    /// between their read and their write, and between counting an attempt
+    /// and consuming the challenge (the windows a non-atomic implementation
+    /// would lose in).
     #[derive(Debug)]
     struct RecordingKv {
         inner: MemoryKvStore,
@@ -765,9 +767,14 @@ mod tests {
             if let Some(v) = &new {
                 self.record(key, v);
             }
-            self.inner
+            let written = self
+                .inner
                 .compare_and_swap(key, expected, new, expiry)
-                .await
+                .await;
+            // Also yield between a write and the caller's next step, so a
+            // concurrent caller can act on the new version first.
+            tokio::task::yield_now().await;
+            written
         }
         async fn delete(&self, key: &StoreKey) -> std::result::Result<bool, StorageError> {
             self.inner.delete(key).await
