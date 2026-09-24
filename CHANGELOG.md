@@ -47,8 +47,8 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
 - **Examples**: send a message, CMS inbox server, Embedded Signup server,
   OTP login, invoice document.
 - **Tooling**: `just ci` gate, CI running it, `cargo xtask meta-docs`,
-  Claude Code dev container with a default-deny firewall, project skills and
-  agents, consumer skills (`npx skills add vaam-apps/wa-rs`).
+  Claude Code dev container with a fail-closed default-deny firewall,
+  project skills and agents, consumer skills (`npx skills add vaam-apps/wa-rs`).
 
 ### Security
 
@@ -61,3 +61,9 @@ forged signatures accepted with a blank app secret; `client_secret` leaks via
 reqwest error URLs, redirect `Referer` headers and `Debug` output; an
 unverified `business_id` stored from the browser; a Postgres CAS that could
 resurrect a used OTP challenge; a devcontainer firewall that failed open.
+The first firewall fix covered only one trigger (an ad-blocking resolver's
+sinkholed answers); any other error before the last lines, such as a
+rate-limited `api.github.com/meta`, still left egress wide open. The script
+now installs the default-deny policies first and fails closed on any error,
+with a dated snapshot of GitHub's ranges for when the live list is
+unavailable.
