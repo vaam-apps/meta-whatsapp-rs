@@ -65,10 +65,12 @@ anyhow = "1"
   `typst` (documents) or `flows-endpoint` as needed; `full` enables all. The
   table is in the [README](../../README.md#feature-flags).
 - Types from sqlx, axum and redis cross the API (`PgPool`, `axum::Router`,
-  a redis connection). If you depend on those crates yourself, use the same
-  majors as wa-rs (sqlx 0.9, axum 0.8, redis 1) or the types will not match.
-  The Postgres adapter re-exports its sqlx as
-  `wa_rs::adapters::store::postgres::sqlx`.
+  a redis connection). Use the versions wa-rs was built with, re-exported:
+  `wa_rs::adapters::store::postgres::sqlx` (feature `postgres`) and
+  `wa_rs::webhooks::axum` (feature `axum`), as the examples do; then there
+  is nothing to pin. If you need axum features wa-rs does not turn on, add
+  `axum = "0.8"` with them yourself: Cargo builds one axum 0.8 for both.
+  redis has no re-export: your own must be 1.x.
 
 ## 3. Send a first message
 
@@ -114,7 +116,7 @@ the HTTP status. `ErrorKind` is non-exhaustive: keep a `_` arm.
 | `Error::Validation(v)` | refused locally; **nothing was sent**; `v.field` names the JSON path | fix the input |
 | `Error::Api(_)` | Meta answered with a Graph error; `err.graph()` gives it | branch on `kind()` |
 | `Error::Transport(_)`, `Error::Http { .. }` 5xx | no usable answer | a send *may* have gone out |
-| `Error::Decode { .. }` | a 2xx body of an unexpected shape | Meta accepted it: treat a send as sent |
+| `Error::Decode { .. }` | a 2xx body of an unexpected shape (for sends, without the body: it names the recipient) | Meta accepted it: treat a send as sent |
 | `Error::Step { step, .. }` | a multi-step flow (onboarding) stopped at `step` | see [embedded-signup.md](embedded-signup.md) |
 
 ```rust
@@ -201,6 +203,12 @@ let info: serde_json::Value = client
 Never `client.get(&format!("{id}/…"))`: the literal-path builders split on
 `/`, so an id read from a database or a webhook could address another Graph
 object with your token.
+
+The token is only ever attached to the configured Graph endpoint (scheme,
+host and port) and to `https://lookaside.fbsbx.com`, where Meta's media
+download URLs point (default port). `client.request_url(method, url)` to
+any other origin, `*.whatsapp.net` included, is refused with
+`Error::Validation` on `url` before anything is sent.
 
 ## What wa-rs does not do
 

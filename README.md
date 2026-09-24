@@ -150,8 +150,10 @@ it with your own sessions and tenant table; keep the checks where they are.
 ### OTP login
 
 From [`otp_login.rs`](crates/wa-rs/examples/otp_login.rs). Codes are stored
-as keyed hashes, issuing is rate-limited per number, and verify attempts are
-counted atomically:
+as keyed hashes and bound to the sending number and `OtpConfig::namespace`
+(set it to the tenant id when one number sends codes for several tenants:
+with the default, they share codes), issuing is rate-limited per number,
+and verify attempts are counted atomically:
 
 ```rust
 let otp = OtpService::new(
@@ -176,12 +178,13 @@ let verified = otp.verify(&user, PURPOSE, code.trim()).await?; // counts as an a
 | --- | --- | --- |
 | `send_message` | a text, then a template | `cargo run -p wa-rs --example send_message` |
 | `invoice_document` | Typst invoice → upload → document message | `cargo run -p wa-rs --example invoice_document --features typst` |
-| `embedded_signup` | onboarding server and launch page | `cargo run -p wa-rs --example embedded_signup --features axum` |
-| `cms_inbox` | webhook endpoint, inbox, SSE, replies | `cargo run -p wa-rs --example cms_inbox --features axum` |
+| `embedded_signup` | onboarding server and launch page | `WA_TENANTS=… WA_APP_ID=… WA_APP_SECRET=… WA_ES_CONFIG_ID=… cargo run -p wa-rs --example embedded_signup --features axum` |
+| `cms_inbox` | webhook endpoint, inbox, SSE, replies | `WA_TENANTS=… WA_APP_SECRET=… WA_VERIFY_TOKEN=… cargo run -p wa-rs --example cms_inbox --features axum` |
 | `otp_login` | issue and verify a code | `cargo run -p wa-rs --example otp_login` |
 
-`embedded_signup` and `cms_inbox` need `WA_TENANTS` (their headers show a
-one-line setup). Add `postgres` to the features and set `DATABASE_URL` to
+`embedded_signup` and `cms_inbox` refuse to start without `WA_TENANTS`
+(their headers show a one-line setup) and listen on `127.0.0.1` unless
+`WA_BIND` says otherwise. Add `postgres` to the features and set `DATABASE_URL` to
 run them on Postgres; with the same `DATABASE_URL`, `WA_VAULT_KEY` and
 `WA_TENANTS`, the merchant you connect in the first is the one you chat as
 in the second (list the connected number under that tenant's

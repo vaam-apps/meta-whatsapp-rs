@@ -41,14 +41,11 @@ tracing-subscriber.workspace = true
 wa-core = { workspace = true, features = ["testing"] }
 wa-adapters = { workspace = true, features = ["memory"] }
 serde_json.workspace = true
-# Examples and the in-process app tests. The examples and tests reach axum
-# through `wa_rs::webhooks::axum` and sqlx through
-# `wa_rs::adapters::store::postgres::sqlx`, as integrators should; this axum
-# entry only serves the facade's own rustdoc example (`src/lib.rs`), which
-# names `axum::Router`. Same features as wa-webhooks enables, so it is one
-# build of one crate.
+# Examples and the in-process app tests. The examples, the tests and the
+# rustdoc examples reach axum through `wa_rs::webhooks::axum` and sqlx through
+# `wa_rs::adapters::store::postgres::sqlx`, as integrators should: neither is
+# a dependency of this crate.
 anyhow.workspace = true
-axum = { workspace = true, features = ["http1", "tokio", "json", "query"] }
 http-body-util.workspace = true
 pretty_assertions.workspace = true
 serde.workspace = true

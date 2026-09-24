@@ -51,6 +51,20 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   Claude Code dev container with a fail-closed default-deny firewall,
   project skills and agents, consumer skills (`npx skills add vaam-apps/wa-rs`).
 
+### Changed
+
+Breaking for anyone pinned to an earlier revision (nothing is released
+yet): `ConversationStore::update_status(phone_number_id, id, status, at,
+error)`; the `validate()` of `TemplateDefinition`, `TemplateEdit`,
+`TemplateMessage`, `AuthenticationTemplate`, `AuthenticationUpsert` and
+`OtpConfig` returns `Result<(), ValidationError>` like every other public
+`validate()`; `OtpConfig` has a `namespace` field; `.xtask` is a workspace
+of its own (`cargo xtask …` still works through the alias). Added:
+`ValidationError::{CUSTOMER_SERVICE_WINDOW, customer_service_window_closed,
+is_customer_service_window_closed}`,
+`MarketingBusiness::client_wabas_with_status_stream`, and
+`wa_webhooks::SIGNATURE_HEADER` without the `axum` feature.
+
 ### Security
 
 Found and fixed during review, before any release: an OTP account takeover
@@ -80,3 +94,43 @@ bind to `127.0.0.1` unless told otherwise. The Flows endpoint's handler
 example now verifies `X-Hub-Signature-256` before decrypting, and the
 Redis store's docs require `noeviction` (a `volatile-*` policy silently
 evicts OTP issue logs and dedup markers).
+
+The final security review of 8ee6fab found, and fixed before 7940d15:
+
+- **H1 — an OTP code was valid across merchants.** Store keys were
+  HMAC(pepper, number | purpose), so `OtpService`s sharing a store and a
+  pepper (several merchants of one integrator) shared records: a code
+  merchant A sent verified at merchant B for the same number and purpose,
+  an issue at A replaced B's code, and cooldowns and issue limits were
+  pooled. Codes are now bound to the sending `phone_number_id` and an
+  optional `OtpConfig::namespace` (new field; a blank one is a config
+  error). Upgrading changes every key once: outstanding codes answer
+  `NotFound` and issue logs restart.
+- **M1 — one NUL in a customer's message blocked the whole webhook batch on
+  Postgres.** Postgres cannot store U+0000, so `InboxSink` failed every
+  delivery of that batch until Meta dropped it after 7 days, with every
+  other event in it. `InboxSink` and `Inbox::send` now store U+0000 in
+  message content as U+FFFD (lossy, and provisional: the choice was
+  reserved for the maintainer, `OPEN_QUESTIONS.md` #18).
+- **L1 — a status or revoke on one number could change another number's
+  message.** `ConversationStore::update_status` matched the message id
+  alone; it now takes the business `phone_number_id` first and both stores
+  match on it (breaking for custom stores).
+- **L3 — the body was read before the signature was looked at.** The axum
+  route buffered an unsigned request up to the body limit (and answered
+  `413` rather than `401` when it was larger). A missing or malformed
+  `X-Hub-Signature-256` is now refused with `401` before the body is read.
+- **Credential allowlist narrowed.** Tokens went to any `*.fbsbx.com`,
+  `*.facebook.com` or `*.whatsapp.net` host on any port, and to
+  `graph.facebook.com` even when the client was configured for a proxy.
+  Now only the configured Graph endpoint's origin and
+  `https://lookaside.fbsbx.com` on the default port (media downloads)
+  receive one; the host is compared exactly, so subdomains, suffix and
+  trailing-dot tricks and IDN look-alikes are refused before sending.
+- **OTP codes go through `Messages::send`.** `OtpService` posted its own
+  body, so `OutboundMessage::validate` never ran on it and it kept a
+  private copy of the response decoding.
+- **Send decode errors no longer quote the recipient.** An unreadable
+  response of `Messages::send` or `Marketing::send` (which echo the
+  recipient's number) is reported without the body snippet and without
+  serde's message.

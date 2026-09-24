@@ -12,6 +12,10 @@ outcome handled; run it with the command in its header). Agent skill:
 
 - Codes go out from **your own** number, with your system user token
   ([getting-started.md](getting-started.md)), never a merchant's.
+- If one number sends codes for **several merchants or tenants**, give
+  each tenant's `OtpService` its own `OtpConfig::namespace` (the tenant
+  id). Services on the same number with the default config share codes: a
+  code sent for one tenant verifies at another (section 3).
 - Codes must be sent with an **authentication template**. Its text is fixed
   by Meta ("*code* is your verification code."), with an optional security
   line and an optional expiry footer (1–90 minutes), and one of three
@@ -97,7 +101,30 @@ let otp = OtpService::new(
 
 `OtpService` is cheap to clone: build it once. With more than one instance,
 the `KvStore` must be shared, or each instance counts attempts and limits on
-its own.
+its own. `new` refuses a bad config with `Error::Config`
+(`OtpConfig::validate()` names the field). Codes go out through
+`client.messages(…).send(…)`, so the usual send checks apply, and an
+unreadable send response is reported without quoting the user's number.
+
+**Codes are scoped to the service.** Every code, cooldown and issue limit is
+bound to the sending `phone_number_id` and to `OtpConfig::namespace`, on
+top of the user's number and the `purpose`. Several services can share one
+store and one pepper (one per brand, each with its own number): a code
+sent by one never verifies at another, and their limits never mix. But two services on the **same** number with the default config
+(`namespace: None`) share a scope, codes and limits included. So if one
+number sends codes for several merchants, tenants or apps, set the
+namespace to the tenant id — always
+([open question](../../OPEN_QUESTIONS.md#authentication-otp) 34 asks
+whether to make it required):
+
+```rust
+let config = OtpConfig { namespace: Some("brand-b".into()), ..OtpConfig::default() }; // not blank
+```
+
+Upgrading wa-rs from a revision before e40b86f changes every store key once:
+codes in flight at the deploy answer `NotFound` (the user asks for a new
+one) and the hourly issue limits start again. Deploy outside peak login
+hours.
 
 ## 4. Numbers must be E.164 with `+`
 
@@ -174,6 +201,7 @@ cannot exceed the limit. Trim what the user typed.
 | `max_attempts` | 5 per code | |
 | `resend_cooldown` | 30 s | stops double taps; does **not** bound guessing |
 | `issue_limit` | 5 codes per number and purpose per rolling hour | bounds brute force to about 0.06 % a day at 6 digits |
+| `namespace` | `None` | separates tenants or apps that share a sending number; changing it invalidates outstanding codes |
 
 The attacker chooses the victim's number, so the issue limit is per number,
 not per IP. `issue_limit: None` is an explicit opt-out for when an
@@ -183,8 +211,9 @@ equivalent per-number limit sits in front. The default is a
 
 ## 7. Pepper custody
 
-- The pepper keys every HMAC: store keys and code hashes. No phone number
-  and no code is stored (namespaces `wa.otp` and `wa.otp.rate`).
+- The pepper keys every HMAC: store keys (over the sending number, the
+  namespace, the user's number and the purpose) and code hashes. No phone
+  number and no code is stored (namespaces `wa.otp` and `wa.otp.rate`).
 - At least 32 random bytes (`openssl rand -base64 32`), kept **outside** the
   database that holds the challenges: with both, a 6-digit code falls to
   10⁶ guesses offline.

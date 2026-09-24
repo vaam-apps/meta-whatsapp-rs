@@ -48,11 +48,24 @@ entry by deciding it in an issue/PR and deleting it here.
 
 ## Authentication (OTP)
 
-13. **Issue limit default.** 5 codes per sliding hour per number and purpose
-    (plus a 30 s cooldown and 5 attempts per code): ~0.06 %/day brute-force
-    success on 6 digits. Confirm or tune; opting out is explicit.
+13. **Issue limit default.** 5 codes per sliding hour per recipient number
+    and purpose, within one service scope (the sending `phone_number_id`
+    plus `OtpConfig::namespace`, since e40b86f), plus a 30 s cooldown and 5
+    attempts per code: ~0.06 %/day brute-force success on 6 digits against
+    one scope. Confirm or tune; opting out is explicit.
 14. **Pepper custody.** The HMAC pepper (`SecretBytes`) is supplied by the
     integrator; changing it invalidates outstanding codes.
+34. **Should `OtpConfig::namespace` be required?** Codes are scoped to the
+    sending `phone_number_id` plus the namespace, which is optional
+    (`None` by default). Two `OtpService`s that send from the *same* number
+    with the default config therefore share a scope: a code one merchant's
+    service sent verifies at the other's, and their cooldowns and limits
+    are pooled. Today the docs tell integrators to set the namespace to the
+    tenant id whenever one number sends codes for several merchants or
+    tenants. Making it required (or a constructor argument) would make
+    that impossible to forget, at the cost of a breaking API change and a
+    one-time key change for everyone (outstanding codes become `NotFound`).
+    An API decision for the maintainer.
 
 ## Webhooks
 
@@ -65,10 +78,24 @@ entry by deciding it in an issue/PR and deleting it here.
 
 ## Storage
 
-18. **Postgres and U+0000.** Postgres cannot store the NUL character; a
-    webhook payload containing one is refused permanently (memory and Redis
-    accept it). Options: strip/replace NUL (lossy) or store payloads as
-    `bytea` (schema change).
+18. **Postgres and U+0000 — provisional; confirm or reverse.** Postgres
+    cannot store the NUL character in `TEXT` or `JSONB`. This entry listed
+    the choice (lossy replacement, or `bytea`) as a maintainer decision; it
+    was taken without asking, provisionally, by the orchestrator of the
+    security remediation (fd4667e), because one NUL in a customer's
+    message otherwise failed its whole webhook batch on every retry for 7
+    days, until Meta dropped it with every other event in it. Today
+    `InboxSink` and `Inbox::send` replace U+0000 with U+FFFD in the content
+    they record (kind, text, payload strings and object keys, status
+    error). That is lossy: a NUL and a U+FFFD read the same afterwards,
+    and two JSON keys differing only by it collapse into one. Not covered:
+    Meta-assigned fields the inbox stores as sent (the message id, the
+    contact — a BSUID, `wa_id` or group id — and the business phone number
+    id); a NUL there is still refused by Postgres, and the Postgres stores
+    refuse U+0000 in anything handed to them directly (memory and Redis
+    accept it). To decide: keep the replacement, make it the integrator's
+    choice, or store payloads losslessly (`bytea` or escaped, a schema
+    change) and revert fd4667e.
 19. **Redis TLS.** `rediss://` is not wired (redis-rs + rustls + two crypto
     providers panics); integrators pass their own connection. Wire it in
     once the crypto provider question is settled workspace-wide.
@@ -142,21 +169,55 @@ Found by the security review of 8ee6fab.
 30. **One permanent sink error fails the whole delivery.** When a sink
     fails, `WebhookHandler` answers 500 and Meta redelivers the whole POST
     (every event in it, possibly for several WABAs) for up to 7 days, then
-    drops it. An event that can never be stored (U+0000 on Postgres, #18)
-    therefore holds back the events after it in the same body until all
-    are lost. A dead-letter design would classify sink errors as
-    transient or permanent, acknowledge a permanent one after writing the
-    event (raw, size-bounded) to a dead-letter store with an alert and a
-    replay path, and deliver the rest of the batch. Today the whole batch
-    fails and Meta retries it.
+    drops it. An event a sink fails on every time therefore holds back the
+    events after it in the same body until all are lost. (For the inbox's
+    most likely case, U+0000 in a customer's message on Postgres, fd4667e
+    replaces the character instead, provisionally, #18; a NUL in a
+    Meta-assigned id, or any other permanent sink failure, still does
+    this.) A dead-letter
+    design would classify sink errors as transient or permanent,
+    acknowledge a permanent one after writing the event (raw, size-bounded)
+    to a dead-letter store with an alert and a replay path, and deliver the
+    rest of the batch. Today the whole batch fails and Meta retries it.
 31. **SSE fan-out cost.** `webhooks::sse` reads a
     `broadcast::Receiver<WebhookEvent>`, and a broadcast receiver clones
     every event it receives: each open inbox copies every merchant's
     events before its filter drops them, including multi-megabyte
     `HistorySynced` bodies, so one coexistence history sync costs its size
-    times the number of open inboxes. (The rustdoc of `sse` says rejected
-    events "cost nothing"; they cost a clone.) Options: broadcast
-    `Arc<WebhookEvent>` (changes `sse`'s and `BroadcastSink`'s types), or
-    one channel per phone number id, created with its first subscriber.
+    times the number of open inboxes. (The rustdoc of `sse` said rejected
+    events "cost nothing"; it now says each one costs a clone.) Options:
+    broadcast `Arc<WebhookEvent>` (changes `sse`'s and `BroadcastSink`'s
+    types), or one channel per phone number id, created with its first
+    subscriber.
     Today: a clone per event per subscriber, fine for a handful of open
     inboxes.
+
+## CMS inbox
+
+Found while writing the integrator guides and checking them against
+7940d15.
+
+32. **A call reopens the window, the inbox cannot see it.** Meta starts or
+    refreshes the 24-hour customer service window when the customer
+    messages the business number, *calls* it (answered or not), or accepts
+    the business's call (`calling/pricing`). `InboxSink` records messages
+    only, and `Inbox::window` is computed from the last recorded inbound
+    message. So after a call, `Inbox::reply` (and `Inbox::send` without a
+    template or a Direct Send category) refuses locally a free-form reply
+    that Meta would accept.
+    Options: record calls (`CallUpdated` / `CallStatusUpdated`) as window
+    events in the `ConversationStore` (a port change), let the caller
+    override the check, or keep it and document the template fallback (what
+    the guides and skills do today).
+33. **Message ids are unique per store, not per business number.** The
+    Postgres `messages.id` is the table's primary key on its own (and the
+    memory store keys by id alone). If the same message id is ever
+    delivered on two of an integrator's business numbers (for example a
+    group both numbers are in, or one of its numbers writing to another,
+    should Meta use one id on both sides), it is stored once, under the
+    conversation that recorded it first: the second `append` returns
+    `false` and changes nothing, and since `update_status` is scoped to the
+    number (4b47bf7), the second number's statuses find no row either.
+    Options: key messages by `(phone_number_id, id)` (a migration of the
+    primary key; history cursors are already per conversation), or keep it
+    and document it (what the guides and skills do today).

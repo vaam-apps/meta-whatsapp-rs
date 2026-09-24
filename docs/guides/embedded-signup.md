@@ -6,9 +6,19 @@ encrypted, routable by phone number id, with webhooks flowing and the
 number registered.
 
 wa-rs implements the **Tech Provider** flow of Embedded Signup v4.
-Example: [`embedded_signup.rs`](../../crates/wa-rs/examples/embedded_signup.rs)
-(run it with `cargo run -p wa-rs --example embedded_signup --features axum`).
-Agent skill: [`wa-rs-embedded-signup`](../../skills/wa-rs-embedded-signup/SKILL.md).
+Example: [`embedded_signup.rs`](../../crates/wa-rs/examples/embedded_signup.rs).
+Agent skill:
+[`wa-rs-embedded-signup`](../../skills/wa-rs-embedded-signup/SKILL.md).
+Run the example with a tenant bearer token (`WA_TENANTS`, a stand-in for
+your CMS's own login; it refuses to start without one); it listens on
+`127.0.0.1` unless `WA_BIND` names another address:
+
+```text
+TOKEN=$(openssl rand -hex 32)   # the demo tenant's bearer token: paste it into the page
+WA_TENANTS='{"demo-merchant": {"token": "'"$TOKEN"'"}}' \
+  WA_APP_ID=… WA_APP_SECRET=… WA_ES_CONFIG_ID=… \
+  cargo run -p wa-rs --example embedded_signup --features axum
+```
 
 ```text
 browser (merchant, signed in to your CMS)      your backend                         Meta
@@ -16,7 +26,7 @@ POST /whatsapp/connect ───────────────────
      ◄── {state, options} ─────────────────────┘
 FB.login(callback, options) ─────────────────────────────────────────────────────► popup
      ◄── code (30 s, single use) + WA_EMBEDDED_SIGNUP message event ───────────────┘
-POST /whatsapp/connect/callback {state, code, event}
+POST /whatsapp/connect/callback {state, code, event, pin}
                                                ► redeem(state, merchant)
                                                  EmbeddedSignup::onboard ─────────► exchange code, debug_token,
                                                    └► TokenVault (by WABA, by number)  verify WABA + number,
@@ -51,9 +61,10 @@ let vault = TokenVault::new(kv.clone(), VaultKeys::new(VaultKey::from_base64("20
 let sessions = SignupSessions::new(kv);
 ```
 
-Use a shared, persistent `KvStore` (Postgres, or Redis with persistence):
-the callback may land on another instance than the start, and the vault
-holds every merchant's token. `MemoryKvStore` loses them all on restart.
+Use a shared, persistent `KvStore` (Postgres, or Redis with persistence and
+the `noeviction` policy): the callback may land on another instance than the
+start, and the vault holds every merchant's token. `MemoryKvStore` loses
+them all on restart.
 
 ## 3. Start an attempt
 
@@ -70,6 +81,11 @@ let options = LaunchOptions::new(config_id.as_str()).to_json()?; // .coexistence
 ```
 
 ## 4. The page
+
+The page is served to a merchant signed in to your CMS: both `fetch` calls
+carry their session (a cookie here), and the backend takes the merchant
+from it, never from anything the page sends. The page also asks for the
+number's two-step verification PIN (section 5).
 
 ```html
 <script async defer crossorigin="anonymous" src="https://connect.facebook.net/en_US/sdk.js"></script>
@@ -100,11 +116,14 @@ let options = LaunchOptions::new(config_id.as_str()).to_json()?; // .coexistence
   function submit() { // the code lives 30 seconds: post as soon as both halves are here
     if (sent || !code || !sessionEvent) return;
     sent = true;
+    const pin = document.getElementById('pin').value || null; // the merchant's own PIN: never logged
     fetch('/whatsapp/connect/callback', { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ state: attempt.state, code, event: sessionEvent }) }).then((r) => r.text()).then(show);
+      body: JSON.stringify({ state: attempt.state, code, event: sessionEvent, pin }) }).then((r) => r.text()).then(show);
   }
   function show(text) { document.getElementById('result').textContent = text; }
 </script>
+<label>Two-step verification PIN of the number (6 digits: the current one, or the one to set)
+  <input id="pin" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off"></label>
 <button id="connect" onclick="connect()" disabled>Connect WhatsApp</button><pre id="result"></pre>
 ```
 
@@ -159,6 +178,15 @@ pub async fn complete(
     }
 }
 ```
+
+The PIN is the merchant's: registering a Cloud API number sets it as the
+number's two-step verification PIN, or must match the one it already has.
+Parse it with the other inputs (`TwoStepPin::new`, exactly 6 digits) before
+`redeem`, so a typo does not burn the attempt; never log or store it; never
+register every merchant's number with one PIN of yours, which one leak would
+expose. Without a PIN the number is left unregistered (a later `resume`
+with one registers it). Who chooses and keeps PINs is an
+[open decision](#open-decisions) (4).
 
 `onboard` runs these steps; every failure is `Error::Step { step, source }`
 with the names in `embedded_signup::steps`:
@@ -277,7 +305,7 @@ before production. Each is a product call; today the code does this:
 | # | Question | Today |
 | --- | --- | --- |
 | 3 | Tech Provider or Solution Partner? | Tech Provider only; no credit-line sharing |
-| 4 | Two-step PIN policy | you pass a 6-digit PIN on every `onboard`/`resume`; nothing generates or stores it |
+| 4 | Two-step PIN policy | you pass a 6-digit PIN on every `onboard`/`resume`; nothing generates or stores it (the example asks the merchant each time) |
 | 5 | Multi-WABA signups | only the claimed (or first, or newest granted) WABA is onboarded |
 | 6 | One WABA shared by several tenants | the vault is keyed by WABA; the last onboarding wins |
 | 7 | Coexistence sync | flagged by `needs_coexistence_sync()`, not triggered |

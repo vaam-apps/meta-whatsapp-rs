@@ -5,7 +5,7 @@ description: "Map of wa-rs, the Rust toolkit for Meta's WhatsApp Business Platfo
 
 # wa-rs
 
-> **Verified against wa-rs 91431ae (2026-09-24).** On another revision, trust
+> **Verified against wa-rs 7940d15 (2026-09-24).** On another revision, trust
 > the code over this page (see `skills/README.md`).
 
 wa-rs is a Cargo workspace. Depend on the facade crate **`wa-rs`** (lib name
@@ -13,7 +13,7 @@ wa-rs is a Cargo workspace. Depend on the facade crate **`wa-rs`** (lib name
 
 ```toml
 [dependencies]
-wa-rs = { git = "https://github.com/vaam-apps/wa-rs", rev = "91431ae033768fc8d849fa198ce734d785fb9c4a", features = ["postgres", "axum"] }
+wa-rs = { git = "https://github.com/vaam-apps/wa-rs", rev = "7940d15669f2d24437f0322fcaf58ea82864800a", features = ["postgres", "axum"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -53,7 +53,7 @@ not implemented: `docs/coverage.md` in the wa-rs repo. The design spec:
 
 | Feature | Default | Adds |
 | --- | --- | --- |
-| `reqwest` | yes | `wa_rs::adapters::http::ReqwestTransport` |
+| `reqwest` | yes | `wa_rs::adapters::http::ReqwestTransport`, and the `wa_rs::client(token)` / `wa_rs::client_builder()` shortcuts |
 | `memory` | yes | `MemoryKvStore`, `MemoryConversationStore` (tests, dev, one instance) |
 | `sinks` | yes | `wa_rs::adapters::sink::*` (channel, broadcast, fan-out, filter, fn, tracing) |
 | `postgres` | no | `PostgresKvStore`, `PostgresConversationStore`, `store::postgres::migrate` (sqlx **0.9**) |
@@ -64,18 +64,42 @@ not implemented: `docs/coverage.md` in the wa-rs repo. The design spec:
 | `full` | no | all of the above |
 
 Types from sqlx, redis and axum cross the API (`PgPool`, `ConnectionManager`,
-`axum::Router`), so your own versions of those crates **must match** the
-majors above or the types will not unify.
+`axum::Router`). Use the versions wa-rs was built with, re-exported:
+`wa_rs::adapters::store::postgres::sqlx` (feature `postgres`) and
+`wa_rs::webhooks::axum` (feature `axum`), instead of a dependency of your
+own. If you need axum features wa-rs does not enable, add `axum = "0.8"`
+with them: Cargo builds one axum 0.8, so the types still unify. redis has
+no re-export: your own `redis` must be 1.x.
+~~Your own versions of those crates **must match** the majors above~~:
+still true, but the re-exports (fe49aa5, 2026-09-24) spare you the pin.
+(Re-exports versus your own pins is `OPEN_QUESTIONS.md` #29.)
 
 Which store: `KvStore` (token vault, OTP, webhook dedup, signup sessions) on
 Postgres or Redis in production — **shared by every instance**; memory only
-for tests or a single instance that may lose it all on restart. Postgres and
+for tests or a single instance that may lose it all on restart. Redis only
+with persistence and the `noeviction` policy, on an instance of its own:
+every key with a TTL there enforces a limit (OTP issue logs, webhook dedup
+markers, signup sessions) and `volatile-*` evicts them silently. Postgres and
 Redis decide expiry by *their* server clock (keep hosts on NTP). For
 `rediss://`, build the connection yourself (enable `redis/tokio-rustls-comp`,
 install a rustls crypto provider at startup) and pass it to
 `RedisKvStore::new`; see its rustdoc.
 
 ## Build a client
+
+```rust
+use wa_rs::prelude::*; // Client, ids, Recipient, message/template builders, webhook pieces, ports, inbox
+
+// One business, one system user token (feature `reqwest`, on by default):
+let client = wa_rs::client(std::env::var("WA_SYSTEM_USER_TOKEN")?)?;
+
+// Multi-tenant: no default token; each call runs as a merchant (below).
+let client = wa_rs::client_builder()?.build()?;
+```
+
+Both are `Client::builder()` with the production transport
+(`ReqwestTransport`: rustls, HTTP/2, `HTTPS_PROXY`) already set. For a
+custom transport, retry policy or endpoint, build it yourself:
 
 ```rust
 use wa_rs::Client;
@@ -86,6 +110,9 @@ let client = Client::builder()
     .access_token(std::env::var("WA_SYSTEM_USER_TOKEN")?) // optional
     .build()?;
 ```
+
+The prelude leaves out `Result` (so a glob import never shadows std's): name
+`wa_rs::Result` explicitly.
 
 `Client` is cheap to clone (one `Arc` + an optional token). Build **one** at
 startup and derive per-tenant copies:
@@ -126,6 +153,22 @@ Error::Other(anyhow)        integrator code, typst RenderError
 status.** `err.graph()` gives the `GraphApiError` (also through `Step`), whose
 `.code` distinguishes codes that share a kind. Full table:
 [references/error-kinds.md](references/error-kinds.md).
+
+- Every public `validate()` (`OutboundMessage`, `TemplateDefinition`,
+  `TemplateEdit`, `TemplateMessage`, `AuthenticationTemplate`,
+  `AuthenticationUpsert`, `OtpConfig`, …) returns
+  `Result<(), ValidationError>`; `?` lifts it into `wa_rs::Error`.
+  ~~The template, authentication and `OtpConfig` ones returned
+  `wa_rs::Result<()>` (`OtpConfig`'s a `Config` error)~~: until 48e2851
+  (2026-09-24). `OtpService::new` still reports a bad config as
+  `Error::Config`.
+- The inbox's local 24-hour refusal is `Error::Validation` whose `kind()` is
+  `ErrorKind::CustomerServiceWindowClosed`, the same as Meta's 131047
+  (`ValidationError::is_customer_service_window_closed()` tells it apart
+  when you need to).
+- An `Error::Decode` from `Messages::send` or `Marketing::send` carries no
+  body snippet and no serde message (both would quote the recipient's
+  number, which the response echoes), only the error category and position.
 
 ```rust
 use wa_rs::{Error, ErrorKind};
@@ -211,8 +254,21 @@ your token*. `get_at`/`post_at`/`delete_at`/`request_at` percent-encode `/`,
 `?`, `#` inside each segment and refuse empty, `.` and `..` segments. The
 literal-path builders are for literal paths only (`client.get("debug_token")`).
 Mark a POST `.idempotent(true)` only when replaying it cannot duplicate an
-effect. The token is only ever attached to the Graph endpoint or Meta's media
-CDN over HTTPS; other URLs fail with a validation error before sending.
+effect.
+
+The token is only ever attached to two origins: the configured Graph
+endpoint (its exact scheme, host and port; `https://graph.facebook.com` by
+default) and `https://lookaside.fbsbx.com` on the default port (where media
+download URLs point). Any other absolute URL given to
+`client.request_url(method, url)` — another Meta host (`*.whatsapp.net`,
+`*.fbcdn.net`, other `*.fbsbx.com` hosts), a subdomain or look-alike of
+the media host, a non-default port, or production Graph when the client is
+configured for a proxy endpoint — is refused with `Error::Validation` on
+field `url` before a byte is sent; call `.no_auth()` on the request for a
+URL that needs no token.
+~~"the Graph endpoint or Meta's media CDN over HTTPS"~~: until 4db6546
+(2026-09-24) any `*.fbsbx.com`, `*.facebook.com` or `*.whatsapp.net` host,
+and `graph.facebook.com` even behind a proxy endpoint, got the token.
 
 ## Secrets
 

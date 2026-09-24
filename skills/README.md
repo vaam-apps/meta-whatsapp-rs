@@ -39,7 +39,7 @@ revision). So each `SKILL.md` names the **commit and date it was verified
 against**, directly under its title:
 
 ```markdown
-> **Verified against wa-rs 91431ae (2026-09-24).**
+> **Verified against wa-rs 7940d15 (2026-09-24).**
 ```
 
 "Verified" means every type, function, argument and enum variant the skill

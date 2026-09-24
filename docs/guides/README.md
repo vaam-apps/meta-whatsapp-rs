@@ -11,7 +11,7 @@ reasons are in [architecture.md](../architecture.md); what exists and what
 does not is in [coverage.md](../coverage.md); decisions nobody has made yet
 are in [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md).
 
-> Checked against wa-rs **8ee6fab** (2026-09-24), Graph API v25.0. Every
+> Checked against wa-rs **7940d15** (2026-09-24), Graph API v25.0. Every
 > Rust name in these pages was checked against the source at that commit,
 > and the snippets were compiled against it. On another revision, trust the
 > rustdoc over these pages.
@@ -46,7 +46,10 @@ production.
   message and template builders, the webhook pieces, the store and sink
   traits and the inbox. Everything else is one path away.
 - Each runnable example's header lists the environment variables it reads
-  and the command that runs it.
+  and the command that runs it. The two servers (`embedded_signup`,
+  `cms_inbox`) refuse to start without `WA_TENANTS`, a bearer-token
+  stand-in for your own authentication, and listen on `127.0.0.1` unless
+  `WA_BIND` says otherwise.
 
 ## Meta's documentation
 

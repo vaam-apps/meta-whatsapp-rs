@@ -408,14 +408,14 @@ enum ApiError {
 impl From<Error> for ApiError {
     fn from(error: Error) -> Self {
         match error {
-            // `Inbox::reply` refuses locally with this field; Meta's own
-            // refusal (131047) is the `ErrorKind` below.
-            Error::Validation(v) if v.field == "customer_service_window" => Self::WindowClosed,
+            // `Inbox::reply`'s local refusal (nothing was sent) and Meta's own
+            // 131047 share this kind: one arm for both, and before the
+            // `Validation` arm, which the local refusal also is.
+            e if e.kind() == ErrorKind::CustomerServiceWindowClosed => Self::WindowClosed,
             Error::Validation(v) => Self::Invalid {
                 field: v.field,
                 reason: v.reason,
             },
-            e if e.kind() == ErrorKind::CustomerServiceWindowClosed => Self::WindowClosed,
             e => Self::Upstream(e),
         }
     }

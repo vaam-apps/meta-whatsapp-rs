@@ -156,7 +156,11 @@ fn status_for(error: &Error) -> StatusCode {
 /// no phone number id and carry raw bodies that can belong to any tenant on
 /// the app, so a filter such as `|e| e.phone_number_id().is_none_or(…)`
 /// leaks them to everyone. The filter runs before an event is serialized,
-/// so rejected events cost nothing.
+/// so a rejected event is never encoded — but it is not free: a broadcast
+/// receiver clones every event sent on the channel, so each open stream
+/// copies every event of every merchant (multi-megabyte `HistorySynced`
+/// bodies included) before `filter` drops it. Fine for a handful of open
+/// inboxes; with many, measure (`OPEN_QUESTIONS.md` #31).
 ///
 /// Each event that passes `filter` (typically "same phone number id as the
 /// merchant watching") is sent as `event: whatsapp` with the event's JSON as

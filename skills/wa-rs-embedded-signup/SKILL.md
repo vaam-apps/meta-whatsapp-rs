@@ -5,7 +5,7 @@ description: "Onboarding merchants' own WhatsApp numbers in a multi-tenant CMS w
 
 # wa-rs-embedded-signup
 
-> **Verified against wa-rs 91431ae (2026-09-24).** On another revision, trust
+> **Verified against wa-rs 7940d15 (2026-09-24).** On another revision, trust
 > the code over this page (see `skills/README.md`).
 
 Module: `wa_rs::client::embedded_signup`. It implements Meta's **Tech
@@ -42,9 +42,13 @@ let sessions = SignupSessions::new(kv);
 ```
 
 Use a **shared, persistent** `KvStore` (Postgres, or Redis with persistence
-and a `noeviction` or `volatile-*` eviction policy) in production: the vault holds every merchant's token and sessions must be
-visible to whichever instance receives the callback. `MemoryKvStore` loses
-all tokens on restart.
+and the `noeviction` policy, on an instance of its own) in production: the
+vault holds every merchant's token and sessions must be visible to
+whichever instance receives the callback. `MemoryKvStore` loses all tokens
+on restart. ~~`noeviction` or `volatile-*`~~: wrong until 1a3cfc6
+(2026-09-24, `RedisKvStore` docs): `volatile-*` silently evicts every key
+with a TTL — signup sessions, OTP issue logs (the per-number rate limit),
+webhook dedup markers.
 
 ## The flow
 
@@ -62,10 +66,12 @@ let options = LaunchOptions::new(config_id).to_json()?; // serde_json::Value for
 
 **2. Frontend**: `FB.login(callback, options)`; collect `authResponse.code`
 from the callback and the `WA_EMBEDDED_SIGNUP` message event (check
-`event.origin`), then POST `{state, code, event}` **immediately**: the code
-is single-use and lives 30 seconds. Sketch: [references/frontend.md](references/frontend.md).
+`event.origin`), then POST `{state, code, event, pin}` **immediately**: the
+code is single-use and lives 30 seconds. Sketch: [references/frontend.md](references/frontend.md).
 
-**3. Callback** (authenticated as the same merchant):
+**3. Callback** (authenticated as the same merchant; `merchant_id` comes
+from your session, never from the page, the body or the query string —
+otherwise one merchant redeems or resumes another's attempt):
 
 ```rust
 use wa_rs::client::embedded_signup::{
@@ -73,19 +79,34 @@ use wa_rs::client::embedded_signup::{
 };
 use wa_rs::client::phone_numbers::TwoStepPin;
 
+// Local checks first: a malformed post must not burn the single-use state.
 let state = SignupState::parse(&body.state)?;
-if !sessions.redeem(&state, &merchant_id).await? {
-    return Err(forbidden()); // expired, replayed, or another merchant's attempt
-}
+let pin = TwoStepPin::new(body.pin.as_str())?; // the merchant's own 6 digits, typed in your page
 let event = EmbeddedSignupEvent::from_json(&body.event)?;
 let EmbeddedSignupEvent::Finish { .. } = &event else {
     return Ok(cancelled(&event)); // Cancel / Error / Unknown: nothing to onboard
 };
 let request = OnboardingRequest::from_event(SignupCode::new(body.code.as_str())?, &event)?
-    .register_with_pin(TwoStepPin::new(pin_for(&merchant_id))?); // 6 digits
+    .register_with_pin(pin);
+if !sessions.redeem(&state, &merchant_id).await? {
+    return Err(forbidden()); // expired, replayed, or another merchant's attempt
+}
 let onboarded = es.onboard(&request, &vault).await?;
 save_mapping(&merchant_id, &onboarded.waba_id, &onboarded.phone_number_ids);
 ```
+
+The PIN is the merchant's: it becomes the number's two-step verification
+PIN (or must match the one it has). Ask for it in the page, parse it before
+`redeem` so a typo does not burn the attempt, never log or store it, and
+never use one PIN for every merchant: one leak would expose them all. The
+`embedded_signup` example does exactly this (`pin` is optional there:
+without one the number is left unregistered).
+~~`TwoStepPin::new(pin_for(&merchant_id))`~~ (until 2026-09-24): it left
+open where the PIN comes from, and the examples meanwhile used one
+configured PIN for every merchant's number (fixed in 1ec792d).
+~~`redeem` first, then parse the event, code and PIN~~ (until 2026-09-24):
+a malformed post then spent the attempt; the example and the guide check
+everything local before `redeem`.
 
 `redeem` checks the tenant **inside the library**, is single-use, and a
 wrong tenant does **not** burn the state. Do not use `consume` unless you
@@ -126,11 +147,24 @@ names are constants in `embedded_signup::steps`.
   again.
 - `resume(&waba_id, &request, &vault)` loads the stored token (`load_token`),
   checks the request against what onboarding verified (`verify_assets`), and
-  reruns only `subscribe_app` and `register_phone`. `request.code` is ignored:
-  to resume later, rebuild the request with the saved `SessionInfo` (it is
-  `Serialize`) or `SessionInfo::default()` (registers the onboarded number).
-  **Check that `waba_id` belongs to the calling merchant first** — `resume`
-  acts with whatever token is stored for the WABA you name.
+  reruns only `subscribe_app` and `register_phone`. `request.code` is not
+  used, but an `OnboardingRequest` cannot be built without a `SignupCode`,
+  so after a restart pass a placeholder (a code-less constructor is
+  `OPEN_QUESTIONS.md` #10):
+
+  ```rust
+  let request = OnboardingRequest::new(SignupCode::new("unused")?, saved_session) // SessionInfo is Serialize
+      .register_with_pin(TwoStepPin::new(pin_from_the_merchant)?);
+  es.resume(&waba_id, &request, &vault).await?;
+  ```
+
+  `SessionInfo::default()` instead of the saved session registers the first
+  onboarded number. **Check that `waba_id` belongs to the calling merchant
+  first** — `resume` acts with whatever token is stored for the WABA you
+  name; the `embedded_signup` example keys its unfinished attempts by the
+  authenticated tenant for that reason.
+  ~~"rebuild the request" (no mention of the code)~~: the placeholder was
+  always needed (clarified 2026-09-24).
 - `register_phone` counts against 10 registrations per 72 h; 133016 locks the
   number for 72 h (`ErrorKind::Registration`, never auto-retried).
 
@@ -207,7 +241,9 @@ not record echoes or history yet (`wa-rs-cms-inbox`).
   pools and partner APIs are not (`docs/coverage.md` rows 1, 28).
 - **PIN policy.** `register` needs a 6-digit PIN that becomes (or must match)
   the number's two-step PIN. Who chooses it, whether you store it (encrypted,
-  your code) and how a merchant recovers it are yours to decide.
+  your code) and how a merchant recovers it are yours to decide
+  (`OPEN_QUESTIONS.md` #4). The examples take it from the merchant per
+  attempt and keep nothing.
 - **Token refresh.** `Onboarded::token_expires_at` / `StoredBusinessToken::expires_at`
   record Meta's expiry when there is one; nothing refreshes a token. An
   `ErrorKind::Authentication` (190) on a merchant's calls means: run Embedded

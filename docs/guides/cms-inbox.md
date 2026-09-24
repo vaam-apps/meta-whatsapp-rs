@@ -4,10 +4,20 @@
 CMS, live, and answers from it with their own number, inside the 24-hour
 customer service window.
 
-Example: [`cms_inbox.rs`](../../crates/wa-rs/examples/cms_inbox.rs) (run it
-with `cargo run -p wa-rs --example cms_inbox --features axum`; add
-`postgres` and `DATABASE_URL` to share the vault with the `embedded_signup`
-example). Agent skill: [`wa-rs-cms-inbox`](../../skills/wa-rs-cms-inbox/SKILL.md).
+Example: [`cms_inbox.rs`](../../crates/wa-rs/examples/cms_inbox.rs).
+Agent skill: [`wa-rs-cms-inbox`](../../skills/wa-rs-cms-inbox/SKILL.md).
+The example refuses to start without `WA_TENANTS` (bearer token → tenant →
+phone number ids, a stand-in for your CMS's login and tenant table) and
+listens on `127.0.0.1` unless `WA_BIND` names another address; add
+`--features axum,postgres` and `DATABASE_URL` (with the same `WA_VAULT_KEY`
+and `WA_TENANTS`) to share the vault with the `embedded_signup` example:
+
+```text
+TOKEN=$(openssl rand -hex 32)   # the demo tenant's bearer token
+WA_TENANTS='{"demo-merchant": {"token": "'"$TOKEN"'", "phone_number_ids": ["<phone number id>"]}}' \
+  WA_APP_SECRET=… WA_VERIFY_TOKEN=… cargo run -p wa-rs --example cms_inbox --features axum
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/inbox/<phone number id>/conversations
+```
 
 ```text
 Meta ─ POST /webhooks/whatsapp ─► WebhookHandler ─► FanoutSink ─┬─► InboxSink ─► ConversationStore (Postgres)
@@ -48,11 +58,21 @@ let conversations: Arc<dyn ConversationStore> = Arc::new(PostgresConversationSto
   server's** clock: keep it on NTP.
 - Call `PostgresKvStore::purge_expired()` periodically (dedup markers add a
   row per event).
-- **Postgres cannot store U+0000.** A message containing it is refused on
-  every retry: the webhook answers `500`, and that event and the ones after
-  it in the same delivery are redelivered for 7 days, then dropped. If your
-  traffic can carry NULs, wrap `InboxSink` in your own sink that strips them
-  ([open question](../../OPEN_QUESTIONS.md#storage) 18).
+- **Postgres cannot store U+0000**, and a refusal on every retry would hold
+  back the whole webhook batch until Meta drops it. So `InboxSink` (and
+  `Inbox::send`, for your replies) replaces U+0000 with U+FFFD, the
+  replacement character, in the stored text, kind, payload and status
+  error: a customer's NUL shows up as `�` instead of failing the delivery.
+  The replacement is lossy and provisional (a maintainer decision, taken
+  without asking; it may be reversed:
+  [open question](../../OPEN_QUESTIONS.md#storage) 18). Meta-assigned
+  fields (the message id, the contact, the phone number id) are stored as
+  sent, so a NUL there is still refused, as is NUL in anything you write
+  to the store directly.
+- A message id is stored once per store: if the same id ever arrives on two
+  of your business numbers (e.g. a group both are in), it is kept only under
+  the first conversation that recorded it
+  ([open question](../../OPEN_QUESTIONS.md#cms-inbox) 33).
 - `MemoryConversationStore` is for tests and demos. There is no Redis
   conversation store.
 
@@ -74,13 +94,17 @@ let webhook = wa_rs::webhooks::router(Arc::new(handler)); // public: Meta authen
 `InboxSink` records inbound messages and status updates and ignores every
 other event. It is idempotent on its own (known message ids and statuses
 that do not move a message forward are ignored); the dedup guard saves it
-the work.
+the work. A status or a revoke only changes a message of the business
+number it arrived on: `ConversationStore::update_status` takes the
+`phone_number_id` first, and a store of your own must match on it too
+(`wa_rs::adapters::store::conversation_conformance::run` checks it).
 
 ## 3. Authenticate every inbox route
 
 The inbox routes read and answer customers' messages: they sit behind your
 own authentication, and **every** request checks that the signed-in
-merchant owns the phone number in the path. `Inbox` only checks that a
+merchant owns the phone number in the path, *before* the token vault is
+read (its tokens belong to every merchant). `Inbox` only checks that a
 conversation belongs to its number, not to your tenant.
 
 ```rust
@@ -95,10 +119,10 @@ pub async fn inbox_for(
     phone_number_id: &str, // from the path
 ) -> wa_rs::Result<Access> {
     let number = PhoneNumberId::new(phone_number_id);
-    let Some(stored) = vault.get_by_phone_number(&number).await? else { return Ok(Access::NotConnected) };
-    if !merchant_owns_waba(merchant_id, &stored.waba_id).await { // your tenant ↔ WABA table
+    if !merchant_owns_number(merchant_id, &number).await { // your tenant ↔ phone number table
         return Ok(Access::Forbidden);
     }
+    let Some(stored) = vault.get_by_phone_number(&number).await? else { return Ok(Access::NotConnected) };
     if stored.is_expired(OffsetDateTime::now_utc()) {
         return Ok(Access::Reconnect); // the merchant runs Embedded Signup again
     }
@@ -106,7 +130,9 @@ pub async fn inbox_for(
 }
 ```
 
-Build an `Inbox` per request; it is cheap (the client is shared).
+Fill the tenant ↔ phone number table from `Onboarded::phone_number_ids`
+when Embedded Signup finishes. Build an `Inbox` per request; it is cheap
+(the client is shared).
 
 ## 4. Conversations and history
 
@@ -164,8 +190,9 @@ match inbox.reply(&key, content).await {
   `CustomerServiceWindowClosed`, like Meta's own 131047): one branch covers
   both.
 - Meta also opens the window when the customer **calls** you; the inbox only
-  sees messages, so after a call it still shows "closed". And Meta notes
-  that, rarely, a reply inside the window is refused anyway. Keep the
+  sees messages, so after a call it still shows "closed" and `reply` refuses
+  free text ([open question](../../OPEN_QUESTIONS.md#cms-inbox) 32). And Meta
+  notes that, rarely, a reply inside the window is refused anyway. Keep the
   template fallback reachable in both cases.
 - Templates must be approved in the merchant's WABA, in that language;
   list them with `client.with_token(t).templates(waba_id).list(…)`.
@@ -211,6 +238,10 @@ events.addEventListener('lagged', () => reloadHistory()); // the browser fell be
 - The filter must be an **allow-list**. `Unknown` and `Unparsed` events have
   no phone number id and carry raw bodies of any tenant: a filter such as
   `e.phone_number_id().is_none_or(…)` leaks them.
+- Each open stream's receiver clones every event before the filter drops
+  it, multi-megabyte history syncs included: fine for a handful of open
+  inboxes, a cost to measure with many
+  ([open question](../../OPEN_QUESTIONS.md#webhooks-and-live-updates) 31).
 - The two sinks run concurrently: a live event can reach the browser before
   the store has it. Render the event itself; it carries the whole message.
 - The broadcast channel lives in one process. With several instances, a
@@ -221,14 +252,15 @@ events.addEventListener('lagged', () => reloadHistory()); // the browser fell be
 ## Pitfalls
 
 - Mounting the inbox routes without the ownership check: any merchant could
-  read or answer any other merchant's customers.
+  read or answer any other merchant's customers. Check it before the vault
+  is read, not with what the vault returns.
 - Keying customers by phone number: the `wa_id` may be absent, and a
   customer's BSUID changes when they change number (`UserIdChanged`); the
   inbox starts a new conversation then and does not merge.
 - Sending a reply with the platform's own token instead of the merchant's:
   it comes from the wrong business, or fails.
 
-## Not recorded (as of 8ee6fab)
+## Not recorded (as of 7940d15)
 
 Coexistence echoes (`MessageEchoed`: messages the merchant sent from the
 WhatsApp Business app) and history sync (`HistorySynced`)

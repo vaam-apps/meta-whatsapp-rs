@@ -1,11 +1,11 @@
 ---
 name: wa-rs-cms-inbox
-description: "The merchant-customer chat inbox of a CMS built on wa-rs (wa_rs::inbox) - InboxSink recording webhook messages and statuses into a ConversationStore, Inbox listing conversations and history and replying with the merchant's token, conversation keys (BSUID, wa_id, group), the 24-hour customer service window and templates outside it, memory vs Postgres storage (and the U+0000 limitation), live updates over SSE, and what the inbox does not record yet. Load when building inbox screens, reply endpoints, or the webhook-to-inbox pipeline."
+description: "The merchant-customer chat inbox of a CMS built on wa-rs (wa_rs::inbox) - InboxSink recording webhook messages and statuses into a ConversationStore, Inbox listing conversations and history and replying with the merchant's token, conversation keys (BSUID, wa_id, group), the 24-hour customer service window and templates outside it, memory vs Postgres storage (and how U+0000 is handled), live updates over SSE, and what the inbox does not record yet. Load when building inbox screens, reply endpoints, or the webhook-to-inbox pipeline."
 ---
 
 # wa-rs-cms-inbox
 
-> **Verified against wa-rs 91431ae (2026-09-24).** On another revision, trust
+> **Verified against wa-rs 7940d15 (2026-09-24).** On another revision, trust
 > the code over this page (see `skills/README.md`).
 
 ```text
@@ -46,6 +46,17 @@ and any status that does not move a message forward); the dedup guard saves
 the work. When one fanned-out sink fails, Meta redelivers and the others see
 the event again: make the UI dedupe by message id.
 
+Statuses and revokes only ever change a message **of the business number
+they arrived on**: `InboxSink` calls
+`ConversationStore::update_status(phone_number_id, id, status, at, error)`
+with the event's `phone_number_id`, and both stores match the id *and* the
+number. A `ConversationStore` of your own must do the same: run
+`wa_rs::adapters::store::conversation_conformance::run(&store).await` in
+its tests (it panics on a broken rule).
+~~`update_status(id, status, at, error)`, matched on the message id
+alone~~: until 4b47bf7 (2026-09-24, breaking), so a status or revoke
+delivered for one number could change another number's message.
+
 ## Conversation keys
 
 `ConversationKey { phone_number_id, contact }` — one business number plus one
@@ -61,6 +72,11 @@ marks the original message `DeliveryStatus::Deleted` instead of adding a row.
 The same rules are public as `wa_rs::inbox::conversation_key` and the text
 preview as `wa_rs::inbox::preview`.
 
+A message id is stored once per store, whatever the number: if the same id
+ever arrives on two of your business numbers (e.g. a group both are in), it
+is kept under the first conversation that recorded it, and the second
+`append` is a no-op (`OPEN_QUESTIONS.md` #33).
+
 **BSUIDs change when a customer changes phone number**
 (`WebhookEvent::UserIdChanged`). The inbox does not merge conversations: the
 new BSUID starts a new one. Handle `UserIdChanged` yourself if that matters.
@@ -68,8 +84,11 @@ new BSUID starts a new one. Handle `UserIdChanged` yourself if that matters.
 ## Reading and replying
 
 Build an `Inbox` per request, for a phone number **your own auth says this
-merchant owns** (the inbox only checks that a key belongs to its number, not
-to your tenant):
+merchant owns** — and check that ownership *before*
+`vault.get_by_phone_number`, whose tokens belong to every merchant (the
+inbox only checks that a key belongs to its number, not to your tenant). The
+`cms_inbox` example's `inbox()` shows the order: authenticated tenant → owns
+the number? (`403` if not) → vault → `Inbox`.
 
 ```rust
 use std::sync::Arc;
@@ -80,11 +99,11 @@ use wa_rs::core::clock::{Clock, SystemClock};
 use wa_rs::core::ids::PhoneNumberId;
 use wa_rs::core::store::ConversationStore;
 use wa_rs::inbox::Inbox;
-use wa_rs::{Client, Error};
+use wa_rs::{Client, ErrorKind};
 
 async fn reply_text(
     client: &Client, vault: &TokenVault, store: Arc<dyn ConversationStore>,
-    pnid: PhoneNumberId, contact: &str, body: &str,
+    pnid: PhoneNumberId, contact: &str, body: &str, // pnid: ownership already checked
 ) -> wa_rs::Result<()> {
     let token = vault.get_by_phone_number(&pnid).await?.ok_or_else(not_connected)?.token;
     let inbox = Inbox::new(client.with_token(token), pnid, store);
@@ -97,11 +116,18 @@ async fn reply_text(
     };
     match inbox.reply(&key, content).await {
         Ok(_sent) => Ok(()),
-        Err(Error::Validation(v)) if v.field == "customer_service_window" => Err(window_closed()),
+        // The local refusal (nothing sent) and Meta's 131047 share one kind.
+        Err(e) if e.kind() == ErrorKind::CustomerServiceWindowClosed => Err(window_closed()),
         Err(e) => Err(e),
     }
 }
 ```
+
+~~Match `Error::Validation(v) if v.field == "customer_service_window"`~~:
+the field is still set, but branch on the kind (fe49aa5, 2026-09-24): a
+field-name match misses Meta's own 131047. To tell the local refusal apart,
+`ValidationError::is_customer_service_window_closed()` (7f436a5) rather than
+the string.
 
 - `inbox.conversations(before, limit)` — newest activity first; next page:
   pass the last row's `(last_message_at, key.contact)`.
@@ -120,8 +146,16 @@ inbound message (Meta: 131047, `ErrorKind::CustomerServiceWindowClosed`).
 `inbox.window(&key)` → `CustomerServiceWindow` (`is_open(now)`,
 `closes_at()`); a conversation with no inbound message is closed.
 `reply`/`send` check it **before** any request and refuse with
-`Error::Validation` on field `customer_service_window`. Exempt: templates, and
-messages with a Direct Send `category` (a Meta beta; Meta stays the judge).
+`Error::Validation(ValidationError::customer_service_window_closed())` (field
+`customer_service_window`), whose `kind()` is
+`ErrorKind::CustomerServiceWindowClosed`, like Meta's 131047: branch on the
+kind. Exempt: templates, and messages with a Direct Send `category` (a Meta
+beta; Meta stays the judge).
+
+The inbox only knows the window from **messages**. Meta also opens it when
+the customer calls your number, but calls are not recorded, so after a call
+`reply` still refuses free text: keep the template fallback reachable there
+too (`OPEN_QUESTIONS.md` #32).
 
 ### What `reply` records, and why it never fails after sending
 
@@ -152,6 +186,15 @@ let msg = OutboundMessage::new(inbox.recipient(&key), Text::new(body)).reply_to(
 inbox.send(&key, msg).await?;
 ```
 
+~~**Caveat (as of 91431ae):** a conversation keyed by a bare `wa_id` is sent
+to `to` *without* `+`, and Meta then prepends your business number's country
+code; use `send` with `Recipient::phone(format!("+{}", key.contact))`. Its
+recipient must be the conversation's contact — this is not checked.~~
+True until 2b2679a (2026-09-24): replies now go to `+<digits>`, `send`
+refuses any recipient but `inbox.recipient(&key)`, and `Inbox::recipient`
+exists only from 2b2679a on. On an older pin, use the struck-through
+workaround.
+
 ## Storage: memory or Postgres
 
 | | `MemoryConversationStore` | `PostgresConversationStore` |
@@ -159,30 +202,42 @@ inbox.send(&key, msg).await?;
 | Use | tests, demos, one process | production |
 | Survives restart / shared by instances | no | yes |
 | Setup | `MemoryConversationStore::new()` | `postgres::migrate(&pool)` at startup; tables `wa_*` (`TablePrefix` + `migrate_with_prefix` for another prefix) |
-| U+0000 in text/ids/payload | accepted | **rejected** |
+| U+0000 given to the store | accepted | **refused** (`StorageError::Backend`) |
+| U+0000 in what `InboxSink` / `Inbox::send` record | stored as U+FFFD | stored as U+FFFD |
 
 There is no Redis `ConversationStore` (history is not cache-shaped).
 
-**The NUL limitation.** Postgres `text`/`jsonb` cannot hold U+0000. A message
-whose id, contact, kind, text, payload or error contains one is rejected with
-`StorageError::Backend` **on every retry**, so the webhook answers `500` and
-Meta retries the delivery for 7 days, then drops it. The handler stops at the
-first failing event, so the events *after* it in the same delivery are stuck
-with it. The library does not strip NULs. If your traffic
-can carry them, wrap `InboxSink` in your own `EventSink` that removes U+0000
-from the event's strings before delegating, or pick another store.
+**U+0000 (NUL).** Postgres `text`/`jsonb` cannot hold it, and a store
+refusal on every retry would make the webhook answer `500` until Meta drops
+the whole batch after 7 days. So `InboxSink` replaces U+0000 with U+FFFD
+(the replacement character) in the stored `kind`, `text`, `payload` (every
+string, object keys included) and status `error`, and `Inbox::send` does
+the same for the outbound row: customer content never fails a delivery.
+The replacement is lossy (a NUL and a U+FFFD read the same afterwards) and
+**provisional**: it was a maintainer decision, taken without asking to stop
+one NUL from losing a whole webhook batch, and may be reversed
+(`OPEN_QUESTIONS.md` #18). Meta-assigned fields — the message id, the
+contact (BSUID, `wa_id`, group id), the business phone number id — are
+stored as Meta sent them, so a NUL there is still refused by Postgres (and
+fails the batch); so is anything you hand the Postgres store directly.
+~~The library does not strip NULs; one in a customer's message fails its
+delivery on every retry — wrap `InboxSink` to remove them~~: true until
+fd4667e (2026-09-24). On an older pin, keep the wrapper.
 
 ## Live updates
 
 Subscribe per merchant to the same broadcast channel and stream with
 `wa_rs::webhooks::sse(live_tx.subscribe(), move |e| e.phone_number_id() == Some(&pnid))`
-(feature `axum`), behind your auth. The filter must be an **allow-list**
-(`Unknown`/`Unparsed` events have no phone number id and may belong to any
-tenant). On `event: lagged`, reload from `inbox.history`. The UI receives
-`WebhookEvent` JSON (`"event": "message_received"`, …); your own outbound
-replies are not broadcast — push them to the UI from the reply endpoint.
+(feature `axum`; `BroadcastSink::receiver()` gives the same receiver),
+behind your auth and after the ownership check. The filter must be an
+**allow-list** (`Unknown`/`Unparsed` events have no phone number id and may
+belong to any tenant). Each open stream clones every event before filtering
+(`OPEN_QUESTIONS.md` #31). On `event: lagged`, reload from `inbox.history`.
+The UI receives `WebhookEvent` JSON (`"event": "message_received"`, …); your
+own outbound replies are not broadcast — push them to the UI from the reply
+endpoint.
 
-## Not recorded (as of 91431ae)
+## Not recorded (as of 7940d15)
 
 - Coexistence **echoes** (`WebhookEvent::MessageEchoed`: messages the merchant
   sent from the WhatsApp Business app) and **history sync**
@@ -191,4 +246,6 @@ replies are not broadcast — push them to the UI from the reply endpoint.
   Download with `client.media(pnid).download(&id)` while the id is valid
   (webhook media ids live 7 days).
 - BSUID changes (`UserIdChanged`), see above.
+- Calls (`CallUpdated`, `CallStatusUpdated`), which also means the window a
+  call opens is invisible to `Inbox::window` (above).
 - Anything but messages and statuses (`InboxSink` ignores other events).
