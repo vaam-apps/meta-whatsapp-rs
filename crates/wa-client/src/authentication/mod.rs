@@ -463,7 +463,7 @@ impl Authentication {
         }
         let mut req = self
             .client
-            .get(&format!("{}/message_template_previews", self.waba_id))
+            .get_at(&[self.waba_id.as_str(), "message_template_previews"])
             .query("category", TemplateCategory::Authentication);
         if !query.languages.is_empty() {
             req = req.query("languages", query.languages.join(","));
@@ -488,7 +488,7 @@ impl Authentication {
         upsert.validate()?;
         let list: DataList<UpsertedTemplate> = self
             .client
-            .post(&format!("{}/upsert_message_templates", self.waba_id))
+            .post_at(&[self.waba_id.as_str(), "upsert_message_templates"])
             .json(&UpsertBody {
                 name: &upsert.name,
                 languages: &upsert.languages,

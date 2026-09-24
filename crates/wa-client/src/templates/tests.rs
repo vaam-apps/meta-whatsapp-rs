@@ -1325,6 +1325,8 @@ async fn list_stream_follows_cursors_and_limit_zero_is_refused() {
     };
     let ids: Vec<String> = templates
         .list_stream(&q)
+        // Bounded: a broken paginator must fail the test, not loop forever.
+        .take(10)
         .map(|r| r.unwrap().id.into_inner())
         .collect()
         .await;
@@ -1336,7 +1338,7 @@ async fn list_stream_follows_cursors_and_limit_zero_is_refused() {
 
     let zero = TemplateListQuery::new().limit(0);
     assert!(templates.list(&zero).await.is_err());
-    let items: Vec<_> = templates.list_stream(&zero).collect().await;
+    let items: Vec<_> = templates.list_stream(&zero).take(10).collect().await;
     assert!(matches!(
         items.as_slice(),
         [Err(wa_core::Error::Validation(_))]
@@ -1764,6 +1766,58 @@ async fn unpause_posts_to_the_template() {
     assert_eq!(req.method, Method::POST);
     assert_eq!(req.path(), "/v25.0/1105258428396250/unpause");
     assert_eq!(t.remaining(), 0);
+}
+
+#[tokio::test]
+async fn ids_cannot_escape_their_path_segment() {
+    // An id is one path segment, whatever it contains: `123/subscribed_apps`
+    // must not become a request to another object with our token.
+    let t = ScriptedTransport::new();
+    for _ in 0..6 {
+        t.push_json(200, json!({"id": "1", "success": true, "data": []}));
+    }
+    let hostile = TemplateId::new("123/subscribed_apps");
+    let templates = client(&t).templates("456/phone_numbers");
+    let _ = templates.get(&hostile).await.unwrap();
+    let _ = templates.get_fields(&hostile, &["status"]).await.unwrap();
+    templates
+        .edit(&hostile, &TemplateEdit::category(TemplateCategory::Utility))
+        .await
+        .unwrap();
+    let _ = templates.unpause(&hostile).await.unwrap();
+    let _ = templates
+        .compare(&hostile, &TemplateId::new("1"), 1, 2)
+        .await
+        .unwrap();
+    templates.delete_by_name("x").await.unwrap();
+    let paths: Vec<String> = t.requests().iter().map(|r| r.path().to_owned()).collect();
+    assert_eq!(
+        paths,
+        [
+            "/v25.0/123%2Fsubscribed_apps",
+            "/v25.0/123%2Fsubscribed_apps",
+            "/v25.0/123%2Fsubscribed_apps",
+            "/v25.0/123%2Fsubscribed_apps/unpause",
+            "/v25.0/123%2Fsubscribed_apps/compare",
+            "/v25.0/456%2Fphone_numbers/message_templates",
+        ]
+    );
+    assert_eq!(t.remaining(), 0);
+
+    // `..` would be resolved away by URL normalization: refused locally.
+    let e = client(&t)
+        .templates("..")
+        .list(&TemplateListQuery::new())
+        .await
+        .unwrap_err();
+    assert!(matches!(e, wa_core::Error::Validation(_)), "{e}");
+    let e = client(&t)
+        .authentication("..")
+        .previews(&crate::authentication::PreviewQuery::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(e, wa_core::Error::Validation(_)), "{e}");
+    assert_eq!(t.requests().len(), 6, "refused before the transport");
 }
 
 #[test]

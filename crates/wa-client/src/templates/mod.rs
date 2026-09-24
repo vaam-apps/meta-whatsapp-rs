@@ -162,7 +162,7 @@ impl Templates {
     fn list_request(&self, query: &TemplateListQuery, cursors: bool) -> GraphRequest {
         let mut req = self
             .client
-            .get(&format!("{}/message_templates", self.waba_id))
+            .get_at(&[self.waba_id.as_str(), "message_templates"])
             .context("message templates list");
         if !query.fields.is_empty() {
             req = req.query("fields", query.fields.join(","));
@@ -202,7 +202,7 @@ impl Templates {
     /// One template with Meta's default fields (`GET /{template_id}`).
     pub async fn get(&self, id: &TemplateId) -> Result<TemplateInfo> {
         self.client
-            .get(id.as_str())
+            .get_at(&[id.as_str()])
             .context("message template")
             .send()
             .await
@@ -212,7 +212,7 @@ impl Templates {
     /// `["quality_score"]`).
     pub async fn get_fields(&self, id: &TemplateId, fields: &[&str]) -> Result<TemplateInfo> {
         self.client
-            .get(id.as_str())
+            .get_at(&[id.as_str()])
             .query("fields", fields.join(","))
             .context("message template")
             .send()
@@ -225,7 +225,7 @@ impl Templates {
     pub async fn create(&self, definition: &TemplateDefinition) -> Result<TemplateCreated> {
         definition.validate()?;
         self.client
-            .post(&format!("{}/message_templates", self.waba_id))
+            .post_at(&[self.waba_id.as_str(), "message_templates"])
             .json(definition)
             .context("create message template response")
             .send()
@@ -238,7 +238,7 @@ impl Templates {
     pub async fn edit(&self, id: &TemplateId, edit: &TemplateEdit) -> Result<()> {
         edit.validate()?;
         self.client
-            .post(id.as_str())
+            .post_at(&[id.as_str()])
             .json(edit)
             .context("edit message template response")
             .send_success()
@@ -251,7 +251,7 @@ impl Templates {
     pub async fn delete_by_name(&self, name: &str) -> Result<()> {
         not_empty(name, "name")?;
         self.client
-            .delete(&format!("{}/message_templates", self.waba_id))
+            .delete_at(&[self.waba_id.as_str(), "message_templates"])
             .query("name", name)
             .context("delete message template response")
             .send_success()
@@ -262,7 +262,7 @@ impl Templates {
     pub async fn delete_by_id(&self, name: &str, id: &TemplateId) -> Result<()> {
         not_empty(name, "name")?;
         self.client
-            .delete(&format!("{}/message_templates", self.waba_id))
+            .delete_at(&[self.waba_id.as_str(), "message_templates"])
             .query("hsm_id", id)
             .query("name", name)
             .context("delete message template response")
@@ -278,7 +278,7 @@ impl Templates {
             return Err(ValidationError::new("hsm_ids", "1 to 100 template ids").into());
         }
         self.client
-            .delete(&format!("{}/message_templates", self.waba_id))
+            .delete_at(&[self.waba_id.as_str(), "message_templates"])
             .query("hsm_ids", id_list(ids))
             .context("delete message templates response")
             .send_success()
@@ -342,7 +342,7 @@ impl Templates {
             )?;
         }
         self.client
-            .post(&format!("{}/message_templates", self.waba_id))
+            .post_at(&[self.waba_id.as_str(), "message_templates"])
             .json(request)
             .context("create message template response")
             .send()
@@ -376,7 +376,7 @@ impl Templates {
             return Err(ValidationError::new("template_ids", "at most 500 ids").into());
         }
         self.client
-            .post(&format!("{}/migrate_message_templates", self.waba_id))
+            .post_at(&[self.waba_id.as_str(), "migrate_message_templates"])
             .json(&Body {
                 source_waba_id: source,
                 options,
@@ -402,7 +402,7 @@ impl Templates {
     ) -> Result<Vec<ComparisonMetric>> {
         let list: DataList<ComparisonMetric> = self
             .client
-            .get(&format!("{id}/compare"))
+            .get_at(&[id.as_str(), "compare"])
             .query("template_ids", id_list(std::slice::from_ref(other)))
             .query("start", start)
             .query("end", end)
@@ -417,7 +417,7 @@ impl Templates {
     /// docs do not show the response, so it is returned as raw JSON.
     pub async fn unpause(&self, id: &TemplateId) -> Result<serde_json::Value> {
         self.client
-            .post(&format!("{id}/unpause"))
+            .post_at(&[id.as_str(), "unpause"])
             .context("unpause message template response")
             .send()
             .await
