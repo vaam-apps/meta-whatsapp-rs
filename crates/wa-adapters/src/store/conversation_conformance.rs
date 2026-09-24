@@ -17,6 +17,7 @@
 //! - status updates follow [`DeliveryStatus::supersedes`]: late webhooks
 //!   never move a message backwards, replays are no-ops, `failed`/`deleted`
 //!   win, and concurrent updates end on the highest status;
+//! - an applied status update with `error: None` keeps a stored error;
 //! - history is `(timestamp, id)` descending in **byte order of the id**
 //!   (the order of Rust's `str`), and paging with the exclusive cursor
 //!   neither repeats nor skips rows, even when every timestamp collides;
@@ -44,6 +45,7 @@ pub async fn run<S: ConversationStore + ?Sized>(store: &S) {
     append_is_idempotent(store).await;
     statuses_never_regress(store).await;
     terminal_statuses_win(store).await;
+    stored_error_survives_updates_without_one(store).await;
     unknown_message_status_update_is_false(store).await;
     history_order_and_exclusive_cursor(store).await;
     paging_with_identical_timestamps(store).await;
@@ -285,6 +287,60 @@ async fn terminal_statuses_win<S: ConversationStore + ?Sized>(store: &S) {
     let d = find(&deleted_id);
     assert_eq!(d.status, DeliveryStatus::Deleted);
     assert_eq!(d.error, None);
+}
+
+/// `update_status` with `error: None` keeps a stored error; one that brings
+/// an error replaces it; one that does not apply touches nothing.
+async fn stored_error_survives_updates_without_one<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("error-keep");
+    let m = r.msg("c", "1", Direction::Outbound, 0, "promo");
+    let id = m.id.clone();
+    store.append(m).await.unwrap();
+
+    let first = serde_json::json!({"code": 131026, "title": "Message undeliverable"});
+    assert!(
+        store
+            .update_status(&id, DeliveryStatus::Sent, at(1), Some(first.clone()))
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .update_status(&id, DeliveryStatus::Delivered, at(2), None)
+            .await
+            .unwrap()
+    );
+    let stored = only_message(store, &r.key("c")).await;
+    assert_eq!(
+        (stored.status, stored.error.as_ref()),
+        (DeliveryStatus::Delivered, Some(&first)),
+        "an applied update without an error keeps the stored one"
+    );
+
+    let second = serde_json::json!({"code": 131049, "title": "Per-user marketing limit"});
+    assert!(
+        store
+            .update_status(&id, DeliveryStatus::Failed, at(3), Some(second.clone()))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .update_status(
+                &id,
+                DeliveryStatus::Read,
+                at(4),
+                Some(serde_json::json!({"code": 1}))
+            )
+            .await
+            .unwrap()
+    );
+    let stored = only_message(store, &r.key("c")).await;
+    assert_eq!(
+        (stored.status, stored.error, stored.status_at),
+        (DeliveryStatus::Failed, Some(second), Some(at(3))),
+        "a new error replaces the old one; an update that does not apply changes nothing"
+    );
 }
 
 async fn unknown_message_status_update_is_false<S: ConversationStore + ?Sized>(store: &S) {
