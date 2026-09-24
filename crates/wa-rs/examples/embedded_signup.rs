@@ -599,6 +599,8 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Postgres when `DATABASE_URL` is set, memory otherwise.
+// Only the Postgres arm awaits; without the feature there is nothing to await.
+#[cfg_attr(not(feature = "postgres"), allow(clippy::unused_async))]
 async fn kv_store() -> anyhow::Result<Arc<dyn KvStore>> {
     match std::env::var("DATABASE_URL") {
         #[cfg(feature = "postgres")]
