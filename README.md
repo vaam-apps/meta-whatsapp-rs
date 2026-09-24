@@ -233,9 +233,15 @@ Agents: see [AGENTS.md](AGENTS.md). Claude Code project skills and agents
 live in `.claude/`.
 
 Coding agents in the repositories that *use* wa-rs (the store, the CMS) get
-consumer skills from [`skills/`](skills/README.md):
-`npx skills add vaam-apps/wa-rs`. Each is stamped with the wa-rs commit it was
-verified against; a public API change updates them in the same PR.
+consumer skills from [`skills/`](skills/README.md): 23 small, task-shaped
+skills (`wa-rs` is the map; `wa-rs-send-messages`, `wa-rs-webhook-endpoint`,
+`wa-rs-otp-login`, `wa-rs-cms-inbox`, …). Install all of them with
+`npx skills add vaam-apps/wa-rs`, or a subset with
+`npx skills add vaam-apps/wa-rs -s wa-rs -s wa-rs-cms-inbox`. Each is stamped
+with the wa-rs commit it was verified against, and `just ci` keeps them
+true: their Rust blocks are excerpts of example files it compiles and
+tests, and every Rust name they use must exist. A public API change
+updates them in the same PR.
 
 ## Naming
 

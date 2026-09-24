@@ -5,9 +5,11 @@ your app serves, verifies them, records each event once, answers fast, and
 alerts you when an account or template needs attention.
 
 Example: [`cms_inbox.rs`](../../crates/wa-rs/examples/cms_inbox.rs) (its
-`/webhook` routes). Agent skill:
-[`wa-rs-webhooks`](../../skills/wa-rs-webhooks/SKILL.md), with the full event
-table in [references/events.md](../../skills/wa-rs-webhooks/references/events.md).
+`/webhook` routes). Agent skills:
+[`wa-rs-webhook-endpoint`](../../skills/wa-rs-webhook-endpoint/SKILL.md),
+[`wa-rs-webhook-events`](../../skills/wa-rs-webhook-events/SKILL.md) (the full event
+table is its [references/events.md](../../skills/wa-rs-webhook-events/references/events.md)),
+[`wa-rs-live-updates`](../../skills/wa-rs-live-updates/SKILL.md).
 
 ```text
 POST ─► X-Hub-Signature-256 present and well-formed? (else 401 before the body is read)

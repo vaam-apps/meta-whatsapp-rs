@@ -4,7 +4,8 @@
 tokens, without leaking secrets or customer data into logs, and without
 being surprised by Meta's limits or API versions.
 
-Agent skill: [`wa-rs`](../../skills/wa-rs/SKILL.md). Design background:
+Agent skills: [`wa-rs-production`](../../skills/wa-rs-production/SKILL.md),
+[`wa-rs-storage`](../../skills/wa-rs-storage/SKILL.md). Design background:
 [architecture.md](../architecture.md) (adapters, error tree, security
 rules).
 

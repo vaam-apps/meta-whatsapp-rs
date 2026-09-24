@@ -4,7 +4,8 @@
 Rust, with errors handled the way the library expects.
 
 Example: [`send_message.rs`](../../crates/wa-rs/examples/send_message.rs).
-Agent skill: [`wa-rs`](../../skills/wa-rs/SKILL.md).
+Agent skills: [`wa-rs-setup`](../../skills/wa-rs-setup/SKILL.md),
+[`wa-rs-errors`](../../skills/wa-rs-errors/SKILL.md).
 
 ## 1. On Meta's side
 
@@ -171,7 +172,7 @@ fn refused_by_meta(e: &Error) -> bool {
   `callback_data`.
 
 The full `ErrorKind` table, with codes and advice, is in the skill's
-[error-kinds reference](../../skills/wa-rs/references/error-kinds.md).
+[error-kinds reference](../../skills/wa-rs-errors/references/error-kinds.md).
 
 ## 5. One client, many merchants
 

@@ -6,7 +6,7 @@ attempt and issue limits.
 
 Example: [`otp_login.rs`](../../crates/wa-rs/examples/otp_login.rs) (every
 outcome handled; run it with the command in its header). Agent skill:
-[`wa-rs-templates-otp`](../../skills/wa-rs-templates-otp/SKILL.md).
+[`wa-rs-otp-login`](../../skills/wa-rs-otp-login/SKILL.md).
 
 ## 1. On Meta's side
 

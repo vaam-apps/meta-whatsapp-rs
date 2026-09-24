@@ -65,6 +65,17 @@ is_customer_service_window_closed}`,
 `MarketingBusiness::client_wabas_with_status_stream`, and
 `wa_webhooks::SIGNATURE_HEADER` without the `axum` feature.
 
+Consumer skills: the seven broad skills became 23 task-shaped ones
+(`wa-rs` routes to the others; `wa-rs-messaging`, `wa-rs-templates-otp` and
+`wa-rs-webhooks` are gone, split into `wa-rs-send-messages`,
+`wa-rs-interactive-messages`, `wa-rs-media`, `wa-rs-templates`,
+`wa-rs-send-templates`, `wa-rs-otp-login`, `wa-rs-webhook-endpoint`,
+`wa-rs-webhook-events`, `wa-rs-live-updates`, …). Each ships compiled,
+tested example code; `just ci` checks excerpts, frontmatter, links, names
+and stamps (`just skills-check`). The developer skills in `.claude/skills/`
+are marked `internal`, so `npx skills add vaam-apps/wa-rs` no longer offers
+them.
+
 ### Security
 
 Found and fixed during review, before any release: an OTP account takeover
