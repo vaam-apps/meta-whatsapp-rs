@@ -1,6 +1,8 @@
 ---
 name: add-graph-endpoint
 description: "Recipe for adding or changing a Graph API endpoint wrapper in wa-client — typed request/response, local validation, secrets, pagination with cursors, ScriptedTransport tests. Use when wrapping a new WhatsApp Cloud API or Business Management API endpoint or fixing an existing one."
+metadata:
+  internal: true
 ---
 
 # Adding a Graph endpoint

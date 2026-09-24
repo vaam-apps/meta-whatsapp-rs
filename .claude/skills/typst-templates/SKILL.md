@@ -1,6 +1,8 @@
 ---
 name: typst-templates
 description: "Authoring and rendering Typst templates in wa-typst — invoices, receipts, vouchers rendered to PDF/PNG from JSON inputs for WhatsApp document/image messages and template headers. Use when adding or changing a .typ template, its input schema, or the renderer."
+metadata:
+  internal: true
 ---
 
 # Typst templates

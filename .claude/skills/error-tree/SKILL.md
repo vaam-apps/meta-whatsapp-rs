@@ -1,6 +1,8 @@
 ---
 name: error-tree
 description: "How wa-rs errors are shaped — the wa_core::Error tree (thiserror nodes, anyhow opaque leaves), ErrorKind classification of Graph error codes, retry safety, in_step for multi-step flows. Use when handling, adding or classifying an error, or deciding whether something may be retried."
+metadata:
+  internal: true
 ---
 
 # The error tree

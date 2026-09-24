@@ -1,6 +1,8 @@
 ---
 name: add-webhook-field
 description: "Recipe for supporting a new WhatsApp webhook field or inbound message type in wa-webhooks — typed value, normalized WebhookEvent, forward-compatible Unknown fallback, fixture tests from Meta's examples. Use when Meta adds a webhook field, a message type, or a property to an existing payload."
+metadata:
+  internal: true
 ---
 
 # Adding a webhook field or message type
