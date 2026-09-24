@@ -1356,6 +1356,15 @@ fn sparse_shapes_omit_what_is_absent() {
         .unwrap(),
         json!({"ttl_minutes": 60})
     );
+    assert_eq!(
+        serde_json::to_value(VoiceCallParameters {
+            display_text: Some("Call".into()),
+            payload: Some("p".into()),
+            ..Default::default()
+        })
+        .unwrap(),
+        json!({"display_text": "Call", "payload": "p"})
+    );
     // A one-section product list without section title.
     assert_eq!(
         content(OutboundMessage::product_list(
