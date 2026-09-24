@@ -43,8 +43,10 @@
 //!   (`history`), in chunks that may come in any order; each message is
 //!   recorded with its own device timestamp (bounded, see
 //!   [`InboxSink::with_clock`]), so the order of the chunks does not
-//!   matter, and a redelivered chunk changes nothing (a message id is
-//!   stored once). Each chunk is one [`ConversationStore::append_synced`]
+//!   change the thread (one exception: a revoke in a chunk that arrives
+//!   before the chunk carrying its message leaves a tombstone in the
+//!   message's place, see below), and a redelivered chunk changes nothing
+//!   (a message id is stored once). Each chunk is one [`ConversationStore::append_synced`]
 //!   batch, then its revokes. A message whose `from` is the business number is
 //!   outbound, with the status its `history_context` names (`PENDING` is
 //!   [`DeliveryStatus::Accepted`], `ERROR` is [`DeliveryStatus::Failed`],
