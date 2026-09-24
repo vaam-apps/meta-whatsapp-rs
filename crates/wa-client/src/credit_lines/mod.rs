@@ -614,8 +614,21 @@ impl CreditLines {
         };
         let mut targets: Vec<AllocationConfigId> = Vec::new();
         let mut unattributed: Vec<AllocationConfigId> = Vec::new();
+        let mut first_failure: Option<Error> = None;
+        let records = match business {
+            // A failed lookup does not stop the known allocation from being
+            // revoked; the lookup's error is returned afterwards.
+            Some(business) => match self.allocations_for(credit_line, business).await {
+                Ok(records) => records,
+                Err(e) => {
+                    first_failure = Some(e);
+                    Vec::new()
+                }
+            },
+            None => Vec::new(),
+        };
         if let Some(business) = business {
-            for record in self.allocations_for(credit_line, business).await? {
+            for record in records {
                 let named = record.receiving_business.and_then(|b| b.id);
                 match (record.id, named) {
                     (Some(id), Some(named)) if &named == business => {
@@ -639,7 +652,6 @@ impl CreditLines {
             unattributed.retain(|id| id != known);
             targets.push(known.clone());
         }
-        let mut first_failure: Option<Error> = None;
         let mut failed: Vec<AllocationConfigId> = Vec::new();
         for id in targets {
             match self.revoke_checked(&id, business).await {

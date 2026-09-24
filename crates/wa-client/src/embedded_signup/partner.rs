@@ -299,8 +299,20 @@ impl EmbeddedSignup {
         vault: &TokenVault,
     ) -> Result<CreditRevocation> {
         let partner = self.require_partner()?;
-        let token = vault.get(waba_id).await?;
-        let credit = vault.credit(waba_id).await?;
+        // An unreadable record (a key dropped too early, tampering) must not
+        // stop a revocation another source can still address: it is logged
+        // and skipped, and only returned when nothing else is left.
+        let mut unreadable = None;
+        let token = vault.get(waba_id).await.unwrap_or_else(|e| {
+            tracing::warn!(waba_id = %waba_id, kind = ?e.kind(), "revocation: token record unreadable");
+            unreadable = Some(e);
+            None
+        });
+        let credit = vault.credit(waba_id).await.unwrap_or_else(|e| {
+            tracing::warn!(waba_id = %waba_id, kind = ?e.kind(), "revocation: credit record unreadable");
+            unreadable.get_or_insert(e);
+            None
+        });
         let stored_business = token
             .and_then(|t| t.business_id)
             .or_else(|| credit.as_ref().and_then(|c| c.business_id.clone()));
@@ -317,11 +329,13 @@ impl EmbeddedSignup {
         };
         let known = credit.and_then(|c| c.allocation_config_id);
         if business.is_none() && known.is_none() {
-            return Err(ValidationError::new(
-                "business_id",
-                "nothing recorded for this WABA and no owner business given: cannot tell which line to revoke",
-            )
-            .into());
+            return Err(unreadable.unwrap_or_else(|| {
+                ValidationError::new(
+                    "business_id",
+                    "nothing recorded for this WABA and no owner business given: pass the owner_business_id of a signed PARTNER_* webhook (or from Meta Business Suite)",
+                )
+                .into()
+            }));
         }
         if let Some(business) = &business {
             vault.mark_revoked(business, &[]).await?;
@@ -1942,6 +1956,147 @@ mod tests {
         assert_eq!(off.credit, None);
         assert!(off.token_deleted);
         assert!(tp.t.requests().is_empty());
+    }
+
+    /// The marker is written before anything is sent: a revocation that
+    /// fails half-way still keeps `resume` from funding the business, and
+    /// the allocation recorded at onboarding is revoked even though the
+    /// lookup failed.
+    #[tokio::test]
+    async fn a_failed_revocation_still_blocks_a_re_share() {
+        let h = harness(CreditSharing::ShareAndAttach);
+        onboarded(&h).await;
+        let before = h.t.requests().len();
+        h.t.push_json(
+            500,
+            json!({"error": {"message": "unknown", "type": "OAuthException", "code": 1}}),
+        );
+        h.t.push_json(200, active()); // the recorded allocation
+        h.t.push_json(200, success());
+        h.t.push_json(200, deleted());
+        let err =
+            h.es.revoke_credit_line(&waba(), None, &h.vault)
+                .await
+                .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::ServiceUnavailable, "{err}");
+        let revocation = &h.t.requests()[before..];
+        assert_eq!(
+            revocation
+                .iter()
+                .filter(|r| r.method == Method::DELETE)
+                .count(),
+            1,
+            "the recorded allocation is revoked despite the failed lookup"
+        );
+        assert!(
+            h.vault
+                .revoked_business(&BusinessId::new(BUSINESS))
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(h.t.remaining(), 0);
+
+        h.t.push_json(200, success()); // subscribe
+        h.t.push_json(200, success()); // assigned_users
+        let err =
+            h.es.resume(&waba(), &request().currency(WabaCurrency::Usd), &h.vault)
+                .await
+                .unwrap_err();
+        assert!(EmbeddedSignup::is_credit_line_revoked(&err), "{err}");
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// An unreadable token record does not stop a revocation the credit
+    /// ledger can still address.
+    #[tokio::test]
+    async fn revocation_survives_an_unreadable_token_record() {
+        let h = harness(CreditSharing::ShareAndAttach);
+        onboarded(&h).await;
+        // The same WABA's record, sealed under a key this vault does not have.
+        let other = TokenVault::new(
+            Arc::new(MemoryKvStore::new()),
+            VaultKeys::new(VaultKey::new("gone", SecretBytes::new([9; 32])).unwrap()),
+        )
+        .unwrap();
+        let foreign = StoredBusinessToken::new(WABA, AccessToken::new(TOKEN)).business_id("X");
+        other.store(&foreign).await.unwrap();
+        let bytes = other
+            .kv()
+            .get(&wa_core::store::StoreKey::new(
+                super::super::vault::TOKEN_NAMESPACE,
+                format!("waba/{WABA}"),
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+            .value;
+        h.vault
+            .kv()
+            .put(
+                &wa_core::store::StoreKey::new(
+                    super::super::vault::TOKEN_NAMESPACE,
+                    format!("waba/{WABA}"),
+                ),
+                bytes,
+                wa_core::store::Expiry::Never,
+            )
+            .await
+            .unwrap();
+        assert!(h.vault.get(&waba()).await.is_err(), "vacuous otherwise");
+        let report = revoked(&h).await;
+        assert_eq!(report.business_id, Some(BusinessId::new(BUSINESS)));
+        assert_eq!(report.revoked, [AllocationConfigId::new(ALLOCATION)]);
+        assert_eq!(h.t.remaining(), 0);
+
+        // With nothing readable and nothing given, the read error is what
+        // comes back.
+        let h = harness(CreditSharing::ShareAndAttach);
+        h.vault
+            .kv()
+            .put(
+                &wa_core::store::StoreKey::new(
+                    super::super::vault::TOKEN_NAMESPACE,
+                    format!("waba/{WABA}"),
+                ),
+                b"{}".to_vec(),
+                wa_core::store::Expiry::Never,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            h.es.revoke_credit_line(&waba(), None, &h.vault).await,
+            Err(Error::Storage(_))
+        ));
+        assert!(h.t.requests().is_empty());
+    }
+
+    /// An allocation recorded for the WABA that Meta says is shared with
+    /// another business is never used to decide the WABA is funded.
+    #[tokio::test]
+    async fn a_recorded_allocation_naming_another_business_is_refused() {
+        let h = harness(CreditSharing::ShareAndAttach);
+        let mut credit = StoredCredit::new(waba());
+        credit.allocation_config_id = Some(AllocationConfigId::new(ALLOCATION));
+        h.vault.put_credit(&credit, None).await.unwrap();
+        script_until_subscribe(&h.t, owner());
+        h.t.push_json(200, success()); // assigned_users
+        h.t.push_json(200, nothing_shared());
+        h.t.push_json(
+            200,
+            json!({"receiving_business": {"name": "Someone Else", "id": "SOMEONE_ELSE"}}),
+        );
+        let err =
+            h.es.onboard(&request().currency(WabaCurrency::Usd), &h.vault)
+                .await
+                .unwrap_err();
+        assert!(
+            matches!(&err, Error::Step { source, .. } if matches!(&**source, Error::Validation(v) if v.field == "allocation_config_id")),
+            "{err}"
+        );
+        let reqs = h.t.requests();
+        assert_eq!(posts_to(&reqs, "/whatsapp_credit_sharing_and_attach"), 0);
+        assert_eq!(h.t.remaining(), 0);
     }
 
     #[test]
