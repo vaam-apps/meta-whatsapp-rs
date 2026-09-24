@@ -55,6 +55,12 @@ tower = { workspace = true, features = ["util"] }
 # kept as SHA-256 digests and compared in constant time.
 sha2.workspace = true
 subtle.workspace = true
+# The consumer skills' example code (skills/*/examples, compiled by
+# tests/skills.rs) streams media downloads and paginated lists, and builds
+# the Redis connection `RedisKvStore` takes, as an integrator would (wa-rs
+# re-exports no redis; the features are the ones wa-adapters enables).
+futures.workspace = true
+redis = { workspace = true, features = ["tokio-comp", "connection-manager"] }
 
 # Examples. `required-features` keeps `cargo check -p wa-rs --examples` (default
 # features) green; `--all-features` (what `just check` and `just lint` use)

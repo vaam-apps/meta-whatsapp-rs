@@ -1,253 +1,159 @@
 ---
 name: wa-rs-embedded-signup
-description: "Onboarding merchants' own WhatsApp numbers in a multi-tenant CMS with wa-rs Embedded Signup - LaunchOptions for FB.login, SignupSessions state bound to the tenant, EmbeddedSignupEvent parsing, EmbeddedSignup::onboard (step order, why the token is stored before subscribe/register, resume after a failed register, never retrying onboard), the encrypted TokenVault (keys, rotation, phone number to WABA routing) and per-merchant clients via with_token. Load when building the Connect WhatsApp flow, its callback, token storage, or anything that acts as a merchant."
+description: "Letting each merchant of a multi-tenant CMS connect their own WhatsApp number with Embedded Signup and wa-rs (Tech Provider flow) - Meta prerequisites, LaunchOptions for FB.login, SignupSessions binding the attempt to the merchant (start, redeem), parsing the WA_EMBEDDED_SIGNUP event, EmbeddedSignup::onboard (code exchange, token checks, encrypted storage, subscribe, register with the merchant's PIN), the Error::Step names, resume after a failed register, coexistence. Load when building the Connect WhatsApp button, its callback endpoint, or recovering a half-finished onboarding."
 ---
 
 # wa-rs-embedded-signup
 
-> **Verified against wa-rs 7940d15 (2026-09-24).** On another revision, trust
-> the code over this page (see `skills/README.md`).
+> **Verified against wa-rs 41fe5f9c963f4718db1362663a62de97244846ee (2026-09-24).** On another revision, trust the code over this page.
 
-Module: `wa_rs::client::embedded_signup`. It implements Meta's **Tech
-Provider** flow for Embedded Signup v4: the merchant clicks "Connect
-WhatsApp", Meta's popup creates or selects their WABA and number, and your
-backend ends up holding a business token scoped to that WABA, encrypted at
-rest, routable by phone number id.
+Reference code: [examples/onboarding.rs](examples/onboarding.rs), compiled
+and tested by wa-rs's own gate. The page side:
+[references/frontend.md](references/frontend.md). A full server with
+authentication: [`embedded_signup.rs`](https://github.com/vaam-apps/wa-rs/blob/main/crates/wa-rs/examples/embedded_signup.rs).
 
-## The pieces
+## When to use
 
-| Piece | Role |
-| --- | --- |
-| `LaunchOptions` | the JSON for `FB.login(callback, options)` (config id, `featureType`, pre-fill) |
-| `SignupSessions` | a single-use `SignupState` binding one attempt to the merchant who started it |
-| `EmbeddedSignupEvent` | parses the `WA_EMBEDDED_SIGNUP` message event the page forwards |
-| `EmbeddedSignup::onboard` | code → verified, stored, subscribed, registered business |
-| `TokenVault` | AES-256-GCM encrypted tokens on any `KvStore`, keyed by WABA, indexed by phone number id |
+A merchant clicks "Connect WhatsApp", goes through Meta's popup, and your
+backend ends up holding their business token — verified, encrypted, and
+routable by phone number id. Module `wa_rs::client::embedded_signup`.
 
-## Wiring (once, at startup)
+## On Meta's side first
+
+A **Tech Provider**: verified business, Advanced access to
+`whatsapp_business_messaging` and `whatsapp_business_management`, the
+page's HTTPS domains allowed in Facebook Login for Business, a Login
+configuration (its **configuration id**), the app subscribed to
+`messages` and `account_update`. Merchants add a payment method before
+their number can send. Steps:
+[embedded-signup guide](https://github.com/vaam-apps/wa-rs/blob/main/docs/guides/embedded-signup.md).
+
+## Wire once, on a shared store
 
 ```rust
-use std::sync::Arc;
-use wa_rs::AppCredentials;
-use wa_rs::client::embedded_signup::{SignupSessions, TokenVault, VaultKey, VaultKeys};
-use wa_rs::core::store::KvStore;
-
-let kv: Arc<dyn KvStore> = Arc::new(wa_rs::adapters::store::PostgresKvStore::new(pool.clone()));
-let es = client.embedded_signup(AppCredentials::new(app_id, app_secret)); // app secret: server only
+let client = wa_rs::client_builder()?.build()?; // no default token
+let es = client.embedded_signup(AppCredentials::new(app_id, app_secret));
 let vault = TokenVault::new(
     kv.clone(),
-    VaultKeys::new(VaultKey::from_base64("2026-09", &vault_key_b64)?), // 32 random bytes, base64
+    VaultKeys::new(VaultKey::from_base64("2026-09", vault_key_b64)?),
 )?;
 let sessions = SignupSessions::new(kv);
 ```
 
-Use a **shared, persistent** `KvStore` (Postgres, or Redis with persistence
-and the `noeviction` policy, on an instance of its own) in production: the
-vault holds every merchant's token and sessions must be visible to
-whichever instance receives the callback. `MemoryKvStore` loses all tokens
-on restart. ~~`noeviction` or `volatile-*`~~: wrong until 1a3cfc6
-(2026-09-24, `RedisKvStore` docs): `volatile-*` silently evicts every key
-with a TTL — signup sessions, OTP issue logs (the per-number rate limit),
-webhook dedup markers.
+The callback may land on another instance than the start, and the vault
+holds every merchant's token: Postgres, or Redis with persistence and
+`noeviction` (`wa-rs-storage`); never `MemoryKvStore` in production.
 
-## The flow
-
-**1. Start** (your authenticated "connect" endpoint): bind an attempt to the
-merchant and hand the page the launch options.
+## Start: bind the attempt to the merchant
 
 ```rust
-use std::time::Duration;
-use wa_rs::client::embedded_signup::LaunchOptions;
-
-let state = sessions.start(&merchant_id, Duration::from_secs(900)).await?; // minutes, not seconds
-let options = LaunchOptions::new(config_id).to_json()?; // serde_json::Value for FB.login
-// respond with { "state": state.as_str(), "options": options }
+let state = signup
+    .sessions
+    .start(merchant_id, Duration::from_mins(15))
+    .await?; // minutes: several screens, maybe an SMS
+let options = LaunchOptions::new(signup.config_id.as_str()).to_json()?; // .coexistence() for WhatsApp Business app users
 ```
 
-**2. Frontend**: `FB.login(callback, options)`; collect `authResponse.code`
-from the callback and the `WA_EMBEDDED_SIGNUP` message event (check
-`event.origin`), then POST `{state, code, event, pin}` **immediately**: the
-code is single-use and lives 30 seconds. Sketch: [references/frontend.md](references/frontend.md).
+The page runs `FB.login(callback, options)`, collects the code and the
+message event, asks the merchant for their number's two-step PIN, and
+posts all of it at once: the code lives 30 seconds.
 
-**3. Callback** (authenticated as the same merchant; `merchant_id` comes
-from your session, never from the page, the body or the query string —
-otherwise one merchant redeems or resumes another's attempt):
+## Complete: local checks, redeem, onboard
 
 ```rust
-use wa_rs::client::embedded_signup::{
-    EmbeddedSignupEvent, OnboardingRequest, SignupCode, SignupState,
-};
-use wa_rs::client::phone_numbers::TwoStepPin;
-
 // Local checks first: a malformed post must not burn the single-use state.
-let state = SignupState::parse(&body.state)?;
-let pin = TwoStepPin::new(body.pin.as_str())?; // the merchant's own 6 digits, typed in your page
-let event = EmbeddedSignupEvent::from_json(&body.event)?;
-let EmbeddedSignupEvent::Finish { .. } = &event else {
-    return Ok(cancelled(&event)); // Cancel / Error / Unknown: nothing to onboard
-};
-let request = OnboardingRequest::from_event(SignupCode::new(body.code.as_str())?, &event)?
-    .register_with_pin(pin);
-if !sessions.redeem(&state, &merchant_id).await? {
-    return Err(forbidden()); // expired, replayed, or another merchant's attempt
+let state = SignupState::parse(state)?;
+let code = SignupCode::new(code)?;
+let pin = pin.map(TwoStepPin::new).transpose()?;
+let event = EmbeddedSignupEvent::from_json(event)?;
+if !matches!(event, EmbeddedSignupEvent::Finish { .. }) {
+    return Ok(Completion::Cancelled); // Cancel / Error / Unknown: nothing to onboard
 }
-let onboarded = es.onboard(&request, &vault).await?;
-save_mapping(&merchant_id, &onboarded.waba_id, &onboarded.phone_number_ids);
+let mut request = OnboardingRequest::from_event(code, &event)?;
+if let (Some(FinishKind::Finish), Some(pin)) = (event.finish_kind(), pin) {
+    request = request.register_with_pin(pin); // never for coexistence numbers
+}
+if !signup.sessions.redeem(&state, merchant_id).await? {
+    return Ok(Completion::Stale);
+}
+// Never retry `onboard`: its first step spends the code.
+match signup.es.onboard(&request, &signup.vault).await {
+    Ok(done) => Ok(Completion::Connected(Box::new(done))), // save done.waba_id for merchant_id
+    Err(
+        e @ Error::Step {
+            step: steps::SUBSCRIBE_APP | steps::REGISTER_PHONE,
+            ..
+        },
+    ) => match request.session.primary_waba_id() {
+        Some(waba) => Ok(Completion::Resumable(waba.clone(), Box::new(e))),
+        None => Ok(Completion::StartOver(Box::new(e))),
+    },
+    Err(e) => Ok(Completion::StartOver(Box::new(e))),
+}
 ```
 
-The PIN is the merchant's: it becomes the number's two-step verification
-PIN (or must match the one it has). Ask for it in the page, parse it before
-`redeem` so a typo does not burn the attempt, never log or store it, and
-never use one PIN for every merchant: one leak would expose them all. The
-`embedded_signup` example does exactly this (`pin` is optional there:
-without one the number is left unregistered).
-~~`TwoStepPin::new(pin_for(&merchant_id))`~~ (until 2026-09-24): it left
-open where the PIN comes from, and the examples meanwhile used one
-configured PIN for every merchant's number (fixed in 1ec792d).
+`merchant_id` comes from **your** session — never from the page, the body
+or the URL. `redeem` checks the tenant inside the library, succeeds once,
+and a wrong tenant does not burn the state (prefer it to `consume`). Save
+`Onboarded::waba_id` and `phone_number_ids` against the merchant.
+
+## What `onboard` does, and when a step fails
+
+Every failure after input checks is `Error::Step { step, source }`; the
+names are constants in `embedded_signup::steps`:
+
+| Step | Then |
+| --- | --- |
+| `exchange_code`, `debug_token`, `verify_assets` | start over: the code is spent |
+| `store_token` | fix the store, start over |
+| `subscribe_app`, `register_phone` | the token is stored: fix the cause, then **`resume`** |
+
+The browser's ids are claims: `verify_assets` checks them with Meta. The
+token is stored **before** subscribe and register on purpose: those fail
+for fixable reasons (a wrong PIN, `ErrorKind::TwoStepVerification`).
+
+```rust
+let request = OnboardingRequest::new(SignupCode::new("unused")?, saved_session)
+    .register_with_pin(TwoStepPin::new(corrected_pin)?);
+signup.es.resume(waba_id, &request, &signup.vault).await
+```
+
+**Check that `waba_id` belongs to the calling merchant before `resume`**:
+it acts with whatever token is stored for that WABA.
+
+## Pitfalls
+
+- The PIN is the merchant's: it becomes the number's two-step PIN or
+  must match it. Parse it before `redeem`; never log or store it; never
+  one PIN for every merchant.
+- `register_phone` counts against 10 (de)registrations per 72 h; 133016
+  locks the number for 72 h (`ErrorKind::Registration`, never retried).
+- Never write tokens yourself instead of `onboard`: `TokenVault::store`
+  trusts its phone number ids, so browser-supplied ids would route one
+  merchant's customers to another (`wa-rs-token-vault`).
+- The app secret stays on the server; limit the callback's body size;
+  never log the code, the event body, tokens or the PIN.
+- **Coexistence** (merchants keeping the WhatsApp Business app): no
+  `register`; if `onboarded.needs_coexistence_sync()`, call
+  `sync_smb_app_data` once per `SmbSyncType` within 24 hours
+  (`wa-rs-phone-numbers`).
+
 ~~`redeem` first, then parse the event, code and PIN~~ (until 2026-09-24):
-a malformed post then spent the attempt; the example and the guide check
-everything local before `redeem`.
+a malformed post spent the attempt. Check everything local first.
 
-`redeem` checks the tenant **inside the library**, is single-use, and a
-wrong tenant does **not** burn the state. Do not use `consume` unless you
-really want to compare tenants yourself. `EmbeddedSignupEvent` is
-`#[non_exhaustive]`; `from_event` also refuses anything but `Finish`.
+## What wa-rs does not do
 
-**4. Act as the merchant**, any time later:
+- Only the Tech Provider flow: no Solution Partner credit lines,
+  pre-verified number pools or multi-WABA onboarding; no token refresh
+  (an expired token means running the flow again)
+  ([open questions 3–12](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)).
+- No PIN policy (who chooses it, recovery) and no code-less
+  `OnboardingRequest` for `resume` after a restart (hence the placeholder
+  code above, open question 10).
+- No tenant model: which of your merchants owns a WABA is your table.
 
-```rust
-let stored = vault.get_by_phone_number(&phone_number_id).await?.ok_or_else(not_connected)?;
-let merchant = client.with_token(stored.token);
-merchant.messages(phone_number_id.clone()).send(&msg).await?;
-```
+## Related skills
 
-Webhooks carry the phone number id, so `get_by_phone_number` is the usual
-lookup; `vault.get(&waba_id)` also works.
-
-## `onboard`: step order, and what to do when a step fails
-
-Every failure after input validation is `Error::Step { step, source }`; the
-names are constants in `embedded_signup::steps`.
-
-| Step | What | If it fails |
-| --- | --- | --- |
-| `exchange_code` | code → business token | Start over: the code is spent |
-| `debug_token` | `GET debug_token` on the new token | Start over |
-| `verify_assets` | token valid and issued to this app; WABA ∈ its grants; owner business read from Meta; claimed number ∈ the WABA's numbers | Start over; a mismatch means the browser lied or the merchant picked other assets |
-| `store_token` | encrypt into the vault, index every number of the WABA | Fix the store, start over |
-| `subscribe_app` | `POST /{waba}/subscribed_apps` | Fix, then **`resume`** |
-| `register_phone` | `POST /{phone}/register` with the PIN | Fix (e.g. the right PIN), then **`resume`** |
-
-- **Never retry `onboard` itself.** The first step spends the code; a second
-  call fails at `exchange_code` and hides the real error.
-- **The token is stored before subscribe/register on purpose.** Those two can
-  fail for fixable reasons (a number that already has a different two-step
-  PIN: `ErrorKind::TwoStepVerification`, 133005; a Meta hiccup). Storing last
-  would lose the only token and force the merchant through the whole popup
-  again.
-- `resume(&waba_id, &request, &vault)` loads the stored token (`load_token`),
-  checks the request against what onboarding verified (`verify_assets`), and
-  reruns only `subscribe_app` and `register_phone`. `request.code` is not
-  used, but an `OnboardingRequest` cannot be built without a `SignupCode`,
-  so after a restart pass a placeholder (a code-less constructor is
-  `OPEN_QUESTIONS.md` #10):
-
-  ```rust
-  let request = OnboardingRequest::new(SignupCode::new("unused")?, saved_session) // SessionInfo is Serialize
-      .register_with_pin(TwoStepPin::new(pin_from_the_merchant)?);
-  es.resume(&waba_id, &request, &vault).await?;
-  ```
-
-  `SessionInfo::default()` instead of the saved session registers the first
-  onboarded number. **Check that `waba_id` belongs to the calling merchant
-  first** — `resume` acts with whatever token is stored for the WABA you
-  name; the `embedded_signup` example keys its unfinished attempts by the
-  authenticated tenant for that reason.
-  ~~"rebuild the request" (no mention of the code)~~: the placeholder was
-  always needed (clarified 2026-09-24).
-- `register_phone` counts against 10 registrations per 72 h; 133016 locks the
-  number for 72 h (`ErrorKind::Registration`, never auto-retried).
-
-```rust
-use wa_rs::Error;
-use wa_rs::client::embedded_signup::steps;
-
-match es.onboard(&request, &vault).await {
-    Ok(done) => Ok(done),
-    Err(Error::Step { step, source }) if step == steps::REGISTER_PHONE || step == steps::SUBSCRIBE_APP => {
-        // token is safe in the vault; show the cause (source.kind()), let the merchant fix it,
-        // then: es.resume(&waba_id, &fixed_request, &vault).await
-        Err(Error::Step { step, source })
-    }
-    Err(e) => Err(e), // earlier step: the merchant must run the popup again
-}
-```
-
-## Never trust the browser — the library already checks
-
-The message event's ids are claims. `onboard` refuses a `debug_token` answer
-without this app's id, requires the WABA to be in the token's
-`whatsapp_business_management` target ids, reads the owner business from
-Meta (the browser's `business_id` is ignored), and requires the claimed
-number to be one Meta lists on that WABA. Keep it that way:
-
-- Do not skip `onboard` and write tokens yourself. `TokenVault::store`
-  **trusts its input**: every phone number id in the record is routed to that
-  WABA, so storing browser-supplied ids lets one merchant capture another's
-  customers.
-- The **app secret never leaves the server**; the page needs only the app id
-  and the configuration id.
-- Never log the code, the posted event body, tokens or the PIN (their types
-  redact `Debug`; `expose_secret()` does not).
-- Limit the callback's request body size in your HTTP layer.
-
-## The vault
-
-- **Key**: 32 random bytes (e.g. `openssl rand -base64 32`) in your secret
-  manager, *not* in the database that holds the `KvStore`. Key ids are 1–64
-  chars of `A-Z a-z 0-9 - _ . :`, stored with each record. `VaultKey::generate`
-  cannot export its bytes — only for tests. Lose the key and every merchant
-  must onboard again.
-- **Rotation**: `VaultKeys::new(new_key).with_previous(old_key)`. Reads
-  re-encrypt old records under the active key (`rotate_on_read`, default
-  `true`; turn off on read-only replicas). The vault cannot list its records:
-  iterate *your* WABA table calling `vault.rotate(&waba_id)`, then drop the old
-  key.
-- Records are bound to their WABA id (associated data): a record copied under
-  another WABA's key fails with `CryptoError::Decrypt` instead of leaking.
-- `get_by_phone_number` returns a token only if the WABA's authenticated
-  record lists the number; a stale index yields `None`.
-- Offboarding: `vault.delete(&waba_id)` (also unlinks its numbers).
-- The vault knows WABAs, not tenants. Re-onboarding a WABA replaces its entry;
-  if a second merchant onboards a WABA already mapped to another, deciding
-  what that means is your product's call.
-
-## Coexistence (merchant keeps the WhatsApp Business app)
-
-`LaunchOptions::new(config_id).coexistence()`. The flow ends with
-`FinishKind::WhatsappBusinessAppOnboarding` and only a WABA id; do **not**
-call `register_with_pin` (validation refuses it). If
-`onboarded.needs_coexistence_sync()`, within 24 hours and once each call
-`merchant.phone_number(pnid).sync_smb_app_data(SmbSyncType::SmbAppStateSync)`
-and `…(SmbSyncType::History)` (`wa_rs::client::phone_numbers::SmbSyncType`;
-a second call fails with `ErrorKind::SyncNotAllowed`), and subscribe to the `history`,
-`smb_app_state_sync` and `smb_message_echoes` webhook fields. The inbox does
-not record echoes or history yet (`wa-rs-cms-inbox`).
-
-## Not handled by the library (open product decisions)
-
-- **Tech Provider vs Solution Partner.** Only the Tech Provider flow is
-  implemented. Solution Partner credit-line sharing, pre-verified number
-  pools and partner APIs are not (`docs/coverage.md` rows 1, 28).
-- **PIN policy.** `register` needs a 6-digit PIN that becomes (or must match)
-  the number's two-step PIN. Who chooses it, whether you store it (encrypted,
-  your code) and how a merchant recovers it are yours to decide
-  (`OPEN_QUESTIONS.md` #4). The examples take it from the merchant per
-  attempt and keep nothing.
-- **Token refresh.** `Onboarded::token_expires_at` / `StoredBusinessToken::expires_at`
-  record Meta's expiry when there is one; nothing refreshes a token. An
-  `ErrorKind::Authentication` (190) on a merchant's calls means: run Embedded
-  Signup again for that merchant.
-- **Multi-WABA flows.** Only `SessionInfo::primary_waba_id()` is onboarded.
-- **Tenant ownership** of WABAs and phone numbers: keep your own mapping and
-  check it before `resume`, `vault.get*`, and every send.
+`wa-rs-token-vault` (the tokens afterwards), `wa-rs-phone-numbers`
+(register, PIN, profile), `wa-rs-webhook-endpoint` (one callback for every
+merchant), `wa-rs-cms-inbox`, `wa-rs-storage`.

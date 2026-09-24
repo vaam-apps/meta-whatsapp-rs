@@ -1,131 +1,124 @@
 ---
 name: wa-rs-documents
-description: "Rendering invoices, receipts and vouchers to PDF or PNG with wa-rs's Typst renderer (wa_rs::typst, feature typst) and sending them over WhatsApp - Renderer and with_today determinism, the built-in templates and their typed inputs (pre-formatted money and dates), custom Typst templates and the sandbox (bundled fonts, no files, no packages, no clock), running it off the async runtime, then media upload and a document message, image message or template header. Never for OTPs or secrets. Load when generating any document or image to send."
+description: "Invoices, receipts and vouchers for WhatsApp with wa-rs's Typst renderer (feature typst) - the built-in templates and their typed inputs (pre-formatted money and dates), Renderer::with_today for deterministic output, rendering off the async runtime, PDF for document messages and template document headers, PNG for image headers, custom Typst templates and the sandbox (bundled fonts, no files, no packages), then upload and send. Never for OTP codes or secrets. Load when generating any PDF or image to send over WhatsApp."
 ---
 
 # wa-rs-documents
 
-> **Verified against wa-rs 7940d15 (2026-09-24).** On another revision, trust
-> the code over this page (see `skills/README.md`).
+> **Verified against wa-rs 41fe5f9c963f4718db1362663a62de97244846ee (2026-09-24).** On another revision, trust the code over this page.
 
-Enable the `typst` feature of `wa-rs`; the crate is `wa_rs::typst`.
+Reference code: [examples/documents.rs](examples/documents.rs), compiled
+and tested by wa-rs's own gate (it renders a real receipt PDF). Runnable
+program: [`invoice_document.rs`](https://github.com/vaam-apps/wa-rs/blob/main/crates/wa-rs/examples/invoice_document.rs).
 
-```toml
-wa-rs = { git = "https://github.com/vaam-apps/wa-rs", rev = "…", features = ["typst"] }
-```
+## When to use
 
-## Render and send an order receipt
+An order receipt, an invoice, a voucher image, a packing slip — rendered
+by your backend and sent over WhatsApp. Enable the `typst` feature; the
+module is `wa_rs::typst`.
+
+## Render, upload, send
 
 ```rust
-use wa_rs::client::messages::{Document, MediaSource, OutboundMessage};
-use wa_rs::core::recipient::Recipient;
-use wa_rs::typst::{ReceiptInput, Renderer, Template};
-
-async fn send_receipt(
-    client: &wa_rs::Client, pnid: &str, to: Recipient, input: ReceiptInput, today: time::Date,
-) -> anyhow::Result<()> {
-    // CPU-bound, synchronous (tens to hundreds of ms): keep it off the async workers.
-    let pdf = tokio::task::spawn_blocking(move || {
-        Renderer::new().with_today(today).render_pdf(&Template::receipt(), &input)
-    })
-    .await??;                                        // JoinError, then RenderError
-
-    let media_id = client.media(pnid).upload(pdf.bytes, pdf.mime_type, &pdf.filename).await?;
-    let doc = Document::new(MediaSource::id(media_id))
-        .filename(format!("receipt-{}.pdf", order_no()))
-        .caption("Thanks for your order!");
-    client.messages(pnid).send(&OutboundMessage::new(to, doc)).await?;
-    Ok(())
-}
+let filename = format!("receipt-{}.pdf", receipt.order_number);
+// CPU-bound and synchronous (tens to hundreds of ms): keep it off the runtime.
+let pdf = tokio::task::spawn_blocking(move || {
+    Renderer::new()
+        .with_today(today)
+        .render_pdf(&Template::receipt(), &receipt)
+})
+.await??; // JoinError, then RenderError
+let media_id = client
+    .media(phone_number_id.clone())
+    .upload(pdf.bytes, pdf.mime_type, &filename)
+    .await?; // PDF up to 100 MB; the id lives 30 days
+let document = Document::new(media_id)
+    .filename(filename)
+    .caption("Thanks for your order!");
 ```
 
-- `RenderedDocument { bytes, mime_type, filename }`: `mime_type` is
-  `"application/pdf"` or `"image/png"`, `filename` is `{template}.pdf`,
-  `{template}.png` or `{template}-{page}.png`. Rename it for the customer
-  with `Document::filename`.
-- `RenderError` converts into `wa_rs::Error::Other` with `?` (the typed error
-  survives: `downcast_ref::<RenderError>()` on the inner `anyhow::Error`).
-- Outside the 24-hour window a free-form document is refused: send it as a
-  **template header** instead:
-  `TemplateMessage::new("order_receipt", "en_US").header(Parameter::document_id(media_id, Some("receipt.pdf".into())))`.
-- Limits: documents up to 100 MB, images (PNG/JPEG) 5 MB; checked before
-  upload. Uploaded media ids live 30 days.
+A document message is free-form: inside the 24-hour window only. Outside
+it, send an approved utility template with a document header:
 
-## Determinism: always set `with_today`
-
-`Renderer::new()` has **no clock**: a template calling `datetime.today()`
-fails to compile, and the PDF carries no creation date. `with_today(date)`
-fixes both. There is deliberately no fallback to the system clock (output
-would change day to day; a server in another time zone would misdate it).
-Pass the date in the customer's or shop's time zone. Same template + input +
-date ⇒ byte-identical output on every machine (bundled fonts only).
+```rust
+TemplateMessage::new("order_receipt", "en_US")
+    .header(Parameter::document_id(media_id, Some(filename)))
+```
 
 ## Built-in templates
 
 | Template | Input | Output |
 | --- | --- | --- |
-| `Template::invoice()` | `InvoiceInput` (`invoice_number`, `issue_date`, `due_date`, `seller`/`buyer: Party`, `currency`, `items: Vec<LineItem>`, `subtotal`, `adjustments: Vec<SummaryLine>`, `total`, `payment_terms`, `notes`) | A4 PDF |
-| `Template::receipt()` | `ReceiptInput` (`merchant_name`, `order_number`, `order_date`, `customer_name`, `currency`, `items`, `subtotal`, `adjustments`, `total`, `payment_method`, `delivery_address`, `estimated_delivery`, `support_contact`) | A5 PDF |
-| `Template::voucher()` | `VoucherInput` (`merchant_name`, `headline`, `description`, `code`, `valid_until`, `terms`, `accent_color` `#RRGGBB`) | 400×210 pt image header: render to **PNG** |
+| `Template::invoice()` | `InvoiceInput` (number, dates, `seller`/`buyer: Party`, currency, `items: Vec<LineItem>`, subtotal, `adjustments: Vec<SummaryLine>`, total, terms, notes) | A4 PDF |
+| `Template::receipt()` | `ReceiptInput` (merchant, order number and date, customer, items, totals, payment method, delivery address, estimated delivery, support contact) | A5 PDF |
+| `Template::voucher()` | `VoucherInput` (merchant, headline, description, `code`, validity, terms, `accent_color` `#RRGGBB`) | 400×210 pt, render as PNG |
 
-- **Money and dates are pre-formatted strings** (`"1,234.50"`, `"24 Sep
-  2026"`), computed by your order system. The template does no arithmetic,
-  so a total can never disagree with the order record through float
-  rounding, and locale formatting stays with you.
-- `Option` fields and empty lists are omitted from the layout.
-- `LineItem { description, quantity: u32, unit_price, amount }`,
-  `Party { name, address: Vec<String>, tax_id, email, phone }`,
-  `SummaryLine { label, amount }` (discounts, shipping, tax).
+**Money and dates are pre-formatted strings** (`"1,234.50"`,
+`"24 Sep 2026"`) from your order system: the template prints, it never
+computes, so a total can never disagree with the order record. `Option`
+fields and empty lists are left out of the layout.
 
-## PNG for image messages and headers
+## Images for headers
 
 ```rust
-let png = Renderer::new().with_today(today).render_png(&Template::voucher(), &voucher, 192.0)?;
-let media_id = client.media(pnid).upload(png.bytes, png.mime_type, &png.filename).await?;
-let t = TemplateMessage::new("autumn_sale", "en_US").header(Parameter::image_id(media_id));
+Renderer::new()
+    .with_today(today)
+    .render_png(&Template::voucher(), voucher, 192.0)
 ```
 
-150–200 ppi suits image headers. `render_png` renders the first page;
-`render_png_pages` every page. `ppi` must be finite and positive
-(`RenderError::InvalidPpi`); a page over `MAX_PNG_PIXELS` (40 M) is refused
-(`ImageTooLarge`) before allocating. For a template's **creation** example the
-header needs a Resumable Upload handle, not a media id (`wa-rs-templates-otp`).
+150–200 ppi suits image headers (images up to 5 MB). `render_png` renders
+the first page, `render_png_pages` every page. A bad `ppi` is
+`RenderError::InvalidPpi`; a page over `MAX_PNG_PIXELS` is
+`RenderError::ImageTooLarge`, refused before allocating. Send it with
+`Parameter::image_id(media_id)` in a template header; a template's
+**creation** example needs a Resumable Upload handle instead (`wa-rs-media`).
 
-## Custom templates and the sandbox
+## Your own template
 
 ```rust
-let t = Template::from_source("packing_slip", r#"#let data = json(bytes(sys.inputs.data))
-#set page(width: 105mm, height: 148mm)
-= Packing slip #data.order
-"#);
-let pdf = Renderer::new().with_today(today).render_pdf(&t, &serde_json::json!({ "order": "860198" }))?;
+let template = Template::from_source(
+    "packing_slip",
+    "#let data = json(bytes(sys.inputs.data))\n#set page(width: 105mm, height: 148mm)\n= Packing slip #data.order\n",
+);
+Renderer::new()
+    .with_today(today)
+    .render_pdf(&template, &serde_json::json!({ "order": order }))
 ```
 
-- Input: any `Serialize` value, read in Typst with
-  `json(bytes(sys.inputs.data))`. Values placed with `#data.field` are text,
-  not markup (an input of `*x* #panic()` prints literally) — unless the
-  template passes input to `eval`: don't.
-- **No file system, no network, no packages**: `@preview` imports and file
-  reads fail with `RenderError::Compile` (diagnostics carry line/column).
-  Everything shown must come from the input or the source.
-- **Fonts**: only the bundled families — `"Libertinus Serif"` (default),
-  `"New Computer Modern"`, `"New Computer Modern Math"`, `"DejaVu Sans Mono"`.
-  Any other family silently falls back.
-- `name` becomes the output filename stem and appears in errors.
-- Compile diagnostics can quote input values: log them with the same care as
+Input is any `Serialize` value, read in Typst with
+`json(bytes(sys.inputs.data))`; values placed with `#data.field` are
+text, not markup — unless the template passes them to `eval`: don't. The
+sandbox has no file system, network or packages (`@preview` imports fail
+with `RenderError::Compile`, whose diagnostics carry line and column) and
+only the bundled fonts: Libertinus Serif (default), New Computer Modern,
+New Computer Modern Math, DejaVu Sans Mono; any other family silently
+falls back.
+
+## Pitfalls
+
+- **Always `with_today(date)`**: `Renderer::new()` has no clock, so a
+  template calling `datetime.today()` fails to compile, and the PDF carries
+  no creation date. Pass the date in the shop's or customer's time zone.
+  Same template, input and date ⇒ byte-identical output everywhere.
+- `RenderError` converts into `wa_rs::Error::Other` with `?`; the typed
+  error survives (`downcast_ref::<RenderError>()` on the inner
+  `anyhow::Error`).
+- Compile diagnostics can quote input values: log them as carefully as
   the input.
+- **Never render OTP codes, PINs, passwords or tokens** into a document or
+  image: media is stored by Meta and on the phone, forwarded and
+  screenshotted. A voucher's `code` is a promotional code meant to be
+  shared, nothing more.
 
-## Never render OTPs or secrets
+## What wa-rs does not do
 
-Authentication codes, PINs, passwords, access tokens and single-use bearer
-secrets (a gift-card secret that is spendable on its own) must never be
-rendered into a PDF or image: media is stored by Meta and on the phone,
-forwarded and screenshotted, and cannot be taken back. OTPs go only through
-authentication templates (`wa-rs-templates-otp`). A voucher's `code` is a
-promotional code meant to be shared — nothing more.
+- No tax or total computation, number or date formatting, label
+  localization, e-invoicing formats (Factur-X, UBL) or PDF signing.
+- No storage of rendered files: keep your own copy if you need it after
+  the media id's 30 days.
 
-## Not provided
+## Related skills
 
-Tax/total computation, number and date formatting, localization of labels,
-e-invoicing formats (Factur-X, UBL), PDF signing, storage of the rendered
-file (keep your own copy if you need it after 30 days).
+`wa-rs-media`, `wa-rs-send-messages`, `wa-rs-send-templates`,
+`wa-rs-commerce` (the orders), `wa-rs-marketing` (voucher campaigns),
+`wa-rs-otp-login` (codes go there, never here).
