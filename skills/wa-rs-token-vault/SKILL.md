@@ -5,7 +5,7 @@ description: "Keeping merchants' WhatsApp business tokens with wa-rs's TokenVaul
 
 # wa-rs-token-vault
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs e4e98e5259e3552aa293cbb7c0d3ec93d20e7991 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/vault.rs](examples/vault.rs), compiled and
 tested by wa-rs's own gate (routing, rotation, wrong key, offboarding).
