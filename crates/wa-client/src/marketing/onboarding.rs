@@ -148,7 +148,7 @@ impl MarketingAccount {
         }
         let r: Response = self
             .client
-            .get(self.waba_id.as_str())
+            .get_at(&[self.waba_id.as_str()])
             .query("fields", "marketing_messages_onboarding_status")
             .context("marketing onboarding status response")
             .send()
@@ -166,7 +166,7 @@ impl MarketingAccount {
         }
         let r: Response = self
             .client
-            .get(self.waba_id.as_str())
+            .get_at(&[self.waba_id.as_str()])
             .query("fields", "owner_business_info")
             .context("owner business info response")
             .send()
@@ -186,7 +186,7 @@ impl MarketingAccount {
         }
         let r: Response = self
             .client
-            .get(self.waba_id.as_str())
+            .get_at(&[self.waba_id.as_str()])
             .query("fields", "disable_marketing_messages_on_cloud_api")
             .context("cloud api marketing setting response")
             .send()
@@ -216,7 +216,7 @@ impl MarketingAccount {
         }
         let response = self
             .client
-            .post(self.waba_id.as_str())
+            .post_at(&[self.waba_id.as_str()])
             .json(&serde_json::json!({ "disable_marketing_messages_on_cloud_api": disabled }))
             .idempotent(true)
             .context(CONTEXT)
@@ -256,7 +256,7 @@ impl MarketingBusiness {
         }
         let r: Response = self
             .client
-            .get(self.business_id.as_str())
+            .get_at(&[self.business_id.as_str()])
             .query("fields", "marketing_messages_onboarding_status")
             .context("business marketing onboarding status response")
             .send()
@@ -279,10 +279,10 @@ impl MarketingBusiness {
             "value": statuses,
         }]);
         self.client
-            .get(&format!(
-                "{}/client_whatsapp_business_accounts",
-                self.business_id
-            ))
+            .get_at(&[
+                self.business_id.as_str(),
+                "client_whatsapp_business_accounts",
+            ])
             .query_json("filtering", &filtering)
             .query_opt("after", after)
             .context("client whatsapp business accounts response")
@@ -310,7 +310,7 @@ impl MarketingBusiness {
     /// is surfaced rather than replayed into a possible error.
     pub async fn request_onboarding(&self, solution_id: Option<&str>) -> Result<OnboardingRequest> {
         self.client
-            .post(&format!("{}/onboard_partners_to_mm_lite", self.business_id))
+            .post_at(&[self.business_id.as_str(), "onboard_partners_to_mm_lite"])
             .query_opt("solution_id", solution_id)
             .context("mm api onboarding request response")
             .send()

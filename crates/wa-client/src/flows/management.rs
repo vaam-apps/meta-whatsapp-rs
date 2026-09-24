@@ -79,7 +79,7 @@ impl Flows {
     pub async fn create(&self, flow: &CreateFlow) -> Result<CreatedFlow> {
         flow.validate()?;
         self.client
-            .post(&format!("{}/flows", self.waba_id))
+            .post_at(&[self.waba_id.as_str(), "flows"])
             .json(flow)
             .context("create flow response")
             .send()
@@ -91,7 +91,7 @@ impl Flows {
     /// [`Page::next_cursor`] as `after` to continue.
     pub async fn list(&self, after: Option<&str>) -> Result<Page<FlowDetails>> {
         self.client
-            .get(&format!("{}/flows", self.waba_id))
+            .get_at(&[self.waba_id.as_str(), "flows"])
             .query_opt("after", after)
             .context("list flows response")
             .send()
@@ -101,7 +101,7 @@ impl Flows {
     /// Every Flow of this account, following cursors page by page.
     pub fn list_stream(&self) -> impl Stream<Item = Result<FlowDetails>> + Send + 'static {
         self.client
-            .get(&format!("{}/flows", self.waba_id))
+            .get_at(&[self.waba_id.as_str(), "flows"])
             .context("list flows response")
             .paginate()
     }
@@ -122,7 +122,7 @@ impl Flow {
     /// except `preview`.
     pub async fn get(&self) -> Result<FlowDetails> {
         self.client
-            .get(self.flow_id.as_str())
+            .get_at(&[self.flow_id.as_str()])
             .query("fields", DETAIL_FIELDS)
             .context("flow details response")
             .send()
@@ -140,7 +140,7 @@ impl Flow {
         }
         let response: PreviewResponse = self
             .client
-            .get(self.flow_id.as_str())
+            .get_at(&[self.flow_id.as_str()])
             .query("fields", format!("preview.invalidate({invalidate})"))
             .context("flow preview response")
             .send()
@@ -156,7 +156,7 @@ impl Flow {
     pub async fn update(&self, update: &UpdateFlow) -> Result<()> {
         update.validate()?;
         self.client
-            .post(self.flow_id.as_str())
+            .post_at(&[self.flow_id.as_str()])
             .json(update)
             .idempotent(true)
             .context("update flow response")
@@ -180,7 +180,7 @@ impl Flow {
             .text("name", "flow.json")
             .text("asset_type", "FLOW_JSON");
         self.client
-            .post(&format!("{}/assets", self.flow_id))
+            .post_at(&[self.flow_id.as_str(), "assets"])
             .multipart(form)
             .idempotent(true)
             .context("upload flow json response")
@@ -191,7 +191,7 @@ impl Flow {
     /// One page of the Flow's assets (`GET /{FLOW_ID}/assets`).
     pub async fn assets(&self, after: Option<&str>) -> Result<Page<FlowAsset>> {
         self.client
-            .get(&format!("{}/assets", self.flow_id))
+            .get_at(&[self.flow_id.as_str(), "assets"])
             .query_opt("after", after)
             .context("flow assets response")
             .send()
@@ -201,7 +201,7 @@ impl Flow {
     /// Every asset of the Flow, following cursors.
     pub fn assets_stream(&self) -> impl Stream<Item = Result<FlowAsset>> + Send + 'static {
         self.client
-            .get(&format!("{}/assets", self.flow_id))
+            .get_at(&[self.flow_id.as_str(), "assets"])
             .context("flow assets response")
             .paginate()
     }
@@ -212,7 +212,7 @@ impl Flow {
     /// (`flows/guides/healthmonitoring`) are outstanding.
     pub async fn publish(&self) -> Result<()> {
         self.client
-            .post(&format!("{}/publish", self.flow_id))
+            .post_at(&[self.flow_id.as_str(), "publish"])
             .context("publish flow response")
             .send_success()
             .await
@@ -222,7 +222,7 @@ impl Flow {
     /// longer be sent or opened. Irreversible.
     pub async fn deprecate(&self) -> Result<()> {
         self.client
-            .post(&format!("{}/deprecate", self.flow_id))
+            .post_at(&[self.flow_id.as_str(), "deprecate"])
             .context("deprecate flow response")
             .send_success()
             .await
@@ -231,7 +231,7 @@ impl Flow {
     /// Delete the Flow (`DELETE /{FLOW_ID}`). Only drafts can be deleted.
     pub async fn delete(&self) -> Result<()> {
         self.client
-            .delete(self.flow_id.as_str())
+            .delete_at(&[self.flow_id.as_str()])
             .context("delete flow response")
             .send_success()
             .await

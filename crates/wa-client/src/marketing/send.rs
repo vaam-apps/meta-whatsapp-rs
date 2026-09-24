@@ -244,7 +244,7 @@ impl Marketing {
                 }),
         };
         self.client
-            .post(&format!("{}/marketing_messages", self.phone_number_id))
+            .post_at(&[self.phone_number_id.as_str(), "marketing_messages"])
             .json(&body)
             .context("send marketing message response")
             .send()

@@ -108,10 +108,10 @@ impl BusinessEncryption {
             .append_pair("business_public_key", public_key_pem)
             .finish();
         self.client
-            .post(&format!(
-                "{}/whatsapp_business_encryption",
-                self.phone_number_id
-            ))
+            .post_at(&[
+                self.phone_number_id.as_str(),
+                "whatsapp_business_encryption",
+            ])
             .bytes("application/x-www-form-urlencoded", body)
             .idempotent(true)
             .context("set business public key response")
@@ -125,10 +125,10 @@ impl BusinessEncryption {
     pub async fn get(&self) -> Result<BusinessPublicKey> {
         let response: GetResponse = self
             .client
-            .get(&format!(
-                "{}/whatsapp_business_encryption",
-                self.phone_number_id
-            ))
+            .get_at(&[
+                self.phone_number_id.as_str(),
+                "whatsapp_business_encryption",
+            ])
             .context("business public key response")
             .send()
             .await?;
