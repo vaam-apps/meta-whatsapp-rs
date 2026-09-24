@@ -29,7 +29,8 @@ crates/
   wa-webhooks   verify, parse, normalize, dedup, dispatch; axum router (feature).
   wa-adapters   port implementations: reqwest, memory/Postgres/Redis stores, sinks.
   wa-typst      Typst → PDF/PNG for document and image messages.
-  wa-rs         facade: re-exports + feature flags. What integrators depend on.
+  wa-rs         facade: re-exports, prelude, `client(token)`, the CMS inbox,
+                feature flags, runnable examples. What integrators depend on.
 .xtask          repo automation (`cargo xtask meta-docs`).
 ```
 

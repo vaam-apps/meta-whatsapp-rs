@@ -7,7 +7,10 @@ and WhatsApp OTP authentication.
 
 **Read [`docs/architecture.md`](docs/architecture.md) before designing
 anything.** It is the spec. [`docs/coverage.md`](docs/coverage.md) says what
-exists and what does not.
+exists and what does not. [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) lists
+decisions reserved for the maintainer — surface them, never pick a default.
+[`CONTRIBUTING.md`](CONTRIBUTING.md) and
+[`docs/dev-environment.md`](docs/dev-environment.md) cover setup and process.
 
 ## Commands
 

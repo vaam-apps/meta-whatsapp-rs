@@ -220,6 +220,19 @@ verified against; a public API change updates them in the same PR.
 `wa-rs` is already taken on crates.io by an unrelated project, so the
 workspace is `publish = false` until crate names are chosen.
 
+## Documentation
+
+| Read | For |
+| --- | --- |
+| [docs/coverage.md](docs/coverage.md) | what is implemented, per Meta feature |
+| [docs/architecture.md](docs/architecture.md) | the design spec: ports, error tree, security rules |
+| [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) | product decisions still open (read before production) |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | setup, the `just ci` gate, review pipeline, docs/skills parity |
+| [docs/dev-environment.md](docs/dev-environment.md) | the Claude Code dev container and its firewall |
+| [CHANGELOG.md](CHANGELOG.md) | what changed |
+| [skills/](skills/README.md) | agent skills for code that uses wa-rs |
+| `cargo doc --open -p wa-rs --all-features` | the API reference |
+
 ## License
 
 MIT

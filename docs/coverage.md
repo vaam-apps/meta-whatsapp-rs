@@ -38,7 +38,7 @@ v25.0).
 | 23 | Typst documents (invoice, receipt, voucher) → PDF/PNG, deterministic, sandboxed | e-commerce | `wa-typst` | — | **done** |
 | 24 | Pricing objects on status webhooks (per-message pricing) | analytics | `wa-webhooks` | `pricing` | **done** |
 | 25 | Identity change check (`identity_key_hash`, setting) | security | `wa-webhooks`, `phone_numbers` | `identity-change` | **done** |
-| 26 | CMS inbox: webhook events → `ConversationStore`, 24h-window-checked replies with the merchant's token | CMS | `wa_rs::inbox` | — | **done** |
+| 26 | CMS inbox: webhook events → `ConversationStore`, 24h-window-checked replies with the merchant's token; runnable servers in `crates/wa-rs/examples/` (`cms_inbox`, `embedded_signup`, `otp_login`, `send_message`, `invoice_document`) | CMS | `wa_rs::inbox` | — | **done** |
 | 27 | Adapters: reqwest transport; memory, Postgres, Redis stores with executable conformance suites; channel/broadcast/fan-out/filter/fn/tracing sinks | core | `wa-adapters` | — | **done**; Postgres cannot store U+0000 (documented); Redis TLS needs an integrator-built connection |
 | 28 | Solution partner APIs: credit lines, partner-led business verification, multi-partner solutions, WABA/number migration | partners | — | `solution-providers/*` | planned |
 | 29 | Conversation routing / handover (standby, thread control) | later | — | `conversation-routing/*` | planned (docs pages unavailable at mirror time) |
