@@ -57,7 +57,8 @@ OtpConfig {
 
 `OtpService::new` checks the config (`OtpConfig::validate()` names the
 field: `code_length` 4–8, `ttl` up to 90 minutes, `max_attempts`,
-`issue_limit`, a blank `namespace`) as `Error::Config`.
+`issue_limit`, a blank `namespace` or one with edge whitespace or control
+characters) as `Error::Config`.
 
 ## 3. Issue, then verify
 
@@ -87,8 +88,9 @@ Ok(match otp.verify(&user, "login", typed.trim()).await? {
 ```
 
 `purpose` (`"login"`, `"reset_password"`, …) separates flows for one
-number. `verify` compares byte for byte: trim input. Every call with a
-live code counts as an attempt, counted atomically before comparing.
+number. It and the namespace are constants of your code or tenant table,
+never request input. `verify` compares byte for byte: trim input. Every
+call with a live code counts as an attempt, counted atomically first.
 
 ## Why E.164 with `+` is mandatory
 
@@ -110,17 +112,15 @@ the purpose: one store and one pepper serve any number of services, and
 tenants sharing a number never see each other's codes. Changing a
 namespace invalidates outstanding codes.
 
-~~`OtpConfig::namespace` is an `Option`, `None` by default (one shared
-scope per number)~~: true until d67b3ac (2026-09-24), now required. Crossing
-it: a service that set `Some(ns)` keeps its keys and outstanding codes
-with `OtpConfig::new(ns)`; one that used `None` must pick a namespace,
-and its codes in flight become `NotFound` once.
+~~`OtpConfig::namespace` is an optional `Option`~~: until d67b3ac. Crossing
+it, `Some(ns)` keeps its keys with `OtpConfig::new(ns)`; a `None` service
+must pick a namespace, and its codes in flight become `NotFound` once.
 
-~~Codes were keyed by the pepper, the recipient's digits and the purpose
-only~~: true until e40b86f (2026-09-24). Moving your `rev` across e40b86f
-changes every store key once: codes in flight become `NotFound` and issue
-limits restart; deploy outside peak login time. On an older pin, give
-every sending number its own pepper or store.
+~~Codes were keyed by the pepper, the digits and the purpose only~~:
+until e40b86f; crossing it, codes in flight become `NotFound` and limits
+restart. ~~The code hash left out the store key~~ (a store writer could
+copy their record over another key): until the OTP key-binding commit
+(2026-09-24); crossing it, codes in flight answer `Invalid` once.
 
 ## Pitfalls
 

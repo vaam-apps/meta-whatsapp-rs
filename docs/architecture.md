@@ -243,15 +243,19 @@ Authentication template definitions (copy code, one-tap with
   netstring-encoded so neither can be shifted into the other. Services
   sharing a store and a pepper (several merchants of one integrator) never
   see each other's codes, cooldowns or issue limits, on their own numbers
-  or on a shared one. A blank namespace is a config error; changing the
+  or on a shared one. A blank namespace (or one with edge whitespace or
+  control characters) is a config error; changing the
   scope (or upgrading across the commit that introduced it) invalidates
   outstanding codes. Making the namespace required kept the encoding: a
   service that had set one derives the same keys.
 - `issue(recipient, purpose) → IssueOutcome { Sent(Challenge{id, expires_at,
   message_id}), CoolingDown{retry_after}, RateLimited{retry_after} }`:
   CSPRNG numeric code (length 4–8), only an HMAC-SHA256 of it stored under a
-  server pepper (`SecretBytes`), keys are HMACs too (no raw phone number in
-  the store). The code goes out through `Messages::send`
+  server pepper (`SecretBytes`): HMAC(pepper, `"wa.otp.code" | key |
+  challenge id | code`), so a record copied to another key (by anyone who
+  can write the store but lacks the pepper) never verifies there. Keys are
+  HMACs too (no raw phone number in the store); the namespace and the
+  purpose are server-side constants, never request input. The code goes out through `Messages::send`
   (`OutboundMessage::template`), so the send checks and the private
   response decoding apply. Resend cooldown (30 s) and a per-recipient
   issue limit (default 5 per sliding hour per number and purpose, per

@@ -60,11 +60,12 @@ match messages.send(&msg).await {
 `Error::may_have_been_sent()` is the line between the two: `false` for a
 Graph error on a 4xx response, a throttling error on any status, a local
 validation or configuration error, or a connection that never opened —
-nothing went out, fix and resend. `true` for a timeout, any other 5xx, an
-unreadable 2xx or anything unknown — the message may be on its way;
-reconcile before resending. The OTP service keeps a code verifiable by the
-same rule. ~~A throttling error on a 5xx is `true`~~: until da39cf0
-(2026-09-24); it is `false` now, as the client's retry policy assumed.
+nothing went out, fix and resend. `true` for a timeout, any other 5xx or
+non-4xx status, an unreadable 2xx or anything unknown — the message may be
+on its way; reconcile before resending. The OTP service keeps a code
+verifiable by the same rule. ~~A throttling error on a 5xx is `true`~~:
+until da39cf0; `false` now, as the retry policy assumed. ~~A Graph error
+on a 1xx–3xx is `false`~~: until the OTP key-binding commit (2026-09-24).
 
 ## Retries: "could succeed later" is not "safe to repeat"
 

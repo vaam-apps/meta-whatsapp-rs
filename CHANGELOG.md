@@ -222,9 +222,9 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   pepper (several merchants of one integrator) shared records: a code
   merchant A sent verified at merchant B for the same number and purpose,
   an issue at A replaced B's code, and cooldowns and issue limits were
-  pooled. Codes are now bound to the sending `phone_number_id` and an
-  optional `OtpConfig::namespace` (new field; a blank one is a config
-  error). Upgrading changes every key once: outstanding codes answer
+  pooled. Codes are now bound to the sending `phone_number_id` and to
+  `OtpConfig::namespace` (a new field, optional at first and required
+  since d67b3ac; a blank one is a config error). Upgrading changes every key once: outstanding codes answer
   `NotFound` and issue logs restart.
 - **M1 — one NUL in a customer's message blocked the whole webhook batch on
   Postgres.** Postgres cannot store U+0000, so `InboxSink` failed every
@@ -273,6 +273,21 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   - **A storage error named a message id** (Meta's ids encode the
     customer's phone number) in text the webhook handler logs. The
     Postgres adapter's status errors no longer carry it.
+  - **L6 — an OTP record copied to another key verified there.** The code
+    hash covered the challenge id and the code, not the store key, so
+    whoever could write the store (a shared Redis) without the pepper
+    could ask for a code for their own number, copy their record over the
+    victim's key (another number, purpose or namespace) and verify as the
+    victim. The code hash now covers the store key. Upgrading: codes in
+    flight answer `Invalid` once (10-minute TTL by default).
+  - `OtpConfig::validate` refuses a namespace with edge whitespace or
+    control characters (two tenants that print alike), and the rustdoc
+    and guides say the namespace and the purpose are server-side
+    constants, never request input.
+  - `Error::may_have_been_sent` said "`true` for any non-4xx status" but
+    answered `false` for a Graph error on a 1xx–3xx response; it now
+    answers `true` there too (unknown), so the OTP service keeps the
+    challenge. A Graph error built without a status stays `false`.
 - **Send decode errors no longer quote the recipient.** An unreadable
   response of `Messages::send` or `Marketing::send` (which echo the
   recipient's number) is reported without the body snippet and without

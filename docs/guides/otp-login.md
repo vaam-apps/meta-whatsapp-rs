@@ -112,8 +112,10 @@ top of the user's number and the `purpose`. Several services can share one
 store and one pepper: a code sent by one never verifies at another, and
 their limits never mix, whether they send from their own numbers or from
 the same one. The namespace is required (`OtpConfig::new` takes it; there
-is no `Default`) and must not be blank: use the tenant id. Other settings
-change with struct update syntax:
+is no `Default`) and must not be blank, nor have edge whitespace or
+control characters: use the tenant id, from your configuration or tenant
+table, never from the request (the same goes for `purpose`). Other
+settings change with struct update syntax:
 
 ```rust
 let config = OtpConfig { code_length: 8, ..OtpConfig::new("brand-b") }; // not blank
@@ -125,7 +127,10 @@ one) and the hourly issue limits start again. Deploy outside peak login
 hours. Upgrading across d67b3ac, which made the namespace required
 (2026-09-24): a service that had `namespace: Some(ns)` keeps its keys with
 `OtpConfig::new(ns)`; one that had `None` needs a namespace, and its codes
-in flight answer `NotFound` once.
+in flight answer `NotFound` once. Upgrading across the commit that binds
+the code hash to its store key (2026-09-24, security review L6): codes in
+flight answer `Invalid` once; the user asks for a new one after the
+cooldown.
 
 ## 4. Numbers must be E.164 with `+`
 
@@ -213,8 +218,10 @@ equivalent per-number limit sits in front. The default is a
 ## 7. Pepper custody
 
 - The pepper keys every HMAC: store keys (over the sending number, the
-  namespace, the user's number and the purpose) and code hashes. No phone
-  number and no code is stored (namespaces `wa.otp` and `wa.otp.rate`).
+  namespace, the user's number and the purpose) and code hashes (over the
+  store key, the challenge id and the code, so a record copied to another
+  key never verifies there). No phone number and no code is stored
+  (namespaces `wa.otp` and `wa.otp.rate`).
 - At least 32 random bytes (`openssl rand -base64 32`), kept **outside** the
   database that holds the challenges: with both, a 6-digit code falls to
   10⁶ guesses offline.
