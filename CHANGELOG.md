@@ -127,13 +127,19 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
 
 ### Changed
 
-- **`account_update` partner fixtures** assert every documented
-  `waba_info` field (`waba_id`, `owner_business_id`, `partner_app_id`,
-  `solution_id`, `solution_partner_business_ids`); the models already had
-  them. In Meta's `PARTNER_*` examples the entry id is a business
-  portfolio id, so `WebhookEvent::waba_id()` is not the merchant's WABA
-  for those events: read `update.waba_info.waba_id` (the guide and the
-  embedded-signup skill say so).
+- **Breaking — `WebhookEvent::AccountUpdated` names the right WABA.** Its
+  `waba_id` (and `WebhookEvent::waba_id()`) was the entry id, which in
+  Meta's examples of every update with a `waba_info` (`PARTNER_ADDED`,
+  `PARTNER_REMOVED`, `PARTNER_APP_INSTALLED`, `PARTNER_APP_UNINSTALLED`,
+  `AD_ACCOUNT_LINKED`, `MM_LITE_TERMS_SIGNED`) is a business portfolio, not
+  the WABA: a `PARTNER_REMOVED` routed by it found no merchant. It is now
+  `Option<WabaId>`: `waba_info.waba_id` when the update has a `waba_info`,
+  `None` if that names no WABA, and the entry id (as before) for updates
+  without one, which is what every such example shows. The entry id is kept
+  verbatim in the new `entry_id` field. Because the event's JSON changed,
+  the `dedup_key` of an `account_update` delivered before the upgrade and
+  redelivered after it differs once. The partner fixtures assert every
+  documented `waba_info` field.
 - **Breaking — one type per concept** (conventions review #9):
   `wa_client::common` defines `MediaSource`, `FlowAction` and
   `QualityRating` once; `messages`, `templates` and `phone_numbers`

@@ -91,6 +91,118 @@ fn account_update_value(value: &serde_json::Value) -> wa_webhooks::fields::Accou
     }
 }
 
+/// Which WABA an `account_update` is about, for every example the
+/// reference page shows. Where the update has a `waba_info`, Meta's entry id
+/// is a business portfolio (in `PARTNER_ADDED`, the first of
+/// `solution_partner_business_ids`): the WABA comes from `waba_info`.
+#[test]
+fn account_update_waba_id_is_the_customers_waba_not_a_business() {
+    const PARTNER_BUSINESS: &str = "2949482758682047";
+    let waba_and_entry = |name: &str| match one(name) {
+        WebhookEvent::AccountUpdated {
+            waba_id, entry_id, ..
+        } => (waba_id.map(wa_core::ids::WabaId::into_inner), entry_id),
+        other => panic!("{name}: {other:?}"),
+    };
+    for (fixture, waba) in [
+        (
+            "fields/account_update_partner_added.json",
+            "980198427658004",
+        ),
+        (
+            "fields/account_update_partner_removed.json",
+            "980198427658004",
+        ),
+        (
+            "fields/account_update_partner_removed_disconnection.json",
+            "980198427658004",
+        ),
+        (
+            "fields/account_update_partner_app_installed.json",
+            "1191624265890717",
+        ),
+        (
+            "fields/account_update_partner_app_uninstalled.json",
+            "184943124712545",
+        ),
+        (
+            "fields/account_update_ad_account_linked.json",
+            "980198427658004",
+        ),
+        (
+            "fields/account_update_mm_lite_terms.json",
+            "980198427658004",
+        ),
+    ] {
+        let event = one(fixture);
+        assert_eq!(
+            event.waba_id().map(wa_core::ids::WabaId::as_str),
+            Some(waba),
+            "{fixture}"
+        );
+        assert_eq!(
+            waba_and_entry(fixture),
+            (Some(waba.to_owned()), PARTNER_BUSINESS.to_owned()),
+            "{fixture}: the entry id is kept, as the business it is"
+        );
+    }
+    let added = account_update("fields/account_update_partner_added.json");
+    assert_eq!(
+        added.waba_info.unwrap().solution_partner_business_ids[0].as_str(),
+        PARTNER_BUSINESS,
+        "the entry id of PARTNER_ADDED is a partner's business portfolio"
+    );
+
+    // Without a `waba_info`, every example's entry id is the WABA.
+    for fixture in [
+        "fields/account_update_deleted.json",
+        "fields/account_update_restriction.json",
+        "fields/account_update_violation.json",
+        "fields/account_update_auth_intl.json",
+        "fields/account_update_disabled.json",
+        "fields/account_update_certification.json",
+        "fields/account_update_coexistence_partner_removed.json",
+        "fields/account_update_primary_location.json",
+        "fields/account_update_volume_tier.json",
+        "fields/account_update_offboarded.json",
+        "fields/account_update_reconnected.json",
+    ] {
+        assert_eq!(
+            waba_and_entry(fixture),
+            (
+                Some("102290129340398".to_owned()),
+                "102290129340398".to_owned()
+            ),
+            "{fixture}"
+        );
+    }
+
+    // A `waba_info` that names no WABA: the entry id is a business, so no
+    // WABA is invented from it.
+    for info in [
+        json!({"owner_business_id": "2329417887457253"}),
+        json!({"waba_id": ""}),
+    ] {
+        let body = json!({"object": "whatsapp_business_account", "entry": [{
+            "id": PARTNER_BUSINESS, "time": 1748477359,
+            "changes": [{"field": "account_update", "value": {"event": "PARTNER_REMOVED", "waba_info": info}}]
+        }]});
+        let event = WebhookPayload::from_slice(body.to_string().as_bytes())
+            .unwrap()
+            .into_events()
+            .remove(0);
+        assert_eq!(event.waba_id(), None, "{info}");
+        let WebhookEvent::AccountUpdated { entry_id, .. } = &event else {
+            panic!("{event:?}")
+        };
+        assert_eq!(entry_id, PARTNER_BUSINESS);
+        // What the SSE helper streams reads back.
+        let back: WebhookEvent =
+            serde_json::from_value(serde_json::to_value(&event).unwrap()).unwrap();
+        assert_eq!(back, event);
+    }
+}
+
 /// `embedded-signup/website-optional` and `marketing-messages/onboarding`
 /// document `account_update` shapes the reference page does not show.
 #[test]

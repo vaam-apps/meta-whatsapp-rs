@@ -1,7 +1,8 @@
 //! Normalized events: one [`WebhookEvent`] per message, status, error and
 //! field change, whatever envelope it arrived in.
 //!
-//! This is what sinks receive. Each event carries the WABA id and, when the
+//! This is what sinks receive. Each event carries the WABA id (unless the
+//! payload does not name one: see [`WebhookEvent::waba_id`]) and, when the
 //! field has one, the business phone number id, plus the WhatsApp user the
 //! item is about ([`Contact`], matched from the change's `contacts` by BSUID
 //! first and phone number second).
@@ -223,9 +224,24 @@ pub enum WebhookEvent {
         update: Box<AccountReviewUpdateValue>,
     },
     /// `account_update`.
+    ///
+    /// Its entry id is not always the WABA. In Meta's examples an update
+    /// with a `waba_info` (`PARTNER_ADDED`, `PARTNER_REMOVED`,
+    /// `PARTNER_APP_INSTALLED`, `PARTNER_APP_UNINSTALLED`,
+    /// `AD_ACCOUNT_LINKED`, `MM_LITE_TERMS_SIGNED`) names the customer's
+    /// WABA in `waba_info.waba_id` and a business portfolio as the entry id
+    /// (for `PARTNER_ADDED`, one of `solution_partner_business_ids`); every
+    /// update without one carries the WABA as the entry id.
     AccountUpdated {
-        /// WABA.
-        waba_id: WabaId,
+        /// The WABA the update is about: `waba_info.waba_id` when the update
+        /// has a `waba_info`, else the entry id. `None` when a `waba_info`
+        /// names no WABA: the entry id is then not one.
+        #[serde(default)]
+        waba_id: Option<WabaId>,
+        /// The entry's `id`, verbatim: the WABA for updates without a
+        /// `waba_info`, a business portfolio for those with one.
+        #[serde(default)]
+        entry_id: String,
         /// When.
         #[serde(default, with = "wa_core::timestamp::unix_option")]
         time: Option<OffsetDateTime>,
@@ -429,7 +445,8 @@ impl WebhookEvent {
     }
 
     /// The WABA the event belongs to. `None` for `partner_solutions` (a
-    /// business portfolio, see [`Self::PartnerSolutionUpdated`]) and for
+    /// business portfolio, see [`Self::PartnerSolutionUpdated`]), for an
+    /// [`Self::AccountUpdated`] whose `waba_info` names no WABA, and for
     /// [`Self::Unparsed`].
     pub fn waba_id(&self) -> Option<&WabaId> {
         match self {
@@ -448,7 +465,6 @@ impl WebhookEvent {
             | Self::FlowUpdated { waba_id, .. }
             | Self::AccountAlert { waba_id, .. }
             | Self::AccountReviewUpdated { waba_id, .. }
-            | Self::AccountUpdated { waba_id, .. }
             | Self::AccountSettingsUpdated { waba_id, .. }
             | Self::BusinessCapabilityUpdated { waba_id, .. }
             | Self::BusinessUsernameUpdated { waba_id, .. }
@@ -462,6 +478,7 @@ impl WebhookEvent {
             | Self::TemplateCategoryUpdated { waba_id, .. }
             | Self::TemplateCategoryMisuseDetected { waba_id, .. }
             | Self::Unknown { waba_id, .. } => Some(waba_id),
+            Self::AccountUpdated { waba_id, .. } => waba_id.as_ref(),
             Self::PartnerSolutionUpdated { .. } | Self::Unparsed { .. } => None,
         }
     }
@@ -636,6 +653,31 @@ impl WebhookPayload {
             }
         }
         out
+    }
+}
+
+/// The WABA an `account_update` is about (`webhooks/reference/account_update`).
+///
+/// The reference's syntax calls the entry id the WABA id, but its examples
+/// disagree for every update that has a `waba_info`: `PARTNER_ADDED`,
+/// `PARTNER_REMOVED`, `PARTNER_APP_INSTALLED`, `PARTNER_APP_UNINSTALLED`,
+/// `AD_ACCOUNT_LINKED` and `MM_LITE_TERMS_SIGNED` all show entry id
+/// `2949482758682047`, which `PARTNER_ADDED` lists in
+/// `solution_partner_business_ids` (a business portfolio), and the customer's
+/// WABA in `waba_info.waba_id`. Every example without a `waba_info`
+/// (`ACCOUNT_DELETED`, …, and the coexistence `PARTNER_REMOVED` of
+/// `embedded-signup/onboarding-business-app-users`) shows the WABA as the
+/// entry id. So: `waba_info.waba_id` when there is a `waba_info`, `None` if
+/// it names none (the entry id is then a business, never a WABA), and the
+/// entry id only when there is no `waba_info`.
+fn account_update_waba(update: &AccountUpdateValue, entry: WabaId) -> Option<WabaId> {
+    match &update.waba_info {
+        Some(info) => info
+            .waba_id
+            .as_ref()
+            .filter(|id| !id.as_str().trim().is_empty())
+            .cloned(),
+        None => Some(entry),
     }
 }
 
@@ -880,7 +922,8 @@ impl Ctx {
                 });
             }
             ChangeValue::AccountUpdate(update) => out.push(WebhookEvent::AccountUpdated {
-                waba_id,
+                waba_id: account_update_waba(&update, waba_id),
+                entry_id: self.entry_id.clone(),
                 time,
                 update,
             }),
