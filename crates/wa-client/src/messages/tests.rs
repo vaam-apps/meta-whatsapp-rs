@@ -38,12 +38,31 @@ fn client(t: &ScriptedTransport) -> Client {
 }
 
 /// Validate, serialize, compare.
+///
+/// Compares the bytes `send` would put on the wire, not `to_value`: a
+/// `Value` silently keeps only the last of two equal keys, which would hide
+/// a flattened field colliding with the envelope.
 #[track_caller]
 fn assert_wire(msg: &OutboundMessage, expected: &Value) {
     if let Err(e) = msg.validate() {
         panic!("documented example failed validation: {e}");
     }
-    assert_eq!(&serde_json::to_value(msg).unwrap(), expected);
+    let wire = serde_json::to_vec(msg).unwrap();
+    assert_no_duplicate_keys(&wire);
+    assert_eq!(&serde_json::from_slice::<Value>(&wire).unwrap(), expected);
+}
+
+/// Re-serializing parsed JSON drops duplicate keys (and nothing else, for
+/// compact output), so a shorter result means the input had some.
+#[track_caller]
+fn assert_no_duplicate_keys(wire: &[u8]) {
+    let parsed: Value = serde_json::from_slice(wire).unwrap();
+    assert_eq!(
+        serde_json::to_vec(&parsed).unwrap().len(),
+        wire.len(),
+        "duplicate JSON keys in {}",
+        String::from_utf8_lossy(wire)
+    );
 }
 
 /// The `field` of the validation error `msg` produces.
@@ -126,25 +145,47 @@ async fn invalid_messages_never_reach_the_transport() {
 
 #[tokio::test]
 async fn a_phone_number_id_cannot_redirect_the_request() {
+    // An id smuggling `/`, `?` or `#` stays one percent-encoded segment:
+    // `123/subscribed_apps` must not become `POST /123/subscribed_apps/…`.
+    let t = ScriptedTransport::new();
+    for id in ["123/subscribed_apps", "123?fields=x#y"] {
+        t.push_json(200, text_response());
+        t.push_json(200, json!({"success": true}));
+        let m = client(&t).messages(id);
+        m.send(&OutboundMessage::text(phone(), "hi")).await.unwrap();
+        m.mark_read(&MessageId::new("wamid.A")).await.unwrap();
+    }
+    let paths: Vec<_> = t.requests().iter().map(|r| r.url.clone()).collect();
+    for url in &paths[..2] {
+        assert_eq!(url.path(), "/v25.0/123%2Fsubscribed_apps/messages");
+        assert_eq!(url.query(), None);
+    }
+    for url in &paths[2..] {
+        assert_eq!(url.path(), "/v25.0/123%3Ffields=x%23y/messages");
+        assert_eq!((url.query(), url.fragment()), (None, None));
+    }
+    assert_eq!(t.remaining(), 0);
+
+    // Segments URL normalization would drop or pop never leave the client.
     let t = ScriptedTransport::new();
     let c = client(&t);
-    for bad in ["", "123/subscribed_apps", "..", "."] {
+    for bad in ["", ".", ".."] {
         let err = c
             .messages(bad)
             .send(&OutboundMessage::text(phone(), "hi"))
             .await
             .unwrap_err();
         assert!(
-            matches!(&err, Error::Validation(v) if v.field == "phone_number_id"),
+            matches!(&err, Error::Validation(v) if v.field == "path"),
             "{bad:?}: {err}"
         );
         let err = c
             .messages(bad)
-            .mark_read(&MessageId::new("wamid.A"))
+            .mark_read_with_typing_indicator(&MessageId::new("wamid.A"))
             .await
             .unwrap_err();
         assert!(
-            matches!(&err, Error::Validation(v) if v.field == "phone_number_id"),
+            matches!(&err, Error::Validation(v) if v.field == "path"),
             "{bad:?}: {err}"
         );
     }
@@ -1871,6 +1912,19 @@ fn direct_send_limits() {
         invalid(&text().direct_send_template_name("x")),
         "direct_send_config"
     );
+
+    // direct-send/supported-features-and-limits: header 60 under Direct
+    // Send; the reply-buttons page itself documents no header limit.
+    let buttons_with_header = |n: usize| {
+        OutboundMessage::new(
+            phone(),
+            ReplyButtons::new("b", buttons(1)).header(Header::text(s(n))),
+        )
+    };
+    assert_limit("interactive.header.text", 60, |n| {
+        buttons_with_header(n).category(DirectSendCategory::Utility)
+    });
+    assert!(buttons_with_header(61).validate().is_ok());
 }
 
 #[test]
@@ -1884,18 +1938,40 @@ fn raw_types_cannot_shadow_envelope_fields() {
             },
         )
     };
-    for reserved in [
-        "to",
-        "type",
-        "recipient",
-        "context",
-        "messaging_product",
-        "category",
-    ] {
+    // Every key the envelope can emit, taken from a message that sets all
+    // of them: a Raw type named like any of them would put it twice.
+    let full = |t: &str| {
+        let mut m = raw(t)
+            .reply_to("wamid.A")
+            .callback_data("cb")
+            .category(DirectSendCategory::Utility)
+            .ttl_seconds(60)
+            .direct_send_template_name("n");
+        m.recipient = Recipient::PhoneAndUser {
+            phone: PHONE.into(),
+            user: UserId::new(BSUID),
+        };
+        m
+    };
+    let envelope = serde_json::to_value(full("order_status")).unwrap();
+    let keys: Vec<&String> = envelope
+        .as_object()
+        .unwrap()
+        .keys()
+        .filter(|k| *k != "order_status")
+        .collect();
+    assert_eq!(keys.len(), 10, "{keys:?}");
+    for reserved in keys {
+        assert_eq!(invalid(&full(reserved)), "type", "{reserved}");
         assert_eq!(invalid(&raw(reserved)), "type", "{reserved}");
     }
     assert_eq!(invalid(&raw("")), "type");
-    assert!(raw("order_status").validate().is_ok());
+    assert!(full("order_status").validate().is_ok());
+    assert_no_duplicate_keys(&serde_json::to_vec(&full("order_status")).unwrap());
+    // The detector itself: an unvalidated collision does duplicate a key.
+    let collide = serde_json::to_vec(&raw("to")).unwrap();
+    let parsed: Value = serde_json::from_slice(&collide).unwrap();
+    assert!(serde_json::to_vec(&parsed).unwrap().len() < collide.len());
     assert_eq!(
         invalid(&OutboundMessage::template(
             phone(),

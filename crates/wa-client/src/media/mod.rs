@@ -4,7 +4,12 @@
 //! Docs: `business-phone-numbers/media`, `reference/media/*`,
 //! `reference/whatsapp-business-phone-number/media-upload-api`,
 //! `templates/template-media`; the Resumable Upload API itself is the Graph
-//! guide `docs/graph-api/guides/upload` (see [`Media::start_upload_session`]).
+//! guide `docs/graph-api/guides/upload` (see [`Media::start_upload_session`];
+//! its ids are [`wa_core::ids::UploadSessionId`] and
+//! [`wa_core::ids::UploadHandle`]).
+//!
+//! Media ids are sent as single path segments (`GET /{media-id}`), so an id
+//! containing `/` is percent-encoded and cannot address another object.
 //!
 //! Doc paths are relative to
 //! `https://developers.facebook.com/documentation/business-messaging/whatsapp/`
@@ -65,7 +70,6 @@ mod verify;
 mod tests;
 
 pub use kinds::{MediaKind, validate_upload};
-pub use resumable::{UploadHandle, UploadSessionId};
 pub use verify::{DownloadedMedia, MediaDownload, VerifiedBody, VerifiedDownload};
 
 use bytes::Bytes;
@@ -78,7 +82,6 @@ use wa_core::ids::{MediaId, PhoneNumberId};
 use wa_core::transport::Multipart;
 
 use crate::Client;
-use crate::messages::validate;
 
 /// Entry point, see [`Client::media`].
 #[derive(Debug, Clone)]
@@ -165,7 +168,6 @@ impl Media {
             id: MediaId,
         }
         let data = data.into();
-        validate::path_id("phone_number_id", self.phone_number_id.as_str())?;
         validate_upload(mime_type, u64::try_from(data.len()).unwrap_or(u64::MAX))?;
         let form = Multipart::new()
             .text("messaging_product", "whatsapp")
@@ -175,7 +177,7 @@ impl Media {
             .file("file", filename, mime_type, data);
         let uploaded: Uploaded = self
             .client
-            .post(&format!("{}/media", self.phone_number_id))
+            .post_at(&[self.phone_number_id.as_str(), "media"])
             .multipart(form)
             .context("media upload response")
             .send()
@@ -185,9 +187,8 @@ impl Media {
 
     /// Metadata and a short-lived download URL (`GET /{media-id}`).
     pub async fn url(&self, media_id: &MediaId) -> Result<MediaInfo> {
-        validate::path_id("media_id", media_id.as_str())?;
         self.client
-            .get(media_id.as_str())
+            .get_at(&[media_id.as_str()])
             .query_opt("phone_number_id", self.scope())
             .context("media URL response")
             .send()
@@ -247,9 +248,8 @@ impl Media {
 
     /// Delete uploaded media (`DELETE /{media-id}`).
     pub async fn delete(&self, media_id: &MediaId) -> Result<()> {
-        validate::path_id("media_id", media_id.as_str())?;
         self.client
-            .delete(media_id.as_str())
+            .delete_at(&[media_id.as_str()])
             .query_opt("phone_number_id", self.scope())
             .context("media delete response")
             .send_success()

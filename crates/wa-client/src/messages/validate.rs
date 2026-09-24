@@ -50,21 +50,6 @@ pub(crate) fn opt_text(field: &str, value: Option<&str>, max: usize) -> Check {
     value.map_or(Ok(()), |v| text(field, v, max))
 }
 
-/// An id that becomes a Graph path segment. The endpoint splits paths on
-/// `/`, so an id containing one (or a dot segment) would address a
-/// different object with the business token, e.g. `DELETE
-/// /{waba}/subscribed_apps` through a crafted media id.
-pub(crate) fn path_id(field: &str, id: &str) -> Check {
-    non_empty(field, id)?;
-    if id.contains('/') || id == "." || id == ".." {
-        return Err(ValidationError::new(
-            field,
-            "is not a valid Graph object id",
-        ));
-    }
-    Ok(())
-}
-
 /// Between `min` and `max` entries, inclusive.
 pub(crate) fn count(field: &str, n: usize, min: usize, max: usize) -> Check {
     if n < min || n > max {

@@ -196,7 +196,7 @@ impl MessageContent {
             }
             Self::Reaction(r) => r.validate(),
             Self::Template(t) => validate::non_empty("template.name", &t.name),
-            Self::Interactive(i) => i.validate(),
+            Self::Interactive(i) => i.validate(direct_send),
             Self::Pin(p) => p.validate(),
             Self::Raw { message_type, .. } => {
                 validate::non_empty("type", message_type)?;

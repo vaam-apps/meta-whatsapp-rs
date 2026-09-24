@@ -10,7 +10,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use wa_core::Error;
 use wa_core::error::TransportError;
-use wa_core::ids::{AppId, MediaId};
+use wa_core::ids::{AppId, MediaId, UploadHandle, UploadSessionId};
 use wa_core::testing::{RecordedBody, ScriptedTransport};
 use wa_core::transport::ByteStream;
 
@@ -219,27 +219,55 @@ async fn delete_uses_the_media_id_path_and_optional_scope() {
 
 #[tokio::test]
 async fn ids_cannot_escape_their_path_segment() {
+    // A crafted media id must not turn `DELETE /{media-id}` into
+    // `DELETE /{waba}/subscribed_apps` with the business token.
+    let t = ScriptedTransport::new();
+    t.push_json(200, json!({"id": "1"}));
+    t.push_json(200, json!({"success": true}));
+    t.push_json(200, info_json(LOOKASIDE, &sha_hex(b"x"), &json!(1)));
+    client(&t)
+        .media("123/subscribed_apps")
+        .upload(vec![1u8], "image/png", "a.png")
+        .await
+        .unwrap();
+    let media = client(&t).media(PNID);
+    let crafted = MediaId::new("123/subscribed_apps");
+    media.delete(&crafted).await.unwrap();
+    media.url(&MediaId::new("1?fields=x")).await.unwrap();
+    let reqs = t.requests();
+    assert_eq!(reqs[0].path(), "/v25.0/123%2Fsubscribed_apps/media");
+    assert_eq!(
+        (reqs[1].method.clone(), reqs[1].path()),
+        (Method::DELETE, "/v25.0/123%2Fsubscribed_apps")
+    );
+    assert_eq!(reqs[2].path(), "/v25.0/1%3Ffields=x");
+    assert_eq!(reqs[2].url.query(), None);
+    assert_eq!(t.remaining(), 0);
+
+    // Segments URL normalization would drop or pop never leave the client.
     let t = ScriptedTransport::new();
     let media = client(&t).media(PNID);
-    for bad in ["", "123/subscribed_apps", "..", "."] {
+    for bad in ["", "..", "."] {
         let err = client(&t)
             .media(bad)
             .upload(vec![1u8], "image/png", "a.png")
             .await
             .unwrap_err();
         assert!(
-            matches!(&err, Error::Validation(v) if v.field == "phone_number_id"),
-            "{bad:?}"
+            matches!(&err, Error::Validation(v) if v.field == "path"),
+            "{bad:?}: {err}"
         );
         let id = MediaId::new(bad);
-        assert!(
-            matches!(media.delete(&id).await, Err(Error::Validation(_))),
-            "{bad:?}"
-        );
-        assert!(
-            matches!(media.url(&id).await, Err(Error::Validation(_))),
-            "{bad:?}"
-        );
+        for err in [
+            media.delete(&id).await.unwrap_err(),
+            media.url(&id).await.unwrap_err(),
+            media.download_bytes(&id, 10).await.unwrap_err(),
+        ] {
+            assert!(
+                matches!(&err, Error::Validation(v) if v.field == "path"),
+                "{bad:?}: {err}"
+            );
+        }
     }
     assert!(t.requests().is_empty());
 }
@@ -277,9 +305,10 @@ async fn tampered_media_fails_at_the_end_of_the_stream() {
     assert_eq!(&body.next().await.unwrap().unwrap()[..], b"tampered");
     let err = body.next().await.unwrap().unwrap_err();
     assert!(
-        matches!(&err, Error::Validation(v) if v.field == "sha256"),
-        "{err}"
+        matches!(&err, Error::Transport(TransportError::Integrity(_))),
+        "{err:?}"
     );
+    assert!(err.is_retryable(), "a fresh download may be intact");
     assert!(body.next().await.is_none(), "stream ends after the error");
 }
 
@@ -306,14 +335,46 @@ async fn verification_hashes_across_chunks_and_accepts_base64_digests() {
     };
     let items: Vec<_> = dl.verified().unwrap().body.collect().await;
     assert_eq!(items.len(), 4);
-    assert!(items[3].is_err());
+    assert!(matches!(
+        items[3],
+        Err(Error::Transport(TransportError::Integrity(_)))
+    ));
     // A truncated file fails too.
     let dl = MediaDownload {
         info: info(&sha_hex(whole)),
         body: stream(&[b"chunk-one|"]),
     };
     let items: Vec<_> = dl.verified().unwrap().body.collect().await;
-    assert!(items.last().unwrap().is_err());
+    assert_eq!(items.len(), 2);
+    assert!(matches!(
+        items[1],
+        Err(Error::Transport(TransportError::Integrity(_)))
+    ));
+    // An empty body is checked too (the digest of nothing is not `whole`'s).
+    let dl = MediaDownload {
+        info: info(&sha_hex(whole)),
+        body: stream(&[]),
+    };
+    let items: Vec<_> = dl.verified().unwrap().body.collect().await;
+    assert!(matches!(
+        items[..],
+        [Err(Error::Transport(TransportError::Integrity(_)))]
+    ));
+}
+
+#[tokio::test]
+async fn a_reported_size_is_not_trusted_for_allocation() {
+    // `collect(u64::MAX)` with a hostile `file_size` must neither abort the
+    // process (allocation failure) nor stop the real bytes from arriving.
+    let body = b"small file";
+    let mut i = info(&sha_hex(body));
+    i.file_size = Some(1 << 60);
+    let dl = MediaDownload {
+        info: i,
+        body: stream(&[b"small ", b"file"]),
+    };
+    let got = dl.verified().unwrap().collect(u64::MAX).await.unwrap();
+    assert_eq!(&got.data[..], body);
 }
 
 #[tokio::test]
@@ -453,8 +514,8 @@ async fn download_bytes_verifies_and_caps_the_size() {
         .await
         .unwrap_err();
     assert!(
-        matches!(&err, Error::Validation(v) if v.field == "sha256"),
-        "{err}"
+        matches!(&err, Error::Transport(TransportError::Integrity(_))),
+        "{err:?}"
     );
 }
 
@@ -538,6 +599,50 @@ async fn resuming_sends_the_offset_and_session_query_stays_a_query() {
 }
 
 #[tokio::test]
+async fn session_ids_stay_one_segment_and_must_be_upload_sessions() {
+    // A `/` before the `?` is escaped into the single segment; the part
+    // after it is still the query the guide's curl would send.
+    let t = ScriptedTransport::new();
+    t.push_json(200, json!({"id": "upload:abc", "file_offset": "0"}));
+    let media = client(&t).media(PNID);
+    let crafted = UploadSessionId::new("upload:abc/../../123/subscribed_apps?sig=1");
+    assert_eq!(media.upload_session_status(&crafted).await.unwrap(), 0);
+    let r = t.last_request().unwrap();
+    assert_eq!(
+        r.path(),
+        "/v25.0/upload:abc%2F..%2F..%2F123%2Fsubscribed_apps"
+    );
+    assert_eq!(r.url.query(), Some("sig=1"));
+    assert_eq!(t.remaining(), 0);
+
+    // Anything but an `upload:` session would aim the token at another
+    // object (`GET /123456` is someone's WABA).
+    let t = ScriptedTransport::new();
+    let media = client(&t).media(PNID);
+    for bad in [
+        "",
+        "123456",
+        "upload:",
+        "?sig=1",
+        "upload:?sig=1",
+        "x/upload:1",
+        " upload:1",
+    ] {
+        let s = UploadSessionId::new(bad);
+        for err in [
+            media.upload_session_status(&s).await.unwrap_err(),
+            media.upload_chunk(&s, 0, vec![1u8]).await.unwrap_err(),
+        ] {
+            assert!(
+                matches!(&err, Error::Validation(v) if v.field == "upload_session_id"),
+                "{bad:?}: {err}"
+            );
+        }
+    }
+    assert!(t.requests().is_empty());
+}
+
+#[tokio::test]
 async fn resumable_upload_convenience_and_its_failure_steps() {
     let t = ScriptedTransport::new();
     t.push_json(200, json!({"id": "upload:s1"}));
@@ -609,21 +714,47 @@ async fn resumable_upload_validates_locally_and_needs_a_token() {
         );
     }
     let err = media
-        .start_upload_session(&AppId::new("1/uploads"), "a.png", 1, "image/png")
+        .start_upload_session(&AppId::new(".."), "a.png", 1, "image/png")
         .await
         .unwrap_err();
     assert!(
-        matches!(&err, Error::Validation(v) if v.field == "app_id"),
+        matches!(&err, Error::Validation(v) if v.field == "path"),
         "{err}"
     );
     assert!(t.requests().is_empty());
 
-    let tokenless = Client::builder().transport(t.clone()).build().unwrap();
-    let err = tokenless
-        .media(PNID)
-        .upload_chunk(&UploadSessionId::new("upload:x"), 0, vec![1u8])
+    // An app id smuggling a path stays one segment.
+    t.push_json(200, json!({"id": "upload:s"}));
+    media
+        .start_upload_session(&AppId::new("1/uploads"), "a.png", 1, "image/png")
         .await
-        .unwrap_err();
-    assert!(matches!(err, Error::Config(_)), "{err}");
+        .unwrap();
+    assert_eq!(
+        t.last_request().unwrap().path(),
+        "/v25.0/1%2Fuploads/uploads"
+    );
+    assert_eq!(t.remaining(), 0);
+
+    // No token: the guide's steps all need one, and none may go out bare.
+    let t = ScriptedTransport::new();
+    let tokenless = Client::builder()
+        .transport(t.clone())
+        .build()
+        .unwrap()
+        .media(PNID);
+    let session = UploadSessionId::new("upload:x");
+    for err in [
+        tokenless
+            .start_upload_session(&app, "a.png", 1, "image/png")
+            .await
+            .unwrap_err(),
+        tokenless
+            .upload_chunk(&session, 0, vec![1u8])
+            .await
+            .unwrap_err(),
+        tokenless.upload_session_status(&session).await.unwrap_err(),
+    ] {
+        assert!(matches!(err, Error::Config(_)), "{err}");
+    }
     assert!(t.requests().is_empty());
 }

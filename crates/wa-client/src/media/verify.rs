@@ -8,7 +8,7 @@ use base64::Engine as _;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use sha2::{Digest, Sha256};
-use wa_core::error::ValidationError;
+use wa_core::error::{TransportError, ValidationError};
 use wa_core::transport::ByteStream;
 use wa_core::{Error, Result};
 
@@ -36,11 +36,12 @@ impl fmt::Debug for MediaDownload {
 
 impl MediaDownload {
     /// Hash the body while it streams and fail at the end if it does not
-    /// match [`MediaInfo::sha256`].
+    /// match [`MediaInfo::sha256`] (see [`VerifiedBody`] for the error).
     ///
-    /// Fails immediately if `sha256` is not a SHA-256 digest in hex (64
-    /// characters) or base64 (Meta's docs show both: hex in history and
-    /// echo webhooks, base64 in media message webhooks).
+    /// Fails immediately, with a [`ValidationError`] on `sha256`, if the
+    /// digest is not SHA-256 in hex (64 characters) or base64 (Meta's docs
+    /// show both: hex in history and echo webhooks, base64 in media message
+    /// webhooks): without a usable digest nothing can be verified.
     pub fn verified(self) -> Result<VerifiedDownload> {
         let expected = decode_sha256(&self.info.sha256).ok_or_else(|| {
             ValidationError::new("sha256", "is not a hex or base64 SHA-256 digest")
@@ -76,11 +77,23 @@ pub struct DownloadedMedia {
     pub data: Bytes,
 }
 
+/// Upper bound on the buffer reserved up front from the *reported*
+/// `file_size`. The report is not trusted for allocation: with a generous
+/// `max_bytes`, a wrong or hostile size (a `MediaInfo` can be built from a
+/// webhook) would otherwise ask the allocator for that many bytes and abort
+/// the process. Past this the buffer grows as bytes actually arrive.
+const MAX_PREALLOC: u64 = 16 * 1024 * 1024;
+
 impl VerifiedDownload {
     /// Buffer the whole file, failing if it grows past `max_bytes` or its
     /// hash does not match.
     pub async fn collect(mut self, max_bytes: u64) -> Result<DownloadedMedia> {
-        let hint = self.info.file_size.unwrap_or(0).min(max_bytes);
+        let hint = self
+            .info
+            .file_size
+            .unwrap_or(0)
+            .min(max_bytes)
+            .min(MAX_PREALLOC);
         let mut buf = Vec::with_capacity(usize::try_from(hint).unwrap_or(0));
         while let Some(chunk) = self.body.next().await {
             let chunk = chunk?;
@@ -108,11 +121,14 @@ pub(super) fn too_large(len: u64, max: u64) -> Error {
 /// Stream adaptor behind [`VerifiedDownload::body`].
 ///
 /// Yields the inner chunks unchanged while hashing them. At end of stream
-/// it yields `Err` (a [`ValidationError`] on field `sha256`) instead of
-/// ending when the digest differs. **Treat bytes as untrusted until the
-/// stream has ended without error**: write them to a temporary location
-/// and only publish them afterwards. Dropping the stream early skips the
-/// check.
+/// it yields `Err(Error::Transport(TransportError::Integrity(..)))` instead
+/// of ending when the digest differs — a transport failure, not bad input:
+/// the bytes were damaged or substituted in flight, and a fresh download
+/// (new URL from [`super::Media::url`]) may be intact, which is why
+/// [`wa_core::Error::is_retryable`] says `true`. **Treat bytes as untrusted
+/// until the stream has ended without error**: write them to a temporary
+/// location and only publish them afterwards. Dropping the stream early
+/// skips the check.
 pub struct VerifiedBody {
     inner: ByteStream,
     hasher: Sha256,
@@ -153,11 +169,9 @@ impl Stream for VerifiedBody {
                 if actual.as_slice() == this.expected {
                     Poll::Ready(None)
                 } else {
-                    Poll::Ready(Some(Err(ValidationError::new(
-                        "sha256",
+                    Poll::Ready(Some(Err(Error::Transport(TransportError::Integrity(
                         "downloaded media does not match the SHA-256 Meta reported; discard it",
-                    )
-                    .into())))
+                    )))))
                 }
             }
         }

@@ -243,11 +243,13 @@ impl ReplyButtons {
         self
     }
 
-    fn validate(&self) -> Check {
+    fn validate(&self, direct_send: bool) -> Check {
         // messages/interactive-reply-buttons-messages. The page gives no
-        // header text limit, so none is enforced here.
+        // header text limit; Direct Send applies the template one, 60
+        // (direct-send/supported-features-and-limits). Its body (1024),
+        // footer (60) and button text (20) limits equal this page's.
         if let Some(h) = &self.header {
-            h.validate(None)?;
+            h.validate(direct_send.then_some(60))?;
         }
         validate::text("interactive.body.text", &self.body, 1024)?;
         validate::opt_text(
@@ -1421,9 +1423,11 @@ pub enum Interactive {
 }
 
 impl Interactive {
-    pub(crate) fn validate(&self) -> Check {
+    /// `direct_send`: sent with a utility or authentication Direct Send
+    /// category, which tightens some limits.
+    pub(crate) fn validate(&self, direct_send: bool) -> Check {
         match self {
-            Self::Buttons(m) => m.validate(),
+            Self::Buttons(m) => m.validate(direct_send),
             Self::List(m) => m.validate(),
             Self::CtaUrl(m) => m.validate(),
             Self::LocationRequest(m) => m.validate(),

@@ -4,98 +4,41 @@
 //! The WhatsApp docs (`templates/template-media`, `templates/components`)
 //! only link to the Graph API guide
 //! `https://developers.facebook.com/docs/graph-api/guides/upload`, which is
-//! outside the WhatsApp mirror. Shapes below come from that guide:
+//! outside the WhatsApp mirror. Shapes below come from that guide (read
+//! 2026-09-24):
 //!
 //! 1. `POST /{app_id}/uploads?file_name&file_length&file_type` →
-//!    `{"id": "upload:<session>"}`.
-//! 2. `POST /upload:<session>` with headers `Authorization: OAuth <token>`
-//!    and `file_offset: <n>`, raw bytes as body → `{"h": "<handle>"}`.
-//! 3. `GET /upload:<session>` with the same auth →
+//!    `{"id": "upload:<UPLOAD_SESSION_ID>"}`.
+//! 2. `POST /upload:<UPLOAD_SESSION_ID>` with headers
+//!    `Authorization: OAuth <token>` and `file_offset: <n>`, raw bytes as
+//!    body → `{"h": "<handle>"}`. The guide: "You must include the access
+//!    token in the header or the call will fail."
+//! 3. `GET /upload:<UPLOAD_SESSION_ID>` with the same auth →
 //!    `{"id": …, "file_offset": <n>}` to resume an interrupted upload.
 //!
-//! Deliberate deviation: the guide's step 1 puts `access_token` in the query
-//! string. We send it as `Authorization: OAuth` on every step instead, so
-//! the token never appears in a URL (URLs get logged).
-
-use std::fmt;
+//! Deliberate deviation: the guide's step 1 `curl` puts `access_token` in
+//! the query string. We send `Authorization: OAuth` on every step instead
+//! (Graph accepts a header token on any endpoint), so the token never
+//! appears in a URL — proxies and transports log URLs.
+//!
+//! Session ids go into the URL the way the guide's `curl` puts them there:
+//! pasted verbatim, so anything after a `?` (ids seen in the wild carry a
+//! `?sig=…` suffix) is a query string, not part of the path. We split on
+//! the first `?` explicitly: the part before it becomes **one** path
+//! segment (a `/` in it is percent-encoded and cannot reach another
+//! object), the part after it becomes query parameters.
 
 use bytes::Bytes;
 use http::Method;
 use serde::Deserialize;
 use wa_core::error::{ConfigError, ValidationError};
-use wa_core::ids::AppId;
+use wa_core::ids::{AppId, UploadHandle, UploadSessionId};
 use wa_core::secret::AccessToken;
 use wa_core::{Error, Result};
 
 use super::Media;
 use crate::GraphRequest;
 use crate::messages::validate;
-
-macro_rules! string_id {
-    ($(#[$meta:meta])* $name:ident) => {
-        $(#[$meta])*
-        #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
-        #[serde(transparent)]
-        pub struct $name(String);
-
-        impl $name {
-            /// Wrap a raw value.
-            pub fn new(value: impl Into<String>) -> Self {
-                Self(value.into())
-            }
-
-            /// Borrow the raw value.
-            pub fn as_str(&self) -> &str {
-                &self.0
-            }
-
-            /// Take the raw value.
-            pub fn into_inner(self) -> String {
-                self.0
-            }
-        }
-
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str(&self.0)
-            }
-        }
-
-        impl fmt::Debug for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, concat!(stringify!($name), "({})"), self.0)
-            }
-        }
-
-        impl AsRef<str> for $name {
-            fn as_ref(&self) -> &str {
-                &self.0
-            }
-        }
-
-        impl From<String> for $name {
-            fn from(s: String) -> Self {
-                Self(s)
-            }
-        }
-
-        impl From<&str> for $name {
-            fn from(s: &str) -> Self {
-                Self(s.to_owned())
-            }
-        }
-    };
-}
-
-string_id!(
-    /// Upload session id as returned by step 1, `upload:` prefix included.
-    UploadSessionId
-);
-string_id!(
-    /// Uploaded file handle (`h`), e.g. `4::aW...`. Pass it as
-    /// `header_handle` when creating a template with a media header.
-    UploadHandle
-);
 
 /// File types the guide lists as valid `file_type` values.
 const RESUMABLE_TYPES: &[&str] = &[
@@ -133,16 +76,24 @@ impl Media {
         })
     }
 
-    /// A request to `/{session}`. The session id is used exactly as Meta
-    /// returned it, as the guide's `curl` does: anything after a `?` in it
-    /// becomes query parameters rather than being escaped into the path.
+    /// A request to `/{session}`, split on the first `?` as the module docs
+    /// describe.
     fn session_request(&self, method: Method, session: &UploadSessionId) -> Result<GraphRequest> {
-        validate::non_empty("upload_session_id", session.as_str())?;
         let (path, query) = match session.as_str().split_once('?') {
             Some((p, q)) => (p, Some(q)),
             None => (session.as_str(), None),
         };
-        let mut req = self.client.request(method, path);
+        // The guide's ids are `upload:<UPLOAD_SESSION_ID>`. Anything else
+        // would aim the token at some other Graph object (`GET /{waba_id}`),
+        // whose body would then come back inside a decode error.
+        if path.strip_prefix("upload:").is_none_or(str::is_empty) {
+            return Err(ValidationError::new(
+                "upload_session_id",
+                "must be an `upload:<id>` session id as returned by `start_upload_session`",
+            )
+            .into());
+        }
+        let mut req = self.client.request_at(method, &[path]);
         if let Some(q) = query {
             for (k, v) in url::form_urlencoded::parse(q.as_bytes()) {
                 req = req.query(&k, v);
@@ -162,7 +113,6 @@ impl Media {
         file_length: u64,
         file_type: &str,
     ) -> Result<UploadSessionId> {
-        validate::path_id("app_id", app_id.as_str())?;
         validate::non_empty("file_name", file_name)?;
         if !RESUMABLE_TYPES.contains(&file_type) {
             return Err(ValidationError::new(
@@ -173,7 +123,7 @@ impl Media {
         }
         let created: SessionCreated = self
             .client
-            .post(&format!("{app_id}/uploads"))
+            .post_at(&[app_id.as_str(), "uploads"])
             .query("file_name", file_name)
             .query("file_length", file_length)
             .query("file_type", file_type)

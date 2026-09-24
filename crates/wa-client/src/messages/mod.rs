@@ -163,7 +163,7 @@ use wa_core::Result;
 use wa_core::ids::{MessageId, PhoneNumberId};
 use wa_core::recipient::Recipient;
 
-use crate::Client;
+use crate::{Client, GraphRequest};
 
 /// Entry point, see [`Client::messages`].
 #[derive(Debug, Clone)]
@@ -211,9 +211,13 @@ impl Messages {
         &self.client
     }
 
-    fn path(&self) -> Result<String> {
-        validate::path_id("phone_number_id", self.phone_number_id.as_str())?;
-        Ok(format!("{}/messages", self.phone_number_id))
+    /// `POST /{phone_number_id}/messages`. The id is one path segment taken
+    /// verbatim (`/`, `?`, `#` percent-encoded; empty, `.` and `..`
+    /// rejected), so a crafted id cannot point the business token at a
+    /// different Graph object.
+    fn post_messages(&self) -> GraphRequest {
+        self.client
+            .post_at(&[self.phone_number_id.as_str(), "messages"])
     }
 
     /// Send `message` (`POST /{phone_number_id}/messages`).
@@ -223,8 +227,7 @@ impl Messages {
     /// been sent.
     pub async fn send(&self, message: &OutboundMessage) -> Result<SendResponse> {
         message.validate()?;
-        self.client
-            .post(&self.path()?)
+        self.post_messages()
             .json(message)
             .context("send message response")
             .send()
@@ -242,8 +245,13 @@ impl Messages {
     /// [`mark_read`](Self::mark_read) and show a typing indicator until you
     /// reply or 25 seconds pass. Only use it when you are about to reply.
     ///
-    /// Not replayed on transient errors: a late replay could show "typing…"
-    /// after your reply has already arrived.
+    /// Not replayed on transient errors (throttling excepted, which proves
+    /// Meta did nothing). Replaying would not duplicate anything, but an
+    /// indicator is only worth showing promptly: a retry that lands after
+    /// backoff — typically when this call runs concurrently with composing
+    /// the reply — can put "typing…" on screen *after* the reply arrived.
+    /// On error, fall back to [`mark_read`](Self::mark_read), which is
+    /// replayed.
     pub async fn mark_read_with_typing_indicator(&self, message_id: &MessageId) -> Result<()> {
         self.mark(message_id, Some(TypingIndicator { kind: "text" }))
             .await
@@ -252,8 +260,7 @@ impl Messages {
     async fn mark(&self, message_id: &MessageId, typing: Option<TypingIndicator>) -> Result<()> {
         validate::non_empty("message_id", message_id.as_str())?;
         let idempotent = typing.is_none();
-        self.client
-            .post(&self.path()?)
+        self.post_messages()
             .json(&MarkRead {
                 messaging_product: "whatsapp",
                 status: "read",
