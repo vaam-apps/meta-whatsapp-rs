@@ -1,6 +1,6 @@
 # The page side of Embedded Signup
 
-> Verified against wa-rs 7940d15 (2026-09-24), and against Meta's
+> **Verified against wa-rs 3a3db05aa425c1737d8bb9239206036dbc81969f (2026-09-24).** Also checked against Meta's
 > `embedded-signup/implementation` page as fetched on 2026-09-24. Meta owns
 > this part: re-read that page (append `.md` to its URL for Markdown) before
 > changing it.
@@ -63,9 +63,9 @@ Notes:
 - The callback endpoint must be authenticated as the same merchant that
   called "start" (your session, never a tenant id the page sends);
   `SignupSessions::redeem(&state, merchant_id)` enforces the binding.
-- The PIN field belongs to your page (`<input id="pin" type="password"
-  inputmode="numeric" maxlength="6" autocomplete="off">`); send it with the
-  attempt and nowhere else. The backend parses it before `redeem`, never
+- The PIN field belongs to your page, e.g. an `<input id="pin">` with
+  `type="password" inputmode="numeric" maxlength="6" autocomplete="off"`;
+  send it with the attempt and nowhere else. The backend parses it before `redeem`, never
   logs or stores it. ~~`body: JSON.stringify({ state, code, event })`~~
   (until 2026-09-24): the PIN had no path from the merchant to the backend.
 - Everything in the event is a claim. The backend verifies it with Meta

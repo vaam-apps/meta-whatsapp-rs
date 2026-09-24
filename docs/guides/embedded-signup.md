@@ -7,8 +7,9 @@ number registered.
 
 wa-rs implements the **Tech Provider** flow of Embedded Signup v4.
 Example: [`embedded_signup.rs`](../../crates/wa-rs/examples/embedded_signup.rs).
-Agent skill:
-[`wa-rs-embedded-signup`](../../skills/wa-rs-embedded-signup/SKILL.md).
+Agent skills:
+[`wa-rs-embedded-signup`](../../skills/wa-rs-embedded-signup/SKILL.md),
+[`wa-rs-token-vault`](../../skills/wa-rs-token-vault/SKILL.md).
 Run the example with a tenant bearer token (`WA_TENANTS`, a stand-in for
 your CMS's own login; it refuses to start without one); it listens on
 `127.0.0.1` unless `WA_BIND` names another address:

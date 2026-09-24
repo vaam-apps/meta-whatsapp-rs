@@ -23,6 +23,11 @@ pub mod postgres;
 #[cfg(feature = "redis")]
 mod redis_kv;
 
+/// The `redis` this adapter is built against — `RedisKvStore::new` takes its
+/// connection types, so build connections with this re-export rather than
+/// pinning redis yourself.
+#[cfg(feature = "redis")]
+pub use ::redis;
 #[cfg(feature = "memory")]
 pub use memory_conversation::MemoryConversationStore;
 #[cfg(feature = "memory")]

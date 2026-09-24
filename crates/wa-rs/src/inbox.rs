@@ -337,6 +337,13 @@ impl Inbox {
         Ok(CustomerServiceWindow::from_last_inbound(last))
     }
 
+    /// Whether a free-form reply is allowed now, by this inbox's own clock —
+    /// the same check [`Inbox::reply`] applies, so a UI deciding between
+    /// "reply" and "send a template" never disagrees with the refusal.
+    pub async fn window_is_open(&self, key: &ConversationKey) -> Result<bool> {
+        Ok(self.window(key).await?.is_open(self.clock.now()))
+    }
+
     /// Reset the unread count (the merchant opened the conversation).
     pub async fn mark_read(&self, key: &ConversationKey) -> Result<()> {
         self.check_key(key)?;
@@ -929,6 +936,7 @@ mod tests {
         t.push_json(200, sent("wamid.out"));
         let inbox = inbox(&t, store.clone(), &clock);
         let key = inbox.key("US.1");
+        assert!(inbox.window_is_open(&key).await.unwrap());
         inbox
             .reply(
                 &key,
@@ -1046,6 +1054,7 @@ mod tests {
         let t = ScriptedTransport::new();
         let inbox = inbox(&t, store.clone(), &clock);
         let key = inbox.key("US.1");
+        assert!(!inbox.window_is_open(&key).await.unwrap());
         let err = inbox
             .reply(
                 &key,

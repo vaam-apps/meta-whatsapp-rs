@@ -19,6 +19,10 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
+        with:
+          # `just skills-check` resolves the commits the consumer skills are
+          # stamped with: it needs the history, not a shallow clone.
+          fetch-depth: 0
       # Same pin as rust-toolchain.toml; bump both together.
       - uses: dtolnay/rust-toolchain@master
         with:

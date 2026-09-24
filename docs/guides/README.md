@@ -20,14 +20,14 @@ are in [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md).
 
 | Guide | Read it when you | Example | Agent skill |
 | --- | --- | --- | --- |
-| [getting-started.md](getting-started.md) | set up the Meta app, add the dependency, send a first message, handle errors | [`send_message`](../../crates/wa-rs/examples/send_message.rs) | [`wa-rs`](../../skills/wa-rs/SKILL.md) |
-| [embedded-signup.md](embedded-signup.md) | let each merchant of your CMS connect their own number | [`embedded_signup`](../../crates/wa-rs/examples/embedded_signup.rs) | [`wa-rs-embedded-signup`](../../skills/wa-rs-embedded-signup/SKILL.md) |
-| [webhooks.md](webhooks.md) | deploy the webhook endpoint and decide what to do with each event | [`cms_inbox`](../../crates/wa-rs/examples/cms_inbox.rs) | [`wa-rs-webhooks`](../../skills/wa-rs-webhooks/SKILL.md) |
+| [getting-started.md](getting-started.md) | set up the Meta app, add the dependency, send a first message, handle errors | [`send_message`](../../crates/wa-rs/examples/send_message.rs) | [`wa-rs-setup`](../../skills/wa-rs-setup/SKILL.md), [`wa-rs-errors`](../../skills/wa-rs-errors/SKILL.md) |
+| [embedded-signup.md](embedded-signup.md) | let each merchant of your CMS connect their own number | [`embedded_signup`](../../crates/wa-rs/examples/embedded_signup.rs) | [`wa-rs-embedded-signup`](../../skills/wa-rs-embedded-signup/SKILL.md), [`wa-rs-token-vault`](../../skills/wa-rs-token-vault/SKILL.md) |
+| [webhooks.md](webhooks.md) | deploy the webhook endpoint and decide what to do with each event | [`cms_inbox`](../../crates/wa-rs/examples/cms_inbox.rs) | [`wa-rs-webhook-endpoint`](../../skills/wa-rs-webhook-endpoint/SKILL.md), [`wa-rs-webhook-events`](../../skills/wa-rs-webhook-events/SKILL.md), [`wa-rs-live-updates`](../../skills/wa-rs-live-updates/SKILL.md) |
 | [cms-inbox.md](cms-inbox.md) | build the merchant ↔ customer chat (history, live updates, replies) | [`cms_inbox`](../../crates/wa-rs/examples/cms_inbox.rs) | [`wa-rs-cms-inbox`](../../skills/wa-rs-cms-inbox/SKILL.md) |
-| [marketing-and-commerce.md](marketing-and-commerce.md) | send campaigns and order updates, collect opt-ins, show products | [`send_message`](../../crates/wa-rs/examples/send_message.rs) | [`wa-rs-messaging`](../../skills/wa-rs-messaging/SKILL.md), [`wa-rs-templates-otp`](../../skills/wa-rs-templates-otp/SKILL.md) |
-| [otp-login.md](otp-login.md) | log users in (or verify a number) with a WhatsApp code | [`otp_login`](../../crates/wa-rs/examples/otp_login.rs) | [`wa-rs-templates-otp`](../../skills/wa-rs-templates-otp/SKILL.md) |
+| [marketing-and-commerce.md](marketing-and-commerce.md) | send campaigns and order updates, collect opt-ins, show products | [`send_message`](../../crates/wa-rs/examples/send_message.rs) | [`wa-rs-marketing`](../../skills/wa-rs-marketing/SKILL.md), [`wa-rs-commerce`](../../skills/wa-rs-commerce/SKILL.md), [`wa-rs-templates`](../../skills/wa-rs-templates/SKILL.md), [`wa-rs-send-templates`](../../skills/wa-rs-send-templates/SKILL.md) |
+| [otp-login.md](otp-login.md) | log users in (or verify a number) with a WhatsApp code | [`otp_login`](../../crates/wa-rs/examples/otp_login.rs) | [`wa-rs-otp-login`](../../skills/wa-rs-otp-login/SKILL.md) |
 | [documents.md](documents.md) | send invoices, receipts and voucher images | [`invoice_document`](../../crates/wa-rs/examples/invoice_document.rs) | [`wa-rs-documents`](../../skills/wa-rs-documents/SKILL.md) |
-| [production.md](production.md) | pick storage, manage keys, log safely, scale, pin versions | — | [`wa-rs`](../../skills/wa-rs/SKILL.md) |
+| [production.md](production.md) | pick storage, manage keys, log safely, scale, pin versions | — | [`wa-rs-production`](../../skills/wa-rs-production/SKILL.md), [`wa-rs-storage`](../../skills/wa-rs-storage/SKILL.md) |
 
 ## Reading order
 

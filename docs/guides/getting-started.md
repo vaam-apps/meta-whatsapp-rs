@@ -4,7 +4,8 @@
 Rust, with errors handled the way the library expects.
 
 Example: [`send_message.rs`](../../crates/wa-rs/examples/send_message.rs).
-Agent skill: [`wa-rs`](../../skills/wa-rs/SKILL.md).
+Agent skills: [`wa-rs-setup`](../../skills/wa-rs-setup/SKILL.md),
+[`wa-rs-errors`](../../skills/wa-rs-errors/SKILL.md).
 
 ## 1. On Meta's side
 
@@ -57,8 +58,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 anyhow = "1"
 ```
 
-- The repository is private: Cargo needs GitHub credentials that can read
-  it (for example `[net] git-fetch-with-cli = true` in `.cargo/config.toml`).
+- The repository is public: Cargo fetches it without credentials.
 - Rust **1.98.1** or newer, edition 2024.
 - Defaults are `reqwest` (the HTTP transport), `memory` (in-process stores)
   and `sinks`. Add `postgres`, `redis`, `axum` (webhook router and SSE),
@@ -66,11 +66,13 @@ anyhow = "1"
   table is in the [README](../../README.md#feature-flags).
 - Types from sqlx, axum and redis cross the API (`PgPool`, `axum::Router`,
   a redis connection). Use the versions wa-rs was built with, re-exported:
-  `wa_rs::adapters::store::postgres::sqlx` (feature `postgres`) and
-  `wa_rs::webhooks::axum` (feature `axum`), as the examples do; then there
-  is nothing to pin. If you need axum features wa-rs does not turn on, add
-  `axum = "0.8"` with them yourself: Cargo builds one axum 0.8 for both.
-  redis has no re-export: your own must be 1.x.
+  `wa_rs::adapters::store::postgres::sqlx` (feature `postgres`),
+  `wa_rs::webhooks::axum` (feature `axum`) and
+  `wa_rs::adapters::store::redis` (feature `redis`), as the examples do;
+  then there is nothing to pin. If you need axum features wa-rs does not
+  turn on, add `axum = "0.8"` with them yourself: Cargo builds one axum 0.8
+  for both (likewise `redis = "1"` with `tokio-rustls-comp` for
+  `rediss://`).
 
 ## 3. Send a first message
 
@@ -141,18 +143,16 @@ async fn notify_shipped(messages: &Messages, to: Recipient, order_no: &str) -> N
         Err(Error::Validation(v)) => Next::FixInput(v.field),
         Err(e) => match e.kind() {
             ErrorKind::TemplateNotFound | ErrorKind::TemplateParameterMismatch => Next::FixTemplate,
-            _ if refused_by_meta(&e) => Next::Rejected(e),
+            _ if !e.may_have_been_sent() => Next::Rejected(e),
             _ => Next::Reconcile,
         },
     }
 }
-
-/// A Graph error on a 4xx response is a refusal; a 5xx, a timeout or an
-/// unreadable 2xx may hide a message that went out.
-fn refused_by_meta(e: &Error) -> bool {
-    e.graph().and_then(|g| g.http_status).is_some_and(|s| (400..500).contains(&s))
-}
 ```
+
+`Error::may_have_been_sent()` is `false` when Meta provably did nothing (a
+Graph error on a 4xx response, a local validation error, a connection that
+never opened) and `true` for a timeout, a 5xx or an unreadable response.
 
 ### Retries: "could succeed later" is not "safe to repeat"
 
@@ -166,12 +166,13 @@ fn refused_by_meta(e: &Error) -> bool {
 - `err.is_retryable()` answers "could the same request succeed later", not
   "is it safe to send again". It is deliberately `false` for 131049
   (per-user marketing limit) and 131048 (spam rate limit).
-- To retry a send from a job queue, follow `refused_by_meta` above, and for
+- To retry a send from a job queue, resend only when
+  `!err.may_have_been_sent()` (and the cause is fixed or transient); for
   anything else first look for a status webhook carrying your
   `callback_data`.
 
 The full `ErrorKind` table, with codes and advice, is in the skill's
-[error-kinds reference](../../skills/wa-rs/references/error-kinds.md).
+[error-kinds reference](../../skills/wa-rs-errors/references/error-kinds.md).
 
 ## 5. One client, many merchants
 

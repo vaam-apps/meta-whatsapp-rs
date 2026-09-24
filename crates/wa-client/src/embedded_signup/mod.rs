@@ -36,6 +36,7 @@
 //! #     posted_state: &str,
 //! #     posted_code: &str,
 //! #     posted_event: &str,
+//! #     posted_pin: &str,
 //! # ) -> wa_core::Result<()> {
 //! use std::time::Duration;
 //!
@@ -56,14 +57,19 @@
 //!
 //! // 1. The merchant clicks "Connect WhatsApp": bind an attempt to them and
 //! //    serve the FB.login options. The page calls FB.login(callback, options)
-//! //    and later posts {state, code, event} back to you.
+//! //    and later posts {state, code, event, pin} back to you.
 //! let state = sessions.start(merchant_id, Duration::from_secs(900)).await?;
 //! let options = LaunchOptions::new("<CONFIGURATION_ID>").to_json()?;
 //! # let _ = (state.as_str(), options);
 //!
-//! // 2. The page posts back. Redeem the state first: exactly once, and only
-//! //    for the merchant your own authentication says is calling.
+//! // 2. The page posts back. Check everything local first (a malformed post
+//! //    must not burn the single-use state), then redeem the state: exactly
+//! //    once, and only for the merchant your own authentication says is
+//! //    calling.
 //! let state = SignupState::parse(posted_state)?;
+//! let event = EmbeddedSignupEvent::from_json(posted_event)?;
+//! let request = OnboardingRequest::from_event(SignupCode::new(posted_code)?, &event)?
+//!     .register_with_pin(TwoStepPin::new(posted_pin)?); // the merchant's own PIN
 //! if !sessions.redeem(&state, merchant_id).await? {
 //!     return Ok(()); // expired, replayed, or someone else's attempt
 //! }
@@ -71,9 +77,6 @@
 //! // 3. Onboard: exchange the code (30-second, single use), verify the WABA,
 //! //    its owner and the number with Meta, store the token encrypted,
 //! //    subscribe, register.
-//! let event = EmbeddedSignupEvent::from_json(posted_event)?;
-//! let request = OnboardingRequest::from_event(SignupCode::new(posted_code)?, &event)?
-//!     .register_with_pin(TwoStepPin::new("<6 digits you keep>")?);
 //! let onboarded = es.onboard(&request, &vault).await?;
 //! // Record onboarded.waba_id against merchant_id in your own tables.
 //!

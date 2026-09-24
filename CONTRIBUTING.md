@@ -20,7 +20,7 @@ Either open the repo in the dev container (see
 ## The gate
 
 ```bash
-just ci        # lint, check, test, doc, features, deny, test-live
+just ci        # lint, check, test, skills-check, doc, features, deny, test-live
 ```
 
 CI runs exactly this. A change is verified when `just ci` exits 0 on its
@@ -70,10 +70,37 @@ A public API change is not done until these agree with it:
 - `docs/architecture.md` and `docs/coverage.md`,
 - the consumer skills in `skills/` (they instruct other repos' coding
   agents — a stale skill generates wrong code at scale). Re-stamp every
-  skill you verified with `Verified against wa-rs <sha> (<date>)`.
+  skill you verified with `Verified against wa-rs <full sha> (<date>)`.
 
 Say in the PR description what happened to each, with a link or
 `n/a — <reason>`.
+
+### How the consumer skills are kept true
+
+- Each skill is `skills/<name>/SKILL.md` (flat, one job per skill, at
+  most 160 lines; long tables in `references/`). Its Rust code lives in
+  `skills/<name>/examples/*.rs`, compiled and tested by
+  `crates/wa-rs/tests/skills.rs` through `tests/skill_examples/mod.rs`
+  (add a `#[path]` line for a new file; the test fails until you do).
+- A ```` ```rust ```` block in a skill is an excerpt of such a file (or of
+  `crates/wa-rs/examples/*.rs`): edit the example, run `just fmt`, then
+  copy the lines. The test names the block that drifted. Label every
+  fence with its language (Rust is exactly `rust`); keep example files
+  free of block comments, `macro_rules!` and any `cfg` but `cfg(test)`,
+  whose code a block could quote without it ever compiling.
+- Backticked Rust names in the prose must exist in `crates/` or in the
+  skill's own examples, and `Type::member` must belong to that type;
+  `skills/.allowlist` lists the few that are
+  another crate's or not Rust at all. Relative links stay inside the
+  skill (each is installed on its own); link anything else on GitHub.
+- No `SKILL.md` outside `skills/<name>/` and `.claude/skills/<name>/`:
+  the installer would offer it (a root one hides every other skill).
+- `just skills-check` (part of `just ci`) checks that every stamp's commit
+  exists and is an ancestor of HEAD.
+- Developer skills in `.claude/skills/` carry `metadata: internal: true`
+  so the installer does not offer them. Check what it offers from your
+  checkout with `npx -y skills add <path-to-checkout> --list`: only the
+  consumer skills may appear.
 
 ## Commits
 

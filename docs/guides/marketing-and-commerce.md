@@ -5,10 +5,11 @@ templates, respect opt-outs and per-user limits, show products from your
 catalog, and measure what happened.
 
 Example: [`send_message.rs`](../../crates/wa-rs/examples/send_message.rs).
-Agent skills: [`wa-rs-messaging`](../../skills/wa-rs-messaging/SKILL.md)
-(sending, marketing, opt-outs) and
-[`wa-rs-templates-otp`](../../skills/wa-rs-templates-otp/SKILL.md)
-(template lifecycle).
+Agent skills: [`wa-rs-marketing`](../../skills/wa-rs-marketing/SKILL.md)
+(opt-ins, campaigns, opt-outs, analytics),
+[`wa-rs-commerce`](../../skills/wa-rs-commerce/SKILL.md) (catalogs, orders),
+[`wa-rs-templates`](../../skills/wa-rs-templates/SKILL.md) (template lifecycle) and
+[`wa-rs-send-templates`](../../skills/wa-rs-send-templates/SKILL.md).
 
 ## 1. On Meta's side
 

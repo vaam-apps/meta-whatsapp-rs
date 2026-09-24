@@ -179,6 +179,45 @@ impl Error {
     }
 }
 
+impl Error {
+    /// Whether a failed **send** (message, OTP, marketing message) may
+    /// nonetheless have been delivered, so resending risks a duplicate.
+    ///
+    /// `false` means Meta provably did nothing — a Graph error on a 4xx
+    /// response, a local validation/configuration/crypto error, or a
+    /// request that was never built or never connected — so it is safe to
+    /// fix and resend. Storage, sink and webhook errors are `false` too:
+    /// wa-rs raises them before a send, and after one it logs them instead
+    /// of returning them (the inbox records a sent reply without failing).
+    /// `true` for a timeout, a 5xx or any other non-4xx status, an answer
+    /// that arrived but was unreadable or failed an integrity check, or
+    /// anything unknown: reconcile with status webhooks (match on
+    /// `biz_opaque_callback_data`) before sending again.
+    pub fn may_have_been_sent(&self) -> bool {
+        // Exhaustive on purpose: a new variant has to decide here.
+        match self {
+            Self::Api(e) => e.http_status.is_some_and(|s| s >= 500),
+            Self::Http { status, .. } => !(400..500).contains(status),
+            Self::Transport(e) => match e {
+                TransportError::Connect(_) | TransportError::Build(_) => false,
+                // An integrity failure means a body came back: the request
+                // reached the server.
+                TransportError::Timeout
+                | TransportError::Backend(_)
+                | TransportError::Integrity(_) => true,
+            },
+            Self::Decode { .. } | Self::Other(_) => true,
+            Self::Step { source, .. } => source.may_have_been_sent(),
+            Self::Validation(_)
+            | Self::Config(_)
+            | Self::Crypto(_)
+            | Self::Storage(_)
+            | Self::Sink(_)
+            | Self::Webhook(_) => false,
+        }
+    }
+}
+
 /// Truncate a body for inclusion in an error message (512 bytes, lossy UTF-8).
 pub fn snippet(body: &[u8]) -> String {
     const MAX: usize = 512;
@@ -225,6 +264,62 @@ mod tests {
             Error::from(ValidationError::new("body", "x")).kind(),
             ErrorKind::InvalidParameter
         );
+    }
+
+    #[test]
+    fn may_have_been_sent_only_when_meta_could_have_acted() {
+        let api = |status: Option<u16>| {
+            let mut g = GraphApiError::new(131047, "x");
+            g.http_status = status;
+            Error::from(g)
+        };
+        let http = |status| Error::Http {
+            status,
+            body_snippet: String::new(),
+        };
+        let decode = Error::decode("send", serde_json::from_str::<u8>("x").unwrap_err(), b"x");
+        for (err, sent) in [
+            (api(Some(400)), false),
+            (api(Some(429)), false),
+            (api(Some(500)), true),
+            (api(None), false),
+            (http(404), false),
+            (http(502), true),
+            (Error::Transport(TransportError::Timeout), true),
+            (
+                Error::Transport(TransportError::Connect(anyhow::anyhow!("refused"))),
+                false,
+            ),
+            (
+                Error::Transport(TransportError::Backend(anyhow::anyhow!("reset"))),
+                true,
+            ),
+            (decode, true),
+            (ValidationError::new("to", "bad").into(), false),
+            (ConfigError::new("no transport").into(), false),
+            (Error::Other(anyhow::anyhow!("?")), true),
+            (
+                Error::Transport(TransportError::Timeout).in_step("send_code"),
+                true,
+            ),
+            (api(Some(400)).in_step("send_code"), false),
+            // Every row below pins one arm a mutation could flip unseen.
+            (http(302), true),
+            (
+                Error::Transport(TransportError::Build("header".into())),
+                false,
+            ),
+            (Error::Transport(TransportError::Integrity("sha256")), true),
+            (CryptoError::Decrypt.into(), false),
+            (
+                StorageError::Backend(anyhow::anyhow!("db down")).into(),
+                false,
+            ),
+            (SinkError::Closed.into(), false),
+            (WebhookError::SignatureMismatch.into(), false),
+        ] {
+            assert_eq!(err.may_have_been_sent(), sent, "{err}");
+        }
     }
 
     #[test]

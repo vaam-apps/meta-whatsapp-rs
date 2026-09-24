@@ -172,8 +172,8 @@ message. Show the state before the merchant types:
 ```rust
 use wa_rs::client::messages::Text;
 
-let window = inbox.window(&key).await?;
-let content: MessageContent = if window.is_open(OffsetDateTime::now_utc()) {
+// Same clock and rule as `reply`'s own refusal.
+let content: MessageContent = if inbox.window_is_open(&key).await? {
     Text::new(body).into()
 } else {
     TemplateMessage::new("follow_up", "en_US").into() // a template the merchant chose

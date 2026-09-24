@@ -1,0 +1,41 @@
+# Names the consumer skills may put in backticks although neither
+# crates/**/*.rs nor the skill's own examples/*.rs define them.
+# crates/wa-rs/tests/skills.rs (`backticked_names_exist`) checks every other
+# backticked Rust path, type, function, constant and snake_case name.
+# One name per line; `#` starts a comment. An entry here is a name nobody
+# checks: keep each one justified.
+
+# Other crates, named as their users write them.
+std
+tokio
+broadcast           # tokio::sync::broadcast (the SSE receiver)
+Receiver            # tokio::sync::broadcast::Receiver
+serde
+Serialize           # serde::Serialize (Typst template input)
+serde_json
+Value               # serde_json::Value
+deny_unknown_fields # the serde attribute the skills warn against
+anyhow
+futures
+StreamExt           # futures::StreamExt (media download streams)
+tower
+ServiceExt          # tower::ServiceExt (driving an axum app in tests)
+axum
+sqlx
+redis
+time
+
+# Aliases the examples import under another name.
+Inbound             # wa_rs::webhooks::fields::MessageContent as Inbound
+
+# Not Rust: HTTP, the browser, prose, environment.
+Authorization       # the HTTP header
+OAuth               # the Authorization scheme of the Resumable Upload API
+EventSource         # the browser API for Server-Sent Events
+login               # FB.login of Meta's JavaScript SDK
+stringify           # JSON.stringify (JavaScript, embedded-signup page)
+Cargo               # the tool, in prose
+HTTPS_PROXY         # environment variable honoured by ReqwestTransport
+
+# Meta's names that wa-rs deliberately does not type.
+consumer_profile    # a webhook field without a documented payload (arrives as Unknown)

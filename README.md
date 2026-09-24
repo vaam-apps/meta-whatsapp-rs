@@ -202,6 +202,7 @@ in the second (list the connected number under that tenant's
 | `axum` | | `webhooks::router` (webhook endpoint) and `webhooks::sse` (live inbox stream) |
 | `typst` | | `wa_rs::typst`: invoice, receipt and voucher templates → PDF/PNG |
 | `flows-endpoint` | | WhatsApp Flows data-endpoint crypto (aws-lc-rs) |
+| `testing` | | `core::testing::ScriptedTransport` for your own tests (enable in `[dev-dependencies]`) |
 | `full` | | all of the above |
 
 ## Crates
@@ -219,7 +220,7 @@ in the second (list the connected number under that tenant's
 
 ```bash
 just            # list recipes
-just ci         # the gate CI runs: lint, check, test, doc, features, deny, test-live
+just ci         # the gate CI runs: lint, check, test, skills-check, doc, features, deny, test-live
 just test       # unit and in-process tests (live adapter tests skip)
 just test-live  # adapter tests against real Postgres and Redis
 just meta-docs  # mirror Meta's docs locally (gitignored) for grep
@@ -233,9 +234,15 @@ Agents: see [AGENTS.md](AGENTS.md). Claude Code project skills and agents
 live in `.claude/`.
 
 Coding agents in the repositories that *use* wa-rs (the store, the CMS) get
-consumer skills from [`skills/`](skills/README.md):
-`npx skills add vaam-apps/wa-rs`. Each is stamped with the wa-rs commit it was
-verified against; a public API change updates them in the same PR.
+consumer skills from [`skills/`](skills/README.md): 24 small, task-shaped
+skills (`wa-rs` is the map; `wa-rs-send-messages`, `wa-rs-webhook-endpoint`,
+`wa-rs-otp-login`, `wa-rs-cms-inbox`, …). Install all of them with
+`npx skills add vaam-apps/wa-rs`, or a subset with
+`npx skills add vaam-apps/wa-rs -s wa-rs -s wa-rs-cms-inbox`. Each is stamped
+with the wa-rs commit it was verified against, and `just ci` keeps them
+true: their Rust blocks are excerpts of example files it compiles and
+tests, and every Rust name they use must exist. A public API change
+updates them in the same PR.
 
 ## Naming
 

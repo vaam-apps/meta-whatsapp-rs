@@ -1,73 +1,151 @@
 # wa-rs consumer skills
 
 Agent skills for code that **uses** [wa-rs](https://github.com/vaam-apps/wa-rs)
-— the e-commerce backend (marketing, order notifications, WhatsApp OTP login)
-and the CMS (merchants onboard their own number with Embedded Signup and chat
-with customers in-app). They tell a coding agent how the real API is shaped,
-which traps the reviews found, and what the library deliberately leaves to you.
+— an e-commerce backend (marketing, order notifications, WhatsApp OTP
+login) or a CMS whose merchants connect their own number with Embedded
+Signup and chat with their customers. Each skill is one job an integrator
+(or their coding agent) asks for: it names the real API, shows code wa-rs
+compiles and tests, lists the traps the reviews found, and says what the
+library leaves to you.
 
-Skills for working **on** wa-rs itself live in `.claude/skills/` instead.
+Skills for working **on** wa-rs itself live in `.claude/skills/`; they are
+marked `internal` and not offered by the installer.
 
 ## Install
 
 ```bash
-npx skills add vaam-apps/wa-rs                      # every skill
-npx skills add vaam-apps/wa-rs --skill wa-rs        # just the map
-npx skills update                                   # re-fetch what is installed
-npx skills ls                                       # what is installed, from where
+npx skills add vaam-apps/wa-rs --list                                  # what is offered
+npx skills add vaam-apps/wa-rs                                         # every skill
+npx skills add vaam-apps/wa-rs -s wa-rs -s wa-rs-webhook-endpoint -s wa-rs-cms-inbox
+npx skills update                                                      # re-fetch what is installed
 ```
 
-The repository is private: the installer (and Cargo, for the crate itself)
-needs GitHub credentials that can read it.
+The repository is public: neither the installer nor Cargo needs
+credentials. Install `wa-rs` in any case: it is the map and routes to the
+others. Each skill is self-contained (its
+`references/` and `examples/` travel with it; links elsewhere point at
+GitHub), so any subset works.
 
-Start with `wa-rs`: it is the map and routes to the others.
+## The skills
+
+**Start**
 
 | Skill | Load it when |
 | --- | --- |
-| [`wa-rs`](wa-rs/) | Anything with wa-rs: crates, features, building a `Client`, errors and retries, recipients |
-| [`wa-rs-embedded-signup`](wa-rs-embedded-signup/) | A merchant connects their WhatsApp number (Embedded Signup, token vault, per-tenant clients) |
-| [`wa-rs-webhooks`](wa-rs-webhooks/) | Receiving Meta's webhooks: endpoint, signatures, events, dedup, sinks, SSE |
-| [`wa-rs-cms-inbox`](wa-rs-cms-inbox/) | The merchant ↔ customer inbox: conversations, the 24-hour window, replies, live updates |
-| [`wa-rs-messaging`](wa-rs-messaging/) | Sending anything: text, media, interactive, products, templates, marketing, opt-outs |
-| [`wa-rs-templates-otp`](wa-rs-templates-otp/) | Creating/managing templates, and WhatsApp OTP login |
-| [`wa-rs-documents`](wa-rs-documents/) | Invoices, receipts and vouchers rendered with Typst and sent as documents/images |
+| [`wa-rs`](wa-rs/) | anything with wa-rs: install, features, rules, which skill to load |
+| [`wa-rs-setup`](wa-rs-setup/) | Meta-side setup, building the `Client`, tokens, API version, unwrapped endpoints |
+| [`wa-rs-errors`](wa-rs-errors/) | matching errors, retries, job queues around sends |
+| [`wa-rs-testing`](wa-rs-testing/) | testing your code without Meta or a database |
+
+**Messaging**
+
+| Skill | Load it when |
+| --- | --- |
+| [`wa-rs-send-messages`](wa-rs-send-messages/) | text, media, location, contacts, reactions, read receipts |
+| [`wa-rs-interactive-messages`](wa-rs-interactive-messages/) | buttons, lists, CTA links, location requests, Flows, carousels |
+| [`wa-rs-media`](wa-rs-media/) | uploads, verified downloads, template header handles |
+
+**Templates and authentication**
+
+| Skill | Load it when |
+| --- | --- |
+| [`wa-rs-templates`](wa-rs-templates/) | creating and managing templates, following their review |
+| [`wa-rs-send-templates`](wa-rs-send-templates/) | sending a template with its parameters |
+| [`wa-rs-otp-login`](wa-rs-otp-login/) | login or phone verification with WhatsApp codes |
+
+**Onboarding merchants**
+
+| Skill | Load it when |
+| --- | --- |
+| [`wa-rs-embedded-signup`](wa-rs-embedded-signup/) | the "Connect WhatsApp" flow and its callback |
+| [`wa-rs-token-vault`](wa-rs-token-vault/) | merchants' tokens, key rotation, acting as a merchant |
+| [`wa-rs-phone-numbers`](wa-rs-phone-numbers/) | registration, PIN, business profile, webhook subscriptions |
+
+**Webhooks and chat**
+
+| Skill | Load it when |
+| --- | --- |
+| [`wa-rs-webhook-endpoint`](wa-rs-webhook-endpoint/) | the endpoint Meta calls, on axum or any framework |
+| [`wa-rs-webhook-events`](wa-rs-webhook-events/) | what each event means and what to do with it |
+| [`wa-rs-live-updates`](wa-rs-live-updates/) | sinks, fan-out, SSE, background workers |
+| [`wa-rs-cms-inbox`](wa-rs-cms-inbox/) | the merchant ↔ customer inbox of a CMS |
+| [`wa-rs-groups-and-calling`](wa-rs-groups-and-calling/) | blocking a customer, group chats, WhatsApp calls |
+
+**Business features**
+
+| Skill | Load it when |
+| --- | --- |
+| [`wa-rs-marketing`](wa-rs-marketing/) | campaigns, opt-ins and opt-outs, analytics, QR codes |
+| [`wa-rs-commerce`](wa-rs-commerce/) | catalogs, product messages, carts |
+| [`wa-rs-documents`](wa-rs-documents/) | invoices, receipts, vouchers rendered with Typst |
+| [`wa-rs-flows`](wa-rs-flows/) | WhatsApp Flows and their data endpoint |
+
+**Operations**
+
+| Skill | Load it when |
+| --- | --- |
+| [`wa-rs-storage`](wa-rs-storage/) | memory, Postgres or Redis stores; your own adapter |
+| [`wa-rs-production`](wa-rs-production/) | secrets, logs, limits, versions, several instances |
 
 ## Versioning: a skill is true of one wa-rs commit
 
-wa-rs has no releases yet (`publish = false`; consumers depend on it by git
-revision). So each `SKILL.md` names the **commit and date it was verified
-against**, directly under its title:
+wa-rs has no releases (`publish = false`; you depend on a git `rev`). So
+each `SKILL.md` names the commit it was verified against, under its title:
 
 ```markdown
-> **Verified against wa-rs 7940d15 (2026-09-24).**
+> **Verified against wa-rs 3a3db05aa425c1737d8bb9239206036dbc81969f (2026-09-24).**
 ```
 
-"Verified" means every type, function, argument and enum variant the skill
-names was checked against the source at that commit, and the key snippets
-were compiled against it. It does not mean the prose is true of any other
-commit.
+"Verified" means: every Rust block is an excerpt of a file wa-rs compiles
+and tests at that commit (the skill's own `examples/*.rs`, or
+`crates/wa-rs/examples/*.rs`), and every Rust name the prose uses exists
+there. The rules:
 
-The rules:
+1. **Your `Cargo.toml` pins you, not the skill.** Same commit as the
+   stamp: trust the skill. Another commit: trust the code (rustdoc,
+   source) wherever they disagree.
+2. **A newer skill on an older wa-rs is the dangerous case**: it describes
+   API your revision lacks. Bump the `rev`, or use the skill's git history
+   at the stamp nearest your revision.
+3. **A corrected claim stays visible**, struck through with the commit or
+   date it stopped being true, in the skill it belongs to: upgraders see
+   what changed.
+4. **Stamps move one skill at a time**: re-verifying one skill against a
+   newer commit restamps that skill only.
 
-1. **Your `Cargo.toml` pins you, not the skill.** Compare the `rev` you depend
-   on with the skill's stamp. Same commit: trust the skill. Different commit:
-   **trust the code** — read the rustdoc (`cargo doc -p wa-rs --open`) or the
-   source for anything the skill tells you, and prefer what the code says.
-2. **A newer skill on an older wa-rs is the dangerous case.** It will describe
-   API your pinned revision does not have. Either bump the `rev`, or read the
-   skill's git history for the version stamped nearest your revision.
-3. **When a skill is corrected, the old claim stays visible**: struck through,
-   with the date and the reason, so a reader can tell which belief was wrong
-   and when it stopped being true.
-4. **A stamp may move forward one skill at a time.** Re-verifying one skill
-   against a newer wa-rs and restamping only that skill is expected; the
-   stamps do not have to agree with each other.
+## How wa-rs keeps them true
 
-Inside wa-rs, a change to a public API is not done until `docs/`, the rustdoc
-and these skills agree with it (see `AGENTS.md`). The pull request says what
-happened to each.
+`just ci` runs, on every change:
+
+- `crates/wa-rs/tests/skills.rs` (in `just test`): every
+  `skills/*/examples/*.rs` compiles and its tests pass, and hides no code
+  that is never compiled (no block comments, `macro_rules!` or `cfg`
+  but the tests' `#[cfg(test)]`); every Rust block is a verbatim excerpt
+  of a compiled file,
+  and every fence carries a known language, so no Rust escapes the check
+  as an `rs` or `rust,ignore` fence, a `~~~` one or an unlabeled block;
+  frontmatter parses the way
+  the `npx skills` CLI parses it (quoted descriptions, `name` = directory,
+  consumer skills never `internal`, developer skills always); the
+  installer finds no other `SKILL.md` (a root one would hide every
+  skill); relative links resolve and stay inside the skill; links into
+  this repository and their anchors exist; every backticked Rust name
+  exists in `crates/` (`skills/.allowlist` lists the placeholders and
+  other crates' names), and the last segment of a path must be a variant,
+  field or item of the type before it, not just of the same file; every
+  skill is stamped, short, and listed
+  here and in the `wa-rs` hub.
+- `just skills-check`: every stamp's commit exists and is an ancestor of
+  the checked-out commit.
+
+What no check can prove: that the prose's *semantics* are right (a real
+constant with a wrong value, a real method called on the wrong type
+through a variable, `inbox.publish()`). Reviews do that.
+
+To see what the installer offers from a checkout (developer skills must
+not appear): `npx -y skills add <path-to-checkout> --list`.
 
 ## Do not hand-edit installed copies
 
-`npx skills` records a hash of what it installed; a local edit reads as drift
-and the next `update` overwrites it. Send the fix to this repository instead.
+`npx skills` records a hash of what it installed; a local edit reads as
+drift and the next `update` overwrites it. Send the fix here instead.
