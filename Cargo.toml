@@ -9,8 +9,11 @@ members = [
   "crates/wa-adapters",
   "crates/wa-typst",
   "crates/wa-rs",
-  ".xtask",
 ]
+# Repository automation is its own workspace (own Cargo.lock): its HTTP
+# client (ureq → rustls with `ring`) must not be resolved into the
+# library's builds and tests. See .xtask/Cargo.toml.
+exclude = [".xtask"]
 default-members = [
   "crates/wa-core",
   "crates/wa-client",

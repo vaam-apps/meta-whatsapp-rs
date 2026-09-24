@@ -1,2 +1,4 @@
 [alias]
-xtask = "run -q -p xtask --"
+# .xtask is a workspace of its own (see .xtask/Cargo.toml), so it is run
+# by manifest path rather than as a member package.
+xtask = "run -q --manifest-path .xtask/Cargo.toml --"

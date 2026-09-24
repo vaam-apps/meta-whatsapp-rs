@@ -1,0 +1,3 @@
+# Its own workspace: `cargo xtask` builds into .xtask/target unless
+# CARGO_TARGET_DIR is set.
+/target

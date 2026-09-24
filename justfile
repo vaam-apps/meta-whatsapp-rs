@@ -34,14 +34,18 @@ test-live:
 test-live-down:
     docker compose -f compose.test.yaml down -v
 
-# Formatting and clippy, warnings are errors
+# Formatting and clippy, warnings are errors. `.xtask` is a workspace of its
+# own (see .xtask/Cargo.toml), so it is checked by manifest path.
 lint:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --all-features -- -D warnings
+    cargo fmt --manifest-path .xtask/Cargo.toml --check
+    cargo clippy --manifest-path .xtask/Cargo.toml --all-targets -- -D warnings
 
 # Format everything
 fmt:
     cargo fmt --all
+    cargo fmt --manifest-path .xtask/Cargo.toml
 
 # Rustdoc with broken links and missing docs as errors
 doc:
@@ -72,4 +76,4 @@ ci: lint check test doc features deny test-live
 # Mirror Meta's WhatsApp docs as Markdown into .meta-docs/ (gitignored; the
 # docs are Meta's, never commit them). Agents grep this instead of guessing.
 meta-docs *args:
-    cargo run -q -p xtask -- meta-docs {{args}}
+    cargo run -q --manifest-path .xtask/Cargo.toml -- meta-docs {{args}}
