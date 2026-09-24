@@ -8,9 +8,22 @@
 //! | `sinks` (default) | [`sink`]: channel, broadcast, fan-out, filter, fn, tracing sinks | `EventSink` | tokio `sync`, tokio-stream |
 //! | `reqwest` | `http::ReqwestTransport` | `HttpTransport` | reqwest (rustls, aws-lc-rs, HTTP/2) |
 //! | `postgres` | `store::PostgresKvStore`, `store::PostgresConversationStore`, `store::postgres::migrate` | `KvStore`, `ConversationStore` | sqlx (Postgres, tokio, rustls) |
-//! | `redis` | `store::RedisKvStore` | `KvStore` | redis (tokio, connection manager) |
+//! | `redis` | `store::RedisKvStore` | `KvStore` | redis (tokio, connection manager; no TLS) |
 //!
 //! Every feature compiles on its own; none is required by another.
+//!
+//! # Known limitations
+//!
+//! - **Redis over TLS (`rediss://`) is not built in.** redis-rs configures
+//!   rustls from the process-wide default crypto provider and panics when
+//!   both `aws-lc-rs` and `ring` are linked and none was installed. Enable
+//!   `redis/tokio-rustls-comp` in your application, install a provider at
+//!   startup, and hand the connection to `RedisKvStore::new`; its docs show
+//!   how.
+//! - **Postgres cannot store U+0000** in text or JSON: such a message or key
+//!   is rejected with `StorageError::Backend` (see `store::postgres`).
+//! - **Proxies**: `ReqwestTransport` honours `HTTP(S)_PROXY`/`NO_PROXY`
+//!   from the environment, not macOS/Windows system settings.
 //!
 //! # Which adapter when
 //!

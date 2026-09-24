@@ -73,15 +73,30 @@ struct Sql {
 /// server's clock.
 const LIVE: &str = "value IS NOT NULL AND (expires_at IS NULL OR expires_at > now())";
 
+/// The last instant `OffsetDateTime` represents at Postgres' precision.
+const LAST_INSTANT: &str = "9999-12-31 23:59:59.999999+00";
+
+/// Longest TTL sent to Postgres: 10 000 years in microseconds. Anything
+/// longer already means "never" (it lands after [`LAST_INSTANT`]), and the
+/// cap keeps `now() + ttl` inside Postgres' interval and timestamp ranges —
+/// the planner may evaluate that sum while planning, before the `CASE` that
+/// would have discarded it.
+const MAX_AFTER_US: i64 = 10_000 * 366 * 24 * 3600 * 1_000_000;
+
 impl Sql {
     fn new(prefix: &TablePrefix) -> Self {
         let kv = prefix.table("kv");
         let seq = prefix.table("kv_version_seq");
         // Expiry parameters, shared by the writes: `after` (microseconds,
-        // BIGINT) and `at` (TIMESTAMPTZ); both NULL means "never".
+        // BIGINT) and `at` (TIMESTAMPTZ); both NULL means "never". A TTL
+        // that lands after year 9999 by the server's clock is also "never",
+        // as in `MemoryKvStore`: `OffsetDateTime` could not read it back, so
+        // storing it would make the key unreadable.
         let new_exp = |after: u8, at: u8| {
+            let deadline = format!("now() + ${after}::bigint * interval '1 microsecond'");
             format!(
-                "COALESCE(${at}::timestamptz, now() + ${after}::bigint * interval '1 microsecond')"
+                "COALESCE(${at}::timestamptz, \
+                   CASE WHEN {deadline} > timestamptz '{LAST_INSTANT}' THEN NULL ELSE {deadline} END)"
             )
         };
         Self {
@@ -159,15 +174,15 @@ struct ExpiryParams {
 }
 
 impl ExpiryParams {
-    fn new(expiry: Expiry) -> Result<Self, StorageError> {
-        Ok(match expiry {
+    fn new(expiry: Expiry) -> Self {
+        match expiry {
             Expiry::Never => Self {
                 after_us: None,
                 at: None,
                 keep: false,
             },
             Expiry::After(d) => Self {
-                after_us: Some(after_micros(d)?),
+                after_us: Some(after_micros(d)),
                 at: None,
                 keep: false,
             },
@@ -181,26 +196,16 @@ impl ExpiryParams {
                 at: None,
                 keep: true,
             },
-        })
+        }
     }
 }
 
 /// A TTL in whole microseconds (Postgres' resolution), rounded **up** so a
-/// sub-microsecond TTL is not dead on arrival. Rejects TTLs that would land
-/// beyond what `OffsetDateTime` can represent (year 9999), judged against
-/// the local clock: those are bugs, not expiries.
-fn after_micros(d: Duration) -> Result<i64, StorageError> {
-    let too_far = || {
-        StorageError::Backend(anyhow::anyhow!(
-            "expiry {d:?} is beyond the representable range"
-        ))
-    };
-    time::Duration::try_from(d)
-        .ok()
-        .and_then(|td| OffsetDateTime::now_utc().checked_add(td))
-        .ok_or_else(too_far)?;
+/// sub-microsecond TTL is not dead on arrival, and capped at
+/// [`MAX_AFTER_US`] (the SQL turns anything past year 9999 into "never").
+fn after_micros(d: Duration) -> i64 {
     let micros = d.as_nanos().div_ceil(1_000);
-    i64::try_from(micros).map_err(|_| too_far())
+    i64::try_from(micros).map_or(MAX_AFTER_US, |m| m.min(MAX_AFTER_US))
 }
 
 /// A version as stored (`BIGINT`) back to the port's `u64`.
@@ -275,7 +280,7 @@ impl KvStore for PostgresKvStore {
         value: Vec<u8>,
         expiry: Expiry,
     ) -> Result<u64, StorageError> {
-        let exp = ExpiryParams::new(expiry)?;
+        let exp = ExpiryParams::new(expiry);
         let row = sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.put)))
             .bind(key.namespace())
             .bind(key.key())
@@ -296,7 +301,7 @@ impl KvStore for PostgresKvStore {
         expiry: Expiry,
     ) -> Result<Option<u64>, StorageError> {
         // `Keep` on a new record means "never": its parameters are both NULL.
-        let exp = ExpiryParams::new(expiry)?;
+        let exp = ExpiryParams::new(expiry);
         let row = sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.put_if_absent)))
             .bind(key.namespace())
             .bind(key.key())
@@ -330,7 +335,7 @@ impl KvStore for PostgresKvStore {
                 .map_err(backend)?;
             return Ok((done.rows_affected() == 1).then_some(0));
         };
-        let exp = ExpiryParams::new(expiry)?;
+        let exp = ExpiryParams::new(expiry);
         let row = sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.cas_set)))
             .bind(key.namespace())
             .bind(key.key())
@@ -362,18 +367,22 @@ mod tests {
 
     #[test]
     fn ttl_rounds_up_to_microseconds() {
-        assert_eq!(after_micros(Duration::from_nanos(1)).unwrap(), 1);
-        assert_eq!(after_micros(Duration::from_micros(7)).unwrap(), 7);
-        assert_eq!(
-            after_micros(Duration::from_millis(1500)).unwrap(),
-            1_500_000
-        );
-        assert_eq!(after_micros(Duration::ZERO).unwrap(), 0);
+        assert_eq!(after_micros(Duration::from_nanos(1)), 1);
+        assert_eq!(after_micros(Duration::from_micros(7)), 7);
+        assert_eq!(after_micros(Duration::from_millis(1500)), 1_500_000);
+        assert_eq!(after_micros(Duration::ZERO), 0);
     }
 
     #[test]
-    fn absurd_ttl_is_an_error_not_a_panic() {
-        assert!(after_micros(Duration::MAX).is_err());
-        assert!(after_micros(Duration::from_hours(20_000 * 365 * 24)).is_err());
+    fn absurd_ttl_is_capped_not_an_error_or_a_panic() {
+        // The SQL maps anything past year 9999 to "never"; the conformance
+        // suite checks that end to end.
+        assert_eq!(after_micros(Duration::MAX), MAX_AFTER_US);
+        assert_eq!(
+            after_micros(Duration::from_hours(20_000 * 365 * 24)),
+            MAX_AFTER_US
+        );
+        let ten_millennia = time::Duration::microseconds(MAX_AFTER_US);
+        assert!(ten_millennia > time::Duration::days(10_000 * 365));
     }
 }

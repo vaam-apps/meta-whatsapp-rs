@@ -34,7 +34,19 @@
 //! `Expiry::At(t)` is compared against the server's time — keep the
 //! database host on NTP. `now()` is the start of the (single-statement)
 //! transaction, and Postgres keeps microseconds, so `expires_at` and message
-//! timestamps come back truncated to microseconds.
+//! timestamps come back truncated to microseconds. An `Expiry::After` that
+//! would land after year 9999 by that clock is stored as "never", as
+//! `MemoryKvStore` does (`OffsetDateTime` could not read such a deadline
+//! back).
+//!
+//! # Limitation: no U+0000
+//!
+//! Postgres `text` and `jsonb` cannot hold the NUL character. A message
+//! whose id, contact, kind, text, payload or error contains U+0000, or a
+//! `StoreKey` that does, is rejected with `StorageError::Backend` — on every
+//! retry, so a webhook carrying one would be redelivered by Meta until it
+//! gives up. The memory and Redis stores accept it. If your pipeline can see
+//! NUL characters, strip or replace them before `append`.
 
 mod conversation;
 mod kv;

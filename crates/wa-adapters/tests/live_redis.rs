@@ -122,20 +122,25 @@ async fn live_redis_layout_counters_and_ttls() {
     store.put(&bin, all.clone(), Expiry::Never).await.unwrap();
     assert_eq!(store.get(&bin).await.unwrap().unwrap().value, all);
 
-    // A deadline past year 9999 is a clean error, not a panic or a corrupt
-    // record (the script rejects it before writing anything).
+    // A deadline past year 9999 means "never", as in MemoryKvStore: no
+    // `exp` field, no key TTL, and the record reads back.
     let far = StoreKey::new("wa.far", "x");
-    assert!(
-        store
-            .put(
-                &far,
-                b"x".to_vec(),
-                Expiry::After(Duration::from_millis(253_402_300_799_999))
-            )
-            .await
-            .is_err()
-    );
-    assert!(store.get(&far).await.unwrap().is_none());
+    store
+        .put(
+            &far,
+            b"x".to_vec(),
+            Expiry::After(Duration::from_millis(253_402_300_799_999)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(store.get(&far).await.unwrap().unwrap().expires_at, None);
+    let far_record = format!("{prefix}{{6:wa.far}}:x");
+    let far_ttl: i64 = redis::cmd("PTTL")
+        .arg(&far_record)
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(far_ttl, -1, "no TTL on a record that never expires");
 
     cleanup(&mut conn, &prefix).await;
 }

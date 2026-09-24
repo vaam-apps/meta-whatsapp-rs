@@ -16,9 +16,7 @@
 //! even after delete + recreate; a per-namespace counter gives that while
 //! letting records expire and vanish completely. (A per-key counter would
 //! have to outlive its record forever: one orphaned Redis key per webhook
-//! dedup marker ever written.) Configure Redis with `noeviction` or a
-//! `volatile-*` policy: an `allkeys-*` policy could evict a counter, and a
-//! recreated counter would restart at 1.
+//! dedup marker ever written.)
 //!
 //! # Atomicity
 //!
@@ -27,17 +25,9 @@
 //! `get` (`HMGET`) and `delete` (`DEL`) are single commands, atomic on their
 //! own.
 //!
-//! # Clock
-//!
-//! Expiry uses the **Redis server's** clock (`TIME` inside the script, key
-//! TTLs), at millisecond resolution: `expires_at` comes back truncated to
-//! milliseconds.
-//!
-//! # Cluster
-//!
-//! The `{…}` around the namespace is a Redis Cluster hash tag: a record and
-//! its namespace counter always share a slot, which scripts require. The
-//! price is that one namespace lives on one shard.
+//! What an operator needs to know (eviction policy, clock, Cluster, TLS) is
+//! on [`RedisKvStore`]'s own docs: this module is private, so its docs are
+//! not rendered.
 
 use std::fmt;
 use std::sync::{Arc, LazyLock};
@@ -89,6 +79,10 @@ local mode = ARGV[4]
 local exp = nil
 if mode == 'after' then
   exp = now + tonumber(ARGV[5])
+  -- Past year 9999 (what `OffsetDateTime` can read back) means never, as
+  -- in MemoryKvStore. The TTL is capped client-side, so this sum stays
+  -- exact in a double.
+  if exp > 253402300799999 then exp = nil end
 elseif mode == 'at' then
   exp = tonumber(ARGV[5])
 elseif mode == 'keep' then
@@ -97,6 +91,7 @@ elseif mode == 'keep' then
   if current then exp = tonumber(current) end
 end
 if exp and exp > 253402300799999 then
+  -- Only a corrupt `exp` field can get here (`at` is at most year 9999).
   return redis.error_reply('wa-adapters: expiry beyond year 9999')
 end
 
@@ -133,6 +128,52 @@ return version
 /// let kv = RedisKvStore::new(client.get_connection_manager().await?);
 /// # Ok(()) }
 /// ```
+///
+/// # Operating Redis for it
+///
+/// - **Eviction policy: `noeviction` or `volatile-*`.** Versions come from
+///   one counter key per namespace (`{prefix}{<len>:<ns>}#version`) that has
+///   no TTL, so records can expire and vanish without leaving a key behind.
+///   An `allkeys-*` policy could evict a counter; a recreated counter
+///   restarts at 1, and old versions would be handed out again.
+/// - **Clock.** Expiry uses the **Redis server's** clock (`TIME` inside the
+///   script, key TTLs) at millisecond resolution: `expires_at` comes back
+///   truncated to milliseconds. An `Expiry::After` that would land after
+///   year 9999 is stored without expiry ("never"), as `MemoryKvStore` does.
+/// - **Cluster.** The `{…}` around the namespace is a hash tag: a record and
+///   its namespace counter share a slot, which the Lua script requires. One
+///   namespace therefore lives on one shard. Keep an empty `{}` out of the
+///   [prefix](Self::with_prefix): Redis ignores an empty tag and would hash
+///   the whole key, splitting a record from its counter.
+///
+/// # TLS (`rediss://`): bring your own connection
+///
+/// This crate enables no TLS feature of `redis`, on purpose. redis-rs builds
+/// its rustls configuration with `rustls::ClientConfig::builder()`, which
+/// uses the **process-wide default** crypto provider. When rustls is built
+/// with both of its providers — `aws-lc-rs` (which `reqwest` and `sqlx` use
+/// here) and `ring` (which many other crates enable) — and the application
+/// installed none, that call **panics** on the first `rediss://` connection.
+/// Whether both are linked depends on the whole dependency graph of the
+/// final binary (in this workspace, the repository's own `xtask` pulls
+/// `ring` in through `ureq`), so a library cannot promise it will not
+/// happen.
+///
+/// `RedisKvStore` accepts any async connection, so TLS stays with the
+/// application, which picks the provider explicitly:
+///
+/// ```toml
+/// # Your application's Cargo.toml (same `redis` major version as wa-adapters)
+/// redis = { version = "1", features = ["tokio-rustls-comp", "connection-manager"] }
+/// rustls = "0.23"
+/// ```
+///
+/// ```ignore
+/// // Once at startup, before any TLS connection is made.
+/// let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+/// let client = redis::Client::open("rediss://:password@redis.example.com:6380")?;
+/// let kv = wa_adapters::store::RedisKvStore::new(client.get_connection_manager().await?);
+/// ```
 #[derive(Clone)]
 pub struct RedisKvStore<C = ConnectionManager> {
     conn: C,
@@ -161,8 +202,9 @@ where
     }
 
     /// Use `prefix` for every key instead of `wa:` (e.g. `tenant1:wa:` to
-    /// share a Redis between deployments). Any string works; an empty
-    /// prefix is allowed.
+    /// share a Redis between deployments). Any string works, an empty one
+    /// included; on Redis Cluster it must not contain `{}` (see
+    /// [Operating Redis](Self#operating-redis-for-it)).
     #[must_use]
     pub fn with_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.prefix = Arc::from(prefix.into());
@@ -196,7 +238,7 @@ where
         value: &[u8],
         expiry: Expiry,
     ) -> Result<Option<u64>, StorageError> {
-        let (mode, ms) = expiry_args(expiry)?;
+        let (mode, ms) = expiry_args(expiry);
         let mut invocation = WRITE.prepare_invoke();
         invocation
             .key(self.record_key(key))
@@ -212,28 +254,23 @@ where
 }
 
 /// `(mode, milliseconds)` for the script.
-fn expiry_args(expiry: Expiry) -> Result<(&'static str, i64), StorageError> {
-    Ok(match expiry {
+fn expiry_args(expiry: Expiry) -> (&'static str, i64) {
+    match expiry {
         Expiry::Never => ("never", 0),
         Expiry::Keep => ("keep", 0),
-        Expiry::After(d) => ("after", ttl_millis(d)?),
+        Expiry::After(d) => ("after", ttl_millis(d)),
         // Floor: the record never outlives the requested instant.
         Expiry::At(t) => ("at", unix_millis(t)),
-    })
+    }
 }
 
 /// A TTL in milliseconds (Redis' resolution), rounded **up** so a
-/// sub-millisecond TTL is not dead on arrival.
-fn ttl_millis(d: Duration) -> Result<i64, StorageError> {
+/// sub-millisecond TTL is not dead on arrival, and capped at
+/// [`MAX_EXP_MS`]: any longer TTL lands after year 9999, which the script
+/// turns into "never", and the cap keeps its arithmetic exact.
+fn ttl_millis(d: Duration) -> i64 {
     let ms = d.as_nanos().div_ceil(1_000_000);
-    i64::try_from(ms)
-        .ok()
-        .filter(|ms| *ms <= MAX_EXP_MS)
-        .ok_or_else(|| {
-            StorageError::Backend(anyhow::anyhow!(
-                "expiry {d:?} is beyond the representable range"
-            ))
-        })
+    i64::try_from(ms).map_or(MAX_EXP_MS, |ms| ms.min(MAX_EXP_MS))
 }
 
 fn unix_millis(t: OffsetDateTime) -> i64 {
@@ -347,10 +384,11 @@ mod tests {
 
     #[test]
     fn ttl_rounds_up_to_milliseconds() {
-        assert_eq!(ttl_millis(Duration::from_nanos(1)).unwrap(), 1);
-        assert_eq!(ttl_millis(Duration::from_millis(1500)).unwrap(), 1500);
-        assert_eq!(ttl_millis(Duration::ZERO).unwrap(), 0);
-        assert!(ttl_millis(Duration::MAX).is_err());
+        assert_eq!(ttl_millis(Duration::from_nanos(1)), 1);
+        assert_eq!(ttl_millis(Duration::from_millis(1500)), 1500);
+        assert_eq!(ttl_millis(Duration::ZERO), 0);
+        // Capped, not an error: the script maps it to "never".
+        assert_eq!(ttl_millis(Duration::MAX), MAX_EXP_MS);
     }
 
     #[test]
