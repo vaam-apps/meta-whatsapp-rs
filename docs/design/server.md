@@ -750,7 +750,7 @@ test fail.
 | M3.1 | The happy path over HTTP with Meta's documented responses binds the verified WABA and all its numbers; no response contains the token |
 | M3.2 | Another tenant's state is `403 stale_attempt` and the rightful tenant still completes; a malformed PIN is `422` and the state survives |
 | M3.3 | A scripted 133005 at registration is `502 onboarding_failed` (`register_phone`, resumable); a new process on the same database resumes with a corrected PIN; another tenant's resume is `404` |
-| M3.4 | Partner mode: the credit-line request carries the partner's system token (asserted header), never the merchant's; missing partner settings refuse the start. D4: a second tenant onboarding a bound WABA gets `409`, binding unchanged. `PARTNER_APP_UNINSTALLED` removes the vault entry and bindings |
+| M3.4 | Partner mode: the credit-line request carries the partner's system token (asserted header), never the merchant's; missing partner settings refuse the start. D4 is enforced **before** any credit call, through the library's post-verification gate: a second tenant onboarding a bound WABA gets `409`, nothing is stored, subscribed or shared, binding unchanged. A business whose line was revoked is not re-funded by `resume` or a new signup without an explicit operator action. Offboarding revokes first and deletes second: a CMS disconnect, `PARTNER_APP_UNINSTALLED` and `PARTNER_REMOVED` (in any order) end with the line revoked (from the stored or the webhook's owner business id) before the vault entry and bindings go; tests replay both orders |
 | M3.5 | OTP: every outcome; tenant A's code verifies at no other tenant on the same number (decisive: the namespace); logs hold neither code nor number; a sentinel in a scripted Graph error on issue reaches no response |
 | M4.1 | The image builds for both architectures, runs non-root on a read-only file system, has no shell; `wa-server healthcheck` works in it |
 | M4.2 | A Compose smoke test in CI (Postgres, the image, a Graph stub via `WA_GRAPH_ENDPOINT`): CLI admin key, tenant, attach, send, a signed Meta webhook, a webhooks-out delivery verified at a stub receiver |
@@ -790,6 +790,7 @@ D1–D4 and D7 were decided by the owner on 2026-09-24 (the recommended option i
 | D11 | Publishing the TypeScript client | npm / GitHub Packages / vendored | public npm | M4 |
 | D12 | A Medusa plugin | none / now / after the first integration | after the first integration | after M4 |
 | D13 | Where the server skills live | this repository / a separate one | this repository | M1 |
+| D14 | Credit line after a merchant unshares (`PARTNER_REMOVED`) | revoke at once (Meta's recommendation) / revoke after a grace period when `disconnection_info` says the coexistence number may reconnect / operator decides | revoke at once; a reconnect needs an explicit re-share. Revocation is per business, so it also stops funding that business's other WABAs | M3 |
 
 **Inherited from [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md).** Until
 decided, the service keeps the library's behaviour and makes it visible to
