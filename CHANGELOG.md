@@ -49,9 +49,11 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   format. `EmbeddedSignup::revoke_credit_line(&waba, owner_business_id,
   &vault)` revokes from the recorded owner (or, when nothing is recorded,
   a signed webhook's `owner_business_id`; a contradicting one revokes
-  nothing), and `EmbeddedSignup::offboard` revokes first and deletes the
-  token second (`Offboarded`), so `PARTNER_APP_UNINSTALLED` and
-  `PARTNER_REMOVED` end revoked in either order. The Tech Provider flow is
+  nothing; an unreadable token or credit record, or a failed lookup, does
+  not stop what the other sources can revoke), and
+  `EmbeddedSignup::offboard` revokes first and deletes the token second
+  (`Offboarded`), so `PARTNER_APP_UNINSTALLED` and `PARTNER_REMOVED` end
+  revoked in either order. The Tech Provider flow is
   unchanged, request for request. `SolutionPartner`'s system token is
   private and never in `Debug`.
 - **`EmbeddedSignup::onboard_with_approval`**: your check of the verified
