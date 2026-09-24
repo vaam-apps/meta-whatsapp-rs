@@ -121,7 +121,10 @@ there. The rules:
   `skills/*/examples/*.rs` compiles and its tests pass, and hides no code
   that is never compiled (no block comments, `macro_rules!` or `cfg`
   but the tests' `#[cfg(test)]`); every Rust block is a verbatim excerpt
-  of a compiled file,
+  of a compiled file, and of its compiled code only: never lines inside a
+  string or a comment, nor an item under a `cfg` that `--all-features`
+  never enables (such as the `#[cfg(not(feature = …))]` arms of the crate's
+  own examples),
   and every fence carries a known language, so no Rust escapes the check
   as an `rs` or `rust,ignore` fence, a `~~~` one or an unlabeled block;
   frontmatter parses the way
@@ -133,7 +136,8 @@ there. The rules:
   exists in `crates/` (`skills/.allowlist` lists the placeholders and
   other crates' names), and the last segment of a path must be a variant,
   field or item of the type before it, not just of the same file; every
-  skill is stamped, short, and listed
+  skill and every `references/*.md` is stamped under its title (and any
+  other stamp is well-formed), every skill is short, and listed
   here and in the `wa-rs` hub.
 - `just skills-check`: every stamp's commit exists and is an ancestor of
   the checked-out commit.

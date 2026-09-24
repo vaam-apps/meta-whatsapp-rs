@@ -87,7 +87,13 @@ Say in the PR description what happened to each, with a link or
   copy the lines. The test names the block that drifted. Label every
   fence with its language (Rust is exactly `rust`); keep example files
   free of block comments, `macro_rules!` and any `cfg` but `cfg(test)`,
-  whose code a block could quote without it ever compiling.
+  whose code a block could quote without it ever compiling. A block may
+  not quote lines inside a string or a comment of any example, nor an
+  item under a `cfg` that `--all-features` never enables (the
+  `#[cfg(not(feature = …))]` arms of `crates/wa-rs/examples/*.rs`).
+- Each `references/*.md` carries a `Verified against wa-rs <full
+  sha> (<date>)` stamp under its title, like its `SKILL.md`, checked the same
+  way.
 - Backticked Rust names in the prose must exist in `crates/` or in the
   skill's own examples, and `Type::member` must belong to that type;
   `skills/.allowlist` lists the few that are

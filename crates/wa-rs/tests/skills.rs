@@ -11,9 +11,13 @@
 //!   each paragraph contiguous in the file and the paragraphs in order (the
 //!   README rule of `tests/readme.rs`, plus order). Every fence is
 //!   ```` ``` ```` with a known language, so no Rust block escapes as
-//!   ```` ```rs ````, ```` ```rust,ignore ````, `~~~` or unlabeled; and the
-//!   example files hide no uncompiled code a block could quote (block
-//!   comments, `macro_rules!`, any `cfg` but `cfg(test)`).
+//!   ```` ```rs ````, ```` ```rust,ignore ````, `~~~` or unlabeled; the
+//!   skills' example files hide no uncompiled code a block could quote
+//!   (block comments, `macro_rules!`, any `cfg` but `cfg(test)`); and no
+//!   block quotes a line of any example that starts inside a string (raw
+//!   or not) or a block comment, or that belongs to an item under a `cfg`
+//!   `--all-features` never enables (the `cfg(not(feature = …))` arms of
+//!   `crates/wa-rs/examples/*.rs`).
 //! - **Discovery**: the installer finds no `SKILL.md` but `skills/<name>/`
 //!   and internal ones in agent directories (a root `SKILL.md` would hide
 //!   every other skill).
@@ -37,7 +41,8 @@
 //!   variable (`inbox.reply(..)`) is only checked to exist on some type.
 //! - **Shape**: each skill is stamped under its title, stays short, links
 //!   its example files, and is routed to from the `wa-rs` hub and from
-//!   `skills/README.md`.
+//!   `skills/README.md`. Each `references/*.md` is stamped under its title
+//!   too, and every other mention of a stamp is a well-formed one.
 //!
 //! The stamp's commit (`Verified against wa-rs <sha>`) must exist and be an
 //! ancestor of HEAD: that needs git, so `just skills-check` checks it.
@@ -537,6 +542,62 @@ fn is_stamp(line: &str) -> bool {
         && rest.starts_with(").**")
 }
 
+/// Problems with the stamps of a skill's Markdown: under the `# title` of
+/// a `references/*.md` file (`under_title`) the first line must be a
+/// stamp, and every prose line that says "Verified against wa-rs" must be a
+/// well-formed one. `just skills-check` only greps `Verified against wa-rs
+/// <hex>` and checks the commit: a stamp with a typo in its words escapes
+/// it, and one with a malformed date or no date passes it.
+fn stamp_problems(markdown: &str, under_title: bool) -> Vec<String> {
+    let mut problems = Vec::new();
+    if under_title {
+        let mut lines = markdown.lines().filter(|l| !l.trim().is_empty());
+        if !lines.next().is_some_and(|l| l.starts_with("# ")) {
+            problems.push("the first line must be its `# title`".to_owned());
+        }
+        if !lines.next().is_some_and(is_stamp) {
+            problems.push(
+                "the line under the title must be `> **Verified against wa-rs <full sha> \
+                 (<YYYY-MM-DD>).**`"
+                    .to_owned(),
+            );
+        }
+    }
+    for (n, line) in prose_lines(markdown) {
+        if line.contains("Verified against wa-rs") && !is_stamp(line) {
+            problems.push(format!(
+                "line {n}: a malformed stamp (`> **Verified against wa-rs <full sha> \
+                 (<YYYY-MM-DD>).**`)"
+            ));
+        }
+    }
+    problems
+}
+
+/// `references/*.md` travel with their skill and make claims about the
+/// code as much as `SKILL.md` does: each carries a stamp, checked like the
+/// skill's, and so does every other mention of one.
+#[test]
+fn references_are_stamped_like_their_skill() {
+    let mut checked = 0;
+    let mut failures = String::new();
+    for skill in consumer_skills() {
+        for problem in stamp_problems(body(&skill.markdown), false) {
+            writeln!(failures, "skills/{}/SKILL.md: {problem}", skill.name).unwrap();
+        }
+        for path in sorted_dir(&skill.dir.join("references")) {
+            if path.extension().is_some_and(|e| e == "md") {
+                checked += 1;
+                for problem in stamp_problems(&read(&path), true) {
+                    writeln!(failures, "{}: {problem}", rel(&path)).unwrap();
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "\n{failures}");
+    assert!(checked >= 4, "only {checked} reference files found");
+}
+
 /// Longest a `SKILL.md` may be; longer tables go to `references/`.
 const MAX_SKILL_LINES: usize = 160;
 
@@ -683,6 +744,390 @@ fn example_files_hide_no_uncompiled_code() {
     assert!(failures.is_empty(), "\n{failures}");
 }
 
+// ─── What an excerpt may quote ───────────────────────────────────────────
+//
+// `crates/wa-rs/examples/*.rs` may use `cfg` (their `#[cfg(not(feature =
+// "postgres"))]` arms keep a build without the feature working), and any
+// example may hold a multi-line string. Neither is code `just test` builds
+// with every feature: a block quoting it would look like compiled Rust.
+
+/// What `--all-features` enables for the examples: the keys of
+/// `crates/wa-rs/Cargo.toml`'s `[features]`.
+fn wa_rs_features() -> HashSet<String> {
+    let manifest = read(&repo().join("crates/wa-rs/Cargo.toml"));
+    let mut in_features = false;
+    let mut features = HashSet::new();
+    for line in manifest.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_features = line == "[features]";
+        } else if in_features
+            && let Some((key, _)) = line.split_once('=')
+            && !line.starts_with('#')
+        {
+            features.insert(key.trim().to_owned());
+        }
+    }
+    assert!(
+        features.contains("postgres"),
+        "no [features] in the manifest"
+    );
+    features
+}
+
+/// `source` with the brackets, `;`, `,` and `#` inside string, raw string
+/// and char literals and every character of comments blanked (newlines
+/// kept, so offsets and lines stay put), and for each line whether it
+/// starts in code rather than inside a string or a block comment.
+#[allow(clippy::too_many_lines)] // one arm per lexer state and token
+fn code_mask(source: &str) -> (Vec<char>, Vec<bool>) {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Lex {
+        Code,
+        Str,
+        RawStr(usize),
+        Block(usize),
+    }
+    let chars: Vec<char> = source.chars().collect();
+    let at = |i: usize| chars.get(i).copied();
+    let mut masked = chars.clone();
+    let blank = |masked: &mut Vec<char>, from: usize, to: usize, all: bool| {
+        for c in &mut masked[from..to.min(chars.len())] {
+            if *c != '\n' && (all || "(){}[];,#".contains(*c)) {
+                *c = ' ';
+            }
+        }
+    };
+    let mut starts = vec![true];
+    let mut state = Lex::Code;
+    let mut i = 0;
+    while let Some(c) = at(i) {
+        if c == '\n' {
+            starts.push(state == Lex::Code);
+            i += 1;
+            continue;
+        }
+        let boundary = i == 0 || !at(i - 1).is_some_and(is_ident_char);
+        match state {
+            Lex::Code => match c {
+                '/' if at(i + 1) == Some('/') => {
+                    let from = i;
+                    while at(i).is_some_and(|c| c != '\n') {
+                        i += 1;
+                    }
+                    blank(&mut masked, from, i, true);
+                }
+                '/' if at(i + 1) == Some('*') => {
+                    blank(&mut masked, i, i + 2, true);
+                    state = Lex::Block(1);
+                    i += 2;
+                }
+                '"' => {
+                    state = Lex::Str;
+                    i += 1;
+                }
+                'b' if boundary && at(i + 1) == Some('"') => {
+                    state = Lex::Str;
+                    i += 2;
+                }
+                'r' | 'b' if boundary => {
+                    let mut j = if c == 'b' { i + 1 } else { i };
+                    if c == 'b' && at(j) != Some('r') {
+                        i += 1;
+                        continue;
+                    }
+                    j += 1;
+                    let mut hashes = 0;
+                    while at(j) == Some('#') {
+                        hashes += 1;
+                        j += 1;
+                    }
+                    if at(j) == Some('"') {
+                        state = Lex::RawStr(hashes);
+                        i = j + 1;
+                    } else {
+                        i += 1;
+                    }
+                }
+                // A char literal ('x', '{', '\'', '\u{1F44D}'), not a
+                // lifetime ('a).
+                '\'' if at(i + 1) == Some('\\') || at(i + 2) == Some('\'') => {
+                    let from = i + 1;
+                    // Past the quote, and past an escape's first character.
+                    i += if at(i + 1) == Some('\\') { 3 } else { 1 };
+                    while at(i).is_some_and(|c| c != '\'' && c != '\n') {
+                        i += 1;
+                    }
+                    blank(&mut masked, from, i, false);
+                    i += 1;
+                }
+                _ => i += 1,
+            },
+            Lex::Str => {
+                if c == '\\' {
+                    blank(&mut masked, i, i + 1, false);
+                    // `\` + newline continues the string on the next line.
+                    i += if at(i + 1) == Some('\n') { 1 } else { 2 };
+                    blank(&mut masked, i - 1, i, false);
+                } else if c == '"' {
+                    state = Lex::Code;
+                    i += 1;
+                } else {
+                    blank(&mut masked, i, i + 1, false);
+                    i += 1;
+                }
+            }
+            Lex::RawStr(hashes) => {
+                if c == '"' && (1..=hashes).all(|k| at(i + k) == Some('#')) {
+                    state = Lex::Code;
+                    i += 1 + hashes;
+                } else {
+                    blank(&mut masked, i, i + 1, false);
+                    i += 1;
+                }
+            }
+            Lex::Block(depth) => {
+                if c == '/' && at(i + 1) == Some('*') {
+                    blank(&mut masked, i, i + 2, true);
+                    state = Lex::Block(depth + 1);
+                    i += 2;
+                } else if c == '*' && at(i + 1) == Some('/') {
+                    blank(&mut masked, i, i + 2, true);
+                    state = if depth == 1 {
+                        Lex::Code
+                    } else {
+                        Lex::Block(depth - 1)
+                    };
+                    i += 2;
+                } else {
+                    blank(&mut masked, i, i + 1, true);
+                    i += 1;
+                }
+            }
+        }
+    }
+    (masked, starts)
+}
+
+/// Whether code under a `cfg` predicate is built: always, in some builds
+/// (`test`), or never, when `features` are all the features there are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Built {
+    Always,
+    Sometimes,
+    Never,
+}
+
+/// Evaluate a `cfg(...)` predicate. `feature = "x"` is on when `x` is a
+/// feature, `test` is `Sometimes`, and anything else (`unix`, `doc`,
+/// `debug_assertions`, a typo, a predicate that does not parse) is
+/// `Never`: the gate only vouches for what `--all-features` builds.
+fn eval_cfg(predicate: &str, features: &HashSet<String>) -> Built {
+    #[derive(Debug, PartialEq, Eq)]
+    enum Tok {
+        Word(String),
+        Str(String),
+        Punct(char),
+    }
+    fn parse(toks: &[Tok], i: &mut usize, features: &HashSet<String>) -> Option<Built> {
+        let Tok::Word(name) = toks.get(*i)? else {
+            return None;
+        };
+        *i += 1;
+        match toks.get(*i) {
+            Some(Tok::Punct('(')) => {
+                *i += 1;
+                let mut parts = Vec::new();
+                while toks.get(*i) != Some(&Tok::Punct(')')) {
+                    parts.push(parse(toks, i, features)?);
+                    match toks.get(*i) {
+                        Some(Tok::Punct(',')) => *i += 1,
+                        Some(Tok::Punct(')')) => {}
+                        _ => return None,
+                    }
+                }
+                *i += 1;
+                let has = |b: Built| parts.contains(&b);
+                Some(match (name.as_str(), parts.as_slice()) {
+                    ("not", [Built::Always]) => Built::Never,
+                    ("not", [Built::Never]) => Built::Always,
+                    ("all", _) if has(Built::Never) => Built::Never,
+                    ("all", _) if !has(Built::Sometimes) => Built::Always,
+                    ("any", _) if has(Built::Always) => Built::Always,
+                    ("any", _) if !has(Built::Sometimes) => Built::Never,
+                    ("not", [Built::Sometimes]) | ("all" | "any", _) => Built::Sometimes,
+                    _ => return None,
+                })
+            }
+            Some(Tok::Punct('=')) => {
+                *i += 1;
+                let Some(Tok::Str(value)) = toks.get(*i) else {
+                    return None;
+                };
+                *i += 1;
+                Some(if name == "feature" && features.contains(value) {
+                    Built::Always
+                } else {
+                    Built::Never
+                })
+            }
+            _ if name == "test" => Some(Built::Sometimes),
+            _ => Some(Built::Never),
+        }
+    }
+    let mut toks = Vec::new();
+    let mut chars = predicate.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c.is_whitespace() {
+            continue;
+        }
+        if c == '"' {
+            toks.push(Tok::Str(chars.by_ref().take_while(|&d| d != '"').collect()));
+        } else if is_ident_start(c) {
+            let mut word = String::from(c);
+            while let Some(d) = chars.next_if(|&d| is_ident_char(d)) {
+                word.push(d);
+            }
+            toks.push(Tok::Word(word));
+        } else {
+            toks.push(Tok::Punct(c));
+        }
+    }
+    let mut i = 0;
+    match parse(&toks, &mut i, features) {
+        Some(built) if i == toks.len() => built,
+        _ => Built::Never,
+    }
+}
+
+/// The first index at or after `from` that is not whitespace.
+fn skip_blank(masked: &[char], mut from: usize) -> usize {
+    while masked.get(from).is_some_and(|c| c.is_whitespace()) {
+        from += 1;
+    }
+    from
+}
+
+/// End (exclusive index into `masked`) of the item that starts at `from`:
+/// past its `;` or `,`, or its closing `}` (a following `else` continues
+/// it; a following `;` or `,` belongs to it), or up to the bracket that
+/// closes what encloses it.
+fn item_end(masked: &[char], mut from: usize) -> usize {
+    let mut depth = 0usize;
+    while let Some(&c) = masked.get(from) {
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' if depth == 0 => return from,
+            ')' | ']' => depth -= 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    let next = skip_blank(masked, from + 1);
+                    let word: String = masked[next..].iter().take(5).collect();
+                    if word.starts_with("else") && !word[4..].starts_with(is_ident_char) {
+                        from = next + 4;
+                        continue;
+                    }
+                    return if matches!(masked.get(next), Some(';' | ',')) {
+                        next + 1
+                    } else {
+                        from + 1
+                    };
+                }
+            }
+            ';' | ',' if depth == 0 => return from + 1,
+            _ => {}
+        }
+        from += 1;
+    }
+    masked.len()
+}
+
+/// For each line of `source`, whether it belongs to an item under a `cfg`
+/// that `features` never enable ([`Built::Never`]): from the attribute's
+/// line through the item's last line. An inner `#![cfg]` that never holds
+/// marks the whole file.
+fn never_built_lines(source: &str, features: &HashSet<String>) -> Vec<bool> {
+    let chars: Vec<char> = source.chars().collect();
+    let (masked, _) = code_mask(source);
+    let line_of = |at: usize| {
+        masked[..at.min(masked.len())]
+            .iter()
+            .filter(|&&c| c == '\n')
+            .count()
+    };
+    let mut never = vec![false; line_of(masked.len()) + 1];
+    let cfg: Vec<char> = "cfg(".chars().collect();
+    for at in 0..masked.len().saturating_sub(cfg.len()) {
+        if masked[at..at + cfg.len()] != cfg[..] {
+            continue;
+        }
+        // Only an attribute (`#[cfg(` or `#![cfg(`) removes code: `cfg!(…)`
+        // and `cfg_attr(…)` build either way, and `x_cfg(` is a call.
+        let mut open = at;
+        while open > 0 && masked[open - 1].is_whitespace() {
+            open -= 1;
+        }
+        if open == 0 || masked[open - 1] != '[' {
+            continue;
+        }
+        let bracket = open - 1;
+        let inner = bracket >= 2 && masked[bracket - 1] == '!' && masked[bracket - 2] == '#';
+        if !(inner || (bracket >= 1 && masked[bracket - 1] == '#')) {
+            continue;
+        }
+        let close = item_end(&masked, at + cfg.len());
+        let predicate: String = chars[at + cfg.len()..close].iter().collect();
+        if eval_cfg(&predicate, features) != Built::Never {
+            continue;
+        }
+        let (first, last) = if inner {
+            (0, never.len() - 1)
+        } else {
+            // Past this attribute's `]` and any attribute after it.
+            let mut item = skip_blank(&masked, close + 1);
+            if masked.get(item) == Some(&']') {
+                item = skip_blank(&masked, item + 1);
+            }
+            while masked.get(item) == Some(&'#') {
+                item = skip_blank(&masked, item_end(&masked, item + 2) + 1);
+            }
+            let end = item_end(&masked, item).max(item + 1);
+            (line_of(bracket - 1), line_of(end - 1))
+        };
+        for line in &mut never[first..=last] {
+            *line = true;
+        }
+    }
+    never
+}
+
+/// Stands for a line an excerpt may not quote; no trimmed Markdown line is
+/// equal to it.
+const UNCOMPILED: &str = "\u{0}(not compiled)";
+
+/// The trimmed, non-blank lines of `source` a Rust block may quote. A line
+/// that starts inside a string (raw or not) or a block comment, or that
+/// belongs to an item under a `cfg` the build never enables, is
+/// [`UNCOMPILED`]: a block can then quote neither it nor across it.
+fn quotable_lines<'a>(source: &'a str, features: &HashSet<String>) -> Vec<&'a str> {
+    let (_, starts_in_code) = code_mask(source);
+    let never = never_built_lines(source, features);
+    source
+        .lines()
+        .enumerate()
+        .filter_map(|(i, line)| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                None
+            } else if !starts_in_code[i] || never[i] {
+                Some(UNCOMPILED)
+            } else {
+                Some(trimmed)
+            }
+        })
+        .collect()
+}
+
 /// Languages a fence in `skills/**/*.md` may be labeled with.
 const FENCE_LANGUAGES: &[&str] = &[
     "rust", "toml", "text", "js", "bash", "sh", "markdown", "json", "sql", "yaml", "html",
@@ -734,14 +1179,6 @@ fn code_fences_are_labeled() {
     assert!(failures.is_empty(), "\n{failures}");
 }
 
-/// Trimmed, non-blank lines.
-fn lines(text: &str) -> Vec<&str> {
-    text.lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .collect()
-}
-
 /// The ```` ```rust ```` blocks of `markdown`: first line number and
 /// paragraphs of trimmed lines.
 fn rust_blocks(markdown: &str) -> Vec<(usize, Vec<Vec<&str>>)> {
@@ -790,36 +1227,39 @@ fn is_excerpt(source: &[&str], paragraphs: &[Vec<&str>]) -> bool {
 
 #[test]
 fn rust_blocks_are_excerpts_of_compiled_files() {
-    let crate_examples: Vec<(PathBuf, String)> = rust_files(&repo().join("crates/wa-rs/examples"))
+    let features = wa_rs_features();
+    let quotable = |text: String| {
+        quotable_lines(&text, &features)
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<String>>()
+    };
+    let crate_examples: Vec<Vec<String>> = rust_files(&repo().join("crates/wa-rs/examples"))
         .into_iter()
-        .map(|p| {
-            let text = read(&p);
-            (p, text)
-        })
+        .map(|p| quotable(read(&p)))
         .collect();
     let mut checked = 0;
     let mut failures = String::new();
     for (path, markdown) in skill_markdown() {
-        let own: Vec<(PathBuf, String)> = owning_skill(&path)
+        let own: Vec<Vec<String>> = owning_skill(&path)
             .map(|dir| rust_files(&dir.join("examples")))
             .unwrap_or_default()
             .into_iter()
-            .map(|p| {
-                let text = read(&p);
-                (p, text)
-            })
+            .map(|p| quotable(read(&p)))
             .collect();
         for (line, paragraphs) in rust_blocks(&markdown) {
             checked += 1;
-            let found = own
-                .iter()
-                .chain(&crate_examples)
-                .any(|(_, source)| is_excerpt(&lines(source), &paragraphs));
+            let found = own.iter().chain(&crate_examples).any(|source| {
+                let source: Vec<&str> = source.iter().map(String::as_str).collect();
+                is_excerpt(&source, &paragraphs)
+            });
             if !found {
                 writeln!(
                     failures,
-                    "{}:{line}: not an excerpt of the skill's examples/*.rs or of \
-                     crates/wa-rs/examples/*.rs (edit the example, then copy it):\n{}\n",
+                    "{}:{line}: not an excerpt of the compiled code of the skill's \
+                     examples/*.rs or of crates/wa-rs/examples/*.rs (not inside a \
+                     string or comment, nor under a `cfg` --all-features never \
+                     enables; edit the example, then copy it):\n{}\n",
                     rel(&path),
                     paragraphs
                         .iter()
@@ -1890,6 +2330,45 @@ fn backticked_names_exist() {
 // ─── The checks catch what they claim to ─────────────────────────────────
 
 #[test]
+fn the_stamp_checks_reject_known_bad_input() {
+    // Stamps.
+    let sha = "41fe5f9c963f4718db1362663a62de97244846ee";
+    assert!(is_stamp(&format!(
+        "> **Verified against wa-rs {sha} (2026-09-24).**"
+    )));
+    assert!(!is_stamp(
+        "> **Verified against wa-rs 41fe5f9 (2026-09-24).**"
+    ));
+    assert!(!is_stamp(&format!(
+        "> **Verified against wa-rs {sha} (24.09.2026).**"
+    )));
+    // References: a stamp under the title, and no malformed stamp anywhere.
+    let good =
+        format!("# Error kinds\n\n> **Verified against wa-rs {sha} (2026-09-24).** Source: x.\n");
+    assert!(stamp_problems(&good, true).is_empty());
+    for bad in [
+        "# Error kinds\n\nA table without a stamp.\n".to_owned(),
+        "# Error kinds\n\n> **Verified against wa-rs 41fe5f9 (2026-09-24).**\n".to_owned(),
+        format!("# Error kinds\n\n> **Verified against wa-rs {sha} (24.09.2026).**\n"),
+        format!("# Error kinds\n\n> **Verifed against wa-rs {sha} (2026-09-24).**\n"),
+        format!("> **Verified against wa-rs {sha} (2026-09-24).**\n\n# Error kinds\n"),
+        format!("{good}\nRe-checked: Verified against wa-rs 41fe5f9 (2026-09-24).\n"),
+    ] {
+        assert!(!stamp_problems(&bad, true).is_empty(), "{bad}");
+    }
+    // In a `SKILL.md` body the title check is the shape test's; a second,
+    // malformed stamp is still refused. One in a code block is an example.
+    assert!(!stamp_problems("Verified against wa-rs 41fe5f9.\n", false).is_empty());
+    assert!(
+        stamp_problems(
+            "```markdown\n> **Verified against wa-rs <sha> (<date>).**\n```\n",
+            false
+        )
+        .is_empty()
+    );
+}
+
+#[test]
 fn the_checks_reject_known_bad_input() {
     // Frontmatter.
     let skill = |markdown: &str| Skill {
@@ -1913,18 +2392,6 @@ fn the_checks_reject_known_bad_input() {
         "y".repeat(1024)
     );
     assert!(!frontmatter_problems(&skill(&long)).is_empty());
-
-    // Stamps.
-    let sha = "41fe5f9c963f4718db1362663a62de97244846ee";
-    assert!(is_stamp(&format!(
-        "> **Verified against wa-rs {sha} (2026-09-24).**"
-    )));
-    assert!(!is_stamp(
-        "> **Verified against wa-rs 41fe5f9 (2026-09-24).**"
-    ));
-    assert!(!is_stamp(&format!(
-        "> **Verified against wa-rs {sha} (24.09.2026).**"
-    )));
 
     // Excerpts: every paragraph, contiguous, in order.
     let source = ["a", "b", "c", "d"];
@@ -2022,6 +2489,70 @@ fn the_code_checks_reject_known_bad_input() {
     ] {
         assert!(!uncompiled_code(hidden).is_empty(), "{hidden}");
     }
+
+    // Excerpts quote compiled code only: never the inside of a string or a
+    // comment, nor an item under a `cfg` that --all-features never enables.
+    let features: HashSet<String> = ["postgres", "flows-endpoint"].map(str::to_owned).into();
+    let quotes = |source: &str, block: &[&str]| {
+        is_excerpt(&quotable_lines(source, &features), &[block.to_vec()])
+    };
+    let raw = "fn page() -> &'static str {\n    r#\"\n    fn fake() -> u8 { 1 }\n    \"#\n}\n";
+    assert!(quotes(raw, &["fn page() -> &'static str {"]));
+    assert!(!quotes(raw, &["fn fake() -> u8 { 1 }"]));
+    assert!(!quotes(raw, &["r#\"", "fn fake() -> u8 { 1 }"]));
+    // A lone `"` inside a raw string does not end it (a plain string would).
+    let lone = "let s = r#\"\nsay \"hi\nfn fake() {}\n\"#;\n";
+    assert!(!quotes(lone, &["fn fake() {}"]));
+    let raw_bytes = "let body = br##\"{\n\"a\": 1\n}\"##;\nlet next = 2;\n";
+    assert!(!quotes(raw_bytes, &["\"a\": 1"]));
+    assert!(quotes(raw_bytes, &["let next = 2;"]));
+    let plain =
+        "let s = \"first line\nfn fake() {}\";\nlet t = '\\'';\nlet u = '{';\nfn real() {}\n";
+    assert!(!quotes(plain, &["fn fake() {}\";"]));
+    assert!(quotes(plain, &["fn real() {}"]), "char literals end");
+    let comment = "/*\nfn fake() {}\n*/\nfn real() {}\n";
+    assert!(!quotes(comment, &["fn fake() {}"]));
+    assert!(quotes(comment, &["fn real() {}"]));
+    // The `stores()` shape of crates/wa-rs/examples: a `not(feature)` arm.
+    let gated = "match url {\n    #[cfg(feature = \"postgres\")]\n    Ok(url) => {\n        \
+                 connect(url)\n    }\n    #[cfg(not(feature = \"postgres\"))]\n    \
+                 Ok(_) => bail!(\"lacks postgres\"),\n    Err(_) => memory(),\n}\n";
+    assert!(quotes(gated, &["Ok(url) => {", "connect(url)", "}"]));
+    assert!(!quotes(gated, &["Ok(_) => bail!(\"lacks postgres\"),"]));
+    assert!(quotes(gated, &["Err(_) => memory(),"]));
+    for never in [
+        "#[cfg(feature = \"nope\")]",
+        "#[cfg(windows)]",
+        "#[cfg(any())]",
+        "#[cfg(not(feature = \"flows-endpoint\"))]",
+        "#[cfg(all(test, feature = \"nope\"))]",
+    ] {
+        let source =
+            format!("{never}\n#[allow(dead_code)]\nfn fake() {{\n    one();\n}}\nfn real() {{}}\n");
+        assert!(!quotes(&source, &["fn fake() {"]), "{never}");
+        assert!(!quotes(&source, &["one();"]), "{never}");
+        assert!(quotes(&source, &["fn real() {}"]), "{never}");
+    }
+    assert!(!quotes(
+        "#![cfg(feature = \"nope\")]\nfn fake() {}\n",
+        &["fn fake() {}"]
+    ));
+    for built in [
+        "#[cfg(test)]",
+        "#[cfg(feature = \"flows-endpoint\")]",
+        "#[cfg(any(test, feature = \"nope\"))]",
+        "#[cfg_attr(not(feature = \"postgres\"), allow(clippy::unused_async))]",
+    ] {
+        let source = format!("{built}\nfn real() {{\n    one();\n}}\n");
+        assert!(quotes(&source, &["fn real() {", "one();"]), "{built}");
+    }
+    assert_eq!(eval_cfg("feature = \"postgres\"", &features), Built::Always);
+    assert_eq!(eval_cfg("not(test)", &features), Built::Sometimes);
+    assert_eq!(eval_cfg("feature =", &features), Built::Never);
+    assert_eq!(
+        eval_cfg("not(feature = \"x\", test)", &features),
+        Built::Never
+    );
 
     // Scope parsing survives braces and keywords inside literals.
     let members = scoped_members(&tokens(&code_only(
