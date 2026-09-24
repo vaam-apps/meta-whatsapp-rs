@@ -448,12 +448,15 @@ retried; a failure after the token is stored saves a resumable attempt
 (session info only; `resume` uses a placeholder code until L4); errors carry
 step, kind and `resumable`, never Meta's text; the page gets only the app
 id, configuration id, Graph API version and `LaunchOptions`.
+The service launches **Embedded Signup v4 only**: Meta retires v2 and v3,
+including their public previews, on 2026-10-15
+(`embedded-signup/onboarding-customers-as-a-solution-partner`, banner).
 
 | | Tech Provider (`WA_ONBOARDING_MODE=tech_provider`) | Solution Partner (`solution_partner`) |
 | --- | --- | --- |
-| Steps | exchange code, `debug_token`, verify assets, store token, subscribe app, register number | the same, plus sharing the partner's extended credit line after `subscribe_app` (`POST /{extended_credit_line_id}/whatsapp_credit_sharing_and_attach` with `waba_id`, `waba_currency`) with the **partner's system user token**, never the merchant's; the returned allocation config id is stored on the WABA |
+| Steps | exchange code, `debug_token`, verify assets, store token, subscribe app, register number | the same, plus, between `subscribe_app` and `register_phone` (Meta's documented order): adding the partner's system user to the merchant's WABA (`POST /{waba_id}/assigned_users`, a prerequisite of the one-call method) and sharing the partner's extended credit line (`POST /{extended_credit_line_id}/whatsapp_credit_sharing_and_attach` with `waba_id`, `waba_currency`) with the **partner's system user token**, never the merchant's; the returned allocation config id is stored on the WABA. Meta's newer two-call method (share with the system token, attach with the merchant's token) is supported by the library as an option |
 | Who pays Meta | the merchant, after adding a payment method in WhatsApp Manager | the partner's credit line |
-| Extra settings | — | `WA_PARTNER_SYSTEM_TOKEN`, `WA_CREDIT_LINE_ID`, `WA_WABA_CURRENCY` |
+| Extra settings | — | `WA_PARTNER_SYSTEM_TOKEN`, `WA_PARTNER_SYSTEM_USER_ID`, `WA_CREDIT_LINE_ID`, `WA_WABA_CURRENCY` (default; one of AUD, EUR, GBP, IDR, INR, USD; a signup may override it). A credit line cannot be changed once attached to a WABA |
 | Library | implemented | in flight (L3): the step's name, resume behaviour and error kinds come from it |
 
 The mode is per deployment (per Meta app), not per tenant.
@@ -625,7 +628,7 @@ crate names still open in OQ #1. *Recommendation: (a)*, named with OQ #1.
 | `WA_SERVER_PUBLIC_BIND`, `WA_SERVER_INTERNAL_BIND` | `127.0.0.1:8080`, `127.0.0.1:8081` | must differ |
 | `WA_APP_ID`, `WA_APP_SECRET`, `WA_VERIFY_TOKEN`, `WA_ES_CONFIG_ID` | — | the Meta app |
 | `WA_VAULT_KEY*`, `WA_OTP_PEPPER`, `WA_SERVER_DATA_KEY*` | — | [§6](#6-security) |
-| `WA_ONBOARDING_MODE` | `tech_provider` | `solution_partner` needs `WA_PARTNER_SYSTEM_TOKEN`, `WA_CREDIT_LINE_ID`, `WA_WABA_CURRENCY` |
+| `WA_ONBOARDING_MODE` | `tech_provider` | `solution_partner` needs `WA_PARTNER_SYSTEM_TOKEN`, `WA_PARTNER_SYSTEM_USER_ID`, `WA_CREDIT_LINE_ID`, `WA_WABA_CURRENCY` |
 | `WA_GRAPH_API_VERSION`, `WA_GRAPH_ENDPOINT` | `ApiVersion::DEFAULT` (v25.0), Graph | the version is also handed to the signup page; the endpoint serves proxies and test stubs |
 | `WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS` | none | hosts and CIDRs for webhooks-out |
 | `WA_SERVER_OUTBOX_RETENTION`, `…_IDEMPOTENCY_TTL`, `…_WEBHOOK_RETRY_WINDOW` | 7 d, 24 h, 72 h | |
