@@ -43,7 +43,12 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   `#[cfg(not(feature = …))]` arms of `crates/wa-rs/examples/*.rs`); and
   every `references/*.md` must carry a well-formed stamp under its title,
   like its `SKILL.md` (`just skills-check` alone passed a malformed date
-  and missed a misspelled stamp).
+  and missed a misspelled stamp). After the security review of b805dac:
+  raw C strings (`cr"…"`, `cr#"…"#`) are strings to both lexers; a
+  `cfg(` inside a `cfg_attr` removes its item; `cfg(test)` never holds in
+  `crates/wa-rs/examples/*.rs` (built as examples), whose files are now
+  checked for block comments, `macro_rules!` and any `cfg` but the
+  `postgres` arms like the skills' own examples.
 - **Granular consumer skills**: 24 task-shaped skills with compiled example
   files, and a gate (`crates/wa-rs/tests/skills.rs`, `just skills-check`)
   that keeps snippets, API names, links, frontmatter and stamps true. The
