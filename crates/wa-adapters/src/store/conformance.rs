@@ -179,6 +179,37 @@ async fn every_write_honours_its_expiry<S: KvStore + ?Sized>(store: &S) {
     );
     store.delete(&k).await.unwrap();
 
+    // Recreating over a dead record (an expired OTP challenge, a deleted
+    // dedup marker) must keep the new expiry too: a backend may take a
+    // different path there (Postgres: the conflict arm).
+    let k = key("expiry-put-if-absent-over-dead");
+    store
+        .put(&k, b"old".to_vec(), Expiry::At(PAST))
+        .await
+        .unwrap();
+    store
+        .put_if_absent(&k, b"a".to_vec(), Expiry::At(FAR_FUTURE))
+        .await
+        .unwrap()
+        .expect("an expired record is absent");
+    assert_eq!(
+        store.get(&k).await.unwrap().unwrap().expires_at,
+        Some(FAR_FUTURE),
+        "put_if_absent over an expired record stores the new expiry"
+    );
+    assert!(store.delete(&k).await.unwrap());
+    store
+        .put_if_absent(&k, b"b".to_vec(), Expiry::At(FAR_FUTURE))
+        .await
+        .unwrap()
+        .expect("a deleted record is absent");
+    assert_eq!(
+        store.get(&k).await.unwrap().unwrap().expires_at,
+        Some(FAR_FUTURE),
+        "put_if_absent over a deleted record stores the new expiry"
+    );
+    store.delete(&k).await.unwrap();
+
     let k = key("expiry-put-if-absent-past");
     store
         .put_if_absent(&k, b"a".to_vec(), Expiry::At(PAST))
