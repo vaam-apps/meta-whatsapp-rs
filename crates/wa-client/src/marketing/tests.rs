@@ -76,7 +76,7 @@ async fn sends_the_documented_minimal_body() {
             "template": {"name": "seasonal_sale_promo", "language": {"code": "en"}}
         }))
     );
-    assert_eq!(sent.messaging_product.as_deref(), Some("whatsapp"));
+    assert_eq!(sent.messaging_product, "whatsapp");
     assert_eq!(sent.contacts[0].input, "+16505551234");
     assert_eq!(
         sent.contacts[0]

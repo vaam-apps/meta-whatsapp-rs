@@ -5,10 +5,10 @@
 //! (schema, `message_status`), `marketing-messages/pricing` (per-message
 //! max-price multiplier).
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use wa_core::Result;
 use wa_core::error::ValidationError;
-use wa_core::ids::{MessageId, PhoneNumberId, UserId, WaId};
+use wa_core::ids::PhoneNumberId;
 use wa_core::recipient::Recipient;
 
 use super::wire_enum;
@@ -134,63 +134,9 @@ struct MarketingMessageBody<'a> {
     bid_spec: Option<BidSpec>,
 }
 
-wire_enum! {
-    /// `messages[].message_status` of a send response.
-    pub enum MessageStatus {
-        /// Accepted and being processed.
-        Accepted = "accepted",
-        /// Held for a quality assessment before delivery.
-        HeldForQualityAssessment = "held_for_quality_assessment",
-        /// Delivery paused.
-        Paused = "paused",
-    }
-}
-
-/// Response of a marketing send.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SendResponse {
-    /// `whatsapp`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub messaging_product: Option<String>,
-    /// Who the message went to.
-    #[serde(default)]
-    pub contacts: Vec<SentContact>,
-    /// The message created.
-    #[serde(default)]
-    pub messages: Vec<SentMessage>,
-}
-
-impl SendResponse {
-    /// Id of the (first) message, to match against status webhooks.
-    pub fn message_id(&self) -> Option<&MessageId> {
-        self.messages.first().map(|m| &m.id)
-    }
-}
-
-/// `contacts[]` of a send response.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SentContact {
-    /// What was sent as the recipient: the phone number, the BSUID, or the
-    /// group id.
-    #[serde(default)]
-    pub input: String,
-    /// The user's phone number; absent when sent by BSUID.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wa_id: Option<WaId>,
-    /// The user's BSUID; present only when sent by BSUID alone.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<UserId>,
-}
-
-/// `messages[]` of a send response.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SentMessage {
-    /// Message id (`wamid.…`).
-    pub id: MessageId,
-    /// Processing state, when Meta reports one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message_status: Option<MessageStatus>,
-}
+// A marketing send answers exactly like a Cloud API send; one set of types
+// serves both.
+pub use crate::messages::{MessageStatus, SendResponse, SentContact, SentMessage};
 
 impl Marketing {
     /// The id this API is scoped to.
