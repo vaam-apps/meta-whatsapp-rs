@@ -273,11 +273,25 @@ async fn sse_streams_filtered_events_and_reports_lag() {
         response.headers().get(header::CONTENT_TYPE).unwrap(),
         "text/event-stream"
     );
+    // Bounded twice over: a stream that fails to end when the channel
+    // closes must fail this test, not collect until the machine runs out
+    // of memory.
     let mut body = response.into_body().into_data_stream();
-    let mut text = String::new();
-    while let Some(chunk) = body.next().await {
-        text.push_str(std::str::from_utf8(&chunk.unwrap()).unwrap());
-    }
+    let collect = async {
+        let mut text = String::new();
+        while let Some(chunk) = body.next().await {
+            text.push_str(std::str::from_utf8(&chunk.unwrap()).unwrap());
+            assert!(
+                text.len() < 64 * 1024,
+                "SSE stream did not end: {} bytes so far",
+                text.len()
+            );
+        }
+        text
+    };
+    let text = tokio::time::timeout(std::time::Duration::from_secs(5), collect)
+        .await
+        .expect("the SSE stream ends when the channel closes");
     assert!(text.contains("event: lagged\ndata: 2\n"), "{text}");
     let json = serde_json::to_string(&wanted).unwrap();
     assert!(
