@@ -76,8 +76,16 @@ impl MemoryConversationStore {
     /// history) move the window and count as unread when inbound.
     async fn insert(&self, message: StoredMessage, live: bool) -> Result<bool, StorageError> {
         let mut st = self.state.lock().await;
+        Ok(st.insert(message, live))
+    }
+}
+
+impl State {
+    /// See [`MemoryConversationStore::insert`].
+    fn insert(&mut self, message: StoredMessage, live: bool) -> bool {
+        let st = self;
         if st.messages.contains_key(&message.id) {
-            return Ok(false);
+            return false;
         }
         let key = message.conversation.clone();
         let at = message.timestamp;
@@ -112,7 +120,7 @@ impl MemoryConversationStore {
             }
         }
         st.messages.insert(message.id.clone(), message);
-        Ok(true)
+        true
     }
 }
 
@@ -122,8 +130,31 @@ impl ConversationStore for MemoryConversationStore {
         self.insert(message, true).await
     }
 
-    async fn append_synced(&self, message: StoredMessage) -> Result<bool, StorageError> {
-        self.insert(message, false).await
+    async fn append_synced(&self, messages: Vec<StoredMessage>) -> Result<Vec<bool>, StorageError> {
+        let mut st = self.state.lock().await;
+        Ok(messages.into_iter().map(|m| st.insert(m, false)).collect())
+    }
+
+    async fn revoke(
+        &self,
+        key: &ConversationKey,
+        id: &MessageId,
+        direction: Direction,
+        at: OffsetDateTime,
+    ) -> Result<bool, StorageError> {
+        let mut st = self.state.lock().await;
+        if let Some(message) = st.messages.get_mut(id) {
+            if message.conversation.phone_number_id != key.phone_number_id
+                || message.direction != direction
+                || !DeliveryStatus::Deleted.supersedes(message.status)
+            {
+                return Ok(false);
+            }
+            message.status = DeliveryStatus::Deleted;
+            message.status_at = Some(at);
+            return Ok(true);
+        }
+        Ok(st.insert(StoredMessage::tombstone(key, id, direction, at), false))
     }
 
     async fn fill_media_placeholder(

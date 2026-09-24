@@ -270,15 +270,26 @@ matches the one on the merchant's phone:
 - **Echoes** (`MessageEchoed`, field `smb_message_echoes`: what the
   merchant sent from the app or a linked device) become outbound rows with
   status `Sent` in the customer's conversation (BSUID, else the phone
-  number without `+`). An echoed revoke marks the original `Deleted`.
+  number without `+`). An echoed revoke marks the original `Deleted` if
+  the business sent it (a revoke never deletes a message of the other
+  direction).
   Echoes open no customer service window, as on Meta's side.
 - **History** (`HistorySynced`, field `history`, after
   `sync_smb_app_data(SmbSyncType::History)`): every synced message is
   recorded in its direction (from the business number: outbound, with the
-  status Meta reports; otherwise inbound), under its own timestamp. Chunks
-  may arrive in any order and be redelivered; nothing is stored twice. A
-  declined sync (error `2593109`) records nothing. One malformed item is
-  skipped and logged by position, never failing the delivery.
+  status Meta reports; otherwise inbound), under its own timestamp (at
+  most 5 minutes past `InboxSink`'s clock: a phone with a wrong clock
+  cannot pin a conversation to the top). Chunks may arrive in any order and
+  be redelivered; nothing is stored twice, and each chunk is stored in one
+  batch. A declined sync (error `2593109`) records nothing. One malformed
+  item is skipped and logged by position, never failing the delivery.
+
+A revoke (live, echoed or synced) that arrives before its message leaves
+a tombstone under the message's id: a row of kind `revoked`
+(`StoredMessage::REVOKED`), without text or payload, `Deleted`, at the
+revoke's time. The message then never gets its content stored. A revoke
+that finds its message marks it `Deleted` and keeps its content
+([open question](../../OPEN_QUESTIONS.md#cms-inbox) 38).
 
 Synced history is part of the conversation (it can be its latest
 message), but a synced *inbound* message neither opens the reply window

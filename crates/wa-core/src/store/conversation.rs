@@ -142,6 +142,36 @@ impl StoredMessage {
     /// sends the content in a later `history` webhook, which
     /// [`ConversationStore::fill_media_placeholder`] records into it.
     pub const MEDIA_PLACEHOLDER: &'static str = "media_placeholder";
+
+    /// The `kind` of the row [`ConversationStore::revoke`] stores for a
+    /// revoke whose message is not stored (yet): it holds the message's id,
+    /// conversation and direction, no text, an empty payload, and status
+    /// [`DeliveryStatus::Deleted`].
+    pub const REVOKED: &'static str = "revoked";
+
+    /// The tombstone [`ConversationStore::revoke`] stores for message `id`
+    /// of conversation `key` when the revoke arrives first: kind
+    /// [`Self::REVOKED`], no text, an empty payload, status
+    /// [`DeliveryStatus::Deleted`], timestamped (and deleted) at `at`.
+    pub fn tombstone(
+        key: &ConversationKey,
+        id: &MessageId,
+        direction: Direction,
+        at: OffsetDateTime,
+    ) -> Self {
+        Self {
+            id: id.clone(),
+            conversation: key.clone(),
+            direction,
+            kind: Self::REVOKED.to_owned(),
+            text: None,
+            payload: serde_json::Value::Object(serde_json::Map::new()),
+            status: DeliveryStatus::Deleted,
+            timestamp: at,
+            status_at: Some(at),
+            error: None,
+        }
+    }
 }
 
 /// Inbox row.
@@ -180,18 +210,23 @@ pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
     /// unread.
     async fn append(&self, message: StoredMessage) -> Result<bool, StorageError>;
 
-    /// Insert a message synchronized from the WhatsApp Business app
-    /// (coexistence history): like [`append`](Self::append) — the same id
-    /// rule, history order and conversation `last_message_at` /
-    /// `last_text` — except that an inbound one neither moves
-    /// `last_inbound_at` nor counts as unread. Meta opens no customer
-    /// service window for a message sent before the business was onboarded
-    /// (`embedded-signup/onboarding-business-app-users`, "Customer service
-    /// window"), and the merchant has seen these messages in the app.
+    /// Insert messages synchronized from the WhatsApp Business app
+    /// (coexistence history), as one batch: each like
+    /// [`append`](Self::append) — the same id rule, history order and
+    /// conversation `last_message_at` / `last_text` — except that an
+    /// inbound one neither moves `last_inbound_at` nor counts as unread.
+    /// Meta opens no customer service window for a message sent before the
+    /// business was onboarded (`embedded-signup/onboarding-business-app-users`,
+    /// "Customer service window"), and the merchant has seen these messages
+    /// in the app.
     ///
-    /// The id rule spans both methods: a message stored by one is never
-    /// changed by the other.
-    async fn append_synced(&self, message: StoredMessage) -> Result<bool, StorageError>;
+    /// Returns, for each message in order, whether it was inserted: `false`
+    /// for an id already stored, or already earlier in the batch. The id
+    /// rule spans both methods: a message stored by one is never changed by
+    /// the other. A history webhook can carry thousands of messages: store
+    /// the batch in as few round trips as the backend allows (the Postgres
+    /// adapter uses one statement).
+    async fn append_synced(&self, messages: Vec<StoredMessage>) -> Result<Vec<bool>, StorageError>;
 
     /// Record the content of message `id` of business number
     /// `phone_number_id` if it is stored as a
@@ -210,6 +245,33 @@ pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
         kind: String,
         text: Option<String>,
         payload: serde_json::Value,
+    ) -> Result<bool, StorageError>;
+
+    /// Apply a revoke (its sender deleted message `id` for everyone) that
+    /// arrived on business number `key.phone_number_id`: the message, if
+    /// stored for that number **and** in `direction` (a customer revokes
+    /// what they sent, the business what it sent), becomes
+    /// [`DeliveryStatus::Deleted`] at `at` when that
+    /// [supersedes](DeliveryStatus::supersedes) its status. A message `id`
+    /// of another number or of the other direction is not touched.
+    ///
+    /// A revoke can arrive before its message (a live revoke, then the
+    /// history chunk that carries the original; or redeliveries out of
+    /// order). When no message `id` is stored at all, a tombstone takes its
+    /// place: a row of kind [`StoredMessage::REVOKED`] in conversation `key`
+    /// with `direction`, no text, an empty payload, status `Deleted`,
+    /// timestamped `at`, which neither moves `last_inbound_at` nor counts as
+    /// unread. The message then finds its id taken, so the content its
+    /// sender deleted is never stored.
+    ///
+    /// Returns whether anything changed (a message deleted, or a tombstone
+    /// stored).
+    async fn revoke(
+        &self,
+        key: &ConversationKey,
+        id: &MessageId,
+        direction: Direction,
+        at: OffsetDateTime,
     ) -> Result<bool, StorageError>;
 
     /// Apply a status update to message `id` of business number

@@ -132,6 +132,11 @@ Found by the conventions review of 8ee6fab; counts are from that commit.
     in wa-core generates them all) before integrators pin a revision:
     changing it later breaks their `match`es. Until then new code follows
     its module and adds no new unit `Unknown`.
+    One struct already mixes the meanings: in `PhoneNumberInfo`,
+    `quality_rating` is the shared `common::QualityRating`, whose `Unknown`
+    is Meta's documented `UNKNOWN` (its catch-all is `Other(String)`),
+    while every other enum of the struct uses a unit `Unknown` as its
+    catch-all.
 28. **`#[non_exhaustive]` policy.** 25 of the 144 `Deserialize` structs in
     wa-client have it (all in the onboarding modules), none of the 104 in
     wa-webhooks; every macro-generated enum has it, the hand-written
@@ -148,6 +153,14 @@ Found by the conventions review of 8ee6fab; counts are from that commit.
     `axum = "0.8"` still unifies with it. The alternative, telling
     integrators to pin their own versions and dropping the re-exports, was
     not taken; confirm the direction.
+36. **Two types for one quality rating.** `wa_client::common::QualityRating`
+    (templates and phone numbers: `GREEN`, `YELLOW`, `RED`, `NA`,
+    `UNKNOWN`, `Other(String)`) and `wa_webhooks::fields::templates::TemplateQualityScore`
+    (the `message_template_quality_update` webhook: `GREEN`, `YELLOW`,
+    `RED`, `UNKNOWN`, `Other(String)`) are the same concept in two crates,
+    neither of which depends on the other. Options: move one type to
+    `wa-core` and re-export it from both, or keep two and document the
+    mapping. Today: two types.
 
 ## Webhooks and live updates
 
@@ -208,3 +221,27 @@ Found while writing the integrator guides and checking them against
     Options: key messages by `(phone_number_id, id)` (a migration of the
     primary key; history cursors are already per conversation), or keep it
     and document it (what the guides and skills do today).
+37. **A revoke matches its business number and direction, not its
+    conversation.** `ConversationStore::revoke` deletes message `id` only
+    if it was stored for the business number the revoke arrived on and in
+    the revoke's direction (a customer revokes what they sent, the business
+    what it sent). The security review also asked it to match the
+    conversation. That was not done: the revoke's conversation key and the
+    original's can differ for the same customer (a message recorded under
+    the phone number, from a history thread without a BSUID, revoked by a
+    live webhook keyed by the BSUID; or a customer whose BSUID changed with
+    their number, `UserIdChanged`), and matching the conversation would
+    then leave the content the customer deleted in place, not marked
+    deleted. Matching the conversation protects against Meta naming a
+    message of another conversation in a revoke, which its ids (unique per
+    message) make unlikely. Options: match the conversation too (and
+    accept the missed deletions), or keep number + direction.
+38. **A revoked message keeps its content.** When a revoke finds its
+    message stored, the row becomes `Deleted` and keeps its text and
+    payload (the merchant's inbox still shows what the customer deleted);
+    when the revoke arrives first, the tombstone keeps the content out for
+    good. WhatsApp shows "This message was deleted" to both sides. Options:
+    erase `text` and `payload` on revoke (a port change: `revoke` would
+    rewrite the row, and the conversation preview when it is the latest
+    message), or keep the content for the merchant's records and document
+    it (what the guides say today).

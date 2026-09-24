@@ -49,7 +49,7 @@ leaks its library's types through a port.
 | --- | --- | --- |
 | `transport::HttpTransport` | `send`, `send_streaming` | rustdoc; non-2xx is *not* an error at this layer |
 | `store::KvStore` | `get`, `put`, `put_if_absent`, `compare_and_swap`, `delete` | `wa_adapters::store::conformance` (executable) |
-| `store::ConversationStore` | `append`, `append_synced` (coexistence history: no window, never unread), `fill_media_placeholder`, `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at` | `wa_adapters::store::conversation_conformance` (executable) |
+| `store::ConversationStore` | `append`, `append_synced` (a batch of coexistence history: no window, never unread), `fill_media_placeholder`, `revoke` (number and direction scoped; a tombstone when the message is not stored yet), `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at` | `wa_adapters::store::conversation_conformance` (executable) |
 | `sink::EventSink<E>` | `deliver` | rustdoc |
 | `clock::Clock` | `now` | — |
 
@@ -444,14 +444,20 @@ exposes the 24-hour `CustomerServiceWindow`, and sends replies.
   window is computed from recorded inbound *messages*: a customer's call,
   which reopens it on Meta's side, is not seen (`OPEN_QUESTIONS.md` #32).
 - Statuses and revokes change only a message of the business number they
-  arrived on (`update_status` takes the `phone_number_id`).
+  arrived on (`update_status` takes the `phone_number_id`); a revoke also
+  only a message of its direction (`ConversationStore::revoke`: a customer
+  revokes what they sent, the business what it sent).
 - Content never fails a delivery: U+0000 in recorded content is stored as
   U+FFFD (see Adapters). Storage errors still do (500, Meta redelivers the
   batch).
 - A storage (or serialization) failure *after* a successful send is
   logged without the message's content, never returned — an error would
   invite a retry that sends twice.
-- Revokes mark the original `Deleted`.
+- Revokes mark the original `Deleted` (its content is kept,
+  `OPEN_QUESTIONS.md` #38). A revoke that arrives before its message
+  stores a tombstone (kind `revoked`, no content, `Deleted`, no window,
+  not unread) under the message's id, so the message, live or synced, is
+  never stored with the content its sender deleted.
 - Coexistence (a merchant who keeps the WhatsApp Business app): echoes
   (`MessageEchoed`, messages the merchant sent from the app) are recorded
   as `Outbound`, status `Sent` (the payload has none), in the customer's
@@ -459,8 +465,15 @@ exposes the 24-hour `CustomerServiceWindow`, and sends replies.
   deletes the original. Synced history (`HistorySynced`) is recorded
   message by message in its documented direction (`from` = the business
   number → `Outbound` with its `history_context` status; else `Inbound`),
-  each with its own device timestamp, so chunks may arrive in any order
-  and a redelivered one is a no-op (ids are stored once). A declined sync
+  each with its own device timestamp (bounded by the sink's clock plus 5
+  minutes, so a phone with a wrong clock cannot pin a conversation to the
+  top), so chunks may arrive in any order and a redelivered one is a no-op
+  (ids are stored once); the exception is a revoke in a chunk that arrives
+  before the chunk carrying its message, which leaves a tombstone in the
+  message's place. Each chunk is one `append_synced` batch (the Postgres
+  adapter: one statement), then its revokes: a history webhook can carry
+  thousands of messages, and one round trip each could outlast the
+  webhook's dedup lease. A declined sync
   (`2593109`) records nothing. One malformed history item never fails the
   delivery: an item without a direction or customer, with U+0000 in an
   id, or that does not parse on its own (when one bad item turned the

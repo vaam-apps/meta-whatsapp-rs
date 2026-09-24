@@ -93,19 +93,23 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
 ### Changed
 
 - **Breaking — `ConversationStore` records coexistence history as history**
-  (`OPEN_QUESTIONS.md` #35): two required methods. `append_synced` stores
-  a message like `append` (same id rule across both, same order, same
-  latest-message preview) but never moves `last_inbound_at` nor the unread
-  count: Meta opens no customer service window for a message sent before
-  onboarding, and the merchant read it in the app. `fill_media_placeholder`
+  (`OPEN_QUESTIONS.md` #35), and revokes are their own method; three
+  required methods. `append_synced` stores a batch of messages, each like
+  `append` (same id rule across both, same order, same latest-message
+  preview; one answer per message), but never moves `last_inbound_at` nor
+  the unread count: Meta opens no customer service window for a message
+  sent before onboarding, and the merchant read it in the app. `revoke`
+  (below, Security) replaces `update_status(.., Deleted, ..)` for
+  revokes. `fill_media_placeholder`
   gives a stored `StoredMessage::MEDIA_PLACEHOLDER` row the media content
   Meta sends later (kind, text, payload; the preview follows when it is
   the latest message), once, on its own business number. `InboxSink`
   uses both for `HistorySynced`; the memory and Postgres adapters
-  implement them (Postgres without a schema change), and
-  `conversation_conformance::run` checks them, so a custom store that
-  treats synced history like live messages fails it. Custom stores must
-  implement the two methods.
+  implement them (Postgres without a schema change; a history batch is
+  one statement), and `conversation_conformance::run` checks them, so a
+  custom store that treats synced history like live messages fails it.
+  Custom stores must implement the three methods. `InboxSink::with_clock`
+  is new.
 - **Breaking — one type per concept** (conventions review #9):
   `wa_client::common` defines `MediaSource`, `FlowAction` and
   `QualityRating` once; `messages`, `templates` and `phone_numbers`
@@ -246,6 +250,29 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
 - **OTP codes go through `Messages::send`.** `OtpService` posted its own
   body, so `OutboundMessage::validate` never ran on it and it kept a
   private copy of the response decoding.
+- The security review of b805dac found (all Low or informational), and
+  fixed:
+  - **A revoke could delete a message of the other direction.** Revokes
+    were applied by message id and business number; the customer's could
+    delete the business's message and an echoed one the customer's.
+    `ConversationStore::revoke` also matches the direction. It does not
+    match the conversation (asked for too): see `OPEN_QUESTIONS.md` #37.
+  - **A revoke that arrived before its message was dropped**, and the
+    message, when it came (a later history chunk, a redelivery), was
+    stored with the content its sender had deleted. The revoke now leaves
+    a tombstone under the message's id (`StoredMessage::tombstone`), which
+    keeps the content out.
+  - **History was stored one round trip per message** while the webhook
+    request waited: a large sync could outlast the 60-second dedup lease,
+    and Meta's retry then ran a second pass concurrently. Each chunk is
+    now one `append_synced` batch (one Postgres statement), and media
+    contents find their contact in an index instead of a scan per item.
+  - **A device clock in the future pinned a conversation to the top.**
+    Synced device timestamps are bounded by `InboxSink`'s clock plus 5
+    minutes (the payload keeps Meta's value).
+  - **A storage error named a message id** (Meta's ids encode the
+    customer's phone number) in text the webhook handler logs. The
+    Postgres adapter's status errors no longer carry it.
 - **Send decode errors no longer quote the recipient.** An unreadable
   response of `Messages::send` or `Marketing::send` (which echo the
   recipient's number) is reported without the body snippet and without
