@@ -710,7 +710,7 @@ mod tests {
         assert_eq!(validation_field(&err), "block_users");
         let err = api.unblock(&[]).await.unwrap_err();
         assert_eq!(validation_field(&err), "block_users");
-        let too_many = vec![Recipient::phone("+16505551234"); MAX_USERS_PER_REQUEST + 1];
+        let too_many = vec![Recipient::phone("+16505551234"); 1001];
         let err = api.block(&too_many).await.unwrap_err();
         assert_eq!(validation_field(&err), "block_users");
         let err = api.unblock(&too_many).await.unwrap_err();
@@ -722,7 +722,7 @@ mod tests {
             200,
             json!({"messaging_product": "whatsapp", "block_users": {}}),
         );
-        let max = vec![Recipient::phone("+16505551234"); MAX_USERS_PER_REQUEST];
+        let max = vec![Recipient::phone("+16505551234"); 1000];
         api.block(&max).await.unwrap();
         assert_eq!(t.remaining(), 0);
     }

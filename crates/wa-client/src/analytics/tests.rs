@@ -561,7 +561,7 @@ async fn template_with_waba_timezone_sends_dates_and_product_type() {
 async fn template_ids_must_be_1_to_10() {
     let t = ScriptedTransport::new();
     let api = client(&t).analytics(WABA);
-    for n in [0, MAX_TEMPLATE_IDS + 1] {
+    for n in [0, 11] {
         let ids = (0..n).map(|i| TemplateId::new(i.to_string())).collect();
         let q = TemplateAnalyticsQuery::new(at(1), at(2), ids);
         let err = api.template(&q).await.unwrap_err();
@@ -575,9 +575,7 @@ async fn template_ids_must_be_1_to_10() {
     }
     assert!(t.requests().is_empty());
     t.push_json(200, json!({"data": []}));
-    let ten = (0..MAX_TEMPLATE_IDS)
-        .map(|i| TemplateId::new(i.to_string()))
-        .collect();
+    let ten = (0..10).map(|i| TemplateId::new(i.to_string())).collect();
     api.template(&TemplateAnalyticsQuery::new(at(1), at(2), ten))
         .await
         .unwrap();
@@ -689,7 +687,7 @@ async fn template_group_matches_docs_example() {
 async fn template_group_ids_must_be_1_to_10() {
     let t = ScriptedTransport::new();
     let api = client(&t).analytics(WABA);
-    for n in [0, MAX_TEMPLATE_GROUP_IDS + 1] {
+    for n in [0, 11] {
         let ids = (0..n).map(|i| i.to_string()).collect();
         let q = TemplateGroupAnalyticsQuery::new(at(1), at(2), ids);
         let err = api.template_group(&q).await.unwrap_err();
@@ -701,6 +699,12 @@ async fn template_group_ids_must_be_1_to_10() {
         );
     }
     assert!(t.requests().is_empty());
+    t.push_json(200, json!({"data": []}));
+    let ten = (0..10).map(|i| i.to_string()).collect();
+    api.template_group(&TemplateGroupAnalyticsQuery::new(at(1), at(2), ten))
+        .await
+        .unwrap();
+    assert_eq!(t.remaining(), 0);
 }
 
 // ── Group analytics ─────────────────────────────────────────────────────

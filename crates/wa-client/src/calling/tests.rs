@@ -260,7 +260,7 @@ async fn call_inputs_are_validated() {
     assert_eq!(validation_field(&err), "session.sdp");
     let err = calling
         .connect(&ConnectCall {
-            biz_opaque_callback_data: Some("x".repeat(BIZ_OPAQUE_CALLBACK_DATA_MAX_CHARS + 1)),
+            biz_opaque_callback_data: Some("x".repeat(513)),
             ..ConnectCall::new(Recipient::phone("1"), SDP)
         })
         .await

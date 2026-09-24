@@ -435,17 +435,14 @@ async fn picture_must_be_a_non_empty_jpeg_of_at_most_5_mib() {
     let g = client(&t).group(GROUP);
     let err = g.set_picture(Vec::<u8>::new()).await.unwrap_err();
     assert_eq!(validation_field(&err), "file");
-    let err = g
-        .set_picture(jpeg(PICTURE_MAX_BYTES + 1))
-        .await
-        .unwrap_err();
+    let err = g.set_picture(jpeg(5 * 1024 * 1024 + 1)).await.unwrap_err();
     assert_eq!(validation_field(&err), "file");
     let png = b"\x89PNG\r\n\x1a\n".to_vec();
     let err = g.set_picture(png).await.unwrap_err();
     assert_eq!(validation_field(&err), "file");
     assert!(t.requests().is_empty());
     t.push_json(200, json!({"success": true}));
-    g.set_picture(jpeg(PICTURE_MAX_BYTES)).await.unwrap();
+    g.set_picture(jpeg(5 * 1024 * 1024)).await.unwrap();
     assert_eq!(t.remaining(), 0);
 }
 
@@ -707,7 +704,7 @@ async fn empty_join_request_lists_are_rejected() {
 async fn remove_participants_by_phone_and_bsuid() {
     let t = ScriptedTransport::new();
     t.push_json(200, json!({"success": true}));
-    client(&t)
+    let outcome = client(&t)
         .group(GROUP)
         .remove_participants(&[
             Recipient::phone("+17865347866"),
@@ -715,6 +712,8 @@ async fn remove_participants_by_phone_and_bsuid() {
         ])
         .await
         .unwrap();
+    assert!(!outcome.partial);
+    assert_eq!(outcome.raw, json!({"success": true}));
     let req = t.last_request().unwrap();
     assert_eq!(req.method, Method::DELETE);
     assert_eq!(req.path(), format!("/v25.0/{GROUP}/participants"));
@@ -733,18 +732,40 @@ async fn remove_participants_by_phone_and_bsuid() {
 async fn add_participants_by_phone() {
     let t = ScriptedTransport::new();
     t.push_json(200, json!({}));
-    client(&t)
+    let outcome = client(&t)
         .group(GROUP)
         .add_participants(&[Recipient::phone("+7669992245")])
         .await
         .unwrap();
+    assert!(!outcome.partial);
     let req = t.last_request().unwrap();
     assert_eq!(req.method, Method::POST);
     assert_eq!(req.path(), format!("/v25.0/{GROUP}/participants"));
+    assert_eq!(req.bearer(), Some("TOKEN"));
     assert_eq!(
         req.json(),
         Some(json!({"messaging_product": "whatsapp", "participants": [{"user": "+7669992245"}]}))
     );
+    assert_eq!(t.remaining(), 0);
+}
+
+#[tokio::test]
+async fn partial_participant_success_is_reported_not_swallowed() {
+    let t = ScriptedTransport::new();
+    // groups/error-codes: 131201 "Request partially succeeded" is HTTP 206.
+    let body = json!({"errors": [{"code": 131201, "message": "Request partially succeeded"}]});
+    t.push_json(206, body.clone());
+    t.push_bytes(200, "text/plain", "");
+    let g = client(&t).group(GROUP);
+    let outcome = g
+        .remove_participants(&[Recipient::phone("+1"), Recipient::phone("+2")])
+        .await
+        .unwrap();
+    assert!(outcome.partial);
+    assert_eq!(outcome.raw, body);
+    let outcome = g.add_participants(&[Recipient::phone("+1")]).await.unwrap();
+    assert!(!outcome.partial);
+    assert_eq!(outcome.raw, serde_json::Value::Null, "empty body");
     assert_eq!(t.remaining(), 0);
 }
 
@@ -754,7 +775,7 @@ async fn participant_lists_are_validated() {
     let g = client(&t).group(GROUP);
     let err = g.remove_participants(&[]).await.unwrap_err();
     assert_eq!(validation_field(&err), "participants");
-    let nine = vec![Recipient::phone("+1"); MAX_PARTICIPANTS_PER_REQUEST + 1];
+    let nine = vec![Recipient::phone("+1"); 9];
     let err = g.remove_participants(&nine).await.unwrap_err();
     assert_eq!(validation_field(&err), "participants");
     let err = g.add_participants(&nine).await.unwrap_err();
@@ -781,7 +802,7 @@ async fn participant_lists_are_validated() {
     assert!(t.requests().is_empty());
 
     t.push_json(200, json!({}));
-    let eight = vec![Recipient::phone("+1"); MAX_PARTICIPANTS_PER_REQUEST];
+    let eight = vec![Recipient::phone("+1"); 8];
     g.remove_participants(&eight).await.unwrap();
     assert_eq!(t.remaining(), 0);
 }
@@ -881,7 +902,7 @@ async fn subject_and_description_limits() {
     let t = ScriptedTransport::new();
     let groups = client(&t).groups("1");
     let g = client(&t).group(GROUP);
-    for bad in ["", "   ", &"s".repeat(SUBJECT_MAX_CHARS + 1)] {
+    for bad in ["", "   ", &"s".repeat(129)] {
         let err = groups.create(&CreateGroup::new(bad)).await.unwrap_err();
         assert_eq!(validation_field(&err), "subject", "{bad:?}");
         let err = g
@@ -893,7 +914,7 @@ async fn subject_and_description_limits() {
             .unwrap_err();
         assert_eq!(validation_field(&err), "subject");
     }
-    let long_description = "d".repeat(DESCRIPTION_MAX_CHARS + 1);
+    let long_description = "d".repeat(2049);
     let err = groups
         .create(&CreateGroup {
             description: Some(long_description.clone()),
@@ -915,8 +936,16 @@ async fn subject_and_description_limits() {
     // Whitespace is trimmed by Meta, so it does not count toward the limit;
     // 128 multi-byte characters are fine.
     t.push_json(200, json!({"request_id": "r"}));
-    let padded = format!("  {}  ", "é".repeat(SUBJECT_MAX_CHARS));
+    let padded = format!("  {}  ", "é".repeat(128));
     groups.create(&CreateGroup::new(padded)).await.unwrap();
+    // 2,048 characters of description are fine too.
+    t.push_json(200, json!({}));
+    g.update(&GroupSettingsUpdate {
+        description: Some("ü".repeat(2048)),
+        ..GroupSettingsUpdate::default()
+    })
+    .await
+    .unwrap();
     assert_eq!(t.remaining(), 0);
 }
 

@@ -469,31 +469,62 @@ impl Group {
     /// join through invite links; the endpoint is in the reference, so it is
     /// wrapped, but expect Meta to refuse it unless your number is enabled
     /// for it. Only phone numbers are documented here (`user`), so
-    /// BSUID-only recipients are refused locally. Meta documents no response
-    /// body; any 2xx is success unless the body says `"success": false`.
-    pub async fn add_participants(&self, users: &[Recipient]) -> Result<()> {
+    /// BSUID-only recipients are refused locally. See
+    /// [`ParticipantsOutcome`] for what the answer tells you.
+    pub async fn add_participants(&self, users: &[Recipient]) -> Result<ParticipantsOutcome> {
         let body = ParticipantsBody::new(users, ParticipantsOp::Add)?;
         let request = self
             .client
             .post(&self.path(Some("participants"))?)
             .json(&body)
             .context("add group participants response");
-        send_expecting_success(request).await
+        Ok(ParticipantsOutcome::from_response(
+            send_lenient(request).await?,
+        ))
     }
 
     /// Remove participants: `DELETE /{group-id}/participants`
     /// (`groups/reference#remove-group-participants`). Each user is named by
     /// phone number (`user`) or BSUID (`user_id`) — not both. A removed user
-    /// can no longer join through an invite link. Meta documents no response
-    /// body; the outcome arrives in a `group_participants_update` webhook.
-    pub async fn remove_participants(&self, users: &[Recipient]) -> Result<()> {
+    /// can no longer join through an invite link. The per-user outcome
+    /// arrives in a `group_participants_update` webhook; see
+    /// [`ParticipantsOutcome`] for what the answer tells you.
+    pub async fn remove_participants(&self, users: &[Recipient]) -> Result<ParticipantsOutcome> {
         let body = ParticipantsBody::new(users, ParticipantsOp::Remove)?;
         let request = self
             .client
             .delete(&self.path(Some("participants"))?)
             .json(&body)
             .context("remove group participants response");
-        send_expecting_success(request).await
+        Ok(ParticipantsOutcome::from_response(
+            send_lenient(request).await?,
+        ))
+    }
+}
+
+/// Answer of [`Group::add_participants`] / [`Group::remove_participants`].
+///
+/// Meta documents no response body for these endpoints, only that a
+/// partial success is HTTP `206` with code `131201` ("Not all
+/// participant-level operations in the request succeeded",
+/// `groups/error-codes`). So this reports that, and keeps the body as sent
+/// rather than guessing field names. An explicit `"success": false` is an
+/// [`Error::Http`] instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParticipantsOutcome {
+    /// `true` on HTTP 206: some participants were not processed; the
+    /// `group_participants_update` webhook says which.
+    pub partial: bool,
+    /// The response body (`Null` when empty or not JSON).
+    pub raw: serde_json::Value,
+}
+
+impl ParticipantsOutcome {
+    fn from_response((status, raw): (u16, serde_json::Value)) -> Self {
+        Self {
+            partial: status == 206,
+            raw,
+        }
     }
 }
 
@@ -535,22 +566,28 @@ async fn fetch_groups_page(
 /// a string): a 2xx is success unless the body explicitly says
 /// `"success": false`.
 async fn send_expecting_success(request: GraphRequest) -> Result<()> {
+    send_lenient(request).await.map(|_| ())
+}
+
+/// [`send_expecting_success`], keeping the status and the body (JSON, or
+/// `Null` when empty or not JSON).
+async fn send_lenient(request: GraphRequest) -> Result<(u16, serde_json::Value)> {
     let resp = request.send_raw().await?;
-    let refused = match serde_json::from_slice::<serde_json::Value>(&resp.body) {
-        Ok(serde_json::Value::Object(map)) => match map.get("success") {
-            Some(serde_json::Value::Bool(ok)) => !ok,
-            Some(serde_json::Value::String(s)) => s.eq_ignore_ascii_case("false"),
-            _ => false,
-        },
+    let status = resp.status.as_u16();
+    let body =
+        serde_json::from_slice::<serde_json::Value>(&resp.body).unwrap_or(serde_json::Value::Null);
+    let refused = match body.get("success") {
+        Some(serde_json::Value::Bool(ok)) => !ok,
+        Some(serde_json::Value::String(s)) => s.eq_ignore_ascii_case("false"),
         _ => false,
     };
     if refused {
         return Err(Error::Http {
-            status: resp.status.as_u16(),
+            status,
             body_snippet: snippet(&resp.body),
         });
     }
-    Ok(())
+    Ok((status, body))
 }
 
 /// The group id is the first path segment: an empty id, or one containing
@@ -617,9 +654,6 @@ fn validate_description(description: Option<&str>) -> Result<()> {
 }
 
 fn validate_picture(jpeg: &[u8]) -> Result<()> {
-    if jpeg.is_empty() {
-        return Err(ValidationError::new("file", "must not be empty").into());
-    }
     if jpeg.len() > PICTURE_MAX_BYTES {
         return Err(ValidationError::new(
             "file",
@@ -630,8 +664,9 @@ fn validate_picture(jpeg: &[u8]) -> Result<()> {
         )
         .into());
     }
-    // SOI marker + the first segment's marker prefix. Meta accepts only
-    // image/jpeg, so a PNG named .jpg would be refused after the upload.
+    // SOI marker + the first segment's marker prefix; also rejects an empty
+    // file. Meta accepts only image/jpeg, so a PNG named .jpg would
+    // otherwise be refused only after the upload.
     if !jpeg.starts_with(&[0xFF, 0xD8, 0xFF]) {
         return Err(ValidationError::new("file", "must be a JPEG image").into());
     }
