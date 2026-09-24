@@ -387,3 +387,352 @@ fn recipient_for(key: &ConversationKey) -> Recipient {
         Recipient::group(c)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use time::macros::datetime;
+    use wa_adapters::store::MemoryConversationStore;
+    use wa_client::RetryPolicy;
+    use wa_client::messages::Text;
+    use wa_client::templates::TemplateMessage;
+    use wa_core::clock::ManualClock;
+    use wa_core::testing::ScriptedTransport;
+    use wa_webhooks::{WebhookPayload, events};
+
+    use super::*;
+
+    const PNID: &str = "106540352242922";
+
+    fn payload(value: serde_json::Value) -> Vec<WebhookEvent> {
+        let body = json!({
+            "object": "whatsapp_business_account",
+            "entry": [{"id": "102290129340398", "changes": [{"field": "messages", "value": value}]}]
+        });
+        let p = WebhookPayload::from_slice(body.to_string().as_bytes()).unwrap();
+        events(&p)
+    }
+
+    fn inbound(
+        id: &str,
+        ts: i64,
+        user_id: Option<&str>,
+        wa_id: Option<&str>,
+        body: &str,
+    ) -> Vec<WebhookEvent> {
+        let mut contact = json!({"profile": {"name": "Sheena"}});
+        let mut message =
+            json!({"id": id, "timestamp": ts.to_string(), "type": "text", "text": {"body": body}});
+        if let Some(u) = user_id {
+            contact["user_id"] = json!(u);
+            message["from_user_id"] = json!(u);
+        }
+        if let Some(w) = wa_id {
+            contact["wa_id"] = json!(w);
+            message["from"] = json!(w);
+        }
+        payload(json!({
+            "messaging_product": "whatsapp",
+            "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
+            "contacts": [contact],
+            "messages": [message]
+        }))
+    }
+
+    fn status(id: &str, st: &str, ts: i64) -> Vec<WebhookEvent> {
+        payload(json!({
+            "messaging_product": "whatsapp",
+            "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
+            "statuses": [{"id": id, "status": st, "timestamp": ts.to_string(), "recipient_id": "16505551234"}]
+        }))
+    }
+
+    async fn deliver_all(sink: &InboxSink, evs: Vec<WebhookEvent>) {
+        assert!(!evs.is_empty(), "fixture produced no events");
+        for e in evs {
+            sink.deliver(e).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn records_inbound_by_bsuid_and_ignores_redelivery() {
+        let store = Arc::new(MemoryConversationStore::new());
+        let sink = InboxSink::new(store.clone());
+        let evs = inbound(
+            "wamid.1",
+            1_760_000_000,
+            Some("US.13491208655302741918"),
+            Some("16505551234"),
+            "hi",
+        );
+        deliver_all(&sink, evs.clone()).await;
+        deliver_all(&sink, evs).await; // Meta retry
+        let key = ConversationKey::new(PNID, "US.13491208655302741918");
+        let rows = store.messages(&key, None, 10).await.unwrap();
+        assert_eq!(rows.len(), 1, "redelivery must not duplicate");
+        assert_eq!(rows[0].direction, Direction::Inbound);
+        assert_eq!(rows[0].kind, "text");
+        assert_eq!(rows[0].text.as_deref(), Some("hi"));
+        assert_eq!(rows[0].status, DeliveryStatus::Received);
+        assert!(store.last_inbound_at(&key).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_wa_id_and_skips_senderless_messages() {
+        let store = Arc::new(MemoryConversationStore::new());
+        let sink = InboxSink::new(store.clone());
+        deliver_all(
+            &sink,
+            inbound("wamid.2", 1_760_000_000, None, Some("16505551234"), "yo"),
+        )
+        .await;
+        let rows = store
+            .messages(&ConversationKey::new(PNID, "16505551234"), None, 10)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        // No identifiers at all: acknowledged, not recorded, not an error.
+        deliver_all(&sink, inbound("wamid.3", 1_760_000_001, None, None, "?")).await;
+        assert_eq!(
+            store
+                .conversations(&PNID.into(), None, 10)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn statuses_move_forward_only() {
+        let store = Arc::new(MemoryConversationStore::new());
+        let sink = InboxSink::new(store.clone());
+        deliver_all(
+            &sink,
+            inbound("wamid.4", 1_760_000_000, Some("US.1"), None, "hi"),
+        )
+        .await;
+        deliver_all(&sink, status("wamid.4", "read", 1_760_000_100)).await;
+        deliver_all(&sink, status("wamid.4", "delivered", 1_760_000_050)).await; // late
+        let rows = store
+            .messages(&ConversationKey::new(PNID, "US.1"), None, 1)
+            .await
+            .unwrap();
+        assert_eq!(rows[0].status, DeliveryStatus::Read);
+    }
+
+    fn one_message(message: serde_json::Value) -> Vec<WebhookEvent> {
+        payload(json!({
+            "messaging_product": "whatsapp",
+            "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
+            "contacts": [{"profile": {"name": "Sheena"}, "wa_id": "16505551234", "user_id": "US.1"}],
+            "messages": [message]
+        }))
+    }
+
+    #[tokio::test]
+    async fn a_revoke_marks_the_original_deleted_instead_of_adding_a_row() {
+        let store = Arc::new(MemoryConversationStore::new());
+        let sink = InboxSink::new(store.clone());
+        deliver_all(
+            &sink,
+            inbound("wamid.orig", 1_749_854_000, Some("US.1"), None, "oops"),
+        )
+        .await;
+        // Shape from webhooks/reference/messages/revoke.
+        deliver_all(
+            &sink,
+            one_message(json!({
+                "from": "16505551234", "id": "wamid.rev", "timestamp": "1749854575",
+                "type": "revoke", "revoke": {"original_message_id": "wamid.orig"}
+            })),
+        )
+        .await;
+        let rows = store
+            .messages(&ConversationKey::new(PNID, "US.1"), None, 10)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1, "the revoke itself is not a message");
+        assert_eq!(rows[0].status, DeliveryStatus::Deleted);
+    }
+
+    #[tokio::test]
+    async fn group_messages_are_keyed_by_the_group() {
+        let store = Arc::new(MemoryConversationStore::new());
+        let sink = InboxSink::new(store.clone());
+        // Shape from groups/groups-messaging (group_text fixture).
+        deliver_all(
+            &sink,
+            one_message(json!({
+                "from": "16505551234", "group_id": "HBgLMTY1MDM4Nzk0MzkVAgASGBQ",
+                "id": "wamid.g1", "timestamp": "1744344496",
+                "text": {"body": "What does everyone think?"}, "type": "text"
+            })),
+        )
+        .await;
+        let group = ConversationKey::new(PNID, "HBgLMTY1MDM4Nzk0MzkVAgASGBQ");
+        assert_eq!(store.messages(&group, None, 10).await.unwrap().len(), 1);
+        assert!(
+            store
+                .messages(&ConversationKey::new(PNID, "US.1"), None, 10)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a group message is not the sender's 1:1 conversation"
+        );
+        assert_eq!(
+            recipient_for(&group),
+            Recipient::group("HBgLMTY1MDM4Nzk0MzkVAgASGBQ")
+        );
+    }
+
+    #[test]
+    fn recipient_modes_follow_the_key() {
+        let k = |c: &str| ConversationKey::new(PNID, c);
+        assert_eq!(
+            recipient_for(&k("US.13491208655302741918")),
+            Recipient::user("US.13491208655302741918")
+        );
+        assert_eq!(
+            recipient_for(&k("16505551234")),
+            Recipient::phone("16505551234")
+        );
+        assert_eq!(
+            recipient_for(&k("+16505551234")),
+            Recipient::phone("+16505551234")
+        );
+        assert_eq!(
+            recipient_for(&k("Y2FwaV9ncm91cDox")),
+            Recipient::group("Y2FwaV9ncm91cDox")
+        );
+    }
+
+    fn inbox(
+        t: &ScriptedTransport,
+        store: Arc<MemoryConversationStore>,
+        clock: &ManualClock,
+    ) -> Inbox {
+        let client = Client::builder()
+            .transport(t.clone())
+            .access_token("MERCHANT_TOKEN")
+            .retry(RetryPolicy::NONE)
+            .build()
+            .unwrap();
+        Inbox::new(client, PNID, store).with_clock(Arc::new(clock.clone()))
+    }
+
+    fn sent(id: &str) -> serde_json::Value {
+        json!({"messaging_product": "whatsapp", "contacts": [{"input": "US.1", "user_id": "US.1"}], "messages": [{"id": id}]})
+    }
+
+    #[tokio::test]
+    async fn reply_inside_the_window_sends_by_bsuid_and_records() {
+        let store = Arc::new(MemoryConversationStore::new());
+        let clock = ManualClock::new(datetime!(2025-10-09 08:00 UTC));
+        let sink = InboxSink::new(store.clone());
+        // 1_760_000_000 = 2025-10-09 08:53:20 UTC
+        deliver_all(
+            &sink,
+            inbound("wamid.in", 1_760_000_000, Some("US.1"), None, "hi"),
+        )
+        .await;
+        clock.set(datetime!(2025-10-09 10:00 UTC));
+        let t = ScriptedTransport::new();
+        t.push_json(200, sent("wamid.out"));
+        let inbox = inbox(&t, store.clone(), &clock);
+        let key = inbox.key("US.1");
+        inbox
+            .reply(
+                &key,
+                MessageContent::Text(Text {
+                    body: "hello".into(),
+                    preview_url: None,
+                }),
+            )
+            .await
+            .unwrap();
+        let req = t.last_request().unwrap();
+        assert_eq!(req.path(), format!("/v25.0/{PNID}/messages"));
+        assert_eq!(req.bearer(), Some("MERCHANT_TOKEN"));
+        let body = req.json().unwrap();
+        assert_eq!(body["recipient"], "US.1");
+        assert!(body.get("to").is_none());
+        assert_eq!(t.remaining(), 0);
+        let rows = inbox.history(&key, None, 10).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, MessageId::new("wamid.out"));
+        assert_eq!(rows[0].direction, Direction::Outbound);
+        assert_eq!(rows[0].status, DeliveryStatus::Accepted);
+        assert_eq!(rows[0].text.as_deref(), Some("hello"));
+    }
+
+    #[tokio::test]
+    async fn free_form_outside_the_window_is_refused_but_templates_go() {
+        let store = Arc::new(MemoryConversationStore::new());
+        let clock = ManualClock::new(datetime!(2025-10-09 08:00 UTC));
+        let sink = InboxSink::new(store.clone());
+        deliver_all(
+            &sink,
+            inbound("wamid.in", 1_760_000_000, Some("US.1"), None, "hi"),
+        )
+        .await;
+        clock.set(datetime!(2025-10-10 09:00 UTC)); // > 24h later
+        let t = ScriptedTransport::new();
+        let inbox = inbox(&t, store.clone(), &clock);
+        let key = inbox.key("US.1");
+        let err = inbox
+            .reply(
+                &key,
+                MessageContent::Text(Text {
+                    body: "late".into(),
+                    preview_url: None,
+                }),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(&err, Error::Validation(v) if v.field == "customer_service_window"));
+        assert!(t.requests().is_empty(), "refused before any request");
+
+        t.push_json(200, sent("wamid.tpl"));
+        inbox
+            .reply(
+                &key,
+                MessageContent::Template(TemplateMessage::new("order_update", "en_US")),
+            )
+            .await
+            .unwrap();
+        assert_eq!(t.requests().len(), 1);
+        // Never messaged at all: closed too.
+        let err = inbox
+            .reply(
+                &inbox.key("US.2"),
+                MessageContent::Text(Text {
+                    body: "x".into(),
+                    preview_url: None,
+                }),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn a_conversation_of_another_number_is_rejected() {
+        let store = Arc::new(MemoryConversationStore::new());
+        let clock = ManualClock::new(datetime!(2025-10-09 08:00 UTC));
+        let t = ScriptedTransport::new();
+        let inbox = inbox(&t, store, &clock);
+        let foreign = ConversationKey::new("999", "US.1");
+        assert!(inbox.history(&foreign, None, 10).await.is_err());
+        assert!(
+            inbox
+                .reply(
+                    &foreign,
+                    MessageContent::Template(TemplateMessage::new("x", "en_US"))
+                )
+                .await
+                .is_err()
+        );
+        assert!(t.requests().is_empty());
+    }
+}

@@ -4710,6 +4710,7 @@ dependencies = [
  "async-trait",
  "serde_json",
  "time",
+ "tokio",
  "tracing",
  "wa-adapters",
  "wa-client",

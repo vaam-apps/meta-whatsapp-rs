@@ -36,5 +36,11 @@ wa-webhooks.workspace = true
 wa-adapters = { workspace = true, default-features = false }
 wa-typst = { workspace = true, optional = true }
 
+[dev-dependencies]
+wa-core = { workspace = true, features = ["testing"] }
+wa-adapters = { workspace = true, features = ["memory"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+
 [lints]
 workspace = true
