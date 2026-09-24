@@ -253,7 +253,7 @@ impl Templates {
     /// Disabled templates cannot be deleted; an approved template's name
     /// cannot be reused for 30 days (`templates/template-management`).
     pub async fn delete_by_name(&self, name: &str) -> Result<()> {
-        validate::name(name, "name")?;
+        not_empty(name, "name")?;
         self.client
             .delete(&format!("{}/message_templates", self.waba_id))
             .query("name", name)
@@ -264,7 +264,7 @@ impl Templates {
 
     /// Delete one language version: the template `id` called `name`.
     pub async fn delete_by_id(&self, name: &str, id: &TemplateId) -> Result<()> {
-        validate::name(name, "name")?;
+        not_empty(name, "name")?;
         self.client
             .delete(&format!("{}/message_templates", self.waba_id))
             .query("hsm_id", id)

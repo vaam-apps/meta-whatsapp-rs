@@ -38,7 +38,11 @@ pub struct TemplateInfo {
     pub language: Option<String>,
     /// Components. Authentication templates' OTP buttons come back as `URL`
     /// buttons.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "null_as_empty"
+    )]
     pub components: Vec<TemplateComponent>,
     /// Placeholder style.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -112,6 +116,16 @@ pub struct TemplateInfo {
     pub degrees_of_freedom_spec: Option<Value>,
 }
 
+/// Parse a `null` list as empty instead of failing the whole response. Not
+/// seen in the docs' examples; defensive, like every response type here.
+fn null_as_empty<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<Vec<T>>::deserialize(deserializer).map(Option::unwrap_or_default)
+}
+
 fn empty_as_none<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -126,8 +140,9 @@ where
 /// `quality_score` (`templates/template-quality`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QualityScore {
-    /// Rating.
-    pub score: QualityRating,
+    /// Rating (optional in the reference schema, present in every example).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<QualityRating>,
     /// When it was last updated, UNIX seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub date: Option<i64>,
@@ -266,7 +281,11 @@ pub struct LibraryTemplate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usecase: Option<String>,
     /// Industries.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "null_as_empty"
+    )]
     pub industry: Vec<String>,
     /// Header text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -275,14 +294,26 @@ pub struct LibraryTemplate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
     /// Example body values.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "null_as_empty"
+    )]
     pub body_params: Vec<String>,
     /// Types of the body values (`TEXT`, `AMOUNT`, `DATE`, …), checked by
     /// Meta at send time.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "null_as_empty"
+    )]
     pub body_param_types: Vec<String>,
     /// Buttons.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "null_as_empty"
+    )]
     pub buttons: Vec<Button>,
 }
 
@@ -457,7 +488,7 @@ pub struct ComparisonMetric {
     /// The metric.
     pub metric: ComparisonMetricKind,
     /// Value shape: `RELATIVE`, `NUMBER_VALUES` or `STRING_VALUES`.
-    #[serde(rename = "type")]
+    #[serde(rename = "type", default)]
     pub kind: String,
     /// `BLOCK_RATE`: template ids by increasing block rate.
     #[serde(default, skip_serializing_if = "Option::is_none")]

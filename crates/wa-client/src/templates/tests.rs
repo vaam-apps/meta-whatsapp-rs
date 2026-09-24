@@ -1370,7 +1370,7 @@ async fn get_status_and_quality_score() {
         .await
         .unwrap();
     let score = q.quality_score.unwrap();
-    assert_eq!(score.score, QualityRating::Green);
+    assert_eq!(score.score, Some(QualityRating::Green));
     assert_eq!(score.date, Some(1_758_754_645));
     assert_eq!(t.requests()[1].path(), "/v25.0/1105258428396250");
     assert_eq!(t.remaining(), 0);
@@ -1773,4 +1773,32 @@ fn id_lists_quote_non_numeric_ids() {
         "[12,34]"
     );
     assert_eq!(id_list(&[TemplateId::new("a\"b")]), r#"["a\"b"]"#);
+}
+
+#[test]
+fn template_info_tolerates_nulls_empties_and_new_fields() {
+    let info: TemplateInfo = serde_json::from_value(json!({
+        "id": "1",
+        "components": null,
+        "quality_score": {"date": 1758754645},
+        "correct_category": "",
+        "previous_category": "UTILITY",
+        "status": "SOMETHING_NEW",
+        "brand_new_field": {"x": 1}
+    }))
+    .unwrap();
+    assert!(info.components.is_empty());
+    assert_eq!(info.quality_score.unwrap().score, None);
+    assert_eq!(info.correct_category, None);
+    assert_eq!(info.previous_category, Some(TemplateCategory::Utility));
+    assert_eq!(
+        info.status,
+        Some(TemplateStatus::Other("SOMETHING_NEW".into()))
+    );
+
+    let lib: LibraryTemplate = serde_json::from_value(json!({
+        "id": "7", "name": "x", "industry": null, "buttons": null
+    }))
+    .unwrap();
+    assert!(lib.industry.is_empty() && lib.buttons.is_empty());
 }
