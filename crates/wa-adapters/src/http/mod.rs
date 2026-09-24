@@ -29,9 +29,18 @@
 //!   token exchange). The URL is stripped before an error leaves this
 //!   module.
 //! - **Redirects** follow reqwest's default (up to 10); reqwest drops
-//!   `Authorization` when a redirect changes host, scheme or port. Pass a
-//!   configured client to [`ReqwestTransport::with_client`] for another
-//!   policy.
+//!   `Authorization` when a redirect changes host, scheme or port. No
+//!   `Referer` is sent: reqwest's default would hand the previous URL,
+//!   query string included, to the redirect target. Pass a configured client
+//!   to [`ReqwestTransport::with_client`] for another policy (and turn
+//!   `referer` off there too).
+//! - **Proxies.** `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY`
+//!   (or their lower-case forms) are honoured, read once when the transport
+//!   is built. Operating-system proxy settings on macOS and Windows are not
+//!   (reqwest's `system-proxy` feature is off: a server rarely has them and
+//!   it pulls platform crates in). For a proxy configured in code, build a
+//!   `reqwest::Client` with `.proxy(…)` and use
+//!   [`ReqwestTransport::with_client`].
 //!
 //! [`send_streaming`]: HttpTransport::send_streaming
 
@@ -75,7 +84,9 @@ impl ReqwestTransport {
     }
 
     /// Use an existing client as is (proxies, mTLS, custom roots, redirect
-    /// policy…). Its timeouts apply when a request has none.
+    /// policy…). Its timeouts apply when a request has none. Its settings
+    /// are yours: reqwest sends a `Referer` on redirects unless you build it
+    /// with `.referer(false)`, which [`ReqwestTransport::builder`] does.
     pub fn with_client(client: reqwest::Client) -> Self {
         Self { client }
     }
@@ -199,6 +210,9 @@ impl ReqwestTransportBuilder {
     /// initialised (e.g. no usable root certificates).
     pub fn build(self) -> Result<ReqwestTransport, ConfigError> {
         let mut builder = reqwest::Client::builder()
+            // A Referer on a redirect would carry the previous URL's query
+            // (`client_secret`, `code`) to whatever host it points at.
+            .referer(false)
             .pool_idle_timeout(self.pool_idle_timeout)
             .pool_max_idle_per_host(self.pool_max_idle_per_host)
             .tcp_keepalive(self.tcp_keepalive);

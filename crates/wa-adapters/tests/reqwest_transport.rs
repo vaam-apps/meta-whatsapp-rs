@@ -48,6 +48,10 @@ impl Server {
             .route("/download", get(download))
             .route("/slow", get(slow))
             .route("/stall-body", get(stall_body))
+            .route("/hop/{port}", get(hop))
+            .route("/loop", get(redirect_loop))
+            .route("/headers", get(headers))
+            .route("/echo-proxy", get(echo_proxy))
             .with_state(Arc::clone(&shared));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -164,8 +168,51 @@ async fn stall_body() -> Response {
     Response::new(Body::from_stream(head.chain(futures::stream::pending())))
 }
 
+/// Redirect to `/headers` on another local server (another origin).
+async fn hop(axum::extract::Path(port): axum::extract::Path<u16>) -> Response {
+    (
+        StatusCode::FOUND,
+        [("location", format!("http://127.0.0.1:{port}/headers"))],
+    )
+        .into_response()
+}
+
+/// Redirect to itself, query included, forever.
+async fn redirect_loop(request: Request) -> Response {
+    let location = request.uri().to_string();
+    (StatusCode::FOUND, [("location", location)]).into_response()
+}
+
+/// What a redirect target gets to see.
+async fn headers(headers: HeaderMap) -> axum::Json<Value> {
+    axum::Json(json!({
+        "authorization": header(&headers, "authorization"),
+        "referer": header(&headers, "referer"),
+    }))
+}
+
+/// Answers a proxied (absolute-form) request with the host it was for.
+async fn echo_proxy(request: Request) -> axum::Json<Value> {
+    axum::Json(json!({
+        "host": header(request.headers(), "host"),
+        "uri": request.uri().to_string(),
+    }))
+}
+
 fn transport() -> ReqwestTransport {
     ReqwestTransport::new().unwrap()
+}
+
+/// Every rendering of `err` and its whole source chain.
+fn renderings(err: &TransportError) -> Vec<String> {
+    let mut out = vec![format!("{err}"), format!("{err:?}")];
+    let mut source = std::error::Error::source(err);
+    while let Some(s) = source {
+        out.push(format!("{s}"));
+        out.push(format!("{s:?}"));
+        source = s.source();
+    }
+    out
 }
 
 /// Fail instead of hanging when streaming does not happen.
@@ -435,6 +482,125 @@ async fn bad_content_types_are_build_errors() {
         RequestBody::Multipart(Multipart::new().file("file", "a.bin", "not a mime", vec![1]));
     let err = transport().send(request).await.unwrap_err();
     assert!(matches!(err, TransportError::Build(_)), "{err:?}");
+}
+
+#[tokio::test]
+async fn redirects_carry_neither_credentials_nor_the_previous_url() {
+    let (origin, target) = (Server::start().await, Server::start().await);
+    let mut request = HttpRequest::new(
+        Method::GET,
+        origin.url(&format!(
+            "/hop/{}?client_secret=s3cr3t-value&code=c0de-value",
+            target.addr.port()
+        )),
+    );
+    request
+        .headers
+        .insert("authorization", "Bearer EAAG-token".parse().unwrap());
+
+    let response = within("redirected request", transport().send(request))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status, StatusCode::OK, "the redirect is followed");
+    let seen: Value = serde_json::from_slice(&response.body).unwrap();
+    assert_eq!(
+        seen,
+        json!({"authorization": null, "referer": null}),
+        "another origin gets no token and no Referer (which would carry the query)"
+    );
+}
+
+#[tokio::test]
+async fn redirect_loop_errors_never_show_the_url() {
+    let server = Server::start().await;
+    let err = within(
+        "redirect loop",
+        transport().send(HttpRequest::new(
+            Method::GET,
+            server.url("/loop?client_secret=s3cr3t-value&code=c0de-value"),
+        )),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, TransportError::Backend(_)), "{err:?}");
+    for rendered in renderings(&err) {
+        assert!(
+            !rendered.contains("s3cr3t-value")
+                && !rendered.contains("c0de-value")
+                && !rendered.contains("/loop"),
+            "the URL leaked into a redirect error: {rendered}"
+        );
+    }
+}
+
+/// The child half of [`proxy_env_vars_are_honoured`]: run in a process whose
+/// `HTTP_PROXY` points at a local server (env vars cannot be set in-process
+/// here: `unsafe_code` is forbidden). Ignored in a normal run.
+#[tokio::test]
+#[ignore = "run by proxy_env_vars_are_honoured in a child process"]
+async fn proxy_env_child() {
+    assert!(
+        std::env::var("HTTP_PROXY").is_ok(),
+        "run by proxy_env_vars_are_honoured, which sets HTTP_PROXY"
+    );
+    // `.invalid` never resolves: only a proxy can answer this.
+    let mut request = HttpRequest::new(
+        Method::GET,
+        Url::parse("http://wa-rs-proxy-probe.invalid/echo-proxy?x=1").unwrap(),
+    );
+    request.timeout = Some(Duration::from_secs(10));
+    let response = transport().send(request).await.unwrap();
+    assert_eq!(response.status, StatusCode::OK);
+    let seen: Value = serde_json::from_slice(&response.body).unwrap();
+    assert_eq!(seen["host"], "wa-rs-proxy-probe.invalid");
+}
+
+/// Integrators behind an egress proxy configure it the usual way.
+#[tokio::test]
+async fn proxy_env_vars_are_honoured() {
+    let proxy = Server::start().await;
+    let proxy_url = format!("http://{}", proxy.addr);
+    let exe = std::env::current_exe().unwrap();
+    let child = tokio::task::spawn_blocking(move || {
+        let mut cmd = std::process::Command::new(exe);
+        cmd.args([
+            "proxy_env_child",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ]);
+        for var in [
+            "ALL_PROXY",
+            "all_proxy",
+            "HTTPS_PROXY",
+            "https_proxy",
+            "NO_PROXY",
+            "no_proxy",
+            "REQUEST_METHOD",
+        ] {
+            cmd.env_remove(var);
+        }
+        cmd.env("HTTP_PROXY", &proxy_url)
+            .env("http_proxy", &proxy_url)
+            .output()
+            .unwrap()
+    });
+    let output = tokio::time::timeout(Duration::from_secs(60), child)
+        .await
+        .expect("the child test finished within 60s")
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "child failed:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("test result: ok. 1 passed"),
+        "the child test must actually run, not be filtered out:\n{stdout}"
+    );
 }
 
 #[tokio::test]
