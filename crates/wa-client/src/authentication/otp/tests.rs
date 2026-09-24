@@ -442,6 +442,162 @@ async fn purposes_are_independent() {
     );
 }
 
+/// A second service on the same store, clock and pepper as `f`, sending
+/// from `phone_number_id`: another merchant of the same integrator.
+fn neighbour(
+    f: &Fixture,
+    phone_number_id: &str,
+    config: OtpConfig,
+) -> (OtpService, ScriptedTransport) {
+    let transport = ScriptedTransport::new();
+    let otp = OtpService::new(
+        client(&transport, RetryPolicy::NONE),
+        phone_number_id,
+        OtpTemplate::new("verification_code", "en_US"),
+        f.kv.clone(),
+        Arc::new(f.clock.clone()),
+        OtpPepper::new(PEPPER).unwrap(),
+        config,
+    )
+    .unwrap();
+    (otp, transport)
+}
+
+async fn issue_at(otp: &OtpService, t: &ScriptedTransport) -> String {
+    accept(t);
+    let outcome = otp.issue(&user(), "login").await.unwrap();
+    assert!(matches!(outcome, IssueOutcome::Sent(_)), "{outcome:?}");
+    code_in(&t.last_request().unwrap())
+}
+
+/// Security review H1 (sec-probe `otp_cross_merchant`): two services that
+/// share one store and one pepper but send from different numbers. The
+/// key used to be `HMAC(pepper, digits|purpose)`, so merchant B accepted
+/// the code merchant A sent: a code for a cheap account at one merchant
+/// logged into the same phone number's account at another.
+#[tokio::test]
+async fn a_code_only_verifies_at_the_service_that_sent_it() {
+    let f = fixture(OtpConfig::default());
+    let (b, tb) = neighbour(&f, "222222222222222", OtpConfig::default());
+    let code_a = issue_at(&f.otp, &f.transport).await;
+    assert_eq!(
+        b.verify(&user(), "login", &code_a).await.unwrap(),
+        VerifyOutcome::NotFound,
+        "A's code is unknown at B"
+    );
+    // B's cooldown and records are its own: A's send does not hold B back.
+    let code_b = issue_at(&b, &tb).await;
+    // A new code at A (after A's cooldown) does not replace B's.
+    f.clock.advance(Duration::from_secs(31));
+    let code_a2 = issue_at(&f.otp, &f.transport).await;
+    assert_eq!(
+        b.verify(&user(), "login", &code_b).await.unwrap(),
+        VerifyOutcome::Verified,
+        "issuing at A cancelled B's code"
+    );
+    assert_eq!(
+        f.otp.verify(&user(), "login", &code_a2).await.unwrap(),
+        VerifyOutcome::Verified
+    );
+    // B's verification attempts never counted against A's record either.
+    assert_eq!(
+        b.verify(&user(), "login", &code_a2).await.unwrap(),
+        VerifyOutcome::NotFound
+    );
+    assert_eq!(f.transport.remaining(), 0);
+    assert_eq!(tb.remaining(), 0);
+}
+
+#[tokio::test]
+async fn cooldowns_and_issue_limits_are_per_service() {
+    let config = OtpConfig {
+        resend_cooldown: Duration::ZERO,
+        issue_limit: Some(IssueLimit {
+            max_issues: 1,
+            window: Duration::from_hours(1),
+        }),
+        ..OtpConfig::default()
+    };
+    let f = fixture(config.clone());
+    let (b, tb) = neighbour(&f, "222222222222222", config);
+    let _ = issue_at(&f.otp, &f.transport).await;
+    assert!(matches!(
+        f.otp.issue(&user(), "login").await.unwrap(),
+        IssueOutcome::RateLimited { .. }
+    ));
+    // A's limit is spent; B's is not.
+    let _ = issue_at(&b, &tb).await;
+    assert_eq!(tb.remaining(), 0);
+
+    let f = fixture(OtpConfig::default());
+    let (b, tb) = neighbour(&f, "222222222222222", OtpConfig::default());
+    let _ = issue_at(&f.otp, &f.transport).await;
+    assert!(matches!(
+        f.otp.issue(&user(), "login").await.unwrap(),
+        IssueOutcome::CoolingDown { .. }
+    ));
+    let _ = issue_at(&b, &tb).await;
+    assert_eq!(tb.remaining(), 0);
+}
+
+/// One sending number shared by several tenants of the integrator (a
+/// platform's own number): `OtpConfig::namespace` separates them.
+#[tokio::test]
+async fn a_namespace_separates_tenants_on_one_number() {
+    let tenant = |ns: &str| OtpConfig {
+        namespace: Some(ns.to_owned()),
+        ..OtpConfig::default()
+    };
+    let f = fixture(tenant("shop-a"));
+    let (b, tb) = neighbour(&f, "105954558954427", tenant("shop-b"));
+    let (same, _) = neighbour(&f, "105954558954427", tenant("shop-a"));
+    let (none, _) = neighbour(&f, "105954558954427", OtpConfig::default());
+    let code = issue_at(&f.otp, &f.transport).await;
+    for other in [&b, &none] {
+        assert_eq!(
+            other.verify(&user(), "login", &code).await.unwrap(),
+            VerifyOutcome::NotFound
+        );
+    }
+    let _ = issue_at(&b, &tb).await;
+    assert_eq!(
+        same.verify(&user(), "login", &code).await.unwrap(),
+        VerifyOutcome::Verified,
+        "same number and namespace is the same service"
+    );
+    for blank in ["", " "] {
+        let e = OtpService::new(
+            client(&tb, RetryPolicy::NONE),
+            "105954558954427",
+            OtpTemplate::new("verification_code", "en_US"),
+            f.kv.clone(),
+            Arc::new(f.clock.clone()),
+            OtpPepper::new(PEPPER).unwrap(),
+            tenant(blank),
+        )
+        .unwrap_err();
+        assert!(matches!(e, Error::Config(_)), "{blank:?}: {e}");
+    }
+}
+
+/// The scope is length-prefixed, so ids and namespaces containing the
+/// separator cannot be shifted into each other.
+#[tokio::test]
+async fn the_scope_encoding_is_unambiguous() {
+    let f = fixture(OtpConfig::default());
+    let ns = |s: &str| OtpConfig {
+        namespace: Some(s.to_owned()),
+        ..OtpConfig::default()
+    };
+    let (x, _) = neighbour(&f, "1|2", ns("3"));
+    let (y, _) = neighbour(&f, "1", ns("2|3"));
+    let phone = Phone::of(&user()).unwrap();
+    assert_ne!(
+        x.key(&phone, "login").unwrap(),
+        y.key(&phone, "login").unwrap()
+    );
+}
+
 #[tokio::test]
 async fn wrong_codes_count_down_then_lock_even_the_right_code() {
     let f = fixture(OtpConfig::default());

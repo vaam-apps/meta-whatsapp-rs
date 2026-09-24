@@ -17,12 +17,19 @@
 //!   (`getrandom`), one byte per digit with rejection sampling — bytes
 //!   `250..=255` are discarded so every digit is exactly 1/10 likely.
 //! - **Storage**: namespace `wa.otp`, key = hex HMAC-SHA256(pepper,
-//!   `"wa.otp.key|" + digits + "|" + purpose`). No phone number or code is
-//!   ever stored or used as a key. The record holds the challenge id,
-//!   HMAC-SHA256(pepper, `"wa.otp.code|" + challenge id + "|" + code`), the
-//!   attempt count, the expiry and the send time. The two HMAC inputs carry
-//!   different prefixes so a key can never be replayed as a code hash. The
-//!   issue log (`wa.otp.rate`, same key) holds send times only.
+//!   `"wa.otp.key|" + scope + "|" + digits + "|" + purpose`). No phone
+//!   number or code is ever stored or used as a key. The record holds the
+//!   challenge id, HMAC-SHA256(pepper, `"wa.otp.code|" + challenge id + "|" +
+//!   code`), the attempt count, the expiry and the send time. The two HMAC
+//!   inputs carry different prefixes so a key can never be replayed as a
+//!   code hash. The issue log (`wa.otp.rate`, same key) holds send times
+//!   only.
+//! - **Scope**: the sending `phone_number_id` and the optional
+//!   [`OtpConfig::namespace`], length-prefixed (netstrings, so neither can be
+//!   shifted into the other). Services that share a store and a pepper —
+//!   several merchants of one integrator — therefore never see each other's
+//!   codes, cooldowns or issue limits: without it, a code merchant A sent
+//!   verified at merchant B for the same phone number and purpose.
 //! - **Rate limits**: see [`OtpConfig::resend_cooldown`] and
 //!   [`OtpConfig::issue_limit`] for the brute-force arithmetic behind them.
 //! - **Issue**: cooldown check, then a slot in the issue log
@@ -201,6 +208,14 @@ pub struct OtpConfig {
     /// `None` is the explicit opt-out: set it only when an equivalent
     /// per-number limit is enforced in front of this service.
     pub issue_limit: Option<IssueLimit>,
+    /// Tenant (or app) this service issues codes for, when one sending
+    /// number serves several: a code, cooldown or issue limit of one
+    /// namespace is invisible to every other. Not needed to separate
+    /// merchants with their own numbers — challenges are always bound to
+    /// the sending `phone_number_id`. Must not be blank; `None` (the
+    /// default) is its own namespace. Changing it invalidates outstanding
+    /// codes.
+    pub namespace: Option<String>,
 }
 
 impl Default for OtpConfig {
@@ -211,6 +226,7 @@ impl Default for OtpConfig {
             max_attempts: 5,
             resend_cooldown: Duration::from_secs(30),
             issue_limit: Some(IssueLimit::DEFAULT),
+            namespace: None,
         }
     }
 }
@@ -232,6 +248,13 @@ impl OtpConfig {
             && (limit.max_issues == 0 || limit.window.is_zero())
         {
             return bad("issue_limit needs max_issues >= 1 and a non-zero window");
+        }
+        if self
+            .namespace
+            .as_deref()
+            .is_some_and(|ns| ns.trim().is_empty())
+        {
+            return bad("namespace must not be blank (use None for no namespace)");
         }
         Ok(())
     }
@@ -461,11 +484,40 @@ fn may_have_been_sent(error: &Error) -> bool {
     }
 }
 
+/// Append `bytes` as a netstring (`<len>:<bytes>,`), a self-delimiting
+/// encoding: no sequence of netstrings can be re-split differently.
+fn netstring(out: &mut Vec<u8>, bytes: &[u8]) {
+    out.extend_from_slice(bytes.len().to_string().as_bytes());
+    out.push(b':');
+    out.extend_from_slice(bytes);
+    out.push(b',');
+}
+
+/// What every store key of a service is bound to: its sending number and
+/// its namespace. Prefix-free: a netstring, then `-` (no namespace; a
+/// netstring never starts with `-`) or a second netstring.
+fn scope(phone_number_id: &PhoneNumberId, namespace: Option<&str>) -> Vec<u8> {
+    let mut out = Vec::new();
+    netstring(&mut out, phone_number_id.as_str().as_bytes());
+    match namespace {
+        Some(ns) => netstring(&mut out, ns.as_bytes()),
+        None => out.push(b'-'),
+    }
+    out
+}
+
 /// Issues and verifies one-time passcodes. Cheap to clone.
+///
+/// Every code, cooldown and issue limit is bound to this service's sending
+/// `phone_number_id` (and [`OtpConfig::namespace`]): services that share a
+/// store and a pepper cannot verify, cancel or rate-limit each other's
+/// codes.
 #[derive(Clone)]
 pub struct OtpService {
     client: Client,
     phone_number_id: PhoneNumberId,
+    /// [`scope`] of `phone_number_id` and the namespace, computed once.
+    scope: Arc<[u8]>,
     template: OtpTemplate,
     challenges: JsonStore<StoredChallenge>,
     issue_log: JsonStore<IssueLog>,
@@ -489,6 +541,10 @@ impl OtpService {
     /// Build a service that sends `template` from `phone_number_id`, keeps
     /// challenges in `store` (namespaces `wa.otp` and `wa.otp.rate`) and
     /// reads time from `clock` (use the same clock for the store in tests).
+    ///
+    /// Challenges are bound to `phone_number_id` and
+    /// [`OtpConfig::namespace`]: one store and one pepper can serve any
+    /// number of services.
     pub fn new(
         client: Client,
         phone_number_id: impl Into<PhoneNumberId>,
@@ -508,9 +564,11 @@ impl OtpService {
             .map_err(|e| ConfigError::new(format!("OTP phone_number_id: {}", e.reason)))?;
         crate::templates::validate::name(&template.name, "template.name")?;
         crate::templates::not_empty(&template.language, "template.language")?;
+        let scope = scope(&phone_number_id, config.namespace.as_deref()).into();
         Ok(Self {
             client,
             phone_number_id,
+            scope,
             template,
             challenges: JsonStore::new(Arc::clone(&store), NAMESPACE),
             issue_log: JsonStore::new(store, ISSUE_LOG_NAMESPACE),
@@ -536,15 +594,16 @@ impl OtpService {
         Ok(mac.finalize().into_bytes().into())
     }
 
-    /// Store key for a phone number and purpose. Digits contain no `|`, so
-    /// `digits|purpose` is unambiguous.
+    /// Store key for a phone number and purpose, bound to this service's
+    /// scope. The scope is prefix-free and digits contain no `|`, so
+    /// `scope|digits|purpose` is unambiguous.
     fn key(&self, phone: &Phone, purpose: &str) -> Result<String> {
         if purpose.is_empty() {
             return Err(ValidationError::new("purpose", "must not be empty").into());
         }
         Ok(hex::encode(self.mac(
             KEY_DOMAIN,
-            &[phone.digits.as_bytes(), purpose.as_bytes()],
+            &[&self.scope[..], phone.digits.as_bytes(), purpose.as_bytes()],
         )?))
     }
 
