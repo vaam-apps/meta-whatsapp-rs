@@ -146,20 +146,30 @@ re-issues the original request with `after=` rather than following
 where `MessageContent` is an internally tagged enum on `type`: text, image,
 audio, video, document, sticker, location, contacts, interactive (button,
 list, cta_url, location_request_message, flow, product, product_list,
-catalog_message, carousel), reaction, template. Constructors cover the
-common cases (`OutboundMessage::text(to, body)`, …). `mark_read(message_id,
-typing_indicator: bool)`. `SendResponse { contacts: [{input, wa_id?, user_id?}], messages: [{id, message_status?}] }`.
+catalog_message, carousel, voice_call, call_permission_request,
+request_contact_info, address_message), reaction, pin/unpin, template, and a
+`Raw` escape hatch that refuses envelope keys. Constructors cover the common
+cases (`OutboundMessage::text(to, body)`, …). Every documented limit is
+checked locally before sending; templates run `TemplateMessage::validate`.
+`mark_read(message_id)` (idempotent) and
+`mark_read_with_typing_indicator(message_id)` (not replayed: a late retry
+could show "typing…" after the reply). `SendResponse { messaging_product,
+contacts: [{input, wa_id?, user_id?, parent_user_id?}], messages: [{id,
+group_id?, message_status?}] }` — shared with the MM API.
 
 Recipient addressing follows the BSUID rules in `wa_core::recipient`.
 
 ### Media (`wa_client::media`)
 
-Upload (multipart: `file`, `type`, `messaging_product`), `url(media_id)` →
-`{url, mime_type, sha256, file_size, id}`, `download(media_id)` → streaming
-body (`StreamingResponse`) with SHA-256 verification helper, `delete`.
-Resumable Upload API (`/{app_id}/uploads` → `/{upload_session}` with
-`file_offset`, `Authorization: OAuth`) returning the handle used as
-`header_handle` in template examples.
+Upload (multipart: `file`, `type`, `messaging_product`; MIME type and size
+checked first), `url(media_id)` → `{url, mime_type, sha256, file_size, id}`,
+`download(media_id)` → streaming body with a `verified()` adaptor that
+hashes while streaming (a mismatch is `TransportError::Integrity`,
+retryable), `download_bytes` with a size cap (pre-allocation never trusts
+Meta's reported size beyond 16 MiB), `delete`. Resumable Upload API
+(`/{app_id}/uploads` → `upload:<id>` sessions, `file_offset`, `Authorization:
+OAuth` on every step so the token never sits in a URL) returning a
+`wa_core::ids::UploadHandle` for template `header_handle`s.
 
 ### Templates (`wa_client::templates`)
 
@@ -314,17 +324,58 @@ Logs carry sizes, digests and field names only — never payload values.
   `postgres`, sqlx, embedded migrations, `wa_` table prefix configurable).
 - `store::RedisKvStore` (feature `redis`; CAS via Lua).
 - `sink::{ChannelSink, BroadcastSink, FanoutSink, FilterSink, FnSink,
-  TracingSink}` and `sink::InboxSink` (records messages/statuses into a
-  `ConversationStore`) — feature `sinks`.
+  TracingSink}` — feature `sinks`, generic over the event type, `Debug`
+  redacted. (The inbox sink needs webhook event types, so it lives in the
+  facade: `wa_rs::inbox::InboxSink`.)
+- Postgres: one table-wide version sequence (versions never reused, even
+  after purge); deleted keys leave marker rows purged after 10 minutes;
+  migrations are templates with a validated table prefix and a per-prefix
+  history table, applied under a database-wide lock. **Limitation:** Postgres
+  cannot store U+0000; a payload containing it is refused (memory and Redis
+  accept it).
+- Redis: per-namespace version counter (a per-key counter would leak one key
+  per dedup marker forever); every mutating op is one Lua script. **TLS**
+  (`rediss://`) is not wired: redis-rs uses the process-wide rustls provider,
+  which panics when both aws-lc-rs and ring are linked — pass your own
+  connection with a provider installed at startup.
+- reqwest: errors never carry the request URL; redirects send no `Referer`
+  (it would carry the query to the redirect target); `HTTP(S)_PROXY` is
+  honoured.
 - Live tests are named `live_*`, read `WA_RS_TEST_POSTGRES_URL` /
   `WA_RS_TEST_REDIS_URL`, skip when unset, and **fail** when unset under
   `WA_RS_REQUIRE_LIVE=1` (`just test-live` sets it). Every `KvStore`
-  adapter runs `store::conformance`.
+  adapter runs `store::conformance`, every `ConversationStore` adapter runs
+  `store::conversation_conformance` (including concurrency, collation and
+  real-time expiry under load).
+
+## CMS inbox (`wa_rs::inbox`)
+
+`InboxSink` (an `EventSink<WebhookEvent>`) records inbound messages and
+status updates into a `ConversationStore`; `Inbox` (one per merchant phone
+number, built with that merchant's token) lists conversations and history,
+exposes the 24-hour `CustomerServiceWindow`, and sends replies.
+
+- Keys: business phone number id + contact, where contact is the BSUID
+  when Meta sent one, else the `wa_id`, else (group messages) the group id.
+- Replies to a `wa_id` go to `+<wa_id>` (Meta prepends the business
+  number's country code to numbers without `+`). `Inbox::send` refuses a
+  message not addressed to the conversation's contact.
+- Free-form replies outside the window are refused locally
+  (`customer_service_window`); templates and Direct Send are exempt.
+- A storage failure *after* a successful send is logged, never returned —
+  an error would invite a retry that sends twice.
+- Revokes mark the original `Deleted`; coexistence echoes and history sync
+  are not recorded yet.
 
 ## Typst (`wa-typst`)
 
-Render a Typst source with JSON inputs (`sys.inputs`) to PDF or PNG, with
-bundled fonts so output is identical on every machine. Ships templates for
+Render a Typst source with JSON inputs (`sys.inputs.data`, read with
+`json(bytes(sys.inputs.data))`) to PDF or PNG, with bundled fonts so output
+is byte-identical on every machine. `today()` comes only from
+`Renderer::with_today` (never the system clock). The world is a sandbox: no
+file reads beyond the main source, no packages, no network; PNG size is
+bounded (`MAX_PNG_PIXELS`) and ppi validated before any allocation; the main
+file is always `/main.typ` (typst interns file ids process-wide). Ships templates for
 e-commerce: `invoice`, `receipt` (order confirmation), `voucher` (coupon /
 gift card image for marketing headers). Output is bytes + MIME + filename,
 ready for `media().upload()` and a document/image message or template
