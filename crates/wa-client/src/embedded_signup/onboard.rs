@@ -485,16 +485,14 @@ fn verify_grant(
 }
 
 /// Every phone number id of the WABA, in Meta's order (most recently
-/// onboarded first), read with the business token. Bounded by
-/// [`MAX_WABA_PHONE_NUMBERS`].
+/// onboarded first: `business-phone-numbers/phone-numbers`), read with the
+/// business token. Reads at most [`MAX_WABA_PHONE_NUMBERS`]` + 1` items: the
+/// counter below is the only bound, and it returns before polling again.
 async fn waba_phone_numbers(waba: &Waba) -> Result<Vec<PhoneNumberId>> {
     let query = PhoneNumbersQuery::new()
         .fields(["id"])
         .limit(PHONE_PAGE_SIZE);
-    let mut numbers = pin!(
-        waba.phone_numbers_stream(&query)
-            .take(MAX_WABA_PHONE_NUMBERS + 1)
-    );
+    let mut numbers = pin!(waba.phone_numbers_stream(&query));
     let mut read = 0usize;
     let mut ids: Vec<PhoneNumberId> = Vec::new();
     while let Some(number) = numbers.next().await {
