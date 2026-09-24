@@ -185,24 +185,35 @@ impl Error {
     ///
     /// `false` means Meta provably did nothing — a Graph error on a 4xx
     /// response, a local validation/configuration/crypto error, or a
-    /// connection that never opened — so it is safe to fix and resend.
-    /// `true` for a timeout, a 5xx, an unreadable success response, or
+    /// request that was never built or never connected — so it is safe to
+    /// fix and resend. Storage, sink and webhook errors are `false` too:
+    /// wa-rs raises them before a send, and after one it logs them instead
+    /// of returning them (the inbox records a sent reply without failing).
+    /// `true` for a timeout, a 5xx or any other non-4xx status, an answer
+    /// that arrived but was unreadable or failed an integrity check, or
     /// anything unknown: reconcile with status webhooks (match on
     /// `biz_opaque_callback_data`) before sending again.
     pub fn may_have_been_sent(&self) -> bool {
+        // Exhaustive on purpose: a new variant has to decide here.
         match self {
             Self::Api(e) => e.http_status.is_some_and(|s| s >= 500),
             Self::Http { status, .. } => !(400..500).contains(status),
             Self::Transport(e) => match e {
-                TransportError::Connect(_)
-                | TransportError::Build(_)
-                | TransportError::Integrity(_) => false,
-                // Timeout, Backend, and variants added later.
-                _ => true,
+                TransportError::Connect(_) | TransportError::Build(_) => false,
+                // An integrity failure means a body came back: the request
+                // reached the server.
+                TransportError::Timeout
+                | TransportError::Backend(_)
+                | TransportError::Integrity(_) => true,
             },
             Self::Decode { .. } | Self::Other(_) => true,
             Self::Step { source, .. } => source.may_have_been_sent(),
-            _ => false,
+            Self::Validation(_)
+            | Self::Config(_)
+            | Self::Crypto(_)
+            | Self::Storage(_)
+            | Self::Sink(_)
+            | Self::Webhook(_) => false,
         }
     }
 }
@@ -292,6 +303,20 @@ mod tests {
                 true,
             ),
             (api(Some(400)).in_step("send_code"), false),
+            // Every row below pins one arm a mutation could flip unseen.
+            (http(302), true),
+            (
+                Error::Transport(TransportError::Build("header".into())),
+                false,
+            ),
+            (Error::Transport(TransportError::Integrity("sha256")), true),
+            (CryptoError::Decrypt.into(), false),
+            (
+                StorageError::Backend(anyhow::anyhow!("db down")).into(),
+                false,
+            ),
+            (SinkError::Closed.into(), false),
+            (WebhookError::SignatureMismatch.into(), false),
         ] {
             assert_eq!(err.may_have_been_sent(), sent, "{err}");
         }
