@@ -112,6 +112,14 @@ pub enum WebhookError {
     /// Signed body is not a payload we understand.
     #[error("webhook payload could not be parsed: {0}")]
     Parse(#[source] serde_json::Error),
+    /// Body exceeds the configured size limit (answer `413`).
+    #[error("webhook body of {size} bytes exceeds the {limit}-byte limit")]
+    PayloadTooLarge {
+        /// Body size in bytes.
+        size: usize,
+        /// Configured limit in bytes.
+        limit: usize,
+    },
 }
 
 /// Encryption or decryption failed. Deliberately carries no detail that

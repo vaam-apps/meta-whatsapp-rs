@@ -27,7 +27,7 @@ pub struct ErrorData {
 
 /// A Graph API error, as found under `error` in a response body or in the
 /// `errors` arrays of a webhook.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, thiserror::Error)]
 #[error("Graph API error #{code}: {}{}", self.summary(), self.details().map(|d| format!(" ({d})")).unwrap_or_default())]
 pub struct GraphApiError {
     /// Error code. The only field to branch on.
