@@ -214,7 +214,10 @@ impl Marketing {
     /// `to` may be a phone number, a BSUID or both (the phone number wins).
     /// Sending by BSUID alone turns off delivery optimization for that
     /// message, and a template with max pricing cannot go to a BSUID
-    /// (`131062`).
+    /// (`131062`). A [`Recipient::Group`] is sent as
+    /// `recipient_type: "group"` without a local check: the guide mentions
+    /// group ids in `to`, but the reference only documents `individual`, so
+    /// Meta's answer is the authority.
     ///
     /// Not retried on timeouts: the message may already be on its way.
     pub async fn send(

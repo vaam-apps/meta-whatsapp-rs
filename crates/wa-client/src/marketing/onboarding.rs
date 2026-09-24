@@ -8,9 +8,10 @@
 //! on Cloud API"), `support/error-codes` (MM API section).
 
 use serde::{Deserialize, Serialize};
-use wa_core::Result;
+use wa_core::error::snippet;
 use wa_core::ids::{BusinessId, WabaId};
 use wa_core::paging::Page;
+use wa_core::{Error, Result};
 
 use super::wire_enum;
 use crate::Client;
@@ -202,17 +203,33 @@ impl MarketingAccount {
     /// and so does the `/marketing_messages` fallback to Cloud API for a WABA
     /// whose Terms of Service are unsigned. Replayed on transient errors:
     /// setting the same value twice is harmless.
+    ///
+    /// Meta's example answers `{"id": …}`; a Graph node update may also
+    /// answer `{"success": …}`, so an explicit `"success": false` is an
+    /// error rather than a silent no-op.
     pub async fn set_cloud_api_marketing_disabled(&self, disabled: bool) -> Result<()> {
+        const CONTEXT: &str = "cloud api marketing setting response";
         #[derive(Deserialize)]
-        struct Response {}
-        let _: Response = self
+        struct Response {
+            #[serde(default)]
+            success: Option<bool>,
+        }
+        let response = self
             .client
             .post(self.waba_id.as_str())
             .json(&serde_json::json!({ "disable_marketing_messages_on_cloud_api": disabled }))
             .idempotent(true)
-            .context("cloud api marketing setting response")
-            .send()
+            .context(CONTEXT)
+            .send_raw()
             .await?;
+        let parsed: Response = serde_json::from_slice(&response.body)
+            .map_err(|e| Error::decode(CONTEXT, e, &response.body))?;
+        if parsed.success == Some(false) {
+            return Err(Error::Http {
+                status: response.status.as_u16(),
+                body_snippet: snippet(&response.body),
+            });
+        }
         Ok(())
     }
 }
@@ -287,8 +304,10 @@ impl MarketingBusiness {
     /// completion arrives as an `account_update` webhook
     /// (`MM_LITE_TERMS_SIGNED`).
     ///
-    /// Not retried on timeouts, so a lost response cannot turn into a
-    /// confusing duplicate-request error.
+    /// Not retried on timeouts. The reference says a repeated call returns
+    /// the pending request's id; the guide says it fails with "Your business
+    /// has already sent this request". Until the two agree, a lost response
+    /// is surfaced rather than replayed into a possible error.
     pub async fn request_onboarding(&self, solution_id: Option<&str>) -> Result<OnboardingRequest> {
         self.client
             .post(&format!("{}/onboard_partners_to_mm_lite", self.business_id))

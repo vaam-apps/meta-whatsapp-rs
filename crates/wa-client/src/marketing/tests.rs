@@ -179,6 +179,32 @@ async fn sends_by_bsuid_and_parses_the_documented_response() {
             .map(wa_core::ids::UserId::as_str),
         Some("US.13491208655302741918")
     );
+
+    // The guide's "Sending to a BSUID" request: both identifiers, `to` wins.
+    t.push_json(200, doc_phone_response());
+    client(&t)
+        .marketing("P")
+        .send(
+            &Recipient::PhoneAndUser {
+                phone: "+16505551234".into(),
+                user: "US.13491208655302741918".into(),
+            },
+            &TemplateMessage::new("t", "en_US"),
+            &MarketingOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        t.last_request().unwrap().json(),
+        Some(json!({
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": "+16505551234",
+            "recipient": "US.13491208655302741918",
+            "type": "template",
+            "template": {"name": "t", "language": {"code": "en_US"}}
+        }))
+    );
     assert_eq!(t.remaining(), 0);
 }
 
@@ -407,6 +433,41 @@ async fn cloud_api_marketing_switch_round_trips() {
 }
 
 #[tokio::test]
+async fn cloud_api_marketing_switch_is_replayed_and_rejects_success_false() {
+    // Setting the same value twice is harmless, so a timeout is retried.
+    let t = ScriptedTransport::new();
+    t.push_error(|| TransportError::Timeout);
+    t.push_json(200, json!({"id": "102290129340398"}));
+    retrying_client(&t)
+        .marketing_account("102290129340398")
+        .set_cloud_api_marketing_disabled(false)
+        .await
+        .unwrap();
+    assert_eq!(t.requests().len(), 2);
+    assert_eq!(
+        t.last_request().unwrap().json(),
+        Some(json!({"disable_marketing_messages_on_cloud_api": false}))
+    );
+    assert_eq!(t.remaining(), 0);
+
+    // A Graph node update may answer {"success": ...}; false is not "done".
+    let t = ScriptedTransport::new();
+    t.push_json(200, json!({"success": true}));
+    t.push_json(200, json!({"success": false}));
+    let account = client(&t).marketing_account("W");
+    account
+        .set_cloud_api_marketing_disabled(true)
+        .await
+        .unwrap();
+    let err = account
+        .set_cloud_api_marketing_disabled(true)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Http { status: 200, .. }), "{err}");
+    assert_eq!(t.remaining(), 0);
+}
+
+#[tokio::test]
 async fn business_onboarding_status_parses_the_documented_example() {
     let t = ScriptedTransport::new();
     t.push_json(
@@ -460,6 +521,22 @@ async fn lists_eligible_client_wabas_with_the_documented_filter() {
     );
     assert_eq!(page.data[0].id.as_str(), "46302397361990");
     assert_eq!(page.data[0].name.as_deref(), Some("San Andreas Roofing"));
+    assert_eq!(req.query("after"), None);
+
+    t.push_json(200, json!({"data": []}));
+    client(&t)
+        .marketing_business("19502398688333")
+        .client_wabas_with_status(
+            &[OnboardingStatus::Eligible, OnboardingStatus::Onboarded],
+            Some("QVFI..."),
+        )
+        .await
+        .unwrap();
+    let req = t.last_request().unwrap();
+    assert_eq!(req.query("after").as_deref(), Some("QVFI..."));
+    let filtering: serde_json::Value =
+        serde_json::from_str(&req.query("filtering").unwrap()).unwrap();
+    assert_eq!(filtering[0]["value"], json!(["ELIGIBLE", "ONBOARDED"]));
     assert_eq!(t.remaining(), 0);
 }
 
@@ -489,6 +566,22 @@ async fn intent_api_posts_and_returns_the_request_id() {
         Some("MULTI-PARTNER_SOLUTION_ID")
     );
     assert_eq!(t.remaining(), 0);
+}
+
+#[tokio::test]
+async fn intent_api_is_not_replayed_after_a_timeout() {
+    // The reference says a pending request's id is returned again, the guide
+    // says a second call fails as already sent. With the docs disagreeing, a
+    // lost response is surfaced rather than replayed.
+    let t = ScriptedTransport::new();
+    t.push_error(|| TransportError::Timeout);
+    let err = retrying_client(&t)
+        .marketing_business("B")
+        .request_onboarding(None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Transport(TransportError::Timeout)));
+    assert_eq!(t.requests().len(), 1);
 }
 
 #[tokio::test]
