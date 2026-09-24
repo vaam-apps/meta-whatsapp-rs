@@ -797,6 +797,26 @@ async fn a_rejected_send_removes_the_challenge() {
     assert!(stored(&f).await.is_none());
 }
 
+/// Conventions review #10: the code goes out through `Messages::send`, so
+/// `OutboundMessage::validate` runs on it and an unreadable response gets
+/// the messages module's redacted decode error, not a private copy of both.
+#[tokio::test]
+async fn the_code_is_sent_through_messages_send() {
+    let f = fixture(OtpConfig::default());
+    f.transport.push_json(
+        200,
+        json!({"contacts": [{"input": PHONE, "wa_id": DIGITS}], "messages": []}),
+    );
+    let err = f.otp.issue(&user(), "login").await.unwrap_err();
+    let Error::Decode { context, .. } = &err else {
+        panic!("{err}")
+    };
+    assert_eq!(*context, crate::messages::SEND_CONTEXT);
+    assert!(!format!("{err} {err:?}").contains(DIGITS), "{err:?}");
+    assert!(stored(&f).await.is_some(), "a 2xx may have been delivered");
+    assert_eq!(f.transport.remaining(), 0);
+}
+
 #[tokio::test]
 async fn a_send_that_may_have_arrived_keeps_the_challenge() {
     // Even with retries on, a timed-out send is not replayed (it may have

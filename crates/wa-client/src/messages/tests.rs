@@ -2165,3 +2165,39 @@ fn raw_types_cannot_shadow_envelope_fields() {
         "template.name"
     );
 }
+
+/// Conventions review #10: a send response echoes the recipient's number
+/// (`contacts[].input`, `wa_id`). An unreadable one must not carry it into
+/// the error — neither as the body snippet nor through serde's message,
+/// which quotes offending values.
+#[tokio::test]
+async fn an_unreadable_send_response_never_quotes_the_recipient() {
+    let digits = PHONE.trim_start_matches('+');
+    for body in [
+        // Truncated.
+        format!(r#"{{"contacts":[{{"input":"{PHONE}","wa_id":"{digits}"}}],"messages":"#),
+        // Wrong shapes: serde's message would quote the string it found.
+        format!(r#"{{"contacts":["{PHONE}"],"messages":[{{"id":"wamid.1"}}]}}"#),
+        format!(r#"{{"contacts":[{{"input":"{PHONE}"}}],"messages":["{digits}"]}}"#),
+    ] {
+        let t = ScriptedTransport::new();
+        t.push_bytes(200, "application/json", body.clone());
+        let err = client(&t)
+            .messages("106540352242922")
+            .send(&OutboundMessage::text(phone(), "hi"))
+            .await
+            .unwrap_err();
+        let Error::Decode {
+            context,
+            body_snippet,
+            ..
+        } = &err
+        else {
+            panic!("{body}: {err}")
+        };
+        assert_eq!(*context, "send message response");
+        let shown = format!("{err} {err:?} {body_snippet}");
+        assert!(!shown.contains(digits), "{body}: {shown}");
+        assert_eq!(t.remaining(), 0);
+    }
+}

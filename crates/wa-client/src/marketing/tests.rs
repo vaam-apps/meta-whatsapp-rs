@@ -239,6 +239,30 @@ async fn local_validation_happens_before_any_request() {
     assert!(t.requests().is_empty());
 }
 
+/// Like `Messages::send`: the response names the recipient, so an
+/// unreadable one is reported without its body or serde's quoted values.
+#[tokio::test]
+async fn an_unreadable_send_response_never_quotes_the_recipient() {
+    let t = ScriptedTransport::new();
+    t.push_bytes(
+        200,
+        "application/json",
+        r#"{"contacts":["+16505551234"],"messages":[{"id":"wamid.1"}]}"#,
+    );
+    let err = client(&t)
+        .marketing("P")
+        .send(
+            &Recipient::phone("+16505551234"),
+            &TemplateMessage::new("t", "en"),
+            &MarketingOptions::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Decode { .. }), "{err}");
+    assert!(!format!("{err} {err:?}").contains("6505551234"), "{err:?}");
+    assert_eq!(t.remaining(), 0);
+}
+
 #[tokio::test]
 async fn sends_are_never_replayed_after_a_timeout() {
     let t = ScriptedTransport::new();

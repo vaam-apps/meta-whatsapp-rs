@@ -72,6 +72,7 @@ use wa_core::{Error, Result};
 
 use super::otp_template_message;
 use crate::Client;
+use crate::messages::OutboundMessage;
 use crate::templates::TemplateMessage;
 
 const NAMESPACE: &str = "wa.otp";
@@ -694,7 +695,7 @@ impl OtpService {
 
         let message = otp_template_message(&self.template.name, &self.template.language, &code);
         drop(code);
-        match self.send(&phone, &message).await {
+        match self.send(&phone, message).await {
             Ok(message_id) => {
                 tracing::debug!(challenge = %id, "OTP challenge issued");
                 Ok(IssueOutcome::Sent(Challenge {
@@ -788,57 +789,25 @@ impl OtpService {
         Err(contention("removal"))
     }
 
-    async fn send(&self, phone: &Phone, template: &TemplateMessage) -> Result<MessageId> {
-        // The send body of the authentication pages; built here because the
-        // messages module is developed separately.
-        #[derive(Serialize)]
-        struct Body<'a> {
-            messaging_product: &'static str,
-            #[serde(flatten)]
-            recipient: &'a Recipient,
-            #[serde(rename = "type")]
-            kind: &'static str,
-            template: &'a TemplateMessage,
-        }
-        #[derive(Deserialize)]
-        struct Sent {
-            #[serde(default)]
-            messages: Vec<SentMessage>,
-        }
-        #[derive(Deserialize)]
-        struct SentMessage {
-            id: MessageId,
-        }
-        const CONTEXT: &str = "send OTP message response";
-        // Decoded here rather than with `send()`: its decode error quotes
-        // the body, and this one echoes the recipient's number
-        // (`contacts[].input`), which has no place in an error message.
-        const WITHHELD: &[u8] = b"(withheld: names the recipient)";
-        let response = self
+    /// Send the code with [`Messages::send`](crate::messages::Messages::send):
+    /// the authentication pages' send body, checked by
+    /// [`OutboundMessage::validate`], and a decode error that never quotes
+    /// the response (it names the recipient).
+    async fn send(&self, phone: &Phone, template: TemplateMessage) -> Result<MessageId> {
+        let message = OutboundMessage::template(Recipient::Phone(phone.e164()), template);
+        let sent = self
             .client
-            .post_at(&[self.phone_number_id.as_str(), "messages"])
-            .json(&Body {
-                messaging_product: "whatsapp",
-                recipient: &Recipient::Phone(phone.e164()),
-                kind: "template",
-                template,
-            })
-            .context(CONTEXT)
-            .send_raw()
+            .messages(self.phone_number_id.clone())
+            .send(&message)
             .await?;
-        let sent: Sent = serde_json::from_slice(&response.body)
-            .map_err(|e| Error::decode(CONTEXT, e, WITHHELD))?;
         sent.messages
             .into_iter()
             .next()
             .map(|m| m.id)
             .ok_or_else(|| {
-                Error::decode(
-                    CONTEXT,
-                    <serde_json::Error as serde::de::Error>::custom(
-                        "no `messages[0].id` in the response",
-                    ),
-                    WITHHELD,
+                crate::request::withheld_decode_error(
+                    crate::messages::SEND_CONTEXT,
+                    "no `messages[0].id` in the response",
                 )
             })
     }

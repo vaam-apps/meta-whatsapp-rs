@@ -193,7 +193,8 @@ impl Marketing {
             .post_at(&[self.phone_number_id.as_str(), "marketing_messages"])
             .json(&body)
             .context("send marketing message response")
-            .send()
+            // The response names the recipient: see `Messages::send`.
+            .send_private()
             .await
     }
 }

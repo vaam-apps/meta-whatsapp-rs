@@ -397,6 +397,15 @@ impl GraphRequest {
         decode_json(context, &resp.body)
     }
 
+    /// [`Self::send`] for a response that names people (the send
+    /// responses): a decode failure carries neither the body nor serde's
+    /// message, see [`decode_json_private`].
+    pub(crate) async fn send_private<T: DeserializeOwned>(self) -> Result<T> {
+        let context = self.context;
+        let resp = self.send_raw().await?;
+        decode_json_private(context, &resp.body)
+    }
+
     /// Send and require `{"success": true}`.
     pub async fn send_success(self) -> Result<()> {
         #[derive(serde::Deserialize)]
@@ -562,6 +571,37 @@ pub(crate) fn decode_error(resp: &HttpResponse) -> Error {
 /// Decode a JSON body, attaching context and a snippet on failure.
 pub(crate) fn decode_json<T: DeserializeOwned>(context: &'static str, body: &[u8]) -> Result<T> {
     serde_json::from_slice(body).map_err(|e| Error::decode(context, e, body))
+}
+
+/// A decode error for a response that names people: `why` replaces serde's
+/// message, and the body snippet is a placeholder.
+pub(crate) fn withheld_decode_error(context: &'static str, why: impl fmt::Display) -> Error {
+    Error::decode(
+        context,
+        <serde_json::Error as serde::de::Error>::custom(why),
+        b"(withheld: the response names the recipient)",
+    )
+}
+
+/// Decode a body that names people — send responses echo the recipient's
+/// phone number in `contacts[]`. On failure neither the body nor serde's
+/// message (which quotes the offending value) reaches the error, only the
+/// error category and position.
+pub(crate) fn decode_json_private<T: DeserializeOwned>(
+    context: &'static str,
+    body: &[u8],
+) -> Result<T> {
+    serde_json::from_slice(body).map_err(|e| {
+        withheld_decode_error(
+            context,
+            format_args!(
+                "{:?} error at line {} column {} (details withheld)",
+                e.classify(),
+                e.line(),
+                e.column()
+            ),
+        )
+    })
 }
 
 #[cfg(test)]
