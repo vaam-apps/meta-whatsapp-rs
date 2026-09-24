@@ -9,7 +9,14 @@
 //!   compiled file — the skill's own `examples/*.rs` or a
 //!   `crates/wa-rs/examples/*.rs` program: all its non-blank lines, trimmed,
 //!   each paragraph contiguous in the file and the paragraphs in order (the
-//!   README rule of `tests/readme.rs`, plus order).
+//!   README rule of `tests/readme.rs`, plus order). Every fence is
+//!   ```` ``` ```` with a known language, so no Rust block escapes as
+//!   ```` ```rs ````, ```` ```rust,ignore ````, `~~~` or unlabeled; and the
+//!   example files hide no uncompiled code a block could quote (block
+//!   comments, `macro_rules!`, any `cfg` but `cfg(test)`).
+//! - **Discovery**: the installer finds no `SKILL.md` but `skills/<name>/`
+//!   and internal ones in agent directories (a root `SKILL.md` would hide
+//!   every other skill).
 //! - **Frontmatter** the `npx skills` CLI accepts: `name` is lowercase
 //!   words joined by hyphens and equals the directory, `description` is a
 //!   double-quoted string of at most 1024 characters that says when to load
@@ -23,8 +30,11 @@
 //!   `#anchor` into a Markdown file names one of its headings.
 //! - **Names**: every backticked Rust path, type, function, constant or
 //!   `snake_case` name in the prose is defined in `crates/**/*.rs`, unless
-//!   `skills/.allowlist` lists it (placeholders, other crates' names); every
-//!   backticked `wa-rs-*` skill name exists.
+//!   `skills/.allowlist` lists it (placeholders, other crates' names); a
+//!   `Type::member` must be a variant, field or item of that type's own
+//!   bodies (or of a trait it implements), not merely of the same file;
+//!   every backticked `wa-rs-*` skill name exists. A method called on a
+//!   variable (`inbox.reply(..)`) is only checked to exist on some type.
 //! - **Shape**: each skill is stamped under its title, stays short, links
 //!   its example files, and is routed to from the `wa-rs` hub and from
 //!   `skills/README.md`.
@@ -400,6 +410,107 @@ fn developer_skills_are_internal() {
     assert!(failures.is_empty(), "\n{failures}");
 }
 
+/// Directories the `npx skills` CLI (1.7) searches besides `skills/`: its
+/// `AGENT_PROJECT_SKILL_DIRS`.
+const AGENT_SKILL_DIRS: &[&str] = &[
+    ".agents/skills",
+    ".claude/skills",
+    ".cline/skills",
+    ".codebuddy/skills",
+    ".codex/skills",
+    ".commandcode/skills",
+    ".continue/skills",
+    ".factory/skills",
+    ".github/skills",
+    ".goose/skills",
+    ".grok/skills",
+    ".iflow/skills",
+    ".junie/skills",
+    ".kilo/skills",
+    ".kilocode/skills",
+    ".kimchi/skills",
+    ".kiro/skills",
+    ".minimax/skills",
+    ".mux/skills",
+    ".neovate/skills",
+    ".opencode/skills",
+    ".openhands/skills",
+    ".pi/skills",
+    ".posit/assistant/skills",
+    ".qoder/skills",
+    ".roo/skills",
+    ".trae/skills",
+    ".windsurf/skills",
+    ".zcode/skills",
+    ".zencoder/skills",
+];
+
+/// The `SKILL.md` files the CLI finds under `dir`: each subdirectory that
+/// has one, else its subdirectories, down to `depth` levels.
+fn discovered_skill_files(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    for child in sorted_dir(dir).into_iter().filter(|p| p.is_dir()) {
+        let md = child.join("SKILL.md");
+        if md.is_file() {
+            out.push(md);
+        } else if depth > 1 {
+            discovered_skill_files(&child, depth - 1, out);
+        }
+    }
+}
+
+/// `npx skills add vaam-apps/wa-rs` must offer exactly `skills/<name>/`.
+/// A `SKILL.md` at the repository root makes the CLI offer that one skill
+/// and nothing else; one in any top-level directory, deeper under
+/// `skills/`, or in an agent directory without `internal: true` is offered
+/// to consumers although no check here reads it.
+#[test]
+fn the_installer_finds_no_other_skill_files() {
+    let root = repo();
+    let mut failures = String::new();
+    let mut stray = Vec::new();
+    if root.join("SKILL.md").is_file() {
+        stray.push(root.join("SKILL.md"));
+    }
+    discovered_skill_files(&root, 1, &mut stray);
+    let mut consumer = Vec::new();
+    discovered_skill_files(&root.join("skills"), 3, &mut consumer);
+    for md in consumer {
+        if md.parent().and_then(Path::parent) != Some(root.join("skills").as_path()) {
+            stray.push(md);
+        }
+    }
+    for path in stray {
+        writeln!(
+            failures,
+            "{}: the installer would offer it (or, at the root, only it); consumer skills \
+             live at skills/<name>/SKILL.md",
+            rel(&path)
+        )
+        .unwrap();
+    }
+    for dir in AGENT_SKILL_DIRS {
+        let mut found = Vec::new();
+        discovered_skill_files(&root.join(dir), 3, &mut found);
+        for md in found {
+            let internal = frontmatter(&read(&md)).is_ok_and(|entries| {
+                entries
+                    .iter()
+                    .any(|(k, v)| k == "metadata.internal" && v == "true")
+            });
+            if !internal {
+                writeln!(
+                    failures,
+                    "{}: add `metadata:` / `  internal: true`, or `npx skills add \
+                     vaam-apps/wa-rs` offers it to consumers",
+                    rel(&md)
+                )
+                .unwrap();
+            }
+        }
+    }
+    assert!(failures.is_empty(), "\n{failures}");
+}
+
 // ─── Stamp and shape ─────────────────────────────────────────────────────
 
 /// Whether `line` is `> **Verified against wa-rs <40 hex> (<YYYY-MM-DD>).**…`.
@@ -530,6 +641,97 @@ fn every_skill_example_is_compiled() {
          {missing:?}"
     );
     assert!(on_disk.len() >= 15, "only {} skill examples", on_disk.len());
+}
+
+/// Constructs of a skill example file whose code is never compiled, so a
+/// skill could quote it as if it were: block comments, `macro_rules!`, and
+/// any `cfg` but `cfg(test)` (`just test` builds the examples with every
+/// feature, so `cfg(not(feature = …))` and `cfg(any())` never build).
+fn uncompiled_code(source: &str) -> Vec<String> {
+    let mut problems = Vec::new();
+    for (i, line) in source.lines().enumerate() {
+        let n = i + 1;
+        if line.contains("/*") {
+            problems.push(format!("line {n}: a block comment"));
+        }
+        if line.contains("macro_rules!") {
+            problems.push(format!(
+                "line {n}: `macro_rules!` (its body is not compiled as written)"
+            ));
+        }
+        let mut rest = line;
+        while let Some(at) = rest.find("cfg(") {
+            if !rest[at..].starts_with("cfg(test)") {
+                problems.push(format!("line {n}: a `cfg` other than `cfg(test)`"));
+            }
+            rest = &rest[at + 4..];
+        }
+    }
+    problems
+}
+
+#[test]
+fn example_files_hide_no_uncompiled_code() {
+    let mut failures = String::new();
+    for skill in consumer_skills() {
+        for example in rust_files(&skill.dir.join("examples")) {
+            for problem in uncompiled_code(&read(&example)) {
+                writeln!(failures, "{}: {problem}", rel(&example)).unwrap();
+            }
+        }
+    }
+    assert!(failures.is_empty(), "\n{failures}");
+}
+
+/// Languages a fence in `skills/**/*.md` may be labeled with.
+const FENCE_LANGUAGES: &[&str] = &[
+    "rust", "toml", "text", "js", "bash", "sh", "markdown", "json", "sql", "yaml", "html",
+];
+
+/// Problems with the code fences of `markdown`: every block is fenced with
+/// ```` ``` ```` and a known language, so a Rust block cannot escape the
+/// excerpt check as ```` ```rs ````, ```` ```rust,ignore ````, an unlabeled
+/// block or a `~~~` fence.
+fn fence_problems(markdown: &str) -> Vec<String> {
+    let mut problems = Vec::new();
+    let mut open: Option<usize> = None;
+    for (i, line) in markdown.lines().enumerate() {
+        let n = i + 1;
+        let trimmed = line.trim();
+        if trimmed.starts_with("~~~") {
+            problems.push(format!("line {n}: `~~~` fence (use ```)"));
+            continue;
+        }
+        let Some(info) = trimmed.strip_prefix("```") else {
+            continue;
+        };
+        match open {
+            Some(_) if info.is_empty() => open = None,
+            Some(start) => problems.push(format!(
+                "line {n}: fence opened inside the block of line {start}"
+            )),
+            None if FENCE_LANGUAGES.contains(&info) => open = Some(n),
+            None => problems.push(format!(
+                "line {n}: fence label `{info}` (one of {FENCE_LANGUAGES:?}; Rust is exactly \
+                 `rust`, and every `rust` block is checked as an excerpt)"
+            )),
+        }
+    }
+    if let Some(start) = open {
+        problems.push(format!("line {start}: unterminated fence"));
+    }
+    problems
+}
+
+#[test]
+fn code_fences_are_labeled() {
+    let mut failures = String::new();
+    for (path, markdown) in skill_markdown() {
+        for problem in fence_problems(&markdown) {
+            writeln!(failures, "{}: {problem}", rel(&path)).unwrap();
+        }
+    }
+    assert!(failures.is_empty(), "\n{failures}");
 }
 
 /// Trimmed, non-blank lines.
@@ -792,6 +994,306 @@ struct SourceFile {
     /// Lines that are exactly one identifier (macro invocation arguments).
     lone: HashSet<String>,
     has_macro_rules: bool,
+    /// Members declared in the body of a type: variants of `enum Name {…}`,
+    /// fields of `struct Name {…}`, `fn`/`const`/`type` items of
+    /// `impl … Name {…}` and `trait Name {…}`.
+    scoped: HashMap<String, HashSet<String>>,
+    /// Traits implemented by a type (`impl Trait for Name`): the trait's
+    /// provided methods are members too.
+    traits: HashMap<String, HashSet<String>>,
+    /// Types declared inside a macro invocation (`open_enum! { enum … }`):
+    /// the macro adds members the source does not spell out.
+    macro_types: HashSet<String>,
+}
+
+/// `text` without comments, and with the contents of string, raw string and
+/// char literals removed, so that braces and keywords inside them do not
+/// count when brace-matching type bodies.
+fn code_only(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let at = |i: usize| chars.get(i).copied();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while let Some(c) = at(i) {
+        let boundary = i == 0 || !at(i - 1).is_some_and(is_ident_char);
+        match c {
+            '/' if at(i + 1) == Some('/') => {
+                while at(i).is_some_and(|c| c != '\n') {
+                    i += 1;
+                }
+            }
+            '/' if at(i + 1) == Some('*') => {
+                let mut depth = 0;
+                while let Some(c) = at(i) {
+                    if c == '/' && at(i + 1) == Some('*') {
+                        depth += 1;
+                        i += 2;
+                    } else if c == '*' && at(i + 1) == Some('/') {
+                        depth -= 1;
+                        i += 2;
+                        if depth == 0 {
+                            break;
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+                out.push(' ');
+            }
+            // r"…", r#"…"#, br"…", br#"…"#
+            'r' | 'b'
+                if boundary && {
+                    let start = if c == 'b' && at(i + 1) == Some('r') {
+                        i + 2
+                    } else {
+                        i + 1
+                    };
+                    (c == 'r' || start == i + 2) && {
+                        let mut j = start;
+                        while at(j) == Some('#') {
+                            j += 1;
+                        }
+                        at(j) == Some('"')
+                    }
+                } =>
+            {
+                let mut j = if c == 'b' { i + 2 } else { i + 1 };
+                let mut hashes = 0;
+                while at(j) == Some('#') {
+                    hashes += 1;
+                    j += 1;
+                }
+                j += 1; // the opening quote
+                while let Some(c) = at(j) {
+                    if c == '"' && (1..=hashes).all(|k| at(j + k) == Some('#')) {
+                        j += 1 + hashes;
+                        break;
+                    }
+                    j += 1;
+                }
+                out.push_str("\"\"");
+                i = j;
+            }
+            '"' => {
+                i += 1;
+                while let Some(c) = at(i) {
+                    i += 1;
+                    if c == '\\' {
+                        i += 1;
+                    } else if c == '"' {
+                        break;
+                    }
+                }
+                out.push_str("\"\"");
+            }
+            // A char literal ('x', '\n', '\u{1F44D}'), not a lifetime ('a).
+            '\'' if at(i + 1) == Some('\\') || at(i + 2) == Some('\'') => {
+                i += if at(i + 1) == Some('\\') { 2 } else { 1 };
+                while at(i).is_some_and(|c| c != '\'') {
+                    i += 1;
+                }
+                i += 1;
+                out.push_str("''");
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// End (exclusive) of the `<…>` starting at `start`; `->` inside does not
+/// close it.
+fn skip_angles(toks: &[Token], start: usize) -> usize {
+    let mut depth = 0usize;
+    let mut i = start;
+    while let Some(token) = toks.get(i) {
+        match token {
+            Token::Punct('<') => depth += 1,
+            Token::Punct('>') if i > 0 && toks[i - 1] != Token::Punct('-') => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return i + 1;
+                }
+            }
+            Token::Punct('{' | ';') => return i,
+            _ => {}
+        }
+        i += 1;
+    }
+    i
+}
+
+/// The last segment of the type path at `i` (`&`, `dyn`, `mut` and
+/// lifetimes skipped), and the index after it and its generics. `None` for
+/// a macro placeholder (`$name`), a tuple or anything else.
+fn type_path(toks: &[Token], mut i: usize) -> Option<(String, usize)> {
+    loop {
+        match toks.get(i) {
+            Some(Token::Punct('&')) => i += 1,
+            Some(Token::Punct('\'')) => i += 2,
+            Some(Token::Ident(w)) if w == "dyn" || w == "mut" => i += 1,
+            _ => break,
+        }
+    }
+    let mut last = ident(toks.get(i))?.to_owned();
+    i += 1;
+    while toks.get(i) == Some(&Token::Punct(':')) && toks.get(i + 1) == Some(&Token::Punct(':')) {
+        ident(toks.get(i + 2))?.clone_into(&mut last);
+        i += 3;
+    }
+    if toks.get(i) == Some(&Token::Punct('<')) {
+        i = skip_angles(toks, i);
+    }
+    Some((last, i))
+}
+
+/// The self type and the trait of an `impl` header (`toks` starts after
+/// `impl`).
+fn impl_header(toks: &[Token]) -> Option<(String, Option<String>)> {
+    let start = if toks.first() == Some(&Token::Punct('<')) {
+        skip_angles(toks, 0)
+    } else {
+        0
+    };
+    let (first, next) = type_path(toks, start)?;
+    if ident(toks.get(next)) == Some("for") {
+        let (self_ty, _) = type_path(toks, next + 1)?;
+        Some((self_ty, Some(first)))
+    } else {
+        Some((first, None))
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Body {
+    Enum,
+    Struct,
+    Items,
+}
+
+/// What [`scoped_members`] finds; see the fields of [`SourceFile`] with
+/// the same names.
+#[derive(Default)]
+struct Scopes {
+    members: HashMap<String, HashSet<String>>,
+    traits: HashMap<String, HashSet<String>>,
+    macro_types: HashSet<String>,
+}
+
+/// Type members by brace-matched body, see [`SourceFile::scoped`].
+fn scoped_members(toks: &[Token]) -> Scopes {
+    let mut members: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut traits: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut macro_types = HashSet::new();
+    let mut depth = 0usize;
+    // (body depth, kind, type name)
+    let mut open: Vec<(usize, Body, String)> = Vec::new();
+    let mut pending: Option<(Body, String)> = None;
+    // Depths at which a macro invocation's body starts.
+    let mut invocations: Vec<usize> = Vec::new();
+    let mut invocation_next = false;
+    for (i, token) in toks.iter().enumerate() {
+        match token {
+            Token::Punct('{' | '(' | '[') if invocation_next => {
+                invocation_next = false;
+                if *token == Token::Punct('{') {
+                    depth += 1;
+                    invocations.push(depth);
+                } else {
+                    // `name!(…)` / `name![…]`: parentheses are not tracked;
+                    // treat what follows as inside until the next `;`.
+                    invocations.push(depth + 1);
+                }
+            }
+            Token::Punct('{') => {
+                depth += 1;
+                if let Some((body, name)) = pending.take() {
+                    if !invocations.is_empty() {
+                        macro_types.insert(name.clone());
+                    }
+                    open.push((depth, body, name));
+                }
+            }
+            Token::Punct('}') => {
+                if open.last().is_some_and(|(d, _, _)| *d == depth) {
+                    open.pop();
+                }
+                while invocations.last().is_some_and(|d| *d >= depth) {
+                    invocations.pop();
+                }
+                depth = depth.saturating_sub(1);
+            }
+            Token::Punct(';') => {
+                pending = None;
+                if invocations.last() == Some(&(depth + 1)) {
+                    invocations.pop();
+                }
+            }
+            Token::Punct('!') => {
+                invocation_next = i > 0
+                    && matches!(&toks[i - 1], Token::Ident(w) if w != "macro_rules")
+                    && matches!(toks.get(i + 1), Some(Token::Punct('{' | '(' | '[')));
+            }
+            Token::Ident(word) => {
+                let next = ident(toks.get(i + 1));
+                match (word.as_str(), next) {
+                    ("enum", Some(name)) => pending = Some((Body::Enum, name.to_owned())),
+                    ("struct" | "union", Some(name)) => {
+                        pending = Some((Body::Struct, name.to_owned()));
+                    }
+                    ("trait", Some(name)) => pending = Some((Body::Items, name.to_owned())),
+                    ("impl", _) => {
+                        if let Some((self_ty, trait_name)) = impl_header(&toks[i + 1..]) {
+                            if let Some(trait_name) = trait_name {
+                                traits
+                                    .entry(self_ty.clone())
+                                    .or_default()
+                                    .insert(trait_name);
+                            }
+                            pending = Some((Body::Items, self_ty));
+                        }
+                    }
+                    _ => {}
+                }
+                if let Some((d, body, name)) = open.last()
+                    && *d == depth
+                    && let Some(member) = body_member(*body, toks, i)
+                {
+                    members
+                        .entry(name.clone())
+                        .or_default()
+                        .insert(member.to_owned());
+                }
+            }
+            Token::Punct(_) => {}
+        }
+    }
+    Scopes {
+        members,
+        traits,
+        macro_types,
+    }
+}
+
+/// The member the identifier at `toks[i]` declares, directly inside a
+/// `body` (a variant, a field, or the name after `fn`/`const`/`type`).
+fn body_member(body: Body, toks: &[Token], i: usize) -> Option<&str> {
+    let word = ident(toks.get(i))?;
+    let prev = i.checked_sub(1).and_then(|p| toks.get(p));
+    match body {
+        Body::Enum => matches!(prev, Some(Token::Punct('{' | ',' | ']'))).then_some(word),
+        Body::Struct => (toks.get(i + 1) == Some(&Token::Punct(':'))
+            && toks.get(i + 2) != Some(&Token::Punct(':'))
+            && prev != Some(&Token::Punct(':')))
+        .then_some(word),
+        Body::Items => match word {
+            "fn" | "const" | "type" => ident(toks.get(i + 1)),
+            _ => None,
+        },
+    }
 }
 
 impl SourceFile {
@@ -874,9 +1376,27 @@ impl SourceFile {
                 Token::Punct(_) => {}
             }
         }
+        let scopes = scoped_members(&tokens(&code_only(text)));
+        file.scoped = scopes.members;
+        file.traits = scopes.traits;
+        file.macro_types = scopes.macro_types;
         file
     }
 }
+
+/// Members every type may be named with in prose: derived or blanket trait
+/// methods the scope parser does not see.
+const DERIVED_MEMBERS: &[&str] = &[
+    "default",
+    "clone",
+    "to_string",
+    "to_owned",
+    "fmt",
+    "eq",
+    "hash",
+    "serialize",
+    "deserialize",
+];
 
 /// Everything `crates/**/*.rs` defines, plus the compiled examples of the
 /// skill being checked (`extra`): its prose may name the helpers they
@@ -955,8 +1475,41 @@ impl Index {
         self.any(|f| f.decls.contains(name) || f.heads.contains(name) || f.reexports.contains(name))
     }
 
+    /// The members declared in the bodies of `head` (and of the traits it
+    /// implements), when its source declares them all: `None` for a type
+    /// without a body in the source, or one a macro invocation declares.
+    fn scoped_members(&self, head: &str) -> Option<HashSet<&str>> {
+        if self.all().any(|f| f.macro_types.contains(head)) {
+            return None;
+        }
+        let mut found = false;
+        let mut members = HashSet::new();
+        let mut traits = HashSet::new();
+        for file in self.all() {
+            if let Some(m) = file.scoped.get(head) {
+                found = true;
+                members.extend(m.iter().map(String::as_str));
+            }
+            if let Some(t) = file.traits.get(head) {
+                traits.extend(t.iter().map(String::as_str));
+            }
+        }
+        for file in self.all() {
+            for t in &traits {
+                if let Some(m) = file.scoped.get(*t) {
+                    members.extend(m.iter().map(String::as_str));
+                }
+            }
+        }
+        found.then_some(members)
+    }
+
     /// Whether `member` is a method, field, variant or constant of `head`.
     fn member(&self, head: &str, member: &str) -> bool {
+        if let Some(members) = self.scoped_members(head) {
+            return members.contains(member) || DERIVED_MEMBERS.contains(&member);
+        }
+        // Macro-generated types: whatever the files around them define.
         let mut files: Vec<&SourceFile> = self
             .all()
             .filter(|f| f.decls.contains(head) || f.impls.contains(head))
@@ -967,6 +1520,10 @@ impl Index {
                 .all()
                 .filter(|f| f.has_macro_rules && f.lone.contains(head))
                 .collect();
+        } else if self.all().any(|f| f.macro_types.contains(head)) {
+            // `open_enum! { enum Name {…} }`: the macro, in another file,
+            // adds members (`Other`, `as_str`).
+            files.extend(self.all().filter(|f| f.has_macro_rules));
         }
         files.iter().any(|f| {
             f.fns.contains(member)
@@ -1042,14 +1599,20 @@ impl Index {
                 return Err(format!("`{item}` is not visible there"));
             }
         }
+        // Each member must belong to the segment before it:
+        // `VerifyOutcome::CoolingDown` fails although `CoolingDown` is a
+        // variant of `IssueOutcome` in the same file.
+        let mut owner = *item;
         for member in members {
-            if !(self.function(member)
-                || self.declared(member)
-                || self.constant(member)
-                || self.word(member))
-            {
-                return Err(format!("`{member}` is not defined"));
+            let ok = if owner.starts_with(|c: char| c.is_ascii_uppercase()) {
+                self.member(owner, member)
+            } else {
+                self.function(member) || self.declared(member) || self.constant(member)
+            };
+            if !ok {
+                return Err(format!("`{owner}` has no member `{member}`"));
             }
+            owner = member;
         }
         Ok(())
     }
@@ -1384,6 +1947,19 @@ fn the_checks_reject_known_bad_input() {
         "client.messages(pnid).send(&msg)",
         "DEFAULT_TIMEOUT",
         "wa-rs-errors",
+        // Members by type: variants, fields, inherent and trait methods,
+        // macro-generated types and derives.
+        "VerifyOutcome::Verified",
+        "IssueOutcome::RateLimited",
+        "OtpConfig::namespace",
+        "wa_rs::client::authentication::OtpConfig::namespace",
+        "wa_rs::inbox::Inbox::window_is_open",
+        "Error::may_have_been_sent",
+        "ErrorKind::is_rejected_before_processing",
+        "MemoryKvStore::get",
+        "PhoneNumberId::new",
+        "PreferenceValue::Other",
+        "ProfileUpdate::default()",
     ] {
         assert!(!bad(good), "{good}");
     }
@@ -1397,6 +1973,12 @@ fn the_checks_reject_known_bad_input() {
         "wa-rs-messaging",
         "TokenSafe",
         "biz_opaque_callback",
+        // A member of a sibling type in the same file, or of another type.
+        "VerifyOutcome::RateLimited",
+        "IssueOutcome::Verified",
+        "wa_rs::client::authentication::VerifyOutcome::CoolingDown",
+        "wa_rs::inbox::Inbox::publish",
+        "OtpConfig::pepper",
     ] {
         assert!(bad(wrong), "{wrong}");
     }
@@ -1414,4 +1996,43 @@ fn the_checks_reject_known_bad_input() {
         )
         .is_none()
     );
+}
+
+#[test]
+fn the_code_checks_reject_known_bad_input() {
+    // Fences.
+    assert!(fence_problems("```rust\nlet a = 1;\n```\n").is_empty());
+    for bad_fence in [
+        "```rs\nlet a = 1;\n```\n",
+        "```rust,ignore\nlet a = 1;\n```\n",
+        "```\nlet a = 1;\n```\n",
+        "~~~rust\nlet a = 1;\n~~~\n",
+        "```rust\nlet a = 1;\n",
+    ] {
+        assert!(!fence_problems(bad_fence).is_empty(), "{bad_fence}");
+    }
+
+    // Example files: code the gate would quote without compiling it.
+    assert!(uncompiled_code("#[cfg(test)]\nmod tests {}\n").is_empty());
+    for hidden in [
+        "/*\nlet a = 1;\n*/\n",
+        "#[cfg(any())]\nfn f() {}\n",
+        "#[cfg(not(feature = \"postgres\"))]\nfn f() {}\n",
+        "macro_rules! skip { ($($t:tt)*) => {}; }\n",
+    ] {
+        assert!(!uncompiled_code(hidden).is_empty(), "{hidden}");
+    }
+
+    // Scope parsing survives braces and keywords inside literals.
+    let members = scoped_members(&tokens(&code_only(
+        "enum A { X, Y(u8) }\nfn f() { let s = \"} enum B { Z }\"; let c = '{'; }\nimpl A { fn g() {} }\n",
+    )))
+    .members;
+    assert_eq!(
+        members
+            .get("A")
+            .map(|m| m.iter().map(String::as_str).collect::<BTreeSet<_>>()),
+        Some(BTreeSet::from(["X", "Y", "g"]))
+    );
+    assert!(!members.contains_key("B"));
 }

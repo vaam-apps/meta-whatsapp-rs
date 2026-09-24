@@ -84,11 +84,17 @@ Say in the PR description what happened to each, with a link or
   (add a `#[path]` line for a new file; the test fails until you do).
 - A ```` ```rust ```` block in a skill is an excerpt of such a file (or of
   `crates/wa-rs/examples/*.rs`): edit the example, run `just fmt`, then
-  copy the lines. The test names the block that drifted.
+  copy the lines. The test names the block that drifted. Label every
+  fence with its language (Rust is exactly `rust`); keep example files
+  free of block comments, `macro_rules!` and any `cfg` but `cfg(test)`,
+  whose code a block could quote without it ever compiling.
 - Backticked Rust names in the prose must exist in `crates/` or in the
-  skill's own examples; `skills/.allowlist` lists the few that are
+  skill's own examples, and `Type::member` must belong to that type;
+  `skills/.allowlist` lists the few that are
   another crate's or not Rust at all. Relative links stay inside the
   skill (each is installed on its own); link anything else on GitHub.
+- No `SKILL.md` outside `skills/<name>/` and `.claude/skills/<name>/`:
+  the installer would offer it (a root one hides every other skill).
 - `just skills-check` (part of `just ci`) checks that every stamp's commit
   exists and is an ancestor of HEAD.
 - Developer skills in `.claude/skills/` carry `metadata: internal: true`

@@ -117,16 +117,29 @@ there. The rules:
 `just ci` runs, on every change:
 
 - `crates/wa-rs/tests/skills.rs` (in `just test`): every
-  `skills/*/examples/*.rs` compiles and its tests pass; every Rust block is
-  a verbatim excerpt of a compiled file; frontmatter parses the way the
-  `npx skills` CLI parses it (quoted descriptions, `name` = directory,
-  consumer skills never `internal`, developer skills always); relative
-  links resolve and stay inside the skill; links into this repository and
-  their anchors exist; every backticked Rust name exists in `crates/`
-  (`skills/.allowlist` lists the placeholders and other crates' names);
-  every skill is stamped, short, and listed here and in the `wa-rs` hub.
+  `skills/*/examples/*.rs` compiles and its tests pass, and hides no code
+  that is never compiled (no block comments, `macro_rules!` or `cfg`
+  but the tests' `#[cfg(test)]`); every Rust block is a verbatim excerpt
+  of a compiled file,
+  and every fence carries a known language, so no Rust escapes the check
+  as an `rs` or `rust,ignore` fence, a `~~~` one or an unlabeled block;
+  frontmatter parses the way
+  the `npx skills` CLI parses it (quoted descriptions, `name` = directory,
+  consumer skills never `internal`, developer skills always); the
+  installer finds no other `SKILL.md` (a root one would hide every
+  skill); relative links resolve and stay inside the skill; links into
+  this repository and their anchors exist; every backticked Rust name
+  exists in `crates/` (`skills/.allowlist` lists the placeholders and
+  other crates' names), and the last segment of a path must be a variant,
+  field or item of the type before it, not just of the same file; every
+  skill is stamped, short, and listed
+  here and in the `wa-rs` hub.
 - `just skills-check`: every stamp's commit exists and is an ancestor of
   the checked-out commit.
+
+What no check can prove: that the prose's *semantics* are right (a real
+constant with a wrong value, a real method called on the wrong type
+through a variable, `inbox.publish()`). Reviews do that.
 
 To see what the installer offers from a checkout (developer skills must
 not appear): `npx -y skills add <path-to-checkout> --list`.
