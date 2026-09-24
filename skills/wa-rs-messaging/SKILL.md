@@ -39,9 +39,10 @@ messages.send(&OutboundMessage::new(to, Image::new(media_id).caption("Your vouch
   are shortcuts. Full list: [references/message-types.md](references/message-types.md).
 - **Local validation first.** `send` checks every documented limit and fails
   with `Error::Validation(v)` whose `v.field` is the JSON path
-  (`interactive.action.buttons[3]`) — nothing was sent. For templates it only
-  checks the name: call `template.validate()?` yourself to check coupon,
-  carousel and MPM limits before sending.
+  (`interactive.action.buttons[3]`) — nothing was sent. Templates get the
+  full send-time checks (`TemplateMessage::validate`: name, language, and
+  coupon, carousel and MPM limits); what depends on the approved definition
+  (parameter counts) is only checked by Meta (`132000`).
 - **Not idempotent.** A timeout or 5xx is returned, not replayed (see `wa-rs`).
   Correlate with status webhooks via `callback_data` before re-sending.
 - Outside the 24-hour window only templates go through

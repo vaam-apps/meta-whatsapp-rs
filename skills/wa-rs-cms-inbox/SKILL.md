@@ -132,26 +132,25 @@ returned**: the message is already out, and an error would invite a retry
 that sends it twice. So never retry a `reply` that returned `Ok`, and treat a
 transport timeout from `reply` as "may have been sent" (see `wa-rs`).
 
-### Addressing, and the `wa_id` caveat
+### Addressing
 
 `reply` addresses by the key: a contact containing `.` is a BSUID
-(`recipient`), all digits (optionally `+`-prefixed) a phone number (`to`),
-anything else a group. **Caveat (as of 91431ae):** a conversation keyed by a
-bare `wa_id` is sent to `to` *without* `+`, and Meta documents that it then
-prepends your business number's country code. For such keys use `send` with
-an explicit `+`:
+(`recipient`), all digits (optionally `+`-prefixed) a phone number, always
+sent as `to: "+<digits>"` — Meta prepends *your business number's* country
+code to a number without `+`, which would deliver the reply to someone else.
+Anything else is a group.
+
+`send` is how you add a quoted reply (`reply_to`), callback data or a Direct
+Send category. Build the recipient with `inbox.recipient(&key)`; a message
+addressed to anyone else is refused (`Error::Validation` on `recipient`), so
+a conversation can't be used to message someone outside it:
 
 ```rust
 use wa_rs::client::messages::OutboundMessage;
-use wa_rs::core::recipient::Recipient;
 
-let to = Recipient::phone(format!("+{}", key.contact));
-inbox.send(&key, OutboundMessage::new(to, Text::new(body)).reply_to(quoted_wamid)).await?;
+let msg = OutboundMessage::new(inbox.recipient(&key), Text::new(body)).reply_to(quoted_wamid);
+inbox.send(&key, msg).await?;
 ```
-
-`send` is also how you add a quoted reply (`reply_to`), callback data or a
-Direct Send category. Its recipient **must** be the conversation's contact —
-this is not checked, so build it from the key.
 
 ## Storage: memory or Postgres
 

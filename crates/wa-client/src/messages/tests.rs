@@ -1159,14 +1159,16 @@ fn address_messages_match_the_docs() {
 #[test]
 fn bsuid_template_and_contact_info_request_match_the_docs() {
     // business-scoped-user-ids, "Using templates": BSUID only, no `to`.
+    // (The page's `<TEMPLATE_NAME>` placeholder is not a valid template
+    // name, which send-time validation now rejects; a real name stands in.)
     assert_wire(
         &OutboundMessage::template(
             Recipient::user(BSUID),
-            TemplateMessage::new("<TEMPLATE_NAME>", "<TEMPLATE_LANGUAGE>"),
+            TemplateMessage::new("order_update", "en_US"),
         ),
         &json!({
           "messaging_product": "whatsapp", "recipient_type": "individual", "recipient": BSUID, "type": "template",
-          "template": {"name": "<TEMPLATE_NAME>", "language": {"code": "<TEMPLATE_LANGUAGE>"}}
+          "template": {"name": "order_update", "language": {"code": "en_US"}}
         }),
     );
     // Same page, "Using interactive messages".

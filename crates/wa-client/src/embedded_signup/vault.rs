@@ -48,9 +48,9 @@
 //! Anyone holding the vault key and the store. Key bytes live in
 //! [`SecretBytes`] (zeroed on drop, never printed); so do the serialized
 //! plaintexts this module builds. Copies made outside this module are not
-//! covered: the AES key schedule inside `aes-gcm` (built without its
-//! `zeroize` feature), the token string inside [`AccessToken`] once handed
-//! out, and the HTTP response body the token first arrived in.
+//! covered: the token string inside [`AccessToken`] once handed out, and
+//! the HTTP response body the token first arrived in. (The AES key schedule
+//! is wiped too: the workspace builds `aes-gcm` with its `zeroize` feature.)
 //!
 //! # Who may write the index
 //!

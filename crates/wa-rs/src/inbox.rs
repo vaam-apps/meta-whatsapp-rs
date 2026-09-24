@@ -14,7 +14,10 @@
 //! Meta sent one — every messages webhook carries `user_id` since April
 //! 2026 — else the `wa_id`, else, for group messages, the group id. BSUIDs
 //! (`CC.digits`, e.g. `US.1349…`) always contain a `.`; phone numbers never
-//! do, which is how [`Inbox::reply`] picks the addressing mode.
+//! do, which is how [`Inbox::reply`] picks the addressing mode. A `wa_id` is
+//! the full international number without `+`; replies go to `+<wa_id>`,
+//! because Meta prepends the *business* number's country code to a number
+//! sent without `+` — the reply would reach a different person.
 //!
 //! **The 24-hour window.** Free-form replies are only accepted within 24
 //! hours of the customer's last message; [`Inbox::reply`] checks the store
@@ -306,15 +309,29 @@ impl Inbox {
             .await
     }
 
+    /// The recipient a message to this conversation must be addressed to
+    /// (build [`OutboundMessage`]s for [`Inbox::send`] with it).
+    pub fn recipient(&self, key: &ConversationKey) -> Recipient {
+        recipient_for(key)
+    }
+
     /// Like [`Inbox::reply`], for a fully built message (context/quoted
-    /// reply, Direct Send `category`, callback data). The message's
-    /// recipient must be the conversation's contact.
+    /// reply, Direct Send `category`, callback data). The message must be
+    /// addressed to [`Inbox::recipient`] of `key`; anything else is refused,
+    /// so a conversation can't be used to message someone outside it.
     pub async fn send(
         &self,
         key: &ConversationKey,
         message: OutboundMessage,
     ) -> Result<SendResponse> {
         self.check_key(key)?;
+        if message.recipient != recipient_for(key) {
+            return Err(ValidationError::new(
+                "recipient",
+                "must be the conversation's contact (use Inbox::recipient)",
+            )
+            .into());
+        }
         let exempt =
             matches!(message.content, MessageContent::Template(_)) || message.category.is_some();
         if !exempt && !self.window(key).await?.is_open(self.clock.now()) {
@@ -374,15 +391,15 @@ impl Inbox {
 }
 
 /// Addressing mode for a conversation contact (see the [module docs](self)):
-/// BSUIDs contain a `.`, phone numbers are digits (optionally `+`-prefixed),
-/// anything else is a group id.
+/// BSUIDs contain a `.`, phone numbers are digits (optionally `+`-prefixed)
+/// and are always sent as `+<digits>`, anything else is a group id.
 fn recipient_for(key: &ConversationKey) -> Recipient {
     let c = key.contact.as_str();
     let digits = c.strip_prefix('+').unwrap_or(c);
     if c.contains('.') {
         Recipient::User(UserId::new(c))
     } else if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
-        Recipient::phone(c)
+        Recipient::phone(format!("+{digits}"))
     } else {
         Recipient::group(c)
     }
@@ -593,9 +610,11 @@ mod tests {
             recipient_for(&k("US.13491208655302741918")),
             Recipient::user("US.13491208655302741918")
         );
+        // A wa_id is sent with `+`: without it Meta prepends the business
+        // number's country code and the reply reaches someone else.
         assert_eq!(
             recipient_for(&k("16505551234")),
-            Recipient::phone("16505551234")
+            Recipient::phone("+16505551234")
         );
         assert_eq!(
             recipient_for(&k("+16505551234")),
@@ -714,6 +733,59 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn send_refuses_a_message_addressed_outside_the_conversation() {
+        let store = Arc::new(MemoryConversationStore::new());
+        let clock = ManualClock::new(datetime!(2025-10-09 08:00 UTC));
+        let t = ScriptedTransport::new();
+        let inbox = inbox(&t, store, &clock);
+        let key = inbox.key("US.1");
+        let stranger = OutboundMessage::template(
+            Recipient::phone("+15550000000"),
+            TemplateMessage::new("promo", "en_US"),
+        );
+        let err = inbox.send(&key, stranger).await.unwrap_err();
+        assert!(matches!(&err, Error::Validation(v) if v.field == "recipient"));
+        assert!(t.requests().is_empty());
+        t.push_json(200, sent("wamid.ok"));
+        let ok = OutboundMessage::template(
+            inbox.recipient(&key),
+            TemplateMessage::new("promo", "en_US"),
+        );
+        inbox.send(&key, ok).await.unwrap();
+        assert_eq!(t.requests().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_wa_id_conversation_is_answered_with_a_plus() {
+        let store = Arc::new(MemoryConversationStore::new());
+        let clock = ManualClock::new(datetime!(2025-10-09 08:00 UTC));
+        let sink = InboxSink::new(store.clone());
+        deliver_all(
+            &sink,
+            inbound("wamid.in", 1_760_000_000, None, Some("16505551234"), "hi"),
+        )
+        .await;
+        clock.set(datetime!(2025-10-09 10:00 UTC));
+        let t = ScriptedTransport::new();
+        t.push_json(200, sent("wamid.out"));
+        let inbox = inbox(&t, store, &clock);
+        inbox
+            .reply(
+                &inbox.key("16505551234"),
+                MessageContent::Text(Text {
+                    body: "hello".into(),
+                    preview_url: None,
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            t.last_request().unwrap().json().unwrap()["to"],
+            "+16505551234"
+        );
     }
 
     #[tokio::test]
