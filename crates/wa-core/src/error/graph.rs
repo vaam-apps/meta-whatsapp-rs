@@ -134,8 +134,8 @@ pub enum ErrorKind {
     Permission,
 
     // ── Throttling ────────────────────────────────────────────────────────
-    /// `4` (app), `80007` (WABA), `130429` (throughput), `133016`
-    /// (registration attempts): back off and retry.
+    /// `4` (app), `80007` (WABA), `130429` (throughput): back off and
+    /// retry.
     RateLimited,
     /// `131048`: sending restricted after too many messages were flagged as
     /// spam. Retrying does not help; improve quality.
@@ -154,8 +154,9 @@ pub enum ErrorKind {
     CountryRestricted,
 
     // ── Request shape ─────────────────────────────────────────────────────
-    /// `100`, `131008`, `131009`, `131021`, `135000`, `33`: missing, misspelled
-    /// or invalid parameter.
+    /// `100`, `131008`, `131009`, `131021`, `135000`, `33`, and the In-App
+    /// Signup request errors `2494166`–`2494179`: missing, misspelled or
+    /// invalid parameter.
     InvalidParameter,
     /// `131051`: message type not supported.
     UnsupportedMessageType,
@@ -217,18 +218,29 @@ pub enum ErrorKind {
     FlowUnavailable,
 
     // ── Phone number lifecycle ────────────────────────────────────────────
-    /// `131045`, `133000`, `133006`, `133010`, `133015`, `131037`: number not
-    /// registered/verified, deregistration pending, or display name not
-    /// approved.
+    /// `131045`, `133000`, `133006`, `133010`, `133015`, `131037`, `136024`:
+    /// number not registered/verified (or already verified), deregistration
+    /// pending, display name not approved. `133016`: too many
+    /// (de)registration attempts — Meta locks the number for 72 h, so this is
+    /// deliberately *not* [`ErrorKind::RateLimited`] (no automatic retry).
     Registration,
     /// `133005`, `133008`, `133009`: two-step verification PIN wrong, or
     /// guessed too often/fast.
     TwoStepVerification,
-    /// `2593107`, `2593108`: coexistence contact/history sync not allowed
-    /// (already done, or outside the 24h window after onboarding).
+    /// `2593107`, `2593108`, `2593109`: coexistence contact/history sync not
+    /// allowed (already done, outside the 24h window after onboarding, or
+    /// history sharing turned off by the business).
     SyncNotAllowed,
     /// `1752041`: onboarding request already made by a partner.
     DuplicateOnboarding,
+
+    // ── Resources ─────────────────────────────────────────────────────────
+    /// `2494164`: the referenced object (e.g. an In-App Signup) does not
+    /// exist.
+    NotFound,
+    /// `2494165`: the API is not enabled for this account (e.g. In-App
+    /// Signup on this WABA).
+    FeatureNotAvailable,
 
     // ── Billing ───────────────────────────────────────────────────────────
     /// `131042`, `134011`: payment method or payments ToS problem.
@@ -249,13 +261,25 @@ impl ErrorKind {
         match code {
             0 | 190 => Self::Authentication,
             3 | 10 | 200..=299 | 131005 => Self::Permission,
-            4 | 80007 | 130429 | 133016 => Self::RateLimited,
+            4 | 80007 | 130429 => Self::RateLimited,
             131048 => Self::SpamRateLimited,
             131056 => Self::PairRateLimited,
             131064 => Self::ClassificationLimitReached,
             368 | 131031 => Self::AccountRestricted,
             130497 => Self::CountryRestricted,
-            33 | 100 | 131008 | 131009 | 131021 | 135000 => Self::InvalidParameter,
+            // 2494166–2494179: In-App Signup request errors (unknown/missing
+            // placeholder, ToS not/already accepted, ToS URL not allowed,
+            // non-https website URL).
+            33
+            | 100
+            | 131008
+            | 131009
+            | 131021
+            | 135000
+            | 2494166..=2494168
+            | 2494176
+            | 2494177
+            | 2494179 => Self::InvalidParameter,
             131051 => Self::UnsupportedMessageType,
             131047 => Self::CustomerServiceWindowClosed,
             131049 => Self::EcosystemEngagementLimit,
@@ -280,10 +304,14 @@ impl ErrorKind {
                 Self::TemplateRejected
             }
             132068 | 132069 => Self::FlowUnavailable,
-            131037 | 131045 | 133000 | 133006 | 133010 | 133015 => Self::Registration,
+            131037 | 131045 | 133000 | 133006 | 133010 | 133015 | 133016 | 136024 => {
+                Self::Registration
+            }
             133005 | 133008 | 133009 => Self::TwoStepVerification,
-            2593107 | 2593108 => Self::SyncNotAllowed,
+            2593107..=2593109 => Self::SyncNotAllowed,
             1752041 => Self::DuplicateOnboarding,
+            2494164 => Self::NotFound,
+            2494165 => Self::FeatureNotAvailable,
             131042 | 134011 => Self::Payment,
             1 | 2 | 131000 | 131016 | 131057 | 133004 | 2494100 => Self::ServiceUnavailable,
             _ => Self::Unknown,
@@ -385,6 +413,12 @@ mod tests {
             (132001, K::TemplateNotFound),
             (132015, K::TemplatePaused),
             (133005, K::TwoStepVerification),
+            (133016, K::Registration),
+            (136024, K::Registration),
+            (2593109, K::SyncNotAllowed),
+            (2494164, K::NotFound),
+            (2494165, K::FeatureNotAvailable),
+            (2494177, K::InvalidParameter),
             (2494100, K::ServiceUnavailable),
             (999999999, K::Unknown),
         ] {
@@ -393,6 +427,7 @@ mod tests {
         assert!(!K::EcosystemEngagementLimit.is_retryable());
         assert!(!K::SpamRateLimited.is_retryable());
         assert!(K::PairRateLimited.is_rejected_before_processing());
+        assert!(!K::Registration.is_retryable(), "133016 locks for 72h");
         assert!(!K::ServiceUnavailable.is_rejected_before_processing());
     }
 }
