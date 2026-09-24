@@ -254,6 +254,11 @@ fn mutate(value: &mut Value, path: &str) {
 
 fn leaf_paths(value: &Value, path: &str, out: &mut Vec<String>) {
     match value {
+        // Either would leave a field of the input type unchecked.
+        Value::Null => panic!("{path}: null in the fixture; set every optional field"),
+        Value::Array(items) if items.is_empty() => {
+            panic!("{path}: empty list in the fixture; give it at least one item")
+        }
         Value::Array(items) => {
             for (i, item) in items.iter().enumerate() {
                 leaf_paths(item, &format!("{path}/{i}"), out);
