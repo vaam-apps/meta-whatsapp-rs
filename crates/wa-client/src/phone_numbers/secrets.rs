@@ -1,18 +1,16 @@
 //! Secret-bearing inputs of the phone number lifecycle.
 //!
-//! `wa_core::secret` has no type for a two-step verification PIN or a
-//! registration code yet, and this crate may not add a dependency on
-//! `secrecy`, so these are small local newtypes. What they guarantee is the
-//! part that matters for us: `Debug` never prints the value, there is no
-//! `Display`, no `Serialize` (a PIN cannot end up in a JSON log by accident),
-//! and reading the value takes an explicit `expose_secret()`. Moving them to
-//! `wa_core::secret` (on `SecretString`, which zeroizes) is a pending core
-//! change request.
+//! Both are held in [`SecretBytes`] (zeroed on drop). What they guarantee:
+//! `Debug` never prints the value, there is no `Display`, no `Serialize` (a
+//! PIN cannot end up in a JSON log by accident), and reading the value takes
+//! an explicit `expose_secret()`. The request body that carries the value to
+//! Meta is an ordinary buffer; that copy is outside this type's reach.
 
 use std::fmt;
 
 use wa_core::Result;
 use wa_core::error::ValidationError;
+use wa_core::secret::SecretBytes;
 
 /// A two-step verification PIN: exactly six ASCII digits.
 ///
@@ -20,14 +18,15 @@ use wa_core::error::ValidationError;
 /// documents the PIN as "a 6-digit number"; anything else is rejected here,
 /// before a request is made, because a wrong-format PIN still counts against
 /// the 10-registrations-per-72-hours limit.
-#[derive(Clone, PartialEq, Eq)]
-pub struct TwoStepPin(String);
+#[derive(Clone)]
+pub struct TwoStepPin(SecretBytes);
 
 impl TwoStepPin {
     /// Validate and wrap a PIN.
     pub fn new(pin: impl Into<String>) -> Result<Self> {
-        let pin = pin.into();
-        if pin.len() == 6 && pin.bytes().all(|b| b.is_ascii_digit()) {
+        let pin = SecretBytes::new(pin.into().into_bytes());
+        let digits = pin.expose_secret();
+        if digits.len() == 6 && digits.iter().all(u8::is_ascii_digit) {
             Ok(Self(pin))
         } else {
             Err(ValidationError::new("pin", "must be exactly 6 digits").into())
@@ -36,9 +35,17 @@ impl TwoStepPin {
 
     /// Read the PIN. Keep the borrow short; never log it.
     pub fn expose_secret(&self) -> &str {
-        &self.0
+        ascii(&self.0)
     }
 }
+
+impl PartialEq for TwoStepPin {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.expose_secret() == other.0.expose_secret()
+    }
+}
+
+impl Eq for TwoStepPin {}
 
 impl fmt::Debug for TwoStepPin {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -51,14 +58,22 @@ impl fmt::Debug for TwoStepPin {
 /// Meta shows the SMS as `WhatsApp code 123-830` and asks for the code
 /// "without the hyphen"; [`VerificationCode::new`] drops hyphens so the
 /// string a user copies works as-is, then requires digits only.
-#[derive(Clone, PartialEq, Eq)]
-pub struct VerificationCode(String);
+#[derive(Clone)]
+pub struct VerificationCode(SecretBytes);
 
 impl VerificationCode {
     /// Normalize (drop `-`) and validate a code.
     pub fn new(code: impl Into<String>) -> Result<Self> {
-        let code: String = code.into().chars().filter(|c| *c != '-').collect();
-        if !code.is_empty() && code.bytes().all(|b| b.is_ascii_digit()) {
+        let raw = SecretBytes::new(code.into().into_bytes());
+        let code = SecretBytes::new(
+            raw.expose_secret()
+                .iter()
+                .copied()
+                .filter(|b| *b != b'-')
+                .collect::<Vec<u8>>(),
+        );
+        let digits = code.expose_secret();
+        if !digits.is_empty() && digits.iter().all(u8::is_ascii_digit) {
             Ok(Self(code))
         } else {
             Err(ValidationError::new("code", "must be the numeric verification code").into())
@@ -67,14 +82,28 @@ impl VerificationCode {
 
     /// Read the code. Keep the borrow short; never log it.
     pub fn expose_secret(&self) -> &str {
-        &self.0
+        ascii(&self.0)
     }
 }
+
+impl PartialEq for VerificationCode {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.expose_secret() == other.0.expose_secret()
+    }
+}
+
+impl Eq for VerificationCode {}
 
 impl fmt::Debug for VerificationCode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("VerificationCode([REDACTED])")
     }
+}
+
+/// The text of a secret validated as ASCII digits on construction, so the
+/// fallback is unreachable.
+fn ascii(bytes: &SecretBytes) -> &str {
+    std::str::from_utf8(bytes.expose_secret()).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -87,6 +116,7 @@ mod tests {
         for bad in ["12345", "1234567", "12345a", "", "１２３４５６", " 23456"] {
             let err = TwoStepPin::new(bad).unwrap_err();
             assert!(err.to_string().contains("`pin`"), "{bad:?}: {err}");
+            assert!(!err.to_string().contains(bad) || bad.is_empty(), "{err}");
         }
     }
 
@@ -95,6 +125,7 @@ mod tests {
         let pin = TwoStepPin::new("581063").unwrap();
         assert_eq!(format!("{pin:?}"), "TwoStepPin([REDACTED])");
         assert_eq!(pin.expose_secret(), "581063");
+        assert_eq!(pin, TwoStepPin::new("581063").unwrap());
         let code = VerificationCode::new("123-830").unwrap();
         assert_eq!(format!("{code:?}"), "VerificationCode([REDACTED])");
         assert_eq!(code.expose_secret(), "123830");

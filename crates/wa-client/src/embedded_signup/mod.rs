@@ -64,17 +64,18 @@
 //! // 2. The page posts back. Redeem the state first: exactly once, and only
 //! //    for the merchant your own authentication says is calling.
 //! let state = SignupState::parse(posted_state)?;
-//! match sessions.consume(&state).await? {
-//!     Some(tenant) if tenant == merchant_id => {}
-//!     _ => return Ok(()), // expired, replayed, or someone else's attempt
+//! if !sessions.redeem(&state, merchant_id).await? {
+//!     return Ok(()); // expired, replayed, or someone else's attempt
 //! }
 //!
-//! // 3. Onboard: exchange the code (30-second, single use), verify the WABA
-//! //    and number, store the token encrypted, subscribe, register.
+//! // 3. Onboard: exchange the code (30-second, single use), verify the WABA,
+//! //    its owner and the number with Meta, store the token encrypted,
+//! //    subscribe, register.
 //! let event = EmbeddedSignupEvent::from_json(posted_event)?;
 //! let request = OnboardingRequest::from_event(SignupCode::new(posted_code)?, &event)?
 //!     .register_with_pin(TwoStepPin::new("<6 digits you keep>")?);
 //! let onboarded = es.onboard(&request, &vault).await?;
+//! // Record onboarded.waba_id against merchant_id in your own tables.
 //!
 //! // 4. Any time later: act as the merchant.
 //! if let Some(stored) = vault.get(&onboarded.waba_id).await? {
@@ -88,39 +89,55 @@
 //! # Onboarding steps, and which are safe to repeat
 //!
 //! [`EmbeddedSignup::onboard`] fails with [`wa_core::Error::Step`] naming the
-//! step (constants in [`steps`]):
+//! step (constants in [`steps`]), in this order:
 //!
 //! | Step | What | Repeatable? |
 //! | --- | --- | --- |
 //! | `exchange_code` | `GET oauth/access_token` | **No**: the code is single-use and lives 30 s |
-//! | `debug_token` | inspect the token; resolve/verify the WABA | yes (read-only) |
-//! | `resolve_phone_number` | verify/resolve the number via the WABA | yes (read-only) |
-//! | `store_token` | encrypt into the [`TokenVault`] | yes (overwrites) |
+//! | `debug_token` | `GET debug_token` on the new token | yes (read-only) |
+//! | `verify_assets` | WABA ∈ the token's grants; `GET /{WABA}?fields=owner_business_info`; the claimed number ∈ `GET /{WABA}/phone_numbers` | yes (read-only) |
+//! | `store_token` | encrypt into the [`TokenVault`], indexing every number of the WABA | yes (overwrites) |
 //! | `subscribe_app` | `POST /{WABA}/subscribed_apps` | yes, with the same override argument |
 //! | `register_phone` | `POST /{PHONE}/register` | yes, but counts against 10 per 72 h |
 //!
-//! The token is stored **before** subscribing and registering, and only
-//! after Meta confirmed which WABA it grants. That order is deliberate:
-//! because the code cannot be exchanged twice, a failure in the last two
-//! steps (a wrong PIN on a number that already has two-step verification,
-//! a callback override that fails verification, a Meta hiccup) would
-//! otherwise lose the token and send the merchant through the whole flow
-//! again. Fix the cause and call [`EmbeddedSignup::resume`] with the same
-//! request: it loads the stored token and redoes only those two steps.
+//! **Retrying a failed `onboard` is not safe**: the code is spent by the
+//! first step. The token is stored **before** subscribing and registering,
+//! and only after Meta confirmed which WABA it grants. That order is
+//! deliberate: a failure in the last two steps (a wrong PIN on a number that
+//! already has two-step verification, a callback override that fails
+//! verification, a Meta hiccup) would otherwise lose the token and send the
+//! merchant through the whole flow again. Fix the cause and call
+//! [`EmbeddedSignup::resume`] with the same request: it loads the stored
+//! token (`load_token`), checks the request against what onboarding
+//! verified (`verify_assets`), and redoes only those two steps.
 //!
 //! Meta does not document an "already registered" success response for
 //! `register` (its "already registered or invalid state" example shares
-//! code `100` with other errors), so none is treated as success.
+//! code `100` with other errors), so none is treated as success. `133016`
+//! (too many (de)registrations: the number is locked for 72 hours) is
+//! [`wa_core::ErrorKind::Registration`] and is never retried automatically.
 //!
 //! # The session info is a claim
 //!
 //! The ids in the message event come from the browser. Before anything is
-//! stored, `onboard` requires the WABA to be one the exchanged token was
-//! granted (`debug_token`, `granular_scopes`), and the phone number to be
-//! one of that WABA's numbers. Otherwise a merchant could post their own
-//! code with another merchant's ids and overwrite that merchant's vault
-//! entry or phone routing. `business_id` cannot be checked this way and is
-//! stored as reported.
+//! stored, `onboard` requires the token to be valid and issued to this app
+//! (a `debug_token` answer without `app_id` is refused), the WABA to be one
+//! the exchanged token was granted (`granular_scopes`), and the phone number
+//! to be one of that WABA's numbers as Meta lists them to the business
+//! token. Otherwise a merchant could post their own code with another
+//! merchant's ids and overwrite that merchant's vault entry or phone
+//! routing. The claimed `business_id` cannot be checked this way; it is not
+//! used, and the WABA's owner business as Meta reports it is stored instead
+//! (it is what credit line sharing is keyed on).
+//!
+//! What this cannot decide for you: whether *your* tenant may own the WABA.
+//! The vault is keyed by WABA and knows no tenants. If one Meta business
+//! portfolio legitimately holds WABAs that two of your tenants onboarded,
+//! either tenant's token is granted both, and the last onboarding of a WABA
+//! replaces its vault entry (with a token Meta confirmed can manage it) by
+//! the time `onboard` returns. Keep your own tenant → WABA mapping, and
+//! decide what a second tenant onboarding an already-mapped
+//! [`Onboarded::waba_id`] means for your product.
 //!
 //! # Coexistence (WhatsApp Business app users)
 //!

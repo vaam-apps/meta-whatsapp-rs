@@ -8,7 +8,7 @@ use time::OffsetDateTime;
 use wa_core::Result;
 use wa_core::error::ValidationError;
 use wa_core::ids::{AppId, WabaId};
-use wa_core::secret::AccessToken;
+use wa_core::secret::{AccessToken, SecretBytes};
 
 /// The permission whose `target_ids` are the WABAs a token can manage.
 pub const WHATSAPP_BUSINESS_MANAGEMENT: &str = "whatsapp_business_management";
@@ -18,16 +18,17 @@ pub const WHATSAPP_BUSINESS_MESSAGING: &str = "whatsapp_business_messaging";
 /// The exchangeable token code from `FB.login`'s `authResponse.code`.
 ///
 /// Single use, and valid for 30 seconds (`embedded-signup/implementation`):
-/// exchange it as soon as it reaches your server. `Debug` is redacted; the
-/// value is only readable through [`Self::expose_secret`].
+/// exchange it as soon as it reaches your server. Held in [`SecretBytes`]
+/// (zeroed on drop); `Debug` is redacted; the value is only readable through
+/// [`Self::expose_secret`].
 #[derive(Clone)]
-pub struct SignupCode(String);
+pub struct SignupCode(SecretBytes);
 
 impl SignupCode {
     /// Wrap a code. Rejects empty strings.
     pub fn new(code: impl Into<String>) -> Result<Self> {
-        let code = code.into();
-        if code.trim().is_empty() {
+        let code = SecretBytes::new(code.into().into_bytes());
+        if secret_str(&code).trim().is_empty() {
             return Err(ValidationError::new("code", "required").into());
         }
         Ok(Self(code))
@@ -35,8 +36,14 @@ impl SignupCode {
 
     /// Read the code. Keep the borrow short; never log it.
     pub fn expose_secret(&self) -> &str {
-        &self.0
+        secret_str(&self.0)
     }
+}
+
+/// The text of a [`SecretBytes`] built from a `String`. Always valid UTF-8
+/// by construction, so the fallback is unreachable.
+fn secret_str(bytes: &SecretBytes) -> &str {
+    std::str::from_utf8(bytes.expose_secret()).unwrap_or_default()
 }
 
 impl fmt::Debug for SignupCode {
@@ -246,7 +253,9 @@ mod tests {
     fn code_and_token_are_redacted() {
         let code = SignupCode::new("AQBhlXsctMxJYbwbrpybxlo9").unwrap();
         assert_eq!(format!("{code:?}"), "SignupCode([REDACTED])");
+        assert_eq!(code.expose_secret(), "AQBhlXsctMxJYbwbrpybxlo9");
         assert!(SignupCode::new(" ").is_err());
+        assert!(SignupCode::new("").is_err());
         let t: BusinessToken =
             serde_json::from_str(r#"{"access_token": "EAAAN6tcBzAUBOwt", "token_type": "bearer"}"#)
                 .unwrap();

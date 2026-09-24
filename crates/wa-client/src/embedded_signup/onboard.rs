@@ -17,31 +17,43 @@ use super::token::{SignupCode, TokenDebug, WHATSAPP_BUSINESS_MANAGEMENT};
 use super::vault::{StoredBusinessToken, TokenVault};
 use crate::Client;
 use crate::phone_numbers::{DataLocalizationRegion, TwoStepPin};
-use crate::waba::{CallbackOverride, PhoneNumbersQuery};
+use crate::waba::{CallbackOverride, PhoneNumbersQuery, Waba};
 
 /// Stable step names used in [`wa_core::Error::Step`] by
-/// [`EmbeddedSignup::onboard`] and [`EmbeddedSignup::resume`].
+/// [`EmbeddedSignup::onboard`] and [`EmbeddedSignup::resume`]. The first six
+/// are the ones `docs/architecture.md` lists for `onboard`, in order.
 pub mod steps {
     /// `GET oauth/access_token`.
     pub const EXCHANGE_CODE: &str = "exchange_code";
-    /// `GET debug_token`, and checking the WABA against its grants.
+    /// `GET debug_token`.
     pub const DEBUG_TOKEN: &str = "debug_token";
-    /// Checking (or finding) the phone number among the WABA's numbers.
-    pub const RESOLVE_PHONE_NUMBER: &str = "resolve_phone_number";
+    /// Checking the browser's claims against Meta: the WABA among the
+    /// token's grants, its owner business, the phone number among the WABA's
+    /// numbers. In [`EmbeddedSignup::resume`](super::EmbeddedSignup::resume),
+    /// checking the request against what onboarding verified.
+    pub const VERIFY_ASSETS: &str = "verify_assets";
     /// Writing the token to the vault.
     pub const STORE_TOKEN: &str = "store_token";
-    /// Reading the token back from the vault ([`EmbeddedSignup::resume`](super::EmbeddedSignup::resume)).
-    pub const LOAD_TOKEN: &str = "load_token";
     /// `POST /{WABA_ID}/subscribed_apps`.
     pub const SUBSCRIBE_APP: &str = "subscribe_app";
     /// `POST /{PHONE_NUMBER_ID}/register`.
     pub const REGISTER_PHONE: &str = "register_phone";
+    /// Reading the token back from the vault ([`EmbeddedSignup::resume`](super::EmbeddedSignup::resume)
+    /// only).
+    pub const LOAD_TOKEN: &str = "load_token";
 }
 
 use steps::{
-    DEBUG_TOKEN, EXCHANGE_CODE, LOAD_TOKEN, REGISTER_PHONE, RESOLVE_PHONE_NUMBER, STORE_TOKEN,
-    SUBSCRIBE_APP,
+    DEBUG_TOKEN, EXCHANGE_CODE, LOAD_TOKEN, REGISTER_PHONE, STORE_TOKEN, SUBSCRIBE_APP,
+    VERIFY_ASSETS,
 };
+
+/// Most phone numbers read from one WABA while verifying. Not a Meta limit:
+/// it stops a pagination that never ends (cycling cursors) from looping for
+/// ever; a WABA with more numbers fails closed.
+const MAX_WABA_PHONE_NUMBERS: usize = 1_000;
+/// Page size for that read (the edge's maximum).
+const PHONE_PAGE_SIZE: u32 = 100;
 
 /// What to onboard, and how.
 ///
@@ -51,8 +63,9 @@ use steps::{
 pub struct OnboardingRequest {
     /// The exchangeable code from `FB.login`.
     pub code: SignupCode,
-    /// Asset ids from the `FINISH*` message event (claims, verified during
-    /// onboarding).
+    /// Asset ids from the `FINISH*` message event. Claims: the WABA and phone
+    /// number are verified during onboarding; `business_id` is not used (the
+    /// WABA's owner is read from Meta instead).
     pub session: SessionInfo,
     /// Which completion the event reported, when known.
     pub finish_kind: Option<FinishKind>,
@@ -127,7 +140,7 @@ impl OnboardingRequest {
                 "required to register the number",
             ));
         }
-        if self.register && self.finish_kind == Some(FinishKind::WhatsappBusinessAppOnboarding) {
+        if self.register && self.is_coexistence() {
             return Err(ValidationError::new(
                 "register",
                 "numbers onboarded with the WhatsApp Business app are already registered",
@@ -161,9 +174,16 @@ impl OnboardingRequest {
 pub struct Onboarded {
     /// The verified WABA.
     pub waba_id: WabaId,
-    /// The verified (or resolved) phone number, if any.
+    /// The verified (or, when the session info named none, the WABA's most
+    /// recently onboarded) phone number: the one registered. `None` when no
+    /// number was claimed and none was needed.
     pub phone_number_id: Option<PhoneNumberId>,
-    /// The business portfolio, as reported by the session info.
+    /// Every number of the WABA, as indexed in the vault for
+    /// [`TokenVault::get_by_phone_number`]; `phone_number_id` first.
+    pub phone_number_ids: Vec<PhoneNumberId>,
+    /// The WABA's owner business portfolio, as Meta reports it
+    /// (`owner_business_info`). The session info's `business_id` is never
+    /// used: it comes from the browser.
     pub business_id: Option<BusinessId>,
     /// Which completion the flow reported, when known.
     pub finish_kind: Option<FinishKind>,
@@ -183,14 +203,30 @@ impl Onboarded {
     }
 }
 
+/// What `verify_assets` established with Meta.
+struct VerifiedAssets {
+    waba_id: WabaId,
+    business_id: Option<BusinessId>,
+    phone_number_id: Option<PhoneNumberId>,
+    phone_number_ids: Vec<PhoneNumberId>,
+}
+
 impl EmbeddedSignup {
     /// Onboard a business that completed Embedded Signup: exchange the code,
-    /// verify the WABA and phone number, store the token in `vault`,
-    /// subscribe the app, and register the number if requested.
+    /// inspect the token, verify the WABA, owner and phone number with Meta,
+    /// store the token in `vault`, subscribe the app, and register the number
+    /// if requested.
     ///
     /// Input errors are reported before any request. Every later failure is
     /// an [`Error::Step`] naming the step; see the [module docs](super) for
-    /// what each step does and which can be repeated.
+    /// what each step does and which can be repeated. **Do not retry a
+    /// failed `onboard`**: the code is spent. After `store_token` succeeded,
+    /// use [`Self::resume`].
+    ///
+    /// This does not know which of *your* tenants is asking: redeem the
+    /// [`SignupState`](super::SignupState) for the calling tenant first
+    /// ([`SignupSessions::redeem`](super::SignupSessions::redeem)), then
+    /// record [`Onboarded::waba_id`] against that tenant.
     pub async fn onboard(
         &self,
         request: &OnboardingRequest,
@@ -209,22 +245,19 @@ impl EmbeddedSignup {
             .debug_token(&token.access_token)
             .await
             .map_err(|e| e.in_step(DEBUG_TOKEN))?;
-        let waba_id = verify_grant(&debug, request.session.primary_waba_id(), &self.app.app_id)
-            .map_err(|e| Error::from(e).in_step(DEBUG_TOKEN))?;
         done.push(DEBUG_TOKEN);
 
         let business = self.client.with_token(token.access_token.clone());
-        let claimed_phone = request.session.phone_number_id.as_ref();
-        let phone_number_id =
-            if claimed_phone.is_some() || request.register || request.is_coexistence() {
-                let phone = resolve_phone_number(&business, &waba_id, claimed_phone)
-                    .await
-                    .map_err(|e| e.in_step(RESOLVE_PHONE_NUMBER))?;
-                done.push(RESOLVE_PHONE_NUMBER);
-                phone
-            } else {
-                None
-            };
+        let assets = verify_assets(
+            &business,
+            &debug,
+            &self.app.app_id,
+            &request.session,
+            request.register || request.is_coexistence(),
+        )
+        .await
+        .map_err(|e| e.in_step(VERIFY_ASSETS))?;
+        done.push(VERIFY_ASSETS);
 
         let expires_at = debug.expires_at_time().or_else(|| {
             token
@@ -232,9 +265,10 @@ impl EmbeddedSignup {
                 .and_then(|s| i64::try_from(s).ok())
                 .map(|s| vault.now() + time::Duration::seconds(s))
         });
-        let mut stored = StoredBusinessToken::new(waba_id.clone(), token.access_token.clone());
-        stored.business_id.clone_from(&request.session.business_id);
-        stored.phone_number_ids = phone_number_id.iter().cloned().collect();
+        let mut stored =
+            StoredBusinessToken::new(assets.waba_id.clone(), token.access_token.clone());
+        stored.business_id.clone_from(&assets.business_id);
+        stored.phone_number_ids.clone_from(&assets.phone_number_ids);
         stored.expires_at = expires_at;
         vault
             .store(&stored)
@@ -244,17 +278,18 @@ impl EmbeddedSignup {
 
         setup(
             &business,
-            &waba_id,
-            phone_number_id.as_ref(),
+            &assets.waba_id,
+            assets.phone_number_id.as_ref(),
             request,
             &mut done,
         )
         .await?;
 
         Ok(Onboarded {
-            waba_id,
-            phone_number_id,
-            business_id: request.session.business_id.clone(),
+            waba_id: assets.waba_id,
+            phone_number_id: assets.phone_number_id,
+            phone_number_ids: assets.phone_number_ids,
+            business_id: assets.business_id,
             finish_kind: request.finish_kind,
             token: token.access_token,
             token_expires_at: expires_at,
@@ -264,9 +299,12 @@ impl EmbeddedSignup {
 
     /// Redo the repeatable tail of [`Self::onboard`] (subscribe, register)
     /// for a WABA whose token is already in `vault`, e.g. after
-    /// `register_phone` failed on a wrong PIN. `request.code` is not used;
-    /// the phone number is the one stored with the token (verified during
-    /// onboarding), not the one in `request.session`.
+    /// `register_phone` failed on a wrong PIN. `request.code` is not used.
+    ///
+    /// The number registered is `request.session.phone_number_id` if it is
+    /// one of the numbers verified and stored at onboarding, else the first
+    /// stored one; a session naming another WABA or an unverified number is
+    /// refused (`verify_assets`) before any request.
     ///
     /// This acts with the stored token of `waba_id`, which the caller names:
     /// check that the WABA belongs to the tenant asking (your own
@@ -291,7 +329,9 @@ impl EmbeddedSignup {
                 .in_step(LOAD_TOKEN)
             })?;
         let mut done = vec![LOAD_TOKEN];
-        let phone_number_id = stored.phone_number_ids.first().cloned();
+        let phone_number_id = resume_phone(waba_id, &stored, &request.session)
+            .map_err(|e| Error::from(e).in_step(VERIFY_ASSETS))?;
+        done.push(VERIFY_ASSETS);
         let business = self.client.with_token(stored.token.clone());
         setup(
             &business,
@@ -304,6 +344,7 @@ impl EmbeddedSignup {
         Ok(Onboarded {
             waba_id: waba_id.clone(),
             phone_number_id,
+            phone_number_ids: stored.phone_number_ids,
             business_id: stored.business_id,
             finish_kind: request.finish_kind,
             token: stored.token,
@@ -353,8 +394,50 @@ async fn setup(
     Ok(())
 }
 
+/// Establish with Meta, using the business token, which assets this
+/// onboarding is about. Nothing from the browser survives unchecked.
+async fn verify_assets(
+    business: &Client,
+    debug: &TokenDebug,
+    app_id: &AppId,
+    session: &SessionInfo,
+    need_phone: bool,
+) -> Result<VerifiedAssets> {
+    let waba_id = verify_grant(debug, session.primary_waba_id(), app_id)?;
+    let waba = business.waba(waba_id.clone());
+    let business_id = waba
+        .get(&["owner_business_info"])
+        .await?
+        .owner_business_info
+        .and_then(|b| b.id);
+    let mut numbers = waba_phone_numbers(&waba).await?;
+    let phone_number_id = match &session.phone_number_id {
+        Some(claimed) => {
+            let Some(at) = numbers.iter().position(|n| n == claimed) else {
+                return Err(ValidationError::new(
+                    "phone_number_id",
+                    "the phone number in the session info does not belong to the WABA",
+                )
+                .into());
+            };
+            Some(numbers.remove(at))
+        }
+        // Meta lists numbers most recently onboarded first.
+        None if need_phone && !numbers.is_empty() => Some(numbers.remove(0)),
+        None => None,
+    };
+    let phone_number_ids = phone_number_id.iter().cloned().chain(numbers).collect();
+    Ok(VerifiedAssets {
+        waba_id,
+        business_id,
+        phone_number_id,
+        phone_number_ids,
+    })
+}
+
 /// Check that `debug` describes a valid token of our app that manages
 /// `claimed` (or pick the newest WABA it manages when nothing is claimed).
+/// Fails closed on anything missing.
 fn verify_grant(
     debug: &TokenDebug,
     claimed: Option<&WabaId>,
@@ -366,11 +449,20 @@ fn verify_grant(
             "Meta reports the exchanged token as invalid",
         ));
     }
-    if debug.app_id.as_ref().is_some_and(|a| a != app_id) {
-        return Err(ValidationError::new(
-            "app_id",
-            "the token was issued to a different app",
-        ));
+    match &debug.app_id {
+        Some(a) if a == app_id => {}
+        Some(_) => {
+            return Err(ValidationError::new(
+                "app_id",
+                "the token was issued to a different app",
+            ));
+        }
+        None => {
+            return Err(ValidationError::new(
+                "app_id",
+                "Meta did not say which app the token was issued to",
+            ));
+        }
     }
     let Some(targets) = debug.target_ids(WHATSAPP_BUSINESS_MANAGEMENT) else {
         return Err(ValidationError::new(
@@ -384,6 +476,7 @@ fn verify_grant(
             "waba_id",
             "the WABA in the session info is not one this token was granted",
         )),
+        // Meta lists the newest grant first (`solution-providers/manage-accounts`).
         None => targets
             .first()
             .map(|t| WabaId::new(t.as_str()))
@@ -391,35 +484,65 @@ fn verify_grant(
     }
 }
 
-/// Verify `claimed` is one of the WABA's numbers, or (nothing claimed) take
-/// the most recently onboarded one — Meta lists them newest first.
-async fn resolve_phone_number(
-    business: &Client,
-    waba_id: &WabaId,
-    claimed: Option<&PhoneNumberId>,
-) -> Result<Option<PhoneNumberId>> {
-    let waba = business.waba(waba_id.clone());
-    let query = PhoneNumbersQuery::new().fields(["id"]);
-    let Some(claimed) = claimed else {
-        let page = waba.phone_numbers(&query).await?;
-        return Ok(page.data.into_iter().next().map(|p| p.id));
-    };
-    let mut numbers = pin!(waba.phone_numbers_stream(&query));
+/// Every phone number id of the WABA, in Meta's order (most recently
+/// onboarded first), read with the business token. Bounded by
+/// [`MAX_WABA_PHONE_NUMBERS`].
+async fn waba_phone_numbers(waba: &Waba) -> Result<Vec<PhoneNumberId>> {
+    let query = PhoneNumbersQuery::new()
+        .fields(["id"])
+        .limit(PHONE_PAGE_SIZE);
+    let mut numbers = pin!(
+        waba.phone_numbers_stream(&query)
+            .take(MAX_WABA_PHONE_NUMBERS + 1)
+    );
+    let mut read = 0usize;
+    let mut ids: Vec<PhoneNumberId> = Vec::new();
     while let Some(number) = numbers.next().await {
-        if &number?.id == claimed {
-            return Ok(Some(claimed.clone()));
+        read += 1;
+        if read > MAX_WABA_PHONE_NUMBERS {
+            return Err(ValidationError::new(
+                "phone_numbers",
+                format!(
+                    "the WABA lists more than {MAX_WABA_PHONE_NUMBERS} phone numbers; refusing to index a partial list"
+                ),
+            )
+            .into());
+        }
+        let id = number?.id;
+        if !ids.contains(&id) {
+            ids.push(id);
         }
     }
-    Err(ValidationError::new(
-        "phone_number_id",
-        "the phone number in the session info does not belong to the WABA",
-    )
-    .into())
+    Ok(ids)
+}
+
+/// The number [`EmbeddedSignup::resume`] registers, checked against what
+/// onboarding verified and stored.
+fn resume_phone(
+    waba_id: &WabaId,
+    stored: &StoredBusinessToken,
+    session: &SessionInfo,
+) -> Result<Option<PhoneNumberId>, ValidationError> {
+    if session.primary_waba_id().is_some_and(|w| w != waba_id) {
+        return Err(ValidationError::new(
+            "waba_id",
+            "the session info names a different WABA than the one being resumed",
+        ));
+    }
+    match &session.phone_number_id {
+        Some(p) if stored.phone_number_ids.contains(p) => Ok(Some(p.clone())),
+        Some(_) => Err(ValidationError::new(
+            "phone_number_id",
+            "not one of the numbers verified for this WABA at onboarding",
+        )),
+        None => Ok(stored.phone_number_ids.first().cloned()),
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use http::Method;
     use pretty_assertions::assert_eq;
@@ -428,9 +551,12 @@ mod tests {
     use wa_adapters::store::MemoryKvStore;
     use wa_core::ErrorKind;
     use wa_core::clock::ManualClock;
+    use wa_core::secret::SecretBytes;
     use wa_core::store::{KvStore, StoreKey};
     use wa_core::testing::{RecordedBody, ScriptedTransport};
 
+    use super::super::session::SignupSessions;
+    use super::super::vault::tests::RecordingKv;
     use super::super::vault::{TOKEN_NAMESPACE, VaultKey, VaultKeys};
     use super::*;
     use crate::{AppCredentials, RetryPolicy};
@@ -442,6 +568,8 @@ mod tests {
     const WABA: &str = "524126980791429";
     const PHONE: &str = "106540352242922";
     const BUSINESS: &str = "2729063490586005";
+    const PIN: &str = "581063";
+    const VERIFY_TOKEN: &str = "verify-me-secret";
 
     struct Harness {
         t: ScriptedTransport,
@@ -450,17 +578,16 @@ mod tests {
         vault: TokenVault,
     }
 
-    fn harness() -> Harness {
+    fn harness_on(kv: Arc<dyn KvStore>, retry: RetryPolicy) -> Harness {
         let t = ScriptedTransport::new();
         let client = Client::builder()
             .transport(t.clone())
-            .retry(RetryPolicy::NONE)
+            .retry(retry)
             .build()
             .unwrap();
-        let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
         let vault = TokenVault::new(
             Arc::clone(&kv),
-            VaultKeys::new(VaultKey::new("k1", [42; 32]).unwrap()),
+            VaultKeys::new(VaultKey::new("k1", SecretBytes::new([42; 32])).unwrap()),
         )
         .unwrap()
         .with_clock(Arc::new(ManualClock::new(datetime!(2026-09-24 12:00 UTC))));
@@ -472,6 +599,10 @@ mod tests {
         }
     }
 
+    fn harness() -> Harness {
+        harness_on(Arc::new(MemoryKvStore::new()), RetryPolicy::NONE)
+    }
+
     fn finish_event(data: &serde_json::Value, event: &str) -> EmbeddedSignupEvent {
         EmbeddedSignupEvent::from_value(
             json!({"data": data, "type": "WA_EMBEDDED_SIGNUP", "event": event}),
@@ -479,18 +610,22 @@ mod tests {
         .unwrap()
     }
 
-    fn full_request() -> OnboardingRequest {
+    fn request_for(waba: &str, phone: &str) -> OnboardingRequest {
         let event = finish_event(
-            &json!({"phone_number_id": PHONE, "waba_id": WABA, "business_id": BUSINESS}),
+            &json!({"phone_number_id": phone, "waba_id": waba, "business_id": "CLAIMED_BY_THE_BROWSER"}),
             "FINISH",
         );
         OnboardingRequest::from_event(SignupCode::new(CODE).unwrap(), &event)
             .unwrap()
-            .register_with_pin(TwoStepPin::new("581063").unwrap())
+            .register_with_pin(TwoStepPin::new(PIN).unwrap())
     }
 
-    fn token_response() -> serde_json::Value {
-        json!({"access_token": TOKEN, "token_type": "bearer"})
+    fn full_request() -> OnboardingRequest {
+        request_for(WABA, PHONE)
+    }
+
+    fn token_response(token: &str) -> serde_json::Value {
+        json!({"access_token": token, "token_type": "bearer"})
     }
 
     fn debug_response(wabas: &[&str]) -> serde_json::Value {
@@ -506,6 +641,11 @@ mod tests {
         }})
     }
 
+    /// `solution-providers/share-and-revoke-credit-lines`, step 1.
+    fn owner_response(waba: &str, business: &str) -> serde_json::Value {
+        json!({"owner_business_info": {"name": "Wind & Wool", "id": business}, "id": waba})
+    }
+
     fn phones_response(ids: &[&str]) -> serde_json::Value {
         json!({"data": ids.iter().map(|id| json!({"id": id})).collect::<Vec<_>>()})
     }
@@ -518,6 +658,17 @@ mod tests {
         json!({"error": {"message": format!("(#{code}) x"), "type": "OAuthException", "code": code, "fbtrace_id": "A"}})
     }
 
+    /// Script a complete, successful onboarding of `waba` whose numbers are
+    /// `phones` (Meta's order), with the register call.
+    fn script_success(t: &ScriptedTransport, token: &str, waba: &str, phones: &[&str]) {
+        t.push_json(200, token_response(token));
+        t.push_json(200, debug_response(&[waba]));
+        t.push_json(200, owner_response(waba, BUSINESS));
+        t.push_json(200, phones_response(phones));
+        t.push_json(200, success());
+        t.push_json(200, success());
+    }
+
     fn step(err: &Error) -> &'static str {
         match err {
             Error::Step { step, .. } => step,
@@ -525,8 +676,8 @@ mod tests {
         }
     }
 
-    async fn stored_bytes(kv: &Arc<dyn KvStore>, waba: &str) -> Option<Vec<u8>> {
-        kv.get(&StoreKey::new(TOKEN_NAMESPACE, format!("waba/{waba}")))
+    async fn raw(kv: &Arc<dyn KvStore>, key: &str) -> Option<Vec<u8>> {
+        kv.get(&StoreKey::new(TOKEN_NAMESPACE, key))
             .await
             .unwrap()
             .map(|v| v.value)
@@ -535,15 +686,16 @@ mod tests {
     #[tokio::test]
     async fn happy_path_runs_every_step_in_order() {
         let h = harness();
-        h.t.push_json(200, token_response());
+        h.t.push_json(200, token_response(TOKEN));
         h.t.push_json(200, debug_response(&[WABA]));
+        h.t.push_json(200, owner_response(WABA, BUSINESS));
         h.t.push_json(200, phones_response(&["999", PHONE]));
         h.t.push_json(200, success());
         h.t.push_json(200, success());
 
         let request = full_request().subscribe_override(CallbackOverride::new(
             "https://hooks.example.com/wa",
-            "verify-me",
+            VERIFY_TOKEN,
         ));
         let done = h.es.onboard(&request, &h.vault).await.unwrap();
         assert_eq!(
@@ -551,7 +703,7 @@ mod tests {
             vec![
                 EXCHANGE_CODE,
                 DEBUG_TOKEN,
-                RESOLVE_PHONE_NUMBER,
+                VERIFY_ASSETS,
                 STORE_TOKEN,
                 SUBSCRIBE_APP,
                 REGISTER_PHONE
@@ -563,18 +715,24 @@ mod tests {
             Some(PHONE)
         );
         assert_eq!(
+            done.phone_number_ids,
+            vec![PhoneNumberId::new(PHONE), PhoneNumberId::new("999")],
+            "the onboarded number first, then the WABA's others"
+        );
+        assert_eq!(
             done.business_id.as_ref().map(BusinessId::as_str),
-            Some(BUSINESS)
+            Some(BUSINESS),
+            "the owner Meta reports, not the browser's claim"
         );
         assert_eq!(done.token.expose_secret(), TOKEN);
         assert_eq!(done.token_expires_at, None);
         let debug_text = format!("{done:?} {request:?}");
-        for secret in [TOKEN, CODE, "581063", "verify-me", APP_SECRET] {
+        for secret in [TOKEN, CODE, PIN, VERIFY_TOKEN, APP_SECRET] {
             assert!(!debug_text.contains(secret), "{secret} in {debug_text}");
         }
 
         let reqs = h.t.requests();
-        assert_eq!(reqs.len(), 5);
+        assert_eq!(reqs.len(), 6);
         // 1. code exchange: no bearer.
         assert_eq!(reqs[0].path(), "/v25.0/oauth/access_token");
         assert_eq!(reqs[0].header("authorization"), None);
@@ -586,31 +744,45 @@ mod tests {
             reqs[1].bearer(),
             Some(format!("{APP_ID}|{APP_SECRET}").as_str())
         );
-        // 3. the WABA's numbers, with the business token.
+        // 3. the WABA's owner, with the business token.
         assert_eq!(reqs[2].method, Method::GET);
-        assert_eq!(reqs[2].path(), format!("/v25.0/{WABA}/phone_numbers"));
-        assert_eq!(reqs[2].bearer(), Some(TOKEN));
-        // 5. subscribe with the override.
-        assert_eq!(reqs[3].method, Method::POST);
-        assert_eq!(reqs[3].path(), format!("/v25.0/{WABA}/subscribed_apps"));
-        assert_eq!(reqs[3].bearer(), Some(TOKEN));
+        assert_eq!(reqs[2].path(), format!("/v25.0/{WABA}"));
         assert_eq!(
-            reqs[3].json(),
-            Some(
-                json!({"override_callback_uri": "https://hooks.example.com/wa", "verify_token": "verify-me"})
-            )
+            reqs[2].query("fields").as_deref(),
+            Some("owner_business_info")
         );
-        // 6. register.
-        assert_eq!(reqs[4].path(), format!("/v25.0/{PHONE}/register"));
+        assert_eq!(reqs[2].bearer(), Some(TOKEN));
+        // 4. the WABA's numbers, with the business token.
+        assert_eq!(reqs[3].method, Method::GET);
+        assert_eq!(reqs[3].path(), format!("/v25.0/{WABA}/phone_numbers"));
+        assert_eq!(reqs[3].query("fields").as_deref(), Some("id"));
+        assert_eq!(reqs[3].query("limit").as_deref(), Some("100"));
+        assert_eq!(reqs[3].bearer(), Some(TOKEN));
+        // 5. subscribe with the override.
+        assert_eq!(reqs[4].method, Method::POST);
+        assert_eq!(reqs[4].path(), format!("/v25.0/{WABA}/subscribed_apps"));
         assert_eq!(reqs[4].bearer(), Some(TOKEN));
         assert_eq!(
             reqs[4].json(),
-            Some(json!({"messaging_product": "whatsapp", "pin": "581063"}))
+            Some(
+                json!({"override_callback_uri": "https://hooks.example.com/wa", "verify_token": VERIFY_TOKEN})
+            )
+        );
+        // 6. register.
+        assert_eq!(reqs[5].path(), format!("/v25.0/{PHONE}/register"));
+        assert_eq!(reqs[5].bearer(), Some(TOKEN));
+        assert_eq!(
+            reqs[5].json(),
+            Some(json!({"messaging_product": "whatsapp", "pin": PIN}))
         );
         assert_eq!(h.t.remaining(), 0);
+        assert_stored_and_routed(&h, &[PHONE, "999"]).await;
+    }
 
-        // 4. stored, encrypted, and indexed by phone number.
-        let bytes = stored_bytes(&h.kv, WABA).await.unwrap();
+    /// Stored under `WABA`, encrypted, with the verified owner, and every
+    /// one of `phones` routes to it.
+    async fn assert_stored_and_routed(h: &Harness, phones: &[&str]) {
+        let bytes = raw(&h.kv, &format!("waba/{WABA}")).await.unwrap();
         assert!(
             !bytes.windows(TOKEN.len()).any(|w| w == TOKEN.as_bytes()),
             "token stored in the clear"
@@ -621,13 +793,15 @@ mod tests {
             stored.business_id.as_ref().map(BusinessId::as_str),
             Some(BUSINESS)
         );
-        let by_phone = h
-            .vault
-            .get_by_phone_number(&PhoneNumberId::new(PHONE))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(by_phone.waba_id.as_str(), WABA);
+        for phone in phones {
+            let by_phone = h
+                .vault
+                .get_by_phone_number(&PhoneNumberId::new(*phone))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(by_phone.waba_id.as_str(), WABA);
+        }
     }
 
     #[tokio::test]
@@ -635,6 +809,7 @@ mod tests {
         let h = harness();
         h.t.push_json(200, json!({"access_token": TOKEN, "expires_in": 5_184_000}));
         h.t.push_json(200, debug_response(&["NEWEST", "OLDER"]));
+        h.t.push_json(200, owner_response("NEWEST", BUSINESS));
         h.t.push_json(200, phones_response(&["P-NEWEST", "P-OLDER"]));
         h.t.push_json(200, success());
         h.t.push_json(200, success());
@@ -654,17 +829,19 @@ mod tests {
         );
         let reqs = h.t.requests();
         assert_eq!(reqs[1].path(), "/v25.0/debug_token");
-        assert_eq!(reqs[2].path(), "/v25.0/NEWEST/phone_numbers");
-        assert_eq!(reqs[2].query("fields").as_deref(), Some("id"));
-        assert_eq!(reqs[4].path(), "/v25.0/P-NEWEST/register");
+        assert_eq!(reqs[2].path(), "/v25.0/NEWEST");
+        assert_eq!(reqs[3].path(), "/v25.0/NEWEST/phone_numbers");
+        assert_eq!(reqs[5].path(), "/v25.0/P-NEWEST/register");
         assert_eq!(h.t.remaining(), 0);
     }
 
     #[tokio::test]
-    async fn only_waba_flow_without_registration_skips_phone_steps() {
+    async fn only_waba_flow_without_registration_indexes_but_registers_nothing() {
         let h = harness();
-        h.t.push_json(200, token_response());
+        h.t.push_json(200, token_response(TOKEN));
         h.t.push_json(200, debug_response(&[WABA]));
+        h.t.push_json(200, owner_response(WABA, BUSINESS));
+        h.t.push_json(200, phones_response(&[PHONE]));
         h.t.push_json(200, success());
         let event = finish_event(&json!({"waba_id": WABA}), "FINISH_ONLY_WABA");
         let request =
@@ -672,13 +849,60 @@ mod tests {
         let done = h.es.onboard(&request, &h.vault).await.unwrap();
         assert_eq!(
             done.steps_completed,
-            vec![EXCHANGE_CODE, DEBUG_TOKEN, STORE_TOKEN, SUBSCRIBE_APP]
+            vec![
+                EXCHANGE_CODE,
+                DEBUG_TOKEN,
+                VERIFY_ASSETS,
+                STORE_TOKEN,
+                SUBSCRIBE_APP
+            ]
         );
         assert_eq!(done.phone_number_id, None);
+        assert_eq!(done.phone_number_ids, vec![PhoneNumberId::new(PHONE)]);
         assert_eq!(
-            h.t.requests()[2].body,
+            h.t.requests()[4].body,
             RecordedBody::Empty,
             "plain subscribe"
+        );
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn re_onboarding_a_waba_keeps_every_number_routed() {
+        // A merchant adds a second number to the same WABA through Embedded
+        // Signup. The first number must keep routing to the WABA.
+        let h = harness();
+        script_success(&h.t, TOKEN, WABA, &[PHONE]);
+        h.es.onboard(&full_request(), &h.vault).await.unwrap();
+        script_success(&h.t, "EAAsecondToken", WABA, &["P2", PHONE]);
+        let done =
+            h.es.onboard(&request_for(WABA, "P2"), &h.vault)
+                .await
+                .unwrap();
+        assert_eq!(
+            done.phone_number_ids,
+            vec![PhoneNumberId::new("P2"), PhoneNumberId::new(PHONE)]
+        );
+        for phone in [PHONE, "P2"] {
+            let t = h
+                .vault
+                .get_by_phone_number(&PhoneNumberId::new(phone))
+                .await
+                .unwrap()
+                .unwrap_or_else(|| panic!("{phone} no longer routes"));
+            assert_eq!(t.token.expose_secret(), "EAAsecondToken");
+        }
+        // And a number Meta no longer lists on the WABA is unlinked.
+        script_success(&h.t, "EAAthirdToken", WABA, &["P2"]);
+        h.es.onboard(&request_for(WABA, "P2"), &h.vault)
+            .await
+            .unwrap();
+        assert!(
+            h.vault
+                .get_by_phone_number(&PhoneNumberId::new(PHONE))
+                .await
+                .unwrap()
+                .is_none()
         );
         assert_eq!(h.t.remaining(), 0);
     }
@@ -702,8 +926,9 @@ mod tests {
         ));
         assert!(h.t.requests().is_empty());
 
-        h.t.push_json(200, token_response());
+        h.t.push_json(200, token_response(TOKEN));
         h.t.push_json(200, debug_response(&[WABA]));
+        h.t.push_json(200, owner_response(WABA, BUSINESS));
         h.t.push_json(200, phones_response(&[PHONE]));
         h.t.push_json(200, success());
         let done = h.es.onboard(&request, &h.vault).await.unwrap();
@@ -717,10 +942,15 @@ mod tests {
             vec![
                 EXCHANGE_CODE,
                 DEBUG_TOKEN,
-                RESOLVE_PHONE_NUMBER,
+                VERIFY_ASSETS,
                 STORE_TOKEN,
                 SUBSCRIBE_APP
             ]
+        );
+        assert!(
+            h.t.requests()
+                .iter()
+                .all(|r| !r.path().ends_with("/register"))
         );
         assert!(
             h.vault
@@ -740,75 +970,124 @@ mod tests {
         assert_eq!(step(&err), EXCHANGE_CODE);
         assert_eq!(err.kind(), ErrorKind::InvalidParameter);
         assert_eq!(h.t.requests().len(), 1);
-        assert!(stored_bytes(&h.kv, WABA).await.is_none());
+        assert!(raw(&h.kv, &format!("waba/{WABA}")).await.is_none());
         assert_eq!(h.t.remaining(), 0);
     }
 
     #[tokio::test]
     async fn failure_at_debug_token_stops_before_storing() {
         let h = harness();
-        h.t.push_json(200, token_response());
+        h.t.push_json(200, token_response(TOKEN));
         h.t.push_json(500, json!({"error": {"message": "x", "code": 2}}));
         let err = h.es.onboard(&full_request(), &h.vault).await.unwrap_err();
         assert_eq!(step(&err), DEBUG_TOKEN);
         assert_eq!(err.kind(), ErrorKind::ServiceUnavailable);
         assert_eq!(h.t.requests().len(), 2);
-        assert!(stored_bytes(&h.kv, WABA).await.is_none());
+        assert!(raw(&h.kv, &format!("waba/{WABA}")).await.is_none());
         assert_eq!(h.t.remaining(), 0);
     }
 
     #[tokio::test]
     async fn a_waba_the_token_was_not_granted_is_rejected() {
         let h = harness();
-        h.t.push_json(200, token_response());
+        h.t.push_json(200, token_response(TOKEN));
         h.t.push_json(200, debug_response(&["SOMEONE_ELSES_OWN_WABA"]));
         let err = h.es.onboard(&full_request(), &h.vault).await.unwrap_err();
-        assert_eq!(step(&err), DEBUG_TOKEN);
+        assert_eq!(step(&err), VERIFY_ASSETS);
         assert_eq!(h.t.requests().len(), 2, "nothing after the check");
-        assert!(stored_bytes(&h.kv, WABA).await.is_none());
+        assert!(raw(&h.kv, &format!("waba/{WABA}")).await.is_none());
         assert_eq!(h.t.remaining(), 0);
     }
 
     #[tokio::test]
-    async fn invalid_foreign_or_ungranular_tokens_are_rejected() {
+    async fn invalid_foreign_unnamed_or_ungranular_tokens_are_rejected() {
+        let grants = json!([{"scope": "whatsapp_business_management", "target_ids": [WABA]}]);
         for debug in [
-            json!({"data": {"is_valid": false, "app_id": APP_ID, "granular_scopes": [{"scope": "whatsapp_business_management", "target_ids": [WABA]}]}}),
-            json!({"data": {"is_valid": true, "app_id": "OTHER_APP", "granular_scopes": [{"scope": "whatsapp_business_management", "target_ids": [WABA]}]}}),
+            json!({"data": {"is_valid": false, "app_id": APP_ID, "granular_scopes": grants}}),
+            json!({"data": {"is_valid": true, "app_id": "OTHER_APP", "granular_scopes": grants}}),
+            // No app_id at all: fail closed, never "not a different app".
+            json!({"data": {"is_valid": true, "granular_scopes": grants}}),
             json!({"data": {"is_valid": true, "app_id": APP_ID, "granular_scopes": [{"scope": "whatsapp_business_management"}]}}),
             json!({"data": {"is_valid": true, "app_id": APP_ID, "granular_scopes": [{"scope": "whatsapp_business_management", "target_ids": []}]}}),
+            json!({"data": {"is_valid": true, "app_id": APP_ID, "granular_scopes": [{"scope": "whatsapp_business_messaging", "target_ids": [WABA]}]}}),
         ] {
-            let h = harness();
-            h.t.push_json(200, token_response());
-            h.t.push_json(200, debug);
-            let request =
-                OnboardingRequest::new(SignupCode::new(CODE).unwrap(), SessionInfo::default());
-            let err = h.es.onboard(&request, &h.vault).await.unwrap_err();
-            assert_eq!(step(&err), DEBUG_TOKEN);
-            assert_eq!(h.t.remaining(), 0);
+            for request in [
+                OnboardingRequest::new(SignupCode::new(CODE).unwrap(), SessionInfo::default()),
+                full_request(),
+            ] {
+                let h = harness();
+                h.t.push_json(200, token_response(TOKEN));
+                h.t.push_json(200, debug.clone());
+                let err = h.es.onboard(&request, &h.vault).await.unwrap_err();
+                assert_eq!(step(&err), VERIFY_ASSETS, "{debug}");
+                assert_eq!(h.t.requests().len(), 2, "{debug}");
+                assert_eq!(h.t.remaining(), 0);
+            }
         }
     }
 
     #[tokio::test]
     async fn a_phone_number_outside_the_waba_is_rejected() {
         let h = harness();
-        h.t.push_json(200, token_response());
+        h.t.push_json(200, token_response(TOKEN));
         h.t.push_json(200, debug_response(&[WABA]));
+        h.t.push_json(200, owner_response(WABA, BUSINESS));
         h.t.push_json(
             200,
             json!({"data": [{"id": "OTHER"}], "paging": {"cursors": {"after": "c"}, "next": "https://graph.facebook.com/x"}}),
         );
         h.t.push_json(200, phones_response(&["STILL_OTHER"]));
         let err = h.es.onboard(&full_request(), &h.vault).await.unwrap_err();
-        assert_eq!(step(&err), RESOLVE_PHONE_NUMBER);
-        assert_eq!(h.t.requests().len(), 4, "all pages were searched");
-        assert!(stored_bytes(&h.kv, WABA).await.is_none());
+        assert_eq!(step(&err), VERIFY_ASSETS);
+        assert_eq!(h.t.requests().len(), 5, "all pages were searched");
+        assert!(raw(&h.kv, &format!("waba/{WABA}")).await.is_none());
         assert!(
-            h.kv.get(&StoreKey::new(TOKEN_NAMESPACE, format!("phone/{PHONE}")))
-                .await
-                .unwrap()
-                .is_none(),
+            raw(&h.kv, &format!("phone/{PHONE}")).await.is_none(),
             "no phone index poisoning"
         );
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_failed_owner_lookup_stops_before_storing() {
+        let h = harness();
+        h.t.push_json(200, token_response(TOKEN));
+        h.t.push_json(200, debug_response(&[WABA]));
+        h.t.push_json(403, graph_error(200));
+        let err = h.es.onboard(&full_request(), &h.vault).await.unwrap_err();
+        assert_eq!(step(&err), VERIFY_ASSETS);
+        assert_eq!(err.kind(), ErrorKind::Permission);
+        assert!(raw(&h.kv, &format!("waba/{WABA}")).await.is_none());
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn an_endless_number_list_fails_closed() {
+        // Pages that never end (every page names a fresh cursor): the read
+        // stops at the bound instead of looping or indexing a partial list.
+        let h = harness();
+        h.t.push_json(200, token_response(TOKEN));
+        h.t.push_json(200, debug_response(&[WABA]));
+        h.t.push_json(200, owner_response(WABA, BUSINESS));
+        let pages = MAX_WABA_PHONE_NUMBERS / PHONE_PAGE_SIZE as usize + 1;
+        for page in 0..pages {
+            // The claimed number is on the first page, so only the bound (not
+            // a failed lookup) can make this fail.
+            let ids: Vec<_> = (0..PHONE_PAGE_SIZE)
+                .map(|i| match (page, i) {
+                    (0, 0) => json!({"id": PHONE}),
+                    _ => json!({"id": format!("P{page}-{i}")}),
+                })
+                .collect();
+            h.t.push_json(
+                200,
+                json!({"data": ids, "paging": {"cursors": {"after": format!("c{page}")}, "next": "https://graph.facebook.com/x"}}),
+            );
+        }
+        let err = h.es.onboard(&full_request(), &h.vault).await.unwrap_err();
+        assert_eq!(step(&err), VERIFY_ASSETS);
+        assert_eq!(h.t.requests().len(), 3 + pages);
+        assert!(raw(&h.kv, &format!("waba/{WABA}")).await.is_none());
         assert_eq!(h.t.remaining(), 0);
     }
 
@@ -856,37 +1135,34 @@ mod tests {
                 Ok(false)
             }
         }
-        let h = harness();
-        let vault = TokenVault::new(
-            Arc::new(BrokenKv),
-            VaultKeys::new(VaultKey::new("k1", [1; 32]).unwrap()),
-        )
-        .unwrap();
-        h.t.push_json(200, token_response());
+        let h = harness_on(Arc::new(BrokenKv), RetryPolicy::NONE);
+        h.t.push_json(200, token_response(TOKEN));
         h.t.push_json(200, debug_response(&[WABA]));
+        h.t.push_json(200, owner_response(WABA, BUSINESS));
         h.t.push_json(200, phones_response(&[PHONE]));
-        let err = h.es.onboard(&full_request(), &vault).await.unwrap_err();
+        let err = h.es.onboard(&full_request(), &h.vault).await.unwrap_err();
         assert_eq!(step(&err), STORE_TOKEN);
         assert!(matches!(
             err,
             Error::Step { ref source, .. } if matches!(**source, Error::Storage(_))
         ));
-        assert_eq!(h.t.requests().len(), 3, "no subscribe, no register");
+        assert_eq!(h.t.requests().len(), 4, "no subscribe, no register");
         assert_eq!(h.t.remaining(), 0);
     }
 
     #[tokio::test]
     async fn failure_at_subscribe_keeps_the_token_and_resume_finishes() {
         let h = harness();
-        h.t.push_json(200, token_response());
+        h.t.push_json(200, token_response(TOKEN));
         h.t.push_json(200, debug_response(&[WABA]));
+        h.t.push_json(200, owner_response(WABA, BUSINESS));
         h.t.push_json(200, phones_response(&[PHONE]));
         h.t.push_json(403, graph_error(200));
         let request = full_request();
         let err = h.es.onboard(&request, &h.vault).await.unwrap_err();
         assert_eq!(step(&err), SUBSCRIBE_APP);
         assert_eq!(err.kind(), ErrorKind::Permission);
-        assert_eq!(h.t.requests().len(), 4, "register never ran");
+        assert_eq!(h.t.requests().len(), 5, "register never ran");
         assert!(h.vault.get(&WabaId::new(WABA)).await.unwrap().is_some());
         assert_eq!(h.t.remaining(), 0);
 
@@ -898,26 +1174,32 @@ mod tests {
                 .unwrap();
         assert_eq!(
             done.steps_completed,
-            vec![LOAD_TOKEN, SUBSCRIBE_APP, REGISTER_PHONE]
+            vec![LOAD_TOKEN, VERIFY_ASSETS, SUBSCRIBE_APP, REGISTER_PHONE]
+        );
+        assert_eq!(
+            done.business_id.as_ref().map(BusinessId::as_str),
+            Some(BUSINESS)
         );
         let reqs = h.t.requests();
-        assert_eq!(reqs[4].path(), format!("/v25.0/{WABA}/subscribed_apps"));
-        assert_eq!(reqs[5].path(), format!("/v25.0/{PHONE}/register"));
-        assert_eq!(reqs[5].bearer(), Some(TOKEN), "stored token used");
+        assert_eq!(reqs[5].path(), format!("/v25.0/{WABA}/subscribed_apps"));
+        assert_eq!(reqs[6].path(), format!("/v25.0/{PHONE}/register"));
+        assert_eq!(reqs[6].bearer(), Some(TOKEN), "stored token used");
         assert_eq!(h.t.remaining(), 0);
     }
 
     #[tokio::test]
     async fn failure_at_register_reports_the_step_and_resume_retries_it() {
         let h = harness();
-        h.t.push_json(200, token_response());
+        h.t.push_json(200, token_response(TOKEN));
         h.t.push_json(200, debug_response(&[WABA]));
+        h.t.push_json(200, owner_response(WABA, BUSINESS));
         h.t.push_json(200, phones_response(&[PHONE]));
         h.t.push_json(200, success());
         h.t.push_json(400, graph_error(133005));
         let err = h.es.onboard(&full_request(), &h.vault).await.unwrap_err();
         assert_eq!(step(&err), REGISTER_PHONE);
         assert_eq!(err.kind(), ErrorKind::TwoStepVerification);
+        assert!(!err.to_string().contains(PIN), "{err}");
         assert_eq!(h.t.remaining(), 0);
 
         // The merchant supplies their existing PIN; only the tail runs again.
@@ -932,13 +1214,26 @@ mod tests {
             Some(json!({"messaging_product": "whatsapp", "pin": "000111"}))
         );
         assert_eq!(h.t.remaining(), 0);
+
+        // 133016: the number is locked for 72 hours; reported, not retried.
+        h.t.push_json(200, success());
+        h.t.push_json(400, graph_error(133016));
+        let err =
+            h.es.resume(&WabaId::new(WABA), &fixed, &h.vault)
+                .await
+                .unwrap_err();
+        assert_eq!(step(&err), REGISTER_PHONE);
+        assert_eq!(err.kind(), ErrorKind::Registration);
+        assert!(!err.is_retryable());
+        assert_eq!(h.t.remaining(), 0);
     }
 
     #[tokio::test]
     async fn register_without_a_number_fails_at_register_after_storing() {
         let h = harness();
-        h.t.push_json(200, token_response());
+        h.t.push_json(200, token_response(TOKEN));
         h.t.push_json(200, debug_response(&[WABA]));
+        h.t.push_json(200, owner_response(WABA, BUSINESS));
         h.t.push_json(200, phones_response(&[]));
         h.t.push_json(200, success());
         let request = OnboardingRequest::new(
@@ -953,6 +1248,33 @@ mod tests {
         assert_eq!(step(&err), REGISTER_PHONE);
         assert!(h.vault.get(&WabaId::new(WABA)).await.unwrap().is_some());
         assert_eq!(h.t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn resume_refuses_claims_onboarding_did_not_verify() {
+        let h = harness();
+        script_success(&h.t, TOKEN, WABA, &[PHONE]);
+        h.es.onboard(&full_request(), &h.vault).await.unwrap();
+        let sent = h.t.requests().len();
+
+        for request in [
+            // A number that is not one of this WABA's verified numbers.
+            request_for(WABA, "SOMEONE_ELSES_NUMBER"),
+            // A session naming another WABA.
+            request_for("OTHER_WABA", PHONE),
+        ] {
+            let err =
+                h.es.resume(&WabaId::new(WABA), &request, &h.vault)
+                    .await
+                    .unwrap_err();
+            assert_eq!(step(&err), VERIFY_ASSETS);
+        }
+        let err =
+            h.es.resume(&WabaId::new("UNKNOWN"), &full_request(), &h.vault)
+                .await
+                .unwrap_err();
+        assert_eq!(step(&err), LOAD_TOKEN);
+        assert_eq!(h.t.requests().len(), sent, "nothing was sent");
     }
 
     #[tokio::test]
@@ -976,11 +1298,180 @@ mod tests {
         )
         .unwrap();
         assert!(OnboardingRequest::from_event(SignupCode::new(CODE).unwrap(), &cancel).is_err());
-        assert!(
-            h.es.resume(&WabaId::new("unknown"), &full_request(), &h.vault)
-                .await
-                .is_err()
-        );
         assert!(h.t.requests().is_empty());
+    }
+
+    /// The multi-tenant property end to end: merchant A, signed in as tenant
+    /// A, completes Embedded Signup with their own Meta assets but posts a
+    /// session event naming merchant B's WABA and/or number. Nothing of B's
+    /// may change.
+    #[tokio::test]
+    async fn a_tenant_cannot_take_over_another_tenants_waba_or_number() {
+        const WABA_A: &str = "111111111111111";
+        const WABA_B: &str = "222222222222222";
+        const PHONE_A: &str = "333333333333333";
+        const PHONE_B: &str = "444444444444444";
+        const TOKEN_A: &str = "EAAtokenOfMerchantA";
+        const TOKEN_B: &str = "EAAtokenOfMerchantB";
+        let h = harness();
+        let sessions = SignupSessions::new(Arc::clone(&h.kv));
+
+        // B onboarded earlier.
+        script_success(&h.t, TOKEN_B, WABA_B, &[PHONE_B]);
+        h.es.onboard(&request_for(WABA_B, PHONE_B), &h.vault)
+            .await
+            .unwrap();
+        let b_record = raw(&h.kv, &format!("waba/{WABA_B}")).await.unwrap();
+        let b_index = raw(&h.kv, &format!("phone/{PHONE_B}")).await.unwrap();
+
+        // A starts a session; B's login cannot redeem it, A's can.
+        let state = sessions
+            .start("tenant-A", Duration::from_mins(15))
+            .await
+            .unwrap();
+        assert!(!sessions.redeem(&state, "tenant-B").await.unwrap());
+        assert!(sessions.redeem(&state, "tenant-A").await.unwrap());
+
+        // A's token (granted only A's WABA) with a claim of B's WABA + number.
+        h.t.push_json(200, token_response(TOKEN_A));
+        h.t.push_json(200, debug_response(&[WABA_A]));
+        let err =
+            h.es.onboard(&request_for(WABA_B, PHONE_B), &h.vault)
+                .await
+                .unwrap_err();
+        assert_eq!(step(&err), VERIFY_ASSETS);
+
+        // A's own WABA, but B's number: Meta does not list it on WABA_A.
+        h.t.push_json(200, token_response(TOKEN_A));
+        h.t.push_json(200, debug_response(&[WABA_A]));
+        h.t.push_json(200, owner_response(WABA_A, "BUSINESS_A"));
+        h.t.push_json(200, phones_response(&[PHONE_A]));
+        let err =
+            h.es.onboard(&request_for(WABA_A, PHONE_B), &h.vault)
+                .await
+                .unwrap_err();
+        assert_eq!(step(&err), VERIFY_ASSETS);
+        assert_eq!(h.t.remaining(), 0);
+
+        // B's record and routing are byte-for-byte what they were.
+        assert_eq!(
+            raw(&h.kv, &format!("waba/{WABA_B}")).await.unwrap(),
+            b_record
+        );
+        assert_eq!(
+            raw(&h.kv, &format!("phone/{PHONE_B}")).await.unwrap(),
+            b_index
+        );
+        let routed = h
+            .vault
+            .get_by_phone_number(&PhoneNumberId::new(PHONE_B))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(routed.waba_id.as_str(), WABA_B);
+        assert_eq!(routed.token.expose_secret(), TOKEN_B);
+        assert!(raw(&h.kv, &format!("waba/{WABA_A}")).await.is_none());
+    }
+
+    /// A `tracing` subscriber that renders every event and span field.
+    #[derive(Clone, Default)]
+    struct Capture(Arc<Mutex<String>>);
+
+    struct Render<'a>(&'a mut String);
+
+    impl tracing::field::Visit for Render<'_> {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            use std::fmt::Write as _;
+            let _ = write!(self.0, "{}={value:?} ", field.name());
+        }
+    }
+
+    impl tracing::Subscriber for Capture {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, attrs: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            attrs.record(&mut Render(&mut self.0.lock().unwrap()));
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, values: &tracing::span::Record<'_>) {
+            values.record(&mut Render(&mut self.0.lock().unwrap()));
+        }
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            let mut out = self.0.lock().unwrap();
+            out.push_str(event.metadata().target());
+            out.push(' ');
+            event.record(&mut Render(&mut out));
+            out.push('\n');
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    /// Secrets never reach the store, the logs, or any `Debug`/`Display`,
+    /// on the success path and on the failure paths that log (retries) or
+    /// carry text (errors).
+    #[tokio::test]
+    async fn secrets_never_reach_the_store_logs_or_errors() {
+        let capture = Capture::default();
+        let _guard = tracing::subscriber::set_default(capture.clone());
+        let rec = Arc::new(RecordingKv::default());
+        let h = harness_on(
+            rec.clone(),
+            RetryPolicy {
+                max_retries: 2,
+                base_delay: Duration::ZERO,
+                max_delay: Duration::ZERO,
+            },
+        );
+        let sessions = SignupSessions::new(rec.clone());
+        let state = sessions
+            .start("tenant-A", Duration::from_mins(15))
+            .await
+            .unwrap();
+        assert!(sessions.redeem(&state, "tenant-A").await.unwrap());
+
+        // Success, with a retried transient failure on the way (logged).
+        h.t.push_json(200, token_response(TOKEN));
+        h.t.push_json(200, debug_response(&[WABA]));
+        h.t.push_json(200, owner_response(WABA, BUSINESS));
+        h.t.push_json(
+            500,
+            json!({"error": {"message": "x", "code": 2, "is_transient": true}}),
+        );
+        h.t.push_json(200, phones_response(&[PHONE]));
+        h.t.push_json(200, success());
+        h.t.push_json(200, success());
+        let request = full_request()
+            .subscribe_override(CallbackOverride::new("https://h.example/wa", VERIFY_TOKEN));
+        let done = h.es.onboard(&request, &h.vault).await.unwrap();
+
+        // Failures: a rejected code, a wrong PIN on resume.
+        h.t.push_json(
+            400,
+            json!({"error": {"message": "This authorization code has been used.", "type": "OAuthException", "code": 100}}),
+        );
+        let e1 = h.es.onboard(&request, &h.vault).await.unwrap_err();
+        h.t.push_json(200, success());
+        h.t.push_json(400, graph_error(133005));
+        let e2 =
+            h.es.resume(&WabaId::new(WABA), &request, &h.vault)
+                .await
+                .unwrap_err();
+        assert_eq!(h.t.remaining(), 0);
+
+        let logs = capture.0.lock().unwrap().clone();
+        assert!(
+            logs.contains("graph request") && logs.contains("retrying graph request"),
+            "capture saw nothing: vacuous check\n{logs}"
+        );
+        let text = format!("{logs}\n{done:?}\n{request:?}\n{e1}\n{e1:?}\n{e2}\n{e2:?}");
+        for secret in [TOKEN, CODE, PIN, APP_SECRET, VERIFY_TOKEN, state.as_str()] {
+            assert!(!text.contains(secret), "`{secret}` leaked:\n{text}");
+        }
+        for secret in [TOKEN, CODE, PIN, APP_SECRET, VERIFY_TOKEN] {
+            rec.assert_never_wrote(secret);
+        }
     }
 }

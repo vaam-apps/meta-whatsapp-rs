@@ -109,6 +109,12 @@ impl FinishKind {
 ///
 /// Every field is optional: which ids come back depends on the flow
 /// (coexistence sends only `waba_id`; the bypass flow sends no business id).
+///
+/// Ids must be JSON strings, as in `embedded-signup/implementation`; a
+/// number is rejected rather than converted, because by the time a 64-bit id
+/// has been through a JavaScript number it may have been rounded to someone
+/// else's id. None of these ids is trusted: see
+/// [`EmbeddedSignup::onboard`](super::EmbeddedSignup::onboard).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct SessionInfo {
@@ -531,13 +537,20 @@ mod tests {
             EmbeddedSignupEvent::from_json("{not json"),
             Err(Error::Decode { .. })
         ));
-        assert!(
-            EmbeddedSignupEvent::from_value(
-                json!({"type": "WA_EMBEDDED_SIGNUP", "event": "FINISH", "data": {"waba_id": 5}})
-            )
-            .is_err(),
-            "a numeric id is not an id"
-        );
+        for data in [
+            json!({"waba_id": 5}),
+            json!({"waba_id": "W", "phone_number_id": 106540352242922_u64}),
+            json!({"waba_id": "W", "business_id": 2729063490586005_u64}),
+            json!({"waba_ids": [524126980791429_u64]}),
+        ] {
+            assert!(
+                EmbeddedSignupEvent::from_value(
+                    json!({"type": "WA_EMBEDDED_SIGNUP", "event": "FINISH", "data": data})
+                )
+                .is_err(),
+                "a numeric id is not an id: {data}"
+            );
+        }
         let via_serde: EmbeddedSignupEvent = serde_json::from_value(
             json!({"type": "WA_EMBEDDED_SIGNUP", "event": "CANCEL", "data": {}}),
         )

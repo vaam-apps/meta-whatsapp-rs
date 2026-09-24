@@ -30,11 +30,26 @@
 //! - **"Alphanumeric"** is checked with Unicode letters and digits, not
 //!   ASCII only: the page says "letters and numbers" without narrowing it.
 //!
-//! Error codes worth branching on (all currently classify as
-//! [`wa_core::ErrorKind::Unknown`]; match [`wa_core::GraphApiError::code`]):
-//! `2494164` not found, `2494165` API not enabled for the WABA, `2494168`
-//! terms not accepted, `2494176` terms already accepted (omit `policy`),
-//! `2494177` terms URL not allowed, `2494179` website URL not https.
+//! Error codes: `2494164` not found ([`wa_core::ErrorKind::NotFound`]),
+//! `2494165` API not enabled for the WABA
+//! ([`wa_core::ErrorKind::FeatureNotAvailable`]); `2494166` unknown
+//! placeholder, `2494167` placeholder without a value, `2494168` terms not
+//! accepted, `2494176` terms already accepted, `2494177` terms URL not
+//! allowed, `2494179` website URL not https (all
+//! [`wa_core::ErrorKind::InvalidParameter`]; read
+//! [`wa_core::GraphApiError::code`] to tell them apart).
+//!
+//! # Terms of Service
+//!
+//! A business's **first** `create` must carry [`SignupPolicy::accept_terms`]
+//! (without it: `2494168`); every later `create` must **omit** it (with it:
+//! `2494176`). Only send the policy after the business has actually agreed
+//! to the terms at [`SIGNUP_TOS_URL`]; on `2494176`, send the same request
+//! without `policy` (nothing was created). This module does not do that
+//! retry for you: whether consent was given is your record, not Meta's.
+//!
+//! Every path is built from segments ([`Client::get_at`] and friends), so a
+//! WABA or signup id containing `/` or `..` cannot address another object.
 
 use futures::Stream;
 use serde::{Deserialize, Serialize};
@@ -59,6 +74,8 @@ pub const MAX_MESSAGE_CHARS: usize = 300;
 pub const MAX_PROMO_CODE_CHARS: usize = 50;
 /// Maximum characters of `display_name`.
 pub const MAX_DISPLAY_NAME_CHARS: usize = 256;
+/// Maximum digits of an E.164 number (ITU-T E.164, not a Meta limit).
+const MAX_E164_DIGITS: usize = 15;
 
 /// Entry point, see [`Client::signups`].
 #[derive(Debug, Clone)]
@@ -383,29 +400,29 @@ struct DefaultBaseBody<'a> {
 /// Build the deep link for `signup_id` on `phone_number`, in the format the
 /// docs give: `wa.me/<PHONE_NUMBER>/signup/<SIGNUP_ID>`.
 ///
-/// The phone number is reduced to its digits, so `+1 (555) 123-4567` works;
-/// characters other than digits, spaces, `+`, `-`, `.`, `(` and `)` are
-/// rejected rather than silently dropped. Meta prints the link without a
-/// scheme; prefix `https://` when you render it as a hyperlink. Any number
-/// of the signup's WABA can be used with the same signup id.
+/// `phone_number` must be strict E.164: `+`, then 1–15 digits, the first
+/// not `0`, nothing else (e.g. `+15551234567`, as a business number's
+/// `display_phone_number` minus its formatting). `wa.me` reads its digits as
+/// an international number, so a number without its country code, or with
+/// a national trunk prefix (`+44 (0)20…`), would silently point the link at
+/// a different number in another country; requiring the `+` form refuses
+/// those instead of guessing. Meta prints the link without a scheme; prefix
+/// `https://` when you render it as a hyperlink. Any number of the signup's
+/// WABA can be used with the same signup id.
 pub fn deep_link(phone_number: &str, signup_id: &SignupId) -> Result<String> {
-    let mut digits = String::with_capacity(phone_number.len());
-    for c in phone_number.chars() {
-        match c {
-            '0'..='9' => digits.push(c),
-            ' ' | '+' | '-' | '.' | '(' | ')' => {}
-            _ => {
-                return Err(ValidationError::new(
-                    "phone_number",
-                    "may only contain digits and + - . ( ) or spaces",
-                )
-                .into());
-            }
-        }
-    }
-    if digits.is_empty() {
-        return Err(ValidationError::new("phone_number", "has no digits").into());
-    }
+    let digits = phone_number
+        .strip_prefix('+')
+        .filter(|d| {
+            (1..=MAX_E164_DIGITS).contains(&d.len())
+                && d.bytes().all(|b| b.is_ascii_digit())
+                && !d.starts_with('0')
+        })
+        .ok_or_else(|| {
+            ValidationError::new(
+                "phone_number",
+                "must be E.164: + followed by 1-15 digits, no spaces or punctuation",
+            )
+        })?;
     if signup_id.as_str().is_empty()
         || !signup_id
             .as_str()
@@ -435,7 +452,7 @@ impl Signups {
     pub async fn create(&self, signup: &NewSignup) -> Result<CreatedSignup> {
         signup.validate()?;
         self.client
-            .post(&format!("{}/signups", self.waba_id))
+            .post_at(&[self.waba_id.as_str(), "signups"])
             .json(signup)
             .context("create signup response")
             .send()
@@ -445,7 +462,7 @@ impl Signups {
     /// `GET /signups/{SIGNUP_ID}`.
     pub async fn get(&self, signup_id: &SignupId) -> Result<SignupInfo> {
         self.client
-            .get(&format!("signups/{signup_id}"))
+            .get_at(&["signups", signup_id.as_str()])
             .context("signup")
             .send()
             .await
@@ -457,7 +474,7 @@ impl Signups {
         }
         Ok(self
             .client
-            .get(&format!("{}/signups", self.waba_id))
+            .get_at(&[self.waba_id.as_str(), "signups"])
             .query_opt("limit", limit)
             .context("signups"))
     }
@@ -480,7 +497,7 @@ impl Signups {
     pub async fn update(&self, signup_id: &SignupId, update: &SignupUpdate) -> Result<()> {
         update.validate()?;
         self.client
-            .post(&format!("signups/{signup_id}"))
+            .post_at(&["signups", signup_id.as_str()])
             .json(update)
             // Sets fields to values: a replay leaves the same state.
             .idempotent(true)
@@ -507,7 +524,7 @@ impl Signups {
     /// `GET /{WABA_ID}/default_messaging_customer_base`.
     pub async fn default_messaging_customer_base(&self) -> Result<DefaultMessagingCustomerBase> {
         self.client
-            .get(&format!("{}/default_messaging_customer_base", self.waba_id))
+            .get_at(&[self.waba_id.as_str(), "default_messaging_customer_base"])
             .context("default messaging customer base")
             .send()
             .await
@@ -523,7 +540,7 @@ impl Signups {
             return Err(ValidationError::new("messaging_customer_base_id", "required").into());
         }
         self.client
-            .post(&format!("{}/default_messaging_customer_base", self.waba_id))
+            .post_at(&[self.waba_id.as_str(), "default_messaging_customer_base"])
             .json(&DefaultBaseBody {
                 messaging_customer_base_id,
             })
@@ -855,18 +872,110 @@ mod tests {
 
     #[test]
     fn deep_link_uses_the_documented_format() {
+        // in-app-signup, "Example response": wa.me/15551234567/signup/9876543210123456.
         let id = SignupId::new("9876543210123456");
         assert_eq!(
-            deep_link("15551234567", &id).unwrap(),
+            deep_link("+15551234567", &id).unwrap(),
             "wa.me/15551234567/signup/9876543210123456"
         );
         assert_eq!(
-            deep_link("+1 (555) 123-4567", &id).unwrap(),
-            "wa.me/15551234567/signup/9876543210123456"
+            deep_link("+123456789012345", &id).unwrap(),
+            "wa.me/123456789012345/signup/9876543210123456",
+            "15 digits is the E.164 maximum"
         );
-        assert!(deep_link("+1 555 CALL-NOW", &id).is_err());
-        assert!(deep_link("+", &id).is_err());
         assert!(deep_link("15551234567", &SignupId::new("../x")).is_err());
-        assert!(deep_link("15551234567", &SignupId::new("")).is_err());
+        assert!(deep_link("+15551234567", &SignupId::new("")).is_err());
+    }
+
+    #[test]
+    fn deep_link_refuses_numbers_that_are_not_strict_e164() {
+        let id = SignupId::new("9876543210123456");
+        for bad in [
+            // Digits only: `12015553931` meant as a local number would link
+            // to +1 201…, a different business.
+            "12015553931",
+            "5551234567",
+            // Formatting could hide a national trunk prefix: +44 (0)20 …
+            // would become 44020…, a number that does not exist.
+            "+44 (0)20 7946 0000",
+            "+1 (555) 123-4567",
+            "+1-555-123-4567",
+            "+0123456789",
+            "+",
+            "+1234567890123456",
+            "++15551234567",
+            "+1555CALLNOW",
+            "+１５５５１２３４５６７",
+            " +15551234567",
+        ] {
+            let err = deep_link(bad, &id).unwrap_err();
+            assert!(
+                matches!(&err, wa_core::Error::Validation(v) if v.field == "phone_number"),
+                "{bad:?}: {err}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn terms_of_service_errors_are_classified() {
+        let t = ScriptedTransport::new();
+        let s = client(&t).signups("W");
+        for (code, kind) in [
+            (2494168, wa_core::ErrorKind::InvalidParameter),
+            (2494176, wa_core::ErrorKind::InvalidParameter),
+            (2494177, wa_core::ErrorKind::InvalidParameter),
+            (2494165, wa_core::ErrorKind::FeatureNotAvailable),
+        ] {
+            t.push_json(
+                400,
+                json!({"error": {"message": "x", "type": "OAuthException", "code": code}}),
+            );
+            let err = s.create(&docs_signup()).await.unwrap_err();
+            assert_eq!(err.kind(), kind, "{code}");
+            assert_eq!(err.graph().map(|g| g.code), Some(code));
+        }
+        t.push_json(
+            400,
+            json!({"error": {"message": "x", "type": "OAuthException", "code": 2494164}}),
+        );
+        let err = s.get(&SignupId::new("1")).await.unwrap_err();
+        assert_eq!(err.kind(), wa_core::ErrorKind::NotFound);
+        assert_eq!(t.requests().len(), 5, "creates are not replayed");
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn ids_cannot_escape_their_path_segment() {
+        let t = ScriptedTransport::new();
+        t.push_json(200, json!({"id": "1"}));
+        t.push_json(200, json!({"success": true}));
+        t.push_json(200, json!({"id": "9"}));
+        let c = client(&t);
+        c.signups("OTHER_WABA/signups")
+            .create(&docs_signup())
+            .await
+            .unwrap();
+        // A signup id that tries to climb to another object.
+        c.signups("W")
+            .disable(&SignupId::new("1/../../OTHER_WABA"))
+            .await
+            .unwrap();
+        c.signups("W").get(&SignupId::new("1?x=y")).await.unwrap();
+        let paths: Vec<String> = t.requests().iter().map(|r| r.path().to_owned()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "/v25.0/OTHER_WABA%2Fsignups/signups",
+                "/v25.0/signups/1%2F..%2F..%2FOTHER_WABA",
+                "/v25.0/signups/1%3Fx=y",
+            ]
+        );
+        assert!(matches!(
+            c.signups("W").get(&SignupId::new("..")).await,
+            Err(wa_core::Error::Validation(_))
+        ));
+        assert!(c.signups("..").create(&docs_signup()).await.is_err());
+        assert_eq!(t.requests().len(), 3, "invalid ids never reach the wire");
+        assert_eq!(t.remaining(), 0);
     }
 }

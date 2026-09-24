@@ -107,7 +107,7 @@ impl Business {
     /// `GET /{BUSINESS_ID}` with `fields` (e.g. `id,name,timezone_id`).
     pub async fn get(&self, fields: &[&str]) -> Result<BusinessInfo> {
         self.client
-            .get(self.business_id.as_str())
+            .get_at(&[self.business_id.as_str()])
             .query_opt("fields", fields_param(fields))
             .context("business portfolio")
             .send()
@@ -117,7 +117,7 @@ impl Business {
     fn waba_list(&self, edge: &str, query: &WabaListQuery) -> GraphRequest {
         let mut req = self
             .client
-            .get(&format!("{}/{edge}", self.business_id))
+            .get_at(&[self.business_id.as_str(), edge])
             .query_opt(
                 "fields",
                 (!query.fields.is_empty()).then(|| query.fields.join(",")),
@@ -183,7 +183,7 @@ impl Business {
             return Err(ValidationError::new("messaging_customer_base_name", "required").into());
         }
         self.client
-            .post(&format!("{}/messaging_customer_base", self.business_id))
+            .post_at(&[self.business_id.as_str(), "messaging_customer_base"])
             .json(&CustomerBaseBody {
                 messaging_customer_base_name: name,
             })
@@ -196,7 +196,7 @@ impl Business {
     pub async fn messaging_customer_bases(&self) -> Result<Vec<MessagingCustomerBase>> {
         let bases: CustomerBases = self
             .client
-            .get(&format!("{}/messaging_customer_base", self.business_id))
+            .get_at(&[self.business_id.as_str(), "messaging_customer_base"])
             .context("messaging customer bases")
             .send()
             .await?;

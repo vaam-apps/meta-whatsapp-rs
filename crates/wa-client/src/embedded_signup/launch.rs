@@ -27,14 +27,24 @@
 //! `sessionInfoVersion` exist for the older and preview versions. `setup`
 //! is always emitted (possibly empty), matching the v4 implementation page.
 //!
-//! # Where Meta's pages disagree
+//! # Where Meta's pages disagree (decided here)
 //!
-//! - `setup.whatsAppBusinessAccount`: the syntax block says
-//!   `{ ids: '<WABA_ID>' }` (a string under `ids`), the example says
-//!   `{ id: ['<WABA_ID>'] }` (an array under `id`). This follows the example.
+//! Both are output-only (this crate never parses launch options back), so
+//! each is one decision, pinned by a test against the page's example:
+//!
+//! - `setup.whatsAppBusinessAccount`: the syntax block of
+//!   `embedded-signup/pre-filled-data` says `{ ids: '<WABA_ID>' }` (a string
+//!   under `ids`), its worked example says `{ id: ['<WABA_ID>'] }` (an array
+//!   under `id`). This follows the **example**, as the rest of the crate
+//!   does when a page contradicts itself: examples are what Meta ran.
 //! - `setup.business.id`: typed "Integer or null", but the existing-portfolio
-//!   example passes a quoted string. Sent as a string: portfolio ids can
-//!   exceed JavaScript's exact integer range.
+//!   example passes a quoted string. Sent as a **string**, matching the
+//!   example: the object is evaluated by JavaScript, and portfolio ids are
+//!   64-bit values that a JS number may not hold exactly (a rounded id would
+//!   name some other portfolio).
+//!
+//! Neither can be verified offline; a live Embedded Signup run with
+//! pre-filled data is the test that would settle them.
 
 use serde::Serialize;
 use serde::ser::Serializer;

@@ -17,6 +17,10 @@
 //! `https://developers.facebook.com/documentation/business-messaging/whatsapp/`
 //! (append `.md` for Markdown; `just meta-docs` mirrors them locally).
 //!
+//! Every path is built from segments ([`Client::get_at`] and friends), so a
+//! WABA or business id containing `/` or `..` cannot address another object
+//! with the token.
+//!
 //! # Subscriptions and the callback override
 //!
 //! `subscribe_app` is idempotent in the sense that matters for onboarding:
@@ -154,7 +158,7 @@ impl Waba {
     /// `currency`, `timezone_id`, `message_template_namespace`.
     pub async fn get(&self, fields: &[&str]) -> Result<WabaInfo> {
         self.client
-            .get(self.waba_id.as_str())
+            .get_at(&[self.waba_id.as_str()])
             .query_opt("fields", fields_param(fields))
             .context("WhatsApp Business Account")
             .send()
@@ -167,7 +171,7 @@ impl Waba {
             return Err(ValidationError::new("update", "set `name` or `timezone_id`").into());
         }
         self.client
-            .post(self.waba_id.as_str())
+            .post_at(&[self.waba_id.as_str()])
             .json(update)
             .idempotent(true)
             .context("WABA update response")
@@ -183,7 +187,7 @@ impl Waba {
         }
         let mut req = self
             .client
-            .get(&format!("{}/phone_numbers", self.waba_id))
+            .get_at(&[self.waba_id.as_str(), "phone_numbers"])
             .query_opt(
                 "fields",
                 (!query.fields.is_empty()).then(|| query.fields.join(",")),
@@ -217,7 +221,7 @@ impl Waba {
     pub async fn create_phone_number(&self, number: &NewPhoneNumber) -> Result<CreatedPhoneNumber> {
         number.validate()?;
         self.client
-            .post(&format!("{}/phone_numbers", self.waba_id))
+            .post_at(&[self.waba_id.as_str(), "phone_numbers"])
             .json(number)
             .context("create phone number response")
             .send()
@@ -238,7 +242,7 @@ impl Waba {
 
     fn subscribed_apps_request(&self) -> GraphRequest {
         self.client
-            .get(&format!("{}/subscribed_apps", self.waba_id))
+            .get_at(&[self.waba_id.as_str(), "subscribed_apps"])
             .context("subscribed apps")
     }
 
@@ -251,7 +255,7 @@ impl Waba {
     pub async fn subscribe_app(&self, callback_override: Option<&CallbackOverride>) -> Result<()> {
         let mut req = self
             .client
-            .post(&format!("{}/subscribed_apps", self.waba_id))
+            .post_at(&[self.waba_id.as_str(), "subscribed_apps"])
             .idempotent(true)
             .context("subscribe app response");
         if let Some(o) = callback_override {
@@ -268,7 +272,7 @@ impl Waba {
     /// calling app, immediately.
     pub async fn unsubscribe_app(&self) -> Result<()> {
         self.client
-            .delete(&format!("{}/subscribed_apps", self.waba_id))
+            .delete_at(&[self.waba_id.as_str(), "subscribed_apps"])
             .context("unsubscribe app response")
             .send_success()
             .await
@@ -276,7 +280,7 @@ impl Waba {
 
     fn assigned_users_request(&self, business: &BusinessId) -> GraphRequest {
         self.client
-            .get(&format!("{}/assigned_users", self.waba_id))
+            .get_at(&[self.waba_id.as_str(), "assigned_users"])
             .query("business", business)
             .context("assigned users")
     }
@@ -305,7 +309,7 @@ impl Waba {
             return Err(ValidationError::new("tasks", "at least one task is required").into());
         }
         self.client
-            .post(&format!("{}/assigned_users", self.waba_id))
+            .post_at(&[self.waba_id.as_str(), "assigned_users"])
             .query("user", user_id)
             .query_json("tasks", &tasks)
             // Granting the same tasks again leaves the same state.
@@ -322,7 +326,7 @@ impl Waba {
             return Err(ValidationError::new("user", "required").into());
         }
         self.client
-            .delete(&format!("{}/assigned_users", self.waba_id))
+            .delete_at(&[self.waba_id.as_str(), "assigned_users"])
             .query("user", user_id)
             .context("remove user response")
             .send_success()
@@ -650,5 +654,60 @@ mod tests {
         assert!(w.assign_user("1", &[]).await.is_err());
         assert!(w.remove_user("").await.is_err());
         assert_eq!(t.requests().len(), 3);
+    }
+
+    /// A WABA or business id taken from data must not be able to address a
+    /// different Graph object with the tenant's token.
+    #[tokio::test]
+    async fn ids_cannot_escape_their_path_segment() {
+        let t = ScriptedTransport::new();
+        for _ in 0..4 {
+            t.push_json(200, json!({"success": true}));
+        }
+        t.push_json(200, json!({"data": []}));
+        let c = client(&t);
+        c.waba("OTHER/subscribed_apps")
+            .subscribe_app(None)
+            .await
+            .unwrap();
+        c.waba("123?fields=x").unsubscribe_app().await.unwrap();
+        c.waba("W/assigned_users").remove_user("1").await.unwrap();
+        c.waba("W/../OTHER")
+            .update(&WabaUpdate::new().name("n"))
+            .await
+            .unwrap();
+        c.business("B/owned_whatsapp_business_accounts")
+            .client_whatsapp_business_accounts(&WabaListQuery::new())
+            .await
+            .unwrap();
+        let paths: Vec<String> = t.requests().iter().map(|r| r.path().to_owned()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "/v25.0/OTHER%2Fsubscribed_apps/subscribed_apps",
+                "/v25.0/123%3Ffields=x/subscribed_apps",
+                "/v25.0/W%2Fassigned_users/assigned_users",
+                "/v25.0/W%2F..%2FOTHER",
+                "/v25.0/B%2Fowned_whatsapp_business_accounts/client_whatsapp_business_accounts",
+            ]
+        );
+        for id in ["..", "."] {
+            assert!(matches!(
+                c.waba(id).subscribe_app(None).await,
+                Err(wa_core::Error::Validation(_))
+            ));
+            assert!(c.waba(id).get(&[]).await.is_err());
+            let streamed: Vec<_> = c
+                .waba(id)
+                .phone_numbers_stream(&PhoneNumbersQuery::new())
+                .take(3)
+                .collect()
+                .await;
+            assert_eq!(streamed.len(), 1);
+            assert!(matches!(streamed[0], Err(wa_core::Error::Validation(_))));
+            assert!(c.business(id).get(&[]).await.is_err());
+        }
+        assert_eq!(t.requests().len(), 5, "invalid ids never reach the wire");
+        assert_eq!(t.remaining(), 0);
     }
 }

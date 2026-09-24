@@ -31,9 +31,14 @@
 //! A number added through Embedded Signup must be registered within 14 days
 //! (`solution-providers/manage-phone-numbers`). `register` and `deregister`
 //! share a budget of 10 requests per number per 72 hours; the 11th fails with
-//! `133016` ([`wa_core::ErrorKind::RateLimited`]) and locks the number for 72
-//! hours, so neither is marked idempotent here and neither should be put in a
-//! retry loop by callers.
+//! `133016` ([`wa_core::ErrorKind::Registration`], deliberately not a
+//! retryable rate limit) and locks the number for 72 hours, so neither is
+//! marked idempotent here and neither should be put in a retry loop by
+//! callers.
+//!
+//! Every path is built from segments ([`Client::post_at`] and friends), so a
+//! phone number id containing `/` or `..` cannot address another object
+//! with the token.
 //!
 //! # Where Meta's pages disagree
 //!
@@ -196,7 +201,7 @@ impl PhoneNumber {
     /// `code_verification_status`, `webhook_configuration`.
     pub async fn get(&self, fields: &[&str]) -> Result<PhoneNumberInfo> {
         self.client
-            .get(self.phone_number_id.as_str())
+            .get_at(&[self.phone_number_id.as_str()])
             .query_opt("fields", fields_param(fields))
             .context("phone number")
             .send()
@@ -213,7 +218,7 @@ impl PhoneNumber {
             return Err(ValidationError::new("language", "must not be empty").into());
         }
         self.client
-            .post(&format!("{}/request_code", self.phone_number_id))
+            .post_at(&[self.phone_number_id.as_str(), "request_code"])
             .json(&RequestCodeBody {
                 code_method: method,
                 language,
@@ -226,7 +231,7 @@ impl PhoneNumber {
     /// `POST /{PHONE_NUMBER_ID}/verify_code`: submit the code received.
     pub async fn verify_code(&self, code: &VerificationCode) -> Result<()> {
         self.client
-            .post(&format!("{}/verify_code", self.phone_number_id))
+            .post_at(&[self.phone_number_id.as_str(), "verify_code"])
             .json(&VerifyCodeBody {
                 code: code.expose_secret(),
             })
@@ -256,7 +261,7 @@ impl PhoneNumber {
             region.validate()?;
         }
         self.client
-            .post(&format!("{}/register", self.phone_number_id))
+            .post_at(&[self.phone_number_id.as_str(), "register"])
             .json(&RegisterBody {
                 messaging_product: "whatsapp",
                 pin: pin.expose_secret(),
@@ -272,7 +277,7 @@ impl PhoneNumber {
     /// Business app); those disconnect from the app.
     pub async fn deregister(&self) -> Result<()> {
         self.client
-            .post(&format!("{}/deregister", self.phone_number_id))
+            .post_at(&[self.phone_number_id.as_str(), "deregister"])
             .context("deregister response")
             .send_success()
             .await
@@ -282,7 +287,7 @@ impl PhoneNumber {
     /// verification PIN. There is no API to turn two-step verification off.
     pub async fn set_two_step_pin(&self, pin: &TwoStepPin) -> Result<()> {
         self.client
-            .post(self.phone_number_id.as_str())
+            .post_at(&[self.phone_number_id.as_str()])
             .json(&PinBody {
                 pin: pin.expose_secret(),
             })
@@ -302,7 +307,7 @@ impl PhoneNumber {
             return Err(ValidationError::new("new_display_name", "must not be empty").into());
         }
         self.client
-            .post(self.phone_number_id.as_str())
+            .post_at(&[self.phone_number_id.as_str()])
             .query("new_display_name", new_display_name)
             .context("display name change response")
             .send_success()
@@ -316,7 +321,7 @@ impl PhoneNumber {
     pub async fn set_webhook_override(&self, callback: &CallbackOverride) -> Result<()> {
         callback.validate()?;
         self.client
-            .post(self.phone_number_id.as_str())
+            .post_at(&[self.phone_number_id.as_str()])
             .json(&WebhookConfigurationBody {
                 webhook_configuration: WebhookOverrideBody {
                     override_callback_uri: &callback.override_callback_uri,
@@ -334,7 +339,7 @@ impl PhoneNumber {
     /// WABA override, then the app's callback.
     pub async fn clear_webhook_override(&self) -> Result<()> {
         self.client
-            .post(self.phone_number_id.as_str())
+            .post_at(&[self.phone_number_id.as_str()])
             .json(&WebhookConfigurationBody {
                 webhook_configuration: WebhookOverrideBody {
                     override_callback_uri: "",
@@ -350,7 +355,7 @@ impl PhoneNumber {
     /// `GET /{PHONE_NUMBER_ID}/settings`.
     pub async fn settings(&self) -> Result<PhoneNumberSettings> {
         self.client
-            .get(&format!("{}/settings", self.phone_number_id))
+            .get_at(&[self.phone_number_id.as_str(), "settings"])
             .context("phone number settings")
             .send()
             .await
@@ -396,7 +401,7 @@ impl PhoneNumber {
 
     async fn post_settings(&self, body: &impl Serialize) -> Result<()> {
         self.client
-            .post(&format!("{}/settings", self.phone_number_id))
+            .post_at(&[self.phone_number_id.as_str(), "settings"])
             .json(body)
             // Settings are set to a value: safe to replay.
             .idempotent(true)
@@ -411,7 +416,7 @@ impl PhoneNumber {
     pub async fn conversational_automation(&self) -> Result<ConversationalAutomation> {
         let env: automation::AutomationEnvelope = self
             .client
-            .get(self.phone_number_id.as_str())
+            .get_at(&[self.phone_number_id.as_str()])
             .query("fields", "conversational_automation")
             .context("conversational automation")
             .send()
@@ -428,10 +433,7 @@ impl PhoneNumber {
     ) -> Result<()> {
         config.validate()?;
         self.client
-            .post(&format!(
-                "{}/conversational_automation",
-                self.phone_number_id
-            ))
+            .post_at(&[self.phone_number_id.as_str(), "conversational_automation"])
             .json(config)
             .idempotent(true)
             .context("conversational automation response")
@@ -450,7 +452,7 @@ impl PhoneNumber {
     /// resolved by looking at the webhooks, not by asking again.
     pub async fn sync_smb_app_data(&self, sync_type: SmbSyncType) -> Result<SmbSyncResponse> {
         self.client
-            .post(&format!("{}/smb_app_data", self.phone_number_id))
+            .post_at(&[self.phone_number_id.as_str(), "smb_app_data"])
             .json(&SmbSyncBody {
                 messaging_product: "whatsapp",
                 sync_type,
@@ -599,9 +601,12 @@ mod tests {
         t.push_json(400, graph_error(133005));
         let err = pn.register(&pin, None).await.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::TwoStepVerification);
+        // 133016 locks the number for 72 hours: a registration problem, not
+        // a throttle the retry policy may replay.
         t.push_json(400, graph_error(133016));
         let err = pn.register(&pin, None).await.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::RateLimited);
+        assert_eq!(err.kind(), ErrorKind::Registration);
+        assert!(!err.is_retryable());
         assert_eq!(t.remaining(), 0);
     }
 
@@ -871,5 +876,50 @@ mod tests {
                 .is_err()
         );
         assert_eq!(t.requests().len(), 1);
+    }
+
+    /// An id from a database or a webhook must not be able to address a
+    /// different Graph object with this number's token.
+    #[tokio::test]
+    async fn ids_cannot_escape_their_path_segment() {
+        let t = ScriptedTransport::new();
+        let pin = TwoStepPin::new("212834").unwrap();
+        for _ in 0..4 {
+            t.push_json(200, json!({"success": true}));
+        }
+        let c = client(&t);
+        // `/` stays inside the segment (percent-encoded) on every path shape.
+        c.phone_number("OTHER_WABA/subscribed_apps")
+            .register(&pin, None)
+            .await
+            .unwrap();
+        c.phone_number("999/register")
+            .set_two_step_pin(&pin)
+            .await
+            .unwrap();
+        c.phone_number("1?fields=x").deregister().await.unwrap();
+        c.phone_number("1/settings")
+            .set_identity_key_check(true)
+            .await
+            .unwrap();
+        let paths: Vec<String> = t.requests().iter().map(|r| r.path().to_owned()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "/v25.0/OTHER_WABA%2Fsubscribed_apps/register",
+                "/v25.0/999%2Fregister",
+                "/v25.0/1%3Ffields=x/deregister",
+                "/v25.0/1%2Fsettings/settings",
+            ]
+        );
+        assert_eq!(t.requests()[2].url.query(), None);
+        // `.` and `..` are refused before anything is sent.
+        for id in ["..", ".", ""] {
+            let err = c.phone_number(id).register(&pin, None).await.unwrap_err();
+            assert!(matches!(err, wa_core::Error::Validation(_)), "{id:?}");
+            assert!(c.phone_number(id).get(&[]).await.is_err());
+        }
+        assert_eq!(t.requests().len(), 4, "invalid ids never reach the wire");
+        assert_eq!(t.remaining(), 0);
     }
 }

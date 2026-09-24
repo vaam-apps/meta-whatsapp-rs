@@ -104,6 +104,11 @@ pub struct WabaInfo {
     /// Business the WABA operates on behalf of.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_behalf_of_business_info: Option<BusinessRef>,
+    /// The business portfolio that owns the WABA (the customer's, after
+    /// Embedded Signup). Request it explicitly: `fields=owner_business_info`
+    /// (`solution-providers/share-and-revoke-credit-lines`, step 1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_business_info: Option<BusinessRef>,
     /// Purchase order number.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purchase_order_number: Option<String>,
@@ -539,6 +544,16 @@ mod tests {
         assert_eq!(w.id.as_str(), "102290129340398");
         assert_eq!(w.status.as_deref(), Some("ACTIVE"));
         assert_eq!(w.business_verification_status.as_deref(), Some("verified"));
+    }
+
+    #[test]
+    fn waba_info_parses_owner_business_info() {
+        // solution-providers/share-and-revoke-credit-lines, step 1 response.
+        let v = r#"{"owner_business_info": {"name": "Wind & Wool", "id": "2729063490586005"}, "id": "102290129340398"}"#;
+        let w: WabaInfo = serde_json::from_str(v).unwrap();
+        let owner = w.owner_business_info.unwrap();
+        assert_eq!(owner.id, Some(BusinessId::new("2729063490586005")));
+        assert_eq!(owner.name.as_deref(), Some("Wind & Wool"));
     }
 
     #[test]

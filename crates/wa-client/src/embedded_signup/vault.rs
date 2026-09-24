@@ -10,14 +10,17 @@
 //!   base64; timestamps are unix seconds.
 //! - `phone/<PHONE_NUMBER_ID>` → `{"waba_id": …}`, the index behind
 //!   [`TokenVault::get_by_phone_number`] (webhooks carry the phone number
-//!   id; this finds the token to answer with).
+//!   id; this finds the token to answer with). Keyed by Meta's phone number
+//!   *id*, never by a phone number, so there is no E.164 normalisation to get
+//!   wrong.
 //!
 //! # Cryptography, and why each choice
 //!
 //! - **AES-256-GCM**, a fresh random 96-bit nonce per write (`getrandom`).
 //!   With random nonces the safe budget is about 2³² writes per key; token
 //!   writes happen once per onboarding, so rotating keys yearly is far
-//!   inside it.
+//!   inside it. A failing OS random number generator is
+//!   [`CryptoError::Rng`]: nothing is written rather than reusing a nonce.
 //! - **Associated data** binds the ciphertext to `wa.token`, the WABA id it
 //!   is stored under, and the key id, each length-prefixed (so no two
 //!   different triples encode to the same bytes). Copying tenant A's record
@@ -28,6 +31,10 @@
 //!   numbers, times). The clear copies in the record are for operators and
 //!   index cleanup only; everything returned by `get` comes from the
 //!   authenticated copy, so editing the clear JSON changes nothing.
+//! - **The phone index is a hint, the record is the authority.**
+//!   [`TokenVault::get_by_phone_number`] only returns a token whose
+//!   authenticated record lists the number, so a stale or forged index entry
+//!   yields `None`, never another WABA's token.
 //! - **Key rotation**: records remember their key id. Reads decrypt with
 //!   whichever configured key matches; writes always use the active key. By
 //!   default a read of a record under an old key re-encrypts it under the
@@ -38,10 +45,20 @@
 //!
 //! # What this does not protect against
 //!
-//! Anyone holding the vault key and the store. Key material lives in memory
-//! for the life of the vault; [`VaultKey`] is zeroed on drop on a
-//! best-effort basis (no `zeroize` dependency yet, see the crate's pending
-//! change requests), and never printed by `Debug`.
+//! Anyone holding the vault key and the store. Key bytes live in
+//! [`SecretBytes`] (zeroed on drop, never printed); so do the serialized
+//! plaintexts this module builds. Copies made outside this module are not
+//! covered: the AES key schedule inside `aes-gcm` (built without its
+//! `zeroize` feature), the token string inside [`AccessToken`] once handed
+//! out, and the HTTP response body the token first arrived in.
+//!
+//! # Who may write the index
+//!
+//! [`TokenVault::store`] trusts its input: every phone number id in the
+//! record is routed to that WABA. [`EmbeddedSignup::onboard`](super::EmbeddedSignup::onboard)
+//! only stores numbers Meta listed on the WABA with the business token. If
+//! you call `store` yourself, do the same, or one merchant's customers can be
+//! routed to another merchant.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -56,7 +73,7 @@ use time::OffsetDateTime;
 use wa_core::clock::{Clock, SystemClock};
 use wa_core::error::{CryptoError, StorageError, ValidationError};
 use wa_core::ids::{BusinessId, PhoneNumberId, WabaId};
-use wa_core::secret::AccessToken;
+use wa_core::secret::{AccessToken, SecretBytes};
 use wa_core::store::{Expiry, KvStore, StoreKey, Versioned};
 use wa_core::{Error, Result};
 
@@ -67,23 +84,23 @@ pub const TOKEN_NAMESPACE: &str = "wa.token";
 const AAD_TAG: &[u8] = b"wa-rs/token-vault/v1";
 const RECORD_VERSION: u8 = 1;
 const NONCE_LEN: usize = 12;
+const KEY_LEN: usize = 32;
 const MAX_KEY_ID_LEN: usize = 64;
 
 /// A 256-bit AES key and the id recorded next to what it encrypts.
 ///
-/// `Debug` prints the id only. The key bytes are overwritten on drop (best
-/// effort: without `zeroize`, copies the compiler makes are not tracked).
+/// The bytes are held in [`SecretBytes`]: zeroed on drop, never printed
+/// (`Debug` shows the id only).
 pub struct VaultKey {
     id: String,
-    key: [u8; 32],
+    key: SecretBytes,
 }
 
 impl VaultKey {
-    /// Build a key. `id` is 1–64 characters of `A-Z a-z 0-9 - _ . :`
-    /// (it is stored in every record and bound into the ciphertext).
-    ///
-    /// `key` is taken by value; wipe your own copy if you had one.
-    pub fn new(id: impl Into<String>, key: [u8; 32]) -> Result<Self> {
+    /// Build a key from exactly 32 secret bytes. `id` is 1–64 characters of
+    /// `A-Z a-z 0-9 - _ . :` (it is stored in every record and bound into
+    /// the ciphertext).
+    pub fn new(id: impl Into<String>, key: SecretBytes) -> Result<Self> {
         let id = id.into();
         let valid_id = !id.is_empty()
             && id.len() <= MAX_KEY_ID_LEN
@@ -97,26 +114,28 @@ impl VaultKey {
             )
             .into());
         }
+        if key.len() != KEY_LEN {
+            return Err(CryptoError::InvalidKey("vault key must be exactly 32 bytes").into());
+        }
         Ok(Self { id, key })
     }
 
     /// Decode a key from standard base64 (e.g. from a secret manager or an
     /// environment variable). It must decode to exactly 32 bytes.
     pub fn from_base64(id: impl Into<String>, encoded: &str) -> Result<Self> {
-        let mut bytes = B64
+        let bytes = B64
             .decode(encoded.trim())
             .map_err(|_| CryptoError::InvalidKey("vault key is not valid base64"))?;
-        let key = <[u8; 32]>::try_from(bytes.as_slice())
-            .map_err(|_| CryptoError::InvalidKey("vault key must decode to exactly 32 bytes"));
-        wipe(&mut bytes);
-        Self::new(id, key?)
+        Self::new(id, SecretBytes::new(bytes))
     }
 
     /// A fresh random key from the operating system's CSPRNG.
     pub fn generate(id: impl Into<String>) -> Result<Self> {
-        let mut key = [0u8; 32];
-        getrandom::fill(&mut key)
-            .map_err(|_| CryptoError::InvalidKey("the OS random number generator failed"))?;
+        let mut key = vec![0u8; KEY_LEN];
+        let filled = getrandom::fill(&mut key);
+        // Wrap before checking so the buffer is zeroed on either path.
+        let key = SecretBytes::new(key);
+        filled.map_err(|_| CryptoError::Rng)?;
         Self::new(id, key)
     }
 
@@ -126,13 +145,8 @@ impl VaultKey {
     }
 
     fn cipher(&self) -> Result<Aes256Gcm, CryptoError> {
-        Aes256Gcm::new_from_slice(&self.key).map_err(|_| CryptoError::InvalidKey("vault key"))
-    }
-}
-
-impl Drop for VaultKey {
-    fn drop(&mut self) {
-        wipe(&mut self.key);
+        Aes256Gcm::new_from_slice(self.key.expose_secret())
+            .map_err(|_| CryptoError::InvalidKey("vault key"))
     }
 }
 
@@ -205,9 +219,10 @@ pub struct StoredBusinessToken {
     pub waba_id: WabaId,
     /// The business token.
     pub token: AccessToken,
-    /// The customer's business portfolio, when known.
+    /// The customer's business portfolio (the WABA's owner), when known.
     pub business_id: Option<BusinessId>,
-    /// Phone numbers indexed to this WABA.
+    /// Phone numbers indexed to this WABA. [`EmbeddedSignup::onboard`](super::EmbeddedSignup::onboard)
+    /// puts the onboarded number first, then the WABA's other numbers.
     pub phone_number_ids: Vec<PhoneNumberId>,
     /// When the record was first written; set by [`TokenVault::store`] when
     /// `None`.
@@ -236,7 +251,8 @@ impl StoredBusinessToken {
         self
     }
 
-    /// Set the phone numbers to index.
+    /// Set the phone numbers to index (see [`TokenVault`] on who may write
+    /// the index).
     #[must_use]
     pub fn phone_number_ids(
         mut self,
@@ -261,6 +277,28 @@ impl StoredBusinessToken {
 
 /// Encrypted business token storage, keyed by WABA, with a phone number
 /// index. Cheap to clone.
+///
+/// - **At rest**: AES-256-GCM under the active [`VaultKey`], a fresh random
+///   96-bit nonce per write, the key id recorded; the associated data binds
+///   each ciphertext to the vault namespace, the WABA id it is stored under
+///   and the key id, so a record copied or swapped between two tenants'
+///   keys fails to decrypt ([`CryptoError::Decrypt`]) instead of handing one
+///   tenant the other's token. The stored bytes never contain the token.
+/// - **Rotation**: records under a previous key (kept with
+///   [`VaultKeys::with_previous`]) still decrypt, and are re-encrypted under
+///   the active key on read (see [`Self::rotate_on_read`]) or by
+///   [`Self::rotate`].
+/// - **Routing**: [`Self::get_by_phone_number`] returns a token only if the
+///   WABA's *authenticated* record lists the number; the index itself is a
+///   hint, so a stale or forged index entry yields `None`.
+///
+/// # Who may write the index
+///
+/// [`Self::store`] trusts its input: every phone number id in the record is
+/// routed to that WABA. [`EmbeddedSignup::onboard`](super::EmbeddedSignup::onboard)
+/// only stores numbers Meta listed on the WABA to the business token. If you
+/// call `store` yourself, do the same, or one merchant's customers can be
+/// routed to another merchant.
 #[derive(Clone)]
 pub struct TokenVault {
     kv: Arc<dyn KvStore>,
@@ -297,9 +335,24 @@ struct Record {
     expires_at: Option<OffsetDateTime>,
 }
 
-/// The encrypted part. Holds the token in the clear: never `Debug`, wiped
-/// after use.
-#[derive(Serialize, Deserialize)]
+/// The encrypted part, as written: borrows the token instead of copying it
+/// into a `String` that would outlive the call un-zeroed.
+#[derive(Serialize)]
+struct SealedRef<'a> {
+    access_token: &'a str,
+    waba_id: &'a WabaId,
+    business_id: Option<&'a BusinessId>,
+    phone_number_ids: &'a [PhoneNumberId],
+    #[serde(with = "time::serde::timestamp")]
+    created_at: OffsetDateTime,
+    #[serde(with = "time::serde::timestamp::option")]
+    expires_at: Option<OffsetDateTime>,
+}
+
+/// The encrypted part, as read back. The token moves straight into an
+/// [`AccessToken`].
+#[derive(Deserialize)]
+#[cfg_attr(test, derive(Serialize))]
 struct Sealed {
     access_token: String,
     waba_id: WabaId,
@@ -356,6 +409,9 @@ impl TokenVault {
     /// token), and point each of its phone numbers at that WABA. Phone
     /// numbers the previous record listed and this one does not are
     /// unlinked. Safe to repeat.
+    ///
+    /// Trusts `token.phone_number_ids`: see [`TokenVault`] on who may write
+    /// the index.
     pub async fn store(&self, token: &StoredBusinessToken) -> Result<()> {
         if token.waba_id.as_str().is_empty() {
             return Err(ValidationError::new("waba_id", "required").into());
@@ -407,9 +463,10 @@ impl TokenVault {
             && record.kid != self.keys.active.id
             && let Err(e) = self.reseal(&key, &token, version).await
         {
+            // The kind only: a backend error's text is not ours to vouch for.
             tracing::warn!(
                 waba_id = %waba_id,
-                error = %e,
+                kind = ?e.kind(),
                 "token vault: re-encrypting under the active key failed; retried on next read"
             );
         }
@@ -509,35 +566,28 @@ impl TokenVault {
 
     fn seal(&self, token: &StoredBusinessToken, created_at: OffsetDateTime) -> Result<Record> {
         let key = &self.keys.active;
-        let sealed = Sealed {
-            access_token: token.token.expose_secret().to_owned(),
-            waba_id: token.waba_id.clone(),
-            business_id: token.business_id.clone(),
-            phone_number_ids: token.phone_number_ids.clone(),
+        let plaintext = serde_json::to_vec(&SealedRef {
+            access_token: token.token.expose_secret(),
+            waba_id: &token.waba_id,
+            business_id: token.business_id.as_ref(),
+            phone_number_ids: &token.phone_number_ids,
             created_at,
             expires_at: token.expires_at,
-        };
-        let plaintext = serde_json::to_vec(&sealed).map_err(|_| CryptoError::Encrypt);
-        let mut access_token = sealed.access_token;
-        wipe_string(&mut access_token);
-        let mut plaintext = plaintext?;
+        })
+        .map(SecretBytes::new)
+        .map_err(|_| CryptoError::Encrypt)?;
         let mut nonce = [0u8; NONCE_LEN];
-        let encrypted = getrandom::fill(&mut nonce)
-            .map_err(|_| CryptoError::Encrypt)
-            .and_then(|()| key.cipher())
-            .and_then(|cipher| {
-                cipher
-                    .encrypt(
-                        &Nonce::from(nonce),
-                        Payload {
-                            msg: &plaintext,
-                            aad: &aad(&token.waba_id, &key.id),
-                        },
-                    )
-                    .map_err(|_| CryptoError::Encrypt)
-            });
-        wipe(&mut plaintext);
-        let ciphertext = encrypted?;
+        getrandom::fill(&mut nonce).map_err(|_| CryptoError::Rng)?;
+        let ciphertext = key
+            .cipher()?
+            .encrypt(
+                &Nonce::from(nonce),
+                Payload {
+                    msg: plaintext.expose_secret(),
+                    aad: &aad(&token.waba_id, &key.id),
+                },
+            )
+            .map_err(|_| CryptoError::Encrypt)?;
         Ok(Record {
             v: RECORD_VERSION,
             kid: key.id.clone(),
@@ -566,7 +616,7 @@ impl TokenVault {
         let ciphertext = B64
             .decode(&record.ciphertext)
             .map_err(|_| CryptoError::Malformed("ciphertext"))?;
-        let mut plaintext = key
+        let plaintext = key
             .cipher()?
             .decrypt(
                 &Nonce::from(nonce),
@@ -575,10 +625,10 @@ impl TokenVault {
                     aad: &aad(waba_id, &record.kid),
                 },
             )
+            .map(SecretBytes::new)
             .map_err(|_| CryptoError::Decrypt)?;
-        let sealed = serde_json::from_slice::<Sealed>(&plaintext);
-        wipe(&mut plaintext);
-        let sealed = sealed.map_err(|_| CryptoError::Malformed("decrypted record"))?;
+        let sealed = serde_json::from_slice::<Sealed>(plaintext.expose_secret())
+            .map_err(|_| CryptoError::Malformed("decrypted record"))?;
         if &sealed.waba_id != waba_id {
             // Unreachable while the AAD binds the WABA id; kept as a second
             // line of defence should the AAD format ever change.
@@ -633,20 +683,10 @@ fn decode<T: serde::de::DeserializeOwned>(key: &StoreKey, v: &Versioned) -> Resu
     })
 }
 
-/// Overwrite a buffer that held secret material. `black_box` keeps the
-/// compiler from treating the writes as dead stores.
-fn wipe(buf: &mut [u8]) {
-    buf.fill(0);
-    std::hint::black_box(&*buf);
-}
-
-fn wipe_string(s: &mut String) {
-    let mut bytes = std::mem::take(s).into_bytes();
-    wipe(&mut bytes);
-}
-
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use std::sync::Mutex;
+
     use pretty_assertions::assert_eq;
     use time::macros::datetime;
     use wa_adapters::store::MemoryKvStore;
@@ -656,12 +696,97 @@ mod tests {
 
     const TOKEN: &str = "EAAAN6tcBzAUBOwtDtTfmZCJ9n3FHpSDcDTH86ekf89XnnMZAtaitMUysPDE7LES3C";
 
+    /// A `KvStore` that remembers every key and value ever written to it,
+    /// so a test can scan the raw bytes for secrets.
+    #[derive(Debug, Default)]
+    pub(crate) struct RecordingKv {
+        inner: MemoryKvStore,
+        writes: Mutex<Vec<(String, Vec<u8>)>>,
+    }
+
+    impl RecordingKv {
+        fn record(&self, key: &StoreKey, value: &[u8]) {
+            self.writes
+                .lock()
+                .unwrap()
+                .push((key.to_string(), value.to_vec()));
+        }
+
+        /// Panic if any key or value ever written contains `secret`, raw or
+        /// base64-encoded (standard or URL-safe).
+        pub(crate) fn assert_never_wrote(&self, secret: &str) {
+            let needles = [
+                secret.as_bytes().to_vec(),
+                B64.encode(secret).into_bytes(),
+                base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .encode(secret)
+                    .into_bytes(),
+            ];
+            let writes = self.writes.lock().unwrap();
+            assert!(!writes.is_empty(), "nothing was written: vacuous check");
+            for (key, value) in writes.iter() {
+                for needle in &needles {
+                    assert!(
+                        !contains(key.as_bytes(), needle) && !contains(value, needle),
+                        "secret written to the store under `{key}`"
+                    );
+                }
+            }
+        }
+    }
+
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    #[async_trait::async_trait]
+    impl KvStore for RecordingKv {
+        async fn get(&self, key: &StoreKey) -> Result<Option<Versioned>, StorageError> {
+            self.inner.get(key).await
+        }
+        async fn put(
+            &self,
+            key: &StoreKey,
+            value: Vec<u8>,
+            expiry: Expiry,
+        ) -> Result<u64, StorageError> {
+            self.record(key, &value);
+            self.inner.put(key, value, expiry).await
+        }
+        async fn put_if_absent(
+            &self,
+            key: &StoreKey,
+            value: Vec<u8>,
+            expiry: Expiry,
+        ) -> Result<Option<u64>, StorageError> {
+            self.record(key, &value);
+            self.inner.put_if_absent(key, value, expiry).await
+        }
+        async fn compare_and_swap(
+            &self,
+            key: &StoreKey,
+            expected: u64,
+            new: Option<Vec<u8>>,
+            expiry: Expiry,
+        ) -> Result<Option<u64>, StorageError> {
+            if let Some(v) = &new {
+                self.record(key, v);
+            }
+            self.inner
+                .compare_and_swap(key, expected, new, expiry)
+                .await
+        }
+        async fn delete(&self, key: &StoreKey) -> Result<bool, StorageError> {
+            self.inner.delete(key).await
+        }
+    }
+
     fn kv() -> Arc<dyn KvStore> {
         Arc::new(MemoryKvStore::new())
     }
 
     fn key(id: &str, byte: u8) -> VaultKey {
-        VaultKey::new(id, [byte; 32]).unwrap()
+        VaultKey::new(id, SecretBytes::new([byte; 32])).unwrap()
     }
 
     fn vault(kv: &Arc<dyn KvStore>, keys: VaultKeys) -> TokenVault {
@@ -744,15 +869,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn no_write_ever_contains_the_token() {
+        // Every path that writes: store (record + index), re-store with a
+        // dropped number (unlink), rotation on read, explicit rotation.
+        let rec = Arc::new(RecordingKv::default());
+        let kv: Arc<dyn KvStore> = rec.clone();
+        let old = vault(&kv, VaultKeys::new(key("old", 1)));
+        old.store(&sample("W1").phone_number_ids(["P1", "P2"]))
+            .await
+            .unwrap();
+        old.store(&sample("W1").phone_number_ids(["P1"]))
+            .await
+            .unwrap();
+        old.store(&sample("W2")).await.unwrap();
+        let new = vault(
+            &kv,
+            VaultKeys::new(key("new", 2)).with_previous(key("old", 1)),
+        );
+        new.get(&WabaId::new("W1")).await.unwrap().unwrap();
+        assert!(new.rotate(&WabaId::new("W2")).await.unwrap());
+        assert_eq!(raw_json(&kv, "waba/W1").await["kid"], "new");
+        for waba in ["W1", "W2"] {
+            rec.assert_never_wrote(&format!("{TOKEN}-{waba}"));
+        }
+        // The common prefix alone, too: no partial leak.
+        rec.assert_never_wrote(TOKEN);
+    }
+
+    #[tokio::test]
     async fn every_write_uses_a_fresh_nonce() {
         let kv = kv();
         let v = vault(&kv, VaultKeys::new(key("k1", 7)));
-        v.store(&sample("W1")).await.unwrap();
-        let a = raw_json(&kv, "waba/W1").await;
-        v.store(&sample("W1")).await.unwrap();
-        let b = raw_json(&kv, "waba/W1").await;
-        assert_ne!(a["nonce"], b["nonce"]);
-        assert_ne!(a["ciphertext"], b["ciphertext"]);
+        let mut nonces = HashSet::new();
+        for waba in ["W1", "W1", "W1", "W2"] {
+            v.store(&sample(waba)).await.unwrap();
+            let rec = raw_json(&kv, &format!("waba/{waba}")).await;
+            assert!(
+                nonces.insert(rec["nonce"].as_str().unwrap().to_owned()),
+                "nonce reused"
+            );
+        }
     }
 
     #[tokio::test]
@@ -824,11 +980,23 @@ mod tests {
             Err(Error::Crypto(CryptoError::Malformed(_)))
         ));
 
+        let mut rec = original.clone();
+        rec["v"] = 2.into();
+        put_json(&kv, "waba/W1", &rec).await;
+        assert!(matches!(
+            v.get(&WabaId::new("W1")).await,
+            Err(Error::Crypto(CryptoError::Malformed(_)))
+        ));
+
         put_json(&kv, "waba/W1", &serde_json::json!({"oops": true})).await;
         assert!(matches!(
             v.get(&WabaId::new("W1")).await,
             Err(Error::Storage(StorageError::Corrupt { .. }))
         ));
+
+        // The untouched record still opens.
+        put_json(&kv, "waba/W1", &original).await;
+        assert!(v.get(&WabaId::new("W1")).await.unwrap().is_some());
     }
 
     #[tokio::test]
@@ -849,22 +1017,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_record_copied_to_another_waba_does_not_decrypt() {
+    async fn swapping_two_tenants_records_fails_to_decrypt_both_ways() {
         let kv = kv();
         let v = vault(&kv, VaultKeys::new(key("k1", 7)));
-        v.store(&sample("W1")).await.unwrap();
-        v.store(&sample("W2")).await.unwrap();
-        // Attacker with write access to the store copies A's record over B's,
-        // and even fixes up the clear waba_id.
-        let mut stolen = raw_json(&kv, "waba/W1").await;
-        stolen["waba_id"] = "W2".into();
-        put_json(&kv, "waba/W2", &stolen).await;
-        assert!(matches!(
-            v.get(&WabaId::new("W2")).await,
-            Err(Error::Crypto(CryptoError::Decrypt))
-        ));
-        // W1 is untouched.
-        assert!(v.get(&WabaId::new("W1")).await.unwrap().is_some());
+        v.store(&sample("W1").phone_number_ids(["P1"]))
+            .await
+            .unwrap();
+        v.store(&sample("W2").phone_number_ids(["P2"]))
+            .await
+            .unwrap();
+        let a = raw_json(&kv, "waba/W1").await;
+        let b = raw_json(&kv, "waba/W2").await;
+        // An attacker with write access swaps the records, and even fixes up
+        // the clear waba_id so the JSON looks consistent.
+        let mut a_as_b = a.clone();
+        a_as_b["waba_id"] = "W2".into();
+        let mut b_as_a = b.clone();
+        b_as_a["waba_id"] = "W1".into();
+        put_json(&kv, "waba/W2", &a_as_b).await;
+        put_json(&kv, "waba/W1", &b_as_a).await;
+        for w in ["W1", "W2"] {
+            assert!(
+                matches!(
+                    v.get(&WabaId::new(w)).await,
+                    Err(Error::Crypto(CryptoError::Decrypt))
+                ),
+                "{w} must not open with the other tenant's record"
+            );
+        }
+        // Routing by phone number fails closed too: P2's traffic never gets
+        // W1's token.
+        assert!(
+            v.get_by_phone_number(&PhoneNumberId::new("P2"))
+                .await
+                .is_err()
+        );
+        // Swapping back restores both.
+        put_json(&kv, "waba/W1", &a).await;
+        put_json(&kv, "waba/W2", &b).await;
+        for w in ["W1", "W2"] {
+            let t = v.get(&WabaId::new(w)).await.unwrap().unwrap();
+            assert_eq!(t.token.expose_secret(), format!("{TOKEN}-{w}"));
+        }
     }
 
     #[tokio::test]
@@ -961,6 +1155,117 @@ mod tests {
                 "created_at kept"
             );
         }
+        // And the old key alone no longer opens them.
+        let only_old = vault(&kv, VaultKeys::new(key("old", 1)));
+        assert!(only_old.get(&WabaId::new("W1")).await.is_err());
+    }
+
+    /// A store whose next read of one key lets a concurrent writer replace
+    /// the record right after the read (the window a read-time rotation
+    /// races against).
+    #[derive(Debug)]
+    struct Interleaved {
+        inner: MemoryKvStore,
+        key: StoreKey,
+        concurrent_write: Mutex<Option<Vec<u8>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl KvStore for Interleaved {
+        async fn get(&self, key: &StoreKey) -> Result<Option<Versioned>, StorageError> {
+            let read = self.inner.get(key).await;
+            let pending = if key == &self.key {
+                self.concurrent_write.lock().unwrap().take()
+            } else {
+                None
+            };
+            if let Some(bytes) = pending {
+                self.inner.put(key, bytes, Expiry::Never).await?;
+            }
+            read
+        }
+        async fn put(
+            &self,
+            key: &StoreKey,
+            value: Vec<u8>,
+            expiry: Expiry,
+        ) -> Result<u64, StorageError> {
+            self.inner.put(key, value, expiry).await
+        }
+        async fn put_if_absent(
+            &self,
+            key: &StoreKey,
+            value: Vec<u8>,
+            expiry: Expiry,
+        ) -> Result<Option<u64>, StorageError> {
+            self.inner.put_if_absent(key, value, expiry).await
+        }
+        async fn compare_and_swap(
+            &self,
+            key: &StoreKey,
+            expected: u64,
+            new: Option<Vec<u8>>,
+            expiry: Expiry,
+        ) -> Result<Option<u64>, StorageError> {
+            self.inner
+                .compare_and_swap(key, expected, new, expiry)
+                .await
+        }
+        async fn delete(&self, key: &StoreKey) -> Result<bool, StorageError> {
+            self.inner.delete(key).await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_rotation_never_overwrites_a_concurrent_store() {
+        // The replacement a concurrent onboarding writes: a new token, under
+        // the new key.
+        let scratch = kv();
+        vault(&scratch, VaultKeys::new(key("new", 2)))
+            .store(&StoredBusinessToken::new(
+                "W1",
+                AccessToken::new("NEW_TOKEN"),
+            ))
+            .await
+            .unwrap();
+        let replacement = raw(&scratch, "waba/W1").await.unwrap().value;
+
+        let wabakey = StoreKey::new(TOKEN_NAMESPACE, "waba/W1");
+        let store = Arc::new(Interleaved {
+            inner: MemoryKvStore::new(),
+            key: wabakey.clone(),
+            concurrent_write: Mutex::new(None),
+        });
+        let kv: Arc<dyn KvStore> = store.clone();
+        vault(&kv, VaultKeys::new(key("old", 1)))
+            .store(&sample("W1"))
+            .await
+            .unwrap();
+        *store.concurrent_write.lock().unwrap() = Some(replacement);
+
+        // This read sees the old record and tries to re-encrypt it; the
+        // concurrent store lands in between.
+        let rotating = vault(
+            &kv,
+            VaultKeys::new(key("new", 2)).with_previous(key("old", 1)),
+        );
+        let seen = rotating.get(&WabaId::new("W1")).await.unwrap().unwrap();
+        assert_eq!(seen.token.expose_secret(), format!("{TOKEN}-W1"));
+        // The concurrent write wins: the stale token is not resurrected.
+        let now = rotating.get(&WabaId::new("W1")).await.unwrap().unwrap();
+        assert_eq!(now.token.expose_secret(), "NEW_TOKEN");
+        // Same for an explicit rotation.
+        let reread = vault(&kv, VaultKeys::new(key("old", 1)));
+        reread.store(&sample("W1")).await.unwrap();
+        vault(&scratch, VaultKeys::new(key("new", 2)))
+            .store(&StoredBusinessToken::new("W1", AccessToken::new("NEWER")))
+            .await
+            .unwrap();
+        *store.concurrent_write.lock().unwrap() =
+            Some(raw(&scratch, "waba/W1").await.unwrap().value);
+        assert!(!rotating.rotate(&WabaId::new("W1")).await.unwrap());
+        let now = rotating.get(&WabaId::new("W1")).await.unwrap().unwrap();
+        assert_eq!(now.token.expose_secret(), "NEWER");
     }
 
     #[tokio::test]
@@ -1038,17 +1343,25 @@ mod tests {
             format!("{k:?}"),
             r#"VaultKey { id: "2026-09", key: "[REDACTED]" }"#
         );
-        assert!(matches!(
-            VaultKey::from_base64("k", &B64.encode([9u8; 31])),
-            Err(Error::Crypto(CryptoError::InvalidKey(_)))
-        ));
+        for len in [0, 16, 31, 33, 64] {
+            assert!(
+                matches!(
+                    VaultKey::from_base64("k", &B64.encode(vec![9u8; len])),
+                    Err(Error::Crypto(CryptoError::InvalidKey(_)))
+                ),
+                "{len} bytes"
+            );
+            assert!(VaultKey::new("k", SecretBytes::new(vec![9u8; len])).is_err());
+        }
         assert!(VaultKey::from_base64("k", "***").is_err());
-        assert!(VaultKey::new("", [0; 32]).is_err());
-        assert!(VaultKey::new("has space", [0; 32]).is_err());
-        assert!(VaultKey::new("x".repeat(65), [0; 32]).is_err());
+        assert!(VaultKey::new("", SecretBytes::new([0; 32])).is_err());
+        assert!(VaultKey::new("has space", SecretBytes::new([0; 32])).is_err());
+        assert!(VaultKey::new("x".repeat(65), SecretBytes::new([0; 32])).is_err());
         let a = VaultKey::generate("a").unwrap();
         let b = VaultKey::generate("b").unwrap();
-        assert_ne!(a.key, b.key);
+        assert_eq!(a.key.len(), 32);
+        assert_ne!(a.key.expose_secret(), b.key.expose_secret());
+        assert_ne!(a.key.expose_secret(), &[0u8; 32]);
         assert!(
             TokenVault::new(
                 kv(),
@@ -1061,5 +1374,7 @@ mod tests {
     #[test]
     fn associated_data_is_unambiguous() {
         assert_ne!(aad(&WabaId::new("a"), "bc"), aad(&WabaId::new("ab"), "c"));
+        assert_ne!(aad(&WabaId::new("W1"), "k"), aad(&WabaId::new("W2"), "k"));
+        assert_ne!(aad(&WabaId::new("W1"), "k1"), aad(&WabaId::new("W1"), "k2"));
     }
 }
