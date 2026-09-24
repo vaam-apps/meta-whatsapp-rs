@@ -330,7 +330,7 @@ impl GraphRequest {
                 return Err(ValidationError::new(
                     "url",
                     format!(
-                        "refusing to send credentials to `{}`: not the Graph endpoint or a Meta media host",
+                        "refusing to send credentials to `{}`: not the Graph endpoint or https://{MEDIA_HOST}",
                         self.url.host_str().unwrap_or_default()
                     ),
                 )
@@ -513,20 +513,24 @@ impl GraphRequest {
     }
 }
 
-/// Hosts that may receive an `Authorization` header: the configured Graph
-/// endpoint, and Meta's media CDN over HTTPS (media download URLs returned
-/// by `GET /{media-id}` live on `lookaside.fbsbx.com` and require the token).
+/// The one host besides the Graph endpoint that needs the token: media
+/// download URLs (from `GET /{media-id}` and media webhooks) point at it,
+/// and Meta refuses the download without the token
+/// (`business-phone-numbers/media`).
+pub(crate) const MEDIA_HOST: &str = "lookaside.fbsbx.com";
+
+/// Origins that may receive an `Authorization` header: the configured Graph
+/// endpoint (scheme, host and port), and `https://lookaside.fbsbx.com` on
+/// the default port. Nothing else — not other Meta hosts (CDN links such as
+/// `*.fbcdn.net` or `*.whatsapp.net` need no token), not subdomains, and not
+/// production Graph when the client is configured for a proxy.
 fn credential_host_allowed(client: &Client, url: &Url) -> bool {
     if client.shared.endpoint.same_origin(url) {
         return true;
     }
     url.scheme() == "https"
-        && url.host_str().is_some_and(|h| {
-            h == "graph.facebook.com"
-                || h.ends_with(".fbsbx.com")
-                || h.ends_with(".facebook.com")
-                || h.ends_with(".whatsapp.net")
-        })
+        && url.host_str() == Some(MEDIA_HOST)
+        && url.port_or_known_default() == Some(443)
 }
 
 fn retry_after(headers: &HeaderMap) -> Option<Duration> {
@@ -780,6 +784,125 @@ mod tests {
             1,
             "refused requests never reach the transport"
         );
+    }
+
+    /// Where an absolute URL may take the token: the configured Graph
+    /// endpoint and `https://lookaside.fbsbx.com` (media downloads), and
+    /// nothing else — not other Meta hosts, not look-alikes, not
+    /// `graph.facebook.com` when the client is configured for a proxy.
+    #[tokio::test]
+    async fn credentials_go_only_to_the_endpoint_and_the_media_host() {
+        let allowed = [
+            "https://graph.facebook.com/v25.0/1037543291543636",
+            "https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1",
+            "https://LOOKASIDE.fbsbx.com/x",
+            "https://lookaside.fbsbx.com:443/x",
+        ];
+        let denied = [
+            "https://evil.example/steal",
+            "http://lookaside.fbsbx.com/x",
+            "https://lookaside.fbsbx.com:8443/x",
+            "https://lookaside.fbsbx.com./x",
+            "https://lookaside.fbsbx.com.evil.example/x",
+            "https://evil.lookaside.fbsbx.com/x",
+            "https://scontent.xx.fbsbx.com/x",
+            "https://www.facebook.com/x",
+            "https://business.facebook.com/x",
+            "https://pps.whatsapp.net/v/t61.24",
+            "https://mmg.whatsapp.net/v/redacted",
+            "https://scontent.xx.fbcdn.net/q.png",
+            "http://graph.facebook.com/v25.0/1",
+            "https://graph.facebook.com:8443/v25.0/1",
+        ];
+        for url in allowed {
+            let t = ScriptedTransport::new();
+            t.push_bytes(200, "image/jpeg", "jpg");
+            let sent = client(&t)
+                .request_url(Method::GET, Url::parse(url).unwrap())
+                .send_raw()
+                .await;
+            assert!(sent.is_ok(), "{url}: {sent:?}");
+            assert_eq!(t.last_request().unwrap().bearer(), Some("TOKEN"), "{url}");
+            assert_eq!(t.remaining(), 0);
+        }
+        for url in denied {
+            let t = ScriptedTransport::new();
+            let err = client(&t)
+                .request_url(Method::GET, Url::parse(url).unwrap())
+                .send_raw()
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, Error::Validation(v) if v.field == "url"),
+                "{url}: {err}"
+            );
+            assert!(t.requests().is_empty(), "{url} reached the transport");
+        }
+
+        // A client configured for a proxy sends its token to the proxy and
+        // the media host only; production Graph is just another host then.
+        let t = ScriptedTransport::new();
+        t.push_bytes(200, "application/json", "{}");
+        t.push_bytes(200, "image/jpeg", "jpg");
+        let proxied = Client::builder()
+            .transport(t.clone())
+            .access_token("TOKEN")
+            .endpoint(
+                wa_core::config::GraphEndpoint::custom(
+                    "https://graph-proxy.internal/",
+                    wa_core::config::ApiVersion::DEFAULT,
+                )
+                .unwrap(),
+            )
+            .build()
+            .unwrap();
+        for url in [
+            "https://graph-proxy.internal/v25.0/1",
+            "https://lookaside.fbsbx.com/x",
+        ] {
+            assert!(
+                proxied
+                    .request_url(Method::GET, Url::parse(url).unwrap())
+                    .send_raw()
+                    .await
+                    .is_ok(),
+                "{url}"
+            );
+        }
+        let err = proxied
+            .request_url(
+                Method::GET,
+                Url::parse("https://graph.facebook.com/v25.0/1").unwrap(),
+            )
+            .send_raw()
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Validation(_)), "{err}");
+        assert_eq!(t.requests().len(), 2);
+    }
+
+    /// The query can hold `client_secret`, an Embedded Signup `code` or an
+    /// `access_token`: `Debug` (what `?request` logs) shows method and path
+    /// only.
+    #[test]
+    fn debug_never_prints_the_query() {
+        let t = ScriptedTransport::new();
+        let request = client(&t)
+            .get("oauth/access_token")
+            .query("client_id", "1234")
+            .query("client_secret", "s3cr3t-app-secret")
+            .query("code", "AQBx-signup-code")
+            .query("access_token", "EAAB-token");
+        let debug = format!("{request:?}");
+        assert_eq!(
+            debug,
+            "GraphRequest { method: GET, path: \"/v25.0/oauth/access_token\", .. }"
+        );
+        for secret in ["s3cr3t", "AQBx", "EAAB", "client_secret", "code=", "?"] {
+            assert!(!debug.contains(secret), "{secret} in {debug}");
+        }
+        let alternate = format!("{request:#?}");
+        assert!(!alternate.contains("s3cr3t"), "{alternate}");
     }
 
     #[tokio::test]

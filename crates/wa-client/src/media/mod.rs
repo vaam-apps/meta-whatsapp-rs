@@ -19,7 +19,8 @@
 //!
 //! Uploaded media ids live 30 days; ids from webhooks 7 days. A media URL
 //! from [`Media::url`] expires after 5 minutes and needs the access token,
-//! which this client only attaches to Meta hosts over HTTPS.
+//! which this client only attaches to the Graph endpoint and
+//! `https://lookaside.fbsbx.com`, where Meta's media URLs point.
 //!
 //! # Upload and send
 //!
@@ -205,9 +206,10 @@ impl Media {
     /// Stream media whose URL you already have (from [`Media::url`], or a
     /// media webhook that carried `url` and `sha256`).
     ///
-    /// The token is only sent to the Graph endpoint or Meta's media CDN over
-    /// HTTPS; any other URL fails with a validation error before a byte is
-    /// sent. Not retried: fetch a fresh URL and call again.
+    /// The token is only sent to the Graph endpoint or
+    /// `https://lookaside.fbsbx.com`; any other URL fails with a validation
+    /// error (field `url`) before a byte is sent. Not retried: fetch a fresh
+    /// URL and call again.
     pub async fn download_with_info(&self, info: MediaInfo) -> Result<MediaDownload> {
         let url = Url::parse(&info.url)
             .map_err(|e| ValidationError::new("url", format!("not an absolute URL: {e}")))?;
