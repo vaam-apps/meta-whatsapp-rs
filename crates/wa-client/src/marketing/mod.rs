@@ -17,7 +17,7 @@
 //! | --- | --- | --- |
 //! | [`Client::marketing`](crate::Client::marketing) | phone number | [`Marketing::send`] |
 //! | [`Client::marketing_account`](crate::Client::marketing_account) | WABA | [`MarketingAccount::onboarding_status`], [`MarketingAccount::owner_business_info`], [`MarketingAccount::cloud_api_marketing_disabled`], [`MarketingAccount::set_cloud_api_marketing_disabled`] |
-//! | [`Client::marketing_business`](crate::Client::marketing_business) | business portfolio | [`MarketingBusiness::onboarding_status`], [`MarketingBusiness::client_wabas_with_status`], [`MarketingBusiness::request_onboarding`] |
+//! | [`Client::marketing_business`](crate::Client::marketing_business) | business portfolio | [`MarketingBusiness::onboarding_status`], [`MarketingBusiness::client_wabas_with_status`] (+ `_stream`), [`MarketingBusiness::request_onboarding`] |
 //!
 //! What lives elsewhere: message TTL, max price (`optimization_spec`),
 //! deep links and creative-optimization opt-outs are *template* settings

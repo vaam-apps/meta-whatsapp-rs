@@ -64,6 +64,7 @@ use wa_core::ids::{BusinessId, WabaId};
 use wa_core::paging::Page;
 
 use crate::phone_numbers::{CreatedPhoneNumber, PhoneNumberInfo, fields_param};
+use crate::request::paginate_or_error;
 use crate::{Client, GraphRequest};
 
 /// Entry point, see [`Client::waba`].
@@ -212,7 +213,7 @@ impl Waba {
         &self,
         query: &PhoneNumbersQuery,
     ) -> impl Stream<Item = Result<PhoneNumberInfo>> + Send + 'static + use<> {
-        stream_or_error(self.phone_numbers_request(query))
+        paginate_or_error(self.phone_numbers_request(query))
     }
 
     /// `POST /{WABA_ID}/phone_numbers`: add a number to the WABA (only
@@ -331,21 +332,6 @@ impl Waba {
             .context("remove user response")
             .send_success()
             .await
-    }
-}
-
-/// A stream that yields the validation error once when the request could
-/// not be built, or the paginated items otherwise.
-pub(crate) fn stream_or_error<T>(
-    request: Result<GraphRequest>,
-) -> impl Stream<Item = Result<T>> + Send + 'static
-where
-    T: serde::de::DeserializeOwned + Send + 'static,
-{
-    use futures::StreamExt;
-    match request {
-        Ok(req) => req.paginate::<T>().left_stream(),
-        Err(e) => futures::stream::once(async move { Err(e) }).right_stream(),
     }
 }
 

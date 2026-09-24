@@ -40,6 +40,7 @@ use wa_core::error::ValidationError;
 use wa_core::ids::{GroupId, TemplateId, WabaId};
 use wa_core::paging::Page;
 
+use crate::request::paginate_or_error;
 use crate::{Client, GraphRequest};
 
 #[cfg(test)]
@@ -213,7 +214,7 @@ impl Analytics {
         &self,
         query: &TemplateAnalyticsQuery,
     ) -> impl Stream<Item = Result<TemplateAnalytics>> + Send + 'static {
-        paginate_or_fail(self.template_request(query))
+        paginate_or_error(self.template_request(query))
     }
 
     fn template_request(&self, query: &TemplateAnalyticsQuery) -> Result<GraphRequest> {
@@ -251,7 +252,7 @@ impl Analytics {
         &self,
         query: &TemplateGroupAnalyticsQuery,
     ) -> impl Stream<Item = Result<TemplateGroupAnalytics>> + Send + 'static {
-        paginate_or_fail(self.template_group_request(query))
+        paginate_or_error(self.template_group_request(query))
     }
 
     fn template_group_request(&self, query: &TemplateGroupAnalyticsQuery) -> Result<GraphRequest> {
@@ -285,7 +286,7 @@ impl Analytics {
         &self,
         query: &GroupAnalyticsQuery,
     ) -> impl Stream<Item = Result<GroupAnalytics>> + Send + 'static {
-        paginate_or_fail(self.groups_request(query))
+        paginate_or_error(self.groups_request(query))
     }
 
     fn groups_request(&self, query: &GroupAnalyticsQuery) -> Result<GraphRequest> {
@@ -366,19 +367,6 @@ impl Analytics {
             .context("set button click tracking response")
             .send_success()
             .await
-    }
-}
-
-fn paginate_or_fail<T>(
-    request: Result<GraphRequest>,
-) -> impl Stream<Item = Result<T>> + Send + 'static
-where
-    T: serde::de::DeserializeOwned + Send + 'static,
-{
-    use futures::{StreamExt, future, stream};
-    match request {
-        Ok(req) => req.paginate::<T>().left_stream(),
-        Err(e) => stream::once(future::ready(Err(e))).right_stream(),
     }
 }
 

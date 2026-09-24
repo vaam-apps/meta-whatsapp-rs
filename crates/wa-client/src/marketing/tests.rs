@@ -564,6 +564,46 @@ async fn lists_eligible_client_wabas_with_the_documented_filter() {
     assert_eq!(t.remaining(), 0);
 }
 
+/// Conventions review #7: the one list here without a `…_stream()`.
+#[tokio::test]
+async fn client_wabas_with_status_stream_follows_cursors_with_the_filter() {
+    use futures::StreamExt;
+    let t = ScriptedTransport::new();
+    t.push_json(
+        200,
+        json!({
+            "data": [{"id": "46302397361990", "name": "San Andreas Roofing"}],
+            "paging": {"cursors": {"after": "QVFI1"}, "next": "https://graph.facebook.com/x"}
+        }),
+    );
+    t.push_json(200, json!({"data": [{"id": "46302397361991"}]}));
+    let ids: Vec<String> = client(&t)
+        .marketing_business("19502398688333")
+        .client_wabas_with_status_stream(&[OnboardingStatus::Eligible])
+        .map(|w| w.unwrap().id.as_str().to_owned())
+        .collect()
+        .await;
+    assert_eq!(ids, ["46302397361990", "46302397361991"]);
+    let reqs = t.requests();
+    assert_eq!(reqs.len(), 2);
+    for (req, after) in reqs.iter().zip([None, Some("QVFI1")]) {
+        assert_eq!(req.method, Method::GET);
+        assert_eq!(
+            req.path(),
+            "/v25.0/19502398688333/client_whatsapp_business_accounts"
+        );
+        assert_eq!(req.bearer(), Some("TOKEN"));
+        let filtering: serde_json::Value =
+            serde_json::from_str(&req.query("filtering").unwrap()).unwrap();
+        assert_eq!(
+            filtering,
+            json!([{"field": "marketing_messages_onboarding_status", "operator": "IN", "value": ["ELIGIBLE"]}])
+        );
+        assert_eq!(req.query("after").as_deref(), after);
+    }
+    assert_eq!(t.remaining(), 0);
+}
+
 #[tokio::test]
 async fn intent_api_posts_and_returns_the_request_id() {
     let t = ScriptedTransport::new();

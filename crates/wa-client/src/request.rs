@@ -522,6 +522,35 @@ impl GraphRequest {
     }
 }
 
+/// `stream`, or — when it could not be built — a stream whose single item
+/// is the error. The one way a `…_stream()` method reports a request that
+/// failed before sending (a bad `limit`, a cursor the stream manages
+/// itself): as its first and only item, never a panic or an empty stream.
+pub(crate) fn stream_or_error<S, T>(
+    stream: Result<S>,
+) -> impl Stream<Item = Result<T>> + Send + 'static
+where
+    S: Stream<Item = Result<T>> + Send + 'static,
+    T: Send + 'static,
+{
+    use futures::StreamExt;
+    match stream {
+        Ok(stream) => stream.left_stream(),
+        Err(error) => futures::stream::once(futures::future::ready(Err(error))).right_stream(),
+    }
+}
+
+/// [`GraphRequest::paginate`] a request that may have failed to build, see
+/// [`stream_or_error`].
+pub(crate) fn paginate_or_error<T>(
+    request: Result<GraphRequest>,
+) -> impl Stream<Item = Result<T>> + Send + 'static
+where
+    T: DeserializeOwned + Send + 'static,
+{
+    stream_or_error(request.map(GraphRequest::paginate::<T>))
+}
+
 /// The one host besides the Graph endpoint that needs the token: media
 /// download URLs (from `GET /{media-id}` and media webhooks) point at it,
 /// and Meta refuses the download without the token
@@ -919,6 +948,24 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, Error::Validation(_)), "{err}");
         assert_eq!(t.requests().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_request_that_failed_to_build_streams_its_error_once() {
+        let t = ScriptedTransport::new();
+        let failed: Result<GraphRequest> = Err(ValidationError::new("limit", "too big").into());
+        let items: Vec<Result<u32>> = paginate_or_error(failed).collect().await;
+        assert_eq!(items.len(), 1);
+        assert!(matches!(&items[0], Err(Error::Validation(v)) if v.field == "limit"));
+        assert!(t.requests().is_empty());
+
+        t.push_json(200, json!({"data": [1, 2]}));
+        let items: Vec<u32> = paginate_or_error::<u32>(Ok(client(&t).get("x")))
+            .map(|r| r.unwrap())
+            .collect()
+            .await;
+        assert_eq!(items, [1, 2]);
+        assert_eq!(t.remaining(), 0);
     }
 
     /// The query can hold `client_secret`, an Embedded Signup `code` or an

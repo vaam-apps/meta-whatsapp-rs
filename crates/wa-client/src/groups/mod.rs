@@ -33,7 +33,7 @@
 //! (append `.md` for Markdown; `just meta-docs` mirrors them locally).
 
 use bytes::Bytes;
-use futures::{Stream, StreamExt, future, stream};
+use futures::{Stream, stream};
 use http::Method;
 use serde::{Deserialize, Deserializer, Serialize};
 use time::OffsetDateTime;
@@ -44,6 +44,7 @@ use wa_core::recipient::Recipient;
 use wa_core::transport::Multipart;
 use wa_core::{Error, GraphApiError, Result};
 
+use crate::request::{paginate_or_error, stream_or_error};
 use crate::{Client, GraphRequest};
 
 #[cfg(test)]
@@ -174,48 +175,46 @@ impl Groups {
         }
         let checked = reject_cursors(query.after.as_deref(), query.before.as_deref())
             .and_then(|()| validate_list_limit(query.limit));
-        if let Err(e) = checked {
-            return stream::once(future::ready(Err(e))).right_stream();
-        }
-        let state = State {
+        let state = checked.map(|()| State {
             client: self.client.clone(),
             phone_number_id: self.phone_number_id.clone(),
             limit: query.limit,
             after: None,
             buffer: Vec::new().into_iter(),
             done: false,
-        };
-        stream::unfold(state, |mut st| async move {
-            loop {
-                if let Some(item) = st.buffer.next() {
-                    return Some((Ok(item), st));
-                }
-                if st.done {
-                    return None;
-                }
-                let page = fetch_groups_page(
-                    &st.client,
-                    &st.phone_number_id,
-                    st.limit,
-                    st.after.as_deref(),
-                    None,
-                )
-                .await;
-                match page {
-                    Ok(page) => {
-                        let next = page.next_cursor().map(str::to_owned);
-                        st.done = next.is_none() || next == st.after;
-                        st.after = next;
-                        st.buffer = page.data.into_iter();
+        });
+        stream_or_error(state.map(|state| {
+            stream::unfold(state, |mut st| async move {
+                loop {
+                    if let Some(item) = st.buffer.next() {
+                        return Some((Ok(item), st));
                     }
-                    Err(e) => {
-                        st.done = true;
-                        return Some((Err(e), st));
+                    if st.done {
+                        return None;
+                    }
+                    let page = fetch_groups_page(
+                        &st.client,
+                        &st.phone_number_id,
+                        st.limit,
+                        st.after.as_deref(),
+                        None,
+                    )
+                    .await;
+                    match page {
+                        Ok(page) => {
+                            let next = page.next_cursor().map(str::to_owned);
+                            st.done = next.is_none() || next == st.after;
+                            st.after = next;
+                            st.buffer = page.data.into_iter();
+                        }
+                        Err(e) => {
+                            st.done = true;
+                            return Some((Err(e), st));
+                        }
                     }
                 }
-            }
-        })
-        .left_stream()
+            })
+        }))
     }
 
     /// Pin a message in a group for 1–30 days: `POST
@@ -422,12 +421,10 @@ impl Group {
         &self,
         query: &ListJoinRequests,
     ) -> impl Stream<Item = Result<JoinRequest>> + Send + 'static {
-        let request = reject_cursors(query.after.as_deref(), query.before.as_deref())
-            .map(|()| self.join_requests_request());
-        match request {
-            Ok(req) => req.paginate::<JoinRequest>().left_stream(),
-            Err(e) => stream::once(future::ready(Err(e))).right_stream(),
-        }
+        paginate_or_error(
+            reject_cursors(query.after.as_deref(), query.before.as_deref())
+                .map(|()| self.join_requests_request()),
+        )
     }
 
     fn join_requests_request(&self) -> GraphRequest {

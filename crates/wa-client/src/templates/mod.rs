@@ -89,13 +89,13 @@ pub use types::{
 };
 
 use futures::Stream;
-use futures::future::Either;
 use serde::{Deserialize, Serialize};
 use wa_core::Result;
 use wa_core::error::ValidationError;
 use wa_core::ids::{TemplateId, WabaId};
 use wa_core::paging::Page;
 
+use crate::request::paginate_or_error;
 use crate::{Client, GraphRequest};
 
 /// Entry point, see [`Client::templates`].
@@ -193,10 +193,7 @@ impl Templates {
         &self,
         query: &TemplateListQuery,
     ) -> impl Stream<Item = Result<TemplateInfo>> + Send + 'static {
-        match check_limit(query.limit) {
-            Ok(()) => Either::Left(self.list_request(query, false).paginate::<TemplateInfo>()),
-            Err(e) => Either::Right(futures::stream::once(async move { Err(e) })),
-        }
+        paginate_or_error(check_limit(query.limit).map(|()| self.list_request(query, false)))
     }
 
     /// One template with Meta's default fields (`GET /{template_id}`).

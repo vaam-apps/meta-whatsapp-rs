@@ -16,13 +16,14 @@
 //! `https://developers.facebook.com/documentation/business-messaging/whatsapp/`
 //! (append `.md` for Markdown; `just meta-docs` mirrors them locally).
 
-use futures::{Stream, StreamExt, future, stream};
+use futures::Stream;
 use serde::{Deserialize, Serialize};
 use wa_core::error::ValidationError;
 use wa_core::ids::{PhoneNumberId, QrCodeId};
 use wa_core::paging::Page;
 use wa_core::{Error, Result};
 
+use crate::request::paginate_or_error;
 use crate::{Client, GraphRequest};
 
 /// Maximum length of a prefilled message, in characters (`qr-codes`,
@@ -155,12 +156,10 @@ impl QrCodes {
         &self,
         query: &ListQrCodes,
     ) -> impl Stream<Item = Result<QrCode>> + Send + 'static {
-        let request = reject_cursors(query.after.as_deref(), query.before.as_deref())
-            .and_then(|()| self.list_request(query));
-        match request {
-            Ok(req) => req.paginate::<QrCode>().left_stream(),
-            Err(e) => stream::once(future::ready(Err(e))).right_stream(),
-        }
+        paginate_or_error(
+            reject_cursors(query.after.as_deref(), query.before.as_deref())
+                .and_then(|()| self.list_request(query)),
+        )
     }
 
     fn list_request(&self, query: &ListQrCodes) -> Result<GraphRequest> {
