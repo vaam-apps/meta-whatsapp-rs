@@ -1,6 +1,7 @@
 //! The `cms_inbox` example's app, driven in-process with
 //! `tower::ServiceExt::oneshot`: Meta's signed webhook in, the merchant's
-//! inbox out, the reply sent with the merchant's token.
+//! inbox out, the reply sent with the merchant's token — and only for the
+//! tenant who owns the number.
 //!
 //! The example file itself is compiled into this test (`#[path]` below), not
 //! a copy of it: what passes here is what `cargo run --example cms_inbox`
@@ -22,11 +23,10 @@
 mod cms_inbox;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use axum::Router;
-use axum::body::Body;
-use axum::http::{Method, Request, StatusCode, header};
+use async_trait::async_trait;
 use http_body_util::{BodyExt, Limited};
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
@@ -35,8 +35,13 @@ use time::format_description::well_known::Rfc3339;
 use tower::ServiceExt;
 use wa_rs::adapters::store::{MemoryConversationStore, MemoryKvStore};
 use wa_rs::client::embedded_signup::{StoredBusinessToken, TokenVault, VaultKey, VaultKeys};
+use wa_rs::core::error::StorageError;
+use wa_rs::core::store::{Expiry, StoreKey, Versioned};
 use wa_rs::core::testing::ScriptedTransport;
 use wa_rs::prelude::*;
+use wa_rs::webhooks::axum::Router;
+use wa_rs::webhooks::axum::body::Body;
+use wa_rs::webhooks::axum::http::{Method, Request, StatusCode, header};
 use wa_rs::webhooks::server::SIGNATURE_HEADER;
 use wa_rs::webhooks::{WebhookPayload, dedup, sign};
 
@@ -46,14 +51,24 @@ const PNID: &str = "106540352242922";
 const BSUID: &str = "US.13491208655302741918";
 const INBOUND_ID: &str = "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQTRBNjU5OUFFRTAzODEwMTQ0RgA=";
 const INBOUND_TEXT: &str = "Does it come in another color?";
-/// Another merchant's number on the same app.
+/// Another merchant's number on the same app, connected with that
+/// merchant's own token.
 const OTHER_PNID: &str = "106540352242923";
+const OTHER_WABA: &str = "102290129340399";
+const OTHER_TOKEN: &str = "EAAOTHER-MERCHANT-BUSINESS-TOKEN";
+/// Listed for merchant A, but nobody connected it.
+const UNCONNECTED_PNID: &str = "106540352242924";
 /// Same page, "Send message response", addressed by BSUID.
 const SENT_ID: &str = "wamid.HBgLMTY0NjcwNDM1OTUVAgARGBI1RjQyNUE3NEYxMzAzMzQ5MkEA";
 
 const APP_SECRET: &str = "5e1f0c2d3b4a59687f6e5d4c3b2a1908";
 const VERIFY_TOKEN: &str = "vibecoding";
 const MERCHANT_TOKEN: &str = "EAAMERCHANT-BUSINESS-TOKEN";
+
+/// The CMS's own logins (the example's stand-in): merchant A owns `PNID`
+/// (and `UNCONNECTED_PNID`), merchant B owns `OTHER_PNID`.
+const TENANT_A_BEARER: &str = "tenant-a-6b1f0e0d9c8b7a69584736251403f2e1";
+const TENANT_B_BEARER: &str = "tenant-b-0f1e2d3c4b5a69788796a5b4c3d2e1f0";
 
 /// Every read of a response body is capped in size and time: a route that
 /// streams by mistake fails the test instead of hanging it.
@@ -65,10 +80,69 @@ struct Harness {
     graph: ScriptedTransport,
     /// Backs webhook dedup and the token vault.
     kv: Arc<dyn KvStore>,
+    /// How many times the vault read its store.
+    vault_reads: Arc<AtomicUsize>,
 }
 
-/// The example's app on a scripted Graph API, with one merchant connected:
-/// `PNID` belongs to `WABA`, whose business token is `MERCHANT_TOKEN`.
+/// A `KvStore` that counts `get`s: what the vault reads when it looks up a
+/// merchant's token.
+#[derive(Debug)]
+struct CountingKv {
+    inner: Arc<dyn KvStore>,
+    gets: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl KvStore for CountingKv {
+    async fn get(&self, key: &StoreKey) -> Result<Option<Versioned>, StorageError> {
+        self.gets.fetch_add(1, Ordering::SeqCst);
+        self.inner.get(key).await
+    }
+    async fn put(
+        &self,
+        key: &StoreKey,
+        value: Vec<u8>,
+        expiry: Expiry,
+    ) -> Result<u64, StorageError> {
+        self.inner.put(key, value, expiry).await
+    }
+    async fn put_if_absent(
+        &self,
+        key: &StoreKey,
+        value: Vec<u8>,
+        expiry: Expiry,
+    ) -> Result<Option<u64>, StorageError> {
+        self.inner.put_if_absent(key, value, expiry).await
+    }
+    async fn compare_and_swap(
+        &self,
+        key: &StoreKey,
+        expected: u64,
+        new: Option<Vec<u8>>,
+        expiry: Expiry,
+    ) -> Result<Option<u64>, StorageError> {
+        self.inner
+            .compare_and_swap(key, expected, new, expiry)
+            .await
+    }
+    async fn delete(&self, key: &StoreKey) -> Result<bool, StorageError> {
+        self.inner.delete(key).await
+    }
+}
+
+/// The example's tenants: A owns `PNID` and `UNCONNECTED_PNID`, B owns
+/// `OTHER_PNID`.
+fn tenants() -> cms_inbox::Tenants {
+    cms_inbox::Tenants::default()
+        .tenant("merchant-a", TENANT_A_BEARER, [PNID, UNCONNECTED_PNID])
+        .unwrap()
+        .tenant("merchant-b", TENANT_B_BEARER, [OTHER_PNID])
+        .unwrap()
+}
+
+/// The example's app on a scripted Graph API, with two merchants connected:
+/// `PNID` belongs to `WABA`, whose business token is `MERCHANT_TOKEN`, and
+/// `OTHER_PNID` to `OTHER_WABA` (`OTHER_TOKEN`).
 async fn harness() -> Harness {
     let graph = ScriptedTransport::new();
     // No default token, as in the example's `main`.
@@ -78,18 +152,27 @@ async fn harness() -> Harness {
         .build()
         .unwrap();
     let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
+    let vault_reads = Arc::new(AtomicUsize::new(0));
+    let vault_kv = CountingKv {
+        inner: kv.clone(),
+        gets: vault_reads.clone(),
+    };
     let vault = TokenVault::new(
-        kv.clone(),
+        Arc::new(vault_kv),
         VaultKeys::new(VaultKey::generate("test").unwrap()),
     )
     .unwrap();
-    vault
-        .store(
-            &StoredBusinessToken::new(WABA, AccessToken::new(MERCHANT_TOKEN))
-                .phone_number_ids([PNID]),
-        )
-        .await
-        .unwrap();
+    for (waba, token, number) in [
+        (WABA, MERCHANT_TOKEN, PNID),
+        (OTHER_WABA, OTHER_TOKEN, OTHER_PNID),
+    ] {
+        vault
+            .store(
+                &StoredBusinessToken::new(waba, AccessToken::new(token)).phone_number_ids([number]),
+            )
+            .await
+            .unwrap();
+    }
     let app = cms_inbox::app(
         client,
         AppSecret::new(APP_SECRET),
@@ -97,9 +180,15 @@ async fn harness() -> Harness {
         kv.clone(),
         Arc::new(MemoryConversationStore::new()),
         vault,
+        tenants(),
     )
     .unwrap();
-    Harness { app, graph, kv }
+    Harness {
+        app,
+        graph,
+        kv,
+        vault_reads,
+    }
 }
 
 /// The dedup guard's marker for the (single) event in `body`: `done` once it
@@ -161,13 +250,41 @@ fn webhook(body: Vec<u8>, signature: Option<&str>) -> Request<Body> {
     request.body(Body::from(body)).unwrap()
 }
 
+/// A `GET` without credentials (the webhook route needs none).
 fn get(uri: &str) -> Request<Body> {
     Request::get(uri).body(Body::empty()).unwrap()
 }
 
+/// A `GET` as the tenant whose bearer token is `bearer`.
+fn get_as(bearer: &str, uri: &str) -> Request<Body> {
+    Request::get(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
+/// Merchant A's inbox (it owns `PNID`).
+fn get_a(uri: &str) -> Request<Body> {
+    get_as(TENANT_A_BEARER, uri)
+}
+
+/// A reply as merchant A.
 fn reply(phone_number_id: &str, contact: &str, text: &str) -> Request<Body> {
-    Request::post(format!("/inbox/{phone_number_id}/reply"))
-        .header(header::CONTENT_TYPE, "application/json")
+    reply_as(Some(TENANT_A_BEARER), phone_number_id, contact, text)
+}
+
+fn reply_as(
+    bearer: Option<&str>,
+    phone_number_id: &str,
+    contact: &str,
+    text: &str,
+) -> Request<Body> {
+    let mut request = Request::post(format!("/inbox/{phone_number_id}/reply"))
+        .header(header::CONTENT_TYPE, "application/json");
+    if let Some(bearer) = bearer {
+        request = request.header(header::AUTHORIZATION, format!("Bearer {bearer}"));
+    }
+    request
         .body(Body::from(
             json!({"contact": contact, "text": text}).to_string(),
         ))
@@ -263,7 +380,7 @@ async fn inbound_webhook_to_inbox_to_reply_with_the_merchants_token() {
     // The merchant's inbox is open and listening.
     let events = app
         .clone()
-        .oneshot(get(&format!("/inbox/{PNID}/events")))
+        .oneshot(get_a(&format!("/inbox/{PNID}/events")))
         .await
         .unwrap();
     assert_eq!(events.status(), StatusCode::OK);
@@ -288,7 +405,7 @@ async fn inbound_webhook_to_inbox_to_reply_with_the_merchants_token() {
 
     // Stored: the conversation is listed, keyed by the BSUID.
     let (status, conversations) =
-        call_json(&app, get(&format!("/inbox/{PNID}/conversations"))).await;
+        call_json(&app, get_a(&format!("/inbox/{PNID}/conversations"))).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         conversations,
@@ -319,7 +436,7 @@ async fn inbound_webhook_to_inbox_to_reply_with_the_merchants_token() {
     // Recorded: newest first, the reply `accepted` until status webhooks
     // move it on; the window closes 24 hours after the customer wrote.
     let (status, conversation) =
-        call_json(&app, get(&format!("/inbox/{PNID}/conversations/{BSUID}"))).await;
+        call_json(&app, get_a(&format!("/inbox/{PNID}/conversations/{BSUID}"))).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         conversation["window_closes_at"],
@@ -363,14 +480,14 @@ async fn inbound_webhook_to_inbox_to_reply_with_the_merchants_token() {
     );
 
     // Opening the conversation marked it read.
-    let (_, conversations) = call_json(&app, get(&format!("/inbox/{PNID}/conversations"))).await;
+    let (_, conversations) = call_json(&app, get_a(&format!("/inbox/{PNID}/conversations"))).await;
     assert_eq!(conversations[0]["unread"], 0);
     assert_eq!(conversations[0]["last_text"], "Yes: navy and olive.");
 }
 
 #[tokio::test]
 async fn webhook_route_checks_the_verify_token_signature_and_retries() {
-    let Harness { app, graph, kv } = harness().await;
+    let Harness { app, graph, kv, .. } = harness().await;
 
     // The dashboard's subscription check, on the nested route.
     let (status, challenge) = call(
@@ -400,7 +517,7 @@ async fn webhook_route_checks_the_verify_token_signature_and_retries() {
         call(&app, webhook(body.clone(), Some(&forged))).await.0,
         StatusCode::UNAUTHORIZED
     );
-    let (_, conversations) = call_json(&app, get(&format!("/inbox/{PNID}/conversations"))).await;
+    let (_, conversations) = call_json(&app, get_a(&format!("/inbox/{PNID}/conversations"))).await;
     assert_eq!(conversations, json!([]));
     assert_eq!(dedup_marker(&kv, &body).await, None);
 
@@ -414,7 +531,7 @@ async fn webhook_route_checks_the_verify_token_signature_and_retries() {
     }
     assert_eq!(dedup_marker(&kv, &body).await.as_deref(), Some("done"));
     let (_, conversation) =
-        call_json(&app, get(&format!("/inbox/{PNID}/conversations/{BSUID}"))).await;
+        call_json(&app, get_a(&format!("/inbox/{PNID}/conversations/{BSUID}"))).await;
     assert_eq!(conversation["messages"].as_array().unwrap().len(), 1);
     assert!(graph.requests().is_empty());
 }
@@ -435,15 +552,199 @@ async fn replies_are_refused_before_meta_when_they_cannot_go() {
             json!({"error": "customer_service_window_closed"})
         )
     );
-    // A number no merchant connected.
-    let (status, error) = call_json(&app, reply(OTHER_PNID, BSUID, "hi")).await;
+    // A number the tenant owns, but no merchant connected.
+    let (status, error) = call_json(&app, reply(UNCONNECTED_PNID, BSUID, "hi")).await;
     assert_eq!(
         (status, error),
         (StatusCode::NOT_FOUND, json!({"error": "not_connected"}))
     );
-    let (status, _) = call(&app, get(&format!("/inbox/{OTHER_PNID}/events"))).await;
+    let (status, _) = call(&app, get_a(&format!("/inbox/{UNCONNECTED_PNID}/events"))).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(graph.requests().is_empty(), "nothing reached Meta");
+}
+
+#[tokio::test]
+async fn inbox_routes_refuse_callers_without_a_tenant_token() {
+    let Harness {
+        app,
+        graph,
+        vault_reads,
+        ..
+    } = harness().await;
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let body = inbound_text(PNID, INBOUND_ID, now);
+    assert_eq!(call(&app, signed_webhook(body)).await.0, StatusCode::OK);
+    let reads_before = vault_reads.load(Ordering::SeqCst);
+
+    let routes = [
+        format!("/inbox/{PNID}/events"),
+        format!("/inbox/{PNID}/conversations"),
+        format!("/inbox/{PNID}/conversations/{BSUID}"),
+    ];
+    let credentials = [
+        None,
+        Some("Bearer not-a-tenant-token-000000000000000000".to_owned()),
+        // Merchant A's token, but not as a bearer token.
+        Some(format!("Basic {TENANT_A_BEARER}")),
+        Some(TENANT_A_BEARER.to_owned()),
+        Some("Bearer ".to_owned()),
+    ];
+    for authorization in &credentials {
+        let requests = routes
+            .iter()
+            .map(|uri| {
+                let mut request = Request::get(uri.as_str());
+                if let Some(value) = authorization {
+                    request = request.header(header::AUTHORIZATION, value);
+                }
+                request.body(Body::empty()).unwrap()
+            })
+            .chain([{
+                let mut request = reply_as(None, PNID, BSUID, "hello");
+                if let Some(value) = authorization {
+                    request
+                        .headers_mut()
+                        .insert(header::AUTHORIZATION, value.parse().unwrap());
+                }
+                request
+            }]);
+        for request in requests {
+            let uri = request.uri().clone();
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "{uri} with {authorization:?}"
+            );
+            assert_eq!(response.headers()[header::WWW_AUTHENTICATE], "Bearer");
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&body).unwrap(),
+                json!({"error": "unauthenticated"})
+            );
+        }
+    }
+    // Refused before anything was looked up or sent.
+    assert_eq!(vault_reads.load(Ordering::SeqCst), reads_before);
+    assert!(graph.requests().is_empty(), "nothing reached Meta");
+
+    // The same routes answer the tenant who owns the number.
+    let (status, conversations) =
+        call_json(&app, get_a(&format!("/inbox/{PNID}/conversations"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(conversations.as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_tenant_cannot_read_or_answer_another_tenants_number() {
+    let Harness {
+        app,
+        graph,
+        vault_reads,
+        ..
+    } = harness().await;
+    let now = OffsetDateTime::now_utc().unix_timestamp() - 60;
+    // Both merchants have a customer conversation.
+    let a = inbound_text(PNID, INBOUND_ID, now);
+    let b = inbound_text(OTHER_PNID, "wamid.OTHER", now);
+    assert_eq!(call(&app, signed_webhook(a)).await.0, StatusCode::OK);
+    assert_eq!(call(&app, signed_webhook(b)).await.0, StatusCode::OK);
+    let reads_before = vault_reads.load(Ordering::SeqCst);
+
+    // Merchant A, authenticated, on merchant B's (connected) number: every
+    // route is refused, before B's token is even read from the vault.
+    let forbidden = json!({"error": "forbidden"});
+    for uri in [
+        format!("/inbox/{OTHER_PNID}/events"),
+        format!("/inbox/{OTHER_PNID}/conversations"),
+        format!("/inbox/{OTHER_PNID}/conversations/{BSUID}"),
+    ] {
+        let (status, body) = call_json(&app, get_a(&uri)).await;
+        assert_eq!(
+            (status, body),
+            (StatusCode::FORBIDDEN, forbidden.clone()),
+            "{uri}"
+        );
+    }
+    let (status, body) = call_json(&app, reply(OTHER_PNID, BSUID, "Hi, it's A")).await;
+    assert_eq!((status, body), (StatusCode::FORBIDDEN, forbidden.clone()));
+    // And the other way round.
+    let (status, body) = call_json(
+        &app,
+        get_as(TENANT_B_BEARER, &format!("/inbox/{PNID}/conversations")),
+    )
+    .await;
+    assert_eq!((status, body), (StatusCode::FORBIDDEN, forbidden));
+    let (status, _) = call(
+        &app,
+        reply_as(Some(TENANT_B_BEARER), PNID, BSUID, "Hi, it's B"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    assert_eq!(
+        vault_reads.load(Ordering::SeqCst),
+        reads_before,
+        "the vault was consulted for a number the tenant does not own"
+    );
+    assert!(graph.requests().is_empty(), "nothing reached Meta");
+
+    // Merchant B reads and answers its own number, with its own token.
+    let (status, conversations) = call_json(
+        &app,
+        get_as(
+            TENANT_B_BEARER,
+            &format!("/inbox/{OTHER_PNID}/conversations"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(conversations[0]["key"]["phone_number_id"], OTHER_PNID);
+    graph.push_json(
+        200,
+        json!({
+          "messaging_product": "whatsapp",
+          "contacts": [{"input": BSUID, "user_id": BSUID}],
+          "messages": [{"id": SENT_ID}]
+        }),
+    );
+    let (status, _) = call_json(
+        &app,
+        reply_as(Some(TENANT_B_BEARER), OTHER_PNID, BSUID, "Hi, it's B"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let sent = graph.last_request().unwrap();
+    assert_eq!(sent.path(), format!("/v25.0/{OTHER_PNID}/messages"));
+    assert_eq!(sent.bearer(), Some(OTHER_TOKEN));
+    assert_eq!(graph.remaining(), 0);
+}
+
+#[test]
+fn tenants_config_refuses_what_would_open_the_inbox() {
+    use cms_inbox::Tenants;
+    // No tenant at all: the example does not start.
+    assert!(Tenants::from_json("{}").is_err());
+    // A guessable token.
+    let short = Tenants::from_json(r#"{"a": {"token": "hunter2", "phone_number_ids": ["1"]}}"#);
+    assert!(short.is_err());
+    // Two tenants sharing a token: whose request would it be?
+    let json = format!(
+        r#"{{"a": {{"token": "{TENANT_A_BEARER}"}}, "b": {{"token": "{TENANT_A_BEARER}"}}}}"#
+    );
+    assert!(Tenants::from_json(&json).is_err());
+    // A malformed value is refused without echoing it (it holds tokens).
+    let error = Tenants::from_json(r#"{"a": "tenant-a-6b1f0e0d9c8b7a69584736251403f2e1"}"#)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(!error.contains("6b1f0e0d"), "{error}");
+    assert!(
+        Tenants::from_json(&format!(
+            r#"{{"a": {{"token": "{TENANT_A_BEARER}", "phone_number_ids": ["{PNID}"]}}}}"#
+        ))
+        .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -484,6 +785,6 @@ async fn invalid_replies_and_metas_window_refusal_map_to_stable_codes() {
     assert_eq!(graph.remaining(), 0);
     // A refused reply is not recorded.
     let (_, conversation) =
-        call_json(&app, get(&format!("/inbox/{PNID}/conversations/{BSUID}"))).await;
+        call_json(&app, get_a(&format!("/inbox/{PNID}/conversations/{BSUID}"))).await;
     assert_eq!(conversation["messages"].as_array().unwrap().len(), 1);
 }

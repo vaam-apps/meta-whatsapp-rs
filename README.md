@@ -27,9 +27,14 @@ pinned to a commit:
 [dependencies]
 wa-rs = { git = "https://github.com/vaam-apps/wa-rs", rev = "<commit>", features = ["axum", "postgres"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-# Only for the webhook router and SSE: the same major version wa-rs uses.
-axum = "0.8"
 ```
+
+axum and sqlx types are part of the API (`Router`, `PgPool`), so use the
+versions wa-rs was built with, re-exported: `wa_rs::webhooks::axum`
+(feature `axum`) and `wa_rs::adapters::store::postgres::sqlx` (feature
+`postgres`), as the examples do. If you need axum features wa-rs does not
+turn on, add `axum = "0.8"` with them yourself: Cargo builds one axum 0.8
+for both, so the types still match.
 
 `use wa_rs::prelude::*;` brings in the client, ids, `Recipient`, the
 message and template builders, the webhook pieces, the storage and sink
@@ -79,10 +84,12 @@ let state = signup.sessions.start(&tenant, ATTEMPT_TTL).await?;
 let launch_options = LaunchOptions::new(signup.config_id.as_str()).to_json()?;
 ```
 
-When the page posts back the code and the `WA_EMBEDDED_SIGNUP` event,
-redeem the state for the merchant your own authentication says is calling,
-then onboard: exchange the code, check the WABA and number with Meta, store
-the token encrypted, subscribe the app, register the number.
+When the page posts back the code, the `WA_EMBEDDED_SIGNUP` event and the
+number's two-step verification PIN (the merchant's own, typed into the page),
+redeem the state for the merchant your own authentication says is calling —
+never a tenant named by the page or the URL — then onboard: exchange the
+code, check the WABA and number with Meta, store the token encrypted,
+subscribe the app, register the number.
 
 ```rust
 // Exactly once, and only for the merchant who started the attempt.
@@ -114,10 +121,18 @@ let handler = WebhookHandler::builder(
 let webhook = wa_rs::webhooks::router(Arc::new(handler)); // GET verify, POST deliver
 ```
 
-Replies go out as the merchant who connected the number, with the token
-Embedded Signup stored, and only inside the 24-hour window:
+Every `/inbox` route first asks who is calling (a bearer token in the
+example, your session in your CMS) and whether that merchant owns the
+number; only then is the merchant's token taken from the vault. Replies go
+out as that merchant, and only inside the 24-hour window:
 
 ```rust
+// Your own table says which numbers this tenant owns; ask it before
+// touching the vault, whose tokens belong to every merchant.
+if !state.tenants.owns(tenant, &number) {
+    return Err(ApiError::Forbidden);
+}
+// The business token Embedded Signup stored for this number's WABA.
 let Some(merchant) = state.vault.get_by_phone_number(&number).await? else {
     return Err(ApiError::NotConnected);
 };
@@ -127,8 +142,10 @@ let key = inbox.key(body.contact);
 let sent = inbox.reply(&key, Text::new(body.text).into()).await?;
 ```
 
-The example's `/inbox` routes are unauthenticated: in your CMS they sit
-behind your own authentication and check that the merchant owns the number.
+Both servers listen on `127.0.0.1` unless `WA_BIND` says otherwise, and
+refuse to start without `WA_TENANTS`, the stand-in for your authentication
+(bearer token → tenant, and tenant → phone numbers for the inbox). Replace
+it with your own sessions and tenant table; keep the checks where they are.
 
 ### OTP login
 
@@ -163,10 +180,12 @@ let verified = otp.verify(&user, PURPOSE, code.trim()).await?; // counts as an a
 | `cms_inbox` | webhook endpoint, inbox, SSE, replies | `cargo run -p wa-rs --example cms_inbox --features axum` |
 | `otp_login` | issue and verify a code | `cargo run -p wa-rs --example otp_login` |
 
-Add `postgres` to the features and set `DATABASE_URL` to run
-`embedded_signup` and `cms_inbox` on Postgres; with the same
-`DATABASE_URL` and `WA_VAULT_KEY`, the merchant you connect in the first is
-the one you chat as in the second.
+`embedded_signup` and `cms_inbox` need `WA_TENANTS` (their headers show a
+one-line setup). Add `postgres` to the features and set `DATABASE_URL` to
+run them on Postgres; with the same `DATABASE_URL`, `WA_VAULT_KEY` and
+`WA_TENANTS`, the merchant you connect in the first is the one you chat as
+in the second (list the connected number under that tenant's
+`phone_number_ids`).
 
 ## Feature flags
 

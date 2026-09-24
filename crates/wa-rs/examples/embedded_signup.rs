@@ -4,62 +4,79 @@
 //! ```text
 //! merchant's browser                         this server                          Meta
 //! GET /  (page, Facebook JS SDK)
-//! GET /signup/start ───────────────────────► SignupSessions::start (state ↔ tenant)
+//! GET /signup/start (bearer) ──────────────► SignupSessions::start (state ↔ tenant)
 //!     ◄── {state, launch_options} ───────────┘
 //! FB.login(callback, launch_options) ──────────────────────────────────────────► popup
 //!     ◄── code (30 s, single use) + WA_EMBEDDED_SIGNUP message event ──────────────┘
-//! POST /signup/complete {state, code, event} ► redeem(state, tenant)
-//!                                              EmbeddedSignup::onboard ──────────► exchange code, debug_token,
+//! POST /signup/complete (bearer) ──────────► redeem(state, tenant)
+//!   {state, code, event, pin?}                 EmbeddedSignup::onboard ──────────► exchange code, debug_token,
 //!                                                 └► TokenVault (by WABA, by number)  verify WABA and number,
 //!                                                                                    subscribe app, register
 //! ```
 //!
-//! | Route | What |
-//! | --- | --- |
-//! | `GET /` | a minimal page with the Facebook JavaScript SDK launch code |
-//! | `GET /signup/start?tenant=…` | a new attempt bound to the merchant: `{"state", "launch_options"}` |
-//! | `POST /signup/complete?tenant=…` | `{"state", "code", "event"}` from the page: redeem, onboard, store |
-//! | `POST /signup/resume?tenant=…` | `{"pin"?}`: after `subscribe_app` or `register_phone` failed, redo just those |
+//! | Route | Who may call | What |
+//! | --- | --- | --- |
+//! | `GET /` | anyone | a minimal page with the Facebook JavaScript SDK launch code (no secrets in it) |
+//! | `GET /signup/start` | a tenant | a new attempt bound to the calling tenant: `{"state", "launch_options"}` |
+//! | `POST /signup/complete` | the tenant who started it | `{"state", "code", "event", "pin"?}` from the page: redeem, onboard, store |
+//! | `POST /signup/resume` | the tenant whose attempt it was | `{"pin"?}`: after `subscribe_app` or `register_phone` failed, redo just those |
 //!
-//! **`tenant` in the query string stands in for your own session.** In
-//! production it is the merchant id your authentication established for the
-//! request, never a value the page chooses; that is what makes
-//! [`SignupSessions::redeem`] bind the code to the right merchant.
+//! # Who is calling
+//!
+//! The tenant (a merchant of your CMS) is whoever your authentication says
+//! is calling — never a value the page or the URL chooses. That is what makes
+//! [`SignupSessions::redeem`] bind the code to the right merchant, and what
+//! stops one merchant from resuming another's onboarding with their own PIN.
+//! Here every `/signup` request needs `Authorization: Bearer <token>`, and
+//! [`Tenants`], configured from `WA_TENANTS`, maps tokens to tenants: **a
+//! stand-in for your session handling**; replace it, and keep the tenant
+//! coming from it. Without `WA_TENANTS` the example does not start; it
+//! listens on `127.0.0.1` unless `WA_BIND` says otherwise.
+//!
+//! # The two-step verification PIN
+//!
+//! Registering a Cloud API number sets its two-step verification PIN (or
+//! must match the one it already has), so the PIN is the **merchant's**: the
+//! page asks for it and posts it with the attempt, and nothing here logs or
+//! stores it. One PIN shared by every merchant's number would let a single
+//! leak take over all of them. Without a PIN the number is left
+//! unregistered.
 //!
 //! The page must be served over HTTPS from a domain listed in the app's
 //! **Allowed domains** and **Valid OAuth redirect URIs** (Facebook Login for
 //! Business → Settings); use a tunnel in development. The token stored here
 //! is what the `cms_inbox` example replies with: run both against the same
-//! `DATABASE_URL` and `WA_VAULT_KEY`.
+//! `DATABASE_URL`, `WA_VAULT_KEY` and `WA_TENANTS`.
 //!
 //! | Variable | Required | What |
 //! | --- | --- | --- |
 //! | `WA_APP_ID` | yes | your Meta app id (public: it is written into the page) |
 //! | `WA_APP_SECRET` | yes | exchanges the code for the business token |
 //! | `WA_ES_CONFIG_ID` | yes | the Facebook Login for Business configuration id (App Dashboard → Facebook Login for Business → Configurations) |
-//! | `WA_REGISTER_PIN` | no | six digits: register Cloud API numbers with this two-step verification PIN; without it numbers are left unregistered |
+//! | `WA_TENANTS` | yes | stand-in for your auth: `{"<tenant>": {"token": "<bearer, 32+ chars>"}}` (the `cms_inbox` example's value works as is) |
 //! | `WA_VAULT_KEY` | with `DATABASE_URL` | base64 of 32 random bytes (`openssl rand -base64 32`); without a database a throwaway key is generated |
 //! | `WA_VAULT_KEY_ID` | no | id recorded with each encrypted token (default `k1`) |
 //! | `DATABASE_URL` | no | Postgres (build with `--features postgres`); memory store otherwise |
+//! | `WA_BIND` | no | address to listen on (default `127.0.0.1`) |
 //! | `PORT` | no | default `3000` |
 //!
 //! ```text
-//! WA_APP_ID=… WA_APP_SECRET=… WA_ES_CONFIG_ID=… \
+//! TOKEN=$(openssl rand -hex 32)   # the demo tenant's bearer token: paste it into the page
+//! WA_TENANTS='{"demo-merchant": {"token": "'"$TOKEN"'"}}' \
+//!   WA_APP_ID=… WA_APP_SECRET=… WA_ES_CONFIG_ID=… \
 //!   cargo run -p wa-rs --example embedded_signup --features axum
 //! ```
 
 use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use anyhow::Context as _;
-use axum::extract::{DefaultBodyLimit, Query, State};
-use axum::http::StatusCode;
-use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{get, post};
-use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 use wa_rs::adapters::store::MemoryKvStore;
 use wa_rs::client::embedded_signup::{
     CurrentStep, EmbeddedSignup, EmbeddedSignupEvent, FinishKind, LaunchOptions, OnboardingRequest,
@@ -68,6 +85,13 @@ use wa_rs::client::embedded_signup::{
 use wa_rs::client::phone_numbers::TwoStepPin;
 use wa_rs::core::config::ApiVersion;
 use wa_rs::prelude::*;
+// The axum the webhook router is built with, re-exported: no pin of your own.
+use wa_rs::webhooks::axum::extract::{DefaultBodyLimit, Request, State};
+use wa_rs::webhooks::axum::http::{HeaderValue, StatusCode, header};
+use wa_rs::webhooks::axum::middleware::{self, Next};
+use wa_rs::webhooks::axum::response::{Html, IntoResponse, Response};
+use wa_rs::webhooks::axum::routing::{get, post};
+use wa_rs::webhooks::axum::{self, Extension, Json, Router};
 
 /// How long a merchant has to go through the flow: several screens, maybe
 /// an SMS code.
@@ -84,14 +108,13 @@ pub struct Signup {
     pub vault: TokenVault,
     /// Facebook Login for Business configuration id.
     pub config_id: String,
-    /// Register Cloud API numbers with this PIN; `None` leaves them
-    /// unregistered.
-    pub pin: Option<TwoStepPin>,
+    /// Who is calling: the stand-in for your authentication.
+    pub tenants: Arc<Tenants>,
     /// Your tenant → WABA table. Onboarding verifies the WABA with Meta, but
     /// only you know which of *your* merchants may own it.
     pub merchants: Arc<Mutex<HashMap<String, WabaId>>>,
     /// Attempts whose token is stored but whose last steps failed, for
-    /// `/signup/resume`.
+    /// `/signup/resume`, by tenant.
     unfinished: Arc<Mutex<HashMap<String, (WabaId, OnboardingRequest)>>>,
 }
 
@@ -102,14 +125,14 @@ impl Signup {
         kv: Arc<dyn KvStore>,
         vault: TokenVault,
         config_id: impl Into<String>,
-        pin: Option<TwoStepPin>,
+        tenants: Tenants,
     ) -> Self {
         Self {
             onboarding,
             sessions: SignupSessions::new(kv),
             vault,
             config_id: config_id.into(),
-            pin,
+            tenants: Arc::new(tenants),
             merchants: Arc::default(),
             unfinished: Arc::default(),
         }
@@ -119,8 +142,7 @@ impl Signup {
 /// The routes. `signup.onboarding.app()` supplies the app id written
 /// into the page.
 pub fn app(signup: Signup) -> Router {
-    Router::new()
-        .route("/", get(page))
+    let authenticated = Router::new()
         .route("/signup/start", get(start))
         // The event comes from the browser: small, and not trusted.
         .route(
@@ -128,20 +150,22 @@ pub fn app(signup: Signup) -> Router {
             post(complete).layer(DefaultBodyLimit::max(16 * 1024)),
         )
         .route("/signup/resume", post(resume))
+        // Every route above: no tenant, no answer.
+        .route_layer(middleware::from_fn_with_state(
+            signup.tenants.clone(),
+            authenticate,
+        ));
+    Router::new()
+        .route("/", get(page))
+        .merge(authenticated)
         .with_state(signup)
 }
 
-/// Stand-in for your authentication: whose attempt this is.
-#[derive(Deserialize)]
-struct Tenant {
-    tenant: String,
-}
-
-/// `GET /signup/start?tenant=…`: bind a new attempt to the merchant and
-/// hand the page what `FB.login` needs.
+/// `GET /signup/start`: bind a new attempt to the calling merchant and hand
+/// the page what `FB.login` needs.
 async fn start(
     State(signup): State<Signup>,
-    Query(Tenant { tenant }): Query<Tenant>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
 ) -> Result<Json<Value>, ApiError> {
     let state = signup.sessions.start(&tenant, ATTEMPT_TTL).await?;
     let launch_options = LaunchOptions::new(signup.config_id.as_str()).to_json()?;
@@ -150,7 +174,8 @@ async fn start(
     ))
 }
 
-/// Body of `POST /signup/complete`: what the page collected.
+/// Body of `POST /signup/complete`: what the page collected. No `Debug`:
+/// it holds the code and the PIN.
 #[derive(Deserialize)]
 struct Completion {
     state: String,
@@ -158,17 +183,21 @@ struct Completion {
     code: String,
     /// The `WA_EMBEDDED_SIGNUP` message event, as received.
     event: Value,
+    /// The number's two-step verification PIN, typed by the merchant: it
+    /// becomes the PIN of a new number, or must match the one it has.
+    pin: Option<String>,
 }
 
-/// `POST /signup/complete?tenant=…`
+/// `POST /signup/complete`
 async fn complete(
     State(signup): State<Signup>,
-    Query(Tenant { tenant }): Query<Tenant>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Json(body): Json<Completion>,
 ) -> Result<Json<Value>, ApiError> {
     // Local checks first: a malformed request must not burn the attempt.
     let state = SignupState::parse(&body.state)?;
     let code = SignupCode::new(body.code)?;
+    let pin = body.pin.map(TwoStepPin::new).transpose()?;
     let event = EmbeddedSignupEvent::from_value(body.event)?;
     if let EmbeddedSignupEvent::Cancel(cancel) = &event {
         let step = cancel.current_step.as_ref().map(CurrentStep::as_str);
@@ -177,8 +206,8 @@ async fn complete(
     let mut request = OnboardingRequest::from_event(code, &event)?; // FINISH* only
     // Only the Cloud API flow has a number to register: coexistence numbers
     // are registered already, and FINISH_ONLY_WABA has none.
-    if let (Some(FinishKind::Finish), Some(pin)) = (event.finish_kind(), &signup.pin) {
-        request = request.register_with_pin(pin.clone());
+    if let (Some(FinishKind::Finish), Some(pin)) = (event.finish_kind(), pin) {
+        request = request.register_with_pin(pin);
     }
 
     // Exactly once, and only for the merchant who started the attempt.
@@ -216,7 +245,7 @@ async fn complete(
     }
 }
 
-/// Body of `POST /signup/resume`.
+/// Body of `POST /signup/resume`. No `Debug`: it holds the PIN.
 #[derive(Deserialize)]
 struct Resume {
     /// A corrected two-step verification PIN, when `register_phone` failed
@@ -224,16 +253,17 @@ struct Resume {
     pin: Option<String>,
 }
 
-/// `POST /signup/resume?tenant=…`: redo `subscribe_app` and
-/// `register_phone` with the token onboarding stored.
+/// `POST /signup/resume`: redo `subscribe_app` and `register_phone` with
+/// the token onboarding stored, for the calling merchant's own attempt.
 async fn resume(
     State(signup): State<Signup>,
-    Query(Tenant { tenant }): Query<Tenant>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Json(body): Json<Resume>,
 ) -> Result<Json<Value>, ApiError> {
     let pin = body.pin.map(TwoStepPin::new).transpose()?; // before taking the entry
     // `resume` acts with the stored token of the WABA it is given: this
-    // tenant-keyed table is what ties that WABA to the caller.
+    // table, keyed by the authenticated tenant, is what ties that WABA to
+    // the caller.
     let Some((waba_id, mut request)) = lock(&signup.unfinished).remove(&tenant) else {
         return Err(ApiError::NothingToResume);
     };
@@ -273,8 +303,106 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// How the signup routes fail: a stable code, never a token or a code.
+/// A tenant (merchant) of your CMS, as authenticated for this request.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Tenant(pub String);
+
+/// Stand-in for your authentication: bearer token → tenant.
+///
+/// Only SHA-256 digests of the tokens are kept, and a presented token is
+/// compared with every one of them in constant time. Build it in code with
+/// [`Tenants::tenant`], or from `WA_TENANTS` with [`Tenants::from_json`].
+#[derive(Default)]
+pub struct Tenants {
+    /// (SHA-256 of the bearer token, whose it is)
+    tokens: Vec<([u8; 32], Tenant)>,
+}
+
+/// Shortest bearer token accepted: 32 characters (`openssl rand -hex 32`
+/// gives 64).
+const MIN_TOKEN_LEN: usize = 32;
+
+impl Tenants {
+    /// Add `tenant`, authenticated by `token`.
+    pub fn tenant(mut self, tenant: &str, token: &str) -> anyhow::Result<Self> {
+        anyhow::ensure!(!tenant.is_empty(), "a tenant id is empty");
+        anyhow::ensure!(
+            token.len() >= MIN_TOKEN_LEN,
+            "tenant {tenant}: the bearer token must be at least {MIN_TOKEN_LEN} characters \
+             (`openssl rand -hex 32`)"
+        );
+        let digest: [u8; 32] = Sha256::digest(token.as_bytes()).into();
+        anyhow::ensure!(
+            !self.tokens.iter().any(|(known, _)| *known == digest),
+            "tenant {tenant}: another tenant has the same bearer token"
+        );
+        self.tokens.push((digest, Tenant(tenant.to_owned())));
+        Ok(self)
+    }
+
+    /// From JSON: `{"<tenant>": {"token": "…"}}` (other fields, such as the
+    /// `cms_inbox` example's `phone_number_ids`, are ignored). Refuses an
+    /// empty map. Errors never quote the input (it holds tokens).
+    pub fn from_json(json: &str) -> anyhow::Result<Self> {
+        #[derive(Deserialize)]
+        struct Entry {
+            token: String,
+        }
+        let entries: HashMap<String, Entry> = serde_json::from_str(json).map_err(|e| {
+            anyhow::anyhow!(
+                "WA_TENANTS: expected {{\"<tenant>\": {{\"token\": …}}}} (line {}, column {})",
+                e.line(),
+                e.column()
+            )
+        })?;
+        anyhow::ensure!(!entries.is_empty(), "WA_TENANTS lists no tenant");
+        entries
+            .into_iter()
+            .try_fold(Self::default(), |tenants, (tenant, entry)| {
+                tenants.tenant(&tenant, &entry.token)
+            })
+    }
+
+    /// The tenant whose token `authorization` (`Bearer <token>`) carries.
+    fn authenticate(&self, authorization: Option<&HeaderValue>) -> Option<Tenant> {
+        let value = authorization?.to_str().ok()?;
+        let (scheme, token) = value.split_once(' ')?;
+        if !scheme.eq_ignore_ascii_case("bearer") {
+            return None;
+        }
+        let presented: [u8; 32] = Sha256::digest(token.trim_start().as_bytes()).into();
+        // No early return: every entry is compared, each in constant time,
+        // so a guess learns nothing from how long the answer took.
+        let mut found = None;
+        for (digest, tenant) in &self.tokens {
+            if bool::from(digest.ct_eq(&presented)) {
+                found = Some(tenant.clone());
+            }
+        }
+        found
+    }
+}
+
+/// Middleware in front of the `/signup` routes: resolve the tenant, or `401`.
+async fn authenticate(
+    State(tenants): State<Arc<Tenants>>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    match tenants.authenticate(request.headers().get(header::AUTHORIZATION)) {
+        Some(tenant) => {
+            request.extensions_mut().insert(tenant);
+            next.run(request).await
+        }
+        None => ApiError::Unauthenticated.into_response(),
+    }
+}
+
+/// How the signup routes fail: a stable code, never a token, a code or a
+/// PIN.
 enum ApiError {
+    /// No bearer token, or one no tenant has.
+    Unauthenticated,
     /// The state expired, was already used, or is another merchant's.
     StaleAttempt,
     NothingToResume,
@@ -312,6 +440,11 @@ impl From<Error> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, body) = match self {
+            Self::Unauthenticated => {
+                let body = Json(json!({"error": "unauthenticated"}));
+                let challenge = [(header::WWW_AUTHENTICATE, "Bearer")];
+                return (StatusCode::UNAUTHORIZED, challenge, body).into_response();
+            }
             Self::StaleAttempt => (StatusCode::FORBIDDEN, json!({"error": "stale_attempt"})),
             Self::NothingToResume => (StatusCode::NOT_FOUND, json!({"error": "nothing_to_resume"})),
             Self::Invalid { field, reason } => (
@@ -359,20 +492,26 @@ const PAGE: &str = r#"<!doctype html>
     version: '__GRAPH_API_VERSION__',
   });
 
-  // Stand-in for your session: in production the server knows the merchant.
-  const tenant = 'demo-merchant';
   let attempt = null; // {state, code, event}, posted once all three are here
   let launchOptions = null;
 
+  // Stand-in for your session: in your CMS the browser already carries the
+  // merchant's login (a cookie), and the server knows who is calling.
+  function auth() {
+    return { authorization: 'Bearer ' + document.getElementById('token').value };
+  }
+
   // Fetched before the click: FB.login must run inside the click handler
   // itself, or the browser blocks the popup.
-  fetch('/signup/start?tenant=' + encodeURIComponent(tenant))
-    .then((r) => r.json())
-    .then(({ state, launch_options }) => {
-      attempt = { state, code: null, event: null };
-      launchOptions = launch_options;
-      document.getElementById('connect').disabled = false;
-    });
+  async function start() {
+    document.getElementById('connect').disabled = true;
+    const r = await fetch('/signup/start', { headers: auth() });
+    if (!r.ok) return show(r.status + ' ' + (await r.text()));
+    const { state, launch_options } = await r.json();
+    attempt = { state, code: null, event: null };
+    launchOptions = launch_options;
+    document.getElementById('connect').disabled = false;
+  }
 
   // Session info: the new asset ids (FINISH), or the screen left (CANCEL).
   window.addEventListener('message', (e) => {
@@ -401,16 +540,22 @@ const PAGE: &str = r#"<!doctype html>
   async function complete() {
     if (sent || !attempt.code || !attempt.event) return;
     sent = true;
-    const r = await fetch('/signup/complete?tenant=' + encodeURIComponent(tenant), {
+    // The merchant's own PIN: never logged, never stored.
+    const pin = document.getElementById('pin').value || null;
+    const r = await fetch('/signup/complete', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(attempt),
+      headers: { 'content-type': 'application/json', ...auth() },
+      body: JSON.stringify({ ...attempt, pin }),
     });
     show(r.status + ' ' + (await r.text()));
   }
 
   function show(text) { document.getElementById('result').textContent = text; }
 </script>
+<p><label>Your tenant token (stands in for your CMS login)
+  <input id="token" type="password" autocomplete="off" onchange="start()"></label></p>
+<p><label>Two-step verification PIN of the number (6 digits: the current one, or the one to set)
+  <input id="pin" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off"></label></p>
 <button id="connect" onclick="connect()" disabled>Connect WhatsApp</button>
 <pre id="result"></pre>
 "#;
@@ -428,10 +573,8 @@ async fn main() -> anyhow::Result<()> {
         "WA_APP_ID must be the numeric app id"
     );
     let credentials = AppCredentials::new(app_id, env("WA_APP_SECRET")?);
-    let pin = std::env::var("WA_REGISTER_PIN")
-        .ok()
-        .map(TwoStepPin::new)
-        .transpose()?;
+    // No tenants, no signup: the routes are never served unauthenticated.
+    let tenants = Tenants::from_json(&env("WA_TENANTS")?)?;
     let kv = kv_store().await?;
     let vault = TokenVault::new(kv.clone(), VaultKeys::new(vault_key()?))?;
     // No default token: onboarding authenticates with the app, then as the
@@ -443,10 +586,13 @@ async fn main() -> anyhow::Result<()> {
         kv,
         vault,
         env("WA_ES_CONFIG_ID")?,
-        pin,
+        tenants,
     );
+    let bind: IpAddr = std::env::var("WA_BIND")
+        .map_or(Ok(Ipv4Addr::LOCALHOST.into()), |a| a.parse())
+        .context("WA_BIND must be an IP address")?;
     let port: u16 = std::env::var("PORT").map_or(Ok(3000), |p| p.parse())?;
-    let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
+    let listener = tokio::net::TcpListener::bind((bind, port)).await?;
     println!("listening on http://{}", listener.local_addr()?);
     axum::serve(listener, app(signup)).await?;
     Ok(())
@@ -457,7 +603,9 @@ async fn kv_store() -> anyhow::Result<Arc<dyn KvStore>> {
     match std::env::var("DATABASE_URL") {
         #[cfg(feature = "postgres")]
         Ok(url) => {
-            use wa_rs::adapters::store::{PostgresKvStore, postgres};
+            // sqlx as wa-rs re-exports it: the `PgPool` the stores take.
+            use wa_rs::adapters::store::PostgresKvStore;
+            use wa_rs::adapters::store::postgres::{self, sqlx};
             let pool = sqlx::PgPool::connect(&url)
                 .await
                 .context("connect to DATABASE_URL")?;
