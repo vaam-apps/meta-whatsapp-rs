@@ -3,12 +3,13 @@
 //!
 //! | Request | Answer |
 //! | --- | --- |
-//! | `GET /` valid verification | `200 text/plain` with `hub.challenge` |
-//! | `GET /` anything else | `403` |
+//! | `GET /` valid verification | `200 text/plain` with `hub.challenge` (`nosniff`, `no-store`) |
+//! | `GET /` anything else, or a blank configured verify token | `403` |
 //! | `POST /` delivered, duplicate or unparseable-but-signed | `200` |
 //! | `POST /` missing, malformed or wrong signature | `401` |
 //! | `POST /` body over the limit | `413` |
 //! | `POST /` sink or dedup store failure | `500` (Meta redelivers) |
+//! | `POST /` an event is being delivered by another request ([`ClaimInFlight`]) | `503` (Meta redelivers) |
 //!
 //! Mount the router wherever your callback URL points
 //! (`Router::new().nest("/webhooks/whatsapp", router(handler))`).
@@ -20,7 +21,7 @@ use axum::Router;
 use axum::body::Bytes;
 use axum::extract::rejection::QueryRejection;
 use axum::extract::{DefaultBodyLimit, Query, State};
-use axum::http::header::CONTENT_TYPE;
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -31,6 +32,7 @@ use tokio::sync::broadcast::error::RecvError;
 use wa_core::Error;
 use wa_core::error::WebhookError;
 
+use crate::dedup::ClaimInFlight;
 use crate::event::WebhookEvent;
 use crate::handler::WebhookHandler;
 use crate::verify::VerificationQuery;
@@ -60,12 +62,24 @@ async fn verify(
         return StatusCode::FORBIDDEN.into_response();
     };
     match handler.verify(&query) {
+        // The challenge is reflected input. It is only echoed to someone who
+        // knows the verify token, but still as inert text: `text/plain` and
+        // `nosniff` so no browser renders it as HTML, `no-store` so no cache
+        // keeps a response that only proves the token once.
         Ok(challenge) => (
             StatusCode::OK,
-            [(CONTENT_TYPE, "text/plain; charset=utf-8")],
+            [
+                (CONTENT_TYPE, "text/plain; charset=utf-8"),
+                (X_CONTENT_TYPE_OPTIONS, "nosniff"),
+                (CACHE_CONTROL, "no-store"),
+            ],
             challenge,
         )
             .into_response(),
+        Err(error @ Error::Config(_)) => {
+            tracing::error!(%error, "webhook verification refused: handler misconfigured");
+            StatusCode::FORBIDDEN.into_response()
+        }
         Err(error) => {
             tracing::warn!(%error, "rejected webhook verification request");
             StatusCode::FORBIDDEN.into_response()
@@ -102,9 +116,12 @@ fn status_for(error: &Error) -> StatusCode {
         Error::Webhook(
             WebhookError::InvalidVerificationRequest(_) | WebhookError::VerifyTokenMismatch,
         ) => StatusCode::FORBIDDEN,
-        // The only validation `deliver` does is the body size. Behind the
-        // router's body limit layer this is a backstop, not the usual path.
-        Error::Validation(v) if v.field == "body" => StatusCode::PAYLOAD_TOO_LARGE,
+        // Behind the router's body limit layer this is a backstop, not the
+        // usual path; both answer 413.
+        Error::Webhook(WebhookError::PayloadTooLarge { .. }) => StatusCode::PAYLOAD_TOO_LARGE,
+        Error::Other(other) if other.downcast_ref::<ClaimInFlight>().is_some() => {
+            StatusCode::SERVICE_UNAVAILABLE
+        }
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
@@ -112,6 +129,15 @@ fn status_for(error: &Error) -> StatusCode {
 /// Stream events from a broadcast channel as Server-Sent Events, for a live
 /// inbox: subscribe a receiver to the channel your sink publishes to and
 /// return this from a handler.
+///
+/// The events carry your customers' messages. Mount the route behind your
+/// own authentication, and make `filter` an allow-list of what the viewer
+/// may see (`|e| e.phone_number_id() == Some(&merchant_number)`), never a
+/// deny-list: [`WebhookEvent::Unparsed`] and [`WebhookEvent::Unknown`] have
+/// no phone number id and carry raw bodies that can belong to any tenant on
+/// the app, so a filter such as `|e| e.phone_number_id().is_none_or(…)`
+/// leaks them to everyone. The filter runs before an event is serialized,
+/// so rejected events cost nothing.
 ///
 /// Each event that passes `filter` (typically "same phone number id as the
 /// merchant watching") is sent as `event: whatsapp` with the event's JSON as
@@ -157,7 +183,7 @@ mod tests {
 
     #[test]
     fn errors_map_to_the_documented_statuses() {
-        let cases: [(Error, StatusCode); 7] = [
+        let cases: [(Error, StatusCode); 9] = [
             (
                 WebhookError::MissingSignature.into(),
                 StatusCode::UNAUTHORIZED,
@@ -175,11 +201,20 @@ mod tests {
                 StatusCode::FORBIDDEN,
             ),
             (
-                ValidationError::new("body", "too big").into(),
+                WebhookError::PayloadTooLarge { size: 2, limit: 1 }.into(),
                 StatusCode::PAYLOAD_TOO_LARGE,
             ),
+            // No longer produced for the body size; must not turn into 413.
             (
-                ValidationError::new("other", "x").into(),
+                ValidationError::new("body", "too big").into(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+            (
+                Error::Other(ClaimInFlight.into()),
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            (
+                Error::Other(std::io::Error::other("integrator").into()),
                 StatusCode::INTERNAL_SERVER_ERROR,
             ),
             (SinkError::Closed.into(), StatusCode::INTERNAL_SERVER_ERROR),

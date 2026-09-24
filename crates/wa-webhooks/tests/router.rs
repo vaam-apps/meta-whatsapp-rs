@@ -15,9 +15,11 @@ use axum::http::{Request, StatusCode, header};
 use futures::StreamExt;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
+use wa_adapters::store::MemoryKvStore;
 use wa_core::secret::{AppSecret, VerifyToken};
 use wa_webhooks::{
-    SignatureVerifier, WebhookEvent, WebhookHandler, router, server::SIGNATURE_HEADER, sign, sse,
+    Claim, DedupGuard, SignatureVerifier, WebhookEvent, WebhookHandler, WebhookPayload, router,
+    server::SIGNATURE_HEADER, sign, sse,
 };
 
 use common::RecordingSink;
@@ -66,15 +68,87 @@ fn post(body: Vec<u8>, signature: Option<String>) -> Request<Body> {
 }
 
 #[tokio::test]
-async fn get_echoes_the_challenge_as_text() {
-    let (status, content_type, body) = send(
+async fn get_echoes_the_challenge_as_inert_text() {
+    let response = app(Arc::default(), None)
+        .oneshot(get(
+            "/?hub.mode=subscribe&hub.challenge=%3Cscript%3Ealert(1)%3C/script%3E&hub.verify_token=vibecoding",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers();
+    assert_eq!(headers[header::CONTENT_TYPE], "text/plain; charset=utf-8");
+    assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&body[..], b"<script>alert(1)</script>");
+
+    let (status, _, body) = send(
         app(Arc::default(), None),
         get("/?hub.mode=subscribe&hub.challenge=1158201444&hub.verify_token=vibecoding"),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(content_type.unwrap().starts_with("text/plain"));
     assert_eq!(body, "1158201444");
+}
+
+#[tokio::test]
+async fn a_blank_configured_verify_token_answers_403_to_everyone() {
+    for token in ["", " "] {
+        let app = router(Arc::new(
+            WebhookHandler::builder(
+                SignatureVerifier::new(vec![secret()]).unwrap(),
+                VerifyToken::new(token),
+                Arc::new(RecordingSink::default()),
+            )
+            .build(),
+        ));
+        for uri in [
+            "/?hub.mode=subscribe&hub.challenge=1&hub.verify_token=",
+            "/?hub.mode=subscribe&hub.challenge=1&hub.verify_token=%20",
+            "/?hub.mode=subscribe&hub.challenge=1&hub.verify_token=vibecoding",
+        ] {
+            let (status, _, body) = send(app.clone(), get(uri)).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{token:?} {uri}");
+            assert!(body.is_empty(), "challenge leaked: {body}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn post_is_503_while_another_request_delivers_the_same_event() {
+    let kv = Arc::new(MemoryKvStore::new());
+    let sink = Arc::new(RecordingSink::default());
+    let handler = WebhookHandler::builder(
+        SignatureVerifier::new(vec![secret()]).unwrap(),
+        VerifyToken::new("vibecoding"),
+        sink.clone(),
+    )
+    .dedup(DedupGuard::new(kv.clone()))
+    .build();
+    let app = router(Arc::new(handler));
+    let body = common::fixture_bytes("messages/text.json");
+    let event = WebhookPayload::from_slice(&body)
+        .unwrap()
+        .into_events()
+        .remove(0);
+    let other = DedupGuard::new(kv);
+    let Claim::Acquired(ticket) = other.claim(&event).await.unwrap() else {
+        panic!()
+    };
+
+    let (status, _, _) = send(
+        app.clone(),
+        post(body.clone(), Some(sign(&secret(), &body))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(sink.calls(), 0);
+
+    other.complete(&ticket).await.unwrap();
+    let (status, _, _) = send(app, post(body.clone(), Some(sign(&secret(), &body)))).await;
+    assert_eq!(status, StatusCode::OK, "a duplicate by now");
+    assert_eq!(sink.calls(), 0);
 }
 
 #[tokio::test]

@@ -11,7 +11,7 @@
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
-use wa_core::error::WebhookError;
+use wa_core::error::{ConfigError, WebhookError};
 use wa_core::secret::VerifyToken;
 
 /// The query string of a verification request. Every parameter is optional
@@ -33,12 +33,23 @@ pub struct VerificationQuery {
 /// Check a verification request and return the challenge to echo.
 ///
 /// Fails with [`WebhookError::InvalidVerificationRequest`] when `hub.mode`
-/// is not `subscribe` or a parameter is missing, and with
-/// [`WebhookError::VerifyTokenMismatch`] when the token differs.
+/// is not `subscribe` or a parameter is missing, with
+/// [`WebhookError::VerifyTokenMismatch`] when the token differs, and with
+/// [`ConfigError`] when `expected` is blank (empty or whitespace).
+///
+/// The blank check is fail-closed on purpose: a token read from an unset
+/// environment variable is `""`, and `""` equals the `hub.verify_token=`
+/// anyone can send, which would let a stranger (re)verify your callback.
 pub fn verify_subscription(
     query: &VerificationQuery,
     expected: &VerifyToken,
 ) -> wa_core::Result<String> {
+    if expected.expose_secret().trim().is_empty() {
+        return Err(ConfigError::new(
+            "webhook verify token is blank; refusing every verification request",
+        )
+        .into());
+    }
     if query.mode.as_deref() != Some("subscribe") {
         return Err(
             WebhookError::InvalidVerificationRequest("hub.mode must be `subscribe`").into(),
@@ -101,6 +112,28 @@ mod tests {
                 Err(Error::Webhook(WebhookError::InvalidVerificationRequest(_)))
             ));
         }
+    }
+
+    #[test]
+    fn blank_configured_token_never_matches_not_even_a_blank_one() {
+        for configured in ["", " ", "\n"] {
+            for given in ["", " ", "\n", "anything"] {
+                let q = query(Some("subscribe"), Some(given), Some("1158201444"));
+                assert!(
+                    matches!(
+                        verify_subscription(&q, &VerifyToken::new(configured)),
+                        Err(Error::Config(_))
+                    ),
+                    "configured {configured:?}, given {given:?}"
+                );
+            }
+        }
+        // A blank *given* token against a real one is a plain mismatch.
+        let q = query(Some("subscribe"), Some(""), Some("1"));
+        assert!(matches!(
+            verify_subscription(&q, &VerifyToken::new("vibecoding")),
+            Err(Error::Webhook(WebhookError::VerifyTokenMismatch))
+        ));
     }
 
     #[test]

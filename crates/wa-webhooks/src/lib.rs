@@ -5,8 +5,9 @@
 //!           ─► X-Hub-Signature-256: HMAC-SHA256 of the raw bytes, any of N app secrets
 //!           ─► WebhookPayload { object, entry[{ id, time?, changes[{ field, value }] }] }
 //!           ─► Vec<WebhookEvent>, one per message / status / error / field change
-//!           ─► DedupGuard (optional; KvStore put_if_absent, 7 days + 1 h)
+//!           ─► per event: DedupGuard claim (optional; 60 s lease in a KvStore)
 //!           ─► EventSink<WebhookEvent>
+//!           ─► DedupGuard complete (marker kept 7 days + 1 h)
 //! ```
 //!
 //! | Module | What |
@@ -16,7 +17,7 @@
 //! | [`payload`] | the envelope and per-field dispatch ([`ChangeValue`]) |
 //! | [`fields`] | typed values for every documented field |
 //! | [`event`] | [`WebhookEvent`] and [`events`] |
-//! | [`dedup`] | [`DedupGuard`] |
+//! | [`dedup`] | [`DedupGuard`]: claim, complete, release; replay notes |
 //! | [`handler`] | [`WebhookHandler`], the framework-independent endpoint |
 //! | `server` | axum `router` and `sse` helpers (feature `axum`) |
 //!
@@ -28,6 +29,9 @@
 //! the reason instead of failing the batch. Only a body that is not a
 //! webhook envelope at all becomes [`WebhookEvent::Unparsed`], and even that
 //! is acknowledged.
+//!
+//! Nothing derived from a body's content is logged (sizes, digests, field
+//! names and redacted error text only): bodies carry personal data.
 //!
 //! Identity follows the business-scoped user id (BSUID) rules: `user_id` is
 //! present in every messages webhook since April 2026, `wa_id` (the phone
@@ -92,13 +96,17 @@ pub mod fields;
 pub mod handler;
 pub(crate) mod open_enum;
 pub mod payload;
+pub(crate) mod redact;
 pub(crate) mod serde_ext;
 #[cfg(feature = "axum")]
 pub mod server;
 pub mod signature;
 pub mod verify;
 
-pub use dedup::{DEDUP_NAMESPACE, DEFAULT_DEDUP_TTL, DedupGuard};
+pub use dedup::{
+    Claim, ClaimInFlight, ClaimTicket, DEDUP_NAMESPACE, DEFAULT_CLAIM_LEASE, DEFAULT_DEDUP_TTL,
+    DedupGuard,
+};
 pub use event::{WebhookEvent, events};
 pub use handler::{DEFAULT_MAX_BODY_BYTES, DeliveryReport, WebhookHandler, WebhookHandlerBuilder};
 pub use payload::{Change, ChangeValue, Entry, WebhookPayload};
