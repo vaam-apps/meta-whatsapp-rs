@@ -83,6 +83,8 @@ features:
 # Licenses, advisories, duplicate versions, sources
 deny:
     cargo deny check
+    # .xtask is its own workspace (own Cargo.lock): check it too.
+    cargo deny --manifest-path .xtask/Cargo.toml --config deny.toml check
 
 # The gate. CI runs exactly this.
 ci: lint check test doc features deny test-live

@@ -86,6 +86,7 @@ use wa_rs::client::phone_numbers::TwoStepPin;
 use wa_rs::core::config::ApiVersion;
 use wa_rs::prelude::*;
 // The axum the webhook router is built with, re-exported: no pin of your own.
+use wa_rs::webhooks::axum::extract::rejection::JsonRejection;
 use wa_rs::webhooks::axum::extract::{DefaultBodyLimit, Request, State};
 use wa_rs::webhooks::axum::http::{HeaderValue, StatusCode, header};
 use wa_rs::webhooks::axum::middleware::{self, Next};
@@ -192,8 +193,9 @@ struct Completion {
 async fn complete(
     State(signup): State<Signup>,
     Extension(Tenant(tenant)): Extension<Tenant>,
-    Json(body): Json<Completion>,
+    body: Result<Json<Completion>, JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(invalid_body)?;
     // Local checks first: a malformed request must not burn the attempt.
     let state = SignupState::parse(&body.state)?;
     let code = SignupCode::new(body.code)?;
@@ -258,8 +260,9 @@ struct Resume {
 async fn resume(
     State(signup): State<Signup>,
     Extension(Tenant(tenant)): Extension<Tenant>,
-    Json(body): Json<Resume>,
+    body: Result<Json<Resume>, JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(invalid_body)?;
     let pin = body.pin.map(TwoStepPin::new).transpose()?; // before taking the entry
     // `resume` acts with the stored token of the WABA it is given: this
     // table, keyed by the authenticated tenant, is what ties that WABA to
@@ -417,6 +420,17 @@ enum ApiError {
         resumable: bool,
     },
     Internal(Error),
+}
+
+/// A body that isn't the expected JSON. axum's own rejection quotes the
+/// offending value (e.g. "invalid type: integer 581063") — a PIN or a code —
+/// so answer with a fixed message instead.
+#[allow(clippy::needless_pass_by_value)] // map_err hands the rejection over by value
+fn invalid_body(_rejection: JsonRejection) -> ApiError {
+    ApiError::Invalid {
+        field: "body".to_owned(),
+        reason: "expected a JSON object with the documented fields".to_owned(),
+    }
 }
 
 impl From<Error> for ApiError {

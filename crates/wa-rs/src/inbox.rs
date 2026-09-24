@@ -954,6 +954,47 @@ mod tests {
         assert_eq!(rows[0].text.as_deref(), Some("hello"));
     }
 
+    /// The outbound side of the NUL rule: a reply whose text carries U+0000
+    /// is recorded with U+FFFD, not refused (and not turned into an error).
+    #[tokio::test]
+    async fn an_outbound_reply_with_nul_is_recorded_with_the_replacement_character() {
+        let store = Arc::new(NulRefusingStore::default());
+        let sink = InboxSink::new(store.clone());
+        deliver_all(
+            &sink,
+            inbound("wamid.in", 1_760_000_000, Some("US.1"), None, "hi"),
+        )
+        .await;
+        let clock = ManualClock::new(datetime!(2025-10-09 10:00 UTC));
+        let t = ScriptedTransport::new();
+        t.push_json(200, sent("wamid.out"));
+        let client = Client::builder()
+            .transport(t.clone())
+            .access_token("MERCHANT_TOKEN")
+            .retry(RetryPolicy::NONE)
+            .build()
+            .unwrap();
+        let inbox = Inbox::new(client, PNID, store.clone()).with_clock(Arc::new(clock));
+        let key = inbox.key("US.1");
+        inbox
+            .reply(
+                &key,
+                MessageContent::Text(Text {
+                    body: "a\0b".into(),
+                    preview_url: None,
+                }),
+            )
+            .await
+            .unwrap();
+        let rows = inbox.history(&key, None, 10).await.unwrap();
+        let out = rows
+            .iter()
+            .find(|r| r.id == MessageId::new("wamid.out"))
+            .expect("the reply is recorded");
+        assert_eq!(out.text.as_deref(), Some("a\u{FFFD}b"));
+        assert_eq!(out.payload["text"]["body"], "a\u{FFFD}b");
+    }
+
     /// Conventions review #18: once Meta accepted a message, nothing about
     /// recording it may turn the send into an error — the caller would
     /// retry and the customer would get it twice.

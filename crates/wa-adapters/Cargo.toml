@@ -63,7 +63,6 @@ wa-core = { workspace = true, features = ["testing"] }
 axum = { workspace = true, features = ["http1", "tokio", "multipart", "json"] }
 # tests/reqwest_transport.rs builds requests with them.
 bytes.workspace = true
-pretty_assertions.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "test-util", "net", "io-util", "sync"] }
 url.workspace = true
 

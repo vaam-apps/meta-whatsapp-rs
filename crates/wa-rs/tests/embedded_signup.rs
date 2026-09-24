@@ -385,6 +385,29 @@ async fn a_wrong_pin_stops_at_register_and_resume_finishes_with_a_new_one() {
 }
 
 #[tokio::test]
+async fn a_malformed_body_never_echoes_the_pin_or_code() {
+    let Harness { app, graph, .. } = harness();
+    let state = start(&app, "merchant-a").await;
+    // A PIN or code of the wrong JSON type: axum's default rejection would
+    // quote the value back.
+    for body in [
+        json!({"state": state, "code": CODE, "event": {}, "pin": 581063}),
+        json!({"state": state, "code": 424242424242_u64, "event": {}}),
+    ] {
+        let (status, text) = call(&app, complete("merchant-a", &body)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{text}");
+        assert!(
+            !text.contains("581063") && !text.contains("424242424242"),
+            "{text}"
+        );
+    }
+    let (status, text) = call(&app, resume("merchant-a", &json!({"pin": 581063}))).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{text}");
+    assert!(!text.contains("581063"), "{text}");
+    assert!(graph.requests().is_empty(), "nothing reached Meta");
+}
+
+#[tokio::test]
 async fn cancelled_or_malformed_posts_do_not_burn_the_attempt() {
     let Harness { app, graph, .. } = harness();
     let state = start(&app, "merchant-a").await;

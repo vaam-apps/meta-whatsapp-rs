@@ -4661,7 +4661,6 @@ dependencies = [
  "bytes",
  "futures",
  "http",
- "pretty_assertions",
  "redis",
  "reqwest",
  "serde_json",

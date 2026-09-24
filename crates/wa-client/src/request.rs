@@ -859,6 +859,37 @@ mod tests {
     /// endpoint and `https://lookaside.fbsbx.com` (media downloads), and
     /// nothing else — not other Meta hosts, not look-alikes, not
     /// `graph.facebook.com` when the client is configured for a proxy.
+    /// An explicit token (`bearer`/`oauth`) obeys the same host allowlist as
+    /// the client's own; `no_auth` requests carry nothing and may go anywhere.
+    #[tokio::test]
+    async fn explicit_tokens_obey_the_same_allowlist() {
+        let foreign = || Url::parse("https://evil.example/x").unwrap();
+        for scheme in ["bearer", "oauth"] {
+            let t = ScriptedTransport::new();
+            let req = client(&t).request_url(Method::GET, foreign());
+            let req = if scheme == "bearer" {
+                req.bearer(&"OTHER".into())
+            } else {
+                req.oauth(&"OTHER".into())
+            };
+            let err = req.send_raw().await.unwrap_err();
+            assert!(
+                matches!(&err, Error::Validation(v) if v.field == "url"),
+                "{scheme}: {err}"
+            );
+            assert!(t.requests().is_empty(), "{scheme} reached the transport");
+        }
+        let t = ScriptedTransport::new();
+        t.push_bytes(200, "text/plain", "ok");
+        client(&t)
+            .request_url(Method::GET, foreign())
+            .no_auth()
+            .send_raw()
+            .await
+            .unwrap();
+        assert_eq!(t.last_request().unwrap().header("authorization"), None);
+    }
+
     #[tokio::test]
     async fn credentials_go_only_to_the_endpoint_and_the_media_host() {
         let allowed = [
@@ -882,6 +913,10 @@ mod tests {
             "https://scontent.xx.fbcdn.net/q.png",
             "http://graph.facebook.com/v25.0/1",
             "https://graph.facebook.com:8443/v25.0/1",
+            // Right host and port, wrong scheme: only https may carry it.
+            "http://lookaside.fbsbx.com:443/x",
+            "wss://lookaside.fbsbx.com/x",
+            "ws://lookaside.fbsbx.com/x",
         ];
         for url in allowed {
             let t = ScriptedTransport::new();
