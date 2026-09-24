@@ -12,8 +12,19 @@ Review the change as a maintainer who has to live with its public API.
   every module.
 - Public surface: anything `pub` that should be `pub(crate)`; types from
   third-party crates leaking through ports; breaking changes.
-- Features: each compiles alone (`just features`); no feature-gated item
-  referenced ungated.
+- Features: each compiles alone; no feature-gated item referenced ungated.
+  `just features` is not enough: it covers the wa-adapters features, the
+  wa-webhooks `axum` and wa-client `flows-endpoint` features, and wa-rs
+  with and without its defaults, but not each **wa-rs** feature on its
+  own, `wa-typst`, or `wa-core` with/without `testing`. Check each
+  yourself (one cargo command at a time):
+  `cargo check -p wa-rs --no-default-features --features <f>` for every
+  feature in `crates/wa-rs/Cargo.toml` (`reqwest`, `memory`, `sinks`,
+  `postgres`, `redis`, `axum`, `typst`, `flows-endpoint`), the same with
+  `--all-targets`, and `RUSTDOCFLAGS="-D warnings" cargo doc -p wa-rs
+  --no-default-features --no-deps` (`just doc` only builds
+  `--all-features`, so a doc link to a gated item slips through). Read the
+  justfile first: if it has grown to cover these, say so instead.
 - Dependencies: new crates justified, workspace-pinned, licenses allowed by
   `deny.toml`, no second version of an existing crate without reason.
 - Docs parity: `docs/coverage.md` status matches reality; rustdoc names the
