@@ -51,8 +51,9 @@ impl Commerce {
         &self.client
     }
 
-    fn path(&self) -> String {
-        format!("{}/whatsapp_commerce_settings", self.phone_number_id)
+    /// Path segments; the id stays one segment whatever it contains.
+    fn segments(&self) -> [&str; 2] {
+        [self.phone_number_id.as_str(), "whatsapp_commerce_settings"]
     }
 
     /// `GET /{phone-number-id}/whatsapp_commerce_settings`
@@ -63,7 +64,7 @@ impl Commerce {
     pub async fn settings(&self) -> Result<CommerceSettings> {
         let resp: DataList<CommerceSettings> = self
             .client
-            .get(&self.path())
+            .get_at(&self.segments())
             .context("commerce settings response")
             .send()
             .await?;
@@ -83,7 +84,7 @@ impl Commerce {
     /// timeout cannot duplicate an effect.
     pub async fn update_settings(&self, update: &CommerceSettingsUpdate) -> Result<()> {
         self.client
-            .post(&self.path())
+            .post_at(&self.segments())
             .query_opt("is_cart_enabled", update.is_cart_enabled)
             .query_opt("is_catalog_visible", update.is_catalog_visible)
             .idempotent(true)

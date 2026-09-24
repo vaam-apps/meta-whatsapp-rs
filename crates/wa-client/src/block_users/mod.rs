@@ -66,8 +66,9 @@ impl BlockUsers {
         &self.client
     }
 
-    fn path(&self) -> String {
-        format!("{}/block_users", self.phone_number_id)
+    /// Path segments; the id stays one segment whatever it contains.
+    fn segments(&self) -> [&str; 2] {
+        [self.phone_number_id.as_str(), "block_users"]
     }
 
     /// Block up to 1,000 users: `POST /{phone-number-id}/block_users`
@@ -76,7 +77,7 @@ impl BlockUsers {
     pub async fn block(&self, users: &[Recipient]) -> Result<BlockUsersResponse> {
         let body = BlockUsersBody::new(users)?;
         self.client
-            .post(&self.path())
+            .post_at(&self.segments())
             .json(&body)
             .context("block users response")
             .send()
@@ -88,7 +89,7 @@ impl BlockUsers {
     pub async fn unblock(&self, users: &[Recipient]) -> Result<UnblockUsersResponse> {
         let body = BlockUsersBody::new(users)?;
         self.client
-            .delete(&self.path())
+            .delete_at(&self.segments())
             .json(&body)
             .context("unblock users response")
             .send()
@@ -137,7 +138,7 @@ impl BlockUsers {
 
     fn list_request(&self, query: &ListBlockedUsers) -> GraphRequest {
         self.client
-            .get(&self.path())
+            .get_at(&self.segments())
             .query_opt("limit", query.limit)
             .context("list blocked users response")
     }

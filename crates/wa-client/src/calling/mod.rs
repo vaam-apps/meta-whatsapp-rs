@@ -92,7 +92,7 @@ impl Calling {
         }
         let env: Envelope = self
             .client
-            .get(&format!("{}/settings", self.phone_number_id))
+            .get_at(&self.segments("settings"))
             .query_opt(
                 "include_sip_credentials",
                 include_sip_credentials.then_some(true),
@@ -116,7 +116,7 @@ impl Calling {
         }
         calling.validate()?;
         self.client
-            .post(&format!("{}/settings", self.phone_number_id))
+            .post_at(&self.segments("settings"))
             .json(&Body { calling })
             .idempotent(true)
             .context("update calling settings response")
@@ -141,7 +141,7 @@ impl Calling {
             _ => return Err(not_an_individual("user")),
         };
         self.client
-            .get(&format!("{}/call_permissions", self.phone_number_id))
+            .get_at(&self.segments("call_permissions"))
             .query_opt("user_wa_id", user_wa_id)
             .query_opt("recipient", recipient)
             .context("call permissions response")
@@ -169,7 +169,7 @@ impl Calling {
             ..CallsBody::new(Action::Connect)
         };
         self.client
-            .post(&self.calls_path())
+            .post_at(&self.segments("calls"))
             .json(&body)
             .context("connect call response")
             .send()
@@ -229,13 +229,15 @@ impl Calling {
         self.send_action(&body, "terminate call response").await
     }
 
-    fn calls_path(&self) -> String {
-        format!("{}/calls", self.phone_number_id)
+    /// `[phone-number-id, edge]`; the id stays one segment whatever it
+    /// contains.
+    fn segments<'a>(&'a self, edge: &'a str) -> [&'a str; 2] {
+        [self.phone_number_id.as_str(), edge]
     }
 
     async fn send_action(&self, body: &CallsBody<'_>, context: &'static str) -> Result<()> {
         self.client
-            .post(&self.calls_path())
+            .post_at(&self.segments("calls"))
             .json(body)
             .context(context)
             .send_success()

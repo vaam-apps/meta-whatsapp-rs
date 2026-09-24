@@ -34,6 +34,7 @@
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt, future, stream};
+use http::Method;
 use serde::{Deserialize, Deserializer, Serialize};
 use time::OffsetDateTime;
 use wa_core::error::{ValidationError, snippet};
@@ -112,8 +113,10 @@ impl Groups {
         self.client.group(group_id)
     }
 
-    fn path(&self) -> String {
-        format!("{}/groups", self.phone_number_id)
+    /// `[phone-number-id, "groups"]`; the id stays one segment whatever it
+    /// contains.
+    fn segments(&self) -> [&str; 2] {
+        [self.phone_number_id.as_str(), "groups"]
     }
 
     /// Create a group: `POST /{phone-number-id}/groups`
@@ -125,7 +128,7 @@ impl Groups {
     pub async fn create(&self, request: &CreateGroup) -> Result<GroupCreated> {
         request.validate()?;
         self.client
-            .post(&self.path())
+            .post_at(&self.segments())
             .json(&WithProduct::new(request))
             .context("create group response")
             .send()
@@ -141,7 +144,7 @@ impl Groups {
         validate_list_limit(query.limit)?;
         fetch_groups_page(
             &self.client,
-            &self.path(),
+            &self.phone_number_id,
             query.limit,
             query.after.as_deref(),
             query.before.as_deref(),
@@ -163,7 +166,7 @@ impl Groups {
     ) -> impl Stream<Item = Result<GroupSummary>> + Send + 'static {
         struct State {
             client: Client,
-            path: String,
+            phone_number_id: PhoneNumberId,
             limit: Option<u32>,
             after: Option<String>,
             buffer: std::vec::IntoIter<GroupSummary>,
@@ -176,7 +179,7 @@ impl Groups {
         }
         let state = State {
             client: self.client.clone(),
-            path: self.path(),
+            phone_number_id: self.phone_number_id.clone(),
             limit: query.limit,
             after: None,
             buffer: Vec::new().into_iter(),
@@ -190,9 +193,14 @@ impl Groups {
                 if st.done {
                     return None;
                 }
-                let page =
-                    fetch_groups_page(&st.client, &st.path, st.limit, st.after.as_deref(), None)
-                        .await;
+                let page = fetch_groups_page(
+                    &st.client,
+                    &st.phone_number_id,
+                    st.limit,
+                    st.after.as_deref(),
+                    None,
+                )
+                .await;
                 match page {
                     Ok(page) => {
                         let next = page.next_cursor().map(str::to_owned);
@@ -254,7 +262,9 @@ impl Groups {
         operation: PinOperation,
         expiration_days: Option<u8>,
     ) -> Result<PinResponse> {
-        validate_group_id(group_id)?;
+        if group_id.as_str().is_empty() {
+            return Err(ValidationError::new("to", "must be a group id").into());
+        }
         let body = PinBody {
             messaging_product: "whatsapp",
             to: Recipient::group(group_id.clone()),
@@ -266,7 +276,7 @@ impl Groups {
             },
         };
         self.client
-            .post(&format!("{}/messages", self.phone_number_id))
+            .post_at(&[self.phone_number_id.as_str(), "messages"])
             .json(&body)
             .context("pin group message response")
             .send()
@@ -285,19 +295,23 @@ impl Group {
         &self.client
     }
 
-    fn path(&self, edge: Option<&str>) -> Result<String> {
-        validate_group_id(&self.group_id)?;
-        Ok(match edge {
-            Some(edge) => format!("{}/{edge}", self.group_id),
-            None => self.group_id.to_string(),
-        })
+    /// A request to `/{group-id}` or `/{group-id}/{edge}`. The id goes
+    /// through the segment builder: one containing `/` stays one encoded
+    /// segment (so a `DELETE` cannot land on another object), and an empty,
+    /// `.` or `..` id fails before anything is sent.
+    fn request(&self, method: Method, edge: Option<&str>) -> GraphRequest {
+        match edge {
+            Some(edge) => self
+                .client
+                .request_at(method, &[self.group_id.as_str(), edge]),
+            None => self.client.request_at(method, &[self.group_id.as_str()]),
+        }
     }
 
     /// Group metadata: `GET /{group-id}?fields=…`
     /// (`groups/reference#get-group-info`). With no `fields`, Meta returns
     /// only the id and `messaging_product`.
     pub async fn info(&self, fields: &[GroupField]) -> Result<GroupInfo> {
-        let path = self.path(None)?;
         let fields = (!fields.is_empty()).then(|| {
             fields
                 .iter()
@@ -305,8 +319,7 @@ impl Group {
                 .collect::<Vec<_>>()
                 .join(",")
         });
-        self.client
-            .get(&path)
+        self.request(Method::GET, None)
             .query_opt("fields", fields)
             .context("group info response")
             .send()
@@ -322,8 +335,7 @@ impl Group {
     pub async fn update(&self, update: &GroupSettingsUpdate) -> Result<()> {
         update.validate()?;
         let request = self
-            .client
-            .post(&self.path(None)?)
+            .request(Method::POST, None)
             .json(&WithProduct::new(update))
             .idempotent(true)
             .context("update group settings response");
@@ -347,8 +359,7 @@ impl Group {
             jpeg,
         );
         let request = self
-            .client
-            .post(&self.path(None)?)
+            .request(Method::POST, None)
             .multipart(form)
             .idempotent(true)
             .context("set group picture response");
@@ -358,8 +369,7 @@ impl Group {
     /// Delete the group and remove every participant, the business
     /// included: `DELETE /{group-id}` (`groups/reference#delete-group`).
     pub async fn delete(&self) -> Result<()> {
-        self.client
-            .delete(&self.path(None)?)
+        self.request(Method::DELETE, None)
             .context("delete group response")
             .send_success()
             .await
@@ -367,8 +377,7 @@ impl Group {
 
     /// Current invite link: `GET /{group-id}/invite_link`.
     pub async fn invite_link(&self) -> Result<InviteLink> {
-        self.client
-            .get(&self.path(Some("invite_link"))?)
+        self.request(Method::GET, Some("invite_link"))
             .context("get group invite link response")
             .send()
             .await
@@ -378,8 +387,7 @@ impl Group {
     /// `POST /{group-id}/invite_link`. Not idempotent: each call issues a
     /// new link.
     pub async fn reset_invite_link(&self) -> Result<InviteLink> {
-        self.client
-            .post(&self.path(Some("invite_link"))?)
+        self.request(Method::POST, Some("invite_link"))
             .json(&ProductOnly::WHATSAPP)
             .context("reset group invite link response")
             .send()
@@ -391,8 +399,7 @@ impl Group {
     /// answer's `success` as a string, so both `true` and `"true"` count.
     pub async fn delete_invite_link(&self) -> Result<()> {
         let request = self
-            .client
-            .delete(&self.path(Some("invite_link"))?)
+            .request(Method::DELETE, Some("invite_link"))
             .json(&ProductOnly::WHATSAPP)
             .context("delete group invite link response");
         send_expecting_success(request).await
@@ -401,7 +408,7 @@ impl Group {
     /// One page of open join requests: `GET /{group-id}/join_requests`
     /// (`groups/reference#get-join-requests`).
     pub async fn join_requests(&self, query: &ListJoinRequests) -> Result<Page<JoinRequest>> {
-        self.join_requests_request()?
+        self.join_requests_request()
             .query_opt("after", query.after.as_deref())
             .query_opt("before", query.before.as_deref())
             .send()
@@ -416,18 +423,16 @@ impl Group {
         query: &ListJoinRequests,
     ) -> impl Stream<Item = Result<JoinRequest>> + Send + 'static {
         let request = reject_cursors(query.after.as_deref(), query.before.as_deref())
-            .and_then(|()| self.join_requests_request());
+            .map(|()| self.join_requests_request());
         match request {
             Ok(req) => req.paginate::<JoinRequest>().left_stream(),
             Err(e) => stream::once(future::ready(Err(e))).right_stream(),
         }
     }
 
-    fn join_requests_request(&self) -> Result<GraphRequest> {
-        Ok(self
-            .client
-            .get(&self.path(Some("join_requests"))?)
-            .context("list join requests response"))
+    fn join_requests_request(&self) -> GraphRequest {
+        self.request(Method::GET, Some("join_requests"))
+            .context("list join requests response")
     }
 
     /// Approve join requests: `POST /{group-id}/join_requests`
@@ -438,8 +443,7 @@ impl Group {
         join_request_ids: &[S],
     ) -> Result<ApprovedJoinRequests> {
         let body = JoinRequestsBody::new(join_request_ids)?;
-        self.client
-            .post(&self.path(Some("join_requests"))?)
+        self.request(Method::POST, Some("join_requests"))
             .json(&body)
             .context("approve join requests response")
             .send()
@@ -454,8 +458,7 @@ impl Group {
         join_request_ids: &[S],
     ) -> Result<RejectedJoinRequests> {
         let body = JoinRequestsBody::new(join_request_ids)?;
-        self.client
-            .delete(&self.path(Some("join_requests"))?)
+        self.request(Method::DELETE, Some("join_requests"))
             .json(&body)
             .context("reject join requests response")
             .send()
@@ -474,8 +477,7 @@ impl Group {
     pub async fn add_participants(&self, users: &[Recipient]) -> Result<ParticipantsOutcome> {
         let body = ParticipantsBody::new(users, ParticipantsOp::Add)?;
         let request = self
-            .client
-            .post(&self.path(Some("participants"))?)
+            .request(Method::POST, Some("participants"))
             .json(&body)
             .context("add group participants response");
         Ok(ParticipantsOutcome::from_response(
@@ -492,8 +494,7 @@ impl Group {
     pub async fn remove_participants(&self, users: &[Recipient]) -> Result<ParticipantsOutcome> {
         let body = ParticipantsBody::new(users, ParticipantsOp::Remove)?;
         let request = self
-            .client
-            .delete(&self.path(Some("participants"))?)
+            .request(Method::DELETE, Some("participants"))
             .json(&body)
             .context("remove group participants response");
         Ok(ParticipantsOutcome::from_response(
@@ -530,7 +531,7 @@ impl ParticipantsOutcome {
 
 async fn fetch_groups_page(
     client: &Client,
-    path: &str,
+    phone_number_id: &PhoneNumberId,
     limit: Option<u32>,
     after: Option<&str>,
     before: Option<&str>,
@@ -548,7 +549,7 @@ async fn fetch_groups_page(
         groups: Vec<GroupSummary>,
     }
     let raw: Raw = client
-        .get(path)
+        .get_at(&[phone_number_id.as_str(), "groups"])
         .query_opt("limit", limit)
         .query_opt("after", after)
         .query_opt("before", before)
@@ -588,19 +589,6 @@ async fn send_lenient(request: GraphRequest) -> Result<(u16, serde_json::Value)>
         });
     }
     Ok((status, body))
-}
-
-/// The group id is the first path segment: an empty id, or one containing
-/// `/` (which the endpoint would split into two segments), would send the
-/// request — a `DELETE`, possibly — to a different Graph object.
-fn validate_group_id(group_id: &GroupId) -> Result<()> {
-    let id = group_id.as_str();
-    if id.is_empty() || id.contains('/') {
-        return Err(
-            ValidationError::new("group_id", "must be non-empty and contain no `/`").into(),
-        );
-    }
-    Ok(())
 }
 
 fn validate_list_limit(limit: Option<u32>) -> Result<()> {

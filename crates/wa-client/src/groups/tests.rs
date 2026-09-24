@@ -461,21 +461,38 @@ async fn delete_group() {
 }
 
 #[tokio::test]
-async fn group_id_that_would_change_the_path_is_rejected() {
+async fn group_id_cannot_leave_its_path_segment() {
     let t = ScriptedTransport::new();
-    for bad in ["", "G1/participants"] {
+    for bad in ["", ".."] {
         let err = client(&t).group(bad).delete().await.unwrap_err();
-        assert_eq!(validation_field(&err), "group_id", "{bad:?}");
+        assert_eq!(validation_field(&err), "path", "{bad:?}");
         let err = client(&t).group(bad).info(&[]).await.unwrap_err();
-        assert_eq!(validation_field(&err), "group_id");
-        let err = client(&t)
-            .groups("1")
-            .unpin_message(&GroupId::new(bad), &MessageId::new("wamid.1"))
-            .await
-            .unwrap_err();
-        assert_eq!(validation_field(&err), "group_id");
+        assert_eq!(validation_field(&err), "path");
+        let items: Vec<_> = client(&t)
+            .group(bad)
+            .join_requests_stream(&ListJoinRequests::default())
+            .collect()
+            .await;
+        assert_eq!(items.len(), 1);
+        assert_eq!(validation_field(items[0].as_ref().unwrap_err()), "path");
     }
+    // The group id of a pin travels in the body (`to`), not the path.
+    let err = client(&t)
+        .groups("1")
+        .unpin_message(&GroupId::new(""), &MessageId::new("wamid.1"))
+        .await
+        .unwrap_err();
+    assert_eq!(validation_field(&err), "to");
     assert!(t.requests().is_empty());
+
+    // A `/` stays inside the one segment: this DELETE cannot land on the
+    // participants edge (or any other object).
+    t.push_json(200, json!({"success": true}));
+    client(&t).group("G1/participants").delete().await.unwrap();
+    let req = t.last_request().unwrap();
+    assert_eq!(req.method, Method::DELETE);
+    assert_eq!(req.path(), "/v25.0/G1%2Fparticipants");
+    assert_eq!(t.remaining(), 0);
 }
 
 // ── Invite links ────────────────────────────────────────────────────────

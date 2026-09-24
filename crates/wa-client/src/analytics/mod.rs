@@ -82,7 +82,7 @@ impl Analytics {
 
     fn expansion(&self, fields: String, context: &'static str) -> GraphRequest {
         self.client
-            .get(self.waba_id.as_str())
+            .get_at(&[self.waba_id.as_str()])
             .query("fields", fields)
             .context(context)
     }
@@ -222,7 +222,7 @@ impl Analytics {
         let ids = query.template_ids.iter().map(TemplateId::as_str);
         Ok(self
             .client
-            .get(&format!("{}/template_analytics", self.waba_id))
+            .get_at(&[self.waba_id.as_str(), "template_analytics"])
             .query("start", query.start)
             .query("end", query.end)
             .query("granularity", "DAILY")
@@ -264,7 +264,7 @@ impl Analytics {
         let ids = query.template_group_ids.iter().map(String::as_str);
         Ok(self
             .client
-            .get(&format!("{}/template_group_analytics", self.waba_id))
+            .get_at(&[self.waba_id.as_str(), "template_group_analytics"])
             .query("granularity", "daily")
             .query("start", query.start)
             .query("end", query.end)
@@ -306,7 +306,7 @@ impl Analytics {
         }
         Ok(self
             .client
-            .get(&format!("{}/group_analytics", self.waba_id))
+            .get_at(&[self.waba_id.as_str(), "group_analytics"])
             .query("start", query.start.unix_timestamp())
             .query("end", query.end.unix_timestamp())
             .query("granularity", "DAILY")
@@ -331,7 +331,7 @@ impl Analytics {
         }
         let resp: Confirmed = self
             .client
-            .post(self.waba_id.as_str())
+            .post_at(&[self.waba_id.as_str()])
             .query("is_enabled_for_insights", true)
             .idempotent(true)
             .context("enable template insights response")
@@ -355,19 +355,11 @@ impl Analytics {
         opted_out: bool,
         category: &str,
     ) -> Result<()> {
-        let id = template_id.as_str();
-        if id.is_empty() || id.contains('/') {
-            return Err(ValidationError::new(
-                "template_id",
-                "must be non-empty and contain no `/`",
-            )
-            .into());
-        }
         if category.trim().is_empty() {
             return Err(ValidationError::new("category", "must not be empty").into());
         }
         self.client
-            .post(id)
+            .post_at(&[template_id.as_str()])
             .query("cta_url_link_tracking_opted_out", opted_out)
             .query("category", category)
             .idempotent(true)

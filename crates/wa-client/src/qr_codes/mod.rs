@@ -65,13 +65,19 @@ impl QrCodes {
         &self.client
     }
 
-    fn collection(&self) -> String {
-        format!("{}/message_qrdls", self.phone_number_id)
+    /// Path segments of the collection; ids stay one segment each.
+    fn collection(&self) -> [&str; 2] {
+        [self.phone_number_id.as_str(), "message_qrdls"]
     }
 
-    fn item(&self, code: &QrCodeId) -> Result<String> {
+    /// Path segments of one code, after checking its documented format.
+    fn item<'a>(&'a self, code: &'a QrCodeId) -> Result<[&'a str; 3]> {
         validate_code("code", code)?;
-        Ok(format!("{}/message_qrdls/{code}", self.phone_number_id))
+        Ok([
+            self.phone_number_id.as_str(),
+            "message_qrdls",
+            code.as_str(),
+        ])
     }
 
     /// Create a QR code and short link:
@@ -83,7 +89,7 @@ impl QrCodes {
     pub async fn create(&self, request: &CreateQrCode) -> Result<QrCode> {
         validate_message(&request.prefilled_message)?;
         self.client
-            .post(&self.collection())
+            .post_at(&self.collection())
             .json(request)
             .context("create QR code response")
             .send()
@@ -99,7 +105,7 @@ impl QrCodes {
         validate_code("code", &request.code)?;
         validate_message(&request.prefilled_message)?;
         self.client
-            .post(&self.collection())
+            .post_at(&self.collection())
             .json(request)
             .idempotent(true)
             .context("update QR code response")
@@ -116,7 +122,7 @@ impl QrCodes {
         let path = self.item(code)?;
         let resp: DataList<QrCode> = self
             .client
-            .get(&path)
+            .get_at(&path)
             .query_opt("fields", fields.to_param())
             .context("get QR code response")
             .send()
@@ -172,7 +178,7 @@ impl QrCodes {
         }
         Ok(self
             .client
-            .get(&self.collection())
+            .get_at(&self.collection())
             .query_opt("fields", query.fields.to_param())
             .query_opt("code", query.code.as_ref())
             .query_opt("limit", query.limit)
@@ -185,7 +191,7 @@ impl QrCodes {
     pub async fn delete(&self, code: &QrCodeId) -> Result<()> {
         let path = self.item(code)?;
         self.client
-            .delete(&path)
+            .delete_at(&path)
             .context("delete QR code response")
             .send_success()
             .await
@@ -207,8 +213,9 @@ fn validate_message(message: &str) -> Result<()> {
     Ok(())
 }
 
-/// Meta rejects anything but a 14-character alphanumeric id. Checking it
-/// locally also keeps a stray `/` from retargeting the request path.
+/// Meta rejects anything but a 14-character alphanumeric id
+/// (`...qr-code-api`: "Expected 14-character alphanumeric string"), so a
+/// malformed one fails here instead of costing a round trip.
 fn validate_code(field: &str, code: &QrCodeId) -> Result<()> {
     let s = code.as_str();
     if s.len() != QR_CODE_ID_LEN || !s.bytes().all(|b| b.is_ascii_alphanumeric()) {

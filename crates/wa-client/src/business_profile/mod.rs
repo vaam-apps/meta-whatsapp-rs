@@ -21,7 +21,7 @@
 
 use serde::{Deserialize, Serialize};
 use wa_core::error::{ValidationError, snippet};
-use wa_core::ids::PhoneNumberId;
+use wa_core::ids::{PhoneNumberId, UploadHandle};
 use wa_core::{Error, Result};
 
 use crate::Client;
@@ -77,8 +77,9 @@ impl BusinessProfile {
         &self.client
     }
 
-    fn path(&self) -> String {
-        format!("{}/whatsapp_business_profile", self.phone_number_id)
+    /// Path segments; the id stays one segment whatever it contains.
+    fn segments(&self) -> [&str; 2] {
+        [self.phone_number_id.as_str(), "whatsapp_business_profile"]
     }
 
     /// `GET /{phone-number-id}/whatsapp_business_profile`
@@ -102,7 +103,7 @@ impl BusinessProfile {
         }
         let resp: DataList<serde_json::Value> = self
             .client
-            .get(&self.path())
+            .get_at(&self.segments())
             .query_opt("fields", fields_param(fields))
             .context(CONTEXT)
             .send()
@@ -121,7 +122,7 @@ impl BusinessProfile {
     pub async fn update(&self, update: &ProfileUpdate) -> Result<()> {
         update.validate()?;
         self.client
-            .post(&self.path())
+            .post_at(&self.segments())
             .json(&update.wire())
             .idempotent(true)
             .context("update business profile response")
@@ -141,24 +142,19 @@ impl BusinessProfileNode {
         &self.client
     }
 
-    fn path(&self) -> Result<&str> {
-        // The id is the whole path: an empty id or one with a `/` would
-        // address a different Graph object with the same token.
-        if self.profile_id.is_empty() || self.profile_id.contains('/') {
-            return Err(
-                ValidationError::new("profile_id", "must be non-empty and contain no `/`").into(),
-            );
-        }
-        Ok(&self.profile_id)
+    /// The id is the whole path, so it goes through the segment builder: an
+    /// id containing `/` stays one (encoded) segment instead of addressing
+    /// another object, and an empty one fails before any request.
+    fn segments(&self) -> [&str; 1] {
+        [self.profile_id.as_str()]
     }
 
     /// `GET /{whatsapp-business-profile-id}` (profile node API). `fields`
     /// works as in [`BusinessProfile::get`], and may include
     /// [`ProfileField::Id`] and [`ProfileField::VerifiedName`].
     pub async fn get(&self, fields: &[ProfileField]) -> Result<Profile> {
-        let path = self.path()?;
         self.client
-            .get(path)
+            .get_at(&self.segments())
             .query_opt("fields", fields_param(fields))
             .context("get business profile node response")
             .send()
@@ -172,11 +168,10 @@ impl BusinessProfileNode {
     /// Marked idempotent: it sets fields to values.
     pub async fn update(&self, update: &ProfileUpdate) -> Result<ProfileNodeUpdated> {
         const CONTEXT: &str = "update business profile node response";
-        let path = self.path()?;
         update.validate()?;
         let resp = self
             .client
-            .post(path)
+            .post_at(&self.segments())
             .json(&update.wire())
             .idempotent(true)
             .context(CONTEXT)
@@ -389,9 +384,9 @@ pub struct ProfileUpdate {
     /// Contact email.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
-    /// Handle of a picture uploaded with the Resumable Upload API.
+    /// Handle (`h`) of a picture uploaded with the Resumable Upload API.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub profile_picture_handle: Option<String>,
+    pub profile_picture_handle: Option<UploadHandle>,
     /// Websites. Sent as a JSON array, as the reference schema types it
     /// (the guide's example sends a JSON-encoded string instead).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -825,22 +820,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn node_id_that_would_change_the_path_is_rejected() {
+    async fn node_id_cannot_leave_its_path_segment() {
         let t = ScriptedTransport::new();
-        for bad in ["", "5/whatsapp_business_profile"] {
+        for bad in ["", ".."] {
             let err = client(&t)
                 .business_profile_node(bad)
                 .get(&[])
                 .await
                 .unwrap_err();
-            assert_eq!(validation_field(&err), "profile_id");
+            assert_eq!(validation_field(&err), "path", "{bad:?}");
             let err = client(&t)
                 .business_profile_node(bad)
                 .update(&ProfileUpdate::default())
                 .await
                 .unwrap_err();
-            assert_eq!(validation_field(&err), "profile_id");
+            assert_eq!(validation_field(&err), "path", "{bad:?}");
         }
         assert!(t.requests().is_empty());
+        // A `/` stays inside the one segment: it cannot address the
+        // phone-number edge (or anything else) with this token.
+        t.push_json(200, json!({"id": "5"}));
+        client(&t)
+            .business_profile_node("5/whatsapp_business_profile")
+            .get(&[])
+            .await
+            .unwrap();
+        assert_eq!(
+            t.last_request().unwrap().path(),
+            "/v25.0/5%2Fwhatsapp_business_profile"
+        );
+        assert_eq!(t.remaining(), 0);
     }
 }

@@ -859,12 +859,12 @@ async fn set_button_click_tracking_matches_docs() {
 async fn button_click_tracking_validates_template_and_category() {
     let t = ScriptedTransport::new();
     let api = client(&t).analytics(WABA);
-    for bad in ["", "245/x"] {
+    for bad in ["", ".."] {
         let err = api
             .set_button_click_tracking(&TemplateId::new(bad), true, "marketing")
             .await
             .unwrap_err();
-        assert_eq!(validation_field(&err), "template_id");
+        assert_eq!(validation_field(&err), "path", "{bad:?}");
     }
     let err = api
         .set_button_click_tracking(&TemplateId::new("1"), false, " ")
@@ -872,6 +872,16 @@ async fn button_click_tracking_validates_template_and_category() {
         .unwrap_err();
     assert_eq!(validation_field(&err), "category");
     assert!(t.requests().is_empty());
+    // An id with `/` stays one segment: it cannot reach another edge.
+    t.push_json(200, json!({"success": true}));
+    api.set_button_click_tracking(&TemplateId::new("245/subscribed_apps"), true, "marketing")
+        .await
+        .unwrap();
+    assert_eq!(
+        t.last_request().unwrap().path(),
+        "/v25.0/245%2Fsubscribed_apps"
+    );
+    assert_eq!(t.remaining(), 0);
 }
 
 #[tokio::test]
