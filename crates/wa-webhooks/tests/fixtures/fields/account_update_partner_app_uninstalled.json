@@ -1,0 +1,22 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "2949482758682047",
+      "time": 1748477359,
+      "changes": [
+        {
+          "value": {
+            "event": "PARTNER_APP_UNINSTALLED",
+            "waba_info": {
+              "waba_id": "184943124712545",
+              "owner_business_id": "1284923862322270",
+              "partner_app_id": "869361281603019"
+            }
+          },
+          "field": "account_update"
+        }
+      ]
+    }
+  ]
+}

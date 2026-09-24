@@ -1,0 +1,40 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "16315553601",
+              "phone_number_id": "106540352242922"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "username": "pablomorales"
+                },
+                "wa_id": "163155536021",
+                "user_id": "US.13491208655302741918"
+              }
+            ],
+            "statuses": [
+              {
+                "id": "wacid.ABGGFjFVU2AfAgo6V",
+                "timestamp": "1671644824",
+                "type": "call",
+                "status": "RINGING",
+                "recipient_id": "163155536021",
+                "recipient_user_id": "US.13491208655302741918",
+                "biz_opaque_callback_data": "random_string"
+              }
+            ]
+          },
+          "field": "calls"
+        }
+      ]
+    }
+  ]
+}

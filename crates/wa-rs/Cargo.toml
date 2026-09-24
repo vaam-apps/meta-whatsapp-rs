@@ -25,11 +25,59 @@ flows-endpoint = ["wa-client/flows-endpoint"]
 full = ["reqwest", "memory", "sinks", "postgres", "redis", "axum", "typst", "flows-endpoint"]
 
 [dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+serde_json.workspace = true
+time.workspace = true
+tracing.workspace = true
 wa-core.workspace = true
 wa-client.workspace = true
 wa-webhooks.workspace = true
 wa-adapters = { workspace = true, default-features = false }
 wa-typst = { workspace = true, optional = true }
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
+wa-core = { workspace = true, features = ["testing"] }
+wa-adapters = { workspace = true, features = ["memory"] }
+serde_json.workspace = true
+# Examples and the in-process app tests. The examples, the tests and the
+# rustdoc examples reach axum through `wa_rs::webhooks::axum` and sqlx through
+# `wa_rs::adapters::store::postgres::sqlx`, as integrators should: neither is
+# a dependency of this crate.
+anyhow.workspace = true
+http-body-util.workspace = true
+pretty_assertions.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "net", "sync", "time"] }
+tower = { workspace = true, features = ["util"] }
+# The examples' bearer-token stand-in for your authentication: tokens are
+# kept as SHA-256 digests and compared in constant time.
+sha2.workspace = true
+subtle.workspace = true
+
+# Examples. `required-features` keeps `cargo check -p wa-rs --examples` (default
+# features) green; `--all-features` (what `just check` and `just lint` use)
+# builds all of them.
+[[example]]
+name = "send_message"
+required-features = ["reqwest"]
+
+[[example]]
+name = "otp_login"
+required-features = ["reqwest", "memory"]
+
+[[example]]
+name = "cms_inbox"
+required-features = ["reqwest", "memory", "sinks", "axum"]
+
+[[example]]
+name = "embedded_signup"
+required-features = ["reqwest", "memory", "axum"]
+
+[[example]]
+name = "invoice_document"
+required-features = ["reqwest", "typst"]
 
 [lints]
 workspace = true

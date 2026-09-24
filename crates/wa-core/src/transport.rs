@@ -4,7 +4,7 @@
 //! [`HttpTransport`]. The shipped adapter is `wa_adapters::http::ReqwestTransport`;
 //! write your own to route through a corporate proxy, add mTLS, record
 //! traffic, or use a different client. Tests use
-//! [`crate::testing::ScriptedTransport`].
+//! `wa_core::testing::ScriptedTransport` (feature `testing`).
 //!
 //! The port is deliberately dumb: no retries, no auth, no JSON. Those live in
 //! the client, once, instead of in every adapter.
@@ -26,7 +26,10 @@ use crate::error::TransportError;
 pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, TransportError>> + Send + 'static>>;
 
 /// An outgoing request.
-#[derive(Debug)]
+///
+/// `Debug` prints the URL without its query or fragment (the query can carry
+/// `client_secret` or an Embedded Signup `code`) and redacts credential
+/// headers.
 pub struct HttpRequest {
     /// Method.
     pub method: Method,
@@ -38,6 +41,34 @@ pub struct HttpRequest {
     pub body: RequestBody,
     /// Per-request deadline; `None` means the adapter's default.
     pub timeout: Option<Duration>,
+}
+
+impl fmt::Debug for HttpRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut url = self.url.clone();
+        let had_query = url.query().is_some();
+        url.set_query(None);
+        url.set_fragment(None);
+        // Credentials print as `Sensitive` even if the caller forgot to mark
+        // them (the client marks `Authorization` itself).
+        let mut headers = self.headers.clone();
+        for (name, value) in &mut headers {
+            if matches!(
+                name.as_str(),
+                "authorization" | "proxy-authorization" | "cookie" | "x-hub-signature-256"
+            ) {
+                value.set_sensitive(true);
+            }
+        }
+        f.debug_struct("HttpRequest")
+            .field("method", &self.method)
+            .field("url", &url.as_str())
+            .field("query", &if had_query { "[REDACTED]" } else { "" })
+            .field("headers", &headers)
+            .field("body", &self.body)
+            .field("timeout", &self.timeout)
+            .finish()
+    }
 }
 
 impl HttpRequest {
@@ -276,5 +307,28 @@ impl<T: HttpTransport + ?Sized> HttpTransport for std::sync::Arc<T> {
         request: HttpRequest,
     ) -> Result<StreamingResponse, TransportError> {
         (**self).send_streaming(request).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_never_prints_the_query() {
+        let mut req = HttpRequest::new(
+            Method::GET,
+            Url::parse("https://graph.facebook.com/v25.0/oauth/access_token?client_id=1&client_secret=s3cr3t&code=c0de#frag")
+                .unwrap(),
+        );
+        req.headers.insert(
+            http::header::AUTHORIZATION,
+            http::HeaderValue::from_static("Bearer tok3n"),
+        );
+        let out = format!("{req:?}");
+        assert!(out.contains("/v25.0/oauth/access_token"));
+        for secret in ["s3cr3t", "c0de", "client_secret", "frag", "tok3n"] {
+            assert!(!out.contains(secret), "{secret} leaked: {out}");
+        }
     }
 }

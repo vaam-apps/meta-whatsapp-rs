@@ -1,0 +1,31 @@
+{
+  "merchant_name": "Vymalo Boutique",
+  "order_number": "ORD-88213",
+  "order_date": "24 September 2026, 14:05",
+  "customer_name": "Amélie Laurent",
+  "currency": "EUR",
+  "items": [
+    {
+      "description": "Linen shirt, navy, size M",
+      "quantity": 2,
+      "unit_price": "49.90",
+      "amount": "99.80"
+    },
+    {
+      "description": "Leather belt, brown",
+      "quantity": 1,
+      "unit_price": "35.00",
+      "amount": "35.00"
+    }
+  ],
+  "subtotal": "134.80",
+  "adjustments": [
+    { "label": "Shipping", "amount": "4.90" },
+    { "label": "Discount WELCOME10", "amount": "-13.48" }
+  ],
+  "total": "126.22",
+  "payment_method": "Visa ending in 4242",
+  "delivery_address": ["Amélie Laurent", "12 rue de la Paix", "75002 Paris", "France"],
+  "estimated_delivery": "Thu 1 Oct - Sat 3 Oct",
+  "support_contact": "Reply to this chat or write to help@vymalo.example"
+}

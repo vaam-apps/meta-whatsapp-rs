@@ -17,8 +17,6 @@ axum = ["dep:axum", "dep:tokio", "tokio/sync"]
 [dependencies]
 wa-core.workspace = true
 
-async-trait.workspace = true
-bytes.workspace = true
 futures.workspace = true
 hex.workspace = true
 hmac.workspace = true
@@ -26,7 +24,6 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 subtle.workspace = true
-thiserror.workspace = true
 time.workspace = true
 tracing.workspace = true
 
@@ -35,9 +32,15 @@ tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 wa-core = { workspace = true, features = ["testing"] }
-wa-adapters = { workspace = true, features = ["memory", "sinks"] }
+# Only the in-memory KvStore: the sink adapters are written separately, so the
+# tests here define their own tiny sinks.
+wa-adapters = { workspace = true, features = ["memory"] }
+# Test sinks and the crate-level doc example implement EventSink.
+async-trait.workspace = true
+http-body-util.workspace = true
 pretty_assertions.workspace = true
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
+tower = { workspace = true, features = ["util"] }
 
 [lints]
 workspace = true

@@ -9,8 +9,11 @@ members = [
   "crates/wa-adapters",
   "crates/wa-typst",
   "crates/wa-rs",
-  ".xtask",
 ]
+# Repository automation is its own workspace (own Cargo.lock): its HTTP
+# client (ureq → rustls with `ring`) must not be resolved into the
+# library's builds and tests. See .xtask/Cargo.toml.
+exclude = [".xtask"]
 default-members = [
   "crates/wa-core",
   "crates/wa-client",
@@ -64,7 +67,7 @@ http = "1"
 url = { version = "2", features = ["serde"] }
 
 # Secrets and time.
-secrecy = { version = "0.10", features = ["serde"] }
+secrecy = "0.10"
 time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
 
 # Crypto. RustCrypto's digest-0.10 generation for HMAC/SHA-2/AES-GCM.
@@ -73,7 +76,8 @@ time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"
 # Flows endpoint decrypts attacker-supplied ciphertext by design.
 hmac = "0.12"
 sha2 = "0.10"
-aes-gcm = "0.10"
+# `zeroize` wipes the expanded key schedule on drop (token vault, Flows).
+aes-gcm = { version = "0.10", features = ["zeroize"] }
 aws-lc-rs = "1"
 subtle = "2"
 getrandom = "0.3"
@@ -91,14 +95,17 @@ redis = { version = "1", default-features = false }
 
 # Typst rendering.
 typst = "0.15"
+# `PagedDocument` (what `typst::compile` lays out and every exporter takes)
+# lives here and is not re-exported by `typst`.
+typst-layout = "0.15"
 typst-pdf = "0.15"
 typst-render = "0.15"
-typst-kit = { version = "0.15", default-features = false }
 typst-assets = "0.15"
 
 # Dev.
+# Examples only: makes the library's `tracing` output visible (RUST_LOG).
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
 pretty_assertions = "1"
-tokio-test = "0.4"
 tower = "0.5"
 http-body-util = "0.1"
 

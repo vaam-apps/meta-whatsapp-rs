@@ -34,19 +34,28 @@ test-live:
 test-live-down:
     docker compose -f compose.test.yaml down -v
 
-# Formatting and clippy, warnings are errors
+# Formatting and clippy, warnings are errors. `.xtask` is a workspace of its
+# own (see .xtask/Cargo.toml), so it is checked by manifest path.
 lint:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --all-features -- -D warnings
+    cargo fmt --manifest-path .xtask/Cargo.toml --check
+    cargo clippy --manifest-path .xtask/Cargo.toml --all-targets -- -D warnings
 
 # Format everything
 fmt:
     cargo fmt --all
+    cargo fmt --manifest-path .xtask/Cargo.toml
 
 # Rustdoc with broken links and missing docs as errors
 doc:
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 
+# The wa-webhooks line builds all targets: the framework-free API
+# (tests/signature.rs uses SIGNATURE_HEADER) must build without axum. The doc
+# line builds rustdoc without default features (wa-rs included): a link to a
+# feature-gated item must be gated with it; `just doc` covers --all-features.
+#
 # Each feature on its own, so a missing cfg gate cannot hide behind --all-features
 features:
     cargo check -p wa-adapters --no-default-features
@@ -55,16 +64,27 @@ features:
     cargo check -p wa-adapters --no-default-features --features reqwest
     cargo check -p wa-adapters --no-default-features --features postgres
     cargo check -p wa-adapters --no-default-features --features redis
-    cargo check -p wa-webhooks --no-default-features
+    cargo check -p wa-webhooks --no-default-features --all-targets
     cargo check -p wa-webhooks --features axum
     cargo check -p wa-client --no-default-features
     cargo check -p wa-client --features flows-endpoint
     cargo check -p wa-rs --no-default-features
+    cargo check -p wa-rs --no-default-features --features reqwest
+    cargo check -p wa-rs --no-default-features --features memory
+    cargo check -p wa-rs --no-default-features --features sinks
+    cargo check -p wa-rs --no-default-features --features postgres
+    cargo check -p wa-rs --no-default-features --features redis
+    cargo check -p wa-rs --no-default-features --features axum
+    cargo check -p wa-rs --no-default-features --features typst
+    cargo check -p wa-rs --no-default-features --features flows-endpoint
     cargo check -p wa-rs
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-default-features --no-deps
 
 # Licenses, advisories, duplicate versions, sources
 deny:
     cargo deny check
+    # .xtask is its own workspace (own Cargo.lock): check it too.
+    cargo deny --manifest-path .xtask/Cargo.toml --config deny.toml check
 
 # The gate. CI runs exactly this.
 ci: lint check test doc features deny test-live
@@ -72,4 +92,4 @@ ci: lint check test doc features deny test-live
 # Mirror Meta's WhatsApp docs as Markdown into .meta-docs/ (gitignored; the
 # docs are Meta's, never commit them). Agents grep this instead of guessing.
 meta-docs *args:
-    cargo run -q -p xtask -- meta-docs {{args}}
+    cargo run -q --manifest-path .xtask/Cargo.toml -- meta-docs {{args}}

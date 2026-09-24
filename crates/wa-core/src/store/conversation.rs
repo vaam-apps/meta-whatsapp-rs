@@ -165,12 +165,16 @@ pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
     /// with the same id exists — webhook retries make this common.
     async fn append(&self, message: StoredMessage) -> Result<bool, StorageError>;
 
-    /// Apply a status update if it [supersedes](DeliveryStatus::supersedes)
-    /// the stored one. Returns whether anything changed; `false` also when
-    /// the message is unknown (a status for a message sent elsewhere).
-    /// When applied, `error: None` keeps any error already stored.
+    /// Apply a status update to message `id` of business number
+    /// `phone_number_id` if it [supersedes](DeliveryStatus::supersedes) the
+    /// stored one. Returns whether anything changed; `false` also when no
+    /// message `id` is stored for that number (a status for a message sent
+    /// elsewhere, or delivered for another business number: a message is
+    /// only ever changed by events of its own number). When applied,
+    /// `error: None` keeps any error already stored.
     async fn update_status(
         &self,
+        phone_number_id: &PhoneNumberId,
         id: &MessageId,
         status: DeliveryStatus,
         at: OffsetDateTime,

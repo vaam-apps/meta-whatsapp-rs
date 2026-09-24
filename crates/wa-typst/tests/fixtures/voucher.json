@@ -1,0 +1,9 @@
+{
+  "merchant_name": "Vymalo Boutique",
+  "headline": "20% OFF",
+  "description": "on your next order over 50 EUR",
+  "code": "AUTUMN20",
+  "valid_until": "31 October 2026",
+  "terms": "One use per customer. Not combinable with other offers.",
+  "accent_color": "#0B6E4F"
+}

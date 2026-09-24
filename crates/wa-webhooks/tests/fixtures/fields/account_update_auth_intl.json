@@ -1,0 +1,26 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "time": 1743451903,
+      "changes": [
+        {
+          "value": {
+            "auth_international_rate_eligibility": {
+              "exception_countries": [
+                {
+                  "country_code": "ID",
+                  "start_time": 1751347424
+                }
+              ],
+              "start_time": 1748780624
+            },
+            "event": "AUTH_INTL_PRICE_ELIGIBILITY_UPDATE"
+          },
+          "field": "account_update"
+        }
+      ]
+    }
+  ]
+}

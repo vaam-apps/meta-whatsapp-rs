@@ -330,7 +330,7 @@ impl GraphRequest {
                 return Err(ValidationError::new(
                     "url",
                     format!(
-                        "refusing to send credentials to `{}`: not the Graph endpoint or a Meta media host",
+                        "refusing to send credentials to `{}`: not the Graph endpoint or https://{MEDIA_HOST}",
                         self.url.host_str().unwrap_or_default()
                     ),
                 )
@@ -397,6 +397,15 @@ impl GraphRequest {
         decode_json(context, &resp.body)
     }
 
+    /// [`Self::send`] for a response that names people (the send
+    /// responses): a decode failure carries neither the body nor serde's
+    /// message, see [`decode_json_private`].
+    pub(crate) async fn send_private<T: DeserializeOwned>(self) -> Result<T> {
+        let context = self.context;
+        let resp = self.send_raw().await?;
+        decode_json_private(context, &resp.body)
+    }
+
     /// Send and require `{"success": true}`.
     pub async fn send_success(self) -> Result<()> {
         #[derive(serde::Deserialize)]
@@ -440,12 +449,14 @@ impl GraphRequest {
         struct State {
             base: GraphRequest,
             after: Option<String>,
+            seen: std::collections::HashSet<String>,
             buffer: std::vec::IntoIter<serde_json::Value>,
             done: bool,
         }
         let state = State {
             base: self,
             after: None,
+            seen: std::collections::HashSet::new(),
             buffer: Vec::new().into_iter(),
             done: false,
         };
@@ -475,7 +486,13 @@ impl GraphRequest {
                 match req.send::<Page<serde_json::Value>>().await {
                     Ok(page) => {
                         let next = page.next_cursor().map(str::to_owned);
-                        st.done = next.is_none() || next == st.after;
+                        // Stop on the last page, and on any cursor already
+                        // followed (a→b→a would otherwise loop forever).
+                        let repeated = next.as_ref().is_some_and(|c| !st.seen.insert(c.clone()));
+                        if repeated {
+                            tracing::warn!("pagination cursor repeated; stopping");
+                        }
+                        st.done = next.is_none() || repeated;
                         st.after = next;
                         st.buffer = page.data.into_iter();
                     }
@@ -505,20 +522,53 @@ impl GraphRequest {
     }
 }
 
-/// Hosts that may receive an `Authorization` header: the configured Graph
-/// endpoint, and Meta's media CDN over HTTPS (media download URLs returned
-/// by `GET /{media-id}` live on `lookaside.fbsbx.com` and require the token).
+/// `stream`, or — when it could not be built — a stream whose single item
+/// is the error. The one way a `…_stream()` method reports a request that
+/// failed before sending (a bad `limit`, a cursor the stream manages
+/// itself): as its first and only item, never a panic or an empty stream.
+pub(crate) fn stream_or_error<S, T>(
+    stream: Result<S>,
+) -> impl Stream<Item = Result<T>> + Send + 'static
+where
+    S: Stream<Item = Result<T>> + Send + 'static,
+    T: Send + 'static,
+{
+    use futures::StreamExt;
+    match stream {
+        Ok(stream) => stream.left_stream(),
+        Err(error) => futures::stream::once(futures::future::ready(Err(error))).right_stream(),
+    }
+}
+
+/// [`GraphRequest::paginate`] a request that may have failed to build, see
+/// [`stream_or_error`].
+pub(crate) fn paginate_or_error<T>(
+    request: Result<GraphRequest>,
+) -> impl Stream<Item = Result<T>> + Send + 'static
+where
+    T: DeserializeOwned + Send + 'static,
+{
+    stream_or_error(request.map(GraphRequest::paginate::<T>))
+}
+
+/// The one host besides the Graph endpoint that needs the token: media
+/// download URLs (from `GET /{media-id}` and media webhooks) point at it,
+/// and Meta refuses the download without the token
+/// (`business-phone-numbers/media`).
+pub(crate) const MEDIA_HOST: &str = "lookaside.fbsbx.com";
+
+/// Origins that may receive an `Authorization` header: the configured Graph
+/// endpoint (scheme, host and port), and `https://lookaside.fbsbx.com` on
+/// the default port. Nothing else — not other Meta hosts (CDN links such as
+/// `*.fbcdn.net` or `*.whatsapp.net` need no token), not subdomains, and not
+/// production Graph when the client is configured for a proxy.
 fn credential_host_allowed(client: &Client, url: &Url) -> bool {
     if client.shared.endpoint.same_origin(url) {
         return true;
     }
     url.scheme() == "https"
-        && url.host_str().is_some_and(|h| {
-            h == "graph.facebook.com"
-                || h.ends_with(".fbsbx.com")
-                || h.ends_with(".facebook.com")
-                || h.ends_with(".whatsapp.net")
-        })
+        && url.host_str() == Some(MEDIA_HOST)
+        && url.port_or_known_default() == Some(443)
 }
 
 fn retry_after(headers: &HeaderMap) -> Option<Duration> {
@@ -550,6 +600,37 @@ pub(crate) fn decode_error(resp: &HttpResponse) -> Error {
 /// Decode a JSON body, attaching context and a snippet on failure.
 pub(crate) fn decode_json<T: DeserializeOwned>(context: &'static str, body: &[u8]) -> Result<T> {
     serde_json::from_slice(body).map_err(|e| Error::decode(context, e, body))
+}
+
+/// A decode error for a response that names people: `why` replaces serde's
+/// message, and the body snippet is a placeholder.
+pub(crate) fn withheld_decode_error(context: &'static str, why: impl fmt::Display) -> Error {
+    Error::decode(
+        context,
+        <serde_json::Error as serde::de::Error>::custom(why),
+        b"(withheld: the response names the recipient)",
+    )
+}
+
+/// Decode a body that names people — send responses echo the recipient's
+/// phone number in `contacts[]`. On failure neither the body nor serde's
+/// message (which quotes the offending value) reaches the error, only the
+/// error category and position.
+pub(crate) fn decode_json_private<T: DeserializeOwned>(
+    context: &'static str,
+    body: &[u8],
+) -> Result<T> {
+    serde_json::from_slice(body).map_err(|e| {
+        withheld_decode_error(
+            context,
+            format_args!(
+                "{:?} error at line {} column {} (details withheld)",
+                e.classify(),
+                e.line(),
+                e.column()
+            ),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -689,6 +770,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pagination_stops_on_a_cursor_cycle() {
+        let t = ScriptedTransport::new();
+        let page = |d: u32, after: &str| json!({"data": [d], "paging": {"cursors": {"after": after}, "next": "https://graph.facebook.com/x"}});
+        t.push_json(200, page(1, "a"));
+        t.push_json(200, page(2, "b"));
+        t.push_json(200, page(3, "a")); // back to a: must not loop
+        t.push_json(200, page(4, "b"));
+        let items: Vec<u32> = client(&t)
+            .get("x")
+            .paginate::<u32>()
+            .take(10)
+            .map(|r| r.unwrap())
+            .collect()
+            .await;
+        assert_eq!(items, vec![1, 2, 3]);
+        assert_eq!(t.remaining(), 1, "the cycle is not followed");
+    }
+
+    #[tokio::test]
     async fn query_struct_skips_nulls_and_encodes_nested() {
         #[derive(Serialize)]
         struct Q {
@@ -753,6 +853,178 @@ mod tests {
             1,
             "refused requests never reach the transport"
         );
+    }
+
+    /// Where an absolute URL may take the token: the configured Graph
+    /// endpoint and `https://lookaside.fbsbx.com` (media downloads), and
+    /// nothing else — not other Meta hosts, not look-alikes, not
+    /// `graph.facebook.com` when the client is configured for a proxy.
+    /// An explicit token (`bearer`/`oauth`) obeys the same host allowlist as
+    /// the client's own; `no_auth` requests carry nothing and may go anywhere.
+    #[tokio::test]
+    async fn explicit_tokens_obey_the_same_allowlist() {
+        let foreign = || Url::parse("https://evil.example/x").unwrap();
+        for scheme in ["bearer", "oauth"] {
+            let t = ScriptedTransport::new();
+            let req = client(&t).request_url(Method::GET, foreign());
+            let req = if scheme == "bearer" {
+                req.bearer(&"OTHER".into())
+            } else {
+                req.oauth(&"OTHER".into())
+            };
+            let err = req.send_raw().await.unwrap_err();
+            assert!(
+                matches!(&err, Error::Validation(v) if v.field == "url"),
+                "{scheme}: {err}"
+            );
+            assert!(t.requests().is_empty(), "{scheme} reached the transport");
+        }
+        let t = ScriptedTransport::new();
+        t.push_bytes(200, "text/plain", "ok");
+        client(&t)
+            .request_url(Method::GET, foreign())
+            .no_auth()
+            .send_raw()
+            .await
+            .unwrap();
+        assert_eq!(t.last_request().unwrap().header("authorization"), None);
+    }
+
+    #[tokio::test]
+    async fn credentials_go_only_to_the_endpoint_and_the_media_host() {
+        let allowed = [
+            "https://graph.facebook.com/v25.0/1037543291543636",
+            "https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1",
+            "https://LOOKASIDE.fbsbx.com/x",
+            "https://lookaside.fbsbx.com:443/x",
+        ];
+        let denied = [
+            "https://evil.example/steal",
+            "http://lookaside.fbsbx.com/x",
+            "https://lookaside.fbsbx.com:8443/x",
+            "https://lookaside.fbsbx.com./x",
+            "https://lookaside.fbsbx.com.evil.example/x",
+            "https://evil.lookaside.fbsbx.com/x",
+            "https://scontent.xx.fbsbx.com/x",
+            "https://www.facebook.com/x",
+            "https://business.facebook.com/x",
+            "https://pps.whatsapp.net/v/t61.24",
+            "https://mmg.whatsapp.net/v/redacted",
+            "https://scontent.xx.fbcdn.net/q.png",
+            "http://graph.facebook.com/v25.0/1",
+            "https://graph.facebook.com:8443/v25.0/1",
+            // Right host and port, wrong scheme: only https may carry it.
+            "http://lookaside.fbsbx.com:443/x",
+            "wss://lookaside.fbsbx.com/x",
+            "ws://lookaside.fbsbx.com/x",
+        ];
+        for url in allowed {
+            let t = ScriptedTransport::new();
+            t.push_bytes(200, "image/jpeg", "jpg");
+            let sent = client(&t)
+                .request_url(Method::GET, Url::parse(url).unwrap())
+                .send_raw()
+                .await;
+            assert!(sent.is_ok(), "{url}: {sent:?}");
+            assert_eq!(t.last_request().unwrap().bearer(), Some("TOKEN"), "{url}");
+            assert_eq!(t.remaining(), 0);
+        }
+        for url in denied {
+            let t = ScriptedTransport::new();
+            let err = client(&t)
+                .request_url(Method::GET, Url::parse(url).unwrap())
+                .send_raw()
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, Error::Validation(v) if v.field == "url"),
+                "{url}: {err}"
+            );
+            assert!(t.requests().is_empty(), "{url} reached the transport");
+        }
+
+        // A client configured for a proxy sends its token to the proxy and
+        // the media host only; production Graph is just another host then.
+        let t = ScriptedTransport::new();
+        t.push_bytes(200, "application/json", "{}");
+        t.push_bytes(200, "image/jpeg", "jpg");
+        let proxied = Client::builder()
+            .transport(t.clone())
+            .access_token("TOKEN")
+            .endpoint(
+                wa_core::config::GraphEndpoint::custom(
+                    "https://graph-proxy.internal/",
+                    wa_core::config::ApiVersion::DEFAULT,
+                )
+                .unwrap(),
+            )
+            .build()
+            .unwrap();
+        for url in [
+            "https://graph-proxy.internal/v25.0/1",
+            "https://lookaside.fbsbx.com/x",
+        ] {
+            assert!(
+                proxied
+                    .request_url(Method::GET, Url::parse(url).unwrap())
+                    .send_raw()
+                    .await
+                    .is_ok(),
+                "{url}"
+            );
+        }
+        let err = proxied
+            .request_url(
+                Method::GET,
+                Url::parse("https://graph.facebook.com/v25.0/1").unwrap(),
+            )
+            .send_raw()
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Validation(_)), "{err}");
+        assert_eq!(t.requests().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_request_that_failed_to_build_streams_its_error_once() {
+        let t = ScriptedTransport::new();
+        let failed: Result<GraphRequest> = Err(ValidationError::new("limit", "too big").into());
+        let items: Vec<Result<u32>> = paginate_or_error(failed).collect().await;
+        assert_eq!(items.len(), 1);
+        assert!(matches!(&items[0], Err(Error::Validation(v)) if v.field == "limit"));
+        assert!(t.requests().is_empty());
+
+        t.push_json(200, json!({"data": [1, 2]}));
+        let items: Vec<u32> = paginate_or_error::<u32>(Ok(client(&t).get("x")))
+            .map(|r| r.unwrap())
+            .collect()
+            .await;
+        assert_eq!(items, [1, 2]);
+        assert_eq!(t.remaining(), 0);
+    }
+
+    /// The query can hold `client_secret`, an Embedded Signup `code` or an
+    /// `access_token`: `Debug` (what `?request` logs) shows method and path
+    /// only.
+    #[test]
+    fn debug_never_prints_the_query() {
+        let t = ScriptedTransport::new();
+        let request = client(&t)
+            .get("oauth/access_token")
+            .query("client_id", "1234")
+            .query("client_secret", "s3cr3t-app-secret")
+            .query("code", "AQBx-signup-code")
+            .query("access_token", "EAAB-token");
+        let debug = format!("{request:?}");
+        assert_eq!(
+            debug,
+            "GraphRequest { method: GET, path: \"/v25.0/oauth/access_token\", .. }"
+        );
+        for secret in ["s3cr3t", "AQBx", "EAAB", "client_secret", "code=", "?"] {
+            assert!(!debug.contains(secret), "{secret} in {debug}");
+        }
+        let alternate = format!("{request:#?}");
+        assert!(!alternate.contains("s3cr3t"), "{alternate}");
     }
 
     #[tokio::test]

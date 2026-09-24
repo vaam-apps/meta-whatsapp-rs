@@ -3,6 +3,7 @@
 
 use std::fmt;
 
+use secrecy::zeroize::Zeroize;
 use secrecy::{ExposeSecret, SecretSlice, SecretString};
 
 macro_rules! secret_type {
@@ -71,9 +72,14 @@ secret_type!(
 pub struct SecretBytes(SecretSlice<u8>);
 
 impl SecretBytes {
-    /// Wrap secret bytes.
+    /// Wrap secret bytes. The caller's buffer is wiped: the bytes are
+    /// copied into an exactly-sized allocation first, so no reallocation
+    /// can leave an unwiped copy behind.
     pub fn new(bytes: impl Into<Vec<u8>>) -> Self {
-        Self(SecretSlice::from(bytes.into()))
+        let mut bytes: Vec<u8> = bytes.into();
+        let boxed: Box<[u8]> = bytes.as_slice().into();
+        bytes.zeroize();
+        Self(SecretSlice::from(boxed))
     }
 
     /// Read the secret. Keep the borrow short; never log it.
