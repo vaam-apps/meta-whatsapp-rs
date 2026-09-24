@@ -440,12 +440,14 @@ impl GraphRequest {
         struct State {
             base: GraphRequest,
             after: Option<String>,
+            seen: std::collections::HashSet<String>,
             buffer: std::vec::IntoIter<serde_json::Value>,
             done: bool,
         }
         let state = State {
             base: self,
             after: None,
+            seen: std::collections::HashSet::new(),
             buffer: Vec::new().into_iter(),
             done: false,
         };
@@ -475,7 +477,13 @@ impl GraphRequest {
                 match req.send::<Page<serde_json::Value>>().await {
                     Ok(page) => {
                         let next = page.next_cursor().map(str::to_owned);
-                        st.done = next.is_none() || next == st.after;
+                        // Stop on the last page, and on any cursor already
+                        // followed (a→b→a would otherwise loop forever).
+                        let repeated = next.as_ref().is_some_and(|c| !st.seen.insert(c.clone()));
+                        if repeated {
+                            tracing::warn!("pagination cursor repeated; stopping");
+                        }
+                        st.done = next.is_none() || repeated;
                         st.after = next;
                         st.buffer = page.data.into_iter();
                     }
@@ -686,6 +694,25 @@ mod tests {
         assert_eq!(reqs[1].url.host_str(), Some("graph.facebook.com"));
         assert_eq!(reqs[1].query("after").as_deref(), Some("c1"));
         assert_eq!(reqs[1].query("limit").as_deref(), Some("2"));
+    }
+
+    #[tokio::test]
+    async fn pagination_stops_on_a_cursor_cycle() {
+        let t = ScriptedTransport::new();
+        let page = |d: u32, after: &str| json!({"data": [d], "paging": {"cursors": {"after": after}, "next": "https://graph.facebook.com/x"}});
+        t.push_json(200, page(1, "a"));
+        t.push_json(200, page(2, "b"));
+        t.push_json(200, page(3, "a")); // back to a: must not loop
+        t.push_json(200, page(4, "b"));
+        let items: Vec<u32> = client(&t)
+            .get("x")
+            .paginate::<u32>()
+            .take(10)
+            .map(|r| r.unwrap())
+            .collect()
+            .await;
+        assert_eq!(items, vec![1, 2, 3]);
+        assert_eq!(t.remaining(), 1, "the cycle is not followed");
     }
 
     #[tokio::test]

@@ -87,7 +87,7 @@ implemented, or any module stub):
 impl Client { pub fn messages(&self, id: impl Into<PhoneNumberId>) -> Messages }
 impl Messages {
     pub async fn send(&self, message: &OutboundMessage) -> Result<SendResponse> {
-        self.client.post(&format!("{}/messages", self.phone_number_id))
+        self.client.post_at(&[self.phone_number_id.as_str(), "messages"])
             .json(message)
             .context("send message response")
             .send()
@@ -98,8 +98,11 @@ impl Messages {
 
 Rules for every endpoint module:
 
-1. **Build requests only through `GraphRequest`** (`client.get/post/delete`).
-   It owns auth, retries, error decoding, the credential host allowlist.
+1. **Build requests only through `GraphRequest`** (`client.get_at/post_at/
+   delete_at(&[segments])` for any path with an id; `client.get/post/delete`
+   for literal paths only). It owns auth, retries, error decoding, the
+   credential host allowlist, and segment-safe paths (an id containing `/`,
+   `?` or `#` stays inside its segment; empty, `.` and `..` are refused).
 2. **Requests are typed structs with `Serialize`, responses typed with
    `Deserialize`.** Unknown response fields are ignored (never
    `deny_unknown_fields`); enums Meta may extend get an `#[serde(other)]
@@ -228,7 +231,15 @@ overwrite another's vault entry) → **store** the token → subscribe app →
 register number. The token is stored *before* the fallible later steps
 because the code is single-use and short-lived: storing last would lose the
 token whenever subscribe or register fails (e.g. wrong PIN, `133005`).
-`resume()` reruns subscribe/register from the stored token. Each failure is
+`verify_assets` also reads the WABA's owning business from Meta
+(`owner_business_info`); a `business_id` claimed by the browser is ignored
+(it is what credit-line sharing keys on). Every number Meta lists on the
+WABA is stored in the phone → WABA index, so onboarding a second number
+never unroutes the first. `resume()` loads the stored token and reruns
+subscribe/register, refusing a session that names another WABA or an
+unverified number. `SignupSessions::redeem(state, tenant)` checks the tenant
+inside the library, is single-use, and does not consume the state on a
+tenant mismatch. Each failure is
 `Error::in_step("exchange_code" | "debug_token" | "verify_assets" |
 "store_token" | "subscribe_app" | "register_phone")`. **Retrying the whole
 `onboard` call is not safe** (the code is spent); retry with `resume()`.

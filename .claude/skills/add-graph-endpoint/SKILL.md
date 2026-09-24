@@ -15,14 +15,18 @@ description: "Recipe for adding or changing a Graph API endpoint wrapper in wa-c
    `#[serde(skip_serializing_if = "Option::is_none")]` on optionals;
    response `#[derive(Deserialize)]`, no `deny_unknown_fields`; extensible
    enums get `#[serde(other)] Unknown`. Ids use `wa_core::ids` newtypes.
-4. **Method** on the module's API struct, built only through
-   `self.client.get/post/delete(&path)`:
+4. **Method** on the module's API struct. Paths containing an id are built
+   **only** with the segment API `self.client.get_at/post_at/delete_at(&[..])`
+   — never `client.post(&format!("{}/…", id))`: `GraphEndpoint::url` splits
+   on `/`, so an id like `123/subscribed_apps` would address another object
+   with the tenant's token. `client.get/post/delete("literal/path")` is for
+   literal paths only (e.g. `"oauth/access_token"`).
 
    ```rust
    pub async fn register(&self, pin: &str) -> Result<()> {
        validate_pin(pin)?; // ValidationError::new("pin", "must be 6 digits")
        self.client
-           .post(&format!("{}/register", self.phone_number_id))
+           .post_at(&[self.phone_number_id.as_str(), "register"])
            .json(&RegisterRequest { messaging_product: "whatsapp", pin })
            .context("register response")
            .send_success()
@@ -50,7 +54,8 @@ description: "Recipe for adding or changing a Graph API endpoint wrapper in wa-c
    ```
 
    Cover: the happy path with the docs' example response, one Graph error
-   mapped to the right `ErrorKind`, and every local validation.
+   mapped to the right `ErrorKind`, every local validation, and that an id
+   containing `/` stays one segment (`/v25.0/123%2Fx/register`).
 6. **Docs**: rustdoc on every public item; module doc lists the Meta
    paths. Update `docs/coverage.md`.
 7. `just ci`.
