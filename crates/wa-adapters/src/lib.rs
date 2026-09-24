@@ -2,10 +2,13 @@
 //!
 //! # Features
 //!
+//! Items are named in code, not linked: every one of them sits behind its
+//! feature, and these docs must build with any feature set.
+//!
 //! | Feature | Adds | Port | Pulls in |
 //! | --- | --- | --- | --- |
-//! | `memory` (default) | [`store::MemoryKvStore`], [`store::MemoryConversationStore`] | `KvStore`, `ConversationStore` | tokio `sync` |
-//! | `sinks` (default) | [`sink`]: channel, broadcast, fan-out, filter, fn, tracing sinks | `EventSink` | tokio `sync`, tokio-stream |
+//! | `memory` (default) | `store::MemoryKvStore`, `store::MemoryConversationStore` | `KvStore`, `ConversationStore` | tokio `sync` |
+//! | `sinks` (default) | `sink`: channel, broadcast, fan-out, filter, fn, tracing sinks | `EventSink` | tokio `sync`, tokio-stream |
 //! | `reqwest` | `http::ReqwestTransport` | `HttpTransport` | reqwest (rustls, aws-lc-rs, HTTP/2) |
 //! | `postgres` | `store::PostgresKvStore`, `store::PostgresConversationStore`, `store::postgres::migrate` | `KvStore`, `ConversationStore` | sqlx (Postgres, tokio, rustls) |
 //! | `redis` | `store::RedisKvStore` | `KvStore` | redis (tokio, connection manager; no TLS) |
@@ -37,15 +40,15 @@
 //! - **Conversation history (`ConversationStore`)** backs the in-app inbox.
 //!   **Postgres** in production; **memory** for tests and demos. (No Redis
 //!   adapter: history is not cache-shaped.)
-//! - **Sinks** route webhook events: a [`sink::ChannelSink`] to a worker for
-//!   anything slow, a [`sink::BroadcastSink`] for live inbox views, a
-//!   [`sink::FanoutSink`] to do both.
+//! - **Sinks** route webhook events: a `sink::ChannelSink` to a worker for
+//!   anything slow, a `sink::BroadcastSink` for live inbox views, a
+//!   `sink::FanoutSink` to do both.
 //! - **Transport**: `ReqwestTransport` unless you need your own HTTP stack.
 //!
 //! # Whose clock?
 //!
 //! Expiry is decided by the store's clock, and the stores do not share one:
-//! [`store::MemoryKvStore`] uses an injectable `Clock` (the system clock by
+//! `store::MemoryKvStore` uses an injectable `Clock` (the system clock by
 //! default), **Postgres uses the database server's `now()`**, and Redis its
 //! server's `TIME` and key TTLs. For the shared backends that is the point —
 //! every application instance agrees on what has expired — but it means

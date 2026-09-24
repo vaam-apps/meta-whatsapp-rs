@@ -51,6 +51,11 @@ fmt:
 doc:
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 
+# The wa-webhooks line builds all targets: the framework-free API
+# (tests/signature.rs uses SIGNATURE_HEADER) must build without axum. The doc
+# line builds rustdoc without default features (wa-rs included): a link to a
+# feature-gated item must be gated with it; `just doc` covers --all-features.
+#
 # Each feature on its own, so a missing cfg gate cannot hide behind --all-features
 features:
     cargo check -p wa-adapters --no-default-features
@@ -59,12 +64,21 @@ features:
     cargo check -p wa-adapters --no-default-features --features reqwest
     cargo check -p wa-adapters --no-default-features --features postgres
     cargo check -p wa-adapters --no-default-features --features redis
-    cargo check -p wa-webhooks --no-default-features
+    cargo check -p wa-webhooks --no-default-features --all-targets
     cargo check -p wa-webhooks --features axum
     cargo check -p wa-client --no-default-features
     cargo check -p wa-client --features flows-endpoint
     cargo check -p wa-rs --no-default-features
+    cargo check -p wa-rs --no-default-features --features reqwest
+    cargo check -p wa-rs --no-default-features --features memory
+    cargo check -p wa-rs --no-default-features --features sinks
+    cargo check -p wa-rs --no-default-features --features postgres
+    cargo check -p wa-rs --no-default-features --features redis
+    cargo check -p wa-rs --no-default-features --features axum
+    cargo check -p wa-rs --no-default-features --features typst
+    cargo check -p wa-rs --no-default-features --features flows-endpoint
     cargo check -p wa-rs
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-default-features --no-deps
 
 # Licenses, advisories, duplicate versions, sources
 deny:
