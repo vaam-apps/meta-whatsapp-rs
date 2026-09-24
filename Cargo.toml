@@ -64,7 +64,7 @@ http = "1"
 url = { version = "2", features = ["serde"] }
 
 # Secrets and time.
-secrecy = { version = "0.10", features = ["serde"] }
+secrecy = "0.10"
 time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
 
 # Crypto. RustCrypto's digest-0.10 generation for HMAC/SHA-2/AES-GCM.
@@ -97,14 +97,12 @@ typst = "0.15"
 typst-layout = "0.15"
 typst-pdf = "0.15"
 typst-render = "0.15"
-typst-kit = { version = "0.15", default-features = false }
 typst-assets = "0.15"
 
 # Dev.
 # Examples only: makes the library's `tracing` output visible (RUST_LOG).
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
 pretty_assertions = "1"
-tokio-test = "0.4"
 tower = "0.5"
 http-body-util = "0.1"
 

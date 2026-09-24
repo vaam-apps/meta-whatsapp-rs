@@ -3126,7 +3126,6 @@ version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e891af845473308773346dc847b2c23ee78fe442e0472ac50e22a18a93d3ae5a"
 dependencies = [
- "serde",
  "zeroize",
 ]
 
@@ -4702,7 +4701,6 @@ dependencies = [
  "pretty_assertions",
  "redis",
  "reqwest",
- "serde",
  "serde_json",
  "sqlx",
  "time",
@@ -4733,7 +4731,6 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "subtle",
- "thiserror",
  "time",
  "tokio",
  "tracing",
@@ -4809,7 +4806,6 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
- "bytes",
  "futures",
  "hex",
  "hmac 0.12.1",
@@ -4819,7 +4815,6 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "subtle",
- "thiserror",
  "time",
  "tokio",
  "tower",
