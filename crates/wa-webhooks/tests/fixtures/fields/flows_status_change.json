@@ -1,0 +1,21 @@
+{
+  "entry": [
+    {
+      "id": "644600416743275",
+      "time": 1684969340,
+      "changes": [
+        {
+          "value": {
+            "event": "FLOW_STATUS_CHANGE",
+            "message": "Flow Webhook 3 changed status from DRAFT to PUBLISHED",
+            "flow_id": "6627390910605886",
+            "old_status": "DRAFT",
+            "new_status": "PUBLISHED"
+          },
+          "field": "flows"
+        }
+      ]
+    }
+  ],
+  "object": "whatsapp_business_account"
+}

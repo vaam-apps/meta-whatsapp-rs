@@ -35,9 +35,13 @@ tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 wa-core = { workspace = true, features = ["testing"] }
-wa-adapters = { workspace = true, features = ["memory", "sinks"] }
+# Only the in-memory KvStore: the sink adapters are written separately, so the
+# tests here define their own tiny sinks.
+wa-adapters = { workspace = true, features = ["memory"] }
+http-body-util.workspace = true
 pretty_assertions.workspace = true
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
+tower = { workspace = true, features = ["util"] }
 
 [lints]
 workspace = true

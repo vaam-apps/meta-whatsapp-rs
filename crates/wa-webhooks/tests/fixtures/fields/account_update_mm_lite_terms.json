@@ -1,0 +1,21 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "2949482758682047",
+      "time": 1744823932,
+      "changes": [
+        {
+          "field": "account_update",
+          "value": {
+            "event": "MM_LITE_TERMS_SIGNED",
+            "waba_info": {
+              "owner_business_id": "2329417887457253",
+              "waba_id": "980198427658004"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

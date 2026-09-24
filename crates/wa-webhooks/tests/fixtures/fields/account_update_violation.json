@@ -1,0 +1,20 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "time": 1743451903,
+      "changes": [
+        {
+          "value": {
+            "event": "ACCOUNT_VIOLATION",
+            "violation_info": {
+              "violation_type": "ADULT"
+            }
+          },
+          "field": "account_update"
+        }
+      ]
+    }
+  ]
+}

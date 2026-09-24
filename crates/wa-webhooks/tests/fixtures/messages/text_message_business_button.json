@@ -1,0 +1,47 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "419561257915477",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550783881",
+              "phone_number_id": "106540352242922"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "Sheena Nelson"
+                },
+                "wa_id": "16505551234"
+              }
+            ],
+            "messages": [
+              {
+                "context": {
+                  "from": "15550783881",
+                  "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgARGA9wcm9kdWN0X2lucXVpcnkA",
+                  "referred_product": {
+                    "catalog_id": "194836987003835",
+                    "product_retailer_id": "di9ozbzfi4"
+                  }
+                },
+                "from": "16505551234",
+                "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQTA2NTUwRkNEMDdFQjJCRUU0NQA=",
+                "timestamp": "1750016800",
+                "text": {
+                  "body": "Is this still available?"
+                },
+                "type": "text"
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}

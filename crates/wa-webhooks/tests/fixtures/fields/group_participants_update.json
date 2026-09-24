@@ -1,0 +1,93 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550783881",
+              "phone_number_id": "106540352242922"
+            },
+            "groups": [
+              {
+                "timestamp": "1750100300",
+                "group_id": "Y2FwaV9ncm91cDoxNzA1NTU1MDEzOToxMjAzNjM0MDQ2OTQyMzM4MjAZD",
+                "type": "group_participants_add",
+                "reason": "invite_link",
+                "added_participants": [
+                  {
+                    "wa_id": "16505551234",
+                    "user_id": "US.13491208655302741918",
+                    "parent_user_id": "US.ENT.11815799212886844830",
+                    "username": "pablomorales"
+                  }
+                ]
+              },
+              {
+                "timestamp": "1750100400",
+                "group_id": "Y2FwaV9ncm91cDoxNzA1NTU1MDEzOToxMjAzNjM0MDQ2OTQyMzM4MjAZD",
+                "type": "group_join_request_created",
+                "join_request_id": "MTIzNDU2Nzg5MDEyMzQ1Ng",
+                "wa_id": "16505551235",
+                "user_id": "US.13491208655302741919"
+              },
+              {
+                "timestamp": "1750100500",
+                "group_id": "Y2FwaV9ncm91cDoxNzA1NTU1MDEzOToxMjAzNjM0MDQ2OTQyMzM4MjAZD",
+                "type": "group_participants_remove",
+                "request_id": "9d4a5fc08eab7b3c",
+                "initiated_by": "business",
+                "removed_participants": [
+                  {
+                    "input": "16505551234"
+                  }
+                ],
+                "failed_participants": [
+                  {
+                    "input": "US.13491208655302741919",
+                    "errors": [
+                      {
+                        "code": 131009,
+                        "message": "Parameter value is not valid",
+                        "title": "Parameter value is not valid",
+                        "error_data": {
+                          "details": "Participant is not in the group"
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "errors": [
+                  {
+                    "code": 131009,
+                    "message": "Failed to remove some participants from the group",
+                    "title": "Not All Participants Remove Succeeded",
+                    "error_data": {
+                      "details": "1 of 2 participants could not be removed"
+                    }
+                  }
+                ]
+              },
+              {
+                "timestamp": "1750100600",
+                "group_id": "Y2FwaV9ncm91cDoxNzA1NTU1MDEzOToxMjAzNjM0MDQ2OTQyMzM4MjAZD",
+                "type": "group_participants_remove",
+                "initiated_by": "participant",
+                "removed_participants": [
+                  {
+                    "wa_id": "16505551236",
+                    "user_id": "US.13491208655302741920"
+                  }
+                ]
+              }
+            ]
+          },
+          "field": "group_participants_update"
+        }
+      ]
+    }
+  ]
+}
