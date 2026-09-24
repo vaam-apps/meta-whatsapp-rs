@@ -6,7 +6,8 @@
 //! | `GET /` valid verification | `200 text/plain` with `hub.challenge` (`nosniff`, `no-store`) |
 //! | `GET /` anything else, or a blank configured verify token | `403` |
 //! | `POST /` delivered, duplicate or unparseable-but-signed | `200` |
-//! | `POST /` missing, malformed or wrong signature | `401` |
+//! | `POST /` missing or malformed signature header (refused before the body is read) | `401` |
+//! | `POST /` wrong signature | `401` |
 //! | `POST /` body over the limit | `413` |
 //! | `POST /` sink or dedup store failure | `500` (Meta redelivers) |
 //! | `POST /` an event is being delivered by another request ([`WebhookError::ClaimInFlight`]) | `503` (Meta redelivers) |
@@ -20,7 +21,7 @@ use std::sync::Arc;
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::rejection::QueryRejection;
-use axum::extract::{DefaultBodyLimit, Query, State};
+use axum::extract::{DefaultBodyLimit, FromRequest, Query, Request, State};
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -34,6 +35,7 @@ use wa_core::error::WebhookError;
 
 use crate::event::WebhookEvent;
 use crate::handler::WebhookHandler;
+use crate::signature;
 use crate::verify::VerificationQuery;
 
 /// Header Meta signs deliveries with.
@@ -86,23 +88,42 @@ async fn verify(
     }
 }
 
-async fn receive(
-    State(handler): State<Arc<WebhookHandler>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> StatusCode {
-    let signature = match headers.get(SIGNATURE_HEADER).map(|v| v.to_str()) {
-        None => None,
-        Some(Ok(value)) => Some(value),
-        Some(Err(_)) => {
-            tracing::warn!(error = %WebhookError::MalformedSignature, "rejected webhook delivery");
+async fn receive(State(handler): State<Arc<WebhookHandler>>, request: Request) -> StatusCode {
+    // The header's shape needs neither a secret nor the body: a missing or
+    // malformed one is refused before a byte of the body is read, so an
+    // unsigned request cannot make us buffer up to the body limit.
+    let signature = match signature_header(request.headers()) {
+        Ok(signature) => signature,
+        Err(error) => {
+            tracing::warn!(%error, "rejected webhook delivery before reading its body");
             return StatusCode::UNAUTHORIZED;
         }
     };
-    match handler.deliver(signature, &body).await {
+    // Honours the router's `DefaultBodyLimit` (413 over it).
+    let body = match Bytes::from_request(request, &()).await {
+        Ok(body) => body,
+        Err(rejection) => {
+            tracing::warn!(status = %rejection.status(), "could not read webhook body");
+            return rejection.status();
+        }
+    };
+    match handler.deliver(Some(&signature), &body).await {
         Ok(_) => StatusCode::OK,
         Err(error) => status_for(&error),
     }
+}
+
+/// The `X-Hub-Signature-256` value, if it is present, ASCII and shaped like
+/// a signature (`sha256=` + 64 hex); whether it matches is the handler's
+/// check.
+fn signature_header(headers: &HeaderMap) -> Result<String, WebhookError> {
+    let value = headers
+        .get(SIGNATURE_HEADER)
+        .ok_or(WebhookError::MissingSignature)?
+        .to_str()
+        .map_err(|_| WebhookError::MalformedSignature)?;
+    signature::parse_header(Some(value))?;
+    Ok(value.to_owned())
 }
 
 fn status_for(error: &Error) -> StatusCode {

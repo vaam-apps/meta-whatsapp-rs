@@ -64,15 +64,7 @@ impl SignatureVerifier {
     /// timing reveals neither how much of the signature matched nor which
     /// secret did. A blank secret never matches.
     pub fn verify(&self, header: Option<&str>, body: &[u8]) -> Result<(), WebhookError> {
-        let header = header.ok_or(WebhookError::MissingSignature)?;
-        let hex = header
-            .trim()
-            .strip_prefix(PREFIX)
-            .ok_or(WebhookError::MalformedSignature)?;
-        let mut expected = [0u8; 32];
-        if hex.len() != 64 || hex::decode_to_slice(hex, &mut expected).is_err() {
-            return Err(WebhookError::MalformedSignature);
-        }
+        let expected = parse_header(header)?;
         let matched = self.secrets.iter().fold(Choice::from(0), |acc, secret| {
             // `None` (blank secret) contributes "no match", never a key.
             acc | tag(secret, body).map_or(Choice::from(0), |tag| tag.as_slice().ct_eq(&expected))
@@ -83,6 +75,24 @@ impl SignatureVerifier {
             Err(WebhookError::SignatureMismatch)
         }
     }
+}
+
+/// The 32-byte tag an `X-Hub-Signature-256` value carries: `sha256=` and
+/// 64 hex characters (either case, surrounding whitespace ignored).
+///
+/// Needs neither a secret nor the body, so an HTTP layer can refuse a
+/// missing or malformed header before it reads (and buffers) the body.
+pub(crate) fn parse_header(header: Option<&str>) -> Result<[u8; 32], WebhookError> {
+    let header = header.ok_or(WebhookError::MissingSignature)?;
+    let hex = header
+        .trim()
+        .strip_prefix(PREFIX)
+        .ok_or(WebhookError::MalformedSignature)?;
+    let mut tag = [0u8; 32];
+    if hex.len() != 64 || hex::decode_to_slice(hex, &mut tag).is_err() {
+        return Err(WebhookError::MalformedSignature);
+    }
+    Ok(tag)
 }
 
 /// `sha256=<lowercase hex>` of `body` under `secret`: the header value Meta
