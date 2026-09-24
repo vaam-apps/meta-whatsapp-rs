@@ -83,6 +83,11 @@ the inbox. It leaves out `Result`: write `wa_rs::Result`.
 | Memory, Postgres or Redis stores, your own adapter | `wa-rs-storage` |
 | Secrets, logs, limits, several instances, going live | `wa-rs-production` |
 
+Also wrapped, without a skill yet: `wa_rs::client::groups` (Groups API),
+`wa_rs::client::calling` (Calling API signalling) and
+`wa_rs::client::block_users` — read their rustdoc
+(`cargo doc -p wa-rs --all-features --open`).
+
 ## Rules every integration follows
 
 From the runnable example
