@@ -26,6 +26,11 @@ use wa_core::secret::AppSecret;
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// The header Meta signs deliveries with, lower-case (`http` stores header
+/// names lower-case). Pass its value to [`SignatureVerifier::verify`] or
+/// `WebhookHandler::deliver`, whatever the HTTP framework.
+pub const SIGNATURE_HEADER: &str = "x-hub-signature-256";
+
 const PREFIX: &str = "sha256=";
 
 /// Verifies `X-Hub-Signature-256` against one or more app secrets.

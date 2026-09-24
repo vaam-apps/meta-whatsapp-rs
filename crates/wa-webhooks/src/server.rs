@@ -38,8 +38,9 @@ use crate::handler::WebhookHandler;
 use crate::signature;
 use crate::verify::VerificationQuery;
 
-/// Header Meta signs deliveries with.
-pub const SIGNATURE_HEADER: &str = "x-hub-signature-256";
+/// Header Meta signs deliveries with; defined (and available without the
+/// `axum` feature) in [`crate::signature`].
+pub use crate::signature::SIGNATURE_HEADER;
 
 /// `GET /` (verification) and `POST /` (deliveries), backed by `handler`.
 ///

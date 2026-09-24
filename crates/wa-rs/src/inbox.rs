@@ -23,7 +23,8 @@
 //! hours of the customer's last message; [`Inbox::reply`] checks the store
 //! first and refuses (with
 //! [`ValidationError::customer_service_window_closed`], whose
-//! [`Error::kind`] is `CustomerServiceWindowClosed`, like Meta's `131047`)
+//! [`Error::kind`](wa_core::Error::kind) is `CustomerServiceWindowClosed`,
+//! like Meta's `131047`)
 //! instead of paying for a request Meta would reject. Templates and Direct
 //! Send (`category`) messages are exempt. Use [`Inbox::window`] to decide up
 //! front.
@@ -39,6 +40,7 @@ use async_trait::async_trait;
 use time::OffsetDateTime;
 use wa_client::Client;
 use wa_client::messages::{MessageContent, OutboundMessage, SendResponse};
+use wa_core::Result;
 use wa_core::clock::{Clock, SystemClock};
 use wa_core::error::{SinkError, StorageError, ValidationError};
 use wa_core::ids::{MessageId, PhoneNumberId, UserId};
@@ -48,7 +50,6 @@ use wa_core::store::{
     ConversationKey, ConversationStore, ConversationSummary, CustomerServiceWindow, DeliveryStatus,
     Direction, StoredMessage,
 };
-use wa_core::{Error, Result};
 use wa_webhooks::WebhookEvent;
 use wa_webhooks::fields::common::Contact;
 use wa_webhooks::fields::messages::{InboundMessage, InteractiveReply, MessageContent as In};
@@ -391,34 +392,48 @@ impl Inbox {
             .send(&message)
             .await?;
         if let Some(sent) = response.messages.first() {
-            let text = match &message.content {
-                MessageContent::Text(t) => Some(without_nul(t.body.clone())),
-                _ => None,
-            };
-            let payload =
-                serde_json::to_value(&message).map_err(|e| Error::Other(anyhow::Error::new(e)))?;
-            // The message is already sent: a storage failure here must not
-            // read as a send failure (a retry would send it twice).
-            if let Err(e) = self
-                .store
-                .append(StoredMessage {
-                    id: sent.id.clone(),
-                    conversation: key.clone(),
-                    direction: Direction::Outbound,
-                    kind: without_nul(message.content.message_type().to_owned()),
-                    text,
-                    payload: json_without_nul(payload),
-                    status: DeliveryStatus::Accepted,
-                    timestamp: self.clock.now(),
-                    status_at: None,
-                    error: None,
-                })
-                .await
-            {
-                tracing::error!(error = %e, "message sent but not recorded in the inbox");
-            }
+            self.record_sent(key, &message, sent.id.clone()).await;
         }
         Ok(response)
+    }
+
+    /// Record a message Meta accepted. Never fails: the message is already
+    /// sent, so neither a serialization nor a storage failure may read as a
+    /// send failure (a retry would send it twice). Both are logged, without
+    /// the message's content.
+    async fn record_sent(&self, key: &ConversationKey, message: &OutboundMessage, id: MessageId) {
+        let payload = match serde_json::to_value(message) {
+            Ok(payload) => json_without_nul(payload),
+            Err(e) => {
+                tracing::error!(
+                    category = ?e.classify(),
+                    "message sent but not recorded in the inbox: it could not be serialized"
+                );
+                return;
+            }
+        };
+        let text = match &message.content {
+            MessageContent::Text(t) => Some(without_nul(t.body.clone())),
+            _ => None,
+        };
+        if let Err(e) = self
+            .store
+            .append(StoredMessage {
+                id,
+                conversation: key.clone(),
+                direction: Direction::Outbound,
+                kind: without_nul(message.content.message_type().to_owned()),
+                text,
+                payload,
+                status: DeliveryStatus::Accepted,
+                timestamp: self.clock.now(),
+                status_at: None,
+                error: None,
+            })
+            .await
+        {
+            tracing::error!(error = %e, "message sent but not recorded in the inbox");
+        }
     }
 
     fn check_key(&self, key: &ConversationKey) -> Result<()> {
@@ -462,6 +477,7 @@ mod tests {
     use wa_webhooks::{WebhookPayload, events};
 
     use super::*;
+    use wa_core::Error;
 
     const PNID: &str = "106540352242922";
 
@@ -619,10 +635,12 @@ mod tests {
 
     /// A store that refuses U+0000 in any text or JSON it is given, the way
     /// Postgres does (`TEXT` cannot hold NUL, `JSONB` rejects `\u0000`), and
-    /// delegates everything else to the memory store.
+    /// delegates everything else to the memory store. With `down`, every
+    /// append fails (the database is unreachable).
     #[derive(Debug, Default)]
     struct NulRefusingStore {
         inner: MemoryConversationStore,
+        down: bool,
     }
 
     fn has_nul(v: &serde_json::Value) -> bool {
@@ -643,6 +661,9 @@ mod tests {
     #[async_trait]
     impl ConversationStore for NulRefusingStore {
         async fn append(&self, m: StoredMessage) -> std::result::Result<bool, StorageError> {
+            if self.down {
+                return Err(StorageError::Backend(anyhow::anyhow!("connection refused")));
+            }
             let texts = [Some(&m.kind), m.text.as_ref()];
             if texts.into_iter().flatten().any(|t| t.contains('\0'))
                 || has_nul(&m.payload)
@@ -931,6 +952,43 @@ mod tests {
         assert_eq!(rows[0].direction, Direction::Outbound);
         assert_eq!(rows[0].status, DeliveryStatus::Accepted);
         assert_eq!(rows[0].text.as_deref(), Some("hello"));
+    }
+
+    /// Conventions review #18: once Meta accepted a message, nothing about
+    /// recording it may turn the send into an error — the caller would
+    /// retry and the customer would get it twice.
+    #[tokio::test]
+    async fn a_recording_failure_after_the_send_is_not_the_callers_error() {
+        let store = Arc::new(NulRefusingStore {
+            down: true,
+            ..NulRefusingStore::default()
+        });
+        let clock = ManualClock::new(datetime!(2025-10-09 08:00 UTC));
+        let t = ScriptedTransport::new();
+        t.push_json(200, sent("wamid.out"));
+        let client = Client::builder()
+            .transport(t.clone())
+            .access_token("MERCHANT_TOKEN")
+            .retry(RetryPolicy::NONE)
+            .build()
+            .unwrap();
+        let inbox = Inbox::new(client, PNID, store.clone()).with_clock(Arc::new(clock));
+        let key = inbox.key("US.1");
+        let message = OutboundMessage::template(
+            inbox.recipient(&key),
+            TemplateMessage::new("order_update", "en_US"),
+        );
+        let response = inbox.send(&key, message).await.unwrap();
+        assert_eq!(response.message_id(), Some(&MessageId::new("wamid.out")));
+        assert_eq!(t.requests().len(), 1, "sent exactly once");
+        assert!(
+            store
+                .inner
+                .messages(&key, None, 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]

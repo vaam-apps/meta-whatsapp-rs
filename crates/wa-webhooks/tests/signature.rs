@@ -12,6 +12,18 @@ use wa_core::error::WebhookError;
 use wa_core::secret::{AppSecret, VerifyToken};
 use wa_webhooks::{SignatureVerifier, VerificationQuery, sign, verify_subscription};
 
+/// Conventions review #18: the header name belongs to the framework-free
+/// API. This file is built without the `axum` feature too (`just
+/// features`), so moving the constant back behind it fails the build.
+#[test]
+fn the_signature_header_is_available_without_axum() {
+    assert_eq!(wa_webhooks::SIGNATURE_HEADER, "x-hub-signature-256");
+    assert_eq!(
+        wa_webhooks::SIGNATURE_HEADER,
+        "X-Hub-Signature-256".to_ascii_lowercase()
+    );
+}
+
 fn verifier(secrets: &[&str]) -> SignatureVerifier {
     SignatureVerifier::new(secrets.iter().map(|s| AppSecret::new(*s)).collect()).unwrap()
 }
