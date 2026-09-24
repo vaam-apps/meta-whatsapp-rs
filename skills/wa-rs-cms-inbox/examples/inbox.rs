@@ -181,5 +181,12 @@ mod tests {
             .unwrap_err();
         assert_eq!(refused.kind(), ErrorKind::CustomerServiceWindowClosed);
         assert_eq!(transport.remaining(), 1); // nothing sent for the refusal
+
+        // `reply_or_template` sends the approved template instead.
+        reply_or_template(&late, CUSTOMER, "Hello?").await.unwrap();
+        let sent = transport.last_request().unwrap().json().unwrap();
+        assert_eq!(sent["type"], "template");
+        assert_eq!(sent["template"]["name"], "reopen_conversation");
+        assert_eq!(transport.remaining(), 0);
     }
 }

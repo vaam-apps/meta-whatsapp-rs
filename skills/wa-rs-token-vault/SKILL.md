@@ -79,8 +79,10 @@ Re-onboarding a WABA replaces its record.
   `store` yourself, do the same, or one merchant's customers reach another
   merchant.
 - Records are bound to their WABA id and key id (associated data): a
-  record copied under another WABA, or read with the wrong key, fails with
-  `Error::Crypto` (`CryptoError::Decrypt`) instead of leaking.
+  record copied under another WABA, or read with other key bytes under
+  the same key id, fails with `Error::Crypto` (`CryptoError::Decrypt`); one
+  whose key id is not configured, with `CryptoError::InvalidKey`. Neither
+  leaks a token.
 - `Debug` of `StoredBusinessToken` never shows the token; never log
   `token.expose_secret()`.
 - One `Client` per process, `with_token` per request: never build a

@@ -58,8 +58,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 anyhow = "1"
 ```
 
-- The repository is private: Cargo needs GitHub credentials that can read
-  it (for example `[net] git-fetch-with-cli = true` in `.cargo/config.toml`).
+- The repository is public: Cargo fetches it without credentials.
 - Rust **1.98.1** or newer, edition 2024.
 - Defaults are `reqwest` (the HTTP transport), `memory` (in-process stores)
   and `sinks`. Add `postgres`, `redis`, `axum` (webhook router and SSE),
@@ -67,11 +66,13 @@ anyhow = "1"
   table is in the [README](../../README.md#feature-flags).
 - Types from sqlx, axum and redis cross the API (`PgPool`, `axum::Router`,
   a redis connection). Use the versions wa-rs was built with, re-exported:
-  `wa_rs::adapters::store::postgres::sqlx` (feature `postgres`) and
-  `wa_rs::webhooks::axum` (feature `axum`), as the examples do; then there
-  is nothing to pin. If you need axum features wa-rs does not turn on, add
-  `axum = "0.8"` with them yourself: Cargo builds one axum 0.8 for both.
-  redis has no re-export: your own must be 1.x.
+  `wa_rs::adapters::store::postgres::sqlx` (feature `postgres`),
+  `wa_rs::webhooks::axum` (feature `axum`) and
+  `wa_rs::adapters::store::redis` (feature `redis`), as the examples do;
+  then there is nothing to pin. If you need axum features wa-rs does not
+  turn on, add `axum = "0.8"` with them yourself: Cargo builds one axum 0.8
+  for both (likewise `redis = "1"` with `tokio-rustls-comp` for
+  `rediss://`).
 
 ## 3. Send a first message
 

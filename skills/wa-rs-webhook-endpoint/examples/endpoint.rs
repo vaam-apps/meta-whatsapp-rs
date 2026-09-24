@@ -42,6 +42,12 @@ pub fn routes(handler: WebhookHandler) -> wa_rs::webhooks::axum::Router {
     )
 }
 
+/// Serve them: `axum::serve` through the same re-export.
+pub async fn serve(handler: WebhookHandler, addr: &str) -> std::io::Result<()> {
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    wa_rs::webhooks::axum::serve(listener, routes(handler)).await
+}
+
 /// Any other framework, `GET`: echo the challenge as `text/plain`.
 pub fn answer_get(handler: &WebhookHandler, query: &VerificationQuery) -> (u16, String) {
     match handler.verify(query) {

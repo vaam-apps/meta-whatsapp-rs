@@ -53,7 +53,13 @@ wa_rs::webhooks::axum::Router::new().nest(
 
 `router` serves `GET` (verification) and `POST` (deliveries), refuses a
 missing or malformed signature header before reading the body, and
-replaces axum's 2 MiB default limit with the handler's.
+replaces axum's 2 MiB default limit with the handler's. Serve it with the
+same re-exported axum (in the example, `routes` returns the router above):
+
+```rust
+let listener = tokio::net::TcpListener::bind(addr).await?;
+wa_rs::webhooks::axum::serve(listener, routes(handler)).await
+```
 
 ## Any other framework
 

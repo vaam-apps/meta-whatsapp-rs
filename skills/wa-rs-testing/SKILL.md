@@ -29,6 +29,7 @@ wa-rs = { git = "https://github.com/vaam-apps/wa-rs", rev = "<rev>" }
 [dev-dependencies]
 wa-rs = { git = "https://github.com/vaam-apps/wa-rs", rev = "<rev>", features = ["testing"] }
 serde_json = "1"
+time = { version = "0.3", features = ["macros"] } # ManualClock takes an OffsetDateTime
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -123,8 +124,8 @@ let key = inbox.key(CUSTOMER);
 
 - No mock HTTP server and no recorded fixtures of Meta's API: the scripts
   are yours, from Meta's documented examples.
-- wa-rs does not forward a `testing` feature: the wa-core dev-dependency
-  above is needed until it does.
+- ~~wa-rs does not forward a `testing` feature: a wa-core dev-dependency
+  is needed~~: true until 4eb93c9 (2026-09-24); use the feature above.
 
 ## Related skills
 

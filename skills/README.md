@@ -20,9 +20,9 @@ npx skills add vaam-apps/wa-rs -s wa-rs -s wa-rs-webhook-endpoint -s wa-rs-cms-i
 npx skills update                                                      # re-fetch what is installed
 ```
 
-The repository is private: the installer (and Cargo, for the crate)
-needs GitHub credentials that can read it. Install `wa-rs` in any case: it
-is the map and routes to the others. Each skill is self-contained (its
+The repository is public: neither the installer nor Cargo needs
+credentials. Install `wa-rs` in any case: it is the map and routes to the
+others. Each skill is self-contained (its
 `references/` and `examples/` travel with it; links elsewhere point at
 GitHub), so any subset works.
 

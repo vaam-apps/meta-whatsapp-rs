@@ -104,7 +104,8 @@ message.validate().err().map(|e| e.field) // Some("interactive.action.buttons")
 ```
 
 `send` runs the same `validate()`; the error's `field` is the JSON path.
-Checked locally: body 1024 (list 4096), footer 60, list and CTA header
+Checked locally: body 1024 (list 4096; a Flow message's body only
+non-empty, Meta documents no limit), footer 60, list and CTA header
 text 60; buttons 1–3 with unique ids and titles, title 20, id 256; lists 1–10
 sections and 1–10 rows in total, row title 24, description 72, section
 titles required with several sections; CTA display text 20; carousel

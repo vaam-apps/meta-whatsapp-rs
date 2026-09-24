@@ -32,13 +32,15 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 anyhow = "1"
 ```
 
-- The repository is private: Cargo needs credentials that can read it
-  (for example `[net] git-fetch-with-cli = true` in `.cargo/config.toml`).
+- ~~The repository is private: Cargo needs credentials that can read
+  it~~: not so at 2026-09-24, `vaam-apps/wa-rs` is public; no credentials.
 - Rust 1.98.1 or newer, edition 2024. You bring the tokio runtime.
-- axum and sqlx types cross the API: use the re-exports
-  `wa_rs::webhooks::axum` (feature `axum`) and
-  `wa_rs::adapters::store::postgres::sqlx` (feature `postgres`) instead of
-  pinning your own. There is no redis re-export: your `redis` must be 1.x.
+- axum, sqlx and redis types cross the API: use the re-exports
+  `wa_rs::webhooks::axum` (feature `axum`),
+  `wa_rs::adapters::store::postgres::sqlx` (feature `postgres`) and
+  `wa_rs::adapters::store::redis` (feature `redis`) instead of pinning
+  your own. ~~There is no redis re-export~~: true until 4eb93c9
+  (2026-09-24).
 
 | Feature | Default | Adds |
 | --- | --- | --- |
@@ -51,6 +53,7 @@ anyhow = "1"
 | `typst` | | `wa_rs::typst`: invoices, receipts, vouchers → PDF/PNG |
 | `flows-endpoint` | | WhatsApp Flows data-endpoint crypto |
 | `full` | | all of the above |
+| `testing` | | `ScriptedTransport` for your own tests; `[dev-dependencies]` only, not in `full` (`wa-rs-testing`) |
 
 `use wa_rs::prelude::*;` brings the client, ids, `Recipient`, the message
 and template builders, the webhook pieces, the store and sink traits and
