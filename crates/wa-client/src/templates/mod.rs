@@ -6,6 +6,10 @@
 //! `https://developers.facebook.com/documentation/business-messaging/whatsapp/`
 //! (append `.md` for Markdown; `just meta-docs` mirrors them locally).
 
+mod send;
+
+pub use send::{TemplateLanguage, TemplateMessage};
+
 use wa_core::ids::WabaId;
 
 use crate::Client;
