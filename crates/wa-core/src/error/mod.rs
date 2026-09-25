@@ -12,6 +12,7 @@
 //! ├── Sink(..)               an `EventSink` adapter failed
 //! ├── Crypto(..)             encryption/decryption (token vault, Flows endpoint)
 //! ├── Config(..)             the client or a service was built with missing/invalid settings
+//! ├── Credit(..)             a Solution Partner credit line step stopped: refused, busy, to reconcile, or a revocation part-way
 //! ├── Step { step, source }  a multi-step flow (onboarding) failed part-way; `step` says where
 //! └── Other(anyhow::Error)   anything an integrator raises that has no typed home
 //! ```
@@ -24,8 +25,11 @@
 //! Decide on behaviour with [`Error::kind`] and [`Error::is_retryable`], never
 //! by matching message strings.
 
+mod credit;
 mod graph;
 mod leaf;
+
+pub use credit::{CreditError, CreditRevocation, RevocationIncomplete};
 
 pub use graph::{ErrorData, ErrorKind, GraphApiError, GraphErrorEnvelope};
 pub use leaf::{
@@ -94,6 +98,12 @@ pub enum Error {
     #[error(transparent)]
     Config(#[from] ConfigError),
 
+    /// A Solution Partner credit line step stopped (see [`CreditError`]):
+    /// it carries whether to retry, whether anything reached Meta, and a
+    /// revocation's report.
+    #[error(transparent)]
+    Credit(#[from] CreditError),
+
     /// A multi-step flow failed part-way through. Earlier steps took effect.
     #[error("step `{step}` failed: {source}")]
     Step {
@@ -143,6 +153,16 @@ impl Error {
         }
     }
 
+    /// The credit line error, if this is (or wraps, through [`Error::Step`])
+    /// one.
+    pub fn credit(&self) -> Option<&CreditError> {
+        match self {
+            Self::Credit(e) => Some(e),
+            Self::Step { source, .. } => source.credit(),
+            _ => None,
+        }
+    }
+
     /// Classification of the failure. Non-API errors map to the closest kind.
     pub fn kind(&self) -> ErrorKind {
         match self {
@@ -157,6 +177,7 @@ impl Error {
                 ErrorKind::CustomerServiceWindowClosed
             }
             Self::Validation(_) => ErrorKind::InvalidParameter,
+            Self::Credit(e) => e.kind(),
             Self::Step { source, .. } => source.kind(),
             _ => ErrorKind::Unknown,
         }
@@ -173,6 +194,7 @@ impl Error {
             Self::Api(e) => e.is_retryable(),
             Self::Http { status, .. } => *status >= 500 || *status == 429,
             Self::Transport(e) => e.is_retryable(),
+            Self::Credit(e) => e.is_retryable(),
             Self::Step { source, .. } => source.is_retryable(),
             _ => false,
         }
@@ -192,7 +214,9 @@ impl Error {
     /// built or never connected — so it is safe to fix and resend. Storage,
     /// sink and webhook errors are `false` too: wa-rs raises them before a
     /// send, and after one it logs them instead of returning them (the
-    /// inbox records a sent reply without failing). `true` for a timeout,
+    /// inbox records a sent reply without failing). A [`CreditError`]
+    /// decides for itself ([`CreditError::may_have_been_sent`]: a raced
+    /// share, a share to reconcile, a revocation's `DELETE`s). `true` for a timeout,
     /// any other 5xx or non-4xx status, an answer that arrived but was
     /// unreadable or failed an integrity check, or anything unknown:
     /// reconcile with status webhooks (match on `biz_opaque_callback_data`)
@@ -219,6 +243,7 @@ impl Error {
                 | TransportError::Integrity(_) => true,
             },
             Self::Decode { .. } | Self::Other(_) => true,
+            Self::Credit(e) => e.may_have_been_sent(),
             Self::Step { source, .. } => source.may_have_been_sent(),
             Self::Validation(_)
             | Self::Config(_)
@@ -347,9 +372,117 @@ mod tests {
             ),
             (SinkError::Closed.into(), false),
             (WebhookError::SignatureMismatch.into(), false),
+            // Credit line refusals: only a raced share, a share to
+            // reconcile and a revocation's DELETEs reached Meta.
+            (credit_revoked(false).into(), false),
+            (credit_revoked(true).into(), true),
+            (busy(false).into(), false),
+            (busy(true).into(), true),
+            (CreditError::OwnerUnknown("x".into()).into(), false),
+            (
+                CreditError::StatusUnknown {
+                    allocation_config_id: "A".into(),
+                    status: "NEW".into(),
+                }
+                .into(),
+                false,
+            ),
+            (CreditError::ApprovalRequired("x".into()).into(), false),
+            (CreditError::Reconcile("x".into()).into(), true),
+            (incomplete(false, None).into(), false),
+            (incomplete(true, None).into(), true),
+            (
+                incomplete(false, Some(Error::Transport(TransportError::Timeout))).into(),
+                true,
+            ),
+            (
+                incomplete(false, Some(ValidationError::new("x", "y").into())).into(),
+                false,
+            ),
+            (
+                Error::from(incomplete(true, None)).in_step("revoke_credit_line"),
+                true,
+            ),
         ] {
             assert_eq!(err.may_have_been_sent(), sent, "{err}");
         }
+    }
+
+    fn credit_revoked(posted: bool) -> CreditError {
+        CreditError::Revoked {
+            business_id: None,
+            reason: "revoked".into(),
+            posted,
+        }
+    }
+
+    fn busy(posted: bool) -> CreditError {
+        CreditError::Busy {
+            reason: "x".into(),
+            posted,
+        }
+    }
+
+    fn incomplete(deletes_sent: bool, source: Option<Error>) -> RevocationIncomplete {
+        let mut r = RevocationIncomplete::new(CreditRevocation::new(None));
+        r.deletes_sent = deletes_sent;
+        r.source = source.map(Box::new);
+        r
+    }
+
+    /// Busy and an unconfirmed revocation are worth retrying; a refusal is
+    /// not; a revocation stopped by a record naming no business needs a
+    /// person, whatever else happened.
+    #[test]
+    fn credit_errors_decide_retry_and_kind() {
+        let step_busy = Error::from(busy(false)).in_step("share_credit_line");
+        assert!(step_busy.is_retryable());
+        assert_eq!(step_busy.kind(), ErrorKind::ServiceUnavailable);
+        assert!(matches!(step_busy.credit(), Some(CreditError::Busy { .. })));
+        assert!(busy(true).is_retryable(), "resume attaches what was shared");
+        let revoked = Error::from(credit_revoked(false));
+        assert!(!revoked.is_retryable());
+        assert_eq!(revoked.kind(), ErrorKind::InvalidParameter);
+        for refusal in [
+            CreditError::OwnerUnknown("x".into()),
+            CreditError::ApprovalRequired("x".into()),
+            CreditError::Reconcile("x".into()),
+        ] {
+            assert!(!refusal.is_retryable(), "{refusal}");
+            assert_eq!(refusal.kind(), ErrorKind::InvalidParameter);
+        }
+
+        let mut unconfirmed = incomplete(true, None);
+        unconfirmed.unconfirmed.push("A1".into());
+        let err = Error::from(unconfirmed);
+        assert!(err.is_retryable(), "a DELETE Meta has not confirmed yet");
+        assert_eq!(err.kind(), ErrorKind::ServiceUnavailable);
+        let mut unattributed = incomplete(false, None);
+        unattributed.unattributed.push("U1".into());
+        assert!(!unattributed.is_retryable());
+        assert_eq!(CreditError::from(unattributed).kind(), ErrorKind::Unknown);
+        let transient = incomplete(false, Some(Error::Transport(TransportError::Timeout)));
+        assert!(transient.is_retryable());
+        let mut both = incomplete(false, Some(Error::Transport(TransportError::Timeout)));
+        both.unattributed.push("U1".into());
+        assert!(!both.is_retryable());
+        let permanent = Error::from(incomplete(
+            false,
+            Some(ValidationError::new("x", "y").into()),
+        ));
+        assert!(!permanent.is_retryable());
+        assert_eq!(permanent.kind(), ErrorKind::InvalidParameter);
+        assert!(
+            permanent
+                .credit()
+                .and_then(CreditError::revocation)
+                .is_some()
+        );
+        assert!(
+            Error::from(ValidationError::new("x", "y"))
+                .credit()
+                .is_none()
+        );
     }
 
     #[test]
