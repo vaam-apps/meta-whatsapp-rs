@@ -5,7 +5,7 @@ description: "Using WhatsApp through meta-whatsapp-server, the meta-whatsapp-rs 
 
 # meta-whatsapp-rs-server
 
-> **Verified against meta-whatsapp-rs 63f3cfc2d23bcecee6d5bccf3e8bc9037725598e (2026-09-25).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 8fa8c190dbe6e5f70f913909b2865399e643c044 (2026-09-25).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/client.ts](examples/client.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
@@ -15,10 +15,11 @@ Your app is not Rust and reaches WhatsApp through meta-whatsapp-server:
 you deploy it, hold its keys, call its /v1 API and handle its errors.
 Rust code uses the library directly (`meta-whatsapp-rs`).
 
-## What the service does today (milestone M1a)
+## What the service does today (milestones M1a and M1c)
 
-Sends, media, templates, Meta's webhooks, the inbox, events, Embedded
-Signup and OTP do not exist yet: write no code against them.
+Sends, media, templates, the inbox routes, live events (SSE), webhooks
+to your backend, Embedded Signup and OTP do not exist yet: write no code
+against them.
 
 | Route | Needs | Does |
 | --- | --- | --- |
@@ -26,6 +27,7 @@ Signup and OTP do not exist yet: write no code against them.
 | `GET /v1/numbers/{pn}` | scope `numbers` | live details from Meta: `display_phone_number`, `verified_name`, `quality_rating`, `name_status`, `throughput` |
 | `GET /v1/numbers/{pn}/profile`, `PATCH /v1/numbers/{pn}/profile` | scope `numbers` | the business profile (`about`, `address`, `description`, `email`, `websites`, `vertical`) |
 | `DELETE /v1/wabas/{waba_id}` | scope `numbers` | disconnect: the token and bindings go only once Meta unsubscribed the app |
+| `GET /v1/events` | scope `events` | Meta's webhook events for the tenant, after a cursor: `meta-whatsapp-rs-server-events` |
 | `POST /v1/admin/tenants`, `POST /v1/admin/tenants/{id}/keys`, `POST /v1/admin/platform-keys` | admin key | tenants and keys |
 | `POST /v1/admin/tenants/{id}/wabas`, `GET /v1/admin/wabas/{waba_id}`, `DELETE /v1/admin/wabas/{waba_id}/binding` | admin key | attach the platform's own WABA (numbers listed by Meta, app subscribed); who holds one; unbind it (token deleted too) |
 | `/livez`, `/readyz`, `/metrics`, `/v1/version`, `/v1/openapi.json` | nothing | operations, and the document every client is generated from |
@@ -33,11 +35,10 @@ Signup and OTP do not exist yet: write no code against them.
 ## Deploy
 
 One deployment per Meta app. The public listener (default
-`127.0.0.1:8080`) serves only `GET /webhooks/meta` (Meta's subscription
-check) and `GET /livez`; the internal one (`127.0.0.1:8081`) serves
-everything else and must stay on your private network. No image yet:
-build it. Do not point Meta's callback URL at it before webhooks land
-(deliveries answer `405`, and Meta retries for days).
+`127.0.0.1:8080`) serves only `/webhooks/meta` (Meta's subscription
+check and deliveries: point the app's callback URL at it) and
+`GET /livez`; the internal one (`127.0.0.1:8081`) serves everything else
+and must stay on your private network. No image yet: build it.
 
 ```bash
 cargo build --release -p meta-whatsapp-server
@@ -145,6 +146,8 @@ export function nextStep(error: ErrorObject): Next {
 ## Related skills
 
 `meta-whatsapp-rs` (the Rust library, when you write Rust),
-`meta-whatsapp-rs-errors` (the error kinds behind the Meta codes),
+`meta-whatsapp-rs-server-events` (Meta's webhooks through the service,
+polling events), `meta-whatsapp-rs-errors` (the error kinds behind the
+Meta codes),
 `meta-whatsapp-rs-production` (what the service does for you: secrets,
 logs, several instances).

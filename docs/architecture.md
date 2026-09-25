@@ -826,6 +826,12 @@ decisions and the delivery milestones, is
   is Meta's text, not the service's, kept only on the routes that opt in
   (never OTP or signup), bounded and without control or format
   characters or line separators.
+- **Webhooks in** go through the library's `WebhookHandler` (signature
+  before parsing, 3 MiB, the leased `DedupGuard` in the shared
+  `KvStore`) into `InboxSink`, then the service's event outbox. Routing
+  to a tenant is an allow-list: the tenant bound to the event's number or
+  WABA, for the event types the service reviewed; everything else is an
+  operator-only row.
 - **Storage** is Postgres (memory only in development). The service's
   tables are `wa_server_*` with their own migration history, run with the
   library's migrations under an advisory lock of the service's own;

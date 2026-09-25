@@ -98,6 +98,7 @@ those names any more. Remove them (`npx skills list` shows them;
 | Skill | Load it when |
 | --- | --- |
 | [`meta-whatsapp-rs-server`](meta-whatsapp-rs-server/) | deploying or calling meta-whatsapp-server, the HTTP service: keys, routes, errors, a typed TypeScript client |
+| [`meta-whatsapp-rs-server-events`](meta-whatsapp-rs-server-events/) | receiving WhatsApp events through meta-whatsapp-server: Meta's callback URL, routing, polling `GET /v1/events` |
 
 ## Versioning: a skill is true of one meta-whatsapp-rs commit
 

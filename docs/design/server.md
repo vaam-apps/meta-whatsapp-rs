@@ -1,11 +1,13 @@
 # Design: a deployable meta-whatsapp-rs service (`meta-whatsapp-server`)
 
-> **Milestone M1a is implemented** in `crates/meta-whatsapp-server` (the
-> crate, configuration, listeners, storage, tenants and keys, the admin
-> API with attach, unbind and vault rotation, the numbers routes, errors,
-> operations, the committed OpenAPI document; [§9](#9-delivery-plan) says
-> which acceptance tests it meets, [coverage.md](../coverage.md) row 33
-> what is missing); the rest is design. Written against `main` =
+> **Milestones M1a and M1c are implemented** in `crates/meta-whatsapp-server`
+> (M1a: the crate, configuration, listeners, storage, tenants and keys,
+> the admin API with attach, unbind and vault rotation, the numbers
+> routes, errors, operations, the committed OpenAPI document; M1c:
+> `POST /webhooks/meta` into the inbox and the event outbox, and
+> `GET /v1/events`; [§9](#9-delivery-plan) says which acceptance tests
+> they meet, [coverage.md](../coverage.md) row 33 what is missing); the
+> rest is design. Written against `main` =
 > bbf24a3 (2026-09-24), Graph API v25.0; the library changes it assumed have
 > since landed on `main` (#4: `OtpConfig::namespace` required, the Intent
 > API's result renamed `marketing::OnboardingRequested`; #5: Solution Partner
@@ -142,6 +144,43 @@ library's `KvStore` namespaces (`wa.token`, `wa.otp`, `wa.webhook.dedup`,
 - `data` is the library's `WebhookEvent` JSON, pinned by snapshot tests
   over Meta's documented examples: a library change that alters it fails
   the server's tests and forces an API-version decision.
+
+How M1c settled what the list above leaves open (none of it is an owner
+decision; each is a place to look in review):
+
+- **Types are an allow-list too.** A tenant receives only the event types
+  the service reviewed and pinned (`TENANT_EVENT_TYPES` in
+  `src/events.rs`); `unknown`, `unparsed`, `partner_solution_updated` and
+  any type a later library adds are operator-only rows until the service
+  lists them (a test reads the library's `WebhookEvent::kind` and fails
+  on an unclassified one).
+- **Ownership is by the bindings, number first.** An event naming a number
+  goes to the number's tenant only when the WABA it names is the one the
+  number is bound under (stale bindings route to nobody); an event naming
+  only a WABA goes to the WABA's tenant. The inbox records an event only
+  when a tenant owns it, so an unowned number's messages never wait in the
+  inbox for whoever binds it later; the outbox records every event.
+- **Sequences commit in order.** An outbox insert holds a transaction
+  advisory lock from before it draws its sequence to its commit, so a
+  poll that saw sequence `n` saw every event before it and never moves
+  past one still in flight. The cost: outbox inserts do not run in
+  parallel across replicas (one statement and a commit each).
+- **Polling.** `next_after` is the last event's sequence when more follow,
+  else the outbox's newest sequence (other tenants' included, so a quiet
+  tenant's cursor does not age into `410`). `410 cursor_expired` is a
+  cursor below what housekeeping purged; a cursor above the newest
+  sequence (a restored database) is `422` on `after`. A page stops past
+  8 MiB of `data`, with at least one event. Housekeeping purges a prefix
+  of sequences past `WA_SERVER_OUTBOX_RETENTION` (7 days until D10 is
+  decided), on one replica at a time, and the library's expired
+  key/value rows with it.
+- **Keyless events** (`error_reported`, `unparsed`) have no dedup key: a
+  redelivered batch records them again, as the library does.
+- **The library's handler, the service's route.** `POST /webhooks/meta`
+  calls the library's `WebhookHandler` (signature, 3 MiB, parsing, the
+  dedup lease) rather than mounting its `router`: the router discards the
+  delivery report the service counts duplicates from. It answers as the
+  router does (bare statuses: `401`, `413`, `503`, `500`).
 
 ### 2.4 Several replicas
 
@@ -772,8 +811,10 @@ messages, media, templates, idempotency keys and rate limits; **M1c**
 `/webhooks/meta` into inbox and outbox and `GET /v1/events`. M1a meets
 M1.1, M1.3, M1.5 and M1.6, and M1.7's parallel migrations and its log
 capture over every M1a route (the M1a routes stand in for a send and a
-webhook); M1.2, M1.4 and the rest of M1.7 (two instances deduplicating a
-webhook, the capture of a send and a webhook) are M1b's and M1c's.
+webhook). M1c meets M1.2 and M1.7's webhook half (two instances on one
+database deduplicating a webhook, the capture of webhooks and of
+`GET /v1/events`), and keeps M1.1, M1.3, M1.5 and M1.6 over its route.
+M1.4 and M1.7's send capture are M1b's: M1 is complete once M1b lands.
 
 Acceptance tests. "Decisive" names the guard whose removal must make the
 test fail.
