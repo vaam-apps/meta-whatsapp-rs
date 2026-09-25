@@ -5,9 +5,12 @@
 //! wa-rs compiles this file and runs its tests in its own gate
 //! (`crates/wa-rs/tests/skills.rs`).
 
+use wa_rs::client::common::QualityRating;
 use wa_rs::core::ids::MessageId;
 use wa_rs::prelude::*;
-use wa_rs::webhooks::fields::{InteractiveReply, MessageContent as Inbound, MessageStatus};
+use wa_rs::webhooks::fields::{
+    InteractiveReply, MessageContent as Inbound, MessageStatus, TemplateQualityScore,
+};
 
 /// What the application does with one event.
 #[derive(Debug, PartialEq)]
@@ -113,6 +116,18 @@ pub fn action(event: &WebhookEvent) -> Action {
     }
 }
 
+/// A `TemplateQualityUpdated` score as the Graph API's `QualityRating`
+/// (templates and phone numbers read with the client): the same scale in
+/// two types. Convert through the wire value: `QualityRating` parses it
+/// case-insensitively, and `NA`, which only it names, is `Other("NA")` on
+/// the webhook side.
+pub fn quality(score: &TemplateQualityScore) -> QualityRating {
+    match score.as_str().parse::<QualityRating>() {
+        Ok(rating) => rating,
+        Err(never) => match never {},
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
@@ -171,6 +186,52 @@ mod tests {
                 id: "wamid.B".into(),
                 kinds: vec![ErrorKind::MarketingOptedOut]
             }
+        );
+    }
+
+    /// `message_template_quality_update`: the webhook's scores map onto the
+    /// client's by wire value; `NA` and other spellings are `Other` on the
+    /// webhook side (it matches exactly) and parse on the client side.
+    #[test]
+    fn template_quality_scores_map_by_wire_value() {
+        let body = json!({"object": "whatsapp_business_account", "entry": [{"id": "102290129340398",
+            "time": 1674864290, "changes": [{"field": "message_template_quality_update", "value": {
+                "previous_quality_score": "GREEN", "new_quality_score": "YELLOW",
+                "message_template_id": 806_312_974_732_579_u64,
+                "message_template_name": "welcome_template",
+                "message_template_language": "en-US"}}]}]});
+        let WebhookEvent::TemplateQualityUpdated { update, .. } = &events(&body)[0] else {
+            panic!("not a quality update")
+        };
+        assert_eq!(quality(&update.new_quality_score), QualityRating::Yellow);
+        let previous = update.previous_quality_score.as_ref().unwrap();
+        assert_eq!(quality(previous), QualityRating::Green);
+        for (webhook, client) in [
+            ("RED", QualityRating::Red),
+            ("UNKNOWN", QualityRating::Unknown),
+            ("NA", QualityRating::NotApplicable),
+            ("green", QualityRating::Green),
+            ("PURPLE", QualityRating::Other("PURPLE".into())),
+        ] {
+            assert_eq!(
+                quality(&TemplateQualityScore::from(webhook)),
+                client,
+                "{webhook}"
+            );
+        }
+        assert_eq!(
+            TemplateQualityScore::from("NA"),
+            TemplateQualityScore::Other("NA".into()),
+            "the webhook documents no NA"
+        );
+        assert_eq!(
+            TemplateQualityScore::from("green"),
+            TemplateQualityScore::Other("green".into()),
+            "and matches exactly"
+        );
+        assert_eq!(
+            TemplateQualityScore::from(QualityRating::NotApplicable.as_str()),
+            TemplateQualityScore::Other("NA".into())
         );
     }
 

@@ -100,6 +100,25 @@ To answer by phone, prepend `+` to the `wa_id`.
 - Name clashes: `webhooks::fields::MessageContent` (inbound) vs
   `client::messages::MessageContent` (outbound), `MessageStatus`, and
   `TemplateCategory` exist on both sides: alias on import (`as Inbound`).
+- **One quality scale, two types**, kept apart on purpose (the owner's
+  decision, 2026-09-25): `TemplateQualityUpdated` carries a
+  `TemplateQualityScore`, the client's templates and phone numbers a
+  `QualityRating`. Both have `Green`, `Yellow`, `Red` and `Unknown` (not
+  rated yet). Only `QualityRating` has `NotApplicable` (`NA`, in the phone
+  number examples): the webhook documents none, so `NA` there is
+  `Other("NA")`. `QualityRating` matches case-insensitively (`green` is
+  `Green`); `TemplateQualityScore` exactly (`green` is `Other("green")`).
+  Convert through the wire value, never by variant name:
+
+```rust
+pub fn quality(score: &TemplateQualityScore) -> QualityRating {
+    match score.as_str().parse::<QualityRating>() {
+        Ok(rating) => rating,
+        Err(never) => match never {},
+    }
+}
+```
+
 - Media ids in webhooks live 7 days: download what you need
   (`wa-rs-media`).
 - Customer data: never log `WebhookEvent`'s `Debug` (names, numbers, text).
