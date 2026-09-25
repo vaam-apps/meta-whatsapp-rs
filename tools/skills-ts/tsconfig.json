@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": true,
+    "skipLibCheck": false,
+    "types": [],
+    "paths": {
+      "openapi-fetch": ["./node_modules/openapi-fetch"]
+    }
+  },
+  "include": ["../../skills/meta-whatsapp-rs-server*/examples/*.ts"]
+}

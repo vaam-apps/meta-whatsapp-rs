@@ -91,6 +91,7 @@ the inbox. It leaves out `Result`: write `meta_whatsapp_rs::Result`.
 | WhatsApp Flows and their data endpoint | `meta-whatsapp-rs-flows` |
 | Memory, Postgres or Redis stores, your own adapter | `meta-whatsapp-rs-storage` |
 | Secrets, logs, limits, several instances, going live | `meta-whatsapp-rs-production` |
+| An app not written in Rust, through the HTTP service meta-whatsapp-server | `meta-whatsapp-rs-server` |
 
 Anything else the client wraps: its rustdoc
 (`cargo doc -p meta-whatsapp-rs --all-features --open`), starting at `meta_whatsapp_rs::client`.

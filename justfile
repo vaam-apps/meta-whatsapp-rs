@@ -144,6 +144,30 @@ skills-check:
     done
     exit "$status"
 
+# The server skills' TypeScript examples (skills/meta-whatsapp-rs-server*/examples/*.ts),
+# type-checked against types generated from the committed OpenAPI document of
+# crates/meta-whatsapp-server. Node is pinned in tools/skills-ts/.nvmrc (CI
+# installs exactly it; locally the major version must match) and the packages
+# by tools/skills-ts/package-lock.json. The rest of the server skills' checks
+# (excerpts, routes, codes, variables) are crates/meta-whatsapp-rs/tests/skills.rs.
+skills-ts:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd tools/skills-ts
+    want="$(cat .nvmrc)"
+    have="$(node --version)"
+    have="${have#v}"
+    if [ "${have%%.*}" != "${want%%.*}" ]; then
+        echo "skills-ts: Node ${want%%.*}.x expected (tools/skills-ts/.nvmrc: $want), found $have"
+        exit 1
+    fi
+    npm ci --no-audit --no-fund
+    for examples in ../../skills/meta-whatsapp-rs-server*/examples; do
+        npx --no-install openapi-typescript ../../crates/meta-whatsapp-server/openapi/v1.json \
+            --output "$examples/meta-whatsapp-server.d.ts"
+    done
+    npx --no-install tsc -p tsconfig.json
+
 # The body of a pull request's squash commit: one `Squashed-commit: <sha>`
 # line per commit of the PR, as GitHub lists them (so stamps naming a branch
 # commit still resolve on main: `skills-check`), then the commits'
@@ -162,7 +186,7 @@ squash-body pr:
     if [ -n "$coauthors" ]; then printf '\n%s\n' "$coauthors"; fi
 
 # The gate. CI runs exactly this.
-ci: lint check test skills-check doc features deny test-live
+ci: lint check test skills-check skills-ts doc features deny test-live
 
 # Mirror Meta's WhatsApp docs as Markdown into .meta-docs/ (gitignored; the
 # docs are Meta's, never commit them). Agents grep this instead of guessing.

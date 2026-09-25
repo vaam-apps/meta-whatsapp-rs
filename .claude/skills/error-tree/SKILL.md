@@ -33,7 +33,10 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
   a stable error code that callers store and compare (an HTTP API's
   error code, metrics labels). Code that maps kinds iterates
   `ErrorKind::ALL` in its tests, so the new kind fails them until it is
-  decided there too.
+  decided there too: the service's HTTP status table
+  (`crates/meta-whatsapp-server/src/error.rs`, `kind_code` and `CODES`;
+  `tests/errors.rs` there) is one, and its codes are a public contract
+  (the OpenAPI document's `ErrorCode`, regenerate and commit it).
 - `is_retryable()` = could succeed later. **Safe to replay** is separate:
   `ErrorKind::is_rejected_before_processing()` (throttling only). The client
   never replays a non-idempotent request on a timeout.

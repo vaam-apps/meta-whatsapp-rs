@@ -12,8 +12,10 @@ just ci > /tmp/ci.log 2>&1; echo $? > /tmp/ci.exit
 cat /tmp/ci.exit   # 0 or it is not verified
 ```
 
-`ci` = `lint check test skills-check doc features deny test-live`. `skills-check`
-needs the git history (a shallow clone fails it).
+`ci` = `lint check test skills-check skills-ts doc features deny test-live`.
+`skills-check` needs the git history (a shallow clone fails it);
+`skills-ts` needs Node of the major version in `tools/skills-ts/.nvmrc`
+(CI installs exactly that version) and the npm registry for `npm ci`.
 
 ## Traps
 
@@ -23,7 +25,8 @@ needs the git history (a shallow clone fails it).
 - **Skipped ≠ passed.** `live_*` tests print `ok` when their service URL is
   unset. Only `just test-live` sets `META_WHATSAPP_RS_REQUIRE_LIVE=1`, which turns a
   missing service into a failure. Check its output shows the live tests
-  *ran* (non-zero count).
+  *ran* (non-zero count). It runs two crates' live tests
+  (`meta-whatsapp-adapters`, `meta-whatsapp-server`): check both counts.
 - **Don't reconstruct the gate.** `cargo test` is not `just test`
   (`--all-features`); `cargo clippy` is not `just lint` (`-D warnings`,
   `--all-targets`).

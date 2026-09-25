@@ -16,3 +16,8 @@
 
 # Claude Code agent worktrees
 /.claude/worktrees/
+
+# `just skills-ts`: its toolchain, and the types it generates next to the
+# server skills' examples from the committed OpenAPI document.
+/tools/skills-ts/node_modules/
+/skills/meta-whatsapp-rs-server*/examples/*.d.ts

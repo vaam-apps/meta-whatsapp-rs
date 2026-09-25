@@ -16,11 +16,14 @@ Either open the repo in the dev container (see
   [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) 0.20.
 - Docker, for `just test-live` (Postgres 18 and Redis 8 from
   `compose.test.yaml`, on ports 55432/56379).
+- Node 24 (the exact version CI uses is `tools/skills-ts/.nvmrc`), for
+  `just skills-ts`: it installs its packages from
+  `tools/skills-ts/package-lock.json` and runs no install scripts.
 
 ## The gate
 
 ```bash
-just ci        # lint, check, test, skills-check, doc, features, deny, test-live
+just ci        # lint, check, test, skills-check, skills-ts, doc, features, deny, test-live
 ```
 
 CI runs exactly this. A change is verified when `just ci` exits 0 on its
@@ -108,6 +111,16 @@ Say in the PR description what happened to each, with a link or
 - `just skills-check` (part of `just ci`) checks that every stamp's commit
   is in HEAD's history: an ancestor of HEAD, or a branch commit that a
   squash commit in that history lists as `Squashed-commit: <sha>`.
+- The service's skills (`skills/meta-whatsapp-rs-server*/`) speak HTTP:
+  their ```` ```ts ```` blocks are excerpts of their own
+  `examples/*.ts`, which `just skills-ts` type-checks against types
+  generated from the committed OpenAPI document
+  (`crates/meta-whatsapp-server/openapi/v1.json`); their backticked
+  routes, schemas, error codes and field names, the routes of their
+  `curl` lines and their JSON error bodies must be in that document, and
+  their backticked environment variables must be read by the service's
+  source (`crates/meta-whatsapp-rs/tests/skills.rs`). A change to the
+  document updates them in the same PR.
 - Developer skills in `.claude/skills/` carry `metadata: internal: true`
   so the installer does not offer them. Check what it offers from your
   checkout with `npx -y skills add <path-to-checkout> --list`: only the

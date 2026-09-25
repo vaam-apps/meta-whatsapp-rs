@@ -670,7 +670,8 @@ fn every_skill_is_stamped_short_and_routed_to() {
             )
             .unwrap();
         }
-        for example in rust_files(&skill.dir.join("examples")) {
+        let examples = skill.dir.join("examples");
+        for example in rust_files(&examples).into_iter().chain(ts_files(&examples)) {
             let name = example.file_name().unwrap().to_string_lossy();
             if !skill.markdown.contains(&format!("](examples/{name})")) {
                 writeln!(failures, "{file}: does not link examples/{name}").unwrap();
@@ -1242,7 +1243,7 @@ fn quotable_lines<'a>(source: &'a str, features: &HashSet<String>, test: Built) 
 
 /// Languages a fence in `skills/**/*.md` may be labeled with.
 const FENCE_LANGUAGES: &[&str] = &[
-    "rust", "toml", "text", "js", "bash", "sh", "markdown", "json", "sql", "yaml", "html",
+    "rust", "toml", "text", "js", "ts", "bash", "sh", "markdown", "json", "sql", "yaml", "html",
 ];
 
 /// Problems with the code fences of `markdown`: every block is fenced with
@@ -2402,6 +2403,7 @@ fn backticked_names_exist() {
     let mut index = Index::build();
     let allowed = allowlist();
     let skills: HashSet<String> = consumer_skills().into_iter().map(|s| s.name).collect();
+    let server_spec = Spec::load();
     let mut failures: HashMap<String, Vec<String>> = HashMap::new();
     let mut checked = 0;
     for (path, markdown) in skill_markdown() {
@@ -2423,6 +2425,11 @@ fn backticked_names_exist() {
             }
             for span in code_spans(prose) {
                 checked += 1;
+                // A server skill's routes, schemas, codes and variables are
+                // the OpenAPI document's (server_skills_cite_the_document…).
+                if in_server_skill(&path) && server_span_problems(&server_spec, span).is_some() {
+                    continue;
+                }
                 for problem in undefined_names(&index, &allowed, &skills, span) {
                     failures.entry(problem).or_default().push(format!(
                         "{}:{}",
@@ -2796,4 +2803,635 @@ fn cfg_predicates_and_scopes_parse_as_built() {
         !members.contains_key("B") && !members.contains_key("C"),
         "{members:?}"
     );
+}
+
+// ─── The service's skills (`meta-whatsapp-rs-server*`) ───────────────────
+//
+// Skills for callers of meta-whatsapp-server speak HTTP, not Rust
+// (docs/design/server.md, section 9, "the skills gate for HTTP callers"):
+//
+// - a ```` ```ts ```` block is an excerpt of the skill's own
+//   `examples/*.ts`, which `just skills-ts` type-checks (Node pinned)
+//   against types generated from the committed OpenAPI document;
+// - backticked routes, schemas, error codes and field names in the prose,
+//   the `curl` routes of its ```` ```bash ```` blocks and the error bodies
+//   of its ```` ```json ```` blocks are checked against that document, and
+//   backticked environment variables against the service's source.
+
+/// Every skill for the service's callers starts with this name.
+/// `tools/skills-ts/tsconfig.json` type-checks exactly their examples.
+const SERVER_SKILLS: &str = "meta-whatsapp-rs-server";
+
+/// The committed OpenAPI document of the service.
+const SERVER_SPEC: &str = "crates/meta-whatsapp-server/openapi/v1.json";
+
+/// The service's source: the environment variables it reads are string
+/// literals there.
+const SERVER_SRC: &str = "crates/meta-whatsapp-server/src";
+
+/// The public listener's routes, which the document leaves out (Meta's
+/// contract, not the callers'); `PUBLIC_ROUTES` in
+/// crates/meta-whatsapp-server/src/api/mod.rs, checked below.
+const SERVER_PUBLIC_ROUTES: &[(&str, &str)] = &[("GET", "/webhooks/meta"), ("GET", "/livez")];
+
+const HTTP_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE"];
+
+/// Whether `path` is (in) a skill for the service's callers.
+fn in_server_skill(path: &Path) -> bool {
+    owning_skill(path).is_some_and(|dir| {
+        dir.file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with(SERVER_SKILLS))
+    })
+}
+
+/// A skill's `examples/*.ts` (generated `*.d.ts` left out).
+fn ts_files(dir: &Path) -> Vec<PathBuf> {
+    sorted_dir(dir)
+        .into_iter()
+        .filter(|p| {
+            let name = p.file_name().unwrap().to_string_lossy();
+            name.ends_with(".ts") && !name.ends_with(".d.ts")
+        })
+        .collect()
+}
+
+/// What a server skill may cite.
+struct Spec {
+    /// `(METHOD, path template)`.
+    operations: HashSet<(String, String)>,
+    /// Schema names.
+    schemas: HashSet<String>,
+    /// Error codes (`ErrorCode`).
+    codes: HashSet<String>,
+    /// Property and parameter names, enum values.
+    words: HashSet<String>,
+    /// `ErrorObject`'s properties.
+    error_fields: HashSet<String>,
+    /// Environment variables the service's source names.
+    env: HashSet<String>,
+}
+
+impl Spec {
+    fn load() -> Self {
+        Self::from(&read(&repo().join(SERVER_SPEC)), &server_sources())
+    }
+
+    fn from(document: &str, sources: &str) -> Self {
+        let doc: serde_json::Value = serde_json::from_str(document).unwrap();
+        let mut spec = Spec {
+            operations: HashSet::new(),
+            schemas: HashSet::new(),
+            codes: HashSet::new(),
+            words: HashSet::new(),
+            error_fields: HashSet::new(),
+            env: HashSet::new(),
+        };
+        for (path, item) in doc["paths"].as_object().unwrap() {
+            for (method, operation) in item.as_object().unwrap() {
+                spec.operations
+                    .insert((method.to_uppercase(), path.clone()));
+                for parameter in operation["parameters"].as_array().into_iter().flatten() {
+                    if let Some(name) = parameter["name"].as_str() {
+                        spec.words.insert(name.to_owned());
+                    }
+                }
+            }
+        }
+        for (method, path) in SERVER_PUBLIC_ROUTES {
+            spec.operations
+                .insert(((*method).to_owned(), (*path).to_owned()));
+        }
+        let schemas = doc["components"]["schemas"].as_object().unwrap();
+        spec.schemas.extend(schemas.keys().cloned());
+        collect_words(&doc["components"], &mut spec.words);
+        spec.codes.extend(
+            schemas["ErrorCode"]["enum"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|c| c.as_str().unwrap().to_owned()),
+        );
+        spec.error_fields.extend(
+            schemas["ErrorObject"]["properties"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned(),
+        );
+        // String literals of the source shaped like environment variables.
+        for piece in sources.split('"').skip(1).step_by(2) {
+            if is_env_name(piece) {
+                spec.env.insert(piece.to_owned());
+            }
+        }
+        spec
+    }
+
+    /// Whether `method` (any, for `None`) on `path` is an operation. A path
+    /// segment matches a `{parameter}` segment of the template when it is
+    /// not empty; `{…}`, `$VAR` and `<…>` segments of `path` match only
+    /// parameters.
+    fn route(&self, method: Option<&str>, path: &str) -> bool {
+        let path = path.split(['?', '#']).next().unwrap_or_default();
+        let segments: Vec<&str> = path.split('/').collect();
+        self.operations.iter().any(|(m, template)| {
+            let parts: Vec<&str> = template.split('/').collect();
+            method.is_none_or(|method| method == m)
+                && parts.len() == segments.len()
+                && parts.iter().zip(&segments).all(|(t, s)| {
+                    let parameter = t.starts_with('{');
+                    let placeholder =
+                        s.starts_with('{') || s.starts_with('$') || s.starts_with('<');
+                    if parameter {
+                        !s.is_empty()
+                    } else {
+                        !placeholder && t == s
+                    }
+                })
+        })
+    }
+}
+
+/// Property names and enum values anywhere under `value`.
+fn collect_words(value: &serde_json::Value, words: &mut HashSet<String>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(props) = map.get("properties").and_then(|p| p.as_object()) {
+                words.extend(props.keys().cloned());
+            }
+            for value in map
+                .get("enum")
+                .and_then(|e| e.as_array())
+                .into_iter()
+                .flatten()
+            {
+                if let Some(s) = value.as_str() {
+                    words.insert(s.to_owned());
+                }
+            }
+            map.values().for_each(|v| collect_words(v, words));
+        }
+        serde_json::Value::Array(items) => items.iter().for_each(|v| collect_words(v, words)),
+        _ => {}
+    }
+}
+
+/// Every `.rs` file of the service, concatenated.
+fn server_sources() -> String {
+    fn walk(dir: &Path, out: &mut String) {
+        for path in sorted_dir(dir) {
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push_str(&read(&path));
+            }
+        }
+    }
+    let mut out = String::new();
+    walk(&repo().join(SERVER_SRC), &mut out);
+    assert!(!out.is_empty(), "no service source found");
+    out
+}
+
+/// `WA_…`, `DATABASE_URL`, `RUST_LOG`: upper case, digits and `_`, with a
+/// `_`.
+fn is_env_name(s: &str) -> bool {
+    s.len() > 2
+        && s.contains('_')
+        && s.starts_with(|c: char| c.is_ascii_uppercase())
+        && s.chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// The problems of a backticked span of a server skill, or `None` when it
+/// is not HTTP-shaped (the Rust checks then apply to it).
+fn server_span_problems(spec: &Spec, span: &str) -> Option<Vec<String>> {
+    let span = span.trim();
+    let fail = |why: String| Some(vec![why]);
+    // `GET /v1/numbers`, `GET|PATCH /v1/numbers/{pn}/profile`
+    if let Some((methods, path)) = span.split_once(' ')
+        && path.starts_with('/')
+        && !path.contains(' ')
+        && methods.split('|').all(|m| HTTP_METHODS.contains(&m))
+    {
+        return Some(
+            methods
+                .split('|')
+                .filter(|m| !spec.route(Some(m), path))
+                .map(|m| format!("route `{m} {path}` is not in {SERVER_SPEC}"))
+                .collect(),
+        );
+    }
+    // `/v1/openapi.json`, `/readyz`
+    if span.starts_with('/') && !span.contains(' ') {
+        return if spec.route(None, span) {
+            Some(Vec::new())
+        } else {
+            fail(format!("path `{span}` is not in {SERVER_SPEC}"))
+        };
+    }
+    if is_env_name(span) {
+        let base = span.strip_suffix("_FILE").unwrap_or(span);
+        return if spec.env.contains(span) || spec.env.contains(base) {
+            Some(Vec::new())
+        } else {
+            fail(format!(
+                "`{span}` is not an environment variable the service reads ({SERVER_SRC})"
+            ))
+        };
+    }
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    if span.starts_with(|c: char| c.is_ascii_lowercase()) && span.chars().all(word) {
+        return if spec.codes.contains(span) || spec.words.contains(span) {
+            Some(Vec::new())
+        } else {
+            fail(format!(
+                "`{span}` is neither an error code, a field, a parameter nor a value of {SERVER_SPEC}"
+            ))
+        };
+    }
+    if is_camel(span) && span.chars().all(word) {
+        return if spec.schemas.contains(span) {
+            Some(Vec::new())
+        } else {
+            fail(format!("`{span}` is not a schema of {SERVER_SPEC}"))
+        };
+    }
+    None
+}
+
+/// The `curl` commands of a ```` ```bash ```` block, continuation lines
+/// joined.
+fn curl_commands(block: &str) -> Vec<String> {
+    let mut commands = Vec::new();
+    let mut current = String::new();
+    for line in block.lines() {
+        let line = line.split(" #").next().unwrap_or_default();
+        let (text, continued) = match line.trim_end().strip_suffix('\\') {
+            Some(text) => (text, true),
+            None => (line, false),
+        };
+        current.push_str(text.trim());
+        current.push(' ');
+        if !continued {
+            if current.contains("curl ") {
+                commands.push(current.trim().to_owned());
+            }
+            current.clear();
+        }
+    }
+    commands
+}
+
+/// Problems with the `curl` routes of a bash block: each names a method
+/// and path of the document.
+fn curl_problems(spec: &Spec, block: &str) -> Vec<String> {
+    let mut problems = Vec::new();
+    for command in curl_commands(block) {
+        let words: Vec<String> = command
+            .split_whitespace()
+            .map(|w| w.trim_matches(|c| c == '"' || c == '\'').to_owned())
+            .collect();
+        let explicit = words
+            .iter()
+            .position(|w| w == "-X" || w == "--request")
+            .and_then(|i| words.get(i + 1))
+            .cloned();
+        let body = words
+            .iter()
+            .any(|w| w == "-d" || w.starts_with("--data") || w.starts_with("-d"));
+        let method = explicit.unwrap_or_else(|| if body { "POST" } else { "GET" }.to_owned());
+        let Some(url) = words
+            .iter()
+            .find(|w| w.contains("/v1/") || w.contains("://") || w.starts_with("$WA_SERVER"))
+        else {
+            problems.push(format!("`{command}`: no URL"));
+            continue;
+        };
+        let path = match url.split_once("://") {
+            Some((_, rest)) => rest.find('/').map_or("/", |i| &rest[i..]),
+            None => url.find('/').map_or("/", |i| &url[i..]),
+        };
+        if !spec.route(Some(&method), path) {
+            problems.push(format!(
+                "`{method} {path}` (a curl) is not in {SERVER_SPEC}"
+            ));
+        }
+    }
+    problems
+}
+
+/// Problems with an error body in a json block: its code and fields are
+/// the document's.
+fn json_error_problems(spec: &Spec, block: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(block) else {
+        return Vec::new();
+    };
+    let Some(error) = value.get("error").and_then(|e| e.as_object()) else {
+        return Vec::new();
+    };
+    let mut problems = Vec::new();
+    match error.get("code").and_then(|c| c.as_str()) {
+        Some(code) if spec.codes.contains(code) => {}
+        other => problems.push(format!("error code {other:?} is not in {SERVER_SPEC}")),
+    }
+    for field in error.keys() {
+        if !spec.error_fields.contains(field) {
+            problems.push(format!("error field `{field}` is not in {SERVER_SPEC}"));
+        }
+    }
+    problems
+}
+
+/// The blocks of `markdown` labeled `language`: first line number and
+/// text.
+fn blocks_of<'a>(markdown: &'a str, language: &str) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
+    let mut open: Option<(usize, Vec<&'a str>)> = None;
+    for (i, line) in markdown.lines().enumerate() {
+        let trimmed = line.trim();
+        match &mut open {
+            None if trimmed.strip_prefix("```") == Some(language) => {
+                open = Some((i + 1, Vec::new()));
+            }
+            None => {}
+            Some(_) if trimmed == "```" => {
+                let (start, lines) = open.take().unwrap();
+                out.push((start, lines.join("\n")));
+            }
+            Some((_, lines)) => lines.push(line),
+        }
+    }
+    out
+}
+
+/// The paragraphs of trimmed lines of a block's text.
+fn paragraphs(text: &str) -> Vec<Vec<&str>> {
+    let mut out = Vec::new();
+    let mut paragraph = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if !paragraph.is_empty() {
+                out.push(std::mem::take(&mut paragraph));
+            }
+        } else {
+            paragraph.push(trimmed);
+        }
+    }
+    if !paragraph.is_empty() {
+        out.push(paragraph);
+    }
+    out
+}
+
+/// What a TypeScript example may not hold: code a block could quote that
+/// the type-check does not see as code (a block comment, a template
+/// literal spanning lines).
+fn ts_example_problems(source: &str) -> Vec<String> {
+    let mut problems = Vec::new();
+    for (i, line) in source.lines().enumerate() {
+        if line.contains("/*") {
+            problems.push(format!("line {}: block comment (use //)", i + 1));
+        }
+        if line.matches('`').count() % 2 == 1 {
+            problems.push(format!("line {}: a template literal spans lines", i + 1));
+        }
+    }
+    problems
+}
+
+#[test]
+fn server_skills_cite_the_document_and_the_source() {
+    let spec = Spec::load();
+    // The public routes this test adds are the service's.
+    let api = read(&repo().join(SERVER_SRC).join("api/mod.rs"));
+    let listed: Vec<&str> = SERVER_PUBLIC_ROUTES.iter().map(|(_, p)| *p).collect();
+    assert!(
+        api.contains(&format!(
+            "pub const PUBLIC_ROUTES: [&str; {}] = [{}];",
+            listed.len(),
+            listed
+                .iter()
+                .map(|p| format!("\"{p}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+        "SERVER_PUBLIC_ROUTES is not the service's PUBLIC_ROUTES"
+    );
+    let mut failures = String::new();
+    let mut checked = 0;
+    for (path, markdown) in skill_markdown() {
+        if !in_server_skill(&path) {
+            continue;
+        }
+        for (line, prose) in prose_lines(&markdown) {
+            for span in code_spans(prose) {
+                if let Some(problems) = server_span_problems(&spec, span) {
+                    checked += 1;
+                    for problem in problems {
+                        writeln!(failures, "{}:{line}: {problem}", rel(&path)).unwrap();
+                    }
+                }
+            }
+        }
+        for (line, block) in blocks_of(&markdown, "bash") {
+            checked += curl_commands(&block).len();
+            for problem in curl_problems(&spec, &block) {
+                writeln!(failures, "{}:{line}: {problem}", rel(&path)).unwrap();
+            }
+        }
+        for (line, block) in blocks_of(&markdown, "json") {
+            for problem in json_error_problems(&spec, &block) {
+                writeln!(failures, "{}:{line}: {problem}", rel(&path)).unwrap();
+            }
+        }
+    }
+    assert!(failures.is_empty(), "\n{failures}");
+    assert!(
+        checked >= 20,
+        "only {checked} routes, codes, fields and variables checked"
+    );
+}
+
+#[test]
+fn ts_blocks_are_excerpts_of_type_checked_examples() {
+    let mut failures = String::new();
+    let mut blocks = 0;
+    let mut examples = 0;
+    for skill in consumer_skills() {
+        for file in ts_files(&skill.dir.join("examples")) {
+            examples += 1;
+            if !skill.name.starts_with(SERVER_SKILLS) {
+                writeln!(
+                    failures,
+                    "{}: only {SERVER_SKILLS}* skills' TypeScript is type-checked \
+                     (tools/skills-ts/tsconfig.json)",
+                    rel(&file)
+                )
+                .unwrap();
+            }
+            for problem in ts_example_problems(&read(&file)) {
+                writeln!(failures, "{}: {problem}", rel(&file)).unwrap();
+            }
+        }
+    }
+    for (path, markdown) in skill_markdown() {
+        let own: Vec<String> = owning_skill(&path)
+            .map(|dir| ts_files(&dir.join("examples")))
+            .unwrap_or_default()
+            .iter()
+            .map(|f| read(f))
+            .collect();
+        for (line, block) in blocks_of(&markdown, "ts") {
+            blocks += 1;
+            let wanted = paragraphs(&block);
+            let found = own.iter().any(|source| {
+                let lines: Vec<&str> = source
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                is_excerpt(&lines, &wanted)
+            });
+            if !found {
+                writeln!(
+                    failures,
+                    "{}:{line}: not an excerpt of the skill's examples/*.ts (edit the example, \
+                     then copy it):\n{block}\n",
+                    rel(&path)
+                )
+                .unwrap();
+            }
+        }
+    }
+    assert!(failures.is_empty(), "\n{failures}");
+    assert!(
+        examples >= 1 && blocks >= 1,
+        "{examples} examples, {blocks} ts blocks"
+    );
+    // The type-check covers exactly the server skills.
+    let tsconfig = read(&repo().join("tools/skills-ts/tsconfig.json"));
+    assert!(
+        tsconfig.contains(&format!("\"../../skills/{SERVER_SKILLS}*/examples/*.ts\"")),
+        "tools/skills-ts/tsconfig.json does not include the server skills' examples"
+    );
+}
+
+/// A small document for the checks' own tests.
+const TEST_DOCUMENT: &str = r#"{"openapi": "3.1.0",
+      "paths": {
+        "/v1/numbers/{pn}": {"get": {"parameters": [{"name": "pn", "in": "path"}]}},
+        "/v1/admin/tenants": {"post": {}}
+      },
+      "components": {"schemas": {
+        "ErrorCode": {"type": "string", "enum": ["not_found", "reconnect_required"]},
+        "ErrorObject": {"properties": {"code": {}, "message": {}}},
+        "TenantView": {"properties": {"status": {"enum": ["active"]}}}
+      }}}"#;
+
+#[test]
+fn the_server_span_checks_reject_known_bad_input() {
+    let spec = Spec::from(
+        TEST_DOCUMENT,
+        r#"r.plain("WA_SERVER_ENV"); r.secret("DATABASE_URL")"#,
+    );
+    let ok = |span: &str| server_span_problems(&spec, span) == Some(Vec::new());
+    let bad = |span: &str| server_span_problems(&spec, span).is_some_and(|p| !p.is_empty());
+    for span in [
+        "GET /v1/numbers/{pn}",
+        "GET /v1/numbers/106540352242922",
+        "POST /v1/admin/tenants",
+        "/v1/numbers/{pn}",
+        "GET /livez",
+        "not_found",
+        "status",
+        "active",
+        "pn",
+        "TenantView",
+        "WA_SERVER_ENV",
+        "DATABASE_URL_FILE",
+    ] {
+        assert!(ok(span), "{span}");
+    }
+    for span in [
+        "PATCH /v1/numbers/{pn}",
+        "GET /v1/numbers",
+        "GET|POST /v1/admin/tenants",
+        "POST /webhooks/meta",
+        "/v1/numberz/{pn}",
+        "reconect_required",
+        "TenantViews",
+        "WA_SERVER_ENVIRONMENT",
+    ] {
+        assert!(bad(span), "{span}");
+    }
+    assert!(
+        server_span_problems(&spec, "Error::kind").is_none(),
+        "Rust stays Rust's"
+    );
+}
+
+#[test]
+fn the_server_fence_checks_reject_known_bad_input() {
+    let spec = Spec::from(TEST_DOCUMENT, "");
+
+    assert!(
+        curl_problems(
+            &spec,
+            "curl -sS \"$WA_SERVER/v1/numbers/$PN\" \\\n  -H \"Authorization: Bearer $KEY\""
+        )
+        .is_empty()
+    );
+    assert!(
+        curl_problems(
+            &spec,
+            "curl -sS -X POST http://127.0.0.1:8081/v1/admin/tenants -d '{}'"
+        )
+        .is_empty()
+    );
+    assert!(
+        !curl_problems(
+            &spec,
+            "curl -sS -X DELETE http://127.0.0.1:8081/v1/admin/tenants"
+        )
+        .is_empty()
+    );
+    assert!(
+        !curl_problems(&spec, "curl -sS http://127.0.0.1:8081/v1/admin/tenants").is_empty(),
+        "GET is not documented"
+    );
+    assert!(!curl_problems(&spec, "curl -sS \"$WA_SERVER/v1/tenants\"").is_empty());
+
+    assert!(
+        json_error_problems(&spec, r#"{"error": {"code": "not_found", "message": "x"}}"#)
+            .is_empty()
+    );
+    assert!(
+        !json_error_problems(&spec, r#"{"error": {"code": "gone", "message": "x"}}"#).is_empty()
+    );
+    assert!(
+        !json_error_problems(&spec, r#"{"error": {"code": "not_found", "reason": "x"}}"#)
+            .is_empty()
+    );
+
+    assert!(ts_example_problems("const a = `x`;\n// ok\n").is_empty());
+    assert!(!ts_example_problems("/* hidden\nconst a = 1;\n*/\n").is_empty());
+    assert!(!ts_example_problems("const a = `\nconst b = 1;\n`;\n").is_empty());
+    let example = [
+        "const a = 1;",
+        "",
+        "export function f() {",
+        "return a;",
+        "}",
+    ];
+    let lines: Vec<&str> = example.iter().copied().filter(|l| !l.is_empty()).collect();
+    assert!(is_excerpt(
+        &lines,
+        &paragraphs("export function f() {\n  return a;\n}")
+    ));
+    assert!(!is_excerpt(
+        &lines,
+        &paragraphs("export function f() {\n  return b;\n}")
+    ));
 }
