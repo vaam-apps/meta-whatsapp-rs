@@ -432,3 +432,30 @@ async fn template_management_is_rate_limited_by_default() {
     );
     assert!(reply.headers.contains_key("retry-after"));
 }
+
+/// A page is cached for the tenant that asked: once the WABA is unbound
+/// and bound to another tenant, that tenant's first list asks Meta, with
+/// its own token. Decisive: the tenant in the cache key.
+#[tokio::test]
+async fn a_page_cached_for_one_tenant_is_never_answered_to_the_next() {
+    use meta_whatsapp_rs::core::ids::WabaId;
+    let (h, key) = connected().await;
+    h.graph.push_json(200, documented_list());
+    assert_eq!(h.call(list(&key, WABA, "")).await.status, StatusCode::OK);
+    // The operator unbinds the WABA; another tenant attaches it.
+    h.store.unbind_waba(&WabaId::new(WABA)).await.unwrap();
+    h.tenant("merchant-43").await;
+    h.connect("merchant-43", WABA, &[PN], "TOKEN-43").await;
+    let theirs = h.tenant_key("merchant-43", &[Scope::Templates]).await;
+    h.graph.push_json(200, json!({"data": []}));
+    let listed = h.call(list(&theirs, WABA, "")).await;
+    assert_eq!(listed.status, StatusCode::OK, "{}", listed.text);
+    assert_eq!(
+        listed.json()["data"],
+        json!([]),
+        "not the first tenant's page"
+    );
+    assert_eq!(h.graph.requests().len(), 2);
+    assert_eq!(h.graph.last_request().unwrap().bearer(), Some("TOKEN-43"));
+    assert_eq!(h.graph.remaining(), 0);
+}
