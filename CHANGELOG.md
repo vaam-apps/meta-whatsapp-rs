@@ -133,10 +133,20 @@ volumes (Claude config, shell history, cargo caches) start empty
   downloads verified against Meta's SHA-256 before the first byte (`502
   integrity`), at most `?max_bytes=` (16 MiB), or streamed with
   `?stream=true`, where a mismatch aborts the connection; `X-WA-SHA256`;
-  deletes; at most `WA_SERVER_MEDIA_CONCURRENCY` transfers in memory per
-  replica. Templates (scope `templates`): list (cached 60 s per WABA),
-  get, create from Meta's JSON (checked locally; `template_rejected`,
-  `template_limit_reached`), delete by name or name and id.
+  deletes; at most `WA_SERVER_MEDIA_CONCURRENCY` transfers in memory and
+  `WA_SERVER_MEDIA_STREAMS` streamed downloads per replica, one tenant
+  holding half of either at most. A media id is digits and must be the
+  number's (Meta's `phone_number_id` on the lookup and the deletion; a
+  deletion looks the id up first); a streamed download is forwarded one
+  chunk behind, so a mismatch never delivers the whole file; downloads
+  carry a sandboxing `Content-Security-Policy`. Templates (scope
+  `templates`): list (cached 60 s per tenant's WABA, least recently used
+  pages evicted first), get (found through the WABA's own list: Meta's
+  template object does not name its WABA), create from Meta's JSON
+  (checked locally; a key the library would drop is `422` on its path;
+  `template_rejected`, `template_limit_reached`), delete by name or name
+  and id (an `audit` event). Another tenant's media or template id is
+  `404 not_found`, like a missing one.
   `Idempotency-Key` on sends, uploads and template creation, scoped to
   the tenant, stored in Postgres (`wa_server_idempotency`, service
   migration 2) or memory: a repeat gets the kept answer with

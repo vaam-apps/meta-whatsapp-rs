@@ -5,25 +5,23 @@ description: "Sending WhatsApp messages, media and templates through meta-whatsa
 
 # meta-whatsapp-rs-server-send
 
-> **Verified against meta-whatsapp-rs 53c06801fa58ac137baf0dfba25722dda5563326 (2026-09-25).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 2773e6d1d42c13db481acbfa65c75b28291a1e2f (2026-09-25).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/send.ts](examples/send.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
 ## When to use
 
 Your backend is not Rust, reaches WhatsApp through meta-whatsapp-server
-(`meta-whatsapp-rs-server` covers deploying it, keys and errors), and
-sends order notifications, replies, files or templates. The key needs the
-scope of each route: `send`, `media`, `templates`.
+(`meta-whatsapp-rs-server`: deploying it, keys, errors) and sends order
+notifications, replies, files or templates (scopes `send`, `media`, `templates`).
 
 | Route | Does |
 | --- | --- |
 | `POST /v1/numbers/{pn}/messages` | send; `202` with `message_id`, the key of its status events |
 | `POST /v1/numbers/{pn}/messages/{message_id}/read` | blue ticks; `typing_indicator` only when a reply follows |
-| `POST /v1/numbers/{pn}/media` | upload (a multipart form: `file`, `type`); `201` with `media_id` |
+| `POST /v1/numbers/{pn}/media` | upload (a multipart form: `type`, then `file`); `201` with `media_id` |
 | `GET /v1/numbers/{pn}/media/{media_id}`, `DELETE /v1/numbers/{pn}/media/{media_id}` | download, verified; delete |
-| `GET /v1/wabas/{waba_id}/templates`, `POST /v1/wabas/{waba_id}/templates`, `DELETE /v1/wabas/{waba_id}/templates` | list (cached 60 s per WABA), create, delete by `name` (and `id`) |
-| `GET /v1/wabas/{waba_id}/templates/{id}` | one template |
+| `GET /v1/wabas/{waba_id}/templates`, `GET /v1/wabas/{waba_id}/templates/{id}`, `POST /v1/wabas/{waba_id}/templates`, `DELETE /v1/wabas/{waba_id}/templates` | list (cached 60 s per WABA), one, create, delete by `name` (and `id`) |
 
 ## Send a message
 
@@ -100,7 +98,7 @@ export function outcome(error: ErrorObject, retryAfter: string | null): Outcome 
 
 ## Media
 
-Upload with a form (`type` is one of Meta's MIME types); type and size are
+Upload a form, `type` (one of Meta's MIME types) before `file`; both are
 checked before Meta is asked (`invalid_request` on `type`,
 `media_too_large`: 5 MiB images, 16 MiB audio and video, 100 MiB
 documents, `WA_SERVER_MEDIA_MAX_BYTES`):
@@ -113,8 +111,9 @@ curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/media" -H "Authorization
 Downloads are checked against Meta's SHA-256 before the first byte:
 `integrity` (502) instead of a corrupt file, `X-WA-SHA256` on success.
 At most `max_bytes` (16 MiB by default and at most); larger files need
-`stream` set to true, where a mismatch **aborts the connection**: keep
-the bytes aside until the body ended cleanly.
+`stream` set to true, where a mismatch **aborts the connection** before
+the last chunk: keep the bytes aside until the body ended cleanly. A
+`media_id` is digits, and your number's: another's is `not_found`.
 
 ```ts
 const { data, error, response } = await api.GET("/v1/numbers/{pn}/media/{media_id}", {
@@ -126,10 +125,12 @@ const { data, error, response } = await api.GET("/v1/numbers/{pn}/media/{media_i
 ## Templates
 
 Creation takes Meta's own template JSON (`TemplateDefinition`), checked
-locally first (`invalid_request` with `field`); Meta refusing it is
+locally first (`invalid_request` with `field`, also on a key the service
+would not pass on: nothing is dropped); Meta refusing it is
 `template_rejected`, a full WABA `template_limit_reached`; the review's
 result comes as an event. Lists (`TemplateList`: `status`, `name`,
-`limit`, `cursor`) are cached 60 seconds per WABA.
+`limit`, `cursor`) are cached 60 seconds per WABA; another WABA's
+template `id` is `not_found`.
 
 ## Rate limits
 
@@ -147,14 +148,13 @@ sent; a platform key shares the tenant's budget. Meta's own limits answer
   `Idempotency-Key` repeat does.
 - No campaign pacing or opt-out registry: respect `marketing_opted_out`
   and pace your own sends.
-- It checks the number is your tenant's, not that a media or template
-  id is: use ids you got from it or from your webhooks.
+- Meta documents its per-number media check for uploads only: a file
+  received by webhook answering `not_found` may be that; report it.
 - No Direct Send, Flows, product or carousel messages, and no
   authentication templates yet; no documents route (M4).
 
 ## Related skills
 
-`meta-whatsapp-rs-server` (deploying the service, keys, the error body),
-`meta-whatsapp-rs-send-messages` and `meta-whatsapp-rs-send-templates`
-(the same messages from Rust, and what each field means),
-`meta-whatsapp-rs-templates` (template definitions in depth).
+`meta-whatsapp-rs-server` (deploying the service, keys, the error body);
+from Rust, and what each field means: `meta-whatsapp-rs-send-messages`,
+`meta-whatsapp-rs-send-templates`, `meta-whatsapp-rs-templates`.

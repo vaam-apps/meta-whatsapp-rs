@@ -598,9 +598,9 @@ sends twice. The service adds no send retries of its own.
 | --- | --- |
 | Forged Meta deliveries | signature over raw bytes with any of N app secrets; missing or malformed header `401` before the body is read; 3 MiB; the public listener serves nothing else |
 | Replayed Meta bodies | dedup for 7 days; bodies never logged |
-| A tenant reading or sending as another | ownership before the vault ([§3.3](#33-authorization-order)); foreign numbers are `404`; extractors are the only path to a token |
+| A tenant reading or sending as another | ownership before the vault ([§3.3](#33-authorization-order)); foreign numbers are `404`; extractors are the only path to a token. *As built in M1b*: one token may reach several tenants' WABAs (the platform's system user token attached to each), so an id in a path is checked to be the path's number's or WABA's own: media with Meta's `phone_number_id`, templates through the WABA's own list; another's is `404` like a missing one |
 | A stolen platform key | limited to its tenants and scopes; internal network only; revocation effective across replicas at once |
-| A stolen database dump | tokens encrypted (vault key elsewhere), API keys hashed, OTP codes and numbers only as HMACs (pepper elsewhere), webhook secrets encrypted (data key elsewhere); inbox history is readable, so database encryption at rest is the operator's |
+| A stolen database dump | tokens encrypted (vault key elsewhere), API keys hashed, OTP codes and numbers only as HMACs (pepper elsewhere), webhook secrets encrypted (data key elsewhere); inbox history is readable, and so are the answers idempotency records keep for 24 h (a send's recipient: phone number, `wa_id` or BSUID), so database encryption at rest is the operator's |
 | Signup attributed to the wrong merchant | state bound to the tenant, redeemed for the credential's tenant; ids verified with Meta; D4 |
 | OTP brute force, cross-tenant codes | the library's limits, per-tenant rate limits, namespace = tenant |
 | SSRF | no URL fetching (media by id, through the library's host allow-list); webhooks-out allow-list, no redirects, pinned address |
@@ -673,8 +673,9 @@ crate names, settled when OQ #1 closed (`meta-whatsapp-*`, 2026-09-25).
 | `WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS` | none | hosts and CIDRs for webhooks-out |
 | `WA_SERVER_OUTBOX_RETENTION`, `…_IDEMPOTENCY_TTL`, `…_WEBHOOK_RETRY_WINDOW` | 7 d, 24 h, 72 h | |
 | `WA_SERVER_MEDIA_MAX_BYTES`, `WA_SERVER_SHUTDOWN_GRACE`, `WA_SERVER_MIGRATE` | 100 MiB, 25 s, `auto` | `skip` when a job runs `meta-whatsapp-server migrate` |
-| `WA_SERVER_MEDIA_CONCURRENCY` (M1b) | 4 | uploads and whole-file downloads held in memory at once per replica (section 6's "bounded media concurrency"; the next is `429`) |
-| `WA_SERVER_RATE_SEND`, `…_READ`, `…_TEMPLATES`, each with `…_BURST` (M1b) | 20 and 40, 50 and 50, 2 and 2 | section 6's limits, per tenant and replica |
+| `WA_SERVER_MEDIA_CONCURRENCY` (M1b) | 4 | uploads and whole-file downloads held in memory at once per replica (section 6's "bounded media concurrency"; the next is `429`); one tenant holds half at most (the service's default, not the design's) |
+| `WA_SERVER_MEDIA_STREAMS` (M1b) | 16 | streamed downloads at once per replica, one tenant holding half at most (the service's defaults, not the design's) |
+| `WA_SERVER_RATE_SEND`, `…_READ`, `…_TEMPLATES`, each with `…_BURST` (M1b) | 20 and 40, 50 and 50, 2 and 2 | section 6's rates, per tenant and replica; the bursts of reads and template management are the service's defaults (section 6 states none) |
 | `RUST_LOG`, `WA_SERVER_LOG_FORMAT`, `OTEL_EXPORTER_OTLP_ENDPOINT` | `info`, `json`, unset | |
 
 ### 7.3 Start, observability, shutdown

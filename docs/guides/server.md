@@ -86,9 +86,10 @@ read yet: set, it stops the start.
 | `WA_SERVER_MIGRATE` | `auto` | `skip` when a job runs `meta-whatsapp-server migrate` |
 | `WA_SERVER_SHUTDOWN_GRACE` | `25s` | how long open requests get after `SIGTERM` |
 | `WA_SERVER_LOG_FORMAT`, `RUST_LOG` | `json`, `info` | `text` for humans |
-| `WA_SERVER_IDEMPOTENCY_TTL` | `24h` | how long an `Idempotency-Key`'s answer is kept (more than 2 minutes) |
+| `WA_SERVER_IDEMPOTENCY_TTL` | `24h` | how long an `Idempotency-Key`'s answer is kept (more than the key's one-minute lease) |
 | `WA_SERVER_MEDIA_MAX_BYTES` | `104857600` (100 MiB) | the largest upload, and the largest streamed download |
-| `WA_SERVER_MEDIA_CONCURRENCY` | `4` | uploads and whole downloads held in memory at once on a replica (the next is `429`) |
+| `WA_SERVER_MEDIA_CONCURRENCY` | `4` | uploads and whole downloads held in memory at once on a replica, one tenant holding half of them at most (the next is `429`) |
+| `WA_SERVER_MEDIA_STREAMS` | `16` | streamed downloads (`?stream=true`) at once on a replica, one tenant holding half of them at most (the next is `429`) |
 | `WA_SERVER_RATE_SEND`, `WA_SERVER_RATE_SEND_BURST` | `20`, `40` | requests a second per tenant and replica for writes (sends, read receipts, media, profile) |
 | `WA_SERVER_RATE_READ`, `WA_SERVER_RATE_READ_BURST` | `50`, `50` | the same for reads |
 | `WA_SERVER_RATE_TEMPLATES`, `WA_SERVER_RATE_TEMPLATES_BURST` | `2`, `2` | the same for template management |
@@ -328,18 +329,38 @@ curl -sS -X POST http://127.0.0.1:8081/v1/numbers/106540352242922/media \
 Type and size are checked first: an unsupported type is `422` on `type`,
 a file over its type's limit (5 MiB for images, 16 MiB for audio and
 video, 500 KiB for stickers, 100 MiB for documents) or over
-`WA_SERVER_MEDIA_MAX_BYTES` `413 media_too_large`.
+`WA_SERVER_MEDIA_MAX_BYTES` `413 media_too_large`. Send `type` before
+`file`: the upload is then read no further than its type allows. A
+form's framing (what precedes each part's data) is read up to 16 KiB;
+past it, `422` on `body`.
 
 `GET /v1/numbers/{pn}/media/{media_id}` downloads a file (an upload's or
 a received message's), verified against the SHA-256 Meta reports, and
-answers it with Meta's MIME type and `X-WA-SHA256` (hex). By default the
-whole file is read, verified, and only then answered: at most
-`?max_bytes=` (default and cap 16 MiB; more is `413 media_too_large`),
-and a mismatch is `502 integrity` with not one byte of the file. With
-`?stream=true` (up to `WA_SERVER_MEDIA_MAX_BYTES`) the bytes are
-forwarded as they arrive and a mismatch **aborts the connection**:
-write them somewhere temporary and use them only once the body ended
-cleanly. `DELETE /v1/numbers/{pn}/media/{media_id}` deletes an upload.
+answers it with Meta's MIME type, `X-WA-SHA256` (hex), `Content-Disposition:
+attachment` and a sandboxing `Content-Security-Policy` (a customer's
+HTML or SVG never runs as a page). By default the whole file is read,
+verified, and only then answered: at most `?max_bytes=` (default and
+cap 16 MiB; more is `413 media_too_large`), and a mismatch is `502
+integrity` with not one byte of the file. With `?stream=true` (up to
+`WA_SERVER_MEDIA_MAX_BYTES`) the bytes are forwarded as they arrive, one
+chunk behind, and a mismatch **aborts the connection** before the last
+chunk: the body never ends cleanly (curl: "transfer closed with
+outstanding read data remaining", or "Empty reply from server" for a
+small file). Write the bytes somewhere temporary and use them only once
+the body ended cleanly. `DELETE /v1/numbers/{pn}/media/{media_id}`
+deletes an upload.
+
+**A media id is the number's.** It is digits (`422` on `media_id`
+otherwise). Both routes ask Meta with `phone_number_id={pn}`, so Meta
+acts only on that number's media, and a deletion first checks the id is
+that media (an id names any Graph object a token reaches: a flow, a
+group). Another number's media id, another tenant's included, answers
+`404 not_found`, exactly like one that does not exist. Meta documents
+the check for media uploaded on the number; that it accepts media
+received on it by webhook is not documented. If Meta refuses those, a
+received file answers `404` too: report it, as the check stays (it is
+what keeps one tenant from reading another's files when one token
+reaches both).
 
 ## Templates
 
@@ -348,16 +369,25 @@ With scope `templates`, on a WABA of the tenant:
 | Route | Does |
 | --- | --- |
 | `GET /v1/wabas/{waba_id}/templates` | a page of `{id, name, language, status, category, components}`, `?status=`, `?name=`, `?limit=`, `?cursor=`; cached 60 s per WABA (Meta allows 200 management calls an hour per WABA) |
-| `GET /v1/wabas/{waba_id}/templates/{id}` | one template |
+| `GET /v1/wabas/{waba_id}/templates/{id}` | one template of this WABA (two management calls: its name, then the WABA's templates of that name) |
 | `POST /v1/wabas/{waba_id}/templates` | create from Meta's JSON (`name`, `language`, `category`, `components`), checked locally first; `201 {id, status, category}`; takes an `Idempotency-Key` |
-| `DELETE /v1/wabas/{waba_id}/templates?name=…[&id=…]` | every language of a name, or one |
+| `DELETE /v1/wabas/{waba_id}/templates?name=…[&id=…]` | every language of a name, or one (with an id, the WABA's templates of that name are listed first) |
 
 A definition breaking a documented limit is `422 invalid_request` with
-`field`, before any request; Meta refusing it is `422 template_rejected`,
-a WABA at its limit `409 template_limit_reached`. Review results will
-arrive as `template_status_updated` events (M1c). A creation or deletion
-drops the WABA's cached pages on the replica that made it; others may
-answer the old list for up to 60 seconds.
+`field`, before any request, and so is a key the service would not pass
+on to Meta (a misspelling, or a field it does not know): never silently
+dropped. Meta refusing a definition is `422 template_rejected`, a WABA
+at its limit `409 template_limit_reached`. Review results will arrive
+as `template_status_updated` events (M1c). A creation or deletion drops
+the WABA's cached pages on the replica that made it; others may answer
+the old list for up to 60 seconds.
+
+**A template id is the WABA's.** Meta's template object does not say
+which WABA it belongs to, so the service looks the id up among the
+WABA's own templates: another WABA's template id, another tenant's
+included, answers `404 not_found` like one that does not exist, and a
+deletion by that id deletes nothing. A deletion is an `audit` event
+with the public id of the key that asked it.
 
 ## Rate limits
 
@@ -406,7 +436,8 @@ Every error answers one body:
 - **Resend only when `may_have_been_sent` is `false`.** A `504 timeout`
   or a `502` may have taken effect at Meta.
 - `invalid_request` names the offending `field`; `401` is always
-  `unauthenticated`; a number of another tenant is `404 not_found`.
+  `unauthenticated`; a number, WABA, media id or template id of another
+  tenant is `404 not_found`, like one that does not exist.
 - A token Meta rejects (`190`) marks the WABA's numbers
   `reconnect_required`: later calls answer `409 reconnect_required`
   without asking Meta, until the WABA is attached (or onboarded) again.
@@ -432,8 +463,13 @@ Every error answers one body:
   or generated), route template (never the raw path), tenant, the public
   id of the key that made it, status and duration; every change an
   operator makes is also an `audit` event (action, admin key id, the
-  tenant, key or WABA touched). No secret, token, message text or phone
-  number is logged; Meta's error texts only at `debug`.
+  tenant, key or WABA touched), and so is a tenant's template deletion
+  (with the key's id). No secret, token, message text or phone number is
+  logged; Meta's error texts only at `debug`.
+- Idempotency records keep each kept answer for
+  `WA_SERVER_IDEMPOTENCY_TTL`: a send's holds the recipient's phone
+  number, WhatsApp id or BSUID, in plain text. Database encryption at
+  rest is yours.
 - Known limit: key digests are unpeppered SHA-256 of random 256-bit
   secrets. Nobody can reverse one, but whoever can write the database's
   keys table can plant a key: guard write access to it.

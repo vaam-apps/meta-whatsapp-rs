@@ -5,7 +5,7 @@ description: "Using WhatsApp through meta-whatsapp-server, the meta-whatsapp-rs 
 
 # meta-whatsapp-rs-server
 
-> **Verified against meta-whatsapp-rs 53c06801fa58ac137baf0dfba25722dda5563326 (2026-09-25).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 2773e6d1d42c13db481acbfa65c75b28291a1e2f (2026-09-25).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/client.ts](examples/client.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
@@ -135,8 +135,8 @@ export function nextStep(error: ErrorObject): Next {
 - `too_many_requests` (429): the tenant's rate limit; wait
   `Retry-After` seconds.
 - `invalid_request` names the culprit in `field`; `401` is always
-  `unauthenticated`; another tenant's number is 404 `not_found`, like a
-  missing one.
+  `unauthenticated`; another tenant's number, WABA, media or template id
+  is 404 `not_found`, like a missing one.
 - `reconnect_required`: Meta rejected the WABA's token (`190`); every call
   on its numbers answers it until an operator attaches the WABA again.
 

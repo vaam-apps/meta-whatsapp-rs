@@ -817,6 +817,11 @@ decisions and the delivery milestones, is
   not exist), and only then reads the vault and calls
   `Client::with_token`. The library leaves this check to the integrator
   (see [CMS inbox](#cms-inbox-meta_whatsapp_rsinbox)); the service is one.
+  A token may reach several tenants' WABAs, so an object a path names by
+  id (a media id, a template id) must also be the number's or WABA's own,
+  asked of Meta through the number or the WABA, never by the bare id;
+  one that is not is `404` like a missing one. A route for a new kind of
+  id (flows, groups, QR codes) owes the same check.
 - **Errors keep the library's classification.** A Graph failure's error
   code is `ErrorKind::as_str()`; its HTTP status comes from a table the
   service owns, tested over `ErrorKind::ALL` so a new kind cannot fall
