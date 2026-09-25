@@ -6043,6 +6043,27 @@ mod tests {
             );
         }
         assert_eq!(h.t.remaining(), 0);
+
+        // The recorded allocation, listed without its business, gets its
+        // own status check instead: Meta reports it revoked, so nothing may
+        // be live.
+        h.vault
+            .update_credit(&waba(), |c| {
+                c.allocation_config_id = Some(AllocationConfigId::new("STORED"));
+                true
+            })
+            .await
+            .unwrap();
+        h.t.push_json(200, json!({"data": [{"id": "STORED"}]}));
+        h.t.push_json(200, deleted());
+        h.t.push_json(200, no_funding());
+        let out =
+            h.es.clear_pending_share(&waba(), "ops", None, &h.vault)
+                .await
+                .unwrap();
+        assert!(matches!(out, PendingShareClearance::Cleared(_)), "{out:?}");
+        assert_status(&h.t.requests()[h.t.requests().len() - 2], "STORED");
+        assert_eq!(h.t.remaining(), 0);
     }
 
     /// The owner business the clearance checks the line's records for: the
