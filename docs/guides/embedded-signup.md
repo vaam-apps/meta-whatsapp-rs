@@ -457,7 +457,9 @@ Which merchant may have a WABA stays your policy (open decision 6).
   `EmbeddedSignup::is_credit_line_revoked`) unless the request says
   `.reshare_after_revocation()`; a record whose `request_status` Meta does
   not document is refused the same way (`CreditError::StatusUnknown`).
-  Funding a merchant again is your decision, taken per onboarding. A
+  Funding a merchant again is your decision, taken on one onboarding but
+  business-wide in effect (a successful re-share clears the business's
+  marker, so its other WABAs are no longer refused either). A
   revocation that runs while a share is posted ends with the line revoked
   or the share reported: the revocation writes its marker before it looks
   anything up, and the share reads the marker after its post, also when
@@ -526,9 +528,15 @@ let report = es.revoke_credit_line(waba_id, owner, &vault).await?; // report.rev
   merchant who reconnects runs Embedded Signup again, and the revoked
   business is refused (`CreditError::Revoked`) until that onboarding says
   `.reshare_after_revocation()`: funding them again is your decision, per
-  onboarding. The skill's example returns `PartnerAction::Disconnected`
-  for a coexistence removal so you can ask the merchant to reconnect, and
-  its `reconnect` onboards with the opt-in.
+  onboarding, but business-wide in effect: a successful re-share clears
+  the business's revocation marker, so its other WABAs are no longer
+  refused either. Gate it: the skill's example returns
+  `PartnerAction::Disconnected` for a coexistence removal and, only when
+  the merchant made the disconnection (`initiated_by: USER`), writes one
+  reconnect grant for that WABA and its tenant, which its `reconnect`
+  consumes in the approval before anything is stored; an unshared WABA,
+  an offboarding, a `SYSTEM` disconnection (inactivity, enforcement) or
+  unpaid invoices get none, and funding them again is your staff's call.
 - **A share whose answer was lost and that Meta never lists** keeps every
   revocation of the WABA at `share_pending`, and `offboard` from deleting
   the token. When someone has checked the WABA's funding in Meta Business

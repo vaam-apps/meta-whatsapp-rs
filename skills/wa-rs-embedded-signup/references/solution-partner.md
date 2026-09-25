@@ -145,7 +145,10 @@ active one already funds the WABA. A lost answer (a timeout, a 5xx) is
 **A revoked business stays revoked.** After `revoke_credit_line`, or when
 Meta reports only `DELETED` records for the business, `onboard_with_approval`
 and `resume` refuse (`EmbeddedSignup::is_credit_line_revoked`). Funding the
-merchant again is your decision, per onboarding:
+merchant again is your decision, made on one onboarding but **business-wide
+in effect**: a successful re-share clears the business's revocation marker,
+so its other WABAs are no longer refused either. Never set it on every
+onboarding; gate it (the example's `reconnect` spends a grant):
 
 ```rust
 request.reshare_after_revocation()
@@ -187,9 +190,17 @@ match (&update.event, waba_id) {
     // and funding it again needs an explicit opt-in (`reconnect`).
     (AccountUpdateEvent::PartnerRemoved, Some(waba_id)) => {
         let revoked = es.revoke_credit_line(waba_id, owner, vault).await?;
-        Ok(match update.disconnection_info {
-            Some(_) => PartnerAction::Disconnected(revoked),
-            None => PartnerAction::Revoked(revoked),
+        let Some(info) = &update.disconnection_info else {
+            return Ok(PartnerAction::Revoked(revoked)); // no reconnect grant
+        };
+        // Only a disconnection the merchant made earns a reconnect.
+        let by_merchant = info.initiated_by == Some(DisconnectionInitiator::User);
+        let why = "coexistence disconnection initiated by the merchant";
+        let reconnect_granted =
+            by_merchant && grant_reconnect(reservations, waba_id, why).await?;
+        Ok(PartnerAction::Disconnected {
+            revoked,
+            reconnect_granted,
         })
     }
     // No WABA named, only its owner: revoke by business.
@@ -221,20 +232,37 @@ match (&update.event, waba_id) {
   your handler calls `revoke_credit_line`. The example returns
   `PartnerAction::Disconnected` for a coexistence removal, so you can ask
   the merchant to reconnect.
+- **Copied an earlier version of this example?** Its policy point for a
+  coexistence disconnection (revoke now or after a grace period) is gone:
+  revoke at once on every `PartnerRemoved`, and never pass
+  `reshare_after_revocation` on a reconnect without a grant. wa-rs's
+  CHANGELOG names the removed items.
 - **A merchant who reconnects onboards again**, and the revoked business
-  is not funded again on its own (`EmbeddedSignup::is_credit_line_revoked`):
-  funding them again is your explicit decision, per onboarding.
+  is not funded again on its own (`EmbeddedSignup::is_credit_line_revoked`).
+  Because the opt-in clears the business-wide marker, the example never
+  hands it out on the merchant's say-so: `grant_reconnect` writes one
+  grant for the WABA and the tenant bound to it, only for a disconnection
+  the merchant made (`initiated_by: USER`: a new device, a new number),
+  and `reconnect`'s approval consumes it atomically before anything is
+  stored. An unshared WABA, an offboarding, a `SYSTEM` disconnection
+  (inactivity, enforcement) or unpaid invoices get none: funding them
+  again is your staff's decision, a `grant_reconnect` by hand. A
+  reconnect that fails after its approval has spent the grant; `resume`
+  it with the same opt-in.
 
 ```rust
-pub async fn reconnect(
-    es: &EmbeddedSignup,
-    vault: &TokenVault,
-    reservations: &Arc<dyn KvStore>,
-    request: OnboardingRequest,
-    tenant: &str,
-) -> wa_rs::Result<Onboarded> {
-    onboard_for_tenant(es, vault, reservations, &fund_again(request), tenant).await
-}
+let request = fund_again(request);
+es.onboard_with_approval(&request, vault, |verified| async move {
+    reserve(reservations, &verified.waba_id, tenant).await?;
+    if !reservations
+        .delete(&reconnect_key(&verified.waba_id, tenant))
+        .await?
+    {
+        let why = "no reconnect grant: funding this business again is your staff's decision";
+        return Err(ValidationError::new("waba_id", why).into());
+    }
+    Ok(())
+})
 ```
 
 - `revoke_credit_line` marks the business revoked first (a share posted

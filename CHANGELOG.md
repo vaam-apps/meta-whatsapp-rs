@@ -42,7 +42,8 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   `disconnection_info` included. The library stays passive (the
   integrator's handler calls `revoke_credit_line`); the
   `wa-rs-embedded-signup` example does so, and a merchant who reconnects
-  is funded again only through `OnboardingRequest::reshare_after_revocation`.
+  is funded again only through `OnboardingRequest::reshare_after_revocation`,
+  which the example gates behind a one-time reconnect grant (see Changed).
 - #40 (`onboard_with_approval` required in Solution Partner mode):
   decided by the owner on 2026-09-25, it stays required.
 - #41 (clearing a share whose answer was lost): decided by the owner on
@@ -92,7 +93,9 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   again** (marked by `revoke_credit_line`, or only `DELETED` records on
   Meta's side: `CreditError::Revoked`, `EmbeddedSignup::is_credit_line_revoked`;
   a `request_status` Meta does not document: `CreditError::StatusUnknown`)
-  unless the request says `OnboardingRequest::reshare_after_revocation()`.
+  unless the request says `OnboardingRequest::reshare_after_revocation()`,
+  which is business-wide in effect: a successful re-share clears the
+  business's marker, so its other WABAs are no longer refused either.
   A revocation that runs while a share is posted ends with the line
   revoked or the share reported: the share re-reads the marker after its
   post, including one whose answer was lost, and revokes by business what
@@ -293,6 +296,23 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
 
 ### Changed
 
+- **The `wa-rs-embedded-signup` skill's Solution Partner example** (for
+  anyone who copied it): `PartnerAction::CoexistenceDisconnected`,
+  `CoexistencePolicy` and `on_coexistence_disconnect` are gone. Every
+  `PARTNER_REMOVED` of your solution now revokes at once (#39, closed
+  above), and a coexistence one returns
+  `PartnerAction::Disconnected { revoked, reconnect_granted }`.
+  `on_account_update` takes the WABA → tenant table, and only a
+  disconnection the merchant made (`disconnection_info.initiated_by:
+  USER`) writes a one-time reconnect grant (`grant_reconnect`) for that
+  WABA and its tenant; `reconnect` consumes it atomically in the approval
+  and refuses without one, because the re-share opt-in clears the
+  business-wide revocation marker. An unshared WABA, an offboarding, a
+  `SYSTEM` disconnection (inactivity, enforcement) or unpaid invoices get
+  no grant: funding them again is the integrator's explicit call. If you
+  kept a grace period from the old `CoexistencePolicy::GracePeriod`,
+  replace it with an immediate `revoke_credit_line`; and never pass
+  `reshare_after_revocation` unconditionally on a reconnect.
 - **Breaking — `WebhookEvent::AccountUpdated` names the right WABA.** Its
   `waba_id` (and `WebhookEvent::waba_id()`) was the entry id, which in
   Meta's examples of every update with a `waba_info` (`PARTNER_ADDED`,

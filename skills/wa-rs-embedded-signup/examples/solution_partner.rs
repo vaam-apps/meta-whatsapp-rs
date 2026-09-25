@@ -9,6 +9,7 @@
 //! (`crates/wa-rs/tests/skills.rs`).
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use wa_rs::client::credit_lines::{CreditRevocation, WabaCurrency};
 use wa_rs::client::embedded_signup::{
@@ -19,7 +20,7 @@ use wa_rs::core::error::ValidationError;
 use wa_rs::core::ids::{BusinessId, CreditLineId, FundingId, WabaId};
 use wa_rs::core::store::{Expiry, KvStore, StoreKey};
 use wa_rs::prelude::*;
-use wa_rs::webhooks::fields::AccountUpdateEvent;
+use wa_rs::webhooks::fields::{AccountUpdateEvent, DisconnectionInitiator};
 
 /// Your partner settings, from your secret manager and configuration.
 pub struct PartnerSettings {
@@ -99,14 +100,45 @@ pub async fn reserve(
 
 /// Funding a merchant again after a revocation is a product decision:
 /// without this, `onboard_with_approval` and `resume` refuse
-/// (`EmbeddedSignup::is_credit_line_revoked(&err)`).
+/// (`EmbeddedSignup::is_credit_line_revoked(&err)`). A successful re-share
+/// clears the business's revocation marker: its other WABAs are then no
+/// longer refused either.
 pub fn fund_again(request: OnboardingRequest) -> OnboardingRequest {
     request.reshare_after_revocation()
 }
 
-/// A merchant whose line was revoked (a coexistence number that
-/// disconnected, say) connects again: Embedded Signup runs anew, and
-/// funding them again is your explicit decision, per onboarding.
+/// One WABA's reconnect grant, for the tenant it was bound to.
+fn reconnect_key(waba_id: &WabaId, tenant: &str) -> StoreKey {
+    StoreKey::new("tenant.reconnect", format!("{waba_id}/{tenant}"))
+}
+
+/// Allow ONE reconnect of `waba_id` by the tenant it is bound to, funded
+/// again. `on_account_update` grants it for a disconnection the merchant
+/// made (a new device, a new number); anything else (an unshared WABA, an
+/// offboarding, inactivity or enforcement, unpaid invoices) is your staff's
+/// decision: they call this by hand, or not at all. `why` is for your
+/// records. The grant expires after 30 days (your policy).
+pub async fn grant_reconnect(
+    reservations: &Arc<dyn KvStore>,
+    waba_id: &WabaId,
+    why: &str,
+) -> wa_rs::Result<bool> {
+    let binding = StoreKey::new("tenant.waba", waba_id.as_str());
+    let Some(tenant) = reservations.get(&binding).await? else {
+        return Ok(false); // no tenant to grant it to
+    };
+    let tenant = String::from_utf8_lossy(&tenant.value).into_owned();
+    let expiry = Expiry::After(Duration::from_hours(30 * 24));
+    let key = reconnect_key(waba_id, &tenant);
+    reservations
+        .put(&key, why.as_bytes().to_vec(), expiry)
+        .await?;
+    Ok(true)
+}
+
+/// A merchant whose line was revoked connects again: Embedded Signup runs
+/// anew, funded again only with a grant for this WABA and tenant, which
+/// the approval consumes (once, atomically) before anything is stored.
 pub async fn reconnect(
     es: &EmbeddedSignup,
     vault: &TokenVault,
@@ -114,7 +146,19 @@ pub async fn reconnect(
     request: OnboardingRequest,
     tenant: &str,
 ) -> wa_rs::Result<Onboarded> {
-    onboard_for_tenant(es, vault, reservations, &fund_again(request), tenant).await
+    let request = fund_again(request);
+    es.onboard_with_approval(&request, vault, |verified| async move {
+        reserve(reservations, &verified.waba_id, tenant).await?;
+        if !reservations
+            .delete(&reconnect_key(&verified.waba_id, tenant))
+            .await?
+        {
+            let why = "no reconnect grant: funding this business again is your staff's decision";
+            return Err(ValidationError::new("waba_id", why).into());
+        }
+        Ok(())
+    })
+    .await
 }
 
 /// What an `account_update` asked of a Solution Partner.
@@ -126,9 +170,15 @@ pub enum PartnerAction {
     Revoked(CreditRevocation),
     /// A coexistence number disconnected (`PARTNER_REMOVED` with
     /// `disconnection_info`: a device change, a re-registration,
-    /// inactivity): revoked at once too. Ask the merchant to reconnect; that
-    /// is a new onboarding, funded again only through `reconnect`.
-    Disconnected(CreditRevocation),
+    /// inactivity, enforcement): revoked at once too. `reconnect_granted`
+    /// when the merchant made it (`initiated_by: USER`): ask them to
+    /// reconnect (`reconnect`). Otherwise your staff decides.
+    Disconnected {
+        /// What was revoked.
+        revoked: CreditRevocation,
+        /// Whether one funded reconnect was granted.
+        reconnect_granted: bool,
+    },
     /// Your app was uninstalled from the WABA: revoked, then the token
     /// deleted.
     Offboarded(Offboarded),
@@ -137,10 +187,12 @@ pub enum PartnerAction {
 /// `account_update`, from a signature-checked delivery only: the
 /// `owner_business_id` it carries is what revocation falls back on when the
 /// vault no longer knows the merchant. `our_business` is your own business
-/// portfolio (the one `credit_lines` lists your lines for).
+/// portfolio (the one `credit_lines` lists your lines for); `reservations`
+/// your WABA → tenant table, where reconnect grants go.
 pub async fn on_account_update(
     es: &EmbeddedSignup,
     vault: &TokenVault,
+    reservations: &Arc<dyn KvStore>,
     our_business: &BusinessId,
     event: &WebhookEvent,
 ) -> wa_rs::Result<PartnerAction> {
@@ -177,9 +229,17 @@ pub async fn on_account_update(
         // and funding it again needs an explicit opt-in (`reconnect`).
         (AccountUpdateEvent::PartnerRemoved, Some(waba_id)) => {
             let revoked = es.revoke_credit_line(waba_id, owner, vault).await?;
-            Ok(match update.disconnection_info {
-                Some(_) => PartnerAction::Disconnected(revoked),
-                None => PartnerAction::Revoked(revoked),
+            let Some(info) = &update.disconnection_info else {
+                return Ok(PartnerAction::Revoked(revoked)); // no reconnect grant
+            };
+            // Only a disconnection the merchant made earns a reconnect.
+            let by_merchant = info.initiated_by == Some(DisconnectionInitiator::User);
+            let why = "coexistence disconnection initiated by the merchant";
+            let reconnect_granted =
+                by_merchant && grant_reconnect(reservations, waba_id, why).await?;
+            Ok(PartnerAction::Disconnected {
+                revoked,
+                reconnect_granted,
             })
         }
         // No WABA named, only its owner: revoke by business.
@@ -311,6 +371,11 @@ mod tests {
             VaultKeys::new(VaultKey::from_base64("2026-09", KEY).unwrap()),
         )
         .unwrap()
+    }
+
+    /// Your WABA → tenant table (reservations and reconnect grants).
+    fn table() -> Arc<dyn KvStore> {
+        Arc::new(MemoryKvStore::new())
     }
 
     fn request() -> OnboardingRequest {
@@ -450,6 +515,7 @@ mod tests {
         let transport = ScriptedTransport::new();
         let es = onboarding_mode(signup(&transport), Some(settings(Some("USD")))).unwrap();
         let vault = vault();
+        let reservations = table();
         stored(&vault).await;
         script_revocation(&transport);
         let event = partner_event(
@@ -458,7 +524,7 @@ mod tests {
                     "solution_id": "1715120619246906",
                     "solution_partner_business_ids": [US, "520744086200222"]}),
         );
-        let action = on_account_update(&es, &vault, &ours(), &event)
+        let action = on_account_update(&es, &vault, &reservations, &ours(), &event)
             .await
             .unwrap();
         assert!(matches!(action, PartnerAction::Revoked(_)), "{action:?}");
@@ -470,11 +536,13 @@ mod tests {
         let transport = ScriptedTransport::new();
         let es = onboarding_mode(signup(&transport), Some(settings(Some("USD")))).unwrap();
         let vault = vault();
+        let reservations = table();
         stored(&vault).await;
         script_revocation(&transport);
-        let PartnerAction::Revoked(revoked) = on_account_update(&es, &vault, &ours(), &removed())
-            .await
-            .unwrap()
+        let PartnerAction::Revoked(revoked) =
+            on_account_update(&es, &vault, &reservations, &ours(), &removed())
+                .await
+                .unwrap()
         else {
             panic!("not revoked")
         };
@@ -499,9 +567,10 @@ mod tests {
         let transport = ScriptedTransport::new();
         let es = onboarding_mode(signup(&transport), Some(settings(Some("USD")))).unwrap();
         let vault = vault();
+        let reservations = table();
         stored(&vault).await;
         script_revocation(&transport);
-        let action = on_account_update(&es, &vault, &ours(), &uninstalled(APP_ID))
+        let action = on_account_update(&es, &vault, &reservations, &ours(), &uninstalled(APP_ID))
             .await
             .unwrap();
         assert!(matches!(action, PartnerAction::Offboarded(_)), "{action:?}");
@@ -515,9 +584,10 @@ mod tests {
             200,
             json!({"receiving_business": business, "request_status": "DELETED"}),
         );
-        let PartnerAction::Revoked(again) = on_account_update(&es, &vault, &ours(), &removed())
-            .await
-            .unwrap()
+        let PartnerAction::Revoked(again) =
+            on_account_update(&es, &vault, &reservations, &ours(), &removed())
+                .await
+                .unwrap()
         else {
             panic!("not revoked")
         };
@@ -532,8 +602,9 @@ mod tests {
         let transport = ScriptedTransport::new();
         let es = onboarding_mode(signup(&transport), Some(settings(Some("USD")))).unwrap();
         let vault = vault();
+        let reservations = table();
         stored(&vault).await;
-        let action = on_account_update(&es, &vault, &ours(), &uninstalled("9999"))
+        let action = on_account_update(&es, &vault, &reservations, &ours(), &uninstalled("9999"))
             .await
             .unwrap();
         assert!(matches!(action, PartnerAction::Ignored), "{action:?}");
@@ -544,7 +615,7 @@ mod tests {
             "PARTNER_APP_UNINSTALLED",
             &json!({"waba_id": WABA, "owner_business_id": OWNER}),
         );
-        let action = on_account_update(&es, &vault, &ours(), &anonymous)
+        let action = on_account_update(&es, &vault, &reservations, &ours(), &anonymous)
             .await
             .unwrap();
         assert!(matches!(action, PartnerAction::Ignored), "{action:?}");
@@ -556,17 +627,16 @@ mod tests {
                     "solution_id": "1715120619246906",
                     "solution_partner_business_ids": ["520744086200222", "506914307656634"]}),
         );
-        let action = on_account_update(&es, &vault, &ours(), &theirs)
+        let action = on_account_update(&es, &vault, &reservations, &ours(), &theirs)
             .await
             .unwrap();
         assert!(matches!(action, PartnerAction::Ignored), "{action:?}");
         assert!(transport.requests().is_empty(), "nothing revoked");
     }
 
-    /// Everything up to the credit step of an onboarding of `WABA`, whose
-    /// owner is `OWNER`: code, token check, owner, numbers, subscribe, the
-    /// system user.
-    fn script_until_share(transport: &ScriptedTransport) {
+    /// Everything up to the approval of an onboarding of `WABA`, whose
+    /// owner is `OWNER`: code, token check, owner, numbers.
+    fn script_until_approval(transport: &ScriptedTransport) {
         transport.push_json(200, json!({"access_token": "EAAB"}));
         transport.push_json(
             200,
@@ -578,20 +648,56 @@ mod tests {
             json!({"owner_business_info": {"id": OWNER}, "id": WABA}),
         );
         transport.push_json(200, json!({"data": [{"id": "106540352242922"}]}));
+    }
+
+    /// Everything up to the credit step: the approval's, then subscribe
+    /// and the system user.
+    fn script_until_share(transport: &ScriptedTransport) {
+        script_until_approval(transport);
         transport.push_json(200, json!({"success": true})); // subscribed_apps
         transport.push_json(200, json!({"success": true})); // assigned_users
     }
 
+    /// The credit step of an opted-in re-share: the revoked record, then
+    /// the new share.
+    fn script_reshare(transport: &ScriptedTransport) {
+        let business = json!({"id": OWNER});
+        transport.push_json(
+            200,
+            json!({"id": "58501441721238", "receiving_business": business}),
+        );
+        transport.push_json(
+            200,
+            json!({"receiving_business": business, "request_status": "DELETED"}),
+        );
+        transport.push_json(
+            200,
+            json!({"allocation_config_id": "58501441721239", "waba_id": WABA}),
+        );
+    }
+
+    /// A coexistence merchant's new Embedded Signup.
+    fn reconnect_request() -> OnboardingRequest {
+        let event = EmbeddedSignupEvent::from_json(&format!(
+            r#"{{"type":"WA_EMBEDDED_SIGNUP","event":"FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING","data":{{"waba_id":"{WABA}"}}}}"#
+        ))
+        .unwrap();
+        OnboardingRequest::from_event(SignupCode::new("code").unwrap(), &event).unwrap()
+    }
+
     /// Decision D14 (2026-09-25): a coexistence `PARTNER_REMOVED` (with
     /// `disconnection_info`, a number that may reconnect) revokes at once,
-    /// like any removal. The merchant who reconnects onboards again, and is
-    /// funded again only with the explicit opt-in.
+    /// like any removal. The merchant made this one (`USER`), so one
+    /// reconnect of this WABA by its tenant is granted: it alone funds the
+    /// business again, once.
     #[tokio::test]
-    async fn a_coexistence_disconnection_revokes_at_once_and_a_reconnect_opts_in() {
+    async fn a_coexistence_disconnection_revokes_at_once_and_grants_one_reconnect() {
         let transport = ScriptedTransport::new();
         let es = onboarding_mode(signup(&transport), Some(settings(Some("USD")))).unwrap();
         let vault = vault();
+        let reservations = table();
         stored(&vault).await;
+        reserve(&reservations, &WABA.into(), "m7").await.unwrap(); // onboarded by m7
         script_revocation(&transport);
         // `embedded-signup/onboarding-business-app-users`: the WABA is the
         // entry id, with disconnection details.
@@ -599,18 +705,22 @@ mod tests {
             "id": WABA, "time": 1748477359,
             "changes": [{"field": "account_update", "value": {
                 "event": "PARTNER_REMOVED", "phone_number": "15550783881",
-                "disconnection_info": {"reason": "ACCOUNT_DELETED", "initiated_by": "USER"}
+                "disconnection_info": {"reason": "USER_RE_REGISTERED", "initiated_by": "USER"}
             }}]
         }]});
         let event = WebhookPayload::from_slice(body.to_string().as_bytes())
             .unwrap()
             .into_events()
             .remove(0);
-        let PartnerAction::Disconnected(revoked) = on_account_update(&es, &vault, &ours(), &event)
+        let action = on_account_update(&es, &vault, &reservations, &ours(), &event)
             .await
-            .unwrap()
+            .unwrap();
+        let PartnerAction::Disconnected {
+            revoked,
+            reconnect_granted: true,
+        } = action
         else {
-            panic!("not revoked at once")
+            panic!("not revoked at once with a grant: {action:?}")
         };
         assert_eq!(revoked.revoked.len(), 1);
         let requests = transport.requests();
@@ -624,13 +734,7 @@ mod tests {
 
         // The merchant reconnects: a new Embedded Signup, which does not
         // fund the business again on its own.
-        let reservations: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
-        let event = EmbeddedSignupEvent::from_json(&format!(
-            r#"{{"type":"WA_EMBEDDED_SIGNUP","event":"FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING","data":{{"waba_id":"{WABA}"}}}}"#
-        ))
-        .unwrap();
-        let request =
-            OnboardingRequest::from_event(SignupCode::new("code").unwrap(), &event).unwrap();
+        let request = reconnect_request();
         let sent = transport.requests().len();
         script_until_share(&transport);
         let err = onboard_for_tenant(&es, &vault, &reservations, &request, "m7")
@@ -645,21 +749,26 @@ mod tests {
         );
         assert_eq!(transport.remaining(), 0);
 
-        // Funding them again is the explicit opt-in.
+        // Another tenant cannot use the grant.
+        script_until_approval(&transport);
+        let err = reconnect(&es, &vault, &reservations, reconnect_request(), "m42")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::Step {
+                    step: steps::APPROVE,
+                    ..
+                }
+            ),
+            "{err}"
+        );
+        assert_eq!(transport.remaining(), 0);
+
+        // `reconnect` consumes the grant: funded again, once.
         script_until_share(&transport);
-        let business = json!({"id": OWNER});
-        transport.push_json(
-            200,
-            json!({"id": "58501441721238", "receiving_business": business}),
-        );
-        transport.push_json(
-            200,
-            json!({"receiving_business": business, "request_status": "DELETED"}),
-        );
-        transport.push_json(
-            200,
-            json!({"allocation_config_id": "58501441721239", "waba_id": WABA}),
-        );
+        script_reshare(&transport);
         let done = reconnect(&es, &vault, &reservations, request, "m7")
             .await
             .unwrap();
@@ -670,8 +779,133 @@ mod tests {
                 .await
                 .unwrap()
                 .is_none(),
-            "the opt-in cleared the marker"
+            "the re-share cleared the business-wide marker"
         );
+        assert!(
+            reservations
+                .get(&reconnect_key(&WABA.into(), "m7"))
+                .await
+                .unwrap()
+                .is_none(),
+            "the grant is spent"
+        );
+        assert_eq!(transport.remaining(), 0);
+    }
+
+    /// A merchant who unshared the WABA (no `disconnection_info`) gets no
+    /// reconnect grant: `reconnect` refuses at the approval, before
+    /// anything is stored, subscribed or shared.
+    #[tokio::test]
+    async fn an_unshared_waba_gets_no_funded_reconnect() {
+        let transport = ScriptedTransport::new();
+        let es = onboarding_mode(signup(&transport), Some(settings(Some("USD")))).unwrap();
+        let vault = vault();
+        let reservations = table();
+        stored(&vault).await;
+        reserve(&reservations, &WABA.into(), "m7").await.unwrap();
+        script_revocation(&transport);
+        let action = on_account_update(&es, &vault, &reservations, &ours(), &removed())
+            .await
+            .unwrap();
+        assert!(matches!(action, PartnerAction::Revoked(_)), "{action:?}");
+
+        let sent = transport.requests().len();
+        script_until_approval(&transport);
+        let err = reconnect(&es, &vault, &reservations, reconnect_request(), "m7")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::Step {
+                    step: steps::APPROVE,
+                    ..
+                }
+            ),
+            "{err}"
+        );
+        assert!(
+            transport.requests()[sent..]
+                .iter()
+                .all(|r| r.method.as_str() == "GET" || r.path().contains("oauth")),
+            "nothing subscribed or shared"
+        );
+        assert!(
+            vault
+                .revoked_business(&OWNER.into())
+                .await
+                .unwrap()
+                .is_some(),
+            "still revoked"
+        );
+        assert_eq!(transport.remaining(), 0);
+    }
+
+    /// A disconnection Meta made (`SYSTEM`: inactivity, enforcement) gets
+    /// no grant either; funding the merchant again is your staff's
+    /// explicit call (`grant_reconnect`).
+    #[tokio::test]
+    async fn a_system_disconnection_needs_your_staffs_grant() {
+        let transport = ScriptedTransport::new();
+        let es = onboarding_mode(signup(&transport), Some(settings(Some("USD")))).unwrap();
+        let vault = vault();
+        let reservations = table();
+        stored(&vault).await;
+        reserve(&reservations, &WABA.into(), "m7").await.unwrap();
+        script_revocation(&transport);
+        // Meta's `account_update` example of a removal with
+        // `disconnection_info` (`webhooks/reference/account_update`).
+        let body = json!({"object": "whatsapp_business_account", "entry": [{
+            "id": US, "time": 1748477359,
+            "changes": [{"field": "account_update", "value": {
+                "event": "PARTNER_REMOVED",
+                "waba_info": {"waba_id": WABA, "owner_business_id": OWNER},
+                "disconnection_info": {"reason": "PRIMARY_INACTIVITY", "initiated_by": "SYSTEM"}
+            }}]
+        }]});
+        let event = WebhookPayload::from_slice(body.to_string().as_bytes())
+            .unwrap()
+            .into_events()
+            .remove(0);
+        let action = on_account_update(&es, &vault, &reservations, &ours(), &event)
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                action,
+                PartnerAction::Disconnected {
+                    reconnect_granted: false,
+                    ..
+                }
+            ),
+            "{action:?}"
+        );
+        script_until_approval(&transport);
+        let err = reconnect(&es, &vault, &reservations, reconnect_request(), "m7")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::Step {
+                    step: steps::APPROVE,
+                    ..
+                }
+            ),
+            "{err}"
+        );
+
+        // Your staff reviewed it and decided to fund the merchant again.
+        assert!(
+            grant_reconnect(&reservations, &WABA.into(), "reviewed by op_7f3a")
+                .await
+                .unwrap()
+        );
+        script_until_share(&transport);
+        script_reshare(&transport);
+        reconnect(&es, &vault, &reservations, reconnect_request(), "m7")
+            .await
+            .unwrap();
         assert_eq!(transport.remaining(), 0);
     }
 
@@ -699,7 +933,7 @@ mod tests {
         assert!(err.may_have_been_sent() && !err.is_retryable(), "{err}");
         // Meta never lists it: the revocation revokes nothing, and says so.
         transport.push_json(200, json!({"data": []}));
-        let err = on_account_update(&es, &vault, &ours(), &removed())
+        let err = on_account_update(&es, &vault, &reservations, &ours(), &removed())
             .await
             .unwrap_err();
         assert!(err.is_retryable(), "{err}");
@@ -740,9 +974,10 @@ mod tests {
         assert_eq!(cleared.cleared_shares[0].cleared_by, "op_7f3a");
         // The revocation finishes now; nothing is left to clear.
         transport.push_json(200, json!({"data": []}));
-        let PartnerAction::Revoked(done) = on_account_update(&es, &vault, &ours(), &removed())
-            .await
-            .unwrap()
+        let PartnerAction::Revoked(done) =
+            on_account_update(&es, &vault, &reservations, &ours(), &removed())
+                .await
+                .unwrap()
         else {
             panic!("not revoked")
         };
@@ -762,6 +997,7 @@ mod tests {
         let transport = ScriptedTransport::new();
         let es = onboarding_mode(signup(&transport), Some(settings(Some("USD")))).unwrap();
         let vault = vault();
+        let reservations = table();
         let business = json!({"id": OWNER});
         transport.push_json(
             200,
@@ -770,9 +1006,10 @@ mod tests {
         script_revocation(&transport);
         let event = partner_event("PARTNER_REMOVED", &json!({"owner_business_id": OWNER}));
         assert_eq!(event.waba_id(), None);
-        let PartnerAction::Revoked(revoked) = on_account_update(&es, &vault, &ours(), &event)
-            .await
-            .unwrap()
+        let PartnerAction::Revoked(revoked) =
+            on_account_update(&es, &vault, &reservations, &ours(), &event)
+                .await
+                .unwrap()
         else {
             panic!("not revoked")
         };
