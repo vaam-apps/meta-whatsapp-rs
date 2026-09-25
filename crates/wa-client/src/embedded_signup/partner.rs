@@ -3938,6 +3938,69 @@ mod tests {
         assert_eq!(h.t.remaining(), 0);
     }
 
+    /// An opted-in re-share whose answer was lost: the next opted-in
+    /// `resume` is not refused for the pending share (the opt-in is the
+    /// integrator's decision to fund the business again); it checks Meta's
+    /// records first, finds the lost share funding the WABA, and posts
+    /// nothing.
+    #[tokio::test]
+    async fn an_opted_in_resume_checks_a_pending_share_first() {
+        let h = harness(CreditSharing::ShareAndAttach);
+        onboarded(&h).await;
+        revoked(&h).await;
+        let reshare = request()
+            .currency(WabaCurrency::Usd)
+            .reshare_after_revocation();
+        h.t.push_json(200, success()); // subscribe
+        h.t.push_json(200, success()); // assigned_users
+        h.t.push_json(200, shared_record(ALLOCATION));
+        h.t.push_json(200, deleted());
+        h.t.push_error(|| TransportError::Timeout);
+        let err = h.es.resume(&waba(), &reshare, &h.vault).await.unwrap_err();
+        assert!(
+            matches!(err.credit(), Some(CreditError::Reconcile(_))),
+            "{err}"
+        );
+        let before = h.t.requests().len();
+        h.t.push_json(200, success()); // subscribe
+        h.t.push_json(200, success()); // assigned_users
+        h.t.push_json(
+            200,
+            json!({"data": [
+                {"id": ALLOCATION, "receiving_business": {"id": BUSINESS}},
+                {"id": "NEW_ALLOCATION", "receiving_business": {"id": BUSINESS}}
+            ]}),
+        );
+        h.t.push_json(200, deleted()); // ALLOCATION
+        h.t.push_json(200, active()); // NEW_ALLOCATION: the lost share
+        h.t.push_json(200, receiving_credential("NEW_ALLOCATION", CREDENTIAL));
+        h.t.push_json(200, funding(CREDENTIAL));
+        h.t.push_json(200, success()); // register
+        let done = h.es.resume(&waba(), &reshare, &h.vault).await.unwrap();
+        assert_eq!(
+            done.allocation_config_id,
+            Some(AllocationConfigId::new("NEW_ALLOCATION"))
+        );
+        assert_eq!(
+            posts_to(
+                &h.t.requests()[before..],
+                "/whatsapp_credit_sharing_and_attach"
+            ),
+            0
+        );
+        let credit = h.vault.credit(&waba()).await.unwrap().unwrap();
+        assert_eq!(credit.pending_share, None);
+        assert!(
+            h.vault
+                .revoked_business(&BusinessId::new(BUSINESS))
+                .await
+                .unwrap()
+                .is_none(),
+            "the opt-in cleared the marker"
+        );
+        assert_eq!(h.t.remaining(), 0);
+    }
+
     /// A revocation that settled the pending flag while this share's POST
     /// was in flight (it revoked another record of the business), then the
     /// POST's answer is lost and nothing new can be revoked: the flag is
