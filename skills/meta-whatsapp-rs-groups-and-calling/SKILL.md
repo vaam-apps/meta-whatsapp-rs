@@ -5,7 +5,7 @@ description: "What a merchant inbox built on meta-whatsapp-rs needs beyond one-t
 
 # meta-whatsapp-rs-groups-and-calling
 
-> **Verified against meta-whatsapp-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/groups_calls.rs](examples/groups_calls.rs),
 compiled and tested by meta-whatsapp-rs's own gate (Meta-shaped answers and

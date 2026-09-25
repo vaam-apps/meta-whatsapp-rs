@@ -5,7 +5,7 @@ description: "WhatsApp Flows with meta-whatsapp-rs - creating a Flow from its JS
 
 # meta-whatsapp-rs-flows
 
-> **Verified against meta-whatsapp-rs 92f9692ed24b96c43bedcca2e7088cf196753064 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/flows.rs](examples/flows.rs), compiled and
 tested by meta-whatsapp-rs's own gate.

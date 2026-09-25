@@ -1,6 +1,6 @@
 # `WebhookEvent` reference
 
-> **Verified against meta-whatsapp-rs b3d2dcad64bc5f0dd9374dc84a387ec978707ab0 (2026-09-25).** Source: `crates/meta-whatsapp-webhooks/src/event.rs`,
+> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** Source: `crates/meta-whatsapp-webhooks/src/event.rs`,
 > `crates/meta-whatsapp-webhooks/src/fields/*`. The enum is `#[non_exhaustive]`.
 
 Payload types live in `meta_whatsapp_rs::webhooks::fields` (flat re-exports of every

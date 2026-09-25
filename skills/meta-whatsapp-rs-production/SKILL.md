@@ -5,7 +5,7 @@ description: "Running meta-whatsapp-rs in production - the secrets (system user 
 
 # meta-whatsapp-rs-production
 
-> **Verified against meta-whatsapp-rs 0e63aba8378556b4e34cf4cd5b5392f18f2a5e00 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/production.rs](examples/production.rs),
 compiled and tested by meta-whatsapp-rs's own gate. Longer walkthrough:

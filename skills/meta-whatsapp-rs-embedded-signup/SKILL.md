@@ -5,7 +5,7 @@ description: "Letting each merchant of a multi-tenant CMS connect their own What
 
 # meta-whatsapp-rs-embedded-signup
 
-> **Verified against meta-whatsapp-rs 0e63aba8378556b4e34cf4cd5b5392f18f2a5e00 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code, compiled and tested by meta-whatsapp-rs's own gate:
 [examples/onboarding.rs](examples/onboarding.rs), [examples/solution_partner.rs](examples/solution_partner.rs). The page side: [references/frontend.md](references/frontend.md). A full

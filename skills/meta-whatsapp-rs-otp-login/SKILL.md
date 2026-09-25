@@ -5,7 +5,7 @@ description: "WhatsApp OTP login and phone verification with meta-whatsapp-rs - 
 
 # meta-whatsapp-rs-otp-login
 
-> **Verified against meta-whatsapp-rs 92f9692ed24b96c43bedcca2e7088cf196753064 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/otp.rs](examples/otp.rs), compiled and tested by
 meta-whatsapp-rs's own gate (issue → verify once, expiry with a `ManualClock`,

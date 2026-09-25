@@ -5,7 +5,7 @@ description: "Where WhatsApp webhook events go after meta-whatsapp-rs verifies t
 
 # meta-whatsapp-rs-live-updates
 
-> **Verified against meta-whatsapp-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/sinks.rs](examples/sinks.rs), compiled and
 tested by meta-whatsapp-rs's own gate. Sinks are in `meta_whatsapp_rs::adapters::sink` (feature

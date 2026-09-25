@@ -1,6 +1,6 @@
 # Upgrading a Postgres inbox to lossless content
 
-> **Verified against meta-whatsapp-rs 0e63aba8378556b4e34cf4cd5b5392f18f2a5e00 (2026-09-25).** Source: the `meta_whatsapp_adapters::store::postgres` module docs ("Upgrading to lossless content", with the pre-flight query) and `crates/meta-whatsapp-adapters/migrations/0003_lossless_content.sql`.
+> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** Source: the `meta_whatsapp_adapters::store::postgres` module docs ("Upgrading to lossless content", with the pre-flight query) and `crates/meta-whatsapp-adapters/migrations/0003_lossless_content.sql`.
 
 Migration 3 of `postgres::migrate` converts `wa_messages.kind`, `text` and
 `wa_conversations.last_text` to `BYTEA`, and `payload` and `error` to

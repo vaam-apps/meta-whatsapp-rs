@@ -5,7 +5,7 @@ description: "Testing code that uses meta-whatsapp-rs without Meta, a network or
 
 # meta-whatsapp-rs-testing
 
-> **Verified against meta-whatsapp-rs 6909be3b54768abc3d5f9b04543a49f32b072669 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/integration.rs](examples/integration.rs) — four
 tests meta-whatsapp-rs runs in its own gate. Every other skill's `examples/*.rs` ends

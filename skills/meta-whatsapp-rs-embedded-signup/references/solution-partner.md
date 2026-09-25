@@ -1,6 +1,6 @@
 # Solution Partner deployments
 
-> **Verified against meta-whatsapp-rs 0e63aba8378556b4e34cf4cd5b5392f18f2a5e00 (2026-09-25).** Also checked against Meta's
+> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** Also checked against Meta's
 > `solution-providers/share-and-revoke-credit-lines`,
 > `solution-providers/manage-system-users` and
 > `webhooks/reference/account_update` pages as fetched on 2026-09-24.
