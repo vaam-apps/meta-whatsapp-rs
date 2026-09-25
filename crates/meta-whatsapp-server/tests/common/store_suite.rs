@@ -240,14 +240,16 @@ pub async fn bindings(store: &dyn Store) {
         ("w1", &a, NumberStatus::Connected)
     );
 
-    // D4: another tenant is refused, and nothing changes.
-    assert_eq!(
-        store
-            .bind_waba(&b, &waba, &pns(&["n1", "n9"]))
-            .await
-            .unwrap(),
-        BindOutcome::OwnedByAnotherTenant
-    );
+    // D4: another tenant is refused, and nothing changes: whether it
+    // names A's numbers, only numbers nobody has, or none (the WABA's own
+    // check, not only the numbers').
+    for numbers in [&["n1", "n9"][..], &["n9"][..], &[][..]] {
+        assert_eq!(
+            store.bind_waba(&b, &waba, &pns(numbers)).await.unwrap(),
+            BindOutcome::OwnedByAnotherTenant,
+            "{numbers:?}"
+        );
+    }
     assert_eq!(store.waba(&waba).await.unwrap().unwrap().tenant_id, a);
     assert!(
         store

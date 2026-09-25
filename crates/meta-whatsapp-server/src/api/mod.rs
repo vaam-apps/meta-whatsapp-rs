@@ -203,3 +203,40 @@ pub fn public_router(state: &AppState) -> Router {
         .layer(middleware::from_fn_with_state(observed, observe))
         .with_state(state.clone())
 }
+
+#[cfg(test)]
+mod tests {
+    /// Every API route is added with `routes!`, which documents it: the
+    /// only plain axum routes are the public listener's, which the document
+    /// leaves out on purpose. A route added any other way would escape the
+    /// tests that iterate the document (M1.3's among them).
+    #[test]
+    fn routes_are_only_added_with_their_documentation() {
+        let sources = [
+            ("mod.rs", include_str!("mod.rs")),
+            ("admin.rs", include_str!("admin.rs")),
+            ("numbers.rs", include_str!("numbers.rs")),
+            ("ops.rs", include_str!("ops.rs")),
+            ("webhooks.rs", include_str!("webhooks.rs")),
+            ("common.rs", include_str!("common.rs")),
+        ];
+        let mut plain = Vec::new();
+        for (file, source) in sources {
+            // The code, not this test.
+            let code = source.split("#[cfg(test)]").next().unwrap_or(source);
+            for needle in [".route(", ".route_service(", ".nest(", ".nest_service("] {
+                for (i, _) in code.match_indices(needle) {
+                    let line = code[i..].lines().next().unwrap_or_default();
+                    plain.push(format!("{file}: {line}"));
+                }
+            }
+        }
+        assert_eq!(
+            plain,
+            [
+                "mod.rs: .route(\"/webhooks/meta\", get(webhooks::verify))",
+                "mod.rs: .route(\"/livez\", get(ops::livez))",
+            ]
+        );
+    }
+}
