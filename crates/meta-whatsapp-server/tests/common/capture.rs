@@ -299,6 +299,60 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
     secrets
 }
 
+const ECHO_TEXT: &str = "An echo the logs must not hold";
+const HISTORY_TEXT: &str = "use code THANKS30";
+const UNPARSED_TEXT: &str = "a body that is not a webhook, which the logs must not hold";
+const OVERSIZED_TEXT: &str = "an oversized body the logs must not hold";
+const FAILED_TEXT: &str = "a message whose recording failed once";
+
+/// Coexistence: an echo of the merchant's phone app and a history sync; a
+/// signed body that is not a webhook; one over 3 MiB; one whose recording
+/// fails once (500), then goes through on Meta's redelivery. Returns the
+/// texts they carried.
+async fn more_deliveries(h: &Harness, waba: &str, pn: &str) -> Vec<String> {
+    let mut echo = with_ids(fixture("fields/smb_message_echoes_text.json"), waba, pn);
+    let item = &mut echo["entry"][0]["changes"][0]["value"]["message_echoes"][0];
+    item["id"] = json!("wamid.CAPTURE-ECHO");
+    item["text"]["body"] = json!(ECHO_TEXT);
+    let history = with_ids(fixture("fields/history_threads.json"), waba, pn);
+    let unparsed = format!("{{\"note\": \"{UNPARSED_TEXT}\"}}").into_bytes();
+    for body in [bytes(&echo), bytes(&history), unparsed] {
+        let reply = send(&h.public, signed(&body).build()).await;
+        assert_eq!(reply.status.as_u16(), 200, "{}", reply.text);
+    }
+    let mut oversized = format!("{{\"note\": \"{OVERSIZED_TEXT}\"}}").into_bytes();
+    oversized.resize(3 * 1024 * 1024 + 1, b' ');
+    let reply = send(&h.public, signed(&oversized).build()).await;
+    assert_eq!(reply.status.as_u16(), 413);
+    let mut failing = text(waba, pn, "wamid.CAPTURE-FAILED");
+    failing["entry"][0]["changes"][0]["value"]["messages"][0]["text"]["body"] = json!(FAILED_TEXT);
+    let failing = bytes(&failing);
+    h.outbox.fail_next(1);
+    assert_eq!(
+        send(&h.public, signed(&failing).build())
+            .await
+            .status
+            .as_u16(),
+        500
+    );
+    assert_eq!(
+        send(&h.public, signed(&failing).build())
+            .await
+            .status
+            .as_u16(),
+        200
+    );
+    [
+        ECHO_TEXT,
+        HISTORY_TEXT,
+        UNPARSED_TEXT,
+        OVERSIZED_TEXT,
+        FAILED_TEXT,
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
 /// Meta's deliveries for merchant-42's first number (Meta's text examples,
 /// by phone number and by BSUID, a status, an error, a field no library
 /// types, and refused ones), then polling them; returns what they carried
@@ -328,56 +382,7 @@ async fn webhooks(h: &Harness, tenant_key: &str) -> Vec<String> {
         );
         carried.push(signature.trim_start_matches("sha256=").to_owned());
     }
-    // Coexistence: an echo of the merchant's phone app and a history sync;
-    // a signed body that is not a webhook; one over 3 MiB; one whose
-    // recording fails once (500), then goes through on Meta's redelivery.
-    const ECHO_TEXT: &str = "An echo the logs must not hold";
-    const HISTORY_TEXT: &str = "use code THANKS30";
-    const UNPARSED_TEXT: &str = "a body that is not a webhook, which the logs must not hold";
-    const OVERSIZED_TEXT: &str = "an oversized body the logs must not hold";
-    const FAILED_TEXT: &str = "a message whose recording failed once";
-    let mut echo = with_ids(fixture("fields/smb_message_echoes_text.json"), WABA, PN);
-    let item = &mut echo["entry"][0]["changes"][0]["value"]["message_echoes"][0];
-    item["id"] = json!("wamid.CAPTURE-ECHO");
-    item["text"]["body"] = json!(ECHO_TEXT);
-    let history = with_ids(fixture("fields/history_threads.json"), WABA, PN);
-    let unparsed = format!("{{\"note\": \"{UNPARSED_TEXT}\"}}").into_bytes();
-    for body in [bytes(&echo), bytes(&history), unparsed] {
-        let reply = send(&h.public, signed(&body).build()).await;
-        assert_eq!(reply.status.as_u16(), 200, "{}", reply.text);
-    }
-    let mut oversized = format!("{{\"note\": \"{OVERSIZED_TEXT}\"}}").into_bytes();
-    oversized.resize(3 * 1024 * 1024 + 1, b' ');
-    let reply = send(&h.public, signed(&oversized).build()).await;
-    assert_eq!(reply.status.as_u16(), 413);
-    let mut failing = text(WABA, PN, "wamid.CAPTURE-FAILED");
-    failing["entry"][0]["changes"][0]["value"]["messages"][0]["text"]["body"] = json!(FAILED_TEXT);
-    let failing = bytes(&failing);
-    h.outbox.fail_next(1);
-    assert_eq!(
-        send(&h.public, signed(&failing).build())
-            .await
-            .status
-            .as_u16(),
-        500
-    );
-    assert_eq!(
-        send(&h.public, signed(&failing).build())
-            .await
-            .status
-            .as_u16(),
-        200
-    );
-    carried.extend(
-        [
-            ECHO_TEXT,
-            HISTORY_TEXT,
-            UNPARSED_TEXT,
-            OVERSIZED_TEXT,
-            FAILED_TEXT,
-        ]
-        .map(str::to_owned),
-    );
+    carried.extend(more_deliveries(h, WABA, PN).await);
     // Refused: unsigned, and signed with another secret.
     let unsigned = Call::new(Method::POST, "/webhooks/meta").body(by_phone.clone().into());
     assert_eq!(send(&h.public, unsigned.build()).await.status.as_u16(), 401);
