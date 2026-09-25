@@ -2,15 +2,74 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use meta_whatsapp_rs::Client;
+use meta_whatsapp_rs::client::DEFAULT_TIMEOUT;
 use meta_whatsapp_rs::client::embedded_signup::TokenVault;
 use meta_whatsapp_rs::core::config::ApiVersion;
 use meta_whatsapp_rs::core::secret::VerifyToken;
+use tokio::sync::Semaphore;
 
+use crate::api::templates::TemplateCache;
 use crate::auth::Tokens;
 use crate::metrics::Metrics;
+use crate::ratelimit::{RateLimiter, RateLimits};
 use crate::store::Store;
+
+/// Default `WA_SERVER_IDEMPOTENCY_TTL`: how long an idempotency key's
+/// record is kept (docs/design/server.md, section 5.4).
+pub const DEFAULT_IDEMPOTENCY_TTL: Duration = Duration::from_hours(24);
+
+/// How long a claimed idempotency key stays `in_progress` before its
+/// outcome counts as unknown: twice the Graph timeout (section 5.4), the
+/// library's default one, which the service keeps.
+pub const IDEMPOTENCY_LEASE: Duration = DEFAULT_TIMEOUT.saturating_mul(2);
+
+/// Default `WA_SERVER_MEDIA_MAX_BYTES` (section 7.2): the largest upload,
+/// and the largest streamed download.
+pub const DEFAULT_MEDIA_MAX_BYTES: u64 = 100 * 1024 * 1024;
+
+/// Default `WA_SERVER_MEDIA_CONCURRENCY`: media transfers held in memory
+/// at once on a replica (uploads, unstreamed downloads). The design asks
+/// for "bounded media concurrency" (section 6) without a number: a
+/// conservative one, as each may hold up to `WA_SERVER_MEDIA_MAX_BYTES`.
+pub const DEFAULT_MEDIA_CONCURRENCY: usize = 4;
+
+/// How long a WABA's template list is cached (section 4.2: Meta allows 200
+/// management calls an hour per WABA).
+pub const TEMPLATE_CACHE_TTL: Duration = Duration::from_secs(60);
+
+/// What the operator tunes (sections 5.4, 6 and 7.2), and the design's
+/// fixed values, which tests shorten.
+#[derive(Debug, Clone)]
+pub struct Settings {
+    /// `WA_SERVER_RATE_*`.
+    pub rate_limits: RateLimits,
+    /// `WA_SERVER_IDEMPOTENCY_TTL`.
+    pub idempotency_ttl: Duration,
+    /// [`IDEMPOTENCY_LEASE`].
+    pub idempotency_lease: Duration,
+    /// `WA_SERVER_MEDIA_MAX_BYTES`.
+    pub media_max_bytes: u64,
+    /// `WA_SERVER_MEDIA_CONCURRENCY`.
+    pub media_concurrency: usize,
+    /// [`TEMPLATE_CACHE_TTL`].
+    pub template_cache_ttl: Duration,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            rate_limits: RateLimits::default(),
+            idempotency_ttl: DEFAULT_IDEMPOTENCY_TTL,
+            idempotency_lease: IDEMPOTENCY_LEASE,
+            media_max_bytes: DEFAULT_MEDIA_MAX_BYTES,
+            media_concurrency: DEFAULT_MEDIA_CONCURRENCY,
+            template_cache_ttl: TEMPLATE_CACHE_TTL,
+        }
+    }
+}
 
 /// Shared state. Cheap to clone.
 #[derive(Clone)]
@@ -25,6 +84,10 @@ struct Inner {
     verify_token: VerifyToken,
     metrics: Metrics,
     shutting_down: AtomicBool,
+    settings: Settings,
+    limiter: RateLimiter,
+    media_permits: Arc<Semaphore>,
+    templates: TemplateCache,
 }
 
 impl std::fmt::Debug for AppState {
@@ -35,13 +98,33 @@ impl std::fmt::Debug for AppState {
 
 impl AppState {
     /// State on `store` and `vault`, calling Graph with `client` (built
-    /// without a default token: each call runs with the tenant's token).
+    /// without a default token: each call runs with the tenant's token),
+    /// with the default [`Settings`].
     pub fn new(
         store: Arc<dyn Store>,
         vault: TokenVault,
         client: Client,
         verify_token: VerifyToken,
         metrics: Metrics,
+    ) -> Self {
+        Self::with_settings(
+            store,
+            vault,
+            client,
+            verify_token,
+            metrics,
+            Settings::default(),
+        )
+    }
+
+    /// [`Self::new`] with `settings`.
+    pub fn with_settings(
+        store: Arc<dyn Store>,
+        vault: TokenVault,
+        client: Client,
+        verify_token: VerifyToken,
+        metrics: Metrics,
+        settings: Settings,
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -51,6 +134,10 @@ impl AppState {
                 verify_token,
                 metrics,
                 shutting_down: AtomicBool::new(false),
+                limiter: RateLimiter::new(settings.rate_limits),
+                media_permits: Arc::new(Semaphore::new(settings.media_concurrency.max(1))),
+                templates: TemplateCache::new(settings.template_cache_ttl),
+                settings,
             }),
         }
     }
@@ -79,6 +166,27 @@ impl AppState {
     /// The metrics.
     pub fn metrics(&self) -> &Metrics {
         &self.inner.metrics
+    }
+
+    /// The settings.
+    pub fn settings(&self) -> &Settings {
+        &self.inner.settings
+    }
+
+    /// The rate limiter.
+    pub(crate) fn limiter(&self) -> &RateLimiter {
+        &self.inner.limiter
+    }
+
+    /// Permits for media transfers held in memory (uploads, unstreamed
+    /// downloads): `WA_SERVER_MEDIA_CONCURRENCY` of them.
+    pub fn media_permits(&self) -> &Arc<Semaphore> {
+        &self.inner.media_permits
+    }
+
+    /// The template lists cached per WABA.
+    pub(crate) fn template_cache(&self) -> &TemplateCache {
+        &self.inner.templates
     }
 
     /// The Graph API version calls use.

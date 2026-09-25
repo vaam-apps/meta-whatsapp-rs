@@ -20,6 +20,20 @@
 //!
 //! and on anything it cannot parse (`Invalid`), a variable set twice
 //! (`Ambiguous`) or a secret file it cannot read (`Unreadable`).
+//!
+//! The service's own limits ([`Settings`], all optional):
+//!
+//! | Variable | Default | What |
+//! | --- | --- | --- |
+//! | `WA_SERVER_IDEMPOTENCY_TTL` | `24h` | how long an idempotency key's record is kept |
+//! | `WA_SERVER_MEDIA_MAX_BYTES` | 104857600 (100 MiB) | largest upload, and largest streamed download |
+//! | `WA_SERVER_MEDIA_CONCURRENCY` | 4 | uploads and whole-file downloads held in memory at once, per replica |
+//! | `WA_SERVER_RATE_SEND`, `WA_SERVER_RATE_SEND_BURST` | 20, 40 | per tenant and replica, a second ([`crate::ratelimit`]) |
+//! | `WA_SERVER_RATE_READ`, `WA_SERVER_RATE_READ_BURST` | 50, 50 | the same, for reads |
+//! | `WA_SERVER_RATE_TEMPLATES`, `WA_SERVER_RATE_TEMPLATES_BURST` | 2, 2 | the same, for template management |
+//!
+//! A rate set without its burst keeps the default's proportion (twice the
+//! rate for sends, the rate itself for the others).
 //! `WA_SERVER_CONFIG` (the TOML file of non-secrets) is not read yet: set,
 //! it is refused (`ConfigFileNotSupported`) rather than ignored.
 
@@ -33,6 +47,9 @@ use meta_whatsapp_rs::client::embedded_signup::{VaultKey, VaultKeys};
 use meta_whatsapp_rs::core::config::{ApiVersion, GraphEndpoint};
 use meta_whatsapp_rs::core::ids::AppId;
 use meta_whatsapp_rs::core::secret::{AccessToken, AppSecret, VerifyToken};
+
+use crate::ratelimit::{Rate, RateLimits};
+use crate::state::Settings;
 
 /// Why the service refuses to start. Never holds a value it read.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -234,6 +251,8 @@ pub struct Config {
     pub log_format: LogFormat,
     /// `RUST_LOG`.
     pub log_filter: String,
+    /// `WA_SERVER_IDEMPOTENCY_TTL`, `WA_SERVER_MEDIA_*`, `WA_SERVER_RATE_*`.
+    pub settings: Settings,
 }
 
 impl fmt::Debug for Config {
@@ -250,6 +269,7 @@ impl fmt::Debug for Config {
             )
             .field("graph_endpoint", &self.graph_endpoint)
             .field("migrate", &self.migrate)
+            .field("settings", &self.settings)
             .finish_non_exhaustive()
     }
 }
@@ -408,6 +428,7 @@ impl Config {
         let onboarding = onboarding(&r)?;
         let graph_endpoint = graph_endpoint(&r, environment)?;
         let runtime = runtime(&r)?;
+        let settings = settings(&r)?;
         Ok(Self {
             environment,
             public_bind,
@@ -426,8 +447,108 @@ impl Config {
             shutdown_grace: runtime.shutdown_grace,
             log_format: runtime.log_format,
             log_filter: runtime.log_filter,
+            settings,
         })
     }
+}
+
+/// A positive whole number.
+fn positive(r: &Reader<'_>, name: &'static str) -> Result<Option<u64>, ConfigError> {
+    match r.plain(name)? {
+        None => Ok(None),
+        Some(value) => value
+            .trim()
+            .parse::<u64>()
+            .ok()
+            .filter(|n| *n > 0)
+            .map(Some)
+            .ok_or(ConfigError::Invalid {
+                name,
+                reason: "expected a positive whole number",
+            }),
+    }
+}
+
+/// A class's rate and burst; an unset burst keeps `default`'s proportion.
+fn rate(
+    r: &Reader<'_>,
+    name: &'static str,
+    burst_name: &'static str,
+    default: Rate,
+) -> Result<Rate, ConfigError> {
+    let too_large = ConfigError::Invalid {
+        name,
+        reason: "expected at most 4294967295",
+    };
+    let per_second = match positive(r, name)? {
+        None => default.per_second,
+        Some(n) => u32::try_from(n).map_err(|_| too_large.clone())?,
+    };
+    let burst = match positive(r, burst_name)? {
+        Some(n) => u32::try_from(n).map_err(|_| ConfigError::Invalid {
+            name: burst_name,
+            reason: "expected at most 4294967295",
+        })?,
+        // The default's proportion.
+        None => per_second.saturating_mul(default.burst / default.per_second.max(1)),
+    };
+    Ok(Rate { per_second, burst })
+}
+
+/// `WA_SERVER_IDEMPOTENCY_TTL`, `WA_SERVER_MEDIA_MAX_BYTES`,
+/// `WA_SERVER_MEDIA_CONCURRENCY` and the rate limits.
+fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
+    let defaults = Settings::default();
+    let idempotency_ttl = match r.plain("WA_SERVER_IDEMPOTENCY_TTL")? {
+        None => defaults.idempotency_ttl,
+        Some(value) => {
+            let ttl = duration("WA_SERVER_IDEMPOTENCY_TTL", &value)?;
+            // A record must outlive its lease, or a running request's key
+            // could be claimed again.
+            if ttl <= defaults.idempotency_lease {
+                return Err(ConfigError::Invalid {
+                    name: "WA_SERVER_IDEMPOTENCY_TTL",
+                    reason: "expected more than the idempotency lease (2m)",
+                });
+            }
+            ttl
+        }
+    };
+    let media_concurrency = match positive(r, "WA_SERVER_MEDIA_CONCURRENCY")? {
+        None => defaults.media_concurrency,
+        Some(n) => usize::try_from(n).map_err(|_| ConfigError::Invalid {
+            name: "WA_SERVER_MEDIA_CONCURRENCY",
+            reason: "expected a smaller number",
+        })?,
+    };
+    let limits = RateLimits::default();
+    Ok(Settings {
+        rate_limits: RateLimits {
+            send: rate(
+                r,
+                "WA_SERVER_RATE_SEND",
+                "WA_SERVER_RATE_SEND_BURST",
+                limits.send,
+            )?,
+            read: rate(
+                r,
+                "WA_SERVER_RATE_READ",
+                "WA_SERVER_RATE_READ_BURST",
+                limits.read,
+            )?,
+            templates: rate(
+                r,
+                "WA_SERVER_RATE_TEMPLATES",
+                "WA_SERVER_RATE_TEMPLATES_BURST",
+                limits.templates,
+            )?,
+        },
+        idempotency_ttl,
+        media_max_bytes: positive(r, "WA_SERVER_MEDIA_MAX_BYTES")?
+            .unwrap_or(defaults.media_max_bytes),
+        media_concurrency,
+        ..defaults
+    })
 }
 
 /// The Meta app's settings.

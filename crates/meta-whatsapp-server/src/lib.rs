@@ -14,6 +14,8 @@
 //! | [`keys`] | the API key format, digests, constant-time comparison |
 //! | [`auth`] | the authorization order: key, tenant, scope, ownership, vault |
 //! | [`api`] | both routers and the OpenAPI document |
+//! | [`idempotency`] | `Idempotency-Key`: claim, replay, release |
+//! | [`ratelimit`] | per-tenant token buckets by route class |
 //! | [`error`] | the error body, codes and statuses |
 //! | [`telemetry`], [`metrics`] | request logs and Prometheus metrics |
 //! | [`serve`], [`listen`], [`cli`] | the process, its listeners' accept loop |
@@ -23,10 +25,12 @@ pub mod auth;
 pub mod cli;
 pub mod config;
 pub mod error;
+pub mod idempotency;
 pub mod keys;
 pub mod listen;
 pub mod metrics;
 pub mod model;
+pub mod ratelimit;
 pub mod serve;
 pub mod state;
 pub mod store;

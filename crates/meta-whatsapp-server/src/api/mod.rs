@@ -4,7 +4,7 @@
 //! | Listener | Routes |
 //! | --- | --- |
 //! | public (`WA_SERVER_PUBLIC_BIND`) | `GET /webhooks/meta`, `GET /livez`, nothing else |
-//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key, scope `numbers`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
+//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`; messages `send`; media `media`; templates `templates`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
 //!
 //! Every API route is registered through utoipa-axum's `routes!`, which
 //! adds the handler and its `#[utoipa::path]` documentation at once: a
@@ -14,8 +14,11 @@
 
 pub mod admin;
 pub mod common;
+pub mod media;
+pub mod messages;
 pub mod numbers;
 pub mod ops;
+pub mod templates;
 pub mod webhooks;
 
 use std::panic::AssertUnwindSafe;
@@ -90,6 +93,9 @@ impl Modify for Security {
     tags(
         (name = "admin", description = "Tenants, keys, WABA bindings and the vault key (admin key)"),
         (name = "numbers", description = "WABAs, numbers and business profiles (scope `numbers`)"),
+        (name = "messages", description = "Sending messages and read receipts (scope `send`)"),
+        (name = "media", description = "Uploading, downloading and deleting media (scope `media`)"),
+        (name = "templates", description = "Listing, creating and deleting message templates (scope `templates`)"),
         (name = "operations", description = "Health, metrics, this document, versions (no key)"),
     )
 )]
@@ -122,6 +128,28 @@ fn numbers_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(numbers::disconnect_waba))
 }
 
+fn messages_routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(messages::send_message))
+        .routes(routes!(messages::mark_read))
+}
+
+fn media_routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(media::upload_media))
+        .routes(routes!(media::download_media, media::delete_media))
+}
+
+fn templates_routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(
+            templates::list_templates,
+            templates::create_template,
+            templates::delete_templates
+        ))
+        .routes(routes!(templates::get_template))
+}
+
 fn ops_routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(ops::livez))
@@ -136,6 +164,9 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
     let (_, mut document) = OpenApiRouter::<AppState>::with_openapi(ApiDoc::openapi())
         .merge(admin_routes())
         .merge(numbers_routes())
+        .merge(messages_routes())
+        .merge(media_routes())
+        .merge(templates_routes())
         .merge(ops_routes())
         .split_for_parts();
     add_default_errors(&mut document);
@@ -234,13 +265,18 @@ pub fn with_deadline(router: Router, limit: Duration) -> Router {
 pub fn internal_router(state: &AppState) -> Router {
     let admin =
         admin_routes().route_layer(middleware::from_fn_with_state(state.clone(), admin_guard));
-    let numbers = numbers_routes().route_layer(middleware::from_fn_with_state(
-        guard(state, Scope::Numbers),
-        tenant_guard,
-    ));
+    let tenant = |routes: OpenApiRouter<AppState>, scope: Scope| {
+        routes.route_layer(middleware::from_fn_with_state(
+            guard(state, scope),
+            tenant_guard,
+        ))
+    };
     let (router, _) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .merge(admin)
-        .merge(numbers)
+        .merge(tenant(numbers_routes(), Scope::Numbers))
+        .merge(tenant(messages_routes(), Scope::Send))
+        .merge(tenant(media_routes(), Scope::Media))
+        .merge(tenant(templates_routes(), Scope::Templates))
         .merge(ops_routes())
         .split_for_parts();
     let observed = Observed {
@@ -378,6 +414,9 @@ mod tests {
             ("ops.rs", include_str!("ops.rs")),
             ("webhooks.rs", include_str!("webhooks.rs")),
             ("common.rs", include_str!("common.rs")),
+            ("messages.rs", include_str!("messages.rs")),
+            ("media.rs", include_str!("media.rs")),
+            ("templates.rs", include_str!("templates.rs")),
         ];
         let mut plain = Vec::new();
         for (file, source) in sources {

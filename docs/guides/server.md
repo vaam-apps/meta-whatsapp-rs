@@ -8,13 +8,16 @@ its reasons and the owner's decisions, is
 [docs/design/server.md](../design/server.md); the rules it keeps are in
 [architecture.md](../architecture.md#service-meta-whatsapp-server).
 
-> **What exists today (milestone M1a).** Tenants, API keys, the admin API,
-> attaching the platform's own WhatsApp Business Accounts (WABAs), the
-> numbers and business profile routes, vault key rotation, health, metrics
-> and the OpenAPI document. **Not yet**: sending messages, media and
-> templates (M1b), receiving Meta's webhooks (M1c: `POST /webhooks/meta`
-> answers `405`), the inbox and live events (M2), Embedded Signup and OTP
-> (M3), the Docker image and the TypeScript client (M4).
+> **What exists today (milestones M1a and M1b).** Tenants, API keys, the
+> admin API, attaching the platform's own WhatsApp Business Accounts
+> (WABAs), the numbers and business profile routes, vault key rotation,
+> sending messages (with idempotency keys), read receipts, media upload,
+> verified download and delete, template listing, creation and deletion,
+> per-tenant rate limits, health, metrics and the OpenAPI document. **Not
+> yet**: receiving Meta's webhooks (M1c: `POST /webhooks/meta` answers
+> `405`, so delivery statuses do not reach you yet), the inbox and live
+> events (M2), Embedded Signup, OTP and authentication templates (M3), the
+> Docker image and the TypeScript client (M4).
 > [coverage.md](../coverage.md) tracks it.
 >
 > **Do not point a Meta app's callback URL at an M1a deployment**: Meta's
@@ -83,6 +86,12 @@ read yet: set, it stops the start.
 | `WA_SERVER_MIGRATE` | `auto` | `skip` when a job runs `meta-whatsapp-server migrate` |
 | `WA_SERVER_SHUTDOWN_GRACE` | `25s` | how long open requests get after `SIGTERM` |
 | `WA_SERVER_LOG_FORMAT`, `RUST_LOG` | `json`, `info` | `text` for humans |
+| `WA_SERVER_IDEMPOTENCY_TTL` | `24h` | how long an `Idempotency-Key`'s answer is kept (more than 2 minutes) |
+| `WA_SERVER_MEDIA_MAX_BYTES` | `104857600` (100 MiB) | the largest upload, and the largest streamed download |
+| `WA_SERVER_MEDIA_CONCURRENCY` | `4` | uploads and whole downloads held in memory at once on a replica (the next is `429`) |
+| `WA_SERVER_RATE_SEND`, `WA_SERVER_RATE_SEND_BURST` | `20`, `40` | requests a second per tenant and replica for writes (sends, read receipts, media, profile) |
+| `WA_SERVER_RATE_READ`, `WA_SERVER_RATE_READ_BURST` | `50`, `50` | the same for reads |
+| `WA_SERVER_RATE_TEMPLATES`, `WA_SERVER_RATE_TEMPLATES_BURST` | `2`, `2` | the same for template management |
 
 **The service refuses to start** rather than run unsafely: on a missing
 or blank app secret or verify token, a missing vault key or a pepper
@@ -116,8 +125,8 @@ up -d --wait` starts one on port 55432 (`postgres://wa:wa@127.0.0.1:55432/wa`).
 
 Postgres holds everything: the library's tables (`wa_kv`, the inbox's
 `wa_messages` and `wa_conversations`) and the service's (`wa_server_tenants`,
-`wa_server_api_keys`, `wa_server_wabas`, `wa_server_numbers`), each with
-its own migration history. `serve` and `migrate` run both under an
+`wa_server_api_keys`, `wa_server_wabas`, `wa_server_numbers`,
+`wa_server_idempotency`), each with its own migration history. `serve` and `migrate` run both under an
 advisory lock, so replicas starting together never interleave them.
 Service migrations only ever add (expand, then contract in a later
 release), so replicas of two versions can share the database during a
@@ -137,9 +146,9 @@ immutable. Three kinds of API key, all `wak_<key id>_<secret>`, sent as
 | platform key | the tenant named in the `WA-Tenant` header, if among its allowed tenants (`*` or a list) | the CMS backend, acting for each merchant |
 | admin key | nobody: `/v1/admin` only | operators |
 
-Tenant and platform keys carry scopes (`numbers` today; `send`, `media`,
-`templates`, `inbox`, `events`, `webhooks`, `signup`, `otp` for the routes
-to come). The service keeps only each key's id and the SHA-256 of its
+Tenant and platform keys carry scopes (`numbers`, `send`, `media` and
+`templates` today; `inbox`, `events`, `webhooks`, `signup`, `otp` for the
+routes to come). The service keeps only each key's id and the SHA-256 of its
 secret, and shows the key once. Rotate by minting a new one, deploying
 it, then revoking the old one: revocation and suspension take effect on
 the next request, on every replica.
@@ -242,6 +251,129 @@ exist), and only then reads the token. `GET`/`PATCH
 the app with the WABA's token, and deletes the token and bindings only if
 Meta agreed.
 
+## Send messages
+
+`POST /v1/numbers/{pn}/messages` (scope `send`) takes Meta's message
+object under the service's envelope: `to`, `type`, the object `type`
+names, and optionally `reply_to` (a received message's id) and
+`callback_data` (echoed in the message's status events):
+
+```bash
+curl -sS -X POST http://127.0.0.1:8081/v1/numbers/106540352242922/messages \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -H "Idempotency-Key: order:1234:shipped" \
+  -d '{"to": {"phone": "+16505551234"}, "type": "text",
+       "text": {"body": "Your order 1234 has shipped."}, "callback_data": "order:1234:shipped"}'
+```
+
+It answers `202 {"message_id": "wamid.…", "contacts": [...]}`: Meta
+accepted the message; delivery arrives later as status events (M1c).
+
+- **Recipients**: `{"phone": "+16505551234"}` in E.164 **with** its `+`
+  (a number without it is refused, `422` on `to.phone`, before any
+  request: Meta would read it as local to the sending number's country),
+  `{"user_id": "US.13491208655302741918"}` (the business-scoped user id a
+  webhook carries), both (Meta uses the phone number), or
+  `{"group_id": "…"}`.
+- **Types**: `text`; `image`, `video`, `audio`, `document`, `sticker` by
+  uploaded `id` or `https://` `link` (Meta fetches it, the service never
+  does); `location`, `contacts`, `reaction`; `template` (Meta's object:
+  `name`, `language`, `components`); `interactive` of type `button`,
+  `list` or `cta_url`. Each is written as Meta's page for it writes it.
+  Anything else (Direct Send included) is `422 unsupported_message_type`.
+  Every limit Meta documents is checked before the request (`422
+  invalid_request` with `field`).
+- Meta enforces the 24-hour window: a free-form message outside it is
+  `409 customer_service_window_closed` (send a template).
+- `POST /v1/numbers/{pn}/messages/{message_id}/read` shows the blue ticks
+  on a received message; `{"typing_indicator": true}` shows "typing…" too,
+  only when you are about to reply.
+
+### Idempotency keys
+
+Sends, uploads and template creation take an `Idempotency-Key` header (1
+to 255 visible ASCII characters), scoped to the tenant. Derive it from
+your own records (`order:1234:shipped`) and set `callback_data` to the
+same. With one:
+
+- the same key and request never reach Meta twice: a repeat gets the
+  first answer back, byte for byte, with `Idempotent-Replayed: true`,
+  including a `504 timeout` (the message may have gone out: reconcile
+  through its status events, never with a new key);
+- an answer that proves nothing was sent (`may_have_been_sent: false`: a
+  validation refusal, a 4xx from Meta such as `409
+  customer_service_window_closed`, throttling) **releases** the key, so
+  you may repeat the request with it once the cause is fixed;
+- the same key with another request is `422 idempotency_key_reused`; a
+  repeat while the first still runs `409 idempotency_in_progress`; a
+  repeat after the first died mid-way (its lease, twice the Graph
+  timeout, ran out) `409 outcome_unknown`, `may_have_been_sent: true`,
+  never a new send.
+
+Answers are kept `WA_SERVER_IDEMPOTENCY_TTL` (24 hours), then the key is
+free again.
+
+## Media
+
+`POST /v1/numbers/{pn}/media` (scope `media`) uploads a
+`multipart/form-data` form with `file` and `type` (the MIME type, one of
+Meta's supported types) and answers `201 {"media_id": "…"}`, the id to
+send in a message:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8081/v1/numbers/106540352242922/media \
+  -H "Authorization: Bearer $KEY" -F type=image/png -F file=@voucher.png
+```
+
+Type and size are checked first: an unsupported type is `422` on `type`,
+a file over its type's limit (5 MiB for images, 16 MiB for audio and
+video, 500 KiB for stickers, 100 MiB for documents) or over
+`WA_SERVER_MEDIA_MAX_BYTES` `413 media_too_large`.
+
+`GET /v1/numbers/{pn}/media/{media_id}` downloads a file (an upload's or
+a received message's), verified against the SHA-256 Meta reports, and
+answers it with Meta's MIME type and `X-WA-SHA256` (hex). By default the
+whole file is read, verified, and only then answered: at most
+`?max_bytes=` (default and cap 16 MiB; more is `413 media_too_large`),
+and a mismatch is `502 integrity` with not one byte of the file. With
+`?stream=true` (up to `WA_SERVER_MEDIA_MAX_BYTES`) the bytes are
+forwarded as they arrive and a mismatch **aborts the connection**:
+write them somewhere temporary and use them only once the body ended
+cleanly. `DELETE /v1/numbers/{pn}/media/{media_id}` deletes an upload.
+
+## Templates
+
+With scope `templates`, on a WABA of the tenant:
+
+| Route | Does |
+| --- | --- |
+| `GET /v1/wabas/{waba_id}/templates` | a page of `{id, name, language, status, category, components}`, `?status=`, `?name=`, `?limit=`, `?cursor=`; cached 60 s per WABA (Meta allows 200 management calls an hour per WABA) |
+| `GET /v1/wabas/{waba_id}/templates/{id}` | one template |
+| `POST /v1/wabas/{waba_id}/templates` | create from Meta's JSON (`name`, `language`, `category`, `components`), checked locally first; `201 {id, status, category}`; takes an `Idempotency-Key` |
+| `DELETE /v1/wabas/{waba_id}/templates?name=…[&id=…]` | every language of a name, or one |
+
+A definition breaking a documented limit is `422 invalid_request` with
+`field`, before any request; Meta refusing it is `422 template_rejected`,
+a WABA at its limit `409 template_limit_reached`. Review results will
+arrive as `template_status_updated` events (M1c). A creation or deletion
+drops the WABA's cached pages on the replica that made it; others may
+answer the old list for up to 60 seconds.
+
+## Rate limits
+
+Each tenant has a budget per class of route, per replica (a deployment
+of N replicas allows N times as much): writes (sends, read receipts,
+media, profile changes) 20 a second with bursts of 40, reads 50 a second,
+template management 2 a second. A platform key acting for a tenant draws
+from that tenant's budget. Past it: `429 too_many_requests`, `retryable:
+true`, with `Retry-After` in seconds, before anything is read or sent.
+Change them with `WA_SERVER_RATE_*` (the same for every tenant: per-tenant
+limits are not settable yet). Meta's own limits (80 messages a second per
+number, pair and portfolio limits) still apply and answer their own codes
+(`rate_limited`, `pair_rate_limited`, …); pacing campaigns is yours.
+
+## The contract
+
 The whole contract is the OpenAPI document: `GET /v1/openapi.json`, or
 [crates/meta-whatsapp-server/openapi/v1.json](../../crates/meta-whatsapp-server/openapi/v1.json)
 in the repository. Generate TypeScript types from it with
@@ -290,8 +422,12 @@ Every error answers one body:
   4,096 on the internal one (more wait), and every request is answered
   within 55 s (past it, `504 timeout` with `may_have_been_sent: true`).
 - `/metrics` (Prometheus) counts requests by listener, method, route
-  template, status and error code, their duration, and failed Graph calls
-  by code; never an id, a number or a key.
+  template, status and error code, their duration, failed Graph calls by
+  code, idempotent repeats by outcome (`replayed`, `reused`,
+  `in_progress`, `outcome_unknown`) and rate-limited requests by class;
+  never an id, a number or a key.
+- Expired idempotency records are purged every 10 minutes by one replica
+  at a time.
 - Logs are JSON, one line per request with its id (`X-Request-Id`, echoed
   or generated), route template (never the raw path), tenant, the public
   id of the key that made it, status and duration; every change an
@@ -306,13 +442,13 @@ Every error answers one body:
 
 ## Not yet
 
-Sends, media, templates, idempotency keys and rate limits (M1b);
 `POST /webhooks/meta` into the inbox and the event outbox, `GET /v1/events`
 (M1c); the inbox routes, SSE and webhooks-out (M2); Embedded Signup,
 disconnection by Meta's webhooks, coexistence sync and OTP (M3); the
-Docker image, a Compose file and the TypeScript client (M4). Tenant
-settings (OTP sender and template, limits) in `PATCH
-/v1/admin/tenants/{id}` come with OTP (M3). The design's TOML file of
+Docker image, a Compose file, the documents route and the TypeScript
+client (M4). Tenant settings (OTP sender and template, limits) in `PATCH
+/v1/admin/tenants/{id}` come with OTP (M3); until then the rate limits
+are the deployment's, for every tenant. The design's TOML file of
 non-secrets (`WA_SERVER_CONFIG`) is not read (set, it stops the start),
 and OpenTelemetry export is not wired. The `/v1/version` revision reads
 `unknown` unless the build sets `META_WHATSAPP_RS_REVISION`.

@@ -826,6 +826,11 @@ decisions and the delivery milestones, is
   is Meta's text, not the service's, kept only on the routes that opt in
   (never OTP or signup), bounded and without control or format
   characters or line separators.
+- **Sends are never repeated behind the caller's back.** The service
+  adds no send retries to the library's; a caller's `Idempotency-Key`
+  (sends, uploads, template creation) keeps the answer of a request that
+  may have taken effect and replays it, and releases the key only when
+  the library's `Error::may_have_been_sent` is `false`.
 - **Storage** is Postgres (memory only in development). The service's
   tables are `wa_server_*` with their own migration history, run with the
   library's migrations under an advisory lock of the service's own;

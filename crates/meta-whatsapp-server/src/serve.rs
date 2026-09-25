@@ -124,11 +124,19 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         public_bind,
         internal_bind,
         shutdown_grace,
+        settings,
         ..
     } = config;
     let vault = vault(backends.kv, vault_keys)?;
     let memory = backends.pool.is_none();
-    let state = AppState::new(backends.store, vault, client, verify_token, Metrics::new());
+    let state = AppState::with_settings(
+        backends.store,
+        vault,
+        client,
+        verify_token,
+        Metrics::new(),
+        settings,
+    );
     if memory {
         // Memory storage exists in development only (the configuration
         // refuses it elsewhere), and the CLI cannot reach it: the first
@@ -159,6 +167,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     tracing::info!(%public_bind, %internal_bind, "listening");
 
     let (stop, stopped) = watch::channel(false);
+    let housekeeping = tokio::spawn(housekeeping(state.clone(), stop_signal(stopped.clone())));
     let public_task = tokio::spawn(listen::serve(
         public,
         api::public_router(&state),
@@ -180,10 +189,33 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         shutdown_grace,
     )
     .await;
+    housekeeping.abort();
     if let Some(pool) = backends.pool {
         pool.close().await;
     }
     served
+}
+
+/// How often expired idempotency records are purged.
+pub const HOUSEKEEPING_INTERVAL: Duration = Duration::from_mins(10);
+
+/// Purge expired records every [`HOUSEKEEPING_INTERVAL`] until `stop`
+/// (docs/design/server.md, section 2.4: any replica, one at a time on
+/// Postgres). Expired records are already ignored; this bounds the table.
+async fn housekeeping(state: AppState, stop: impl Future<Output = ()>) {
+    let mut stop = std::pin::pin!(stop);
+    let mut ticks = tokio::time::interval(HOUSEKEEPING_INTERVAL);
+    loop {
+        tokio::select! {
+            () = &mut stop => return,
+            _ = ticks.tick() => {}
+        }
+        match state.store().purge_idempotency_keys().await {
+            Ok(0) => {}
+            Ok(purged) => tracing::debug!(purged, "expired idempotency records purged"),
+            Err(error) => tracing::warn!(error = %error, "purging idempotency records failed"),
+        }
+    }
 }
 
 /// Completes once `stop` says so: the shutdown future of a listener.

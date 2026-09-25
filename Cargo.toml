@@ -128,6 +128,11 @@ clap = { version = "4", default-features = false, features = ["std", "derive", "
 # no connection cap. Both are already in the tree through axum.
 hyper = { version = "1", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
+# Media uploads (`POST /v1/numbers/{pn}/media`, multipart): the parser
+# axum's own `Multipart` extractor wraps, used directly so the service
+# keeps reaching axum through the facade's re-export (whose axum has no
+# `multipart` feature) and can bound each field while it streams.
+multer = { version = "3", default-features = false }
 
 # Dev, and the service's logs (crates/meta-whatsapp-server adds `json`):
 # the examples use it to make the library's `tracing` output visible.

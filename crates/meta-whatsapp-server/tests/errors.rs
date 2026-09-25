@@ -220,6 +220,15 @@ const CALLS_META: &[&str] = &[
     "POST /v1/admin/tenants/{id}/wabas",
     "DELETE /v1/admin/tenants/{id}",
     "DELETE /v1/admin/wabas/{waba_id}/binding",
+    "POST /v1/numbers/{pn}/messages",
+    "POST /v1/numbers/{pn}/messages/{message_id}/read",
+    "POST /v1/numbers/{pn}/media",
+    "GET /v1/numbers/{pn}/media/{media_id}",
+    "DELETE /v1/numbers/{pn}/media/{media_id}",
+    "GET /v1/wabas/{waba_id}/templates",
+    "POST /v1/wabas/{waba_id}/templates",
+    "DELETE /v1/wabas/{waba_id}/templates",
+    "GET /v1/wabas/{waba_id}/templates/{id}",
 ];
 
 /// Operations whose call to Meta is best effort: whatever Meta answers,
@@ -236,6 +245,15 @@ const DETAILS_KEPT: &[&str] = &[
     "DELETE /v1/wabas/{waba_id}",
     "POST /v1/admin/tenants/{id}/wabas",
     "DELETE /v1/admin/tenants/{id}",
+    "POST /v1/numbers/{pn}/messages",
+    "POST /v1/numbers/{pn}/messages/{message_id}/read",
+    "POST /v1/numbers/{pn}/media",
+    "GET /v1/numbers/{pn}/media/{media_id}",
+    "DELETE /v1/numbers/{pn}/media/{media_id}",
+    "GET /v1/wabas/{waba_id}/templates",
+    "POST /v1/wabas/{waba_id}/templates",
+    "DELETE /v1/wabas/{waba_id}/templates",
+    "GET /v1/wabas/{waba_id}/templates/{id}",
 ];
 
 /// M1.5's sentinel, on every operation of the committed document: Meta's

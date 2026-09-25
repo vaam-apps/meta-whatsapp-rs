@@ -40,56 +40,31 @@ async fn two_tenants() -> Harness {
     h
 }
 
-/// `(method, template)` of every operation in the committed document whose
-/// path names a number or a WABA.
-fn owned_routes() -> Vec<(Method, String)> {
-    let spec: Value = serde_json::from_str(include_str!("../openapi/v1.json")).unwrap();
-    let mut routes = Vec::new();
-    for (path, item) in spec["paths"].as_object().unwrap() {
-        if !(path.contains("{pn}") || path.contains("{waba_id}")) {
-            continue;
-        }
-        for method in item.as_object().unwrap().keys() {
-            let method = Method::from_bytes(method.to_uppercase().as_bytes()).unwrap();
-            routes.push((method, path.clone()));
-        }
-    }
-    routes
+/// Every operation in the committed document whose path names a number
+/// or a WABA.
+fn owned_routes() -> Vec<common::Operation> {
+    common::spec_operations()
+        .into_iter()
+        .filter(|o| o.template.contains("{pn}") || o.template.contains("{waba_id}"))
+        .collect()
 }
 
-/// `template` with A's number and WABA, and a placeholder in any other
-/// parameter.
-fn on_a(template: &str) -> String {
-    let path = template.replace("{pn}", PN_A).replace("{waba_id}", WABA_A);
-    let mut out = String::new();
-    let mut rest = path.as_str();
-    while let Some(start) = rest.find('{') {
-        out.push_str(&rest[..start]);
-        let end = rest[start..].find('}').unwrap() + start;
-        out.push_str("placeholder");
-        rest = &rest[end + 1..];
-    }
-    out.push_str(rest);
-    out
-}
-
-/// A body a route with one would accept, so a refusal cannot be the body's
-/// fault.
-fn valid_body(method: &Method, template: &str) -> Option<Value> {
-    match (method.as_str(), template) {
-        ("PATCH", "/v1/numbers/{pn}/profile") => Some(json!({"about": "Open 9 to 5"})),
-        ("POST" | "PATCH" | "PUT", _) => Some(json!({})),
-        _ => None,
+/// The values of A's number and WABA.
+fn on_a() -> common::Sample {
+    common::Sample {
+        tenant: A.to_owned(),
+        waba: WABA_A.to_owned(),
+        pn: PN_A.to_owned(),
+        key_id: "placeholder".to_owned(),
     }
 }
 
-fn call(method: &Method, template: &str, path: &str, key: &str, tenant: Option<&str>) -> Call {
-    let mut call = Call::new(method.clone(), path).key(key);
+/// A call of `operation` on A's number or WABA, with a body and query it
+/// would accept (so a refusal cannot be their fault).
+fn call(operation: &common::Operation, key: &str, tenant: Option<&str>) -> Call {
+    let mut call = common::sample_call(operation, &on_a(), Some(key));
     if let Some(tenant) = tenant {
         call = call.tenant(tenant);
-    }
-    if let Some(body) = valid_body(method, template) {
-        call = call.json(&body);
     }
     call
 }
@@ -112,40 +87,51 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
         (Method::PATCH, "/v1/numbers/{pn}/profile"),
         (Method::DELETE, "/v1/wabas/{waba_id}"),
         (Method::DELETE, "/v1/admin/wabas/{waba_id}/binding"),
+        (Method::POST, "/v1/numbers/{pn}/messages"),
+        (Method::POST, "/v1/numbers/{pn}/messages/{message_id}/read"),
+        (Method::POST, "/v1/numbers/{pn}/media"),
+        (Method::GET, "/v1/numbers/{pn}/media/{media_id}"),
+        (Method::DELETE, "/v1/numbers/{pn}/media/{media_id}"),
+        (Method::GET, "/v1/wabas/{waba_id}/templates"),
+        (Method::POST, "/v1/wabas/{waba_id}/templates"),
+        (Method::DELETE, "/v1/wabas/{waba_id}/templates"),
+        (Method::GET, "/v1/wabas/{waba_id}/templates/{id}"),
     ] {
         assert!(
-            routes.iter().any(|(m, p)| *m == known.0 && p == known.1),
+            routes
+                .iter()
+                .any(|o| o.method == known.0 && o.template == known.1),
             "{known:?} is not in the document"
         );
     }
 
     let mut checked = 0;
-    for (method, template) in &routes {
-        let path = on_a(template);
+    for operation in &routes {
         // Admin routes refuse any non-admin key before anything else.
-        let expected = if template.starts_with("/v1/admin/") {
+        let expected = if operation.admin() {
             (StatusCode::FORBIDDEN, "forbidden")
         } else {
             (StatusCode::NOT_FOUND, "not_found")
         };
         for (key, named) in [(&b_key, None), (&platform, Some(B))] {
             let before = h.kv.vault_reads();
-            let reply = h.call(call(method, template, &path, key, named)).await;
+            let reply = h.call(call(operation, key, named)).await;
+            let label = operation.label();
             assert_eq!(
                 (reply.status, reply.code().as_str()),
                 expected,
-                "{method} {path} with B's key: {}",
+                "{label} with B's key: {}",
                 reply.text
             );
             assert_eq!(
                 h.kv.vault_reads(),
                 before,
-                "{method} {path} read the vault for tenant B"
+                "{label} read the vault for tenant B"
             );
             checked += 1;
         }
     }
-    assert!(checked >= 10, "only {checked} calls");
+    assert!(checked >= 28, "only {checked} calls");
     assert!(h.graph.requests().is_empty(), "no call reached Meta");
     assert_eq!(h.graph.remaining(), 0);
     // Nothing of A's changed.
@@ -167,24 +153,30 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
 async fn the_owner_reads_the_vault_on_every_owned_route() {
     let h = two_tenants().await;
     let a_key = h.tenant_key(A, &ALL_SCOPES).await;
-    for (method, template) in owned_routes() {
-        if template.starts_with("/v1/admin/") {
+    for operation in owned_routes() {
+        if operation.admin() {
             continue;
         }
-        let path = on_a(&template);
+        let label = operation.label();
         let before = h.kv.vault_reads();
+        let asked = h.graph.requests().len();
         // Graph answers with an error: the point is the vault read before it.
         h.graph.push_json(
             500,
             json!({"error": {"message": "x", "type": "OAuthException", "code": 2}}),
         );
-        let _ = h.call(call(&method, &template, &path, &a_key, None)).await;
+        let _ = h.call(call(&operation, &a_key, None)).await;
         assert!(
             h.kv.vault_reads() > before,
-            "{method} {path}: A's own call did not read the vault"
+            "{label}: A's own call did not read the vault"
+        );
+        assert_eq!(
+            h.graph.requests().len(),
+            asked + 1,
+            "{label}: Meta was not asked"
         );
         let request = h.graph.last_request().unwrap();
-        assert_eq!(request.bearer(), Some("TOKEN-OF-A"), "{method} {path}");
+        assert_eq!(request.bearer(), Some("TOKEN-OF-A"), "{label}");
     }
     assert_eq!(h.graph.remaining(), 0);
 }

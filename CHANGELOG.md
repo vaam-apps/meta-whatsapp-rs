@@ -119,6 +119,39 @@ volumes (Claude config, shell history, cargo caches) start empty
 
 ### Added
 
+- **meta-whatsapp-server, milestone M1b**: messages, read receipts,
+  media, templates, idempotency keys and rate limits.
+  `POST /v1/numbers/{pn}/messages` (scope `send`) sends text, media by
+  uploaded id or `https://` link, location, contacts, reactions,
+  templates (Meta's object) and interactive `button`, `list` and
+  `cta_url` messages, each written as Meta's page writes it, to a strict
+  E.164 number (a digits-only one is refused before any request), a
+  BSUID, both, or a group; anything else, Direct Send included, is `422
+  unsupported_message_type`. `POST …/messages/{message_id}/read` marks
+  read, with an optional typing indicator. Media (scope `media`): uploads
+  checked (type, size, `WA_SERVER_MEDIA_MAX_BYTES`) before any request;
+  downloads verified against Meta's SHA-256 before the first byte (`502
+  integrity`), at most `?max_bytes=` (16 MiB), or streamed with
+  `?stream=true`, where a mismatch aborts the connection; `X-WA-SHA256`;
+  deletes; at most `WA_SERVER_MEDIA_CONCURRENCY` transfers in memory per
+  replica. Templates (scope `templates`): list (cached 60 s per WABA),
+  get, create from Meta's JSON (checked locally; `template_rejected`,
+  `template_limit_reached`), delete by name or name and id.
+  `Idempotency-Key` on sends, uploads and template creation, scoped to
+  the tenant, stored in Postgres (`wa_server_idempotency`, service
+  migration 2) or memory: a repeat gets the kept answer with
+  `Idempotent-Replayed: true` and never a second request; an answer
+  proving nothing was sent releases the key; another request under it is
+  `422 idempotency_key_reused`, a running one `409
+  idempotency_in_progress`, one whose lease (twice the Graph timeout)
+  lapsed `409 outcome_unknown`; kept `WA_SERVER_IDEMPOTENCY_TTL` (24 h),
+  purged by one replica at a time. Rate limits per tenant, route class
+  and replica (sends 20/s burst 40, reads 50/s, template management 2/s,
+  `WA_SERVER_RATE_*`), `429 too_many_requests` with `Retry-After`, before
+  ownership and the vault. Metrics for idempotent repeats and refused
+  requests. New dependencies of the service: `multer` (the multipart
+  parser axum's own extractor wraps) and `base64` (Meta's digests).
+  Guide: docs/guides/server.md; skill: `meta-whatsapp-rs-server-send`.
 - **meta-whatsapp-server, milestone M1a**: the HTTP service of
   docs/design/server.md, for apps not written in Rust
   (`crates/meta-whatsapp-server`, binary `meta-whatsapp-server`, not

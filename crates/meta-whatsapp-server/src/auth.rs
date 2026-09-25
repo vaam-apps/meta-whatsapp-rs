@@ -7,7 +7,10 @@
 //! 2. **Resolve the tenant**: the tenant key's own, or the `WA-Tenant`
 //!    header's within the platform key's allowed set, else `403
 //!    forbidden`; a suspended tenant is `403 tenant_suspended`.
-//! 3. **Check the scope**, else `403 forbidden`.
+//! 3. **Check the scope**, else `403 forbidden`. Then the tenant's rate
+//!    limit for the route's class ([`crate::ratelimit`]), else `429
+//!    too_many_requests`: before ownership, so a limited request reads
+//!    neither the bindings nor the vault.
 //! 4. **Ownership**: the path's `{pn}` or `{waba_id}` must be bound to that
 //!    tenant, else `404 not_found`, the answer for one that does not exist
 //!    ([`OwnedNumber`], [`OwnedWaba`]).
@@ -39,6 +42,7 @@ use crate::model::{
     ApiKeyRecord, KeyOwner, MAX_PAGE_SIZE, NumberStatus, PageRequest, Scope, TenantId,
     TenantStatus, WabaBinding,
 };
+use crate::ratelimit::{RouteClass, retry_after_secs};
 use crate::state::AppState;
 use crate::store::Store;
 use crate::telemetry;
@@ -280,6 +284,12 @@ pub async fn tenant_guard(
     telemetry::record_tenant(tenant.as_str());
     if !key.scopes.contains(&guard.scope) {
         return ApiError::forbidden().into_response();
+    }
+    // The tenant's budget for this class of route, per replica.
+    let class = RouteClass::of(guard.scope, request.method());
+    if let Err(wait) = guard.state.limiter().check(&tenant, class) {
+        guard.state.metrics().rate_limited(class.as_str());
+        return ApiError::too_many_requests(retry_after_secs(wait)).into_response();
     }
     request.extensions_mut().insert(Caller {
         key_id: key.key_id,

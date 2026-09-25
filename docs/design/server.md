@@ -1,11 +1,12 @@
 # Design: a deployable meta-whatsapp-rs service (`meta-whatsapp-server`)
 
-> **Milestone M1a is implemented** in `crates/meta-whatsapp-server` (the
-> crate, configuration, listeners, storage, tenants and keys, the admin
-> API with attach, unbind and vault rotation, the numbers routes, errors,
-> operations, the committed OpenAPI document; [§9](#9-delivery-plan) says
-> which acceptance tests it meets, [coverage.md](../coverage.md) row 33
-> what is missing); the rest is design. Written against `main` =
+> **Milestones M1a and M1b are implemented** in `crates/meta-whatsapp-server`
+> (M1a: the crate, configuration, listeners, storage, tenants and keys, the
+> admin API with attach, unbind and vault rotation, the numbers routes,
+> errors, operations, the committed OpenAPI document; M1b: messages, read
+> receipts, media, templates, idempotency keys and rate limits;
+> [§9](#9-delivery-plan) says which acceptance tests they meet,
+> [coverage.md](../coverage.md) row 33 what is missing); the rest is design. Written against `main` =
 > bbf24a3 (2026-09-24), Graph API v25.0; the library changes it assumed have
 > since landed on `main` (#4: `OtpConfig::namespace` required, the Intent
 > API's result renamed `marketing::OnboardingRequested`; #5: Solution Partner
@@ -627,6 +628,12 @@ the route template, not the raw path (contacts identify customers).
 20/s (burst 40), reads 50/s, template management 2/s, OTP issue 5/s, 20
 streams; `429` with `Retry-After`. Meta's limits (80 messages/s per number,
 portfolio limits) still apply; pacing campaigns is the caller's job.
+*As built in M1b*: token buckets keyed by tenant and route class, checked
+after the scope and before ownership; the bursts this paragraph does not
+state (reads, template management) are one second's worth; read
+receipts, media and profile writes count as sends; the operator sets
+them per deployment (`WA_SERVER_RATE_*`, [§7.2](#72-environment)), and
+per-tenant overrides wait for the tenant settings (M3).
 
 **CORS**: none (D3). **TLS** terminates at the ingress: valid certificate,
 body limit of at least 3 MiB, no body rewriting or decompression, a timeout
@@ -666,6 +673,8 @@ crate names, settled when OQ #1 closed (`meta-whatsapp-*`, 2026-09-25).
 | `WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS` | none | hosts and CIDRs for webhooks-out |
 | `WA_SERVER_OUTBOX_RETENTION`, `…_IDEMPOTENCY_TTL`, `…_WEBHOOK_RETRY_WINDOW` | 7 d, 24 h, 72 h | |
 | `WA_SERVER_MEDIA_MAX_BYTES`, `WA_SERVER_SHUTDOWN_GRACE`, `WA_SERVER_MIGRATE` | 100 MiB, 25 s, `auto` | `skip` when a job runs `meta-whatsapp-server migrate` |
+| `WA_SERVER_MEDIA_CONCURRENCY` (M1b) | 4 | uploads and whole-file downloads held in memory at once per replica (section 6's "bounded media concurrency"; the next is `429`) |
+| `WA_SERVER_RATE_SEND`, `…_READ`, `…_TEMPLATES`, each with `…_BURST` (M1b) | 20 and 40, 50 and 50, 2 and 2 | section 6's limits, per tenant and replica |
 | `RUST_LOG`, `WA_SERVER_LOG_FORMAT`, `OTEL_EXPORTER_OTLP_ENDPOINT` | `info`, `json`, unset | |
 
 ### 7.3 Start, observability, shutdown
@@ -773,7 +782,12 @@ messages, media, templates, idempotency keys and rate limits; **M1c**
 M1.1, M1.3, M1.5 and M1.6, and M1.7's parallel migrations and its log
 capture over every M1a route (the M1a routes stand in for a send and a
 webhook); M1.2, M1.4 and the rest of M1.7 (two instances deduplicating a
-webhook, the capture of a send and a webhook) are M1b's and M1c's.
+webhook, the capture of a send and a webhook) are M1b's and M1c's. **M1b
+meets M1.4** (`tests/messages.rs`, and on Postgres
+`tests/live_postgres.rs`), **M1.3 and M1.5 over its routes** (the tests
+iterate the committed document) **and M1.7's send part** (the capture
+exercises every route, sends with text, a phone number, a BSUID and a
+contact card included); M1.1 on its final head.
 
 Acceptance tests. "Decisive" names the guard whose removal must make the
 test fail.

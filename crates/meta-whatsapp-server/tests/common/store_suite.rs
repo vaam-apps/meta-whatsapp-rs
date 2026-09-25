@@ -376,9 +376,180 @@ pub async fn bindings(store: &dyn Store) {
 }
 
 /// Every case.
+/// Idempotency keys: claimed once, found by a repeat, completed with the
+/// answer byte for byte, released, scoped to their tenant, leased,
+/// expired, purged, and gone with their tenant.
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
+pub async fn idempotency(store: &dyn Store) {
+    use std::time::Duration as StdDuration;
+
+    use meta_whatsapp_server::model::{
+        IdempotencyClaim, IdempotencyKey, IdempotencyRecord, IdempotencyState,
+    };
+    let a = id("idem-a");
+    let b = id("idem-b");
+    for t in [&a, &b] {
+        store.create_tenant(t, "").await.unwrap().unwrap();
+    }
+    let key = IdempotencyKey::parse("order:1234:shipped").unwrap();
+    let hour = StdDuration::from_secs(3600);
+    let minute = StdDuration::from_secs(60);
+    let claim = |tenant, fingerprint: [u8; 32], claim_id: &'static str, lease, ttl| {
+        let key = key.clone();
+        async move {
+            store
+                .claim_idempotency_key(tenant, &key, &fingerprint, claim_id, lease, ttl)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(
+        claim(&a, [1; 32], "c1", minute, hour).await,
+        IdempotencyClaim::Claimed
+    );
+    // A repeat finds it running, with the first request's fingerprint.
+    assert_eq!(
+        claim(&a, [2; 32], "c2", minute, hour).await,
+        IdempotencyClaim::Existing(IdempotencyRecord {
+            fingerprint: [1; 32],
+            state: IdempotencyState::InProgress {
+                lease_expired: false
+            },
+        })
+    );
+    // Another tenant's same key is another record.
+    assert_eq!(
+        claim(&b, [1; 32], "c3", minute, hour).await,
+        IdempotencyClaim::Claimed
+    );
+    // Only the holder settles it.
+    assert!(
+        !store
+            .complete_idempotency_key(&a, &key, "c2", 202, b"{}")
+            .await
+            .unwrap()
+    );
+    assert!(!store.release_idempotency_key(&a, &key, "c3").await.unwrap());
+    let body = br#"{"message_id": "wamid.X", "contacts": []}"#;
+    assert!(
+        store
+            .complete_idempotency_key(&a, &key, "c1", 202, body)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        claim(&a, [1; 32], "c4", minute, hour).await,
+        IdempotencyClaim::Existing(IdempotencyRecord {
+            fingerprint: [1; 32],
+            state: IdempotencyState::Completed {
+                status: 202,
+                body: body.to_vec()
+            },
+        })
+    );
+    // Released: free again.
+    assert!(store.release_idempotency_key(&b, &key, "c3").await.unwrap());
+    assert_eq!(
+        claim(&b, [9; 32], "c5", minute, hour).await,
+        IdempotencyClaim::Claimed
+    );
+    // A lease that ran out: the outcome is unknown.
+    let leased = IdempotencyKey::parse("leased").unwrap();
+    assert_eq!(
+        store
+            .claim_idempotency_key(
+                &a,
+                &leased,
+                &[1; 32],
+                "c6",
+                StdDuration::from_millis(1),
+                hour
+            )
+            .await
+            .unwrap(),
+        IdempotencyClaim::Claimed
+    );
+    tokio::time::sleep(StdDuration::from_millis(50)).await;
+    assert_eq!(
+        store
+            .claim_idempotency_key(&a, &leased, &[1; 32], "c7", minute, hour)
+            .await
+            .unwrap(),
+        IdempotencyClaim::Existing(IdempotencyRecord {
+            fingerprint: [1; 32],
+            state: IdempotencyState::InProgress {
+                lease_expired: true
+            },
+        })
+    );
+    // An expired record is replaced, then purged when none replaces it.
+    let short = IdempotencyKey::parse("short").unwrap();
+    let old = IdempotencyKey::parse("old").unwrap();
+    for (k, c) in [(&short, "c8"), (&old, "c9")] {
+        store
+            .claim_idempotency_key(
+                &a,
+                k,
+                &[1; 32],
+                c,
+                StdDuration::from_millis(1),
+                StdDuration::from_millis(20),
+            )
+            .await
+            .unwrap();
+    }
+    assert!(
+        store
+            .complete_idempotency_key(&a, &short, "c8", 504, b"{}")
+            .await
+            .unwrap()
+    );
+    tokio::time::sleep(StdDuration::from_millis(60)).await;
+    assert_eq!(
+        store
+            .claim_idempotency_key(&a, &short, &[3; 32], "c10", minute, hour)
+            .await
+            .unwrap(),
+        IdempotencyClaim::Claimed
+    );
+    assert!(
+        store.purge_idempotency_keys().await.unwrap() >= 1,
+        "`old` expired"
+    );
+    assert_eq!(
+        store
+            .claim_idempotency_key(&a, &old, &[3; 32], "c11", minute, hour)
+            .await
+            .unwrap(),
+        IdempotencyClaim::Claimed
+    );
+    // Live records survive the purge.
+    assert_eq!(
+        claim(&a, [1; 32], "c12", minute, hour).await,
+        IdempotencyClaim::Existing(IdempotencyRecord {
+            fingerprint: [1; 32],
+            state: IdempotencyState::Completed {
+                status: 202,
+                body: body.to_vec()
+            },
+        })
+    );
+    // A deleted tenant's records go with it.
+    assert_eq!(
+        store.delete_tenant(&b).await.unwrap(),
+        DeleteTenantOutcome::Deleted
+    );
+    store.create_tenant(&b, "").await.unwrap().unwrap();
+    assert_eq!(
+        claim(&b, [7; 32], "c13", minute, hour).await,
+        IdempotencyClaim::Claimed
+    );
+}
+
 pub async fn run(store: &dyn Store) {
     store.ping().await.unwrap();
     tenants(store).await;
     keys(store).await;
     bindings(store).await;
+    idempotency(store).await;
 }
