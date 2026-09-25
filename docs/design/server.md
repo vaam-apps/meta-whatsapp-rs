@@ -393,7 +393,7 @@ a caller's generic error handling can never swallow `invalid`.
 | `…/tenants/{id}/keys[/{key_id}]`, `/v1/admin/platform-keys[/{key_id}]` | mint, list, revoke keys; platform keys with their allowed tenants |
 | `POST /v1/admin/tenants/{id}/wabas`; `GET /v1/admin/wabas/{waba_id}`; `DELETE /v1/admin/wabas/{waba_id}/binding` | attach an own WABA, verified with Meta and subscribed; which tenant holds a WABA, and its numbers; unbind (D4: token deleted too, [§3.4](#34-how-numbers-get-bound)) |
 | `POST /v1/admin/vault/rotate` | re-encrypt every WABA's token under the active key, walking `wa_server_wabas` (the vault cannot list itself), within the request deadline: a walk cut there answers `504 timeout` and is repeated (idempotent), and `meta-whatsapp-server vault rotate` has no deadline. It walks bound WABAs only, which holds every vault record in M1a; M3 keeps records past a binding (credit ledgers of offboarded WABAs, revocation markers), and the walk must cover those too (`TokenVault::rotate` on each such WABA, `rotate_business` on each marker) before an operator may drop an old key |
-| `GET /livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` | internal listener, no key; `version` reports server, meta-whatsapp-rs revision, Graph and API versions |
+| `GET /livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` | internal listener, no key; `version` reports server, meta-whatsapp-rs revision, Graph and API versions; `/v1/openapi.json` until M4, when the `.cstack` schema replaces it ([§8](#8-client-sdks)) |
 
 The public listener serves `GET|POST /webhooks/meta` and `GET /livez`,
 nothing else.
@@ -710,20 +710,52 @@ if the platform's privacy obligations require it. A legal and product call.
 
 Within `/v1`, changes are additive; a breaking change is `/v2`, served
 beside `/v1` for a deprecation period; webhook endpoints keep their
-`api_version`. The spec is committed (`crates/meta-whatsapp-server/openapi/v1.json`):
+`api_version`. Until M4 the spec is committed (`crates/meta-whatsapp-server/openapi/v1.json`):
 CI fails when the generated one differs, and `oasdiff` checks breaking
-changes against the last release. Image, spec `info.version` and the
-TypeScript client share one semver; `/v1/version` adds the meta-whatsapp-rs revision.
+changes against the last release. From M4 ([§8](#8-client-sdks)) the committed
+`.cstack` schema takes its place: CrateStack's check mode fails on a stale
+generated client, and `cratestack diff` checks breaking changes against the
+last release. Image, API contract (spec, then schema) and the TypeScript
+client share one semver; `/v1/version` adds the meta-whatsapp-rs revision.
 
 ## 8. Client SDKs
 
-Generate types, not a runtime: `openapi-typescript` turns the committed
-spec into types, `openapi-fetch` (a few kB, `fetch`, Node 20+) types calls
-by path and method; no Java toolchain, no generated classes to review. A
-thin hand-written layer adds the credential and `WA-Tenant` headers, an
-`Idempotency-Key` option, a `WaServerError` whose `code` is a union of the
-documented codes, an SSE reader that sends headers and resumes, and
-`verifyWebhook()`. It lives in `clients/typescript`, built and tested in CI.
+**From M4 the API layer is CrateStack** (the owner's schema-first framework,
+[cratestack/cratestack](https://github.com/cratestack/cratestack)), not
+OpenAPI (owner, 2026-09-25; D15–D18). M1 (M1a–M1c) is built on axum with a
+committed OpenAPI document; M4 moves it:
+
+- **Facade `cratestack-api`, procedures only** (`db = None`, D15): a
+  `.cstack` schema declares the service's procedures, types and enums;
+  the service keeps its own store, migrations, authorization order
+  ([§3.3](#33-authorization-order)) and memory storage for development.
+  Handlers written in M1 keep their logic in plain functions so they
+  become procedures without a rewrite.
+- **The contract is the `.cstack` schema** and the clients generated from
+  it (D18): TypeScript for Medusa and the CMS, Dart and Rust as needed; no
+  OpenAPI document. Routes outside CrateStack (`/webhooks/meta`, media
+  upload and download, SSE, health and metrics) are documented in the
+  guide and listed in a constant the tests read.
+- **Errors ([§5](#5-error-model)) go upstream** (D16): CrateStack's error
+  type gains domain errors (own `code`, status, `details` on the wire,
+  502/504/410/413) so the service's body survives the move. Until that
+  lands upstream, M4 cannot keep §5.
+- A thin hand-written layer over the generated TypeScript client adds the
+  credential and `WA-Tenant` headers, `Idempotency-Key`, a typed error
+  from the §5 body, an SSE reader that resumes, media, and
+  `verifyWebhook()`. It lives in `clients/typescript`; the consumer skills'
+  TypeScript is type-checked against it (replacing today's
+  openapi-typescript gate).
+
+What CrateStack 0.12 does not do today, found in a fit study
+(2026-09-25): domain error bodies; a 404 from `@authorize`; authenticating
+before the body is read; resource-shaped URLs (procedures are `POST
+/$procs/<name>`); idempotency with release-when-not-sent (§5.4 stays the
+service's own middleware); cursor pagination; resumable SSE; multipart
+and streamed media; per-procedure body limits. Also a bug: its generated
+clients ignore `@api_version` while its server honours it. Each is an
+upstream change in CrateStack (which requires REST, RPC, every client,
+docs and skills), or stays a custom route in the service.
 
 **Decision for owner (D11): publishing the client.** (a) Public npm under
 the organization's scope; (b) GitHub Packages (consumers need a token even
@@ -761,7 +793,7 @@ Tests use `ScriptedTransport` (method, path, token, exact JSON,
 | **M1** skeleton, auth, messages and templates, webhooks in | the crate, fail-closed configuration, both listeners, storage and migrations, tenants, keys, admin API and CLI bootstrap, admin attach, the authorization order, messages, media, templates (list, get, create, delete), `/webhooks/meta` into inbox and outbox, `GET /v1/events`, errors (L1), idempotency, rate limits, health, metrics, tracing, the committed spec | `docs/guides/server.md` (run, configure, tenants, keys, first send); a README section "Not writing Rust? Run the service"; L6; a `docs/coverage.md` row; skills `meta-whatsapp-rs-server` (hub for HTTP callers: deploy, credentials, errors, idempotency, routing) and `meta-whatsapp-rs-server-send` (messages, templates, media); the skills gate below |
 | **M2** inbox, live updates, webhooks out | inbox routes, SSE (`LISTEN/NOTIFY`, `Last-Event-ID`), `GET /v1/events/{id}`, webhook endpoints, dispatcher, retries, destination allow-list, the service's number events | `server.md` inbox and events; skill `meta-whatsapp-rs-server-inbox` (inbox API, relaying live events to the CMS's browsers, receiving and verifying webhooks-out) |
 | **M3** Embedded Signup in both modes, OTP | signup routes, persisted attempts, disconnection, coexistence sync, authentication templates, OTP and its per-tenant settings; needs L2 (and L3 for partner mode). Vault rotation extended to the records partner mode keeps past a binding (credit ledgers that outlive their token, revocation markers: the library's `rotate_business`), without which a rotation's empty `failed` no longer means the old key is unused | `server.md` onboarding and OTP, and its key rotation advice ("drop the old key once `failed` is empty", caveated since M1a) made true again; skills `meta-whatsapp-rs-server-onboarding` (the CMS connect flow through the service: page, relay, PIN, resume, both modes) and `meta-whatsapp-rs-server-otp` |
-| **M4** TypeScript client, Docker image, docs | `clients/typescript`, the image and its CI, a Compose file, the documents route, the deployment guide | `server.md` deployment (Docker, Compose, Kubernetes notes); a `docs/guides/README.md` row; skill `meta-whatsapp-rs-server-typescript` (install, calls, errors, idempotency, SSE, webhook verification in Medusa or any Node backend); `meta-whatsapp-rs-production` points to the service |
+| **M4** CrateStack, TypeScript client, Docker image, docs | the API layer moved onto `cratestack-api` procedures ([§8](#8-client-sdks); needs D16 upstream), `clients/typescript` generated by CrateStack, the image and its CI, a Compose file, the documents route, the deployment guide | `server.md` deployment (Docker, Compose, Kubernetes notes); a `docs/guides/README.md` row; skill `meta-whatsapp-rs-server-typescript` (install, calls, errors, idempotency, SSE, webhook verification in Medusa or any Node backend); `meta-whatsapp-rs-production` points to the service |
 
 **M1 ships in three parts**, each its own pull request: **M1a** the
 crate, configuration, listeners, storage and migrations, tenants, keys,
@@ -799,7 +831,7 @@ test fail.
 | M3.5 | OTP: every outcome; tenant A's code verifies at no other tenant on the same number (decisive: the namespace); logs hold neither code nor number; a sentinel in a scripted Graph error on issue reaches no response |
 | M4.1 | The image builds for both architectures, runs non-root on a read-only file system, has no shell; `meta-whatsapp-server healthcheck` works in it |
 | M4.2 | A Compose smoke test in CI (Postgres, the image, a Graph stub via `WA_GRAPH_ENDPOINT`): CLI admin key, tenant, attach, send, a signed Meta webhook, a webhooks-out delivery verified at a stub receiver |
-| M4.3 | The client is generated from the committed spec; `tsc --noEmit` passes on it and on every TypeScript excerpt of the server skills; a Node test verifies a real delivery with `verifyWebhook()`; a breaking change within `v1` fails the spec diff; the invoice fixture renders byte-identically |
+| M4.3 | The client is generated from the committed `.cstack` schema (CrateStack's check mode fails on drift); `tsc --noEmit` passes on it and on every TypeScript excerpt of the server skills; a Node test verifies a real delivery with `verifyWebhook()`; a breaking change within `v1` fails `cratestack diff` against the last release; the invoice fixture renders byte-identically |
 
 **The skills gate for HTTP callers (M1).** `crates/meta-whatsapp-rs/tests/skills.rs`
 assumes Rust (no TypeScript fences; backticked names must exist in
@@ -818,7 +850,7 @@ atomically and are checked against the same commit.
 
 ## 10. Decisions for the owner
 
-D1–D4 and D7 were decided by the owner on 2026-09-24 and D13–D14 on 2026-09-25 (the recommended option in each case); D5 is settled as "support both modes, chosen per deployment". The rest are open and are asked at the milestone that needs them.
+D1–D4 and D7 were decided by the owner on 2026-09-24, D13–D14 on 2026-09-25 (the recommended option in each case) and D15–D18 on 2026-09-25 (D17 against the recommendation to move before M1b); D5 is settled as "support both modes, chosen per deployment". The rest are open and are asked at the milestone that needs them.
 
 | # | Question | Options | Recommendation | Needed by |
 | --- | --- | --- | --- | --- |
@@ -836,6 +868,12 @@ D1–D4 and D7 were decided by the owner on 2026-09-24 and D13–D14 on 2026-09-
 | D12 | A Medusa plugin | none / now / after the first integration | after the first integration | after M4 |
 | D13 | Where the server skills live | this repository / a separate one | **Decided 2026-09-25: this repository** (under `skills/`, same stamp gate and `npx skills add vaam-apps/meta-whatsapp-rs`) | M1 |
 | D14 | Credit line after a merchant unshares (`PARTNER_REMOVED`) | revoke at once (Meta's recommendation) / revoke after a grace period when `disconnection_info` says the coexistence number may reconnect / operator decides | **Decided 2026-09-25: revoke at once** on every `PARTNER_REMOVED` for our solution, coexistence included; a merchant who reconnects re-onboards and is funded again only through the explicit re-share (`reshare_after_revocation`) | M3 |
+| D15 | API layer framework | OpenAPI (axum + utoipa) / CrateStack `cratestack-api` (procedures) / `cratestack-pg` (models + policies) / schema for clients only | **Decided 2026-09-25: CrateStack, `cratestack-api`, procedures only** | M4 |
+| D16 | The §5 error body under CrateStack | add domain errors to CrateStack upstream / rewrite layer in the service / two shapes / results instead of errors | **Decided 2026-09-25: upstream in CrateStack** | before M4 |
+| D17 | When to move to CrateStack | before M1b / finish M1 first, migrate at M4 | **Decided 2026-09-25: finish M1 on axum + OpenAPI, migrate at M4** | M1 |
+| D18 | Callers that do not use a generated client | generated clients only / an OpenAPI emitter upstream / a hand-kept OpenAPI document | **Decided 2026-09-25: generated clients only** (TypeScript, Dart, Rust) | M4 |
+| D19 | CrateStack transport | REST (JSON, `@status`, `POST /$procs/<name>`) / RPC (batching, subscriptions; CBOR by default in the TS client) | REST | M4 |
+| D20 | CrateStack's dependencies | allow BlueOak-1.0.0 (`minicbor`) in `deny.toml`; accept `ring` beside `aws-lc-rs` (explicit TLS provider at start); accept its `sqlx =0.9.0` pin / change them upstream first | — | M4 |
 
 **Inherited from [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md).** Until
 decided, the service keeps the library's behaviour and makes it visible to
