@@ -37,7 +37,9 @@ its keys: `meta-whatsapp-rs-server` first.
   slower than 15 s: `408`.
 - Busy (64 deliveries in flight, or another replica recording the same
   event): `503`, Meta retries. Already recorded: acknowledged, not
-  recorded again, errors included.
+  recorded again. Errors and bodies that are not webhooks carry no id:
+  the same body within an hour is a redelivery, after it a new event
+  (new `id`), since the same error can recur.
 - **Routed by ownership, as an allow-list**: an event about a business
   number goes to the tenant that number is bound to; one naming only a
   WABA (template reviews, account updates) to the WABA's tenant; and only
@@ -70,9 +72,11 @@ omit `after` only for the very first poll (the oldest event kept).
   return last !== undefined && last.sequence === data.next_after;
 ```
 
-- Each tenant has its own `sequence` (1, 2, 3… for its events alone).
-  `next_after` is the last event's when more may follow (poll again at
-  once), else the tenant's newest: save it even when `data` is empty.
+- Each tenant has its own `sequence`, increasing with gaps, for its
+  events alone (a tenant created again under a deleted one's id goes on
+  after the deleted one's last). `next_after` is the last event's when
+  more may follow (poll again at once), else the tenant's newest: save
+  it even when `data` is empty.
 - Handle, then save: after a crash in between the same events come
   again, so handlers skip an `id` they already handled.
 - `cursor_expired` (410): events after your cursor were purged, past
@@ -102,8 +106,9 @@ curl -sS "$WA_SERVER/v1/events?after=18342&limit=100" -H "Authorization: Bearer 
 
 `data` is meta-whatsapp-rs's event JSON: Meta's fields, normalized, the
 same for every tenant. Deduplicate on `id` (an event recorded again
-keeps it), order on `sequence`; make what you do per message idempotent
-on `data.message.id` too. Key a customer by their BSUID (the contact's
+keeps it, unless the operator rotated `WA_APP_SECRET` in between), order
+on `sequence`; make what you do per message idempotent on
+`data.message.id` too. Key a customer by their BSUID (the contact's
 user id): the phone number may be absent. New fields and types appear
 within v1: ignore what you do not know.
 

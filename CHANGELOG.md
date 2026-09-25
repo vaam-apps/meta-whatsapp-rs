@@ -134,23 +134,33 @@ volumes (Claude config, shell history, cargo caches) start empty
   and only if Meta dated it no earlier than that binding began: into the
   inbox (`InboxSink`), then into the outbox (`wa_server_events`,
   migration 3), idempotent on the event's key, so Meta's redeliveries
-  after a failure (`500`) record nothing twice, errors and bodies that
-  are not webhooks included (keyed by the signed body and their place in
-  it). Events of numbers or WABAs no tenant holds, events dated more than
-  7 days ago (replays), `unknown`, `unparsed`, `partner_solution_updated`
-  and any type the service has not reviewed are operator-only rows, never
-  shown to a tenant, logged by size and digest. `GET /v1/events` (scope
+  after a failure (`500`) record nothing twice. Errors and bodies that
+  are not webhooks, which the library gives no key, are keyed by the
+  signed body and their place in it and deduplicated for an hour only
+  (a coordinator's decision, reversible): the same body later is recorded
+  again, as a new event with its own id. On Postgres, the insert checks
+  the routing again under a lock on the binding: an event whose WABA
+  moved, or whose tenant was deleted, created again and bound again
+  after Meta dated the event, is operator-only (an undated one, such as
+  an error, goes to the tenant holding the binding then). Events of
+  numbers or WABAs no tenant holds, events dated more than 7 days ago
+  (replays), `unknown`, `unparsed`, `partner_solution_updated` and any
+  type the service has not reviewed are operator-only rows, never shown
+  to a tenant, logged by size and digest. `GET /v1/events` (scope
   `events`) answers the caller's tenant's events after `after` in the
   tenant's own sequence (`types`, `phone_number_id`, `limit`, pages of at
   most 8 MiB of data), `{data, next_after}`, `410 cursor_expired` past
   retention (`WA_SERVER_OUTBOX_RETENTION`, 7 days until the owner decides
-  D10) or after a tenant of the same id was deleted. An event's id is
-  derived from the event, so it keeps it when recorded again. Deleting a
-  tenant deletes its events and takes it out of every platform key's
-  allowed tenants. Event `data` is the library's `WebhookEvent` JSON,
-  pinned by snapshots over Meta's examples. Metrics for deliveries,
-  events by type and audience, duplicates and failures. Skill:
-  `meta-whatsapp-rs-server-events`.
+  D10) or after a tenant of the same id was deleted. Each tenant has its
+  own sequence (a coordinator's decision, reversible: design D21). An
+  event's id is derived from the event under a key derived from
+  `WA_APP_SECRET`, so it keeps it when recorded again, until that secret
+  is rotated. Deleting a tenant deletes its events (a coordinator's
+  decision touching the open retention decision D10: design D22) and
+  takes it out of every platform key's allowed tenants. Event `data` is
+  the library's `WebhookEvent` JSON, pinned by snapshots over Meta's
+  examples. Metrics for deliveries, events by type and audience,
+  duplicates and failures. Skill: `meta-whatsapp-rs-server-events`.
 - **meta-whatsapp-server, milestone M1a**: the HTTP service of
   docs/design/server.md, for apps not written in Rust
   (`crates/meta-whatsapp-server`, binary `meta-whatsapp-server`, not

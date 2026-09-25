@@ -145,10 +145,13 @@ impl<S: Send + Sync> FromRequestParts<S> for EventsQuery {
 #[schema(as = Event)]
 pub struct EventEnvelope {
     /// The event's id (`evt_…`): derived from the event, so the same event
-    /// keeps it wherever it is recorded again; deduplicate on it.
+    /// keeps it wherever it is recorded again (until the operator rotates
+    /// the Meta app secret it is derived with); deduplicate on it. An
+    /// error, or a body that is not a webhook, seen again over an hour
+    /// later is a new event, with a new id.
     pub id: String,
     /// Its position among the tenant's events (each tenant has its own
-    /// sequence): increasing, never reused; order on it.
+    /// sequence): increasing (with gaps), never reused; order on it.
     pub sequence: i64,
     /// Its type (`EventType`), the `event` tag of `data`.
     #[serde(rename = "type")]

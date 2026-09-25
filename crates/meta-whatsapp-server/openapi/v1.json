@@ -2478,7 +2478,7 @@
           },
           "id": {
             "type": "string",
-            "description": "The event's id (`evt_…`): derived from the event, so the same event\nkeeps it wherever it is recorded again; deduplicate on it."
+            "description": "The event's id (`evt_…`): derived from the event, so the same event\nkeeps it wherever it is recorded again (until the operator rotates\nthe Meta app secret it is derived with); deduplicate on it. An\nerror, or a body that is not a webhook, seen again over an hour\nlater is a new event, with a new id."
           },
           "phone_number_id": {
             "type": [
@@ -2495,7 +2495,7 @@
           "sequence": {
             "type": "integer",
             "format": "int64",
-            "description": "Its position among the tenant's events (each tenant has its own\nsequence): increasing, never reused; order on it."
+            "description": "Its position among the tenant's events (each tenant has its own\nsequence): increasing (with gaps), never reused; order on it."
           },
           "tenant_id": {
             "type": "string",

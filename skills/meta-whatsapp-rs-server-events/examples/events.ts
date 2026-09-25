@@ -44,9 +44,8 @@ export interface Cursor {
 }
 
 // One poll. Handle each event, then save next_after. Handlers must be
-// idempotent (skip an event id already handled: an event recorded again
-// keeps its id): after a crash between the two, the next poll returns the
-// same events. Returns whether more may follow at once (poll again without
+// idempotent (skip an event id already handled): after a crash between
+// the two, the next poll returns the same events, under the same ids. Returns whether more may follow at once (poll again without
 // waiting).
 export async function pollOnce(
   api: WhatsApp,

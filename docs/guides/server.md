@@ -301,9 +301,12 @@ tenant's deliveries: whoever holds it can forge any tenant's events.
   not attached.
 - `200` once every event is recorded; `500` when recording failed: Meta
   redelivers the batch, the events already recorded are acknowledged as
-  duplicates, and neither the inbox nor the outbox records one twice
-  (errors and bodies that are not webhooks, which carry no id, are told
-  apart by the body they came in and their place in it).
+  duplicates, and neither the inbox nor the outbox records one twice.
+  Errors and bodies that are not webhooks carry no id: they are told
+  apart by the body they came in and their place in it, for an hour. The
+  same body again after that hour is recorded again, as a new event with
+  its own id (the same error can legitimately recur; a redelivery that
+  late is recorded twice).
 
 **3. Poll the events** with a key holding the `events` scope:
 
@@ -316,8 +319,9 @@ curl -sS "http://127.0.0.1:8081/v1/events?after=18342&types=message_received,sta
 The answer is `{"data": [...], "next_after": 18350}`. Store `next_after`
 and pass it as `after` next time: it is the last event's `sequence` when
 more follow (poll again at once), else the tenant's newest sequence (wait
-a little). Each tenant has its own sequence: 1, 2, 3… for its events
-alone. Omitting `after` starts at the oldest event kept. Each event is an
+a little). Each tenant has its own sequence, increasing (with gaps)
+for its events alone; a tenant created again under a deleted tenant's id
+goes on after the deleted one's last sequence. Omitting `after` starts at the oldest event kept. Each event is an
 envelope:
 
 ```json
@@ -330,7 +334,8 @@ envelope:
 `data` is meta-whatsapp-rs's `WebhookEvent` JSON (Meta's fields,
 normalized; key customers by `contact.user_id`, the BSUID, since
 `wa_id` may be absent). Deduplicate on `id` (an event recorded again,
-Meta's late retry or a replay, keeps its id) and order on `sequence`;
+Meta's late retry or a replay, keeps its id, unless `WA_APP_SECRET` was
+rotated in between: ids are derived with it) and order on `sequence`;
 what your backend does per message (an order confirmation), make
 idempotent on the message id too (`data.message.id`), as a last guard.
 Filter with `types` (comma-separated, or repeated) and `phone_number_id`;
