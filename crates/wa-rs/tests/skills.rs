@@ -45,7 +45,8 @@
 //!   too, and every other mention of a stamp is a well-formed one.
 //!
 //! The stamp's commit (`Verified against wa-rs <sha>`) must be in HEAD's
-//! history (an ancestor, or listed as `Squashed-commit:` by a squash merge):
+//! history (an ancestor, or listed as `Squashed-commit:` by a squash commit
+//! on main):
 //! that needs git, so `just skills-check` checks it.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]

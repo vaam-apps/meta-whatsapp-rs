@@ -120,18 +120,25 @@ Say in the PR description what happened to each, with a link or
 
 ## Merging
 
-Pull requests are **squash-merged** (from #6 on; #1, #2, #4 and #5 were
-merge commits). A squash replaces the branch's commits with one, so:
+Pull requests are **squash-merged** (every PR merged after PR #5, from
+2026-09-25; PRs #1, #2, #4 and #5 were merge commits). Merge commits and
+rebase merges are not used: a rebase rewrites every commit and lists none.
+A squash replaces the branch's commits with one, so:
 
 - In the CHANGELOG, docs, `OPEN_QUESTIONS.md` and code comments, cite a
-  pull request (`#12`) or a commit already on `main`, never a commit of the
-  branch under review: it will not exist on `main`.
+  pull request as "PR #12" (a bare `#N` is an open question's number) or a
+  commit already on `main`, never a commit of the branch under review: it
+  will not exist on `main`.
 - Skill stamps may name the branch's last code commit, as before. The
-  squash commit's body must then list every branch commit, one
-  `Squashed-commit: <full sha>` line each, which `just squash-trailers
-  <base> <head>` prints; `just skills-check` accepts a stamp listed there.
-  For example:
+  squash commit's body must then list every commit of the PR, one
+  `Squashed-commit: <full sha>` line each, which `just squash-body <pr>`
+  prints (from GitHub's list of the PR's commits, with their
+  `Co-authored-by:` lines); `just skills-check` accepts a stamp that a
+  squash commit **on main** lists. Merge only the head you reviewed:
 
   ```bash
-  gh pr merge 12 --squash --body "$(just squash-trailers origin/main origin/feat/x)"
+  head=$(gh pr view 12 --json headRefOid --jq .headRefOid)
+  gh pr merge 12 --squash --match-head-commit "$head" --body "$(just squash-body 12)"
   ```
+
+  A PR's own CI cannot prove this step: main's CI after the merge does.
