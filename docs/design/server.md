@@ -773,7 +773,7 @@ atomically and are checked against the same commit.
 
 ## 10. Decisions for the owner
 
-D1–D4 and D7 were decided by the owner on 2026-09-24 (the recommended option in each case); D5 is settled as "support both modes, chosen per deployment". The rest are open and are asked at the milestone that needs them.
+D1–D4 and D7 were decided by the owner on 2026-09-24 and D13–D14 on 2026-09-25 (the recommended option in each case); D5 is settled as "support both modes, chosen per deployment". The rest are open and are asked at the milestone that needs them.
 
 | # | Question | Options | Recommendation | Needed by |
 | --- | --- | --- | --- | --- |
@@ -789,8 +789,8 @@ D1–D4 and D7 were decided by the owner on 2026-09-24 (the recommended option i
 | D10 | Retention and erasure of customers' messages | keep / purge after N days; erasure or not | configurable, keep by default; erasure if required (L5) | M2 |
 | D11 | Publishing the TypeScript client | npm / GitHub Packages / vendored | public npm | M4 |
 | D12 | A Medusa plugin | none / now / after the first integration | after the first integration | after M4 |
-| D13 | Where the server skills live | this repository / a separate one | this repository | M1 |
-| D14 | Credit line after a merchant unshares (`PARTNER_REMOVED`) | revoke at once (Meta's recommendation) / revoke after a grace period when `disconnection_info` says the coexistence number may reconnect / operator decides | revoke at once; a reconnect needs an explicit re-share. Revocation is per business, so it also stops funding that business's other WABAs | M3 |
+| D13 | Where the server skills live | this repository / a separate one | **Decided 2026-09-25: this repository** (under `skills/`, same stamp gate and `npx skills add vaam-apps/wa-rs`) | M1 |
+| D14 | Credit line after a merchant unshares (`PARTNER_REMOVED`) | revoke at once (Meta's recommendation) / revoke after a grace period when `disconnection_info` says the coexistence number may reconnect / operator decides | **Decided 2026-09-25: revoke at once** on every `PARTNER_REMOVED` for our solution, coexistence included; a merchant who reconnects re-onboards and is funded again only through the explicit re-share (`reshare_after_revocation`) | M3 |
 
 **Inherited from [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md).** Until
 decided, the service keeps the library's behaviour and makes it visible to
