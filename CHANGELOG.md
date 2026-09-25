@@ -165,6 +165,12 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   characters, and `ClearedShare`'s `Debug` redacts it. It needs a
   merchant token that still works, which after `PARTNER_REMOVED` it may
   not; a merchant who connects again stores a new one.
+  **Upgrading:** a revision older than this one drops the trail whenever
+  it writes a WABA's credit record, so rolling back (or running an older
+  revision beside this one) loses audit entries; keep your own
+  append-only log of each returned `ClearedShare` as well. From this
+  revision on, fields a later revision adds to a credit record or to an
+  audit entry are kept when this one writes it.
 - **`EmbeddedSignup::onboard_with_approval`** (and
   `resume_with_approval`): your check of the verified WABA, owner business
   and numbers (`VerifiedOnboarding`) runs after `verify_assets` and before

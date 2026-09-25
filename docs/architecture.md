@@ -487,7 +487,10 @@ cannot be taken back, so the design is fail-closed:
 - **The credit ledger** (`TokenVault::credit`, `revoked_business`):
   `credit/<WABA>` holds the owner, the allocation, the currency, the
   approval, the pending-share flag and the operator clearances
-  (`cleared_shares`), written by compare-and-swap;
+  (`cleared_shares`), written by compare-and-swap, with fields a later
+  revision adds (to the record or to an audit entry) kept as read so a
+  rollback does not drop them (a revision older than the trail drops
+  the trail itself; integrators keep their own append-only log);
   `revoked/<BUSINESS>` marks a revoked business; both sealed with the
   vault keys (AAD bound to the store key), re-sealed on read like tokens,
   and left by `TokenVault::delete`, so revocation works after the token

@@ -264,6 +264,13 @@ notification queue on top must be idempotent itself: tag each message with
     whitespace, control or format characters (`Error::Config`); fixing
     it changes the store keys, so codes in flight answer `NotFound` once
     and limits restart ([otp-login.md](otp-login.md#3-wire-the-service)).
+  - The revision that adds `EmbeddedSignup::clear_pending_share` adds an
+    audit trail to each WABA's credit record (`cleared_shares`). An older
+    revision knows nothing of it: rolling back, or running an older
+    revision beside a newer one, drops the trail whenever the older one
+    writes that record. From that revision on, fields a later revision
+    adds to a credit record or an audit entry are kept. Keep your own
+    append-only log of each returned `ClearedShare` too.
   - Nothing is back-filled: rows and conversation summaries recorded
     before an upgrade stay as they were written (synced history recorded
     before 6d50701 keeps the unread count and window it moved, for

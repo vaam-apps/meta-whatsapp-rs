@@ -102,7 +102,31 @@ pub struct StoredCredit {
     /// oldest first: who, when, and what Meta showed then. Sealed with the
     /// rest of the record, and never counted as a share
     /// ([`Self::records_a_share`]).
+    ///
+    /// Not an audit log on its own: a wa-rs revision older than this field
+    /// (a rollback, or two revisions running side by side) drops the trail
+    /// whenever it writes the record, and anyone with write access to the
+    /// store can put back an older sealed copy. Also append each returned
+    /// [`ClearedShare`] to your own append-only audit log. From this
+    /// revision on, fields a later revision adds are kept when this one
+    /// writes the record.
     pub cleared_shares: Vec<ClearedShare>,
+    /// Fields of the record this revision does not know, written by a later
+    /// one: kept and written back as they are.
+    unknown: UnknownFields,
+}
+
+/// Fields of a credit record this revision does not know (a later
+/// revision's): kept as they are and written back with the record, so a
+/// rollback or two revisions running side by side do not drop them. Only
+/// their names are shown by `Debug`.
+#[derive(Clone, Default, PartialEq, Eq)]
+struct UnknownFields(serde_json::Map<String, serde_json::Value>);
+
+impl fmt::Debug for UnknownFields {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_set().entries(self.0.keys()).finish()
+    }
 }
 
 /// One pending share an operator cleared: the audit entry
@@ -129,6 +153,25 @@ pub struct ClearedShare {
     /// this id as not your line (`acknowledged_funding`), or nothing would
     /// have been cleared.
     pub primary_funding_id: Option<FundingId>,
+    /// Fields of the entry a later revision added: kept as read.
+    unknown: UnknownFields,
+}
+
+impl ClearedShare {
+    pub(super) fn new(
+        pending_since: OffsetDateTime,
+        cleared_at: OffsetDateTime,
+        cleared_by: String,
+        primary_funding_id: Option<FundingId>,
+    ) -> Self {
+        Self {
+            pending_since,
+            cleared_at,
+            cleared_by,
+            primary_funding_id,
+            unknown: UnknownFields::default(),
+        }
+    }
 }
 
 impl fmt::Debug for ClearedShare {
@@ -138,6 +181,7 @@ impl fmt::Debug for ClearedShare {
             .field("cleared_at", &self.cleared_at)
             .field("cleared_by", &"<redacted>")
             .field("primary_funding_id", &self.primary_funding_id)
+            .field("unknown", &self.unknown)
             .finish()
     }
 }
@@ -154,6 +198,7 @@ impl StoredCredit {
             approved_token_created_at: None,
             pending_share: None,
             cleared_shares: Vec::new(),
+            unknown: UnknownFields::default(),
         }
     }
 
@@ -210,17 +255,31 @@ struct CreditPlain {
     /// revisions before it): an empty trail.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     cleared_shares: Vec<ClearedPlain>,
+    /// Every other field, from a later revision: written back as read.
+    #[serde(flatten)]
+    unknown: serde_json::Map<String, serde_json::Value>,
 }
 
+/// An audit entry as sealed. Every field has a default, so an entry a
+/// later revision shaped differently never makes the whole credit record
+/// unreadable (which revocation and `offboard` would treat as a share).
 #[derive(Serialize, Deserialize)]
 struct ClearedPlain {
-    #[serde(with = "time::serde::timestamp")]
+    #[serde(default = "epoch", with = "time::serde::timestamp")]
     pending_since: OffsetDateTime,
-    #[serde(with = "time::serde::timestamp")]
+    #[serde(default = "epoch", with = "time::serde::timestamp")]
     cleared_at: OffsetDateTime,
+    #[serde(default)]
     cleared_by: String,
     #[serde(default)]
     primary_funding_id: Option<FundingId>,
+    /// Every other field, from a later revision: written back as read.
+    #[serde(flatten)]
+    unknown: serde_json::Map<String, serde_json::Value>,
+}
+
+fn epoch() -> OffsetDateTime {
+    OffsetDateTime::UNIX_EPOCH
 }
 
 impl CreditPlain {
@@ -242,8 +301,10 @@ impl CreditPlain {
                     cleared_at: c.cleared_at,
                     cleared_by: c.cleared_by.clone(),
                     primary_funding_id: c.primary_funding_id.clone(),
+                    unknown: c.unknown.0.clone(),
                 })
                 .collect(),
+            unknown: credit.unknown.0.clone(),
         }
     }
 
@@ -265,8 +326,10 @@ impl CreditPlain {
                     cleared_at: c.cleared_at,
                     cleared_by: c.cleared_by,
                     primary_funding_id: c.primary_funding_id,
+                    unknown: UnknownFields(c.unknown),
                 })
                 .collect(),
+            unknown: UnknownFields(self.unknown),
         }
     }
 }
@@ -939,6 +1002,52 @@ mod tests {
         );
     }
 
+    /// A field a later revision adds survives this revision's writes, and
+    /// an audit entry shaped differently never makes the record unreadable.
+    #[tokio::test]
+    async fn a_later_revisions_fields_survive_this_ones_writes() {
+        let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
+        let v = vault(&kv, VaultKeys::new(key("k1", 7)));
+        let k = credit_key(&WabaId::new("W1"));
+        let later = br#"{"waba_id":"W1","business_id":"B1","pending_share":1790251200,
+            "cleared_shares":[{"cleared_by":"op_1","reviewed_by":"op_2"}],
+            "later_field":{"kept":["as", "is"]},"secret_note":"not for Debug"}"#;
+        put(
+            &kv,
+            "credit/W1",
+            encode_json(&k, &v.seal_blob(&k, later).unwrap()).unwrap(),
+        )
+        .await;
+        let read = v.credit(&WabaId::new("W1")).await.unwrap().unwrap();
+        assert_eq!(read.pending_share, Some(datetime!(2026-09-24 12:00 UTC)));
+        let entry = &read.cleared_shares[0];
+        assert_eq!(entry.cleared_by, "op_1");
+        assert_eq!(
+            entry.cleared_at,
+            OffsetDateTime::UNIX_EPOCH,
+            "a missing time"
+        );
+        let shown = format!("{read:?}");
+        assert!(shown.contains("later_field"), "{shown}");
+        assert!(!shown.contains("not for Debug"), "names only: {shown}");
+
+        // This revision writes the record: the later field is still there.
+        v.record_approval(&WabaId::new("W1"), None).await.unwrap();
+        let stored = kv.get(&k).await.unwrap().unwrap();
+        let blob: SealedBlob = decode_json(&k, &stored).unwrap();
+        let plain: serde_json::Value =
+            serde_json::from_slice(&v.open_blob(&k, &blob).unwrap()).unwrap();
+        assert_eq!(
+            plain["later_field"],
+            serde_json::json!({"kept": ["as", "is"]})
+        );
+        assert_eq!(plain["secret_note"], "not for Debug");
+        assert!(plain["approved_at"].is_i64(), "and the write happened");
+        assert_eq!(plain["cleared_shares"][0]["reviewed_by"], "op_2");
+        let again = v.credit(&WabaId::new("W1")).await.unwrap().unwrap();
+        assert_eq!(again.cleared_shares, read.cleared_shares);
+    }
+
     /// An operator's clearance: only at the version read, appended to the
     /// trail, and a record written before the trail existed opens with an
     /// empty one.
@@ -963,11 +1072,13 @@ mod tests {
         assert_eq!(read.pending_share, Some(datetime!(2026-09-24 12:00 UTC)));
         assert!(read.cleared_shares.is_empty());
 
-        let entry = |by: &str| ClearedShare {
-            pending_since: datetime!(2026-09-24 12:00 UTC),
-            cleared_at: datetime!(2026-09-24 13:00 UTC),
-            cleared_by: by.to_owned(),
-            primary_funding_id: Some(FundingId::new("F1")),
+        let entry = |by: &str| {
+            ClearedShare::new(
+                datetime!(2026-09-24 12:00 UTC),
+                datetime!(2026-09-24 13:00 UTC),
+                by.to_owned(),
+                Some(FundingId::new("F1")),
+            )
         };
         let cleared = v
             .clear_pending_share(&read, version, entry("first"))

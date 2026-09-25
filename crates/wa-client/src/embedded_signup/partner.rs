@@ -737,12 +737,12 @@ impl EmbeddedSignup {
         // Nothing may be live: clear, if no share took the lease meanwhile
         // (the compare-and-swap below also refuses a record written since).
         renew_clearance(vault, waba_id, lease).await?;
-        let cleared = ClearedShare {
+        let cleared = ClearedShare::new(
             pending_since,
-            cleared_at: vault.now(),
-            cleared_by: cleared_by.to_owned(),
-            primary_funding_id: funding.primary_funding_id,
-        };
+            vault.now(),
+            cleared_by.to_owned(),
+            funding.primary_funding_id,
+        );
         vault
             .clear_pending_share(&credit, version, cleared.clone())
             .await?;
@@ -5522,12 +5522,12 @@ mod tests {
             h.es.clear_pending_share(&waba(), "  ops@wind-and-wool.example ", None, &h.vault)
                 .await
                 .unwrap();
-        let entry = ClearedShare {
-            pending_since: datetime!(2026-09-24 12:00 UTC),
-            cleared_at: datetime!(2026-09-24 13:00 UTC),
-            cleared_by: "ops@wind-and-wool.example".into(),
-            primary_funding_id: None,
-        };
+        let entry = ClearedShare::new(
+            datetime!(2026-09-24 12:00 UTC),
+            datetime!(2026-09-24 13:00 UTC),
+            "ops@wind-and-wool.example".into(),
+            None,
+        );
         assert_eq!(out, PendingShareClearance::Cleared(entry.clone()));
         let checked = &h.t.requests()[before..];
         assert_eq!(checked.len(), 2, "{checked:?}");
