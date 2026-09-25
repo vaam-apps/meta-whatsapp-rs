@@ -5,7 +5,7 @@ description: "Choosing and running wa-rs storage - the KvStore (token vault, OTP
 
 # wa-rs-storage
 
-> **Verified against wa-rs 0a53954259d1f592b7b8c6a75c2dcca392ae131f (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against wa-rs 3e9dd15a9a219efc7ff87c26ce616243833014bd (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/stores.rs](examples/stores.rs), compiled by
 wa-rs's own gate; its tests run the conformance suites on the memory
@@ -60,16 +60,13 @@ separate from yours. Another prefix (two deployments, one schema):
 Message content keeps U+0000: `wa_messages.kind_utf8`, `text_utf8` and
 `wa_conversations.last_text_utf8` are `BYTEA` (UTF-8), `payload_json`
 and `error_json` are `json`. Your own SQL decodes the `*_utf8` columns as
-UTF-8, searches the bytes (a recipe is in the `postgres` module docs),
-and never indexes or extracts payload fields (`->`, `->>`, a cast to
-`jsonb` all fail on a document holding a NUL, so an index on one fails
-the insert). Upgrading
-a database written before that: stop the older writers, drop your own
-views, rules and GIN indexes on those columns (they fail the migration,
-which then changes nothing), then let the new revision's `migrate`
-convert the columns (one locked rewrite; old rows keep their content, a
-stored U+FFFD stays one); an older instance left running fails on every
-content statement and cannot migrate back.
+UTF-8 and searches the bytes (a recipe is in the `postgres` module docs);
+it never indexes, extracts or compares payload fields (`->`, `->>`, a
+cast to `jsonb` fail on a document holding a NUL, so an index on one
+fails the insert; `json` has no `=`). Upgrading a database written before
+that is one-way: back up, stop the older writers, drop your own objects
+on those columns, run `migrate` once from a job, in that order
+([references/lossless-upgrade.md](references/lossless-upgrade.md)).
 
 ## Redis
 
@@ -124,7 +121,7 @@ holding U+0000 may be refused, never stored as another key.
 which added `append_synced`, `fill_media_placeholder` and `revoke`.
 ~~A tombstone is part of the summary; a revoked placeholder may be
 filled~~: until af5b1f8 (2026-09-25). ~~Content may lose U+0000~~:
-until the owner decided open question 18 (2026-09-25).
+until the pull request that made U+0000 lossless (PR #TBD, 2026-09-25).
 
 ## Pitfalls
 

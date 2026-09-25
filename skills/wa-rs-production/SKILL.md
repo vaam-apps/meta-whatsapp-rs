@@ -5,7 +5,7 @@ description: "Running wa-rs in production - the secrets (system user token, app 
 
 # wa-rs-production
 
-> **Verified against wa-rs 0a53954259d1f592b7b8c6a75c2dcca392ae131f (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against wa-rs 3e9dd15a9a219efc7ff87c26ce616243833014bd (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/production.rs](examples/production.rs),
 compiled and tested by wa-rs's own gate. Longer walkthrough:
@@ -129,15 +129,15 @@ timeouts longer than your slowest sink.
   answer `Invalid` once; 8238853 and 7e4801f refuse a namespace with edge
   whitespace, control or format characters at `OtpService::new`, and
   fixing it restarts codes and limits (`wa-rs-otp-login`). Lossless
-  message content (open question 18, decided 2026-09-25) is Postgres
-  migration 3: stop the older instances that write to the inbox tables
-  before the new revision runs `migrate`, which converts the content
-  columns in one locked rewrite (plan for it on a large history); an
-  older instance left running fails on every content statement (500s
-  Meta redelivers, replies sent but not recorded) and cannot migrate
-  back, so a rollback is a restore (`wa-rs-storage`). Upgrades
-  back-fill nothing: rows and summaries recorded before stay as written
-  (a U+FFFD an older revision stored for a NUL stays one).
+  message content (PR #TBD, 2026-09-25) is Postgres migration 3, one-way:
+  back up first (a rollback is a restore, losing what was recorded
+  since), stop the older instances that write to the inbox tables, drop
+  your own objects on the content columns, run `migrate` once from a job
+  with a lock timeout, then start (steps: `wa-rs-storage`). An older
+  instance left running fails on every content statement (500s Meta
+  redelivers, replies sent but not recorded). Upgrades back-fill
+  nothing: rows and summaries recorded before stay as written (a U+FFFD
+  an older revision stored for a NUL stays one).
 
 ## What wa-rs does not do
 
@@ -148,8 +148,9 @@ message keeping its content in the inbox (38). No metrics exporter, no
 health endpoint, no
 secret manager integration. ~~Whether the OTP namespace becomes
 required~~: decided in d67b3ac (2026-09-24), it is (`wa-rs-otp-login`).
-~~The provisional U+0000 replacement~~: decided by the owner
-(2026-09-25), message content keeps it (`wa-rs-storage`).
+~~The provisional U+0000 replacement~~: until the pull request that
+made U+0000 lossless (PR #TBD, 2026-09-25); message content keeps it
+(`wa-rs-storage`).
 
 ## Related skills
 

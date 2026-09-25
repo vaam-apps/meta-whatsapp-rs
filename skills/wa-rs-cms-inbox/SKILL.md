@@ -5,7 +5,7 @@ description: "The merchant-to-customer chat inbox of a multi-tenant CMS built on
 
 # wa-rs-cms-inbox
 
-> **Verified against wa-rs 0a53954259d1f592b7b8c6a75c2dcca392ae131f (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against wa-rs 3e9dd15a9a219efc7ff87c26ce616243833014bd (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/inbox.rs](examples/inbox.rs), compiled and
 tested by wa-rs's own gate. The full server (webhook endpoint, SSE,
@@ -128,7 +128,7 @@ go to `+<digits>`; a contact with a `.` is a BSUID. The rules are public:
 - **U+0000 is content**: `InboxSink` and `Inbox::send` record it
   exactly and the Postgres store keeps it, so render or strip it in your
   UI; your own SQL on those columns follows `wa-rs-storage`, as does a
-  store of your own. Meta-assigned ids refuse it.
+  store of your own. The Postgres store refuses it in Meta-assigned ids.
 
 ~~`update_status` matched on the message id alone~~: until 4b47bf7.
 ~~A `wa_id` conversation replied without `+`~~: until 2b2679a (on an
@@ -138,9 +138,9 @@ window, is unread, keeps its placeholders~~: until 6d50701. ~~A revoke
 deletes any message of its number; one before its message is lost~~:
 until a9593f3 (all 2026-09-24). ~~A tombstone moves the summary; a
 revoked placeholder is filled~~: until af5b1f8 (2026-09-25). ~~U+0000
-becomes U+FFFD~~: until open question 18 was decided (2026-09-25).
-4b47bf7, 6d50701, a9593f3, af5b1f8 and that decision change the
-`ConversationStore` contract.
+becomes U+FFFD~~: until the pull request that made U+0000 lossless
+(PR #TBD, 2026-09-25). 4b47bf7, 6d50701, a9593f3, af5b1f8 and that pull
+request change the `ConversationStore` contract.
 
 ## What wa-rs does not do
 
