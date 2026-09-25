@@ -121,24 +121,6 @@ of its own, after an HTML comment; keep that when you add one.
 
 ## Storage
 
-18. **Postgres and U+0000 — provisional; confirm or reverse.** Postgres
-    cannot store the NUL character in `TEXT` or `JSONB`. This entry listed
-    the choice (lossy replacement, or `bytea`) as a maintainer decision; it
-    was taken without asking, provisionally, by the orchestrator of the
-    security remediation (fd4667e), because one NUL in a customer's
-    message otherwise failed its whole webhook batch on every retry for 7
-    days, until Meta dropped it with every other event in it. Today
-    `InboxSink` and `Inbox::send` replace U+0000 with U+FFFD in the content
-    they record (kind, text, payload strings and object keys, status
-    error). That is lossy: a NUL and a U+FFFD read the same afterwards,
-    and two JSON keys differing only by it collapse into one. Not covered:
-    Meta-assigned fields the inbox stores as sent (the message id, the
-    contact — a BSUID, `wa_id` or group id — and the business phone number
-    id); a NUL there is still refused by Postgres, and the Postgres stores
-    refuse U+0000 in anything handed to them directly (memory and Redis
-    accept it). To decide: keep the replacement, make it the integrator's
-    choice, or store payloads losslessly (`bytea` or escaped, a schema
-    change) and revert fd4667e.
 19. **Redis TLS.** `rediss://` is not wired (redis-rs + rustls + two crypto
     providers panics); integrators pass their own connection. Wire it in
     once the crypto provider question is settled workspace-wide.
@@ -236,11 +218,11 @@ Found by the security review of 8ee6fab.
     fails, `WebhookHandler` answers 500 and Meta redelivers the whole POST
     (every event in it, possibly for several WABAs) for up to 7 days, then
     drops it. An event a sink fails on every time therefore holds back the
-    events after it in the same body until all are lost. (For the inbox's
-    most likely case, U+0000 in a customer's message on Postgres, fd4667e
-    replaces the character instead, provisionally, #18; a NUL in a
-    Meta-assigned id, or any other permanent sink failure, still does
-    this.) A dead-letter
+    events after it in the same body until all are lost. (The inbox's
+    most likely case, U+0000 in a customer's message on Postgres, no
+    longer fails: message content keeps it since the owner decided the
+    former #18; a NUL in a Meta-assigned id, or any other permanent sink
+    failure, still does this.) A dead-letter
     design would classify sink errors as transient or permanent,
     acknowledge a permanent one after writing the event (raw, size-bounded)
     to a dead-letter store with an alert and a replay path, and deliver the

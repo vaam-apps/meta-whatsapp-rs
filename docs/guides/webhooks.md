@@ -168,7 +168,8 @@ let sink = FanoutSink::new()
 - **A sink error that can never succeed** holds back its batch: Meta
   redelivers the whole body (the events after the failing one too) for 7
   days, then drops it. Keep permanent failures out of the sink path
-  (`InboxSink` stores U+0000 as U+FFFD for that reason); a dead-letter design
+  (`InboxSink` records content exactly, and the stores keep it, U+0000
+  included, for that reason); a dead-letter design
   is an [open question](../../OPEN_QUESTIONS.md#webhooks-and-live-updates) (30).
 - **At least once.** The dedup guard removes Meta's retries, but a sink call
   that outlasts the lease, or a batch redelivered after one fanned-out sink

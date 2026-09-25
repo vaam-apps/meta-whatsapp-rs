@@ -58,17 +58,31 @@ let conversations: Arc<dyn ConversationStore> = Arc::new(PostgresConversationSto
   server's** clock: keep it on NTP.
 - Call `PostgresKvStore::purge_expired()` periodically (dedup markers add a
   row per event).
-- **Postgres cannot store U+0000**, and a refusal on every retry would hold
-  back the whole webhook batch until Meta drops it. So `InboxSink` (and
-  `Inbox::send`, for your replies) replaces U+0000 with U+FFFD, the
-  replacement character, in the stored text, kind, payload and status
-  error: a customer's NUL shows up as `�` instead of failing the delivery.
-  The replacement is lossy and provisional (a maintainer decision, taken
-  without asking; it may be reversed:
-  [open question](../../OPEN_QUESTIONS.md#storage) 18). Meta-assigned
-  fields (the message id, the contact, the phone number id) are stored as
-  sent, so a NUL there is still refused, as is NUL in anything you write
-  to the store directly.
+- **Message content keeps U+0000.** `InboxSink` (and `Inbox::send`, for
+  your replies) records the text, kind, payload and status error exactly
+  as sent, and the Postgres store keeps them: `kind_utf8`, `text_utf8`
+  and `wa_conversations.last_text_utf8` are `BYTEA` (the UTF-8 bytes),
+  `payload_json` and `error_json` are `json`. Your UI gets the NUL back:
+  render or strip it there. If you query these tables yourself, decode the
+  `*_utf8` columns as UTF-8 in your application, search on bytes
+  (`position(convert_to($1, 'UTF8') IN text_utf8) > 0`; `convert_from`
+  fails on a row holding a NUL), and never index or extract payload
+  fields in SQL: `->`, `->>` and a cast to `jsonb` fail on a document
+  holding a NUL anywhere, and an index on one would fail the insert, and
+  the webhook with it. Meta-assigned ids (the message id, the contact,
+  the phone number id) stay `TEXT`: a NUL there is refused (Meta never
+  assigns one; a history item with one is skipped).
+- **Upgrading a database written before lossless content**: stop the
+  older instances that write to the inbox tables before the new revision
+  runs `migrate`, and drop views, rules and GIN indexes of your own on
+  `kind`, `text`, `payload`, `error` or `last_text` (they make it fail,
+  changing nothing). Its migration 3 converts the content columns in
+  place, in one transaction that locks both tables, and existing rows
+  keep their content: a NUL an older revision stored as U+FFFD stays
+  U+FFFD. An older instance left running fails on every content
+  statement (renamed columns) instead of writing anything: its webhooks
+  are redelivered by Meta, but a reply it sends is not recorded
+  ([production.md](production.md#7-before-going-live)).
 - A message id is stored once per store: if the same id ever arrives on two
   of your business numbers (e.g. a group both are in), it is kept only under
   the first conversation that recorded it

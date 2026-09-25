@@ -29,7 +29,7 @@ Everything stateful sits on two ports. The typed stores are built on
 | survives restarts, shared by instances | no | yes | yes, with persistence on |
 | expiry clock | the process | the database server | the Redis server |
 | maintenance | — | `migrate` at startup; `purge_expired()` every few minutes to hourly | eviction policy `noeviction`, on an instance of its own |
-| limits | one instance | refuses U+0000 in stored text (the inbox stores it as U+FFFD) | no built-in TLS |
+| limits | one instance | refuses U+0000 in ids and keys (message content keeps it, as bytes and `json`: search on bytes, no payload indexes) | no built-in TLS |
 
 Postgres alone covers everything and is the simplest choice. Put the vault
 on Redis only with persistence (AOF or RDB): a Redis that forgets on
@@ -231,10 +231,10 @@ notification queue on top must be idempotent itself: tag each message with
 - Webhook fields subscribed; alerts wired ([webhooks.md](webhooks.md#8-operational-alerts)).
 - Secrets from the secret manager, none in the repository or the database.
 - [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) read: several defaults there
-  (OTP issue limit, PIN policy, the provisional NUL replacement, a
-  dead-letter path for webhook batches, token refresh, a revoked message
-  keeping its content in the inbox: #38) are product decisions still
-  open. The OTP namespace is required since d67b3ac.
+  (OTP issue limit, PIN policy, a dead-letter path for webhook batches,
+  token refresh, a revoked message keeping its content in the inbox:
+  #38) are product decisions still open. The OTP namespace is required
+  since d67b3ac.
 - Upgrading from an older wa-rs revision, per commit crossed:
   - e40b86f: outstanding OTP codes become `NotFound` once (their store
     keys now include the sending number), and issue limits restart
@@ -254,6 +254,23 @@ notification queue on top must be idempotent itself: tag each message with
     whitespace, control or format characters (`Error::Config`); fixing
     it changes the store keys, so codes in flight answer `NotFound` once
     and limits restart ([otp-login.md](otp-login.md#3-wire-the-service)).
+  - The lossless-content change (`OPEN_QUESTIONS.md` #18, decided by the
+    owner on 2026-09-25): **stop every instance of the older revision
+    that writes to the inbox tables** (webhook receivers, anything calling
+    `Inbox::send`) and drop your own views, rules and GIN indexes on the
+    content columns (they make the migration fail, changing nothing),
+    then start the new one. Its `migrate` (migration 3) converts the
+    content columns of `wa_messages` and `wa_conversations` to `BYTEA`
+    and `json` under new names, in one transaction that locks both
+    tables for one rewrite of each: plan for it on a large history. Existing rows keep their content; a NUL an
+    older revision stored as U+FFFD stays U+FFFD. An older instance left
+    running fails on every content statement (500s Meta redelivers, a
+    reply sent but not recorded) and its `migrate` refuses the upgraded
+    database, so a rollback is a restore. SQL of your own on those
+    columns needs the rules in
+    [cms-inbox.md](cms-inbox.md#1-storage-postgres-and-migrations); a
+    custom store must now keep content, U+0000 included, exactly (the
+    conformance suites say so).
   - Nothing is back-filled: rows and conversation summaries recorded
     before an upgrade stay as they were written (synced history recorded
     before 6d50701 keeps the unread count and window it moved, for
