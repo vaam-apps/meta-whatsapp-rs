@@ -401,6 +401,48 @@ impl OwnedWaba {
         })
     }
 
+    /// Unbind a WABA as the operator (decision D4's admin unbind): with
+    /// its stored token, if one is usable, unsubscribe the app, at best
+    /// (Meta refusing does not stop it); then delete the token, then the
+    /// bindings, as a disconnection does. A token no tenant can reach
+    /// serves nothing and widens what a database and vault key compromise
+    /// exposes.
+    pub async fn unbind_for_admin(
+        state: &AppState,
+        _admin: &AdminCaller,
+        binding: &WabaBinding,
+    ) -> Result<(), ApiError> {
+        match Self::open(state, binding.waba_id.clone()).await {
+            Ok(owned) => {
+                let unsubscribed = owned
+                    .client
+                    .waba(owned.waba_id.clone())
+                    .unsubscribe_app()
+                    .await;
+                if let Err(error) = unsubscribed {
+                    let api = owned.failed(state, &error).await;
+                    tracing::warn!(
+                        code = api.code(),
+                        "unbinding a WABA Meta did not unsubscribe the app from"
+                    );
+                }
+                owned.forget(state).await
+            }
+            // Storage down: nothing can be deleted either.
+            Err(error) if error.code() == "storage_unavailable" => Err(error),
+            // No token, an expired one, or one that no longer decrypts.
+            Err(unusable) => {
+                tracing::info!(
+                    code = unusable.code(),
+                    "unbinding a WABA without a usable token: the app stays subscribed"
+                );
+                state.tokens().delete(&binding.waba_id).await?;
+                state.store().unbind_waba(&binding.waba_id).await?;
+                Ok(())
+            }
+        }
+    }
+
     /// A WABA for an admin operation (deleting its tenant): step 5 only, as
     /// the admin key may act on every tenant.
     pub async fn for_admin(

@@ -1023,7 +1023,7 @@
         "tags": [
           "admin"
         ],
-        "summary": "Remove a WABA's binding and its numbers' (decision D4: the admin unbind\nthat lets another tenant connect it). Its app subscription and its\ntoken in the vault are left as they are.",
+        "summary": "Unbind a WABA (decision D4: the admin unbind that lets another tenant\nconnect it), also the way to free a WABA whose token no longer works:\nwith its stored token, if usable, unsubscribe the app, at best; then\ndelete the token and the bindings of the WABA and its numbers.",
         "operationId": "unbind_waba",
         "parameters": [
           {
@@ -1038,7 +1038,7 @@
         ],
         "responses": {
           "204": {
-            "description": "Unbound"
+            "description": "Unbound, its token deleted (the app unsubscribed when the token allowed it)"
           },
           "401": {
             "description": "No valid key",

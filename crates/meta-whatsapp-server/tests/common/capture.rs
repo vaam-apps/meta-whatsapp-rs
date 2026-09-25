@@ -238,6 +238,7 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
         ))
         .await;
     assert_eq!(second.status.as_u16(), 201, "{}", second.text);
+    h.graph.push_json(200, json!({"success": true}));
     let unbound = h
         .call(delete("/v1/admin/wabas/102290129340399/binding", &admin))
         .await;

@@ -932,9 +932,10 @@ pub async fn attach_waba(
     ))
 }
 
-/// Remove a WABA's binding and its numbers' (decision D4: the admin unbind
-/// that lets another tenant connect it). Its app subscription and its
-/// token in the vault are left as they are.
+/// Unbind a WABA (decision D4: the admin unbind that lets another tenant
+/// connect it), also the way to free a WABA whose token no longer works:
+/// with its stored token, if usable, unsubscribe the app, at best; then
+/// delete the token and the bindings of the WABA and its numbers.
 #[utoipa::path(
     delete,
     path = "/v1/admin/wabas/{waba_id}/binding",
@@ -942,7 +943,7 @@ pub async fn attach_waba(
     security(("api_key" = [])),
     params(("waba_id" = String, Path, description = "WhatsApp Business Account id")),
     responses(
-        (status = 204, description = "Unbound"),
+        (status = 204, description = "Unbound, its token deleted (the app unsubscribed when the token allowed it)"),
         (status = 401, description = "No valid key", body = ErrorBody),
         (status = 403, description = "Not an admin key", body = ErrorBody),
         (status = 404, description = "`not_found`: not bound", body = ErrorBody),
@@ -950,12 +951,14 @@ pub async fn attach_waba(
 )]
 pub async fn unbind_waba(
     State(state): State<AppState>,
-    _admin: AdminCaller,
+    admin: AdminCaller,
     Path(waba_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    if state.store().unbind_waba(&WabaId::new(waba_id)).await? {
-        Ok(StatusCode::NO_CONTENT)
-    } else {
-        Err(ApiError::not_found())
-    }
+    let binding = state
+        .store()
+        .waba(&WabaId::new(waba_id))
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+    OwnedWaba::unbind_for_admin(&state, &admin, &binding).await?;
+    Ok(StatusCode::NO_CONTENT)
 }

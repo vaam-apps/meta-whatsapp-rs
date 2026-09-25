@@ -274,7 +274,12 @@ const CALLS_META: &[&str] = &[
     "DELETE /v1/wabas/{waba_id}",
     "POST /v1/admin/tenants/{id}/wabas",
     "DELETE /v1/admin/tenants/{id}",
+    "DELETE /v1/admin/wabas/{waba_id}/binding",
 ];
+
+/// Operations whose call to Meta is best effort: whatever Meta answers,
+/// they succeed without a body.
+const BEST_EFFORT: &[&str] = &["DELETE /v1/admin/wabas/{waba_id}/binding"];
 
 /// M1.5's sentinel, on every operation of the committed document: Meta's
 /// error texts, a non-Graph answer and an unreadable one reach no
@@ -323,6 +328,11 @@ async fn a_sentinel_in_metas_answer_reaches_no_response() {
                 continue;
             }
             calling.insert(operation.label());
+            if BEST_EFFORT.contains(&operation.label().as_str()) {
+                assert_eq!(reply.status, StatusCode::NO_CONTENT, "{label}");
+                assert!(reply.text.is_empty(), "{label}");
+                continue;
+            }
             assert!(
                 reply.status.is_client_error() || reply.status.is_server_error(),
                 "{label}: {}",

@@ -424,11 +424,18 @@ async fn a_waba_of_another_tenant_is_refused_until_the_admin_unbinds_it() {
         "merchant-a"
     );
 
-    // The admin unbinds; B may attach it.
+    // The admin unbinds (unsubscribing with A's token, then deleting it);
+    // B may attach it.
+    h.graph.push_json(200, json!({"success": true}));
     let unbound = h
         .call(Call::new(Method::DELETE, format!("/v1/admin/wabas/{WABA}/binding")).key(&admin))
         .await;
     assert_eq!(unbound.status, StatusCode::NO_CONTENT);
+    let unsubscribe = h.graph.last_request().unwrap();
+    assert_eq!(unsubscribe.method, Method::DELETE);
+    assert_eq!(unsubscribe.path(), format!("/v25.0/{WABA}/subscribed_apps"));
+    assert_eq!(unsubscribe.bearer(), Some("TOKEN-OF-A"));
+    assert!(h.vault.get(&WabaId::new(WABA)).await.unwrap().is_none());
     assert!(
         h.store
             .number(&PhoneNumberId::new("1972385232742141"))
@@ -729,5 +736,37 @@ async fn a_listing_past_a_thousand_numbers_is_refused() {
         reply.json()["phone_number_ids"].as_array().unwrap().len(),
         1000
     );
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// The admin unbind frees a WABA whatever Meta says: the app is
+/// unsubscribed with the stored token at best, and the token and bindings
+/// always go (security review L5, coordinator's decision). Decisive:
+/// deleting the vault entry.
+#[tokio::test]
+async fn unbinding_deletes_the_token_even_when_meta_refuses() {
+    let h = Harness::new();
+    let admin = h.admin_key().await;
+    h.tenant("merchant-a").await;
+    h.connect("merchant-a", WABA, &["1972385232742141"], "TOKEN-OF-A")
+        .await;
+    h.graph.push_json(
+        401,
+        json!({"error": {"message": "Invalid OAuth access token", "type": "OAuthException",
+                         "code": 190, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+    );
+    let unbound = h
+        .call(Call::new(Method::DELETE, format!("/v1/admin/wabas/{WABA}/binding")).key(&admin))
+        .await;
+    assert_eq!(unbound.status, StatusCode::NO_CONTENT, "{}", unbound.text);
+    assert!(h.vault.get(&WabaId::new(WABA)).await.unwrap().is_none());
+    assert!(
+        h.vault
+            .get_by_phone_number(&PhoneNumberId::new("1972385232742141"))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(h.store.waba(&WabaId::new(WABA)).await.unwrap().is_none());
     assert_eq!(h.graph.remaining(), 0);
 }
