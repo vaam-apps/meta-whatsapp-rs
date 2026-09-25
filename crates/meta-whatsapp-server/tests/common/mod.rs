@@ -20,6 +20,7 @@ use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_rs::core::secret::{AccessToken, VerifyToken};
 use meta_whatsapp_rs::core::store::{Expiry, KvStore, StoreKey, Versioned};
 use meta_whatsapp_rs::core::testing::ScriptedTransport;
+use meta_whatsapp_rs::core::transport::HttpTransport;
 use meta_whatsapp_rs::webhooks::axum::Router;
 use meta_whatsapp_rs::webhooks::axum::body::Body;
 use meta_whatsapp_rs::webhooks::axum::http::{HeaderMap, Method, Request, StatusCode, header};
@@ -292,6 +293,30 @@ impl Harness {
 
     /// On `store` and `kv`, with `settings`.
     pub fn on_with(store: Arc<dyn Store>, kv: Arc<dyn KvStore>, settings: Settings) -> Self {
+        Self::on_with_transport(store, kv, settings, |graph| Arc::new(graph))
+    }
+
+    /// On a memory store, with `settings`, Meta reached through what
+    /// `wrap` makes of the scripted transport (`graph` still records every
+    /// request): a download body streamed in parts, say.
+    pub fn with_transport(
+        settings: Settings,
+        wrap: impl FnOnce(ScriptedTransport) -> Arc<dyn HttpTransport>,
+    ) -> Self {
+        Self::on_with_transport(
+            Arc::new(MemoryStore::new()),
+            Arc::new(MemoryKvStore::new()),
+            settings,
+            wrap,
+        )
+    }
+
+    fn on_with_transport(
+        store: Arc<dyn Store>,
+        kv: Arc<dyn KvStore>,
+        settings: Settings,
+        wrap: impl FnOnce(ScriptedTransport) -> Arc<dyn HttpTransport>,
+    ) -> Self {
         let kv = Arc::new(CountingKv::new(kv));
         let vault = TokenVault::new(
             kv.clone(),
@@ -300,7 +325,7 @@ impl Harness {
         .unwrap();
         let graph = ScriptedTransport::new();
         let client = Client::builder()
-            .transport(graph.clone())
+            .shared_transport(wrap(graph.clone()))
             .retry(RetryPolicy::NONE)
             .build()
             .unwrap();

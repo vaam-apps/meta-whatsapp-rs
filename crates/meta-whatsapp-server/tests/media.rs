@@ -9,8 +9,14 @@ mod common;
 use base64::Engine as _;
 use common::capture::sha256_hex;
 use common::{Call, Harness};
+use futures::StreamExt as _;
 use http_body_util::BodyExt;
+use meta_whatsapp_rs::core::error::TransportError;
 use meta_whatsapp_rs::core::testing::RecordedBody;
+use meta_whatsapp_rs::core::transport::{
+    HttpRequest, HttpResponse, HttpTransport, StreamingResponse,
+};
+use meta_whatsapp_rs::webhooks::axum::body::Bytes;
 use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode};
 use meta_whatsapp_server::model::{Scope, TenantId};
 use meta_whatsapp_server::state::Settings;
@@ -590,7 +596,9 @@ async fn a_known_type_stops_reading_the_upload_at_its_limit() {
 #[tokio::test]
 async fn a_media_id_is_digits() {
     let (h, key) = connected().await;
-    for bad in ["Y2FwaV9ncm91cDox", "0123", "12a", "1%2F2"] {
+    // Longer than 64 digits, too.
+    let too_long = "9".repeat(65);
+    for bad in ["Y2FwaV9ncm91cDox", "0123", "12a", "1%2F2", &too_long] {
         for method in [Method::GET, Method::DELETE] {
             let reply = h
                 .call(Call::new(method.clone(), format!("/v1/numbers/{PN}/media/{bad}")).key(&key))
@@ -905,5 +913,108 @@ async fn over_http_a_tampered_stream_ends_without_its_terminating_chunk() {
     assert!(!tampered.contains("TAMPERED-BYTES"), "{tampered:?}");
     let _ = stop.send(());
     server.await.unwrap().unwrap();
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// Meta, with a download body the test feeds chunk by chunk: the media
+/// URL answers its scripted status and headers, then the chunks sent on
+/// the channel as they come, and ends when the sender is dropped.
+/// Everything else is the script.
+#[derive(Debug)]
+struct Fed {
+    graph: meta_whatsapp_rs::core::testing::ScriptedTransport,
+    body: std::sync::Mutex<Option<futures::channel::mpsc::UnboundedReceiver<Bytes>>>,
+}
+
+#[async_trait::async_trait]
+impl HttpTransport for Fed {
+    async fn send(&self, request: HttpRequest) -> Result<HttpResponse, TransportError> {
+        self.graph.send(request).await
+    }
+
+    async fn send_streaming(
+        &self,
+        request: HttpRequest,
+    ) -> Result<StreamingResponse, TransportError> {
+        let head = self.graph.send(request).await?;
+        let chunks = self
+            .body
+            .lock()
+            .unwrap()
+            .take()
+            .expect("one streamed download");
+        Ok(StreamingResponse {
+            status: head.status,
+            headers: head.headers,
+            body: Box::pin(chunks.map(Ok)),
+        })
+    }
+}
+
+/// The next data frame of `body` within `wait`: `None` when none came in
+/// time, `Some(None)` at its end.
+async fn frame_within(
+    body: &mut meta_whatsapp_rs::webhooks::axum::body::Body,
+    wait: std::time::Duration,
+) -> Option<Option<Bytes>> {
+    let frame = tokio::time::timeout(wait, body.frame()).await.ok()?;
+    Some(frame.map(|frame| frame.unwrap().into_data().unwrap()))
+}
+
+/// A streamed download forwards the file while it arrives: with Meta's
+/// body still open, every chunk but the last one received is already
+/// out. A stream holds one chunk, not the file: 16 streams of 100 MiB
+/// would otherwise hold 1.6 GiB on a replica. Decisive: the chunks
+/// passed on before the body ends, one held back.
+#[tokio::test]
+async fn a_streamed_download_forwards_the_file_before_it_ends() {
+    use std::time::Duration;
+
+    let (meta, received) = futures::channel::mpsc::unbounded::<Bytes>();
+    let h = Harness::with_transport(common::test_settings(), |graph| {
+        std::sync::Arc::new(Fed {
+            graph,
+            body: std::sync::Mutex::new(Some(received)),
+        })
+    });
+    h.tenant(TENANT).await;
+    h.connect(TENANT, WABA, &[PN], TOKEN).await;
+    let key = h.tenant_key(TENANT, &[Scope::Media]).await;
+    let chunks: Vec<Bytes> = (0u8..3).map(|i| Bytes::from(vec![i; 64 * 1024])).collect();
+    let file = chunks.concat();
+    h.graph
+        .push_json(200, media_info(&file, &sha256_hex(&file), Some(file.len())));
+    h.graph.push_bytes(200, "image/jpeg", Vec::new());
+    let response = h
+        .internal
+        .clone()
+        .oneshot(download(&key, "?stream=true").build())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut body = response.into_body();
+    meta.unbounded_send(chunks[0].clone()).unwrap();
+    meta.unbounded_send(chunks[1].clone()).unwrap();
+    // Meta's body is still open: the first chunk is out, the second held.
+    let first = frame_within(&mut body, Duration::from_secs(10))
+        .await
+        .expect("nothing forwarded before the end of the file");
+    assert_eq!(first.as_ref(), Some(&chunks[0]));
+    assert_eq!(
+        frame_within(&mut body, Duration::from_millis(100)).await,
+        None,
+        "the last chunk received waits for the next one"
+    );
+    meta.unbounded_send(chunks[2].clone()).unwrap();
+    let second = frame_within(&mut body, Duration::from_secs(10)).await;
+    assert_eq!(second, Some(Some(chunks[1].clone())));
+    // The end: the digest matches, the chunk held back goes out.
+    drop(meta);
+    let last = frame_within(&mut body, Duration::from_secs(10)).await;
+    assert_eq!(last, Some(Some(chunks[2].clone())));
+    assert_eq!(
+        frame_within(&mut body, Duration::from_secs(10)).await,
+        Some(None)
+    );
     assert_eq!(h.graph.remaining(), 0);
 }

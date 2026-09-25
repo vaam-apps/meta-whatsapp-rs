@@ -765,6 +765,60 @@ mod tests {
         );
     }
 
+    /// A page answered from the cache counts as used: the pages not asked
+    /// for since go before it, in a WABA and across the replica (least
+    /// recently used, not first in first out). Decisive: a hit refreshing
+    /// the page's recency.
+    #[tokio::test(start_paused = true)]
+    async fn a_cache_hit_keeps_its_page_longest() {
+        let cache = TemplateCache::new(Duration::from_secs(60));
+        let tick = || tokio::time::advance(Duration::from_millis(1));
+        let query = |after: usize| CacheKey {
+            after: Some(after.to_string()),
+            ..key("busy")
+        };
+        for i in 0..TEMPLATE_CACHE_PER_WABA {
+            tick().await;
+            cache.put(query(i), page("x"));
+        }
+        tick().await;
+        assert!(
+            cache.get(&query(0)).is_some(),
+            "the oldest page, used again"
+        );
+        tick().await;
+        cache.put(query(TEMPLATE_CACHE_PER_WABA), page("x"));
+        assert!(cache.get(&query(0)).is_some(), "the page used again stayed");
+        assert!(
+            cache.get(&query(1)).is_none(),
+            "the least recently used went"
+        );
+        // Across the replica: fill it with other WABAs' pages, use the
+        // oldest again, add one more.
+        let other = |i: usize| key(&format!("w{i}"));
+        let room = TEMPLATE_CACHE_ENTRIES - cache.entries.lock().unwrap().len();
+        for i in 0..room {
+            tick().await;
+            cache.put(other(i), page("x"));
+        }
+        assert_eq!(cache.entries.lock().unwrap().len(), TEMPLATE_CACHE_ENTRIES);
+        tick().await;
+        // `busy`'s pages were put before `other(0)`; use them all again,
+        // then `other(0)`, the oldest left.
+        for i in 2..=TEMPLATE_CACHE_PER_WABA {
+            assert!(cache.get(&query(i)).is_some(), "{i}");
+        }
+        assert!(cache.get(&query(0)).is_some());
+        assert!(cache.get(&other(0)).is_some());
+        tick().await;
+        cache.put(key("new"), page("x"));
+        assert!(cache.get(&other(0)).is_some(), "used again: kept");
+        assert!(
+            cache.get(&other(1)).is_none(),
+            "the least recently used went"
+        );
+    }
+
     #[test]
     fn filters_are_checked() {
         assert_eq!(status_filter("approved").unwrap(), "APPROVED");

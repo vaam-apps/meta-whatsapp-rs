@@ -822,3 +822,127 @@ async fn another_tenants_template_id_is_not_found() {
     );
     assert_eq!(h.graph.remaining(), 0);
 }
+
+/// The calls on an object named by id (a media id, a template id), with
+/// the Graph request Meta's scripted failure answers: `(label, method,
+/// path, Meta's answers before the one that fails)`.
+fn object_calls() -> Vec<(&'static str, Method, String, Vec<Value>)> {
+    const MEDIA: &str = "1037543291543636";
+    let media_info = json!({"messaging_product": "whatsapp", "id": MEDIA, "mime_type": "image/jpeg",
+        "sha256": "3f9d94d399fa61c191bc1d4ca71375a035cd9b9f5b1128e1f0963a415c16b0cc",
+        "url": "https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1037543291543636"});
+    let media = format!("/v1/numbers/{PN_A}/media/{MEDIA}");
+    vec![
+        ("download: the lookup", Method::GET, media.clone(), vec![]),
+        ("delete: the lookup", Method::DELETE, media.clone(), vec![]),
+        (
+            "delete: the DELETE",
+            Method::DELETE,
+            media,
+            vec![media_info],
+        ),
+        (
+            "template: its name",
+            Method::GET,
+            format!("/v1/wabas/{WABA_A}/templates/1407680676729941"),
+            vec![],
+        ),
+    ]
+}
+
+/// Only Meta refusing the object is `404 not_found` on a route naming an
+/// object by id: the token's own failure (`190`) is `409
+/// reconnect_required` and marks the WABA's numbers (section 5.2: Meta's
+/// `authentication` on a stored token; the design keeps `404` for an
+/// object that is not there, and a dead token says nothing about it),
+/// and Meta failing (a 5xx, whatever
+/// its code, even one the library does not know) is Meta's failure,
+/// `502`, with its code, never taken for a missing object. A plain 4xx
+/// without a Graph error (`404` from a proxy of Meta's, say) refuses the
+/// object: `404`, without its body. Decisive: the token's failure and
+/// the 5xx kept out of the refusals, and the plain 4xx kept in.
+#[tokio::test]
+async fn only_metas_refusal_of_the_object_is_not_found() {
+    // reference/whatsapp-business-phone-number/whatsapp-business-account-phone-number-api, 401 example.
+    let expired = json!({"error": {"message": "Error validating access token: Session has expired",
+        "type": "OAuthException", "code": 190, "error_subcode": 463, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}});
+    // A code the library does not map (`ErrorKind::Unknown`), on a 5xx.
+    let failed = json!({"error": {"message": "An unexpected error SENTINEL-5XX", "type": "OAuthException",
+        "code": 987654, "is_transient": true, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}});
+    for (label, method, path, before) in object_calls() {
+        let call = |key: &str| Call::new(method.clone(), &path).key(key);
+        // 190: reconnect_required, the numbers marked, Meta not asked again.
+        let h = two_tenants().await;
+        let key = h.tenant_key(A, &[Scope::Media, Scope::Templates]).await;
+        for answer in &before {
+            h.graph.push_json(200, answer.clone());
+        }
+        h.graph.push_json(401, expired.clone());
+        let reply = h.call(call(&key)).await;
+        assert_eq!(
+            (reply.status, reply.code().as_str()),
+            (StatusCode::CONFLICT, "reconnect_required"),
+            "{label}: {}",
+            reply.text
+        );
+        assert_eq!(reply.json()["error"]["graph"]["code"], 190, "{label}");
+        let number = h
+            .store
+            .number(&PhoneNumberId::new(PN_A))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(number.status, NumberStatus::ReconnectRequired, "{label}");
+        // A number route checks the status first (a WABA route has
+        // none of its own: step 5 is the number's).
+        if path.starts_with("/v1/numbers/") {
+            let asked = h.graph.requests().len();
+            let again = h.call(call(&key)).await;
+            assert_eq!(again.code(), "reconnect_required", "{label}");
+            assert_eq!(h.graph.requests().len(), asked, "{label}: Meta not asked");
+        }
+        assert_eq!(h.graph.remaining(), 0, "{label}");
+
+        // A 5xx with a code the library does not know: 502 `unknown`.
+        let h = two_tenants().await;
+        let key = h.tenant_key(A, &[Scope::Media, Scope::Templates]).await;
+        for answer in &before {
+            h.graph.push_json(200, answer.clone());
+        }
+        h.graph.push_json(500, failed.clone());
+        let reply = h.call(call(&key)).await;
+        assert_eq!(
+            (reply.status, reply.code().as_str()),
+            (StatusCode::BAD_GATEWAY, "unknown"),
+            "{label}: {}",
+            reply.text
+        );
+        assert_eq!(reply.json()["error"]["graph"]["code"], 987_654, "{label}");
+        assert!(!reply.text.contains("SENTINEL-5XX"), "{label}");
+        assert_eq!(h.graph.remaining(), 0, "{label}");
+
+        // A plain 4xx, no Graph error in it: the object refused, 404.
+        for status in [400, 403, 404] {
+            let h = two_tenants().await;
+            let key = h.tenant_key(A, &[Scope::Media, Scope::Templates]).await;
+            for answer in &before {
+                h.graph.push_json(200, answer.clone());
+            }
+            h.graph.push_bytes(
+                status,
+                "text/html",
+                b"<html><body>SENTINEL-PLAIN Not Found</body></html>".to_vec(),
+            );
+            let reply = h.call(call(&key)).await;
+            assert_eq!(
+                (reply.status, reply.code().as_str()),
+                (StatusCode::NOT_FOUND, "not_found"),
+                "{label} <- plain {status}: {}",
+                reply.text
+            );
+            assert!(reply.json()["error"]["graph"].is_null(), "{label}");
+            assert!(!reply.text.contains("SENTINEL-PLAIN"), "{label}");
+            assert_eq!(h.graph.remaining(), 0, "{label}");
+        }
+    }
+}
