@@ -159,11 +159,11 @@
 //!      of every payload holding one. None of them can be recreated on the
 //!      `json` columns.
 //!    - **On `kind`, `text` or `last_text`**: a view, rule, materialized
-//!      view, policy or generated column, and a trigram (GIN or GiST),
-//!      `text_pattern_ops`, full-text or `lower()` index make the migration
-//!      fail, changing nothing. A plain b-tree or hash index is rebuilt on
-//!      the bytes and kept (it can be created on a `*_utf8` column later
-//!      too).
+//!      view, policy or generated column, and a trigram (`gin_trgm_ops`,
+//!      `gist_trgm_ops`), `text_pattern_ops`, full-text or `lower()` index
+//!      make the migration fail, changing nothing. A plain b-tree or hash
+//!      index is rebuilt on the bytes and kept (it can be created on a
+//!      `*_utf8` column later too).
 //!    - **Triggers and functions**: Postgres does not check their bodies,
 //!      so the migration succeeds, and a trigger that names a content
 //!      column (`NEW.text`, `NEW.payload`) then fails every insert: the
@@ -172,8 +172,8 @@
 //! 4. **Run [`migrate`] once, from a one-off job**, rather than from every
 //!    instance at startup. The conversion rewrites both tables: 200,006
 //!    messages (a 153 MB table) took 1 to 2 seconds on an otherwise idle
-//!    Postgres 18 on a local NVMe disk, and reads and writes of both tables
-//!    waited for it (the key/value table did not). The lock waits without
+//!    Postgres 18 on a local solid-state disk, and reads and writes of both
+//!    tables waited for it (the key/value table did not). The lock waits without
 //!    limit behind any transaction open on those tables, and every later
 //!    query on them queues behind the waiting lock; a role's or server's
 //!    `statement_timeout` shorter than the rewrite cancels it (changing
