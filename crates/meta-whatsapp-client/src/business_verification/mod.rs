@@ -221,8 +221,10 @@ fn unsupported() -> ValidationError {
 }
 
 /// One business document to submit (`business_documents[]`): checked when
-/// built, so a submission never spends one of the customer's three attempts
-/// on a file Meta refuses by type or size.
+/// built against what the page documents (type, size) and against its own
+/// content, so a file that cannot pass is refused before any request.
+/// Whether Meta counts a submission it refuses for a document towards the
+/// three is not documented; "5 MB" is read as 5 MiB ([`MAX_DOCUMENT_BYTES`]).
 ///
 /// `Debug` shows the file name, type and size, never the content.
 #[derive(Clone, PartialEq, Eq)]
@@ -324,9 +326,27 @@ pub struct SubmissionReceipt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     /// How many submissions you have made for this customer, this one
-    /// included.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// included. Read leniently (a number or a numeric string; anything
+    /// else is `None`): the submission is spent by the time this is read,
+    /// so an unexpected spelling must not turn it into an error that
+    /// invites a second one.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_attempts"
+    )]
     pub verification_attempts: Option<u32>,
+}
+
+/// `verification_attempts` as a number or a numeric string; any other
+/// value (null, a negative or fractional number, text) is `None`, never a
+/// decode error.
+fn lenient_attempts<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u32>, D::Error> {
+    Ok(match serde_json::Value::deserialize(d)? {
+        serde_json::Value::Number(n) => n.as_u64().and_then(|n| u32::try_from(n).ok()),
+        serde_json::Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    })
 }
 
 impl SubmissionReceipt {

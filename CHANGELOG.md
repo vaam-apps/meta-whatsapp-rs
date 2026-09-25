@@ -127,7 +127,8 @@ volumes (Claude config, shell history, cargo caches) start empty
   /{BUSINESS_ID}/self_certify_whatsapp_business`, multipart
   `end_business_id` and one `business_documents[]` part per document;
   never replayed, `{"success": false}` is an error → `SubmissionReceipt`
-  with `verification_attempts` and `attempts_left`), `submissions` /
+  with `verification_attempts`, read leniently since the submission is
+  spent by then, and `attempts_left`), `submissions` /
   `submissions_stream` (`…/self_certified_whatsapp_business_submissions`,
   filtered by `ListVerificationSubmissions::end_business_id`) and
   `status` (`GET /{BUSINESS_ID}?fields=verification_status`). Submitting

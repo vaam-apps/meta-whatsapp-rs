@@ -184,6 +184,83 @@ async fn success_false_is_an_error() {
     assert_eq!(t.remaining(), 0);
 }
 
+/// The submission is spent once Meta answers: an unexpected spelling of
+/// `verification_attempts` must not become an error inviting another.
+#[tokio::test]
+async fn verification_attempts_are_read_leniently() {
+    for (attempts, expected) in [
+        (json!(2), Some(2)),
+        (json!("2"), Some(2)),
+        (json!(" 3 "), Some(3)),
+        (json!(null), None),
+        (json!(-1), None),
+        (json!(1.5), None),
+        (json!(u64::from(u32::MAX) + 1), None),
+        (json!("two"), None),
+        (json!({"count": 2}), None),
+    ] {
+        let t = ScriptedTransport::new();
+        t.push_json(
+            200,
+            json!({"success": true, "verification_attempts": attempts}),
+        );
+        let receipt = system(&t)
+            .submit(&partner(), &customer(), &documents())
+            .await
+            .unwrap_or_else(|e| panic!("{attempts}: {e:?}"));
+        assert_eq!(receipt.verification_attempts, expected, "{attempts}");
+        assert_eq!(t.remaining(), 0);
+    }
+}
+
+/// Each call authenticates with the token of the client it was built from,
+/// whichever it is: nothing in the module picks or overrides one.
+#[tokio::test]
+async fn every_call_sends_its_clients_token() {
+    let t = ScriptedTransport::new();
+    t.push_json(200, json!({"success": true}));
+    t.push_json(200, json!({"data": []}));
+    t.push_json(200, json!({"data": []}));
+    t.push_json(200, json!({"id": CUSTOMER}));
+    let base = client(&t, "UNUSED_BASE_TOKEN");
+    let partner_api = base
+        .with_token(AccessToken::new("PARTNER_SYSTEM_USER_7"))
+        .business_verification();
+    partner_api
+        .submit(&partner(), &customer(), &documents())
+        .await
+        .unwrap();
+    partner_api
+        .submissions(&partner(), &ListVerificationSubmissions::new())
+        .await
+        .unwrap();
+    let streamed: Vec<_> = partner_api
+        .submissions_stream(&partner(), &ListVerificationSubmissions::new())
+        .collect()
+        .await;
+    assert!(streamed.is_empty());
+    base.with_token(AccessToken::new("MERCHANT_BUSINESS_9"))
+        .business_verification()
+        .status(&customer())
+        .await
+        .unwrap();
+    let bearers: Vec<Option<String>> = t
+        .requests()
+        .iter()
+        .map(|r| r.bearer().map(str::to_owned))
+        .collect();
+    assert_eq!(
+        bearers,
+        [
+            Some("PARTNER_SYSTEM_USER_7".to_owned()),
+            Some("PARTNER_SYSTEM_USER_7".to_owned()),
+            Some("PARTNER_SYSTEM_USER_7".to_owned()),
+            Some("MERCHANT_BUSINESS_9".to_owned()),
+        ]
+    );
+    assert_eq!(t.remaining(), 0);
+}
+
 #[tokio::test]
 async fn submit_maps_graph_errors() {
     let t = ScriptedTransport::new();
@@ -750,6 +827,55 @@ fn submission_statuses_are_open() {
     assert_eq!(
         serde_json::to_value(&submission).unwrap(),
         json!({"id": "1", "verification_status": "IN_REVIEW"})
+    );
+}
+
+/// An unknown value is kept exactly as Meta sent it (case included) and
+/// serializes back the same.
+#[test]
+fn unknown_values_are_kept_verbatim() {
+    let status: SubmissionStatus = serde_json::from_value(json!("In_Review")).unwrap();
+    assert_eq!(status, SubmissionStatus::Other("In_Review".into()));
+    assert_eq!(serde_json::to_value(&status).unwrap(), json!("In_Review"));
+    assert_eq!(status.to_string(), "In_Review");
+    let business: BusinessVerificationStatus =
+        serde_json::from_value(json!("Pending_Review")).unwrap();
+    assert_eq!(
+        business,
+        BusinessVerificationStatus::Other("Pending_Review".into())
+    );
+    assert_eq!(
+        serde_json::to_value(&business).unwrap(),
+        json!("Pending_Review")
+    );
+
+    // A reason is matched after trimming and in either spelling, but an
+    // unknown one keeps Meta's string untouched.
+    assert_eq!(RejectionReason::parse(" NONE\n"), RejectionReason::None);
+    assert_eq!(
+        RejectionReason::parse(" MALFORMED_DOCUMENTS "),
+        RejectionReason::MalformedDocuments
+    );
+    assert_eq!(
+        RejectionReason::parse(" Document_Expired "),
+        RejectionReason::Other(" Document_Expired ".into())
+    );
+    let submission: VerificationSubmission = serde_json::from_value(json!({
+        "id": "1",
+        "verification_status": "FAILED",
+        "rejection_reasons": ["DOCUMENT_EXPIRED", "LEGAL NAME NOT MATCHING"]
+    }))
+    .unwrap();
+    assert_eq!(
+        submission.reasons(),
+        [
+            RejectionReason::Other("DOCUMENT_EXPIRED".into()),
+            RejectionReason::LegalNameNotMatching
+        ]
+    );
+    assert_eq!(
+        serde_json::to_value(&submission).unwrap()["rejection_reasons"],
+        json!(["DOCUMENT_EXPIRED", "LEGAL NAME NOT MATCHING"])
     );
 }
 
