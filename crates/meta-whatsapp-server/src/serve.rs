@@ -556,6 +556,7 @@ mod tests {
             types: None,
             phone_number_id: None,
             limit: 10,
+            max_bytes: crate::events::MAX_PAGE_DATA_BYTES,
         };
         let purged_through = |events: Arc<dyn EventStore>, query: EventQuery| async move {
             events.page(&query).await.unwrap().purged_through

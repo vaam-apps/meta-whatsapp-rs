@@ -203,7 +203,7 @@ fn metric(h: &Harness, series: &str) -> u64 {
 
 /// Rows of the outbox, whatever their tenant.
 async fn outbox_rows(pool: &sqlx::PgPool) -> Vec<(Option<String>, String)> {
-    sqlx::query_as("SELECT tenant_id, event_type FROM wa_server_events ORDER BY sequence")
+    sqlx::query_as("SELECT tenant_id, event_type FROM wa_server_events ORDER BY created_at")
         .fetch_all(pool)
         .await
         .unwrap()
@@ -419,11 +419,12 @@ async fn live_postgres_polling_during_concurrent_inserts_misses_nothing() {
     assert_eq!(seen_sorted, written, "an event was skipped");
 }
 
-/// An insert in flight on another replica holds back every later insert
-/// until it commits: a poll in between sees neither, so its cursor never
-/// moves past the one in flight. Decisive: the outbox insert's advisory
-/// lock (without it the later insert commits first, the poll moves past
-/// the earlier sequence, and that event is never polled).
+/// An insert in flight on another replica holds back every later insert of
+/// the same tenant until it commits: a poll in between sees neither, so
+/// its cursor never moves past the one in flight. Another tenant's inserts
+/// do not wait. Decisive: the stream's row, locked from the drawing of a
+/// sequence to the commit (without it the later insert draws the same
+/// sequence, or commits first and the poll moves past the earlier one).
 #[tokio::test]
 async fn live_postgres_an_insert_in_flight_is_never_skipped() {
     let Some(db) = TestDb::new().await else {
@@ -433,6 +434,7 @@ async fn live_postgres_an_insert_in_flight_is_never_skipped() {
     migrate(&pool).await.unwrap();
     let h = Harness::with(Stores::postgres(&pool));
     common::events_suite::bind(h.store.as_ref(), "tenant-a", "1").await;
+    common::events_suite::bind(h.store.as_ref(), "tenant-b", "2").await;
     let key = h.tenant_key("tenant-a", &[Scope::Events]).await;
     let events_after = |after: Option<i64>| {
         let path = after.map_or_else(
@@ -454,43 +456,62 @@ async fn live_postgres_an_insert_in_flight_is_never_skipped() {
             (ids, body["next_after"].as_i64().unwrap())
         }
     };
-    // Another replica's insert, in flight: lock taken, sequence drawn,
-    // not committed (what the store's insert does, stopped before its
-    // commit).
+    // Another replica's insert, in flight: sequence drawn (the stream's
+    // row locked), row written, not committed (what the store's insert
+    // does, stopped before its commit).
     let first = common::events_suite::row(Some("tenant-a"), "message_received", "1", None);
     let mut in_flight = pool.begin().await.unwrap();
-    sqlx::query("SELECT pg_advisory_xact_lock($1)")
-        .bind(meta_whatsapp_server::store::OUTBOX_LOCK)
-        .execute(&mut *in_flight)
-        .await
-        .unwrap();
-    sqlx::query(
-        "INSERT INTO wa_server_events (id, tenant_id, phone_number_id, event_type, data) \
-         VALUES ($1, $2, '1', 'message_received', $3::json)",
+    let drawn: i64 = sqlx::query_scalar(
+        "INSERT INTO wa_server_event_streams AS s (stream, last_sequence) \
+         VALUES ('tenant-a', 1) \
+         ON CONFLICT (stream) DO UPDATE SET last_sequence = s.last_sequence + 1 \
+         RETURNING s.last_sequence",
     )
+    .fetch_one(&mut *in_flight)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO wa_server_events \
+         (tenant_id, sequence, id, phone_number_id, event_type, data, data_bytes) \
+         VALUES ('tenant-a', $1, $2, '1', 'message_received', $3::json, $4)",
+    )
+    .bind(drawn)
     .bind(&first.id)
-    .bind("tenant-a")
     .bind(&first.data)
+    .bind(i32::try_from(first.data.len()).unwrap())
     .execute(&mut *in_flight)
     .await
     .unwrap();
-    // A later insert through the store.
+    // A later insert of the same tenant through the store waits.
     let second = common::events_suite::row(Some("tenant-a"), "message_received", "1", None);
     let later = {
         let store = PgEventStore::new(pool.clone());
         let second = second.clone();
         tokio::spawn(async move { store.insert(&second).await })
     };
+    // Another tenant's does not.
+    let other = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        PgEventStore::new(pool.clone()).insert(&common::events_suite::row(
+            Some("tenant-b"),
+            "message_received",
+            "2",
+            None,
+        )),
+    )
+    .await
+    .expect("tenant-b's insert waited for tenant-a's")
+    .unwrap();
+    assert_eq!(other, Some(1));
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!later.is_finished(), "the later insert did not wait");
     let (mut seen, after) = events_after(None).await;
+    assert!(seen.is_empty(), "{seen:?}");
     in_flight.commit().await.unwrap();
-    later.await.unwrap().unwrap().unwrap();
+    assert_eq!(later.await.unwrap().unwrap(), Some(drawn + 1));
     let (more, _) = events_after(Some(after)).await;
     seen.extend(more);
-    seen.sort();
-    let mut expected = vec![first.id, second.id];
-    expected.sort();
-    assert_eq!(seen, expected, "an event was skipped");
+    assert_eq!(seen, [first.id, second.id], "an event was skipped");
 }
 
 /// Housekeeping runs on one replica at a time: while another session holds
@@ -533,8 +554,8 @@ async fn live_postgres_one_replica_purges_at_a_time() {
 
 /// Fix #1 of the M1c review, on Postgres: a tenant deleted and created
 /// again under the same id polls nothing of the deleted one's events
-/// (`common::scenarios`), which stay as operator-only rows until
-/// retention. Decisive: the outbox's foreign key to the tenant.
+/// (`common::scenarios`), which were deleted with it (security review M4).
+/// Decisive: the outbox's foreign key to the tenant.
 #[tokio::test]
 async fn live_postgres_a_recreated_tenant_polls_nothing_from_before() {
     let Some(db) = TestDb::new().await else {
@@ -548,7 +569,7 @@ async fn live_postgres_a_recreated_tenant_polls_nothing_from_before() {
     .fetch_all(&db.pool(1).await)
     .await
     .unwrap();
-    assert_eq!(old, [None], "kept, operator-only");
+    assert!(old.is_empty(), "deleted with the tenant: {old:?}");
 }
 
 /// The race fix #1 leaves without the insert's re-check: an event routed to

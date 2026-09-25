@@ -25,10 +25,11 @@ fn message_ids(events: &[Value]) -> Vec<String> {
 }
 
 /// Fix #1 of the M1c review: a tenant deleted and created again under the
-/// same id polls nothing of the deleted one's events, and polls its own
-/// once it holds a number again; another tenant is untouched. Decisive:
-/// the deletion reaching the outbox (the foreign key on Postgres, the
-/// linked outbox in memory).
+/// same id polls nothing of the deleted one's events (they were deleted
+/// with it, and an old cursor is expired), and polls its own once it holds
+/// a number again, numbered after the deleted ones; another tenant is
+/// untouched. Decisive: the deletion reaching the outbox (the foreign key
+/// on Postgres, the store's own outbox in memory).
 pub async fn a_recreated_tenant_polls_nothing_from_before(h: &Harness) {
     const WABA_A: &str = "102290129340398";
     const PN_A: &str = "106540352242922";
@@ -66,17 +67,27 @@ pub async fn a_recreated_tenant_polls_nothing_from_before(h: &Harness) {
         polled(h, "tenant-a").await.is_empty(),
         "the new tenant-a sees the old one's events"
     );
+    // A cursor of the deleted tenant's (it had one event) is expired: its
+    // events are gone. From there on, the new tenant's stream goes on.
     let key = h.tenant_key("tenant-a", &[Scope::Events]).await;
-    let from_zero = h.call(Call::get("/v1/events?after=0").key(&key)).await;
-    assert_eq!(from_zero.status, StatusCode::OK, "{}", from_zero.text);
-    assert_eq!(from_zero.json()["data"], json!([]));
+    let old_cursor = h.call(Call::get("/v1/events?after=0").key(&key)).await;
+    assert_eq!(
+        (old_cursor.status, old_cursor.code().as_str()),
+        (StatusCode::GONE, "cursor_expired")
+    );
+    let from_there = h.call(Call::get("/v1/events?after=1").key(&key)).await;
+    assert_eq!(from_there.status, StatusCode::OK, "{}", from_there.text);
+    assert_eq!(from_there.json()["data"], json!([]));
+    assert_eq!(from_there.json()["next_after"], 1);
 
     // Its own events, once it holds the number again.
     h.connect("tenant-a", WABA_A, &[PN_A], "TOKEN-OF-NEW-A")
         .await;
     let body = text(WABA_A, PN_A, "wamid.NEW-A");
     assert_eq!(h.webhook(&bytes(&body)).await.status, StatusCode::OK);
-    assert_eq!(message_ids(&polled(h, "tenant-a").await), ["wamid.NEW-A"]);
+    let new = polled(h, "tenant-a").await;
+    assert_eq!(message_ids(&new), ["wamid.NEW-A"]);
+    assert_eq!(new[0]["sequence"], 2, "after the deleted tenant's");
     assert_eq!(message_ids(&polled(h, "tenant-b").await), ["wamid.B"]);
     assert_eq!(h.graph.remaining(), 0);
 }

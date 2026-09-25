@@ -49,9 +49,8 @@ fn next_after(reply: &Reply) -> i64 {
 }
 
 /// Following `next_after` page by page returns every event of the tenant
-/// once, in order, and ends at the outbox's newest sequence (other
-/// tenants' included), so the next poll starts there. Decisive: the
-/// `after` cursor.
+/// once, in order, and ends at the tenant's newest sequence, so the next
+/// poll starts there. Decisive: the `after` cursor.
 #[tokio::test]
 async fn following_next_after_returns_every_event_once_in_order() {
     let h = harness().await;
@@ -64,7 +63,8 @@ async fn following_next_after_returns_every_event_once_in_order() {
             insert(&h, &row(None, "unknown", "1", None)).await;
         }
     }
-    let newest = insert(&h, &row(Some(B), "status_updated", "1", None)).await;
+    insert(&h, &row(Some(B), "status_updated", "1", None)).await;
+    let newest = *mine.last().unwrap();
     let mut seen = Vec::new();
     let mut cursor: Option<i64> = None;
     let mut pages = 0;
@@ -87,13 +87,18 @@ async fn following_next_after_returns_every_event_once_in_order() {
         }
         seen.extend(page.iter().copied());
         if page.is_empty() {
-            assert_eq!(next, newest, "caught up: the newest sequence");
+            assert_eq!(next, newest, "caught up: the tenant's newest sequence");
             break;
         }
         cursor = Some(next);
         assert!(pages < 10);
     }
     assert_eq!(seen, mine, "every event once, in order");
+    assert_eq!(
+        mine,
+        (1..=7).collect::<Vec<i64>>(),
+        "the tenant's own stream"
+    );
     // Caught up, the cursor stays; a new event comes next.
     let reply = poll(&h, &key, &format!("?after={newest}")).await;
     assert_eq!((sequences(&reply), next_after(&reply)), (vec![], newest));
@@ -239,14 +244,17 @@ async fn a_cursor_past_retention_is_410() {
     assert_eq!(sequences(&poll(&h, &key, "").await), [next]);
 }
 
-/// A cursor this outbox never issued (past its newest sequence: a restored
-/// or another database) is `422 invalid_request` on `after`, not an empty
-/// page that would wait for ever.
+/// A cursor the tenant's stream never reached (a restored or another
+/// database) is `422 invalid_request` on `after`, not an empty page that
+/// would wait for ever; another tenant's sequences do not count.
 #[tokio::test]
 async fn a_cursor_never_issued_is_422() {
     let h = harness().await;
     let key = h.tenant_key(A, &[Scope::Events]).await;
-    let newest = insert(&h, &row(Some(B), "message_received", "1", None)).await;
+    let newest = insert(&h, &row(Some(A), "message_received", "1", None)).await;
+    for _ in 0..3 {
+        insert(&h, &row(Some(B), "message_received", "1", None)).await;
+    }
     let reply = poll(&h, &key, &format!("?after={}", newest + 1)).await;
     assert_eq!(
         (reply.status, reply.code().as_str()),
@@ -257,6 +265,35 @@ async fn a_cursor_never_issued_is_422() {
         poll(&h, &key, &format!("?after={newest}")).await.status,
         StatusCode::OK
     );
+}
+
+/// Each tenant has its own sequences (security review L2): two tenants'
+/// events are numbered 1, 2, … each, and one tenant's cursor does not move
+/// when another receives events, so polling reveals nothing of other
+/// tenants' traffic. Decisive: the per-tenant stream.
+#[tokio::test]
+async fn tenants_have_their_own_sequences() {
+    let h = harness().await;
+    let a_key = h.tenant_key(A, &[Scope::Events]).await;
+    let b_key = h.tenant_key(B, &[Scope::Events]).await;
+    for (tenant, n) in [(A, 2), (B, 3), (A, 1)] {
+        for _ in 0..n {
+            insert(&h, &row(Some(tenant), "message_received", "1", None)).await;
+        }
+        insert(&h, &row(None, "unknown", "1", None)).await;
+    }
+    let a = poll(&h, &a_key, "").await;
+    assert_eq!(sequences(&a), [1, 2, 3]);
+    assert_eq!(next_after(&a), 3);
+    let b = poll(&h, &b_key, "").await;
+    assert_eq!(sequences(&b), [1, 2, 3]);
+    for _ in 0..5 {
+        insert(&h, &row(Some(B), "message_received", "1", None)).await;
+    }
+    let a = poll(&h, &a_key, "?after=3").await;
+    assert_eq!((sequences(&a), next_after(&a)), (vec![], 3));
+    let envelope = &poll(&h, &a_key, "").await.json()["data"][0];
+    assert_eq!(envelope["sequence"], 1);
 }
 
 /// Bad parameters are `422` on the parameter.

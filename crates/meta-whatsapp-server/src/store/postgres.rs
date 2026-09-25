@@ -319,12 +319,21 @@ impl Store for PgStore {
         if has_wabas.is_some() {
             return Ok(DeleteTenantOutcome::HasWabas);
         }
-        // Keys go with it (ON DELETE CASCADE).
+        // Keys and events go with it (ON DELETE CASCADE); its event stream
+        // records them purged, so a tenant created later with the same id
+        // goes on after them and an old cursor is `410 cursor_expired`.
         sqlx::query("DELETE FROM wa_server_tenants WHERE id = $1")
             .bind(id.as_str())
             .execute(&mut *tx)
             .await
             .map_err(backend)?;
+        sqlx::query(
+            "UPDATE wa_server_event_streams SET purged_through = last_sequence WHERE stream = $1",
+        )
+        .bind(id.as_str())
+        .execute(&mut *tx)
+        .await
+        .map_err(backend)?;
         tx.commit().await.map_err(backend)?;
         Ok(DeleteTenantOutcome::Deleted)
     }
@@ -619,7 +628,7 @@ mod tests {
         ),
         (
             3,
-            "73a1bdaa570aeb40d61f08979940d5dc38080166605f81cb540c03cefb2c4cdf8f3a8da4417c577ef51782e15ce595d8",
+            "918bc557b6c2b0136678885248e38abffd63e11c2d605ca8c7a228234311b6b0cf3ab12b8a0f1515f8a03059b18c70d6",
         ),
     ];
 

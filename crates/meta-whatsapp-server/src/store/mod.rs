@@ -13,7 +13,7 @@ mod memory;
 mod postgres;
 
 pub use events::{EventStore, MemoryEventStore, PgEventStore};
-pub use events_postgres::{HOUSEKEEPING_LOCK, OUTBOX_LOCK};
+pub use events_postgres::HOUSEKEEPING_LOCK;
 pub use memory::MemoryStore;
 pub use postgres::{MIGRATION_LOCK, MIGRATIONS_TABLE, PgStore, migrate, migrations};
 

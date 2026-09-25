@@ -3,7 +3,7 @@
 //!
 //! | Route | Does |
 //! | --- | --- |
-//! | `GET /v1/events` | the caller's tenant's events after a sequence, `?after=&types=&phone_number_id=&limit=`; `410 cursor_expired` past retention |
+//! | `GET /v1/events` | the caller's tenant's events after a sequence of its own, `?after=&types=&phone_number_id=&limit=`; `410 cursor_expired` past retention |
 //!
 //! Operator-only events (no tenant) are never answered. The logic is
 //! [`crate::events::poll`]; this module parses the query and shapes the
@@ -19,7 +19,7 @@ use super::common::rfc3339;
 use super::ops::API_VERSION;
 use crate::auth::Caller;
 use crate::error::{ApiError, ErrorBody};
-use crate::events::{TENANT_EVENT_TYPES, poll};
+use crate::events::{MAX_PAGE_DATA_BYTES, TENANT_EVENT_TYPES, poll};
 use crate::model::{MAX_PAGE_SIZE, TenantId};
 use crate::state::AppState;
 use crate::store::events::{EventQuery, StoredEvent};
@@ -68,6 +68,7 @@ impl EventsQuery {
             types: self.types,
             phone_number_id: self.phone_number_id,
             limit: self.limit,
+            max_bytes: MAX_PAGE_DATA_BYTES,
         }
     }
 }
@@ -145,7 +146,8 @@ impl<S: Send + Sync> FromRequestParts<S> for EventsQuery {
 pub struct EventEnvelope {
     /// The event's id (`evt_…`): unique, stable; deduplicate on it.
     pub id: String,
-    /// Its position: increasing (with gaps), never reused; order on it.
+    /// Its position among the tenant's events (each tenant has its own
+    /// sequence): increasing, never reused; order on it.
     pub sequence: i64,
     /// Its type (`EventType`), the `event` tag of `data`.
     #[serde(rename = "type")]
@@ -195,8 +197,8 @@ pub struct EventList {
     /// The events, in sequence order.
     pub data: Vec<EventEnvelope>,
     /// Pass as `after` to continue: the last event's sequence when more
-    /// follow, else the newest sequence of the outbox (so a poll never
-    /// starts again from an old cursor).
+    /// follow, else the tenant's newest sequence (so a poll never starts
+    /// again from an old cursor).
     pub next_after: i64,
 }
 
@@ -234,8 +236,8 @@ fn envelope(tenant: &TenantId, event: StoredEvent) -> Result<EventEnvelope, ApiE
         (status = 200, description = "The tenant's events after `after`", body = EventList),
         (status = 401, description = "No valid key", body = ErrorBody),
         (status = 403, description = "`forbidden` (no `events` scope), `tenant_suspended`", body = ErrorBody),
-        (status = 410, description = "`cursor_expired`: events after `after` may have been purged (past retention); start again without `after`", body = ErrorBody),
-        (status = 422, description = "`invalid_request` on `after`, `types`, `phone_number_id` or `limit`", body = ErrorBody),
+        (status = 410, description = "`cursor_expired`: events after `after` were purged (past retention, or deleted with a tenant of the same id); start again without `after`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `after` (malformed, or past the tenant's newest sequence), `types` (not a `KnownEventType`), `phone_number_id` or `limit`", body = ErrorBody),
     )
 )]
 pub async fn list_events(

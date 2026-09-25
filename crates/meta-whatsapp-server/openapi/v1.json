@@ -1494,7 +1494,7 @@
             }
           },
           "410": {
-            "description": "`cursor_expired`: events after `after` may have been purged (past retention); start again without `after`",
+            "description": "`cursor_expired`: events after `after` were purged (past retention, or deleted with a tenant of the same id); start again without `after`",
             "content": {
               "application/json": {
                 "schema": {
@@ -1504,7 +1504,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` on `after`, `types`, `phone_number_id` or `limit`",
+            "description": "`invalid_request` on `after` (malformed, or past the tenant's newest sequence), `types` (not a `KnownEventType`), `phone_number_id` or `limit`",
             "content": {
               "application/json": {
                 "schema": {
@@ -2495,7 +2495,7 @@
           "sequence": {
             "type": "integer",
             "format": "int64",
-            "description": "Its position: increasing (with gaps), never reused; order on it."
+            "description": "Its position among the tenant's events (each tenant has its own\nsequence): increasing, never reused; order on it."
           },
           "tenant_id": {
             "type": "string",
@@ -2536,7 +2536,7 @@
           "next_after": {
             "type": "integer",
             "format": "int64",
-            "description": "Pass as `after` to continue: the last event's sequence when more\nfollow, else the newest sequence of the outbox (so a poll never\nstarts again from an old cursor)."
+            "description": "Pass as `after` to continue: the last event's sequence when more\nfollow, else the tenant's newest sequence (so a poll never starts\nagain from an old cursor)."
           }
         }
       },

@@ -11,7 +11,7 @@
 //!                          1. route: the tenant owning the number, else the WABA
 //!                          2. inbox (InboxSink), when a tenant owns it
 //!                          3. outbox row: the tenant, or none (operator-only)
-//! GET /v1/events ─► poll: the caller's tenant's rows after a sequence
+//! GET /v1/events ─► poll: the caller's tenant's rows after a sequence of its own
 //! ```
 //!
 //! **Routing is an allow-list.** An event naming a business phone number
@@ -74,9 +74,10 @@ pub const DEFAULT_OUTBOX_RETENTION: Duration = Duration::from_hours(7 * 24);
 /// library's expired key/value rows on Postgres).
 pub const HOUSEKEEPING_INTERVAL: Duration = Duration::from_secs(600);
 
-/// The most `data` a page of `GET /v1/events` carries: past it the page
-/// ends early (with at least one event), and `next_after` continues from
-/// there. A history sync event alone can approach 3 MiB.
+/// The most `data` a page of `GET /v1/events` carries: the store stops
+/// before the event that would pass it (the first event always comes) and
+/// reads no data past it, and `next_after` continues from there. A history
+/// sync event alone can approach 3 MiB.
 pub const MAX_PAGE_DATA_BYTES: usize = 8 * 1024 * 1024;
 
 /// The event types a tenant receives: the library's `WebhookEvent::kind`s
@@ -389,7 +390,7 @@ fn new_event_id() -> Result<String, SinkError> {
 /// What the service does with an event: route, then the inbox, then the
 /// outbox, in that order (docs/design/server.md, section 2.3), so whoever
 /// sees an event can already read its history. Each delivery reaches it
-/// through its own [`DeliverySink`].
+/// through a sink of its own, which keys its events ([`EventKey`]).
 #[derive(Clone)]
 pub struct ServiceSink {
     store: Arc<dyn Store>,
@@ -490,19 +491,19 @@ pub struct Polled {
     /// The events, in sequence order.
     pub events: Vec<StoredEvent>,
     /// Pass as `after` next time: the last event's sequence when more
-    /// follow, else the newest sequence of the whole outbox.
+    /// follow, else the newest sequence of the tenant's stream.
     pub next_after: i64,
 }
 
-/// A tenant's events after `query.after` (docs/design/server.md, section
-/// 4.2).
+/// A tenant's events after `query.after`, in its own stream of sequences
+/// (docs/design/server.md, sections 2.3 and 4.2).
 ///
 /// # Errors
 ///
-/// `410 cursor_expired` for a cursor below what housekeeping purged (events
-/// after it may be gone); `422 invalid_request` on `after` for a cursor
-/// this outbox never issued (past its newest sequence: a restored or
-/// another database); `503 storage_unavailable`.
+/// `410 cursor_expired` for a cursor below what was purged (by retention,
+/// or with a deleted tenant of the same id: events after it may be gone);
+/// `422 invalid_request` on `after` for a cursor the tenant's stream never
+/// reached (a restored or another database); `503 storage_unavailable`.
 pub async fn poll(outbox: &dyn EventStore, query: &EventQuery) -> Result<Polled, ApiError> {
     let page = outbox.page(query).await?;
     let start = match query.after {
@@ -513,28 +514,14 @@ pub async fn poll(outbox: &dyn EventStore, query: &EventQuery) -> Result<Polled,
         Some(after) => after,
         None => page.purged_through,
     };
-    let mut events = page.events;
-    let mut more = events.len() > query.limit;
-    events.truncate(query.limit);
-    let mut bytes = 0usize;
-    let fits = events
-        .iter()
-        .enumerate()
-        .take_while(|(i, event)| {
-            bytes = bytes.saturating_add(event.data.len());
-            *i == 0 || bytes <= MAX_PAGE_DATA_BYTES
-        })
-        .count();
-    if fits < events.len() {
-        events.truncate(fits);
-        more = true;
-    }
-    let next_after = if more {
-        events.last().map_or(start, |event| event.sequence)
-    } else {
-        page.high_water.max(start)
+    let next_after = match page.events.last() {
+        Some(last) if page.more => last.sequence,
+        _ => page.high_water.max(start),
     };
-    Ok(Polled { events, next_after })
+    Ok(Polled {
+        events: page.events,
+        next_after,
+    })
 }
 
 /// One round of housekeeping: purge the outbox past `retention`. `None`
