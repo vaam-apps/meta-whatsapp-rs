@@ -9,6 +9,7 @@ members = [
   "crates/meta-whatsapp-adapters",
   "crates/meta-whatsapp-typst",
   "crates/meta-whatsapp-rs",
+  "crates/meta-whatsapp-server",
 ]
 # Repository automation is its own workspace (own Cargo.lock): its HTTP
 # client (ureq → rustls with `ring`) must not be resolved into the
@@ -21,6 +22,7 @@ default-members = [
   "crates/meta-whatsapp-adapters",
   "crates/meta-whatsapp-typst",
   "crates/meta-whatsapp-rs",
+  "crates/meta-whatsapp-server",
 ]
 
 [workspace.package]
@@ -45,6 +47,9 @@ meta-whatsapp-webhooks = { path = "crates/meta-whatsapp-webhooks" }
 # defaults name the features they use.
 meta-whatsapp-adapters = { path = "crates/meta-whatsapp-adapters", default-features = false }
 meta-whatsapp-typst = { path = "crates/meta-whatsapp-typst" }
+# The facade, for binaries only: no library crate depends on it
+# (docs/architecture.md, dependency rule).
+meta-whatsapp-rs = { path = "crates/meta-whatsapp-rs", default-features = false }
 
 # Errors. `thiserror` shapes the typed tree; `anyhow` is the opaque leaf for
 # failures an adapter or integrator raises that have no typed home.
@@ -104,6 +109,18 @@ typst-layout = "0.15"
 typst-pdf = "0.15"
 typst-render = "0.15"
 typst-assets = "0.15"
+
+# The service (crates/meta-whatsapp-server) only. Each passes `cargo deny`.
+# The OpenAPI 3.1 document is generated from the handlers' annotations
+# (utoipa), and utoipa-axum registers each route and its documentation in
+# one call, so the router and the committed spec cannot disagree.
+utoipa = { version = "6", default-features = false, features = ["macros"] }
+utoipa-axum = "0.3"
+# `/metrics` in the Prometheus text format; no HTTP server or runtime of
+# its own (the internal listener serves it).
+prometheus-client = "0.25"
+# The command line: serve, migrate, openapi, healthcheck, admin keys.
+clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 
 # Dev.
 # Examples only: makes the library's `tracing` output visible (RUST_LOG).

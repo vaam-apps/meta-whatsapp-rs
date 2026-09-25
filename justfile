@@ -16,7 +16,7 @@ check:
 test:
     cargo test --workspace --all-features
 
-# Adapter tests against real Postgres and Redis. Uses META_WHATSAPP_RS_TEST_POSTGRES_URL /
+# Adapter and service tests against real Postgres and Redis. Uses META_WHATSAPP_RS_TEST_POSTGRES_URL /
 # META_WHATSAPP_RS_TEST_REDIS_URL when set (the devcontainer sets them to its sidecars),
 # otherwise starts compose.test.yaml. META_WHATSAPP_RS_REQUIRE_LIVE=1 turns a missing
 # service into a failure instead of a skip.
@@ -29,6 +29,7 @@ test-live:
         export META_WHATSAPP_RS_TEST_REDIS_URL="redis://127.0.0.1:56379"
     fi
     META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-adapters --all-features live_ -- --test-threads=4
+    META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-server --all-features live_ -- --test-threads=4
 
 # Stop the compose.test.yaml services
 test-live-down:

@@ -1,0 +1,59 @@
+[package]
+name = "meta-whatsapp-server"
+description = "The meta-whatsapp-rs HTTP service: WhatsApp Business Platform over REST, for apps not written in Rust."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+# A deployable binary (docs/design/server.md), never a dependency.
+publish = false
+
+[lib]
+name = "meta_whatsapp_server"
+
+[[bin]]
+name = "meta-whatsapp-server"
+path = "src/main.rs"
+
+[dependencies]
+# The only crate of this workspace the service depends on
+# (docs/architecture.md, § Service): axum through
+# `meta_whatsapp_rs::webhooks::axum`, sqlx through
+# `meta_whatsapp_rs::adapters::store::postgres::sqlx`.
+meta-whatsapp-rs = { workspace = true, features = ["reqwest", "memory", "postgres", "axum"] }
+
+anyhow.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+# Random API keys (key id and secret).
+getrandom.workspace = true
+# Opaque list cursors.
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# API keys are stored as SHA-256 digests and compared in constant time.
+sha2.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time", "io-util"] }
+tracing.workspace = true
+# JSON logs (`WA_SERVER_LOG_FORMAT=json`, the default).
+tracing-subscriber = { workspace = true, features = ["json"] }
+
+clap.workspace = true
+prometheus-client.workspace = true
+utoipa.workspace = true
+utoipa-axum.workspace = true
+
+[dev-dependencies]
+meta-whatsapp-rs = { workspace = true, features = ["reqwest", "memory", "postgres", "axum", "testing"] }
+http-body-util.workspace = true
+pretty_assertions.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync", "test-util"] }
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true
