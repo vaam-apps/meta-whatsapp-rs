@@ -27,7 +27,8 @@
 //! | --- | --- | --- |
 //! | `WA_SERVER_IDEMPOTENCY_TTL` | `24h` | how long an idempotency key's record is kept |
 //! | `WA_SERVER_MEDIA_MAX_BYTES` | 104857600 (100 MiB) | largest upload, and largest streamed download |
-//! | `WA_SERVER_MEDIA_CONCURRENCY` | 4 | uploads and whole-file downloads held in memory at once, per replica |
+//! | `WA_SERVER_MEDIA_CONCURRENCY` | 4 | uploads and whole-file downloads held in memory at once, per replica (half of them at most for one tenant) |
+//! | `WA_SERVER_MEDIA_STREAMS` | 16 | streamed downloads at once, per replica (half of them at most for one tenant) |
 //! | `WA_SERVER_RATE_SEND`, `WA_SERVER_RATE_SEND_BURST` | 20, 40 | per tenant and replica, a second ([`crate::ratelimit`]) |
 //! | `WA_SERVER_RATE_READ`, `WA_SERVER_RATE_READ_BURST` | 50, 50 | the same, for reads |
 //! | `WA_SERVER_RATE_TEMPLATES`, `WA_SERVER_RATE_TEMPLATES_BURST` | 2, 2 | the same, for template management |
@@ -508,7 +509,7 @@ fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
             if ttl <= defaults.idempotency_lease {
                 return Err(ConfigError::Invalid {
                     name: "WA_SERVER_IDEMPOTENCY_TTL",
-                    reason: "expected more than the idempotency lease (2m)",
+                    reason: "expected more than the idempotency lease (1m)",
                 });
             }
             ttl
@@ -518,6 +519,13 @@ fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
         None => defaults.media_concurrency,
         Some(n) => usize::try_from(n).map_err(|_| ConfigError::Invalid {
             name: "WA_SERVER_MEDIA_CONCURRENCY",
+            reason: "expected a smaller number",
+        })?,
+    };
+    let media_streams = match positive(r, "WA_SERVER_MEDIA_STREAMS")? {
+        None => defaults.media_streams,
+        Some(n) => usize::try_from(n).map_err(|_| ConfigError::Invalid {
+            name: "WA_SERVER_MEDIA_STREAMS",
             reason: "expected a smaller number",
         })?,
     };
@@ -547,6 +555,7 @@ fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
         media_max_bytes: positive(r, "WA_SERVER_MEDIA_MAX_BYTES")?
             .unwrap_or(defaults.media_max_bytes),
         media_concurrency,
+        media_streams,
         ..defaults
     })
 }

@@ -38,6 +38,26 @@ where
     }
 }
 
+/// Longest Meta id a path or a query may name.
+const MAX_GRAPH_ID_LEN: usize = 64;
+
+/// A Meta object id from a path or a query (a media id, a template id):
+/// digits, not starting with `0`, else `422 invalid_request` on `field`.
+/// Checked before any request: an id is a Graph path segment, and a
+/// route for one kind of object must not reach another (`DELETE
+/// /{id}` deletes whatever node the id names).
+pub fn graph_id(field: &'static str, id: &str) -> Result<(), ApiError> {
+    let valid = !id.is_empty()
+        && id.len() <= MAX_GRAPH_ID_LEN
+        && id.bytes().all(|b| b.is_ascii_digit())
+        && !id.starts_with('0');
+    if valid {
+        Ok(())
+    } else {
+        Err(ApiError::invalid(field))
+    }
+}
+
 /// Default page size.
 pub const DEFAULT_PAGE_SIZE: usize = 50;
 

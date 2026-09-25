@@ -708,10 +708,11 @@ async fn another_tenants_media_id_is_not_found() {
             assert!(!reply.text.contains("B-MEDIA-SENTINEL"), "{}", reply.text);
             let requests = h.graph.requests();
             assert_eq!(requests.len(), asked + 1, "{method}: one call, no download");
+            // The lookup, for a deletion too: no DELETE is sent.
             let request = requests.last().unwrap();
             assert_eq!(
                 (request.method.clone(), request.path().to_owned()),
-                (method.clone(), format!("/v25.0/{B_MEDIA}"))
+                (Method::GET, format!("/v25.0/{B_MEDIA}"))
             );
             assert_eq!(
                 request.query("phone_number_id").as_deref(),

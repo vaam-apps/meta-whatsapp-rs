@@ -12,7 +12,7 @@ use common::{Call, Harness};
 use http_body_util::BodyExt;
 use meta_whatsapp_rs::core::testing::RecordedBody;
 use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode};
-use meta_whatsapp_server::model::Scope;
+use meta_whatsapp_server::model::{Scope, TenantId};
 use meta_whatsapp_server::state::Settings;
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
@@ -304,6 +304,11 @@ async fn a_download_is_verified_before_it_is_answered() {
         assert_eq!(response.headers()["x-wa-sha256"], hex.as_str());
         assert_eq!(response.headers()["content-type"], "image/jpeg");
         assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+        assert_eq!(response.headers()["content-disposition"], "attachment");
+        assert_eq!(
+            response.headers()["content-security-policy"],
+            "sandbox; default-src 'none'"
+        );
         let body = response.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(&body[..], &file[..]);
         let requests = h.graph.requests();
@@ -445,9 +450,21 @@ async fn a_streamed_download_aborts_on_a_mismatch() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK, "the head went out");
+    // Not even the bytes before the abort hold the whole tampered file:
+    // the last chunk waits for the digest.
+    let mut body = response.into_body();
+    let mut received = Vec::new();
+    let aborted = loop {
+        match body.frame().await {
+            None => break false,
+            Some(Err(_)) => break true,
+            Some(Ok(frame)) => received.extend_from_slice(frame.data_ref().unwrap()),
+        }
+    };
+    assert!(aborted, "the body must not complete");
     assert!(
-        response.into_body().collect().await.is_err(),
-        "the body must not complete"
+        received.len() < b"tampered".len(),
+        "the whole tampered file arrived before the abort: {received:?}"
     );
     // Past max_bytes while streaming: the same.
     h.graph.push_json(200, media_info(&file, &digest, None));
@@ -462,7 +479,7 @@ async fn a_streamed_download_aborts_on_a_mismatch() {
     assert_eq!(h.graph.remaining(), 0);
 }
 
-/// Every media slot of the replica busy: `429`, before any request.
+/// The tenant's share of the media slots busy: `429`, before any request.
 #[tokio::test]
 async fn busy_media_slots_are_429() {
     let (h, key) = connected_with(Settings {
@@ -470,7 +487,11 @@ async fn busy_media_slots_are_429() {
         ..common::test_settings()
     })
     .await;
-    let held = h.state.media_permits().clone().try_acquire_owned().unwrap();
+    let held = h
+        .state
+        .media_slots()
+        .try_acquire(&TenantId::parse(TENANT).unwrap())
+        .unwrap();
     let reply = h
         .call(upload(
             &key,
@@ -487,10 +508,13 @@ async fn busy_media_slots_are_429() {
     assert!(h.graph.requests().is_empty());
 }
 
-/// `DELETE /{media-id}?phone_number_id={pn}` with the merchant's token.
+/// `DELETE /{media-id}?phone_number_id={pn}` with the merchant's token,
+/// once `GET /{media-id}?phone_number_id={pn}` said it is that media.
 #[tokio::test]
 async fn a_delete_is_metas_request() {
     let (h, key) = connected().await;
+    h.graph
+        .push_json(200, media_info(b"x", &sha256_hex(b"x"), None));
     h.graph.push_json(200, json!({"success": true}));
     let reply = h
         .call(Call::new(Method::DELETE, format!("/v1/numbers/{PN}/media/{MEDIA_ID}")).key(&key))
@@ -503,6 +527,15 @@ async fn a_delete_is_metas_request() {
     );
     assert_eq!(request.query("phone_number_id").as_deref(), Some(PN));
     assert_eq!(request.bearer(), Some(TOKEN));
+    let requests = h.graph.requests();
+    let [lookup, _] = &requests[..] else {
+        panic!("{requests:?}")
+    };
+    assert_eq!(
+        (lookup.method.clone(), lookup.path()),
+        (Method::GET, "/v25.0/1037543291543636")
+    );
+    assert_eq!(lookup.query("phone_number_id").as_deref(), Some(PN));
     assert_eq!(h.graph.remaining(), 0);
 }
 
@@ -550,4 +583,255 @@ async fn a_known_type_stops_reading_the_upload_at_its_limit() {
         "read {read} bytes of a 12 MiB form for a 5 MiB image limit"
     );
     assert!(h.graph.requests().is_empty());
+}
+
+/// A media id is digits: anything else is `422` on `media_id`, before any
+/// request (an id names any Graph node the token reaches).
+#[tokio::test]
+async fn a_media_id_is_digits() {
+    let (h, key) = connected().await;
+    for bad in ["Y2FwaV9ncm91cDox", "0123", "12a", "1%2F2"] {
+        for method in [Method::GET, Method::DELETE] {
+            let reply = h
+                .call(Call::new(method.clone(), format!("/v1/numbers/{PN}/media/{bad}")).key(&key))
+                .await;
+            assert_eq!(
+                (reply.status, reply.json()["error"]["field"].as_str()),
+                (StatusCode::UNPROCESSABLE_ENTITY, Some("media_id")),
+                "{method} {bad}: {}",
+                reply.text
+            );
+        }
+    }
+    assert!(h.graph.requests().is_empty());
+}
+
+/// An id Meta answers for with another kind of node (a flow, say), or
+/// with another id: `404`, nothing downloaded, and a deletion sends no
+/// `DELETE` (it would delete that node). Decisive: the lookup before the
+/// deletion, and the id compared.
+#[tokio::test]
+async fn an_id_that_is_not_this_media_is_not_found_and_not_deleted() {
+    let (h, key) = connected().await;
+    // flows/reference: a flow node, not a media object (no `url`).
+    let flow = json!({"id": MEDIA_ID, "name": "My flow", "status": "DRAFT"});
+    let other = media_info(b"x", &sha256_hex(b"x"), None);
+    let mut other_id = other.clone();
+    other_id["id"] = json!("1037543291543699");
+    for answer in [flow, other_id] {
+        for method in [Method::GET, Method::DELETE] {
+            let asked = h.graph.requests().len();
+            h.graph.push_json(200, answer.clone());
+            let reply = h
+                .call(
+                    Call::new(method.clone(), format!("/v1/numbers/{PN}/media/{MEDIA_ID}"))
+                        .key(&key),
+                )
+                .await;
+            assert_eq!(
+                (reply.status, reply.code().as_str()),
+                (StatusCode::NOT_FOUND, "not_found"),
+                "{method} <- {answer}: {}",
+                reply.text
+            );
+            let requests = h.graph.requests();
+            assert_eq!(requests.len(), asked + 1, "{method}: the lookup only");
+            let lookup = requests.last().unwrap();
+            assert_eq!(lookup.method, Method::GET, "no DELETE was sent");
+            assert_eq!(lookup.query("phone_number_id").as_deref(), Some(PN));
+        }
+    }
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// A `type` with a control character is `422` on `type`, before any
+/// request (it would be a header of the part Meta receives).
+#[tokio::test]
+async fn a_type_with_a_control_character_is_refused() {
+    let (h, key) = connected().await;
+    let reply = h
+        .call(upload(
+            &key,
+            &[
+                ("type", None, b"audio/ogg; codecs=\x01opus"),
+                ("file", Some("a.ogg"), b"OggS"),
+            ],
+        ))
+        .await;
+    assert_eq!(
+        (reply.status, reply.json()["error"]["field"].as_str()),
+        (StatusCode::UNPROCESSABLE_ENTITY, Some("type")),
+        "{}",
+        reply.text
+    );
+    assert!(h.graph.requests().is_empty());
+}
+
+/// A form's framing (a preamble, a part's headers) is read up to 16 KiB
+/// and a chunk, not to the end of the body: `422` on `body`. Decisive:
+/// the framing budget.
+#[tokio::test]
+async fn a_form_whose_framing_never_ends_is_refused_early() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use futures::StreamExt as _;
+    use meta_whatsapp_rs::webhooks::axum::body::{Body, Bytes};
+
+    let (h, key) = connected().await;
+    let (content_type, form) =
+        common::multipart(&[("type", None, b"image/png"), ("file", Some("a.png"), b"x")]);
+    let long_name = format!("{}.png", "n".repeat(4 * 1024 * 1024));
+    let (_, long_header) = common::multipart(&[("file", Some(&long_name), b"x")]);
+    let preamble = [vec![b'p'; 4 * 1024 * 1024], form].concat();
+    for body in [preamble, long_header] {
+        let pulled = Arc::new(AtomicUsize::new(0));
+        let counter = pulled.clone();
+        let chunks: Vec<Bytes> = body.chunks(1024).map(Bytes::copy_from_slice).collect();
+        let stream = futures::stream::iter(chunks).map(move |chunk| {
+            counter.fetch_add(chunk.len(), Ordering::SeqCst);
+            Ok::<_, std::io::Error>(chunk)
+        });
+        let reply = h
+            .call(
+                Call::new(Method::POST, format!("/v1/numbers/{PN}/media"))
+                    .key(&key)
+                    .header("content-type", &content_type)
+                    .body(Body::from_stream(stream)),
+            )
+            .await;
+        assert_eq!(
+            (reply.status, reply.json()["error"]["field"].as_str()),
+            (StatusCode::UNPROCESSABLE_ENTITY, Some("body")),
+            "{}",
+            reply.text
+        );
+        let read = pulled.load(Ordering::SeqCst);
+        assert!(read < 256 * 1024, "read {read} bytes of a 4 MiB framing");
+    }
+    assert!(h.graph.requests().is_empty());
+}
+
+/// Tenant A's upload that never finishes holds A's share of the media
+/// slots, not the replica's: B still uploads, A's next upload is `429`.
+/// Decisive: the tenant's share.
+#[tokio::test]
+async fn one_tenants_stuck_upload_leaves_the_others_theirs() {
+    use futures::StreamExt as _;
+    use meta_whatsapp_rs::webhooks::axum::body::{Body, Bytes};
+
+    let (h, a_key) = connected_with(Settings {
+        media_concurrency: 2,
+        ..common::test_settings()
+    })
+    .await;
+    h.tenant("merchant-43").await;
+    h.connect(
+        "merchant-43",
+        "102290129340399",
+        &["106540352242923"],
+        "TOKEN-43",
+    )
+    .await;
+    let b_key = h.tenant_key("merchant-43", &[Scope::Media]).await;
+    // A's upload: the `type` part, then nothing, ever.
+    let (content_type, form) =
+        common::multipart(&[("type", None, b"image/png"), ("file", Some("a.png"), b"x")]);
+    let (reading, read) = tokio::sync::oneshot::channel::<()>();
+    let mut reading = Some(reading);
+    let head = Bytes::copy_from_slice(&form[..form.len() / 2]);
+    let stuck = futures::stream::once(async move { Ok::<_, std::io::Error>(head) })
+        .chain(futures::stream::pending())
+        .inspect(move |_| {
+            if let Some(reading) = reading.take() {
+                let _ = reading.send(());
+            }
+        });
+    let router = h.internal.clone();
+    let request = Call::new(Method::POST, format!("/v1/numbers/{PN}/media"))
+        .key(&a_key)
+        .header("content-type", &content_type)
+        .body(Body::from_stream(stuck))
+        .build();
+    let task = tokio::spawn(async move { common::send(&router, request).await });
+    read.await.unwrap();
+    // B uploads.
+    h.graph.push_json(200, json!({"id": MEDIA_ID}));
+    let theirs = h
+        .call(
+            Call::new(Method::POST, "/v1/numbers/106540352242923/media")
+                .key(&b_key)
+                .multipart(&[("type", None, b"image/png"), ("file", Some("b.png"), b"x")]),
+        )
+        .await;
+    assert_eq!(theirs.status, StatusCode::CREATED, "{}", theirs.text);
+    // A's share is taken.
+    let again = h
+        .call(upload(
+            &a_key,
+            &[("type", None, b"image/png"), ("file", Some("a.png"), b"x")],
+        ))
+        .await;
+    assert_eq!(
+        (again.status, again.code().as_str()),
+        (StatusCode::TOO_MANY_REQUESTS, "too_many_requests")
+    );
+    task.abort();
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// A streamed download holds a stream slot of its tenant's share until
+/// its body ends; another tenant streams meanwhile. Decisive: the slot
+/// moved into the body.
+#[tokio::test]
+async fn a_streamed_download_holds_its_slot_until_its_body_ends() {
+    let (h, key) = connected_with(Settings {
+        media_streams: 2,
+        ..common::test_settings()
+    })
+    .await;
+    h.tenant("merchant-43").await;
+    h.connect(
+        "merchant-43",
+        "102290129340399",
+        &["106540352242923"],
+        "TOKEN-43",
+    )
+    .await;
+    let b_key = h.tenant_key("merchant-43", &[Scope::Media]).await;
+    let file = b"a streamed file".to_vec();
+    let digest = sha256_hex(&file);
+    h.graph.push_json(200, media_info(&file, &digest, None));
+    h.graph.push_bytes(200, "image/jpeg", file.clone());
+    let open = h
+        .internal
+        .clone()
+        .oneshot(download(&key, "?stream=true").build())
+        .await
+        .unwrap();
+    assert_eq!(open.status(), StatusCode::OK);
+    // The body is not read yet: the slot is still held.
+    let refused = h.call(download(&key, "?stream=true")).await;
+    assert_eq!(refused.code(), "too_many_requests", "{}", refused.text);
+    h.graph.push_json(200, media_info(&file, &digest, None));
+    h.graph.push_bytes(200, "image/jpeg", file.clone());
+    let theirs = h
+        .call(
+            Call::get(format!(
+                "/v1/numbers/106540352242923/media/{MEDIA_ID}?stream=true"
+            ))
+            .key(&b_key),
+        )
+        .await;
+    assert_eq!(theirs.status, StatusCode::OK, "{}", theirs.text);
+    // Once the body ended, the slot is free.
+    let body = open.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&body[..], &file[..]);
+    h.graph.push_json(200, media_info(&file, &digest, None));
+    h.graph.push_bytes(200, "image/jpeg", file.clone());
+    assert_eq!(
+        h.call(download(&key, "?stream=true")).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(h.graph.remaining(), 0);
 }

@@ -4,18 +4,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use crate::api::templates::TemplateCache;
+use crate::auth::Tokens;
+use crate::metrics::Metrics;
+use crate::ratelimit::{RateLimiter, RateLimits, Slots};
+use crate::store::Store;
 use meta_whatsapp_rs::Client;
 use meta_whatsapp_rs::client::DEFAULT_TIMEOUT;
 use meta_whatsapp_rs::client::embedded_signup::TokenVault;
 use meta_whatsapp_rs::core::config::ApiVersion;
 use meta_whatsapp_rs::core::secret::VerifyToken;
-use tokio::sync::Semaphore;
-
-use crate::api::templates::TemplateCache;
-use crate::auth::Tokens;
-use crate::metrics::Metrics;
-use crate::ratelimit::{RateLimiter, RateLimits};
-use crate::store::Store;
 
 /// Default `WA_SERVER_IDEMPOTENCY_TTL`: how long an idempotency key's
 /// record is kept (docs/design/server.md, section 5.4).
@@ -36,6 +34,11 @@ pub const DEFAULT_MEDIA_MAX_BYTES: u64 = 100 * 1024 * 1024;
 /// conservative one, as each may hold up to `WA_SERVER_MEDIA_MAX_BYTES`.
 pub const DEFAULT_MEDIA_CONCURRENCY: usize = 4;
 
+/// Default `WA_SERVER_MEDIA_STREAMS`: streamed downloads (`?stream=true`)
+/// a replica forwards at once. Each holds a connection to Meta and one to
+/// the caller rather than memory; the design states no number.
+pub const DEFAULT_MEDIA_STREAMS: usize = 16;
+
 /// How long a WABA's template list is cached (section 4.2: Meta allows 200
 /// management calls an hour per WABA).
 pub const TEMPLATE_CACHE_TTL: Duration = Duration::from_secs(60);
@@ -54,6 +57,8 @@ pub struct Settings {
     pub media_max_bytes: u64,
     /// `WA_SERVER_MEDIA_CONCURRENCY`.
     pub media_concurrency: usize,
+    /// `WA_SERVER_MEDIA_STREAMS`.
+    pub media_streams: usize,
     /// [`TEMPLATE_CACHE_TTL`].
     pub template_cache_ttl: Duration,
 }
@@ -66,6 +71,7 @@ impl Default for Settings {
             idempotency_lease: IDEMPOTENCY_LEASE,
             media_max_bytes: DEFAULT_MEDIA_MAX_BYTES,
             media_concurrency: DEFAULT_MEDIA_CONCURRENCY,
+            media_streams: DEFAULT_MEDIA_STREAMS,
             template_cache_ttl: TEMPLATE_CACHE_TTL,
         }
     }
@@ -86,7 +92,8 @@ struct Inner {
     shutting_down: AtomicBool,
     settings: Settings,
     limiter: RateLimiter,
-    media_permits: Arc<Semaphore>,
+    media_slots: Slots,
+    stream_slots: Slots,
     templates: TemplateCache,
 }
 
@@ -135,7 +142,8 @@ impl AppState {
                 metrics,
                 shutting_down: AtomicBool::new(false),
                 limiter: RateLimiter::new(settings.rate_limits),
-                media_permits: Arc::new(Semaphore::new(settings.media_concurrency.max(1))),
+                media_slots: Slots::new(settings.media_concurrency),
+                stream_slots: Slots::new(settings.media_streams),
                 templates: TemplateCache::new(settings.template_cache_ttl),
                 settings,
             }),
@@ -178,10 +186,17 @@ impl AppState {
         &self.inner.limiter
     }
 
-    /// Permits for media transfers held in memory (uploads, unstreamed
-    /// downloads): `WA_SERVER_MEDIA_CONCURRENCY` of them.
-    pub fn media_permits(&self) -> &Arc<Semaphore> {
-        &self.inner.media_permits
+    /// Slots for media transfers held in memory (uploads, unstreamed
+    /// downloads): `WA_SERVER_MEDIA_CONCURRENCY` of them, half of them at
+    /// most for one tenant.
+    pub fn media_slots(&self) -> &Slots {
+        &self.inner.media_slots
+    }
+
+    /// Slots for streamed downloads: `WA_SERVER_MEDIA_STREAMS` of them,
+    /// half of them at most for one tenant.
+    pub fn stream_slots(&self) -> &Slots {
+        &self.inner.stream_slots
     }
 
     /// The template lists cached per WABA.

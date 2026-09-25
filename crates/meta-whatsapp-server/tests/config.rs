@@ -402,6 +402,7 @@ fn the_service_limits_default_to_the_designs_and_parse() {
     );
     assert_eq!(settings.media_max_bytes, 100 * 1024 * 1024);
     assert_eq!(settings.media_concurrency, 4);
+    assert_eq!(settings.media_streams, 16);
     assert_eq!(settings.template_cache_ttl, Duration::from_secs(60));
     let limits = settings.rate_limits;
     assert_eq!(
@@ -431,6 +432,7 @@ fn the_service_limits_default_to_the_designs_and_parse() {
             .set("WA_SERVER_IDEMPOTENCY_TTL", "48h")
             .set("WA_SERVER_MEDIA_MAX_BYTES", "16777216")
             .set("WA_SERVER_MEDIA_CONCURRENCY", "2")
+            .set("WA_SERVER_MEDIA_STREAMS", "3")
             .set("WA_SERVER_RATE_SEND", "10")
             .set("WA_SERVER_RATE_READ", "5")
             .set("WA_SERVER_RATE_READ_BURST", "7")
@@ -441,6 +443,7 @@ fn the_service_limits_default_to_the_designs_and_parse() {
     assert_eq!(settings.idempotency_ttl, Duration::from_hours(48));
     assert_eq!(settings.media_max_bytes, 16 * 1024 * 1024);
     assert_eq!(settings.media_concurrency, 2);
+    assert_eq!(settings.media_streams, 3);
     assert_eq!(
         settings.rate_limits.send,
         Rate {
@@ -467,6 +470,7 @@ fn the_service_limits_default_to_the_designs_and_parse() {
         ("WA_SERVER_IDEMPOTENCY_TTL", "soon"),
         ("WA_SERVER_IDEMPOTENCY_TTL", "1m"),
         ("WA_SERVER_MEDIA_MAX_BYTES", "0"),
+        ("WA_SERVER_MEDIA_STREAMS", "0"),
         ("WA_SERVER_MEDIA_MAX_BYTES", "100MiB"),
         ("WA_SERVER_MEDIA_CONCURRENCY", "-1"),
         ("WA_SERVER_RATE_SEND", "0"),

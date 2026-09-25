@@ -1734,7 +1734,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` on `type` (not a supported media type), `file` or `body`; `idempotency_key_reused`",
+            "description": "`invalid_request` on `type` (not a supported media type), `file` or `body` (not a form of `type` and `file`, or its framing past 16 KiB); `idempotency_key_reused`",
             "content": {
               "application/json": {
                 "schema": {
@@ -1744,7 +1744,7 @@
             }
           },
           "429": {
-            "description": "`too_many_requests`: the tenant's limit, or every media slot of the replica busy",
+            "description": "`too_many_requests`: the tenant's rate limit, or its share of the replica's media slots busy",
             "content": {
               "application/json": {
                 "schema": {
@@ -1920,7 +1920,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` on `max_bytes` (over 16 MiB without `stream=true`) or `stream`",
+            "description": "`invalid_request` on `media_id` (digits), `max_bytes` (over 16 MiB without `stream=true`) or `stream`",
             "content": {
               "application/json": {
                 "schema": {
@@ -1930,7 +1930,7 @@
             }
           },
           "429": {
-            "description": "`too_many_requests`",
+            "description": "`too_many_requests`: the tenant's rate limit, or its share of the replica's media (or stream) slots busy",
             "content": {
               "application/json": {
                 "schema": {
@@ -2059,7 +2059,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` on `media_id`",
+            "description": "`invalid_request` on `media_id` (digits)",
             "content": {
               "application/json": {
                 "schema": {

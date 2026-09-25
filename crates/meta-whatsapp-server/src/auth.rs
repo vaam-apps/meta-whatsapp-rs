@@ -560,10 +560,14 @@ impl FromRequestParts<AppState> for OwnedWaba {
 /// Whether Meta refused a call on an object named by id (a media id, a
 /// template id) as one it does not have, or not for this caller: an
 /// invalid parameter (`100`, `33`), a permission error, a not-found, or an
-/// unknown code, answered with a 4xx; or a 4xx without a Graph error
-/// object. A token's own failure (`190`), throttling and Meta's failures
-/// (5xx) are not refusals of the object.
+/// unknown code, answered with a 4xx; a 4xx without a Graph error object;
+/// or a JSON answer that is not that kind of object (another node the id
+/// names). A token's own failure (`190`), throttling, Meta's failures
+/// (5xx) and an answer that is not JSON are not refusals of the object.
 pub(crate) fn object_refused(error: &Error) -> bool {
+    if let Error::Decode { source, .. } = error {
+        return source.classify() == serde_json::error::Category::Data;
+    }
     if let Some(graph) = error.graph() {
         return graph.http_status.is_none_or(|status| status < 500)
             && matches!(

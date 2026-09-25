@@ -4,7 +4,7 @@
 //! | --- | --- |
 //! | `POST /v1/numbers/{pn}/media` | `POST /{pn}/media` (multipart: `messaging_product`, `type`, `file`) |
 //! | `GET /v1/numbers/{pn}/media/{media_id}` | `GET /{media_id}?phone_number_id={pn}` (URL, MIME type, SHA-256, size), then the URL (`lookaside.fbsbx.com`, the only other host a token may reach) |
-//! | `DELETE /v1/numbers/{pn}/media/{media_id}` | `DELETE /{media_id}?phone_number_id={pn}` |
+//! | `DELETE /v1/numbers/{pn}/media/{media_id}` | `GET /{media_id}?phone_number_id={pn}` (it must be that media), then `DELETE /{media_id}?phone_number_id={pn}` |
 //!
 //! Pages: `business-phone-numbers/media`, `reference/media/media-api`,
 //! `reference/media/media-download-api`,
@@ -16,8 +16,10 @@
 //! images, 16 MiB for audio and video, 500 KiB for stickers, 100 MiB for
 //! documents) or than `WA_SERVER_MEDIA_MAX_BYTES` is `413
 //! media_too_large`; when `type` comes first, the body is read no further
-//! than its kind's limit (and the form's framing). They take an
-//! `Idempotency-Key`.
+//! than its kind's limit (and the form's framing). The form's framing (a
+//! preamble, a part's headers) is read up to 16 KiB and a chunk (`422` on
+//! `body` past it), and frames already there reach the parser merged into
+//! chunks of up to 64 KiB. They take an `Idempotency-Key`.
 //!
 //! **Downloads** are verified against the SHA-256 Meta reports:
 //!
@@ -25,17 +27,27 @@
 //!   cap 16 MiB), verified, and only then answered: a mismatch is `502
 //!   integrity` and **no byte** of the file is sent;
 //! - with `?stream=true` (`max_bytes` up to `WA_SERVER_MEDIA_MAX_BYTES`),
-//!   bytes are forwarded as they arrive and hashed on the way; a mismatch
-//!   (or a file growing past `max_bytes`) **aborts the connection**, so
-//!   unverified bytes never arrive as a complete body.
+//!   bytes are forwarded as they arrive, one chunk behind, and hashed on
+//!   the way; a mismatch (or a file growing past `max_bytes`) **aborts the
+//!   connection** and the chunk held back is never sent, so unverified
+//!   bytes never arrive as a complete body, nor as the whole file.
 //!
-//! Either way `X-WA-SHA256` carries the digest (hex), and a size Meta
-//! reports over the limit is `413 media_too_large` before the download.
+//! Either way `X-WA-SHA256` carries the digest (hex), the answer is an
+//! `attachment` with `nosniff` and a sandboxing `Content-Security-Policy`
+//! (a customer's file is never active content), and a size Meta reports
+//! over the limit is `413 media_too_large` before the download.
+//!
 //! Uploads and whole-file downloads hold memory: at most
-//! `WA_SERVER_MEDIA_CONCURRENCY` run at once on a replica, the next is
-//! `429 too_many_requests`.
+//! `WA_SERVER_MEDIA_CONCURRENCY` run at once on a replica, streamed
+//! downloads at most `WA_SERVER_MEDIA_STREAMS`; one tenant holds half of
+//! either at most (one at least), and the next is `429
+//! too_many_requests`. An upload takes its slot before its body is read;
+//! a stream holds its slot until its body ends.
 //!
-//! **A media id is the number's, or it does not exist.** The number is the
+//! **A media id is the number's, or it does not exist.** It is digits
+//! (`422` on `media_id` otherwise), and the node Meta answers for it must
+//! be media with that id: a deletion looks it up first, since `DELETE
+//! /{id}` deletes whatever node an id names. The number is the
 //! tenant's (step 4 of the authorization order); the media id is Meta's,
 //! and one token may reach the media of several tenants' numbers (the
 //! platform's system user token attached to WABAs of different tenants).
@@ -65,9 +77,12 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use utoipa::ToSchema;
 
+use super::common::graph_id;
 use crate::auth::{Caller, OwnedNumber};
 use crate::error::{ApiError, ErrorBody};
 use crate::idempotency::{self, Fingerprint, KeyHeader, Success};
+use crate::model::TenantId;
+use crate::ratelimit::Slot;
 use crate::state::AppState;
 
 /// `X-WA-SHA256`: the downloaded file's SHA-256, hex.
@@ -184,9 +199,13 @@ fn filename(given: Option<&str>, mime_type: &str) -> String {
     }
 }
 
-/// A `type` field: one of Meta's supported MIME types.
+/// A `type` field: one of Meta's supported MIME types, without a control
+/// character (it becomes a header of the part Meta receives).
 fn checked_type(value: &str) -> Result<String, ApiError> {
     let value = value.trim();
+    if !value.bytes().all(|b| b == b' ' || b.is_ascii_graphic()) {
+        return Err(ApiError::invalid("type"));
+    }
     MediaKind::for_mime_type(value)
         .map(|_| value.to_owned())
         .ok_or_else(|| ApiError::invalid("type"))
@@ -209,33 +228,126 @@ fn form_error(error: &multer::Error) -> ApiError {
     }
 }
 
-/// A body stream that hands its chunks over one at a time: after each, it
-/// answers "not yet" once (and wakes its reader at once). multer reads
-/// every chunk already there before it parses any; without the pause, a
-/// client sending faster than the form is parsed would have the whole
-/// body read, whatever limit parsing it finds.
-struct OneChunkAtATime<S> {
-    inner: S,
-    paused: bool,
+/// Frames already there are merged into chunks of up to this many bytes
+/// before multer sees them: multer scans what it holds on every chunk, so
+/// a body sent as tiny frames would cost it work per frame.
+pub const FORM_CHUNK: usize = 64 * 1024;
+
+/// Most bytes read while waiting for a part's headers (the form's
+/// preamble, a part's headers), past one chunk: a form is `type` and
+/// `file`, whose framing is a few hundred bytes.
+pub const FORM_FRAMING: u64 = 16 * 1024;
+
+/// Whether the reader is waiting for a part's headers, how much it read
+/// meanwhile (see [`FORM_FRAMING`]), and whether the budget was met once
+/// already.
+#[derive(Debug, Default)]
+struct Framing {
+    armed: std::sync::atomic::AtomicBool,
+    read: std::sync::atomic::AtomicU64,
+    spent: std::sync::atomic::AtomicBool,
 }
 
-impl<S: futures::Stream + Unpin> futures::Stream for OneChunkAtATime<S> {
-    type Item = S::Item;
+impl Framing {
+    fn arm(&self) {
+        self.read.store(0, std::sync::atomic::Ordering::SeqCst);
+        self.spent.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn disarm(&self) {
+        self.armed.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// The form's framing ran past [`FORM_FRAMING`].
+#[derive(Debug, thiserror::Error)]
+#[error("the form's framing is too long")]
+struct FramingTooLong;
+
+/// An upload's body as multer reads it:
+///
+/// - **one chunk at a time**: after each, it answers "not yet" once (and
+///   wakes its reader at once). multer reads every chunk already there
+///   before it parses any; without the pause, a client sending faster than
+///   the form is parsed would have the whole body read, whatever limit
+///   parsing it finds;
+/// - **frames merged** into chunks of up to [`FORM_CHUNK`] bytes, from
+///   what is already there (a body of one-byte frames is not parsed a
+///   byte at a time);
+/// - **framing bounded**: while the reader waits for a part's headers,
+///   at most [`FORM_FRAMING`] bytes and a chunk are read.
+struct FormBody<S> {
+    inner: S,
+    paused: bool,
+    ended: bool,
+    framing: std::sync::Arc<Framing>,
+}
+
+impl<S, E> futures::Stream for FormBody<S>
+where
+    S: futures::Stream<Item = Result<Bytes, E>> + Unpin,
+    E: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    type Item = Result<Bytes, Box<dyn std::error::Error + Send + Sync>>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
+        use std::sync::atomic::Ordering;
+        use std::task::Poll;
+        // The pause comes first, the end included: multer, handed a chunk
+        // and the end in one read of the stream, takes a form whose first
+        // boundary it has not looked for yet as incomplete.
         if !self.paused {
             self.paused = true;
             cx.waker().wake_by_ref();
-            return std::task::Poll::Pending;
+            return Poll::Pending;
         }
-        let next = self.inner.poll_next_unpin(cx);
-        if next.is_ready() {
-            self.paused = false;
+        if self.ended {
+            return Poll::Ready(None);
         }
-        next
+        if self.framing.armed.load(Ordering::SeqCst)
+            && self.framing.read.load(Ordering::SeqCst) >= FORM_FRAMING
+        {
+            // multer looks at what it holds after each read of the stream:
+            // the first time, "not yet", so that it parses what it has;
+            // asked again, it needs more, and the framing is too long.
+            if self.framing.spent.swap(true, Ordering::SeqCst) {
+                self.ended = true;
+                return Poll::Ready(Some(Err(Box::new(FramingTooLong))));
+            }
+            cx.waker().wake_by_ref();
+            return Poll::Pending;
+        }
+        let mut merged: Vec<u8> = Vec::new();
+        while merged.len() < FORM_CHUNK {
+            match self.inner.poll_next_unpin(cx) {
+                Poll::Pending if merged.is_empty() => return Poll::Pending,
+                Poll::Pending => break,
+                Poll::Ready(Some(Ok(frame))) => merged.extend_from_slice(&frame),
+                Poll::Ready(Some(Err(error))) => {
+                    self.ended = true;
+                    return Poll::Ready(Some(Err(error.into())));
+                }
+                Poll::Ready(None) => {
+                    self.ended = true;
+                    if merged.is_empty() {
+                        return Poll::Ready(None);
+                    }
+                    break;
+                }
+            }
+        }
+        self.paused = false;
+        if self.framing.armed.load(Ordering::SeqCst) {
+            self.framing.read.fetch_add(
+                u64::try_from(merged.len()).unwrap_or(u64::MAX),
+                Ordering::SeqCst,
+            );
+        }
+        Poll::Ready(Some(Ok(Bytes::from(merged))))
     }
 }
 
@@ -249,9 +361,12 @@ async fn read_upload(max_bytes: u64, request: Request) -> Result<Upload, ApiErro
         .and_then(|v| v.to_str().ok())
         .and_then(|v| multer::parse_boundary(v).ok())
         .ok_or_else(|| ApiError::invalid("body"))?;
-    let body = OneChunkAtATime {
+    let framing = std::sync::Arc::new(Framing::default());
+    let body = FormBody {
         inner: request.into_body().into_data_stream(),
         paused: false,
+        ended: false,
+        framing: framing.clone(),
     };
     let constraints = multer::Constraints::new()
         .allowed_fields(vec!["file", "type"])
@@ -264,7 +379,13 @@ async fn read_upload(max_bytes: u64, request: Request) -> Result<Upload, ApiErro
     let mut form = multer::Multipart::with_constraints(body, boundary, constraints);
     let mut mime_type: Option<String> = None;
     let mut file: Option<(Option<String>, Vec<u8>)> = None;
-    while let Some(mut field) = form.next_field().await.map_err(|e| form_error(&e))? {
+    loop {
+        framing.arm();
+        let next = form.next_field().await;
+        framing.disarm();
+        let Some(mut field) = next.map_err(|e| form_error(&e))? else {
+            break;
+        };
         match field.name() {
             Some("type") if mime_type.is_none() => {
                 let value = field.text().await.map_err(|e| form_error(&e))?;
@@ -332,13 +453,13 @@ async fn upload(
     }
 }
 
-/// A permit for a transfer held in memory, or `429 too_many_requests`.
-fn media_permit(state: &AppState) -> Result<tokio::sync::OwnedSemaphorePermit, ApiError> {
+/// A slot for a transfer held in memory, or `429 too_many_requests` when
+/// the tenant's share or the replica's slots are taken.
+fn media_slot(state: &AppState, tenant: &TenantId) -> Result<Slot, ApiError> {
     state
-        .media_permits()
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| ApiError::too_many_requests(1))
+        .media_slots()
+        .try_acquire(tenant)
+        .ok_or_else(|| ApiError::too_many_requests(1))
 }
 
 /// `POST /v1/numbers/{pn}/media`: upload a file.
@@ -360,8 +481,8 @@ fn media_permit(state: &AppState) -> Result<tokio::sync::OwnedSemaphorePermit, A
         (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
         (status = 409, description = "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`", body = ErrorBody),
         (status = 413, description = "`media_too_large`: larger than its type allows or `WA_SERVER_MEDIA_MAX_BYTES`; `payload_too_large`", body = ErrorBody),
-        (status = 422, description = "`invalid_request` on `type` (not a supported media type), `file` or `body`; `idempotency_key_reused`", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`: the tenant's limit, or every media slot of the replica busy", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `type` (not a supported media type), `file` or `body` (not a form of `type` and `file`, or its framing past 16 KiB); `idempotency_key_reused`", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`: the tenant's rate limit, or its share of the replica's media slots busy", body = ErrorBody),
         (status = 502, description = "Meta failed (`media_upload_failed`, …)", body = ErrorBody),
         (status = 504, description = "`timeout`: the upload may have happened", body = ErrorBody),
     )
@@ -374,7 +495,9 @@ pub async fn upload_media(
     uri: Uri,
     request: Request,
 ) -> Response {
-    let permit = match media_permit(&state) {
+    // The slot is taken before the body is read: a body that trickles in
+    // holds one of its tenant's slots, never another tenant's.
+    let permit = match media_slot(&state, caller.tenant()) {
         Ok(permit) => permit,
         Err(error) => return error.into_response(),
     };
@@ -518,33 +641,38 @@ async fn download_failed(state: &AppState, owned: &OwnedNumber, error: &Error) -
         (status = 404, description = "`not_found`: no such number for this tenant, or no such media on this number (another number's media id looks like a missing one)", body = ErrorBody),
         (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
         (status = 413, description = "`media_too_large`: larger than `max_bytes`", body = ErrorBody),
-        (status = 422, description = "`invalid_request` on `max_bytes` (over 16 MiB without `stream=true`) or `stream`", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `media_id` (digits), `max_bytes` (over 16 MiB without `stream=true`) or `stream`", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`: the tenant's rate limit, or its share of the replica's media (or stream) slots busy", body = ErrorBody),
         (status = 502, description = "`integrity` (the digest does not match: nothing of the file was answered), `media_download_failed`, `upstream`", body = ErrorBody),
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
 )]
 pub async fn download_media(
     State(state): State<AppState>,
+    caller: Caller,
     owned: OwnedNumber,
     Path((_, media_id)): Path<(String, String)>,
     query: DownloadQuery,
 ) -> Result<Response, ApiError> {
-    if media_id.trim().is_empty() {
-        return Err(ApiError::invalid("media_id"));
-    }
-    // A whole file is held in memory: take a slot first.
+    graph_id("media_id", &media_id)?;
+    // A whole file is held in memory, a stream holds two connections:
+    // take a slot of the tenant's share first.
     let permit = if query.stream {
-        None
+        state
+            .stream_slots()
+            .try_acquire(caller.tenant())
+            .ok_or_else(|| ApiError::too_many_requests(1))?
     } else {
-        Some(media_permit(&state)?)
+        media_slot(&state, caller.tenant())?
     };
     let media = owned
         .client()
         .media(owned.phone_number_id().clone())
         .restrict_to_phone_number();
-    let info = match media.url(&MediaId::new(media_id)).await {
-        Ok(info) => info,
+    let info = match media.url(&MediaId::new(media_id.as_str())).await {
+        // A media node, the one asked for.
+        Ok(info) if info.id.as_str() == media_id => info,
+        Ok(_) => return Err(ApiError::not_found()),
         Err(error) => return Err(owned.failed_on_object(&state, &error).await),
     };
     // Meta's reported size, before a byte is downloaded (checked again
@@ -578,9 +706,22 @@ pub async fn download_media(
             header::CONTENT_DISPOSITION,
             HeaderValue::from_static("attachment"),
         ),
+        // A customer's file is never active content, whatever its type (an
+        // HTML or SVG document shown by a CMS that drops the attachment).
+        (
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static("sandbox; default-src 'none'"),
+        ),
     ];
     if query.stream {
-        let body = Body::from_stream(bounded(verified.body, query.max_bytes));
+        let body = Body::from_stream(HeldBack {
+            inner: verified.body,
+            held: None,
+            read: 0,
+            max_bytes: query.max_bytes,
+            done: false,
+            _slot: permit,
+        });
         return Ok((StatusCode::OK, headers, body).into_response());
     }
     let mut body = verified.body;
@@ -609,34 +750,72 @@ enum StreamStopped {
     Failed,
 }
 
-/// The verified body, cut (as an error: the connection aborts) past
-/// `max_bytes`; nothing follows the first error.
-fn bounded(
-    body: meta_whatsapp_rs::client::media::VerifiedBody,
+/// The verified body of a streamed download, forwarded **one chunk
+/// behind**: the last chunk goes out only once the stream ended with the
+/// digest matching, so even a client that ignores the aborted connection
+/// never holds the whole of a tampered file. Past `max_bytes`, or on a
+/// mismatch or a failure, it errs (the connection aborts), the held chunk
+/// is dropped, and nothing follows. It holds the download's stream slot
+/// until it ends.
+struct HeldBack {
+    inner: meta_whatsapp_rs::client::media::VerifiedBody,
+    held: Option<Bytes>,
+    read: u64,
     max_bytes: u64,
-) -> impl futures::Stream<Item = Result<Bytes, StreamStopped>> + Send + 'static {
-    let mut read: u64 = 0;
-    body.map(move |chunk| {
-        let chunk = chunk.map_err(|error| match error {
-            Error::Transport(TransportError::Integrity(_)) => StreamStopped::Integrity,
-            _ => StreamStopped::Failed,
-        })?;
-        read = read.saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
-        if read > max_bytes {
-            return Err(StreamStopped::TooLarge);
+    done: bool,
+    _slot: Slot,
+}
+
+impl HeldBack {
+    fn stop(&mut self, why: StreamStopped) -> Result<Bytes, StreamStopped> {
+        self.done = true;
+        self.held = None;
+        tracing::warn!(reason = %why, "a streamed media download stopped: connection aborted");
+        Err(why)
+    }
+}
+
+impl futures::Stream for HeldBack {
+    type Item = Result<Bytes, StreamStopped>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
+        loop {
+            if self.done {
+                return Poll::Ready(None);
+            }
+            let chunk = match self.inner.poll_next_unpin(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(None) => {
+                    // Verified: the digest matched.
+                    self.done = true;
+                    return Poll::Ready(self.held.take().map(Ok));
+                }
+                Poll::Ready(Some(Err(Error::Transport(TransportError::Integrity(_))))) => {
+                    return Poll::Ready(Some(self.stop(StreamStopped::Integrity)));
+                }
+                Poll::Ready(Some(Err(_))) => {
+                    return Poll::Ready(Some(self.stop(StreamStopped::Failed)));
+                }
+                Poll::Ready(Some(Ok(chunk))) => chunk,
+            };
+            self.read = self
+                .read
+                .saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
+            if self.read > self.max_bytes {
+                return Poll::Ready(Some(self.stop(StreamStopped::TooLarge)));
+            }
+            if chunk.is_empty() {
+                continue;
+            }
+            if let Some(previous) = self.held.replace(chunk) {
+                return Poll::Ready(Some(Ok(previous)));
+            }
         }
-        Ok(chunk)
-    })
-    .scan(false, |stopped, item| {
-        if *stopped {
-            return std::future::ready(None);
-        }
-        if let Err(why) = &item {
-            *stopped = true;
-            tracing::warn!(reason = %why, "a streamed media download stopped: connection aborted");
-        }
-        std::future::ready(Some(item))
-    })
+    }
 }
 
 // ─── Delete ──────────────────────────────────────────────────────────────
@@ -658,7 +837,7 @@ fn bounded(
         (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant, or no such media on this number (another number's media id looks like a missing one)", body = ErrorBody),
         (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
-        (status = 422, description = "`invalid_request` on `media_id`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `media_id` (digits)", body = ErrorBody),
         (status = 429, description = "`too_many_requests`", body = ErrorBody),
         (status = 502, description = "Meta failed", body = ErrorBody),
         (status = 504, description = "`timeout`", body = ErrorBody),
@@ -669,15 +848,21 @@ pub async fn delete_media(
     owned: OwnedNumber,
     Path((_, media_id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    if media_id.trim().is_empty() {
-        return Err(ApiError::invalid("media_id"));
-    }
-    let deleted = owned
+    graph_id("media_id", &media_id)?;
+    let media = owned
         .client()
         .media(owned.phone_number_id().clone())
-        .restrict_to_phone_number()
-        .delete(&MediaId::new(media_id))
-        .await;
+        .restrict_to_phone_number();
+    let id = MediaId::new(media_id.as_str());
+    // `DELETE /{id}` deletes whatever node the id names (a flow, a QR
+    // code) that the token reaches: look it up first, as this number's
+    // media, and delete only that.
+    match media.url(&id).await {
+        Ok(info) if info.id == id => {}
+        Ok(_) => return Err(ApiError::not_found()),
+        Err(error) => return Err(owned.failed_on_object(&state, &error).await),
+    }
+    let deleted = media.delete(&id).await;
     match deleted {
         Ok(()) => Ok(StatusCode::NO_CONTENT),
         Err(error) => Err(owned.failed_on_object(&state, &error).await),
@@ -704,6 +889,24 @@ mod tests {
         assert_eq!(filename(Some(""), "audio/ogg; codecs=opus"), "upload.ogg");
         assert_eq!(filename(Some("é"), "application/pdf"), "upload.pdf");
         assert_eq!(filename(Some(&"x".repeat(300)), "image/png").len(), 128);
+    }
+
+    /// Frames already there reach multer merged, up to [`FORM_CHUNK`]
+    /// bytes: a body of one-byte frames is not parsed a byte at a time.
+    /// Decisive: the merge.
+    #[tokio::test]
+    async fn ready_frames_are_merged_before_multer_sees_them() {
+        let frames = futures::stream::iter(
+            (0..FORM_CHUNK + 10).map(|_| Ok::<_, std::io::Error>(Bytes::from_static(b"x"))),
+        );
+        let body = FormBody {
+            inner: frames,
+            paused: false,
+            ended: false,
+            framing: std::sync::Arc::new(Framing::default()),
+        };
+        let chunks: Vec<usize> = body.map(|chunk| chunk.unwrap().len()).collect().await;
+        assert_eq!(chunks, [FORM_CHUNK, 10]);
     }
 
     #[test]

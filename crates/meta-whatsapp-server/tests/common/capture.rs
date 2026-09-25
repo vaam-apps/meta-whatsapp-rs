@@ -432,6 +432,12 @@ async fn send_media_and_templates(h: &Harness, admin: &str) -> Vec<String> {
         .call(Call::get(format!("/v1/numbers/{pn}/media/1037543291543636")).key(&key))
         .await;
     assert_eq!(downloaded.status.as_u16(), 200, "{}", downloaded.text);
+    h.graph.push_json(
+        200,
+        json!({"messaging_product": "whatsapp",
+               "url": "https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1037543291543636&ext=1&hash=abc",
+               "mime_type": "image/png", "sha256": digest, "id": "1037543291543636"}),
+    );
     h.graph.push_json(200, json!({"success": true}));
     let deleted = h
         .call(

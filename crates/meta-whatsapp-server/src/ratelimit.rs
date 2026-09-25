@@ -24,9 +24,10 @@
 //! implemented.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use meta_whatsapp_rs::webhooks::axum::http::Method;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::{Duration, Instant};
 
 use crate::model::{Scope, TenantId};
@@ -173,6 +174,62 @@ impl RateLimiter {
     }
 }
 
+/// Transfers a replica runs at once (media held in memory, streamed
+/// downloads), and each tenant's share of them: a tenant holds at most
+/// half of a pool (at least one), so one tenant's slow or stuck transfers
+/// never take every slot of the replica (docs/design/server.md, section 6:
+/// "bounded media concurrency"; the share is this service's default, the
+/// design states none).
+#[derive(Debug)]
+pub struct Slots {
+    total: Arc<Semaphore>,
+    per_tenant: usize,
+    tenants: Mutex<HashMap<TenantId, Arc<Semaphore>>>,
+}
+
+/// A slot of [`Slots`], its tenant's and the replica's, released when
+/// dropped.
+#[derive(Debug)]
+pub struct Slot {
+    _tenant: OwnedSemaphorePermit,
+    _total: OwnedSemaphorePermit,
+}
+
+impl Slots {
+    /// A pool of `total` slots (at least one), each tenant holding at most
+    /// half of them (at least one).
+    pub fn new(total: usize) -> Self {
+        let total = total.max(1);
+        Self {
+            total: Arc::new(Semaphore::new(total)),
+            per_tenant: (total / 2).max(1),
+            tenants: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// How many slots one tenant may hold.
+    pub fn per_tenant(&self) -> usize {
+        self.per_tenant
+    }
+
+    /// A slot for `tenant`, or `None` when its share or the pool is taken.
+    pub fn try_acquire(&self, tenant: &TenantId) -> Option<Slot> {
+        let share = self
+            .tenants
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(tenant.clone())
+            .or_insert_with(|| Arc::new(Semaphore::new(self.per_tenant)))
+            .clone();
+        let tenant = share.try_acquire_owned().ok()?;
+        let total = self.total.clone().try_acquire_owned().ok()?;
+        Some(Slot {
+            _tenant: tenant,
+            _total: total,
+        })
+    }
+}
+
 /// `Retry-After` for a wait: whole seconds, rounded up, at least 1.
 pub fn retry_after_secs(wait: Duration) -> u64 {
     let secs = wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
@@ -247,6 +304,28 @@ mod tests {
             limiter.check(&a, RouteClass::Send).unwrap();
         }
         assert!(limiter.check(&a, RouteClass::Send).is_err());
+    }
+
+    /// A tenant holds half of a pool at most: another tenant still gets a
+    /// slot. Decisive: the tenant's share.
+    #[test]
+    fn a_tenant_holds_its_share_of_the_slots() {
+        let slots = Slots::new(4);
+        assert_eq!(slots.per_tenant(), 2);
+        let a = tenant("a");
+        let held: Vec<Slot> = (0..2).map(|_| slots.try_acquire(&a).unwrap()).collect();
+        assert!(slots.try_acquire(&a).is_none(), "a's share is taken");
+        let b = slots.try_acquire(&tenant("b")).unwrap();
+        let c = slots.try_acquire(&tenant("c")).unwrap();
+        assert!(
+            slots.try_acquire(&tenant("d")).is_none(),
+            "the pool is taken"
+        );
+        drop(held);
+        assert!(slots.try_acquire(&a).is_some(), "released on drop");
+        drop((b, c));
+        assert_eq!(Slots::new(1).per_tenant(), 1);
+        assert_eq!(Slots::new(0).per_tenant(), 1);
     }
 
     #[test]
