@@ -177,3 +177,32 @@ async fn the_public_listener_serves_metas_check_and_livez_only() {
     }
     assert_eq!(PUBLIC_ROUTES, ["/webhooks/meta", "/livez"]);
 }
+
+/// Anyone on the internet may send any token as a method to the public
+/// listener: the metrics keep a bounded label set, never the token.
+/// Decisive: labelling requests by their raw method (security review H1).
+#[tokio::test]
+async fn made_up_methods_are_counted_as_other() {
+    let h = Harness::new();
+    let paths = ["/livez", "/webhooks/meta", "/nowhere"];
+    for i in 0..100 {
+        let method = Method::from_bytes(format!("MADEUP{i}").as_bytes()).unwrap();
+        let path = paths[i % paths.len()];
+        let reply = send(&h.public, Call::new(method, path).build()).await;
+        assert!(reply.status.is_client_error(), "{path}: {}", reply.status);
+    }
+    let metrics = h.state.metrics().render();
+    assert!(!metrics.contains("MADEUP"), "{metrics}");
+    let series = metrics
+        .lines()
+        .filter(|l| l.starts_with("wa_server_http_requests_total{"))
+        .count();
+    assert!(
+        (1..=paths.len()).contains(&series),
+        "{series} request series for 100 made-up methods:\n{metrics}"
+    );
+    assert!(
+        metrics.contains("listener=\"public\",method=\"other\""),
+        "{metrics}"
+    );
+}

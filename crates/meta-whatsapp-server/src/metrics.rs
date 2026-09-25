@@ -2,7 +2,10 @@
 //! (docs/design/server.md, section 7.3).
 //!
 //! Labelled by listener, method, route **template**, status and error
-//! code, never by an id, a number or a contact.
+//! code, never by an id, a number or a contact. Every label takes a
+//! bounded set of values: a method outside the standard ones is `other`
+//! (a client, on the public listener anyone, may send any token as a
+//! method), an unknown path `unmatched`.
 //!
 //! | Metric | Labels |
 //! | --- | --- |
@@ -13,6 +16,7 @@
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use meta_whatsapp_rs::webhooks::axum::http::Method;
 use prometheus_client::encoding::EncodeLabelSet;
 use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::family::Family;
@@ -43,6 +47,23 @@ struct CodeLabels {
 }
 
 type DurationFamily = Family<RouteLabels, Histogram, fn() -> Histogram>;
+
+/// An HTTP method as a label or a log field: the methods an API client
+/// sends as they are, anything else `other`. hyper accepts any token as a
+/// method, hundreds of kilobytes long: kept as is, each new one would add
+/// label sets that are never freed, and log lines of any size.
+pub fn method_label(method: &Method) -> &'static str {
+    match *method {
+        Method::GET => "GET",
+        Method::HEAD => "HEAD",
+        Method::POST => "POST",
+        Method::PUT => "PUT",
+        Method::PATCH => "PATCH",
+        Method::DELETE => "DELETE",
+        Method::OPTIONS => "OPTIONS",
+        _ => "other",
+    }
+}
 
 /// The service's metrics. Cheap to clone.
 #[derive(Clone)]
@@ -101,10 +122,13 @@ impl Metrics {
     }
 
     /// Count an answered request.
+    ///
+    /// `method` is a [`method_label`]: the request's own token never
+    /// becomes a label.
     pub fn request(
         &self,
         listener: Listener,
-        method: &str,
+        method: &'static str,
         route: &str,
         status: u16,
         code: Option<&str>,

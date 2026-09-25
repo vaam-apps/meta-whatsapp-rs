@@ -16,7 +16,7 @@ use meta_whatsapp_rs::webhooks::axum::response::Response;
 use tracing::Instrument;
 
 use crate::config::LogFormat;
-use crate::metrics::Metrics;
+use crate::metrics::{Metrics, method_label};
 
 /// `X-Request-Id`: echoed when the caller sends a well-formed one, else
 /// generated.
@@ -130,7 +130,8 @@ pub async fn observe(
     if let Ok(value) = HeaderValue::from_str(&id) {
         request.headers_mut().insert(REQUEST_ID.clone(), value);
     }
-    let method = request.method().as_str().to_owned();
+    // A bounded label, never the request's own token (see `method_label`).
+    let method = method_label(request.method());
     let route = route_template(&observed.routes, request.uri().path()).to_owned();
     let span = tracing::info_span!(
         "request",
@@ -161,7 +162,7 @@ pub async fn observe(
         .map(|tag| tag.0);
     observed
         .metrics
-        .request(observed.listener, &method, &route, status, code, elapsed);
+        .request(observed.listener, method, &route, status, code, elapsed);
     if let Ok(value) = HeaderValue::from_str(&id) {
         response.headers_mut().insert(REQUEST_ID.clone(), value);
     }
