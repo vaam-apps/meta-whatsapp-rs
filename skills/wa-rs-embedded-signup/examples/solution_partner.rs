@@ -126,10 +126,12 @@ pub enum PartnerAction {
 
 /// `account_update`, from a signature-checked delivery only: the
 /// `owner_business_id` it carries is what revocation falls back on when the
-/// vault no longer knows the merchant.
+/// vault no longer knows the merchant. `our_business` is your own business
+/// portfolio (the one `credit_lines` lists your lines for).
 pub async fn on_account_update(
     es: &EmbeddedSignup,
     vault: &TokenVault,
+    our_business: &BusinessId,
     event: &WebhookEvent,
 ) -> wa_rs::Result<PartnerAction> {
     let WebhookEvent::AccountUpdated { update, .. } = event else {
@@ -139,6 +141,14 @@ pub async fn on_account_update(
     let owner = info.and_then(|i| i.owner_business_id.as_ref());
     // The merchant's WABA: `waba_info.waba_id` for the PARTNER_* events.
     let waba_id = event.waba_id();
+    // Under a Multi-Partner Solution, `solution_partner_business_ids` names
+    // its partners: a removal from a solution you are not in is not yours.
+    // Meta sends the list only then, and does not say whose business the
+    // entry id is, so nothing else identifies you.
+    let partners = info.map(|i| i.solution_partner_business_ids.as_slice());
+    if partners.is_some_and(|ids| !ids.is_empty() && !ids.contains(our_business)) {
+        return Ok(PartnerAction::Ignored);
+    }
     match (&update.event, waba_id) {
         // Only YOUR app: under a Multi-Partner Solution another partner
         // uninstalling its own app is not a reason to revoke your line.
@@ -256,6 +266,12 @@ mod tests {
     const APP_ID: &str = "1234";
     const WABA: &str = "980198427658004";
     const OWNER: &str = "2329417887457253";
+    /// Your business portfolio (the entry id of Meta's PARTNER_* examples).
+    const US: &str = "2949482758682047";
+
+    fn ours() -> BusinessId {
+        BusinessId::new(US)
+    }
 
     fn settings(currency: Option<&str>) -> PartnerSettings {
         PartnerSettings {
@@ -414,6 +430,27 @@ mod tests {
             .unwrap();
     }
 
+    /// A removal from a Multi-Partner Solution we are in is ours.
+    #[tokio::test]
+    async fn a_removal_from_our_solution_revokes() {
+        let transport = ScriptedTransport::new();
+        let es = onboarding_mode(signup(&transport), Some(settings(Some("USD")))).unwrap();
+        let vault = vault();
+        stored(&vault).await;
+        script_revocation(&transport);
+        let event = partner_event(
+            "PARTNER_REMOVED",
+            &json!({"waba_id": WABA, "owner_business_id": OWNER,
+                    "solution_id": "1715120619246906",
+                    "solution_partner_business_ids": [US, "520744086200222"]}),
+        );
+        let action = on_account_update(&es, &vault, &ours(), &event)
+            .await
+            .unwrap();
+        assert!(matches!(action, PartnerAction::Revoked(_)), "{action:?}");
+        assert_eq!(transport.remaining(), 0);
+    }
+
     #[tokio::test]
     async fn partner_removed_revokes_from_the_stored_owner() {
         let transport = ScriptedTransport::new();
@@ -421,8 +458,9 @@ mod tests {
         let vault = vault();
         stored(&vault).await;
         script_revocation(&transport);
-        let PartnerAction::Revoked(revoked) =
-            on_account_update(&es, &vault, &removed()).await.unwrap()
+        let PartnerAction::Revoked(revoked) = on_account_update(&es, &vault, &ours(), &removed())
+            .await
+            .unwrap()
         else {
             panic!("not revoked")
         };
@@ -449,7 +487,7 @@ mod tests {
         let vault = vault();
         stored(&vault).await;
         script_revocation(&transport);
-        let action = on_account_update(&es, &vault, &uninstalled(APP_ID))
+        let action = on_account_update(&es, &vault, &ours(), &uninstalled(APP_ID))
             .await
             .unwrap();
         assert!(matches!(action, PartnerAction::Offboarded(_)), "{action:?}");
@@ -463,8 +501,9 @@ mod tests {
             200,
             json!({"receiving_business": business, "request_status": "DELETED"}),
         );
-        let PartnerAction::Revoked(again) =
-            on_account_update(&es, &vault, &removed()).await.unwrap()
+        let PartnerAction::Revoked(again) = on_account_update(&es, &vault, &ours(), &removed())
+            .await
+            .unwrap()
         else {
             panic!("not revoked")
         };
@@ -481,11 +520,34 @@ mod tests {
         let es = onboarding_mode(signup(&transport), Some(settings(Some("USD")))).unwrap();
         let vault = vault();
         stored(&vault).await;
-        let action = on_account_update(&es, &vault, &uninstalled("9999"))
+        let action = on_account_update(&es, &vault, &ours(), &uninstalled("9999"))
             .await
             .unwrap();
         assert!(matches!(action, PartnerAction::Ignored), "{action:?}");
         assert!(vault.get(&WABA.into()).await.unwrap().is_some());
+        // Without a partner_app_id, an uninstall is nobody's in particular:
+        // not ours either.
+        let anonymous = partner_event(
+            "PARTNER_APP_UNINSTALLED",
+            &json!({"waba_id": WABA, "owner_business_id": OWNER}),
+        );
+        let action = on_account_update(&es, &vault, &ours(), &anonymous)
+            .await
+            .unwrap();
+        assert!(matches!(action, PartnerAction::Ignored), "{action:?}");
+        assert!(vault.get(&WABA.into()).await.unwrap().is_some());
+        // A removal from a Multi-Partner Solution we are not in.
+        let theirs = partner_event(
+            "PARTNER_REMOVED",
+            &json!({"waba_id": WABA, "owner_business_id": OWNER,
+                    "solution_id": "1715120619246906",
+                    "solution_partner_business_ids": ["520744086200222", "506914307656634"]}),
+        );
+        let action = on_account_update(&es, &vault, &ours(), &theirs)
+            .await
+            .unwrap();
+        assert!(matches!(action, PartnerAction::Ignored), "{action:?}");
+        assert!(transport.requests().is_empty(), "nothing revoked");
 
         // `embedded-signup/onboarding-business-app-users`: the WABA is the
         // entry id, with disconnection details.
@@ -501,7 +563,9 @@ mod tests {
             .into_events()
             .remove(0);
         let PartnerAction::CoexistenceDisconnected { waba_id, owner } =
-            on_account_update(&es, &vault, &event).await.unwrap()
+            on_account_update(&es, &vault, &ours(), &event)
+                .await
+                .unwrap()
         else {
             panic!("not routed to the policy")
         };
@@ -546,7 +610,9 @@ mod tests {
         script_revocation(&transport);
         let event = partner_event("PARTNER_REMOVED", &json!({"owner_business_id": OWNER}));
         assert_eq!(event.waba_id(), None);
-        let PartnerAction::Revoked(revoked) = on_account_update(&es, &vault, &event).await.unwrap()
+        let PartnerAction::Revoked(revoked) = on_account_update(&es, &vault, &ours(), &event)
+            .await
+            .unwrap()
         else {
             panic!("not revoked")
         };
