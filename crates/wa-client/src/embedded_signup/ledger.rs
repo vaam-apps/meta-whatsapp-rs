@@ -118,8 +118,10 @@ pub struct ClearedShare {
     /// Who cleared it, as the caller named them (trimmed).
     pub cleared_by: String,
     /// The WABA's `primary_funding_id` as Meta reported it when the share
-    /// was cleared (`None`: nothing funded the WABA). No record of your
-    /// line explained it, or nothing would have been cleared.
+    /// was cleared (`None`: nothing funded the WABA). When `Some`, no
+    /// record of your line explained it and the caller acknowledged exactly
+    /// this id as not your line (`acknowledged_funding`), or nothing would
+    /// have been cleared.
     pub primary_funding_id: Option<FundingId>,
 }
 

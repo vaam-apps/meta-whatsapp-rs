@@ -181,8 +181,10 @@
 //!   Meta never shows (a post that never reached it) stays flagged until an
 //!   operator who checked Meta Business Suite calls
 //!   [`EmbeddedSignup::clear_pending_share`]: it checks Meta again, clears
-//!   nothing while a record may be live, and seals who cleared it and when
-//!   in the ledger ([`StoredCredit::cleared_shares`]).
+//!   nothing while a record may be live, nor while something funds the WABA
+//!   that no record explains unless the operator acknowledged exactly that
+//!   funding, and seals who cleared it and when in the ledger
+//!   ([`StoredCredit::cleared_shares`]).
 //!   Without the owner business (`owner_business_info`) nothing can be
 //!   checked or revoked later, so nothing is shared
 //!   ([`CreditError::OwnerUnknown`](wa_core::error::CreditError::OwnerUnknown)).

@@ -529,20 +529,28 @@ let report = es.revoke_credit_line(waba_id, owner, &vault).await?; // report.rev
   revocation of the WABA at `share_pending`, and `offboard` from deleting
   the token. When someone has checked the WABA's funding in Meta Business
   Suite and the share is not there, clear it:
-  `es.clear_pending_share(&waba_id, cleared_by, &vault)`. It posts
+  `es.clear_pending_share(&waba_id, cleared_by, None, &vault)`. It posts
   nothing and holds the WABA's credit lease (`CreditError::Busy` while a
   share runs). It checks Meta first: your line's records for the owner
   business and the recorded allocation, each with its `request_status`,
   and the WABA's `primary_funding_id` (with the merchant's stored token).
-  An active record, or one whose status Meta does not document, clears
-  nothing (`PendingShareClearance::NotCleared`, with what was found; a
-  record funding the WABA is recorded as its allocation, which the next
+  An active record, one whose status Meta does not document, or one the
+  lookup returns naming no business clears nothing
+  (`PendingShareClearance::NotCleared`, with what was found; a record
+  funding the WABA is recorded as its allocation, which the next
   revocation revokes). Any active record of the business stops it, also
   one funding another of its WABAs: Meta does not say which WABA a record
-  funds. Otherwise the flag is cleared and who cleared it, when, and the
-  `primary_funding_id` Meta showed are sealed in the ledger
+  funds. A `primary_funding_id` that no record explains stops it too
+  (`SharesFound::unexplained_funding`): it may be the lost share itself,
+  applied before Meta's lookup lists it, and wa-rs cannot tell it from
+  the merchant's own card. Look at what pays for the WABA in Meta
+  Business Suite; only when it is not your credit line, call again with
+  that id as the third argument. Otherwise the flag is cleared and who
+  cleared it, when, and the acknowledged funding are sealed in the ledger
   (`StoredCredit::cleared_shares`); revocation and `offboard` then behave
   as if nothing had been posted. It refuses when nothing is pending.
+  Meta documents no delay after which a share that went through is
+  listed: let time pass since the pending share before clearing it.
 - `es.offboard(&waba_id, owner, &vault)` revokes the same way and then
   deletes the token (§9). The credit ledger outlives the token, so
   `PartnerAppUninstalled` and `PartnerRemoved` end with the line revoked

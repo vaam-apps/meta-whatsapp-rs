@@ -16,7 +16,7 @@ use wa_rs::client::embedded_signup::{
     SolutionPartner, TokenVault,
 };
 use wa_rs::core::error::ValidationError;
-use wa_rs::core::ids::{BusinessId, CreditLineId, WabaId};
+use wa_rs::core::ids::{BusinessId, CreditLineId, FundingId, WabaId};
 use wa_rs::core::store::{Expiry, KvStore, StoreKey};
 use wa_rs::prelude::*;
 use wa_rs::webhooks::fields::AccountUpdateEvent;
@@ -193,6 +193,19 @@ pub async fn on_account_update(
     }
 }
 
+/// What your admin tool shows after `clear_lost_share`.
+#[derive(Debug, PartialEq)]
+pub enum Clearance {
+    /// Cleared, and sealed in the WABA's credit ledger.
+    Cleared,
+    /// Meta shows a record of your line that may be live: nothing cleared.
+    MayBeLive,
+    /// Something no record of your line explains pays for the WABA: it may
+    /// be the lost share itself. Show it; call again with it only once the
+    /// admin has seen in Meta Business Suite that it is not your line.
+    ConfirmFunding(FundingId),
+}
+
 /// Your admin tool, once someone checked the WABA's funding in Meta
 /// Business Suite: a share whose answer was lost and that Meta never lists
 /// keeps every revocation of the WABA incomplete (`share_pending`) and
@@ -202,12 +215,18 @@ pub async fn clear_lost_share(
     es: &EmbeddedSignup,
     vault: &TokenVault,
     waba_id: &WabaId,
-    admin: &str, // who checked: sealed in the WABA's credit ledger
-) -> wa_rs::Result<bool> {
-    match es.clear_pending_share(waba_id, admin, vault).await? {
-        PendingShareClearance::Cleared(_) => Ok(true), // vault.credit(waba_id) → cleared_shares
-        _ => Ok(false), // NotCleared: Meta shows a share that may be live
-    }
+    admin: &str,                   // who checked: sealed in the WABA's credit ledger
+    confirmed: Option<&FundingId>, // a ConfirmFunding the admin confirmed, else None
+) -> wa_rs::Result<Clearance> {
+    let outcome = es.clear_pending_share(waba_id, admin, confirmed, vault);
+    Ok(match outcome.await? {
+        PendingShareClearance::Cleared(_) => Clearance::Cleared, // vault.credit(waba_id) → cleared_shares
+        PendingShareClearance::NotCleared(found) => match found.unexplained_funding() {
+            Some(funding) => Clearance::ConfirmFunding(funding.clone()),
+            None => Clearance::MayBeLive,
+        },
+        _ => Clearance::MayBeLive, // nothing cleared
+    })
 }
 
 /// The merchant disconnects in your CMS: stop the webhooks while the token
@@ -686,12 +705,30 @@ mod tests {
         assert!(err.is_retryable(), "{err}");
 
         let sent = transport.requests().len();
+        // Something pays for the WABA that no record of the line explains:
+        // it may be the lost share. The admin checks, then confirms it.
         transport.push_json(200, json!({"data": []})); // the line's records
-        transport.push_json(200, json!({"id": WABA})); // nothing funds the WABA
-        assert!(
-            clear_lost_share(&es, &vault, &WABA.into(), "ops@example.com")
+        transport.push_json(
+            200,
+            json!({"primary_funding_id": "MERCHANTS_CARD", "id": WABA}),
+        );
+        let card = FundingId::new("MERCHANTS_CARD");
+        assert_eq!(
+            clear_lost_share(&es, &vault, &WABA.into(), "ops@example.com", None)
                 .await
-                .unwrap()
+                .unwrap(),
+            Clearance::ConfirmFunding(card.clone())
+        );
+        transport.push_json(200, json!({"data": []}));
+        transport.push_json(
+            200,
+            json!({"primary_funding_id": "MERCHANTS_CARD", "id": WABA}),
+        );
+        assert_eq!(
+            clear_lost_share(&es, &vault, &WABA.into(), "ops@example.com", Some(&card))
+                .await
+                .unwrap(),
+            Clearance::Cleared
         );
         assert!(
             transport.requests()[sent..]
@@ -711,7 +748,7 @@ mod tests {
         };
         assert_eq!(done.all().count(), 0);
         assert!(
-            clear_lost_share(&es, &vault, &WABA.into(), "ops@example.com")
+            clear_lost_share(&es, &vault, &WABA.into(), "ops@example.com", None)
                 .await
                 .is_err()
         );

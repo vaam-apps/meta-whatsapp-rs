@@ -254,19 +254,30 @@ pub async fn reconnect(
   Business Suite, clear it from your admin tool (`clear_lost_share` in the
   example). It posts nothing and holds the WABA's credit lease; it checks
   your line's records for the owner business and the WABA's
-  `primary_funding_id` again, clears nothing while a record may be live
-  (`PendingShareClearance::NotCleared`, recording a record that funds the
-  WABA as its allocation), and otherwise seals who cleared it, when, and
-  the funding Meta showed in the ledger (`StoredCredit::cleared_shares`).
-  Revocation and `offboard` then behave as if nothing had been posted.
-  It refuses when nothing is pending, and needs the merchant's stored
-  token (Meta serves `primary_funding_id` to it).
+  `primary_funding_id` again, and clears nothing while a record may be
+  live (`PendingShareClearance::NotCleared`, recording a record that
+  funds the WABA as its allocation). A `primary_funding_id` that no
+  record explains stops it too: it may be the lost share itself, applied
+  while Meta's lookup does not list it yet, and wa-rs cannot tell it from
+  the merchant's own card. `SharesFound::unexplained_funding` returns it;
+  pass it back as `acknowledged_funding` only once someone has seen in
+  Meta Business Suite that what pays for the WABA is not your credit
+  line. Otherwise it seals who cleared it, when, and the acknowledged
+  funding in the ledger (`StoredCredit::cleared_shares`); revocation and
+  `offboard` then behave as if nothing had been posted. It refuses when
+  nothing is pending, and needs the merchant's stored token (Meta serves
+  `primary_funding_id` to it).
 
 ```rust
-match es.clear_pending_share(waba_id, admin, vault).await? {
-    PendingShareClearance::Cleared(_) => Ok(true), // vault.credit(waba_id) → cleared_shares
-    _ => Ok(false), // NotCleared: Meta shows a share that may be live
-}
+let outcome = es.clear_pending_share(waba_id, admin, confirmed, vault);
+Ok(match outcome.await? {
+    PendingShareClearance::Cleared(_) => Clearance::Cleared, // vault.credit(waba_id) → cleared_shares
+    PendingShareClearance::NotCleared(found) => match found.unexplained_funding() {
+        Some(funding) => Clearance::ConfirmFunding(funding.clone()),
+        None => Clearance::MayBeLive,
+    },
+    _ => Clearance::MayBeLive, // nothing cleared
+})
 ```
 
 - `offboard` revokes first and deletes the token second; if revocation

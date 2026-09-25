@@ -130,24 +130,31 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   Tech
   Provider flow is unchanged, request for request. `SolutionPartner`'s
   system token is private and never in `Debug`.
-- **`EmbeddedSignup::clear_pending_share(&waba_id, cleared_by, &vault)`**
-  (Solution Partner mode): an operator's way out of a share whose answer
-  was lost and that Meta never lists, which kept every revocation of the
-  WABA at `RevocationIncomplete { share_pending }` and `offboard` from
-  deleting the token. Called after checking Meta Business Suite, it posts
-  nothing and holds the WABA's credit lease (a share running meanwhile
-  makes it `CreditError::Busy`, and so does a credit record written
-  during its check). It checks Meta first: the line's records for the
-  owner business and the recorded allocation, each with its
-  `request_status`, and the WABA's `primary_funding_id` (with the stored
-  merchant token). An active record, or one of undocumented status,
-  clears nothing (`PendingShareClearance::NotCleared(SharesFound)`; a
-  record funding the WABA is recorded as its allocation, as `resume`
-  records a share it finds). Otherwise the pending share is cleared and a
-  `ClearedShare` (who, when, the pending share's time, the funding Meta
-  showed) is appended to `StoredCredit::cleared_shares`, sealed with the
-  record; revocation and offboarding then behave as if nothing had been
-  posted. Refused before anything is sent when nothing is pending.
+- **`EmbeddedSignup::clear_pending_share(&waba_id, cleared_by,
+  acknowledged_funding, &vault)`** (Solution Partner mode): an operator's
+  way out of a share whose answer was lost and that Meta never lists,
+  which kept every revocation of the WABA at
+  `RevocationIncomplete { share_pending }` and `offboard` from deleting
+  the token. Called after checking Meta Business Suite, it posts nothing
+  and holds the WABA's credit lease (a share running meanwhile makes it
+  `CreditError::Busy`, and so does a credit record written during its
+  check, a key rotation included). It checks Meta first: the line's
+  records for the owner business and the recorded allocation, each with
+  its `request_status`, and the WABA's `primary_funding_id` (with the
+  stored merchant token). An active record, one of undocumented status,
+  or one the lookup returns naming no business clears nothing
+  (`PendingShareClearance::NotCleared(SharesFound)`; a record funding the
+  WABA is recorded as its allocation, as `resume` records a share it
+  finds). So does a `primary_funding_id` that no record explains
+  (`SharesFound::unexplained_funding`), unless `acknowledged_funding` is
+  exactly that id: it may be the lost share itself, applied before Meta's
+  lookup lists it, and only a person looking at Meta Business Suite can
+  tell it from the merchant's own card. Otherwise the pending share is
+  cleared and a `ClearedShare` (who, when, the pending share's time, the
+  acknowledged funding) is appended to `StoredCredit::cleared_shares`,
+  sealed with the record; revocation and offboarding then behave as if
+  nothing had been posted. Refused before anything is sent when nothing
+  is pending.
 - **`EmbeddedSignup::onboard_with_approval`** (and
   `resume_with_approval`): your check of the verified WABA, owner business
   and numbers (`VerifiedOnboarding`) runs after `verify_assets` and before

@@ -461,18 +461,26 @@ cannot be taken back, so the design is fail-closed:
 - **A pending share Meta never lists** (a post that never reached it)
   would keep every revocation incomplete for good, so an operator clears
   it (the owner's decision, 2026-09-25):
-  `clear_pending_share(&waba_id, cleared_by, &vault)`, after checking
-  Meta Business Suite. It posts nothing and holds the WABA's credit lease
-  (renewed before the clear, which is compare-and-swapped on the version
-  it read). It checks Meta first, as a share does: the line's records
-  for the owner business and the recorded allocation, with their
-  `request_status`, and the WABA's `primary_funding_id` (merchant
-  token). An active record, or one of undocumented status, clears
-  nothing (`PendingShareClearance::NotCleared`; a record funding the WABA
-  is recorded as its allocation). Otherwise the
-  flag is cleared and a `ClearedShare` (who, when, the pending share's
-  time, the funding Meta showed) is appended to the record's audit trail.
-  Revocation and `offboard` then behave as if nothing had been posted.
+  `clear_pending_share(&waba_id, cleared_by, acknowledged_funding,
+  &vault)`, after checking Meta Business Suite. It posts nothing and
+  holds the WABA's credit lease (renewed before any ledger write; the
+  clear is compare-and-swapped on the version it read). It checks Meta
+  first, as a share does: the line's records for the owner business and
+  the recorded allocation, with their `request_status`, and the WABA's
+  `primary_funding_id` (merchant token). An active record, one of
+  undocumented status, or one the lookup returned naming no business
+  clears nothing (`PendingShareClearance::NotCleared`; a record funding
+  the WABA is recorded as its allocation). Nor does a
+  `primary_funding_id` that no record explains, unless
+  `acknowledged_funding` is exactly that id: it may be the lost share
+  itself, applied before Meta's lookup lists it (the state a share calls
+  `Reconcile`), and only a person looking at Meta Business Suite can
+  tell it from the merchant's own card. Otherwise the flag is cleared and
+  a `ClearedShare` (who, when, the pending share's time, the acknowledged
+  funding) is appended to the record's audit trail. Revocation and
+  `offboard` then behave as if nothing had been posted. The library
+  imposes no minimum age on the pending share (Meta documents no delay;
+  the owner rejected an automatic settle time): the operator waits.
 - **The credit ledger** (`TokenVault::credit`, `revoked_business`):
   `credit/<WABA>` holds the owner, the allocation, the currency, the
   approval, the pending-share flag and the operator clearances
