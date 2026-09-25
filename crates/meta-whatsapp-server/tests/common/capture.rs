@@ -584,6 +584,14 @@ fn check_audit(logs: &str) {
         }
     }
     assert!(changes >= 10, "{changes} admin changes");
+    // A tenant's template deletion is audited too, with its key's id.
+    assert!(
+        events.iter().any(|e| e["target"] == "audit"
+            && e["fields"]["action"] == "templates_deleted"
+            && e["fields"]["key_id"].is_string()
+            && e["fields"]["tenant"] == "merchant-42"),
+        "no audit event for a template deletion"
+    );
 }
 
 /// Every success status an operation answered is one its document lists

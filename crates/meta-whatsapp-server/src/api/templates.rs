@@ -49,19 +49,25 @@ use serde_json::Value;
 use tokio::time::{Duration, Instant};
 use utoipa::ToSchema;
 
-use super::common::{ApiJson, PageParams, PageQuery, encode_cursor};
+use super::common::{ApiJson, PageParams, PageQuery, encode_cursor, graph_id};
 use crate::auth::{Caller, OwnedWaba};
 use crate::error::{ApiError, ErrorBody};
 use crate::idempotency::{self, Fingerprint, KeyHeader, Success};
 use crate::model::TenantId;
 use crate::state::AppState;
+use crate::telemetry;
 
 /// The fields asked of Meta for each template.
 pub const TEMPLATE_FIELDS: [&str; 5] = ["name", "language", "status", "category", "components"];
 
-/// Most list pages cached on a replica; past it, expired entries go, then
-/// the new page is not cached.
+/// Most list pages cached on a replica; past it, the least recently used
+/// page goes.
 pub const TEMPLATE_CACHE_ENTRIES: usize = 512;
+
+/// Most list pages cached for one tenant's WABA (its queries and cursors);
+/// past it, that WABA's least recently used page goes, never another
+/// WABA's.
+pub const TEMPLATE_CACHE_PER_WABA: usize = 32;
 
 /// Longest template name (`templates/template-management`: 512
 /// characters of `a-z 0-9 _`).
@@ -170,7 +176,10 @@ struct CacheKey {
 
 #[derive(Debug)]
 struct Cached {
+    /// When Meta answered it.
     at: Instant,
+    /// When it was last answered from here.
+    used: Instant,
     page: Arc<TemplateList>,
 }
 
@@ -191,28 +200,52 @@ impl TemplateCache {
     }
 
     fn get(&self, key: &CacheKey) -> Option<Arc<TemplateList>> {
-        let entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
-        entries
-            .get(key)
-            .filter(|cached| cached.at.elapsed() < self.ttl)
-            .map(|cached| cached.page.clone())
+        let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        let cached = entries.get_mut(key)?;
+        if cached.at.elapsed() >= self.ttl {
+            return None;
+        }
+        cached.used = Instant::now();
+        Some(cached.page.clone())
     }
 
+    /// Keep `page`: expired pages go first; then, past
+    /// [`TEMPLATE_CACHE_PER_WABA`], the WABA's least recently used page,
+    /// and past [`TEMPLATE_CACHE_ENTRIES`], the replica's.
     fn put(&self, key: CacheKey, page: Arc<TemplateList>) {
         let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        let ttl = self.ttl;
+        entries.retain(|_, cached| cached.at.elapsed() < ttl);
+        entries.remove(&key);
+        let same_waba = |k: &CacheKey| k.tenant == key.tenant && k.waba_id == key.waba_id;
+        if entries.keys().filter(|k| same_waba(k)).count() >= TEMPLATE_CACHE_PER_WABA {
+            let lru = entries
+                .iter()
+                .filter(|(k, _)| same_waba(k))
+                .min_by_key(|(_, cached)| cached.used)
+                .map(|(k, _)| k.clone());
+            if let Some(lru) = lru {
+                entries.remove(&lru);
+            }
+        }
         if entries.len() >= TEMPLATE_CACHE_ENTRIES {
-            let ttl = self.ttl;
-            entries.retain(|_, cached| cached.at.elapsed() < ttl);
+            let lru = entries
+                .iter()
+                .min_by_key(|(_, cached)| cached.used)
+                .map(|(k, _)| k.clone());
+            if let Some(lru) = lru {
+                entries.remove(&lru);
+            }
         }
-        if entries.len() < TEMPLATE_CACHE_ENTRIES {
-            entries.insert(
-                key,
-                Cached {
-                    at: Instant::now(),
-                    page,
-                },
-            );
-        }
+        let now = Instant::now();
+        entries.insert(
+            key,
+            Cached {
+                at: now,
+                used: now,
+                page,
+            },
+        );
     }
 
     /// Drop every page of `waba_id`: its templates changed.
@@ -380,19 +413,6 @@ pub async fn list_templates(
 }
 
 // ─── Get ─────────────────────────────────────────────────────────────────
-
-/// A Meta id from a path or a query: digits, not starting with `0`.
-fn graph_id(field: &'static str, id: &str) -> Result<(), ApiError> {
-    let valid = !id.is_empty()
-        && id.len() <= 64
-        && id.bytes().all(|b| b.is_ascii_digit())
-        && !id.starts_with('0');
-    if valid {
-        Ok(())
-    } else {
-        Err(ApiError::invalid(field))
-    }
-}
 
 /// `GET /v1/wabas/{waba_id}/templates/{id}`: one template.
 #[utoipa::path(
@@ -595,6 +615,7 @@ pub struct TemplateDeletion {
 )]
 pub async fn delete_templates(
     State(state): State<AppState>,
+    caller: Caller,
     owned: OwnedWaba,
     ApiQuery(deletion): ApiQuery<TemplateDeletion>,
 ) -> Result<StatusCode, ApiError> {
@@ -620,7 +641,22 @@ pub async fn delete_templates(
     };
     state.template_cache().invalidate(owned.waba_id());
     match deleted {
-        Ok(()) => Ok(StatusCode::NO_CONTENT),
+        Ok(()) => {
+            telemetry::tenant_audit(
+                if deletion.id.is_some() {
+                    "template_deleted"
+                } else {
+                    "templates_deleted"
+                },
+                caller.key_id(),
+                &telemetry::Subject {
+                    tenant: Some(caller.tenant().as_str()),
+                    waba_id: Some(owned.waba_id().as_str()),
+                    ..telemetry::Subject::default()
+                },
+            );
+            Ok(StatusCode::NO_CONTENT)
+        }
         Err(error) => Err(owned.failed(&state, &error).await.with_details(&error)),
     }
 }
@@ -680,13 +716,53 @@ mod tests {
         assert!(cache.get(&key("2")).is_none(), "expired");
     }
 
-    #[test]
-    fn the_cache_is_bounded() {
+    /// Bounded per WABA and per replica, the least recently used page
+    /// going first: a new page is always kept, and one WABA's many queries
+    /// never push another WABA's pages out. Decisive: the per-WABA cap and
+    /// the recency.
+    #[tokio::test(start_paused = true)]
+    async fn the_cache_is_bounded_per_waba_and_least_recently_used_first() {
         let cache = TemplateCache::new(Duration::from_secs(60));
+        let query = |waba: &str, after: usize| CacheKey {
+            after: Some(after.to_string()),
+            ..key(waba)
+        };
+        cache.put(key("other"), page("kept"));
+        for i in 0..TEMPLATE_CACHE_PER_WABA + 10 {
+            tokio::time::advance(Duration::from_millis(1)).await;
+            cache.put(query("busy", i), page("x"));
+            // The other WABA's page stays in use.
+            assert!(cache.get(&key("other")).is_some(), "{i}");
+        }
+        let busy = cache
+            .entries
+            .lock()
+            .unwrap()
+            .keys()
+            .filter(|k| k.waba_id == "busy")
+            .count();
+        assert_eq!(busy, TEMPLATE_CACHE_PER_WABA);
+        assert!(
+            cache.get(&query("busy", 0)).is_none(),
+            "its oldest page went"
+        );
+        assert!(
+            cache
+                .get(&query("busy", TEMPLATE_CACHE_PER_WABA + 9))
+                .is_some()
+        );
+        // Across the replica: the least recently used page goes, a new
+        // page is always kept.
         for i in 0..TEMPLATE_CACHE_ENTRIES + 10 {
+            tokio::time::advance(Duration::from_millis(1)).await;
             cache.put(key(&i.to_string()), page("x"));
+            assert!(cache.get(&key(&i.to_string())).is_some(), "{i} was kept");
         }
         assert_eq!(cache.entries.lock().unwrap().len(), TEMPLATE_CACHE_ENTRIES);
+        assert!(
+            cache.get(&key("0")).is_none(),
+            "the least recently used went"
+        );
     }
 
     #[test]
