@@ -499,3 +499,49 @@ async fn a_delete_is_metas_request() {
     assert_eq!(request.bearer(), Some(TOKEN));
     assert_eq!(h.graph.remaining(), 0);
 }
+
+/// With `type` first, a file over its kind's limit is refused without
+/// reading the rest of the form: at most the limit and a chunk are
+/// pulled. Decisive: the per-kind cap applied while the file streams in.
+#[tokio::test]
+async fn a_known_type_stops_reading_the_upload_at_its_limit() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use futures::StreamExt as _;
+    use meta_whatsapp_rs::webhooks::axum::body::{Body, Bytes};
+
+    let (h, key) = connected().await;
+    let image = vec![7u8; 12 * 1024 * 1024];
+    let (content_type, form) = common::multipart(&[
+        ("type", None, b"image/png"),
+        ("file", Some("big.png"), &image),
+    ]);
+    let pulled = Arc::new(AtomicUsize::new(0));
+    let counter = pulled.clone();
+    let chunks: Vec<Bytes> = form.chunks(64 * 1024).map(Bytes::copy_from_slice).collect();
+    let body = futures::stream::iter(chunks).map(move |chunk| {
+        counter.fetch_add(chunk.len(), Ordering::SeqCst);
+        Ok::<_, std::io::Error>(chunk)
+    });
+    let reply = h
+        .call(
+            Call::new(Method::POST, format!("/v1/numbers/{PN}/media"))
+                .key(&key)
+                .header("content-type", &content_type)
+                .body(Body::from_stream(body)),
+        )
+        .await;
+    assert_eq!(
+        (reply.status, reply.code().as_str()),
+        (StatusCode::PAYLOAD_TOO_LARGE, "media_too_large"),
+        "{}",
+        reply.text
+    );
+    let read = pulled.load(Ordering::SeqCst);
+    assert!(
+        read < 6 * 1024 * 1024,
+        "read {read} bytes of a 12 MiB form for a 5 MiB image limit"
+    );
+    assert!(h.graph.requests().is_empty());
+}

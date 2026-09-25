@@ -15,8 +15,9 @@
 //! type is `422` on `type`, a file larger than its kind allows (5 MiB for
 //! images, 16 MiB for audio and video, 500 KiB for stickers, 100 MiB for
 //! documents) or than `WA_SERVER_MEDIA_MAX_BYTES` is `413
-//! media_too_large`, read no further than the limit when `type` comes
-//! first. They take an `Idempotency-Key`.
+//! media_too_large`; when `type` comes first, the body is read no further
+//! than its kind's limit (and the form's framing). They take an
+//! `Idempotency-Key`.
 //!
 //! **Downloads** are verified against the SHA-256 Meta reports:
 //!
@@ -198,9 +199,39 @@ fn form_error(error: &multer::Error) -> ApiError {
     }
 }
 
+/// A body stream that hands its chunks over one at a time: after each, it
+/// answers "not yet" once (and wakes its reader at once). multer reads
+/// every chunk already there before it parses any; without the pause, a
+/// client sending faster than the form is parsed would have the whole
+/// body read, whatever limit parsing it finds.
+struct OneChunkAtATime<S> {
+    inner: S,
+    paused: bool,
+}
+
+impl<S: futures::Stream + Unpin> futures::Stream for OneChunkAtATime<S> {
+    type Item = S::Item;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        if !self.paused {
+            self.paused = true;
+            cx.waker().wake_by_ref();
+            return std::task::Poll::Pending;
+        }
+        let next = self.inner.poll_next_unpin(cx);
+        if next.is_ready() {
+            self.paused = false;
+        }
+        next
+    }
+}
+
 /// Read and check an upload's form: `type` and the size before any
-/// request (and, when `type` comes first, before reading more of the file
-/// than its kind allows).
+/// request. When `type` comes first, the body is read no further than the
+/// file's kind allows (and a chunk).
 async fn read_upload(max_bytes: u64, request: Request) -> Result<Upload, ApiError> {
     let boundary = request
         .headers()
@@ -208,6 +239,10 @@ async fn read_upload(max_bytes: u64, request: Request) -> Result<Upload, ApiErro
         .and_then(|v| v.to_str().ok())
         .and_then(|v| multer::parse_boundary(v).ok())
         .ok_or_else(|| ApiError::invalid("body"))?;
+    let body = OneChunkAtATime {
+        inner: request.into_body().into_data_stream(),
+        paused: false,
+    };
     let constraints = multer::Constraints::new()
         .allowed_fields(vec!["file", "type"])
         .size_limit(
@@ -216,11 +251,7 @@ async fn read_upload(max_bytes: u64, request: Request) -> Result<Upload, ApiErro
                 .for_field("type", MAX_TYPE_LEN)
                 .for_field("file", max_bytes),
         );
-    let mut form = multer::Multipart::with_constraints(
-        request.into_body().into_data_stream(),
-        boundary,
-        constraints,
-    );
+    let mut form = multer::Multipart::with_constraints(body, boundary, constraints);
     let mut mime_type: Option<String> = None;
     let mut file: Option<(Option<String>, Vec<u8>)> = None;
     while let Some(mut field) = form.next_field().await.map_err(|e| form_error(&e))? {
@@ -232,7 +263,7 @@ async fn read_upload(max_bytes: u64, request: Request) -> Result<Upload, ApiErro
             Some("file") if file.is_none() => {
                 let given = field.file_name().map(str::to_owned);
                 // A known type caps the file at its kind's size as it
-                // streams in.
+                // streams in: no more of the body is read.
                 let cap = mime_type
                     .as_deref()
                     .and_then(MediaKind::for_mime_type)
