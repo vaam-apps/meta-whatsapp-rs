@@ -9,8 +9,9 @@
 //!
 //! - `credit/<WABA_ID>`: a [`StoredCredit`], written with compare-and-swap
 //!   by the approval of `onboard_with_approval` / `resume_with_approval`,
-//!   by `share_credit_line`, and by a revocation that learnt the owner
-//!   business.
+//!   by `share_credit_line`, by a revocation that learnt the owner
+//!   business, and by an operator's
+//!   [`EmbeddedSignup::clear_pending_share`](super::EmbeddedSignup::clear_pending_share).
 //! - `revoked/<BUSINESS_ID>`: a [`RevokedBusiness`], written by
 //!   [`EmbeddedSignup::revoke_credit_line`](super::EmbeddedSignup::revoke_credit_line)
 //!   before it looks anything up on Meta's side; while it exists,
@@ -18,8 +19,10 @@
 //!   the request opts in
 //!   ([`OnboardingRequest::reshare_after_revocation`](super::OnboardingRequest::reshare_after_revocation)).
 //! - `credit-lease/<WABA_ID>`: a short lease held while one onboarding runs
-//!   the credit step, renewed before each post, so two concurrent
-//!   onboardings of one WABA cannot both post a share.
+//!   the credit step (or an operator clears a pending share), renewed
+//!   before each post and before a clearance, so two concurrent onboardings
+//!   of one WABA cannot both post a share, and no share runs while a
+//!   pending one is cleared.
 //!
 //! Each record is `{v, kid, nonce, ciphertext}`: AES-256-GCM under the
 //! vault's active key, the associated data binding it to its own store key,
@@ -42,7 +45,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use wa_core::error::{CreditError, CryptoError};
-use wa_core::ids::{AllocationConfigId, BusinessId, WabaId};
+use wa_core::ids::{AllocationConfigId, BusinessId, FundingId, WabaId};
 use wa_core::store::{Expiry, StoreKey, Versioned};
 use wa_core::{Error, Result};
 
@@ -89,8 +92,35 @@ pub struct StoredCredit {
     pub approved_token_created_at: Option<OffsetDateTime>,
     /// Set just before a share is posted and cleared once its allocation is
     /// recorded: while set, a share may have gone through that the ledger
-    /// does not know (a post that timed out, a process that died).
+    /// does not know (a post that timed out, a process that died). When
+    /// Meta never shows that share, an operator clears it with
+    /// [`EmbeddedSignup::clear_pending_share`](super::EmbeddedSignup::clear_pending_share).
     pub pending_share: Option<OffsetDateTime>,
+    /// Every pending share an operator cleared
+    /// ([`EmbeddedSignup::clear_pending_share`](super::EmbeddedSignup::clear_pending_share)),
+    /// oldest first: who, when, and what Meta showed then. Sealed with the
+    /// rest of the record, and never counted as a share
+    /// ([`Self::records_a_share`]).
+    pub cleared_shares: Vec<ClearedShare>,
+}
+
+/// One pending share an operator cleared: the audit entry
+/// [`EmbeddedSignup::clear_pending_share`](super::EmbeddedSignup::clear_pending_share)
+/// appends to [`StoredCredit::cleared_shares`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ClearedShare {
+    /// When the cleared share was flagged (the [`StoredCredit::pending_share`]
+    /// it replaced).
+    pub pending_since: OffsetDateTime,
+    /// When it was cleared (the vault's clock).
+    pub cleared_at: OffsetDateTime,
+    /// Who cleared it, as the caller named them (trimmed).
+    pub cleared_by: String,
+    /// The WABA's `primary_funding_id` as Meta reported it when the share
+    /// was cleared (`None`: nothing funded the WABA). No record of your
+    /// line explained it, or nothing would have been cleared.
+    pub primary_funding_id: Option<FundingId>,
 }
 
 impl StoredCredit {
@@ -104,6 +134,7 @@ impl StoredCredit {
             approved_at: None,
             approved_token_created_at: None,
             pending_share: None,
+            cleared_shares: Vec::new(),
         }
     }
 
@@ -156,6 +187,21 @@ struct CreditPlain {
     approved_token_created_at: Option<OffsetDateTime>,
     #[serde(default, with = "time::serde::timestamp::option")]
     pending_share: Option<OffsetDateTime>,
+    /// Absent from records written before the first clearance (and by
+    /// revisions before it): an empty trail.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    cleared_shares: Vec<ClearedPlain>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ClearedPlain {
+    #[serde(with = "time::serde::timestamp")]
+    pending_since: OffsetDateTime,
+    #[serde(with = "time::serde::timestamp")]
+    cleared_at: OffsetDateTime,
+    cleared_by: String,
+    #[serde(default)]
+    primary_funding_id: Option<FundingId>,
 }
 
 impl CreditPlain {
@@ -169,6 +215,16 @@ impl CreditPlain {
             approved_at: credit.approved_at,
             approved_token_created_at: credit.approved_token_created_at,
             pending_share: credit.pending_share,
+            cleared_shares: credit
+                .cleared_shares
+                .iter()
+                .map(|c| ClearedPlain {
+                    pending_since: c.pending_since,
+                    cleared_at: c.cleared_at,
+                    cleared_by: c.cleared_by.clone(),
+                    primary_funding_id: c.primary_funding_id.clone(),
+                })
+                .collect(),
         }
     }
 
@@ -182,6 +238,16 @@ impl CreditPlain {
             approved_at: self.approved_at,
             approved_token_created_at: self.approved_token_created_at,
             pending_share: self.pending_share,
+            cleared_shares: self
+                .cleared_shares
+                .into_iter()
+                .map(|c| ClearedShare {
+                    pending_since: c.pending_since,
+                    cleared_at: c.cleared_at,
+                    cleared_by: c.cleared_by,
+                    primary_funding_id: c.primary_funding_id,
+                })
+                .collect(),
         }
     }
 }
@@ -361,6 +427,33 @@ impl TokenVault {
             }
         }
         Ok(None)
+    }
+
+    /// Clear the pending share of `credit`, read at `version`, appending
+    /// `cleared` to its audit trail. Compare-and-swap on that version: when
+    /// anything wrote the record since (a share, a revocation settling it,
+    /// another clearance), nothing is cleared and the call is
+    /// [`CreditError::Busy`]: what Meta showed may no longer be what the
+    /// record says.
+    pub(super) async fn clear_pending_share(
+        &self,
+        credit: &StoredCredit,
+        version: u64,
+        cleared: ClearedShare,
+    ) -> Result<StoredCredit> {
+        let mut next = credit.clone();
+        next.pending_share = None;
+        next.cleared_shares.push(cleared);
+        self.write_sealed(
+            &credit_key(&next.waba_id),
+            &CreditPlain::from_credit(&next),
+            Some(version),
+        )
+        .await?
+        .ok_or_else(|| {
+            busy("the WABA's credit record changed while its pending share was checked; nothing was cleared, call again")
+        })?;
+        Ok(next)
     }
 
     /// Record the integrator's approval of onboarding `waba_id` with the
@@ -824,6 +917,83 @@ mod tests {
         assert!(
             !sealed.records_a_share(),
             "the currency is sealed before any post"
+        );
+    }
+
+    /// An operator's clearance: only at the version read, appended to the
+    /// trail, and a record written before the trail existed opens with an
+    /// empty one.
+    #[tokio::test]
+    async fn a_clearance_is_compare_and_swapped_and_appended() {
+        let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
+        let v = vault(&kv, VaultKeys::new(key("k1", 7)));
+        // The format before the trail: no `cleared_shares` at all.
+        let k = credit_key(&WabaId::new("W1"));
+        let old = br#"{"waba_id":"W1","business_id":"B1","pending_share":1790251200}"#;
+        put(
+            &kv,
+            "credit/W1",
+            encode_json(&k, &v.seal_blob(&k, old).unwrap()).unwrap(),
+        )
+        .await;
+        let (read, version) = v
+            .credit_versioned(&WabaId::new("W1"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(read.pending_share, Some(datetime!(2026-09-24 12:00 UTC)));
+        assert!(read.cleared_shares.is_empty());
+
+        let entry = |by: &str| ClearedShare {
+            pending_since: datetime!(2026-09-24 12:00 UTC),
+            cleared_at: datetime!(2026-09-24 13:00 UTC),
+            cleared_by: by.to_owned(),
+            primary_funding_id: Some(FundingId::new("F1")),
+        };
+        let cleared = v
+            .clear_pending_share(&read, version, entry("first"))
+            .await
+            .unwrap();
+        assert_eq!(cleared.pending_share, None);
+        // A second clearance from the same stale read loses, typed.
+        let err = v
+            .clear_pending_share(&read, version, entry("stale"))
+            .await
+            .unwrap_err();
+        assert!(EmbeddedSignupRefusal::busy(&err), "{err}");
+        let stored = v.credit(&WabaId::new("W1")).await.unwrap().unwrap();
+        assert_eq!(stored, cleared);
+        assert_eq!(stored.cleared_shares, [entry("first")]);
+        assert_eq!(stored.business_id, Some(BusinessId::new("B1")), "kept");
+
+        // A later clearance appends.
+        let mut again = stored.clone();
+        again.pending_share = Some(datetime!(2026-09-25 08:00 UTC));
+        let (_, version) = v
+            .credit_versioned(&WabaId::new("W1"))
+            .await
+            .unwrap()
+            .unwrap();
+        v.put_credit(&again, Some(version)).await.unwrap();
+        let (read, version) = v
+            .credit_versioned(&WabaId::new("W1"))
+            .await
+            .unwrap()
+            .unwrap();
+        v.clear_pending_share(&read, version, entry("second"))
+            .await
+            .unwrap();
+        assert_eq!(
+            v.credit(&WabaId::new("W1"))
+                .await
+                .unwrap()
+                .unwrap()
+                .cleared_shares,
+            [entry("first"), entry("second")]
+        );
+        assert!(
+            !String::from_utf8_lossy(&raw(&kv, "credit/W1").await).contains("first"),
+            "sealed"
         );
     }
 

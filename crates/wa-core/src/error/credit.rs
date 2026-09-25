@@ -83,7 +83,8 @@ pub struct RevocationIncomplete {
     /// answer was lost, or one still in flight), and this call revoked no
     /// record: that share may be live and not listed by Meta's lookup yet.
     /// Call again; if it keeps revoking nothing, check the WABA's funding
-    /// in Meta Business Suite.
+    /// in Meta Business Suite, and when the share is not there, an operator
+    /// clears it (`EmbeddedSignup::clear_pending_share` in wa-client).
     pub share_pending: bool,
     /// Whether a `DELETE` this call sent may have taken effect (one
     /// succeeded, or one failed without proving Meta did nothing).

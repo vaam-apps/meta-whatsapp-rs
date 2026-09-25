@@ -10,12 +10,12 @@
 use std::fmt;
 
 use wa_core::error::{CreditError, ValidationError};
-use wa_core::ids::{AllocationConfigId, BusinessId, CreditLineId, SystemUserId, WabaId};
+use wa_core::ids::{AllocationConfigId, BusinessId, CreditLineId, FundingId, SystemUserId, WabaId};
 use wa_core::secret::AccessToken;
 use wa_core::{Error, Result};
 
 use super::EmbeddedSignup;
-use super::ledger::StoredCredit;
+use super::ledger::{ClearedShare, StoredCredit};
 use super::onboard::steps::{DELETE_TOKEN, REVOKE_CREDIT_LINE};
 use super::vault::{StoredBusinessToken, TokenVault};
 use crate::Client;
@@ -184,6 +184,46 @@ pub struct Offboarded {
     pub token_deleted: bool,
 }
 
+/// What [`EmbeddedSignup::clear_pending_share`] found on Meta's side, and
+/// whether it cleared the pending share.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+#[must_use = "a pending share is cleared only when this is `Cleared`"]
+pub enum PendingShareClearance {
+    /// Meta shows no record of your line that may be live for the WABA's
+    /// owner business: the pending share is cleared, and this entry was
+    /// appended to [`StoredCredit::cleared_shares`].
+    Cleared(ClearedShare),
+    /// Meta shows your line funding the WABA, or a record for its owner
+    /// business that may be live: **nothing was cleared**. A record that
+    /// funds the WABA was recorded in the ledger, as `resume` records a
+    /// share it finds.
+    NotCleared(SharesFound),
+}
+
+/// What Meta showed [`EmbeddedSignup::clear_pending_share`] that stopped it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SharesFound {
+    /// The WABA's owner business the records were looked up for.
+    pub business_id: BusinessId,
+    /// The record whose receiving credential is the WABA's
+    /// `primary_funding_id`: your line funds the WABA. Now
+    /// [`StoredCredit::allocation_config_id`]; the pending share stays until
+    /// a revocation revokes that record or `resume` settles it.
+    pub funding: Option<AllocationConfigId>,
+    /// Active records naming the owner business (the recorded allocation
+    /// included), `funding` among them. One may fund another WABA of the
+    /// business, or be the lost share not showing in the WABA's funding
+    /// yet: Meta does not say which.
+    pub active: Vec<AllocationConfigId>,
+    /// Records whose `request_status` Meta does not document, with that
+    /// value verbatim: they may be live.
+    pub unknown_status: Vec<(AllocationConfigId, String)>,
+    /// The WABA's `primary_funding_id` as read.
+    pub primary_funding_id: Option<FundingId>,
+}
+
 impl EmbeddedSignup {
     /// Onboard as a Solution Partner with `partner` (one choice per
     /// deployment): [`Self::onboard_with_approval`] and [`Self::resume`]
@@ -280,6 +320,13 @@ impl EmbeddedSignup {
     /// recommends revoking at once), or through [`Self::offboard`]. Revoking
     /// applies to **every** WABA of that business shared with you.
     ///
+    /// Call it at once on **every** `PARTNER_REMOVED` of your solution,
+    /// including a coexistence one with `disconnection_info` whose number
+    /// may reconnect (the owner's decision, 2026-09-25): a merchant who
+    /// reconnects onboards again, and funding them again takes
+    /// [`OnboardingRequest::reshare_after_revocation`](super::OnboardingRequest::reshare_after_revocation).
+    /// Nothing calls it for you.
+    ///
     /// - **The business** is the one Meta reported at onboarding: from the
     ///   token record, else the credit ledger (which outlives the token),
     ///   else the one Meta's own record of the allocation in the ledger
@@ -316,7 +363,8 @@ impl EmbeddedSignup {
     ///   none is, the call is [`CreditError::RevocationIncomplete`] with
     ///   `share_pending` (retryable), never done, because that share may be
     ///   live and not listed by Meta yet. Call again; if it keeps revoking
-    ///   nothing, check the WABA's funding in Meta Business Suite.
+    ///   nothing, check the WABA's funding in Meta Business Suite, and when
+    ///   the share is not there, clear it with [`Self::clear_pending_share`].
     ///
     /// The token and the ledger are left in the vault; [`Self::offboard`]
     /// deletes the token after revoking.
@@ -395,7 +443,16 @@ impl EmbeddedSignup {
     ///   revocation revoked nothing (old `DELETED` records say nothing
     ///   about it), nothing is deleted either:
     ///   [`CreditError::RevocationIncomplete`] with `share_pending`,
-    ///   retryable (see [`Self::revoke_credit_line`]).
+    ///   retryable (see [`Self::revoke_credit_line`] and
+    ///   [`Self::clear_pending_share`]).
+    /// - When the WABA's business is recorded (in its token record or the
+    ///   ledger), it is **marked revoked even if nothing was ever shared with
+    ///   it** (a WABA onboarded in Tech Provider mode, say): the marker is
+    ///   written before anything is looked up, which is what stops a share
+    ///   racing this call from surviving it. The cost: onboarding that
+    ///   business in Solution Partner mode later takes
+    ///   [`OnboardingRequest::reshare_after_revocation`](super::OnboardingRequest::reshare_after_revocation)
+    ///   (the owner's decision, 2026-09-25).
     pub async fn offboard(
         &self,
         waba_id: &WabaId,
@@ -444,6 +501,186 @@ impl EmbeddedSignup {
             .into());
         }
         Ok(report)
+    }
+
+    /// Clear the pending share of `waba_id` ([`StoredCredit::pending_share`]:
+    /// a credit line post whose answer was lost) once Meta does not show
+    /// it, recording who cleared it. An operator's call, after checking the
+    /// WABA's funding in Meta Business Suite: nothing calls it for you.
+    ///
+    /// Until it is cleared, or a revocation revokes a record of that share,
+    /// every [`Self::revoke_credit_line`] of the WABA is
+    /// [`CreditError::RevocationIncomplete`] with `share_pending`,
+    /// [`Self::offboard`] keeps the token, and onboarding the WABA is
+    /// [`CreditError::Reconcile`] when something funds it. A post that never
+    /// reached Meta is never listed, so without this call it stays pending.
+    ///
+    /// It posts nothing. Holding the WABA's credit lease (so no share runs
+    /// meanwhile: [`CreditError::Busy`] while one does), it checks Meta
+    /// first, as `share_credit_line` does before it posts: your line's
+    /// records for the WABA's owner business
+    /// (`owning_credit_allocation_configs`) and the allocation recorded in
+    /// the ledger, each with its `request_status`, and the WABA's
+    /// `primary_funding_id` (with the merchant's stored token, which Meta
+    /// requires; none stored is a validation error on `waba_id`).
+    ///
+    /// - An active record, or one whose `request_status` Meta does not
+    ///   document, means the share may be live: nothing is cleared, and
+    ///   [`PendingShareClearance::NotCleared`] says what was found. A record
+    ///   whose receiving credential is the WABA's `primary_funding_id` is
+    ///   recorded as the WABA's allocation, as `resume` would record it (a
+    ///   revocation then revokes it, which settles the pending share). Any
+    ///   active record stops it, also one funding another WABA of the same
+    ///   business: Meta does not say which WABA a record funds.
+    /// - Otherwise the pending share is cleared and a [`ClearedShare`]
+    ///   (`cleared_by`, the time, the pending share's time and the
+    ///   `primary_funding_id` Meta showed) is appended to
+    ///   [`StoredCredit::cleared_shares`], sealed with the record:
+    ///   [`PendingShareClearance::Cleared`]. A `primary_funding_id` no
+    ///   record of your line explains (the merchant's own payment method,
+    ///   another partner's line) does not stop it: that is what the
+    ///   operator checked in Meta Business Suite, and it is kept in the
+    ///   entry. Revocation and offboarding then behave as if the share had
+    ///   never been posted, and `resume` checks and shares again.
+    ///
+    /// Refused before anything is sent or written: outside Solution Partner
+    /// mode, with a blank `cleared_by`, and when the ledger shows no pending
+    /// share for the WABA (a validation error on `pending_share`). A failed
+    /// lookup, a record naming another business, a lease lost during the
+    /// check, or a credit record written meanwhile (a share, a revocation)
+    /// clear nothing: the error is returned, and the call can be repeated.
+    pub async fn clear_pending_share(
+        &self,
+        waba_id: &WabaId,
+        cleared_by: &str,
+        vault: &TokenVault,
+    ) -> Result<PendingShareClearance> {
+        let partner = self.require_partner()?;
+        let cleared_by = cleared_by.trim();
+        if cleared_by.is_empty() {
+            return Err(ValidationError::new(
+                "cleared_by",
+                "required: who checked the WABA's funding in Meta Business Suite, for the audit entry",
+            )
+            .into());
+        }
+        let mut lease = vault.lease_credit(waba_id).await?;
+        let outcome = self
+            .clear_leased(partner, waba_id, cleared_by, vault, &mut lease)
+            .await;
+        if let Err(e) = vault.release_credit(waba_id, lease).await {
+            tracing::warn!(waba_id = %waba_id, kind = ?e.kind(), "credit lease not released");
+        }
+        outcome
+    }
+
+    async fn clear_leased(
+        &self,
+        partner: &SolutionPartner,
+        waba_id: &WabaId,
+        cleared_by: &str,
+        vault: &TokenVault,
+        lease: &mut u64,
+    ) -> Result<PendingShareClearance> {
+        let nothing_pending = || -> Error {
+            ValidationError::new(
+                "pending_share",
+                "the WABA's credit ledger shows no share without a recorded outcome; nothing to clear",
+            )
+            .into()
+        };
+        let Some((credit, version)) = vault.credit_versioned(waba_id).await? else {
+            return Err(nothing_pending());
+        };
+        let Some(pending_since) = credit.pending_share else {
+            return Err(nothing_pending());
+        };
+        let token = vault.get(waba_id).await?.ok_or_else(|| {
+            ValidationError::new(
+                "waba_id",
+                "no business token is stored for this WABA: its primary_funding_id, which Meta serves to the merchant's token, cannot be checked; nothing cleared",
+            )
+        })?;
+        let owner = match (&credit.business_id, &token.business_id) {
+            (Some(recorded), Some(verified)) if recorded != verified => {
+                return Err(ValidationError::new(
+                    "business_id",
+                    "the WABA's owner differs from the business its credit line was shared with; nothing cleared",
+                )
+                .into());
+            }
+            (Some(owner), _) | (None, Some(owner)) => owner.clone(),
+            (None, None) => {
+                return Err(CreditError::OwnerUnknown(
+                    "no owner business is recorded for the WABA, so your line's records for it cannot be checked; nothing cleared".into(),
+                )
+                .into());
+            }
+        };
+
+        // What Meta shows: the records naming the owner (and the recorded
+        // allocation), and what funds the WABA.
+        let system = self.system_client(partner).credit_lines();
+        let found = records(
+            &system,
+            &partner.credit_line_id,
+            &owner,
+            credit.allocation_config_id.as_ref(),
+        )
+        .await?;
+        let funding = self
+            .client
+            .with_token(token.token.clone())
+            .credit_lines()
+            .primary_funding(waba_id)
+            .await?;
+
+        // A record that may be live: never cleared.
+        if !found.active.is_empty() || !found.unknown.is_empty() {
+            let mut funds = None;
+            let live = found
+                .active
+                .iter()
+                .chain(found.unknown.iter().map(|(id, _)| id));
+            for candidate in live {
+                if is_shared(&system.receiving_credential(candidate).await?, &funding) {
+                    funds = Some(candidate.clone());
+                    break;
+                }
+            }
+            if let Some(allocation) = &funds {
+                record_found(vault, waba_id, &owner, allocation).await?;
+            }
+            return Ok(PendingShareClearance::NotCleared(SharesFound {
+                business_id: owner,
+                funding: funds,
+                active: found.active,
+                unknown_status: found.unknown,
+                primary_funding_id: funding.primary_funding_id,
+            }));
+        }
+
+        // Nothing may be live: clear, if no share took the lease meanwhile
+        // (the compare-and-swap below also refuses a record written since).
+        match vault.renew_credit(waba_id, *lease).await? {
+            Some(renewed) => *lease = renewed,
+            None => {
+                return Err(super::ledger::busy(
+                    "this call's credit lease expired and another step of the WABA may hold it; nothing was cleared, call again",
+                ));
+            }
+        }
+        let cleared = ClearedShare {
+            pending_since,
+            cleared_at: vault.now(),
+            cleared_by: cleared_by.to_owned(),
+            primary_funding_id: funding.primary_funding_id,
+        };
+        vault
+            .clear_pending_share(&credit, version, cleared.clone())
+            .await?;
+        tracing::info!(waba_id = %waba_id, "pending credit line share cleared by an operator");
+        Ok(PendingShareClearance::Cleared(cleared))
     }
 
     /// Resolve whose line to revoke for `waba_id` and revoke it. `None`
@@ -1303,6 +1540,36 @@ async fn revoke_raced(
     }
 }
 
+/// A record Meta shows funding the WABA, found while an operator's
+/// clearance checked a pending share: recorded as the WABA's allocation,
+/// as `record_share` records a share it finds, so a revocation revokes it.
+/// The pending flag stays: nothing was cleared, and a revocation that
+/// revokes this record settles it.
+async fn record_found(
+    vault: &TokenVault,
+    waba: &WabaId,
+    owner: &BusinessId,
+    allocation: &AllocationConfigId,
+) -> Result<()> {
+    let now = vault.now();
+    vault
+        .update_credit(waba, |c| {
+            let same = c.allocation_config_id.as_ref() == Some(allocation);
+            if same && c.shared_at.is_some() && c.business_id.is_some() {
+                return false;
+            }
+            if !same || c.shared_at.is_none() {
+                c.shared_at = Some(now);
+            }
+            c.allocation_config_id = Some(allocation.clone());
+            c.business_id.get_or_insert_with(|| owner.clone());
+            true
+        })
+        .await?
+        .map(|_| ())
+        .ok_or_else(|| super::ledger::busy("the WABA's credit record kept changing"))
+}
+
 /// Set the pending share flag again if something cleared it.
 async fn keep_pending(vault: &TokenVault, waba: &WabaId) -> Result<()> {
     let now = vault.now();
@@ -1376,6 +1643,8 @@ mod tests {
         t: ScriptedTransport,
         es: EmbeddedSignup,
         vault: TokenVault,
+        /// The vault's clock.
+        clock: Arc<ManualClock>,
     }
 
     fn partner(method: CreditSharing) -> SolutionPartner {
@@ -1389,18 +1658,24 @@ mod tests {
             .retry(RetryPolicy::NONE)
             .build()
             .unwrap();
+        let clock = Arc::new(ManualClock::new(datetime!(2026-09-24 12:00 UTC)));
         let vault = TokenVault::new(
             Arc::new(MemoryKvStore::new()),
             VaultKeys::new(VaultKey::new("k1", SecretBytes::new([42; 32])).unwrap()),
         )
         .unwrap()
-        .with_clock(Arc::new(ManualClock::new(datetime!(2026-09-24 12:00 UTC))));
+        .with_clock(clock.clone());
         let es = client.embedded_signup(AppCredentials::new(APP_ID, APP_SECRET));
         let es = match partner {
             Some(p) => es.solution_partner(p),
             None => es,
         };
-        Harness { t, es, vault }
+        Harness {
+            t,
+            es,
+            vault,
+            clock,
+        }
     }
 
     fn harness(method: CreditSharing) -> Harness {
@@ -1565,12 +1840,13 @@ mod tests {
             inner: t.clone(),
             hooks: Arc::default(),
         };
+        let clock = Arc::new(ManualClock::new(datetime!(2026-09-24 12:00 UTC)));
         let vault = TokenVault::new(
             kv,
             VaultKeys::new(VaultKey::new("k1", SecretBytes::new([42; 32])).unwrap()),
         )
         .unwrap()
-        .with_clock(Arc::new(ManualClock::new(datetime!(2026-09-24 12:00 UTC))));
+        .with_clock(clock.clone());
         let build = |transport: Hooked, plain: Option<ScriptedTransport>| {
             let builder = Client::builder().retry(RetryPolicy::NONE);
             let client = match plain {
@@ -1587,11 +1863,13 @@ mod tests {
             t: t.clone(),
             es: build(hooked.clone(), None),
             vault: vault.clone(),
+            clock: clock.clone(),
         };
         let other = Harness {
             t: t.clone(),
             es: build(hooked.clone(), Some(t)),
             vault,
+            clock,
         };
         (h, hooked, other)
     }
@@ -4957,6 +5235,555 @@ mod tests {
                 .await
                 .is_err()
         );
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// Decision on #42 (2026-09-25): offboarding marks a recorded business
+    /// revoked even when nothing was ever shared with it (the marker comes
+    /// before any lookup, so no racing share survives), and onboarding that
+    /// business in Solution Partner mode later needs the opt-in.
+    #[tokio::test]
+    async fn offboarding_marks_a_business_never_funded_and_a_re_onboarding_opts_in() {
+        let h = harness(CreditSharing::ShareAndAttach);
+        // Onboarded in Tech Provider mode: a token naming its business, no
+        // share in the ledger.
+        h.vault
+            .store(&StoredBusinessToken::new(WABA, AccessToken::new(TOKEN)).business_id(BUSINESS))
+            .await
+            .unwrap();
+        h.t.push_json(200, nothing_shared());
+        let off = h.es.offboard(&waba(), None, &h.vault).await.unwrap();
+        assert!(off.token_deleted);
+        assert_eq!(off.credit.map(|r| r.all().count()), Some(0));
+        assert!(
+            h.vault
+                .revoked_business(&BusinessId::new(BUSINESS))
+                .await
+                .unwrap()
+                .is_some(),
+            "marked, though nothing was shared"
+        );
+        assert_eq!(h.t.remaining(), 0);
+
+        let before = h.t.requests().len();
+        script_until_subscribe(&h.t, owner());
+        h.t.push_json(200, success()); // assigned_users
+        let err = h
+            .onboard(&request().currency(WabaCurrency::Usd))
+            .await
+            .unwrap_err();
+        assert_eq!(step(&err), SHARE_CREDIT_LINE);
+        assert!(EmbeddedSignup::is_credit_line_revoked(&err), "{err}");
+        assert!(!err.may_have_been_sent());
+        assert_eq!(credit_calls(&h.t.requests()[before..]), 0);
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// Onboard with share-and-attach until the share's POST times out: the
+    /// ledger keeps a pending share.
+    async fn lost_share(h: &Harness) {
+        script_until_subscribe(&h.t, owner());
+        h.t.push_json(200, success()); // assigned_users
+        h.t.push_json(200, nothing_shared());
+        h.t.push_error(|| TransportError::Timeout);
+        let err = h
+            .onboard(&request().currency(WabaCurrency::Usd))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err.credit(), Some(CreditError::Reconcile(_))),
+            "{err}"
+        );
+        let credit = h.vault.credit(&waba()).await.unwrap().unwrap();
+        assert_eq!(credit.pending_share, Some(datetime!(2026-09-24 12:00 UTC)));
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// `GET /{WABA}?fields=primary_funding_id`, with the merchant's token.
+    fn assert_funding_read(r: &RecordedRequest) {
+        assert_request(
+            r,
+            &Method::GET,
+            &format!("/v25.0/{WABA}"),
+            &[("fields", "primary_funding_id")],
+            TOKEN,
+        );
+    }
+
+    fn credit_store_key() -> wa_core::store::StoreKey {
+        wa_core::store::StoreKey::new(
+            super::super::vault::TOKEN_NAMESPACE,
+            format!("credit/{WABA}"),
+        )
+    }
+
+    fn no_funding() -> serde_json::Value {
+        json!({"id": WABA})
+    }
+
+    /// Decision on #41 (2026-09-25): a lost share Meta never shows keeps
+    /// every revocation incomplete until an operator clears it. The
+    /// clearance checks Meta first (GETs only), clears, and seals who did
+    /// it and when in the ledger; revocation and offboarding then finish as
+    /// if no share had been posted.
+    #[tokio::test]
+    async fn an_operator_clears_a_lost_share_meta_does_not_show() {
+        let h = harness(CreditSharing::ShareAndAttach);
+        lost_share(&h).await;
+        // Stuck: the revocation revokes nothing, and says so.
+        h.t.push_json(200, nothing_shared());
+        let err =
+            h.es.revoke_credit_line(&waba(), None, &h.vault)
+                .await
+                .unwrap_err();
+        let incomplete = err.credit().and_then(CreditError::revocation).unwrap();
+        assert!(incomplete.share_pending, "{err}");
+
+        h.clock.advance(std::time::Duration::from_secs(3600));
+        let before = h.t.requests().len();
+        h.t.push_json(200, nothing_shared());
+        h.t.push_json(200, no_funding());
+        let out =
+            h.es.clear_pending_share(&waba(), "  ops@wind-and-wool.example ", &h.vault)
+                .await
+                .unwrap();
+        let entry = ClearedShare {
+            pending_since: datetime!(2026-09-24 12:00 UTC),
+            cleared_at: datetime!(2026-09-24 13:00 UTC),
+            cleared_by: "ops@wind-and-wool.example".into(),
+            primary_funding_id: None,
+        };
+        assert_eq!(out, PendingShareClearance::Cleared(entry.clone()));
+        let checked = &h.t.requests()[before..];
+        assert_eq!(checked.len(), 2, "{checked:?}");
+        assert_lookup(&checked[0]);
+        assert_funding_read(&checked[1]);
+        assert_eq!(h.t.remaining(), 0);
+
+        // The audit entry: sealed with the record, and read back.
+        let credit = h.vault.credit(&waba()).await.unwrap().unwrap();
+        assert_eq!(credit.pending_share, None);
+        assert_eq!(credit.cleared_shares, std::slice::from_ref(&entry));
+        assert!(!credit.records_a_share(), "a cleared share is not a share");
+        let sealed = h
+            .vault
+            .kv()
+            .get(&credit_store_key())
+            .await
+            .unwrap()
+            .unwrap()
+            .value;
+        assert!(
+            !String::from_utf8_lossy(&sealed).contains("wind-and-wool"),
+            "the operator is sealed, not in the clear"
+        );
+        let copy: Arc<dyn wa_core::store::KvStore> = Arc::new(MemoryKvStore::new());
+        copy.put(&credit_store_key(), sealed, wa_core::store::Expiry::Never)
+            .await
+            .unwrap();
+        let reader = TokenVault::new(
+            Arc::clone(&copy),
+            VaultKeys::new(VaultKey::new("k1", SecretBytes::new([42; 32])).unwrap()),
+        )
+        .unwrap();
+        assert_eq!(
+            reader
+                .credit(&waba())
+                .await
+                .unwrap()
+                .unwrap()
+                .cleared_shares,
+            std::slice::from_ref(&entry),
+            "readable back with the vault key"
+        );
+        let stranger = TokenVault::new(
+            copy,
+            VaultKeys::new(VaultKey::new("k1", SecretBytes::new([7; 32])).unwrap()),
+        )
+        .unwrap();
+        assert!(stranger.credit(&waba()).await.is_err(), "and only with it");
+
+        // As if no share had been posted: the revocation is done, and
+        // offboarding deletes the token.
+        h.t.push_json(200, nothing_shared());
+        let report =
+            h.es.revoke_credit_line(&waba(), None, &h.vault)
+                .await
+                .unwrap();
+        assert_eq!(report.all().count(), 0);
+        h.t.push_json(200, nothing_shared());
+        let off = h.es.offboard(&waba(), None, &h.vault).await.unwrap();
+        assert!(off.token_deleted);
+        assert_eq!(off.credit.map(|r| r.all().count()), Some(0));
+        assert!(h.t.requests().iter().all(|r| r.method != Method::DELETE));
+        assert_eq!(h.t.remaining(), 0);
+        assert_eq!(
+            h.vault
+                .credit(&waba())
+                .await
+                .unwrap()
+                .unwrap()
+                .cleared_shares,
+            [entry],
+            "the trail outlives the token"
+        );
+    }
+
+    /// After a clearance, `resume` shares again without the pending share's
+    /// check of the WABA's funding: as if nothing had been posted.
+    #[tokio::test]
+    async fn after_a_clearance_resume_shares_as_if_nothing_had_been_posted() {
+        let h = harness(CreditSharing::ShareAndAttach);
+        lost_share(&h).await;
+        h.t.push_json(200, nothing_shared());
+        h.t.push_json(200, funding("THE_MERCHANTS_OWN_CARD"));
+        let PendingShareClearance::Cleared(entry) =
+            h.es.clear_pending_share(&waba(), "ops", &h.vault)
+                .await
+                .unwrap()
+        else {
+            panic!("not cleared")
+        };
+        assert_eq!(
+            entry.primary_funding_id,
+            Some(FundingId::new("THE_MERCHANTS_OWN_CARD")),
+            "what Meta showed is kept"
+        );
+        let before = h.t.requests().len();
+        h.t.push_json(200, success()); // subscribe
+        h.t.push_json(200, success()); // assigned_users
+        h.t.push_json(200, nothing_shared());
+        h.t.push_json(200, shared_and_attached());
+        h.t.push_json(200, success()); // register
+        let done =
+            h.es.resume(&waba(), &request().currency(WabaCurrency::Usd), &h.vault)
+                .await
+                .unwrap();
+        assert_eq!(
+            done.allocation_config_id,
+            Some(AllocationConfigId::new(ALLOCATION))
+        );
+        let resumed = &h.t.requests()[before..];
+        assert_lookup(&resumed[2]);
+        assert_eq!(
+            resumed[3].path(),
+            format!("/v25.0/{LINE}/whatsapp_credit_sharing_and_attach")
+        );
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// Meta shows the lost share funding the WABA: nothing is cleared, the
+    /// record is recorded as the WABA's allocation (as `resume` would), and
+    /// the revocation that revokes it settles the pending share.
+    #[tokio::test]
+    async fn a_lost_share_meta_shows_funding_the_waba_is_recorded_not_cleared() {
+        let h = harness(CreditSharing::ShareAndAttach);
+        lost_share(&h).await;
+        let before = h.t.requests().len();
+        h.t.push_json(200, shared_record(ALLOCATION));
+        h.t.push_json(200, active());
+        h.t.push_json(200, funding(CREDENTIAL));
+        h.t.push_json(200, receiving_credential(ALLOCATION, CREDENTIAL));
+        let out =
+            h.es.clear_pending_share(&waba(), "ops", &h.vault)
+                .await
+                .unwrap();
+        assert_eq!(
+            out,
+            PendingShareClearance::NotCleared(SharesFound {
+                business_id: BusinessId::new(BUSINESS),
+                funding: Some(AllocationConfigId::new(ALLOCATION)),
+                active: vec![AllocationConfigId::new(ALLOCATION)],
+                unknown_status: Vec::new(),
+                primary_funding_id: Some(FundingId::new(CREDENTIAL)),
+            })
+        );
+        let checked = &h.t.requests()[before..];
+        assert_eq!(checked.len(), 4, "{checked:?}");
+        assert_lookup(&checked[0]);
+        assert_status(&checked[1], ALLOCATION);
+        assert_funding_read(&checked[2]);
+        assert_request(
+            &checked[3],
+            &Method::GET,
+            &format!("/v25.0/{ALLOCATION}"),
+            &[("fields", "receiving_credential")],
+            SYSTEM_TOKEN,
+        );
+        assert_eq!(h.t.remaining(), 0);
+        let credit = h.vault.credit(&waba()).await.unwrap().unwrap();
+        assert!(credit.pending_share.is_some(), "not cleared");
+        assert!(credit.cleared_shares.is_empty(), "no audit entry");
+        assert_eq!(
+            credit.allocation_config_id,
+            Some(AllocationConfigId::new(ALLOCATION)),
+            "recorded"
+        );
+        assert!(credit.shared_at.is_some());
+
+        let report = revoked(&h).await;
+        assert_eq!(report.revoked, [AllocationConfigId::new(ALLOCATION)]);
+        assert_eq!(
+            h.vault
+                .credit(&waba())
+                .await
+                .unwrap()
+                .unwrap()
+                .pending_share,
+            None,
+            "settled by the revocation that revoked it"
+        );
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// Any record that may be live stops a clearance, whether or not it
+    /// funds this WABA (Meta does not say which WABA it funds), and so does
+    /// one whose status Meta does not document. Once none is live, a
+    /// funding no record of the line explains does not.
+    #[tokio::test]
+    async fn a_record_that_may_be_live_is_never_cleared() {
+        let h = harness(CreditSharing::ShareAndAttach);
+        lost_share(&h).await;
+        let (_, version) = h.vault.credit_versioned(&waba()).await.unwrap().unwrap();
+        h.t.push_json(200, shared_record("OTHER_WABA_RECORD"));
+        h.t.push_json(200, active());
+        h.t.push_json(200, no_funding());
+        h.t.push_json(
+            200,
+            receiving_credential("OTHER_WABA_RECORD", "CRED_OF_ANOTHER_WABA"),
+        );
+        let out =
+            h.es.clear_pending_share(&waba(), "ops", &h.vault)
+                .await
+                .unwrap();
+        assert_eq!(
+            out,
+            PendingShareClearance::NotCleared(SharesFound {
+                business_id: BusinessId::new(BUSINESS),
+                funding: None,
+                active: vec![AllocationConfigId::new("OTHER_WABA_RECORD")],
+                unknown_status: Vec::new(),
+                primary_funding_id: None,
+            })
+        );
+        assert_eq!(
+            h.vault.credit_versioned(&waba()).await.unwrap().unwrap().1,
+            version,
+            "the record is untouched"
+        );
+
+        h.t.push_json(200, shared_record("ODD"));
+        h.t.push_json(
+            200,
+            json!({"receiving_business": {"id": BUSINESS}, "request_status": "PENDING_REVIEW"}),
+        );
+        h.t.push_json(200, funding("CRED_ELSEWHERE"));
+        h.t.push_json(200, receiving_credential("ODD", "CRED_OF_ODD"));
+        let out =
+            h.es.clear_pending_share(&waba(), "ops", &h.vault)
+                .await
+                .unwrap();
+        assert_eq!(
+            out,
+            PendingShareClearance::NotCleared(SharesFound {
+                business_id: BusinessId::new(BUSINESS),
+                funding: None,
+                active: Vec::new(),
+                unknown_status: vec![(AllocationConfigId::new("ODD"), "PENDING_REVIEW".to_owned())],
+                primary_funding_id: Some(FundingId::new("CRED_ELSEWHERE")),
+            })
+        );
+        assert_eq!(
+            h.vault.credit_versioned(&waba()).await.unwrap().unwrap().1,
+            version,
+            "the record is untouched"
+        );
+
+        // Revoked since: nothing live. The WABA's funding is someone else's
+        // (the operator checked); it is kept in the audit entry.
+        h.t.push_json(200, shared_record("OTHER_WABA_RECORD"));
+        h.t.push_json(200, deleted());
+        h.t.push_json(200, funding("CRED_ELSEWHERE"));
+        let out =
+            h.es.clear_pending_share(&waba(), "ops", &h.vault)
+                .await
+                .unwrap();
+        let PendingShareClearance::Cleared(entry) = out else {
+            panic!("not cleared: {out:?}")
+        };
+        assert_eq!(
+            entry.primary_funding_id,
+            Some(FundingId::new("CRED_ELSEWHERE"))
+        );
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// Refused before anything is sent or written: not a Solution Partner,
+    /// no operator named, nothing pending, no token to read the WABA's
+    /// funding with. A failed check clears nothing.
+    #[tokio::test]
+    async fn a_clearance_is_refused_before_anything_is_sent() {
+        let field = |err: &Error| match err {
+            Error::Validation(v) => v.field.clone(),
+            other => panic!("not a validation error: {other}"),
+        };
+        let tp = harness_with(None);
+        let err = tp
+            .es
+            .clear_pending_share(&waba(), "ops", &tp.vault)
+            .await
+            .unwrap_err();
+        assert_eq!(field(&err), "solution_partner");
+
+        let h = harness(CreditSharing::ShareAndAttach);
+        let err =
+            h.es.clear_pending_share(&waba(), "ops", &h.vault)
+                .await
+                .unwrap_err();
+        assert_eq!(field(&err), "pending_share", "no credit record");
+        onboarded(&h).await;
+        let sent = h.t.requests().len();
+        let err =
+            h.es.clear_pending_share(&waba(), "ops", &h.vault)
+                .await
+                .unwrap_err();
+        assert_eq!(field(&err), "pending_share", "shared and recorded");
+        assert!(!err.is_retryable() && !err.may_have_been_sent());
+        assert_eq!(h.t.requests().len(), sent);
+
+        let h = harness(CreditSharing::ShareAndAttach);
+        lost_share(&h).await;
+        let sent = h.t.requests().len();
+        for blank in ["", "  "] {
+            let err =
+                h.es.clear_pending_share(&waba(), blank, &h.vault)
+                    .await
+                    .unwrap_err();
+            assert_eq!(field(&err), "cleared_by");
+        }
+        // A failed lookup clears nothing.
+        h.t.push_json(
+            500,
+            json!({"error": {"message": "An unexpected error has occurred", "type": "OAuthException", "code": 2, "fbtrace_id": "A"}}),
+        );
+        let err =
+            h.es.clear_pending_share(&waba(), "ops", &h.vault)
+                .await
+                .unwrap_err();
+        assert!(err.graph().is_some(), "{err}");
+        // No token: the WABA's funding cannot be read.
+        h.vault.delete(&waba()).await.unwrap();
+        let err =
+            h.es.clear_pending_share(&waba(), "ops", &h.vault)
+                .await
+                .unwrap_err();
+        assert_eq!(field(&err), "waba_id");
+        assert_eq!(h.t.requests().len(), sent + 1, "the lookup only");
+        assert_eq!(h.t.remaining(), 0);
+        let credit = h.vault.credit(&waba()).await.unwrap().unwrap();
+        assert!(credit.pending_share.is_some() && credit.cleared_shares.is_empty());
+        // Every refusal released the lease.
+        let lease = h.vault.lease_credit(&waba()).await.unwrap();
+        h.vault.release_credit(&waba(), lease).await.unwrap();
+    }
+
+    /// The clearance holds the WABA's credit lease: while a share holds it
+    /// the clearance is refused, and a share that starts during the check
+    /// is refused, posting nothing.
+    #[tokio::test]
+    async fn a_clearance_holds_the_lease_so_no_share_races_it() {
+        let (h, hooked, other) = hooked_harness(CreditSharing::ShareAndAttach, Arc::default());
+        lost_share(&h).await;
+        let held = h.vault.lease_credit(&waba()).await.unwrap();
+        let err =
+            h.es.clear_pending_share(&waba(), "ops", &h.vault)
+                .await
+                .unwrap_err();
+        assert!(EmbeddedSignup::is_credit_step_busy(&err), "{err}");
+        assert!(err.is_retryable() && !err.may_have_been_sent());
+        h.vault.release_credit(&waba(), held).await.unwrap();
+
+        let before = h.t.requests().len();
+        h.t.push_json(200, success()); // the racing resume's subscribe
+        h.t.push_json(200, success()); // its assigned_users
+        h.t.push_json(200, nothing_shared()); // the clearance's lookup
+        h.t.push_json(200, no_funding());
+        hooked.before(
+            Method::GET,
+            "/owning_credit_allocation_configs",
+            move || {
+                Box::pin(async move {
+                    let err = other
+                        .es
+                        .resume(
+                            &waba(),
+                            &request().currency(WabaCurrency::Usd),
+                            &other.vault,
+                        )
+                        .await
+                        .unwrap_err();
+                    assert_eq!(step(&err), SHARE_CREDIT_LINE);
+                    assert!(EmbeddedSignup::is_credit_step_busy(&err), "{err}");
+                    assert!(!err.may_have_been_sent(), "{err}");
+                })
+            },
+        );
+        let out =
+            h.es.clear_pending_share(&waba(), "ops", &h.vault)
+                .await
+                .unwrap();
+        assert!(matches!(out, PendingShareClearance::Cleared(_)), "{out:?}");
+        assert_eq!(
+            credit_calls(&h.t.requests()[before..]),
+            1,
+            "the clearance's lookup; the racing share posted nothing"
+        );
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// A lease lost during the check, or a credit record written meanwhile
+    /// (a revocation settling the share, say), clears nothing.
+    #[tokio::test]
+    async fn a_clearance_that_lost_its_lease_or_its_record_clears_nothing() {
+        let (h, hooked, other) = hooked_harness(CreditSharing::ShareAndAttach, Arc::default());
+        lost_share(&h).await;
+        h.t.push_json(200, nothing_shared());
+        h.t.push_json(200, no_funding());
+        let taker = other.vault.clone();
+        hooked.before(Method::GET, "/102290129340398", move || {
+            Box::pin(async move {
+                // The lease expired; a share took it.
+                taker.kv().delete(&lease_key()).await.unwrap();
+                taker.lease_credit(&waba()).await.unwrap();
+            })
+        });
+        let err =
+            h.es.clear_pending_share(&waba(), "ops", &h.vault)
+                .await
+                .unwrap_err();
+        assert!(EmbeddedSignup::is_credit_step_busy(&err), "{err}");
+        let credit = h.vault.credit(&waba()).await.unwrap().unwrap();
+        assert!(credit.pending_share.is_some() && credit.cleared_shares.is_empty());
+        assert!(
+            h.vault.lease_credit(&waba()).await.is_err(),
+            "the new holder keeps it"
+        );
+        other.vault.kv().delete(&lease_key()).await.unwrap();
+
+        h.t.push_json(200, nothing_shared());
+        h.t.push_json(200, no_funding());
+        hooked.before(Method::GET, "/102290129340398", move || {
+            Box::pin(async move {
+                other.vault.record_approval(&waba(), None).await.unwrap();
+            })
+        });
+        let err =
+            h.es.clear_pending_share(&waba(), "ops", &h.vault)
+                .await
+                .unwrap_err();
+        assert!(EmbeddedSignup::is_credit_step_busy(&err), "{err}");
+        let credit = h.vault.credit(&waba()).await.unwrap().unwrap();
+        assert!(credit.pending_share.is_some() && credit.cleared_shares.is_empty());
         assert_eq!(h.t.remaining(), 0);
     }
 
