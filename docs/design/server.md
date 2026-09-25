@@ -145,7 +145,7 @@ library's `KvStore` namespaces (`wa.token`, `wa.otp`, `wa.webhook.dedup`,
 | rate limits | token buckets per replica (limit ÷ replicas); a shared limiter only if needed |
 | API key cache | at most 30 s; a revocation `NOTIFY` purges every replica at once |
 | housekeeping (`purge_expired`, outbox and idempotency purges) | any replica, under an advisory lock |
-| migrations | at start, under the library's lock and a service advisory lock; expand-then-contract so rolling deploys can mix versions |
+| migrations | at start, under the library's lock and a service advisory lock; expand-then-contract so rolling deploys can mix versions. One exception predates the service: the library's migration 3 (lossless message content) converts in one step and needs older writers stopped first, then `migrate` run once from a one-off job (`docs/guides/production.md`); it runs before the service's first deploy, so no service rollout crosses it |
 
 ## 3. Tenancy and authentication
 
@@ -797,7 +797,7 @@ D1–D4 and D7 were decided by the owner on 2026-09-24 and D13–D14 on 2026-09-
 decided, the service keeps the library's behaviour and makes it visible to
 callers: #5 (multi-WABA signups), #8 (no token refresh: the service reports
 `reconnect_required`), #9 (vault key custody and cadence: rotation becomes
-one call), #10 (resume without a code), #13 (OTP issue limit), #18 (U+0000
-stored as U+FFFD), #30 (a permanently failing sink holds back its batch),
+one call), #10 (resume without a code), #13 (OTP issue limit), #30 (a permanently
+failing sink holds back its batch),
 #32 (calls do not reopen the inbox's window), #33 (message ids unique per
 store).
