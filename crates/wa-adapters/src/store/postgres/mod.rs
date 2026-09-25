@@ -91,6 +91,12 @@
 //! for byte: a NUL that an older revision stored as U+FFFD stays U+FFFD, the
 //! original is gone.
 //!
+//! Objects of your own on the converted columns (`wa_messages.kind`,
+//! `text`, `payload`, `error`, `wa_conversations.last_text`) must go first:
+//! a view, a rule or a `jsonb` index (GIN) makes the migration fail, and it
+//! then changes nothing (the transaction rolls back); a b-tree index is
+//! rebuilt on the bytes.
+//!
 //! **Stop every instance of the older revision that writes to these tables
 //! (webhook receivers, anything calling `Inbox::send`) before the first
 //! instance of this one runs [`migrate`].** An older instance left running

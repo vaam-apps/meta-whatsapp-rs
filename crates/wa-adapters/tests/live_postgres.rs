@@ -367,9 +367,18 @@ async fn live_postgres_migrate_is_idempotent_under_concurrency() {
     let Some(db) = TestDb::new().await else {
         return;
     };
-    let runs = (0..4).map(|_| postgres::migrate(&db.pool));
+    // Four independent "processes", each with its connection already open,
+    // so their migrations start together rather than one after the other.
+    let mut instances = Vec::new();
+    for _ in 0..4 {
+        instances.push(TestDb::pool_on(&db.url, &db.schema, 1).await);
+    }
+    let runs = instances.iter().map(postgres::migrate);
     for result in futures::future::join_all(runs).await {
         result.unwrap();
+    }
+    for pool in instances {
+        pool.close().await;
     }
     postgres::migrate(&db.pool).await.unwrap();
     assert_eq!(
