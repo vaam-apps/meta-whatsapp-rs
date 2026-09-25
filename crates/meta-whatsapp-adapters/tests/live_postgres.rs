@@ -4,7 +4,8 @@
 //!
 //! Every test runs in its own freshly created schema (the pool's
 //! `search_path`), so runs in parallel — and repeated runs against the same
-//! database — never see each other's tables.
+//! database — never see each other's tables. A `common::PgCleanup` guard drops
+//! each schema and private database, when the test panics too.
 #![cfg(feature = "postgres")]
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test crate: a panic is the report
 
@@ -27,18 +28,23 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{AssertSqlSafe, PgPool};
 use time::macros::datetime;
 
-/// A schema of our own on the test database.
+use common::PgCleanup;
+
+/// A schema of our own on the test database, dropped with it.
 struct TestDb {
     url: String,
     schema: String,
     admin: PgPool,
     pool: PgPool,
+    /// Last: fields drop in order, so the pools go before the schema.
+    _cleanup: PgCleanup,
 }
 
 impl TestDb {
     async fn new() -> Option<Self> {
         let url = common::service_url("META_WHATSAPP_RS_TEST_POSTGRES_URL")?;
         let schema = format!("wa_test_{}", common::unique());
+        let cleanup = PgCleanup::schema(&url, &schema);
         let admin = PgPoolOptions::new()
             .max_connections(2)
             .connect(&url)
@@ -54,6 +60,7 @@ impl TestDb {
             schema,
             admin,
             pool,
+            _cleanup: cleanup,
         })
     }
 
@@ -108,17 +115,6 @@ impl TestDb {
         .await
         .unwrap()
     }
-
-    async fn drop(self) {
-        self.pool.close().await;
-        sqlx::query(AssertSqlSafe(format!(
-            "DROP SCHEMA {} CASCADE",
-            self.schema
-        )))
-        .execute(&self.admin)
-        .await
-        .unwrap();
-    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -129,7 +125,6 @@ async fn live_postgres_kv_conformance() {
     postgres::migrate(&db.pool).await.unwrap();
     let store = PostgresKvStore::new(db.pool.clone());
     conformance::run_with_real_time(&store, Duration::from_millis(500)).await;
-    db.drop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -140,7 +135,6 @@ async fn live_postgres_conversation_conformance() {
     postgres::migrate(&db.pool).await.unwrap();
     let store = PostgresConversationStore::new(db.pool.clone());
     conversation_conformance::run(&store).await;
-    db.drop().await;
 }
 
 /// The search recipe of `store::postgres`' module docs finds a row holding a
@@ -267,7 +261,6 @@ async fn live_postgres_keeps_nul_in_content_and_refuses_it_in_ids() {
         .await
         .unwrap();
     assert_eq!(kv.get(&key).await.unwrap().unwrap().value, b"\0v\0");
-    db.drop().await;
 }
 
 /// The history and inbox order must be byte order whatever the server's
@@ -280,6 +273,7 @@ async fn live_postgres_conversation_order_ignores_the_database_collation() {
         return;
     };
     let name = format!("wa_test_icu_{}", common::unique());
+    let _cleanup = PgCleanup::database(&url, &name);
     let admin = PgPoolOptions::new()
         .max_connections(1)
         .connect(&url)
@@ -308,12 +302,6 @@ async fn live_postgres_conversation_order_ignores_the_database_collation() {
 
     postgres::migrate(&pool).await.unwrap();
     conversation_conformance::run(&PostgresConversationStore::new(pool.clone())).await;
-
-    pool.close().await;
-    sqlx::query(AssertSqlSafe(format!("DROP DATABASE {name} WITH (FORCE)")))
-        .execute(&admin)
-        .await
-        .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -360,7 +348,6 @@ async fn live_postgres_races_across_independent_pools() {
         .count();
     assert_eq!(wins, 1, "one compare_and_swap wins across two pools");
     other.close().await;
-    db.drop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -393,7 +380,6 @@ async fn live_postgres_migrate_is_idempotent_under_concurrency() {
     );
     assert_eq!(db.applied_migrations().await, [1, 2, 3]);
     assert_eq!(db.content_columns().await, LOSSLESS_CONTENT_COLUMNS);
-    db.drop().await;
 }
 
 /// The content columns after migration 3: bytes and `json`, no `text` or
@@ -674,7 +660,6 @@ async fn live_postgres_upgrade_keeps_existing_content_and_stops_old_writers() {
         store.conversations(&pn, None, 1).await.unwrap()[0].last_text,
         nul.text
     );
-    db.drop().await;
 }
 
 /// The pre-flight query of the `store::postgres` module docs ("Upgrading to
@@ -708,17 +693,18 @@ async fn preflight_objects(pool: &PgPool) -> Vec<String> {
 }
 
 /// A database of its own (the trigram case installs an extension, which is
-/// per database), one schema per case in it.
+/// per database), one schema per case in it, dropped with it.
 struct PrivateDb {
     url: String,
     name: String,
-    admin: PgPool,
+    _cleanup: PgCleanup,
 }
 
 impl PrivateDb {
     async fn new(label: &str) -> Option<Self> {
         let url = common::service_url("META_WHATSAPP_RS_TEST_POSTGRES_URL")?;
         let name = format!("wa_test_{label}_{}", common::unique());
+        let cleanup = PgCleanup::database(&url, &name);
         let admin = PgPoolOptions::new()
             .max_connections(1)
             .connect(&url)
@@ -728,7 +714,12 @@ impl PrivateDb {
             .execute(&admin)
             .await
             .unwrap();
-        Some(Self { url, name, admin })
+        admin.close().await;
+        Some(Self {
+            url,
+            name,
+            _cleanup: cleanup,
+        })
     }
 
     /// A pool on a new schema of this database.
@@ -751,16 +742,6 @@ impl PrivateDb {
             .connect_with(options.options([("search_path", schema)]))
             .await
             .unwrap()
-    }
-
-    async fn drop(self) {
-        sqlx::query(AssertSqlSafe(format!(
-            "DROP DATABASE {} WITH (FORCE)",
-            self.name
-        )))
-        .execute(&self.admin)
-        .await
-        .unwrap();
     }
 }
 
@@ -912,7 +893,6 @@ async fn live_postgres_upgrade_refuses_objects_that_would_fail_content() {
     {
         assert_refused(&db, &format!("refused_{i}"), case, object, listed).await;
     }
-    db.drop().await;
 }
 
 /// What the upgrade keeps: a b-tree index on text, rebuilt on the bytes,
@@ -971,7 +951,6 @@ async fn live_postgres_upgrade_keeps_plain_indexes_and_json_expressions_fail_nul
         "nor can it be created over a row holding one"
     );
     pool.close().await;
-    db.drop().await;
 }
 
 /// A content column that is not UTF-8 (only a hand edit can make one:
@@ -1059,7 +1038,6 @@ async fn live_postgres_reads_content_that_is_not_utf8_as_corrupt() {
         }
         other => panic!("last_text_utf8: {other:?}"),
     }
-    db.drop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1106,7 +1084,6 @@ async fn live_postgres_custom_prefix_is_isolated() {
         tenant,
     ))
     .await;
-    db.drop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1180,7 +1157,6 @@ async fn live_postgres_purge_expired_keeps_versions_unique() {
         recreated > deleted_version,
         "a purged key never gets back an old version ({deleted_version} then {recreated})"
     );
-    db.drop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1205,5 +1181,4 @@ async fn live_postgres_debug_is_redacted_and_missing_tables_are_errors() {
             .is_err(),
         "no tables yet: queries fail with a backend error, not a panic"
     );
-    db.drop().await;
 }
