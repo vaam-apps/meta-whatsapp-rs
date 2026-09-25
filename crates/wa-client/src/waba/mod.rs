@@ -236,6 +236,19 @@ impl Waba {
             .await
     }
 
+    /// `GET /{WABA_ID}?fields=owner_business_info`, decoded without quoting
+    /// the body in a decode error (it carries the business's name).
+    pub(crate) async fn owner_business(&self) -> Result<Option<BusinessRef>> {
+        let info: WabaInfo = self
+            .client
+            .get_at(&[self.waba_id.as_str()])
+            .query("fields", "owner_business_info")
+            .context("WhatsApp Business Account owner")
+            .send_private()
+            .await?;
+        Ok(info.owner_business_info)
+    }
+
     /// `POST /{WABA_ID}`: rename or change the time zone.
     pub async fn update(&self, update: &WabaUpdate) -> Result<()> {
         if update.name.is_none() && update.timezone_id.is_none() {

@@ -1,74 +1,72 @@
 //! The Solution Partner credit ledger: what onboarding shared with each
-//! WABA, and which customer businesses had the credit line revoked. Kept in
-//! the [`TokenVault`]'s store, sealed with its keys, under keys of its own,
-//! so it outlives the tokens ([`TokenVault::delete`] leaves it): revoking a
-//! line after the merchant left needs the business id and the allocation.
+//! WABA, which WABAs the integrator approved, and which customer businesses
+//! had the credit line revoked. Kept in the [`TokenVault`]'s store, sealed
+//! with its keys, under keys of its own, so it outlives the tokens
+//! ([`TokenVault::delete`] leaves it): revoking a line after the merchant
+//! left needs the business id and the allocation.
 //!
 //! Keys (namespace `wa.token`):
 //!
-//! - `credit/<WABA_ID>`: a [`StoredCredit`], written by `share_credit_line`
-//!   with compare-and-swap.
+//! - `credit/<WABA_ID>`: a [`StoredCredit`], written with compare-and-swap
+//!   by the approval of `onboard_with_approval` / `resume_with_approval`,
+//!   by `share_credit_line`, and by a revocation that learnt the owner
+//!   business.
 //! - `revoked/<BUSINESS_ID>`: a [`RevokedBusiness`], written by
 //!   [`EmbeddedSignup::revoke_credit_line`](super::EmbeddedSignup::revoke_credit_line)
-//!   before it revokes anything; while it exists, onboarding refuses to
-//!   share the line with that business again unless the request opts in
+//!   before it looks anything up on Meta's side; while it exists,
+//!   onboarding refuses to share the line with that business again unless
+//!   the request opts in
 //!   ([`OnboardingRequest::reshare_after_revocation`](super::OnboardingRequest::reshare_after_revocation)).
 //! - `credit-lease/<WABA_ID>`: a short lease held while one onboarding runs
-//!   the credit step, so two concurrent onboardings of one WABA cannot both
-//!   post a share.
+//!   the credit step, renewed before each post, so two concurrent
+//!   onboardings of one WABA cannot both post a share.
 //!
 //! Each record is `{v, kid, nonce, ciphertext}`: AES-256-GCM under the
 //! vault's active key, the associated data binding it to its own store key,
-//! so a record copied to another WABA's or business's key (or edited) fails
-//! to open. Nothing in it is a secret; sealing makes it tamper-evident: a
-//! revocation marker cannot be forged away, nor a stored allocation
-//! redirected to another customer's.
+//! so a record copied to another WABA's or business's key, or edited, fails
+//! to open. Nothing in it is a secret. Sealing stops a record from being
+//! forged or moved; it does **not** stop someone with write access to the
+//! store from deleting a record (a revocation marker, and with it the
+//! refusal to fund that business again) or from putting back an older
+//! sealed copy of the same key (an earlier allocation, a marker since
+//! cleared). Rollback protection is out of scope: keep write access to the
+//! store as narrow as access to the vault key.
+//!
+//! Records under a previous key are re-sealed under the active key when
+//! read, like tokens (unless [`TokenVault::rotate_on_read`] is off), and by
+//! [`TokenVault::rotate`] (a WABA's credit record and its business's
+//! marker) and [`TokenVault::rotate_business`] (a marker alone).
 
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
-use wa_core::error::{CryptoError, ValidationError};
+use wa_core::error::{CreditError, CryptoError};
 use wa_core::ids::{AllocationConfigId, BusinessId, WabaId};
-use wa_core::store::{Expiry, StoreKey};
+use wa_core::store::{Expiry, StoreKey, Versioned};
 use wa_core::{Error, Result};
 
 use super::vault::{SealedBlob, TOKEN_NAMESPACE, TokenVault, decode_json, encode_json};
 use crate::credit_lines::WabaCurrency;
 
-/// How long `share_credit_line` holds a WABA's lease. Long enough for its
-/// requests, short enough that a crashed process does not block `resume`
-/// for long.
+/// How long `share_credit_line` holds a WABA's lease after taking or
+/// renewing it. Long enough for the requests between two renewals, short
+/// enough that a crashed process does not block `resume` for long.
 pub(super) const CREDIT_LEASE: Duration = Duration::from_secs(300);
 
-/// How many times a revocation marker update retries a lost
-/// compare-and-swap before giving up.
-const MARK_ATTEMPTS: usize = 5;
+/// How many times a ledger update retries a lost compare-and-swap before
+/// giving up.
+const ATTEMPTS: usize = 5;
 
-/// `ValidationError::field` of the refusals the Solution Partner credit
-/// steps make, for callers to branch on (also through
-/// [`EmbeddedSignup::is_credit_line_revoked`](super::EmbeddedSignup::is_credit_line_revoked)
-/// and [`EmbeddedSignup::is_credit_step_busy`](super::EmbeddedSignup::is_credit_step_busy)).
-pub mod refusals {
-    /// The customer business had the credit line revoked (by
-    /// `revoke_credit_line`, or on Meta's side: only `DELETED` records and
-    /// no active one). Onboarding does not share it again unless the request
-    /// says so with `OnboardingRequest::reshare_after_revocation`.
-    pub const CREDIT_LINE_REVOKED: &str = "credit_line_revoked";
-    /// Another onboarding of the same WABA holds the credit step, or changed
-    /// its credit record meanwhile. Nothing was posted; `resume` later.
-    pub const CREDIT_STEP_BUSY: &str = "credit_line_busy";
-}
-
-/// What Solution Partner onboarding shared with one WABA
+/// What Solution Partner onboarding recorded for one WABA
 /// ([`TokenVault::credit`]). Outlives the token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct StoredCredit {
     /// The WABA.
     pub waba_id: WabaId,
-    /// Its owner business as Meta reported it at onboarding (what
-    /// revocation looks the line up by).
+    /// Its owner business: as Meta reported it at onboarding, or as a
+    /// revocation established it (what revocation looks the line up by).
     pub business_id: Option<BusinessId>,
     /// The allocation that funds the WABA, or the share intent recorded
     /// before the attach of the two-call method.
@@ -79,6 +77,14 @@ pub struct StoredCredit {
     pub currency: Option<WabaCurrency>,
     /// When the line was found or made to fund the WABA.
     pub shared_at: Option<OffsetDateTime>,
+    /// When the integrator approved onboarding this WABA
+    /// (`onboard_with_approval`, `resume_with_approval`). Solution Partner
+    /// mode shares nothing for a WABA without it.
+    pub approved_at: Option<OffsetDateTime>,
+    /// Set just before a share is posted and cleared once its allocation is
+    /// recorded: while set, a share may have gone through that the ledger
+    /// does not know (a post that timed out, a process that died).
+    pub pending_share: Option<OffsetDateTime>,
 }
 
 impl StoredCredit {
@@ -89,7 +95,19 @@ impl StoredCredit {
             allocation_config_id: None,
             currency: None,
             shared_at: None,
+            approved_at: None,
+            pending_share: None,
         }
+    }
+
+    /// Whether this record shows that the credit line was, or may have
+    /// been, shared with the WABA: an allocation, a share time, or a share
+    /// posted whose outcome is unknown. (A currency alone does not: it is
+    /// sealed before the first post.)
+    pub fn records_a_share(&self) -> bool {
+        self.allocation_config_id.is_some()
+            || self.shared_at.is_some()
+            || self.pending_share.is_some()
     }
 }
 
@@ -117,6 +135,36 @@ struct CreditPlain {
     currency: Option<String>,
     #[serde(default, with = "time::serde::timestamp::option")]
     shared_at: Option<OffsetDateTime>,
+    #[serde(default, with = "time::serde::timestamp::option")]
+    approved_at: Option<OffsetDateTime>,
+    #[serde(default, with = "time::serde::timestamp::option")]
+    pending_share: Option<OffsetDateTime>,
+}
+
+impl CreditPlain {
+    fn from_credit(credit: &StoredCredit) -> Self {
+        Self {
+            waba_id: credit.waba_id.clone(),
+            business_id: credit.business_id.clone(),
+            allocation_config_id: credit.allocation_config_id.clone(),
+            currency: credit.currency.as_ref().map(|c| c.as_str().to_owned()),
+            shared_at: credit.shared_at,
+            approved_at: credit.approved_at,
+            pending_share: credit.pending_share,
+        }
+    }
+
+    fn into_credit(self) -> StoredCredit {
+        StoredCredit {
+            waba_id: self.waba_id,
+            business_id: self.business_id,
+            allocation_config_id: self.allocation_config_id,
+            currency: self.currency.map(currency_from),
+            shared_at: self.shared_at,
+            approved_at: self.approved_at,
+            pending_share: self.pending_share,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -140,8 +188,13 @@ fn lease_key(waba_id: &WabaId) -> StoreKey {
     StoreKey::new(TOKEN_NAMESPACE, format!("credit-lease/{waba_id}"))
 }
 
+/// [`CreditError::Busy`] for a step that posted nothing.
 pub(super) fn busy(reason: &str) -> Error {
-    ValidationError::new(refusals::CREDIT_STEP_BUSY, reason).into()
+    CreditError::Busy {
+        reason: reason.to_owned(),
+        posted: false,
+    }
+    .into()
 }
 
 fn currency_from(code: String) -> WabaCurrency {
@@ -149,18 +202,51 @@ fn currency_from(code: String) -> WabaCurrency {
 }
 
 impl TokenVault {
-    async fn read_sealed<T: serde::de::DeserializeOwned>(
+    /// Open a sealed record read from `key`.
+    fn open_sealed<T: serde::de::DeserializeOwned>(
         &self,
         key: &StoreKey,
-    ) -> Result<Option<(T, SealedBlob, u64)>> {
-        let Some(v) = self.kv().get(key).await? else {
-            return Ok(None);
-        };
-        let blob: SealedBlob = decode_json(key, &v)?;
+        v: &Versioned,
+    ) -> Result<(T, SealedBlob, Vec<u8>)> {
+        let blob: SealedBlob = decode_json(key, v)?;
         let plain = self.open_blob(key, &blob)?;
         let value = serde_json::from_slice(&plain)
             .map_err(|_| CryptoError::Malformed("decrypted credit ledger record"))?;
-        Ok(Some((value, blob, v.version)))
+        Ok((value, blob, plain))
+    }
+
+    /// Read and open `key`; its version. A record under a previous key is
+    /// re-sealed under the active one (compare-and-swap; a concurrent write
+    /// wins) when the vault rotates on read, and the new version returned.
+    async fn read_sealed<T: serde::de::DeserializeOwned>(
+        &self,
+        key: &StoreKey,
+    ) -> Result<Option<(T, u64)>> {
+        let Some(v) = self.kv().get(key).await? else {
+            return Ok(None);
+        };
+        let (value, blob, plain) = self.open_sealed::<T>(key, &v)?;
+        let mut version = v.version;
+        if self.rotates_on_read() && !self.is_current(&blob) {
+            match self.reseal_blob(key, &plain, version).await {
+                Ok(Some(new)) => version = new,
+                Ok(None) => {}
+                Err(e) => tracing::warn!(
+                    kind = ?e.kind(),
+                    "credit ledger: re-sealing under the active key failed; retried on next read"
+                ),
+            }
+        }
+        Ok(Some((value, version)))
+    }
+
+    /// Seal `plain` under the active key in place of version `version`.
+    async fn reseal_blob(&self, key: &StoreKey, plain: &[u8], version: u64) -> Result<Option<u64>> {
+        let bytes = encode_json(key, &self.seal_blob(key, plain)?)?;
+        Ok(self
+            .kv()
+            .compare_and_swap(key, version, Some(bytes), Expiry::Keep)
+            .await?)
     }
 
     /// Seal `value` for `key`: create it when `expected` is `None`, else
@@ -199,42 +285,97 @@ impl TokenVault {
         waba_id: &WabaId,
     ) -> Result<Option<(StoredCredit, u64)>> {
         let key = credit_key(waba_id);
-        let Some((plain, _, version)) = self.read_sealed::<CreditPlain>(&key).await? else {
+        let Some((plain, version)) = self.read_sealed::<CreditPlain>(&key).await? else {
             return Ok(None);
         };
         if &plain.waba_id != waba_id {
             return Err(CryptoError::Decrypt.into());
         }
-        Ok(Some((
-            StoredCredit {
-                waba_id: plain.waba_id,
-                business_id: plain.business_id,
-                allocation_config_id: plain.allocation_config_id,
-                currency: plain.currency.map(currency_from),
-                shared_at: plain.shared_at,
-            },
-            version,
-        )))
+        Ok(Some((plain.into_credit(), version)))
     }
 
     /// Write `credit`: create it (`expected` `None`) or replace version
     /// `expected`. Returns the new version; a concurrent write is
-    /// [`refusals::CREDIT_STEP_BUSY`].
+    /// [`CreditError::Busy`]. **Only before a share is posted**: after one,
+    /// use [`Self::update_credit`], which merges instead.
     pub(super) async fn put_credit(
         &self,
         credit: &StoredCredit,
         expected: Option<u64>,
     ) -> Result<u64> {
-        let plain = CreditPlain {
-            waba_id: credit.waba_id.clone(),
-            business_id: credit.business_id.clone(),
-            allocation_config_id: credit.allocation_config_id.clone(),
-            currency: credit.currency.as_ref().map(|c| c.as_str().to_owned()),
-            shared_at: credit.shared_at,
-        };
-        self.write_sealed(&credit_key(&credit.waba_id), &plain, expected)
-            .await?
-            .ok_or_else(|| busy("the WABA's credit record changed while this step ran"))
+        self.write_sealed(
+            &credit_key(&credit.waba_id),
+            &CreditPlain::from_credit(credit),
+            expected,
+        )
+        .await?
+        .ok_or_else(|| busy("the WABA's credit record changed while this step ran"))
+    }
+
+    /// Apply `change` to the credit record of `waba_id` (a new record when
+    /// there is none) with compare-and-swap, re-reading and re-applying it
+    /// when another write got there first. `change` returns `false` to
+    /// leave the record as it is. The record and its version afterwards, or
+    /// `None` when every attempt lost the race.
+    pub(super) async fn update_credit(
+        &self,
+        waba_id: &WabaId,
+        mut change: impl FnMut(&mut StoredCredit) -> bool,
+    ) -> Result<Option<(StoredCredit, Option<u64>)>> {
+        for _ in 0..ATTEMPTS {
+            let (mut credit, version) = match self.credit_versioned(waba_id).await? {
+                Some((credit, version)) => (credit, Some(version)),
+                None => (StoredCredit::new(waba_id.clone()), None),
+            };
+            if !change(&mut credit) {
+                return Ok(Some((credit, version)));
+            }
+            let written = self
+                .write_sealed(
+                    &credit_key(waba_id),
+                    &CreditPlain::from_credit(&credit),
+                    version,
+                )
+                .await?;
+            if let Some(version) = written {
+                return Ok(Some((credit, Some(version))));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Record the integrator's approval of onboarding `waba_id`.
+    pub(super) async fn record_approval(&self, waba_id: &WabaId) -> Result<()> {
+        let now = self.now();
+        self.update_credit(waba_id, |c| {
+            c.approved_at = Some(now);
+            true
+        })
+        .await?
+        .map(|_| ())
+        .ok_or_else(|| {
+            busy("the WABA's credit record kept changing while the approval was recorded")
+        })
+    }
+
+    /// Record `business_id` as the owner of `waba_id` when the credit record
+    /// names none (creating the record if there is none). Leaves a record
+    /// naming a business as it is.
+    pub(super) async fn note_business(
+        &self,
+        waba_id: &WabaId,
+        business_id: &BusinessId,
+    ) -> Result<()> {
+        self.update_credit(waba_id, |c| {
+            if c.business_id.is_some() {
+                return false;
+            }
+            c.business_id = Some(business_id.clone());
+            true
+        })
+        .await?
+        .map(|_| ())
+        .ok_or_else(|| busy("the WABA's credit record kept changing"))
     }
 
     /// The revocation marker of `business_id`, if its credit line was
@@ -244,40 +385,61 @@ impl TokenVault {
         &self,
         business_id: &BusinessId,
     ) -> Result<Option<RevokedBusiness>> {
+        Ok(self.revoked_versioned(business_id).await?.map(|(r, _)| r))
+    }
+
+    pub(super) async fn revoked_versioned(
+        &self,
+        business_id: &BusinessId,
+    ) -> Result<Option<(RevokedBusiness, u64)>> {
         let key = revoked_key(business_id);
-        let Some((plain, _, _)) = self.read_sealed::<RevokedPlain>(&key).await? else {
+        let Some((plain, version)) = self.read_sealed::<RevokedPlain>(&key).await? else {
             return Ok(None);
         };
         if &plain.business_id != business_id {
             return Err(CryptoError::Decrypt.into());
         }
-        Ok(Some(RevokedBusiness {
-            business_id: plain.business_id,
-            revoked_at: plain.revoked_at,
-            allocation_config_ids: plain.allocation_config_ids,
-        }))
+        Ok(Some((
+            RevokedBusiness {
+                business_id: plain.business_id,
+                revoked_at: plain.revoked_at,
+                allocation_config_ids: plain.allocation_config_ids,
+            },
+            version,
+        )))
     }
 
     /// Record that `business_id`'s line is (being) revoked, adding `ids`.
-    /// Keeps the first `revoked_at`.
+    /// Keeps the first `revoked_at`. A marker that cannot be read (edited,
+    /// sealed under a key no longer configured) is replaced: a marker only
+    /// ever makes onboarding stricter, so writing a fresh one is safe.
     pub(super) async fn mark_revoked(
         &self,
         business_id: &BusinessId,
         ids: &[AllocationConfigId],
     ) -> Result<()> {
         let key = revoked_key(business_id);
-        for _ in 0..MARK_ATTEMPTS {
-            let current = self.read_sealed::<RevokedPlain>(&key).await?;
-            let (mut plain, version) = match current {
-                Some((plain, _, version)) => (plain, Some(version)),
-                None => (
-                    RevokedPlain {
-                        business_id: business_id.clone(),
-                        revoked_at: self.now(),
-                        allocation_config_ids: Vec::new(),
-                    },
-                    None,
-                ),
+        for _ in 0..ATTEMPTS {
+            let fresh = || RevokedPlain {
+                business_id: business_id.clone(),
+                revoked_at: self.now(),
+                allocation_config_ids: Vec::new(),
+            };
+            let (mut plain, version) = match self.kv().get(&key).await? {
+                None => (fresh(), None),
+                Some(v) => match self.open_sealed::<RevokedPlain>(&key, &v) {
+                    Ok((plain, _, _)) if &plain.business_id == business_id => {
+                        (plain, Some(v.version))
+                    }
+                    Ok(_) => (fresh(), Some(v.version)),
+                    Err(e) => {
+                        tracing::warn!(
+                            kind = ?e.kind(),
+                            "credit ledger: unreadable revocation marker replaced"
+                        );
+                        (fresh(), Some(v.version))
+                    }
+                },
             };
             for id in ids {
                 if !plain.allocation_config_ids.contains(id) {
@@ -292,26 +454,54 @@ impl TokenVault {
     }
 
     /// Forget `business_id`'s revocation marker (after an explicit
-    /// re-share). Returns whether one was removed.
-    pub(super) async fn clear_revoked(&self, business_id: &BusinessId) -> Result<bool> {
-        Ok(self.kv().delete(&revoked_key(business_id)).await?)
+    /// re-share), only if it is still at `version`, the one the share read
+    /// before posting. `false` when it changed or went: a revocation ran
+    /// meanwhile.
+    pub(super) async fn clear_revoked(
+        &self,
+        business_id: &BusinessId,
+        version: u64,
+    ) -> Result<bool> {
+        Ok(self
+            .kv()
+            .compare_and_swap(&revoked_key(business_id), version, None, Expiry::Keep)
+            .await?
+            .is_some())
+    }
+
+    fn lease_stamp(&self, key: &StoreKey) -> Result<Vec<u8>> {
+        encode_json(
+            key,
+            &serde_json::json!({ "at": self.now().unix_timestamp() }),
+        )
     }
 
     /// Take `waba_id`'s credit lease for [`CREDIT_LEASE`]; its version, to
-    /// release it. [`refusals::CREDIT_STEP_BUSY`] while another holds it.
+    /// renew and release it. [`CreditError::Busy`] while another holds it.
     pub(super) async fn lease_credit(&self, waba_id: &WabaId) -> Result<u64> {
         let key = lease_key(waba_id);
-        let stamp = serde_json::json!({ "at": self.now().unix_timestamp() });
         self.kv()
-            .put_if_absent(
-                &key,
-                encode_json(&key, &stamp)?,
-                Expiry::After(CREDIT_LEASE),
-            )
+            .put_if_absent(&key, self.lease_stamp(&key)?, Expiry::After(CREDIT_LEASE))
             .await?
             .ok_or_else(|| {
                 busy("another onboarding of this WABA is sharing its credit line; resume later")
             })
+    }
+
+    /// Extend the lease at `version` for another [`CREDIT_LEASE`]; its new
+    /// version. `None` when it expired or another holder has it now: the
+    /// caller must not post.
+    pub(super) async fn renew_credit(&self, waba_id: &WabaId, version: u64) -> Result<Option<u64>> {
+        let key = lease_key(waba_id);
+        Ok(self
+            .kv()
+            .compare_and_swap(
+                &key,
+                version,
+                Some(self.lease_stamp(&key)?),
+                Expiry::After(CREDIT_LEASE),
+            )
+            .await?)
     }
 
     /// Release a lease taken by [`Self::lease_credit`] (only that one: a
@@ -323,34 +513,50 @@ impl TokenVault {
         Ok(())
     }
 
+    /// Re-seal `key` under the active key if it is under an older one.
+    async fn rotate_key(&self, key: &StoreKey) -> Result<bool> {
+        let Some(v) = self.kv().get(key).await? else {
+            return Ok(false);
+        };
+        let blob: SealedBlob = decode_json(key, &v)?;
+        if self.is_current(&blob) {
+            return Ok(false);
+        }
+        let plain = self.open_blob(key, &blob)?;
+        Ok(self.reseal_blob(key, &plain, v.version).await?.is_some())
+    }
+
     /// Re-seal the credit record of `waba_id`, and its business's
     /// revocation marker, under the active key. Whether anything was
     /// rewritten.
     pub(super) async fn rotate_ledger(&self, waba_id: &WabaId) -> Result<bool> {
         let key = credit_key(waba_id);
-        let mut rewritten = false;
-        let mut business = None;
-        if let Some((plain, blob, version)) = self.read_sealed::<CreditPlain>(&key).await? {
-            business.clone_from(&plain.business_id);
-            if !self.is_current(&blob) {
-                rewritten |= self
-                    .write_sealed(&key, &plain, Some(version))
-                    .await?
-                    .is_some();
+        let mut rewritten = self.rotate_key(&key).await?;
+        let business = match self.kv().get(&key).await? {
+            Some(v) => {
+                let (plain, _, _) = self.open_sealed::<CreditPlain>(&key, &v)?;
+                plain.business_id
             }
-        }
+            None => None,
+        };
         if let Some(business) = business {
-            let key = revoked_key(&business);
-            if let Some((plain, blob, version)) = self.read_sealed::<RevokedPlain>(&key).await?
-                && !self.is_current(&blob)
-            {
-                rewritten |= self
-                    .write_sealed(&key, &plain, Some(version))
-                    .await?
-                    .is_some();
-            }
+            rewritten |= self.rotate_key(&revoked_key(&business)).await?;
         }
         Ok(rewritten)
+    }
+
+    /// Re-seal the revocation marker of `business_id` under the active key
+    /// if it is under an older one; whether it was rewritten.
+    ///
+    /// [`Self::rotate`] already does this for the business a WABA's credit
+    /// record names (every revocation writes its business there). Use this
+    /// one for markers no credit record points to: a business revoked with
+    /// [`EmbeddedSignup::revoke_business_credit_line`](super::EmbeddedSignup::revoke_business_credit_line),
+    /// or before this revision recorded the business (take the ids from
+    /// the `business_id` of your stored [`CreditRevocation`](crate::credit_lines::CreditRevocation)
+    /// reports). The vault cannot list its records.
+    pub async fn rotate_business(&self, business_id: &BusinessId) -> Result<bool> {
+        self.rotate_key(&revoked_key(business_id)).await
     }
 }
 
@@ -506,8 +712,120 @@ mod tests {
         )
         .await;
         assert!(v.revoked_business(&BusinessId::new("OTHER")).await.is_err());
-        assert!(v.clear_revoked(&business).await.unwrap());
+
+        // Cleared only at the version the re-share read: a revocation that
+        // touched the marker since keeps it.
+        let (_, read) = v.revoked_versioned(&business).await.unwrap().unwrap();
+        v.mark_revoked(&business, &[]).await.unwrap(); // a revocation meanwhile
+        assert!(!v.clear_revoked(&business, read).await.unwrap());
+        assert!(v.revoked_business(&business).await.unwrap().is_some());
+        let (_, now) = v.revoked_versioned(&business).await.unwrap().unwrap();
+        assert!(v.clear_revoked(&business, now).await.unwrap());
         assert!(v.revoked_business(&business).await.unwrap().is_none());
+    }
+
+    /// A marker only makes onboarding stricter: one that cannot be read is
+    /// replaced, never a reason not to mark.
+    #[tokio::test]
+    async fn an_unreadable_marker_is_replaced() {
+        let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
+        let v = vault(&kv, VaultKeys::new(key("k1", 7)));
+        let business = BusinessId::new("2729063490586005");
+        for garbage in [
+            b"{}".to_vec(),
+            b"not json".to_vec(),
+            // Sealed under a key this vault does not have.
+            {
+                let other = vault(&kv, VaultKeys::new(key("gone", 9)));
+                let k = revoked_key(&business);
+                encode_json(&k, &other.seal_blob(&k, b"{}").unwrap()).unwrap()
+            },
+        ] {
+            put(&kv, "revoked/2729063490586005", garbage).await;
+            assert!(v.revoked_business(&business).await.is_err(), "vacuous");
+            v.mark_revoked(&business, &[AllocationConfigId::new("A1")])
+                .await
+                .unwrap();
+            let marker = v.revoked_business(&business).await.unwrap().unwrap();
+            assert_eq!(
+                marker.allocation_config_ids,
+                [AllocationConfigId::new("A1")]
+            );
+        }
+    }
+
+    /// Approval, the business a revocation learnt and a post's allocation
+    /// merge into whatever the record holds, instead of failing on a
+    /// concurrent write.
+    #[tokio::test]
+    async fn updates_merge_into_the_current_record() {
+        let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
+        let v = vault(&kv, VaultKeys::new(key("k1", 7)));
+        let waba = WabaId::new("W1");
+        v.record_approval(&waba).await.unwrap();
+        let first = v.credit(&waba).await.unwrap().unwrap();
+        assert_eq!(first.approved_at, Some(datetime!(2026-09-24 12:00 UTC)));
+        assert!(!first.records_a_share(), "an approval is not a share");
+        v.note_business(&waba, &BusinessId::new("B1"))
+            .await
+            .unwrap();
+        v.note_business(&waba, &BusinessId::new("B2"))
+            .await
+            .unwrap();
+        let noted = v.credit(&waba).await.unwrap().unwrap();
+        assert_eq!(
+            noted.business_id,
+            Some(BusinessId::new("B1")),
+            "never replaced"
+        );
+        assert_eq!(noted.approved_at, first.approved_at, "kept");
+        let (merged, _) = v
+            .update_credit(&waba, |c| {
+                c.allocation_config_id = Some(AllocationConfigId::new("A1"));
+                true
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(merged.business_id, Some(BusinessId::new("B1")));
+        assert!(merged.records_a_share());
+        let mut pending = StoredCredit::new(WabaId::new("W2"));
+        pending.pending_share = Some(datetime!(2026-09-24 12:00 UTC));
+        assert!(pending.records_a_share(), "a post whose outcome is unknown");
+        let mut sealed = StoredCredit::new(WabaId::new("W2"));
+        sealed.currency = Some(WabaCurrency::Usd);
+        assert!(
+            !sealed.records_a_share(),
+            "the currency is sealed before any post"
+        );
+    }
+
+    /// A5: a lease outlived by a slow step expires; the next holder gets
+    /// it, and the first can neither renew (so it posts nothing more) nor
+    /// release it.
+    #[tokio::test]
+    async fn a_lease_expires_and_the_late_holder_loses_it() {
+        let clock = Arc::new(ManualClock::new(datetime!(2026-09-24 12:00 UTC)));
+        let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::with_clock(clock.clone()));
+        let v = TokenVault::new(Arc::clone(&kv), VaultKeys::new(key("k1", 7)))
+            .unwrap()
+            .with_clock(clock.clone());
+        let waba = WabaId::new("W1");
+        let slow = v.lease_credit(&waba).await.unwrap();
+        clock.advance(CREDIT_LEASE.saturating_sub(Duration::from_secs(1)));
+        let renewed = v.renew_credit(&waba, slow).await.unwrap().unwrap();
+        clock.advance(CREDIT_LEASE.saturating_sub(Duration::from_secs(1)));
+        assert!(v.lease_credit(&waba).await.is_err(), "renewal extended it");
+        clock.advance(Duration::from_secs(2));
+        let next = v.lease_credit(&waba).await.unwrap();
+        assert_eq!(v.renew_credit(&waba, renewed).await.unwrap(), None);
+        v.release_credit(&waba, renewed).await.unwrap();
+        assert!(
+            v.lease_credit(&waba).await.is_err(),
+            "still the next holder's"
+        );
+        v.release_credit(&waba, next).await.unwrap();
+        v.lease_credit(&waba).await.unwrap();
     }
 
     #[tokio::test]
@@ -552,6 +870,96 @@ mod tests {
                 .is_some()
         );
         assert!(!new.rotate(&WabaId::new("W1")).await.unwrap(), "done once");
+    }
+
+    /// Reading a ledger record re-seals it under the active key, as reading
+    /// a token does; a replica that does not rotate on read leaves it.
+    #[tokio::test]
+    async fn ledger_reads_reseal_under_the_active_key() {
+        let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
+        let old = vault(&kv, VaultKeys::new(key("old", 1)));
+        let business = BusinessId::new("2729063490586005");
+        old.put_credit(&credit("W1"), None).await.unwrap();
+        old.mark_revoked(&business, &[]).await.unwrap();
+        let replica = vault(
+            &kv,
+            VaultKeys::new(key("new", 2)).with_previous(key("old", 1)),
+        )
+        .rotate_on_read(false);
+        replica.credit(&WabaId::new("W1")).await.unwrap().unwrap();
+        replica.revoked_business(&business).await.unwrap().unwrap();
+        let only_new = vault(&kv, VaultKeys::new(key("new", 2)));
+        assert!(
+            only_new.credit(&WabaId::new("W1")).await.is_err(),
+            "not rotated"
+        );
+
+        let new = vault(
+            &kv,
+            VaultKeys::new(key("new", 2)).with_previous(key("old", 1)),
+        );
+        new.credit(&WabaId::new("W1")).await.unwrap().unwrap();
+        new.revoked_business(&business).await.unwrap().unwrap();
+        assert_eq!(
+            only_new.credit(&WabaId::new("W1")).await.unwrap(),
+            Some(credit("W1"))
+        );
+        assert!(
+            only_new
+                .revoked_business(&business)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    /// The ledger of an offboarded WABA (no token), a marker no credit
+    /// record names, and a token whose credit record is corrupt all rotate.
+    #[tokio::test]
+    async fn rotation_reaches_every_ledger_record() {
+        let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
+        let old = vault(&kv, VaultKeys::new(key("old", 1)));
+        old.put_credit(&credit("OFFBOARDED"), None).await.unwrap();
+        let orphan = BusinessId::new("REVOKED_BY_BUSINESS_ID");
+        old.mark_revoked(&orphan, &[]).await.unwrap();
+        old.store(&super::super::vault::StoredBusinessToken::new(
+            "CORRUPT",
+            wa_core::secret::AccessToken::new("EAAB"),
+        ))
+        .await
+        .unwrap();
+        put(&kv, "credit/CORRUPT", b"{}".to_vec()).await;
+
+        let new = vault(
+            &kv,
+            VaultKeys::new(key("new", 2)).with_previous(key("old", 1)),
+        )
+        .rotate_on_read(false);
+        assert!(new.rotate(&WabaId::new("OFFBOARDED")).await.unwrap());
+        assert!(new.rotate_business(&orphan).await.unwrap());
+        assert!(!new.rotate_business(&orphan).await.unwrap(), "done once");
+        assert!(
+            new.rotate(&WabaId::new("CORRUPT")).await.is_err(),
+            "the corrupt record is reported"
+        );
+
+        let only_new = vault(&kv, VaultKeys::new(key("new", 2)));
+        assert!(
+            only_new
+                .credit(&WabaId::new("OFFBOARDED"))
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(only_new.revoked_business(&orphan).await.unwrap().is_some());
+        assert!(
+            only_new
+                .get(&WabaId::new("CORRUPT"))
+                .await
+                .unwrap()
+                .is_some(),
+            "the token was rotated despite its corrupt credit record"
+        );
     }
 
     /// The typed refusals, as callers test them.

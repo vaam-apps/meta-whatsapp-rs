@@ -82,8 +82,11 @@
 //! - The revocation status example has no `id`, so
 //!   [`AllocationConfig::id`] is optional.
 //! - Only `DELETED` is documented for `request_status`
-//!   ([`AllocationRequestStatus`] keeps any other value); anything else
-//!   counts as not revoked.
+//!   ([`AllocationRequestStatus`] keeps any other value verbatim). A record
+//!   without one is active ([`AllocationConfig::is_active`]); one with a
+//!   value Meta does not document is neither active nor revoked: Solution
+//!   Partner onboarding refuses to share next to it unless the request
+//!   opts in, and revocation deletes it like an active one.
 //! - The page's examples mix API versions (v21.0, v24.0, v25.0); the
 //!   client's configured version is used for all of them.
 
@@ -93,7 +96,8 @@ use std::str::FromStr;
 use futures::Stream;
 use serde::de::{DeserializeOwned, Deserializer};
 use serde::{Deserialize, Serialize};
-use wa_core::error::{ValidationError, snippet};
+pub use wa_core::error::CreditRevocation;
+use wa_core::error::{RevocationIncomplete, ValidationError, snippet};
 use wa_core::ids::{AllocationConfigId, BusinessId, CreditLineId, FundingId, WabaId};
 use wa_core::paging::Page;
 use wa_core::{Error, Result};
@@ -574,49 +578,51 @@ impl CreditLines {
     /// - Only records whose `receiving_business.id` is `business_id` are
     ///   touched; one naming another business is left alone. A record that
     ///   names no business is not revoked either (that could revoke another
-    ///   customer): it makes the call fail, listing its id, after the rest
-    ///   was revoked.
+    ///   customer): it is reported in [`RevocationIncomplete::unattributed`]
+    ///   after the rest was revoked.
     /// - Each record's status is read first (`allocation_status`): one
     ///   already `DELETED` is reported in
     ///   [`CreditRevocation::already_revoked`] and not deleted again. Each
     ///   `DELETE` is confirmed by reading the status back; a `DELETE` that
     ///   fails on a record Meta then reports `DELETED` counts as done.
-    /// - Every record is attempted even if one fails; the first failure is
-    ///   returned after the others were tried, so a single error never leaves
-    ///   the rest of the business funded. Call again to finish: what is
-    ///   already revoked is skipped.
+    /// - Every record is attempted even if one fails, so a single error
+    ///   never leaves the rest of the business funded. Anything left
+    ///   undone is an [`Error::Credit`] carrying a [`RevocationIncomplete`]:
+    ///   the report of what was revoked, the records that failed, were not
+    ///   confirmed yet, or name no business, and the first underlying
+    ///   error, with its own `is_retryable` and `may_have_been_sent`. Call
+    ///   again to finish: what is already revoked is skipped.
     ///
     /// Works when the WABA is no longer shared with you and its
     /// `owner_business_info` cannot be read any more: pass the business id
     /// stored at onboarding (or the `owner_business_id` of a signed
-    /// `PARTNER_REMOVED` webhook).
+    /// `PARTNER_REMOVED` webhook). Unlike
+    /// [`EmbeddedSignup::revoke_credit_line`](crate::embedded_signup::EmbeddedSignup::revoke_credit_line),
+    /// it records nothing: Solution Partner onboarding does not know the
+    /// business was revoked.
     pub async fn revoke_for_business(
         &self,
         credit_line: &CreditLineId,
         business_id: &BusinessId,
     ) -> Result<CreditRevocation> {
-        self.revoke_all(credit_line, Some(business_id), None).await
+        self.revoke_all(credit_line, Some(business_id), &[]).await
     }
 
     /// [`Self::revoke_for_business`] for `business` (when known), plus
-    /// `known`, an allocation id recorded at onboarding that the lookup may
-    /// not return. `known` is never revoked if its status names another
+    /// `known`, allocation ids recorded at onboarding that the lookup may
+    /// not return. A known id is never revoked if its status names another
     /// business than `business`.
     pub(crate) async fn revoke_all(
         &self,
         credit_line: &CreditLineId,
         business: Option<&BusinessId>,
-        known: Option<&AllocationConfigId>,
+        known: &[AllocationConfigId],
     ) -> Result<CreditRevocation> {
-        let mut report = CreditRevocation {
-            business_id: business.cloned(),
-            ..CreditRevocation::default()
-        };
-        let mut targets: Vec<AllocationConfigId> = Vec::new();
-        let mut unattributed: Vec<AllocationConfigId> = Vec::new();
+        let mut out = RevocationIncomplete::new(CreditRevocation::new(business.cloned()));
         let mut first_failure: Option<Error> = None;
+        let mut targets: Vec<AllocationConfigId> = Vec::new();
         let records = match business {
-            // A failed lookup does not stop the known allocation from being
+            // A failed lookup does not stop the known allocations from being
             // revoked; the lookup's error is returned afterwards.
             Some(business) => match self.allocations_for(credit_line, business).await {
                 Ok(records) => records,
@@ -639,52 +645,61 @@ impl CreditLines {
                     // Another customer's record: never touched.
                     (Some(_) | None, Some(_)) | (None, None) => {}
                     (Some(id), None) => {
-                        if !unattributed.contains(&id) {
-                            unattributed.push(id);
+                        if !out.unattributed.contains(&id) {
+                            out.unattributed.push(id);
                         }
                     }
                 }
             }
         }
-        if let Some(known) = known
-            && !targets.contains(known)
-        {
-            unattributed.retain(|id| id != known);
-            targets.push(known.clone());
+        for known in known {
+            if !targets.contains(known) {
+                out.unattributed.retain(|id| id != known);
+                targets.push(known.clone());
+            }
         }
-        let mut failed: Vec<AllocationConfigId> = Vec::new();
         for id in targets {
             match self.revoke_checked(&id, business).await {
-                Ok(Revoked::Now) => report.revoked.push(id),
-                Ok(Revoked::Already) => report.already_revoked.push(id),
-                Err(e) => {
-                    failed.push(id);
-                    first_failure.get_or_insert(e);
+                Revoked::Now => {
+                    out.deletes_sent = true;
+                    out.report.revoked.push(id);
+                }
+                Revoked::Already { deleted_by_us } => {
+                    out.deletes_sent |= deleted_by_us;
+                    out.report.already_revoked.push(id);
+                }
+                Revoked::Unconfirmed(e) => {
+                    out.deletes_sent = true;
+                    out.unconfirmed.push(id);
+                    if let Some(e) = e {
+                        first_failure.get_or_insert(e);
+                    }
+                }
+                Revoked::Failed { error, sent } => {
+                    out.deletes_sent |= sent;
+                    out.failed.push(id);
+                    first_failure.get_or_insert(error);
                 }
             }
         }
-        if let Some(error) = first_failure {
-            tracing::warn!(
-                revoked = ?report.revoked,
-                already_revoked = ?report.already_revoked,
-                failed = ?failed,
-                kind = ?error.kind(),
-                "credit line revocation incomplete"
-            );
-            return Err(error);
+        if first_failure.is_none()
+            && out.failed.is_empty()
+            && out.unconfirmed.is_empty()
+            && out.unattributed.is_empty()
+        {
+            return Ok(out.report);
         }
-        if !unattributed.is_empty() {
-            return Err(ValidationError::new(
-                "receiving_business",
-                format!(
-                    "records {unattributed:?} name no receiving business, so they were not revoked \
-                     (check them in Meta Business Suite); revoked {:?}, already revoked {:?}",
-                    report.revoked, report.already_revoked
-                ),
-            )
-            .into());
-        }
-        Ok(report)
+        out.source = first_failure.map(Box::new);
+        tracing::warn!(
+            revoked = ?out.report.revoked,
+            already_revoked = ?out.report.already_revoked,
+            failed = ?out.failed,
+            unconfirmed = ?out.unconfirmed,
+            unattributed = ?out.unattributed,
+            kind = ?out.source.as_ref().map(|e| e.kind()),
+            "credit line revocation incomplete"
+        );
+        Err(out.into())
     }
 
     /// Revoke one record unless it is already `DELETED` or names another
@@ -693,7 +708,7 @@ impl CreditLines {
         &self,
         id: &AllocationConfigId,
         business: Option<&BusinessId>,
-    ) -> Result<Revoked> {
+    ) -> Revoked {
         // A failed read does not stop the revocation: the DELETE decides.
         if let Ok(status) = self.allocation_status(id).await {
             if let (Some(business), Some(named)) = (
@@ -704,30 +719,36 @@ impl CreditLines {
                     .and_then(|b| b.id.as_ref()),
             ) && named != business
             {
-                return Err(ValidationError::new(
-                    "allocation_config_id",
-                    format!("{id} is shared with another business; not revoked"),
-                )
-                .into());
+                return Revoked::Failed {
+                    error: ValidationError::new(
+                        "allocation_config_id",
+                        format!("{id} is shared with another business; not revoked"),
+                    )
+                    .into(),
+                    sent: false,
+                };
             }
             if status.is_deleted() {
-                return Ok(Revoked::Already);
+                return Revoked::Already {
+                    deleted_by_us: false,
+                };
             }
         }
-        if let Err(e) = self.revoke(id).await {
+        if let Err(error) = self.revoke(id).await {
+            let sent = error.may_have_been_sent();
             return match self.allocation_status(id).await {
-                Ok(status) if status.is_deleted() => Ok(Revoked::Already),
-                _ => Err(e),
+                // Gone either way: by this DELETE (whose answer was lost) or
+                // before it.
+                Ok(status) if status.is_deleted() => Revoked::Already {
+                    deleted_by_us: sent,
+                },
+                _ => Revoked::Failed { error, sent },
             };
         }
-        if self.allocation_status(id).await?.is_deleted() {
-            Ok(Revoked::Now)
-        } else {
-            Err(ValidationError::new(
-                "request_status",
-                format!("{id}: Meta accepted the DELETE but does not report the record DELETED yet; call again"),
-            )
-            .into())
+        match self.allocation_status(id).await {
+            Ok(status) if status.is_deleted() => Revoked::Now,
+            Ok(_) => Revoked::Unconfirmed(None),
+            Err(e) => Revoked::Unconfirmed(Some(e)),
         }
     }
 
@@ -752,36 +773,31 @@ impl CreditLines {
 /// record per credit line in Meta's examples.
 pub const MAX_ALLOCATION_PAGES: usize = 20;
 
-/// What a revocation did ([`CreditLines::revoke_for_business`],
-/// [`EmbeddedSignup::revoke_credit_line`](crate::embedded_signup::EmbeddedSignup::revoke_credit_line)).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct CreditRevocation {
-    /// The customer business whose records were looked up, when known.
-    pub business_id: Option<BusinessId>,
-    /// Records this call deleted, each confirmed `DELETED` afterwards.
-    pub revoked: Vec<AllocationConfigId>,
-    /// Records already `DELETED` (by an earlier call, in Meta Business
-    /// Suite, …): nothing was sent for them.
-    pub already_revoked: Vec<AllocationConfigId>,
-}
-
-impl CreditRevocation {
-    /// Every record that is now revoked, by this call or before it.
-    pub fn all(&self) -> impl Iterator<Item = &AllocationConfigId> {
-        self.revoked.iter().chain(&self.already_revoked)
-    }
-}
-
+/// What happened to one record.
 enum Revoked {
+    /// Deleted by this call and confirmed.
     Now,
-    Already,
+    /// Already `DELETED` (`deleted_by_us`: a DELETE of this call whose
+    /// answer was an error may have done it).
+    Already { deleted_by_us: bool },
+    /// Meta accepted the DELETE but does not report the record `DELETED`
+    /// (yet), or the status could not be read back.
+    Unconfirmed(Option<Error>),
+    /// Still active.
+    Failed { error: Error, sent: bool },
 }
 
 impl AllocationConfig {
     /// Whether Meta reports the record revoked (`request_status` `DELETED`).
     pub fn is_deleted(&self) -> bool {
         self.request_status == Some(AllocationRequestStatus::Deleted)
+    }
+
+    /// Whether the record is active: it has no `request_status` (Meta
+    /// documents only `DELETED`). A value Meta does not document makes it
+    /// neither active nor [deleted](Self::is_deleted).
+    pub fn is_active(&self) -> bool {
+        self.request_status.is_none()
     }
 }
 
@@ -1180,6 +1196,11 @@ mod tests {
             other.request_status,
             Some(AllocationRequestStatus::Other("SOMETHING_NEW".into()))
         );
+        // Neither active nor revoked: only a missing status is active.
+        assert!(!other.is_active() && !other.is_deleted());
+        assert!(status.is_deleted() && !status.is_active());
+        let active: AllocationConfig = serde_json::from_value(json!({})).unwrap();
+        assert!(active.is_active() && !active.is_deleted());
     }
 
     fn status(business: &str, deleted: bool) -> serde_json::Value {
@@ -1269,12 +1290,23 @@ mod tests {
             .revoke_for_business(&line(), &BusinessId::new(CUSTOMER))
             .await
             .unwrap_err();
-        assert!(
-            matches!(&err, Error::Validation(v) if v.field == "receiving_business" && v.reason.contains("UNNAMED") && v.reason.contains("A1")),
-            "{err}"
+        let incomplete = incomplete(&err);
+        assert_eq!(
+            incomplete.unattributed,
+            [AllocationConfigId::new("UNNAMED")]
         );
+        assert_eq!(incomplete.report.revoked, [AllocationConfigId::new("A1")]);
+        assert!(incomplete.source.is_none(), "{err}");
+        assert!(!err.is_retryable(), "a person must check it");
+        assert!(err.may_have_been_sent(), "A1's DELETE went out");
         assert!(t.requests().iter().all(|r| r.path() != "/v25.0/UNNAMED"));
         assert_eq!(t.remaining(), 0);
+    }
+
+    fn incomplete(err: &Error) -> &RevocationIncomplete {
+        err.credit()
+            .and_then(wa_core::error::CreditError::revocation)
+            .unwrap_or_else(|| panic!("not an incomplete revocation: {err}"))
     }
 
     /// One failed DELETE does not leave the rest of the business funded:
@@ -1325,8 +1357,20 @@ mod tests {
             .collect();
         assert_eq!(deletes, ["/v25.0/A1", "/v25.0/A2", "/v25.0/A3"]);
         assert_eq!(t.remaining(), 0);
+        // Each record lands where it belongs: A2's failed DELETE on a
+        // record Meta then reports DELETED counts as done.
+        let report = incomplete(&err);
+        assert_eq!(report.failed, [AllocationConfigId::new("A1")]);
+        assert_eq!(
+            report.report.already_revoked,
+            [AllocationConfigId::new("A2")]
+        );
+        assert_eq!(report.report.revoked, []);
+        assert_eq!(report.unconfirmed, [AllocationConfigId::new("A3")]);
+        assert!(err.may_have_been_sent(), "A3's DELETE was accepted");
+        assert!(!err.is_retryable(), "a permission error stays one");
 
-        // An unconfirmed DELETE alone is an error too.
+        // An unconfirmed DELETE alone is an error too, and worth repeating.
         t.push_json(
             200,
             json!({"id": "A3", "receiving_business": {"id": CUSTOMER}}),
@@ -1338,10 +1382,51 @@ mod tests {
             .revoke_for_business(&line(), &BusinessId::new(CUSTOMER))
             .await
             .unwrap_err();
+        let report = incomplete(&err);
+        assert_eq!(report.unconfirmed, [AllocationConfigId::new("A3")]);
+        assert!(report.source.is_none(), "{err}");
+        assert!(err.is_retryable(), "call again: {err}");
+        assert!(err.may_have_been_sent());
+        assert_eq!(t.remaining(), 0);
+
+        // A DELETE that times out on a record Meta then reports DELETED is
+        // done, and may have been this call's doing.
+        t.push_json(
+            200,
+            json!({"id": "A4", "receiving_business": {"id": CUSTOMER}}),
+        );
+        t.push_json(200, status(CUSTOMER, false));
+        t.push_error(|| TransportError::Timeout);
+        t.push_json(200, status(CUSTOMER, true));
+        let report = system(&t)
+            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER))
+            .await
+            .unwrap();
+        assert_eq!(report.already_revoked, [AllocationConfigId::new("A4")]);
+        assert_eq!(t.remaining(), 0);
+    }
+
+    /// The page limit holds when Meta's cursors cycle through more than one
+    /// value (A, B, A, ...): the same-cursor check alone never fires.
+    #[tokio::test]
+    async fn allocations_for_stops_at_the_page_limit() {
+        let t = ScriptedTransport::new();
+        for page in 0..MAX_ALLOCATION_PAGES {
+            let cursor = if page % 2 == 0 { "A" } else { "B" };
+            t.push_json(
+                200,
+                json!({"data": [], "paging": {"cursors": {"after": cursor}, "next": "https://graph.facebook.com/next"}}),
+            );
+        }
+        let err = system(&t)
+            .allocations_for(&line(), &BusinessId::new(CUSTOMER))
+            .await
+            .unwrap_err();
         assert!(
-            matches!(&err, Error::Validation(v) if v.field == "request_status"),
+            matches!(&err, Error::Validation(v) if v.field == "owning_credit_allocation_configs" && v.reason.contains("pages")),
             "{err}"
         );
+        assert_eq!(t.requests().len(), MAX_ALLOCATION_PAGES);
         assert_eq!(t.remaining(), 0);
     }
 

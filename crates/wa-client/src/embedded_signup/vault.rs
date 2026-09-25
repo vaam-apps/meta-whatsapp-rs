@@ -46,7 +46,13 @@
 //!   whichever configured key matches; writes always use the active key. By
 //!   default a read of a record under an old key re-encrypts it under the
 //!   active key (compare-and-swap, so a concurrent write wins); [`TokenVault::rotate`]
-//!   does the same on demand. Once every record is rotated, drop the old key.
+//!   does the same on demand, for a WABA's token and its Solution Partner
+//!   credit ledger (which outlives the token: include offboarded WABAs),
+//!   and [`TokenVault::rotate_business`] for a revocation marker no credit
+//!   record names. The vault cannot list its records, so walk every WABA
+//!   you ever onboarded, and every business you revoked by business id,
+//!   before dropping the old key: a record still under it then fails with
+//!   [`CryptoError::InvalidKey`].
 //! - Errors carry no detail that could serve as an oracle
 //!   ([`CryptoError::Decrypt`] for any authentication failure).
 //!
@@ -398,9 +404,10 @@ impl TokenVault {
         self
     }
 
-    /// Whether [`Self::get`] re-encrypts records found under a previous key
-    /// (default `true`). Turn it off for read-only replicas and rotate with
-    /// [`Self::rotate`] instead.
+    /// Whether [`Self::get`] (and the reads of the Solution Partner credit
+    /// ledger) re-encrypts records found under a previous key (default
+    /// `true`). Turn it off for read-only replicas and rotate with
+    /// [`Self::rotate`] and [`Self::rotate_business`] instead.
     #[must_use]
     pub fn rotate_on_read(mut self, enabled: bool) -> Self {
         self.rotate_on_read = enabled;
@@ -410,6 +417,11 @@ impl TokenVault {
     /// Current time on the vault's clock.
     pub(crate) fn now(&self) -> OffsetDateTime {
         self.clock.now()
+    }
+
+    /// Whether reads re-encrypt records found under a previous key.
+    pub(super) fn rotates_on_read(&self) -> bool {
+        self.rotate_on_read
     }
 
     /// Encrypt and store `token` under its WABA (replacing any previous
@@ -524,20 +536,32 @@ impl TokenVault {
 
     /// Re-encrypt the record of `waba_id` under the active key if it is
     /// under an older one, and likewise its Solution Partner credit record
-    /// and its business's revocation marker. Returns whether anything was
-    /// rewritten (`false` also when a concurrent write got there first, or
-    /// there is no record).
+    /// and the revocation marker of the business that record names. Returns
+    /// whether anything was rewritten (`false` also when a concurrent write
+    /// got there first, or there is no record).
+    ///
+    /// Works on a WABA whose token was deleted (offboarded): its credit
+    /// ledger outlives the token and needs rotating too. The token and the
+    /// ledger are rotated independently: when one of them cannot be read,
+    /// the other is still rotated and the first error is returned
+    /// afterwards. Markers no credit record names:
+    /// [`Self::rotate_business`].
     pub async fn rotate(&self, waba_id: &WabaId) -> Result<bool> {
-        let ledger = self.rotate_ledger(waba_id).await?;
+        let token = self.rotate_token(waba_id).await;
+        let ledger = self.rotate_ledger(waba_id).await;
+        Ok(token? | ledger?)
+    }
+
+    async fn rotate_token(&self, waba_id: &WabaId) -> Result<bool> {
         let key = waba_key(waba_id);
         let Some((record, version)) = self.read_record(&key).await? else {
-            return Ok(ledger);
+            return Ok(false);
         };
         if record.kid == self.keys.active.id {
-            return Ok(ledger);
+            return Ok(false);
         }
         let token = self.open(waba_id, &record)?;
-        Ok(self.reseal(&key, &token, version).await? || ledger)
+        self.reseal(&key, &token, version).await
     }
 
     async fn reseal(
