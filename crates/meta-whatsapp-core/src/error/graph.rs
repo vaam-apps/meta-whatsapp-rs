@@ -271,7 +271,8 @@ pub enum ErrorKind {
 const _: () = assert!(ErrorKind::ALL.len() == ErrorKind::Unknown as usize + 1);
 
 impl ErrorKind {
-    /// Every kind, in declaration order, [`ErrorKind::Unknown`] last.
+    /// Every kind exactly once, [`ErrorKind::Unknown`] last. Iterate it;
+    /// do not rely on a kind's position in it.
     ///
     /// `ErrorKind` is `#[non_exhaustive]`, so this list grows when Meta
     /// documents a code worth its own kind: iterate it, rather than naming
