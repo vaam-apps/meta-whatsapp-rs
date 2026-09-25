@@ -202,9 +202,9 @@ Found while writing the integrator guides and checking them against
 
 ## Service (meta-whatsapp-server)
 
-Found in the review of milestone M1b (34).
+Found in the review of milestone M1b (43).
 
-34. **Media received by webhook, and the `phone_number_id` check.** The
+43. **Media received by webhook, and the `phone_number_id` check.** The
     service's media routes ask Meta with `phone_number_id={pn}`, so that
     Meta acts only on that number's media and one tenant cannot reach
     another's files when one token reaches both tenants' numbers

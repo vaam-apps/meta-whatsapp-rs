@@ -380,7 +380,7 @@ received on it by webhook is not documented. If Meta refuses those, a
 received file answers `404` too: report it, as the check stays (it is
 what keeps one tenant from reading another's files when one token
 reaches both); the remedy planned is
-[OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) #34.
+[OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) #43.
 
 ## Templates
 
