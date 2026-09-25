@@ -143,10 +143,15 @@ volumes (Claude config, shell history, cargo caches) start empty
   `templates`): list (cached 60 s per tenant's WABA, least recently used
   pages evicted first), get (found through the WABA's own list: Meta's
   template object does not name its WABA), create from Meta's JSON
-  (checked locally; a key the library would drop is `422` on its path;
-  `template_rejected`, `template_limit_reached`), delete by name or name
-  and id (an `audit` event). Another tenant's media or template id is
-  `404 not_found`, like a missing one.
+  (checked locally; a key the library would drop is `422` on its path,
+  while Meta's flat positional `body_text`, which the library writes as
+  `[[..]]`, is sent; the shapes it cannot carry, payment buttons,
+  `app_deep_link`, `optimization_spec` and the pre-v21 one-tap button
+  fields, are refused; `template_rejected`, `template_limit_reached`),
+  delete by name or name and id (an `audit` event, `templates_deleted`
+  or `template_deleted`). Another tenant's media or template id is
+  `404 not_found`, like a missing one; on those routes a `190` stays
+  `409 reconnect_required` and a Meta 5xx a `502`.
   `Idempotency-Key` on sends, uploads and template creation, scoped to
   the tenant, stored in Postgres (`wa_server_idempotency`, service
   migration 2) or memory: a repeat gets the kept answer with

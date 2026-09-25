@@ -5,7 +5,7 @@ description: "Sending WhatsApp messages, media and templates through meta-whatsa
 
 # meta-whatsapp-rs-server-send
 
-> **Verified against meta-whatsapp-rs 2773e6d1d42c13db481acbfa65c75b28291a1e2f (2026-09-25).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 8c6d6f2e936063da2b0cd224085cce8fad992fae (2026-09-25).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/send.ts](examples/send.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
@@ -99,9 +99,9 @@ export function outcome(error: ErrorObject, retryAfter: string | null): Outcome 
 ## Media
 
 Upload a form, `type` (one of Meta's MIME types) before `file`; both are
-checked before Meta is asked (`invalid_request` on `type`,
-`media_too_large`: 5 MiB images, 16 MiB audio and video, 100 MiB
-documents, `WA_SERVER_MEDIA_MAX_BYTES`):
+checked first (`invalid_request` on `type`, `media_too_large`: 5 MiB images,
+16 MiB audio and video, 100 MiB documents, `WA_SERVER_MEDIA_MAX_BYTES`;
+`too_many_requests` while half the replica's media slots are yours):
 
 ```bash
 curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/media" -H "Authorization: Bearer $KEY" \

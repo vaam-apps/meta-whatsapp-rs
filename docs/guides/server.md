@@ -213,6 +213,15 @@ WABAs from Meta and stops at the first that fails (`409` for one without
 a usable token: unbind it first). A tenant id already taken is `409
 tenant_exists`.
 
+**One token, several tenants.** Nothing stops you attaching the same
+system user token to WABAs of different tenants, and the service does
+not ask Meta what else a token reaches when you attach it. Such a token
+reaches every one of those WABAs, so what keeps one of those tenants out
+of another's media and templates is only the service's check, on each
+route taking an id, that the id is the path's number's or WABA's own
+(see [Media](#media) and [Templates](#templates)). Where you can,
+attach a token that reaches that tenant's WABAs only.
+
 **4. Rotating the vault key.** Put the new key in `WA_VAULT_KEY` (with a
 new `WA_VAULT_KEY_ID`) and the old one in `WA_VAULT_PREVIOUS_KEYS`,
 deploy, then call `POST /v1/admin/vault/rotate` (or run
@@ -332,7 +341,17 @@ video, 500 KiB for stickers, 100 MiB for documents) or over
 `WA_SERVER_MEDIA_MAX_BYTES` `413 media_too_large`. Send `type` before
 `file`: the upload is then read no further than its type allows. A
 form's framing (what precedes each part's data) is read up to 16 KiB;
-past it, `422` on `body`.
+past it, `422` on `body`. An upload is one request, and every request
+is answered within 55 s: your file must reach the service, and the
+service's copy reach Meta, within that time, or the answer is `504
+timeout`. A 100 MiB document needs about 15 Mbit/s for your part
+alone.
+
+Uploads and whole-file downloads share `WA_SERVER_MEDIA_CONCURRENCY`
+slots on a replica, streamed downloads `WA_SERVER_MEDIA_STREAMS`, and
+one tenant holds half of either at most: past its share, the next
+transfer is `429 too_many_requests` (`Retry-After: 1`) before its body
+is read or Meta is asked. Retry it once one of yours has finished.
 
 `GET /v1/numbers/{pn}/media/{media_id}` downloads a file (an upload's or
 a received message's), verified against the SHA-256 Meta reports, and
@@ -360,7 +379,8 @@ the check for media uploaded on the number; that it accepts media
 received on it by webhook is not documented. If Meta refuses those, a
 received file answers `404` too: report it, as the check stays (it is
 what keeps one tenant from reading another's files when one token
-reaches both).
+reaches both); the remedy planned is
+[OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) #34.
 
 ## Templates
 
@@ -369,14 +389,30 @@ With scope `templates`, on a WABA of the tenant:
 | Route | Does |
 | --- | --- |
 | `GET /v1/wabas/{waba_id}/templates` | a page of `{id, name, language, status, category, components}`, `?status=`, `?name=`, `?limit=`, `?cursor=`; cached 60 s per WABA (Meta allows 200 management calls an hour per WABA) |
-| `GET /v1/wabas/{waba_id}/templates/{id}` | one template of this WABA (two management calls: its name, then the WABA's templates of that name) |
+| `GET /v1/wabas/{waba_id}/templates/{id}` | one template of this WABA (2 to 6 management calls: its name, then the WABA's templates of that name, below) |
 | `POST /v1/wabas/{waba_id}/templates` | create from Meta's JSON (`name`, `language`, `category`, `components`), checked locally first; `201 {id, status, category}`; takes an `Idempotency-Key` |
 | `DELETE /v1/wabas/{waba_id}/templates?name=…[&id=…]` | every language of a name, or one (with an id, the WABA's templates of that name are listed first) |
 
 A definition breaking a documented limit is `422 invalid_request` with
 `field`, before any request, and so is a key the service would not pass
 on to Meta (a misspelling, or a field it does not know): never silently
-dropped. Meta refusing a definition is `422 template_rejected`, a WABA
+dropped. The template definitions and sends of Meta's examples pass,
+`body_text` as a flat list (`["Pablo", "860198"]`, the positional
+parameters syntax) included, but for shapes the library cannot carry
+yet, refused on the key named:
+
+- in a send's `template`, the payment buttons' `order_details` and
+  `payment_request` (India and Brazil payments are out of scope,
+  docs/coverage.md row 32);
+- in a definition, `optimization_spec` and a URL button's
+  `app_deep_link` (Marketing Messages API bidding and app deep links),
+  and `package_name` and `signature_hash` on a one-tap or zero-tap
+  button itself, which Meta accepts on Graph API v20.0 and older only:
+  write them in the button's `supported_apps`;
+- a template as `GET` answers it, which is not a definition: its `id`,
+  `status` or `correct_category`.
+
+Meta refusing a definition is `422 template_rejected`, a WABA
 at its limit `409 template_limit_reached`. Review results will arrive
 as `template_status_updated` events (M1c). A creation or deletion drops
 the WABA's cached pages on the replica that made it; others may answer
@@ -388,6 +424,21 @@ WABA's own templates: another WABA's template id, another tenant's
 included, answers `404 not_found` like one that does not exist, and a
 deletion by that id deletes nothing. A deletion is an `audit` event
 with the public id of the key that asked it.
+
+The lookup has limits to know about:
+
+- It lists the WABA's templates with the list's `name=` filter, which
+  Meta's reference for that list does not document (the service's tests
+  cannot prove Meta honours it). If Meta ignored it, a template would
+  be looked for among all the WABA's templates, as far as the pages
+  below reach.
+- It reads at most 5 pages of 100 templates (a name has one template
+  per language, so one page is the rule): a template of the WABA beyond
+  them answers `404 not_found`.
+- Each lookup costs 2 to 6 of the WABA's 200 management calls an hour:
+  `GET …/templates/{id}` asks for the id's name, then 1 to 5 pages; a
+  deletion by id reads 1 to 5 pages, then deletes. Lists answered from
+  the cache cost nothing, lookups are never cached.
 
 ## Rate limits
 
@@ -439,8 +490,12 @@ Every error answers one body:
   `unauthenticated`; a number, WABA, media id or template id of another
   tenant is `404 not_found`, like one that does not exist.
 - A token Meta rejects (`190`) marks the WABA's numbers
-  `reconnect_required`: later calls answer `409 reconnect_required`
-  without asking Meta, until the WABA is attached (or onboarded) again.
+  `reconnect_required`: later calls on those numbers answer `409
+  reconnect_required` without asking Meta, until the WABA is attached
+  (or onboarded) again (a WABA route, templates say, asks Meta and gets
+  the same answer). It is `409` on a route naming a media or template id
+  too: a dead token is never taken for a missing object, and neither is
+  Meta failing (a `5xx` stays `502`).
 
 ## Operations
 
