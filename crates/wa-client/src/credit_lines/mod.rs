@@ -96,6 +96,7 @@ use std::str::FromStr;
 use futures::Stream;
 use serde::de::{DeserializeOwned, Deserializer};
 use serde::{Deserialize, Serialize};
+#[doc(no_inline)]
 pub use wa_core::error::CreditRevocation;
 use wa_core::error::{RevocationIncomplete, ValidationError, snippet};
 use wa_core::ids::{AllocationConfigId, BusinessId, CreditLineId, FundingId, WabaId};

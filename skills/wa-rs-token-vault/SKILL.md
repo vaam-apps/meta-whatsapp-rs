@@ -52,13 +52,18 @@ record lists the number.
 
 ```rust
 let vault = TokenVault::new(kv, VaultKeys::new(new_key).with_previous(old_key))?;
+let mut failed = Vec::new(); // fix or delete these records, then walk again
 for waba_id in every_waba_ever {
-    vault.rotate(waba_id).await?; // the token and its credit ledger; false if already done
+    if let Err(e) = vault.rotate(waba_id).await {
+        failed.push((waba_id.to_string(), e)); // the rest of this WABA was still rotated
+    }
 }
 for business_id in revoked_by_business {
-    vault.rotate_business(business_id).await?; // a revocation marker no WABA names
+    if let Err(e) = vault.rotate_business(business_id).await {
+        failed.push((business_id.to_string(), e)); // a revocation marker no WABA names
+    }
 }
-Ok(vault) // once all of it is rotated, drop the old key from the config
+Ok((vault, failed)) // drop the old key from the config only once `failed` is empty
 ```
 
 Reads also re-encrypt old records under the active key (`rotate_on_read`,
@@ -69,7 +74,9 @@ Solution Partner's credit ledger outlives the token, and `rotate` re-seals
 it with the revocation marker of the business it names), plus every
 business you revoked by business id alone. A record left under a dropped
 key fails with `CryptoError::InvalidKey`; a corrupt credit record does not
-stop `rotate` from re-encrypting the token (the error comes back after).
+stop `rotate` from re-encrypting the token, nor a corrupt token its
+ledger (the error comes back after). One failure must not stop the walk:
+collect it and go on, then deal with the list before dropping the key.
 ~~Iterate your current merchants~~ (until 069fed9): that left offboarded
 WABAs' credit ledgers and markers no WABA names under the old key.
 

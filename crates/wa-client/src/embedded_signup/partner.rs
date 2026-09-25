@@ -295,8 +295,12 @@ impl EmbeddedSignup {
     ///   vault, replacing an unreadable one), before anything is looked up,
     ///   so neither `resume` nor a new onboarding funds it again without
     ///   [`OnboardingRequest::reshare_after_revocation`](super::OnboardingRequest::reshare_after_revocation),
-    ///   even if a request below fails, and a share posted while this runs
-    ///   sees the marker and revokes itself. The business is also written
+    ///   even if a request below fails. A share posted while this runs sees
+    ///   the marker after its post (also when its answer was lost) and
+    ///   revokes what it may have made; when it cannot find that, it
+    ///   reports it ([`CreditError::Reconcile`]) and keeps it pending. A
+    ///   caller's business whose check failed is marked once this call's
+    ///   own lookup finds records naming it. The business is also written
     ///   into the WABA's credit record when it names none.
     /// - Every active record naming the business is revoked, plus the
     ///   allocation recorded in the ledger, each confirmed `DELETED`; see
@@ -304,7 +308,15 @@ impl EmbeddedSignup {
     ///   unreadable token or credit record, a failed lookup or a failed
     ///   marker write does not stop what the other sources can revoke.
     ///   Anything left undone is [`CreditError::RevocationIncomplete`], with
-    ///   the report. Safe to repeat.
+    ///   the report; a ledger write that failed is its `ledger`, and does
+    ///   not make it unretryable. Safe to repeat.
+    /// - **A share whose outcome is unknown** (the WABA's
+    ///   [`StoredCredit::pending_share`]: an answer lost, or a share still
+    ///   in flight) is settled only by a record revoked by this call: when
+    ///   none is, the call is [`CreditError::RevocationIncomplete`] with
+    ///   `share_pending` (retryable), never done, because that share may be
+    ///   live and not listed by Meta yet. Call again; if it keeps revoking
+    ///   nothing, check the WABA's funding in Meta Business Suite.
     ///
     /// The token and the ledger are left in the vault; [`Self::offboard`]
     /// deletes the token after revoking.
@@ -379,6 +391,11 @@ impl EmbeddedSignup {
     ///   read, nothing is deleted: [`CreditError::Reconcile`]. Check the
     ///   line in Meta Business Suite, then delete the token yourself
     ///   ([`TokenVault::delete`]).
+    /// - When the ledger shows a share whose outcome is unknown and the
+    ///   revocation revoked nothing (old `DELETED` records say nothing
+    ///   about it), nothing is deleted either:
+    ///   [`CreditError::RevocationIncomplete`] with `share_pending`,
+    ///   retryable (see [`Self::revoke_credit_line`]).
     pub async fn offboard(
         &self,
         waba_id: &WabaId,
