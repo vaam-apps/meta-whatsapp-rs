@@ -1,4 +1,4 @@
-# Design: a deployable wa-rs service (`wa-server`)
+# Design: a deployable meta-whatsapp-rs service (`meta-whatsapp-server`)
 
 > **Design only: no service code exists yet.** Written against `main` =
 > bbf24a3 (2026-09-24), Graph API v25.0; the library changes it assumed have
@@ -9,9 +9,9 @@
 > [§10](#10-decisions-for-the-owner).
 
 The product decision: apps not written in Rust (Medusa, in TypeScript; the
-CMS, any stack) use wa-rs through a **service deployed as a Docker image
-and called over HTTP**. In short: a binary crate, `crates/wa-server`
-(axum), built only on the `wa-rs` facade, productizes the runnable examples
+CMS, any stack) use meta-whatsapp-rs through a **service deployed as a Docker image
+and called over HTTP**. In short: a binary crate, `crates/meta-whatsapp-server`
+(axum), built only on the `meta-whatsapp-rs` facade, productizes the runnable examples
 and keeps their security rules; one multi-tenant deployment per Meta app;
 a public listener serving only Meta's webhook and an internal one for the
 API; Postgres for all state, with an event outbox feeding SSE, polling and
@@ -39,7 +39,7 @@ generated clients can rely on.
 
 **Non-goals.** A public end-user API. A UI, campaign scheduler, consent
 registry or job queue (callers own these, as with the library). All of
-`wa-client` in v1: analytics, commerce, groups, calling, Flows, QR codes,
+`meta-whatsapp-client` in v1: analytics, commerce, groups, calling, Flows, QR codes,
 In-App Signup, Marketing Messages API sends and block users come on demand,
 each a thin route over an existing module. Behaviour the library lacks
 (token refresh, dead-lettering, a call-aware window). A Graph proxy:
@@ -57,12 +57,12 @@ separate deployments only for separate apps or environments.
 
 ### 2.1 The crate
 
-`crates/wa-server`, binary `wa-server`, `publish = false`, a workspace
-member (so `just ci` covers it). It depends only on the `wa-rs` facade
+`crates/meta-whatsapp-server`, binary `meta-whatsapp-server`, `publish = false`, a workspace
+member (so `just ci` covers it). It depends only on the `meta-whatsapp-rs` facade
 (`postgres`, `axum`, `typst`; axum and sqlx through its re-exports, OQ
 #29): the API an outside integrator has, which proves the facade suffices.
-[architecture.md](../architecture.md)'s "nothing depends on `wa-rs`"
-becomes "no library crate depends on `wa-rs`; binaries may" (L6). New
+[architecture.md](../architecture.md)'s "nothing depends on `meta-whatsapp-rs`"
+becomes "no library crate depends on `meta-whatsapp-rs`; binaries may" (L6). New
 dependencies (OpenAPI generation, `tower-http`, a Prometheus exporter, a
 rate limiter, `clap`) must pass `cargo deny`.
 
@@ -79,13 +79,13 @@ Meta ─HTTPS─► ingress ─► GET|POST /webhooks/meta        Medusa / CMS �
             ▼                              ▼                                ▼
   SSE hub (each replica LISTENs)   GET /v1/events (poll)    webhooks-out workers (SKIP LOCKED)
 
-API call ─► key → tenant ─► tenant owns number/WABA? ─► TokenVault ─► client.with_token ─► wa-client
+API call ─► key → tenant ─► tenant owns number/WABA? ─► TokenVault ─► client.with_token ─► meta-whatsapp-client
 ```
 
-Reused unchanged: `wa_rs::webhooks::router`, `DedupGuard`, `InboxSink`,
+Reused unchanged: `meta_whatsapp_rs::webhooks::router`, `DedupGuard`, `InboxSink`,
 `Inbox`, `TokenVault`, `EmbeddedSignup`, `SignupSessions`, `OtpService`, the
-endpoint modules, `wa_rs::typst::Renderer`, the Postgres stores. Not used:
-`wa_rs::webhooks::sse` and `BroadcastSink` (the service needs resume and
+endpoint modules, `meta_whatsapp_rs::typst::Renderer`, the Postgres stores. Not used:
+`meta_whatsapp_rs::webhooks::sse` and `BroadcastSink` (the service needs resume and
 cross-replica fan-out, [§4.5](#45-live-updates-sse)).
 
 ### 2.2 Configuration and storage
@@ -172,7 +172,7 @@ bytes, base62>` (the prefix lets secret scanners find leaks) and are stored
 as the key id plus SHA-256 of the secret, compared in constant time (the
 examples' scheme; random 256-bit secrets need no slow hash). Shown once;
 several active per tenant; rotate by create, deploy, revoke. The first admin
-key comes from the CLI (`wa-server admin create-admin-key`), not the
+key comes from the CLI (`meta-whatsapp-server admin create-admin-key`), not the
 environment.
 
 **Decision for owner (D2): credential model.** (a) Tenant keys only: the
@@ -366,7 +366,7 @@ a caller's generic error handling can never swallow `invalid`.
 | `…/tenants/{id}/keys[/{key_id}]`, `/v1/admin/platform-keys[/{key_id}]` | mint, list, revoke keys; platform keys with their allowed tenants |
 | `POST /v1/admin/tenants/{id}/wabas`; `DELETE /v1/admin/wabas/{waba_id}/binding` | attach an own WABA, verified with Meta; unbind (D4) |
 | `POST /v1/admin/vault/rotate` | re-encrypt every WABA's token under the active key, walking `wa_server_wabas` (the vault cannot list itself) |
-| `GET /livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` | internal listener, no key; `version` reports server, wa-rs revision, Graph and API versions |
+| `GET /livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` | internal listener, no key; `version` reports server, meta-whatsapp-rs revision, Graph and API versions |
 
 The public listener serves `GET|POST /webhooks/meta` and `GET /livez`,
 nothing else.
@@ -374,7 +374,7 @@ nothing else.
 ### 4.3 Message content
 
 A union owned by the service, named after Meta's Cloud API message object
-(so Meta's pages describe it) and mapped onto `wa-client` builders, which
+(so Meta's pages describe it) and mapped onto `meta-whatsapp-client` builders, which
 `OutboundMessage::validate` checks before any request (`OutboundMessage` is
 serialize-only, so no library change). Types: `text`; `image`, `video`,
 `audio`, `document`, `sticker` by `id` or `https://` `link` (Meta fetches
@@ -393,7 +393,7 @@ For backends such as Medusa that prefer not to hold a stream open.
 {"id": "evt_01J8Z6Q4M3", "sequence": 18342, "type": "message_received", "api_version": "v1",
  "tenant_id": "merchant-42", "phone_number_id": "106540352242922", "waba_id": "102290129340398",
  "received_at": "2026-09-24T10:00:01Z", "truncated": false,
- "data": {"event": "message_received", "…": "the wa-rs WebhookEvent JSON"}}
+ "data": {"event": "message_received", "…": "the meta-whatsapp-rs WebhookEvent JSON"}}
 ```
 
 - **Signature: [Standard Webhooks](https://www.standardwebhooks.com/)**
@@ -433,7 +433,7 @@ For backends such as Medusa that prefer not to hold a stream open.
 ### 4.6 Embedded Signup
 
 ```text
-merchant's browser       CMS backend                     wa-server                           Meta
+merchant's browser       CMS backend                     meta-whatsapp-server                Meta
 "Connect" ────────────► POST /connect ─────────────────► POST /v1/signup/sessions (WA-Tenant: m42)
           ◄─ launch data ◄────────────────────────────── {state, app_id, config_id, launch_options}
 FB.login(…) ──────────────────────────────────────────────────────────────────────────────► popup
@@ -613,12 +613,13 @@ private network (a `NetworkPolicy` admitting the two backends). Egress:
   and musl's allocator is slower; revisit if size matters more.
 - The image sets both binds to `0.0.0.0` explicitly (loopback is
   unreachable in a container); the binary's default stays loopback.
-- `HEALTHCHECK` runs `wa-server healthcheck` (no curl). Read-only root file
+- `HEALTHCHECK` runs `meta-whatsapp-server healthcheck` (no curl). Read-only root file
   system (fonts bundled). amd64 and arm64, SBOM and provenance attestations.
 
 **Decision for owner (D9): image name and registry.** (a) Public on GHCR
 next to the public repository; (b) a private registry. The name follows the
-crate names still open in OQ #1. *Recommendation: (a)*, named with OQ #1.
+crate names, settled when OQ #1 closed (`meta-whatsapp-*`, 2026-09-25).
+*Recommendation: (a)*, named after the binary, `meta-whatsapp-server`.
 
 ### 7.2 Environment
 
@@ -633,12 +634,12 @@ crate names still open in OQ #1. *Recommendation: (a)*, named with OQ #1.
 | `WA_GRAPH_API_VERSION`, `WA_GRAPH_ENDPOINT` | `ApiVersion::DEFAULT` (v25.0), Graph | the version is also handed to the signup page; the endpoint serves proxies and test stubs |
 | `WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS` | none | hosts and CIDRs for webhooks-out |
 | `WA_SERVER_OUTBOX_RETENTION`, `…_IDEMPOTENCY_TTL`, `…_WEBHOOK_RETRY_WINDOW` | 7 d, 24 h, 72 h | |
-| `WA_SERVER_MEDIA_MAX_BYTES`, `WA_SERVER_SHUTDOWN_GRACE`, `WA_SERVER_MIGRATE` | 100 MiB, 25 s, `auto` | `skip` when a job runs `wa-server migrate` |
+| `WA_SERVER_MEDIA_MAX_BYTES`, `WA_SERVER_SHUTDOWN_GRACE`, `WA_SERVER_MIGRATE` | 100 MiB, 25 s, `auto` | `skip` when a job runs `meta-whatsapp-server migrate` |
 | `RUST_LOG`, `WA_SERVER_LOG_FORMAT`, `OTEL_EXPORTER_OTLP_ENDPOINT` | `info`, `json`, unset | |
 
 ### 7.3 Start, observability, shutdown
 
-- `wa-server serve` validates the configuration, runs `postgres::migrate`
+- `meta-whatsapp-server serve` validates the configuration, runs `postgres::migrate`
   and the service's migrations (unless `skip`), opens both listeners.
   Also: `migrate`, `openapi`, `healthcheck`, `admin …`, `vault rotate`.
 - Logs: `tracing` JSON, a span per request (request id, route template,
@@ -678,10 +679,10 @@ if the platform's privacy obligations require it. A legal and product call.
 
 Within `/v1`, changes are additive; a breaking change is `/v2`, served
 beside `/v1` for a deprecation period; webhook endpoints keep their
-`api_version`. The spec is committed (`crates/wa-server/openapi/v1.json`):
+`api_version`. The spec is committed (`crates/meta-whatsapp-server/openapi/v1.json`):
 CI fails when the generated one differs, and `oasdiff` checks breaking
 changes against the last release. Image, spec `info.version` and the
-TypeScript client share one semver; `/v1/version` adds the wa-rs revision.
+TypeScript client share one semver; `/v1/version` adds the meta-whatsapp-rs revision.
 
 ## 8. Client SDKs
 
@@ -713,7 +714,7 @@ review with distinct lenses, remediate, re-run the original failure, `just
 ci` on the final head) and names its companion docs and skills in the PR.
 Tests use `ScriptedTransport` (method, path, token, exact JSON,
 `remaining() == 0`); live tests are `live_*`, and `just test-live` gains
-`-p wa-server` under `WA_RS_REQUIRE_LIVE=1`.
+`-p meta-whatsapp-server` under `META_WHATSAPP_RS_REQUIRE_LIVE=1`.
 
 | # | Library change (own PR, own parity) | When | Kind |
 | --- | --- | --- | --- |
@@ -726,10 +727,10 @@ Tests use `ScriptedTransport` (method, path, token, exact JSON,
 
 | | Scope | Docs and skills it adds |
 | --- | --- | --- |
-| **M1** skeleton, auth, messages and templates, webhooks in | the crate, fail-closed configuration, both listeners, storage and migrations, tenants, keys, admin API and CLI bootstrap, admin attach, the authorization order, messages, media, templates (list, get, create, delete), `/webhooks/meta` into inbox and outbox, `GET /v1/events`, errors (L1), idempotency, rate limits, health, metrics, tracing, the committed spec | `docs/guides/server.md` (run, configure, tenants, keys, first send); a README section "Not writing Rust? Run the service"; L6; a `docs/coverage.md` row; skills `wa-rs-server` (hub for HTTP callers: deploy, credentials, errors, idempotency, routing) and `wa-rs-server-send` (messages, templates, media); the skills gate below |
-| **M2** inbox, live updates, webhooks out | inbox routes, SSE (`LISTEN/NOTIFY`, `Last-Event-ID`), `GET /v1/events/{id}`, webhook endpoints, dispatcher, retries, destination allow-list, the service's number events | `server.md` inbox and events; skill `wa-rs-server-inbox` (inbox API, relaying live events to the CMS's browsers, receiving and verifying webhooks-out) |
-| **M3** Embedded Signup in both modes, OTP | signup routes, persisted attempts, disconnection, coexistence sync, authentication templates, OTP and its per-tenant settings; needs L2 (and L3 for partner mode) | `server.md` onboarding and OTP; skills `wa-rs-server-onboarding` (the CMS connect flow through the service: page, relay, PIN, resume, both modes) and `wa-rs-server-otp` |
-| **M4** TypeScript client, Docker image, docs | `clients/typescript`, the image and its CI, a Compose file, the documents route, the deployment guide | `server.md` deployment (Docker, Compose, Kubernetes notes); a `docs/guides/README.md` row; skill `wa-rs-server-typescript` (install, calls, errors, idempotency, SSE, webhook verification in Medusa or any Node backend); `wa-rs-production` points to the service |
+| **M1** skeleton, auth, messages and templates, webhooks in | the crate, fail-closed configuration, both listeners, storage and migrations, tenants, keys, admin API and CLI bootstrap, admin attach, the authorization order, messages, media, templates (list, get, create, delete), `/webhooks/meta` into inbox and outbox, `GET /v1/events`, errors (L1), idempotency, rate limits, health, metrics, tracing, the committed spec | `docs/guides/server.md` (run, configure, tenants, keys, first send); a README section "Not writing Rust? Run the service"; L6; a `docs/coverage.md` row; skills `meta-whatsapp-rs-server` (hub for HTTP callers: deploy, credentials, errors, idempotency, routing) and `meta-whatsapp-rs-server-send` (messages, templates, media); the skills gate below |
+| **M2** inbox, live updates, webhooks out | inbox routes, SSE (`LISTEN/NOTIFY`, `Last-Event-ID`), `GET /v1/events/{id}`, webhook endpoints, dispatcher, retries, destination allow-list, the service's number events | `server.md` inbox and events; skill `meta-whatsapp-rs-server-inbox` (inbox API, relaying live events to the CMS's browsers, receiving and verifying webhooks-out) |
+| **M3** Embedded Signup in both modes, OTP | signup routes, persisted attempts, disconnection, coexistence sync, authentication templates, OTP and its per-tenant settings; needs L2 (and L3 for partner mode) | `server.md` onboarding and OTP; skills `meta-whatsapp-rs-server-onboarding` (the CMS connect flow through the service: page, relay, PIN, resume, both modes) and `meta-whatsapp-rs-server-otp` |
+| **M4** TypeScript client, Docker image, docs | `clients/typescript`, the image and its CI, a Compose file, the documents route, the deployment guide | `server.md` deployment (Docker, Compose, Kubernetes notes); a `docs/guides/README.md` row; skill `meta-whatsapp-rs-server-typescript` (install, calls, errors, idempotency, SSE, webhook verification in Medusa or any Node backend); `meta-whatsapp-rs-production` points to the service |
 
 Acceptance tests. "Decisive" names the guard whose removal must make the
 test fail.
@@ -737,7 +738,7 @@ test fail.
 | # | Test |
 | --- | --- |
 | M1.1 | `just ci` exits 0 with the crate included (lint, doc, deny with the new dependencies) |
-| M1.2 | A body signed with `wa_rs::webhooks::sign` is `200` and one outbox row for the owning tenant; no signature is `401` without the body being polled; the same body twice is one row; 3 MiB + 1 byte is `413`; `unknown` and `unparsed` are operator-only. Decisive: routing an unowned number's event to a tenant |
+| M1.2 | A body signed with `meta_whatsapp_rs::webhooks::sign` is `200` and one outbox row for the owning tenant; no signature is `401` without the body being polled; the same body twice is one row; 3 MiB + 1 byte is `413`; `unknown` and `unparsed` are operator-only. Decisive: routing an unowned number's event to a tenant |
 | M1.3 | Table-driven over every `{pn}` and `{waba_id}` route in the spec (a new route cannot skip it): tenant B's key on A's number is `404`, and a counting vault wrapper records zero reads. Decisive: step 4 of [§3.3](#33-authorization-order) |
 | M1.4 | Sends carry the merchant's vault token; a digits-only `to.phone` is refused before any request; a scripted timeout is `504` with `may_have_been_sent: true` and the same `Idempotency-Key` replays it with no second request; a scripted 131047 is `409` and releases the key |
 | M1.5 | Every `ErrorKind` maps to a code and status (iterating L1's list); a sentinel in a scripted Graph error message reaches no response |
@@ -753,21 +754,21 @@ test fail.
 | M3.3 | A scripted 133005 at registration is `502 onboarding_failed` (`register_phone`, resumable); a new process on the same database resumes with a corrected PIN; another tenant's resume is `404` |
 | M3.4 | Partner mode: the credit-line request carries the partner's system token (asserted header), never the merchant's; missing partner settings refuse the start. D4 is enforced **before** any credit call, through the library's post-verification gate: a second tenant onboarding a bound WABA gets `409`, nothing is stored, subscribed or shared, binding unchanged. A business whose line was revoked is not re-funded by `resume` or a new signup without an explicit operator action. Offboarding revokes first and deletes second: a CMS disconnect, `PARTNER_APP_UNINSTALLED` and `PARTNER_REMOVED` (in any order) end with the line revoked (from the stored or the webhook's owner business id) before the vault entry and bindings go; tests replay both orders |
 | M3.5 | OTP: every outcome; tenant A's code verifies at no other tenant on the same number (decisive: the namespace); logs hold neither code nor number; a sentinel in a scripted Graph error on issue reaches no response |
-| M4.1 | The image builds for both architectures, runs non-root on a read-only file system, has no shell; `wa-server healthcheck` works in it |
+| M4.1 | The image builds for both architectures, runs non-root on a read-only file system, has no shell; `meta-whatsapp-server healthcheck` works in it |
 | M4.2 | A Compose smoke test in CI (Postgres, the image, a Graph stub via `WA_GRAPH_ENDPOINT`): CLI admin key, tenant, attach, send, a signed Meta webhook, a webhooks-out delivery verified at a stub receiver |
 | M4.3 | The client is generated from the committed spec; `tsc --noEmit` passes on it and on every TypeScript excerpt of the server skills; a Node test verifies a real delivery with `verifyWebhook()`; a breaking change within `v1` fails the spec diff; the invoice fixture renders byte-identically |
 
-**The skills gate for HTTP callers (M1).** `crates/wa-rs/tests/skills.rs`
+**The skills gate for HTTP callers (M1).** `crates/meta-whatsapp-rs/tests/skills.rs`
 assumes Rust (no TypeScript fences; backticked names must exist in
 `crates/`), so server skills would fail it or pass unchecked if
-allow-listed. M1 extends it for `skills/wa-rs-server*`: a `ts` fence must be
+allow-listed. M1 extends it for `skills/meta-whatsapp-rs-server*`: a `ts` fence must be
 an excerpt of the skill's `examples/*.ts`, type-checked by a new `just
 skills-ts` (tsc against the generated client, Node pinned) inside `just
 ci`; backticked routes, schemas and codes are checked against the committed
 spec. Stamps, the 160-line limit and hub listing apply unchanged.
 
 **Decision for owner (D13): where the server skills live.** (a) This
-repository's `skills/` (`npx skills add vaam-apps/wa-rs -s wa-rs-server …`),
+repository's `skills/` (`npx skills add vaam-apps/meta-whatsapp-rs -s meta-whatsapp-rs-server …`),
 changed in the same PR as the API; (b) a separate skills repository with
 its own coverage gate. *Recommendation: (a)*: API, spec and skills change
 atomically and are checked against the same commit.
@@ -786,11 +787,11 @@ D1–D4 and D7 were decided by the owner on 2026-09-24 and D13–D14 on 2026-09-
 | D6 | Two-step PIN (OQ #4) | per attempt, never stored / generated and stored | per attempt | M3 |
 | D7 | Coexistence sync (OQ #7) | endpoint / automatic / both, per tenant | **Decided 2026-09-24: automatic** (the service starts the one-time contacts + history sync right after a coexistence onboarding) | M3 |
 | D8 | Who sends a tenant's OTP codes | platform number / merchant's / per tenant | per tenant, platform number by default | M3 |
-| D9 | Image name and registry (with OQ #1) | public GHCR / private registry; the name | public on GHCR, name settled with OQ #1 | M4 |
+| D9 | Image name and registry | public GHCR / private registry; the name | public on GHCR, named `meta-whatsapp-server` (OQ #1, closed, settled the crate names) | M4 |
 | D10 | Retention and erasure of customers' messages | keep / purge after N days; erasure or not | configurable, keep by default; erasure if required (L5) | M2 |
 | D11 | Publishing the TypeScript client | npm / GitHub Packages / vendored | public npm | M4 |
 | D12 | A Medusa plugin | none / now / after the first integration | after the first integration | after M4 |
-| D13 | Where the server skills live | this repository / a separate one | **Decided 2026-09-25: this repository** (under `skills/`, same stamp gate and `npx skills add vaam-apps/wa-rs`) | M1 |
+| D13 | Where the server skills live | this repository / a separate one | **Decided 2026-09-25: this repository** (under `skills/`, same stamp gate and `npx skills add vaam-apps/meta-whatsapp-rs`) | M1 |
 | D14 | Credit line after a merchant unshares (`PARTNER_REMOVED`) | revoke at once (Meta's recommendation) / revoke after a grace period when `disconnection_info` says the coexistence number may reconnect / operator decides | **Decided 2026-09-25: revoke at once** on every `PARTNER_REMOVED` for our solution, coexistence included; a merchant who reconnects re-onboards and is funded again only through the explicit re-share (`reshare_after_revocation`) | M3 |
 
 **Inherited from [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md).** Until

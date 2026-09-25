@@ -1,30 +1,36 @@
-# wa-rs consumer skills
+# meta-whatsapp-rs consumer skills
 
-Agent skills for code that **uses** [wa-rs](https://github.com/vaam-apps/wa-rs)
+Agent skills for code that **uses** [meta-whatsapp-rs](https://github.com/vaam-apps/meta-whatsapp-rs)
 — an e-commerce backend (marketing, order notifications, WhatsApp OTP
 login) or a CMS whose merchants connect their own number with Embedded
 Signup and chat with their customers. Each skill is one job an integrator
-(or their coding agent) asks for: it names the real API, shows code wa-rs
+(or their coding agent) asks for: it names the real API, shows code meta-whatsapp-rs
 compiles and tests, lists the traps the reviews found, and says what the
 library leaves to you.
 
-Skills for working **on** wa-rs itself live in `.claude/skills/`; they are
+Skills for working **on** meta-whatsapp-rs itself live in `.claude/skills/`; they are
 marked `internal` and not offered by the installer.
 
 ## Install
 
 ```bash
-npx skills add vaam-apps/wa-rs --list                                  # what is offered
-npx skills add vaam-apps/wa-rs                                         # every skill
-npx skills add vaam-apps/wa-rs -s wa-rs -s wa-rs-webhook-endpoint -s wa-rs-cms-inbox
-npx skills update                                                      # re-fetch what is installed
+npx skills add vaam-apps/meta-whatsapp-rs --list    # what is offered
+npx skills add vaam-apps/meta-whatsapp-rs           # every skill
+npx skills add vaam-apps/meta-whatsapp-rs -s meta-whatsapp-rs -s meta-whatsapp-rs-webhook-endpoint -s meta-whatsapp-rs-cms-inbox
+npx skills update                                   # re-fetch what is installed
 ```
 
 The repository is public: neither the installer nor Cargo needs
-credentials. Install `wa-rs` in any case: it is the map and routes to the
+credentials. Install `meta-whatsapp-rs` in any case: it is the map and routes to the
 others. Each skill is self-contained (its
 `references/` and `examples/` travel with it; links elsewhere point at
 GitHub), so any subset works.
+
+Skills installed before the project was renamed (named `wa-rs` and
+`wa-rs-*`) name crates and paths that no longer exist, and
+`npx skills update` cannot refresh them: the repository has no skills by
+those names any more. Remove them (`npx skills list` shows them;
+`npx skills remove <name> …`), then add the ones above.
 
 ## The skills
 
@@ -32,73 +38,73 @@ GitHub), so any subset works.
 
 | Skill | Load it when |
 | --- | --- |
-| [`wa-rs`](wa-rs/) | anything with wa-rs: install, features, rules, which skill to load |
-| [`wa-rs-setup`](wa-rs-setup/) | Meta-side setup, building the `Client`, tokens, API version, unwrapped endpoints |
-| [`wa-rs-errors`](wa-rs-errors/) | matching errors, retries, job queues around sends |
-| [`wa-rs-testing`](wa-rs-testing/) | testing your code without Meta or a database |
+| [`meta-whatsapp-rs`](meta-whatsapp-rs/) | anything with meta-whatsapp-rs: install, features, rules, which skill to load |
+| [`meta-whatsapp-rs-setup`](meta-whatsapp-rs-setup/) | Meta-side setup, building the `Client`, tokens, API version, unwrapped endpoints |
+| [`meta-whatsapp-rs-errors`](meta-whatsapp-rs-errors/) | matching errors, retries, job queues around sends |
+| [`meta-whatsapp-rs-testing`](meta-whatsapp-rs-testing/) | testing your code without Meta or a database |
 
 **Messaging**
 
 | Skill | Load it when |
 | --- | --- |
-| [`wa-rs-send-messages`](wa-rs-send-messages/) | text, media, location, contacts, reactions, read receipts |
-| [`wa-rs-interactive-messages`](wa-rs-interactive-messages/) | buttons, lists, CTA links, location requests, Flows, carousels |
-| [`wa-rs-media`](wa-rs-media/) | uploads, verified downloads, template header handles |
+| [`meta-whatsapp-rs-send-messages`](meta-whatsapp-rs-send-messages/) | text, media, location, contacts, reactions, read receipts |
+| [`meta-whatsapp-rs-interactive-messages`](meta-whatsapp-rs-interactive-messages/) | buttons, lists, CTA links, location requests, Flows, carousels |
+| [`meta-whatsapp-rs-media`](meta-whatsapp-rs-media/) | uploads, verified downloads, template header handles |
 
 **Templates and authentication**
 
 | Skill | Load it when |
 | --- | --- |
-| [`wa-rs-templates`](wa-rs-templates/) | creating and managing templates, following their review |
-| [`wa-rs-send-templates`](wa-rs-send-templates/) | sending a template with its parameters |
-| [`wa-rs-otp-login`](wa-rs-otp-login/) | login or phone verification with WhatsApp codes |
+| [`meta-whatsapp-rs-templates`](meta-whatsapp-rs-templates/) | creating and managing templates, following their review |
+| [`meta-whatsapp-rs-send-templates`](meta-whatsapp-rs-send-templates/) | sending a template with its parameters |
+| [`meta-whatsapp-rs-otp-login`](meta-whatsapp-rs-otp-login/) | login or phone verification with WhatsApp codes |
 
 **Onboarding merchants**
 
 | Skill | Load it when |
 | --- | --- |
-| [`wa-rs-embedded-signup`](wa-rs-embedded-signup/) | the "Connect WhatsApp" flow and its callback; Solution Partner credit lines |
-| [`wa-rs-token-vault`](wa-rs-token-vault/) | merchants' tokens, key rotation, acting as a merchant |
-| [`wa-rs-phone-numbers`](wa-rs-phone-numbers/) | registration, PIN, business profile, webhook subscriptions |
+| [`meta-whatsapp-rs-embedded-signup`](meta-whatsapp-rs-embedded-signup/) | the "Connect WhatsApp" flow and its callback; Solution Partner credit lines |
+| [`meta-whatsapp-rs-token-vault`](meta-whatsapp-rs-token-vault/) | merchants' tokens, key rotation, acting as a merchant |
+| [`meta-whatsapp-rs-phone-numbers`](meta-whatsapp-rs-phone-numbers/) | registration, PIN, business profile, webhook subscriptions |
 
 **Webhooks and chat**
 
 | Skill | Load it when |
 | --- | --- |
-| [`wa-rs-webhook-endpoint`](wa-rs-webhook-endpoint/) | the endpoint Meta calls, on axum or any framework |
-| [`wa-rs-webhook-events`](wa-rs-webhook-events/) | what each event means and what to do with it |
-| [`wa-rs-live-updates`](wa-rs-live-updates/) | sinks, fan-out, SSE, background workers |
-| [`wa-rs-cms-inbox`](wa-rs-cms-inbox/) | the merchant ↔ customer inbox of a CMS |
-| [`wa-rs-groups-and-calling`](wa-rs-groups-and-calling/) | blocking a customer, group chats, WhatsApp calls |
+| [`meta-whatsapp-rs-webhook-endpoint`](meta-whatsapp-rs-webhook-endpoint/) | the endpoint Meta calls, on axum or any framework |
+| [`meta-whatsapp-rs-webhook-events`](meta-whatsapp-rs-webhook-events/) | what each event means and what to do with it |
+| [`meta-whatsapp-rs-live-updates`](meta-whatsapp-rs-live-updates/) | sinks, fan-out, SSE, background workers |
+| [`meta-whatsapp-rs-cms-inbox`](meta-whatsapp-rs-cms-inbox/) | the merchant ↔ customer inbox of a CMS |
+| [`meta-whatsapp-rs-groups-and-calling`](meta-whatsapp-rs-groups-and-calling/) | blocking a customer, group chats, WhatsApp calls |
 
 **Business features**
 
 | Skill | Load it when |
 | --- | --- |
-| [`wa-rs-marketing`](wa-rs-marketing/) | campaigns, opt-ins and opt-outs, analytics, QR codes |
-| [`wa-rs-commerce`](wa-rs-commerce/) | catalogs, product messages, carts |
-| [`wa-rs-documents`](wa-rs-documents/) | invoices, receipts, vouchers rendered with Typst |
-| [`wa-rs-flows`](wa-rs-flows/) | WhatsApp Flows and their data endpoint |
+| [`meta-whatsapp-rs-marketing`](meta-whatsapp-rs-marketing/) | campaigns, opt-ins and opt-outs, analytics, QR codes |
+| [`meta-whatsapp-rs-commerce`](meta-whatsapp-rs-commerce/) | catalogs, product messages, carts |
+| [`meta-whatsapp-rs-documents`](meta-whatsapp-rs-documents/) | invoices, receipts, vouchers rendered with Typst |
+| [`meta-whatsapp-rs-flows`](meta-whatsapp-rs-flows/) | WhatsApp Flows and their data endpoint |
 
 **Operations**
 
 | Skill | Load it when |
 | --- | --- |
-| [`wa-rs-storage`](wa-rs-storage/) | memory, Postgres or Redis stores; your own adapter |
-| [`wa-rs-production`](wa-rs-production/) | secrets, logs, limits, versions, several instances |
+| [`meta-whatsapp-rs-storage`](meta-whatsapp-rs-storage/) | memory, Postgres or Redis stores; your own adapter |
+| [`meta-whatsapp-rs-production`](meta-whatsapp-rs-production/) | secrets, logs, limits, versions, several instances |
 
-## Versioning: a skill is true of one wa-rs commit
+## Versioning: a skill is true of one meta-whatsapp-rs commit
 
-wa-rs has no releases (`publish = false`; you depend on a git `rev`). So
+meta-whatsapp-rs has no releases (`publish = false`; you depend on a git `rev`). So
 each `SKILL.md` names the commit it was verified against, under its title:
 
 ```markdown
-> **Verified against wa-rs 6909be3b54768abc3d5f9b04543a49f32b072669 (2026-09-25).**
+> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).**
 ```
 
-"Verified" means: every Rust block is an excerpt of a file wa-rs compiles
+"Verified" means: every Rust block is an excerpt of a file meta-whatsapp-rs compiles
 and tests at that commit (the skill's own `examples/*.rs`, or
-`crates/wa-rs/examples/*.rs`), and every Rust name the prose uses exists
+`crates/meta-whatsapp-rs/examples/*.rs`), and every Rust name the prose uses exists
 there. The rules:
 
 1. **Your `Cargo.toml` pins you, not the skill.** Same commit as the
@@ -108,7 +114,7 @@ there. The rules:
    one listing it, found with
    `git log origin/main --grep "Squashed-commit: <sha>"`, and GitHub still
    shows the stamped commit itself at `/commit/<sha>`.
-2. **A newer skill on an older wa-rs is the dangerous case**: it describes
+2. **A newer skill on an older meta-whatsapp-rs is the dangerous case**: it describes
    API your revision lacks. Bump the `rev`, or use the skill's git history
    at the stamp nearest your revision.
 3. **A corrected claim stays visible**, struck through with the commit or
@@ -117,11 +123,11 @@ there. The rules:
 4. **Stamps move one skill at a time**: re-verifying one skill against a
    newer commit restamps that skill only.
 
-## How wa-rs keeps them true
+## How meta-whatsapp-rs keeps them true
 
 `just ci` runs, on every change:
 
-- `crates/wa-rs/tests/skills.rs` (in `just test`): every
+- `crates/meta-whatsapp-rs/tests/skills.rs` (in `just test`): every
   `skills/*/examples/*.rs` compiles and its tests pass, and hides no code
   that is never compiled (no block comments, `macro_rules!` or `cfg`
   but the tests' `#[cfg(test)]`, and in the crate's own examples only the
@@ -144,7 +150,7 @@ there. The rules:
   field or item of the type before it, not just of the same file; every
   skill and every `references/*.md` is stamped under its title (and any
   other stamp is well-formed), every skill is short, and listed
-  here and in the `wa-rs` hub.
+  here and in the `meta-whatsapp-rs` hub.
 - `just skills-check`: every stamp's commit is in the checked-out
   commit's history, as an ancestor or as a pull request's commit that a
   squash commit on main lists in its Squashed-commit lines.

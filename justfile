@@ -1,4 +1,4 @@
-# wa-rs — task runner. `just ci` is the gate: CI runs exactly it, and
+# meta-whatsapp-rs — task runner. `just ci` is the gate: CI runs exactly it, and
 # nothing is "verified" until it exits 0 on the final head.
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
@@ -16,19 +16,19 @@ check:
 test:
     cargo test --workspace --all-features
 
-# Adapter tests against real Postgres and Redis. Uses WA_RS_TEST_POSTGRES_URL /
-# WA_RS_TEST_REDIS_URL when set (the devcontainer sets them to its sidecars),
-# otherwise starts compose.test.yaml. WA_RS_REQUIRE_LIVE=1 turns a missing
+# Adapter tests against real Postgres and Redis. Uses META_WHATSAPP_RS_TEST_POSTGRES_URL /
+# META_WHATSAPP_RS_TEST_REDIS_URL when set (the devcontainer sets them to its sidecars),
+# otherwise starts compose.test.yaml. META_WHATSAPP_RS_REQUIRE_LIVE=1 turns a missing
 # service into a failure instead of a skip.
 test-live:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ -z "${WA_RS_TEST_POSTGRES_URL:-}" ] || [ -z "${WA_RS_TEST_REDIS_URL:-}" ]; then
+    if [ -z "${META_WHATSAPP_RS_TEST_POSTGRES_URL:-}" ] || [ -z "${META_WHATSAPP_RS_TEST_REDIS_URL:-}" ]; then
         docker compose -f compose.test.yaml up -d --wait
-        export WA_RS_TEST_POSTGRES_URL="postgres://wa:wa@127.0.0.1:55432/wa"
-        export WA_RS_TEST_REDIS_URL="redis://127.0.0.1:56379"
+        export META_WHATSAPP_RS_TEST_POSTGRES_URL="postgres://wa:wa@127.0.0.1:55432/wa"
+        export META_WHATSAPP_RS_TEST_REDIS_URL="redis://127.0.0.1:56379"
     fi
-    WA_RS_REQUIRE_LIVE=1 cargo test -p wa-adapters --all-features live_ -- --test-threads=4
+    META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-adapters --all-features live_ -- --test-threads=4
 
 # Stop the compose.test.yaml services
 test-live-down:
@@ -51,33 +51,33 @@ fmt:
 doc:
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 
-# The wa-webhooks line builds all targets: the framework-free API
+# The meta-whatsapp-webhooks line builds all targets: the framework-free API
 # (tests/signature.rs uses SIGNATURE_HEADER) must build without axum. The doc
-# line builds rustdoc without default features (wa-rs included): a link to a
+# line builds rustdoc without default features (meta-whatsapp-rs included): a link to a
 # feature-gated item must be gated with it; `just doc` covers --all-features.
 #
 # Each feature on its own, so a missing cfg gate cannot hide behind --all-features
 features:
-    cargo check -p wa-adapters --no-default-features
-    cargo check -p wa-adapters --no-default-features --features memory
-    cargo check -p wa-adapters --no-default-features --features sinks
-    cargo check -p wa-adapters --no-default-features --features reqwest
-    cargo check -p wa-adapters --no-default-features --features postgres
-    cargo check -p wa-adapters --no-default-features --features redis
-    cargo check -p wa-webhooks --no-default-features --all-targets
-    cargo check -p wa-webhooks --features axum
-    cargo check -p wa-client --no-default-features
-    cargo check -p wa-client --features flows-endpoint
-    cargo check -p wa-rs --no-default-features
-    cargo check -p wa-rs --no-default-features --features reqwest
-    cargo check -p wa-rs --no-default-features --features memory
-    cargo check -p wa-rs --no-default-features --features sinks
-    cargo check -p wa-rs --no-default-features --features postgres
-    cargo check -p wa-rs --no-default-features --features redis
-    cargo check -p wa-rs --no-default-features --features axum
-    cargo check -p wa-rs --no-default-features --features typst
-    cargo check -p wa-rs --no-default-features --features flows-endpoint
-    cargo check -p wa-rs
+    cargo check -p meta-whatsapp-adapters --no-default-features
+    cargo check -p meta-whatsapp-adapters --no-default-features --features memory
+    cargo check -p meta-whatsapp-adapters --no-default-features --features sinks
+    cargo check -p meta-whatsapp-adapters --no-default-features --features reqwest
+    cargo check -p meta-whatsapp-adapters --no-default-features --features postgres
+    cargo check -p meta-whatsapp-adapters --no-default-features --features redis
+    cargo check -p meta-whatsapp-webhooks --no-default-features --all-targets
+    cargo check -p meta-whatsapp-webhooks --features axum
+    cargo check -p meta-whatsapp-client --no-default-features
+    cargo check -p meta-whatsapp-client --features flows-endpoint
+    cargo check -p meta-whatsapp-rs --no-default-features
+    cargo check -p meta-whatsapp-rs --no-default-features --features reqwest
+    cargo check -p meta-whatsapp-rs --no-default-features --features memory
+    cargo check -p meta-whatsapp-rs --no-default-features --features sinks
+    cargo check -p meta-whatsapp-rs --no-default-features --features postgres
+    cargo check -p meta-whatsapp-rs --no-default-features --features redis
+    cargo check -p meta-whatsapp-rs --no-default-features --features axum
+    cargo check -p meta-whatsapp-rs --no-default-features --features typst
+    cargo check -p meta-whatsapp-rs --no-default-features --features flows-endpoint
+    cargo check -p meta-whatsapp-rs
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-default-features --no-deps
 
 # Licenses, advisories, duplicate versions, sources
@@ -87,11 +87,11 @@ deny:
     cargo deny --manifest-path .xtask/Cargo.toml --config deny.toml check
 
 # Everything else about the consumer skills (compiled examples, excerpts,
-# frontmatter, links, names) is crates/wa-rs/tests/skills.rs, run by `test`.
+# frontmatter, links, names) is crates/meta-whatsapp-rs/tests/skills.rs, run by `test`.
 # This needs the git history: CI checks out with fetch-depth 0, and a shallow
 # clone fails here.
 #
-# Consumer skills: every `Verified against wa-rs <sha>` stamp is a commit in HEAD's history, or a branch commit a squash commit on main lists
+# Consumer skills: every `Verified against meta-whatsapp-rs <sha>` stamp is a commit in HEAD's history, or a branch commit a squash commit on main lists
 skills-check:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -101,12 +101,12 @@ skills-check:
     fi
     status=0
     for skill in skills/*/SKILL.md; do
-        if ! grep -qE 'Verified against wa-rs [0-9a-f]{40} ' "$skill"; then
-            echo "$skill: no 'Verified against wa-rs <full sha>' stamp"
+        if ! grep -qE 'Verified against meta-whatsapp-rs [0-9a-f]{40} ' "$skill"; then
+            echo "$skill: no 'Verified against meta-whatsapp-rs <full sha>' stamp"
             status=1
         fi
     done
-    stamps=$(grep -rhoE 'Verified against wa-rs [0-9a-f]+' skills | awk '{print $4}' | sort -u)
+    stamps=$(grep -rhoE 'Verified against meta-whatsapp-rs [0-9a-f]+' skills | awk '{print $4}' | sort -u)
     if [ -z "$stamps" ]; then
         echo "no stamps found under skills/"
         exit 1
@@ -120,7 +120,7 @@ skills-check:
         exit 1
     }
     for sha in $stamps; do
-        files=$(grep -rlE "Verified against wa-rs $sha([^0-9a-f]|$)" skills | wc -l)
+        files=$(grep -rlE "Verified against meta-whatsapp-rs $sha([^0-9a-f]|$)" skills | wc -l)
         if [ "${#sha}" -ne 40 ]; then
             echo "stamp $sha: not a full 40-character commit id ($files files)"
             status=1

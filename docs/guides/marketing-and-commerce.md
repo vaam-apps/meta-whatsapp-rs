@@ -4,12 +4,12 @@
 templates, respect opt-outs and per-user limits, show products from your
 catalog, and measure what happened.
 
-Example: [`send_message.rs`](../../crates/wa-rs/examples/send_message.rs).
-Agent skills: [`wa-rs-marketing`](../../skills/wa-rs-marketing/SKILL.md)
+Example: [`send_message.rs`](../../crates/meta-whatsapp-rs/examples/send_message.rs).
+Agent skills: [`meta-whatsapp-rs-marketing`](../../skills/meta-whatsapp-rs-marketing/SKILL.md)
 (opt-ins, campaigns, opt-outs, analytics),
-[`wa-rs-commerce`](../../skills/wa-rs-commerce/SKILL.md) (catalogs, orders),
-[`wa-rs-templates`](../../skills/wa-rs-templates/SKILL.md) (template lifecycle) and
-[`wa-rs-send-templates`](../../skills/wa-rs-send-templates/SKILL.md).
+[`meta-whatsapp-rs-commerce`](../../skills/meta-whatsapp-rs-commerce/SKILL.md) (catalogs, orders),
+[`meta-whatsapp-rs-templates`](../../skills/meta-whatsapp-rs-templates/SKILL.md) (template lifecycle) and
+[`meta-whatsapp-rs-send-templates`](../../skills/meta-whatsapp-rs-send-templates/SKILL.md).
 
 ## 1. On Meta's side
 
@@ -52,7 +52,7 @@ Meta's pages:
 them a confirmation, optionally with a promo code:
 
 ```rust
-use wa_rs::client::signups::{NewSignup, SignupPolicy, deep_link};
+use meta_whatsapp_rs::client::signups::{NewSignup, SignupPolicy, deep_link};
 
 let created = client.signups(waba_id.clone())
     .create(&NewSignup::new("Get our deals on WhatsApp", "You're in! Code {{promo_code}}", "https://shop.example/privacy")
@@ -67,14 +67,14 @@ The first `create` of a business must carry `accept_terms()` (without it:
 Accepting accepts Meta's marketing messages terms on the business's behalf:
 a [legal decision](../../OPEN_QUESTIONS.md#product-details) (26), not a
 technical one. Meta's page says a webhook notifies you of each
-subscription but does not document its payload; wa-rs has no typed event
+subscription but does not document its payload; meta-whatsapp-rs has no typed event
 for it, so it would arrive as `WebhookEvent::Unknown` (or an unknown
 message type). Check on a test WABA before relying on it.
 
 **QR codes and short links** open a chat with a prefilled message:
 
 ```rust
-use wa_rs::client::qr_codes::{CreateQrCode, QrImageFormat};
+use meta_whatsapp_rs::client::qr_codes::{CreateQrCode, QrImageFormat};
 
 let qr = client.qr_codes(phone_number_id.clone())
     .create(&CreateQrCode::new("Hi! Send me the autumn catalog").with_image(QrImageFormat::Svg)) // SVG for print
@@ -85,13 +85,13 @@ let qr = client.qr_codes(phone_number_id.clone())
 The prefilled message is 1–140 characters. The chat it opens also opens a
 customer service window when the user sends it.
 
-wa-rs keeps no consent registry: store opt-ins and opt-outs yourself, keyed
+meta-whatsapp-rs keeps no consent registry: store opt-ins and opt-outs yourself, keyed
 by the customer's business-scoped user id (BSUID) and phone number.
 
 ## 3. Create templates
 
 ```rust
-use wa_rs::client::templates::{Button, ParameterFormat, TemplateCategory, TemplateComponent, TemplateDefinition};
+use meta_whatsapp_rs::client::templates::{Button, ParameterFormat, TemplateCategory, TemplateComponent, TemplateDefinition};
 
 let templates = client.templates(waba_id.clone());
 
@@ -123,7 +123,7 @@ its text: treat "Stop promotions" as an opt-out in your own code.
 ## 4. Send: Cloud API or MM API
 
 ```rust
-use wa_rs::client::marketing::MarketingOptions;
+use meta_whatsapp_rs::client::marketing::MarketingOptions;
 
 let offer = TemplateMessage::new("autumn_sale", "en_US")
     .header(Parameter::image_id(voucher_media_id)) // at send time: a normal media id
@@ -160,7 +160,7 @@ status webhook; handle them on the call too, since the same codes map to the
 same `ErrorKind` there.
 
 ```rust
-use wa_rs::webhooks::fields::PreferenceValue;
+use meta_whatsapp_rs::webhooks::fields::PreferenceValue;
 
 match &event {
     WebhookEvent::UserPreferenceChanged { preference, .. } => match preference.value {
@@ -193,7 +193,7 @@ match &event {
 ## 6. Catalogs and product messages
 
 ```rust
-use wa_rs::client::messages::ProductSection;
+use meta_whatsapp_rs::client::messages::ProductSection;
 
 let messages = client.messages(phone_number_id.clone());
 messages.send(&OutboundMessage::product(to.clone(), catalog_id.clone(), "SKU-1")).await?;

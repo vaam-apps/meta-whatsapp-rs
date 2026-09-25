@@ -1,6 +1,6 @@
 ---
 name: add-graph-endpoint
-description: "Recipe for adding or changing a Graph API endpoint wrapper in wa-client — typed request/response, local validation, secrets, pagination with cursors, ScriptedTransport tests. Use when wrapping a new WhatsApp Cloud API or Business Management API endpoint or fixing an existing one."
+description: "Recipe for adding or changing a Graph API endpoint wrapper in meta-whatsapp-client — typed request/response, local validation, secrets, pagination with cursors, ScriptedTransport tests. Use when wrapping a new WhatsApp Cloud API or Business Management API endpoint or fixing an existing one."
 metadata:
   internal: true
 ---
@@ -23,7 +23,7 @@ metadata:
 3. **Types**: request struct `#[derive(Serialize)]` with
    `#[serde(skip_serializing_if = "Option::is_none")]` on optionals;
    response `#[derive(Deserialize)]`, no `deny_unknown_fields`. Ids use
-   `wa_core::ids` newtypes. Secrets the caller supplies (PINs, codes) are
+   `meta_whatsapp_core::ids` newtypes. Secrets the caller supplies (PINs, codes) are
    newtypes that validate on construction and redact `Debug`
    (`phone_numbers::TwoStepPin`, `embedded_signup::SignupCode`); take them
    by reference and call `expose_secret()` only to fill the request body.
@@ -34,7 +34,7 @@ metadata:
      are in, and **do not add a unit `#[serde(other)] Unknown`**. It drops
      Meta's value, and if the enum also derives `Serialize` it writes its
      own name back instead. The value-keeping macros are `open_enum!`
-     (wa-webhooks), `string_enum!` (templates) and `wire_enum!` (flows).
+     (meta-whatsapp-webhooks), `string_enum!` (templates) and `wire_enum!` (flows).
 4. **Method** on the module's API struct. Paths containing an id are built
    **only** with the segment API `self.client.get_at/post_at/delete_at(&[..])`
    — never `client.post(&format!("{}/…", id))`: `GraphEndpoint::url` splits

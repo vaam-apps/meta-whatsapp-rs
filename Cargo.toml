@@ -1,26 +1,26 @@
 [workspace]
 resolver = "3"
-# Hexagonal layout: `wa-core` owns the error tree and the ports (traits);
+# Hexagonal layout: `meta-whatsapp-core` owns the error tree and the ports (traits);
 # everything else depends on it and never the reverse. See docs/architecture.md.
 members = [
-  "crates/wa-core",
-  "crates/wa-client",
-  "crates/wa-webhooks",
-  "crates/wa-adapters",
-  "crates/wa-typst",
-  "crates/wa-rs",
+  "crates/meta-whatsapp-core",
+  "crates/meta-whatsapp-client",
+  "crates/meta-whatsapp-webhooks",
+  "crates/meta-whatsapp-adapters",
+  "crates/meta-whatsapp-typst",
+  "crates/meta-whatsapp-rs",
 ]
 # Repository automation is its own workspace (own Cargo.lock): its HTTP
 # client (ureq → rustls with `ring`) must not be resolved into the
 # library's builds and tests. See .xtask/Cargo.toml.
 exclude = [".xtask"]
 default-members = [
-  "crates/wa-core",
-  "crates/wa-client",
-  "crates/wa-webhooks",
-  "crates/wa-adapters",
-  "crates/wa-typst",
-  "crates/wa-rs",
+  "crates/meta-whatsapp-core",
+  "crates/meta-whatsapp-client",
+  "crates/meta-whatsapp-webhooks",
+  "crates/meta-whatsapp-adapters",
+  "crates/meta-whatsapp-typst",
+  "crates/meta-whatsapp-rs",
 ]
 
 [workspace.package]
@@ -30,21 +30,21 @@ edition = "2024"
 # typst 0.15 (1.92) and sqlx 0.9 (1.94) already sit close to it.
 rust-version = "1.98.1"
 license = "MIT"
-repository = "https://github.com/vaam-apps/wa-rs"
+repository = "https://github.com/vaam-apps/meta-whatsapp-rs"
 authors = ["Vymalo"]
-# `wa-rs` is already taken on crates.io (an unrelated WhatsApp Web client), so
-# nothing here is publishable until the crate names are decided.
+# The crate names were free on crates.io on 2026-09-25 (OPEN_QUESTIONS #1,
+# closed), but nothing is published until a release is decided.
 publish = false
 
 [workspace.dependencies]
 # Internal crates.
-wa-core = { path = "crates/wa-core" }
-wa-client = { path = "crates/wa-client" }
-wa-webhooks = { path = "crates/wa-webhooks" }
+meta-whatsapp-core = { path = "crates/meta-whatsapp-core" }
+meta-whatsapp-client = { path = "crates/meta-whatsapp-client" }
+meta-whatsapp-webhooks = { path = "crates/meta-whatsapp-webhooks" }
 # default-features off here so the facade can choose; members that want the
 # defaults name the features they use.
-wa-adapters = { path = "crates/wa-adapters", default-features = false }
-wa-typst = { path = "crates/wa-typst" }
+meta-whatsapp-adapters = { path = "crates/meta-whatsapp-adapters", default-features = false }
+meta-whatsapp-typst = { path = "crates/meta-whatsapp-typst" }
 
 # Errors. `thiserror` shapes the typed tree; `anyhow` is the opaque leaf for
 # failures an adapter or integrator raises that have no typed home.
@@ -90,7 +90,7 @@ tracing = "0.1"
 # Unicode general categories (the OTP namespace refuses format characters).
 unicode-properties = { version = "0.1", default-features = false, features = ["general-category"] }
 
-# Adapters (optional behind features in wa-adapters / wa-webhooks).
+# Adapters (optional behind features in meta-whatsapp-adapters / meta-whatsapp-webhooks).
 reqwest = { version = "0.13", default-features = false }
 axum = { version = "0.8", default-features = false }
 sqlx = { version = "0.9", default-features = false }

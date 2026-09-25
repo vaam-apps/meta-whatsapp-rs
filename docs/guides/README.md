@@ -1,17 +1,17 @@
 # Integrator guides
 
-Task-oriented guides for engineers who put wa-rs into a product: the
+Task-oriented guides for engineers who put meta-whatsapp-rs into a product: the
 e-commerce backend (marketing, order notifications, invoices, WhatsApp OTP
 login) and the multi-tenant CMS (each merchant connects their own number
 with Embedded Signup and chats with customers in-app).
 
 They sit between the [README](../../README.md) quick start and the API
-reference (`cargo doc -p wa-rs --all-features --open`). The design and its
+reference (`cargo doc -p meta-whatsapp-rs --all-features --open`). The design and its
 reasons are in [architecture.md](../architecture.md); what exists and what
 does not is in [coverage.md](../coverage.md); decisions nobody has made yet
 are in [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md).
 
-> Checked against wa-rs **7940d15** (2026-09-24), Graph API v25.0. Every
+> Checked against meta-whatsapp-rs **7940d15** (2026-09-24), Graph API v25.0. Every
 > Rust name in these pages was checked against the source at that commit,
 > and the snippets were compiled against it. On another revision, trust the
 > rustdoc over these pages.
@@ -20,14 +20,14 @@ are in [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md).
 
 | Guide | Read it when you | Example | Agent skill |
 | --- | --- | --- | --- |
-| [getting-started.md](getting-started.md) | set up the Meta app, add the dependency, send a first message, handle errors | [`send_message`](../../crates/wa-rs/examples/send_message.rs) | [`wa-rs-setup`](../../skills/wa-rs-setup/SKILL.md), [`wa-rs-errors`](../../skills/wa-rs-errors/SKILL.md) |
-| [embedded-signup.md](embedded-signup.md) | let each merchant of your CMS connect their own number | [`embedded_signup`](../../crates/wa-rs/examples/embedded_signup.rs) | [`wa-rs-embedded-signup`](../../skills/wa-rs-embedded-signup/SKILL.md), [`wa-rs-token-vault`](../../skills/wa-rs-token-vault/SKILL.md) |
-| [webhooks.md](webhooks.md) | deploy the webhook endpoint and decide what to do with each event | [`cms_inbox`](../../crates/wa-rs/examples/cms_inbox.rs) | [`wa-rs-webhook-endpoint`](../../skills/wa-rs-webhook-endpoint/SKILL.md), [`wa-rs-webhook-events`](../../skills/wa-rs-webhook-events/SKILL.md), [`wa-rs-live-updates`](../../skills/wa-rs-live-updates/SKILL.md) |
-| [cms-inbox.md](cms-inbox.md) | build the merchant ↔ customer chat (history, live updates, replies) | [`cms_inbox`](../../crates/wa-rs/examples/cms_inbox.rs) | [`wa-rs-cms-inbox`](../../skills/wa-rs-cms-inbox/SKILL.md) |
-| [marketing-and-commerce.md](marketing-and-commerce.md) | send campaigns and order updates, collect opt-ins, show products | [`send_message`](../../crates/wa-rs/examples/send_message.rs) | [`wa-rs-marketing`](../../skills/wa-rs-marketing/SKILL.md), [`wa-rs-commerce`](../../skills/wa-rs-commerce/SKILL.md), [`wa-rs-templates`](../../skills/wa-rs-templates/SKILL.md), [`wa-rs-send-templates`](../../skills/wa-rs-send-templates/SKILL.md) |
-| [otp-login.md](otp-login.md) | log users in (or verify a number) with a WhatsApp code | [`otp_login`](../../crates/wa-rs/examples/otp_login.rs) | [`wa-rs-otp-login`](../../skills/wa-rs-otp-login/SKILL.md) |
-| [documents.md](documents.md) | send invoices, receipts and voucher images | [`invoice_document`](../../crates/wa-rs/examples/invoice_document.rs) | [`wa-rs-documents`](../../skills/wa-rs-documents/SKILL.md) |
-| [production.md](production.md) | pick storage, manage keys, log safely, scale, pin versions | — | [`wa-rs-production`](../../skills/wa-rs-production/SKILL.md), [`wa-rs-storage`](../../skills/wa-rs-storage/SKILL.md) |
+| [getting-started.md](getting-started.md) | set up the Meta app, add the dependency, send a first message, handle errors | [`send_message`](../../crates/meta-whatsapp-rs/examples/send_message.rs) | [`meta-whatsapp-rs-setup`](../../skills/meta-whatsapp-rs-setup/SKILL.md), [`meta-whatsapp-rs-errors`](../../skills/meta-whatsapp-rs-errors/SKILL.md) |
+| [embedded-signup.md](embedded-signup.md) | let each merchant of your CMS connect their own number | [`embedded_signup`](../../crates/meta-whatsapp-rs/examples/embedded_signup.rs) | [`meta-whatsapp-rs-embedded-signup`](../../skills/meta-whatsapp-rs-embedded-signup/SKILL.md), [`meta-whatsapp-rs-token-vault`](../../skills/meta-whatsapp-rs-token-vault/SKILL.md) |
+| [webhooks.md](webhooks.md) | deploy the webhook endpoint and decide what to do with each event | [`cms_inbox`](../../crates/meta-whatsapp-rs/examples/cms_inbox.rs) | [`meta-whatsapp-rs-webhook-endpoint`](../../skills/meta-whatsapp-rs-webhook-endpoint/SKILL.md), [`meta-whatsapp-rs-webhook-events`](../../skills/meta-whatsapp-rs-webhook-events/SKILL.md), [`meta-whatsapp-rs-live-updates`](../../skills/meta-whatsapp-rs-live-updates/SKILL.md) |
+| [cms-inbox.md](cms-inbox.md) | build the merchant ↔ customer chat (history, live updates, replies) | [`cms_inbox`](../../crates/meta-whatsapp-rs/examples/cms_inbox.rs) | [`meta-whatsapp-rs-cms-inbox`](../../skills/meta-whatsapp-rs-cms-inbox/SKILL.md) |
+| [marketing-and-commerce.md](marketing-and-commerce.md) | send campaigns and order updates, collect opt-ins, show products | [`send_message`](../../crates/meta-whatsapp-rs/examples/send_message.rs) | [`meta-whatsapp-rs-marketing`](../../skills/meta-whatsapp-rs-marketing/SKILL.md), [`meta-whatsapp-rs-commerce`](../../skills/meta-whatsapp-rs-commerce/SKILL.md), [`meta-whatsapp-rs-templates`](../../skills/meta-whatsapp-rs-templates/SKILL.md), [`meta-whatsapp-rs-send-templates`](../../skills/meta-whatsapp-rs-send-templates/SKILL.md) |
+| [otp-login.md](otp-login.md) | log users in (or verify a number) with a WhatsApp code | [`otp_login`](../../crates/meta-whatsapp-rs/examples/otp_login.rs) | [`meta-whatsapp-rs-otp-login`](../../skills/meta-whatsapp-rs-otp-login/SKILL.md) |
+| [documents.md](documents.md) | send invoices, receipts and voucher images | [`invoice_document`](../../crates/meta-whatsapp-rs/examples/invoice_document.rs) | [`meta-whatsapp-rs-documents`](../../skills/meta-whatsapp-rs-documents/SKILL.md) |
+| [production.md](production.md) | pick storage, manage keys, log safely, scale, pin versions | — | [`meta-whatsapp-rs-production`](../../skills/meta-whatsapp-rs-production/SKILL.md), [`meta-whatsapp-rs-storage`](../../skills/meta-whatsapp-rs-storage/SKILL.md) |
 
 ## Reading order
 
@@ -41,8 +41,8 @@ production.
 
 - Snippets are excerpts. Names such as `merchant_id`, `save_merchant_waba`
   or `pool` stand for your own code and values; everything imported from
-  `wa_rs` is the real API.
-- `use wa_rs::prelude::*;` brings in the client, ids, `Recipient`, the
+  `meta_whatsapp_rs` is the real API.
+- `use meta_whatsapp_rs::prelude::*;` brings in the client, ids, `Recipient`, the
   message and template builders, the webhook pieces, the store and sink
   traits and the inbox. Everything else is one path away.
 - Each runnable example's header lists the environment variables it reads

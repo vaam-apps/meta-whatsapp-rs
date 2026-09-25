@@ -1,17 +1,17 @@
 ---
 name: typst-templates
-description: "Authoring and rendering Typst templates in wa-typst — invoices, receipts, vouchers rendered to PDF/PNG from JSON inputs for WhatsApp document/image messages and template headers. Use when adding or changing a .typ template, its input schema, or the renderer."
+description: "Authoring and rendering Typst templates in meta-whatsapp-typst — invoices, receipts, vouchers rendered to PDF/PNG from JSON inputs for WhatsApp document/image messages and template headers. Use when adding or changing a .typ template, its input schema, or the renderer."
 metadata:
   internal: true
 ---
 
 # Typst templates
 
-- Templates live in `crates/wa-typst/templates/*.typ` and are embedded in
+- Templates live in `crates/meta-whatsapp-typst/templates/*.typ` and are embedded in
   the binary; inputs arrive as JSON through `sys.inputs` (read with
   `json(bytes(sys.inputs.data))` or the helper the renderer documents).
 - Each template has a typed Rust input struct (`Serialize`) and a sample
-  input under `crates/wa-typst/tests/fixtures/`. Tests render every
+  input under `crates/meta-whatsapp-typst/tests/fixtures/`. Tests render every
   template with its sample and assert: PDF starts with `%PDF`, PNG decodes,
   deterministic output for identical input.
 - Fonts are bundled; never depend on system fonts (output must be identical
@@ -22,4 +22,4 @@ metadata:
 - Never render OTPs or secrets into media. Authentication codes go only
   through authentication templates.
 - Preview locally with the `typst` CLI in the devcontainer:
-  `typst compile --input data='{...}' crates/wa-typst/templates/invoice.typ /tmp/out.pdf`.
+  `typst compile --input data='{...}' crates/meta-whatsapp-typst/templates/invoice.typ /tmp/out.pdf`.

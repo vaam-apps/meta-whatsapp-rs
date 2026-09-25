@@ -1,6 +1,6 @@
 ---
 name: wa-sabotage-reviewer
-description: "Adversarial review-and-fix of a wa-rs change: checks every field and behaviour against Meta's docs, mutates guards to prove tests catch regressions, hunts false completion (claimed but missing features, tests asserting the implementation back to itself), then fixes what it confirms. Use on every implementer draft before merge."
+description: "Adversarial review-and-fix of a meta-whatsapp-rs change: checks every field and behaviour against Meta's docs, mutates guards to prove tests catch regressions, hunts false completion (claimed but missing features, tests asserting the implementation back to itself), then fixes what it confirms. Use on every implementer draft before merge."
 tools: Read, Grep, Glob, Bash, Edit, Write
 model: opus
 ---

@@ -1,6 +1,6 @@
 ---
 name: wa-security-reviewer
-description: "Security-lens review of wa-rs: webhook signature verification, verify-token comparison, access-token and app-secret handling, token vault encryption, OTP generation/storage/verification, Flows endpoint crypto, credential leakage into logs/errors/URLs, SSRF via media URLs. Use on any change touching auth, secrets, crypto, webhooks or onboarding."
+description: "Security-lens review of meta-whatsapp-rs: webhook signature verification, verify-token comparison, access-token and app-secret handling, token vault encryption, OTP generation/storage/verification, Flows endpoint crypto, credential leakage into logs/errors/URLs, SSRF via media URLs. Use on any change touching auth, secrets, crypto, webhooks or onboarding."
 tools: Read, Grep, Glob, Bash
 model: opus
 ---

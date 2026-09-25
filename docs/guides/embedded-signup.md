@@ -5,17 +5,17 @@ Meta's popup, and your backend ends up holding their business token,
 encrypted, routable by phone number id, with webhooks flowing and the
 number registered.
 
-wa-rs implements Embedded Signup v4 for a **Tech Provider** (each merchant
+meta-whatsapp-rs implements Embedded Signup v4 for a **Tech Provider** (each merchant
 adds a payment method and pays Meta) or a **Solution Partner** (your
 credit line pays for every merchant you onboard), chosen once per
 deployment: see [Solution Partner mode](#solution-partner-mode).
-Example: [`embedded_signup.rs`](../../crates/wa-rs/examples/embedded_signup.rs),
+Example: [`embedded_signup.rs`](../../crates/meta-whatsapp-rs/examples/embedded_signup.rs),
 a **Tech Provider** server (it calls plain `onboard`, which Solution Partner
 mode refuses); the Solution Partner flow is in the skill's
-[`solution_partner.rs`](../../skills/wa-rs-embedded-signup/examples/solution_partner.rs).
+[`solution_partner.rs`](../../skills/meta-whatsapp-rs-embedded-signup/examples/solution_partner.rs).
 Agent skills:
-[`wa-rs-embedded-signup`](../../skills/wa-rs-embedded-signup/SKILL.md),
-[`wa-rs-token-vault`](../../skills/wa-rs-token-vault/SKILL.md).
+[`meta-whatsapp-rs-embedded-signup`](../../skills/meta-whatsapp-rs-embedded-signup/SKILL.md),
+[`meta-whatsapp-rs-token-vault`](../../skills/meta-whatsapp-rs-token-vault/SKILL.md).
 Run the example with a tenant bearer token (`WA_TENANTS`, a stand-in for
 your CMS's own login; it refuses to start without one); it listens on
 `127.0.0.1` unless `WA_BIND` names another address:
@@ -24,7 +24,7 @@ your CMS's own login; it refuses to start without one); it listens on
 TOKEN=$(openssl rand -hex 32)   # the demo tenant's bearer token: paste it into the page
 WA_TENANTS='{"demo-merchant": {"token": "'"$TOKEN"'"}}' \
   WA_APP_ID=… WA_APP_SECRET=… WA_ES_CONFIG_ID=… \
-  cargo run -p wa-rs --example embedded_signup --features axum
+  cargo run -p meta-whatsapp-rs --example embedded_signup --features axum
 ```
 
 ```text
@@ -59,12 +59,12 @@ secret** stays on the server.
 
 ```rust
 use std::sync::Arc;
-use wa_rs::adapters::store::PostgresKvStore;
-use wa_rs::client::embedded_signup::{SignupSessions, TokenVault, VaultKey, VaultKeys};
-use wa_rs::prelude::*;
+use meta_whatsapp_rs::adapters::store::PostgresKvStore;
+use meta_whatsapp_rs::client::embedded_signup::{SignupSessions, TokenVault, VaultKey, VaultKeys};
+use meta_whatsapp_rs::prelude::*;
 
 let kv: Arc<dyn KvStore> = Arc::new(PostgresKvStore::new(pool.clone())); // shared by every instance
-let client = wa_rs::client_builder()?.build()?; // no default token: onboarding acts as the app, then as the merchant
+let client = meta_whatsapp_rs::client_builder()?.build()?; // no default token: onboarding acts as the app, then as the merchant
 let es = client.embedded_signup(AppCredentials::new(app_id, app_secret));
 let vault = TokenVault::new(kv.clone(), VaultKeys::new(VaultKey::from_base64("2026-09", &vault_key_b64)?))?;
 let sessions = SignupSessions::new(kv);
@@ -82,7 +82,7 @@ hand the page the `FB.login` options:
 
 ```rust
 use std::time::Duration;
-use wa_rs::client::embedded_signup::LaunchOptions;
+use meta_whatsapp_rs::client::embedded_signup::LaunchOptions;
 
 let state = sessions.start(&merchant_id, Duration::from_mins(15)).await?; // minutes: several screens, maybe an SMS
 let options = LaunchOptions::new(config_id.as_str()).to_json()?; // .coexistence() for WhatsApp Business app users
@@ -142,12 +142,12 @@ the page over HTTPS from an allowed domain.
 ## 5. Complete: redeem, then onboard
 
 ```rust
-use wa_rs::client::embedded_signup::{
+use meta_whatsapp_rs::client::embedded_signup::{
     EmbeddedSignup, EmbeddedSignupEvent, FinishKind, Onboarded, OnboardingRequest, SignupCode,
     SignupSessions, SignupState, TokenVault, steps,
 };
-use wa_rs::client::phone_numbers::TwoStepPin;
-use wa_rs::prelude::*;
+use meta_whatsapp_rs::client::phone_numbers::TwoStepPin;
+use meta_whatsapp_rs::prelude::*;
 
 pub enum Completed {
     Connected(Onboarded),
@@ -160,7 +160,7 @@ pub async fn complete(
     es: &EmbeddedSignup, sessions: &SignupSessions, vault: &TokenVault,
     merchant_id: &str, // from YOUR session, never from the page
     state: &str, code: String, event: &str, pin: Option<TwoStepPin>,
-) -> wa_rs::Result<Completed> {
+) -> meta_whatsapp_rs::Result<Completed> {
     // Local checks first: a malformed post must not burn the attempt.
     let state = SignupState::parse(state)?;
     let code = SignupCode::new(code)?;
@@ -238,7 +238,7 @@ WABA at once both pass. Checking after `onboard` returns is too late for a
 Solution Partner: the credit line is attached by then, and an attached
 line cannot be taken back from the WABA, which is why a Solution Partner
 deployment refuses plain `onboard`. Which merchant may have a WABA is your
-policy: wa-rs decides none ([open decision](#open-decisions) 6).
+policy: meta-whatsapp-rs decides none ([open decision](#open-decisions) 6).
 
 ## 6. Resume
 
@@ -325,7 +325,7 @@ always go to the app's callback
   Partner's `offboard` revokes the credit line **first** and deletes
   nothing if that fails.
 - **Meta tells you:** `WebhookEvent::AccountUpdated`, with the merchant's
-  WABA in `event.waba_id()` (for the `Partner*` events wa-rs takes it from
+  WABA in `event.waba_id()` (for the `Partner*` events meta-whatsapp-rs takes it from
   `waba_info.waba_id`: Meta's entry id there is a business portfolio, kept
   as `entry_id`). On `AccountUpdateEvent::PartnerAppUninstalled` whose
   `waba_info.partner_app_id` is **your** app id (`es.app().app_id`; under a
@@ -353,7 +353,7 @@ always go to the app's callback
 ## Solution Partner mode
 
 A Solution Partner pays Meta for its merchants through its own credit
-line (and invoices them); wa-rs shares that line with every merchant it
+line (and invoices them); meta-whatsapp-rs shares that line with every merchant it
 onboards. You are liable to Meta for every message sent on a shared line,
 and a line cannot be changed or taken back from a WABA once attached. It
 is one choice per deployment (the owner's decision on 2026-09-24):
@@ -366,8 +366,8 @@ a system user with the business_management permission and an Admin or
 Financial Editor role on your portfolio, its token and its id.
 
 ```rust
-use wa_rs::client::credit_lines::WabaCurrency;
-use wa_rs::client::embedded_signup::{CreditSharing, SolutionPartner};
+use meta_whatsapp_rs::client::credit_lines::WabaCurrency;
+use meta_whatsapp_rs::client::embedded_signup::{CreditSharing, SolutionPartner};
 
 let es = client
     .embedded_signup(AppCredentials::new(app_id, app_secret))
@@ -393,7 +393,7 @@ a WABA. `onboard_with_approval` records the approval in the vault's credit
 ledger (`StoredCredit::approved_at`), bound to the token record it stores
 (`StoredCredit::approved_token_created_at`), and `resume` shares only for a
 WABA approved so: a token stored without one (onboarded in Tech Provider
-mode before the deployment switched, by an older wa-rs, or stored again
+mode before the deployment switched, by an older meta-whatsapp-rs, or stored again
 since, e.g. by a Tech Provider onboarding after an offboard) fails
 `resume` at step `approve` until `resume_with_approval` approves it once.
 The approval stays required (the owner confirmed it on 2026-09-25).
@@ -522,8 +522,8 @@ let report = es.revoke_credit_line(waba_id, owner, &vault).await?; // report.rev
 - **Revoke at once on every `PartnerRemoved` of your solution**,
   including a coexistence one (with `disconnection_info`: a number that
   changed device, was re-registered or went inactive, and may reconnect).
-  That is the owner's decision for wa-rs (2026-09-25), and what Meta
-  recommends for any removal; no grace period. wa-rs stays passive:
+  That is the owner's decision for meta-whatsapp-rs (2026-09-25), and what Meta
+  recommends for any removal; no grace period. meta-whatsapp-rs stays passive:
   nothing revokes unless your handler calls `revoke_credit_line`. A
   merchant who reconnects runs Embedded Signup again, and the revoked
   business is refused (`CreditError::Revoked`) until that onboarding says
@@ -554,7 +554,7 @@ let report = es.revoke_credit_line(waba_id, owner, &vault).await?; // report.rev
   one funding another of its WABAs: Meta does not say which WABA a record
   funds. A `primary_funding_id` that no record explains stops it too
   (`SharesFound::unexplained_funding`): it may be the lost share itself,
-  applied before Meta's lookup lists it, and wa-rs cannot tell it from
+  applied before Meta's lookup lists it, and meta-whatsapp-rs cannot tell it from
   the merchant's own card. Look at what pays for the WABA in Meta
   Business Suite; only when it is not your credit line, call again with
   that id as the third argument. Otherwise the flag is cleared and who
@@ -566,7 +566,7 @@ let report = es.revoke_credit_line(waba_id, owner, &vault).await?; // report.rev
   It is an operator's call: never route it from a handler a merchant can
   reach, and pass the operator id of your authenticated staff session as
   `cleared_by`, not a name or an email (it stays, sealed, as long as the
-  WABA's credit record; wa-rs never logs it and `ClearedShare`'s `Debug`
+  WABA's credit record; meta-whatsapp-rs never logs it and `ClearedShare`'s `Debug`
   redacts it). It is refused when blank, longer than 256 characters, or
   containing control, format or line separator characters. It needs a
   merchant token that still works: after `PartnerRemoved` it may not, and
@@ -574,7 +574,7 @@ let report = es.revoke_credit_line(waba_id, owner, &vault).await?; // report.rev
   from nothing). A merchant who connects again stores a new token, after
   which the clearance works; until then revocations of that WABA keep
   answering `share_pending`. There is no other call, and a hand edit of
-  the sealed record makes it unreadable: ask the wa-rs maintainers.
+  the sealed record makes it unreadable: ask the meta-whatsapp-rs maintainers.
 - `es.offboard(&waba_id, owner, &vault)` revokes the same way and then
   deletes the token (§9). The credit ledger outlives the token, so
   `PartnerAppUninstalled` and `PartnerRemoved` end with the line revoked
@@ -595,7 +595,7 @@ let report = es.revoke_credit_line(waba_id, owner, &vault).await?; // report.rev
 The lower-level calls (`CreditLines::share`, `attach`,
 `receiving_credential`, `primary_funding`, `allocations_for`,
 `revoke_for_business`, `allocation_status`) are in
-`wa_rs::client::credit_lines`, with the token each needs in their rustdoc.
+`meta_whatsapp_rs::client::credit_lines`, with the token each needs in their rustdoc.
 
 Not settled by Meta's pages (the code's choice in brackets): whether the
 share-then-attach method also needs the system user on the WABA [not

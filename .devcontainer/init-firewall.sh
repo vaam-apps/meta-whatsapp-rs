@@ -1,5 +1,5 @@
 #!/bin/bash
-# Default-deny egress for the wa-rs dev container.
+# Default-deny egress for the meta-whatsapp-rs dev container.
 #
 # Adapted from Anthropic's reference Claude Code devcontainer. Differences:
 #
@@ -25,7 +25,7 @@ set -Eeuo pipefail  # Exit on error (also in functions), undefined vars, pipelin
 IFS=$'\n\t'         # Stricter word splitting
 
 GITHUB_META_URL="${WA_FIREWALL_GITHUB_META_URL:-https://api.github.com/meta}"
-GITHUB_SNAPSHOT="${WA_FIREWALL_GITHUB_SNAPSHOT:-/etc/wa-rs-firewall/github-meta-snapshot.json}"
+GITHUB_SNAPSHOT="${WA_FIREWALL_GITHUB_SNAPSHOT:-/etc/meta-whatsapp-rs-firewall/github-meta-snapshot.json}"
 
 have_ip6tables() {
     command -v ip6tables >/dev/null 2>&1 && ip6tables -S >/dev/null 2>&1

@@ -10,13 +10,20 @@ devcontainer (`github.com/anthropics/claude-code/.devcontainer`), for Rust:
 | `Dockerfile` | `node:24-bookworm` base (Claude Code is an npm package), Rust 1.98.1 via rustup, `just`, `cargo-deny`, `typst` CLI, `git-delta`, zsh, `psql`/`redis-cli` |
 | `compose.yaml` | `dev` (your shell), `postgres:18-alpine`, `redis:8-alpine`; named volumes for shell history, Claude config and the cargo registry |
 | `init-firewall.sh` | default-deny egress, run on every start |
-| `github-meta-snapshot.json` | GitHub's IPv4 ranges as of the date inside it: the firewall's fallback (copied to `/etc/wa-rs-firewall/`) |
+| `github-meta-snapshot.json` | GitHub's IPv4 ranges as of the date inside it: the firewall's fallback (copied to `/etc/meta-whatsapp-rs-firewall/`) |
 | `devcontainer.json` | VS Code extensions (Claude Code, rust-analyzer, tinymist for Typst, Even Better TOML, CodeLLDB, just, GitLens) |
 
 Open it with VS Code's "Reopen in Container" or `devcontainer up`. Inside,
-`WA_RS_TEST_POSTGRES_URL` and `WA_RS_TEST_REDIS_URL` point at the sidecars,
-so `just test-live` (and `just ci`) use them instead of starting
-`compose.test.yaml`.
+`META_WHATSAPP_RS_TEST_POSTGRES_URL` and `META_WHATSAPP_RS_TEST_REDIS_URL`
+point at the sidecars, so `just test-live` (and `just ci`) use them instead
+of starting `compose.test.yaml`.
+
+The Compose project is `meta-whatsapp-rs-dev` (it was `wa-rs-dev` before
+the rename), and named volumes are per project: a container built before
+the rename kept its shell history, Claude config and cargo caches in the
+`wa-rs-dev_*` volumes, which the renamed one does not mount. Log in to
+Claude Code again, or copy the old volumes' contents over; remove them
+with `docker volume rm` once you no longer need them.
 
 ### The firewall
 
@@ -86,8 +93,8 @@ fail-closed path, run the image as root with a network capability and both
 hooks pointing nowhere:
 
 ```bash
-docker build -t wa-rs-devcontainer:test .devcontainer
-docker run --rm --user root --cap-add=NET_ADMIN --cap-add=NET_RAW wa-rs-devcontainer:test \
+docker build -t meta-whatsapp-rs-devcontainer:test .devcontainer
+docker run --rm --user root --cap-add=NET_ADMIN --cap-add=NET_RAW meta-whatsapp-rs-devcontainer:test \
   bash -c 'WA_FIREWALL_GITHUB_META_URL=https://192.0.2.1/meta WA_FIREWALL_GITHUB_SNAPSHOT=/nonexistent \
     /usr/local/bin/init-firewall.sh >/dev/null 2>&1; echo "exit=$?"; iptables -S | grep "^-P";
     curl -s -o /dev/null --connect-timeout 5 https://example.com && echo "example.com ALLOWED" || echo "example.com BLOCKED"'

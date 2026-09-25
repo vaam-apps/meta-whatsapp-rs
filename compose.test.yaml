@@ -1,6 +1,6 @@
 # Services for `just test-live`. Non-default host ports so a developer's own
 # Postgres/Redis are never touched.
-name: wa-rs-test
+name: meta-whatsapp-rs-test
 services:
   postgres:
     image: postgres:18-alpine

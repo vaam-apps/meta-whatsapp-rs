@@ -1,6 +1,6 @@
 # Dev container services. `dev` is where you (and Claude Code) work; the
-# sidecars back `just test-live` (WA_RS_TEST_* point at them).
-name: wa-rs-dev
+# sidecars back `just test-live` (META_WHATSAPP_RS_TEST_* point at them).
+name: meta-whatsapp-rs-dev
 services:
   dev:
     build:
@@ -21,8 +21,8 @@ services:
       CLAUDE_CONFIG_DIR: /home/node/.claude
       NODE_OPTIONS: --max-old-space-size=4096
       POWERLEVEL9K_DISABLE_GITSTATUS: "true"
-      WA_RS_TEST_POSTGRES_URL: postgres://wa:wa@postgres:5432/wa
-      WA_RS_TEST_REDIS_URL: redis://redis:6379
+      META_WHATSAPP_RS_TEST_POSTGRES_URL: postgres://wa:wa@postgres:5432/wa
+      META_WHATSAPP_RS_TEST_REDIS_URL: redis://redis:6379
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }

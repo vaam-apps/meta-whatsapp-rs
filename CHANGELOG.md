@@ -9,8 +9,67 @@ All notable changes to this project are documented here. The format follows
 First feature set. See [docs/coverage.md](docs/coverage.md) for the full
 matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
 
+### Renamed
+
+The project is now **meta-whatsapp-rs** (the owner's decision of
+2026-09-25), and so is the repository: `github.com/vaam-apps/meta-whatsapp-rs`
+(the old `vaam-apps/wa-rs` URL redirects). The entries below this section
+predate the rename and keep the names of their time.
+
+| Before | After |
+| --- | --- |
+| crate `wa-rs`, `use wa_rs::…` | `meta-whatsapp-rs`, `use meta_whatsapp_rs::…` |
+| `wa-core`, `wa_core` | `meta-whatsapp-core`, `meta_whatsapp_core` |
+| `wa-client`, `wa_client` | `meta-whatsapp-client`, `meta_whatsapp_client` |
+| `wa-webhooks`, `wa_webhooks` | `meta-whatsapp-webhooks`, `meta_whatsapp_webhooks` |
+| `wa-adapters`, `wa_adapters` | `meta-whatsapp-adapters`, `meta_whatsapp_adapters` |
+| `wa-typst`, `wa_typst` | `meta-whatsapp-typst`, `meta_whatsapp_typst` |
+| `wa-server` (design only, no crate) | `meta-whatsapp-server` |
+| consumer skills `wa-rs`, `wa-rs-*` | `meta-whatsapp-rs`, `meta-whatsapp-rs-*` (same suffixes) |
+| skill stamp `Verified against wa-rs <sha> (<date>)` | `Verified against meta-whatsapp-rs <sha> (<date>)` |
+| HTTP `User-Agent` `wa-rs/<version>` | `meta-whatsapp-rs/<version>` |
+| test variables `WA_RS_REQUIRE_LIVE`, `WA_RS_TEST_POSTGRES_URL`, `WA_RS_TEST_REDIS_URL` | `META_WHATSAPP_RS_REQUIRE_LIVE`, `META_WHATSAPP_RS_TEST_POSTGRES_URL`, `META_WHATSAPP_RS_TEST_REDIS_URL` |
+
+If you depend on the git repository:
+
+- **`Cargo.toml`**: a revision from the rename on has no package named
+  `wa-rs`. Rename the dependency and point it at the new URL:
+  `meta-whatsapp-rs = { git = "https://github.com/vaam-apps/meta-whatsapp-rs", rev = "…" }`
+  (the same for any `wa-*` crate you name directly, e.g. a `wa-core`
+  dev-dependency). To keep your code unchanged for now, alias it instead:
+  `wa-rs = { package = "meta-whatsapp-rs", git = "…", rev = "…" }`.
+- **Code**: replace the paths as in the table (`wa_rs::` →
+  `meta_whatsapp_rs::`, `wa_core::` → `meta_whatsapp_core::`, …, and
+  `#[serde(with = "wa_core::…")]` strings). No public type, function or feature
+  was renamed.
+- **Skills**: remove the installed `wa-rs` and `wa-rs-*` skills
+  (`npx skills remove <name> …`; `npx skills update` cannot refresh
+  them, the repository has no skills by those names any more) and
+  install the new ones with
+  `npx skills add vaam-apps/meta-whatsapp-rs`; the old ones name crates
+  and paths that no longer exist.
+- **Stored data needs nothing**: every persistent identifier predates the
+  rename and is unchanged (the vault's associated-data tags
+  `wa-rs/token-vault/v1` and `wa-rs/token-vault/ledger/v1`, the OTP HMAC
+  domains, the `wa.…` store namespaces, the Postgres `wa_` table prefix
+  and the migration files, the Redis `wa:` prefix). docs/architecture.md
+  § "Stable identifiers" lists them; tests fail if one changes.
+
+For contributors: the test variables are renamed (table above). The
+Compose project of `just test-live` is `meta-whatsapp-rs-test`, on the
+same host ports as the old `wa-rs-test`: stop that one first
+(`docker compose -p wa-rs-test down -v`), or starting the new one fails.
+The dev container's Compose project is `meta-whatsapp-rs-dev`, so its
+volumes (Claude config, shell history, cargo caches) start empty
+(docs/dev-environment.md).
+
 ### Open questions closed
 
+- #1 (crate names): decided by the owner on 2026-09-25, `meta-whatsapp-rs`,
+  `meta-whatsapp-core`, `meta-whatsapp-client`, `meta-whatsapp-webhooks`,
+  `meta-whatsapp-adapters` and `meta-whatsapp-typst` (see Renamed). The
+  names were free on crates.io that day, but nothing is published: the
+  workspace stays `publish = false` until a release is decided.
 - #3 (Tech Provider or Solution Partner?): decided by the owner on
   2026-09-24, "support both, per deployment"; Solution Partner mode is
   below.

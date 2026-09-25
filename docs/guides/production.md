@@ -1,11 +1,11 @@
 # Production
 
-**Goal:** run wa-rs on several instances without losing webhooks or
+**Goal:** run meta-whatsapp-rs on several instances without losing webhooks or
 tokens, without leaking secrets or customer data into logs, and without
 being surprised by Meta's limits or API versions.
 
-Agent skills: [`wa-rs-production`](../../skills/wa-rs-production/SKILL.md),
-[`wa-rs-storage`](../../skills/wa-rs-storage/SKILL.md). Design background:
+Agent skills: [`meta-whatsapp-rs-production`](../../skills/meta-whatsapp-rs-production/SKILL.md),
+[`meta-whatsapp-rs-storage`](../../skills/meta-whatsapp-rs-storage/SKILL.md). Design background:
 [architecture.md](../architecture.md) (adapters, error tree, security
 rules).
 
@@ -43,7 +43,7 @@ size `maxmemory` for 7 days of dedup markers.
 ```rust
 use std::sync::Arc;
 use std::time::Duration;
-use wa_rs::adapters::store::postgres::{self, PostgresKvStore, sqlx};
+use meta_whatsapp_rs::adapters::store::postgres::{self, PostgresKvStore, sqlx};
 
 let pool = sqlx::PgPool::connect(&database_url).await?;
 postgres::migrate(&pool).await?; // idempotent, takes a lock: any instance may run it
@@ -54,18 +54,18 @@ tokio::spawn(async move {
     loop {
         every.tick().await;
         if let Err(e) = purger.purge_expired().await {
-            tracing::warn!(error = %e, "purging expired wa-rs rows failed");
+            tracing::warn!(error = %e, "purging expired meta-whatsapp-rs rows failed");
         }
     }
 });
-let kv: Arc<dyn wa_rs::core::store::KvStore> = Arc::new(kv);
+let kv: Arc<dyn meta_whatsapp_rs::core::store::KvStore> = Arc::new(kv);
 ```
 
 An upgrade across a migration that rewrites tables (migration 3, lossless
 message content) is the exception: run `migrate` once from a one-off job
 first ([section 7](#7-before-going-live)).
 
-Redis over TLS (`rediss://`): wa-rs enables no TLS feature of redis on
+Redis over TLS (`rediss://`): meta-whatsapp-rs enables no TLS feature of redis on
 purpose (two rustls crypto providers in one binary make the first TLS
 connection panic). Enable redis's `tokio-rustls-comp` in your own crate,
 install a provider at startup, and hand the connection to
@@ -85,7 +85,7 @@ runs it against real Postgres and Redis.
 | vault key(s) | encrypting merchants' tokens, and a Solution Partner's credit ledger | secret manager, **not** the vault's database | `VaultKeys::new(new).with_previous(old)`, `vault.rotate(&waba_id)` for every WABA ever onboarded (offboarded ones too: the credit ledger outlives the token), `vault.rotate_business(&business_id)` for each business revoked by business id alone, then drop the old key |
 | OTP pepper | keyed hashes of codes and numbers | secret manager, not the OTP database | invalidates outstanding codes and resets limits |
 | merchants' business tokens | acting as a merchant | the vault only | merchant reconnects (no refresh) |
-| two-step PINs | registering numbers | not stored by wa-rs; the examples ask the merchant per attempt | your policy ([open question](../../OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants) 4) |
+| two-step PINs | registering numbers | not stored by meta-whatsapp-rs; the examples ask the merchant per attempt | your policy ([open question](../../OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants) 4) |
 
 `AccessToken`, `AppSecret`, `VerifyToken`, `SecretBytes`, `SignupCode`,
 `TwoStepPin`, `OtpPepper` and `VaultKey` print `[REDACTED]` (or only an id)
@@ -101,20 +101,20 @@ not to `graph.facebook.com`.
 
 ## 3. Logs and observability
 
-wa-rs logs through `tracing`; install a subscriber and filter with
+meta-whatsapp-rs logs through `tracing`; install a subscriber and filter with
 `RUST_LOG`:
 
 ```rust
 tracing_subscriber::fmt()
-    .with_env_filter(tracing_subscriber::EnvFilter::from_default_env()) // RUST_LOG=info,wa_client=debug
+    .with_env_filter(tracing_subscriber::EnvFilter::from_default_env()) // RUST_LOG=info,meta_whatsapp_client=debug
     .init();
 ```
 
 | Level | What |
 | --- | --- |
-| `debug` (`wa_client`) | each Graph request (method, path, attempt); each retry (error kind, Graph code, delay); OTP challenges issued and verified (challenge id only) |
-| `warn` (`wa_webhooks`) | rejected deliveries (signature, size) and verification requests; changes kept untyped (field name); sink failures and events in flight elsewhere (the non-`200` answers); dedup leases that expired before the event was marked done |
-| `warn` (`wa_client`) | the token vault failing to re-encrypt a record under the active key (retried on the next read) |
+| `debug` (`meta_whatsapp_client`) | each Graph request (method, path, attempt); each retry (error kind, Graph code, delay); OTP challenges issued and verified (challenge id only) |
+| `warn` (`meta_whatsapp_webhooks`) | rejected deliveries (signature, size) and verification requests; changes kept untyped (field name); sink failures and events in flight elsewhere (the non-`200` answers); dedup leases that expired before the event was marked done |
+| `warn` (`meta_whatsapp_client`) | the token vault failing to re-encrypt a record under the active key (retried on the next read) |
 | `error` | signed bodies that are not webhooks (size and SHA-256 only); dedup markers that could not be written or released; a reply sent but not recorded in the inbox |
 
 **Never logged:** tokens, the app secret, Embedded Signup codes, PINs, OTP
@@ -136,7 +136,7 @@ failed sends, and the count of `Unknown` events.
 
 ## 4. Limits, throughput and retries
 
-| Limit (Meta) | Value | In wa-rs |
+| Limit (Meta) | Value | In meta-whatsapp-rs |
 | --- | --- | --- |
 | messages per number | 80/s by default, up to 1,000 | `RateLimited` (130429), replayed within the retry budget |
 | same user | about one message per 6 s, short bursts borrowed from later | `PairRateLimited` (131056), replayed within the budget; Meta suggests backing off 4^n seconds after that |
@@ -150,9 +150,9 @@ full-jitter backoff from 250 ms to 8 s. Change them once, at startup:
 
 ```rust
 use std::time::Duration;
-use wa_rs::RetryPolicy;
+use meta_whatsapp_rs::RetryPolicy;
 
-let client = wa_rs::client_builder()?
+let client = meta_whatsapp_rs::client_builder()?
     .timeout(Duration::from_secs(15))
     .retry(RetryPolicy { max_retries: 2, base_delay: Duration::from_millis(500), max_delay: Duration::from_secs(4) })
     .build()?;
@@ -166,11 +166,11 @@ notification queue on top must be idempotent itself: tag each message with
 ## 5. Graph API version
 
 - `ApiVersion::DEFAULT` is **v25.0**, the version Meta's docs used on
-  2026-09-24, and the one wa-rs was tested against. Pin wa-rs by `rev` and
+  2026-09-24, and the one meta-whatsapp-rs was tested against. Pin meta-whatsapp-rs by `rev` and
   the version moves only when you move the pin.
-- To hold a version across a wa-rs upgrade:
+- To hold a version across a meta-whatsapp-rs upgrade:
   `.api_version(ApiVersion::new(25, 0))` on the builder
-  (`wa_rs::core::config::ApiVersion`). Use the same value in the Embedded
+  (`meta_whatsapp_rs::core::config::ApiVersion`). Use the same value in the Embedded
   Signup page's `FB.init`.
 - Before moving: read Meta's changelog for the new version, rerun your
   integration tests against a test WABA, and watch the `Unknown` count:
@@ -187,7 +187,7 @@ notification queue on top must be idempotent itself: tag each message with
 - **Clocks:** Postgres and Redis decide expiry by their own clock; keep all
   hosts on NTP.
 - **One `Client` per process**, cloned; `with_token` per merchant. Each
-  `wa_rs::client()` call creates a new connection pool.
+  `meta_whatsapp_rs::client()` call creates a new connection pool.
 - **Live inbox:** the broadcast channel behind SSE is per process. Relay
   events between instances yourself (Postgres `LISTEN/NOTIFY`, Redis
   pub/sub), or pin each merchant's browser and webhooks to one instance.
@@ -248,7 +248,7 @@ notification queue on top must be idempotent itself: tag each message with
   token refresh) are product decisions still open. The OTP namespace is
   required since d67b3ac; a revoked message keeps its content in the inbox
   (decided on 2026-09-25).
-- Upgrading from an older wa-rs revision, per commit crossed:
+- Upgrading from an older meta-whatsapp-rs revision, per commit crossed:
   - e40b86f: outstanding OTP codes become `NotFound` once (their store
     keys now include the sending number), and issue limits restart
     ([otp-login.md](otp-login.md#3-wire-the-service)).
@@ -270,7 +270,7 @@ notification queue on top must be idempotent itself: tag each message with
   - PR #7, lossless message content (the owner's decision of
     2026-09-25): Postgres migration 3 rewrites the inbox tables, and an
     older revision cannot run against them afterwards. In this order
-    (details and a pre-flight query: the `wa_adapters::store::postgres`
+    (details and a pre-flight query: the `meta_whatsapp_adapters::store::postgres`
     docs, "Upgrading to lossless content"):
     1. **Back up** `wa_messages` and `wa_conversations` of every table
        prefix. The only way back is a restore, which loses what was
@@ -320,7 +320,7 @@ notification queue on top must be idempotent itself: tag each message with
 
 ## The dev container
 
-The repository's `.devcontainer/` is for working **on** wa-rs, not for
+The repository's `.devcontainer/` is for working **on** meta-whatsapp-rs, not for
 deploying it: the pinned Rust toolchain, `just`, `cargo-deny`, the `typst`
 CLI, Postgres and Redis sidecars, and a default-deny egress firewall (it
 fails closed) that still lets `graph.facebook.com` through. Inside it,

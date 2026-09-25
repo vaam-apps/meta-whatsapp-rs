@@ -4,8 +4,8 @@
 CMS, live, and answers from it with their own number, inside the 24-hour
 customer service window.
 
-Example: [`cms_inbox.rs`](../../crates/wa-rs/examples/cms_inbox.rs).
-Agent skill: [`wa-rs-cms-inbox`](../../skills/wa-rs-cms-inbox/SKILL.md).
+Example: [`cms_inbox.rs`](../../crates/meta-whatsapp-rs/examples/cms_inbox.rs).
+Agent skill: [`meta-whatsapp-rs-cms-inbox`](../../skills/meta-whatsapp-rs-cms-inbox/SKILL.md).
 The example refuses to start without `WA_TENANTS` (bearer token → tenant →
 phone number ids, a stand-in for your CMS's login and tenant table) and
 listens on `127.0.0.1` unless `WA_BIND` names another address; add
@@ -15,7 +15,7 @@ and `WA_TENANTS`) to share the vault with the `embedded_signup` example:
 ```text
 TOKEN=$(openssl rand -hex 32)   # the demo tenant's bearer token
 WA_TENANTS='{"demo-merchant": {"token": "'"$TOKEN"'", "phone_number_ids": ["<phone number id>"]}}' \
-  WA_APP_SECRET=… WA_VERIFY_TOKEN=… cargo run -p wa-rs --example cms_inbox --features axum
+  WA_APP_SECRET=… WA_VERIFY_TOKEN=… cargo run -p meta-whatsapp-rs --example cms_inbox --features axum
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/inbox/<phone number id>/conversations
 ```
 
@@ -40,8 +40,8 @@ merchant's browser ─ POST /inbox/{number}/reply ─► Inbox::reply ─► Met
 
 ```rust
 use std::sync::Arc;
-use wa_rs::adapters::store::postgres::{self, PostgresConversationStore, PostgresKvStore, sqlx};
-use wa_rs::prelude::*;
+use meta_whatsapp_rs::adapters::store::postgres::{self, PostgresConversationStore, PostgresKvStore, sqlx};
+use meta_whatsapp_rs::prelude::*;
 
 let pool = sqlx::PgPool::connect(&database_url).await?;
 postgres::migrate(&pool).await?; // idempotent; safe from several instances at boot
@@ -74,7 +74,7 @@ let conversations: Arc<dyn ConversationStore> = Arc::new(PostgresConversationSto
   `UNION` on it fail on every row. Meta-assigned ids (the message id, the
   contact, the phone number id) stay `TEXT`: the Postgres store refuses a
   NUL there (Meta never assigns one; a history item with one is skipped).
-  The rest is in the `wa_adapters::store::postgres` docs.
+  The rest is in the `meta_whatsapp_adapters::store::postgres` docs.
 - **Upgrading a database written before lossless content** is a one-way
   schema change (migration 3): back up first (a rollback is a restore,
   which loses what was recorded since), stop the older instances that
@@ -84,7 +84,7 @@ let conversations: Arc<dyn ConversationStore> = Arc::new(PostgresConversationSto
   insert), then run `migrate` once from a one-off job before starting the
   new revision. The ordered steps and timings:
   [production.md](production.md#7-before-going-live); the pre-flight
-  query that lists your objects: the `wa_adapters::store::postgres` docs.
+  query that lists your objects: the `meta_whatsapp_adapters::store::postgres` docs.
   Existing rows keep their content: a NUL an older revision stored as
   U+FFFD stays U+FFFD.
 - A message id is stored once per store: if the same id ever arrives on two
@@ -97,7 +97,7 @@ let conversations: Arc<dyn ConversationStore> = Arc::new(PostgresConversationSto
 ## 2. Wire the pipeline
 
 ```rust
-use wa_rs::adapters::sink::{BroadcastSink, FanoutSink};
+use meta_whatsapp_rs::adapters::sink::{BroadcastSink, FanoutSink};
 
 let (live, _) = tokio::sync::broadcast::channel::<WebhookEvent>(1024);
 let sink = FanoutSink::new()
@@ -106,7 +106,7 @@ let sink = FanoutSink::new()
 let handler = WebhookHandler::builder(verifier, verify_token, Arc::new(sink))
     .dedup(DedupGuard::new(kv.clone()))
     .build();
-let webhook = wa_rs::webhooks::router(Arc::new(handler)); // public: Meta authenticates by signature
+let webhook = meta_whatsapp_rs::webhooks::router(Arc::new(handler)); // public: Meta authenticates by signature
 ```
 
 `InboxSink` records inbound messages, status updates, and the coexistence
@@ -116,7 +116,7 @@ that do not move a message forward are ignored); the dedup guard saves it
 the work. A status or a revoke only changes a message of the business
 number it arrived on: `ConversationStore::update_status` takes the
 `phone_number_id` first, and a store of your own must match on it too
-(`wa_rs::adapters::store::conversation_conformance::run` checks it).
+(`meta_whatsapp_rs::adapters::store::conversation_conformance::run` checks it).
 
 ## 3. Authenticate every inbox route
 
@@ -128,7 +128,7 @@ conversation belongs to its number, not to your tenant.
 
 ```rust
 use time::OffsetDateTime;
-use wa_rs::client::embedded_signup::TokenVault;
+use meta_whatsapp_rs::client::embedded_signup::TokenVault;
 
 pub enum Access { Granted(Inbox), NotConnected, Forbidden, Reconnect }
 
@@ -136,7 +136,7 @@ pub async fn inbox_for(
     client: &Client, vault: &TokenVault, conversations: Arc<dyn ConversationStore>,
     merchant_id: &str, // from your session
     phone_number_id: &str, // from the path
-) -> wa_rs::Result<Access> {
+) -> meta_whatsapp_rs::Result<Access> {
     let number = PhoneNumberId::new(phone_number_id);
     if !merchant_owns_number(merchant_id, &number).await { // your tenant ↔ phone number table
         return Ok(Access::Forbidden);
@@ -190,7 +190,7 @@ message. Show the state before the merchant types:
 | no inbound message yet (`closes_at()` is `None`) | templates only |
 
 ```rust
-use wa_rs::client::messages::Text;
+use meta_whatsapp_rs::client::messages::Text;
 
 // Same clock and rule as `reply`'s own refusal.
 let content: MessageContent = if inbox.window_is_open(&key).await? {
@@ -246,7 +246,7 @@ replayed on errors: a late retry would show "typing…" after the answer.
 // in the authenticated GET /inbox/{number}/events handler, after inbox_for(...)
 let number = inbox.phone_number_id().clone();
 let only_this_number = move |e: &WebhookEvent| e.phone_number_id() == Some(&number);
-wa_rs::webhooks::sse(live.subscribe(), only_this_number) // impl IntoResponse
+meta_whatsapp_rs::webhooks::sse(live.subscribe(), only_this_number) // impl IntoResponse
 ```
 
 ```js
@@ -267,7 +267,7 @@ events.addEventListener('lagged', () => reloadHistory()); // the browser fell be
 - The broadcast channel lives in one process. With several instances, a
   webhook lands on one of them and browsers connected to the others see
   nothing live. Relay events between instances (Postgres `LISTEN/NOTIFY`,
-  Redis pub/sub) into each instance's channel; wa-rs does not provide it.
+  Redis pub/sub) into each instance's channel; meta-whatsapp-rs does not provide it.
 
 ## Pitfalls
 
