@@ -39,14 +39,69 @@
 //! `MemoryKvStore` does (`OffsetDateTime` could not read such a deadline
 //! back).
 //!
-//! # Limitation: no U+0000
+//! # Content keeps U+0000
 //!
-//! Postgres `text` and `jsonb` cannot hold the NUL character. A message
-//! whose id, contact, kind, text, payload or error contains U+0000, or a
-//! `StoreKey` that does, is rejected with `StorageError::Backend` — on every
-//! retry, so a webhook carrying one would be redelivered by Meta until it
-//! gives up. The memory and Redis stores accept it. If your pipeline can see
-//! NUL characters, strip or replace them before `append`.
+//! Postgres `text` cannot hold the NUL character and `jsonb` refuses a
+//! `\u0000` escape, so [`PostgresConversationStore`] keeps message content
+//! in types that can (migration `0003`):
+//!
+//! | Content | Column | Type |
+//! | --- | --- | --- |
+//! | `kind`, `text` | `kind_utf8`, `text_utf8` | `BYTEA`, the UTF-8 bytes |
+//! | `payload`, `error` | `payload_json`, `error_json` | `JSON`, the document's text as written |
+//! | the summary's `last_text` | `last_text_utf8` | `BYTEA`, the UTF-8 bytes |
+//!
+//! Every string round-trips exactly, U+0000 included, in JSON strings and
+//! object keys alike, and a NUL never reads back as U+FFFD (nor two keys
+//! differing only by one as a single key). What it costs, if you query these
+//! tables yourself:
+//!
+//! - **Search and preview are bytes.** Decode `text_utf8` and
+//!   `last_text_utf8` in your application (they are UTF-8).
+//!   `convert_from(text_utf8, 'UTF8')` fails on a row holding a NUL; search
+//!   in SQL on the bytes instead, e.g.
+//!   `position(convert_to($1, 'UTF8') IN text_utf8) > 0` (exact and
+//!   case-sensitive), or keep your own search index.
+//! - **Payload fields are not indexable.** `json` has no GIN operator
+//!   classes, and Postgres refuses `->`, `->>` and a cast to `jsonb` on a
+//!   document holding `\u0000` *anywhere*, even under another key. Never put
+//!   an expression index or a generated column on `payload_json` or
+//!   `error_json`: the insert of such a message would fail, and the webhook
+//!   batch with it. Read the payload in your application instead.
+//! - **Size**: `json` keeps the text (no binary form), usually a little
+//!   smaller than `jsonb` for message payloads; each `->` re-parses it.
+//!
+//! Ordering never involves content: history pages by `(ts, id)`, the inbox by
+//! `(last_message_at, contact)`, all `COLLATE "C"` or timestamps.
+//!
+//! **Identifiers keep `TEXT` and refuse U+0000**: a message id, contact (a
+//! BSUID, `wa_id` or group id) or phone number id holding one, and a
+//! [`StoreKey`](wa_core::store::StoreKey) namespace or key holding one, are
+//! rejected with `StorageError::Backend`. Meta assigns those ids and never
+//! with a NUL; `wa_rs::inbox::InboxSink` skips a history item that has one.
+//! (The memory and Redis stores accept NUL there.) `PostgresKvStore` values
+//! are `BYTEA`: any bytes, NUL included.
+//!
+//! # Upgrading to lossless content (migration `0003`)
+//!
+//! [`migrate`] converts the content columns of existing rows in place and
+//! renames them, in one transaction under an exclusive lock on the messages
+//! and conversations tables: the inbox waits for it (one rewrite of each
+//! table), nothing sees it half done. Existing rows keep their content byte
+//! for byte: a NUL that an older revision stored as U+FFFD stays U+FFFD, the
+//! original is gone.
+//!
+//! **Stop every instance of the older revision that writes to these tables
+//! (webhook receivers, anything calling `Inbox::send`) before the first
+//! instance of this one runs [`migrate`].** An older instance left running
+//! cannot corrupt anything, but it fails: every one of its inbox statements
+//! that touches content names a column that no longer exists, so its
+//! webhooks answer 500 (Meta redelivers them, to the upgraded instances),
+//! its inbox reads fail, and a reply it sends reaches the customer but is
+//! not recorded (it logs "message sent but not recorded"). Its own
+//! [`migrate`] then refuses to run (it does not know migration 3), so it
+//! cannot be restarted against the upgraded database, and rolling back
+//! means restoring a backup. The key/value table is unchanged.
 
 mod conversation;
 mod kv;
@@ -227,7 +282,14 @@ mod tests {
                 "migration {} uses the prefix",
                 m.version
             );
-            for stmt in ["CREATE TABLE ", "CREATE INDEX ", "CREATE SEQUENCE ", " ON "] {
+            for stmt in [
+                "CREATE TABLE ",
+                "CREATE INDEX ",
+                "CREATE SEQUENCE ",
+                " ON ",
+                "ALTER TABLE ",
+                "LOCK TABLE ",
+            ] {
                 for (i, _) in sql.match_indices(stmt) {
                     let rest = &sql[i + stmt.len()..];
                     assert!(

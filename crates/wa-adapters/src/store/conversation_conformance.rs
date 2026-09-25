@@ -54,6 +54,14 @@
 //!   longer) a placeholder, not a placeholder that was revoked, not the
 //!   window or the unread count; the conversation preview follows when the
 //!   placeholder is the latest message.
+//! - content is stored exactly, U+0000 included (`OPEN_QUESTIONS.md` #18,
+//!   decided: losslessly): `kind`, `text`, payload strings and object keys,
+//!   the status `error` and the conversation preview read back as written
+//!   through every write method; a NUL never reads back as U+FFFD, two
+//!   object keys differing only by one stay distinct, and a `kind` one NUL
+//!   away from `StoredMessage::MEDIA_PLACEHOLDER` is not a placeholder.
+//!   (Identifiers are not covered: Meta never assigns one with U+0000, and
+//!   the Postgres store refuses it there.)
 
 use time::OffsetDateTime;
 use time::macros::datetime;
@@ -93,6 +101,7 @@ pub async fn run<S: ConversationStore + ?Sized>(store: &S) {
     a_revoke_before_its_message_leaves_a_tombstone(store).await;
     a_tombstone_leaves_the_summary_alone(store).await;
     a_revoked_placeholder_is_never_filled(store).await;
+    content_keeps_nul(store).await;
 }
 
 const T0: OffsetDateTime = datetime!(2026-09-24 12:00 UTC);
@@ -1502,5 +1511,191 @@ async fn a_revoked_placeholder_is_never_filled<S: ConversationStore + ?Sized>(st
         summary(store, &key).await.unwrap().last_text,
         None,
         "and out of the preview"
+    );
+}
+
+/// Content round-trips exactly, U+0000 included (`OPEN_QUESTIONS.md` #18,
+/// decided on 2026-09-25: stored losslessly): `kind`, `text`, payload
+/// strings and object keys, the status `error`, and the preview, through
+/// `append`, `append_synced`, `update_status` and `fill_media_placeholder`.
+/// A NUL never reads back as U+FFFD, and two object keys differing only by
+/// one stay two keys.
+async fn content_keeps_nul<S: ConversationStore + ?Sized>(store: &S) {
+    appended_content_keeps_nul(store).await;
+    synced_content_keeps_nul(store).await;
+    a_filled_placeholder_keeps_nul(store).await;
+}
+
+/// `append` and `update_status`: see [`content_keeps_nul`].
+async fn appended_content_keeps_nul<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("nul");
+    let key = r.key("c");
+    let payload = serde_json::json!({
+        "type": "te\0xt",
+        "text": {"body": "order\u{0}42"},
+        "k\0": "the NUL key",
+        "k\u{FFFD}": "the U+FFFD key",
+        "\0": ["\0", {"deep\0": "b\0"}, "\0\0"],
+        "fffd": "\u{FFFD}"
+    });
+    let live = StoredMessage {
+        kind: "te\0xt".to_owned(),
+        text: Some("order\u{0}42".to_owned()),
+        payload: payload.clone(),
+        ..r.msg("c", "live", Direction::Inbound, 1, "")
+    };
+    assert!(
+        store.append(live.clone()).await.unwrap(),
+        "a message with U+0000 in its content is stored"
+    );
+    let stored = only_message(store, &key).await;
+    assert_eq!(stored, live, "kind, text and payload read back exactly");
+    assert_eq!(
+        (
+            stored.payload["k\0"].as_str(),
+            stored.payload["k\u{FFFD}"].as_str(),
+            stored.payload.as_object().map(serde_json::Map::len),
+        ),
+        (Some("the NUL key"), Some("the U+FFFD key"), Some(6)),
+        "keys differing only by NUL vs U+FFFD stay distinct"
+    );
+    assert_eq!(
+        summary(store, &key).await.unwrap().last_text.as_deref(),
+        Some("order\u{0}42"),
+        "the preview keeps it"
+    );
+
+    // A NUL and a U+FFFD are two different texts.
+    let lookalike = StoredMessage {
+        kind: "te\u{FFFD}xt".to_owned(),
+        text: Some("order\u{FFFD}42".to_owned()),
+        ..r.msg("c", "lookalike", Direction::Inbound, 2, "")
+    };
+    assert!(store.append(lookalike.clone()).await.unwrap());
+    assert_eq!(
+        store.messages(&key, None, 10).await.unwrap(),
+        [lookalike.clone(), live.clone()],
+        "neither becomes the other"
+    );
+    assert_eq!(
+        summary(store, &key).await.unwrap().last_text,
+        lookalike.text,
+        "the preview follows the latest message"
+    );
+
+    // The status error keeps it, keys included.
+    let out = r.msg("c", "out", Direction::Outbound, 3, "sent");
+    assert!(store.append(out.clone()).await.unwrap());
+    let error = serde_json::json!([{
+        "code": 131_026,
+        "title": "bad\0",
+        "error_data": {"details\0": "x\0", "details\u{FFFD}": "y"}
+    }]);
+    assert!(
+        store
+            .update_status(
+                &r.pn,
+                &out.id,
+                DeliveryStatus::Failed,
+                at(4),
+                Some(error.clone())
+            )
+            .await
+            .unwrap()
+    );
+    let failed = StoredMessage {
+        status: DeliveryStatus::Failed,
+        status_at: Some(at(4)),
+        error: Some(error),
+        ..out
+    };
+    assert_eq!(
+        store.messages(&key, None, 1).await.unwrap(),
+        [failed],
+        "the error reads back exactly"
+    );
+}
+
+/// `append_synced`: see [`content_keeps_nul`].
+async fn synced_content_keeps_nul<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("nul-synced");
+    let synced_key = r.key("s");
+    let history = StoredMessage {
+        kind: "\0".to_owned(),
+        text: Some("\0".to_owned()),
+        payload: serde_json::json!({"\0": "\0", "\u{FFFD}": "\u{FFFD}"}),
+        ..r.msg("s", "s1", Direction::Inbound, 5, "")
+    };
+    assert_eq!(
+        store.append_synced(vec![history.clone()]).await.unwrap(),
+        [true]
+    );
+    assert_eq!(only_message(store, &synced_key).await, history);
+    assert_eq!(
+        summary(store, &synced_key)
+            .await
+            .unwrap()
+            .last_text
+            .as_deref(),
+        Some("\0")
+    );
+}
+
+/// `fill_media_placeholder`: see [`content_keeps_nul`]. `kind` is compared
+/// exactly: a kind that differs from the placeholder's by a NUL is not one.
+async fn a_filled_placeholder_keeps_nul<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("nul-placeholder");
+    let media = r.key("m");
+    let lookalike_placeholder = StoredMessage {
+        kind: format!("{}\0", StoredMessage::MEDIA_PLACEHOLDER),
+        text: None,
+        payload: serde_json::json!({}),
+        ..r.msg("m", "p0", Direction::Outbound, 0, "")
+    };
+    let placeholder = StoredMessage {
+        kind: StoredMessage::MEDIA_PLACEHOLDER.to_owned(),
+        text: None,
+        payload: serde_json::json!({"type": "media_placeholder"}),
+        ..r.msg("m", "p1", Direction::Outbound, 6, "")
+    };
+    assert_eq!(
+        store
+            .append_synced(vec![lookalike_placeholder.clone(), placeholder.clone()])
+            .await
+            .unwrap(),
+        [true, true]
+    );
+    let content = serde_json::json!({"type": "ima\0ge", "ima\0ge": {"caption": "cap\0tion"}});
+    for (id, expected) in [(&lookalike_placeholder.id, false), (&placeholder.id, true)] {
+        let applied = store
+            .fill_media_placeholder(
+                &r.pn,
+                id,
+                "ima\0ge".to_owned(),
+                Some("cap\0tion".to_owned()),
+                content.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            applied, expected,
+            "{id}: only the placeholder is filled; a kind one NUL away from its kind is not one"
+        );
+    }
+    let filled = StoredMessage {
+        kind: "ima\0ge".to_owned(),
+        text: Some("cap\0tion".to_owned()),
+        payload: content.clone(),
+        ..placeholder
+    };
+    assert_eq!(
+        store.messages(&media, None, 10).await.unwrap(),
+        [filled, lookalike_placeholder],
+        "the filled content reads back exactly; the lookalike is untouched"
+    );
+    assert_eq!(
+        summary(store, &media).await.unwrap().last_text.as_deref(),
+        Some("cap\0tion"),
+        "the preview of the filled latest message keeps it"
     );
 }

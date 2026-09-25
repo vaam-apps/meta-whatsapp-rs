@@ -23,8 +23,12 @@
 //!   `redis/tokio-rustls-comp` in your application, install a provider at
 //!   startup, and hand the connection to `RedisKvStore::new`; its docs show
 //!   how.
-//! - **Postgres cannot store U+0000** in text or JSON: such a message or key
-//!   is rejected with `StorageError::Backend` (see `store::postgres`).
+//! - **Postgres refuses U+0000 in identifiers**: a message id, contact or
+//!   phone number id, or a `StoreKey`, holding one is rejected with
+//!   `StorageError::Backend`. Message content (kind, text, payload, status
+//!   error, preview) keeps it, and key/value values are bytes; content
+//!   columns are `BYTEA` and `json`, which costs SQL-side search and
+//!   indexing (see `store::postgres`).
 //! - **Proxies**: `ReqwestTransport` honours `HTTP(S)_PROXY`/`NO_PROXY`
 //!   from the environment, not macOS/Windows system settings.
 //!

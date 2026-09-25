@@ -162,38 +162,6 @@ fn delivery(e: StorageError) -> SinkError {
     SinkError::Delivery(anyhow::Error::new(e))
 }
 
-/// `s` with every U+0000 replaced by U+FFFD (the replacement character).
-///
-/// Postgres cannot store NUL in `TEXT` or `JSONB`, so one NUL typed by a
-/// customer would fail every delivery of its webhook batch: Meta retries it
-/// for 7 days, then drops the whole batch. Lossy on purpose — a stored
-/// message with a visible replacement character beats a lost one.
-fn without_nul(s: String) -> String {
-    if s.contains('\0') {
-        s.replace('\0', "\u{FFFD}")
-    } else {
-        s
-    }
-}
-
-/// [`without_nul`] applied to every string of `value`, object keys
-/// included. Two keys that differ only by NUL vs U+FFFD collapse into one
-/// (the later wins). Recursion depth is bounded by the parse that produced
-/// the value (`serde_json` refuses nesting deeper than 128).
-fn json_without_nul(value: serde_json::Value) -> serde_json::Value {
-    use serde_json::Value;
-    match value {
-        Value::String(s) => Value::String(without_nul(s)),
-        Value::Array(items) => Value::Array(items.into_iter().map(json_without_nul).collect()),
-        Value::Object(map) => Value::Object(
-            map.into_iter()
-                .map(|(k, v)| (without_nul(k), json_without_nul(v)))
-                .collect(),
-        ),
-        other => other,
-    }
-}
-
 /// Records inbound messages, status updates, and the coexistence events
 /// (echoes of messages the merchant sent from the WhatsApp Business app,
 /// synchronized history) into a [`ConversationStore`]; see the
@@ -201,11 +169,12 @@ fn json_without_nul(value: serde_json::Value) -> serde_json::Value {
 /// ignores a message id it already has, and a status that does not
 /// supersede the stored one.
 ///
-/// Content never makes a delivery fail: U+0000, which Postgres cannot
-/// store, is replaced by U+FFFD in the stored `kind`, `text`, `payload`
-/// (keys included) and status `error`. A malformed history item is skipped
-/// (and logged without its content). Storage errors still fail the
-/// delivery (Meta redelivers).
+/// Content is recorded exactly as Meta sent it, U+0000 included: the
+/// stored `kind`, `text`, `payload` (object keys included) and status
+/// `error` keep it, and every store in `wa_adapters` stores it
+/// (`OPEN_QUESTIONS.md` #18, decided: losslessly). A malformed history
+/// item is skipped (and logged without its content). Storage errors still
+/// fail the delivery (Meta redelivers).
 ///
 /// Synced history opens no customer service window and is never unread
 /// ([`ConversationStore::append_synced`]), and a later media content fills
@@ -250,8 +219,8 @@ enum Record {
     Skip(&'static str),
 }
 
-/// The row of a message, with the NUL rule applied to its content (see
-/// [`without_nul`]). Ids and the conversation are stored as given.
+/// The row of a message. Content and ids are stored as given, U+0000
+/// included.
 fn row(
     id: &MessageId,
     conversation: ConversationKey,
@@ -265,9 +234,9 @@ fn row(
         id: id.clone(),
         conversation,
         direction,
-        kind: without_nul(content.type_name().unwrap_or("unknown").to_owned()),
-        text: preview(content).map(without_nul),
-        payload: json_without_nul(payload),
+        kind: content.type_name().unwrap_or("unknown").to_owned(),
+        text: preview(content),
+        payload,
         status,
         timestamp,
         status_at: None,
@@ -519,8 +488,9 @@ fn phone_digits(phone: &str) -> String {
 }
 
 /// A history item must not fail the delivery: skip it when a Meta-assigned
-/// id it would be stored under carries U+0000, which Postgres refuses on
-/// every redelivery.
+/// id it would be stored under carries U+0000, which the Postgres store
+/// refuses (ids are `TEXT`) on every redelivery. Meta never assigns one;
+/// content with U+0000 is stored as it is.
 fn guard_synced(record: Record) -> Record {
     match &record {
         Record::Append(m)
@@ -974,9 +944,7 @@ impl EventSink<WebhookEvent> for InboxSink {
                 let error = if status.errors.is_empty() {
                     None
                 } else {
-                    serde_json::to_value(&status.errors)
-                        .ok()
-                        .map(json_without_nul)
+                    serde_json::to_value(&status.errors).ok()
                 };
                 self.store
                     .update_status(&phone_number_id, &status.id, new, status.timestamp, error)
@@ -1148,7 +1116,7 @@ impl Inbox {
     /// the message's content.
     async fn record_sent(&self, key: &ConversationKey, message: &OutboundMessage, id: MessageId) {
         let payload = match serde_json::to_value(message) {
-            Ok(payload) => json_without_nul(payload),
+            Ok(payload) => payload,
             Err(e) => {
                 tracing::error!(
                     category = ?e.classify(),
@@ -1158,7 +1126,7 @@ impl Inbox {
             }
         };
         let text = match &message.content {
-            MessageContent::Text(t) => Some(without_nul(t.body.clone())),
+            MessageContent::Text(t) => Some(t.body.clone()),
             _ => None,
         };
         if let Err(e) = self
@@ -1167,7 +1135,7 @@ impl Inbox {
                 id,
                 conversation: key.clone(),
                 direction: Direction::Outbound,
-                kind: without_nul(message.content.message_type().to_owned()),
+                kind: message.content.message_type().to_owned(),
                 text,
                 payload,
                 status: DeliveryStatus::Accepted,
@@ -1378,47 +1346,42 @@ mod tests {
         assert_eq!(rows[0].status, DeliveryStatus::Deleted);
     }
 
-    /// A store that refuses U+0000 in any text or JSON it is given, the way
-    /// Postgres does (`TEXT` cannot hold NUL, `JSONB` rejects `\u0000`), and
-    /// delegates everything else to the memory store. With `down`, every
-    /// append fails (the database is unreachable).
+    /// A store with the Postgres store's rules for U+0000
+    /// (`live_postgres_keeps_nul_in_content_and_refuses_it_in_ids` pins
+    /// them): refused in the identifiers it keeps as `TEXT` (message id,
+    /// contact, phone number id), stored exactly in content. Delegates to
+    /// the memory store. With `down`, every write fails (the database is
+    /// unreachable).
     #[derive(Debug, Default)]
-    struct NulRefusingStore {
+    struct PostgresRulesStore {
         inner: MemoryConversationStore,
         down: bool,
     }
 
-    fn has_nul(v: &serde_json::Value) -> bool {
-        match v {
-            serde_json::Value::String(s) => s.contains('\0'),
-            serde_json::Value::Array(a) => a.iter().any(has_nul),
-            serde_json::Value::Object(o) => o.iter().any(|(k, v)| k.contains('\0') || has_nul(v)),
-            _ => false,
-        }
+    /// Whether the Postgres store refuses an identifier.
+    fn refused_id(id: &str) -> bool {
+        id.contains('\0')
     }
 
-    /// Whether Postgres would refuse `m` (U+0000 in a text or a JSON value).
+    /// Whether the Postgres store refuses `m`: U+0000 in an identifier.
     fn refused(m: &StoredMessage) -> bool {
-        let texts = [
-            Some(m.kind.as_str()),
-            m.text.as_deref(),
-            Some(m.conversation.contact.as_str()),
-            Some(m.conversation.phone_number_id.as_str()),
-            Some(m.id.as_str()),
-        ];
-        texts.into_iter().flatten().any(|t| t.contains('\0'))
-            || has_nul(&m.payload)
-            || m.error.as_ref().is_some_and(has_nul)
+        [
+            m.id.as_str(),
+            m.conversation.contact.as_str(),
+            m.conversation.phone_number_id.as_str(),
+        ]
+        .into_iter()
+        .any(refused_id)
     }
 
     fn refuse() -> StorageError {
         StorageError::Backend(anyhow::anyhow!(
-            "unsupported Unicode escape sequence: \\u0000 cannot be converted to text"
+            "invalid byte sequence for encoding \"UTF8\": 0x00"
         ))
     }
 
     #[async_trait]
-    impl ConversationStore for NulRefusingStore {
+    impl ConversationStore for PostgresRulesStore {
         async fn append(&self, m: StoredMessage) -> std::result::Result<bool, StorageError> {
             if self.down {
                 return Err(StorageError::Backend(anyhow::anyhow!("connection refused")));
@@ -1451,7 +1414,10 @@ mod tests {
             if self.down {
                 return Err(StorageError::Backend(anyhow::anyhow!("connection refused")));
             }
-            if id.as_str().contains('\0') || key.contact.contains('\0') {
+            if refused_id(id.as_str())
+                || refused_id(&key.contact)
+                || refused_id(key.phone_number_id.as_str())
+            {
                 return Err(refuse());
             }
             self.inner.revoke(key, id, direction, at).await
@@ -1467,11 +1433,7 @@ mod tests {
             if self.down {
                 return Err(StorageError::Backend(anyhow::anyhow!("connection refused")));
             }
-            if kind.contains('\0')
-                || text.as_ref().is_some_and(|t| t.contains('\0'))
-                || has_nul(&payload)
-                || id.as_str().contains('\0')
-            {
+            if refused_id(id.as_str()) || refused_id(phone_number_id.as_str()) {
                 return Err(refuse());
             }
             self.inner
@@ -1489,7 +1451,7 @@ mod tests {
             if self.down {
                 return Err(StorageError::Backend(anyhow::anyhow!("connection refused")));
             }
-            if error.as_ref().is_some_and(has_nul) || id.as_str().contains('\0') {
+            if refused_id(id.as_str()) || refused_id(phone_number_id.as_str()) {
                 return Err(refuse());
             }
             self.inner
@@ -1528,10 +1490,12 @@ mod tests {
     /// Security review M1: one NUL in a customer's message made every
     /// delivery of the batch fail on Postgres, so Meta retried it for 7
     /// days and then dropped it, together with every other event in it.
-    /// Stored text and payload now carry U+FFFD instead.
+    /// fd4667e stored U+FFFD instead; since `OPEN_QUESTIONS.md` #18 was
+    /// decided (2026-09-25), the content is recorded exactly, and the
+    /// Postgres store keeps it.
     #[tokio::test]
-    async fn a_nul_in_customer_content_is_replaced_not_refused() {
-        let store = Arc::new(NulRefusingStore::default());
+    async fn a_nul_in_customer_content_is_recorded_exactly() {
+        let store = Arc::new(PostgresRulesStore::default());
         let sink = InboxSink::new(store.clone());
         deliver_all(
             &sink,
@@ -1547,7 +1511,8 @@ mod tests {
             &sink,
             one_message(&json!({
                 "from": "16505551234", "id": "wamid.nul2", "timestamp": "1760000001",
-                "type": "fut\u{0}ure", "fut\u{0}ure": {"k\u{0}": ["a\u{0}", {"deep\u{0}": "b\u{0}"}]}
+                "type": "fut\u{0}ure",
+                "fut\u{0}ure": {"k\u{0}": ["a\u{0}", {"deep\u{0}": "b\u{0}"}], "k\u{FFFD}": "fffd"}
             })),
         )
         .await;
@@ -1565,18 +1530,29 @@ mod tests {
             .unwrap();
         assert_eq!(rows.len(), 2, "both messages recorded");
         let (unknown, text) = (&rows[0], &rows[1]);
-        assert_eq!(text.text.as_deref(), Some("order\u{FFFD}42"));
-        assert_eq!(text.payload["text"]["body"], "order\u{FFFD}42");
+        assert_eq!(text.text.as_deref(), Some("order\u{0}42"));
+        assert_eq!(text.payload["text"]["body"], "order\u{0}42");
         assert_eq!(text.status, DeliveryStatus::Failed);
         let error = text.error.as_ref().unwrap();
-        assert!(!has_nul(error), "{error}");
-        assert_eq!(error[0]["title"], "bad\u{FFFD}");
-        assert_eq!(unknown.kind, "fut\u{FFFD}ure");
-        assert!(!has_nul(&unknown.payload), "{}", unknown.payload);
+        assert_eq!(error[0]["title"], "bad\u{0}");
+        assert_eq!(error[0]["error_data"]["details"], "x\u{0}");
+        assert_eq!(unknown.kind, "fut\u{0}ure");
+        let properties = &unknown.payload["fut\u{0}ure"];
         assert_eq!(
-            unknown.payload["fut\u{FFFD}ure"]["k\u{FFFD}"][1]["deep\u{FFFD}"], "b\u{FFFD}",
-            "keys and nested values: {}",
+            (
+                &properties["k\u{0}"][0],
+                &properties["k\u{0}"][1]["deep\u{0}"],
+                &properties["k\u{FFFD}"],
+                properties.as_object().map(serde_json::Map::len),
+            ),
+            (&json!("a\u{0}"), &json!("b\u{0}"), &json!("fffd"), Some(2)),
+            "keys and nested values, and two keys differing by NUL vs U+FFFD: {}",
             unknown.payload
+        );
+        let text_row = serde_json::to_string(text).unwrap();
+        assert!(
+            !text_row.contains('\u{FFFD}'),
+            "no replacement character anywhere: {text_row}"
         );
     }
 
@@ -1763,11 +1739,11 @@ mod tests {
         assert_eq!(rows[0].text.as_deref(), Some("hello"));
     }
 
-    /// The outbound side of the NUL rule: a reply whose text carries U+0000
-    /// is recorded with U+FFFD, not refused (and not turned into an error).
+    /// The outbound side: a reply whose text carries U+0000 is recorded
+    /// exactly, not refused (and not turned into an error).
     #[tokio::test]
-    async fn an_outbound_reply_with_nul_is_recorded_with_the_replacement_character() {
-        let store = Arc::new(NulRefusingStore::default());
+    async fn an_outbound_reply_with_nul_is_recorded_exactly() {
+        let store = Arc::new(PostgresRulesStore::default());
         let sink = InboxSink::new(store.clone());
         deliver_all(
             &sink,
@@ -1800,8 +1776,9 @@ mod tests {
             .iter()
             .find(|r| r.id == MessageId::new("wamid.out"))
             .expect("the reply is recorded");
-        assert_eq!(out.text.as_deref(), Some("a\u{FFFD}b"));
-        assert_eq!(out.payload["text"]["body"], "a\u{FFFD}b");
+        assert_eq!(out.text.as_deref(), Some("a\u{0}b"));
+        assert_eq!(out.payload["text"]["body"], "a\u{0}b");
+        assert_eq!(out.kind, "text");
     }
 
     /// Conventions review #18: once Meta accepted a message, nothing about
@@ -1809,9 +1786,9 @@ mod tests {
     /// retry and the customer would get it twice.
     #[tokio::test]
     async fn a_recording_failure_after_the_send_is_not_the_callers_error() {
-        let store = Arc::new(NulRefusingStore {
+        let store = Arc::new(PostgresRulesStore {
             down: true,
-            ..NulRefusingStore::default()
+            ..PostgresRulesStore::default()
         });
         let clock = ManualClock::new(datetime!(2025-10-09 08:00 UTC));
         let t = ScriptedTransport::new();
@@ -2315,7 +2292,7 @@ mod tests {
         // The same through a `history` value that fell to
         // `WebhookEvent::Unknown`, and for the business's own media
         // (`message_echoes`).
-        let store = Arc::new(NulRefusingStore::default());
+        let store = Arc::new(PostgresRulesStore::default());
         let sink = InboxSink::new(store.clone());
         deliver_all(
             &sink,
@@ -2581,7 +2558,7 @@ mod tests {
                 false,
             ),
         ] {
-            let store = Arc::new(NulRefusingStore::default());
+            let store = Arc::new(PostgresRulesStore::default());
             let sink = InboxSink::new(store.clone());
             let events = history_with(&bad);
             assert_eq!(events.len(), 1, "{case}");
@@ -3197,10 +3174,10 @@ mod tests {
         assert_eq!(thread(store.as_ref(), "US.B").await.len(), 1);
     }
 
-    /// Content in history and echoes follows the inbound NUL rule.
+    /// Content in history and echoes is recorded exactly too.
     #[tokio::test]
-    async fn a_nul_in_synced_or_echoed_content_is_replaced_not_refused() {
-        let store = Arc::new(NulRefusingStore::default());
+    async fn a_nul_in_synced_or_echoed_content_is_recorded_exactly() {
+        let store = Arc::new(PostgresRulesStore::default());
         let sink = InboxSink::new(store.clone());
         deliver_all(
             &sink,
@@ -3226,20 +3203,21 @@ mod tests {
         .await;
         let rows = thread(&store.inner, "16505551234").await;
         let texts: Vec<_> = rows.iter().map(|r| r.text.as_deref().unwrap()).collect();
-        assert_eq!(
-            texts,
-            ["before", "code\u{FFFD}42", "after", "see\u{FFFD}you"]
-        );
-        assert!(rows.iter().all(|r| !has_nul(&r.payload)));
+        assert_eq!(texts, ["before", "code\u{0}42", "after", "see\u{0}you"]);
+        let bodies: Vec<_> = rows
+            .iter()
+            .map(|r| r.payload["text"]["body"].as_str().unwrap())
+            .collect();
+        assert_eq!(bodies, texts, "the payloads keep it too");
     }
 
     /// Storage failures still fail the delivery, so Meta redelivers the
     /// history instead of it being lost.
     #[tokio::test]
     async fn a_storage_failure_during_history_fails_the_delivery() {
-        let store = Arc::new(NulRefusingStore {
+        let store = Arc::new(PostgresRulesStore {
             down: true,
-            ..NulRefusingStore::default()
+            ..PostgresRulesStore::default()
         });
         let sink = InboxSink::new(store);
         for event in body(HISTORY_THREADS)
