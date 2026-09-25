@@ -20,6 +20,7 @@ use wa_adapters::store::postgres::{self, TablePrefix};
 use wa_adapters::store::{
     PostgresConversationStore, PostgresKvStore, conformance, conversation_conformance,
 };
+use wa_core::error::StorageError;
 use wa_core::ids::MessageId;
 use wa_core::store::{
     ConversationKey, ConversationStore, DeliveryStatus, Direction, Expiry, KvStore, StoreKey,
@@ -169,8 +170,8 @@ async fn the_documented_sql_holds(pool: &PgPool) {
     }
 }
 
-/// U+0000 is content like any other character (`OPEN_QUESTIONS.md` #18,
-/// decided: stored losslessly), and identifiers keep `TEXT`, which refuses
+/// U+0000 is content like any other character (the owner's decision of
+/// 2026-09-25: stored losslessly), and identifiers keep `TEXT`, which refuses
 /// it. `wa_rs::inbox`'s unit tests use a store double with exactly these
 /// rules: this pins that double to the real server. (The conformance suite
 /// checks the round trips in detail; this is the refusing half, and the
@@ -673,6 +674,402 @@ async fn live_postgres_upgrade_keeps_existing_content_and_stops_old_writers() {
         store.conversations(&pn, None, 1).await.unwrap()[0].last_text,
         nul.text
     );
+    db.drop().await;
+}
+
+/// The pre-flight query of the `store::postgres` module docs ("Upgrading"),
+/// verbatim: every object of an operator's own on the content columns of
+/// the default tables. Keep the two copies identical.
+const PREFLIGHT: &str = "\
+SELECT pg_describe_object(d.classid, d.objid, d.objsubid) AS object,
+       d.refobjid::regclass::text AS tbl, a.attname::text AS col
+FROM pg_depend d, pg_attribute a
+WHERE d.refclassid = 'pg_class'::regclass
+  AND d.refobjid IN ('wa_messages'::regclass, 'wa_conversations'::regclass)
+  AND a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
+  AND a.attname IN ('kind', 'text', 'payload', 'error', 'last_text')
+  AND NOT (d.classid = 'pg_constraint'::regclass
+           AND (SELECT contype FROM pg_constraint WHERE oid = d.objid) = 'n')
+UNION
+SELECT pg_describe_object('pg_trigger'::regclass, t.oid, 0), t.tgrelid::regclass::text, NULL
+FROM pg_trigger t
+WHERE t.tgrelid IN ('wa_messages'::regclass, 'wa_conversations'::regclass)
+  AND NOT t.tgisinternal
+UNION
+SELECT 'function ' || p.oid::regprocedure::text, NULL, NULL
+FROM pg_proc p
+WHERE p.prosrc ~ '(wa_messages|wa_conversations)'
+ORDER BY 1";
+
+/// A database of its own (the trigram case installs an extension, which is
+/// per database), one schema per case in it.
+struct PrivateDb {
+    url: String,
+    name: String,
+    admin: PgPool,
+}
+
+impl PrivateDb {
+    async fn new(label: &str) -> Option<Self> {
+        let url = common::service_url("WA_RS_TEST_POSTGRES_URL")?;
+        let name = format!("wa_test_{label}_{}", common::unique());
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        sqlx::query(AssertSqlSafe(format!("CREATE DATABASE {name}")))
+            .execute(&admin)
+            .await
+            .unwrap();
+        Some(Self { url, name, admin })
+    }
+
+    /// A pool on a new schema of this database.
+    async fn schema(&self, schema: &str) -> PgPool {
+        let options = PgConnectOptions::from_str(&self.url)
+            .unwrap()
+            .database(&self.name);
+        let setup = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(options.clone())
+            .await
+            .unwrap();
+        sqlx::query(AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+            .execute(&setup)
+            .await
+            .unwrap();
+        setup.close().await;
+        PgPoolOptions::new()
+            .max_connections(4)
+            .connect_with(options.options([("search_path", schema)]))
+            .await
+            .unwrap()
+    }
+
+    async fn drop(self) {
+        sqlx::query(AssertSqlSafe(format!(
+            "DROP DATABASE {} WITH (FORCE)",
+            self.name
+        )))
+        .execute(&self.admin)
+        .await
+        .unwrap();
+    }
+}
+
+/// `table.column: type` of the content columns in the pool's schema.
+async fn content_columns_of(pool: &PgPool) -> Vec<String> {
+    let columns: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT table_name::text, column_name::text, data_type::text \
+         FROM information_schema.columns \
+         WHERE table_schema = current_schema() \
+           AND table_name IN ('wa_messages', 'wa_conversations') \
+           AND column_name NOT IN ('id', 'phone_number_id', 'contact', 'direction', \
+             'status', 'ts', 'status_at', 'last_message_at', 'last_message_id', \
+             'last_inbound_at', 'unread') \
+         ORDER BY 1, 2",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    columns
+        .into_iter()
+        .map(|(table, column, ty)| format!("{table}.{column}: {ty}"))
+        .collect()
+}
+
+/// The content columns before migration 3.
+const PRE_LOSSLESS_CONTENT_COLUMNS: [&str; 5] = [
+    "wa_conversations.last_text: text",
+    "wa_messages.error: jsonb",
+    "wa_messages.kind: text",
+    "wa_messages.payload: jsonb",
+    "wa_messages.text: text",
+];
+
+/// A message holding U+0000 in its text and, under a key of its own, in its
+/// payload.
+fn with_nul(id: &str) -> StoredMessage {
+    StoredMessage {
+        id: MessageId::new(id),
+        text: Some("order\u{0}42".to_owned()),
+        payload: serde_json::json!({"type": "text", "text": {"body": "order"}, "note": "a\0b"}),
+        timestamp: datetime!(2026-09-24 15:00 UTC),
+        ..written_by_09db4aa()[0].clone()
+    }
+}
+
+/// `object`, created in a fresh schema written by 09db4aa, makes `migrate`
+/// fail and change nothing; the pre-flight query lists it as `listed`.
+async fn assert_refused(db: &PrivateDb, schema: &str, case: &str, object: &str, listed: &str) {
+    let pool = db.schema(schema).await;
+    migrate_like_09db4aa(&pool).await.unwrap();
+    let rows = written_by_09db4aa();
+    for m in &rows {
+        append_like_09db4aa(&pool, m).await.unwrap();
+    }
+    let preflight = |pool: PgPool| async move {
+        sqlx::query_as::<_, (String, Option<String>, Option<String>)>(PREFLIGHT)
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(object, _, _)| object)
+            .collect::<Vec<_>>()
+    };
+    let before = preflight(pool.clone()).await;
+    assert!(before.is_empty(), "{case}: none of ours: {before:?}");
+    sqlx::query(AssertSqlSafe(object.to_owned()))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let found = preflight(pool.clone()).await;
+    assert!(
+        found.iter().any(|o| o.contains(listed)),
+        "{case}: the pre-flight lists it: {found:?}"
+    );
+
+    let error = postgres::migrate(&pool).await.expect_err(case).to_string();
+    assert!(!error.contains("order"), "{case}: no content: {error}");
+    let versions: Vec<i64> =
+        sqlx::query_scalar("SELECT version FROM wa_sqlx_migrations WHERE success ORDER BY version")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(versions, [1, 2], "{case}: {error}");
+    assert_eq!(
+        content_columns_of(&pool).await,
+        PRE_LOSSLESS_CONTENT_COLUMNS,
+        "{case}: nothing changed"
+    );
+    append_like_09db4aa(
+        &pool,
+        &StoredMessage {
+            id: MessageId::new("wamid.still-old"),
+            ..rows[0].clone()
+        },
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{case}: the old schema still works: {e}"));
+    pool.close().await;
+}
+
+/// Objects of an operator's own on the content columns, against the
+/// upgrade. Those that would keep failing inserts of a payload holding
+/// U+0000 after the conversion (an expression or partial index, or a check
+/// constraint, on `payload` or `error`), and those Postgres cannot convert
+/// (a view, a trigram index), make `migrate` fail and change nothing. The
+/// documented pre-flight query lists each, and none of the adapter's own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_upgrade_refuses_objects_that_would_fail_content() {
+    let Some(db) = PrivateDb::new("objects").await else {
+        return;
+    };
+    let owner = PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            PgConnectOptions::from_str(&db.url)
+                .unwrap()
+                .database(&db.name),
+        )
+        .await
+        .unwrap();
+    sqlx::query("CREATE EXTENSION pg_trgm SCHEMA public")
+        .execute(&owner)
+        .await
+        .unwrap();
+    owner.close().await;
+
+    for (i, (case, object, listed)) in [
+        (
+            "an expression index on payload",
+            "CREATE INDEX my_type ON wa_messages ((payload->>'type'))",
+            "index my_type",
+        ),
+        (
+            "a partial index on error",
+            "CREATE INDEX my_failed ON wa_messages (id) WHERE error->>'code' IS NOT NULL",
+            "index my_failed",
+        ),
+        (
+            "a check constraint on payload",
+            "ALTER TABLE wa_messages ADD CONSTRAINT my_typed \
+             CHECK (payload->>'type' IS NOT NULL)",
+            "constraint my_typed",
+        ),
+        (
+            "a view on text",
+            "CREATE VIEW my_texts AS SELECT id, text FROM wa_messages",
+            "rule _RETURN on view my_texts",
+        ),
+        (
+            "a trigram index on the preview",
+            "CREATE INDEX my_preview ON wa_conversations \
+             USING gin (last_text public.gin_trgm_ops)",
+            "index my_preview",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_refused(&db, &format!("refused_{i}"), case, object, listed).await;
+    }
+    db.drop().await;
+}
+
+/// What the upgrade keeps: a b-tree index on text, rebuilt on the bytes,
+/// and a trigger that names no content column (the pre-flight lists both
+/// for review). And why an expression on the payload is refused: after the
+/// upgrade, one fails the insert of any payload holding a NUL, under any
+/// key, and cannot be created once such a row exists.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_upgrade_keeps_plain_indexes_and_json_expressions_fail_nul() {
+    let Some(db) = PrivateDb::new("kept").await else {
+        return;
+    };
+    let pool = db.schema("kept").await;
+    migrate_like_09db4aa(&pool).await.unwrap();
+    for object in [
+        "CREATE INDEX my_text ON wa_messages (text)",
+        "CREATE FUNCTION my_notify() RETURNS trigger LANGUAGE plpgsql AS \
+         $$ BEGIN PERFORM pg_notify('inbox', NEW.id); RETURN NEW; END $$",
+        "CREATE TRIGGER my_notify AFTER INSERT ON wa_messages \
+         FOR EACH ROW EXECUTE FUNCTION my_notify()",
+    ] {
+        sqlx::query(AssertSqlSafe(object))
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    let preflight: Vec<String> =
+        sqlx::query_as::<_, (String, Option<String>, Option<String>)>(PREFLIGHT)
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(object, _, _)| object)
+            .collect();
+    assert_eq!(
+        preflight,
+        ["index my_text", "trigger my_notify on table wa_messages"]
+    );
+    postgres::migrate(&pool).await.unwrap();
+    assert_eq!(content_columns_of(&pool).await, LOSSLESS_CONTENT_COLUMNS);
+    let index: String = sqlx::query_scalar(
+        "SELECT indexdef FROM pg_indexes \
+         WHERE schemaname = current_schema() AND indexname = 'my_text'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(index.ends_with("(text_utf8)"), "{index}");
+
+    let type_index = "CREATE INDEX my_type ON wa_messages ((payload_json->>'type'))";
+    sqlx::query(type_index).execute(&pool).await.unwrap();
+    let store = PostgresConversationStore::new(pool.clone());
+    assert!(
+        store.append(with_nul("wamid.kept")).await.is_err(),
+        "an index on payload_json->>'type' refuses a NUL under another key"
+    );
+    sqlx::query("DROP INDEX my_type")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(store.append(with_nul("wamid.kept")).await.unwrap());
+    assert!(
+        sqlx::query(type_index).execute(&pool).await.is_err(),
+        "nor can it be created over a row holding one"
+    );
+    pool.close().await;
+    db.drop().await;
+}
+
+/// A content column that is not UTF-8 (only a hand edit can make one:
+/// every write stores a `str`'s bytes) reads as `StorageError::Corrupt`
+/// naming the column, never as a panic or a replacement character, and
+/// never with the content in the error.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_reads_content_that_is_not_utf8_as_corrupt() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let store = PostgresConversationStore::new(db.pool.clone());
+    let [message, _, other] = written_by_09db4aa();
+    let secret = StoredMessage {
+        text: Some("secret".to_owned()),
+        ..message
+    };
+    assert!(store.append(secret.clone()).await.unwrap());
+    assert!(store.append(other.clone()).await.unwrap());
+    let pn = secret.conversation.phone_number_id.clone();
+
+    for (column, update) in [
+        (
+            "kind_utf8",
+            "UPDATE wa_messages SET kind_utf8 = '\\x736563ff'::bytea WHERE id = $1",
+        ),
+        (
+            "text_utf8",
+            "UPDATE wa_messages SET text_utf8 = '\\x736563726574c328'::bytea WHERE id = $1",
+        ),
+    ] {
+        sqlx::query(AssertSqlSafe(update))
+            .bind(secret.id.as_str())
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        match store.messages(&secret.conversation, None, 10).await {
+            Err(e @ StorageError::Corrupt { .. }) => {
+                let StorageError::Corrupt { key, .. } = &e else {
+                    unreachable!()
+                };
+                assert_eq!(key, column);
+                assert!(!e.to_string().contains("sec"), "{e}");
+            }
+            other => panic!("{column}: {other:?}"),
+        }
+        assert_eq!(
+            store.messages(&other.conversation, None, 10).await.unwrap(),
+            std::slice::from_ref(&other),
+            "{column}: other conversations still read"
+        );
+        // Put the row back.
+        sqlx::query(
+            "UPDATE wa_messages SET kind_utf8 = convert_to('text', 'UTF8'), \
+             text_utf8 = convert_to('secret', 'UTF8') WHERE id = $1",
+        )
+        .bind(secret.id.as_str())
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            store
+                .messages(&secret.conversation, None, 10)
+                .await
+                .unwrap(),
+            std::slice::from_ref(&secret)
+        );
+    }
+
+    sqlx::query(
+        "UPDATE wa_conversations SET last_text_utf8 = '\\x736563ff'::bytea WHERE contact = $1",
+    )
+    .bind(secret.conversation.contact.as_str())
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    match store.conversations(&pn, None, 10).await {
+        Err(e @ StorageError::Corrupt { .. }) => {
+            let StorageError::Corrupt { key, .. } = &e else {
+                unreachable!()
+            };
+            assert_eq!(key, "last_text_utf8");
+            assert!(!e.to_string().contains("sec"), "{e}");
+        }
+        other => panic!("last_text_utf8: {other:?}"),
+    }
     db.drop().await;
 }
 

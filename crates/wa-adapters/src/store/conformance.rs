@@ -462,14 +462,18 @@ async fn values_are_any_bytes<S: KvStore + ?Sized>(store: &S) {
 
 /// A key holding U+0000 is either refused (an error, as on Postgres, whose
 /// key columns are `text`) or kept exactly (memory, Redis); it is never
-/// stored as another key, such as the one with U+FFFD in its place.
+/// stored as another key, such as the one with U+FFFD in its place or the
+/// one without it.
 async fn a_nul_in_a_key_is_kept_or_refused<S: KvStore + ?Sized>(store: &S) {
     let base = format!("nul-{}", unique());
     let fffd = StoreKey::new("wa.conformance", format!("{base}\u{FFFD}"));
-    store
-        .put(&fffd, b"fffd".to_vec(), Expiry::Never)
-        .await
-        .unwrap();
+    let stripped = StoreKey::new("wa.conformance", base.clone());
+    for (other, value) in [(&fffd, b"fffd"), (&stripped, b"none")] {
+        store
+            .put(other, value.to_vec(), Expiry::Never)
+            .await
+            .unwrap();
+    }
     for nul in [
         StoreKey::new("wa.conformance", format!("{base}\0")),
         StoreKey::new("wa.conformance\0", format!("{base}\u{FFFD}")),
@@ -494,8 +498,14 @@ async fn a_nul_in_a_key_is_kept_or_refused<S: KvStore + ?Sized>(store: &S) {
             b"fffd",
             "{nul:?}: the U+FFFD key is another key"
         );
+        assert_eq!(
+            store.get(&stripped).await.unwrap().unwrap().value,
+            b"none",
+            "{nul:?}: the key without the NUL is another key"
+        );
     }
     store.delete(&fffd).await.unwrap();
+    store.delete(&stripped).await.unwrap();
 }
 
 async fn keep_preserves_expiry<S: KvStore + ?Sized>(store: &S) {

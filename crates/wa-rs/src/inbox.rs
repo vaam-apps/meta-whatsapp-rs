@@ -172,7 +172,7 @@ fn delivery(e: StorageError) -> SinkError {
 /// Nothing in the content is replaced, U+0000 included: the stored
 /// `kind`, `text` (the preview), `payload` (strings and object keys) and
 /// status `error` keep every character the parsed event carried, and every
-/// store in `wa_adapters` stores them (`OPEN_QUESTIONS.md` #18, decided:
+/// store in `wa_adapters` stores them (the owner's decision of 2026-09-25:
 /// losslessly). A malformed history item is skipped (and logged without
 /// its content). Storage errors still fail the delivery (Meta redelivers).
 ///
@@ -1490,9 +1490,9 @@ mod tests {
     /// Security review M1: one NUL in a customer's message made every
     /// delivery of the batch fail on Postgres, so Meta retried it for 7
     /// days and then dropped it, together with every other event in it.
-    /// fd4667e stored U+FFFD instead; since `OPEN_QUESTIONS.md` #18 was
-    /// decided (2026-09-25), the content is recorded exactly, and the
-    /// Postgres store keeps it.
+    /// fd4667e stored U+FFFD instead; since the owner's decision of
+    /// 2026-09-25, the content is recorded exactly, and the Postgres store
+    /// keeps it.
     #[tokio::test]
     async fn a_nul_in_customer_content_is_recorded_exactly() {
         let store = Arc::new(PostgresRulesStore::default());
@@ -2543,6 +2543,19 @@ mod tests {
                 "U+0000 in a revoked id",
                 json!({"from": "16505551234", "id": "wamid.r", "timestamp": "1739230950",
                     "type": "revoke", "revoke": {"original_message_id": "wamid.\u{0}a"}}),
+                true,
+            ),
+            (
+                "U+0000 in the customer's id (a BSUID)",
+                json!({"from": "16505551234", "from_user_id": "US.\u{0}x", "id": "wamid.x",
+                    "timestamp": "1739230950", "type": "text", "text": {"body": "x"}}),
+                true,
+            ),
+            (
+                "U+0000 in a revoke's customer id",
+                json!({"from": "16505551234", "from_user_id": "US.\u{0}x", "id": "wamid.r",
+                    "timestamp": "1739230950", "type": "revoke",
+                    "revoke": {"original_message_id": "wamid.a"}}),
                 true,
             ),
             (

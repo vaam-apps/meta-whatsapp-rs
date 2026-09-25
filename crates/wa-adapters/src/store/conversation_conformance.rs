@@ -54,8 +54,8 @@
 //!   longer) a placeholder, not a placeholder that was revoked, not the
 //!   window or the unread count; the conversation preview follows when the
 //!   placeholder is the latest message.
-//! - content is stored exactly, U+0000 included (`OPEN_QUESTIONS.md` #18,
-//!   decided: losslessly): `kind`, `text`, payload strings and object keys,
+//! - content is stored exactly, U+0000 included (the owner's decision of
+//!   2026-09-25: losslessly): `kind`, `text`, payload strings and object keys,
 //!   the status `error` and the conversation preview read back as written
 //!   through every write method; a NUL never reads back as U+FFFD, two
 //!   object keys differing only by one stay distinct, and a `kind` one NUL
@@ -1514,8 +1514,8 @@ async fn a_revoked_placeholder_is_never_filled<S: ConversationStore + ?Sized>(st
     );
 }
 
-/// Content round-trips exactly, U+0000 included (`OPEN_QUESTIONS.md` #18,
-/// decided on 2026-09-25: stored losslessly): `kind`, `text`, payload
+/// Content round-trips exactly, U+0000 included (the owner's decision of
+/// 2026-09-25: stored losslessly): `kind`, `text`, payload
 /// strings and object keys, the status `error`, and the preview, through
 /// `append`, `append_synced`, `update_status` and `fill_media_placeholder`.
 /// A NUL never reads back as U+FFFD, and two object keys differing only by

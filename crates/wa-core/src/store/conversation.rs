@@ -111,6 +111,11 @@ impl DeliveryStatus {
 }
 
 /// A persisted message.
+///
+/// Content (`kind`, `text`, `payload`, `error`) is kept exactly as given,
+/// U+0000 included; identifiers (`id` and the `conversation`'s ids) must
+/// not contain U+0000, which a store may refuse there (see
+/// [`ConversationStore`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StoredMessage {
     /// WhatsApp message id; unique. Appending an existing id is a no-op.
@@ -213,6 +218,17 @@ pub struct ConversationSummary {
 /// Ordering is by `(timestamp, id)` descending — newest first — and the
 /// `before` cursor is exclusive, so paging never repeats or skips a row even
 /// when timestamps collide.
+///
+/// Content round-trips exactly through every method: a message's `kind`,
+/// `text`, `payload` (strings and object keys) and `error`, and a summary's
+/// `last_text`, read back as written, U+0000 included — never replaced
+/// (U+FFFD) or dropped, and two object keys differing only by one stay
+/// two keys. Identifiers (message ids, contacts, phone number ids) never
+/// contain U+0000 in what Meta sends; a store may refuse one that does
+/// with an error (the Postgres adapter does), but never store it as
+/// another id. The conformance suite
+/// (`wa_adapters::store::conversation_conformance`) checks the content
+/// rule.
 #[async_trait]
 pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
     /// Insert a message. Returns `false` (and changes nothing) if a message

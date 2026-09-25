@@ -1,5 +1,5 @@
--- Message content keeps U+0000 (`OPEN_QUESTIONS.md` #18, decided by the
--- owner on 2026-09-25: store it losslessly).
+-- Message content keeps U+0000 (the owner's decision of 2026-09-25: store
+-- it losslessly).
 --
 -- A template like 0001 and 0002: the brace-wrapped placeholder becomes the
 -- table prefix before the migration runs.
@@ -27,6 +27,35 @@
 -- (the NUL is gone, nothing can tell the two apart).
 
 LOCK TABLE {prefix}messages, {prefix}conversations IN ACCESS EXCLUSIVE MODE;
+
+-- Refuse to convert under an object of the operator's own that depends on
+-- `payload` or `error` (an expression or partial index, a check constraint,
+-- a view, a policy, a generated column...). Some would fail the conversion
+-- below anyway, but an expression such as `payload->>'type'` survives it
+-- (no existing row holds a NUL) and then fails the insert of every payload
+-- holding one, anywhere: the webhook batch fails with it, which is what
+-- this migration exists to end. The exception rolls the whole migration
+-- back. NOT NULL constraints are the table's own.
+DO $guard$
+DECLARE
+    found text;
+BEGIN
+    SELECT string_agg(DISTINCT pg_describe_object(d.classid, d.objid, d.objsubid), '; ')
+    INTO found
+    FROM pg_depend d, pg_attribute a
+    WHERE d.refclassid = 'pg_class'::regclass
+      AND d.refobjid = '{prefix}messages'::regclass
+      AND a.attrelid = d.refobjid
+      AND a.attnum = d.refobjsubid
+      AND a.attname IN ('payload', 'error')
+      AND NOT (d.classid = 'pg_constraint'::regclass
+               AND (SELECT c.contype FROM pg_constraint c WHERE c.oid = d.objid) = 'n');
+    IF found IS NOT NULL THEN
+        RAISE EXCEPTION 'lossless content (migration 3): drop what depends on the payload or error column of {prefix}messages first, nothing was changed: %', found
+            USING HINT = 'A payload holding U+0000 would fail every such index, constraint or view. See the upgrade steps of wa_adapters::store::postgres.';
+    END IF;
+END
+$guard$;
 
 ALTER TABLE {prefix}messages
     ALTER COLUMN kind    TYPE BYTEA USING convert_to(kind, 'UTF8'),

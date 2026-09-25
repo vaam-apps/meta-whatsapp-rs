@@ -326,14 +326,17 @@ fn json_text(value: &serde_json::Value, what: &str) -> Result<String, StorageErr
     })
 }
 
-/// A `BYTEA` content column back to its text. The error names the column,
+/// A `BYTEA` content column back to its text. Our writes are always UTF-8;
+/// bytes that are not (a row edited by hand) are
+/// [`StorageError::Corrupt`], never replaced. The error names the column,
 /// never the content.
 fn utf8(column: &str, bytes: Vec<u8>) -> Result<String, StorageError> {
-    String::from_utf8(bytes).map_err(|e| {
-        StorageError::Backend(anyhow::anyhow!(
-            "`{column}` is not UTF-8 (valid up to byte {})",
+    String::from_utf8(bytes).map_err(|e| StorageError::Corrupt {
+        key: column.to_owned(),
+        source: serde::de::Error::custom(format_args!(
+            "not UTF-8 (valid up to byte {})",
             e.utf8_error().valid_up_to()
-        ))
+        )),
     })
 }
 

@@ -104,6 +104,10 @@ pub enum Expiry {
 /// - `put_if_absent` and `compare_and_swap` are atomic with respect to each
 ///   other and to `put`/`delete` on the same key, across processes for
 ///   shared backends. OTP attempt counting and webhook dedup rely on it.
+/// - A value is any bytes (U+0000 and invalid UTF-8 included) and reads
+///   back exactly. A key (namespace or key) holding U+0000 is either kept
+///   exactly or refused with an error (the Postgres adapter refuses it),
+///   never stored as another key.
 #[async_trait]
 pub trait KvStore: Send + Sync + fmt::Debug + 'static {
     /// Read a live record.
