@@ -27,13 +27,19 @@ Error::Transport(..)        no answer: timeout, connect, integrity (media hash)
 Error::Decode { .. }        a 2xx body of an unexpected shape
 Error::Validation(v)        refused locally, NOTHING was sent; v.field is the JSON path
 Error::Webhook / Storage / Sink / Crypto / Config
+Error::Credit(CreditError)  Solution Partner credit line: refused, busy, reconcile, revocation part-way
 Error::Step { step, source } a multi-step flow (onboarding) stopped at `step`
 Error::Other(anyhow)        your code, Typst's RenderError
 ```
 
 `err.graph()` returns the `GraphApiError`, also through `Step`; its `code`
 tells apart codes that share a kind. `ErrorKind` is `#[non_exhaustive]`:
-keep a `_` arm.
+keep a `_` arm. `err.credit()` returns the `CreditError` of a Solution
+Partner credit step the same way: each variant decides `is_retryable()`
+and `may_have_been_sent()` itself (`Busy` is retryable; `Reconcile` and a
+revocation that sent `DELETE`s may have been sent), and
+`CreditError::revocation()` gives an incomplete revocation's report
+(`wa-rs-embedded-signup`).
 
 ## Branch on the kind
 

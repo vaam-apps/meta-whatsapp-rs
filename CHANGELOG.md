@@ -34,38 +34,71 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   first adds your system user to the WABA (`assign_system_user`), then
   calls `whatsapp_credit_sharing_and_attach` with the system user token;
   `CreditSharing::ShareThenAttach` shares with the verified owner business
-  and attaches with the merchant's token. The currency
+  and attaches with the merchant's token. **The approval is required**:
+  plain `onboard` is refused before the code is exchanged
+  (`CreditError::ApprovalRequired`); `onboard_with_approval` records the
+  approval in the ledger, `resume` shares only for an approved WABA, and
+  `EmbeddedSignup::resume_with_approval` approves a token stored without
+  one (Tech Provider mode before a switch). The currency
   (`OnboardingRequest::currency`, else `SolutionPartner::default_currency`)
   is required before the code is exchanged, and the first one is sealed:
   another is refused later. `share_credit_line` checks before it posts,
-  in `onboard` and `resume` alike (the owner's records and the recorded
-  allocation, each with its `request_status`, against the WABA's
-  `primary_funding_id`), under a per-WABA lease, so a timed-out share is
-  resumed without posting it twice and two concurrent onboardings cannot
-  both post (`refusals::CREDIT_STEP_BUSY`). **A revoked business is not
-  funded again** (marked by `revoke_credit_line`, or only `DELETED`
-  records on Meta's side: `refusals::CREDIT_LINE_REVOKED`,
-  `EmbeddedSignup::is_credit_line_revoked`) unless the request says
-  `OnboardingRequest::reshare_after_revocation()`. The allocation is
+  in `onboard_with_approval` and `resume` alike (the owner's records and
+  the recorded allocation, each with its `request_status`, against the
+  WABA's `primary_funding_id`), under a per-WABA lease renewed right
+  before each post, so a timed-out share is resumed without posting it
+  twice and two concurrent onboardings cannot both post
+  (`CreditError::Busy`, retryable). A `pending_share` flag is sealed before
+  each post and cleared once its allocation is recorded; a pending share
+  nothing explains, on a WABA something funds, is `CreditError::Reconcile`.
+  Without the owner business nothing is shared
+  (`CreditError::OwnerUnknown`). **A revoked business is not funded
+  again** (marked by `revoke_credit_line`, or only `DELETED` records on
+  Meta's side: `CreditError::Revoked`, `EmbeddedSignup::is_credit_line_revoked`;
+  a `request_status` Meta does not document: `CreditError::StatusUnknown`)
+  unless the request says `OnboardingRequest::reshare_after_revocation()`,
+  and a revocation that runs while a share is posted wins (the share
+  re-reads the marker after its post and revokes what it just shared; the
+  opt-in clears the marker only by compare-and-swap). The allocation is
   returned (`Onboarded::allocation_config_id`) and kept in a sealed credit
   ledger (`TokenVault::credit` → `StoredCredit`,
   `TokenVault::revoked_business` → `RevokedBusiness`) that
-  `TokenVault::delete` leaves, so the token record keeps its previous
-  format. `EmbeddedSignup::revoke_credit_line(&waba, owner_business_id,
-  &vault)` revokes from the recorded owner (or, when nothing is recorded,
-  a signed webhook's `owner_business_id`; a contradicting one revokes
-  nothing; an unreadable token or credit record, or a failed lookup, does
-  not stop what the other sources can revoke), and
-  `EmbeddedSignup::offboard` revokes first and deletes the token second
-  (`Offboarded`), so `PARTNER_APP_UNINSTALLED` and `PARTNER_REMOVED` end
-  revoked in either order. The Tech Provider flow is
-  unchanged, request for request. `SolutionPartner`'s system token is
-  private and never in `Debug`.
-- **`EmbeddedSignup::onboard_with_approval`**: your check of the verified
-  WABA, owner business and numbers (`VerifiedOnboarding`) runs after
-  `verify_assets` and before `store_token`; a refusal is step `approve`
-  and nothing is stored, subscribed or shared. For a Solution Partner it
-  is where tenant checks belong: after `onboard` the line is attached.
+  `TokenVault::delete` leaves, re-sealed on read and by `TokenVault::rotate`
+  (offboarded WABAs included) and `TokenVault::rotate_business`, so the
+  token record keeps its previous format. `EmbeddedSignup::revoke_credit_line(&waba,
+  owner_business_id, &vault)` marks the business first, then revokes from
+  the recorded owner (else the business Meta's record of the recorded
+  allocation names, written back into the ledger; else a signed webhook's
+  `owner_business_id`, only if the line has records naming it; a
+  contradicting one revokes nothing). An unreadable token record, credit
+  record or revocation marker (replaced), a failed lookup or a failed
+  marker write does not stop what the other sources can revoke; what is
+  left undone is `CreditError::RevocationIncomplete`, with the report.
+  `EmbeddedSignup::revoke_business_credit_line` revokes from a business id
+  alone. `EmbeddedSignup::offboard` revokes first and deletes the token
+  second (`Offboarded`), so `PARTNER_APP_UNINSTALLED` and
+  `PARTNER_REMOVED` end revoked in either order; with nothing to revoke
+  and no share in the ledger it just deletes, and a recorded share it
+  cannot find keeps the token (`CreditError::Reconcile`). The Tech
+  Provider flow is unchanged, request for request. `SolutionPartner`'s
+  system token is private and never in `Debug`.
+- **`EmbeddedSignup::onboard_with_approval`** (and
+  `resume_with_approval`): your check of the verified WABA, owner business
+  and numbers (`VerifiedOnboarding`) runs after `verify_assets` and before
+  `store_token`; a refusal is step `approve` and nothing is stored,
+  subscribed or shared. Required for a Solution Partner (after `onboard`
+  the line would be attached); what it checks stays your policy
+  (`OPEN_QUESTIONS.md` #6).
+- **`Error::Credit(CreditError)`**, a node of the error tree for the
+  Solution Partner credit steps: each variant decides `is_retryable` and
+  `may_have_been_sent` (`Busy` is retryable; a raced share, a share to
+  reconcile and a revocation's `DELETE`s may have been sent), and
+  `RevocationIncomplete` carries the `CreditRevocation` report with the
+  failed, unconfirmed and unattributed records instead of leaving them in a
+  log line. `Error::credit()` looks through `Error::Step`.
+  `CreditRevocation` now lives in `wa_core::error` (re-exported from
+  `wa_client::credit_lines`). This replaces the `refusals` constants and
+  the `ValidationError`s the credit steps returned before this remediation.
 - **`wa_client::credit_lines`**: `CreditLines` (`Client::credit_lines`)
   with `list`/`list_stream` (`extendedcredits`), `share_and_attach`,
   `share`, `attach`, `receiving_credential`, `primary_funding`,
@@ -73,9 +106,10 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   `{"data": [...]}` page, follows cursors, never quotes the business name
   in an error), `revoke`, `revoke_for_business` (→ `CreditRevocation`:
   only active records naming that business, each confirmed `DELETED`,
-  every one attempted before a failure is returned, records naming no
-  business reported rather than revoked), `allocation_status`, and
-  `is_shared`;
+  every one attempted, records naming no business reported rather than
+  revoked; anything left undone is `CreditError::RevocationIncomplete`),
+  `allocation_status` (`AllocationConfig::is_active` only without a
+  `request_status`, `is_deleted` for `DELETED`), and `is_shared`;
   `WabaCurrency` (the six supported codes, `Other` only on purpose). New
   ids in `wa_core::ids`: `CreditLineId`, `AllocationConfigId`, `FundingId`
   (both sides of the `is_shared` comparison: a receiving credential and a
@@ -179,7 +213,20 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   verbatim in the new `entry_id` field. Because the event's JSON changed,
   the `dedup_key` of an `account_update` delivered before the upgrade and
   redelivered after it differs once. The partner fixtures assert every
-  documented `waba_info` field.
+  documented `waba_info` field. An event serialized before `entry_id`
+  existed reads back the same way (its old `waba_id` becomes `entry_id`,
+  the WABA comes from `waba_info`), and an `account_update` that fails to
+  parse is `WebhookEvent::Unknown` keyed by its raw `waba_info.waba_id`
+  when it has one, not by the entry's business id.
+  **Upgrading:** a `match` arm binding `AccountUpdated { waba_id, .. }` now
+  binds an `Option<WabaId>` (`None` when the `waba_info` names no WABA):
+  handle `None` rather than unwrap it. Rows or tables you keyed by the old
+  `waba_id` of `PARTNER_*` events (`PARTNER_ADDED`, `PARTNER_REMOVED`,
+  `PARTNER_APP_INSTALLED`, `PARTNER_APP_UNINSTALLED`, `AD_ACCOUNT_LINKED`,
+  `MM_LITE_TERMS_SIGNED`) hold a business portfolio id, not a WABA:
+  re-key them by the stored event's `waba_info.waba_id` (reading the
+  stored event with this revision does it), and look again for merchants
+  a `PARTNER_REMOVED` failed to find.
 - **Breaking — `ConversationStore` records coexistence history as history**
   (`OPEN_QUESTIONS.md` #35), and revokes are their own method; three
   required methods. `append_synced` stores a batch of messages, each like

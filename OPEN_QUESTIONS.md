@@ -28,7 +28,11 @@ of its own, after an HTML comment; keep that when you add one.
 6. **One WABA shared by several tenants.** The vault is keyed by WABA and
    knows no tenants; the last onboarding wins. `onboard_with_approval`
    lets an integrator refuse (or apply any other policy) before anything
-   is stored; which policy wa-rs itself should default to is open.
+   is stored; which policy wa-rs itself should default to is open. A
+   Solution Partner deployment must approve (plain `onboard` is refused,
+   and `resume` shares only for a WABA whose approval is recorded), but
+   what the approval checks is still the integrator's: wa-rs decides no
+   tenant policy.
 7. **Coexistence sync.** Contacts/history sync (`smb_app_data`) must happen
    once, within 24 h of onboarding. `onboard` only flags it
    (`needs_coexistence_sync()`); should it trigger it?

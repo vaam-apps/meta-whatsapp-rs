@@ -81,6 +81,29 @@ implements five methods once and every feature works.
   one kind.
 - Multi-step flows (Embedded Signup onboarding) wrap failures with
   `Error::in_step("stable_step_name")` so callers know how far they got.
+- **`Error::Credit(CreditError)`**, the one leaf added for a feature
+  module, and why: a Solution Partner credit line is money (the partner
+  pays for every message on a shared line, and an attached line cannot be
+  taken back), and its steps stop in ways no existing leaf describes. A
+  `ValidationError` is never retryable and never sent, but a busy credit
+  step is worth retrying, a share that raced a revocation did reach Meta,
+  and a revocation that stopped part-way has already sent `DELETE`s and
+  carries a report the caller must act on. `CreditError` decides
+  `is_retryable` and `may_have_been_sent` per variant: `Busy` (retryable;
+  `posted` only for the two-call method's recorded share), `Revoked`
+  (`posted` when a share raced a revocation and was revoked at once),
+  `OwnerUnknown`, `StatusUnknown` and `ApprovalRequired` (nothing sent,
+  not retryable), `Reconcile` (sent: a share may be live; a person checks
+  Meta Business Suite) and `RevocationIncomplete`, whose
+  `RevocationIncomplete` struct holds the `CreditRevocation` report, the
+  `failed`, `unconfirmed` and `unattributed` records, `deletes_sent` and the
+  first underlying error as its `source`; it is retryable unless a record
+  names no business or the source is not. `CreditError::kind()` is
+  `ServiceUnavailable` for `Busy`, the source's kind for an incomplete
+  revocation, `InvalidParameter` for the refusals. Helpers:
+  `Error::credit()` (looks through `Step`, like `graph()`),
+  `CreditError::revocation()`, and `EmbeddedSignup::is_credit_line_revoked`
+  / `is_credit_step_busy`.
 - Examples and binaries use `anyhow::Result` at the edge.
 - No module adds a variant to the root for its own convenience; a new leaf
   needs a reason in this document.
@@ -316,7 +339,8 @@ message event (`FINISH` with `waba_id`, `phone_number_id`, `business_id`;
    with AES-256-GCM under an integrator-supplied key, key id recorded for
    rotation) keyed by WABA id, with a phone-number → WABA index.
 
-`EmbeddedSignup::onboard(&request, &vault) → Onboarded` runs, in order:
+`EmbeddedSignup::onboard(&request, &vault) → Onboarded` (Tech Provider;
+Solution Partner mode requires `onboard_with_approval`) runs, in order:
 exchange code → `debug_token` → **verify** that the WABA id from the browser
 event is among the token's grants and that the phone number belongs to that
 WABA (browser-supplied ids are never trusted — otherwise one merchant could
@@ -366,9 +390,14 @@ cannot be taken back, so the design is fail-closed:
   exchanged. A Tech Provider request naming one (or a re-share) is refused
   the same way. The first currency is sealed before the first share is
   posted; another one is refused later.
-- **Gate before sharing**: tenant checks on the verified ids go in
-  `onboard_with_approval`, which runs before `store_token`; a check after
-  `onboard` would come after the line is attached.
+- **Approval required before sharing**: plain `onboard` is refused
+  (`CreditError::ApprovalRequired`, before the code is exchanged); tenant
+  checks on the verified ids go in `onboard_with_approval`, which runs
+  before `store_token` and records the approval in the credit ledger
+  (`approved_at`). `resume` shares only for a WABA approved so;
+  `resume_with_approval` approves a token stored without one (Tech
+  Provider mode before a switch). The policy stays the integrator's
+  (`OPEN_QUESTIONS.md` #6).
 - `CreditSharing::ShareAndAttach` (default, Meta's current method):
   `assign_system_user` (`POST /{waba}/assigned_users`, system user token,
   the method's documented prerequisite), then
@@ -378,29 +407,52 @@ cannot be taken back, so the design is fail-closed:
   user token), then `whatsapp_credit_attach` with the merchant's business
   token.
 - `share_credit_line` holds a per-WABA lease (`put_if_absent` with
-  expiry) and checks before it posts, in `onboard` and `resume` alike: the
-  line's records for the owner business (`owning_credit_allocation_configs`,
-  only records naming that business) plus the recorded allocation, each
-  with its `request_status` (the lookup does not say whether a record was
-  revoked); an active one whose receiving credential is the WABA's
-  `primary_funding_id` means nothing is posted. A POST that timed out may
-  have succeeded and Meta refuses a second attach, so a share is never
-  posted again without that check; a resumed step that cannot check
-  refuses. A business marked revoked, or with only `DELETED` records, is
-  refused unless `OnboardingRequest::reshare_after_revocation` opts in.
+  expiry, renewed by compare-and-swap right before each POST; lost, the
+  step posts nothing more) and checks before it posts, in `onboard` and
+  `resume` alike: the line's records for the owner business
+  (`owning_credit_allocation_configs`, only records naming that business)
+  plus the recorded allocation, each with its `request_status` (the lookup
+  does not say whether a record was revoked; no status is active, an
+  undocumented one is `StatusUnknown`); an active one whose receiving
+  credential is the WABA's `primary_funding_id` means nothing is posted. A
+  POST that timed out may have succeeded and Meta refuses a second attach,
+  so a share is never posted again without that check: the ledger seals
+  `pending_share` before each POST and clears it once the allocation is
+  recorded (merged by compare-and-swap, never reported busy after a POST),
+  and a pending share nothing explains on a funded WABA is `Reconcile`.
+  No owner business, no share (`OwnerUnknown`). A business marked
+  revoked, or with only `DELETED` records, is refused unless
+  `OnboardingRequest::reshare_after_revocation` opts in.
+- **A revocation racing a share**: the revocation writes its marker
+  before it looks anything up; the share reads the marker after its POST.
+  One of them sees the other, so a share that finds a new or changed
+  marker revokes the allocation it just made (`Revoked` with `posted`),
+  and an opted-in re-share clears the marker only by compare-and-swap on
+  the version it read.
 - **The credit ledger** (`TokenVault::credit`, `revoked_business`):
-  `credit/<WABA>` holds the owner, the allocation and the currency,
-  written by compare-and-swap; `revoked/<BUSINESS>` marks a revoked
-  business; both sealed with the vault keys (AAD bound to the store key)
+  `credit/<WABA>` holds the owner, the allocation, the currency, the
+  approval and the pending-share flag, written by compare-and-swap;
+  `revoked/<BUSINESS>` marks a revoked business; both sealed with the
+  vault keys (AAD bound to the store key), re-sealed on read like tokens,
   and left by `TokenVault::delete`, so revocation works after the token
-  is gone. The token record keeps its pre-Solution-Partner format.
-- `revoke_credit_line(&waba_id, owner_business_id, &vault)` marks the
-  business revoked, then revokes every active record naming the owner
-  recorded at onboarding (or, when nothing is recorded, a signed
-  webhook's `owner_business_id`; a contradicting one revokes nothing) plus
-  the recorded allocation, confirming each; every record is attempted
-  before a failure is returned. `offboard` revokes first and deletes the
-  token second.
+  is gone (`rotate` covers them, `rotate_business` a marker no credit
+  record names). Sealing stops forgery and moving; it does not stop
+  someone with write access to the store from deleting a record or
+  putting back an older copy (rollback is out of scope). The token record
+  keeps its pre-Solution-Partner format.
+- `revoke_credit_line(&waba_id, owner_business_id, &vault)` resolves the
+  business (recorded at onboarding, else named by Meta's record of the
+  recorded allocation and written back, else a signed webhook's
+  `owner_business_id` if the line has records naming it; a contradicting
+  one revokes nothing), marks it revoked (replacing an unreadable marker;
+  a failed marker write does not stop the `DELETE`s), then revokes every
+  active record naming it plus the recorded allocation, confirming each;
+  every record is attempted, and what is left undone is
+  `RevocationIncomplete` with the report. `revoke_business_credit_line`
+  does the same from a business id alone. `offboard` revokes first and
+  deletes the token second; with nothing to address and no share in the
+  ledger it just deletes, and a recorded share revocation cannot find is
+  `Reconcile` with the token kept.
 
 The calls themselves are `wa_client::credit_lines` (list, share-and-attach,
 share, attach, receiving credential, primary funding, find records,

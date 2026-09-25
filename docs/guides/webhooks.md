@@ -211,7 +211,7 @@ every time.
 | `AccountUpdated` (`account_update`) | restrictions, violations | also onboarding and offboarding; for `Partner*` events `waba_id` comes from `waba_info` (the entry id is a business portfolio, kept as `entry_id`) |
 | `PhoneNumberQualityUpdated`, `BusinessCapabilityUpdated`, `AccountAlert` | limits and quality | per merchant |
 | `UserIdChanged` (`user_id_update`) | a customer's BSUID changed | merge conversations yourself |
-| `Unknown`, `Unparsed` | a field or shape this version does not type | same |
+| `Unknown`, `Unparsed` | a field or shape this version does not type (an `account_update` that did not parse keeps its `waba_info.waba_id` as `waba_id`) | same |
 
 Key customers by their business-scoped user id (`contact.user_id`): since
 2026 the phone number (`wa_id`) may be absent.

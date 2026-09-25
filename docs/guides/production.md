@@ -78,7 +78,7 @@ runs it against real Postgres and Redis.
 | system user token | your own number (OTP, order messages) | secret manager | generate a new one in Business Settings, deploy, revoke the old |
 | app secret | webhook signatures, the code exchange, the app token for `debug_token` | secret manager | list old and new in `SignatureVerifier::new` while rolling out, then drop the old |
 | verify token | webhook `GET` verification | secret manager | change it in the dashboard and in your config together |
-| vault key(s) | encrypting merchants' tokens | secret manager, **not** the vault's database | `VaultKeys::new(new).with_previous(old)`, `vault.rotate(&waba_id)` for each WABA, drop the old key |
+| vault key(s) | encrypting merchants' tokens, and a Solution Partner's credit ledger | secret manager, **not** the vault's database | `VaultKeys::new(new).with_previous(old)`, `vault.rotate(&waba_id)` for every WABA ever onboarded (offboarded ones too: the credit ledger outlives the token), `vault.rotate_business(&business_id)` for each business revoked by business id alone, then drop the old key |
 | OTP pepper | keyed hashes of codes and numbers | secret manager, not the OTP database | invalidates outstanding codes and resets limits |
 | merchants' business tokens | acting as a merchant | the vault only | merchant reconnects (no refresh) |
 | two-step PINs | registering numbers | not stored by wa-rs; the examples ask the merchant per attempt | your policy ([open question](../../OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants) 4) |
@@ -203,10 +203,25 @@ notification queue on top must be idempotent itself: tag each message with
   merchant's); templates approved in every language you send.
 - Tech Provider: App Review passed with Advanced access; Embedded Signup
   domains and configuration set ([embedded-signup.md](embedded-signup.md)).
-- Solution Partner: the system user's token, id and your credit line id in
-  the secret manager and configuration; a currency for every merchant (or
-  a default); `PartnerRemoved` wired to `revoke_credit_line`
-  ([embedded-signup.md](embedded-signup.md#solution-partner-mode)).
+- Solution Partner ([embedded-signup.md](embedded-signup.md#solution-partner-mode)):
+  - the system user's token, id and your credit line id in the secret
+    manager and configuration; a currency for every merchant (or a
+    default);
+  - the approval gate: onboarding through `onboard_with_approval` (plain
+    `onboard` is refused), reserving the WABA for the merchant in one
+    atomic write, and `resume_with_approval` for tokens stored before the
+    deployment became a Solution Partner;
+  - `PartnerRemoved` wired to `revoke_credit_line` (to
+    `revoke_business_credit_line` when it names no WABA), with your
+    decided policy for a coexistence disconnection;
+  - `PartnerAppUninstalled` wired to `offboard`, **only when its
+    `waba_info.partner_app_id` is your app id**;
+  - key rotation walking every WABA ever onboarded, offboarded ones
+    included, and every business revoked by id (`rotate_business`): the
+    credit ledger is sealed with the vault keys;
+  - alerts on `CreditError::Reconcile` and on a
+    `CreditError::RevocationIncomplete` that is not retryable: both need a
+    person and Meta Business Suite.
 - Webhook fields subscribed; alerts wired ([webhooks.md](webhooks.md#8-operational-alerts)).
 - Secrets from the secret manager, none in the repository or the database.
 - [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) read: several defaults there

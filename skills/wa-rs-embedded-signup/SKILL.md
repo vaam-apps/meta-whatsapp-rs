@@ -10,7 +10,7 @@ description: "Letting each merchant of a multi-tenant CMS connect their own What
 Reference code, compiled and tested by wa-rs's own gate:
 [examples/onboarding.rs](examples/onboarding.rs), [examples/solution_partner.rs](examples/solution_partner.rs).
 The page side: [references/frontend.md](references/frontend.md). A full
-server: [`embedded_signup.rs`](https://github.com/vaam-apps/wa-rs/blob/main/crates/wa-rs/examples/embedded_signup.rs).
+**Tech Provider** server: [`embedded_signup.rs`](https://github.com/vaam-apps/wa-rs/blob/main/crates/wa-rs/examples/embedded_signup.rs).
 
 ## When to use
 
@@ -27,8 +27,8 @@ configuration (its **configuration id**), the app subscribed to
 `messages` and `account_update`. Merchants add a payment method before
 their number can send, unless you are a **Solution Partner** sharing your
 credit line ([references/solution-partner.md](references/solution-partner.md):
-one `SolutionPartner` per deployment, a currency per merchant). Steps:
-[embedded-signup guide](https://github.com/vaam-apps/wa-rs/blob/main/docs/guides/embedded-signup.md).
+one `SolutionPartner` per deployment, a currency per merchant, approval
+required). [Guide](https://github.com/vaam-apps/wa-rs/blob/main/docs/guides/embedded-signup.md).
 
 ## Wire once, on a shared store
 
@@ -104,15 +104,15 @@ names are constants in `embedded_signup::steps`:
 | Step | Then |
 | --- | --- |
 | `exchange_code`, `debug_token`, `verify_assets` | start over: the code is spent |
-| `approve` (`onboard_with_approval` only) | your refusal: nothing was stored, subscribed or shared |
+| `approve` (`onboard_with_approval`, `resume_with_approval`) | your refusal: nothing stored, subscribed or shared; a Solution Partner's `resume` of an unapproved WABA |
 | `store_token` | fix the store, start over |
 | `subscribe_app`, `assign_system_user`, `share_credit_line`, `register_phone` (`AFTER_STORE`) | the token is stored: fix the cause, then **`resume`** |
 
 The browser's ids are claims: `verify_assets` checks them with Meta. The
 token is stored first: later steps fail for fixable reasons (a wrong PIN,
-`ErrorKind::TwoStepVerification`). The credit steps check before they
-post and refuse a revoked business. Refuse another merchant's WABA in
-`onboard_with_approval`, before anything is stored.
+`ErrorKind::TwoStepVerification`). Credit steps check before they post
+and refuse a revoked business (`err.credit()`). Refuse another merchant's
+WABA in `onboard_with_approval` (required for a Solution Partner).
 
 ```rust
 let request = OnboardingRequest::new(SignupCode::new("unused")?, saved_session)

@@ -25,7 +25,7 @@ field module). Payloads are boxed.
 | `FlowUpdated` | `flows` | `time`, `update: Box<FlowsValue>` |
 | `AccountAlert` | `account_alerts` | `time`, `alert` |
 | `AccountReviewUpdated` | `account_review_update` | `time`, `update` |
-| `AccountUpdated` | `account_update` | `waba_id` is an **`Option`**: `waba_info.waba_id` for updates with a `waba_info` (Meta's PARTNER_* events, whose entry id is a business portfolio), the entry id otherwise; `entry_id` (verbatim), `time`, `update` |
+| `AccountUpdated` | `account_update` | `waba_id` is an **`Option`**: `waba_info.waba_id` for updates with a `waba_info` (Meta's PARTNER_* events, whose entry id is a business portfolio), the entry id otherwise; `entry_id` (verbatim), `time`, `update`. An event you stored before `entry_id` existed reads back the same way |
 | `AccountSettingsUpdated` | `account_settings_update` | `time`, `update` |
 | `BusinessCapabilityUpdated` | `business_capability_update` | `time`, `update` |
 | `BusinessUsernameUpdated` | `business_username_updates` | `time`, `update` |
@@ -39,7 +39,7 @@ field module). Payloads are boxed.
 | `TemplateStatusUpdated` | `message_template_status_update` | `time`, `update: Box<TemplateStatusUpdateValue>` |
 | `TemplateCategoryUpdated` | `template_category_update` | `time`, `update` |
 | `TemplateCategoryMisuseDetected` | `template_correct_category_detection` | `time`, `update` |
-| `Unknown` | any other, or a known field whose value did not parse | `field`, `time`, `raw: Value`, `parse_error: Option<String>` |
+| `Unknown` | any other, or a known field whose value did not parse | `waba_id` (the entry id; for an `account_update` that did not parse, its raw `waba_info.waba_id` when that is a non-blank string, since the entry id of such updates is a business portfolio), `field`, `time`, `raw: Value`, `parse_error: Option<String>` |
 | `Unparsed` | a signed body that is not a webhook envelope | `raw: Value`, `error: String` (no `waba_id`) |
 
 Undocumented or unavailable at 2026-09-24, so they arrive as `Unknown`:

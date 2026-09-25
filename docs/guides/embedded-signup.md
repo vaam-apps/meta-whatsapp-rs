@@ -9,7 +9,10 @@ wa-rs implements Embedded Signup v4 for a **Tech Provider** (each merchant
 adds a payment method and pays Meta) or a **Solution Partner** (your
 credit line pays for every merchant you onboard), chosen once per
 deployment: see [Solution Partner mode](#solution-partner-mode).
-Example: [`embedded_signup.rs`](../../crates/wa-rs/examples/embedded_signup.rs).
+Example: [`embedded_signup.rs`](../../crates/wa-rs/examples/embedded_signup.rs),
+a **Tech Provider** server (it calls plain `onboard`, which Solution Partner
+mode refuses); the Solution Partner flow is in the skill's
+[`solution_partner.rs`](../../skills/wa-rs-embedded-signup/examples/solution_partner.rs).
 Agent skills:
 [`wa-rs-embedded-signup`](../../skills/wa-rs-embedded-signup/SKILL.md),
 [`wa-rs-token-vault`](../../skills/wa-rs-token-vault/SKILL.md).
@@ -170,6 +173,9 @@ pub async fn complete(
     if !sessions.redeem(&state, merchant_id).await? {
         return Ok(Completed::StaleAttempt);
     }
+    // Tech Provider. A Solution Partner deployment refuses plain `onboard`
+    // (before spending the code): call `es.onboard_with_approval(&request,
+    // vault, |verified| …)` and reserve the WABA for `merchant_id` in it.
     match es.onboard(&request, vault).await { // the code is spent: never call this twice
         Ok(onboarded) => {
             save_merchant_waba(merchant_id, &onboarded.waba_id).await; // your tenant ↔ WABA table
@@ -207,7 +213,7 @@ with the names in `embedded_signup::steps`:
 | `exchange_code` | code → business token | start over (the code is spent) |
 | `debug_token` | inspects the new token | start over |
 | `verify_assets` | the WABA is among the token's grants, its owner is read from Meta, the number belongs to the WABA | start over; a mismatch means the browser's ids were wrong |
-| `approve` | `onboard_with_approval` only: your check of what Meta verified | nothing was stored, subscribed or shared; the merchant starts again if you allow it |
+| `approve` | `onboard_with_approval` (required for a Solution Partner) and `resume_with_approval`: your check of what Meta verified, recorded in the credit ledger in Solution Partner mode | nothing was stored, subscribed or shared; the merchant starts again if you allow it. A Solution Partner's `resume` fails here when no approval is recorded: `resume_with_approval` once |
 | `store_token` | encrypts the token into the vault, indexes every number of the WABA | fix the store, start over |
 | `subscribe_app` | `POST /{waba}/subscribed_apps` | fix, then `resume` |
 | `assign_system_user` | Solution Partner, share-and-attach only: your system user on the merchant's WABA | fix, then `resume` |
@@ -225,9 +231,14 @@ not serve), use `es.onboard_with_approval(&request, &vault, |verified| async mov
 instead of `onboard`: the closure receives the `VerifiedOnboarding` (WABA,
 owner business, numbers, all checked with Meta) right after
 `verify_assets`, and an error from it stops the flow at step `approve`
-with nothing stored, subscribed or shared. Checking after `onboard`
-returns is too late for a Solution Partner: the credit line is attached by
-then, and an attached line cannot be taken back from the WABA.
+with nothing stored, subscribed or shared. Reserve the WABA for the
+merchant in **one atomic write** there (`put_if_absent`, an insert on a
+unique key): with a lookup then a write, two merchants onboarding the same
+WABA at once both pass. Checking after `onboard` returns is too late for a
+Solution Partner: the credit line is attached by then, and an attached
+line cannot be taken back from the WABA, which is why a Solution Partner
+deployment refuses plain `onboard`. Which merchant may have a WABA is your
+policy: wa-rs decides none ([open decision](#open-decisions) 6).
 
 ## 6. Resume
 
@@ -238,6 +249,12 @@ if !merchant_owns_waba(&merchant_id, &waba_id).await { return Err(forbidden()) }
 let request = request.register_with_pin(TwoStepPin::new(corrected_pin)?);
 let done = es.resume(&waba_id, &request, &vault).await?; // the steps after store_token only
 ```
+
+A Solution Partner's `resume` shares the credit line only for a WABA whose
+approval the ledger records (`onboard_with_approval` records it); for a
+token stored without one it fails at step `approve` before any request:
+call `es.resume_with_approval(&waba_id, &request, &vault, |verified| …)`
+once, with the same tenant check as at onboarding.
 
 After a restart you no longer have the `OnboardingRequest`; rebuild one with
 a placeholder code (ignored by `resume`) and an empty `SessionInfo`:
@@ -255,9 +272,17 @@ A code-less constructor is an [open question](../../OPEN_QUESTIONS.md#embedded-s
   every merchant must connect again.
 - **Rotation:** start with `VaultKeys::new(new_key).with_previous(old_key)`.
   Reads re-encrypt old records under the active key (`rotate_on_read`, on by
-  default; turn it off on read-only replicas). The vault cannot list its
-  records, so walk *your* merchant table calling `vault.rotate(&waba_id)`,
-  then drop the old key.
+  default; turn it off on read-only replicas), tokens and the Solution
+  Partner credit ledger alike. The vault cannot list its records, so walk
+  *your* merchant table calling `vault.rotate(&waba_id)` for **every WABA
+  you ever onboarded, offboarded ones included** (a Solution Partner's
+  credit ledger outlives the token, and `rotate` re-seals it and the
+  revocation marker of the business it names), plus
+  `vault.rotate_business(&business_id)` for each business you revoked by
+  business id alone (`revoke_business_credit_line`). Only then drop the old
+  key: a record still under it fails with `CryptoError::InvalidKey`, and a
+  Solution Partner's onboarding, `resume` and revocation of that merchant
+  with it.
 - Records are bound to their WABA id: a record copied into another WABA's
   entry fails to decrypt instead of handing out the wrong token.
 - `TokenVault::store` trusts its input: every phone number id in the record
@@ -294,16 +319,20 @@ always go to the app's callback
 - **Meta tells you:** `WebhookEvent::AccountUpdated`, with the merchant's
   WABA in `event.waba_id()` (for the `Partner*` events wa-rs takes it from
   `waba_info.waba_id`: Meta's entry id there is a business portfolio, kept
-  as `entry_id`). On `AccountUpdateEvent::PartnerAppUninstalled` (the
-  business removed your app) call `es.offboard(waba_id, owner, &vault)`,
+  as `entry_id`). On `AccountUpdateEvent::PartnerAppUninstalled` whose
+  `waba_info.partner_app_id` is **your** app id (`es.app().app_id`; under a
+  Multi-Partner Solution the other partners' uninstalls reach you too), the
+  business removed your app: call `es.offboard(waba_id, owner, &vault)`,
   with `owner` the event's `waba_info.owner_business_id`; on
   `AccountDeleted`, `vault.delete`. `AccountOffboarded`, and
   `PartnerRemoved` with disconnection details, concern coexistence numbers
-  that changed device or number: ask the merchant to reconnect.
-  `PartnerRemoved` without them means the merchant unshared the WABA: a
-  Solution Partner revokes its credit line ([below](#solution-partner-mode)).
-  Pass `owner_business_id` only from a delivery whose signature was
-  checked.
+  that changed device or number: ask the merchant to reconnect; whether a
+  Solution Partner keeps funding such a number meanwhile is its own policy
+  ([below](#solution-partner-mode)). `PartnerRemoved` without them means
+  the merchant unshared the WABA: a Solution Partner revokes its credit
+  line (below; by business with `revoke_business_credit_line` when the
+  event names no WABA). Pass `owner_business_id` only from a delivery
+  whose signature was checked.
 - **The token stops working:** `ErrorKind::Authentication` (190) on a
   merchant's calls. Nothing refreshes tokens; the merchant runs Embedded
   Signup again. `StoredBusinessToken::is_expired(now)` tells you ahead of
@@ -338,14 +367,25 @@ let es = client
 // Per merchant, from your billing records (never the browser): checked
 // before the code is exchanged.
 let request = request.currency("EUR".parse::<WabaCurrency>()?);
-// Gate on the verified ids before anything is stored or shared (§5).
+// Required: plain `onboard` is refused. Reserve the WABA for the merchant
+// atomically in the approval, before anything is stored or shared (§5).
 let done = es.onboard_with_approval(&request, &vault, |verified| async move {
-    refuse_if_bound_to_another_tenant(&verified.waba_id).await
+    reserve_for_merchant(&verified.waba_id, merchant_id).await // put_if_absent, not a lookup
 }).await?;
 ```
 
-`onboard` then runs, following Meta's Solution Partner order (subscribe,
-share the credit line, register):
+**The approval is required.** A Solution Partner deployment refuses plain
+`onboard` before the code is exchanged (`CreditError::ApprovalRequired`),
+because the approval is the last point where a line can still be kept from
+a WABA. `onboard_with_approval` records the approval in the vault's credit
+ledger (`StoredCredit::approved_at`), and `resume` shares only for a WABA
+approved so: a token stored without one (onboarded in Tech Provider mode
+before the deployment switched, or by an older wa-rs) fails `resume` at
+step `approve` until `resume_with_approval` approves it once. Which merchant
+may have a WABA stays your policy (open decision 6).
+
+`onboard_with_approval` then runs, following Meta's Solution Partner order
+(subscribe, share the credit line, register):
 
 | After `subscribe_app` | Request | Token |
 | --- | --- | --- |
@@ -364,20 +404,37 @@ share the credit line, register):
   code; a Tech Provider request naming one is refused too. The first
   currency is sealed in the vault before the first share is posted; a
   `resume` or a later onboarding of the WABA naming another is refused.
-- **It checks before it posts.** When an active record (its
-  `request_status` is not `DELETED`) has the WABA's `primary_funding_id`
-  as its receiving credential, nothing is posted. So a timed-out share
-  (which may have gone through: `Error::may_have_been_sent`) is safe to
-  `resume`, and so is onboarding a WABA that is already funded. A resumed
-  step that cannot check (Meta reported no owner and nothing is recorded)
-  refuses rather than share blindly. Two onboardings of one WABA at once:
-  the second is refused (`EmbeddedSignup::is_credit_step_busy`) and
-  resumes later.
+- **It checks before it posts.** When an active record (no
+  `request_status`: Meta documents only `DELETED`) has the WABA's
+  `primary_funding_id` as its receiving credential, nothing is posted. So
+  a timed-out share (which may have gone through:
+  `Error::may_have_been_sent`) is safe to `resume`, and so is onboarding a
+  WABA that is already funded. The ledger flags each post until its
+  allocation is recorded (`StoredCredit::pending_share`); a flagged share
+  that no record explains, on a WABA something funds, is
+  `CreditError::Reconcile`: check in Meta Business Suite before anything
+  else. Without the owner business (`owner_business_info`, which Meta's
+  docs show on every WABA) nothing can be checked or revoked, so nothing
+  is shared (`CreditError::OwnerUnknown`).
+- **One onboarding at a time.** The credit step holds a per-WABA lease,
+  renewed right before each post; a second onboarding of the WABA, or one
+  whose lease a slow step outlived, posts nothing and is
+  `CreditError::Busy` (`EmbeddedSignup::is_credit_step_busy`, retryable:
+  resume later).
 - **A revoked business stays revoked.** When `revoke_credit_line` marked
   the business revoked, or Meta reports only `DELETED` records for it,
-  `onboard` and `resume` refuse (`EmbeddedSignup::is_credit_line_revoked`)
-  unless the request says `.reshare_after_revocation()`. Funding a
-  merchant again is your decision, taken per onboarding.
+  `onboard_with_approval` and `resume` refuse (`CreditError::Revoked`,
+  `EmbeddedSignup::is_credit_line_revoked`) unless the request says
+  `.reshare_after_revocation()`; a record whose `request_status` Meta does
+  not document is refused the same way (`CreditError::StatusUnknown`).
+  Funding a merchant again is your decision, taken per onboarding. A
+  revocation that runs while a share is posted wins: it writes its marker
+  before it looks anything up, the share reads the marker after it posts,
+  and a share that finds a new or changed marker revokes what it just
+  shared (`CreditError::Revoked` with `posted`).
+- Every refusal is a `CreditError` (`err.credit()`), with its own
+  `is_retryable()` and `may_have_been_sent()`; branch on those, never on
+  the text.
 - The allocation comes back as `Onboarded::allocation_config_id` and is
   recorded, with the owner and the currency, in the vault's credit ledger
   (`vault.credit(&waba_id)`), which `vault.delete` leaves in place.
@@ -396,26 +453,43 @@ let owner = update.waba_info.as_ref().and_then(|i| i.owner_business_id.as_ref())
 let report = es.revoke_credit_line(waba_id, owner, &vault).await?; // report.revoked, report.already_revoked
 ```
 
-- It marks the business revoked in the vault first, then revokes every
-  active record of your line naming the business, plus the allocation
-  recorded at onboarding, confirming each with `request_status`; records
-  already `DELETED` are skipped, one naming another business is never
-  touched, and one naming no business makes the call fail with its id
-  rather than be revoked blindly. Every record is tried before a failure
-  is returned. Safe to repeat.
+- It marks the business revoked in the vault first (replacing a marker it
+  cannot read: a marker only makes onboarding stricter), before looking
+  anything up, then revokes every active record of your line naming the
+  business, plus the allocation recorded at onboarding, confirming each
+  with `request_status`; records already `DELETED` are skipped, one naming
+  another business is never touched, and one naming no business is
+  reported rather than revoked blindly. Every record is tried, and a
+  marker that cannot be written does not stop the `DELETE`s. What is left
+  undone is `CreditError::RevocationIncomplete`, carrying the report and
+  the failed, unconfirmed and unattributed records: repeat the call when
+  it `is_retryable()`, otherwise check those records in Meta Business
+  Suite. Safe to repeat.
 - The owner comes from what onboarding recorded (the token record, else
-  the credit ledger); the webhook's `owner_business_id` is used only when
-  nothing is recorded, and if it contradicts the record nothing is
+  the credit ledger, else the business Meta's own record of the recorded
+  allocation names, which is then written into the ledger); the
+  webhook's `owner_business_id` is used only when none of these exists,
+  and only if your line has records naming it (so an id that is not your
+  customer's marks nothing). If it contradicts the record nothing is
   revoked.
 - **Revocation is per business**: every WABA of that business shared with
-  you loses the line.
-- When to revoke after `PartnerRemoved` is your call: at once, as Meta
-  recommends, or later for a coexistence number that may reconnect. A
-  reconnect then needs `.reshare_after_revocation()`.
+  you loses the line. `es.revoke_business_credit_line(&business_id,
+  &vault)` revokes from a business id alone, for a `PartnerRemoved` that
+  names no WABA.
+- When to revoke after a coexistence `PartnerRemoved` (with
+  `disconnection_info`: a number that changed device and may reconnect)
+  is your call: at once, as Meta recommends for any removal, or after a
+  grace period. The skill's example routes it to a policy point and
+  decides neither. A reconnect after a revocation needs
+  `.reshare_after_revocation()`.
 - `es.offboard(&waba_id, owner, &vault)` revokes the same way and then
   deletes the token (§9). The credit ledger outlives the token, so
   `PartnerAppUninstalled` and `PartnerRemoved` end with the line revoked
-  in either order.
+  in either order. When nothing names the business and the ledger shows
+  nothing was ever shared, there is nothing to revoke and the token is
+  deleted; when the ledger shows a share that revocation cannot find (or
+  cannot be read), the token is kept (`CreditError::Reconcile`): check in
+  Meta Business Suite, then `vault.delete` it yourself.
 
 The lower-level calls (`CreditLines::share`, `attach`,
 `receiving_credential`, `primary_funding`, `allocations_for`,
@@ -465,7 +539,7 @@ one per deployment):
 | --- | --- | --- |
 | 4 | Two-step PIN policy | you pass a 6-digit PIN on every `onboard`/`resume`; nothing generates or stores it (the example asks the merchant each time) |
 | 5 | Multi-WABA signups | only the claimed (or first, or newest granted) WABA is onboarded |
-| 6 | One WABA shared by several tenants | the vault is keyed by WABA; the last onboarding wins unless your `onboard_with_approval` refuses it |
+| 6 | One WABA shared by several tenants | the vault is keyed by WABA; the last onboarding wins unless your `onboard_with_approval` refuses it (required for a Solution Partner, whose approval is recorded; the policy is still yours) |
 | 7 | Coexistence sync | flagged by `needs_coexistence_sync()`, not triggered |
 | 8 | Token expiry and refresh | expiry recorded, nothing refreshes |
 | 9 | Vault key custody and rotation cadence | you supply keys; rotation supported, not scheduled |

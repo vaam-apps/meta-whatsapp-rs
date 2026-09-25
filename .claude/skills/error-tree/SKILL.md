@@ -14,6 +14,8 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
       ─ Decode{context, source, body_snippet}
       ─ Validation(ValidationError{field, reason})
       ─ Webhook / Storage / Sink / Crypto / Config
+      ─ Credit(CreditError)                       Solution Partner credit line: refused, busy,
+                                                  reconcile, or a revocation part-way (with report)
       ─ Step{step, source}                        multi-step flow failed at `step`
       ─ Other(anyhow::Error)                      integrator code
 ```
@@ -38,6 +40,13 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
   integrators branch on it ("fix and resend" vs "reconcile first") and
   the OTP service removes a challenge only when it is `false`. Add a row
   per new arm to `may_have_been_sent_only_when_meta_could_have_acted`.
+- A refusal that is not a plain input error goes in a typed node that
+  decides retry and sent-ness itself, not in a `ValidationError` (never
+  retryable, never sent): the precedent is `Error::Credit(CreditError)`,
+  whose `RevocationIncomplete` carries the partial report instead of
+  leaving it in a log line. Reach it through a helper that looks through
+  `Step` (`Error::credit()`, like `Error::graph()`), and document the
+  helpers in `docs/architecture.md` § Error tree.
 - `anyhow` only wraps errors from code we don't own
   (`TransportError::Backend`, `StorageError::Backend`, `SinkError::Delivery`,
   `Error::Other`).
