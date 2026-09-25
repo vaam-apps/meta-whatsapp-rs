@@ -677,29 +677,35 @@ async fn live_postgres_upgrade_keeps_existing_content_and_stops_old_writers() {
     db.drop().await;
 }
 
-/// The pre-flight query of the `store::postgres` module docs ("Upgrading"),
-/// verbatim: every object of an operator's own on the content columns of
-/// the default tables. Keep the two copies identical.
-const PREFLIGHT: &str = "\
-SELECT pg_describe_object(d.classid, d.objid, d.objsubid) AS object,
-       d.refobjid::regclass::text AS tbl, a.attname::text AS col
-FROM pg_depend d, pg_attribute a
-WHERE d.refclassid = 'pg_class'::regclass
-  AND d.refobjid IN ('wa_messages'::regclass, 'wa_conversations'::regclass)
-  AND a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
-  AND a.attname IN ('kind', 'text', 'payload', 'error', 'last_text')
-  AND NOT (d.classid = 'pg_constraint'::regclass
-           AND (SELECT contype FROM pg_constraint WHERE oid = d.objid) = 'n')
-UNION
-SELECT pg_describe_object('pg_trigger'::regclass, t.oid, 0), t.tgrelid::regclass::text, NULL
-FROM pg_trigger t
-WHERE t.tgrelid IN ('wa_messages'::regclass, 'wa_conversations'::regclass)
-  AND NOT t.tgisinternal
-UNION
-SELECT 'function ' || p.oid::regprocedure::text, NULL, NULL
-FROM pg_proc p
-WHERE p.prosrc ~ '(wa_messages|wa_conversations)'
-ORDER BY 1";
+/// The pre-flight query of the `store::postgres` module docs ("Upgrading to
+/// lossless content"), read from them: the ```` ```sql ```` block. Tests
+/// run the query the operators copy.
+fn preflight() -> String {
+    let docs = include_str!("../src/store/postgres/mod.rs");
+    let lines: Vec<&str> = docs
+        .lines()
+        .map(|l| l.trim_start_matches("//!").trim_start())
+        .skip_while(|l| *l != "```sql")
+        .skip(1)
+        .take_while(|l| *l != "```")
+        .collect();
+    assert!(
+        lines.len() > 10,
+        "no pre-flight query in the module docs: {lines:?}"
+    );
+    lines.join("\n")
+}
+
+/// The objects the pre-flight query lists in the pool's schema.
+async fn preflight_objects(pool: &PgPool) -> Vec<String> {
+    sqlx::query_as::<_, (String, Option<String>, Option<String>)>(AssertSqlSafe(preflight()))
+        .fetch_all(pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(object, _, _)| object)
+        .collect()
+}
 
 /// A database of its own (the trigram case installs an extension, which is
 /// per database), one schema per case in it.
@@ -809,22 +815,13 @@ async fn assert_refused(db: &PrivateDb, schema: &str, case: &str, object: &str, 
     for m in &rows {
         append_like_09db4aa(&pool, m).await.unwrap();
     }
-    let preflight = |pool: PgPool| async move {
-        sqlx::query_as::<_, (String, Option<String>, Option<String>)>(PREFLIGHT)
-            .fetch_all(&pool)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|(object, _, _)| object)
-            .collect::<Vec<_>>()
-    };
-    let before = preflight(pool.clone()).await;
+    let before = preflight_objects(&pool).await;
     assert!(before.is_empty(), "{case}: none of ours: {before:?}");
     sqlx::query(AssertSqlSafe(object.to_owned()))
         .execute(&pool)
         .await
         .unwrap();
-    let found = preflight(pool.clone()).await;
+    let found = preflight_objects(&pool).await;
     assert!(
         found.iter().any(|o| o.contains(listed)),
         "{case}: the pre-flight lists it: {found:?}"
@@ -942,16 +939,8 @@ async fn live_postgres_upgrade_keeps_plain_indexes_and_json_expressions_fail_nul
             .await
             .unwrap();
     }
-    let preflight: Vec<String> =
-        sqlx::query_as::<_, (String, Option<String>, Option<String>)>(PREFLIGHT)
-            .fetch_all(&pool)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|(object, _, _)| object)
-            .collect();
     assert_eq!(
-        preflight,
+        preflight_objects(&pool).await,
         ["index my_text", "trigger my_notify on table wa_messages"]
     );
     postgres::migrate(&pool).await.unwrap();
