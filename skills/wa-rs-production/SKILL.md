@@ -68,8 +68,8 @@ wired to `revoke_credit_line` at once, coexistence disconnections included
 `PartnerAppUninstalled` of **your** app to `offboard`; the key rotation
 above; an alert on `CreditError::Reconcile` and on a `RevocationIncomplete`
 that is not retryable (`ErrorKind::Unknown`: a person checks Meta Business
-Suite), and a retry of one that is; an admin action for a lost share Meta
-never lists (`clear_pending_share`).
+Suite), and a retry of one that is; a staff-only admin action for a lost
+share Meta never lists (`clear_pending_share`, with an operator id).
 
 ## Limits and retries
 

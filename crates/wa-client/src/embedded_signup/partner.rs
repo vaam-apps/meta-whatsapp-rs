@@ -9,6 +9,7 @@
 
 use std::fmt;
 
+use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 use wa_core::error::{CreditError, ValidationError};
 use wa_core::ids::{AllocationConfigId, BusinessId, CreditLineId, FundingId, SystemUserId, WabaId};
 use wa_core::secret::AccessToken;
@@ -551,6 +552,17 @@ impl EmbeddedSignup {
     /// `primary_funding_id` (with the merchant's stored token, which Meta
     /// requires; none stored is a validation error on `waba_id`, and a
     /// token Meta refuses is its error: either way nothing is cleared).
+    /// That read stays mandatory: it is what tells a lost share from
+    /// nothing. After `PARTNER_REMOVED` the merchant's token may no longer
+    /// read the WABA; the way out is a working token (a merchant who
+    /// connects again stores one at the `store_token` step, even when the
+    /// credit step then refuses the revoked business). Without one the flag
+    /// stays: revocations of the WABA keep answering `share_pending`
+    /// (retryable; stop retrying once Meta Business Suite shows no record
+    /// of your line for the business). wa-rs has no call that edits the
+    /// sealed record otherwise, and a hand edit of the store makes it
+    /// unreadable (then treated as a share by `offboard`): ask the wa-rs
+    /// maintainers rather than editing it.
     ///
     /// - An active record, one whose `request_status` Meta does not
     ///   document, or one the lookup returned naming no business, means the
@@ -583,8 +595,18 @@ impl EmbeddedSignup {
     /// [`StoredCredit::pending_share`] before clearing it (the library
     /// imposes no minimum).
     ///
+    /// **Operator-only.** Never route this call from a handler a merchant
+    /// can reach, and take `cleared_by` from your authenticated staff
+    /// session, never from the request. Prefer an opaque operator id to a
+    /// name or an email: it is personal data kept, sealed, for as long as
+    /// the WABA's credit record, which outlives the token (wa-rs never logs
+    /// it, and [`ClearedShare`]'s `Debug` redacts it). It is trimmed, and
+    /// refused when blank, longer than [`MAX_CLEARED_BY_CHARS`] characters,
+    /// or containing a control, format (U+200B, U+FEFF, bidi controls, …)
+    /// or line separator character.
+    ///
     /// Refused before anything is sent: outside Solution Partner mode (or
-    /// with an invalid [`SolutionPartner`]), with a blank `cleared_by`,
+    /// with an invalid [`SolutionPartner`]), with an invalid `cleared_by`,
     /// and when the ledger shows no pending share for the WABA (a
     /// validation error on `pending_share`; the lease taken meanwhile is
     /// released). A failed lookup, a record naming another business, a
@@ -600,13 +622,7 @@ impl EmbeddedSignup {
     ) -> Result<PendingShareClearance> {
         let partner = self.require_partner()?;
         let cleared_by = cleared_by.trim();
-        if cleared_by.is_empty() {
-            return Err(ValidationError::new(
-                "cleared_by",
-                "required: who checked the WABA's funding in Meta Business Suite, for the audit entry",
-            )
-            .into());
-        }
+        check_cleared_by(cleared_by)?;
         let mut lease = vault.lease_credit(waba_id).await?;
         let outcome = self
             .clear_leased(
@@ -1623,6 +1639,41 @@ async fn revoke_raced(
             .into()
         }
     }
+}
+
+/// The longest `cleared_by` [`EmbeddedSignup::clear_pending_share`]
+/// accepts, in characters (after trimming): an operator id, not a note.
+pub const MAX_CLEARED_BY_CHARS: usize = 256;
+
+/// `cleared_by`, trimmed: not blank, at most [`MAX_CLEARED_BY_CHARS`]
+/// characters, and nothing invisible or line-breaking (control, format
+/// such as U+200B or bidi controls, line and paragraph separators), so an
+/// audit entry cannot look blank or like another operator.
+fn check_cleared_by(cleared_by: &str) -> Result<(), ValidationError> {
+    let bad = |reason: &str| Err(ValidationError::new("cleared_by", reason));
+    if cleared_by.is_empty() {
+        return bad(
+            "required: the operator who checked the WABA's funding in Meta Business Suite, for the audit entry",
+        );
+    }
+    if cleared_by.chars().count() > MAX_CLEARED_BY_CHARS {
+        return bad("longer than 256 characters: pass an operator id");
+    }
+    let invisible = |c: char| {
+        c.is_control()
+            || matches!(
+                c.general_category(),
+                GeneralCategory::Format
+                    | GeneralCategory::LineSeparator
+                    | GeneralCategory::ParagraphSeparator
+            )
+    };
+    if cleared_by.chars().any(invisible) {
+        return bad(
+            "must not contain control, format (U+200B, U+FEFF, bidi controls, …) or line separator characters",
+        );
+    }
+    Ok(())
 }
 
 /// The owner business a clearance checks the line's records for: the one
@@ -5489,6 +5540,10 @@ mod tests {
         assert_eq!(credit.pending_share, None);
         assert_eq!(credit.cleared_shares, std::slice::from_ref(&entry));
         assert!(!credit.records_a_share(), "a cleared share is not a share");
+        for shown in [format!("{out:?}"), format!("{credit:?}")] {
+            assert!(!shown.contains("wind-and-wool"), "{shown}");
+            assert!(shown.contains("cleared_by: \"<redacted>\""), "{shown}");
+        }
         let sealed = h
             .vault
             .kv()
@@ -5795,7 +5850,7 @@ mod tests {
         let h = harness(CreditSharing::ShareAndAttach);
         lost_share(&h).await;
         let sent = h.t.requests().len();
-        for blank in ["", "  "] {
+        for blank in ["", "  ", "\u{200B}", "ops\u{202E}", "ops\nothers"] {
             let err =
                 h.es.clear_pending_share(&waba(), blank, None, &h.vault)
                     .await
@@ -6277,6 +6332,37 @@ mod tests {
         let credit = rotated.credit(&waba()).await.unwrap().unwrap();
         assert!(credit.pending_share.is_some() && credit.cleared_shares.is_empty());
         assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// `cleared_by` is an operator id for an audit entry: not blank, not
+    /// free text, nothing invisible or line-breaking.
+    #[test]
+    fn cleared_by_is_an_operator_id() {
+        assert!(check_cleared_by("op_7f3a").is_ok());
+        assert!(check_cleared_by("Aïcha Ndiaye").is_ok());
+        assert!(check_cleared_by(&"x".repeat(MAX_CLEARED_BY_CHARS)).is_ok());
+        assert!(
+            check_cleared_by(&"é".repeat(MAX_CLEARED_BY_CHARS)).is_ok(),
+            "characters, not bytes"
+        );
+        let long = "x".repeat(MAX_CLEARED_BY_CHARS + 1);
+        for bad in [
+            "",
+            "\u{200B}",
+            "\u{FEFF}ops",
+            "ops\u{202E}",
+            "ops\u{2066}x",
+            "ops\nother",
+            "ops\u{2028}x",
+            "ops\u{7}",
+            &long,
+        ] {
+            assert_eq!(
+                check_cleared_by(bad).unwrap_err().field,
+                "cleared_by",
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]

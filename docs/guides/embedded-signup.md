@@ -555,6 +555,18 @@ let report = es.revoke_credit_line(waba_id, owner, &vault).await?; // report.rev
   as if nothing had been posted. It refuses when nothing is pending.
   Meta documents no delay after which a share that went through is
   listed: let time pass since the pending share before clearing it.
+  It is an operator's call: never route it from a handler a merchant can
+  reach, and pass the operator id of your authenticated staff session as
+  `cleared_by`, not a name or an email (it stays, sealed, as long as the
+  WABA's credit record; wa-rs never logs it and `ClearedShare`'s `Debug`
+  redacts it). It is refused when blank, longer than 256 characters, or
+  containing control, format or line separator characters. It needs a
+  merchant token that still works: after `PartnerRemoved` it may not, and
+  then nothing is cleared (the funding read is what tells a lost share
+  from nothing). A merchant who connects again stores a new token, after
+  which the clearance works; until then revocations of that WABA keep
+  answering `share_pending`. There is no other call, and a hand edit of
+  the sealed record makes it unreadable: ask the wa-rs maintainers.
 - `es.offboard(&waba_id, owner, &vault)` revokes the same way and then
   deletes the token (§9). The credit ledger outlives the token, so
   `PartnerAppUninstalled` and `PartnerRemoved` end with the line revoked

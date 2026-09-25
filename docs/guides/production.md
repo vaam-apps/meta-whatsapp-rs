@@ -231,9 +231,12 @@ notification queue on top must be idempotent itself: tag each message with
     found yet, a ledger write) is called again later; a share whose
     answer was lost (`Reconcile`) is never retried at once;
   - an admin action for a pending share Meta never lists (a revocation
-    that keeps answering `share_pending`): after checking the WABA's
-    funding in Meta Business Suite, `clear_pending_share` with the
-    admin's name, which is sealed in the ledger;
+    that keeps answering `share_pending`), on a staff-only route: after
+    checking the WABA's funding in Meta Business Suite,
+    `clear_pending_share` with the operator id of the authenticated staff
+    session (not a name or an email: it is sealed in the ledger for as
+    long as the WABA's credit record), acknowledging a funding it reports
+    only once Business Suite shows it is not your line;
 - Webhook fields subscribed; alerts wired ([webhooks.md](webhooks.md#8-operational-alerts)).
 - Secrets from the secret manager, none in the repository or the database.
 - [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) read: several defaults there

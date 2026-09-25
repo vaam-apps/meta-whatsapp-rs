@@ -265,8 +265,13 @@ pub async fn reconnect(
   line. Otherwise it seals who cleared it, when, and the acknowledged
   funding in the ledger (`StoredCredit::cleared_shares`); revocation and
   `offboard` then behave as if nothing had been posted. It refuses when
-  nothing is pending, and needs the merchant's stored token (Meta serves
-  `primary_funding_id` to it).
+  nothing is pending, and needs a merchant token that still works (Meta
+  serves `primary_funding_id` to it; after `PartnerRemoved` it may not,
+  and a merchant who connects again stores a new one). **Operator-only**:
+  never reachable from a merchant's route; `cleared_by` is the operator id
+  of your authenticated staff session, not a name or an email (kept,
+  sealed, as long as the WABA's credit record; `Debug` redacts it; at
+  most `MAX_CLEARED_BY_CHARS` characters, nothing invisible).
 
 ```rust
 let outcome = es.clear_pending_share(waba_id, admin, confirmed, vault);

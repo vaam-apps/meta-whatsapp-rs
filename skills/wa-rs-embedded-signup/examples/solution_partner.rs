@@ -215,7 +215,7 @@ pub async fn clear_lost_share(
     es: &EmbeddedSignup,
     vault: &TokenVault,
     waba_id: &WabaId,
-    admin: &str,                   // who checked: sealed in the WABA's credit ledger
+    admin: &str, // your staff session's operator id, never the request's: sealed in the ledger
     confirmed: Option<&FundingId>, // a ConfirmFunding the admin confirmed, else None
 ) -> wa_rs::Result<Clearance> {
     let outcome = es.clear_pending_share(waba_id, admin, confirmed, vault);
@@ -714,7 +714,7 @@ mod tests {
         );
         let card = FundingId::new("MERCHANTS_CARD");
         assert_eq!(
-            clear_lost_share(&es, &vault, &WABA.into(), "ops@example.com", None)
+            clear_lost_share(&es, &vault, &WABA.into(), "op_7f3a", None)
                 .await
                 .unwrap(),
             Clearance::ConfirmFunding(card.clone())
@@ -725,7 +725,7 @@ mod tests {
             json!({"primary_funding_id": "MERCHANTS_CARD", "id": WABA}),
         );
         assert_eq!(
-            clear_lost_share(&es, &vault, &WABA.into(), "ops@example.com", Some(&card))
+            clear_lost_share(&es, &vault, &WABA.into(), "op_7f3a", Some(&card))
                 .await
                 .unwrap(),
             Clearance::Cleared
@@ -737,7 +737,7 @@ mod tests {
             "it checks, and posts nothing"
         );
         let cleared = vault.credit(&WABA.into()).await.unwrap().unwrap();
-        assert_eq!(cleared.cleared_shares[0].cleared_by, "ops@example.com");
+        assert_eq!(cleared.cleared_shares[0].cleared_by, "op_7f3a");
         // The revocation finishes now; nothing is left to clear.
         transport.push_json(200, json!({"data": []}));
         let PartnerAction::Revoked(done) = on_account_update(&es, &vault, &ours(), &removed())
@@ -748,7 +748,7 @@ mod tests {
         };
         assert_eq!(done.all().count(), 0);
         assert!(
-            clear_lost_share(&es, &vault, &WABA.into(), "ops@example.com", None)
+            clear_lost_share(&es, &vault, &WABA.into(), "op_7f3a", None)
                 .await
                 .is_err()
         );

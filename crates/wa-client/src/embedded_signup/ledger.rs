@@ -40,6 +40,7 @@
 //! [`TokenVault::rotate`] (a WABA's credit record and its business's
 //! marker) and [`TokenVault::rotate_business`] (a marker alone).
 
+use std::fmt;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -106,8 +107,9 @@ pub struct StoredCredit {
 
 /// One pending share an operator cleared: the audit entry
 /// [`EmbeddedSignup::clear_pending_share`](super::EmbeddedSignup::clear_pending_share)
-/// appends to [`StoredCredit::cleared_shares`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// appends to [`StoredCredit::cleared_shares`]. Its `Debug` redacts
+/// [`Self::cleared_by`].
+#[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ClearedShare {
     /// When the cleared share was flagged (the [`StoredCredit::pending_share`]
@@ -115,7 +117,11 @@ pub struct ClearedShare {
     pub pending_since: OffsetDateTime,
     /// When it was cleared (the vault's clock).
     pub cleared_at: OffsetDateTime,
-    /// Who cleared it, as the caller named them (trimmed).
+    /// Who cleared it, as the caller named them (trimmed). Personal data
+    /// unless you pass an opaque operator id (recommended): it is kept,
+    /// sealed, for as long as the WABA's credit record, which outlives the
+    /// token and is never deleted by wa-rs; wa-rs never logs it, and
+    /// `Debug` shows `<redacted>`.
     pub cleared_by: String,
     /// The WABA's `primary_funding_id` as Meta reported it when the share
     /// was cleared (`None`: nothing funded the WABA). When `Some`, no
@@ -123,6 +129,17 @@ pub struct ClearedShare {
     /// this id as not your line (`acknowledged_funding`), or nothing would
     /// have been cleared.
     pub primary_funding_id: Option<FundingId>,
+}
+
+impl fmt::Debug for ClearedShare {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClearedShare")
+            .field("pending_since", &self.pending_since)
+            .field("cleared_at", &self.cleared_at)
+            .field("cleared_by", &"<redacted>")
+            .field("primary_funding_id", &self.primary_funding_id)
+            .finish()
+    }
 }
 
 impl StoredCredit {

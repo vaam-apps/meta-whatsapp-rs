@@ -157,7 +157,14 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   is pending. A share whose post outlived its 300 s lease and whose
   answer is lost (or not recorded) sets the pending flag again, even when
   a clearance took the expired lease and cleared it meanwhile; keep the
-  request timeout (`ClientBuilder::timeout`) well below the lease.
+  request timeout (`ClientBuilder::timeout`) well below the lease. An
+  operator-only call: `cleared_by` should be the operator id of your
+  authenticated staff session, never taken from a merchant's request; it
+  is refused when blank, longer than `MAX_CLEARED_BY_CHARS` (256)
+  characters, or containing control, format or line separator
+  characters, and `ClearedShare`'s `Debug` redacts it. It needs a
+  merchant token that still works, which after `PARTNER_REMOVED` it may
+  not; a merchant who connects again stores a new one.
 - **`EmbeddedSignup::onboard_with_approval`** (and
   `resume_with_approval`): your check of the verified WABA, owner business
   and numbers (`VerifiedOnboarding`) runs after `verify_assets` and before

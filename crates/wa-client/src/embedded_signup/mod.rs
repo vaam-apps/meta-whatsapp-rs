@@ -291,7 +291,10 @@ pub use launch::{
 };
 pub use ledger::{ClearedShare, RevokedBusiness, StoredCredit};
 pub use onboard::{Onboarded, OnboardingRequest, VerifiedOnboarding, steps};
-pub use partner::{CreditSharing, Offboarded, PendingShareClearance, SharesFound, SolutionPartner};
+pub use partner::{
+    CreditSharing, MAX_CLEARED_BY_CHARS, Offboarded, PendingShareClearance, SharesFound,
+    SolutionPartner,
+};
 pub use session::{SESSION_NAMESPACE, SignupSessions, SignupState};
 pub use token::{
     BusinessToken, GranularScope, SignupCode, TokenDebug, TokenType, WHATSAPP_BUSINESS_MANAGEMENT,
