@@ -9,6 +9,7 @@
 //! meta-whatsapp-server admin create-platform-key --tenants '*'|a,b --scopes numbers,… [--name N] [--expires-at RFC3339]
 //! meta-whatsapp-server admin list-keys [--tenant ID]
 //! meta-whatsapp-server admin revoke-key <key_id>
+//! meta-whatsapp-server vault rotate           re-encrypt every token under the active vault key
 //! ```
 //!
 //! The admin commands need only `DATABASE_URL` (they migrate first unless
@@ -59,6 +60,20 @@ pub enum Command {
     /// Keys, from the database directly (the first admin key).
     #[command(subcommand)]
     Admin(AdminCommand),
+    /// The token vault.
+    #[command(subcommand)]
+    Vault(VaultCommand),
+}
+
+/// A vault command.
+#[derive(Debug, Subcommand)]
+pub enum VaultCommand {
+    /// Re-encrypt every bound WABA's token under the active vault key
+    /// (`WA_VAULT_KEY`, the old one in `WA_VAULT_PREVIOUS_KEYS`), like
+    /// `POST /v1/admin/vault/rotate`. Needs the service's configuration.
+    /// Exits non-zero when a record failed: keep the old key until none
+    /// does.
+    Rotate,
 }
 
 /// An admin command.
@@ -126,6 +141,29 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Admin(command) => {
             init_cli_logs();
             admin(command, &ProcessEnv).await
+        }
+        Command::Vault(VaultCommand::Rotate) => {
+            init_cli_logs();
+            let config = Config::from_process_env().context("refusing to rotate")?;
+            let backends = serve::backends(&config).await?;
+            let vault = serve::vault(backends.kv, config.vault_keys)?;
+            let report = crate::auth::rotate_vault(backends.store.as_ref(), &vault).await?;
+            println!(
+                "{} WABAs walked, {} records re-encrypted, {} failed{}",
+                report.wabas,
+                report.rotated,
+                report.failed.len(),
+                if report.failed.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", report.failed.join(", "))
+                }
+            );
+            anyhow::ensure!(
+                report.failed.is_empty(),
+                "some records were not rotated: keep the previous key"
+            );
+            Ok(())
         }
     }
 }

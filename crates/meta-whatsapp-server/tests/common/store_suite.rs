@@ -338,6 +338,17 @@ pub async fn bindings(store: &dyn Store) {
     );
     let wabas = store.wabas(&a, &page(None, 10)).await.unwrap();
     assert_eq!(wabas.items.len(), 1);
+    // Every tenant's, paged.
+    store.bind_waba(&b, &WabaId::new("w0"), &[]).await.unwrap();
+    let first = store.all_wabas(&page(None, 1)).await.unwrap();
+    assert_eq!(first.items[0].waba_id.as_str(), "w0");
+    let rest = store
+        .all_wabas(&page(first.next_after.as_deref(), 10))
+        .await
+        .unwrap();
+    assert_eq!(rest.items.len(), 1);
+    assert_eq!(rest.items[0].waba_id, waba);
+    assert!(store.unbind_waba(&WabaId::new("w0")).await.unwrap());
 
     // Unbind frees the WABA for B.
     assert!(store.unbind_waba(&waba).await.unwrap());

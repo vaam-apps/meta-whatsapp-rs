@@ -248,6 +248,10 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
         .call(delete("/v1/wabas/102290129340398", &tenant_key))
         .await;
     assert_eq!(disconnected.status.as_u16(), 204, "{}", disconnected.text);
+    let rotated = h
+        .call(Call::new(Method::POST, "/v1/admin/vault/rotate").key(&admin))
+        .await;
+    assert_eq!(rotated.status.as_u16(), 200, "{}", rotated.text);
     // Operations, keyless.
     for path in [
         "/livez",

@@ -18,7 +18,7 @@ use time::OffsetDateTime;
 use utoipa::ToSchema;
 
 use super::common::{ApiJson, PageParams, PageQuery, json, next_cursor, parse_rfc3339, rfc3339};
-use crate::auth::{AdminCaller, OwnedWaba};
+use crate::auth::{AdminCaller, OwnedWaba, VaultRotation};
 use crate::error::{ApiError, ErrorBody};
 use crate::keys::MintedKey;
 use crate::model::{
@@ -1097,4 +1097,30 @@ pub async fn unbind_waba(
         },
     );
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ─── Vault ───────────────────────────────────────────────────────────────
+
+/// Re-encrypt every bound WABA's token (and its credit ledger) under the
+/// active vault key (`WA_VAULT_KEY`), walking the service's bindings (the
+/// vault cannot list its records). The old key can go once `failed` is
+/// empty. Also `meta-whatsapp-server vault rotate`.
+#[utoipa::path(
+    post,
+    path = "/v1/admin/vault/rotate",
+    tag = "admin",
+    security(("api_key" = [])),
+    responses(
+        (status = 200, description = "Walked every WABA: how many records were re-encrypted, and which failed", body = VaultRotation),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "Not an admin key", body = ErrorBody),
+    )
+)]
+pub async fn rotate_vault(
+    State(state): State<AppState>,
+    admin: AdminCaller,
+) -> Result<Json<VaultRotation>, ApiError> {
+    let report = state.tokens().rotate_all(state.store()).await?;
+    audit("vault_rotated", &admin, Subject::default());
+    Ok(Json(report))
 }

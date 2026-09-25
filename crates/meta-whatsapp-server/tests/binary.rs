@@ -373,5 +373,20 @@ fn live_postgres_cli_bootstrap_key_works_against_the_served_api() {
         "revoked through the CLI, refused by the running service"
     );
     assert_ne!(list()[7], "-", "listed as revoked");
+    // `vault rotate` walks the (empty) bindings with the service's
+    // configuration.
+    let mut rotate = Command::new(BIN);
+    with_db(&mut rotate);
+    let rotated = rotate
+        .args(["vault", "rotate"])
+        .stdout(Stdio::piped())
+        .output()
+        .unwrap();
+    assert!(
+        rotated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rotated.stderr)
+    );
+    assert!(String::from_utf8_lossy(&rotated.stdout).starts_with("0 WABAs walked"));
     terminate(&mut child);
 }

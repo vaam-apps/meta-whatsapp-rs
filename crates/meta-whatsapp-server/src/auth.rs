@@ -36,9 +36,11 @@ use time::OffsetDateTime;
 use crate::error::ApiError;
 use crate::keys::PresentedKey;
 use crate::model::{
-    ApiKeyRecord, KeyOwner, NumberStatus, Scope, TenantId, TenantStatus, WabaBinding,
+    ApiKeyRecord, KeyOwner, MAX_PAGE_SIZE, NumberStatus, PageRequest, Scope, TenantId,
+    TenantStatus, WabaBinding,
 };
 use crate::state::AppState;
+use crate::store::Store;
 use crate::telemetry;
 
 /// `WA-Tenant`: the tenant a platform key acts as.
@@ -65,6 +67,59 @@ impl Tokens {
     /// Delete a WABA's token and its phone index.
     async fn delete(&self, waba_id: &WabaId) -> Result<bool, Error> {
         self.vault.delete(waba_id).await
+    }
+
+    /// Re-encrypt every bound WABA's token (and its credit ledger) under
+    /// the active vault key: see [`rotate_vault`].
+    pub(crate) async fn rotate_all(&self, store: &dyn Store) -> Result<VaultRotation, Error> {
+        rotate_vault(store, &self.vault).await
+    }
+}
+
+/// What a vault rotation did.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+pub struct VaultRotation {
+    /// WABAs walked.
+    pub wabas: usize,
+    /// Records re-encrypted under the active key.
+    pub rotated: usize,
+    /// WABAs whose records could not be read or rewritten (a record under
+    /// a key no longer configured, say): rotate again, or reconnect them,
+    /// before dropping the old key.
+    pub failed: Vec<String>,
+}
+
+/// Walk every bound WABA (`wa_server_wabas`: the vault cannot list its
+/// records) and re-encrypt its token and credit ledger under the active
+/// key with `TokenVault::rotate`. A record that fails is reported and the
+/// walk goes on; only the service's own storage failing stops it.
+pub async fn rotate_vault(store: &dyn Store, vault: &TokenVault) -> Result<VaultRotation, Error> {
+    let mut report = VaultRotation::default();
+    let mut page = PageRequest {
+        after: None,
+        limit: MAX_PAGE_SIZE,
+    };
+    loop {
+        let listing = store.all_wabas(&page).await?;
+        for binding in &listing.items {
+            report.wabas += 1;
+            match vault.rotate(&binding.waba_id).await {
+                Ok(true) => report.rotated += 1,
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        kind = error.kind().as_str(),
+                        waba_id = binding.waba_id.as_str(),
+                        "a vault record could not be rotated"
+                    );
+                    report.failed.push(binding.waba_id.as_str().to_owned());
+                }
+            }
+        }
+        let Some(after) = listing.next_after else {
+            return Ok(report);
+        };
+        page.after = Some(after);
     }
 }
 

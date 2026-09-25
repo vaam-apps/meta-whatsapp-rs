@@ -1184,6 +1184,62 @@
         ]
       }
     },
+    "/v1/admin/vault/rotate": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Re-encrypt every bound WABA's token (and its credit ledger) under the\nactive vault key (`WA_VAULT_KEY`), walking the service's bindings (the\nvault cannot list its records). The old key can go once `failed` is\nempty. Also `meta-whatsapp-server vault rotate`.",
+        "operationId": "rotate_vault",
+        "responses": {
+          "200": {
+            "description": "Walked every WABA: how many records were re-encrypted, and which failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultRotation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/admin/wabas/{waba_id}/binding": {
       "delete": {
         "tags": [
@@ -2885,6 +2941,34 @@
         },
         "additionalProperties": false
       },
+      "VaultRotation": {
+        "type": "object",
+        "description": "What a vault rotation did.",
+        "required": [
+          "wabas",
+          "rotated",
+          "failed"
+        ],
+        "properties": {
+          "failed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "WABAs whose records could not be read or rewritten (a record under\na key no longer configured, say): rotate again, or reconnect them,\nbefore dropping the old key."
+          },
+          "rotated": {
+            "type": "integer",
+            "description": "Records re-encrypted under the active key.",
+            "minimum": 0
+          },
+          "wabas": {
+            "type": "integer",
+            "description": "WABAs walked.",
+            "minimum": 0
+          }
+        }
+      },
       "Version": {
         "type": "object",
         "description": "`GET /v1/version`.",
@@ -2969,7 +3053,7 @@
   "tags": [
     {
       "name": "admin",
-      "description": "Tenants, keys and WABA bindings (admin key)"
+      "description": "Tenants, keys, WABA bindings and the vault key (admin key)"
     },
     {
       "name": "numbers",

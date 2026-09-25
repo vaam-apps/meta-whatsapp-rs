@@ -265,6 +265,15 @@ impl Store for MemoryStore {
         Ok(self.lock().numbers.get(phone_number_id.as_str()).cloned())
     }
 
+    async fn all_wabas(&self, request: &PageRequest) -> StoreResult<Listing<WabaBinding>> {
+        let items = page(&self.lock().wabas, request, |_| true);
+        Ok(listing(
+            items.into_iter().map(|(_, w)| w).collect(),
+            request.limit,
+            |w: &WabaBinding| w.waba_id.as_str().to_owned(),
+        ))
+    }
+
     async fn wabas(
         &self,
         tenant: &TenantId,

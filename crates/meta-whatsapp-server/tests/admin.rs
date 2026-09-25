@@ -798,3 +798,89 @@ async fn unbinding_deletes_the_token_even_when_meta_refuses() {
     assert!(h.store.waba(&WabaId::new(WABA)).await.unwrap().is_none());
     assert_eq!(h.graph.remaining(), 0);
 }
+
+/// Vault key rotation walks every bound WABA (the vault cannot list its
+/// records): tokens sealed with the previous key are re-encrypted under the
+/// active one, so the previous key can go; a record under a key no longer
+/// configured is reported, and the walk goes on (design section 4.2,
+/// conventions review S12). Decisive: `TokenVault::rotate` on each binding.
+#[tokio::test]
+async fn rotating_the_vault_key_rewrites_every_bound_token() {
+    use std::sync::Arc;
+
+    use meta_whatsapp_rs::adapters::store::MemoryKvStore;
+    use meta_whatsapp_rs::client::embedded_signup::{
+        StoredBusinessToken, TokenVault, VaultKey, VaultKeys,
+    };
+    use meta_whatsapp_rs::core::secret::AccessToken;
+    use meta_whatsapp_rs::core::store::KvStore;
+    use meta_whatsapp_server::auth::rotate_vault;
+    use meta_whatsapp_server::store::{MemoryStore, Store};
+
+    // 32 bytes of one value each, in base64.
+    let key = |id: &str, byte: u8| {
+        let b64 = match byte {
+            1 => "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+            2 => "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+            _ => "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=",
+        };
+        VaultKey::from_base64(id, b64).unwrap()
+    };
+    let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
+    let store = MemoryStore::new();
+    let tenant = TenantId::parse("merchant-a").unwrap();
+    store.create_tenant(&tenant, "").await.unwrap();
+    let old = TokenVault::new(kv.clone(), VaultKeys::new(key("k1", 1))).unwrap();
+    let lost = TokenVault::new(kv.clone(), VaultKeys::new(key("k0", 9))).unwrap();
+    for (waba, vault) in [("201", &old), ("202", &old), ("203", &lost)] {
+        store
+            .bind_waba(&tenant, &WabaId::new(waba), &[])
+            .await
+            .unwrap();
+        vault
+            .store(&StoredBusinessToken::new(
+                waba,
+                AccessToken::new(format!("TOKEN-{waba}")),
+            ))
+            .await
+            .unwrap();
+    }
+    let rolling = TokenVault::new(
+        kv.clone(),
+        VaultKeys::new(key("k2", 2)).with_previous(key("k1", 1)),
+    )
+    .unwrap()
+    .rotate_on_read(false);
+    let report = rotate_vault(&store, &rolling).await.unwrap();
+    assert_eq!(report.wabas, 3);
+    assert_eq!(report.rotated, 2);
+    assert_eq!(report.failed, ["203"]);
+    // The previous key can go: both records open with the new key alone.
+    let new_only = TokenVault::new(kv.clone(), VaultKeys::new(key("k2", 2))).unwrap();
+    for waba in ["201", "202"] {
+        let token = new_only.get(&WabaId::new(waba)).await.unwrap().unwrap();
+        assert_eq!(token.token.expose_secret(), format!("TOKEN-{waba}"));
+    }
+    // Again: nothing left to rewrite.
+    let again = rotate_vault(&store, &rolling).await.unwrap();
+    assert_eq!((again.rotated, again.failed.len()), (0, 1));
+}
+
+/// `POST /v1/admin/vault/rotate`, admin key only, answers the report.
+#[tokio::test]
+async fn the_rotation_route_reports_the_walk() {
+    let h = Harness::new();
+    let admin = h.admin_key().await;
+    h.tenant("merchant-a").await;
+    h.connect("merchant-a", WABA, &["1972385232742141"], "TOKEN-OF-A")
+        .await;
+    let reply = h
+        .call(Call::new(Method::POST, "/v1/admin/vault/rotate").key(&admin))
+        .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+    assert_eq!(
+        reply.json(),
+        json!({"wabas": 1, "rotated": 0, "failed": []})
+    );
+    assert!(h.graph.requests().is_empty());
+}

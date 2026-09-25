@@ -507,6 +507,22 @@ impl Store for PgStore {
         row.as_ref().map(number_row).transpose()
     }
 
+    async fn all_wabas(&self, page: &PageRequest) -> StoreResult<Listing<WabaBinding>> {
+        let rows = sqlx::query(
+            "SELECT waba_id, tenant_id, credit_allocation_id, attached_at FROM wa_server_wabas \
+             WHERE ($1::text IS NULL OR waba_id > $1) ORDER BY waba_id LIMIT $2",
+        )
+        .bind(page.after.as_deref())
+        .bind(fetch_limit(page))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(backend)?;
+        let items = rows.iter().map(waba_row).collect::<StoreResult<Vec<_>>>()?;
+        Ok(listing(items, page.limit, |w| {
+            w.waba_id.as_str().to_owned()
+        }))
+    }
+
     async fn wabas(
         &self,
         tenant: &TenantId,

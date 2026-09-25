@@ -95,6 +95,10 @@ pub trait Store: Send + Sync + 'static {
     /// The binding of a phone number.
     async fn number(&self, phone_number_id: &PhoneNumberId) -> StoreResult<Option<NumberBinding>>;
 
+    /// Every tenant's WABAs, in id order (the vault cannot list its
+    /// records: key rotation walks these).
+    async fn all_wabas(&self, page: &PageRequest) -> StoreResult<Listing<WabaBinding>>;
+
     /// A tenant's WABAs, in id order.
     async fn wabas(
         &self,

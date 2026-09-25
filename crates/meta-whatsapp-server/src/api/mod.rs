@@ -88,7 +88,7 @@ impl Modify for Security {
     modifiers(&Security),
     components(schemas(ErrorBody, ErrorCode)),
     tags(
-        (name = "admin", description = "Tenants, keys and WABA bindings (admin key)"),
+        (name = "admin", description = "Tenants, keys, WABA bindings and the vault key (admin key)"),
         (name = "numbers", description = "WABAs, numbers and business profiles (scope `numbers`)"),
         (name = "operations", description = "Health, metrics, this document, versions (no key)"),
     )
@@ -109,6 +109,7 @@ fn admin_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(admin::revoke_platform_key))
         .routes(routes!(admin::attach_waba))
         .routes(routes!(admin::unbind_waba))
+        .routes(routes!(admin::rotate_vault))
 }
 
 fn numbers_routes() -> OpenApiRouter<AppState> {
