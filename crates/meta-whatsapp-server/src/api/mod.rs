@@ -55,8 +55,17 @@ pub const MAX_BODY_BYTES: usize = 64 * 1024;
 pub const REQUEST_DEADLINE: Duration = Duration::from_secs(55);
 
 /// The public listener's routes (not in the OpenAPI document: Meta's
-/// contract, not the integrators').
+/// contract, not the integrators'): the paths of [`PUBLIC_OPERATIONS`].
 pub const PUBLIC_ROUTES: [&str; 2] = ["/webhooks/meta", "/livez"];
+
+/// The public listener's operations, `(method, path)`: Meta's subscription
+/// check and deliveries, and liveness. Every other method on these paths is
+/// `405`, every other path `404` (a test sends each).
+pub const PUBLIC_OPERATIONS: [(&str, &str); 3] = [
+    ("GET", "/webhooks/meta"),
+    ("POST", "/webhooks/meta"),
+    ("GET", "/livez"),
+];
 
 struct Security;
 
@@ -414,6 +423,37 @@ mod tests {
             assert_eq!(response.status(), status, "{len} bytes");
         }
         assert_eq!(MAX_WEBHOOK_BODY_BYTES, 3 * 1024 * 1024);
+    }
+
+    /// The public listener serves exactly [`PUBLIC_OPERATIONS`]: each is
+    /// answered (not `404` or `405`), any other method on their paths is
+    /// `405`. The skills gate reads the list (`SERVER_PUBLIC_ROUTES` in
+    /// crates/meta-whatsapp-rs/tests/skills.rs).
+    #[tokio::test]
+    async fn the_public_listener_serves_exactly_its_operations() {
+        use meta_whatsapp_rs::webhooks::axum::http::{Method, Request};
+        let mut paths: Vec<&str> = PUBLIC_OPERATIONS.iter().map(|(_, p)| *p).collect();
+        paths.dedup();
+        assert_eq!(paths, PUBLIC_ROUTES);
+        let router = public_router(&AppState::for_tests());
+        for path in PUBLIC_ROUTES {
+            for method in ["GET", "POST", "PUT", "PATCH", "DELETE"] {
+                let request = Request::builder()
+                    .method(Method::from_bytes(method.as_bytes()).unwrap())
+                    .uri(path)
+                    .body(Body::empty())
+                    .unwrap();
+                let status = router.clone().oneshot(request).await.unwrap().status();
+                if PUBLIC_OPERATIONS.contains(&(method, path)) {
+                    assert!(
+                        status != StatusCode::NOT_FOUND && status != StatusCode::METHOD_NOT_ALLOWED,
+                        "{method} {path}: {status}"
+                    );
+                } else {
+                    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "{method} {path}");
+                }
+            }
+        }
     }
 
     /// Every API route is added with `routes!`, which documents it: the

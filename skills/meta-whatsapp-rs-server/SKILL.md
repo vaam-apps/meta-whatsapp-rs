@@ -35,9 +35,9 @@ against them.
 ## Deploy
 
 One deployment per Meta app. The public listener (default
-`127.0.0.1:8080`) serves only `/webhooks/meta` (Meta's subscription
-check and deliveries: point the app's callback URL at it) and
-`GET /livez`; the internal one (`127.0.0.1:8081`) serves everything else
+`127.0.0.1:8080`) serves only `GET /webhooks/meta` and
+`POST /webhooks/meta` (Meta's subscription check and deliveries: point
+the app's callback URL at it) and `GET /livez`; the internal one (`127.0.0.1:8081`) serves everything else
 and must stay on your private network. No image yet: build it.
 
 ```bash

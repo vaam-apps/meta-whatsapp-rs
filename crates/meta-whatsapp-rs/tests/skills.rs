@@ -2829,10 +2829,15 @@ const SERVER_SPEC: &str = "crates/meta-whatsapp-server/openapi/v1.json";
 /// literals there.
 const SERVER_SRC: &str = "crates/meta-whatsapp-server/src";
 
-/// The public listener's routes, which the document leaves out (Meta's
-/// contract, not the callers'); `PUBLIC_ROUTES` in
-/// crates/meta-whatsapp-server/src/api/mod.rs, checked below.
-const SERVER_PUBLIC_ROUTES: &[(&str, &str)] = &[("GET", "/webhooks/meta"), ("GET", "/livez")];
+/// The public listener's operations, which the document leaves out
+/// (Meta's contract, not the callers'); `PUBLIC_OPERATIONS` in
+/// crates/meta-whatsapp-server/src/api/mod.rs, checked below (and the
+/// service's own test sends each to its router).
+const SERVER_PUBLIC_ROUTES: &[(&str, &str)] = &[
+    ("GET", "/webhooks/meta"),
+    ("POST", "/webhooks/meta"),
+    ("GET", "/livez"),
+];
 
 const HTTP_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE"];
 
@@ -3209,20 +3214,27 @@ fn ts_example_problems(source: &str) -> Vec<String> {
 #[test]
 fn server_skills_cite_the_document_and_the_source() {
     let spec = Spec::load();
-    // The public routes this test adds are the service's.
+    // The public operations this test adds are the service's, method and
+    // path (compared without whitespace: rustfmt lays the list out).
     let api = read(&repo().join(SERVER_SRC).join("api/mod.rs"));
-    let listed: Vec<&str> = SERVER_PUBLIC_ROUTES.iter().map(|(_, p)| *p).collect();
-    assert!(
-        api.contains(&format!(
-            "pub const PUBLIC_ROUTES: [&str; {}] = [{}];",
-            listed.len(),
-            listed
-                .iter()
-                .map(|p| format!("\"{p}\""))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )),
-        "SERVER_PUBLIC_ROUTES is not the service's PUBLIC_ROUTES"
+    let squeeze = |s: &str| s.split_whitespace().collect::<String>().replace(",]", "]");
+    let declared = api
+        .split_once("pub const PUBLIC_OPERATIONS")
+        .and_then(|(_, rest)| rest.split_once("];"))
+        .map(|(list, _)| squeeze(&format!("pub const PUBLIC_OPERATIONS{list}];")))
+        .expect("PUBLIC_OPERATIONS in the service's api/mod.rs");
+    let expected = squeeze(&format!(
+        "pub const PUBLIC_OPERATIONS: [(&str, &str); {}] = [{}];",
+        SERVER_PUBLIC_ROUTES.len(),
+        SERVER_PUBLIC_ROUTES
+            .iter()
+            .map(|(m, p)| format!("(\"{m}\", \"{p}\")"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+    assert_eq!(
+        declared, expected,
+        "SERVER_PUBLIC_ROUTES is not the service's PUBLIC_OPERATIONS"
     );
     let mut failures = String::new();
     let mut checked = 0;
@@ -3373,6 +3385,8 @@ fn the_server_span_checks_reject_known_bad_input() {
         "POST /v1/admin/tenants",
         "/v1/numbers/{pn}",
         "GET /livez",
+        "GET /webhooks/meta",
+        "POST /webhooks/meta",
         "not_found",
         "status",
         "active",
@@ -3387,7 +3401,8 @@ fn the_server_span_checks_reject_known_bad_input() {
         "PATCH /v1/numbers/{pn}",
         "GET /v1/numbers",
         "GET|POST /v1/admin/tenants",
-        "POST /webhooks/meta",
+        "PUT /webhooks/meta",
+        "POST /livez",
         "/v1/numberz/{pn}",
         "reconect_required",
         "TenantViews",

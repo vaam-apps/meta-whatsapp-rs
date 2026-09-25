@@ -21,6 +21,8 @@ its keys: `meta-whatsapp-rs-server` first.
 - App Dashboard, WhatsApp, Configuration: callback URL
   `https://<public host>/webhooks/meta`, verify token the value of
   `WA_VERIFY_TOKEN`; subscribe the fields you need (messages, at least).
+  The public listener answers Meta's check (`GET /webhooks/meta`) and
+  takes its deliveries (`POST /webhooks/meta`); nothing of the /v1 API.
 - Meta sends a WABA's events only once the app is subscribed to it:
   attaching one (`POST /v1/admin/tenants/{id}/wabas`) does that.
 - Deliveries are signed with the app secret: `WA_APP_SECRET`, and
