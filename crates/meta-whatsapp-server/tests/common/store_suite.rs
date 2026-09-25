@@ -338,6 +338,14 @@ pub async fn bindings(store: &dyn Store) {
     );
     let wabas = store.wabas(&a, &page(None, 10)).await.unwrap();
     assert_eq!(wabas.items.len(), 1);
+    let of_waba: Vec<String> = store
+        .waba_numbers(&waba)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|n| n.phone_number_id.into_inner())
+        .collect();
+    assert_eq!(of_waba, ["n2", "n3"]);
     // Every tenant's, paged.
     store.bind_waba(&b, &WabaId::new("w0"), &[]).await.unwrap();
     let first = store.all_wabas(&page(None, 1)).await.unwrap();

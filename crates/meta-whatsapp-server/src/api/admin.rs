@@ -1059,6 +1059,56 @@ pub async fn attach_waba(
     ))
 }
 
+/// A bound WABA, as the operator sees it.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = WabaBinding)]
+pub struct WabaBindingView {
+    /// The WABA.
+    pub waba_id: String,
+    /// The tenant it is bound to.
+    pub tenant_id: String,
+    /// When it was bound (RFC 3339).
+    #[schema(format = DateTime)]
+    pub attached_at: String,
+    /// Its numbers and their connection status.
+    pub numbers: Vec<crate::api::numbers::NumberView>,
+}
+
+/// Which tenant holds a WABA, and its numbers: what an operator checks
+/// before an unbind (decision D4).
+#[utoipa::path(
+    get,
+    path = "/v1/admin/wabas/{waba_id}",
+    tag = "admin",
+    security(("api_key" = [])),
+    params(("waba_id" = String, Path, description = "WhatsApp Business Account id")),
+    responses(
+        (status = 200, description = "The binding", body = WabaBindingView),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "Not an admin key", body = ErrorBody),
+        (status = 404, description = "`not_found`: not bound", body = ErrorBody),
+    )
+)]
+pub async fn get_waba(
+    State(state): State<AppState>,
+    _admin: AdminCaller,
+    Path(waba_id): Path<String>,
+) -> Result<Json<WabaBindingView>, ApiError> {
+    let waba_id = WabaId::new(waba_id);
+    let binding = state
+        .store()
+        .waba(&waba_id)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+    let numbers = state.store().waba_numbers(&waba_id).await?;
+    Ok(Json(WabaBindingView {
+        waba_id: binding.waba_id.into_inner(),
+        tenant_id: binding.tenant_id.as_str().to_owned(),
+        attached_at: rfc3339(binding.attached_at),
+        numbers: numbers.into_iter().map(Into::into).collect(),
+    }))
+}
+
 /// Unbind a WABA (decision D4: the admin unbind that lets another tenant
 /// connect it), also the way to free a WABA whose token no longer works:
 /// with its stored token, if usable, unsubscribe the app, at best; then

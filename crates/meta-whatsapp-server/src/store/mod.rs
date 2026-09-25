@@ -106,6 +106,9 @@ pub trait Store: Send + Sync + 'static {
         page: &PageRequest,
     ) -> StoreResult<Listing<WabaBinding>>;
 
+    /// A WABA's numbers, in id order (at most the 1,000 attach binds).
+    async fn waba_numbers(&self, waba_id: &WabaId) -> StoreResult<Vec<NumberBinding>>;
+
     /// A tenant's numbers, in id order.
     async fn numbers(
         &self,

@@ -108,6 +108,7 @@ fn admin_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(admin::mint_platform_key, admin::list_platform_keys))
         .routes(routes!(admin::revoke_platform_key))
         .routes(routes!(admin::attach_waba))
+        .routes(routes!(admin::get_waba))
         .routes(routes!(admin::unbind_waba))
         .routes(routes!(admin::rotate_vault))
 }

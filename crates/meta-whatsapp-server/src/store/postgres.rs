@@ -544,6 +544,18 @@ impl Store for PgStore {
         }))
     }
 
+    async fn waba_numbers(&self, waba_id: &WabaId) -> StoreResult<Vec<NumberBinding>> {
+        let rows = sqlx::query(
+            "SELECT phone_number_id, waba_id, tenant_id, status, updated_at FROM wa_server_numbers \
+             WHERE waba_id = $1 ORDER BY phone_number_id LIMIT 1001",
+        )
+        .bind(waba_id.as_str())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(backend)?;
+        rows.iter().map(number_row).collect()
+    }
+
     async fn numbers(
         &self,
         tenant: &TenantId,

@@ -1240,6 +1240,83 @@
         ]
       }
     },
+    "/v1/admin/wabas/{waba_id}": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Which tenant holds a WABA, and its numbers: what an operator checks\nbefore an unbind (decision D4).",
+        "operationId": "get_waba",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The binding",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WabaBinding"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: not bound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/admin/wabas/{waba_id}/binding": {
       "delete": {
         "tags": [
@@ -3013,6 +3090,38 @@
           "waba_id": {
             "type": "string",
             "description": "WhatsApp Business Account id."
+          }
+        }
+      },
+      "WabaBinding": {
+        "type": "object",
+        "description": "A bound WABA, as the operator sees it.",
+        "required": [
+          "waba_id",
+          "tenant_id",
+          "attached_at",
+          "numbers"
+        ],
+        "properties": {
+          "attached_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was bound (RFC 3339)."
+          },
+          "numbers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Number"
+            },
+            "description": "Its numbers and their connection status."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "The tenant it is bound to."
+          },
+          "waba_id": {
+            "type": "string",
+            "description": "The WABA."
           }
         }
       },

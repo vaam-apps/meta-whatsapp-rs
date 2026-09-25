@@ -287,6 +287,16 @@ impl Store for MemoryStore {
         ))
     }
 
+    async fn waba_numbers(&self, waba_id: &WabaId) -> StoreResult<Vec<NumberBinding>> {
+        Ok(self
+            .lock()
+            .numbers
+            .values()
+            .filter(|n| &n.waba_id == waba_id)
+            .cloned()
+            .collect())
+    }
+
     async fn numbers(
         &self,
         tenant: &TenantId,

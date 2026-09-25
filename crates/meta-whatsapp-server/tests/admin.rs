@@ -452,6 +452,15 @@ async fn a_waba_of_another_tenant_is_refused_until_the_admin_unbinds_it() {
         "merchant-a"
     );
 
+    // The operator sees who holds it.
+    let held = h
+        .call(Call::get(format!("/v1/admin/wabas/{WABA}")).key(&admin))
+        .await;
+    assert_eq!(held.status, StatusCode::OK, "{}", held.text);
+    let held = held.json();
+    assert_eq!(held["tenant_id"], "merchant-a");
+    assert_eq!(held["numbers"][0]["phone_number_id"], "1972385232742141");
+    assert_eq!(held["numbers"][0]["status"], "connected");
     // The admin unbinds (unsubscribing with A's token, then deleting it);
     // B may attach it.
     h.graph.push_json(200, json!({"success": true}));
@@ -475,6 +484,10 @@ async fn a_waba_of_another_tenant_is_refused_until_the_admin_unbinds_it() {
         .call(Call::new(Method::DELETE, format!("/v1/admin/wabas/{WABA}/binding")).key(&admin))
         .await;
     assert_eq!(again.status, StatusCode::NOT_FOUND);
+    let gone = h
+        .call(Call::get(format!("/v1/admin/wabas/{WABA}")).key(&admin))
+        .await;
+    assert_eq!(gone.status, StatusCode::NOT_FOUND);
     h.graph.push_json(200, phone_numbers_page());
     h.graph.push_json(200, json!({"success": true}));
     let attached = h
