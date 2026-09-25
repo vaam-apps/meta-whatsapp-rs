@@ -281,21 +281,51 @@ const CALLS_META: &[&str] = &[
 /// they succeed without a body.
 const BEST_EFFORT: &[&str] = &["DELETE /v1/admin/wabas/{waba_id}/binding"];
 
+/// Operations that answer Meta's `error_data.details` (section 5.1: every
+/// route but OTP and signup; opt-in per route, so a route missing here
+/// must answer without it).
+const DETAILS_KEPT: &[&str] = &[
+    "GET /v1/numbers/{pn}",
+    "GET /v1/numbers/{pn}/profile",
+    "PATCH /v1/numbers/{pn}/profile",
+    "DELETE /v1/wabas/{waba_id}",
+    "POST /v1/admin/tenants/{id}/wabas",
+    "DELETE /v1/admin/tenants/{id}",
+];
+
 /// M1.5's sentinel, on every operation of the committed document: Meta's
 /// error texts, a non-Graph answer and an unreadable one reach no
 /// response. Decisive: a Meta text copied into a body, on any route.
 #[tokio::test]
 async fn a_sentinel_in_metas_answer_reaches_no_response() {
-    let answers: Vec<(u16, String)> = vec![
-        (400, graph_error(100).to_string()),
-        (500, graph_error(131000).to_string()),
+    // `(status, body, the details a route that keeps them answers)`.
+    let with_data = |code: i64, data: Value| {
+        let mut error = graph_error(code);
+        error["error"]["error_data"] = data;
+        error.to_string()
+    };
+    let answers: Vec<(u16, String, Option<&str>)> = vec![
+        (400, graph_error(100).to_string(), None),
+        (
+            400,
+            with_data(131047, json!({"details": "Meta's own\u{7}\r\n details"})),
+            Some("Meta's own details"),
+        ),
+        (
+            400,
+            with_data(100, json!("a string error_data")),
+            Some("a string error_data"),
+        ),
+        (500, graph_error(131000).to_string(), None),
         (
             502,
             format!("<html><body>{SENTINEL} bad gateway</body></html>"),
+            None,
         ),
         (
             200,
             format!("{{\"id\": \"{SENTINEL}\", \"quality_rating\": 7"),
+            None,
         ),
     ];
     let sample = Sample {
@@ -307,7 +337,7 @@ async fn a_sentinel_in_metas_answer_reaches_no_response() {
     let mut calling = BTreeSet::new();
     let mut quiet = BTreeSet::new();
     for operation in spec_operations() {
-        for (status, body) in &answers {
+        for (status, body, details) in &answers {
             let h = Harness::new();
             let admin = h.admin_key().await;
             h.tenant(TENANT).await;
@@ -340,6 +370,13 @@ async fn a_sentinel_in_metas_answer_reaches_no_response() {
             );
             let code = reply.code();
             assert!(CODES.iter().any(|(c, _, _)| *c == code), "{label}: {code}");
+            let answered = &reply.json()["error"]["graph"]["details"];
+            match details {
+                Some(details) if DETAILS_KEPT.contains(&operation.label().as_str()) => {
+                    assert_eq!(answered, details, "{label}");
+                }
+                _ => assert!(answered.is_null(), "{label}: details {answered}"),
+            }
             if *status >= 500 || *status == 200 {
                 assert!(
                     matches!(code.as_str(), "service_unavailable" | "upstream"),

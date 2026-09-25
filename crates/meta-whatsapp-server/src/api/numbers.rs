@@ -293,7 +293,7 @@ pub async fn get_number(
         .await;
     match info {
         Ok(info) => Ok(Json(details(&owned, info))),
-        Err(error) => Err(owned.failed(&state, &error).await),
+        Err(error) => Err(owned.failed(&state, &error).await.with_details(&error)),
     }
 }
 
@@ -305,7 +305,7 @@ async fn read_profile(state: &AppState, owned: &OwnedNumber) -> Result<ProfileVi
         .await;
     match profile {
         Ok(profile) => Ok(profile_view(profile)),
-        Err(error) => Err(owned.failed(state, &error).await),
+        Err(error) => Err(owned.failed(state, &error).await.with_details(&error)),
     }
 }
 
@@ -386,7 +386,7 @@ pub async fn patch_profile(
             .update(&update)
             .await;
         if let Err(error) = updated {
-            return Err(owned.failed(&state, &error).await);
+            return Err(owned.failed(&state, &error).await.with_details(&error));
         }
     }
     read_profile(&state, &owned).await.map(Json)
@@ -424,7 +424,7 @@ pub async fn disconnect_waba(
         .unsubscribe_app()
         .await;
     if let Err(error) = unsubscribed {
-        return Err(owned.failed(&state, &error).await);
+        return Err(owned.failed(&state, &error).await.with_details(&error));
     }
     owned.forget(&state).await?;
     Ok(StatusCode::NO_CONTENT)

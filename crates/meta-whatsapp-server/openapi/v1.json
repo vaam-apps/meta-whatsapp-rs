@@ -1969,7 +1969,7 @@
       },
       "GraphErrorInfo": {
         "type": "object",
-        "description": "Meta's error, as the body carries it: the code and trace id, and\n`error_data.details`. Never Meta's `message` or titles.",
+        "description": "Meta's error, as the body carries it: the code and trace id, and, on\nthe routes that opt in, `error_data.details`. Never Meta's `message` or\ntitles.",
         "required": [
           "code"
         ],
@@ -1984,7 +1984,7 @@
               "string",
               "null"
             ],
-            "description": "Meta's `error_data.details`."
+            "description": "Meta's own text (`error_data.details`), on the routes that keep it:\nnot the service's, and not a stable value to branch on."
           },
           "fbtrace_id": {
             "type": [

@@ -19,9 +19,12 @@
 //!   test instead of falling through unmapped.
 //! - `message` is always the service's sentence for the code: never Meta's
 //!   `message`, `title` or user-facing texts, and never an input value.
-//!   `graph.details` is Meta's `error_data.details`, as section 5.1 of the
-//!   design keeps it (the OTP and signup routes, which will drop it, do not
-//!   exist yet).
+//! - `graph.details` is Meta's text (`error_data.details`), not the
+//!   service's: section 5.1 of the design keeps it, except on the OTP and
+//!   signup routes (a template error could quote a parameter: the code).
+//!   So it is **opt-in per route** ([`ApiError::with_details`]; a new route
+//!   answers without it), stripped of control characters and cut at
+//!   [`MAX_DETAILS_CHARS`], and logged at `debug` only.
 //! - `retryable` and `may_have_been_sent` are the library's
 //!   [`Error::is_retryable`] and [`Error::may_have_been_sent`]: resend only
 //!   when `may_have_been_sent` is `false`.
@@ -333,6 +336,19 @@ pub fn code_info(code: &str) -> Option<(StatusCode, &'static str)> {
         .and_then(|(_, status, message)| StatusCode::from_u16(*status).ok().map(|s| (s, *message)))
 }
 
+/// Longest `graph.details` answered, in characters.
+pub const MAX_DETAILS_CHARS: usize = 512;
+
+/// Meta's details as answered: no control character (they could forge a
+/// caller's log line), at most [`MAX_DETAILS_CHARS`] characters.
+fn bounded_details(details: &str) -> String {
+    details
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_DETAILS_CHARS)
+        .collect()
+}
+
 /// The API code of a Graph error kind: [`ErrorKind::as_str`], except
 /// `Authentication` (codes 0 and 190 on a merchant's token), which is
 /// `reconnect_required`.
@@ -343,8 +359,9 @@ pub fn kind_code(kind: ErrorKind) -> &'static str {
     }
 }
 
-/// Meta's error, as the body carries it: the code and trace id, and
-/// `error_data.details`. Never Meta's `message` or titles.
+/// Meta's error, as the body carries it: the code and trace id, and, on
+/// the routes that opt in, `error_data.details`. Never Meta's `message` or
+/// titles.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct GraphErrorInfo {
     /// Meta's error code, e.g. `131047`.
@@ -353,7 +370,8 @@ pub struct GraphErrorInfo {
     pub subcode: Option<i64>,
     /// Trace id for Meta's support.
     pub fbtrace_id: Option<String>,
-    /// Meta's `error_data.details`.
+    /// Meta's own text (`error_data.details`), on the routes that keep it:
+    /// not the service's, and not a stable value to branch on.
     pub details: Option<String>,
 }
 
@@ -514,9 +532,10 @@ impl ApiError {
     }
 
     /// The code and status of a library error, `retryable` and
-    /// `may_have_been_sent` from the library, and Meta's code and details
-    /// when Meta answered with a Graph error. Logs the error (Meta's
-    /// message at `debug` only).
+    /// `may_have_been_sent` from the library, and Meta's code and trace id
+    /// when Meta answered with a Graph error; never Meta's texts (for
+    /// `details`, see [`Self::with_details`]). Logs the error (Meta's texts
+    /// at `debug` only).
     pub fn from_library(error: &Error) -> Self {
         let mut api = Self::classify(error);
         api.0.retryable = error.is_retryable();
@@ -526,11 +545,23 @@ impl ApiError {
                 code: graph.code,
                 subcode: graph.error_subcode,
                 fbtrace_id: graph.fbtrace_id.clone(),
-                details: graph.details().map(str::to_owned),
+                details: None,
             });
         }
         log(error, &api);
         api
+    }
+
+    /// Add Meta's `error_data.details` (or a string `error_data`) to
+    /// `graph`, for a route whose design keeps it (section 5.1: every route
+    /// but OTP and signup), stripped of control characters and cut at
+    /// [`MAX_DETAILS_CHARS`]. A route opts in by calling this.
+    #[must_use]
+    pub fn with_details(mut self, error: &Error) -> Self {
+        if let (Some(info), Some(graph)) = (self.0.graph.as_mut(), error.graph()) {
+            info.details = graph.details().map(bounded_details);
+        }
+        self
     }
 
     fn classify(error: &Error) -> Self {
@@ -591,7 +622,11 @@ fn log(error: &Error, api: &ApiError) {
         "request failed"
     );
     if let Some(graph) = graph {
-        tracing::debug!(graph_message = %graph.summary(), "Meta's error message");
+        tracing::debug!(
+            graph_message = %graph.summary(),
+            graph_details = graph.details(),
+            "Meta's error texts"
+        );
     }
 }
 
@@ -660,6 +695,45 @@ mod tests {
             assert!(StatusCode::from_u16(*status).is_ok(), "{code}");
             assert!(!message.is_empty(), "{code}");
         }
+    }
+
+    /// `details` is opt-in, bounded and free of control characters.
+    #[test]
+    fn details_are_opt_in_and_bounded() {
+        let error = |data: serde_json::Value| {
+            let graph: GraphApiError = serde_json::from_value(serde_json::json!({
+                "message": "(#131047) Re-engagement message",
+                "type": "OAuthException",
+                "code": 131047,
+                "error_data": data,
+            }))
+            .unwrap();
+            Error::Api(Box::new(graph))
+        };
+        let object = error(serde_json::json!({"details": "Message failed\r\nto send"}));
+        let plain = ApiError::from_library(&object);
+        assert_eq!(
+            plain.0.graph.as_ref().unwrap().details,
+            None,
+            "off by default"
+        );
+        let kept = ApiError::from_library(&object).with_details(&object);
+        assert_eq!(
+            kept.0.graph.as_ref().unwrap().details.as_deref(),
+            Some("Message failedto send")
+        );
+        let string = error(serde_json::json!("plain string"));
+        let kept = ApiError::from_library(&string).with_details(&string);
+        assert_eq!(
+            kept.0.graph.unwrap().details.as_deref(),
+            Some("plain string")
+        );
+        let long = error(serde_json::json!({"details": "é".repeat(MAX_DETAILS_CHARS + 10)}));
+        let kept = ApiError::from_library(&long).with_details(&long);
+        assert_eq!(
+            kept.0.graph.unwrap().details.unwrap().chars().count(),
+            MAX_DETAILS_CHARS
+        );
     }
 
     #[test]

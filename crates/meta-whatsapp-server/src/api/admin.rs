@@ -321,7 +321,7 @@ pub async fn delete_tenant(
                 .unsubscribe_app()
                 .await;
             if let Err(error) = unsubscribed {
-                return Err(owned.failed(&state, &error).await);
+                return Err(owned.failed(&state, &error).await.with_details(&error));
             }
             owned.forget(&state).await?;
             let waba_id = binding.waba_id.as_str();
@@ -939,7 +939,7 @@ pub async fn attach_waba(
         .with_token(token.clone())
         .waba(waba_id.clone());
     let meta_failed = |error: &meta_whatsapp_rs::Error| {
-        let api = ApiError::from_library(error);
+        let api = ApiError::from_library(error).with_details(error);
         state.metrics().graph_error(api.code());
         // The token is the request's: Meta refusing it is the caller's
         // input to fix, not a stored token to reconnect.

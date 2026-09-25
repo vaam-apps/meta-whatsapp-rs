@@ -516,7 +516,9 @@ authentication template); (c) per tenant, defaulting to (a).
 `code` is stable (codes only grow within `v1`; an unknown one is handled
 by its status class). `message` is the service's sentence for the code,
 never Meta's message or an input value. `graph` appears when Meta answered
-with an error; `details` is dropped on OTP and signup routes.
+with an error; `details` is Meta's text, not the service's: dropped on OTP
+and signup routes, and elsewhere opt-in per route, without control
+characters and at most 512 characters.
 
 ### 5.2 Codes and statuses
 
@@ -745,7 +747,7 @@ test fail.
 | M1.2 | A body signed with `meta_whatsapp_rs::webhooks::sign` is `200` and one outbox row for the owning tenant; no signature is `401` without the body being polled; the same body twice is one row; 3 MiB + 1 byte is `413`; `unknown` and `unparsed` are operator-only. Decisive: routing an unowned number's event to a tenant |
 | M1.3 | Table-driven over every `{pn}` and `{waba_id}` route in the spec (a new route cannot skip it): tenant B's key on A's number is `404`, and a counting vault wrapper records zero reads. Decisive: step 4 of [§3.3](#33-authorization-order) |
 | M1.4 | Sends carry the merchant's vault token; a digits-only `to.phone` is refused before any request; a scripted timeout is `504` with `may_have_been_sent: true` and the same `Idempotency-Key` replays it with no second request; a scripted 131047 is `409` and releases the key |
-| M1.5 | Every `ErrorKind` maps to a code and status (iterating L1's list); a sentinel in a scripted Graph error message reaches no response |
+| M1.5 | Every `ErrorKind` maps to a code and status (iterating L1's list); a sentinel in a scripted Graph error's message, title and user texts reaches no response; `details` only where [§5.1](#51-body) allows, bounded |
 | M1.6 | One test per start-up refusal ([§2.2](#22-configuration-and-storage)); the generated spec equals the committed one |
 | M1.7 | Live: two instances on one database deduplicate the same webhook; parallel migrations succeed. Captured `tracing` output of a send and a webhook holds no token, secret, key, message text, phone number or contact |
 | M2.1 | On Postgres: inbound webhook → conversation list → history → reply in the window (recorded `accepted`) → a status webhook moves it to `delivered`; a free-form reply outside the window is `409` with zero requests |
