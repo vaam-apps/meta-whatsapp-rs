@@ -169,12 +169,12 @@ fn delivery(e: StorageError) -> SinkError {
 /// ignores a message id it already has, and a status that does not
 /// supersede the stored one.
 ///
-/// Content is recorded exactly as Meta sent it, U+0000 included: the
-/// stored `kind`, `text`, `payload` (object keys included) and status
-/// `error` keep it, and every store in `wa_adapters` stores it
-/// (`OPEN_QUESTIONS.md` #18, decided: losslessly). A malformed history
-/// item is skipped (and logged without its content). Storage errors still
-/// fail the delivery (Meta redelivers).
+/// Nothing in the content is replaced, U+0000 included: the stored
+/// `kind`, `text` (the preview), `payload` (strings and object keys) and
+/// status `error` keep every character the parsed event carried, and every
+/// store in `wa_adapters` stores them (`OPEN_QUESTIONS.md` #18, decided:
+/// losslessly). A malformed history item is skipped (and logged without
+/// its content). Storage errors still fail the delivery (Meta redelivers).
 ///
 /// Synced history opens no customer service window and is never unread
 /// ([`ConversationStore::append_synced`]), and a later media content fills
