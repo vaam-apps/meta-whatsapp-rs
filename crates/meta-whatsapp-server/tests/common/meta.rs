@@ -42,6 +42,9 @@ pub fn fixture(name: &str) -> Value {
         "fields/partner_solutions.json" => include_str!(
             "../../../meta-whatsapp-webhooks/tests/fixtures/fields/partner_solutions.json"
         ),
+        "fields/smb_message_echoes_text.json" => include_str!(
+            "../../../meta-whatsapp-webhooks/tests/fixtures/fields/smb_message_echoes_text.json"
+        ),
         "fields/history_threads.json" => include_str!(
             "../../../meta-whatsapp-webhooks/tests/fixtures/fields/history_threads.json"
         ),
