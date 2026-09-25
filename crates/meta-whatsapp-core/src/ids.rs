@@ -183,6 +183,12 @@ id_type!(
     /// [`UserId`] (a WhatsApp user).
     SystemUserId
 );
+id_type!(
+    /// A partner-led business verification submission id (`id` of a
+    /// `GET /{BUSINESS_ID}/self_certified_whatsapp_business_submissions`
+    /// item).
+    VerificationSubmissionId
+);
 
 #[cfg(test)]
 mod tests {

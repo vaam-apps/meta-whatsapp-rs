@@ -26,6 +26,7 @@ pub mod analytics;
 pub mod authentication;
 pub mod block_users;
 pub mod business_profile;
+pub mod business_verification;
 pub mod calling;
 pub mod commerce;
 pub mod common;

@@ -362,7 +362,10 @@ pub struct DisconnectionInfo {
 }
 
 open_enum! {
-    /// `partner_client_certification_info.status`.
+    /// `partner_client_certification_info.status`: the outcome of a
+    /// partner-led business verification submission (the five values of
+    /// `webhooks/reference/account_update`; the partner-led page lists
+    /// `APPROVED` and `FAILED`).
     pub enum CertificationStatus {
         /// Approved.
         Approved => "APPROVED",
@@ -377,7 +380,10 @@ open_enum! {
     }
 }
 
-/// `account_update.partner_client_certification_info`.
+/// `account_update.partner_client_certification_info`: the decision on a
+/// submission made with `meta_whatsapp_client::business_verification`
+/// (`BusinessVerification::submit`; `solution-providers/partner-led-business-verification`).
+/// The event's entry id is the customer's WABA.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PartnerClientCertificationInfo {
     /// The client's business portfolio.
@@ -386,12 +392,18 @@ pub struct PartnerClientCertificationInfo {
     /// Status.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<CertificationStatus>,
-    /// Rejection reasons, e.g. `LEGAL NAME NOT MATCHING`, or `NONE`.
+    /// Rejection reasons, verbatim: `NONE` when not rejected, else e.g.
+    /// `LEGAL NAME NOT MATCHING` (`account_update`'s spelling) or
+    /// `LEGAL_NAME_NOT_FOUND_IN_DOCUMENTS` (the partner-led page's).
+    /// `meta_whatsapp_client::business_verification::RejectionReason::parse`
+    /// reads both.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rejection_reasons: Vec<String>,
 }
 
-/// `account_update.partner_client_certification_needed_info`.
+/// `account_update.partner_client_certification_needed_info`: a customer
+/// who skipped the website in Embedded Signup cannot send messages until
+/// you verify their business (`meta_whatsapp_client::business_verification`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PartnerClientCertificationNeededInfo {
     /// The business customer's portfolio.

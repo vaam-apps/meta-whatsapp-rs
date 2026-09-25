@@ -119,6 +119,31 @@ volumes (Claude config, shell history, cargo caches) start empty
 
 ### Added
 
+- **`meta_whatsapp_client::business_verification`**, partner-led business
+  verification for approved Select and Premier Solution Partners
+  (`solution-providers/partner-led-business-verification`; the rest of
+  coverage row 28 next to credit lines): `BusinessVerification`
+  (`Client::business_verification`) with `submit` (`POST
+  /{BUSINESS_ID}/self_certify_whatsapp_business`, multipart
+  `end_business_id` and one `business_documents[]` part per document;
+  never replayed, `{"success": false}` is an error → `SubmissionReceipt`
+  with `verification_attempts` and `attempts_left`), `submissions` /
+  `submissions_stream` (`…/self_certified_whatsapp_business_submissions`,
+  filtered by `ListVerificationSubmissions::end_business_id`) and
+  `status` (`GET /{BUSINESS_ID}?fields=verification_status`). Submitting
+  and listing take the partner's system user token, `status` the
+  customer's business token (module docs, tests assert each). Checked
+  before any request: both ids, one to three documents
+  (`VerificationDocument`: PDF, JPEG/JPG or PNG by `DocumentType`, at most
+  5 MiB, content matching the declared type, `Debug` without the
+  content). Open enums `SubmissionStatus` and
+  `BusinessVerificationStatus` keep an unknown value in `Other`;
+  `RejectionReason::parse` reads the reasons in both of Meta's spellings
+  (`LEGAL NAME NOT MATCHING`, `LEGAL_NAME_NOT_FOUND_IN_DOCUMENTS`). New id
+  `meta_whatsapp_core::ids::VerificationSubmissionId`. The outcome still
+  arrives as `account_update` `PARTNER_CLIENT_CERTIFICATION_STATUS_UPDATE`
+  (`PartnerClientCertificationInfo`, now linked from both sides and
+  tested against the partner-led page's example too).
 - **meta-whatsapp-server, milestone M1b**: messages, read receipts,
   media, templates, idempotency keys and rate limits.
   `POST /v1/numbers/{pn}/messages` (scope `send`) sends text, media by

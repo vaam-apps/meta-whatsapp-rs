@@ -12,7 +12,9 @@ deployment: see [Solution Partner mode](#solution-partner-mode).
 Example: [`embedded_signup.rs`](../../crates/meta-whatsapp-rs/examples/embedded_signup.rs),
 a **Tech Provider** server (it calls plain `onboard`, which Solution Partner
 mode refuses); the Solution Partner flow is in the skill's
-[`solution_partner.rs`](../../skills/meta-whatsapp-rs-embedded-signup/examples/solution_partner.rs).
+[`solution_partner.rs`](../../skills/meta-whatsapp-rs-embedded-signup/examples/solution_partner.rs),
+partner-led business verification in its
+[`business_verification.rs`](../../skills/meta-whatsapp-rs-embedded-signup/examples/business_verification.rs).
 Agent skills:
 [`meta-whatsapp-rs-embedded-signup`](../../skills/meta-whatsapp-rs-embedded-signup/SKILL.md),
 [`meta-whatsapp-rs-token-vault`](../../skills/meta-whatsapp-rs-token-vault/SKILL.md).
@@ -614,6 +616,64 @@ whether a `PARTNER_REMOVED` about another partner can reach your app [the
 skill's example ignores one whose `solution_partner_business_ids` does not
 list your business; Meta sends that list only under a Multi-Partner
 Solution, and does not say whose business the entry id is].
+
+### Partner-led business verification
+
+Approved **Select** and **Premier** Solution Partners can verify a
+merchant's business for them, with the merchant's documents
+([partner-led-business-verification](https://developers.facebook.com/documentation/business-messaging/whatsapp/solution-providers/partner-led-business-verification)).
+A merchant who ticked "My business does not have a website" in Embedded
+Signup needs it: their onboarding's `account_update` is
+`PARTNER_CLIENT_CERTIFICATION_NEEDED`, and they cannot send messages until
+their business is verified. The calls are in
+`meta_whatsapp_rs::client::business_verification`:
+
+| Call | Business portfolio | Token |
+| --- | --- | --- |
+| `submit(&your_business, &merchant_business, &documents)` | yours in the path, the merchant's as `end_business_id` | your system user's (an admin of your portfolio, `business_management`) |
+| `submissions` / `submissions_stream` (optionally `ListVerificationSubmissions::end_business_id`) | yours | your system user's |
+| `status(&merchant_business)` (`verification_status`) | the merchant's | the merchant's business token, from the vault |
+
+```rust
+use meta_whatsapp_rs::client::business_verification::VerificationDocument;
+
+let document = VerificationDocument::from_file_name("bank_statement.pdf", bytes)?;
+let receipt = client
+    .with_token(system_token)
+    .business_verification()
+    .submit(&our_business, &merchant_business, &[document])
+    .await?;
+// receipt.verification_attempts: 1, 2 or 3 of the merchant's three.
+```
+
+- **Three submissions per merchant**; after three rejections the merchant
+  verifies on their own. `submit` is never retried: after a lost answer,
+  list the merchant's submissions before submitting again.
+- **Documents** are checked before anything is sent: one to three, PDF,
+  JPEG/JPG or PNG (by extension with `VerificationDocument::from_file_name`,
+  or a `DocumentType`), at most 5 MB each, and content that is the type
+  it claims. Which documents Meta accepts as proof is its Help Center's
+  call ("Upload official documents to verify your business").
+- **The decision arrives by webhook**, in about five minutes (sometimes
+  hours): `account_update` with `PARTNER_CLIENT_CERTIFICATION_STATUS_UPDATE`,
+  read as `AccountUpdateValue::partner_client_certification_info`
+  (`client_business_id`, a `CertificationStatus`, `rejection_reasons`).
+  Your app must be subscribed to `account_update` and to the merchant's
+  WABA. `RejectionReason::parse` reads a reason in either of Meta's
+  spellings; `BUSINESS NOT ELIGIBLE` means the merchant can only verify
+  themselves. Meta asks for a Direct Support ticket when no webhook has
+  come after 24 hours.
+- Not settled by Meta's pages (the code's choice in brackets): the values
+  of a submission's `verification_status` [the five `account_update`
+  documents for the same submission's `status`, any other kept as
+  `SubmissionStatus::Other`]; the format of `submitted_time` and
+  `update_time` [kept as Meta's strings]; how the submissions list filters
+  by merchant [`end_business_id` as a parameter, as the edge's reference
+  says, not inside `fields` as the page's example writes it].
+
+The skill's
+[`business_verification.rs`](../../skills/meta-whatsapp-rs-embedded-signup/examples/business_verification.rs)
+does all three: look, then submit; read the webhook; check the status.
 
 ## Coexistence (merchants keeping the WhatsApp Business app)
 

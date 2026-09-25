@@ -14,7 +14,10 @@ metadata:
    → a phone-number-scoped module (`messages`, `media`, `phone_numbers`, …),
    `/{WABA_ID}/…` → `waba`, `templates`, `flows`, `analytics`, `signups`;
    Solution Partner credit lines (`/{CREDIT_LINE_ID}/…`,
-   `/{ALLOCATION_CONFIG_ID}`) → `credit_lines`. When one family mixes
+   `/{ALLOCATION_CONFIG_ID}`) → `credit_lines`; partner-led business
+   verification (`/{BUSINESS_ID}/self_certify_whatsapp_business`,
+   `…/self_certified_whatsapp_business_submissions`, a business's
+   `verification_status`) → `business_verification`. When one family mixes
    tokens (the partner's system user token for most credit line calls, the
    merchant's business token for `attach` and `primary_funding`), take the
    token from the `Client` the caller built and say which one in the

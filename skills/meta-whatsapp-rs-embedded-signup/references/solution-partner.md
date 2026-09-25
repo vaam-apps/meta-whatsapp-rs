@@ -3,8 +3,11 @@
 > **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** Also checked against Meta's
 > `solution-providers/share-and-revoke-credit-lines`,
 > `solution-providers/manage-system-users` and
-> `webhooks/reference/account_update` pages as fetched on 2026-09-24.
-> Code: [examples/solution_partner.rs](../examples/solution_partner.rs).
+> `webhooks/reference/account_update` pages as fetched on 2026-09-24, and
+> `solution-providers/partner-led-business-verification` and
+> `embedded-signup/website-optional` as fetched on 2026-09-25.
+> Code: [examples/solution_partner.rs](../examples/solution_partner.rs),
+> [examples/business_verification.rs](../examples/business_verification.rs).
 
 A **Solution Partner** pays Meta for its merchants through its own credit
 line and invoices them; a **Tech Provider**'s merchants add their own
@@ -342,6 +345,70 @@ replaced), but misses the allocation and any pending share recorded in
 an unreadable credit record, and returns the `InvalidKey` error when
 nothing readable names the business.
 
+## Partner-led business verification
+
+Approved **Select** and **Premier** Solution Partners only. A merchant
+who ticked "no website" in Embedded Signup arrives with
+`AccountUpdateEvent::PartnerClientCertificationNeeded` and cannot send
+messages until you verify their business. `submit`, `submissions` and
+`submissions_stream` take **your system user token** and **your**
+business portfolio; `status` takes **the merchant's business token** and
+their portfolio (`meta_whatsapp_rs::client::business_verification`).
+
+Three submissions per merchant, and `submit` is never retried: look
+before you submit.
+
+```rust
+let query = ListVerificationSubmissions::new().end_business_id(merchant.clone());
+let previous: Vec<_> = api
+    .submissions_stream(our_business, &query)
+    .try_collect()
+    .await?;
+```
+
+```rust
+if previous.iter().any(|s| live(&s.verification_status)) {
+    return Ok(Submission::AlreadySubmitted);
+}
+if previous.len() >= MAX_SUBMISSIONS as usize {
+    return Ok(Submission::MerchantMustVerify);
+}
+// PDF, JPEG/JPG or PNG, at most 5 MB each, one to three: checked here,
+// before anything is sent.
+let documents = files
+    .into_iter()
+    .map(|(name, data)| VerificationDocument::from_file_name(name, data))
+    .collect::<Result<Vec<_>, _>>()?;
+let receipt = api.submit(our_business, merchant, &documents).await?;
+```
+
+`VerificationDocument` also refuses a file whose content is not the type
+its name claims. The decision comes as `account_update`
+`PartnerClientCertificationStatusUpdate` (minutes, sometimes hours; a
+Direct Support ticket after 24 hours without one):
+
+```rust
+AccountUpdateEvent::PartnerClientCertificationStatusUpdate => {
+    let info = update.partner_client_certification_info.as_ref()?;
+    let reasons = info
+        .rejection_reasons
+        .iter()
+        .map(|r| RejectionReason::parse(r))
+        .filter(|r| *r != RejectionReason::None)
+        .collect();
+```
+
+`RejectionReason::parse` reads Meta's two spellings (with spaces, as in
+`LEGAL NAME NOT MATCHING`, or with underscores);
+`BusinessNotEligible` means the merchant can only verify on their own.
+The status, with the merchant's token from the vault:
+
+```rust
+let business = client.with_token(stored.token);
+let info = business.business_verification().status(merchant).await?;
+Ok(info.is_verified())
+```
+
 ## Not settled by Meta's pages
 
 - Whether the two-call method also needs the system user on the WABA.
@@ -362,3 +429,9 @@ nothing readable names the business.
 - Whether a business can attach a line shared with it to other WABAs
   itself: reconcile your credit line invoice against the WABAs you
   onboarded.
+- The values of a submission's `verification_status`: `SubmissionStatus`
+  names the five `account_update` documents for the same submission, and
+  keeps any other as `Other`.
+- The format of `submitted_time` and `update_time` (kept as strings), and
+  whether the submissions list counts discarded submissions among the
+  three (the example counts every one it lists).

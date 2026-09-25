@@ -11,6 +11,8 @@ mod meta_whatsapp_rs_cms_inbox_inbox;
 mod meta_whatsapp_rs_commerce_commerce;
 #[path = "../../../../skills/meta-whatsapp-rs-documents/examples/documents.rs"]
 mod meta_whatsapp_rs_documents_documents;
+#[path = "../../../../skills/meta-whatsapp-rs-embedded-signup/examples/business_verification.rs"]
+mod meta_whatsapp_rs_embedded_signup_business_verification;
 #[path = "../../../../skills/meta-whatsapp-rs-embedded-signup/examples/onboarding.rs"]
 mod meta_whatsapp_rs_embedded_signup_onboarding;
 #[path = "../../../../skills/meta-whatsapp-rs-embedded-signup/examples/solution_partner.rs"]

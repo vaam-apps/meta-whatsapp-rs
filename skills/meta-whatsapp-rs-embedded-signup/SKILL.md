@@ -1,6 +1,6 @@
 ---
 name: meta-whatsapp-rs-embedded-signup
-description: "Letting each merchant of a multi-tenant CMS connect their own WhatsApp number with Embedded Signup and meta-whatsapp-rs (Tech Provider, or Solution Partner funding merchants with its credit line, chosen per deployment) - Meta prerequisites, LaunchOptions for FB.login, SignupSessions binding the attempt to the merchant (start, redeem), parsing the WA_EMBEDDED_SIGNUP event, EmbeddedSignup::onboard and onboard_with_approval (code exchange, token checks, your approval gate, encrypted storage, subscribe, credit line sharing, register with the merchant's PIN), the Error::Step names, resume after a failed step, offboarding and revoking the credit line when a merchant leaves, coexistence. Load when building the Connect WhatsApp button, its callback endpoint, offboarding, or recovering a half-finished onboarding."
+description: "Letting each merchant of a multi-tenant CMS connect their own WhatsApp number with Embedded Signup and meta-whatsapp-rs (Tech Provider, or Solution Partner funding merchants with its credit line, chosen per deployment) - Meta prerequisites, LaunchOptions for FB.login, SignupSessions binding the attempt to the merchant (start, redeem), parsing the WA_EMBEDDED_SIGNUP event, EmbeddedSignup::onboard and onboard_with_approval (code exchange, token checks, your approval gate, encrypted storage, subscribe, credit line sharing, register with the merchant's PIN), the Error::Step names, resume after a failed step, offboarding and revoking the credit line when a merchant leaves, partner-led business verification of a merchant's business, coexistence. Load when building the Connect WhatsApp button, its callback endpoint, offboarding, or recovering a half-finished onboarding."
 ---
 
 # meta-whatsapp-rs-embedded-signup
@@ -8,7 +8,7 @@ description: "Letting each merchant of a multi-tenant CMS connect their own What
 > **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code, compiled and tested by meta-whatsapp-rs's own gate:
-[examples/onboarding.rs](examples/onboarding.rs), [examples/solution_partner.rs](examples/solution_partner.rs). The page side: [references/frontend.md](references/frontend.md). A full
+[examples/onboarding.rs](examples/onboarding.rs), [examples/solution_partner.rs](examples/solution_partner.rs), [examples/business_verification.rs](examples/business_verification.rs). The page side: [references/frontend.md](references/frontend.md). A full
 **Tech Provider** server: [`embedded_signup.rs`](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/crates/meta-whatsapp-rs/examples/embedded_signup.rs).
 
 ## When to use
@@ -27,7 +27,7 @@ configuration (its **configuration id**), the app subscribed to
 their number can send, unless you are a **Solution Partner** sharing your
 credit line ([references/solution-partner.md](references/solution-partner.md):
 one `SolutionPartner` per deployment, a currency per merchant, approval
-required). [Guide](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/embedded-signup.md).
+required; partner-led business verification). [Guide](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/embedded-signup.md).
 
 ## Wire once, on a shared store
 
