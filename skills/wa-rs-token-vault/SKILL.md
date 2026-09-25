@@ -52,15 +52,24 @@ record lists the number.
 
 ```rust
 let vault = TokenVault::new(kv, VaultKeys::new(new_key).with_previous(old_key))?;
-for waba_id in my_wabas {
-    vault.rotate(waba_id).await?; // re-encrypt under the new key; false if already done
+for waba_id in every_waba_ever {
+    vault.rotate(waba_id).await?; // the token and its credit ledger; false if already done
 }
-Ok(vault) // once every WABA is rotated, drop the old key from the config
+for business_id in revoked_by_business {
+    vault.rotate_business(business_id).await?; // a revocation marker no WABA names
+}
+Ok(vault) // once all of it is rotated, drop the old key from the config
 ```
 
 Reads also re-encrypt old records under the active key (`rotate_on_read`,
-default `true`; turn it off on read-only replicas). The vault cannot list
-its records: iterate **your** merchant table.
+default `true`; turn it off on read-only replicas), tokens and the
+Solution Partner credit ledger alike. The vault cannot list its records:
+iterate **your** merchant table, **offboarded WABAs included** (a
+Solution Partner's credit ledger outlives the token, and `rotate` re-seals
+it with the revocation marker of the business it names), plus every
+business you revoked by business id alone. A record left under a dropped
+key fails with `CryptoError::InvalidKey`; a corrupt credit record does not
+stop `rotate` from re-encrypting the token (the error comes back after).
 
 ## Offboard
 
@@ -69,7 +78,8 @@ Re-onboarding a WABA replaces its record. A Solution Partner offboards
 with `EmbeddedSignup::offboard` instead, which revokes the credit line
 before it deletes; `delete` leaves the credit ledger (`vault.credit`,
 `vault.revoked_business`) that revocation needs once the token is gone,
-and `rotate` re-seals it with the token.
+and `rotate` re-seals it with the token (and without it, once the token
+is gone).
 
 ## Pitfalls
 

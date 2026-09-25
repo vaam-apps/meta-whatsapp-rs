@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use time::OffsetDateTime;
 use wa_rs::client::embedded_signup::{StoredBusinessToken, TokenVault, VaultKey, VaultKeys};
+use wa_rs::core::ids::BusinessId;
 use wa_rs::prelude::*;
 
 /// At startup: the key comes from your secret manager, never from the
@@ -23,13 +24,17 @@ pub async fn rotate_all(
     kv: Arc<dyn KvStore>,
     new_key: VaultKey,
     old_key: VaultKey,
-    my_wabas: &[WabaId], // from YOUR merchant table: the vault cannot list its records
+    every_waba_ever: &[WabaId], // from YOUR merchant table, offboarded WABAs included
+    revoked_by_business: &[BusinessId], // Solution Partner: businesses revoked by id alone
 ) -> wa_rs::Result<TokenVault> {
     let vault = TokenVault::new(kv, VaultKeys::new(new_key).with_previous(old_key))?;
-    for waba_id in my_wabas {
-        vault.rotate(waba_id).await?; // re-encrypt under the new key; false if already done
+    for waba_id in every_waba_ever {
+        vault.rotate(waba_id).await?; // the token and its credit ledger; false if already done
     }
-    Ok(vault) // once every WABA is rotated, drop the old key from the config
+    for business_id in revoked_by_business {
+        vault.rotate_business(business_id).await?; // a revocation marker no WABA names
+    }
+    Ok(vault) // once all of it is rotated, drop the old key from the config
 }
 
 /// Why no merchant client could be made.
@@ -115,7 +120,7 @@ mod tests {
         // A new key: old records still open, and rotate re-encrypts them.
         let old = VaultKey::from_base64("2026-09", KEY_2026).unwrap();
         let new = VaultKey::generate("2027-01").unwrap(); // test only: its bytes cannot be exported
-        let rotated = rotate_all(kv, new, old, &["102290129340398".into()])
+        let rotated = rotate_all(kv, new, old, &["102290129340398".into()], &[])
             .await
             .unwrap();
         let again = rotated
