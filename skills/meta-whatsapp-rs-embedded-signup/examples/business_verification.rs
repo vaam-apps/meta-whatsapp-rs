@@ -22,7 +22,8 @@ use meta_whatsapp_rs::webhooks::fields::{AccountUpdateEvent, CertificationStatus
 pub enum Submission {
     /// Submitted; Meta decides in minutes to hours, by webhook.
     Submitted(SubmissionReceipt),
-    /// A submission is pending or approved already: nothing sent.
+    /// A submission is pending, approved, or in a state this code does not
+    /// know (a value Meta adds, or none): nothing sent.
     AlreadySubmitted,
     /// Three submissions made: the merchant verifies on their own.
     MerchantMustVerify,
@@ -46,13 +47,17 @@ pub async fn submit_for_verification(
         .submissions_stream(our_business, &query)
         .try_collect()
         .await?;
-    let live = |s: &Option<SubmissionStatus>| {
+    // Only a rejected, discarded or revoked submission lets you submit
+    // again: any other status, one Meta adds included, may still succeed.
+    let settled = |s: &Option<SubmissionStatus>| {
         matches!(
             s,
-            Some(SubmissionStatus::Pending | SubmissionStatus::Approved)
+            Some(
+                SubmissionStatus::Failed | SubmissionStatus::Discarded | SubmissionStatus::Revoked
+            )
         )
     };
-    if previous.iter().any(|s| live(&s.verification_status)) {
+    if !previous.iter().all(|s| settled(&s.verification_status)) {
         return Ok(Submission::AlreadySubmitted);
     }
     if previous.len() >= MAX_SUBMISSIONS as usize {
@@ -205,10 +210,22 @@ mod tests {
             json!({"data": [{"id": "1", "verification_status": "PENDING"}]}),
         );
         assert_eq!(submit(&t).await.unwrap(), Submission::AlreadySubmitted);
+        // A status Meta adds, or none, may still succeed: wait for it too.
+        for unknown in [
+            json!({"id": "2", "verification_status": "IN_REVIEW"}),
+            json!({"id": "3"}),
+        ] {
+            t.push_json(
+                200,
+                json!({"data": [{"id": "1", "verification_status": "DISCARDED"}, unknown]}),
+            );
+            assert_eq!(submit(&t).await.unwrap(), Submission::AlreadySubmitted);
+        }
         let failed = json!({"id": "1", "verification_status": "FAILED"});
         t.push_json(200, json!({"data": [failed, failed, failed]}));
         assert_eq!(submit(&t).await.unwrap(), Submission::MerchantMustVerify);
-        assert_eq!(t.requests().len(), 2, "no submission posted");
+        assert_eq!(t.requests().len(), 4, "no submission posted");
+        assert!(t.requests().iter().all(|r| r.method.as_str() == "GET"));
     }
 
     #[tokio::test]

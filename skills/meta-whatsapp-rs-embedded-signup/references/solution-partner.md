@@ -367,7 +367,17 @@ let previous: Vec<_> = api
 ```
 
 ```rust
-if previous.iter().any(|s| live(&s.verification_status)) {
+// Only a rejected, discarded or revoked submission lets you submit
+// again: any other status, one Meta adds included, may still succeed.
+let settled = |s: &Option<SubmissionStatus>| {
+    matches!(
+        s,
+        Some(
+            SubmissionStatus::Failed | SubmissionStatus::Discarded | SubmissionStatus::Revoked
+        )
+    )
+};
+if !previous.iter().all(|s| settled(&s.verification_status)) {
     return Ok(Submission::AlreadySubmitted);
 }
 if previous.len() >= MAX_SUBMISSIONS as usize {
