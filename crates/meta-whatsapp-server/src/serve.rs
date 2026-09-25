@@ -16,6 +16,7 @@ use meta_whatsapp_rs::client::embedded_signup::{TokenVault, VaultKeys};
 use meta_whatsapp_rs::core::store::KvStore;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
+use tokio::task::JoinHandle;
 
 use crate::api;
 use crate::config::{Config, DatabaseUrl, MigrateMode, Storage};
@@ -132,36 +133,113 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     let wait = |mut rx: watch::Receiver<bool>| async move {
         let _ = rx.wait_for(|stop| *stop).await;
     };
-    let public_server = axum_serve(public, api::public_router(&state), wait(stopped.clone()));
-    let internal_server = axum_serve(internal, api::internal_router(&state), wait(stopped));
-    let mut servers = tokio::spawn(async move { tokio::join!(public_server, internal_server) });
+    let mut public_task = tokio::spawn(axum_serve(
+        public,
+        api::public_router(&state),
+        wait(stopped.clone()),
+    ));
+    let mut internal_task = tokio::spawn(axum_serve(
+        internal,
+        api::internal_router(&state),
+        wait(stopped),
+    ));
 
-    // A listener that stops on its own (an accept loop failing) stops the
-    // process too, rather than leaving it up with nothing served.
-    tokio::select! {
-        () = shutdown_signal() => {}
-        finished = &mut servers => {
-            let (public, internal) = finished.context("listener task")?;
-            public.context("public listener")?;
-            internal.context("internal listener")?;
-            anyhow::bail!("a listener stopped");
+    // Either listener stopping on its own (its task failing or panicking)
+    // stops the process too, rather than leaving it up half served: the
+    // orchestrator then restarts it.
+    let outcome = first_to_stop(&mut public_task, &mut internal_task, shutdown_signal()).await;
+    match &outcome {
+        Stopped::Signal => tracing::info!("shutting down"),
+        Stopped::Listener { error, .. } => {
+            tracing::error!(error = %error, "a listener stopped: shutting down");
         }
     }
-    tracing::info!("shutting down");
     state.begin_shutdown();
     let _ = stop.send(true);
-    match tokio::time::timeout(shutdown_grace, servers).await {
-        Ok(Ok((public, internal))) => {
-            public.context("public listener")?;
-            internal.context("internal listener")?;
-        }
-        Ok(Err(join)) => return Err(join).context("listener task"),
-        Err(_) => tracing::warn!("open requests outlived WA_SERVER_SHUTDOWN_GRACE"),
-    }
+    // The listeners still running get the grace period; one that stopped
+    // on its own was already awaited.
+    let running = [("public", public_task), ("internal", internal_task)]
+        .into_iter()
+        .filter(|(name, _)| outcome.ended() != Some(*name))
+        .map(|(name, task)| async move { (name, task.await) });
+    let drained = tokio::time::timeout(shutdown_grace, futures::future::join_all(running)).await;
     if let Some(pool) = backends.pool {
         pool.close().await;
     }
+    if let Stopped::Listener { error, .. } = outcome {
+        return Err(error);
+    }
+    let Ok(ended) = drained else {
+        tracing::warn!("open requests outlived WA_SERVER_SHUTDOWN_GRACE");
+        return Ok(());
+    };
+    for (name, result) in ended {
+        listener_result(name, result)?;
+    }
     Ok(())
+}
+
+/// A listener task's end.
+type ListenerTask = JoinHandle<std::io::Result<()>>;
+
+/// Why [`first_to_stop`] returned.
+#[derive(Debug)]
+pub enum Stopped {
+    /// `SIGTERM` or `SIGINT`.
+    Signal,
+    /// A listener stopped before any signal.
+    Listener {
+        /// `public` or `internal`.
+        name: &'static str,
+        /// Why.
+        error: anyhow::Error,
+    },
+}
+
+impl Stopped {
+    /// The listener that stopped on its own, if one did.
+    pub fn ended(&self) -> Option<&'static str> {
+        match self {
+            Self::Signal => None,
+            Self::Listener { name, .. } => Some(name),
+        }
+    }
+}
+
+/// `Ok` for a listener that ended cleanly after the stop signal, else the
+/// error, naming the listener.
+fn listener_result(
+    name: &'static str,
+    ended: Result<std::io::Result<()>, tokio::task::JoinError>,
+) -> anyhow::Result<()> {
+    match ended {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(anyhow::Error::new(error).context(format!("{name} listener"))),
+        Err(join) => Err(anyhow::Error::new(join).context(format!("{name} listener task"))),
+    }
+}
+
+/// Wait for `signal`, or for either listener task to end on its own,
+/// whichever comes first. A listener never ends before the stop signal
+/// unless it failed, so its end, with or without an error, is
+/// [`Stopped::Listener`].
+pub async fn first_to_stop(
+    public: &mut ListenerTask,
+    internal: &mut ListenerTask,
+    signal: impl Future<Output = ()>,
+) -> Stopped {
+    let ended = |name: &'static str, ended| Stopped::Listener {
+        name,
+        error: match listener_result(name, ended) {
+            Ok(()) => anyhow::anyhow!("the {name} listener stopped"),
+            Err(error) => error,
+        },
+    };
+    tokio::select! {
+        () = signal => Stopped::Signal,
+        result = public => ended("public", result),
+        result = internal => ended("internal", result),
+    }
 }
 
 async fn axum_serve(
@@ -194,5 +272,63 @@ async fn shutdown_signal() {
     #[cfg(not(unix))]
     {
         let _ = interrupt.await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::pending;
+
+    use super::*;
+
+    fn never() -> ListenerTask {
+        tokio::spawn(pending())
+    }
+
+    /// Either listener ending before the signal stops the process, with or
+    /// without an error, and names it. Decisive: supervising the two
+    /// listeners together (a `join!` of both) instead of each.
+    #[tokio::test]
+    async fn a_listener_that_stops_stops_the_process() {
+        let failed = || tokio::spawn(async { Err(std::io::Error::other("accept failed")) });
+        let ended = || tokio::spawn(async { Ok(()) });
+        let panicked = || -> ListenerTask { tokio::spawn(async { panic!("the accept loop") }) };
+        for (which, mut public, mut internal) in [
+            ("public", failed(), never()),
+            ("internal", never(), failed()),
+            ("public", ended(), never()),
+            ("internal", never(), ended()),
+            ("internal", never(), panicked()),
+        ] {
+            let stopped = tokio::time::timeout(
+                Duration::from_secs(5),
+                first_to_stop(&mut public, &mut internal, pending()),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("the {which} listener stopped, the process did not"));
+            assert_eq!(stopped.ended(), Some(which), "{stopped:?}");
+            let Stopped::Listener { error, .. } = stopped else {
+                unreachable!()
+            };
+            assert!(format!("{error:#}").contains(which), "{error:#}");
+            public.abort();
+            internal.abort();
+        }
+    }
+
+    /// The signal stops serving while both listeners run.
+    #[tokio::test]
+    async fn the_signal_stops_serving() {
+        let (mut public, mut internal) = (never(), never());
+        let stopped = tokio::time::timeout(
+            Duration::from_secs(5),
+            first_to_stop(&mut public, &mut internal, async {}),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(stopped, Stopped::Signal), "{stopped:?}");
+        assert!(!public.is_finished() && !internal.is_finished());
+        public.abort();
+        internal.abort();
     }
 }
