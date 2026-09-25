@@ -1,11 +1,12 @@
 # Design: a deployable wa-rs service (`wa-server`)
 
-> **Draft for the owner's review. Design only: no service code exists.**
-> Against `main` = bbf24a3 (2026-09-24), Graph API v25.0. Assumes the
-> changes in flight on another branch (`OtpConfig::namespace` required; the
-> partner Intent API's result type, `marketing::OnboardingRequest` today,
-> renamed) and Solution Partner onboarding landing next. Owner choices are
-> marked **Decision for owner (Dn)** and listed in [§10](#10-decisions-for-the-owner).
+> **Design only: no service code exists yet.** Written against `main` =
+> bbf24a3 (2026-09-24), Graph API v25.0; the library changes it assumed have
+> since landed on `main` (#4: `OtpConfig::namespace` required, the Intent
+> API's result renamed `marketing::OnboardingRequested`; #5: Solution Partner
+> onboarding with `onboard_with_approval`, `offboard` and the credit ledger).
+> Owner choices are marked **Decision for owner (Dn)** and listed in
+> [§10](#10-decisions-for-the-owner).
 
 The product decision: apps not written in Rust (Medusa, in TypeScript; the
 CMS, any stack) use wa-rs through a **service deployed as a Docker image
@@ -717,8 +718,8 @@ Tests use `ScriptedTransport` (method, path, token, exact JSON,
 | # | Library change (own PR, own parity) | When | Kind |
 | --- | --- | --- | --- |
 | L1 | `ErrorKind::as_str()`, stable snake_case, pinned by a test | M1 | additive |
-| L2 | `OtpConfig::namespace` required | in flight, before M3 | breaking |
-| L3 | Solution Partner credit-line step in onboarding | in flight, before M3's partner mode | additive |
+| L2 | `OtpConfig::namespace` required | done (#4) | breaking |
+| L3 | Solution Partner credit-line step in onboarding | done (#5: `onboard_with_approval`, `offboard`, credit ledger) | additive |
 | L4 | a code-less `OnboardingRequest` for `resume` (OQ #10) | M3, optional | additive |
 | L5 | `ConversationStore` erasure | if D10 asks | port change |
 | L6 | [architecture.md](../architecture.md): dependency rule for binaries, a "Service" section | M1 | docs |
