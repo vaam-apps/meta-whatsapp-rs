@@ -154,6 +154,57 @@ fn serve_answers_on_both_listeners_and_stops_on_sigterm() {
     assert!(!down.success(), "healthcheck against a stopped service");
 }
 
+/// In development on memory storage (which the CLI cannot reach), `serve`
+/// writes a one-time admin key to standard error, which the served API
+/// accepts (coordinator's decision DP9). Decisive: minting it at start.
+#[test]
+fn development_on_memory_prints_a_one_time_admin_key() {
+    use std::io::BufRead as _;
+    let (public, internal) = two_ports();
+    let mut child = base(&mut Command::new(BIN), public, internal)
+        .env("WA_SERVER_ENV", "development")
+        .arg("serve")
+        .spawn()
+        .unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let (found, key) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stderr)
+            .lines()
+            .map_while(Result::ok)
+        {
+            if let Some((_, key)) = line.split_once("shown once: ") {
+                let _ = found.send(key.trim().to_owned());
+            }
+        }
+    });
+    let key = key
+        .recv_timeout(Duration::from_secs(30))
+        .expect("no admin key on standard error");
+    assert!(key.starts_with("wak_"), "{key}");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let bearer = format!("Bearer {key}");
+    let (status, body) = loop {
+        let answer = http(
+            internal,
+            "POST",
+            "/v1/admin/tenants",
+            &[
+                ("Authorization", &bearer),
+                ("Content-Type", "application/json"),
+            ],
+            r#"{"id": "merchant-42"}"#,
+        );
+        if let Some(answer) = answer {
+            break answer;
+        }
+        assert!(Instant::now() < deadline, "the service never answered");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(status, 201, "{body}");
+    terminate(&mut child);
+}
+
 #[test]
 fn a_refused_configuration_exits_naming_the_variable_not_the_value() {
     let (public, internal) = two_ports();

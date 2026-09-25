@@ -18,8 +18,10 @@ use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
+use crate::api::admin::mint;
 use crate::config::{Config, DatabaseUrl, MigrateMode, Storage};
 use crate::metrics::Metrics;
+use crate::model::KeyOwner;
 use crate::state::AppState;
 use crate::store::{MemoryStore, PgStore, Store, migrate};
 use crate::{api, listen};
@@ -125,7 +127,28 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         ..
     } = config;
     let vault = vault(backends.kv, vault_keys)?;
+    let memory = backends.pool.is_none();
     let state = AppState::new(backends.store, vault, client, verify_token, Metrics::new());
+    if memory {
+        // Memory storage exists in development only (the configuration
+        // refuses it elsewhere), and the CLI cannot reach it: the first
+        // admin key is minted here and written once to standard error,
+        // never through the logs.
+        let (minted, _) = mint(
+            state.store(),
+            KeyOwner::Admin,
+            Vec::new(),
+            "development".to_owned(),
+            None,
+        )
+        .await
+        .context("minting the development admin key")?;
+        eprintln!(
+            "meta-whatsapp-server: development, memory storage: a one-time admin key for this \
+             process, shown once: {}",
+            minted.expose_key()
+        );
+    }
 
     let public = TcpListener::bind(public_bind)
         .await
