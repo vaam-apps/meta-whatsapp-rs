@@ -5,8 +5,9 @@
 //! meta-whatsapp-server migrate                create or upgrade the tables, then exit
 //! meta-whatsapp-server openapi                print the OpenAPI document
 //! meta-whatsapp-server healthcheck            GET /livez on the internal listener (container HEALTHCHECK)
-//! meta-whatsapp-server admin create-admin-key [--name N]
-//! meta-whatsapp-server admin create-platform-key --tenants '*'|a,b --scopes numbers,… [--name N]
+//! meta-whatsapp-server admin create-admin-key [--name N] [--expires-at RFC3339]
+//! meta-whatsapp-server admin create-platform-key --tenants '*'|a,b --scopes numbers,… [--name N] [--expires-at RFC3339]
+//! meta-whatsapp-server admin list-keys [--tenant ID]
 //! meta-whatsapp-server admin revoke-key <key_id>
 //! ```
 //!
@@ -21,9 +22,16 @@ use anyhow::Context as _;
 use clap::{Parser, Subcommand};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
+
 use crate::api::admin::{TenantsSpec, allowed_tenants, mint};
+use crate::api::common::rfc3339;
 use crate::config::{self, Config, Env, MigrateMode, ProcessEnv};
-use crate::model::{KeyOwner, KeyScope, MAX_NAME_CHARS, Scope};
+use crate::model::{
+    AllowedTenants, ApiKeyRecord, KeyOwner, KeyScope, MAX_NAME_CHARS, MAX_PAGE_SIZE, PageRequest,
+    Scope, TenantId,
+};
 use crate::store::{PgStore, Store, migrate};
 use crate::{api, serve, telemetry};
 
@@ -61,6 +69,9 @@ pub enum AdminCommand {
         /// A label for operators.
         #[arg(long, default_value = "")]
         name: String,
+        /// When it stops working (RFC 3339, in the future); never, if unset.
+        #[arg(long)]
+        expires_at: Option<String>,
     },
     /// Mint a platform key and print it once.
     CreatePlatformKey {
@@ -73,6 +84,16 @@ pub enum AdminCommand {
         /// A label for operators.
         #[arg(long, default_value = "")]
         name: String,
+        /// When it stops working (RFC 3339, in the future); never, if unset.
+        #[arg(long)]
+        expires_at: Option<String>,
+    },
+    /// List the admin and platform keys (or one tenant's), revoked ones
+    /// included, one per line: never a secret.
+    ListKeys {
+        /// A tenant's keys instead.
+        #[arg(long)]
+        tenant: Option<String>,
     },
     /// Revoke a key of any kind.
     RevokeKey {
@@ -125,9 +146,11 @@ async fn admin_store(env: &dyn Env) -> anyhow::Result<PgStore> {
 async fn admin(command: AdminCommand, env: &dyn Env) -> anyhow::Result<()> {
     let store = admin_store(env).await?;
     match command {
-        AdminCommand::CreateAdminKey { name } => {
+        AdminCommand::CreateAdminKey { name, expires_at } => {
             check_name(&name)?;
-            let (minted, record) = mint(&store, KeyOwner::Admin, Vec::new(), name, None).await?;
+            let expires_at = expiry(expires_at.as_deref())?;
+            let (minted, record) =
+                mint(&store, KeyOwner::Admin, Vec::new(), name, expires_at).await?;
             eprintln!("admin key {} created; it is shown once:", record.key_id);
             println!("{}", minted.expose_key());
         }
@@ -135,8 +158,10 @@ async fn admin(command: AdminCommand, env: &dyn Env) -> anyhow::Result<()> {
             tenants,
             scopes,
             name,
+            expires_at,
         } => {
             check_name(&name)?;
+            let expires_at = expiry(expires_at.as_deref())?;
             let spec = if tenants.trim() == "*" {
                 TenantsSpec::All("*".to_owned())
             } else {
@@ -145,10 +170,43 @@ async fn admin(command: AdminCommand, env: &dyn Env) -> anyhow::Result<()> {
             let allowed = allowed_tenants(spec)
                 .map_err(|_| anyhow::anyhow!("--tenants: `*` or comma-separated tenant ids"))?;
             let scopes = parse_scopes(&scopes)?;
-            let (minted, record) =
-                mint(&store, KeyOwner::Platform(allowed), scopes, name, None).await?;
+            let (minted, record) = mint(
+                &store,
+                KeyOwner::Platform(allowed),
+                scopes,
+                name,
+                expires_at,
+            )
+            .await?;
             eprintln!("platform key {} created; it is shown once:", record.key_id);
             println!("{}", minted.expose_key());
+        }
+        AdminCommand::ListKeys { tenant } => {
+            let scopes = match tenant {
+                Some(tenant) => vec![KeyScope::Tenant(
+                    TenantId::parse(&tenant).context("--tenant: not a tenant id")?,
+                )],
+                None => vec![KeyScope::Admin, KeyScope::Platform],
+            };
+            println!(
+                "key_id\tkind\ttenants\tscopes\tname\tcreated_at\texpires_at\trevoked_at\tlast_used_at"
+            );
+            for scope in &scopes {
+                let mut page = PageRequest {
+                    after: None,
+                    limit: MAX_PAGE_SIZE,
+                };
+                loop {
+                    let listing = store.keys(scope, &page).await?;
+                    for key in &listing.items {
+                        println!("{}", key_line(key));
+                    }
+                    let Some(after) = listing.next_after else {
+                        break;
+                    };
+                    page.after = Some(after);
+                }
+            }
         }
         AdminCommand::RevokeKey { key_id } => {
             let record = store
@@ -165,6 +223,59 @@ async fn admin(command: AdminCommand, env: &dyn Env) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// `--expires-at`: RFC 3339, in the future.
+fn expiry(value: Option<&str>) -> anyhow::Result<Option<OffsetDateTime>> {
+    let Some(value) = value else { return Ok(None) };
+    let at = OffsetDateTime::parse(value, &Rfc3339)
+        .context("--expires-at: an RFC 3339 time, e.g. 2027-01-01T00:00:00Z")?;
+    anyhow::ensure!(at > OffsetDateTime::now_utc(), "--expires-at: in the past");
+    Ok(Some(at))
+}
+
+/// A key as one tab-separated line: its public id and record, never a
+/// secret.
+fn key_line(key: &ApiKeyRecord) -> String {
+    let time = |at: Option<OffsetDateTime>| at.map_or_else(|| "-".to_owned(), rfc3339);
+    let tenants = match &key.owner {
+        KeyOwner::Tenant(tenant) => tenant.as_str().to_owned(),
+        KeyOwner::Platform(AllowedTenants::All) => "*".to_owned(),
+        KeyOwner::Platform(AllowedTenants::Only(list)) => list
+            .iter()
+            .map(TenantId::as_str)
+            .collect::<Vec<_>>()
+            .join(","),
+        KeyOwner::Admin => "-".to_owned(),
+    };
+    let scopes = key
+        .scopes
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    // Names are operators' labels: tabs and newlines would break the line.
+    let name: String = key.name.chars().filter(|c| !c.is_control()).collect();
+    [
+        key.key_id.clone(),
+        key.owner.kind().as_str().to_owned(),
+        tenants,
+        if scopes.is_empty() {
+            "-".to_owned()
+        } else {
+            scopes
+        },
+        if name.is_empty() {
+            "-".to_owned()
+        } else {
+            name
+        },
+        rfc3339(key.created_at),
+        time(key.expires_at),
+        time(key.revoked_at),
+        time(key.last_used_at),
+    ]
+    .join("\t")
 }
 
 fn check_name(name: &str) -> anyhow::Result<()> {

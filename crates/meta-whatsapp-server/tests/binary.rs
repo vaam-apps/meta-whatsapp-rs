@@ -189,9 +189,11 @@ fn a_refused_configuration_exits_naming_the_variable_not_the_value() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("memory storage"));
 }
 
-/// The CLI mints the first admin key into Postgres; the served API
-/// accepts it, and `admin revoke-key` stops it.
+/// The CLI mints the first admin key into Postgres (with an expiry, and
+/// lists it without its secret); the served API accepts it, and `admin
+/// revoke-key` stops it.
 #[test]
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
 fn live_postgres_cli_bootstrap_key_works_against_the_served_api() {
     let Some(url) = common::postgres_url() else {
         return;
@@ -214,10 +216,31 @@ fn live_postgres_cli_bootstrap_key_works_against_the_served_api() {
             )
             .env("WA_OTP_PEPPER", "a-pepper-of-at-least-thirty-two-bytes");
     };
+    // An expiry in the past is refused.
+    let mut past = Command::new(BIN);
+    with_db(&mut past);
+    let refused = past
+        .args([
+            "admin",
+            "create-admin-key",
+            "--expires-at",
+            "2020-01-01T00:00:00Z",
+        ])
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("--expires-at"));
     let mut mint = Command::new(BIN);
     with_db(&mut mint);
     let minted = mint
-        .args(["admin", "create-admin-key", "--name", "ops"])
+        .args([
+            "admin",
+            "create-admin-key",
+            "--name",
+            "ops",
+            "--expires-at",
+            "2099-01-01T00:00:00Z",
+        ])
         .stdout(Stdio::piped())
         .output()
         .unwrap();
@@ -252,6 +275,31 @@ fn live_postgres_cli_bootstrap_key_works_against_the_served_api() {
     .unwrap();
     assert_eq!(status, 201, "{body}");
     let key_id = key["wak_".len()..].split_once('_').unwrap().0.to_owned();
+    let secret = key.rsplit('_').next().unwrap().to_owned();
+    let list = || {
+        let mut list = Command::new(BIN);
+        with_db(&mut list);
+        let listed = list
+            .args(["admin", "list-keys"])
+            .stdout(Stdio::piped())
+            .output()
+            .unwrap();
+        assert!(listed.status.success());
+        let listed = String::from_utf8(listed.stdout).unwrap();
+        assert!(!listed.contains(&secret), "{listed}");
+        listed
+            .lines()
+            .find(|l| l.starts_with(&key_id))
+            .unwrap_or_else(|| panic!("{key_id} not listed: {listed}"))
+            .split('\t')
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    let line = list();
+    assert_eq!(line[1], "admin");
+    assert_eq!(line[4], "ops");
+    assert_eq!(line[6], "2099-01-01T00:00:00Z");
+    assert_eq!(line[7], "-", "not revoked");
     let mut revoke = Command::new(BIN);
     with_db(&mut revoke);
     assert!(
@@ -273,5 +321,6 @@ fn live_postgres_cli_bootstrap_key_works_against_the_served_api() {
         status, 401,
         "revoked through the CLI, refused by the running service"
     );
+    assert_ne!(list()[7], "-", "listed as revoked");
     terminate(&mut child);
 }

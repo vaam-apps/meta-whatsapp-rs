@@ -609,44 +609,97 @@ mod tests {
         assert_eq!(MIGRATION_LOCK, i64::from_be_bytes(first));
     }
 
+    /// Why `sql` would contract the schema (what a replica of the previous
+    /// release still reads, or writes without knowing a new rule), or
+    /// `None` when it only expands.
+    fn contraction(sql: &str) -> Option<String> {
+        let upper = sql
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .to_uppercase();
+        for forbidden in [
+            "DROP ",
+            "RENAME ",
+            "TRUNCATE",
+            "DELETE FROM",
+            "UPDATE ",
+            " TYPE ",
+            "SET NOT NULL",
+            // A new constraint refuses the writes of the previous release.
+            "ADD CONSTRAINT",
+        ] {
+            if upper.contains(forbidden) {
+                return Some(format!("`{}`", forbidden.trim()));
+            }
+        }
+        for statement in upper.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+            let statement = statement.split_whitespace().collect::<Vec<_>>().join(" ");
+            if !(statement.starts_with("CREATE TABLE WA_SERVER_")
+                || statement.starts_with("CREATE INDEX WA_SERVER_")
+                || statement.starts_with("ALTER TABLE WA_SERVER_"))
+            {
+                return Some(format!(
+                    "`{statement}` is not an expansion of a wa_server_ table"
+                ));
+            }
+            // The previous release inserts rows without the new column.
+            if statement.starts_with("ALTER TABLE")
+                && statement.contains("NOT NULL")
+                && !statement.contains("DEFAULT")
+            {
+                return Some(format!(
+                    "`{statement}`: a NOT NULL column without a default"
+                ));
+            }
+        }
+        None
+    }
+
     /// Expand-then-contract: a migration adds; it never drops, renames,
     /// retypes or rewrites what a replica of the previous release still
-    /// reads. A contracting step is a migration of a later release, whose
-    /// name says so (`…_contract.sql`) and which this test then allows.
+    /// reads, nor adds a rule its writes break. A contracting step is a
+    /// migration of a later release, whose name says so (`…_contract.sql`)
+    /// and which this test then allows.
     #[test]
     fn migrations_only_expand() {
         for (version, description, sql) in MIGRATION_FILES {
             if description.ends_with("contract") {
                 continue;
             }
-            let upper = sql
-                .lines()
-                .filter(|l| !l.trim_start().starts_with("--"))
-                .collect::<Vec<_>>()
-                .join("\n")
-                .to_uppercase();
-            for forbidden in [
-                "DROP ",
-                "RENAME ",
-                "TRUNCATE",
-                "DELETE FROM",
-                "UPDATE ",
-                " TYPE ",
-                "SET NOT NULL",
-            ] {
-                assert!(
-                    !upper.contains(forbidden),
-                    "migration {version} ({description}) contracts: `{forbidden}`"
-                );
-            }
-            for statement in upper.split(';').map(str::trim).filter(|s| !s.is_empty()) {
-                assert!(
-                    statement.starts_with("CREATE TABLE WA_SERVER_")
-                        || statement.starts_with("CREATE INDEX WA_SERVER_")
-                        || statement.starts_with("ALTER TABLE WA_SERVER_"),
-                    "migration {version}: `{statement}` is not an expansion of a wa_server_ table"
-                );
-            }
+            assert_eq!(
+                contraction(sql),
+                None,
+                "migration {version} ({description}) contracts"
+            );
+        }
+    }
+
+    /// The check's own test: what it must refuse, and allow.
+    #[test]
+    fn the_expand_only_check_rejects_contractions() {
+        for sql in [
+            "DROP TABLE wa_server_tenants;",
+            "ALTER TABLE wa_server_tenants RENAME COLUMN name TO label;",
+            "ALTER TABLE wa_server_tenants ALTER COLUMN name TYPE INT;",
+            "ALTER TABLE wa_server_tenants ALTER COLUMN name SET NOT NULL;",
+            "ALTER TABLE wa_server_tenants ADD CONSTRAINT name_len CHECK (length(name) < 9);",
+            "ALTER TABLE wa_server_tenants ADD COLUMN plan TEXT NOT NULL;",
+            "ALTER TABLE wa_server_tenants\n  ADD COLUMN plan TEXT\n  NOT NULL;",
+            "UPDATE wa_server_tenants SET name = '';",
+            "CREATE TABLE wa_other (id TEXT);",
+        ] {
+            assert!(contraction(sql).is_some(), "{sql}");
+        }
+        for sql in [
+            "CREATE TABLE wa_server_x (id TEXT NOT NULL);",
+            "CREATE INDEX wa_server_x_idx ON wa_server_x (id);",
+            "ALTER TABLE wa_server_tenants ADD COLUMN plan TEXT;",
+            "ALTER TABLE wa_server_tenants ADD COLUMN plan TEXT NOT NULL DEFAULT 'free';",
+            "-- DROP nothing: a comment\nCREATE TABLE wa_server_y (id TEXT);",
+        ] {
+            assert_eq!(contraction(sql), None, "{sql}");
         }
     }
 }
