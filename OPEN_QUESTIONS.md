@@ -31,9 +31,9 @@ of its own, after an HTML comment; keep that when you add one.
    is stored; which policy wa-rs itself should default to is open. A
    Solution Partner deployment must approve (plain `onboard` is refused,
    and `resume` shares only for a WABA whose stored token record has a
-   recorded approval; whether that stays required is #40), but what the
-   approval checks is still the integrator's: wa-rs decides no tenant
-   policy.
+   recorded approval; the owner decided on 2026-09-25 that it stays
+   required), but what the approval checks is still the integrator's:
+   wa-rs decides no tenant policy.
 7. **Coexistence sync.** Contacts/history sync (`smb_app_data`) must happen
    once, within 24 h of onboarding. `onboard` only flags it
    (`needs_coexistence_sync()`); should it trigger it?
@@ -51,56 +51,6 @@ of its own, after an HTML comment; keep that when you add one.
     `whatsAppBusinessAccount` both as `{ids: …}` and `{id: [...]}`; the code
     uses the worked example (`{id: [...]}`) and sends `business.id` as a
     string. Confirm in Meta's Integration Helper before relying on pre-fill.
-
-<!-- 39 starts its own list so it renders as 39, not 13 (40 follows it). -->
-
-39. **When to revoke the credit line after `PARTNER_REMOVED`.** The
-    owner's decision, tracked as D14 in `docs/design/server.md` on the
-    `docs/server-design` branch. Meta recommends revoking at once when a
-    customer unshares its WABA; a `PARTNER_REMOVED` with
-    `disconnection_info` concerns a coexistence number (a device change, a
-    re-registration, inactivity) that may reconnect. Options: revoke at
-    once in every case; revoke after a grace period when
-    `disconnection_info` says the number may reconnect; let the operator
-    decide per event. Revocation is per business, so it also stops funding
-    that business's other WABAs, and funding it again needs
-    `OnboardingRequest::reshare_after_revocation`. Today the library
-    decides none (`revoke_credit_line` runs when the integrator calls
-    it); the `wa-rs-embedded-signup` skill's example revokes a removal
-    without `disconnection_info` and hands one with it to the
-    integrator's own policy (`PartnerAction::CoexistenceDisconnected`),
-    choosing neither option.
-40. **`onboard_with_approval` required in Solution Partner mode.** Plain
-    `onboard` is refused there (`CreditError::ApprovalRequired`, before
-    the code is exchanged), and `resume` shares only for a WABA whose
-    stored token record has a recorded approval. Making it required was
-    the coordinating agent's call on a review finding (1a7b5bf), not the
-    maintainer's, and awaits the maintainer's confirmation. Options: keep
-    it required; or let plain `onboard` share, as before 1a7b5bf, which
-    leaves the tenant check to the integrator after the line is attached
-    (an attached line cannot be taken back from the WABA). It does not
-    decide #6: what the approval checks stays the integrator's.
-41. **Clearing a share whose answer was lost.** A credit post whose answer
-    never came back leaves the WABA's ledger record with a pending share.
-    Until Meta's records list that share, every revocation of the WABA
-    returns `RevocationIncomplete` with `share_pending` (retryable), and
-    `offboard` keeps the token. If the post never reached Meta, nothing will
-    ever list it, and the record stays pending: no public call clears it
-    today. Options: an explicit operator call that clears the pending share
-    after checking Meta Business Suite (and records who cleared it and
-    when); clearing it automatically after a settle time with no share
-    listed (Meta documents no settle time); or keep it and document the
-    manual store edit.
-42. **Marking a business revoked when nothing was ever shared.** `offboard`
-    in Solution Partner mode writes the revocation marker before it looks
-    anything up, also for a WABA onboarded in Tech Provider mode that was
-    never funded. That order is what stops a share starting after
-    `offboard` read the ledger from surviving the revocation; the cost is
-    that a later partner-mode onboarding of that business needs
-    `reshare_after_revocation`. Options: keep marking (today); skip the
-    marker when the ledger shows no approval and no share, accepting that
-    narrow race; or mark and let the approval step clear markers that no
-    share ever followed.
 
 ## Authentication (OTP)
 
@@ -155,7 +105,7 @@ of its own, after an HTML comment; keep that when you add one.
 ## API conventions
 
 Found by the conventions reviews of 8ee6fab (27–29; counts are from that
-commit) and of b805dac (36).
+commit).
 
 27. **One catch-all variant for every open enum.** Enums Meta may extend
     have a catch-all so a new value never fails parsing, but it comes in
@@ -193,23 +143,6 @@ commit) and of b805dac (36).
     integrators to pin their own versions and dropping the re-exports, was
     not taken; confirm the direction.
 
-<!-- 36 starts its own list so it renders as 36, not 30. -->
-
-36. **Two types for one quality rating.** `wa_client::common::QualityRating`
-    (templates and phone numbers: `GREEN`, `YELLOW`, `RED`, `NA`,
-    `UNKNOWN`, `Other(String)`) and `wa_webhooks::fields::templates::TemplateQualityScore`
-    (the `message_template_quality_update` webhook: `GREEN`, `YELLOW`,
-    `RED`, `UNKNOWN`, `Other(String)`) are the same concept in two crates,
-    neither of which depends on the other. Options: move one type to
-    `wa-core` and re-export it from both, or keep two and document the
-    mapping. Merging changes the webhook type's variants (it gains
-    `NotApplicable`: `"NA"` is `Other("NA")` today) and its case rule (the
-    client's type matches values case-insensitively, the webhook's
-    exactly), which breaks a `match` on it: an arm on `Other("NA")` or on
-    a lower-case `Other` value stops matching, and unless
-    `TemplateQualityScore` stays as an alias, every `match` naming it stops
-    compiling. Today: two types.
-
 ## Webhooks and live updates
 
 Found by the security review of 8ee6fab.
@@ -243,7 +176,7 @@ Found by the security review of 8ee6fab.
 ## CMS inbox
 
 Found while writing the integrator guides and checking them against
-7940d15 (32, 33), and by the security review of b805dac (37, 38).
+7940d15 (32, 33).
 
 32. **A call reopens the window, the inbox cannot see it.** Meta starts or
     refreshes the 24-hour customer service window when the customer
@@ -269,47 +202,3 @@ Found while writing the integrator guides and checking them against
     Options: key messages by `(phone_number_id, id)` (a migration of the
     primary key; history cursors are already per conversation), or keep it
     and document it (what the guides and skills do today).
-
-<!-- 37 starts its own list so it renders as 37, not 34 (38 follows it). -->
-
-37. **Should a revoke also match its conversation?**
-    `ConversationStore::revoke` deletes message `id` if it was stored for
-    the business number the revoke arrived on and in the revoke's
-    direction (a customer revokes what they sent, the business what it
-    sent). The security review of b805dac asked for the conversation to
-    match too; the remediation did not do it, and the port leaves it
-    unspecified until this is decided (the in-repo adapters do not match
-    it, and the conformance suite requires neither). A revoke's
-    conversation key and its message's can differ for the same customer:
-    a message recorded under the phone number (a history thread without a
-    BSUID) and revoked by a live webhook keyed by the BSUID, or a customer
-    whose BSUID changed with their number (`UserIdChanged`).
-    - *Keep number + direction (today).* A revoke finds its message (of
-      its number and direction) however the two were keyed. The cost: a
-      revoke keyed to conversation A marks a message stored under
-      conversation B `Deleted` when the number and direction match, so
-      nothing checks that the revoke and the message belong to the same
-      customer.
-    - *Match the conversation too.* A revoke only ever deletes a message
-      of the conversation it names. The cost: when the keys differ as
-      above, the message is not marked deleted and the merchant's inbox
-      keeps showing it as a live message, with the content its sender
-      deleted.
-
-    Under either option, a revoke that arrives before its message leaves
-    its tombstone in the revoke's conversation; when the message's thread
-    is keyed differently, that thread shows nothing for it (message ids
-    are unique per store, #33, so the message is not stored there either).
-38. **A revoked message keeps its content.** When a revoke finds its
-    message stored, the row becomes `Deleted` and keeps its text and
-    payload (the merchant's inbox still shows what the customer deleted).
-    When the revoke arrives first, the tombstone keeps the content out:
-    the message finds its id taken, and the only method that writes
-    content into a stored row, `fill_media_placeholder`, refuses a
-    tombstone (not a placeholder) and a revoked placeholder. Meta's revoke
-    webhook describes the event as the user deleting the message
-    (`webhooks/reference/messages/revoke`). Options: erase `text` and
-    `payload` on revoke (a port change: `revoke` would rewrite the row,
-    and the conversation preview when it is the latest message), or keep
-    the content for the merchant's records and document it (what the
-    guides say today).

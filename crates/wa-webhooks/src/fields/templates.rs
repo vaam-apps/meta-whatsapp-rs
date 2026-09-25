@@ -106,7 +106,31 @@ pub struct TemplateButton {
 }
 
 open_enum! {
-    /// Template quality score (`templates/template-quality`).
+    /// Template quality score (`templates/template-quality`), as the
+    /// `message_template_quality_update` webhook sends it.
+    ///
+    /// # The Graph API's type
+    ///
+    /// Templates and phone numbers read through the Graph API carry the
+    /// same score as `wa_client::common::QualityRating`. The two types stay
+    /// separate (the owner's decision, 2026-09-25: wa-webhooks and
+    /// wa-client do not depend on each other); they correspond by wire
+    /// value ([`Self::as_str`], and `as_str` on the client's type):
+    ///
+    /// | Wire | `TemplateQualityScore` | `QualityRating` |
+    /// | --- | --- | --- |
+    /// | `GREEN`, `YELLOW`, `RED` | `Green`, `Yellow`, `Red` | `Green`, `Yellow`, `Red` |
+    /// | `UNKNOWN` (not rated yet) | `Unknown` | `Unknown` |
+    /// | `NA` | `Other("NA")`: this webhook documents no `NA` | `NotApplicable` (in the phone number examples) |
+    /// | anything else | `Other`, verbatim | `Other`, verbatim |
+    ///
+    /// **Case**: this type matches values exactly (`"green"` is
+    /// `Other("green")`), the client's type case-insensitively (`"green"` is
+    /// `Green`). Convert through the wire value, into the client's type:
+    /// `score.as_str().parse::<QualityRating>()` (infallible) maps each
+    /// value here to its variant there, `Other("NA")` and lower-case
+    /// spellings included. The other way, [`From<&str>`](Self::from) of
+    /// `QualityRating::as_str` turns `NotApplicable` into `Other("NA")`.
     pub enum TemplateQualityScore {
         /// High quality.
         Green => "GREEN",

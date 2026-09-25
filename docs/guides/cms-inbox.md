@@ -312,12 +312,14 @@ the conversation's history but never in its summary: it moves neither
 the inbox order, the preview, the window nor the unread count, and a
 conversation with nothing but a tombstone is not listed. The message then
 never gets its content stored. A revoke that finds its message marks it
-`Deleted` and keeps its content
-([open question](../../OPEN_QUESTIONS.md#cms-inbox) 38), except that a
-media placeholder revoked before its content arrived never gets that
-content. Whether a revoke must also match the conversation it arrived in
-is open ([open question](../../OPEN_QUESTIONS.md#cms-inbox) 37); today it
-matches the business number and the direction only.
+`Deleted` and keeps its text and payload, for the merchant's records (the
+owner's decision, 2026-09-25), except that a media placeholder revoked
+before its content arrived never gets that content.
+A revoke matches the business number and the direction only, not the
+conversation it arrived in (also decided on 2026-09-25): a message stored
+under the customer's phone number (a history thread without a BSUID) is
+deleted by a revoke keyed by their BSUID, and one stored before a BSUID
+change by a revoke under the new one.
 
 Synced history is part of the conversation (it can be its latest
 message), but a synced *inbound* message neither opens the reply window

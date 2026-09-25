@@ -226,6 +226,10 @@ impl ClientBuilder {
     }
 
     /// Default per-request timeout. Defaults to [`DEFAULT_TIMEOUT`].
+    ///
+    /// Embedded Signup in Solution Partner mode posts each credit line
+    /// share under a 300 s per-WABA lease: keep this well below it, so no
+    /// post outlives its lease.
     #[must_use]
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);

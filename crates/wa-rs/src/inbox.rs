@@ -2248,9 +2248,10 @@ mod tests {
         assert_eq!(summary_of(store.as_ref(), &key).await.unwrap().unread, 0);
     }
 
-    /// Former `OPEN_QUESTIONS.md` #35: the media content Meta sends after a
-    /// `media_placeholder` (Meta's two `history` examples, same message id)
-    /// replaces the placeholder's content. The row keeps what the thread
+    /// Synced history is history (`ConversationStore::fill_media_placeholder`,
+    /// a port change the owner confirmed on 2026-09-25): the media content
+    /// Meta sends after a `media_placeholder` (Meta's two `history`
+    /// examples, same message id) replaces the placeholder's content. The row keeps what the thread
     /// said: its conversation, direction, status and timestamp (Meta's
     /// examples disagree on the sender; the thread's is kept).
     #[tokio::test]
@@ -2378,9 +2379,10 @@ mod tests {
         );
     }
 
-    /// Former `OPEN_QUESTIONS.md` #35: Meta opens no customer service window for a
-    /// message received before onboarding, and the merchant has read the
-    /// synced history in the app. Neither the typed nor the recovered
+    /// Synced history is history (`ConversationStore::append_synced`, a port
+    /// change the owner confirmed on 2026-09-25): Meta opens no customer
+    /// service window for a message received before onboarding, and the
+    /// merchant has read the synced history in the app. Neither the typed nor the recovered
     /// (`WebhookEvent::Unknown`) path may open the window or count unread;
     /// a live message afterwards does both.
     #[tokio::test]

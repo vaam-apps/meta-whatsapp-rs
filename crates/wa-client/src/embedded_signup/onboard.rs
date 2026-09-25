@@ -191,9 +191,13 @@ impl OnboardingRequest {
     /// ([`CreditError::Revoked`]), or with a record whose `request_status`
     /// Meta does not document ([`CreditError::StatusUnknown`]): whether to
     /// fund a merchant again after a revocation is your product decision,
-    /// taken per onboarding. A successful re-share clears the marker,
-    /// unless a revocation touched it meanwhile (then the new share is
-    /// revoked at once).
+    /// taken on one onboarding but **business-wide in effect**: a
+    /// successful re-share clears the business's marker (unless a
+    /// revocation touched it meanwhile; then the new share is revoked at
+    /// once), so its other WABAs are no longer refused either. Never set
+    /// it on every onboarding: gate it behind a decision of yours (the
+    /// `wa-rs-embedded-signup` skill's example spends a one-time reconnect
+    /// grant).
     #[must_use]
     pub fn reshare_after_revocation(mut self) -> Self {
         self.reshare_after_revocation = true;

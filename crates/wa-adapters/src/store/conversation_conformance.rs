@@ -42,8 +42,12 @@
 //!   direction, never regresses a terminal status, and when its message is
 //!   not stored yet leaves a tombstone (kind `revoked`, no content,
 //!   `Deleted`) that keeps the message's content out when it arrives, live
-//!   or synced; whether a revoke must match the conversation too is not
-//!   checked (`OPEN_QUESTIONS.md` #37);
+//!   or synced;
+//! - a revoke does not match its conversation: keyed by another
+//!   conversation of the same number, it marks the message `Deleted` all
+//!   the same, and leaves no tombstone under its own key (the owner's
+//!   decision, 2026-09-25); a revoked message keeps its text and payload,
+//!   for the merchant's records (decided the same day);
 //! - a tombstone is history but never part of the summary: in an existing
 //!   conversation the summary stays exactly as it was (latest message,
 //!   preview, window, unread), and a conversation with nothing but a
@@ -98,6 +102,7 @@ pub async fn run<S: ConversationStore + ?Sized>(store: &S) {
     a_media_placeholder_is_filled_once(store).await;
     synced_batches_answer_per_message(store).await;
     a_revoke_matches_its_number_and_direction(store).await;
+    a_revoke_does_not_match_its_conversation(store).await;
     a_revoke_before_its_message_leaves_a_tombstone(store).await;
     a_tombstone_leaves_the_summary_alone(store).await;
     a_revoked_placeholder_is_never_filled(store).await;
@@ -1299,6 +1304,103 @@ async fn a_revoke_matches_its_number_and_direction<S: ConversationStore + ?Sized
         (Some(at(1)), 1),
         "revokes move neither the window nor the count"
     );
+}
+
+/// A revoke matches its business number and direction, not its
+/// conversation (the owner's decision, 2026-09-25): the same customer's
+/// message can be stored under one conversation key (a history thread keyed
+/// by phone number, say) and revoked under another (a live revoke keyed by
+/// BSUID, or a BSUID that changed). The message becomes `Deleted` with its
+/// content kept, and the revoke's own conversation gets no tombstone: the
+/// id is taken.
+async fn a_revoke_does_not_match_its_conversation<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("revoke-across");
+    let stored_under = r.key("keyed-by-phone");
+    let revoked_under = r.key("keyed-by-user-id");
+    let inbound = r.msg(
+        "keyed-by-phone",
+        "in",
+        Direction::Inbound,
+        1,
+        "from the customer",
+    );
+    let outbound = r.msg(
+        "keyed-by-phone",
+        "out",
+        Direction::Outbound,
+        2,
+        "from the business",
+    );
+    store.append(inbound.clone()).await.unwrap();
+    store.append(outbound.clone()).await.unwrap();
+
+    assert!(
+        store
+            .revoke(&revoked_under, &inbound.id, Direction::Inbound, at(5))
+            .await
+            .unwrap(),
+        "a revoke keyed by another conversation of the number deletes the message"
+    );
+    assert!(
+        store
+            .revoke(&revoked_under, &outbound.id, Direction::Outbound, at(6))
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        store.messages(&stored_under, None, 10).await.unwrap(),
+        [
+            StoredMessage {
+                status: DeliveryStatus::Deleted,
+                status_at: Some(at(6)),
+                ..outbound.clone()
+            },
+            StoredMessage {
+                status: DeliveryStatus::Deleted,
+                status_at: Some(at(5)),
+                ..inbound.clone()
+            },
+        ],
+        "deleted where they are stored, text and payload kept"
+    );
+    assert!(
+        store
+            .messages(&revoked_under, None, 10)
+            .await
+            .unwrap()
+            .is_empty(),
+        "no tombstone under the revoke's key: the id is taken"
+    );
+
+    // Still scoped to the direction across conversations.
+    let later = r.msg("keyed-by-phone", "later", Direction::Inbound, 3, "again");
+    store.append(later.clone()).await.unwrap();
+    assert!(
+        !store
+            .revoke(&revoked_under, &later.id, Direction::Outbound, at(7))
+            .await
+            .unwrap(),
+        "the business cannot revoke the customer's message from another conversation"
+    );
+    assert_eq!(
+        only_status(store, &stored_under, &later.id).await,
+        DeliveryStatus::Received
+    );
+}
+
+async fn only_status<S: ConversationStore + ?Sized>(
+    store: &S,
+    key: &ConversationKey,
+    id: &MessageId,
+) -> DeliveryStatus {
+    store
+        .messages(key, None, 100)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|m| &m.id == id)
+        .unwrap()
+        .status
 }
 
 /// A revoke that arrives before its message leaves a tombstone, and the
