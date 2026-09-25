@@ -1,5 +1,7 @@
 # `WebhookEvent` reference
 
+> **Verified against meta-whatsapp-rs cdf6f6e0db7dfa4896a3ca8d79600e7a429660125dfc66259e67d04784d0b2 (2026-09-25).** On another revision, trust the code over this page.
+
 > **Verified against wa-rs b3d2dcad64bc5f0dd9374dc84a387ec978707ab0 (2026-09-25).** Source: `crates/wa-webhooks/src/event.rs`,
 > `crates/wa-webhooks/src/fields/*`. The enum is `#[non_exhaustive]`.
 

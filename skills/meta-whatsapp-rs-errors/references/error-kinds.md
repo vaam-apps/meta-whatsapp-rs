@@ -1,5 +1,7 @@
 # `ErrorKind` reference
 
+> **Verified against meta-whatsapp-rs cdf6f6e0db7dfa4896a3ca8d79600e7a429660125dfc66259e67d04784d0b2 (2026-09-25).** On another revision, trust the code over this page.
+
 > **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** Source: `crates/wa-core/src/error/graph.rs`
 > (`ErrorKind::from_code`, `is_retryable`, `is_rejected_before_processing`) and
 > `crates/wa-core/src/error/mod.rs` (`Error::kind`: the local-refusal rule below).

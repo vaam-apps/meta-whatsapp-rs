@@ -21,7 +21,7 @@ task skills below. Load the task skill before writing that kind of code.
 
 ## Install
 
-Depend on the facade crate `wa-rs` (lib name `wa_rs`); it re-exports the
+Depend on the facade crate `wa-rs` (lib name `meta_whatsapp_rs`); it re-exports the
 others. It is not on crates.io (the name is taken there; the workspace is
 `publish = false`), so pin a git revision:
 

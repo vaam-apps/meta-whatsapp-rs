@@ -1,5 +1,7 @@
 # The page side of Embedded Signup
 
+> **Verified against meta-whatsapp-rs cdf6f6e0db7dfa4896a3ca8d79600e7a429660125dfc66259e67d04784d0b2 (2026-09-25).** On another revision, trust the code over this page.
+
 > **Verified against wa-rs 8bc676747a09a3c9225a53954030ed7d4eb44adf (2026-09-24).** Also checked against Meta's
 > `embedded-signup/implementation` page as fetched on 2026-09-24. Meta owns
 > this part: re-read that page (append `.md` to its URL for Markdown) before
