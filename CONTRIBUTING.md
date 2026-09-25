@@ -106,7 +106,8 @@ Say in the PR description what happened to each, with a link or
 - No `SKILL.md` outside `skills/<name>/` and `.claude/skills/<name>/`:
   the installer would offer it (a root one hides every other skill).
 - `just skills-check` (part of `just ci`) checks that every stamp's commit
-  exists and is an ancestor of HEAD.
+  is in HEAD's history: an ancestor of HEAD, or a branch commit that a
+  squash commit in that history lists as `Squashed-commit: <sha>`.
 - Developer skills in `.claude/skills/` carry `metadata: internal: true`
   so the installer does not offer them. Check what it offers from your
   checkout with `npx -y skills add <path-to-checkout> --list`: only the
@@ -116,3 +117,21 @@ Say in the PR description what happened to each, with a link or
 
 [Conventional Commits](https://www.conventionalcommits.org/):
 `feat(webhooks): …`, `fix(client): …`, `docs(skills): …`.
+
+## Merging
+
+Pull requests are **squash-merged** (from #6 on; #1, #2, #4 and #5 were
+merge commits). A squash replaces the branch's commits with one, so:
+
+- In the CHANGELOG, docs, `OPEN_QUESTIONS.md` and code comments, cite a
+  pull request (`#12`) or a commit already on `main`, never a commit of the
+  branch under review: it will not exist on `main`.
+- Skill stamps may name the branch's last code commit, as before. The
+  squash commit's body must then list every branch commit, one
+  `Squashed-commit: <full sha>` line each, which `just squash-trailers
+  <base> <head>` prints; `just skills-check` accepts a stamp listed there.
+  For example:
+
+  ```bash
+  gh pr merge 12 --squash --body "$(just squash-trailers origin/main origin/feat/x)"
+  ```

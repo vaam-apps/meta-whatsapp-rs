@@ -22,7 +22,7 @@ decisions reserved for the maintainer — surface them, never pick a default.
 | `just test-live` | adapter tests against real Postgres + Redis, with `WA_RS_REQUIRE_LIVE=1` so a missing service **fails** |
 | `just doc` | rustdoc with `-D warnings` (broken intra-doc links fail) |
 | `just features` | each adapter feature compiled alone |
-| `just skills-check` | every consumer skill's `Verified against wa-rs <sha>` stamp is a commit in HEAD's history (the rest of the skill checks run in `just test`: `crates/wa-rs/tests/skills.rs`) |
+| `just skills-check` | every consumer skill's `Verified against wa-rs <sha>` stamp is a commit in HEAD's history, directly or listed as `Squashed-commit:` by a squash merge (the rest of the skill checks run in `just test`: `crates/wa-rs/tests/skills.rs`) |
 | `just meta-docs` | mirror Meta's docs as Markdown into `.meta-docs/` (gitignored) |
 
 Toolchain is pinned in `rust-toolchain.toml` (1.98.1, edition 2024). Run
@@ -63,7 +63,9 @@ phone number alone.
 - **Tests** use `wa_core::testing::ScriptedTransport`; assert method, path,
   query, auth and exact JSON; assert `remaining() == 0`.
 - **Lints**: `unsafe_code = forbid`, `missing_docs`, clippy pedantic.
-- **Commits**: Conventional Commits (`feat(webhooks): …`).
+- **Commits**: Conventional Commits (`feat(webhooks): …`). PRs are
+  squash-merged: cite PR numbers, not the branch's own commits, and put
+  `just squash-trailers` in the squash body (CONTRIBUTING.md § Merging).
 
 ## Verification discipline
 

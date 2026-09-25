@@ -116,17 +116,32 @@ skills-check:
         if [ "${#sha}" -ne 40 ]; then
             echo "stamp $sha: not a full 40-character commit id ($files files)"
             status=1
-        elif ! git cat-file -e "$sha^{commit}" 2>/dev/null; then
-            echo "stamp $sha: no such commit ($files files)"
-            status=1
-        elif ! git merge-base --is-ancestor "$sha" HEAD; then
-            echo "stamp $sha: not an ancestor of HEAD ($files files)"
-            status=1
-        else
+        elif git cat-file -e "$sha^{commit}" 2>/dev/null && git merge-base --is-ancestor "$sha" HEAD; then
             echo "stamp $sha: ok ($files files)"
+        else
+            # A squash merge replaces a branch's commits with one: the stamp
+            # then names a branch commit that its squash commit (in HEAD's
+            # history) lists as `Squashed-commit: <sha>` (`just squash-trailers`).
+            squash=$(git log -E --format=%H --grep="^Squashed-commit: $sha\$" HEAD | head -n 1)
+            if [ -n "$squash" ]; then
+                echo "stamp $sha: ok, squashed into $squash ($files files)"
+            elif git cat-file -e "$sha^{commit}" 2>/dev/null; then
+                echo "stamp $sha: not an ancestor of HEAD, and no commit in its history lists it as Squashed-commit ($files files)"
+                status=1
+            else
+                echo "stamp $sha: no such commit, and no commit in HEAD's history lists it as Squashed-commit ($files files)"
+                status=1
+            fi
         fi
     done
     exit "$status"
+
+# The `Squashed-commit:` lines for a squash merge's commit body: every commit
+# of the branch, so the stamps and citations naming them still resolve on
+# main (`skills-check` accepts a stamp listed there). Pass the PR's base and
+# head, e.g. `just squash-trailers origin/main origin/feat/x`.
+squash-trailers base="origin/main" head="HEAD":
+    @git log --reverse --format='Squashed-commit: %H' {{base}}..{{head}}
 
 # The gate. CI runs exactly this.
 ci: lint check test skills-check doc features deny test-live

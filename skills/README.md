@@ -141,8 +141,9 @@ there. The rules:
   skill and every `references/*.md` is stamped under its title (and any
   other stamp is well-formed), every skill is short, and listed
   here and in the `wa-rs` hub.
-- `just skills-check`: every stamp's commit exists and is an ancestor of
-  the checked-out commit.
+- `just skills-check`: every stamp's commit is in the checked-out
+  commit's history, as an ancestor or as a branch commit a squash merge
+  lists (`Squashed-commit: <sha>`).
 
 What no check can prove: that the prose's *semantics* are right (a real
 constant with a wrong value, a real method called on the wrong type
