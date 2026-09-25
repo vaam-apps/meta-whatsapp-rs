@@ -3313,6 +3313,56 @@ mod tests {
         assert_eq!(report.business_id, None);
         assert_eq!(h.t.remaining(), 0);
 
+        // Meta's record names no business, and the caller's hint has no
+        // record of the line either: the allocation is revoked, the hint
+        // is not marked.
+        let h = harness(CreditSharing::ShareAndAttach);
+        h.vault.put_credit(&credit, None).await.unwrap();
+        h.t.push_json(200, json!({})); // the allocation names no business
+        h.t.push_json(200, nothing_shared()); // the hint's records: none
+        h.t.push_json(200, nothing_shared()); // the lookup
+        h.t.push_json(200, json!({}));
+        h.t.push_json(200, success());
+        h.t.push_json(200, json!({"request_status": "DELETED"}));
+        let report =
+            h.es.revoke_credit_line(&waba(), Some(&BusinessId::new(BUSINESS)), &h.vault)
+                .await
+                .unwrap();
+        assert_eq!(report.revoked, [AllocationConfigId::new(ALLOCATION)]);
+        assert!(
+            h.vault
+                .revoked_business(&BusinessId::new(BUSINESS))
+                .await
+                .unwrap()
+                .is_none(),
+            "a hint the line has no record of is never marked"
+        );
+        assert_eq!(h.t.remaining(), 0);
+
+        // The hint's lookup fails: it cannot be checked, so it is not
+        // marked either, and the failure comes back.
+        let h = harness(CreditSharing::ShareAndAttach);
+        let failure = json!({"error": {"message": "unknown", "type": "OAuthException", "code": 1}});
+        h.t.push_json(500, failure.clone());
+        h.t.push_json(500, failure);
+        let err =
+            h.es.revoke_credit_line(&waba(), Some(&BusinessId::new(BUSINESS)), &h.vault)
+                .await
+                .unwrap_err();
+        assert!(
+            err.credit().and_then(CreditError::revocation).is_some(),
+            "{err}"
+        );
+        assert!(err.is_retryable(), "{err}");
+        assert!(
+            h.vault
+                .revoked_business(&BusinessId::new(BUSINESS))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(h.t.remaining(), 0);
+
         // A hint that contradicts Meta's record revokes nothing.
         let h = harness(CreditSharing::ShareAndAttach);
         h.vault.put_credit(&credit, None).await.unwrap();

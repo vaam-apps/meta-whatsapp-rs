@@ -811,7 +811,11 @@ mod tests {
             .unwrap()
             .with_clock(clock.clone());
         let waba = WabaId::new("W1");
+        // Taken and never renewed: it expires on its own.
+        let crashed = v.lease_credit(&waba).await.unwrap();
+        clock.advance(CREDIT_LEASE + Duration::from_secs(1));
         let slow = v.lease_credit(&waba).await.unwrap();
+        assert_eq!(v.renew_credit(&waba, crashed).await.unwrap(), None);
         clock.advance(CREDIT_LEASE.saturating_sub(Duration::from_secs(1)));
         let renewed = v.renew_credit(&waba, slow).await.unwrap().unwrap();
         clock.advance(CREDIT_LEASE.saturating_sub(Duration::from_secs(1)));
