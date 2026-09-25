@@ -437,6 +437,80 @@ async fn live_postgres_polling_during_concurrent_inserts_misses_nothing() {
     assert_eq!(seen_sorted, written, "an event was skipped");
 }
 
+/// An insert in flight on another replica holds back every later insert
+/// until it commits: a poll in between sees neither, so its cursor never
+/// moves past the one in flight. Decisive: the outbox insert's advisory
+/// lock (without it the later insert commits first, the poll moves past
+/// the earlier sequence, and that event is never polled).
+#[tokio::test]
+async fn live_postgres_an_insert_in_flight_is_never_skipped() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(6).await;
+    migrate(&pool).await.unwrap();
+    let h = Harness::with(Stores::postgres(&pool));
+    h.tenant("tenant-a").await;
+    let key = h.tenant_key("tenant-a", &[Scope::Events]).await;
+    let events_after = |after: Option<i64>| {
+        let path = after.map_or_else(
+            || "/v1/events".to_owned(),
+            |a| format!("/v1/events?after={a}"),
+        );
+        let h = &h;
+        let key = key.clone();
+        async move {
+            let reply = h.call(Call::get(path).key(&key)).await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+            let body = reply.json();
+            let ids: Vec<String> = body["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|e| e["id"].as_str().unwrap().to_owned())
+                .collect();
+            (ids, body["next_after"].as_i64().unwrap())
+        }
+    };
+    // Another replica's insert, in flight: lock taken, sequence drawn,
+    // not committed (what the store's insert does, stopped before its
+    // commit).
+    let first = common::events_suite::row(Some("tenant-a"), "message_received", "1", None);
+    let mut in_flight = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(meta_whatsapp_server::store::OUTBOX_LOCK)
+        .execute(&mut *in_flight)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO wa_server_events (id, tenant_id, phone_number_id, event_type, data) \
+         VALUES ($1, $2, '1', 'message_received', $3::json)",
+    )
+    .bind(&first.id)
+    .bind("tenant-a")
+    .bind(&first.data)
+    .execute(&mut *in_flight)
+    .await
+    .unwrap();
+    // A later insert through the store.
+    let second = common::events_suite::row(Some("tenant-a"), "message_received", "1", None);
+    let later = {
+        let store = PgEventStore::new(pool.clone());
+        let second = second.clone();
+        tokio::spawn(async move { store.insert(&second).await })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let (mut seen, after) = events_after(None).await;
+    in_flight.commit().await.unwrap();
+    later.await.unwrap().unwrap().unwrap();
+    let (more, _) = events_after(Some(after)).await;
+    seen.extend(more);
+    seen.sort();
+    let mut expected = vec![first.id, second.id];
+    expected.sort();
+    assert_eq!(seen, expected, "an event was skipped");
+}
+
 /// Housekeeping runs on one replica at a time: while another session holds
 /// its lock, a purge does nothing.
 #[tokio::test]

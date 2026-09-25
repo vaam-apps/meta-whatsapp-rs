@@ -1,6 +1,8 @@
-//! Acceptance test M1.7, the M1a part in process: the captured `tracing`
-//! output of admin and numbers calls, at `TRACE` for every target (the
-//! library's included), holds no secret, key, token or phone number.
+//! Acceptance test M1.7 in process (all but a send, which is M1b's): the
+//! captured `tracing` output of admin and numbers calls, Meta's webhook
+//! deliveries (signed, unsigned, forged) and polling their events, at
+//! `TRACE` for every target (the library's included), holds no secret,
+//! key, token, message text, phone number or contact.
 //! `live_postgres.rs` repeats it on Postgres.
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test crate: a panic is the report
 

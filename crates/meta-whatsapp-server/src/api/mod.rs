@@ -382,6 +382,40 @@ mod tests {
         assert_eq!(started.elapsed(), REQUEST_DEADLINE);
     }
 
+    /// The public listener's own body limit is 3 MiB, whatever a handler
+    /// behind it checks (the webhook's library handler checks it too):
+    /// 3 MiB is read, one byte more is `413` before a handler sees it.
+    /// Decisive: the public router's body limit.
+    #[tokio::test]
+    async fn the_public_router_reads_3_mib_and_refuses_one_byte_more() {
+        use meta_whatsapp_rs::webhooks::axum::body::Bytes;
+        use meta_whatsapp_rs::webhooks::axum::routing::post;
+        let state = AppState::for_tests();
+        let router = public_router_with(
+            axum::Router::new().route(
+                "/echo",
+                post(|body: Bytes| async move { body.len().to_string() }),
+            ),
+            &state,
+        );
+        for (len, status) in [
+            (MAX_WEBHOOK_BODY_BYTES, StatusCode::OK),
+            (MAX_WEBHOOK_BODY_BYTES + 1, StatusCode::PAYLOAD_TOO_LARGE),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    meta_whatsapp_rs::webhooks::axum::http::Request::post("/echo")
+                        .body(Body::from(vec![b' '; len]))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status, "{len} bytes");
+        }
+        assert_eq!(MAX_WEBHOOK_BODY_BYTES, 3 * 1024 * 1024);
+    }
+
     /// Every API route is added with `routes!`, which documents it: the
     /// only plain axum routes are the public listener's, which the document
     /// leaves out on purpose. A route added any other way would escape the

@@ -39,7 +39,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use meta_whatsapp_rs::adapters::store::MemoryConversationStore;
 use meta_whatsapp_rs::core::error::{SinkError, StorageError};
 use meta_whatsapp_rs::core::secret::{AppSecret, VerifyToken};
 use meta_whatsapp_rs::core::sink::EventSink;
@@ -54,7 +53,7 @@ use crate::error::ApiError;
 use crate::metrics::Metrics;
 use crate::model::TenantId;
 use crate::store::events::{EventQuery, EventStore, NewEvent, StoredEvent};
-use crate::store::{MemoryEventStore, Store, StoreResult};
+use crate::store::{Store, StoreResult};
 
 /// Largest webhook body read: 3 MiB, the library's default (Meta documents
 /// payloads of up to 3 MB, `webhooks/overview`). One byte more is `413`.
@@ -166,21 +165,17 @@ impl Inbound {
     /// # Errors
     ///
     /// A blank `app_secret`.
-    pub fn in_memory(
+    #[cfg(test)]
+    pub(crate) fn in_memory(
         app_secret: AppSecret,
         kv: Arc<dyn KvStore>,
     ) -> meta_whatsapp_rs::Result<Self> {
         Self::new(
             vec![app_secret],
             kv,
-            Arc::new(MemoryConversationStore::new()),
-            Arc::new(MemoryEventStore::new()),
+            Arc::new(meta_whatsapp_rs::adapters::store::MemoryConversationStore::new()),
+            Arc::new(crate::store::MemoryEventStore::new()),
         )
-    }
-
-    /// The outbox.
-    pub fn outbox(&self) -> &Arc<dyn EventStore> {
-        &self.outbox
     }
 }
 
