@@ -27,6 +27,9 @@ cat /tmp/ci.exit   # 0 or it is not verified
   missing service into a failure. Check its output shows the live tests
   *ran* (non-zero count). It runs two crates' live tests
   (`meta-whatsapp-adapters`, `meta-whatsapp-server`): check both counts.
+- **`just features`' rustdoc line leaves `meta-whatsapp-server` out** on
+  purpose: the service turns on the facade's features, and in one
+  `--workspace` build they would hide an ungated doc link.
 - **Don't reconstruct the gate.** `cargo test` is not `just test`
   (`--all-features`); `cargo clippy` is not `just lint` (`-D warnings`,
   `--all-targets`).

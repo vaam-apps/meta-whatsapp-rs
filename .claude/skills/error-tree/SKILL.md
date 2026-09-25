@@ -35,8 +35,10 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
   `ErrorKind::ALL` in its tests, so the new kind fails them until it is
   decided there too: the service's HTTP status table
   (`crates/meta-whatsapp-server/src/error.rs`, `kind_code` and `CODES`;
-  `tests/errors.rs` there) is one, and its codes are a public contract
-  (the OpenAPI document's `ErrorCode`, regenerate and commit it).
+  `tests/errors.rs` there, which reads the table of
+  `docs/design/server.md` section 5.2: add the code there too) is one,
+  and its codes are a public contract (the OpenAPI document's
+  `ErrorCode`, regenerate and commit it).
 - `is_retryable()` = could succeed later. **Safe to replay** is separate:
   `ErrorKind::is_rejected_before_processing()` (throttling only). The client
   never replays a non-idempotent request on a timeout.
