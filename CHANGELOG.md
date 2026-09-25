@@ -9,6 +9,21 @@ All notable changes to this project are documented here. The format follows
 First feature set. See [docs/coverage.md](docs/coverage.md) for the full
 matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
 
+### Renamed
+
+- **Project**: `wa-rs` → `meta-whatsapp-rs` (crate and module names, Git repo).
+  **Migration**: remove old `wa-rs-*` consumer skills from your environment;
+  `npx skills add vaam-apps/meta-whatsapp-rs` to install the renamed ones.
+  Update Cargo.toml package names and `use` paths:
+  - `wa-rs` → `meta-whatsapp-rs` / `wa_rs` → `meta_whatsapp_rs`
+  - `wa-core` → `meta-whatsapp-core` / `wa_core` → `meta_whatsapp_core`
+  - `wa-client` → `meta-whatsapp-client` / `wa_client` → `meta_whatsapp_client`
+  - `wa-webhooks` → `meta-whatsapp-webhooks` / `wa_webhooks` → `meta_whatsapp_webhooks`
+  - `wa-adapters` → `meta-whatsapp-adapters` / `wa_adapters` → `meta_whatsapp_adapters`
+  - `wa-typst` → `meta-whatsapp-typst` / `wa_typst` → `meta_whatsapp_typst`
+  Crate names `meta-whatsapp-*` are reserved on crates.io as of 2026-09-25;
+  `publish = false` remains until a release is decided.
+
 ### Open questions closed
 
 - #3 (Tech Provider or Solution Partner?): decided by the owner on
@@ -31,7 +46,7 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   `wa_webhooks::fields::templates::TemplateQualityScore` document the
   mapping (by wire value; `NA` is `NotApplicable` on the client's side and
   `Other("NA")` on the webhook's; the client matches case-insensitively,
-  the webhook exactly), and so does the `wa-rs-webhook-events` skill,
+  the webhook exactly), and so does the `meta-whatsapp-rs-webhook-events` skill,
   whose example converts one into the other.
 - #37 (should a revoke also match its conversation?): decided by the
   owner on 2026-09-25, no: a revoke matches the business number and the
@@ -45,7 +60,7 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   `PARTNER_REMOVED` of your solution, coexistence removals with
   `disconnection_info` included. The library stays passive (the
   integrator's handler calls `revoke_credit_line`); the
-  `wa-rs-embedded-signup` example does so, and a merchant who reconnects
+  `meta-whatsapp-rs-embedded-signup` example does so, and a merchant who reconnects
   is funded again only through `OnboardingRequest::reshare_after_revocation`,
   which the example gates behind a one-time reconnect grant (see Changed).
 - #40 (`onboard_with_approval` required in Solution Partner mode):
@@ -231,28 +246,28 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   could still have been delivered — the line between "fix and resend" and
   "reconcile first"), `Inbox::window_is_open` (the reply window by the
   inbox's own clock, the same check `reply` makes), a `testing` feature on
-  `wa-rs` (no second pinned `wa-core` dev-dependency), and a `redis`
+  `meta-whatsapp-rs` (no second pinned `wa-core` dev-dependency), and a `redis`
   re-export next to the `sqlx` one.
 - **Skills gate, three holes closed**: a Rust block may no longer quote the
   inside of a string (raw or not) or a comment of an example, nor an item
   under a `cfg` that `--all-features` never enables (the
-  `#[cfg(not(feature = …))]` arms of `crates/wa-rs/examples/*.rs`); and
+  `#[cfg(not(feature = …))]` arms of `crates/meta-whatsapp-rs/examples/*.rs`); and
   every `references/*.md` must carry a well-formed stamp under its title,
   like its `SKILL.md` (`just skills-check` alone passed a malformed date
   and missed a misspelled stamp). After the security review of b805dac:
   raw C strings (`cr"…"`, `cr#"…"#`) are strings to both lexers; a
   `cfg(` inside a `cfg_attr` removes its item; `cfg(test)` never holds in
-  `crates/wa-rs/examples/*.rs` (built as examples), whose files are now
+  `crates/meta-whatsapp-rs/examples/*.rs` (built as examples), whose files are now
   checked for block comments, `macro_rules!` and any `cfg` but the
   `postgres` arms like the skills' own examples.
 - **Granular consumer skills**: 24 task-shaped skills with compiled example
-  files, and a gate (`crates/wa-rs/tests/skills.rs`, `just skills-check`)
+  files, and a gate (`crates/meta-whatsapp-rs/tests/skills.rs`, `just skills-check`)
   that keeps snippets, API names, links, frontmatter and stamps true. The
   developer skills in `.claude/skills/` are marked internal so
-  `npx skills add vaam-apps/wa-rs` offers only the consumer skills.
+  `npx skills add vaam-apps/meta-whatsapp-rs` offers only the consumer skills.
 
 - **Workspace**: `wa-core` (error tree, ids, ports), `wa-client`,
-  `wa-webhooks`, `wa-adapters`, `wa-typst`, and the `wa-rs` facade with a
+  `wa-webhooks`, `wa-adapters`, `wa-typst`, and the `meta-whatsapp-rs` facade with a
   prelude and a `client(token)` shortcut. Graph API v25.0 by default.
 - **Error tree**: `thiserror` nodes with `anyhow` opaque leaves;
   `ErrorKind` classifies every documented Graph error code; retry policy
@@ -277,7 +292,7 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   profile, commerce settings, Flows (management + data-endpoint crypto via
   aws-lc-rs), Marketing Messages API, analytics, QR codes, block users,
   Groups, Calling signalling, Direct Send.
-- **CMS inbox** (`wa_rs::inbox`): webhook events into a conversation store,
+- **CMS inbox** (`meta_whatsapp_rs::inbox`): webhook events into a conversation store,
   24-hour-window-checked replies with the merchant's token.
 - **Adapters**: reqwest transport; memory, Postgres and Redis stores with
   executable conformance suites; channel, broadcast, fan-out, filter, fn and
@@ -289,7 +304,7 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   login, invoice document.
 - **Tooling**: `just ci` gate, CI running it, `cargo xtask meta-docs`,
   Claude Code dev container with a fail-closed default-deny firewall,
-  project skills and agents, consumer skills (`npx skills add vaam-apps/wa-rs`).
+  project skills and agents, consumer skills (`npx skills add vaam-apps/meta-whatsapp-rs`).
 
 ### Deprecated
 
@@ -300,7 +315,7 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
 
 ### Changed
 
-- **The `wa-rs-embedded-signup` skill's Solution Partner example** (for
+- **The `meta-whatsapp-rs-embedded-signup` skill's Solution Partner example** (for
   anyone who copied it): `PartnerAction::CoexistenceDisconnected`,
   `CoexistencePolicy` and `on_coexistence_disconnect` are gone. Every
   `PARTNER_REMOVED` of your solution now revokes at once (#39, closed
@@ -528,14 +543,14 @@ is_customer_service_window_closed}`,
 `wa_webhooks::SIGNATURE_HEADER` without the `axum` feature.
 
 Consumer skills: the seven broad skills became 24 task-shaped ones
-(`wa-rs` routes to the others; `wa-rs-messaging`, `wa-rs-templates-otp` and
-`wa-rs-webhooks` are gone, split into `wa-rs-send-messages`,
-`wa-rs-interactive-messages`, `wa-rs-media`, `wa-rs-templates`,
-`wa-rs-send-templates`, `wa-rs-otp-login`, `wa-rs-webhook-endpoint`,
-`wa-rs-webhook-events`, `wa-rs-live-updates`, …). Each ships compiled,
+(`meta-whatsapp-rs` routes to the others; `meta-whatsapp-rs-messaging`, `meta-whatsapp-rs-templates-otp` and
+`meta-whatsapp-rs-webhooks` are gone, split into `meta-whatsapp-rs-send-messages`,
+`meta-whatsapp-rs-interactive-messages`, `meta-whatsapp-rs-media`, `meta-whatsapp-rs-templates`,
+`meta-whatsapp-rs-send-templates`, `meta-whatsapp-rs-otp-login`, `meta-whatsapp-rs-webhook-endpoint`,
+`meta-whatsapp-rs-webhook-events`, `meta-whatsapp-rs-live-updates`, …). Each ships compiled,
 tested example code; `just ci` checks excerpts, frontmatter, links, names
 and stamps (`just skills-check`). The developer skills in `.claude/skills/`
-are marked `internal`, so `npx skills add vaam-apps/wa-rs` no longer offers
+are marked `internal`, so `npx skills add vaam-apps/meta-whatsapp-rs` no longer offers
 them.
 
 ### Security

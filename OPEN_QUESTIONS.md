@@ -11,12 +11,9 @@ of its own, after an HTML comment; keep that when you add one.
 
 ## Naming and publishing
 
-1. **Crate names.** `wa-rs` is taken on crates.io by an unrelated project,
-   so the workspace is `publish = false`. Pick names (e.g. a common prefix)
-   before the first release.
-2. **`wa_rs::client` is both a module and a function** (the production
+2. **`meta_whatsapp_rs::client` is both a module and a function** (the production
    client shortcut). Rustdoc links need `mod@`/`fn@`. Alternative:
-   `wa_rs::connect(token)`.
+   `meta_whatsapp_rs::connect(token)`.
 
 ## Embedded Signup (onboarding merchants)
 
@@ -28,12 +25,12 @@ of its own, after an HTML comment; keep that when you add one.
 6. **One WABA shared by several tenants.** The vault is keyed by WABA and
    knows no tenants; the last onboarding wins. `onboard_with_approval`
    lets an integrator refuse (or apply any other policy) before anything
-   is stored; which policy wa-rs itself should default to is open. A
+   is stored; which policy meta-whatsapp-rs itself should default to is open. A
    Solution Partner deployment must approve (plain `onboard` is refused,
    and `resume` shares only for a WABA whose stored token record has a
    recorded approval; the owner decided on 2026-09-25 that it stays
    required), but what the approval checks is still the integrator's:
-   wa-rs decides no tenant policy.
+   meta-whatsapp-rs decides no tenant policy.
 7. **Coexistence sync.** Contacts/history sync (`smb_app_data`) must happen
    once, within 24 h of onboarding. `onboard` only flags it
    (`needs_coexistence_sync()`); should it trigger it?
@@ -136,7 +133,7 @@ commit).
     kind (response structs, webhook payloads, enums) and write the rule in
     `docs/architecture.md`.
 29. **axum and sqlx: re-exports or your own pins?** Both are re-exported
-    (`wa_rs::webhooks::axum`, `wa_rs::adapters::store::postgres::sqlx`)
+    (`meta_whatsapp_rs::webhooks::axum`, `meta_whatsapp_rs::adapters::store::postgres::sqlx`)
     and their rustdoc says to use the re-export; the README and examples
     now do the same, and the examples no longer pin sqlx. A consumer's own
     `axum = "0.8"` still unifies with it. The alternative, telling

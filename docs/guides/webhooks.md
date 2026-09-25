@@ -4,12 +4,12 @@
 your app serves, verifies them, records each event once, answers fast, and
 alerts you when an account or template needs attention.
 
-Example: [`cms_inbox.rs`](../../crates/wa-rs/examples/cms_inbox.rs) (its
+Example: [`cms_inbox.rs`](../../crates/meta-whatsapp-rs/examples/cms_inbox.rs) (its
 `/webhook` routes). Agent skills:
-[`wa-rs-webhook-endpoint`](../../skills/wa-rs-webhook-endpoint/SKILL.md),
-[`wa-rs-webhook-events`](../../skills/wa-rs-webhook-events/SKILL.md) (the full event
-table is its [references/events.md](../../skills/wa-rs-webhook-events/references/events.md)),
-[`wa-rs-live-updates`](../../skills/wa-rs-live-updates/SKILL.md).
+[`meta-whatsapp-rs-webhook-endpoint`](../../skills/meta-whatsapp-rs-webhook-endpoint/SKILL.md),
+[`meta-whatsapp-rs-webhook-events`](../../skills/meta-whatsapp-rs-webhook-events/SKILL.md) (the full event
+table is its [references/events.md](../../skills/meta-whatsapp-rs-webhook-events/references/events.md)),
+[`meta-whatsapp-rs-live-updates`](../../skills/meta-whatsapp-rs-live-updates/SKILL.md).
 
 ```text
 POST ─► X-Hub-Signature-256 present and well-formed? (else 401 before the body is read)
@@ -46,7 +46,7 @@ Meta's pages:
 
 ```rust
 use std::sync::Arc;
-use wa_rs::prelude::*;
+use meta_whatsapp_rs::prelude::*;
 
 let handler = WebhookHandler::builder(
     SignatureVerifier::new(vec![AppSecret::new(app_secret)])?, // refuses an empty list or a blank secret
@@ -57,7 +57,7 @@ let handler = WebhookHandler::builder(
 .build();
 
 // The axum the router is built with, re-exported: no axum dependency of your own.
-let app = wa_rs::webhooks::axum::Router::new().nest("/webhooks/whatsapp", wa_rs::webhooks::router(Arc::new(handler)));
+let app = meta_whatsapp_rs::webhooks::axum::Router::new().nest("/webhooks/whatsapp", meta_whatsapp_rs::webhooks::router(Arc::new(handler)));
 ```
 
 - `router` serves `GET` (verification) and `POST` (deliveries) and sets the
@@ -88,15 +88,15 @@ Anything but `200` makes Meta redeliver the **whole batch**.
 Call the handler yourself and answer the same way. `VerificationQuery`
 deserializes from the query string (it uses Meta's `hub.*` names). For a
 `POST`, look at the signature header before reading the body, as `router`
-does: `wa_rs::webhooks::SIGNATURE_HEADER` (`x-hub-signature-256`) is
+does: `meta_whatsapp_rs::webhooks::SIGNATURE_HEADER` (`x-hub-signature-256`) is
 available without the `axum` feature. Without it, answer `401` at once;
 otherwise read the raw body with a limit of `handler.max_body_bytes()`
 (`413` over it) and pass both to `deliver`, which takes the header as an
 `Option<&str>` and checks its shape and the signature.
 
 ```rust
-use wa_rs::core::error::WebhookError;
-use wa_rs::webhooks::{DeliveryReport, VerificationQuery};
+use meta_whatsapp_rs::core::error::WebhookError;
+use meta_whatsapp_rs::webhooks::{DeliveryReport, VerificationQuery};
 
 fn answer_get(handler: &WebhookHandler, query: &VerificationQuery) -> (u16, String) {
     match handler.verify(query) {
@@ -105,7 +105,7 @@ fn answer_get(handler: &WebhookHandler, query: &VerificationQuery) -> (u16, Stri
     }
 }
 
-fn status_of(result: &wa_rs::Result<DeliveryReport>) -> u16 {
+fn status_of(result: &meta_whatsapp_rs::Result<DeliveryReport>) -> u16 {
     match result {
         Ok(_) => 200,
         Err(Error::Webhook(
@@ -130,9 +130,9 @@ persist what cannot be lost.
 
 ```rust
 use async_trait::async_trait;
-use wa_rs::adapters::sink::{BroadcastSink, ChannelMode, FanoutSink, channel};
-use wa_rs::core::error::SinkError;
-use wa_rs::webhooks::fields::MessageContent as Inbound;
+use meta_whatsapp_rs::adapters::sink::{BroadcastSink, ChannelMode, FanoutSink, channel};
+use meta_whatsapp_rs::core::error::SinkError;
+use meta_whatsapp_rs::webhooks::fields::MessageContent as Inbound;
 
 #[derive(Debug)]
 struct Orders; // holds your pool
@@ -232,7 +232,7 @@ Key customers by their business-scoped user id (`contact.user_id`): since
 - The library logs sizes, digests and field names, never payload values.
   Do not log request bodies, the signature header, or `WebhookEvent`'s
   `Debug` (names, numbers, message text) yourself.
-- In tests, `wa_rs::webhooks::sign(&secret, body)` produces the header
+- In tests, `meta_whatsapp_rs::webhooks::sign(&secret, body)` produces the header
   value Meta would send.
 
 ## 7. Callback overrides
@@ -249,8 +249,8 @@ exist even when every merchant has an override.
 ## 8. Operational alerts
 
 ```rust
-use wa_rs::adapters::sink::FnSink;
-use wa_rs::webhooks::fields::{AccountUpdateEvent, TemplateStatusEvent};
+use meta_whatsapp_rs::adapters::sink::FnSink;
+use meta_whatsapp_rs::webhooks::fields::{AccountUpdateEvent, TemplateStatusEvent};
 
 let alerts = FnSink::new(|event: WebhookEvent| async move {
     match &event {
@@ -265,7 +265,7 @@ let alerts = FnSink::new(|event: WebhookEvent| async move {
             // `Option`: an update whose `waba_info` names no WABA has none.
             tracing::error!(waba = ?waba_id, "account restricted or in violation");
         }
-        WebhookEvent::Unknown { field, .. } => tracing::warn!(%field, "field not typed by this wa-rs version"),
+        WebhookEvent::Unknown { field, .. } => tracing::warn!(%field, "field not typed by this meta-whatsapp-rs version"),
         WebhookEvent::Unparsed { .. } => tracing::error!("signed body that is not a webhook payload"),
         _ => {}
     }

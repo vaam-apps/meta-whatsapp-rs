@@ -1,6 +1,6 @@
 ---
 name: verify-gate
-description: "What counts as verified in wa-rs — running `just ci` (lint, check, test, consumer-skill stamps, doc, per-feature builds, cargo-deny, live Postgres/Redis tests), reading its exit code, and the traps (skipped live tests, reconstructed commands, agent self-reports). Use before claiming anything passes, before committing, and when reviewing a sub-agent's result."
+description: "What counts as verified in meta-whatsapp-rs — running `just ci` (lint, check, test, consumer-skill stamps, doc, per-feature builds, cargo-deny, live Postgres/Redis tests), reading its exit code, and the traps (skipped live tests, reconstructed commands, agent self-reports). Use before claiming anything passes, before committing, and when reviewing a sub-agent's result."
 metadata:
   internal: true
 ---

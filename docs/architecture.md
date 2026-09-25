@@ -1,4 +1,4 @@
-# wa-rs architecture
+# meta-whatsapp-rs architecture
 
 This is the spec. Code that disagrees with it is a bug in one of the two;
 fix whichever is wrong, in the same PR. For task-oriented integration
@@ -31,7 +31,7 @@ crates/
   wa-webhooks   verify, parse, normalize, dedup, dispatch; axum router (feature).
   wa-adapters   port implementations: reqwest, memory/Postgres/Redis stores, sinks.
   wa-typst      Typst → PDF/PNG for document and image messages.
-  wa-rs         facade: re-exports, prelude, `client(token)`, the CMS inbox,
+  meta-whatsapp-rs         facade: re-exports, prelude, `client(token)`, the CMS inbox,
                 feature flags, runnable examples. What integrators depend on.
 .xtask          repo automation (`cargo xtask meta-docs`): a workspace of its own,
                 with its own Cargo.lock, excluded from the root one, so its ureq
@@ -39,7 +39,7 @@ crates/
 ```
 
 Dependency rule: everything depends on `wa-core`; nothing depends on
-`wa-rs`; `wa-client` and `wa-webhooks` never depend on each other or on
+`meta-whatsapp-rs`; `wa-client` and `wa-webhooks` never depend on each other or on
 `wa-adapters` (except as a dev-dependency for tests). An adapter never
 leaks its library's types through a port.
 
@@ -56,6 +56,23 @@ leaks its library's types through a port.
 Typed stores are built **on `KvStore`**, never as new ports: token vault,
 OTP challenges, webhook dedup, Embedded Signup sessions. An adapter author
 implements five methods once and every feature works.
+
+## Stable identifiers (predate the rename to meta-whatsapp-rs)
+
+The following are encrypted, hashed, signed, used as storage keys or dedup
+keys, or are field names owned by Meta. Changing them breaks stored data or
+compatibility with Meta's API. Never change them:
+
+| Identifier | Location | Reason |
+| --- | --- | --- |
+| `b"wa-rs/token-vault/v1"` | `crates/meta-whatsapp-adapters/src/store/embedded_signup/vault.rs` | AEAD tag; renaming makes every encrypted token and ledger record undecryptable |
+| `b"wa-rs/token-vault/ledger/v1"` | `crates/meta-whatsapp-adapters/src/store/embedded_signup/vault.rs` | AEAD tag; renaming makes ledger records undecryptable |
+| `b"wa.otp.key"`, `b"wa.otp.code"` | `crates/meta-whatsapp-core/src/authentication/otp.rs` | HMAC domains; changing breaks OTP verification |
+| `"wa.otp"`, `"wa.otp.rate"` | `crates/meta-whatsapp-core/src/authentication/otp.rs` | KV namespaces; changing makes stored challenges and rate-limit counters inaccessible |
+| `"wa.token"`, `"wa.es.session"`, `"wa.webhook.dedup"`, etc. (all `"wa.*"`) | throughout | KV namespaces; breaking existing stored data |
+| `"wa:"` | `crates/meta-whatsapp-adapters/src/store/redis/*.rs` | Redis key prefix; changing makes stored keys inaccessible |
+| `wa_` (Postgres table prefix) | `crates/meta-whatsapp-adapters/src/store/postgres/mod.rs` | `TablePrefix::DEFAULT`; renaming breaks migrations and stored tables |
+| `wa_id`, `wamid`, `waba`, `waba_id`, `wa.me`, `wacid`, `WA_EMBEDDED_SIGNUP`, etc. | throughout | Meta field names and constants; never ours to change |
 
 ## Error tree
 
@@ -608,7 +625,7 @@ Logs carry sizes, digests and field names only — never payload values.
 - `sink::{ChannelSink, BroadcastSink, FanoutSink, FilterSink, FnSink,
   TracingSink}` — feature `sinks`, generic over the event type, `Debug`
   redacted. (The inbox sink needs webhook event types, so it lives in the
-  facade: `wa_rs::inbox::InboxSink`.)
+  facade: `meta_whatsapp_rs::inbox::InboxSink`.)
 - Postgres: one table-wide version sequence (versions never reused, even
   after purge); deleted keys leave marker rows purged after 10 minutes;
   migrations are templates with a validated table prefix and a per-prefix
@@ -650,7 +667,7 @@ Logs carry sizes, digests and field names only — never payload values.
   `store::conversation_conformance` (including concurrency, collation and
   real-time expiry under load).
 
-## CMS inbox (`wa_rs::inbox`)
+## CMS inbox (`meta_whatsapp_rs::inbox`)
 
 `InboxSink` (an `EventSink<WebhookEvent>`) records inbound messages,
 status updates, and coexistence echoes and history into a

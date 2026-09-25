@@ -1,6 +1,6 @@
 ---
 name: meta-docs
-description: "Look up Meta's WhatsApp Business Platform docs as Markdown instead of guessing. Use before writing, changing or reviewing any Graph API call, webhook type, template component, error code or Embedded Signup step in wa-rs — and whenever a field name, limit or enum value is in doubt."
+description: "Look up Meta's WhatsApp Business Platform docs as Markdown instead of guessing. Use before writing, changing or reviewing any Graph API call, webhook type, template component, error code or Embedded Signup step in meta-whatsapp-rs — and whenever a field name, limit or enum value is in doubt."
 metadata:
   internal: true
 ---

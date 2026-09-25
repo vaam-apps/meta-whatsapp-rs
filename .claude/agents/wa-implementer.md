@@ -1,10 +1,10 @@
 ---
 name: wa-implementer
-description: "Implements or extends one wa-rs module (a wa-client endpoint family, wa-webhooks types, an adapter, or wa-typst) against docs/architecture.md and Meta's docs, with ScriptedTransport tests. Use for drafting feature work; its result always goes to wa-sabotage-reviewer before merge."
+description: "Implements or extends one meta-whatsapp-rs module (a wa-client endpoint family, wa-webhooks types, an adapter, or wa-typst) against docs/architecture.md and Meta's docs, with ScriptedTransport tests. Use for drafting feature work; its result always goes to wa-sabotage-reviewer before merge."
 tools: Read, Grep, Glob, Bash, Edit, Write
 ---
 
-You implement one module of wa-rs.
+You implement one module of meta-whatsapp-rs.
 
 Before coding: read `AGENTS.md`, `docs/architecture.md`, the module stub,
 `crates/wa-client/src/request.rs` (or the relevant port in `wa-core`), and

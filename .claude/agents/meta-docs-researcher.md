@@ -1,6 +1,6 @@
 ---
 name: meta-docs-researcher
-description: "Read-only extraction of an exact spec from Meta's WhatsApp docs mirror (.meta-docs/) — endpoints, fields, limits, enums, examples, error codes — for one feature area. Use before implementing or reviewing a wa-rs module so the work is grounded in the real docs, not memory."
+description: "Read-only extraction of an exact spec from Meta's WhatsApp docs mirror (.meta-docs/) — endpoints, fields, limits, enums, examples, error codes — for one feature area. Use before implementing or reviewing a meta-whatsapp-rs module so the work is grounded in the real docs, not memory."
 tools: Read, Grep, Glob, Bash
 model: haiku
 ---

@@ -1,4 +1,4 @@
-# wa-rs — agent guide
+# meta-whatsapp-rs — agent guide
 
 Rust toolkit for Meta's WhatsApp Business Platform: typed Graph API client,
 webhooks, storage/transport/sink adapters, Typst documents. Built for three
@@ -19,10 +19,10 @@ decisions reserved for the maintainer — surface them, never pick a default.
 | `just ci` | **The gate.** CI runs exactly this. Nothing is "verified" until it exits 0 on the final head. |
 | `just lint` | `cargo fmt --check` + clippy (pedantic, `-D warnings`) |
 | `just test` | unit + in-process tests; `live_*` tests *skip* here |
-| `just test-live` | adapter tests against real Postgres + Redis, with `WA_RS_REQUIRE_LIVE=1` so a missing service **fails** |
+| `just test-live` | adapter tests against real Postgres + Redis, with `META_WHATSAPP_RS_REQUIRE_LIVE=1` so a missing service **fails** |
 | `just doc` | rustdoc with `-D warnings` (broken intra-doc links fail) |
 | `just features` | each adapter feature compiled alone |
-| `just skills-check` | every consumer skill's `Verified against wa-rs <sha>` stamp is a commit in HEAD's history, directly or listed as `Squashed-commit:` by a squash commit on main (the rest of the skill checks run in `just test`: `crates/wa-rs/tests/skills.rs`) |
+| `just skills-check` | every consumer skill's `Verified against meta-whatsapp-rs <sha>` stamp is a commit in HEAD's history, directly or listed as `Squashed-commit:` by a squash commit on main (the rest of the skill checks run in `just test`: `crates/meta-whatsapp-rs/tests/skills.rs`) |
 | `just squash-body <pr>` | the body of a PR's squash commit: its commits as `Squashed-commit:` lines plus their co-authors (CONTRIBUTING.md § Merging) |
 | `just meta-docs` | mirror Meta's docs as Markdown into `.meta-docs/` (gitignored) |
 
@@ -81,13 +81,13 @@ phone number alone.
 
 ## Companion docs and skills
 
-- Developer skills (working **on** wa-rs): `.claude/skills/`.
-- Consumer skills (working **with** wa-rs, e.g. in the e-commerce or CMS
+- Developer skills (working **on** meta-whatsapp-rs): `.claude/skills/`.
+- Consumer skills (working **with** meta-whatsapp-rs, e.g. in the e-commerce or CMS
   repo): `skills/<name>/`, one task each, installable with
-  `npx skills add vaam-apps/wa-rs`. Each carries a
-  `Verified against wa-rs <full sha> (<date>)` stamp; its Rust blocks are
+  `npx skills add vaam-apps/meta-whatsapp-rs`. Each carries a
+  `Verified against meta-whatsapp-rs <full sha> (<date>)` stamp; its Rust blocks are
   excerpts of its `examples/*.rs`, which `just test` compiles and runs
-  (`crates/wa-rs/tests/skills.rs`; CONTRIBUTING.md § "How the consumer
+  (`crates/meta-whatsapp-rs/tests/skills.rs`; CONTRIBUTING.md § "How the consumer
   skills are kept true"). Developer skills are `internal`: the installer
   never offers them.
 - A change to a public API is not done until `docs/`, `skills/` and the

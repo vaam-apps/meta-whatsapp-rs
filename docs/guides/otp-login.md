@@ -4,9 +4,9 @@
 over WhatsApp, safely: hashed at rest, bound to the exact number, with
 attempt and issue limits.
 
-Example: [`otp_login.rs`](../../crates/wa-rs/examples/otp_login.rs) (every
+Example: [`otp_login.rs`](../../crates/meta-whatsapp-rs/examples/otp_login.rs) (every
 outcome handled; run it with the command in its header). Agent skill:
-[`wa-rs-otp-login`](../../skills/wa-rs-otp-login/SKILL.md).
+[`meta-whatsapp-rs-otp-login`](../../skills/meta-whatsapp-rs-otp-login/SKILL.md).
 
 ## 1. On Meta's side
 
@@ -49,7 +49,7 @@ One template per name and language. Create them from a deploy script, not
 per request:
 
 ```rust
-use wa_rs::client::authentication::{AuthenticationTemplate, AuthenticationUpsert, SupportedApp};
+use meta_whatsapp_rs::client::authentication::{AuthenticationTemplate, AuthenticationUpsert, SupportedApp};
 
 let auth = client.authentication(waba_id); // your WABA, your system user token
 
@@ -85,11 +85,11 @@ per language.
 
 ```rust
 use std::sync::Arc;
-use wa_rs::client::authentication::{OtpConfig, OtpPepper, OtpService, OtpTemplate};
-use wa_rs::core::clock::SystemClock;
+use meta_whatsapp_rs::client::authentication::{OtpConfig, OtpPepper, OtpService, OtpTemplate};
+use meta_whatsapp_rs::core::clock::SystemClock;
 
 let otp = OtpService::new(
-    wa_rs::client(system_user_token)?, // your number's token
+    meta_whatsapp_rs::client(system_user_token)?, // your number's token
     phone_number_id,                   // the number that sends the codes
     OtpTemplate::new("login_code", "en_US"), // approved, in that language
     kv.clone(),                        // shared KvStore: Postgres or Redis
@@ -122,7 +122,7 @@ for `purpose`). Other settings change with struct update syntax:
 let config = OtpConfig { code_length: 8, ..OtpConfig::new("brand-b") }; // not blank
 ```
 
-Upgrading wa-rs from a revision before e40b86f changes every store key once:
+Upgrading meta-whatsapp-rs from a revision before e40b86f changes every store key once:
 codes in flight at the deploy answer `NotFound` (the user asks for a new
 one) and the hourly issue limits start again. Deploy outside peak login
 hours. Upgrading across d67b3ac, which made the namespace required
@@ -164,12 +164,12 @@ digits, and send to exactly `+<digits>`.
 ```rust
 use std::time::Duration;
 use time::OffsetDateTime;
-use wa_rs::client::authentication::{IssueOutcome, OtpService, VerifyOutcome};
-use wa_rs::prelude::*;
+use meta_whatsapp_rs::client::authentication::{IssueOutcome, OtpService, VerifyOutcome};
+use meta_whatsapp_rs::prelude::*;
 
 pub enum Screen { EnterCode { expires_at: OffsetDateTime }, Wait(Duration), AskForNumber, TryLater }
 
-pub async fn send_code(otp: &OtpService, phone: &str) -> wa_rs::Result<Screen> {
+pub async fn send_code(otp: &OtpService, phone: &str) -> meta_whatsapp_rs::Result<Screen> {
     let user = Recipient::phone(phone); // "+16505551234"
     Ok(match otp.issue(&user, "login").await {
         Ok(IssueOutcome::Sent(challenge)) => Screen::EnterCode { expires_at: challenge.expires_at },
@@ -183,7 +183,7 @@ pub async fn send_code(otp: &OtpService, phone: &str) -> wa_rs::Result<Screen> {
     })
 }
 
-pub async fn check_code(otp: &OtpService, phone: &str, typed: &str) -> wa_rs::Result<bool> {
+pub async fn check_code(otp: &OtpService, phone: &str, typed: &str) -> meta_whatsapp_rs::Result<bool> {
     match otp.verify(&Recipient::phone(phone), "login", typed.trim()).await? {
         VerifyOutcome::Verified => Ok(true), // consumed: create the session now
         VerifyOutcome::Invalid { attempts_left } => { show_wrong_code(attempts_left); Ok(false) }

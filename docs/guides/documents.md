@@ -4,9 +4,9 @@
 image, and send it over WhatsApp as a document, an image, or a template
 header.
 
-Example: [`invoice_document.rs`](../../crates/wa-rs/examples/invoice_document.rs)
-(`cargo run -p wa-rs --example invoice_document --features typst`). Agent
-skill: [`wa-rs-documents`](../../skills/wa-rs-documents/SKILL.md).
+Example: [`invoice_document.rs`](../../crates/meta-whatsapp-rs/examples/invoice_document.rs)
+(`cargo run -p meta-whatsapp-rs --example invoice_document --features typst`). Agent
+skill: [`meta-whatsapp-rs-documents`](../../skills/meta-whatsapp-rs-documents/SKILL.md).
 
 ```text
 order record ─► InvoiceInput (pre-formatted strings) ─► Renderer (Typst, sandboxed) ─► PDF bytes
@@ -33,9 +33,9 @@ Enable the `typst` feature. Rendering is CPU-bound and synchronous (tens to
 hundreds of milliseconds): keep it off the async workers.
 
 ```rust
-use wa_rs::client::messages::Document;
-use wa_rs::prelude::*;
-use wa_rs::typst::{InvoiceInput, Renderer, Template};
+use meta_whatsapp_rs::client::messages::Document;
+use meta_whatsapp_rs::prelude::*;
+use meta_whatsapp_rs::typst::{InvoiceInput, Renderer, Template};
 
 async fn send_invoice(client: &Client, pnid: PhoneNumberId, to: Recipient, invoice: InvoiceInput,
                       today: time::Date) -> anyhow::Result<MessageId> {
@@ -57,7 +57,7 @@ async fn send_invoice(client: &Client, pnid: PhoneNumberId, to: Recipient, invoi
   default filename is the template's name (`invoice.pdf`): name it for the
   customer with `Document::filename`.
 - `upload` checks the MIME type and size before sending anything.
-- In a function returning `wa_rs::Result`, `?` turns a `RenderError` into
+- In a function returning `meta_whatsapp_rs::Result`, `?` turns a `RenderError` into
   `Error::Other`; `downcast_ref::<RenderError>()` on the inner error gets
   it back.
 
@@ -82,7 +82,7 @@ Resumable Upload handle of a sample PDF), then send the rendered invoice's
 media id as the header parameter:
 
 ```rust
-use wa_rs::client::templates::{TemplateCategory, TemplateComponent, TemplateDefinition};
+use meta_whatsapp_rs::client::templates::{TemplateCategory, TemplateComponent, TemplateDefinition};
 
 let handle = client.media(pnid.clone()).resumable_upload(&app_id, "sample.pdf", "application/pdf", sample_pdf).await?;
 client.templates(waba_id).create(&TemplateDefinition::new("invoice_ready", "en_US", TemplateCategory::Utility)
@@ -100,7 +100,7 @@ client.messages(pnid).send(&OutboundMessage::template(to, invoice_ready)).await?
 ## 5. Vouchers as image headers
 
 ```rust
-use wa_rs::typst::VoucherInput;
+use meta_whatsapp_rs::typst::VoucherInput;
 
 let png = Renderer::new().with_today(today).render_png(&Template::voucher(), &voucher, 192.0)?;
 let media_id = client.media(pnid.clone()).upload(png.bytes, png.mime_type, &png.filename).await?;

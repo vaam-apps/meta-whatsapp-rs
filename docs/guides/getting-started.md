@@ -3,9 +3,9 @@
 **Goal:** from an empty Meta account to a first WhatsApp message sent from
 Rust, with errors handled the way the library expects.
 
-Example: [`send_message.rs`](../../crates/wa-rs/examples/send_message.rs).
-Agent skills: [`wa-rs-setup`](../../skills/wa-rs-setup/SKILL.md),
-[`wa-rs-errors`](../../skills/wa-rs-errors/SKILL.md).
+Example: [`send_message.rs`](../../crates/meta-whatsapp-rs/examples/send_message.rs).
+Agent skills: [`meta-whatsapp-rs-setup`](../../skills/meta-whatsapp-rs-setup/SKILL.md),
+[`meta-whatsapp-rs-errors`](../../skills/meta-whatsapp-rs-errors/SKILL.md).
 
 ## 1. On Meta's side
 
@@ -48,13 +48,13 @@ in the repository or the database.
 
 ## 2. Add the dependency
 
-wa-rs is not on crates.io yet (the name is taken; see
+meta-whatsapp-rs is not on crates.io yet (the name is taken; see
 [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md#naming-and-publishing)). Depend
 on it by git revision:
 
 ```toml
 [dependencies]
-wa-rs = { git = "https://github.com/vaam-apps/wa-rs", rev = "<commit>", features = ["axum", "postgres"] }
+meta-whatsapp-rs = { git = "https://github.com/vaam-apps/meta-whatsapp-rs", rev = "<commit>", features = ["axum", "postgres"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 anyhow = "1"
 ```
@@ -66,11 +66,11 @@ anyhow = "1"
   `typst` (documents) or `flows-endpoint` as needed; `full` enables all. The
   table is in the [README](../../README.md#feature-flags).
 - Types from sqlx, axum and redis cross the API (`PgPool`, `axum::Router`,
-  a redis connection). Use the versions wa-rs was built with, re-exported:
-  `wa_rs::adapters::store::postgres::sqlx` (feature `postgres`),
-  `wa_rs::webhooks::axum` (feature `axum`) and
-  `wa_rs::adapters::store::redis` (feature `redis`), as the examples do;
-  then there is nothing to pin. If you need axum features wa-rs does not
+  a redis connection). Use the versions meta-whatsapp-rs was built with, re-exported:
+  `meta_whatsapp_rs::adapters::store::postgres::sqlx` (feature `postgres`),
+  `meta_whatsapp_rs::webhooks::axum` (feature `axum`) and
+  `meta_whatsapp_rs::adapters::store::redis` (feature `redis`), as the examples do;
+  then there is nothing to pin. If you need axum features meta-whatsapp-rs does not
   turn on, add `axum = "0.8"` with them yourself: Cargo builds one axum 0.8
   for both (likewise `redis = "1"` with `tokio-rustls-comp` for
   `rediss://`).
@@ -78,9 +78,9 @@ anyhow = "1"
 ## 3. Send a first message
 
 ```rust
-use wa_rs::prelude::*;
+use meta_whatsapp_rs::prelude::*;
 
-let client = wa_rs::client(std::env::var("WA_TOKEN")?)?;
+let client = meta_whatsapp_rs::client(std::env::var("WA_TOKEN")?)?;
 let messages = client.messages(std::env::var("WA_PHONE_NUMBER_ID")?);
 let to = Recipient::phone("+16505551234"); // E.164, with the `+`
 
@@ -90,9 +90,9 @@ println!("accepted as {:?}", sent.message_id());
 ```
 
 Run the full program with
-`WA_TOKEN=… WA_PHONE_NUMBER_ID=… WA_TO=+16505551234 cargo run -p wa-rs --example send_message`.
+`WA_TOKEN=… WA_PHONE_NUMBER_ID=… WA_TO=+16505551234 cargo run -p meta-whatsapp-rs --example send_message`.
 
-- `wa_rs::client(token)` builds a client on the production transport
+- `meta_whatsapp_rs::client(token)` builds a client on the production transport
   (rustls, HTTP/2, `HTTPS_PROXY` honoured), Graph API v25.0, a 30 s timeout
   and the default retry policy. Build **one** at startup and clone it:
   cloning is cheap and shares the connection pool.
@@ -110,7 +110,7 @@ Run the full program with
 
 ## 4. Handle errors
 
-Every fallible call returns `wa_rs::Result<T>`. Branch on `err.kind()`, an
+Every fallible call returns `meta_whatsapp_rs::Result<T>`. Branch on `err.kind()`, an
 `ErrorKind` classified from Meta's error code, never on the message text or
 the HTTP status. `ErrorKind` is non-exhaustive: keep a `_` arm.
 
@@ -124,8 +124,8 @@ the HTTP status. `ErrorKind` is non-exhaustive: keep a `_` arm.
 | `Error::Credit(_)` | a Solution Partner credit line step stopped (refused, busy, to reconcile, a revocation part-way); `err.credit()` gives it, also through `Step` | its own `is_retryable()` and `may_have_been_sent()`: see [embedded-signup.md](embedded-signup.md#solution-partner-mode) |
 
 ```rust
-use wa_rs::client::messages::Messages;
-use wa_rs::prelude::*;
+use meta_whatsapp_rs::client::messages::Messages;
+use meta_whatsapp_rs::prelude::*;
 
 /// What the order service does next.
 enum Next {
@@ -176,7 +176,7 @@ unreadable response.
   `callback_data`.
 
 The full `ErrorKind` table, with codes and advice, is in the skill's
-[error-kinds reference](../../skills/wa-rs-errors/references/error-kinds.md).
+[error-kinds reference](../../skills/meta-whatsapp-rs-errors/references/error-kinds.md).
 
 ## 5. One client, many merchants
 
@@ -184,7 +184,7 @@ A multi-tenant service builds a client without a token and derives one per
 merchant:
 
 ```rust
-let client = wa_rs::client_builder()?.build()?; // no default token
+let client = meta_whatsapp_rs::client_builder()?.build()?; // no default token
 let merchant = client.with_token(merchant_token); // an AccessToken, e.g. from the TokenVault
 merchant.messages(phone_number_id).send(&msg).await?;
 ```
@@ -192,7 +192,7 @@ merchant.messages(phone_number_id).send(&msg).await?;
 `with_token` shares the transport, endpoint and retry policy; only the
 token differs. Never build a client per request.
 
-## 6. An endpoint wa-rs does not wrap
+## 6. An endpoint meta-whatsapp-rs does not wrap
 
 Use the client's request builders, so authentication, retries, error
 decoding and the credential host allowlist still apply:
@@ -215,7 +215,7 @@ download URLs point (default port). `client.request_url(method, url)` to
 any other origin, `*.whatsapp.net` included, is refused with
 `Error::Validation` on `url` before anything is sent.
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - No tenant model: it knows WABAs and phone number ids, not your merchants.
 - No job queue, outbox or retry scheduler for sends.

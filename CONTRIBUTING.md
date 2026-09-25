@@ -1,4 +1,4 @@
-# Contributing to wa-rs
+# Contributing to meta-whatsapp-rs
 
 Read [AGENTS.md](AGENTS.md) first — it is the short version of everything
 below and applies to humans and coding agents alike.
@@ -70,7 +70,7 @@ A public API change is not done until these agree with it:
 - `docs/architecture.md` and `docs/coverage.md`,
 - the consumer skills in `skills/` (they instruct other repos' coding
   agents — a stale skill generates wrong code at scale). Re-stamp every
-  skill you verified with `Verified against wa-rs <full sha> (<date>)`.
+  skill you verified with `Verified against meta-whatsapp-rs <full sha> (<date>)`.
 
 Say in the PR description what happened to each, with a link or
 `n/a — <reason>`.
@@ -80,22 +80,22 @@ Say in the PR description what happened to each, with a link or
 - Each skill is `skills/<name>/SKILL.md` (flat, one job per skill, at
   most 160 lines; long tables in `references/`). Its Rust code lives in
   `skills/<name>/examples/*.rs`, compiled and tested by
-  `crates/wa-rs/tests/skills.rs` through `tests/skill_examples/mod.rs`
+  `crates/meta-whatsapp-rs/tests/skills.rs` through `tests/skill_examples/mod.rs`
   (add a `#[path]` line for a new file; the test fails until you do).
 - A ```` ```rust ```` block in a skill is an excerpt of such a file (or of
-  `crates/wa-rs/examples/*.rs`): edit the example, run `just fmt`, then
+  `crates/meta-whatsapp-rs/examples/*.rs`): edit the example, run `just fmt`, then
   copy the lines. The test names the block that drifted. Label every
   fence with its language (Rust is exactly `rust`); keep example files
   free of block comments, `macro_rules!` and any `cfg` but `cfg(test)`
-  (in `crates/wa-rs/examples/*.rs`: but the `postgres` arms; they are
+  (in `crates/meta-whatsapp-rs/examples/*.rs`: but the `postgres` arms; they are
   built as examples, so `cfg(test)` never holds there), whose code a
   block could quote without it ever compiling. A block may not quote
   lines inside a string (plain, raw, byte or C) or a block comment of any
   example (a line comment is quoted as a comment, which is harmless), nor
   an item under a `cfg` that `--all-features` never enables (the
-  `#[cfg(not(feature = …))]` arms of `crates/wa-rs/examples/*.rs`) or
+  `#[cfg(not(feature = …))]` arms of `crates/meta-whatsapp-rs/examples/*.rs`) or
   under a `cfg_attr` that carries a `cfg`.
-- Each `references/*.md` carries a `Verified against wa-rs <full
+- Each `references/*.md` carries a `Verified against meta-whatsapp-rs <full
   sha> (<date>)` stamp under its title, like its `SKILL.md`, checked the same
   way.
 - Backticked Rust names in the prose must exist in `crates/` or in the
