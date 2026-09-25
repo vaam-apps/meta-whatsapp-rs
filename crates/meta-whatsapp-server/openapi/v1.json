@@ -1,0 +1,3192 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "meta-whatsapp-server",
+    "description": "The meta-whatsapp-rs HTTP service: WhatsApp Business Platform over REST, for apps not written in Rust. Errors: every error answers `ErrorBody`; branch on `error.code` (`ErrorCode`), and resend only when `may_have_been_sent` is false.",
+    "contact": {
+      "name": "Vymalo"
+    },
+    "license": {
+      "name": "MIT",
+      "identifier": "MIT"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/livez": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "`GET /livez`: the process is alive.",
+        "operationId": "livez",
+        "responses": {
+          "200": {
+            "description": "Alive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "`GET /metrics`: Prometheus text exposition.",
+        "operationId": "metrics",
+        "responses": {
+          "200": {
+            "description": "Prometheus metrics, in the OpenMetrics text format",
+            "content": {
+              "application/openmetrics-text": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "`GET /readyz`: the service takes traffic: storage answers and it is not\nshutting down.",
+        "operationId": "readyz",
+        "responses": {
+          "200": {
+            "description": "Ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`shutting_down` or `storage_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/platform-keys": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "List platform keys, revoked ones included.",
+        "operationId": "list_platform_keys",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The keys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Mint a platform key.",
+        "operationId": "mint_platform_key",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MintPlatformKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The key, shown once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MintedKey"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `tenants`, `scopes`, `name`, `expires_at` or `body`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/platform-keys/{key_id}": {
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Revoke a platform key.",
+        "operationId": "revoke_platform_key",
+        "parameters": [
+          {
+            "name": "key_id",
+            "in": "path",
+            "description": "Key id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked (or already revoked)"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/tenants": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "List tenants.",
+        "operationId": "list_tenants",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tenants, in id order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `limit` or `cursor`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Create a tenant.",
+        "operationId": "create_tenant",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTenant"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tenant"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`tenant_exists`: the id is taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `id` (malformed), `name` or `body`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/tenants/{id}": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "One tenant.",
+        "operationId": "get_tenant",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Tenant id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tenant"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Delete a tenant: disconnect every WABA it has (as\n`DELETE /v1/wabas/{waba_id}` does), then delete it and its keys. Stops\nat the first WABA that cannot be disconnected; the tenant stays.",
+        "operationId": "delete_tenant",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Tenant id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted, with its keys; every WABA disconnected"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key, or Meta refused to unsubscribe a WABA",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A WABA has no usable token (`number_not_connected`, `reconnect_required`): unbind it first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Unsubscribing a WABA failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Rename, suspend or reactivate a tenant.",
+        "operationId": "update_tenant",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Tenant id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTenant"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The tenant after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tenant"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `name` or `body`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/tenants/{id}/keys": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "List a tenant's keys, revoked ones included.",
+        "operationId": "list_tenant_keys",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Tenant id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The keys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Mint a key for a tenant.",
+        "operationId": "mint_tenant_key",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Tenant id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MintTenantKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The key, shown once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MintedKey"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `scopes`, `name`, `expires_at` or `body`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/tenants/{id}/keys/{key_id}": {
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Revoke a tenant's key. Effective at once, on every replica (keys are\nnot cached).",
+        "operationId": "revoke_tenant_key",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Tenant id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key_id",
+            "in": "path",
+            "description": "Key id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked (or already revoked)"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such key for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/tenants/{id}/wabas": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Attach one of the platform's own WABAs to a tenant: list its numbers\nfrom Meta with the given token (so no id is bound on the caller's word),\nbind the WABA and those numbers to the tenant (refused when another\ntenant has it, decision D4), store the token in the vault, then\nsubscribe the app to the WABA's webhooks with it.",
+        "description": "Subscribing the app is the last step: its failure carries\n`step: subscribe_app` and `resumable: true`, as the WABA stays\nattached and repeating the call finishes it (with a new token after a\n`409 reconnect_required`: Meta refused the stored one).",
+        "operationId": "attach_waba",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Tenant id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttachWaba"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Attached: its numbers bound, the token stored, the app subscribed to its webhooks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachedWaba"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key, or Meta refused the token access to the WABA (nothing bound or stored), or to subscribe the app (`step` `subscribe_app`: the WABA stays attached; repeat the call)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`waba_owned_by_another_tenant`; `reconnect_required` with `step` `subscribe_app`: Meta refused the token once it was stored (the WABA stays attached, its numbers `reconnect_required`: repeat the call with a valid token)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `waba_id` (digits), `token` (blank, or refused by Meta when listing the numbers: nothing bound or stored) or `body`; Meta's `invalid_parameter`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed, or listed more than 1,000 numbers (`upstream`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/vault/rotate": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Re-encrypt every bound WABA's token (and its credit ledger) under the\nactive vault key (`WA_VAULT_KEY`), walking the service's bindings (the\nvault cannot list its records). The old key can go once `failed` is\nempty. Also `meta-whatsapp-server vault rotate`.",
+        "description": "The walk is a request like any other, cut at the 55 s request\ndeadline: one too large to finish in time answers `504 timeout`, part\nof the records rotated. It is idempotent: repeat it (records already\nunder the active key are read, not rewritten), or run\n`meta-whatsapp-server vault rotate`, which has no deadline.",
+        "operationId": "rotate_vault",
+        "responses": {
+          "200": {
+            "description": "Walked every WABA: how many records were re-encrypted, and which failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultRotation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the walk outlived the 55 s request deadline, part of the records rotated; repeat it, or run `meta-whatsapp-server vault rotate`, which has no deadline",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/wabas/{waba_id}": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Which tenant holds a WABA, and its numbers: what an operator checks\nbefore an unbind (decision D4).",
+        "operationId": "get_waba",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The binding",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WabaBinding"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: not bound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/wabas/{waba_id}/binding": {
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Unbind a WABA (decision D4: the admin unbind that lets another tenant\nconnect it), also the way to free a WABA whose token no longer works:\nwith its stored token, if usable, unsubscribe the app, at best; then\ndelete the token and the bindings of the WABA and its numbers.",
+        "operationId": "unbind_waba",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Unbound, its token deleted (the app unsubscribed when the token allowed it)"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: not bound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers": {
+      "get": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`GET /v1/numbers`: the tenant's numbers with their connection status.",
+        "operationId": "list_numbers",
+        "parameters": [
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's numbers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NumberList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `limit` or `cursor`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}": {
+      "get": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`GET /v1/numbers/{pn}`: the number's live details from Meta.",
+        "operationId": "get_number",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Live details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NumberDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/profile": {
+      "get": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/profile`: the business profile.",
+        "operationId": "get_profile",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Profile"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`PATCH /v1/numbers/{pn}/profile`: change the given fields, answer the\nwhole profile. (Operation `update_profile`, like `update_tenant`.)",
+        "operationId": "update_profile",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfilePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The profile after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Profile"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`address` over 256 characters, a vertical that cannot be set), or Meta's `invalid_parameter`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/openapi.json": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "`GET /v1/openapi.json`: this document.",
+        "operationId": "openapi_json",
+        "responses": {
+          "200": {
+            "description": "The OpenAPI 3.1 document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/version": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "`GET /v1/version`.",
+        "operationId": "version",
+        "responses": {
+          "200": {
+            "description": "Versions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Version"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/wabas": {
+      "get": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`GET /v1/wabas`: the tenant's WABAs.",
+        "operationId": "list_wabas",
+        "parameters": [
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's WABAs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WabaList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `limit` or `cursor`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}": {
+      "delete": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`DELETE /v1/wabas/{waba_id}`: disconnect. Unsubscribes the app from the\nWABA with its token; only then deletes the token and the bindings. When\nMeta refuses or fails, nothing is deleted.",
+        "operationId": "disconnect_waba",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Disconnected: token and bindings deleted"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (nothing deleted)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required` (nothing deleted)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Unsubscribing failed: nothing deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: nothing deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AttachWaba": {
+        "type": "object",
+        "description": "`POST /v1/admin/tenants/{id}/wabas`: the platform's own WABA and a\nsystem user token with access to it.",
+        "required": [
+          "waba_id",
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "format": "password",
+            "description": "A system user access token with access to the WABA. Stored\nencrypted; never answered or logged.",
+            "writeOnly": true
+          },
+          "waba_id": {
+            "type": "string",
+            "description": "WhatsApp Business Account id."
+          }
+        },
+        "additionalProperties": false
+      },
+      "AttachedWaba": {
+        "type": "object",
+        "description": "An attached WABA.",
+        "required": [
+          "waba_id",
+          "tenant_id",
+          "phone_number_ids"
+        ],
+        "properties": {
+          "phone_number_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every number Meta listed on it, now bound to the tenant."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "Its tenant."
+          },
+          "waba_id": {
+            "type": "string",
+            "description": "The WABA."
+          }
+        }
+      },
+      "CreateTenant": {
+        "type": "object",
+        "description": "`POST /v1/admin/tenants`.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The integrator's id (e.g. the CMS merchant id): 1 to 64 characters\nof `[A-Za-z0-9._:-]`. Immutable."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A label for operators, at most 256 characters."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ErrorBody": {
+        "type": "object",
+        "description": "The body of every error answer.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorObject",
+            "description": "The error."
+          }
+        }
+      },
+      "ErrorCode": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/KnownErrorCode"
+          },
+          {
+            "type": "string"
+          }
+        ],
+        "description": "Stable error code: a KnownErrorCode today. Codes only grow within v1: handle an unknown one by its HTTP status class."
+      },
+      "ErrorObject": {
+        "type": "object",
+        "description": "An error: its stable code, the service's sentence for it, whether to\nretry, whether the request may have taken effect, and Meta's error when\nMeta answered with one.",
+        "required": [
+          "code",
+          "message",
+          "retryable",
+          "may_have_been_sent",
+          "field",
+          "step",
+          "resumable",
+          "graph",
+          "request_id"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ErrorCode",
+            "description": "Stable error code (one of the `ErrorCode` values)."
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The request field at fault, for `invalid_request`."
+          },
+          "graph": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GraphErrorInfo",
+                "description": "Meta's error, when Meta answered with one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "may_have_been_sent": {
+            "type": "boolean",
+            "description": "Whether the request may have taken effect (a message may have been\nsent): if `true`, reconcile before repeating it."
+          },
+          "message": {
+            "type": "string",
+            "description": "The service's sentence for the code."
+          },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The request's id (`X-Request-Id`)."
+          },
+          "resumable": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the stopped operation can be resumed."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether repeating the same request later may succeed."
+          },
+          "step": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The step a multi-step operation stopped at."
+          }
+        }
+      },
+      "GraphErrorInfo": {
+        "type": "object",
+        "description": "Meta's error, as the body carries it: the code and trace id, and, on\nthe routes that opt in, `error_data.details`. Never Meta's `message` or\ntitles.",
+        "required": [
+          "code",
+          "subcode",
+          "fbtrace_id",
+          "details"
+        ],
+        "properties": {
+          "code": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Meta's error code, e.g. `131047`."
+          },
+          "details": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Meta's own text (`error_data.details`), on the routes that keep it:\nnot the service's, and not a stable value to branch on."
+          },
+          "fbtrace_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Trace id for Meta's support."
+          },
+          "subcode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Meta's subcode, when it sent one (deprecated by Meta since v16)."
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "description": "A probe's answer.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/HealthStatus",
+            "description": "`ok` (alive) or `ready`."
+          }
+        }
+      },
+      "HealthStatus": {
+        "type": "string",
+        "description": "What a probe says.",
+        "enum": [
+          "ok",
+          "ready"
+        ]
+      },
+      "Key": {
+        "type": "object",
+        "description": "An API key, as listed (never its secret).",
+        "required": [
+          "key_id",
+          "kind",
+          "tenant_id",
+          "tenants",
+          "scopes",
+          "name",
+          "created_at",
+          "expires_at",
+          "revoked_at",
+          "last_used_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339."
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it stops working (RFC 3339)."
+          },
+          "key_id": {
+            "type": "string",
+            "description": "Public id (the part of the key between `wak_` and the secret)."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/KeyKind",
+            "description": "Whose key it is."
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was last used, to the minute (RFC 3339)."
+          },
+          "name": {
+            "type": "string",
+            "description": "A label for operators."
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was revoked (RFC 3339)."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Scope"
+            },
+            "description": "Scopes on tenant routes."
+          },
+          "tenant_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A tenant key's tenant."
+          },
+          "tenants": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TenantsSpec",
+                "description": "A platform key's tenants."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "KeyKind": {
+        "type": "string",
+        "description": "Whose key it is.",
+        "enum": [
+          "tenant",
+          "platform",
+          "admin"
+        ]
+      },
+      "KeyList": {
+        "type": "object",
+        "description": "A page of keys.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Key"
+            },
+            "description": "The keys, in id order, revoked ones included."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; `null` on the last one."
+          }
+        }
+      },
+      "KnownErrorCode": {
+        "type": "string",
+        "description": "The error codes this version answers (a client can switch on them and let any other fall to its default).",
+        "enum": [
+          "unauthenticated",
+          "method_not_allowed",
+          "invalid_request",
+          "invalid_parameter",
+          "unsupported_message_type",
+          "recipient_not_supported",
+          "undeliverable",
+          "template_parameter_mismatch",
+          "template_not_found",
+          "template_text_too_long",
+          "template_policy_violation",
+          "template_rejected",
+          "idempotency_key_reused",
+          "customer_service_window_closed",
+          "marketing_opted_out",
+          "blocked_by_business",
+          "experiment_holdout",
+          "template_paused",
+          "template_disabled",
+          "template_syncing",
+          "template_unavailable",
+          "template_limit_reached",
+          "flow_unavailable",
+          "registration",
+          "two_step_verification",
+          "sync_not_allowed",
+          "duplicate_onboarding",
+          "number_not_connected",
+          "reconnect_required",
+          "waba_owned_by_another_tenant",
+          "tenant_exists",
+          "idempotency_in_progress",
+          "outcome_unknown",
+          "permission",
+          "account_restricted",
+          "country_restricted",
+          "payment",
+          "feature_not_available",
+          "marketing_not_allowed",
+          "forbidden",
+          "tenant_suspended",
+          "stale_attempt",
+          "rate_limited",
+          "pair_rate_limited",
+          "spam_rate_limited",
+          "ecosystem_engagement_limit",
+          "classification_limit_reached",
+          "too_many_requests",
+          "too_many_streams",
+          "not_found",
+          "nothing_to_resume",
+          "cursor_expired",
+          "payload_too_large",
+          "media_too_large",
+          "service_unavailable",
+          "unknown",
+          "upstream",
+          "integrity",
+          "media_download_failed",
+          "media_upload_failed",
+          "onboarding_failed",
+          "timeout",
+          "storage_unavailable",
+          "shutting_down",
+          "internal"
+        ]
+      },
+      "MintPlatformKey": {
+        "type": "object",
+        "description": "`POST /v1/admin/platform-keys`.",
+        "required": [
+          "tenants",
+          "scopes"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it stops working (RFC 3339, in the future)."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A label for operators, at most 256 characters."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Scope"
+            },
+            "description": "At least one scope."
+          },
+          "tenants": {
+            "$ref": "#/components/schemas/TenantsSpec",
+            "description": "The tenants it may name with `WA-Tenant`: `\"*\"` or a non-empty list."
+          }
+        },
+        "additionalProperties": false
+      },
+      "MintTenantKey": {
+        "type": "object",
+        "description": "`POST /v1/admin/tenants/{id}/keys`.",
+        "required": [
+          "scopes"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it stops working (RFC 3339, in the future)."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A label for operators, at most 256 characters."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Scope"
+            },
+            "description": "At least one scope."
+          }
+        },
+        "additionalProperties": false
+      },
+      "MintedKey": {
+        "type": "object",
+        "description": "A key just minted: the whole key, shown this once, and its record.",
+        "required": [
+          "key",
+          "api_key"
+        ],
+        "properties": {
+          "api_key": {
+            "$ref": "#/components/schemas/Key",
+            "description": "The key's record."
+          },
+          "key": {
+            "type": "string",
+            "description": "The key, `wak_<key_id>_<secret>`: send it as\n`Authorization: Bearer <key>`. Shown once; only its digest is kept."
+          }
+        }
+      },
+      "Number": {
+        "type": "object",
+        "description": "A number of the tenant and its connection status.",
+        "required": [
+          "phone_number_id",
+          "waba_id",
+          "status",
+          "updated_at"
+        ],
+        "properties": {
+          "phone_number_id": {
+            "type": "string",
+            "description": "Phone number id."
+          },
+          "status": {
+            "$ref": "#/components/schemas/NumberStatus",
+            "description": "Its connection status."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the status last changed (RFC 3339)."
+          },
+          "waba_id": {
+            "type": "string",
+            "description": "Its WABA."
+          }
+        }
+      },
+      "NumberDetails": {
+        "type": "object",
+        "description": "A number's live details, from Meta.",
+        "required": [
+          "phone_number_id",
+          "waba_id",
+          "status",
+          "display_phone_number",
+          "verified_name",
+          "quality_rating",
+          "name_status",
+          "throughput"
+        ],
+        "properties": {
+          "display_phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The number as WhatsApp displays it."
+          },
+          "name_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Display name review status, as Meta reports it."
+          },
+          "phone_number_id": {
+            "type": "string",
+            "description": "Phone number id."
+          },
+          "quality_rating": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Quality rating, as Meta reports it (`GREEN`, `YELLOW`, `RED`, …)."
+          },
+          "status": {
+            "$ref": "#/components/schemas/NumberStatus",
+            "description": "The service's connection status (`connected`: the details come\nfrom Meta)."
+          },
+          "throughput": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Throughput",
+                "description": "Throughput."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verified_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Approved display name."
+          },
+          "waba_id": {
+            "type": "string",
+            "description": "Its WABA."
+          }
+        }
+      },
+      "NumberList": {
+        "type": "object",
+        "description": "A page of numbers.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Number"
+            },
+            "description": "The numbers, in id order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; `null` on the last one."
+          }
+        }
+      },
+      "NumberStatus": {
+        "type": "string",
+        "description": "A number's connection status.",
+        "enum": [
+          "connected",
+          "reconnect_required",
+          "disconnected"
+        ]
+      },
+      "Profile": {
+        "type": "object",
+        "description": "A business profile.",
+        "required": [
+          "about",
+          "address",
+          "description",
+          "email",
+          "websites",
+          "vertical"
+        ],
+        "properties": {
+          "about": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "\"About\" text."
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Address."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Description."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Contact email."
+          },
+          "vertical": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Industry, as Meta names it (`RETAIL`, `OTHER`, …)."
+          },
+          "websites": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Websites."
+          }
+        }
+      },
+      "ProfilePatch": {
+        "type": "object",
+        "description": "Fields to change; absent ones stay as they are.",
+        "properties": {
+          "about": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "\"About\" text."
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Address (at most 256 characters)."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Description."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Contact email."
+          },
+          "vertical": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Industry, as Meta names it (`UNDEFINED` and `NOT_A_BIZ` cannot be\nset)."
+          },
+          "websites": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Websites."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Scope": {
+        "type": "string",
+        "description": "A scope of a tenant or platform key.",
+        "enum": [
+          "send",
+          "media",
+          "templates",
+          "inbox",
+          "events",
+          "webhooks",
+          "signup",
+          "otp",
+          "numbers"
+        ]
+      },
+      "Tenant": {
+        "type": "object",
+        "description": "A tenant.",
+        "required": [
+          "id",
+          "name",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339."
+          },
+          "id": {
+            "type": "string",
+            "description": "The integrator's id: 1 to 64 characters of `[A-Za-z0-9._:-]`."
+          },
+          "name": {
+            "type": "string",
+            "description": "A label for operators."
+          },
+          "status": {
+            "$ref": "#/components/schemas/TenantStatus",
+            "description": "`active` or `suspended`."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339."
+          }
+        }
+      },
+      "TenantList": {
+        "type": "object",
+        "description": "A page of tenants.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Tenant"
+            },
+            "description": "The tenants, in id order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; `null` on the last one."
+          }
+        }
+      },
+      "TenantStatus": {
+        "type": "string",
+        "description": "A tenant's status.",
+        "enum": [
+          "active",
+          "suspended"
+        ]
+      },
+      "TenantsSpec": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Any tenant.",
+            "enum": [
+              "*"
+            ]
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "These tenant ids.",
+            "minItems": 1
+          }
+        ],
+        "description": "The tenants a platform key may name with WA-Tenant: \"*\" for any, or a non-empty list of tenant ids."
+      },
+      "Throughput": {
+        "type": "object",
+        "description": "A number's throughput.",
+        "required": [
+          "level"
+        ],
+        "properties": {
+          "level": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Throughput level, as Meta reports it."
+          }
+        }
+      },
+      "UpdateTenant": {
+        "type": "object",
+        "description": "`PATCH /v1/admin/tenants/{id}`.",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new label, at most 256 characters."
+          },
+          "status": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TenantStatus",
+                "description": "`suspended` to suspend the tenant, `active` to lift it."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "VaultRotation": {
+        "type": "object",
+        "description": "What a vault rotation did.",
+        "required": [
+          "wabas",
+          "rotated",
+          "failed"
+        ],
+        "properties": {
+          "failed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "WABAs whose records could not be read or rewritten (a record under\na key no longer configured, say): rotate again, or reconnect them,\nbefore dropping the old key."
+          },
+          "rotated": {
+            "type": "integer",
+            "description": "Records re-encrypted under the active key.",
+            "minimum": 0
+          },
+          "wabas": {
+            "type": "integer",
+            "description": "WABAs walked.",
+            "minimum": 0
+          }
+        }
+      },
+      "Version": {
+        "type": "object",
+        "description": "`GET /v1/version`.",
+        "required": [
+          "server",
+          "meta_whatsapp_rs_revision",
+          "graph_api_version",
+          "api_version"
+        ],
+        "properties": {
+          "api_version": {
+            "type": "string",
+            "description": "The HTTP API's version: `v1`."
+          },
+          "graph_api_version": {
+            "type": "string",
+            "description": "The Graph API version calls use, e.g. `v25.0`."
+          },
+          "meta_whatsapp_rs_revision": {
+            "type": "string",
+            "description": "The meta-whatsapp-rs git revision the service was built from, when\nthe build recorded it (`META_WHATSAPP_RS_REVISION` at build time),\nelse `unknown`."
+          },
+          "server": {
+            "type": "string",
+            "description": "The service's version (the OpenAPI document's `info.version`)."
+          }
+        }
+      },
+      "Waba": {
+        "type": "object",
+        "description": "A WABA of the tenant.",
+        "required": [
+          "waba_id",
+          "attached_at"
+        ],
+        "properties": {
+          "attached_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was bound to the tenant (RFC 3339)."
+          },
+          "waba_id": {
+            "type": "string",
+            "description": "WhatsApp Business Account id."
+          }
+        }
+      },
+      "WabaBinding": {
+        "type": "object",
+        "description": "A bound WABA, as the operator sees it.",
+        "required": [
+          "waba_id",
+          "tenant_id",
+          "attached_at",
+          "numbers"
+        ],
+        "properties": {
+          "attached_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was bound (RFC 3339)."
+          },
+          "numbers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Number"
+            },
+            "description": "Its numbers and their connection status."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "The tenant it is bound to."
+          },
+          "waba_id": {
+            "type": "string",
+            "description": "The WABA."
+          }
+        }
+      },
+      "WabaList": {
+        "type": "object",
+        "description": "A page of WABAs.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Waba"
+            },
+            "description": "The WABAs, in id order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; `null` on the last one."
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "api_key": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "wak_<key id>_<secret>",
+        "description": "An API key: a tenant key, a platform key (with the WA-Tenant header) or an admin key (/v1/admin only)."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "admin",
+      "description": "Tenants, keys, WABA bindings and the vault key (admin key)"
+    },
+    {
+      "name": "numbers",
+      "description": "WABAs, numbers and business profiles (scope `numbers`)"
+    },
+    {
+      "name": "operations",
+      "description": "Health, metrics, this document, versions (no key)"
+    }
+  ]
+}

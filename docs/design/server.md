@@ -1,6 +1,11 @@
 # Design: a deployable meta-whatsapp-rs service (`meta-whatsapp-server`)
 
-> **Design only: no service code exists yet.** Written against `main` =
+> **Milestone M1a is implemented** in `crates/meta-whatsapp-server` (the
+> crate, configuration, listeners, storage, tenants and keys, the admin
+> API with attach, unbind and vault rotation, the numbers routes, errors,
+> operations, the committed OpenAPI document; [§9](#9-delivery-plan) says
+> which acceptance tests it meets, [coverage.md](../coverage.md) row 33
+> what is missing); the rest is design. Written against `main` =
 > bbf24a3 (2026-09-24), Graph API v25.0; the library changes it assumed have
 > since landed on `main` (#4: `OtpConfig::namespace` required, the Intent
 > API's result renamed `marketing::OnboardingRequested`; #5: Solution Partner
@@ -95,8 +100,12 @@ optional TOML file (`WA_SERVER_CONFIG`) for non-secrets. The list is in
 [§7.2](#72-environment). **The service refuses to start** on a blank or
 missing app secret or verify token (closing OQ #16 for itself), a missing
 vault key or a pepper under 32 bytes with Postgres, memory storage outside
-`WA_SERVER_ENV=development`, identical public and internal binds, or
-Solution Partner mode without its credentials.
+`WA_SERVER_ENV=development`, identical public and internal binds, a
+plain-`http` `WA_GRAPH_ENDPOINT` outside development (every token
+travels to it), a vault key id used twice (`WA_VAULT_KEY_ID`'s and
+`WA_VAULT_PREVIOUS_KEYS`': records sealed with one of the two keys
+could never be opened), or Solution Partner mode without its
+credentials.
 
 Postgres is required outside development (memory stores and a throwaway
 vault key only there). Library tables keep their `wa_` prefix; the
@@ -143,7 +152,7 @@ library's `KvStore` namespaces (`wa.token`, `wa.otp`, `wa.webhook.dedup`,
 | SSE | per replica, fed from the outbox by `LISTEN/NOTIFY`; `Last-Event-ID` resumes on any replica |
 | webhooks-out | workers on every replica claim rows with `FOR UPDATE SKIP LOCKED` and a lease; no leader |
 | rate limits | token buckets per replica (limit ÷ replicas); a shared limiter only if needed |
-| API key cache | at most 30 s; a revocation `NOTIFY` purges every replica at once |
+| API key cache | none in v1: every request reads its key, so a revocation or suspension holds on the next request, on every replica (a cache of at most 30 s, purged by a revocation `NOTIFY`, if the key reads ever cost too much) |
 | housekeeping (`purge_expired`, outbox and idempotency purges) | any replica, under an advisory lock |
 | migrations | at start, under the library's lock and a service advisory lock; expand-then-contract so rolling deploys can mix versions. One exception predates the service: the library's migration 3 (lossless message content) converts in one step and needs older writers stopped first, then `migrate` run once from a one-off job (`docs/guides/production.md`); it runs before the service's first deploy, so no service rollout crosses it |
 
@@ -170,7 +179,9 @@ Keys carry scopes (`send`, `media`, `templates`, `inbox`, `events`,
 `webhooks`, `signup`, `otp`, `numbers`), look like `wak_<key id>_<32 random
 bytes, base62>` (the prefix lets secret scanners find leaks) and are stored
 as the key id plus SHA-256 of the secret, compared in constant time (the
-examples' scheme; random 256-bit secrets need no slow hash). Shown once;
+examples' scheme; random 256-bit secrets need no slow hash). The digest is
+not peppered: whoever can write the keys table can plant a key, a limit
+accepted with the database's own access control. Shown once;
 several active per tenant; rotate by create, deploy, revoke. The first admin
 key comes from the CLI (`meta-whatsapp-server admin create-admin-key`), not the
 environment.
@@ -206,11 +217,27 @@ Every tenant route, as middleware plus typed extractors (`OwnedNumber`,
 - **Admin attach** (the platform's own WABA): the admin gives the WABA id
   and a system user token; the service lists the WABA's numbers from Meta
   with it before `TokenVault::store` (which trusts its input). Ids are
-  never bound on a caller's word.
+  never bound on a caller's word. It binds (D4, atomically) **before** it
+  stores the token: storing first would overwrite the owner's token
+  before D4 refused. Then it subscribes the app to the WABA's webhooks
+  (`POST /{waba_id}/subscribed_apps`, idempotent), as onboarding does
+  after storing: disconnecting unsubscribes, so attaching must subscribe.
+  A refused subscription leaves the WABA attached, and the answer says
+  so (`step: subscribe_app`, `resumable: true`): repeating the attach
+  finishes it. A `190` there is a stored token's: `409
+  reconnect_required`, the numbers marked so, not the `422` on `token`
+  of a token refused before anything was bound.
 - **Disconnect**: `DELETE /v1/wabas/{waba_id}` unsubscribes the app with
   the merchant's token, deletes the vault entry and the bindings. An
   `account_updated` with `PARTNER_APP_UNINSTALLED` or `ACCOUNT_DELETED`
-  does the same and emits `number_disconnected`.
+  does the same and emits `number_disconnected`. A tenant whose token no
+  longer works (`409 number_not_connected` or `reconnect_required`)
+  cannot disconnect: the operator's path is the admin unbind.
+- **Admin unbind** (`DELETE /v1/admin/wabas/{waba_id}/binding`, D4): with
+  the stored token, if usable, unsubscribe the app, at best (Meta refusing
+  does not stop it); then delete the vault entry, then the bindings. A
+  token no tenant can reach serves nothing and widens what a database and
+  vault key compromise exposes.
 
 **Decision for owner (D3): browser access.** (a) Never browser-facing: the
 CMS relays signup calls and live events (an SSE relay per open inbox, or
@@ -292,7 +319,7 @@ Rules the service implements:
 | `GET /v1/wabas`, `GET /v1/numbers` | the tenant's WABAs; its numbers with connection status | → `{data: [...]}` |
 | `GET /v1/numbers/{pn}` | live details: display number, verified name, quality, name status, throughput | → object |
 | `GET`, `PATCH /v1/numbers/{pn}/profile` | business profile: about, address, description, email, websites, vertical | partial profile → profile |
-| `DELETE /v1/wabas/{waba_id}` | disconnect ([§3.4](#34-how-numbers-get-bound)); `502` if unsubscribing fails, nothing deleted | → 204 |
+| `DELETE /v1/wabas/{waba_id}` | disconnect ([§3.4](#34-how-numbers-get-bound)); if unsubscribing fails, nothing is deleted and the answer is Meta's error's code and status ([§5.2](#52-codes-and-statuses): `502` when Meta fails, `403` or `409` when it refuses, `504` on a timeout); a tenant whose token no longer works asks the operator for the admin unbind | → 204 |
 
 **Messages and media** (scopes `send`, `media`)
 
@@ -364,8 +391,8 @@ a caller's generic error handling can never swallow `invalid`.
 | --- | --- |
 | `POST`, `GET`, `PATCH`, `DELETE /v1/admin/tenants[/{id}]` | create, list, suspend, configure (OTP sender and template, limits), delete (disconnects every WABA) |
 | `…/tenants/{id}/keys[/{key_id}]`, `/v1/admin/platform-keys[/{key_id}]` | mint, list, revoke keys; platform keys with their allowed tenants |
-| `POST /v1/admin/tenants/{id}/wabas`; `DELETE /v1/admin/wabas/{waba_id}/binding` | attach an own WABA, verified with Meta; unbind (D4) |
-| `POST /v1/admin/vault/rotate` | re-encrypt every WABA's token under the active key, walking `wa_server_wabas` (the vault cannot list itself) |
+| `POST /v1/admin/tenants/{id}/wabas`; `GET /v1/admin/wabas/{waba_id}`; `DELETE /v1/admin/wabas/{waba_id}/binding` | attach an own WABA, verified with Meta and subscribed; which tenant holds a WABA, and its numbers; unbind (D4: token deleted too, [§3.4](#34-how-numbers-get-bound)) |
+| `POST /v1/admin/vault/rotate` | re-encrypt every WABA's token under the active key, walking `wa_server_wabas` (the vault cannot list itself), within the request deadline: a walk cut there answers `504 timeout` and is repeated (idempotent), and `meta-whatsapp-server vault rotate` has no deadline. It walks bound WABAs only, which holds every vault record in M1a; M3 keeps records past a binding (credit ledgers of offboarded WABAs, revocation markers), and the walk must cover those too (`TokenVault::rotate` on each such WABA, `rotate_business` on each marker) before an operator may drop an old key |
 | `GET /livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` | internal listener, no key; `version` reports server, meta-whatsapp-rs revision, Graph and API versions |
 
 The public listener serves `GET|POST /webhooks/meta` and `GET /livez`,
@@ -512,7 +539,10 @@ authentication template); (c) per tenant, defaulting to (a).
 `code` is stable (codes only grow within `v1`; an unknown one is handled
 by its status class). `message` is the service's sentence for the code,
 never Meta's message or an input value. `graph` appears when Meta answered
-with an error; `details` is dropped on OTP and signup routes.
+with an error; `details` is Meta's text, not the service's: dropped on OTP
+and signup routes, and elsewhere opt-in per route, without control or
+format characters or line separators (they could forge a log line), at
+most 512 characters.
 
 ### 5.2 Codes and statuses
 
@@ -525,13 +555,14 @@ each new kind into `unknown` silently.
 | HTTP | Codes | Meaning |
 | --- | --- | --- |
 | 422 | `invalid_request` (local validation, with `field`), `invalid_parameter`, `unsupported_message_type`, `recipient_not_supported`, `undeliverable`, `template_parameter_mismatch`, `template_not_found`, `template_text_too_long`, `template_policy_violation`, `template_rejected`, `idempotency_key_reused` | fix the request; nothing was sent |
-| 409 | `customer_service_window_closed`, `marketing_opted_out`, `blocked_by_business`, `experiment_holdout`, `template_paused`, `template_disabled`, `template_syncing`, `template_unavailable`, `template_limit_reached`, `flow_unavailable`, `registration`, `two_step_verification`, `sync_not_allowed`, `duplicate_onboarding`, `number_not_connected`, `reconnect_required` (also Meta's `authentication` on a merchant token), `waba_owned_by_another_tenant`, `idempotency_in_progress`, `outcome_unknown` | a state must change first |
+| 409 | `customer_service_window_closed`, `marketing_opted_out`, `blocked_by_business`, `experiment_holdout`, `template_paused`, `template_disabled`, `template_syncing`, `template_unavailable`, `template_limit_reached`, `flow_unavailable`, `registration`, `two_step_verification`, `sync_not_allowed`, `duplicate_onboarding`, `number_not_connected`, `reconnect_required` (also Meta's `authentication` on a stored token: a merchant's, or an attached WABA's once stored), `waba_owned_by_another_tenant` (also a phone number another tenant holds), `tenant_exists`, `idempotency_in_progress`, `outcome_unknown` | a state must change first |
 | 403 | `permission`, `account_restricted`, `country_restricted`, `payment`, `feature_not_available`, `marketing_not_allowed`; `forbidden`, `tenant_suspended`, `stale_attempt` | not allowed, by Meta or the service |
 | 429 | `rate_limited`, `pair_rate_limited`, `spam_rate_limited`, `ecosystem_engagement_limit`, `classification_limit_reached`, `too_many_requests`, `too_many_streams` | `Retry-After` when known; `retryable` says whether waiting helps (false for 131048, 131049) |
 | 404, 410, 413 | `not_found`, `nothing_to_resume`; `cursor_expired`; `payload_too_large`, `media_too_large` | |
 | 502 | `service_unavailable`, `unknown`, `upstream` (non-Graph answer), `integrity`, `media_download_failed`, `media_upload_failed`, `onboarding_failed` | Meta or the network failed |
 | 504 | `timeout` | no answer in time: a send may have gone out |
 | 503, 500 | `storage_unavailable`, `shutting_down`; `internal` (configuration, an undecryptable vault record) | |
+| 401, 405 | `unauthenticated`; `method_not_allowed` | no valid key (step 1 of [§3.3](#33-authorization-order), before anything else); the path exists, not with this method |
 
 ### 5.3 Was it sent?
 
@@ -626,12 +657,12 @@ crate names, settled when OQ #1 closed (`meta-whatsapp-*`, 2026-09-25).
 | Variable | Default | What |
 | --- | --- | --- |
 | `DATABASE_URL` | required outside development | Postgres |
-| `WA_SERVER_ENV` | `production` | `development` allows memory storage, a throwaway vault key, plain-HTTP webhook targets |
+| `WA_SERVER_ENV` | `production` | `development` allows memory storage, a throwaway vault key, a plain-`http` `WA_GRAPH_ENDPOINT`, plain-HTTP webhook targets |
 | `WA_SERVER_PUBLIC_BIND`, `WA_SERVER_INTERNAL_BIND` | `127.0.0.1:8080`, `127.0.0.1:8081` | must differ |
 | `WA_APP_ID`, `WA_APP_SECRET`, `WA_VERIFY_TOKEN`, `WA_ES_CONFIG_ID` | — | the Meta app |
-| `WA_VAULT_KEY*`, `WA_OTP_PEPPER`, `WA_SERVER_DATA_KEY*` | — | [§6](#6-security) |
+| `WA_VAULT_KEY*`, `WA_OTP_PEPPER`, `WA_SERVER_DATA_KEY*` | — | [§6](#6-security); `WA_VAULT_KEY_ID` defaults to `k1`, `WA_VAULT_PREVIOUS_KEYS` is `<id>:<base64 of 32 bytes>`, comma-separated, each id once (the active key's included: a repeated id refuses the start) |
 | `WA_ONBOARDING_MODE` | `tech_provider` | `solution_partner` needs `WA_PARTNER_SYSTEM_TOKEN`, `WA_PARTNER_SYSTEM_USER_ID`, `WA_CREDIT_LINE_ID`, `WA_WABA_CURRENCY` |
-| `WA_GRAPH_API_VERSION`, `WA_GRAPH_ENDPOINT` | `ApiVersion::DEFAULT` (v25.0), Graph | the version is also handed to the signup page; the endpoint serves proxies and test stubs |
+| `WA_GRAPH_API_VERSION`, `WA_GRAPH_ENDPOINT` | `ApiVersion::DEFAULT` (v25.0), Graph | the version is also handed to the signup page; the endpoint serves proxies and test stubs, and must be `https` outside development (every token travels to it) |
 | `WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS` | none | hosts and CIDRs for webhooks-out |
 | `WA_SERVER_OUTBOX_RETENTION`, `…_IDEMPOTENCY_TTL`, `…_WEBHOOK_RETRY_WINDOW` | 7 d, 24 h, 72 h | |
 | `WA_SERVER_MEDIA_MAX_BYTES`, `WA_SERVER_SHUTDOWN_GRACE`, `WA_SERVER_MIGRATE` | 100 MiB, 25 s, `auto` | `skip` when a job runs `meta-whatsapp-server migrate` |
@@ -718,19 +749,31 @@ Tests use `ScriptedTransport` (method, path, token, exact JSON,
 
 | # | Library change (own PR, own parity) | When | Kind |
 | --- | --- | --- | --- |
-| L1 | `ErrorKind::as_str()`, stable snake_case, pinned by a test | M1 | additive |
+| L1 | `ErrorKind::as_str()`, stable snake_case, pinned by a test (with `ErrorKind::ALL`) | done (M1a) | additive |
 | L2 | `OtpConfig::namespace` required | done (#4) | breaking |
 | L3 | Solution Partner credit-line step in onboarding | done (#5: `onboard_with_approval`, `offboard`, credit ledger) | additive |
 | L4 | a code-less `OnboardingRequest` for `resume` (OQ #10) | M3, optional | additive |
 | L5 | `ConversationStore` erasure | if D10 asks | port change |
-| L6 | [architecture.md](../architecture.md): dependency rule for binaries, a "Service" section | M1 | docs |
+| L6 | [architecture.md](../architecture.md): dependency rule for binaries, a "Service" section | done (M1a) | docs |
 
 | | Scope | Docs and skills it adds |
 | --- | --- | --- |
 | **M1** skeleton, auth, messages and templates, webhooks in | the crate, fail-closed configuration, both listeners, storage and migrations, tenants, keys, admin API and CLI bootstrap, admin attach, the authorization order, messages, media, templates (list, get, create, delete), `/webhooks/meta` into inbox and outbox, `GET /v1/events`, errors (L1), idempotency, rate limits, health, metrics, tracing, the committed spec | `docs/guides/server.md` (run, configure, tenants, keys, first send); a README section "Not writing Rust? Run the service"; L6; a `docs/coverage.md` row; skills `meta-whatsapp-rs-server` (hub for HTTP callers: deploy, credentials, errors, idempotency, routing) and `meta-whatsapp-rs-server-send` (messages, templates, media); the skills gate below |
 | **M2** inbox, live updates, webhooks out | inbox routes, SSE (`LISTEN/NOTIFY`, `Last-Event-ID`), `GET /v1/events/{id}`, webhook endpoints, dispatcher, retries, destination allow-list, the service's number events | `server.md` inbox and events; skill `meta-whatsapp-rs-server-inbox` (inbox API, relaying live events to the CMS's browsers, receiving and verifying webhooks-out) |
-| **M3** Embedded Signup in both modes, OTP | signup routes, persisted attempts, disconnection, coexistence sync, authentication templates, OTP and its per-tenant settings; needs L2 (and L3 for partner mode) | `server.md` onboarding and OTP; skills `meta-whatsapp-rs-server-onboarding` (the CMS connect flow through the service: page, relay, PIN, resume, both modes) and `meta-whatsapp-rs-server-otp` |
+| **M3** Embedded Signup in both modes, OTP | signup routes, persisted attempts, disconnection, coexistence sync, authentication templates, OTP and its per-tenant settings; needs L2 (and L3 for partner mode). Vault rotation extended to the records partner mode keeps past a binding (credit ledgers that outlive their token, revocation markers: the library's `rotate_business`), without which a rotation's empty `failed` no longer means the old key is unused | `server.md` onboarding and OTP, and its key rotation advice ("drop the old key once `failed` is empty", caveated since M1a) made true again; skills `meta-whatsapp-rs-server-onboarding` (the CMS connect flow through the service: page, relay, PIN, resume, both modes) and `meta-whatsapp-rs-server-otp` |
 | **M4** TypeScript client, Docker image, docs | `clients/typescript`, the image and its CI, a Compose file, the documents route, the deployment guide | `server.md` deployment (Docker, Compose, Kubernetes notes); a `docs/guides/README.md` row; skill `meta-whatsapp-rs-server-typescript` (install, calls, errors, idempotency, SSE, webhook verification in Medusa or any Node backend); `meta-whatsapp-rs-production` points to the service |
+
+**M1 ships in three parts**, each its own pull request: **M1a** the
+crate, configuration, listeners, storage and migrations, tenants, keys,
+the admin API (attach, unbind, vault rotation) and CLI bootstrap, the
+authorization order, the numbers and profile routes, errors (L1),
+health, metrics, tracing, the committed spec and the skills gate; **M1b**
+messages, media, templates, idempotency keys and rate limits; **M1c**
+`/webhooks/meta` into inbox and outbox and `GET /v1/events`. M1a meets
+M1.1, M1.3, M1.5 and M1.6, and M1.7's parallel migrations and its log
+capture over every M1a route (the M1a routes stand in for a send and a
+webhook); M1.2, M1.4 and the rest of M1.7 (two instances deduplicating a
+webhook, the capture of a send and a webhook) are M1b's and M1c's.
 
 Acceptance tests. "Decisive" names the guard whose removal must make the
 test fail.
@@ -741,7 +784,7 @@ test fail.
 | M1.2 | A body signed with `meta_whatsapp_rs::webhooks::sign` is `200` and one outbox row for the owning tenant; no signature is `401` without the body being polled; the same body twice is one row; 3 MiB + 1 byte is `413`; `unknown` and `unparsed` are operator-only. Decisive: routing an unowned number's event to a tenant |
 | M1.3 | Table-driven over every `{pn}` and `{waba_id}` route in the spec (a new route cannot skip it): tenant B's key on A's number is `404`, and a counting vault wrapper records zero reads. Decisive: step 4 of [§3.3](#33-authorization-order) |
 | M1.4 | Sends carry the merchant's vault token; a digits-only `to.phone` is refused before any request; a scripted timeout is `504` with `may_have_been_sent: true` and the same `Idempotency-Key` replays it with no second request; a scripted 131047 is `409` and releases the key |
-| M1.5 | Every `ErrorKind` maps to a code and status (iterating L1's list); a sentinel in a scripted Graph error message reaches no response |
+| M1.5 | Every `ErrorKind` maps to a code and status (iterating L1's list); a sentinel in a scripted Graph error's message, title and user texts reaches no response; `details` only where [§5.1](#51-body) allows, bounded |
 | M1.6 | One test per start-up refusal ([§2.2](#22-configuration-and-storage)); the generated spec equals the committed one |
 | M1.7 | Live: two instances on one database deduplicate the same webhook; parallel migrations succeed. Captured `tracing` output of a send and a webhook holds no token, secret, key, message text, phone number or contact |
 | M2.1 | On Postgres: inbound webhook → conversation list → history → reply in the window (recorded `accepted`) → a status webhook moves it to `delivered`; a free-form reply outside the window is `409` with zero requests |

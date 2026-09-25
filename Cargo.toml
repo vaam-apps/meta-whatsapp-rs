@@ -9,11 +9,15 @@ members = [
   "crates/meta-whatsapp-adapters",
   "crates/meta-whatsapp-typst",
   "crates/meta-whatsapp-rs",
+  "crates/meta-whatsapp-server",
 ]
 # Repository automation is its own workspace (own Cargo.lock): its HTTP
 # client (ureq → rustls with `ring`) must not be resolved into the
 # library's builds and tests. See .xtask/Cargo.toml.
 exclude = [".xtask"]
+# The service is a member (every `--workspace` recipe, and so `just ci`,
+# covers it) but not a default one: a bare `cargo build` or `cargo test` in
+# the root builds the library alone, with the features its crates choose.
 default-members = [
   "crates/meta-whatsapp-core",
   "crates/meta-whatsapp-client",
@@ -45,6 +49,9 @@ meta-whatsapp-webhooks = { path = "crates/meta-whatsapp-webhooks" }
 # defaults name the features they use.
 meta-whatsapp-adapters = { path = "crates/meta-whatsapp-adapters", default-features = false }
 meta-whatsapp-typst = { path = "crates/meta-whatsapp-typst" }
+# The facade, for binaries only: no library crate depends on it
+# (docs/architecture.md, dependency rule).
+meta-whatsapp-rs = { path = "crates/meta-whatsapp-rs", default-features = false }
 
 # Errors. `thiserror` shapes the typed tree; `anyhow` is the opaque leaf for
 # failures an adapter or integrator raises that have no typed home.
@@ -105,8 +112,25 @@ typst-pdf = "0.15"
 typst-render = "0.15"
 typst-assets = "0.15"
 
-# Dev.
-# Examples only: makes the library's `tracing` output visible (RUST_LOG).
+# The service (crates/meta-whatsapp-server) only. Each passes `cargo deny`.
+# The OpenAPI 3.1 document is generated from the handlers' annotations
+# (utoipa), and utoipa-axum registers each route and its documentation in
+# one call, so the router and the committed spec cannot disagree.
+utoipa = { version = "6", default-features = false, features = ["macros"] }
+utoipa-axum = "0.3"
+# `/metrics` in the Prometheus text format; no HTTP server or runtime of
+# its own (the internal listener serves it).
+prometheus-client = "0.25"
+# The command line: serve, migrate, openapi, healthcheck, admin keys.
+clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
+# The listeners' accept loop (crates/meta-whatsapp-server/src/listen.rs):
+# axum::serve sets no timer, so hyper's header read timeout is off, and has
+# no connection cap. Both are already in the tree through axum.
+hyper = { version = "1", default-features = false }
+hyper-util = { version = "0.1", default-features = false }
+
+# Dev, and the service's logs (crates/meta-whatsapp-server adds `json`):
+# the examples use it to make the library's `tracing` output visible.
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
 pretty_assertions = "1"
 tower = "0.5"

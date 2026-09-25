@@ -28,6 +28,7 @@ are in [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md).
 | [otp-login.md](otp-login.md) | log users in (or verify a number) with a WhatsApp code | [`otp_login`](../../crates/meta-whatsapp-rs/examples/otp_login.rs) | [`meta-whatsapp-rs-otp-login`](../../skills/meta-whatsapp-rs-otp-login/SKILL.md) |
 | [documents.md](documents.md) | send invoices, receipts and voucher images | [`invoice_document`](../../crates/meta-whatsapp-rs/examples/invoice_document.rs) | [`meta-whatsapp-rs-documents`](../../skills/meta-whatsapp-rs-documents/SKILL.md) |
 | [production.md](production.md) | pick storage, manage keys, log safely, scale, pin versions | — | [`meta-whatsapp-rs-production`](../../skills/meta-whatsapp-rs-production/SKILL.md), [`meta-whatsapp-rs-storage`](../../skills/meta-whatsapp-rs-storage/SKILL.md) |
+| [server.md](server.md) | run the HTTP service for an app not written in Rust: configure it, create tenants and keys, call it | [`client.ts`](../../skills/meta-whatsapp-rs-server/examples/client.ts) (a TypeScript caller, type-checked against the service's OpenAPI document) | [`meta-whatsapp-rs-server`](../../skills/meta-whatsapp-rs-server/SKILL.md) |
 
 ## Reading order
 
@@ -36,6 +37,8 @@ are in [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md).
 
 **CMS:** getting-started → embedded-signup → webhooks → cms-inbox →
 production.
+
+**Not in Rust:** getting-started (the Meta app) → server.
 
 ## How to read the code
 

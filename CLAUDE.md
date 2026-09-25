@@ -30,7 +30,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Tests behind a feature (`axum`, `postgres`, `typst`, `flows-endpoint`)
   need it enabled: add `--all-features` when in doubt.
 - Consumer-skill examples: `cargo test -p meta-whatsapp-rs --all-features --test skills`
-- `live_*` adapter tests need real services: `just test-live` (or set
+- Service tests: `cargo test -p meta-whatsapp-server --all-features`;
+  after changing a route, regenerate the spec with
+  `cargo run -p meta-whatsapp-server -- openapi > crates/meta-whatsapp-server/openapi/v1.json`
+  and review the diff (within v1 a change must be additive).
+- `live_*` adapter and service tests need real services: `just test-live` (or set
   `META_WHATSAPP_RS_TEST_POSTGRES_URL` / `META_WHATSAPP_RS_TEST_REDIS_URL`
   and `META_WHATSAPP_RS_REQUIRE_LIVE=1`).
 
@@ -41,7 +45,8 @@ A filtered run is feedback, not verification — `just ci` still has to pass.
 Hexagonal workspace. `meta-whatsapp-core` owns the error tree, ids,
 secrets and the **ports** (`HttpTransport`, `KvStore`, `ConversationStore`,
 `EventSink`, `Clock`); it does no I/O. Dependency rule: everything depends
-on core; nothing depends on the `meta-whatsapp-rs` facade; `client` and
+on core; no library crate depends on the `meta-whatsapp-rs` facade (binaries
+may: `meta-whatsapp-server` does); `client` and
 `webhooks` never depend on each other or on `adapters` (dev-deps aside);
 adapter library types (sqlx, reqwest, redis) never leak through a port.
 
@@ -74,6 +79,11 @@ flowchart LR
 - **Facade** `crates/meta-whatsapp-rs`: re-exports, `prelude`, the CMS
   `inbox` (conversation store + 24-hour-window-guarded replies), feature
   flags selecting adapters, and the runnable `examples/`.
+- **Service** `crates/meta-whatsapp-server`: the HTTP binary for apps not
+  written in Rust (`docs/design/server.md`, `docs/guides/server.md`). A
+  workspace member but not a default one; its OpenAPI document
+  (`openapi/v1.json`) is generated from code and committed (a test compares
+  them); `tests/errors.rs` reads the error table from the design doc's §5.2.
 - **Stable identifiers** (`wa-rs/token-vault/v1`, `wa.token`, `wa.otp.*`,
   `wa.es.session`, `wa.webhook.dedup`, table prefix `wa_`) predate the
   rename and are pinned by tests: they are encrypted/hashed into stored
@@ -89,6 +99,12 @@ flowchart LR
   gate (including on an intra-doc link) hides behind `--all-features`.
 - `just skills-check` needs full git history and `origin/main`; it fails
   in a shallow clone.
+- `just ci` needs **Node 24** (`tools/skills-ts/.nvmrc`): `just skills-ts`
+  type-checks the server skills' TypeScript against the committed OpenAPI
+  document.
+- PRs are **squash-merged**: cite "PR #N", never a branch commit, in docs;
+  the squash body is `just squash-body <pr>` so skill stamps resolve on main
+  (CONTRIBUTING.md § Merging).
 - Consumer skills' Rust blocks are excerpts of
   `skills/<name>/examples/*.rs`; README snippets are excerpts of
   `crates/meta-whatsapp-rs/examples/` (`tests/readme.rs`). Change the

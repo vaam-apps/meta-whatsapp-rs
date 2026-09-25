@@ -33,13 +33,18 @@ crates/
   meta-whatsapp-typst      Typst → PDF/PNG for document and image messages.
   meta-whatsapp-rs         facade: re-exports, prelude, `client(token)`, the CMS inbox,
                            feature flags, runnable examples. What integrators depend on.
+  meta-whatsapp-server     the HTTP service (a binary on the facade): tenants, keys, the /v1
+                           API for apps not written in Rust. See "Service" below.
 .xtask                     repo automation (`cargo xtask meta-docs`): a workspace of its own,
                            with its own Cargo.lock, excluded from the root one, so its ureq
                            (rustls with `ring`) never enters a library or test build.
 ```
 
-Dependency rule: everything depends on `meta-whatsapp-core`; nothing
-depends on `meta-whatsapp-rs`; `meta-whatsapp-client` and
+Dependency rule: every library crate depends on `meta-whatsapp-core`; no
+library crate depends on `meta-whatsapp-rs`; binaries may, and a binary
+of this workspace (the [service](#service-meta-whatsapp-server)) depends
+on `meta-whatsapp-rs` alone among them, reaching axum and sqlx through its
+re-exports, as an outside integrator would; `meta-whatsapp-client` and
 `meta-whatsapp-webhooks` never depend on each other or on
 `meta-whatsapp-adapters` (except as a dev-dependency for tests). An adapter
 never leaks its library's types through a port.
@@ -777,6 +782,55 @@ gift card image for marketing headers). Output is bytes + MIME + filename,
 ready for `media().upload()` and a document/image message or template
 header. Never renders OTP codes (those go through authentication
 templates only).
+
+## Service (`meta-whatsapp-server`)
+
+Apps not written in Rust use meta-whatsapp-rs through a service, deployed
+as a container and called over HTTP. Its design, with the owner's
+decisions and the delivery milestones, is
+[docs/design/server.md](design/server.md); what is built so far is in
+[docs/coverage.md](coverage.md). The rules that bind it to the library:
+
+- **A binary on the facade.** `crates/meta-whatsapp-server` (binary
+  `meta-whatsapp-server`, `publish = false`, a workspace member so `just
+  ci` covers it) depends on `meta-whatsapp-rs` and on no other crate of
+  this workspace; axum and sqlx come through the facade's re-exports
+  (`meta_whatsapp_rs::webhooks::axum`,
+  `meta_whatsapp_rs::adapters::store::postgres::sqlx`). What the service
+  cannot build from the facade, an integrator could not either: the gap is
+  a library change of its own, not a private shortcut.
+- **One multi-tenant deployment per Meta app** (the owner's decision D1):
+  every merchant onboarded through the app delivers to its one callback
+  URL. Tenants are the integrator's ids; a tenant owns WABAs, a WABA owns
+  phone numbers, and the business token stays in the library's
+  `TokenVault`, keyed by WABA.
+- **Two listeners.** The public one serves Meta's webhook and a liveness
+  probe, nothing else; the internal one (loopback by default) serves the
+  API, readiness, metrics and the OpenAPI document.
+- **Credentials** (D2): tenant keys, and platform keys that name a tenant
+  per request (`WA-Tenant`), within their allowed set; an admin key for
+  `/v1/admin` only. Keys are stored as SHA-256 digests and compared in
+  constant time.
+- **Ownership before the vault.** Every route that names a number or a
+  WABA checks, in this order: the key, the tenant, the scope, that the
+  tenant owns the number or WABA (else `404`, the answer for one that does
+  not exist), and only then reads the vault and calls
+  `Client::with_token`. The library leaves this check to the integrator
+  (see [CMS inbox](#cms-inbox-meta_whatsapp_rsinbox)); the service is one.
+- **Errors keep the library's classification.** A Graph failure's error
+  code is `ErrorKind::as_str()`; its HTTP status comes from a table the
+  service owns, tested over `ErrorKind::ALL` so a new kind cannot fall
+  through unmapped; `may_have_been_sent` and `retryable` are
+  `Error::may_have_been_sent` and `Error::is_retryable`. Meta's error
+  message, title and user texts never reach a response; `graph.details`
+  is Meta's text, not the service's, kept only on the routes that opt in
+  (never OTP or signup), bounded and without control or format
+  characters or line separators.
+- **Storage** is Postgres (memory only in development). The service's
+  tables are `wa_server_*` with their own migration history, run with the
+  library's migrations under an advisory lock of the service's own;
+  migrations are expand-then-contract so replicas of two versions can
+  share a database during a rolling deploy.
 
 ## Verification
 

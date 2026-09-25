@@ -19,14 +19,17 @@ decisions reserved for the maintainer — surface them, never pick a default.
 | `just ci` | **The gate.** CI runs exactly this. Nothing is "verified" until it exits 0 on the final head. |
 | `just lint` | `cargo fmt --check` + clippy (pedantic, `-D warnings`) |
 | `just test` | unit + in-process tests; `live_*` tests *skip* here |
-| `just test-live` | adapter tests against real Postgres + Redis, with `META_WHATSAPP_RS_REQUIRE_LIVE=1` so a missing service **fails** |
+| `just test-live` | adapter and service (`meta-whatsapp-server`) tests against real Postgres + Redis, with `META_WHATSAPP_RS_REQUIRE_LIVE=1` so a missing service **fails** |
 | `just doc` | rustdoc with `-D warnings` (broken intra-doc links fail) |
 | `just features` | each adapter feature compiled alone |
 | `just skills-check` | every consumer skill's `Verified against meta-whatsapp-rs <sha>` stamp is a commit in HEAD's history, directly or listed as `Squashed-commit:` by a squash commit on main (the rest of the skill checks run in `just test`: `crates/meta-whatsapp-rs/tests/skills.rs`) |
+| `just skills-ts` | the server skills' TypeScript examples type-check against types generated from `crates/meta-whatsapp-server/openapi/v1.json` (Node pinned in `tools/skills-ts/.nvmrc`; part of `just ci`) |
 | `just squash-body <pr>` | the body of a PR's squash commit: its commits as `Squashed-commit:` lines plus their co-authors (CONTRIBUTING.md § Merging) |
 | `just meta-docs` | mirror Meta's docs as Markdown into `.meta-docs/` (gitignored) |
 
-Toolchain is pinned in `rust-toolchain.toml` (1.98.1, edition 2024). Run
+Toolchain is pinned in `rust-toolchain.toml` (1.98.1, edition 2024); `just
+ci` also needs Node, the major version of `tools/skills-ts/.nvmrc` (24),
+and npm's registry, for `just skills-ts`. Run
 `just ci`, not a reconstruction of it: the flags you drop are the ones that
 were set on purpose.
 
@@ -88,8 +91,12 @@ phone number alone.
   `Verified against meta-whatsapp-rs <full sha> (<date>)` stamp; its Rust blocks are
   excerpts of its `examples/*.rs`, which `just test` compiles and runs
   (`crates/meta-whatsapp-rs/tests/skills.rs`; CONTRIBUTING.md § "How the consumer
-  skills are kept true"). Developer skills are `internal`: the installer
-  never offers them.
+  skills are kept true"). The service's skills (`meta-whatsapp-rs-server*`)
+  speak HTTP instead: their `ts` blocks are excerpts of `examples/*.ts`,
+  which `just skills-ts` type-checks against the committed OpenAPI
+  document, and their routes, schemas, codes and variables are checked
+  against it and the service's source. Developer skills are `internal`:
+  the installer never offers them.
 - A change to a public API is not done until `docs/`, `skills/` and the
   rustdoc agree with it. Say in the PR what happened to each (a link, or
   `n/a — <reason>`).

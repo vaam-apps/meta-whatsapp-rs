@@ -93,6 +93,12 @@ those names any more. Remove them (`npx skills list` shows them;
 | [`meta-whatsapp-rs-storage`](meta-whatsapp-rs-storage/) | memory, Postgres or Redis stores; your own adapter |
 | [`meta-whatsapp-rs-production`](meta-whatsapp-rs-production/) | secrets, logs, limits, versions, several instances |
 
+**Apps not written in Rust**
+
+| Skill | Load it when |
+| --- | --- |
+| [`meta-whatsapp-rs-server`](meta-whatsapp-rs-server/) | deploying or calling meta-whatsapp-server, the HTTP service: keys, routes, errors, a typed TypeScript client |
+
 ## Versioning: a skill is true of one meta-whatsapp-rs commit
 
 meta-whatsapp-rs has no releases (`publish = false`; you depend on a git `rev`). So

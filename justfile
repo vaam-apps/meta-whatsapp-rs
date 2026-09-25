@@ -16,7 +16,7 @@ check:
 test:
     cargo test --workspace --all-features
 
-# Adapter tests against real Postgres and Redis. Uses META_WHATSAPP_RS_TEST_POSTGRES_URL /
+# Adapter and service tests against real Postgres and Redis. Uses META_WHATSAPP_RS_TEST_POSTGRES_URL /
 # META_WHATSAPP_RS_TEST_REDIS_URL when set (the devcontainer sets them to its sidecars),
 # otherwise starts compose.test.yaml. META_WHATSAPP_RS_REQUIRE_LIVE=1 turns a missing
 # service into a failure instead of a skip.
@@ -29,6 +29,7 @@ test-live:
         export META_WHATSAPP_RS_TEST_REDIS_URL="redis://127.0.0.1:56379"
     fi
     META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-adapters --all-features live_ -- --test-threads=4
+    META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-server --all-features live_ -- --test-threads=4
 
 # Stop the compose.test.yaml services
 test-live-down:
@@ -55,6 +56,9 @@ doc:
 # (tests/signature.rs uses SIGNATURE_HEADER) must build without axum. The doc
 # line builds rustdoc without default features (meta-whatsapp-rs included): a link to a
 # feature-gated item must be gated with it; `just doc` covers --all-features.
+# It leaves meta-whatsapp-server out: the service turns on the facade's
+# reqwest, memory, postgres and axum, and in one --workspace build those
+# features would be on for every crate, hiding an ungated link.
 #
 # Each feature on its own, so a missing cfg gate cannot hide behind --all-features
 features:
@@ -78,7 +82,7 @@ features:
     cargo check -p meta-whatsapp-rs --no-default-features --features typst
     cargo check -p meta-whatsapp-rs --no-default-features --features flows-endpoint
     cargo check -p meta-whatsapp-rs
-    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-default-features --no-deps
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude meta-whatsapp-server --no-default-features --no-deps
 
 # Licenses, advisories, duplicate versions, sources
 deny:
@@ -143,6 +147,30 @@ skills-check:
     done
     exit "$status"
 
+# The server skills' TypeScript examples (skills/meta-whatsapp-rs-server*/examples/*.ts),
+# type-checked against types generated from the committed OpenAPI document of
+# crates/meta-whatsapp-server. Node is pinned in tools/skills-ts/.nvmrc (CI
+# installs exactly it; locally the major version must match) and the packages
+# by tools/skills-ts/package-lock.json. The rest of the server skills' checks
+# (excerpts, routes, codes, variables) are crates/meta-whatsapp-rs/tests/skills.rs.
+skills-ts:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd tools/skills-ts
+    want="$(cat .nvmrc)"
+    have="$(node --version)"
+    have="${have#v}"
+    if [ "${have%%.*}" != "${want%%.*}" ]; then
+        echo "skills-ts: Node ${want%%.*}.x expected (tools/skills-ts/.nvmrc: $want), found $have"
+        exit 1
+    fi
+    npm ci --no-audit --no-fund
+    for examples in ../../skills/meta-whatsapp-rs-server*/examples; do
+        npx --no-install openapi-typescript ../../crates/meta-whatsapp-server/openapi/v1.json \
+            --output "$examples/meta-whatsapp-server.d.ts"
+    done
+    npx --no-install tsc -p tsconfig.json
+
 # The body of a pull request's squash commit: one `Squashed-commit: <sha>`
 # line per commit of the PR, as GitHub lists them (so stamps naming a branch
 # commit still resolve on main: `skills-check`), then the commits'
@@ -161,7 +189,7 @@ squash-body pr:
     if [ -n "$coauthors" ]; then printf '\n%s\n' "$coauthors"; fi
 
 # The gate. CI runs exactly this.
-ci: lint check test skills-check doc features deny test-live
+ci: lint check test skills-check skills-ts doc features deny test-live
 
 # Mirror Meta's WhatsApp docs as Markdown into .meta-docs/ (gitignored; the
 # docs are Meta's, never commit them). Agents grep this instead of guessing.

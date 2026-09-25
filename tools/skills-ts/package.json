@@ -1,0 +1,14 @@
+{
+  "name": "meta-whatsapp-rs-skills-ts",
+  "private": true,
+  "description": "Type-checks the TypeScript examples of the meta-whatsapp-rs-server* skills against types generated from the committed OpenAPI document (`just skills-ts`).",
+  "license": "MIT",
+  "engines": {
+    "node": "24.x"
+  },
+  "devDependencies": {
+    "openapi-fetch": "0.17.0",
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3"
+  }
+}
