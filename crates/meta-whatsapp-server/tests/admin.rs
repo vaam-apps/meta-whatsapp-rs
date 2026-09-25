@@ -7,7 +7,7 @@ mod common;
 use common::{Call, Harness};
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode};
-use meta_whatsapp_server::model::{Scope, TenantId};
+use meta_whatsapp_server::model::{NumberStatus, Scope, TenantId};
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
 
@@ -673,6 +673,11 @@ async fn a_refused_subscription_is_reported_and_a_repeat_finishes_it() {
         (reply.status, reply.code().as_str()),
         (StatusCode::FORBIDDEN, "permission")
     );
+    // Where it stopped, and that repeating the call finishes it.
+    let body = reply.json();
+    assert_eq!(body["error"]["step"], "subscribe_app");
+    assert_eq!(body["error"]["resumable"], true);
+    assert_eq!(body["error"]["graph"]["code"], 200);
     let requests = h.graph.requests();
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[1].method, Method::POST);
@@ -685,6 +690,72 @@ async fn a_refused_subscription_is_reported_and_a_repeat_finishes_it() {
     let again = h.call(attach()).await;
     assert_eq!(again.status, StatusCode::CREATED, "{}", again.text);
     assert_eq!(h.graph.requests().len(), 4);
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// A token Meta rejects (`190`) once it is stored, when subscribing the
+/// app, is a stored token's `190`: `409 reconnect_required`, not the `422
+/// invalid_request` of a token refused before anything was bound (which
+/// would say nothing changed). The answer says where it stopped and that
+/// it can be finished; the WABA stays attached, its numbers
+/// `reconnect_required`, and repeating the call with a valid token
+/// finishes it. Decisive: the subscribe step's own error mapping.
+#[tokio::test]
+async fn a_token_meta_rejects_once_stored_is_reconnect_required_and_resumable() {
+    let h = Harness::new();
+    let admin = h.admin_key().await;
+    h.tenant("merchant-a").await;
+    h.graph.push_json(200, phone_numbers_page());
+    h.graph.push_json(
+        401,
+        json!({"error": {"message": "Error validating access token: Session has expired",
+                         "type": "OAuthException", "code": 190, "error_subcode": 463,
+                         "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+    );
+    let attach = |token: &str| {
+        post(
+            "/v1/admin/tenants/merchant-a/wabas",
+            &admin,
+            &json!({"waba_id": WABA, "token": token}),
+        )
+    };
+    let reply = h.call(attach(SYSTEM_TOKEN)).await;
+    assert_eq!(
+        (reply.status, reply.code().as_str()),
+        (StatusCode::CONFLICT, "reconnect_required"),
+        "{}",
+        reply.text
+    );
+    let body = reply.json();
+    assert_eq!(body["error"]["step"], "subscribe_app");
+    assert_eq!(body["error"]["resumable"], true);
+    assert_eq!(body["error"]["field"], Value::Null);
+    assert_eq!(body["error"]["graph"]["code"], 190);
+    assert!(!reply.text.contains(SYSTEM_TOKEN));
+    // Attached, the token stored, its numbers marked.
+    assert!(h.store.waba(&WabaId::new(WABA)).await.unwrap().is_some());
+    assert!(h.vault.get(&WabaId::new(WABA)).await.unwrap().is_some());
+    let numbers = h.store.waba_numbers(&WabaId::new(WABA)).await.unwrap();
+    assert_eq!(numbers.len(), 2);
+    assert!(
+        numbers
+            .iter()
+            .all(|n| n.status == NumberStatus::ReconnectRequired),
+        "{numbers:?}"
+    );
+
+    // A valid token finishes it.
+    h.graph.push_json(200, phone_numbers_page());
+    h.graph.push_json(200, json!({"success": true}));
+    let again = h.call(attach("EAAG-a-new-system-user-token")).await;
+    assert_eq!(again.status, StatusCode::CREATED, "{}", again.text);
+    let numbers = h.store.waba_numbers(&WabaId::new(WABA)).await.unwrap();
+    assert!(
+        numbers.iter().all(|n| n.status == NumberStatus::Connected),
+        "{numbers:?}"
+    );
+    let stored = h.vault.get(&WabaId::new(WABA)).await.unwrap().unwrap();
+    assert_eq!(stored.token.expose_secret(), "EAAG-a-new-system-user-token");
     assert_eq!(h.graph.remaining(), 0);
 }
 
@@ -810,6 +881,263 @@ async fn unbinding_deletes_the_token_even_when_meta_refuses() {
     );
     assert!(h.store.waba(&WabaId::new(WABA)).await.unwrap().is_none());
     assert_eq!(h.graph.remaining(), 0);
+}
+
+/// An unusable token, expired or sealed with a key the service no longer
+/// has, goes with the bindings: the unbind asks Meta nothing (no token to
+/// ask with) and deletes the vault entry and its phone index anyway, as
+/// for a usable one. Decisive: deleting the vault entry when the token is
+/// unusable.
+#[tokio::test]
+async fn unbinding_deletes_an_unusable_token_too() {
+    use std::sync::Arc;
+
+    use meta_whatsapp_rs::client::embedded_signup::{
+        StoredBusinessToken, TokenVault, VaultKey, VaultKeys,
+    };
+    use meta_whatsapp_rs::core::secret::AccessToken;
+    use meta_whatsapp_rs::core::store::KvStore;
+
+    let h = Harness::new();
+    let admin = h.admin_key().await;
+    let tenant = h.tenant("merchant-a").await;
+    let expired = (WABA, "1972385232742141");
+    let undecryptable = ("102290129340399", "1972385232742142");
+    let lost = TokenVault::new(
+        h.kv.clone() as Arc<dyn KvStore>,
+        VaultKeys::new(VaultKey::generate("lost").unwrap()),
+    )
+    .unwrap();
+    for ((waba, pn), vault, expires) in [(expired, &h.vault, true), (undecryptable, &lost, false)] {
+        let (waba, pn) = (WabaId::new(waba), PhoneNumberId::new(pn));
+        h.store
+            .bind_waba(&tenant, &waba, std::slice::from_ref(&pn))
+            .await
+            .unwrap();
+        let mut token = StoredBusinessToken::new(waba, AccessToken::new("TOKEN-OF-A"))
+            .phone_number_ids(vec![pn]);
+        if expires {
+            token = token.expires_at(time::OffsetDateTime::now_utc() - time::Duration::hours(1));
+        }
+        vault.store(&token).await.unwrap();
+    }
+    // Unusable indeed: expired, and not readable with the service's key.
+    let token = h.vault.get(&WabaId::new(expired.0)).await.unwrap().unwrap();
+    assert!(token.is_expired(time::OffsetDateTime::now_utc()));
+    assert!(h.vault.get(&WabaId::new(undecryptable.0)).await.is_err());
+
+    for (waba, pn) in [expired, undecryptable] {
+        let unbound = h
+            .call(Call::new(Method::DELETE, format!("/v1/admin/wabas/{waba}/binding")).key(&admin))
+            .await;
+        assert_eq!(unbound.status, StatusCode::NO_CONTENT, "{}", unbound.text);
+        // Gone: no record left, readable or not, and no phone index entry.
+        assert!(
+            matches!(h.vault.get(&WabaId::new(waba)).await, Ok(None)),
+            "{waba}: the vault entry was kept"
+        );
+        assert!(
+            matches!(
+                h.vault.get_by_phone_number(&PhoneNumberId::new(pn)).await,
+                Ok(None)
+            ),
+            "{waba}: the phone index was kept"
+        );
+        assert!(h.store.waba(&WabaId::new(waba)).await.unwrap().is_none());
+    }
+    assert!(h.graph.requests().is_empty());
+}
+
+/// A `KvStore` whose deletes fail while `failing` is set.
+#[derive(Debug)]
+struct FailingDeletes {
+    inner: meta_whatsapp_rs::adapters::store::MemoryKvStore,
+    failing: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl meta_whatsapp_rs::core::store::KvStore for FailingDeletes {
+    async fn get(
+        &self,
+        key: &meta_whatsapp_rs::core::store::StoreKey,
+    ) -> Result<
+        Option<meta_whatsapp_rs::core::store::Versioned>,
+        meta_whatsapp_rs::core::error::StorageError,
+    > {
+        self.inner.get(key).await
+    }
+    async fn put(
+        &self,
+        key: &meta_whatsapp_rs::core::store::StoreKey,
+        value: Vec<u8>,
+        expiry: meta_whatsapp_rs::core::store::Expiry,
+    ) -> Result<u64, meta_whatsapp_rs::core::error::StorageError> {
+        self.inner.put(key, value, expiry).await
+    }
+    async fn put_if_absent(
+        &self,
+        key: &meta_whatsapp_rs::core::store::StoreKey,
+        value: Vec<u8>,
+        expiry: meta_whatsapp_rs::core::store::Expiry,
+    ) -> Result<Option<u64>, meta_whatsapp_rs::core::error::StorageError> {
+        self.inner.put_if_absent(key, value, expiry).await
+    }
+    async fn compare_and_swap(
+        &self,
+        key: &meta_whatsapp_rs::core::store::StoreKey,
+        expected: u64,
+        new: Option<Vec<u8>>,
+        expiry: meta_whatsapp_rs::core::store::Expiry,
+    ) -> Result<Option<u64>, meta_whatsapp_rs::core::error::StorageError> {
+        self.inner
+            .compare_and_swap(key, expected, new, expiry)
+            .await
+    }
+    async fn delete(
+        &self,
+        key: &meta_whatsapp_rs::core::store::StoreKey,
+    ) -> Result<bool, meta_whatsapp_rs::core::error::StorageError> {
+        if self.failing.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(meta_whatsapp_rs::core::error::StorageError::Backend(
+                anyhow::anyhow!("the store is down"),
+            ));
+        }
+        self.inner.delete(key).await
+    }
+}
+
+/// The unbind deletes the token before the bindings: when the token
+/// cannot be deleted, the binding stays and the answer is `503`, so the
+/// operator repeats the unbind (bindings gone first would leave a token no
+/// route reaches, and nothing to repeat the unbind on). Both ways: after
+/// Meta unsubscribed the app with a usable token, and without a usable
+/// token. Decisive: the order in `OwnedWaba::forget` and in the
+/// unusable-token branch.
+#[tokio::test]
+async fn a_token_that_cannot_be_deleted_keeps_the_binding_for_a_retry() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use meta_whatsapp_rs::adapters::store::MemoryKvStore;
+    use meta_whatsapp_rs::client::embedded_signup::StoredBusinessToken;
+    use meta_whatsapp_rs::core::secret::AccessToken;
+    use meta_whatsapp_server::store::MemoryStore;
+
+    let kv = Arc::new(FailingDeletes {
+        inner: MemoryKvStore::new(),
+        failing: AtomicBool::new(false),
+    });
+    let h = Harness::on(Arc::new(MemoryStore::new()), kv.clone());
+    let admin = h.admin_key().await;
+    let tenant = h.tenant("merchant-a").await;
+    let usable = WABA;
+    let expired = "102290129340399";
+    h.connect("merchant-a", usable, &["1972385232742141"], "TOKEN-OF-A")
+        .await;
+    h.store
+        .bind_waba(&tenant, &WabaId::new(expired), &[])
+        .await
+        .unwrap();
+    h.vault
+        .store(
+            &StoredBusinessToken::new(expired, AccessToken::new("TOKEN-OF-A"))
+                .expires_at(time::OffsetDateTime::now_utc() - time::Duration::hours(1)),
+        )
+        .await
+        .unwrap();
+    let unbind = |waba: &str| {
+        Call::new(Method::DELETE, format!("/v1/admin/wabas/{waba}/binding")).key(&admin)
+    };
+    for waba in [usable, expired] {
+        if waba == usable {
+            h.graph.push_json(200, json!({"success": true}));
+        }
+        kv.failing.store(true, Ordering::SeqCst);
+        let refused = h.call(unbind(waba)).await;
+        assert_eq!(
+            (refused.status, refused.code().as_str()),
+            (StatusCode::SERVICE_UNAVAILABLE, "storage_unavailable"),
+            "{waba}"
+        );
+        assert!(
+            h.store.waba(&WabaId::new(waba)).await.unwrap().is_some(),
+            "{waba}: the binding went before the token"
+        );
+        assert!(h.vault.get(&WabaId::new(waba)).await.unwrap().is_some());
+
+        kv.failing.store(false, Ordering::SeqCst);
+        if waba == usable {
+            h.graph.push_json(200, json!({"success": true}));
+        }
+        let unbound = h.call(unbind(waba)).await;
+        assert_eq!(
+            unbound.status,
+            StatusCode::NO_CONTENT,
+            "{waba}: {}",
+            unbound.text
+        );
+        assert!(h.store.waba(&WabaId::new(waba)).await.unwrap().is_none());
+        assert!(h.vault.get(&WabaId::new(waba)).await.unwrap().is_none());
+    }
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// The rotation walks every page of bindings, not only the first 100
+/// (`MAX_PAGE_SIZE`). Decisive: following `next_after`.
+#[tokio::test]
+async fn rotating_the_vault_key_walks_every_page_of_bindings() {
+    use std::sync::Arc;
+
+    use meta_whatsapp_rs::adapters::store::MemoryKvStore;
+    use meta_whatsapp_rs::client::embedded_signup::{
+        StoredBusinessToken, TokenVault, VaultKey, VaultKeys,
+    };
+    use meta_whatsapp_rs::core::secret::AccessToken;
+    use meta_whatsapp_rs::core::store::KvStore;
+    use meta_whatsapp_server::auth::rotate_vault;
+    use meta_whatsapp_server::model::MAX_PAGE_SIZE;
+    use meta_whatsapp_server::store::{MemoryStore, Store};
+
+    let old =
+        || VaultKey::from_base64("k1", "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=").unwrap();
+    let new =
+        || VaultKey::from_base64("k2", "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=").unwrap();
+    let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
+    let store = MemoryStore::new();
+    let tenant = TenantId::parse("merchant-a").unwrap();
+    store.create_tenant(&tenant, "").await.unwrap();
+    let sealing = TokenVault::new(kv.clone(), VaultKeys::new(old())).unwrap();
+    let wabas = 2 * MAX_PAGE_SIZE + 1;
+    for i in 0..wabas {
+        let waba = format!("{}", 300_000 + i);
+        store
+            .bind_waba(&tenant, &WabaId::new(waba.as_str()), &[])
+            .await
+            .unwrap();
+        sealing
+            .store(&StoredBusinessToken::new(
+                waba.as_str(),
+                AccessToken::new(format!("TOKEN-{waba}")),
+            ))
+            .await
+            .unwrap();
+    }
+    let rolling = TokenVault::new(kv.clone(), VaultKeys::new(new()).with_previous(old()))
+        .unwrap()
+        .rotate_on_read(false);
+    let report = rotate_vault(&store, &rolling).await.unwrap();
+    assert_eq!(report.wabas, wabas);
+    assert_eq!(report.rotated, wabas);
+    assert!(report.failed.is_empty(), "{:?}", report.failed);
+    // The last one too opens with the new key alone.
+    let new_only = TokenVault::new(kv, VaultKeys::new(new())).unwrap();
+    let last = format!("{}", 300_000 + wabas - 1);
+    let token = new_only
+        .get(&WabaId::new(last.as_str()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(token.token.expose_secret(), format!("TOKEN-{last}"));
 }
 
 /// Vault key rotation walks every bound WABA (the vault cannot list its

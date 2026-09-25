@@ -96,3 +96,32 @@ impl AppState {
         self.inner.shutting_down.load(Ordering::SeqCst)
     }
 }
+
+#[cfg(test)]
+impl AppState {
+    /// A state on memory stores, with a Graph client scripted to answer
+    /// nothing: for unit tests that never call Meta.
+    #[allow(clippy::unwrap_used)] // test helper: a panic is the report
+    pub(crate) fn for_tests() -> Self {
+        use meta_whatsapp_rs::adapters::store::MemoryKvStore;
+        use meta_whatsapp_rs::client::embedded_signup::{VaultKey, VaultKeys};
+        use meta_whatsapp_rs::core::testing::ScriptedTransport;
+
+        let vault = TokenVault::new(
+            Arc::new(MemoryKvStore::new()),
+            VaultKeys::new(VaultKey::generate("test").unwrap()),
+        )
+        .unwrap();
+        let client = Client::builder()
+            .transport(ScriptedTransport::new())
+            .build()
+            .unwrap();
+        Self::new(
+            Arc::new(crate::store::MemoryStore::new()),
+            vault,
+            client,
+            VerifyToken::new("verify-token-for-unit-tests"),
+            Metrics::new(),
+        )
+    }
+}

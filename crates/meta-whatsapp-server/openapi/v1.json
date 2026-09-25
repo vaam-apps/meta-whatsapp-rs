@@ -1063,6 +1063,7 @@
           "admin"
         ],
         "summary": "Attach one of the platform's own WABAs to a tenant: list its numbers\nfrom Meta with the given token (so no id is bound on the caller's word),\nbind the WABA and those numbers to the tenant (refused when another\ntenant has it, decision D4), store the token in the vault, then\nsubscribe the app to the WABA's webhooks with it.",
+        "description": "Subscribing the app is the last step: its failure carries\n`step: subscribe_app` and `resumable: true`, as the WABA stays\nattached and repeating the call finishes it (with a new token after a\n`409 reconnect_required`: Meta refused the stored one).",
         "operationId": "attach_waba",
         "parameters": [
           {
@@ -1107,7 +1108,7 @@
             }
           },
           "403": {
-            "description": "Not an admin key, or Meta refused the token access to the WABA (nothing bound or stored), or to subscribe the app (the WABA stays attached: repeat the call)",
+            "description": "Not an admin key, or Meta refused the token access to the WABA (nothing bound or stored), or to subscribe the app (`step` `subscribe_app`: the WABA stays attached; repeat the call)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1127,7 +1128,7 @@
             }
           },
           "409": {
-            "description": "`waba_owned_by_another_tenant`",
+            "description": "`waba_owned_by_another_tenant`; `reconnect_required` with `step` `subscribe_app`: Meta refused the token once it was stored (the WABA stays attached, its numbers `reconnect_required`: repeat the call with a valid token)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1137,7 +1138,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` on `waba_id` (digits), `token` (blank, or not a valid token for Meta) or `body`; Meta's `invalid_parameter`",
+            "description": "`invalid_request` on `waba_id` (digits), `token` (blank, or refused by Meta when listing the numbers: nothing bound or stored) or `body`; Meta's `invalid_parameter`",
             "content": {
               "application/json": {
                 "schema": {
@@ -1190,6 +1191,7 @@
           "admin"
         ],
         "summary": "Re-encrypt every bound WABA's token (and its credit ledger) under the\nactive vault key (`WA_VAULT_KEY`), walking the service's bindings (the\nvault cannot list its records). The old key can go once `failed` is\nempty. Also `meta-whatsapp-server vault rotate`.",
+        "description": "The walk is a request like any other, cut at the 55 s request\ndeadline: one too large to finish in time answers `504 timeout`, part\nof the records rotated. It is idempotent: repeat it (records already\nunder the active key are read, not rewritten), or run\n`meta-whatsapp-server vault rotate`, which has no deadline.",
         "operationId": "rotate_vault",
         "responses": {
           "200": {
@@ -1214,6 +1216,16 @@
           },
           "403": {
             "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the walk outlived the 55 s request deadline, part of the records rotated; repeat it, or run `meta-whatsapp-server vault rotate`, which has no deadline",
             "content": {
               "application/json": {
                 "schema": {

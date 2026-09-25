@@ -156,32 +156,45 @@ fn serve_answers_on_both_listeners_and_stops_on_sigterm() {
 
 /// In development on memory storage (which the CLI cannot reach), `serve`
 /// writes a one-time admin key to standard error, which the served API
-/// accepts (coordinator's decision DP9). Decisive: minting it at start.
+/// accepts (coordinator's decision DP9). The key is a plain line of its
+/// own, never a log event: with JSON logs (the default format) on the same
+/// stream, no log line holds it, so a log pipeline never ships it.
+/// Decisive: minting it at start, and `eprintln!` rather than `tracing`.
 #[test]
 fn development_on_memory_prints_a_one_time_admin_key() {
     use std::io::BufRead as _;
     let (public, internal) = two_ports();
     let mut child = base(&mut Command::new(BIN), public, internal)
         .env("WA_SERVER_ENV", "development")
+        .env("WA_SERVER_LOG_FORMAT", "json")
         .arg("serve")
         .spawn()
         .unwrap();
     let stderr = child.stderr.take().unwrap();
     let (found, key) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
+    let reader = std::thread::spawn(move || {
+        let mut lines = Vec::new();
         for line in std::io::BufReader::new(stderr)
             .lines()
             .map_while(Result::ok)
         {
-            if let Some((_, key)) = line.split_once("shown once: ") {
+            // The key's own line, not a JSON log event.
+            if serde_json::from_str::<serde_json::Value>(&line).is_err()
+                && let Some((_, key)) = line.split_once("shown once: ")
+            {
                 let _ = found.send(key.trim().to_owned());
             }
+            lines.push(line);
         }
+        lines
     });
     let key = key
         .recv_timeout(Duration::from_secs(30))
-        .expect("no admin key on standard error");
-    assert!(key.starts_with("wak_"), "{key}");
+        .expect("no admin key on a plain line of standard error");
+    assert!(
+        key.starts_with("wak_") && !key.contains(char::is_whitespace),
+        "{key}"
+    );
     let deadline = Instant::now() + Duration::from_secs(30);
     let bearer = format!("Bearer {key}");
     let (status, body) = loop {
@@ -203,6 +216,97 @@ fn development_on_memory_prints_a_one_time_admin_key() {
     };
     assert_eq!(status, 201, "{body}");
     terminate(&mut child);
+    let lines = reader.join().unwrap();
+    let secret = key.rsplit('_').next().unwrap();
+    let (logs, plain): (Vec<&String>, Vec<&String>) = lines
+        .iter()
+        .partition(|line| serde_json::from_str::<serde_json::Value>(line).is_ok());
+    assert!(
+        logs.iter()
+            .any(|line| line.contains("memory storage: everything is lost")),
+        "the JSON logs were captured: {lines:#?}"
+    );
+    for line in &logs {
+        assert!(
+            !line.contains("wak_") && !line.contains(secret),
+            "a log line holds the admin key: {line}"
+        );
+    }
+    let holding: Vec<&&String> = plain.iter().filter(|l| l.contains(secret)).collect();
+    assert_eq!(holding.len(), 1, "{lines:#?}");
+    assert!(
+        holding[0].starts_with("meta-whatsapp-server: development, memory storage: "),
+        "{}",
+        holding[0]
+    );
+}
+
+/// Both listeners of the served binary cut off a client whose request
+/// head does not arrive within 10 s (`listen::PUBLIC_LIMITS` and
+/// `INTERNAL_LIMITS`, the header read timeout; hyper's own default is 30
+/// s). Decisive: `serve` passing the listeners their limits.
+#[test]
+fn serve_cuts_off_a_slow_request_head_on_both_listeners() {
+    let (public, internal) = two_ports();
+    let mut child = base(&mut Command::new(BIN), public, internal)
+        .env("WA_SERVER_ENV", "development")
+        .arg("serve")
+        .spawn()
+        .unwrap();
+    wait_live(internal, &mut child);
+    wait_live(public, &mut child);
+    let slow = |addr: SocketAddr| {
+        std::thread::spawn(move || {
+            let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2)).unwrap();
+            let started = Instant::now();
+            stream
+                .write_all(b"GET /livez HTTP/1.1\r\nHost: localhost\r\nX-Slow: ")
+                .unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(40)))
+                .unwrap();
+            let mut answer = Vec::new();
+            let closed = stream.read_to_end(&mut answer).is_ok();
+            (closed, started.elapsed(), answer)
+        })
+    };
+    let (public_slow, internal_slow) = (slow(public), slow(internal));
+    for (name, handle) in [("public", public_slow), ("internal", internal_slow)] {
+        let (closed, after, answer) = handle.join().unwrap();
+        assert!(closed, "{name}: still open after {after:?}");
+        assert!(
+            after >= Duration::from_secs(9) && after < Duration::from_secs(20),
+            "{name}: closed after {after:?}, not the 10 s header read timeout"
+        );
+        assert!(
+            answer.is_empty() || answer.starts_with(b"HTTP/1.1 408"),
+            "{name}: {}",
+            String::from_utf8_lossy(&answer)
+        );
+    }
+    terminate(&mut child);
+}
+
+/// `vault rotate` refuses memory storage: that store is per process, so
+/// the command's own would be empty (and the running service's out of
+/// reach), and a rotation reporting success over nothing would let an
+/// operator drop a key still in use. Decisive: the refusal.
+#[test]
+fn vault_rotate_refuses_memory_storage() {
+    let (public, internal) = two_ports();
+    let output = base(&mut Command::new(BIN), public, internal)
+        .env("WA_SERVER_ENV", "development")
+        .stdout(Stdio::piped())
+        .args(["vault", "rotate"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("memory storage is per process"), "{stderr}");
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("WABAs walked"),
+        "nothing was walked"
+    );
 }
 
 #[test]
@@ -389,4 +493,106 @@ fn live_postgres_cli_bootstrap_key_works_against_the_served_api() {
     );
     assert!(String::from_utf8_lossy(&rotated.stdout).starts_with("0 WABAs walked"));
     terminate(&mut child);
+    // On Postgres the CLI mints admin keys: `serve` prints none (DP9 is
+    // memory storage's alone).
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    assert!(
+        !stderr.contains("wak_") && !stderr.contains("shown once"),
+        "serve on Postgres printed an admin key: {stderr}"
+    );
+}
+
+/// `vault rotate` fails, listing the WABA, when a record cannot be
+/// re-encrypted (sealed with a key no longer configured): the operator
+/// must keep the previous key. The others are rotated all the same.
+/// Decisive: the command's exit status on a failed record.
+#[test]
+fn live_postgres_cli_vault_rotate_fails_when_a_record_does() {
+    use std::sync::Arc;
+
+    use meta_whatsapp_rs::adapters::store::PostgresKvStore;
+    use meta_whatsapp_rs::client::embedded_signup::{
+        StoredBusinessToken, TokenVault, VaultKey, VaultKeys,
+    };
+    use meta_whatsapp_rs::core::ids::WabaId;
+    use meta_whatsapp_rs::core::secret::AccessToken;
+    use meta_whatsapp_rs::core::store::KvStore;
+    use meta_whatsapp_server::model::TenantId;
+    use meta_whatsapp_server::store::{PgStore, Store, migrate};
+
+    const ACTIVE: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
+    const PREVIOUS: &str = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+    const LOST: &str = "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=";
+    let Some(url) = common::postgres_url() else {
+        return;
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let db = runtime.block_on(common::TestDb::new()).unwrap();
+    let kv: Arc<dyn KvStore> = runtime.block_on(async {
+        let pool = db.pool(3).await;
+        migrate(&pool).await.unwrap();
+        let store = PgStore::new(pool.clone());
+        let kv: Arc<dyn KvStore> = Arc::new(PostgresKvStore::new(pool));
+        let tenant = TenantId::parse("merchant-a").unwrap();
+        store.create_tenant(&tenant, "").await.unwrap();
+        for (waba, key) in [
+            ("201", VaultKey::from_base64("k0", PREVIOUS).unwrap()),
+            ("202", VaultKey::from_base64("kx", LOST).unwrap()),
+        ] {
+            store
+                .bind_waba(&tenant, &WabaId::new(waba), &[])
+                .await
+                .unwrap();
+            TokenVault::new(kv.clone(), VaultKeys::new(key))
+                .unwrap()
+                .store(&StoredBusinessToken::new(
+                    waba,
+                    AccessToken::new(format!("TOKEN-{waba}")),
+                ))
+                .await
+                .unwrap();
+        }
+        kv
+    });
+    let separator = if url.contains('?') { '&' } else { '?' };
+    let url = format!("{url}{separator}options=-c%20search_path%3D{}", db.schema);
+    let (public, internal) = two_ports();
+    let rotated = base(&mut Command::new(BIN), public, internal)
+        .env("DATABASE_URL", &url)
+        .env("WA_VAULT_KEY", ACTIVE)
+        .env("WA_VAULT_PREVIOUS_KEYS", format!("k0:{PREVIOUS}"))
+        .env("WA_OTP_PEPPER", "a-pepper-of-at-least-thirty-two-bytes")
+        .stdout(Stdio::piped())
+        .args(["vault", "rotate"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&rotated.stdout);
+    let stderr = String::from_utf8_lossy(&rotated.stderr);
+    assert!(!rotated.status.success(), "{stdout}{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "2 WABAs walked, 1 records re-encrypted, 1 failed: 202",
+        "{stderr}"
+    );
+    assert!(stderr.contains("keep the previous key"), "{stderr}");
+    // The other record was rotated: it opens with the active key alone.
+    let active_only = TokenVault::new(
+        kv,
+        VaultKeys::new(VaultKey::from_base64("k1", ACTIVE).unwrap()),
+    )
+    .unwrap();
+    let token = runtime
+        .block_on(active_only.get(&WabaId::new("201")))
+        .unwrap()
+        .unwrap();
+    assert_eq!(token.token.expose_secret(), "TOKEN-201");
 }

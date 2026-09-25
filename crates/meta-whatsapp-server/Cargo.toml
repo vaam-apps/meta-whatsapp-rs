@@ -38,6 +38,9 @@ sha2.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
 time.workspace = true
+# Meta's `details` lose format characters and line separators, not only
+# control characters (src/error.rs).
+unicode-properties.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time", "io-util"] }
 tracing.workspace = true
 # JSON logs (`WA_SERVER_LOG_FORMAT=json`, the default).

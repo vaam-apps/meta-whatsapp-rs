@@ -118,39 +118,49 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
         200,
         json!({"data": [{"about": "Hi", "email": "lucky@luckyshrub.com"}]}),
     );
-    let _ = h
+    let profile = h
         .call(
             Call::get("/v1/numbers/1972385232742142/profile")
                 .key(&platform_key)
                 .tenant("merchant-42"),
         )
         .await;
+    assert_eq!(profile.status.as_u16(), 200, "{}", profile.text);
     h.graph.push_json(200, json!({"success": true}));
     h.graph
         .push_json(200, json!({"data": [{"about": "Hello"}]}));
-    let _ = h
+    let patched = h
         .call(
             Call::new(Method::PATCH, "/v1/numbers/1972385232742141/profile")
                 .key(&tenant_key)
                 .json(&json!({"about": "Hello"})),
         )
         .await;
-    let _ = h.call(Call::get("/v1/numbers").key(&tenant_key)).await;
+    assert_eq!(patched.status.as_u16(), 200, "{}", patched.text);
+    let listed = h.call(Call::get("/v1/numbers").key(&tenant_key)).await;
+    assert_eq!(listed.status.as_u16(), 200, "{}", listed.text);
     // Failures log too: a refused key, and Meta refusing a token.
-    let _ = h
+    let refused = h
         .call(Call::get("/v1/numbers").key(&format!("{tenant_key}x")))
         .await;
+    assert_eq!(refused.status.as_u16(), 401, "{}", refused.text);
     h.graph.push_json(
         401,
         json!({"error": {"message": "Invalid OAuth access token", "type": "OAuthException",
                          "code": 190, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
     );
-    let _ = h
+    let rejected = h
         .call(Call::get("/v1/numbers/1972385232742141").key(&tenant_key))
         .await;
+    assert_eq!(
+        (rejected.status.as_u16(), rejected.code().as_str()),
+        (409, "reconnect_required"),
+        "{}",
+        rejected.text
+    );
     // Meta's subscription check, with the verify token in the query, and a
     // made-up method (never logged as sent).
-    let _ = send(
+    let verified = send(
         &h.public,
         Call::get(format!(
             "/webhooks/meta?hub.mode=subscribe&hub.challenge=1&hub.verify_token={VERIFY_TOKEN}"
@@ -158,8 +168,13 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
         .build(),
     )
     .await;
+    assert_eq!(
+        (verified.status.as_u16(), verified.text.as_str()),
+        (200, "1")
+    );
     let made_up = Method::from_bytes(MADE_UP_METHOD.as_bytes()).unwrap();
-    let _ = send(&h.public, Call::new(made_up, "/livez").build()).await;
+    let odd = send(&h.public, Call::new(made_up, "/livez").build()).await;
+    assert_eq!(odd.status.as_u16(), 405, "{}", odd.text);
 
     // Every other operation of the committed document, so that `check`
     // finds each one in the logs.
@@ -175,7 +190,9 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
         get("/v1/admin/platform-keys", &admin),
         get("/v1/wabas", &tenant_key),
     ] {
-        let _ = h.call(call).await;
+        // Exercised, not merely logged: each answers 200.
+        let reply = h.call(call).await;
+        assert_eq!(reply.status.as_u16(), 200, "{}", reply.text);
     }
     // Spare keys to revoke, a spare tenant to delete.
     let spare = h
@@ -197,13 +214,14 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
     for minted in [&spare, &spare_platform] {
         secrets.push(minted["key"].as_str().unwrap().to_owned());
     }
-    let _ = h
+    let spare_tenant = h
         .call(post(
             "/v1/admin/tenants",
             &admin,
             json!({"id": "spare-tenant"}),
         ))
         .await;
+    assert_eq!(spare_tenant.status.as_u16(), 201, "{}", spare_tenant.text);
     for call in [
         delete(
             &format!(

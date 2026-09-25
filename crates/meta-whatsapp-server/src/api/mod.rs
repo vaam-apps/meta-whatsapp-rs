@@ -260,14 +260,22 @@ pub fn internal_router(state: &AppState) -> Router {
 /// The public listener's router: Meta's webhook and `/livez`, nothing
 /// else.
 pub fn public_router(state: &AppState) -> Router {
+    let routes = axum::Router::new()
+        .route("/webhooks/meta", get(webhooks::verify))
+        .route("/livez", get(ops::livez));
+    public_router_with(routes, state)
+}
+
+/// The public listener's router around `paths`: its layers, deadline
+/// included, are the ones [`public_router`] serves (a test adds a slow
+/// route, which no public route is in M1a).
+fn public_router_with(paths: axum::Router<AppState>, state: &AppState) -> Router {
     let observed = Observed {
         listener: Listener::Public,
         routes: Arc::new(PUBLIC_ROUTES.map(str::to_owned).to_vec()),
         metrics: state.metrics().clone(),
     };
-    let router = axum::Router::new()
-        .route("/webhooks/meta", get(webhooks::verify))
-        .route("/livez", get(ops::livez))
+    let router = paths
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .layer(middleware::from_fn(catch_panic))
@@ -327,6 +335,36 @@ mod tests {
         assert_eq!(fast.status(), StatusCode::OK);
     }
 
+    /// The public listener's router cuts a request at its deadline, as
+    /// the internal one does (tests/numbers.rs): `POST /webhooks/meta`
+    /// (M1c) will read bodies and run sinks. Decisive: the deadline layer
+    /// of the public router.
+    #[tokio::test(start_paused = true)]
+    async fn the_public_router_cuts_a_request_at_its_deadline() {
+        let state = AppState::for_tests();
+        let router = public_router_with(
+            axum::Router::new().route(
+                "/slow",
+                get(|| async {
+                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                    "late"
+                }),
+            ),
+            &state,
+        );
+        let started = tokio::time::Instant::now();
+        let response = router
+            .oneshot(
+                meta_whatsapp_rs::webhooks::axum::http::Request::get("/slow")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+        assert_eq!(started.elapsed(), REQUEST_DEADLINE);
+    }
+
     /// Every API route is added with `routes!`, which documents it: the
     /// only plain axum routes are the public listener's, which the document
     /// leaves out on purpose. A route added any other way would escape the
@@ -356,7 +394,7 @@ mod tests {
             plain,
             [
                 "mod.rs: .route(\"/webhooks/meta\", get(webhooks::verify))",
-                "mod.rs: .route(\"/livez\", get(ops::livez))",
+                "mod.rs: .route(\"/livez\", get(ops::livez));",
             ]
         );
     }

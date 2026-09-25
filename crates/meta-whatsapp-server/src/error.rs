@@ -23,8 +23,9 @@
 //!   service's: section 5.1 of the design keeps it, except on the OTP and
 //!   signup routes (a template error could quote a parameter: the code).
 //!   So it is **opt-in per route** ([`ApiError::with_details`]; a new route
-//!   answers without it), stripped of control characters and cut at
-//!   [`MAX_DETAILS_CHARS`], and logged at `debug` only.
+//!   answers without it), stripped of control and format characters and
+//!   line separators, cut at [`MAX_DETAILS_CHARS`], and logged at `debug`
+//!   only.
 //! - `retryable` and `may_have_been_sent` are the library's
 //!   [`Error::is_retryable`] and [`Error::may_have_been_sent`]: resend only
 //!   when `may_have_been_sent` is `false`.
@@ -37,6 +38,7 @@ use meta_whatsapp_rs::webhooks::axum::http::{HeaderValue, StatusCode, header};
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 use meta_whatsapp_rs::{Error, ErrorKind, GraphApiError};
 use serde::Serialize;
+use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 use utoipa::ToSchema;
 
 use crate::telemetry;
@@ -345,14 +347,29 @@ pub fn code_info(code: &str) -> Option<(StatusCode, &'static str)> {
 /// Longest `graph.details` answered, in characters.
 pub const MAX_DETAILS_CHARS: usize = 512;
 
-/// Meta's details as answered: no control character (they could forge a
-/// caller's log line), at most [`MAX_DETAILS_CHARS`] characters.
+/// Meta's details as answered: at most [`MAX_DETAILS_CHARS`] characters,
+/// without the characters that could forge or disguise a line of a
+/// caller's log: control characters (Cc: a newline starts a new line),
+/// format characters (Cf: a right-to-left override, U+202E, reverses what
+/// follows; zero-width ones hide text) and the line and paragraph
+/// separators (U+2028, U+2029: a new line to some log viewers).
 fn bounded_details(details: &str) -> String {
     details
         .chars()
-        .filter(|c| !c.is_control())
+        .filter(|&c| !forges_log_lines(c))
         .take(MAX_DETAILS_CHARS)
         .collect()
+}
+
+/// A character [`bounded_details`] drops.
+fn forges_log_lines(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c.general_category(),
+            GeneralCategory::Format
+                | GeneralCategory::LineSeparator
+                | GeneralCategory::ParagraphSeparator
+        )
 }
 
 /// The API code of a Graph error kind: [`ErrorKind::as_str`], except
@@ -510,6 +527,14 @@ impl ApiError {
         self
     }
 
+    /// Set `resumable`: whether repeating the operation that stopped at
+    /// `step` finishes it.
+    #[must_use]
+    pub fn resumable(mut self, resumable: bool) -> Self {
+        self.0.resumable = Some(resumable);
+        self
+    }
+
     /// The same error, answered as `422 invalid_request` on `field` (Meta
     /// refused a value the request carried): `graph`, `retryable` and
     /// `may_have_been_sent` stay.
@@ -568,8 +593,9 @@ impl ApiError {
 
     /// Add Meta's `error_data.details` (or a string `error_data`) to
     /// `graph`, for a route whose design keeps it (section 5.1: every route
-    /// but OTP and signup), stripped of control characters and cut at
-    /// [`MAX_DETAILS_CHARS`]. A route opts in by calling this.
+    /// but OTP and signup), stripped of control and format characters and
+    /// line separators, and cut at [`MAX_DETAILS_CHARS`]. A route opts in
+    /// by calling this.
     #[must_use]
     pub fn with_details(mut self, error: &Error) -> Self {
         if let (Some(info), Some(graph)) = (self.0.graph.as_mut(), error.graph()) {
@@ -734,7 +760,8 @@ mod tests {
         }
     }
 
-    /// `details` is opt-in, bounded and free of control characters.
+    /// `details` is opt-in, bounded to 512 characters and free of control
+    /// characters.
     #[test]
     fn details_are_opt_in_and_bounded() {
         let error = |data: serde_json::Value| {
@@ -765,12 +792,42 @@ mod tests {
             kept.0.graph.unwrap().details.as_deref(),
             Some("plain string")
         );
-        let long = error(serde_json::json!({"details": "é".repeat(MAX_DETAILS_CHARS + 10)}));
+        // 512 characters, the design's bound (section 5.1), whatever the
+        // constant says.
+        assert_eq!(MAX_DETAILS_CHARS, 512);
+        let long = error(serde_json::json!({"details": "é".repeat(600)}));
         let kept = ApiError::from_library(&long).with_details(&long);
+        assert_eq!(kept.0.graph.unwrap().details.unwrap(), "é".repeat(512));
+    }
+
+    /// Characters that forge or disguise a log line go too: format
+    /// characters (a right-to-left override, zero-width ones, a byte order
+    /// mark, tags) and the line and paragraph separators; letters, symbols
+    /// and spaces of any script stay. Decisive: the general categories
+    /// checked beside `is_control`.
+    #[test]
+    fn details_lose_format_characters_and_line_separators() {
+        let graph: GraphApiError = serde_json::from_value(serde_json::json!({
+            "message": "(#100) Invalid parameter",
+            "type": "OAuthException",
+            "code": 100,
+            "error_data": {"details": "Param\u{202E}txt.exe\u{202C} ok\u{2028}level=ERROR\u{2029}x\u{200B}y\u{2066}z\u{2069}\u{FEFF}\u{E0041}\u{00AD} café 日本 👍\u{00A0}end"},
+        }))
+        .unwrap();
+        let error = Error::Api(Box::new(graph));
+        let kept = ApiError::from_library(&error).with_details(&error);
         assert_eq!(
-            kept.0.graph.unwrap().details.unwrap().chars().count(),
-            MAX_DETAILS_CHARS
+            kept.0.graph.unwrap().details.as_deref(),
+            Some("Paramtxt.exe oklevel=ERRORxyz café 日本 👍\u{00A0}end")
         );
+        for c in [
+            '\u{202E}', '\u{200F}', '\u{2028}', '\u{2029}', '\u{FEFF}', '\n', '\u{85}',
+        ] {
+            assert!(forges_log_lines(c), "{:04X}", u32::from(c));
+        }
+        for c in ['a', 'é', '日', '👍', ' ', '\u{00A0}', '\u{3000}'] {
+            assert!(!forges_log_lines(c), "{:04X}", u32::from(c));
+        }
     }
 
     /// Every code the source names (`ApiError::new("…")`, `.code() ==

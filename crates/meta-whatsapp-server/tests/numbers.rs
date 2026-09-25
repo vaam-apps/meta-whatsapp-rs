@@ -6,7 +6,9 @@
 mod common;
 
 use common::{Call, Harness};
+use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+use meta_whatsapp_rs::core::store::{Expiry, KvStore, StoreKey, Versioned};
 use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode};
 use meta_whatsapp_server::model::Scope;
 use pretty_assertions::assert_eq;
@@ -290,4 +292,86 @@ async fn a_timeout_may_have_taken_effect() {
         "nothing deleted"
     );
     assert_eq!(h.graph.remaining(), 0);
+}
+
+/// A `KvStore` whose reads hang for an hour while `slow` is set.
+#[derive(Debug)]
+struct SlowReads {
+    inner: meta_whatsapp_rs::adapters::store::MemoryKvStore,
+    slow: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl KvStore for SlowReads {
+    async fn get(&self, key: &StoreKey) -> Result<Option<Versioned>, StorageError> {
+        if self.slow.load(std::sync::atomic::Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        }
+        self.inner.get(key).await
+    }
+    async fn put(
+        &self,
+        key: &StoreKey,
+        value: Vec<u8>,
+        expiry: Expiry,
+    ) -> Result<u64, StorageError> {
+        self.inner.put(key, value, expiry).await
+    }
+    async fn put_if_absent(
+        &self,
+        key: &StoreKey,
+        value: Vec<u8>,
+        expiry: Expiry,
+    ) -> Result<Option<u64>, StorageError> {
+        self.inner.put_if_absent(key, value, expiry).await
+    }
+    async fn compare_and_swap(
+        &self,
+        key: &StoreKey,
+        expected: u64,
+        new: Option<Vec<u8>>,
+        expiry: Expiry,
+    ) -> Result<Option<u64>, StorageError> {
+        self.inner
+            .compare_and_swap(key, expected, new, expiry)
+            .await
+    }
+    async fn delete(&self, key: &StoreKey) -> Result<bool, StorageError> {
+        self.inner.delete(key).await
+    }
+}
+
+/// The internal listener's router, as `serve` builds it, cuts a request
+/// not answered within the deadline (a vault read that hangs, here): `504
+/// timeout` with `may_have_been_sent: true`, at 55 s exactly, and nothing
+/// sent to Meta. Decisive: the deadline layer of the internal router.
+#[tokio::test(start_paused = true)]
+async fn the_internal_router_cuts_a_request_at_its_deadline() {
+    use std::sync::Arc;
+
+    use meta_whatsapp_server::api::REQUEST_DEADLINE;
+    use meta_whatsapp_server::store::MemoryStore;
+
+    let kv = Arc::new(SlowReads {
+        inner: meta_whatsapp_rs::adapters::store::MemoryKvStore::new(),
+        slow: std::sync::atomic::AtomicBool::new(false),
+    });
+    let h = Harness::on(Arc::new(MemoryStore::new()), kv.clone());
+    h.tenant(TENANT).await;
+    h.connect(TENANT, WABA, &[PN], TOKEN).await;
+    let key = h.tenant_key(TENANT, &[Scope::Numbers]).await;
+    kv.slow.store(true, std::sync::atomic::Ordering::SeqCst);
+    let started = tokio::time::Instant::now();
+    let reply = h
+        .call(Call::get(format!("/v1/numbers/{PN}")).key(&key))
+        .await;
+    assert_eq!(
+        (reply.status, reply.code().as_str()),
+        (StatusCode::GATEWAY_TIMEOUT, "timeout"),
+        "{}",
+        reply.text
+    );
+    assert_eq!(reply.json()["error"]["may_have_been_sent"], true);
+    assert_eq!(started.elapsed(), REQUEST_DEADLINE);
+    assert!(h.graph.requests().is_empty());
 }

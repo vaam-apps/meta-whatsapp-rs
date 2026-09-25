@@ -28,7 +28,7 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::api::admin::{TenantsSpec, allowed_tenants, mint};
 use crate::api::common::rfc3339;
-use crate::config::{self, Config, Env, MigrateMode, ProcessEnv};
+use crate::config::{self, Config, Env, MigrateMode, ProcessEnv, Storage};
 use crate::model::{
     AllowedTenants, ApiKeyRecord, KeyOwner, KeyScope, MAX_NAME_CHARS, MAX_PAGE_SIZE, PageRequest,
     Scope, TenantId,
@@ -70,9 +70,10 @@ pub enum Command {
 pub enum VaultCommand {
     /// Re-encrypt every bound WABA's token under the active vault key
     /// (`WA_VAULT_KEY`, the old one in `WA_VAULT_PREVIOUS_KEYS`), like
-    /// `POST /v1/admin/vault/rotate`. Needs the service's configuration.
-    /// Exits non-zero when a record failed: keep the old key until none
-    /// does.
+    /// `POST /v1/admin/vault/rotate` but without its request deadline.
+    /// Needs the service's configuration, with Postgres (memory storage is
+    /// per process: refused). Exits non-zero when a record failed: keep
+    /// the old key until none does.
     Rotate,
 }
 
@@ -145,6 +146,14 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Vault(VaultCommand::Rotate) => {
             init_cli_logs();
             let config = Config::from_process_env().context("refusing to rotate")?;
+            // Memory storage lives in one process: this one's vault is
+            // empty and the running service's out of reach, so a walk
+            // would report success over nothing.
+            anyhow::ensure!(
+                !matches!(config.storage, Storage::Memory),
+                "refusing to rotate: memory storage is per process, and this command cannot reach \
+                 the running service's (use POST /v1/admin/vault/rotate, or set DATABASE_URL)"
+            );
             let backends = serve::backends(&config).await?;
             let vault = serve::vault(backends.kv, config.vault_keys)?;
             let report = crate::auth::rotate_vault(backends.store.as_ref(), &vault).await?;

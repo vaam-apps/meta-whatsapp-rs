@@ -159,26 +159,57 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     tracing::info!(%public_bind, %internal_bind, "listening");
 
     let (stop, stopped) = watch::channel(false);
-    let wait = |mut rx: watch::Receiver<bool>| async move {
-        let _ = rx.wait_for(|stop| *stop).await;
-    };
-    let mut public_task = tokio::spawn(listen::serve(
+    let public_task = tokio::spawn(listen::serve(
         public,
         api::public_router(&state),
         listen::PUBLIC_LIMITS,
-        wait(stopped.clone()),
+        stop_signal(stopped.clone()),
     ));
-    let mut internal_task = tokio::spawn(listen::serve(
+    let internal_task = tokio::spawn(listen::serve(
         internal,
         api::internal_router(&state),
         listen::INTERNAL_LIMITS,
-        wait(stopped),
+        stop_signal(stopped),
     ));
+    let served = supervise(
+        &state,
+        &stop,
+        public_task,
+        internal_task,
+        shutdown_signal(),
+        shutdown_grace,
+    )
+    .await;
+    if let Some(pool) = backends.pool {
+        pool.close().await;
+    }
+    served
+}
 
-    // Either listener stopping on its own (its task failing or panicking)
-    // stops the process too, rather than leaving it up half served: the
-    // orchestrator then restarts it.
-    let outcome = first_to_stop(&mut public_task, &mut internal_task, shutdown_signal()).await;
+/// Completes once `stop` says so: the shutdown future of a listener.
+async fn stop_signal(mut stop: watch::Receiver<bool>) {
+    let _ = stop.wait_for(|stop| *stop).await;
+}
+
+/// The second half of [`serve`]: serve until `signal`, or until either
+/// listener stops on its own (its task failing or panicking), which stops
+/// the process too rather than leaving it up half served (the orchestrator
+/// then restarts it). Then fail `/readyz`, tell the listeners through
+/// `stop` to stop accepting, and give the ones still running `grace` to
+/// finish their requests.
+///
+/// # Errors
+///
+/// A listener that stopped on its own, or ended with an error after `stop`.
+pub async fn supervise(
+    state: &AppState,
+    stop: &watch::Sender<bool>,
+    mut public_task: ListenerTask,
+    mut internal_task: ListenerTask,
+    signal: impl Future<Output = ()>,
+    grace: Duration,
+) -> anyhow::Result<()> {
+    let outcome = first_to_stop(&mut public_task, &mut internal_task, signal).await;
     match &outcome {
         Stopped::Signal => tracing::info!("shutting down"),
         Stopped::Listener { error, .. } => {
@@ -193,10 +224,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         .into_iter()
         .filter(|(name, _)| outcome.ended() != Some(*name))
         .map(|(name, task)| async move { (name, task.await) });
-    let drained = tokio::time::timeout(shutdown_grace, futures::future::join_all(running)).await;
-    if let Some(pool) = backends.pool {
-        pool.close().await;
-    }
+    let drained = tokio::time::timeout(grace, futures::future::join_all(running)).await;
     if let Stopped::Listener { error, .. } = outcome {
         return Err(error);
     }
@@ -211,7 +239,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
 }
 
 /// A listener task's end.
-type ListenerTask = JoinHandle<std::io::Result<()>>;
+pub type ListenerTask = JoinHandle<std::io::Result<()>>;
 
 /// Why [`first_to_stop`] returned.
 #[derive(Debug)]
@@ -334,6 +362,97 @@ mod tests {
             assert!(format!("{error:#}").contains(which), "{error:#}");
             public.abort();
             internal.abort();
+        }
+    }
+
+    /// A listener on a free local port, stopping when `stop` says so, and
+    /// its address.
+    async fn listening(
+        state: &AppState,
+        stop: &watch::Sender<bool>,
+    ) -> (ListenerTask, std::net::SocketAddr) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(listen::serve(
+            listener,
+            api::public_router(state),
+            listen::PUBLIC_LIMITS,
+            stop_signal(stop.subscribe()),
+        ));
+        (task, addr)
+    }
+
+    /// `serve`'s supervision: a listener that stops on its own (an error
+    /// or a panic in its accept loop) stops the process with an error
+    /// naming it, after failing `/readyz` and stopping the other listener
+    /// (which gets its grace period and then accepts nothing). Decisive:
+    /// `supervise` watching the listeners, not only the signal (security
+    /// review A3).
+    #[tokio::test]
+    async fn serve_stops_when_either_listener_stops() {
+        for (which, panics) in [("internal", false), ("public", true), ("internal", true)] {
+            let state = AppState::for_tests();
+            let (stop, _) = watch::channel(false);
+            let (healthy, addr) = listening(&state, &stop).await;
+            let broken: ListenerTask = if panics {
+                tokio::spawn(async { panic!("the accept loop") })
+            } else {
+                tokio::spawn(async { Err(std::io::Error::other("accept failed")) })
+            };
+            let (public, internal) = if which == "public" {
+                (broken, healthy)
+            } else {
+                (healthy, broken)
+            };
+            let served = tokio::time::timeout(
+                Duration::from_secs(10),
+                supervise(
+                    &state,
+                    &stop,
+                    public,
+                    internal,
+                    pending(),
+                    Duration::from_secs(5),
+                ),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("the {which} listener stopped, serve did not"));
+            let error = served.expect_err("a listener that stops is an error");
+            assert!(format!("{error:#}").contains(which), "{error:#}");
+            assert!(state.is_shutting_down(), "/readyz fails");
+            assert!(*stop.borrow(), "the other listener was told to stop");
+            assert!(
+                tokio::net::TcpStream::connect(addr).await.is_err(),
+                "the other listener still accepts"
+            );
+        }
+    }
+
+    /// On the signal, both listeners stop accepting and `serve` returns
+    /// `Ok` once they drained.
+    #[tokio::test]
+    async fn serve_stops_both_listeners_on_the_signal() {
+        let state = AppState::for_tests();
+        let (stop, _) = watch::channel(false);
+        let (public, public_addr) = listening(&state, &stop).await;
+        let (internal, internal_addr) = listening(&state, &stop).await;
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            supervise(
+                &state,
+                &stop,
+                public,
+                internal,
+                async {},
+                Duration::from_secs(5),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(state.is_shutting_down());
+        for addr in [public_addr, internal_addr] {
+            assert!(tokio::net::TcpStream::connect(addr).await.is_err());
         }
     }
 

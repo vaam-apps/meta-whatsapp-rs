@@ -534,8 +534,9 @@ impl FromRequestParts<AppState> for OwnedWaba {
     }
 }
 
-/// The API error of a failed Graph call made with `waba_id`'s token.
-async fn graph_failed(state: &AppState, waba_id: &WabaId, error: &Error) -> ApiError {
+/// The API error of a failed Graph call made with `waba_id`'s stored
+/// token: a `190` (or `0`) marks the WABA's numbers `reconnect_required`.
+pub(crate) async fn graph_failed(state: &AppState, waba_id: &WabaId, error: &Error) -> ApiError {
     if error.kind() == ErrorKind::Authentication
         && let Err(storage) = state
             .store()

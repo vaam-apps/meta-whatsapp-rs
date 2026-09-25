@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 
 use futures::{StreamExt, TryStreamExt};
 use meta_whatsapp_rs::ErrorKind;
-use meta_whatsapp_rs::client::embedded_signup::StoredBusinessToken;
+use meta_whatsapp_rs::client::embedded_signup::{StoredBusinessToken, steps};
 use meta_whatsapp_rs::client::waba::PhoneNumbersQuery;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_rs::core::secret::AccessToken;
@@ -18,7 +18,7 @@ use time::OffsetDateTime;
 use utoipa::ToSchema;
 
 use super::common::{ApiJson, PageParams, PageQuery, json, next_cursor, parse_rfc3339, rfc3339};
-use crate::auth::{AdminCaller, OwnedWaba, VaultRotation};
+use crate::auth::{AdminCaller, OwnedWaba, VaultRotation, graph_failed};
 use crate::error::{ApiError, ErrorBody};
 use crate::keys::MintedKey;
 use crate::model::{
@@ -948,6 +948,11 @@ fn graph_id(field: &'static str, id: &str) -> Result<String, ApiError> {
 /// bind the WABA and those numbers to the tenant (refused when another
 /// tenant has it, decision D4), store the token in the vault, then
 /// subscribe the app to the WABA's webhooks with it.
+///
+/// Subscribing the app is the last step: its failure carries
+/// `step: subscribe_app` and `resumable: true`, as the WABA stays
+/// attached and repeating the call finishes it (with a new token after a
+/// `409 reconnect_required`: Meta refused the stored one).
 #[utoipa::path(
     post,
     path = "/v1/admin/tenants/{id}/wabas",
@@ -958,10 +963,10 @@ fn graph_id(field: &'static str, id: &str) -> Result<String, ApiError> {
     responses(
         (status = 201, description = "Attached: its numbers bound, the token stored, the app subscribed to its webhooks", body = AttachedWaba),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "Not an admin key, or Meta refused the token access to the WABA (nothing bound or stored), or to subscribe the app (the WABA stays attached: repeat the call)", body = ErrorBody),
+        (status = 403, description = "Not an admin key, or Meta refused the token access to the WABA (nothing bound or stored), or to subscribe the app (`step` `subscribe_app`: the WABA stays attached; repeat the call)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such tenant", body = ErrorBody),
-        (status = 409, description = "`waba_owned_by_another_tenant`", body = ErrorBody),
-        (status = 422, description = "`invalid_request` on `waba_id` (digits), `token` (blank, or not a valid token for Meta) or `body`; Meta's `invalid_parameter`", body = ErrorBody),
+        (status = 409, description = "`waba_owned_by_another_tenant`; `reconnect_required` with `step` `subscribe_app`: Meta refused the token once it was stored (the WABA stays attached, its numbers `reconnect_required`: repeat the call with a valid token)", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `waba_id` (digits), `token` (blank, or refused by Meta when listing the numbers: nothing bound or stored) or `body`; Meta's `invalid_parameter`", body = ErrorBody),
         (status = 502, description = "Meta failed, or listed more than 1,000 numbers (`upstream`)", body = ErrorBody),
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
@@ -1045,10 +1050,18 @@ pub async fn attach_waba(
     // webhook, and disconnecting unsubscribes it (docs/design/server.md,
     // section 3.4), so attaching again must subscribe again. Safe to
     // repeat: after a refusal the WABA stays attached, and repeating the
-    // attach finishes it.
-    waba.subscribe_app(None)
-        .await
-        .map_err(|error| meta_failed(&error))?;
+    // attach finishes it, which the answer says (`step`, `resumable`).
+    // The token is stored by now: Meta refusing it is a stored token's
+    // `190`, `409 reconnect_required` with the WABA's numbers marked so,
+    // as on every route, not the `422` of a token refused before anything
+    // was bound.
+    if let Err(error) = waba.subscribe_app(None).await {
+        let error = error.in_step(steps::SUBSCRIBE_APP);
+        return Err(graph_failed(&state, &waba_id, &error)
+            .await
+            .with_details(&error)
+            .resumable(true));
+    }
     Ok(json(
         StatusCode::CREATED,
         AttachedWaba {
@@ -1155,6 +1168,12 @@ pub async fn unbind_waba(
 /// active vault key (`WA_VAULT_KEY`), walking the service's bindings (the
 /// vault cannot list its records). The old key can go once `failed` is
 /// empty. Also `meta-whatsapp-server vault rotate`.
+///
+/// The walk is a request like any other, cut at the 55 s request
+/// deadline: one too large to finish in time answers `504 timeout`, part
+/// of the records rotated. It is idempotent: repeat it (records already
+/// under the active key are read, not rewritten), or run
+/// `meta-whatsapp-server vault rotate`, which has no deadline.
 #[utoipa::path(
     post,
     path = "/v1/admin/vault/rotate",
@@ -1164,6 +1183,7 @@ pub async fn unbind_waba(
         (status = 200, description = "Walked every WABA: how many records were re-encrypted, and which failed", body = VaultRotation),
         (status = 401, description = "No valid key", body = ErrorBody),
         (status = 403, description = "Not an admin key", body = ErrorBody),
+        (status = 504, description = "`timeout`: the walk outlived the 55 s request deadline, part of the records rotated; repeat it, or run `meta-whatsapp-server vault rotate`, which has no deadline", body = ErrorBody),
     )
 )]
 pub async fn rotate_vault(
