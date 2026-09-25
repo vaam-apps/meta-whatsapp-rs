@@ -537,7 +537,7 @@ pub struct SendMessage {
     pub reaction: Option<ReactionObject>,
     /// For `template`: Meta's template object (`name`, `language`,
     /// `components`), as the send-template pages write it.
-    #[schema(value_type = Option<Object>)]
+    #[schema(value_type = Option<HashMap<String, Value>>)]
     pub template: Option<Value>,
     /// For `interactive`.
     pub interactive: Option<InteractiveObject>,

@@ -5361,7 +5361,11 @@
               "object",
               "null"
             ],
-            "description": "For `template`: Meta's template object (`name`, `language`,\n`components`), as the send-template pages write it."
+            "description": "For `template`: Meta's template object (`name`, `language`,\n`components`), as the send-template pages write it.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "text": {
             "oneOf": [
@@ -5439,7 +5443,11 @@
           "components": {
             "type": "array",
             "items": {
-              "type": "object"
+              "type": "object",
+              "additionalProperties": {},
+              "propertyNames": {
+                "type": "string"
+              }
             },
             "description": "Components, in Meta's JSON (`templates/components`)."
           },
@@ -5501,7 +5509,11 @@
       },
       "TemplateDefinition": {
         "type": "object",
-        "description": "A template definition in Meta's JSON (`name`, `language`, `category`,\n`parameter_format`, `components`), as `templates/overview` writes it."
+        "description": "A template definition in Meta's JSON (`name`, `language`, `category`,\n`parameter_format`, `components`), as `templates/overview` writes it.",
+        "additionalProperties": {},
+        "propertyNames": {
+          "type": "string"
+        }
       },
       "TemplateList": {
         "type": "object",

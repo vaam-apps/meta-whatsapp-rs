@@ -75,7 +75,7 @@ pub struct TemplateView {
     #[schema(required = true)]
     pub category: Option<String>,
     /// Components, in Meta's JSON (`templates/components`).
-    #[schema(value_type = Vec<Object>)]
+    #[schema(value_type = Vec<HashMap<String, Value>>)]
     pub components: Vec<Value>,
 }
 
@@ -106,8 +106,8 @@ pub struct TemplateCreatedView {
 /// A template definition in Meta's JSON (`name`, `language`, `category`,
 /// `parameter_format`, `components`), as `templates/overview` writes it.
 #[derive(Debug, ToSchema)]
-#[schema(as = TemplateDefinition, value_type = Object)]
-pub struct TemplateDefinitionBody(pub Value);
+#[schema(as = TemplateDefinition, value_type = HashMap<String, Value>)]
+pub struct TemplateDefinitionBody(pub HashMap<String, Value>);
 
 /// A value of Meta's enum, as its wire string.
 fn wire<T: Serialize>(value: Option<&T>) -> Option<String> {
