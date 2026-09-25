@@ -5,7 +5,7 @@ description: "Using WhatsApp through meta-whatsapp-server, the meta-whatsapp-rs 
 
 # meta-whatsapp-rs-server
 
-> **Verified against meta-whatsapp-rs 63f3cfc2d23bcecee6d5bccf3e8bc9037725598e (2026-09-25).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 53c06801fa58ac137baf0dfba25722dda5563326 (2026-09-25).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/client.ts](examples/client.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
@@ -15,10 +15,11 @@ Your app is not Rust and reaches WhatsApp through meta-whatsapp-server:
 you deploy it, hold its keys, call its /v1 API and handle its errors.
 Rust code uses the library directly (`meta-whatsapp-rs`).
 
-## What the service does today (milestone M1a)
+## What the service does today (milestones M1a and M1b)
 
-Sends, media, templates, Meta's webhooks, the inbox, events, Embedded
-Signup and OTP do not exist yet: write no code against them.
+Meta's webhooks, the inbox, events, Embedded Signup and OTP do not exist
+yet: write no code against them. Sends, media and templates do: load
+`meta-whatsapp-rs-server-send`.
 
 | Route | Needs | Does |
 | --- | --- | --- |
@@ -26,6 +27,7 @@ Signup and OTP do not exist yet: write no code against them.
 | `GET /v1/numbers/{pn}` | scope `numbers` | live details from Meta: `display_phone_number`, `verified_name`, `quality_rating`, `name_status`, `throughput` |
 | `GET /v1/numbers/{pn}/profile`, `PATCH /v1/numbers/{pn}/profile` | scope `numbers` | the business profile (`about`, `address`, `description`, `email`, `websites`, `vertical`) |
 | `DELETE /v1/wabas/{waba_id}` | scope `numbers` | disconnect: the token and bindings go only once Meta unsubscribed the app |
+| `POST /v1/numbers/{pn}/messages`, `POST /v1/numbers/{pn}/media`, `GET /v1/wabas/{waba_id}/templates`, … | scopes `send`, `media`, `templates` | sends, media, templates: `meta-whatsapp-rs-server-send` |
 | `POST /v1/admin/tenants`, `POST /v1/admin/tenants/{id}/keys`, `POST /v1/admin/platform-keys` | admin key | tenants and keys |
 | `POST /v1/admin/tenants/{id}/wabas`, `GET /v1/admin/wabas/{waba_id}`, `DELETE /v1/admin/wabas/{waba_id}/binding` | admin key | attach the platform's own WABA (numbers listed by Meta, app subscribed); who holds one; unbind it (token deleted too) |
 | `/livez`, `/readyz`, `/metrics`, `/v1/version`, `/v1/openapi.json` | nothing | operations, and the document every client is generated from |
@@ -127,7 +129,11 @@ export function nextStep(error: ErrorObject): Next {
   caused is its error kind (`marketing_opted_out`, …); `details` under
   `graph` is Meta's own text: show it, never branch on it.
 - **Repeat a request only when `may_have_been_sent` is false**; a
-  `timeout` (504) or a Meta failure (502) may have taken effect.
+  `timeout` (504) or a Meta failure (502) may have taken effect. Sends,
+  uploads and template creation take an `Idempotency-Key`: the same key
+  never acts twice.
+- `too_many_requests` (429): the tenant's rate limit; wait
+  `Retry-After` seconds.
 - `invalid_request` names the culprit in `field`; `401` is always
   `unauthenticated`; another tenant's number is 404 `not_found`, like a
   missing one.
@@ -144,7 +150,9 @@ export function nextStep(error: ErrorObject): Next {
 
 ## Related skills
 
-`meta-whatsapp-rs` (the Rust library, when you write Rust),
+`meta-whatsapp-rs-server-send` (sending messages, media and templates
+through the service), `meta-whatsapp-rs` (the Rust library, when you
+write Rust),
 `meta-whatsapp-rs-errors` (the error kinds behind the Meta codes),
 `meta-whatsapp-rs-production` (what the service does for you: secrets,
 logs, several instances).
