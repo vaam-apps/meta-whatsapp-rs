@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use wa_core::error::{CreditError, RevocationIncomplete, ValidationError};
+use wa_core::error::{CreditError, ValidationError};
 use wa_core::ids::{AllocationConfigId, BusinessId, CreditLineId, SystemUserId, WabaId};
 use wa_core::secret::AccessToken;
 use wa_core::{Error, Result};
@@ -20,7 +20,7 @@ use super::onboard::steps::{DELETE_TOKEN, REVOKE_CREDIT_LINE};
 use super::vault::{StoredBusinessToken, TokenVault};
 use crate::Client;
 use crate::credit_lines::{
-    CreditLines, CreditRevocation, WabaCurrency, WabaFunding, is_shared, owned_by,
+    CreditLines, CreditRevocation, WabaCurrency, WabaFunding, finish, is_shared, owned_by,
 };
 use crate::waba::WabaTask;
 
@@ -539,76 +539,100 @@ impl EmbeddedSignup {
                         return Ok(CreditRevocation::new(Some(business.clone())));
                     }
                 }
-                // Cannot tell: not marked; the lookup below reports it.
+                // Cannot tell yet: marked after the revocation's own lookup
+                // if that one attributes a record to it (step 5).
                 Err(e) => tracing::warn!(kind = ?e.kind(), "revocation: lookup failed"),
             }
         }
         // 2. Mark before looking anything up: a share posted meanwhile reads
         // the marker after its post, so either it sees the marker or the
         // lookup below sees its record.
-        let marked = if r.corroborated {
-            r.business.clone()
-        } else {
-            None
-        };
-        let mut ledger_error: Option<Error> = None;
-        if let Some(business) = &marked {
-            if let Err(e) = vault.mark_revoked(business, &[]).await {
-                tracing::warn!(kind = ?e.kind(), "revocation: marker not written; revoking anyway");
-                ledger_error = Some(e);
-            }
-            if let Some(waba) = r.waba {
-                match vault.credit(waba).await {
-                    // An unreadable record is left alone (and reported by the
-                    // caller's read); only a readable one is completed.
-                    Ok(_) => {
-                        if let Err(e) = vault.note_business(waba, business).await {
-                            tracing::warn!(kind = ?e.kind(), "revocation: business not recorded");
-                            ledger_error.get_or_insert(e);
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(kind = ?e.kind(), "revocation: credit record unreadable");
-                    }
-                }
-            }
+        let mut ledger: Option<Error> = None;
+        let mut marked = false;
+        if r.corroborated
+            && let Some(business) = &r.business
+        {
+            mark(vault, business, &[], r.waba, &mut ledger).await;
+            marked = true;
         }
-        // 3. An allocation a racing share recorded since the first read.
+        // 3. The ledger again: an allocation a racing share recorded since
+        // the first read, and a share posted whose outcome is unknown.
+        let mut pending = None;
         if let Some(waba) = r.waba
             && let Ok(Some(credit)) = vault.credit(waba).await
-            && let Some(allocation) = credit.allocation_config_id
-            && !r.known.contains(&allocation)
         {
-            r.known.push(allocation);
+            if let Some(allocation) = credit.allocation_config_id
+                && !r.known.contains(&allocation)
+            {
+                r.known.push(allocation);
+            }
+            pending = credit.pending_share;
         }
         // 4. Revoke.
-        let result = system.revoke_all(line, r.business.as_ref(), &r.known).await;
-        // 5. The marker lists what is revoked, even after a partial run.
-        if let Some(business) = &marked {
-            let ids: Vec<AllocationConfigId> = match &result {
-                Ok(report) => report.all().cloned().collect(),
-                Err(e) => e
-                    .credit()
-                    .and_then(CreditError::revocation)
-                    .map(|r| r.report.all().cloned().collect())
-                    .unwrap_or_default(),
-            };
-            if !ids.is_empty()
-                && let Err(e) = vault.mark_revoked(business, &ids).await
-            {
-                tracing::warn!(kind = ?e.kind(), "revocation: marker not updated");
-                ledger_error.get_or_insert(e);
+        let revoked = system.revoke_all(line, r.business.as_ref(), &r.known).await;
+        let mut out = revoked.outcome;
+        // 5. The marker lists what is revoked, even after a partial run. A
+        // business not marked yet (its check failed) is marked once the
+        // revocation's own lookup attributed one of these records to it.
+        if let Some(business) = &r.business {
+            let ids: Vec<AllocationConfigId> = out.report.all().cloned().collect();
+            if marked {
+                if !ids.is_empty()
+                    && let Err(e) = vault.mark_revoked(business, &ids).await
+                {
+                    tracing::warn!(kind = ?e.kind(), "revocation: marker not updated");
+                    ledger.get_or_insert(e);
+                }
+            } else if ids.iter().any(|id| revoked.named.contains(id)) {
+                mark(vault, business, &ids, r.waba, &mut ledger).await;
             }
         }
-        match (result, ledger_error) {
-            (Ok(report), None) => Ok(report),
-            (Ok(report), Some(e)) => {
-                let mut incomplete = RevocationIncomplete::new(report);
-                incomplete.deletes_sent = !incomplete.report.revoked.is_empty();
-                incomplete.source = Some(Box::new(e));
-                Err(incomplete.into())
+        // 6. A share posted whose outcome is unknown (its answer lost, or
+        // still in flight) is settled only by a record revoked now: records
+        // found already revoked say nothing about it.
+        if let (Some(waba), Some(_)) = (r.waba, pending) {
+            if out.report.revoked.is_empty() {
+                out.share_pending = true;
+            } else if !out.is_incomplete()
+                && let Err(e) = settle_pending(vault, waba, None).await
+            {
+                ledger.get_or_insert(e);
             }
-            (Err(e), _) => Err(e),
+        }
+        // Ledger failures do not make the revocation unretryable, and are
+        // kept next to a failure on Meta's side.
+        out.ledger = ledger.map(Box::new);
+        finish(out)
+    }
+}
+
+/// Mark `business` revoked (adding `ids`) and, for a WABA, record the
+/// business in its credit record when it names none, so
+/// [`TokenVault::rotate`] reaches the marker. Failures go to `ledger`.
+async fn mark(
+    vault: &TokenVault,
+    business: &BusinessId,
+    ids: &[AllocationConfigId],
+    waba: Option<&WabaId>,
+    ledger: &mut Option<Error>,
+) {
+    if let Err(e) = vault.mark_revoked(business, ids).await {
+        tracing::warn!(kind = ?e.kind(), "revocation: marker not written; revoking anyway");
+        ledger.get_or_insert(e);
+    }
+    if let Some(waba) = waba {
+        match vault.credit(waba).await {
+            // An unreadable record is left alone (and reported by the
+            // caller's read); only a readable one is completed.
+            Ok(_) => {
+                if let Err(e) = vault.note_business(waba, business).await {
+                    tracing::warn!(kind = ?e.kind(), "revocation: business not recorded");
+                    ledger.get_or_insert(e);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(kind = ?e.kind(), "revocation: credit record unreadable");
+            }
         }
     }
 }
@@ -753,7 +777,6 @@ async fn records(
     Ok(records)
 }
 
-#[allow(clippy::too_many_lines)] // one check per documented failure mode, in order
 async fn share_leased(
     es: &EmbeddedSignup,
     plan: &CreditPlan<'_>,
@@ -806,6 +829,14 @@ async fn share_leased(
         .await?
         .map(|(_, version)| version);
     if marker.is_some() && !plan.reshare_after_revocation {
+        // A share whose outcome is unknown may be live though the business
+        // was revoked since: "revoked, nothing posted" would hide it.
+        if let Some(at) = credit.pending_share {
+            return Err(CreditError::Reconcile(format!(
+                "a share posted at {at} has no recorded outcome, and the credit line of business {owner} was revoked since: that share may be live. Call revoke_credit_line again and check the WABA's funding in Meta Business Suite"
+            ))
+            .into());
+        }
         return Err(revoked(&owner, "recorded by revoke_credit_line"));
     }
 
@@ -825,6 +856,50 @@ async fn share_leased(
         }
     }
 
+    // 3, 4.
+    let already = already_funded(&system, business, waba, &found, credit.pending_share).await?;
+
+    // 5. Seal the owner, the currency and, before a post, the "posted,
+    // outcome unknown" flag.
+    credit.business_id = Some(owner.clone());
+    credit.currency = Some(plan.currency.clone());
+    if already.is_none() {
+        credit.pending_share = Some(vault.now());
+    }
+    vault.put_credit(&credit, version).await?;
+
+    // 6. If the line does not fund the WABA yet, share it.
+    let share = Share {
+        system: &system,
+        business,
+        vault,
+        plan,
+        waba,
+        owner: &owner,
+    };
+    let mut posted = Posted::default();
+    let allocation = match already {
+        Some(id) => id,
+        None => match post_share(&share, &found, lease, &mut posted).await {
+            Ok(id) => id,
+            Err(e) => return Err(after_failed_post(&share, marker, &posted, e).await),
+        },
+    };
+
+    // 7, 8.
+    record_share(&share, marker, posted.any, allocation).await
+}
+
+/// Steps 3 and 4 of a share: the record among `found` that already funds
+/// the WABA, if any, and a refusal when a share posted earlier with no
+/// recorded outcome (`pending`) could be what funds it.
+async fn already_funded(
+    system: &CreditLines,
+    business: &Client,
+    waba: &WabaId,
+    found: &Records,
+    pending: Option<time::OffsetDateTime>,
+) -> Result<Option<AllocationConfigId>> {
     // 3. Does one of them already fund the WABA? (Opted in, a record of
     // unknown status is checked too.)
     let mut funding: Option<WabaFunding> = None;
@@ -848,9 +923,13 @@ async fn share_leased(
 
     // 4. A share posted earlier whose outcome was never recorded, and
     // nothing found funds the WABA: if something else does, posting again
-    // could fund it twice or fail half-way.
+    // could fund it twice or fail half-way. When nothing does, it is posted
+    // again: that assumes the lookup and `primary_funding_id` show a share
+    // once Meta applied it, which Meta does not document (the two-call
+    // method's share alone funds nothing, so for it only the lookup
+    // tells).
     if already.is_none()
-        && let Some(at) = credit.pending_share
+        && let Some(at) = pending
     {
         let funding = match funding {
             Some(funding) => funding,
@@ -864,46 +943,151 @@ async fn share_leased(
         }
     }
 
-    // 5. Seal the owner, the currency and, before a post, the "posted,
-    // outcome unknown" flag.
-    credit.business_id = Some(owner.clone());
-    credit.currency = Some(plan.currency.clone());
-    if already.is_none() {
-        credit.pending_share = Some(vault.now());
-    }
-    vault.put_credit(&credit, version).await?;
+    Ok(already)
+}
 
-    // 6. If the line does not fund the WABA yet, share it.
-    let mut posted = false;
-    let allocation = if let Some(id) = already {
-        id
-    } else {
-        let shared = post_share(
-            &system,
-            business,
-            vault,
-            plan,
-            waba,
-            &owner,
-            &found,
-            lease,
-            &mut posted,
-        )
-        .await;
-        match shared {
-            Ok(id) => id,
-            Err(e) => {
-                if !e.may_have_been_sent() {
-                    // Meta provably did nothing: the outcome is known.
-                    clear_pending(vault, waba).await;
+/// What the posts of one share, and what follows them, work on.
+struct Share<'a> {
+    /// The partner's credit lines (system user token).
+    system: &'a CreditLines,
+    /// The merchant's client (business token).
+    business: &'a Client,
+    vault: &'a TokenVault,
+    plan: &'a CreditPlan<'a>,
+    waba: &'a WabaId,
+    /// The WABA's verified owner business.
+    owner: &'a BusinessId,
+}
+
+/// How far [`post_share`] got.
+#[derive(Default)]
+struct Posted {
+    /// A request that may change Meta's side went out.
+    any: bool,
+    /// The allocation the two-call method's share made, once it answered.
+    shared: Option<AllocationConfigId>,
+    /// Whether `shared` is recorded in the ledger.
+    recorded: bool,
+}
+
+/// Post the share with the configured method, saying in `posted` how far it
+/// got. A failure after the two-call method's share went out says so:
+/// [`CreditError::AttachFailed`] when the attach provably reached nothing,
+/// [`CreditError::Busy`] with `posted` when the lease was lost.
+async fn post_share(
+    share: &Share<'_>,
+    found: &Records,
+    lease: &mut u64,
+    posted: &mut Posted,
+) -> Result<AllocationConfigId> {
+    let Share {
+        system,
+        business,
+        vault,
+        plan,
+        waba,
+        owner,
+    } = share;
+    let line = &plan.partner.credit_line_id;
+    match plan.partner.method {
+        CreditSharing::ShareAndAttach => {
+            renew(vault, waba, lease, false).await?;
+            posted.any = true;
+            Ok(system
+                .share_and_attach(line, waba, &plan.currency)
+                .await?
+                .allocation_config_id)
+        }
+        CreditSharing::ShareThenAttach => {
+            if found.active.is_empty() {
+                renew(vault, waba, lease, false).await?;
+                posted.any = true;
+                let id = system.share(line, owner).await?.allocation_config_id;
+                posted.shared = Some(id.clone());
+                // Recorded before the attach: a resume then checks it even
+                // if the lookup does not list it.
+                let recorded = vault
+                    .update_credit(waba, |c| {
+                        c.allocation_config_id = Some(id.clone());
+                        true
+                    })
+                    .await;
+                if !matches!(recorded, Ok(Some(_))) {
+                    return Err(CreditError::Reconcile(format!(
+                        "the line was shared with the owner business (allocation {id}) but the credit ledger could not record it; nothing was attached"
+                    ))
+                    .into());
                 }
-                return Err(e);
+                posted.recorded = true;
+            }
+            renew(vault, waba, lease, posted.any).await?;
+            posted.any = true;
+            match business
+                .credit_lines()
+                .attach(line, waba, &plan.currency)
+                .await
+            {
+                Ok(attached) => Ok(attached.allocation_config_id),
+                // The share went out and is recorded: say so, whatever the
+                // attach's own error says.
+                Err(e) => match &posted.shared {
+                    Some(id) if !e.may_have_been_sent() => Err(CreditError::AttachFailed {
+                        allocation_config_id: id.clone(),
+                        source: Box::new(e),
+                    }
+                    .into()),
+                    _ => Err(e),
+                },
             }
         }
-    };
+    }
+}
 
-    // 7. Record it, merging with whatever changed meanwhile: never "busy"
-    // once a share went out.
+/// A post failed. When Meta provably did nothing, the outcome is known:
+/// the pending flag is cleared and the error returned (a post that went
+/// out before the failing one already made the error say so, in
+/// [`post_share`]). Otherwise a share may be live: a revocation that ran
+/// meanwhile is looked for, as after a successful post, and a lost answer
+/// is [`CreditError::Reconcile`], never an invitation to retry at once.
+async fn after_failed_post(
+    share: &Share<'_>,
+    marker: Option<u64>,
+    posted: &Posted,
+    e: Error,
+) -> Error {
+    if !e.may_have_been_sent() {
+        clear_pending(share.vault, share.waba).await;
+        return e;
+    }
+    if revoked_since(share.vault, share.owner, marker, false).await {
+        return revoke_raced(share, posted.shared.as_ref(), posted.recorded).await;
+    }
+    if e.credit().is_some() {
+        // Already says what was posted (Busy, Reconcile, AttachFailed).
+        return e;
+    }
+    tracing::warn!(waba_id = %share.waba, kind = ?e.kind(), "credit line share: answer lost");
+    CreditError::Reconcile(format!(
+        "the answer to this step's credit line post was lost ({:?}): the share may have gone through. Do not retry at once: resume checks Meta's records first (the line's records for the owner business, and the WABA's primary funding) and posts again only when none funds the WABA, which assumes Meta lists a share as soon as it applied it (undocumented)",
+        e.kind()
+    ))
+    .into()
+}
+
+/// Steps 7 and 8 of a share: record the allocation, merging with whatever
+/// changed meanwhile (never "busy" once a share went out), then check
+/// whether a revocation of the owner ran meanwhile. A revocation writes its
+/// marker before it looks anything up, and this step reads it after
+/// posting: one of the two sees the other.
+async fn record_share(
+    share: &Share<'_>,
+    marker: Option<u64>,
+    posted: bool,
+    allocation: AllocationConfigId,
+) -> Result<AllocationConfigId> {
+    let Share {
+        vault, waba, owner, ..
+    } = share;
     let now = vault.now();
     let recorded = vault
         .update_credit(waba, |c| {
@@ -911,44 +1095,17 @@ async fn share_leased(
                 c.shared_at = Some(now);
             }
             c.allocation_config_id = Some(allocation.clone());
-            c.business_id.get_or_insert_with(|| owner.clone());
+            c.business_id.get_or_insert_with(|| (*owner).clone());
             c.pending_share = None;
             true
         })
         .await;
-
-    // 8. Did a revocation of the owner run meanwhile? It writes its marker
-    // before it looks anything up, and this step reads it after posting:
-    // one of the two sees the other.
-    let raced = match vault.revoked_versioned(&owner).await {
-        // Gone: another re-share of the business cleared it (a revocation
-        // never deletes a marker).
-        Ok(None) => false,
-        Ok(Some((_, now))) => match marker {
-            Some(then) if then == now => {
-                // Opted in: clear it, unless a revocation touched it since.
-                match vault.clear_revoked(&owner, then).await {
-                    Ok(cleared) => !cleared,
-                    Err(e) => {
-                        // A leftover marker only makes onboarding stricter.
-                        tracing::warn!(kind = ?e.kind(), "revocation marker not cleared");
-                        false
-                    }
-                }
-            }
-            _ => true,
-        },
-        Err(e) => {
-            tracing::warn!(kind = ?e.kind(), "revocation marker unreadable after the share");
-            true
-        }
-    };
-    if raced {
+    if revoked_since(vault, owner, marker, true).await {
         return Err(if posted {
             let recorded = matches!(recorded, Ok(Some(_)));
-            revoke_raced_share(&system, vault, line, &owner, &allocation, recorded).await
+            revoke_raced(share, Some(&allocation), recorded).await
         } else {
-            revoked(&owner, "a revocation ran while this step checked the line")
+            revoked(owner, "a revocation ran while this step checked the line")
         });
     }
     match recorded {
@@ -964,57 +1121,43 @@ async fn share_leased(
     }
 }
 
-/// Post the share with the configured method; `posted` turns `true` once a
-/// request went out.
-#[allow(clippy::too_many_arguments)]
-async fn post_share(
-    system: &CreditLines,
-    business: &Client,
+/// Whether a revocation of `owner` ran since this step read its marker at
+/// version `then` (`None`: there was none). A marker that cannot be read
+/// counts as one.
+///
+/// `settle`: the share succeeded, so an opted-in re-share clears the marker
+/// it read, by compare-and-swap on that version: a revocation that touched
+/// it since makes the clear fail, and counts.
+///
+/// A marker that is gone counts as none: another opted-in re-share of the
+/// business cleared it (a revocation never deletes one). A revocation that
+/// ran before that clear, and whose lookup missed this share, is then not
+/// seen here: the other re-share's opt-in funds the business again anyway.
+async fn revoked_since(
     vault: &TokenVault,
-    plan: &CreditPlan<'_>,
-    waba: &WabaId,
     owner: &BusinessId,
-    found: &Records,
-    lease: &mut u64,
-    posted: &mut bool,
-) -> Result<AllocationConfigId> {
-    let line = &plan.partner.credit_line_id;
-    match plan.partner.method {
-        CreditSharing::ShareAndAttach => {
-            renew(vault, waba, lease, false).await?;
-            *posted = true;
-            Ok(system
-                .share_and_attach(line, waba, &plan.currency)
-                .await?
-                .allocation_config_id)
-        }
-        CreditSharing::ShareThenAttach => {
-            if found.active.is_empty() {
-                renew(vault, waba, lease, false).await?;
-                *posted = true;
-                let shared = system.share(line, owner).await?.allocation_config_id;
-                // Recorded before the attach: a resume then checks it even
-                // if the lookup does not list it.
-                let recorded = vault
-                    .update_credit(waba, |c| {
-                        c.allocation_config_id = Some(shared.clone());
-                        true
-                    })
-                    .await;
-                if !matches!(recorded, Ok(Some(_))) {
-                    return Err(CreditError::Reconcile(format!(
-                        "the line was shared with the owner business (allocation {shared}) but the credit ledger could not record it; nothing was attached"
-                    ))
-                    .into());
+    then: Option<u64>,
+    settle: bool,
+) -> bool {
+    match vault.revoked_versioned(owner).await {
+        Ok(None) => false,
+        Ok(Some((_, now))) if then == Some(now) => {
+            if !settle {
+                return false;
+            }
+            match vault.clear_revoked(owner, now).await {
+                Ok(cleared) => !cleared,
+                Err(e) => {
+                    // A leftover marker only makes onboarding stricter.
+                    tracing::warn!(kind = ?e.kind(), "revocation marker not cleared");
+                    false
                 }
             }
-            renew(vault, waba, lease, *posted).await?;
-            *posted = true;
-            Ok(business
-                .credit_lines()
-                .attach(line, waba, &plan.currency)
-                .await?
-                .allocation_config_id)
+        }
+        Ok(Some(_)) => true,
+        Err(e) => {
+            tracing::warn!(kind = ?e.kind(), "revocation marker unreadable after the share");
+            true
         }
     }
 }
@@ -1035,50 +1178,128 @@ async fn clear_pending(vault: &TokenVault, waba: &WabaId) {
     }
 }
 
-/// A revocation of `owner` ran while this step posted a share: revoke the
-/// new allocation at once, add it to the marker, and report the business
-/// revoked.
-async fn revoke_raced_share(
-    system: &CreditLines,
+/// A share whose outcome was unknown is settled (revoked): clear the flag,
+/// and record `allocation`, what it made, when known.
+async fn settle_pending(
     vault: &TokenVault,
-    line: &CreditLineId,
-    owner: &BusinessId,
-    allocation: &AllocationConfigId,
+    waba: &WabaId,
+    allocation: Option<&AllocationConfigId>,
+) -> Result<()> {
+    vault
+        .update_credit(waba, |c| {
+            let known = allocation.is_none_or(|a| c.allocation_config_id.as_ref() == Some(a));
+            if c.pending_share.is_none() && known {
+                return false;
+            }
+            c.pending_share = None;
+            if let Some(allocation) = allocation {
+                c.allocation_config_id = Some(allocation.clone());
+            }
+            true
+        })
+        .await?
+        .map(|_| ())
+        .ok_or_else(|| super::ledger::busy("the WABA's credit record kept changing"))
+}
+
+/// A revocation of the owner ran while this step posted: revoke what the
+/// post made at once, add it to the marker, and say what happened.
+///
+/// `made` is the allocation the post made, when known (its answer, or the
+/// two-call method's share); `None` when the answer was lost, and then
+/// every active record naming the owner is revoked, and only a record
+/// revoked now can be that share. `recorded`: whether the ledger holds
+/// `made`.
+async fn revoke_raced(
+    share: &Share<'_>,
+    made: Option<&AllocationConfigId>,
     recorded: bool,
 ) -> Error {
-    let outcome = system
-        .revoke_all(line, Some(owner), std::slice::from_ref(allocation))
-        .await;
-    let ids: Vec<AllocationConfigId> = match &outcome {
-        Ok(report) => report.all().cloned().collect(),
-        Err(e) => e
-            .credit()
-            .and_then(CreditError::revocation)
-            .map(|r| r.report.all().cloned().collect())
-            .unwrap_or_default(),
-    };
+    let Share {
+        system,
+        vault,
+        plan,
+        waba,
+        owner,
+        ..
+    } = share;
+    let line = &plan.partner.credit_line_id;
+    let known: Vec<AllocationConfigId> = made.into_iter().cloned().collect();
+    let out = system.revoke_all(line, Some(owner), &known).await.outcome;
+    let ids: Vec<AllocationConfigId> = out.report.all().cloned().collect();
     if let Err(e) = vault.mark_revoked(owner, &ids).await {
         tracing::warn!(kind = ?e.kind(), "revocation marker not updated after a raced share");
     }
-    let what = match (&outcome, recorded) {
-        (Ok(_), _) => "was revoked at once",
-        (Err(e), true) => {
-            tracing::warn!(kind = ?e.kind(), "raced share not revoked");
-            "could not be revoked: it is recorded in the credit ledger, call revoke_credit_line again"
-        }
-        (Err(e), false) => {
-            tracing::warn!(kind = ?e.kind(), "raced share neither revoked nor recorded");
-            "could be neither revoked nor recorded: revoke it in Meta Business Suite"
-        }
+    let settled = match made {
+        Some(made) => out.report.all().any(|id| id == made),
+        None => !out.is_incomplete() && !out.report.revoked.is_empty(),
     };
-    CreditError::Revoked {
-        business_id: Some(owner.clone()),
-        reason: format!(
-            "a revocation of business {owner} ran while this step shared the credit line; the new allocation {allocation} {what}"
-        ),
-        posted: true,
+    if settled {
+        let what = match (made, out.report.revoked.as_slice()) {
+            (Some(id), _) | (None, [id]) => Some(id),
+            (None, _) => None,
+        };
+        if let Err(e) = settle_pending(vault, waba, what).await {
+            tracing::warn!(kind = ?e.kind(), "raced share revoked; the ledger not updated");
+        }
+        let revoked_now = match made {
+            Some(id) => format!("the new allocation {id} was revoked at once"),
+            None => format!(
+                "its answer was lost, and the records naming the business were revoked at once ({:?})",
+                out.report.revoked
+            ),
+        };
+        return CreditError::Revoked {
+            business_id: Some((*owner).clone()),
+            reason: format!(
+                "a revocation of business {owner} ran while this step shared the credit line; {revoked_now}"
+            ),
+            posted: true,
+        }
+        .into();
     }
-    .into()
+    tracing::warn!(kind = ?out.source.as_ref().map(|e| e.kind()), "raced share not revoked");
+    match (made, recorded) {
+        (Some(id), true) => CreditError::Revoked {
+            business_id: Some((*owner).clone()),
+            reason: format!(
+                "a revocation of business {owner} ran while this step shared the credit line; the new allocation {id} could not be revoked: it is recorded in the credit ledger, call revoke_credit_line again"
+            ),
+            posted: true,
+        }
+        .into(),
+        (Some(id), false) => CreditError::Reconcile(format!(
+            "a revocation of business {owner} ran while this step shared the credit line; the new allocation {id} could be neither revoked nor recorded: revoke it in Meta Business Suite"
+        ))
+        .into(),
+        (None, _) => {
+            // Kept pending for the next revocation, even if a revocation
+            // settled the flag while this post was in flight.
+            if let Err(e) = keep_pending(vault, waba).await {
+                tracing::warn!(kind = ?e.kind(), "pending share flag not kept");
+            }
+            CreditError::Reconcile(format!(
+                "a revocation of business {owner} ran while this step shared the credit line, and the share's answer was lost; no record of it could be revoked (Meta's lookup may not list it yet): it may be live. Call revoke_credit_line again (the ledger keeps the share pending) and check the WABA's funding in Meta Business Suite"
+            ))
+            .into()
+        }
+    }
+}
+
+/// Set the pending share flag again if something cleared it.
+async fn keep_pending(vault: &TokenVault, waba: &WabaId) -> Result<()> {
+    let now = vault.now();
+    vault
+        .update_credit(waba, |c| {
+            if c.pending_share.is_some() {
+                return false;
+            }
+            c.pending_share = Some(now);
+            true
+        })
+        .await?
+        .map(|_| ())
+        .ok_or_else(|| super::ledger::busy("the WABA's credit record kept changing"))
 }
 
 #[cfg(test)]
@@ -1230,6 +1451,8 @@ mod tests {
         inner: MemoryKvStore,
         touch_marker_before_clear: std::sync::atomic::AtomicBool,
         refuse_marker_writes: std::sync::atomic::AtomicBool,
+        refuse_credit_writes: std::sync::atomic::AtomicBool,
+        refuse_lease_writes: std::sync::atomic::AtomicBool,
     }
 
     impl TestKv {
@@ -1237,16 +1460,23 @@ mod tests {
             &self,
             key: &wa_core::store::StoreKey,
         ) -> Result<(), wa_core::error::StorageError> {
-            if key.key().starts_with("revoked/")
-                && self
-                    .refuse_marker_writes
-                    .load(std::sync::atomic::Ordering::SeqCst)
+            let on = |flag: &std::sync::atomic::AtomicBool| {
+                flag.load(std::sync::atomic::Ordering::SeqCst)
+            };
+            let k = key.key();
+            if (k.starts_with("revoked/") && on(&self.refuse_marker_writes))
+                || (k.starts_with("credit/") && on(&self.refuse_credit_writes))
+                || (k.starts_with("credit-lease/") && on(&self.refuse_lease_writes))
             {
                 return Err(wa_core::error::StorageError::Backend(anyhow::anyhow!(
-                    "marker writes refused"
+                    "writes refused"
                 )));
             }
             Ok(())
+        }
+
+        fn refuse(flag: &std::sync::atomic::AtomicBool) {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
         }
     }
 
@@ -1354,6 +1584,26 @@ mod tests {
             super::super::vault::TOKEN_NAMESPACE,
             format!("credit-lease/{WABA}"),
         )
+    }
+
+    /// Another process revokes the line right before the share's POST is
+    /// answered: its lookup finds nothing yet, and the ledger shows the
+    /// share in flight, so it reports the revocation incomplete (call
+    /// again), never done.
+    async fn revoke_before_the_post(other: &Harness) {
+        let err = other
+            .es
+            .revoke_credit_line(&waba(), None, &other.vault)
+            .await
+            .unwrap_err();
+        let incomplete = err.credit().and_then(CreditError::revocation).unwrap();
+        assert_eq!(
+            incomplete.report.all().count(),
+            0,
+            "it looked before the share"
+        );
+        assert!(incomplete.share_pending, "{err}");
+        assert!(err.is_retryable() && !err.may_have_been_sent(), "{err}");
     }
 
     fn deletes(reqs: &[RecordedRequest]) -> Vec<String> {
@@ -2101,6 +2351,24 @@ mod tests {
         );
         let err = h.onboard(&request).await.unwrap_err();
         assert_eq!(step(&err), SHARE_CREDIT_LINE);
+        // The attach reached nothing, but the share went out: the answer
+        // says so, and the ledger keeps the outcome pending.
+        assert!(
+            matches!(err.credit(), Some(CreditError::AttachFailed { allocation_config_id, .. }) if allocation_config_id.as_str() == ALLOCATION),
+            "{err}"
+        );
+        assert!(err.may_have_been_sent(), "the share went out");
+        assert!(!err.is_retryable(), "a 400: fix the request, then resume");
+        assert_eq!(err.kind(), ErrorKind::InvalidParameter);
+        assert!(
+            h.vault
+                .credit(&waba())
+                .await
+                .unwrap()
+                .unwrap()
+                .pending_share
+                .is_some()
+        );
         let before = h.t.requests().len();
 
         h.t.push_json(200, success()); // subscribe
@@ -2826,17 +3094,28 @@ mod tests {
 
     /// Fix 2, the decisive test: a revocation runs between the share's
     /// marker check and its POST (another process: it finds nothing to
-    /// revoke yet and returns). The share reads the marker after posting,
-    /// revokes what it just shared, and reports the business revoked: the
-    /// line ends revoked.
+    /// revoke yet, and reports the share in flight). The share reads the
+    /// marker after posting, revokes what it just shared, and reports the
+    /// business revoked: the line ends revoked. B (security review of
+    /// caadb55): the same when the POST's answer is lost.
     #[tokio::test]
     async fn a_revocation_racing_a_share_ends_with_the_line_revoked() {
+        for answer_lost in [false, true] {
+            a_revocation_racing_a_share(answer_lost).await;
+        }
+    }
+
+    async fn a_revocation_racing_a_share(answer_lost: bool) {
         let (h, hooked, other) = hooked_harness(CreditSharing::ShareAndAttach, Arc::default());
         script_until_subscribe(&h.t, owner());
         h.t.push_json(200, success()); // assigned_users
         h.t.push_json(200, nothing_shared()); // the share's check: nothing yet
         h.t.push_json(200, nothing_shared()); // the revocation's lookup, before the POST
-        h.t.push_json(200, shared_and_attached()); // the POST
+        if answer_lost {
+            h.t.push_error(|| TransportError::Timeout); // the POST
+        } else {
+            h.t.push_json(200, shared_and_attached()); // the POST
+        }
         h.t.push_json(200, shared_record(ALLOCATION)); // the share revokes itself
         h.t.push_json(200, active());
         h.t.push_json(200, success());
@@ -2844,16 +3123,7 @@ mod tests {
         hooked.before(
             Method::POST,
             "/whatsapp_credit_sharing_and_attach",
-            move || {
-                Box::pin(async move {
-                    let report = other
-                        .es
-                        .revoke_credit_line(&waba(), None, &other.vault)
-                        .await
-                        .unwrap();
-                    assert_eq!(report.all().count(), 0, "it looked before the share");
-                })
-            },
+            move || Box::pin(async move { revoke_before_the_post(&other).await }),
         );
         let err = h
             .onboard(&request().currency(WabaCurrency::Usd))
@@ -2891,6 +3161,556 @@ mod tests {
                 .allocation_config_id,
             Some(AllocationConfigId::new(ALLOCATION)),
             "recorded for any later revocation"
+        );
+        assert_eq!(
+            h.vault
+                .credit(&waba())
+                .await
+                .unwrap()
+                .unwrap()
+                .pending_share,
+            None,
+            "the share's outcome is known: revoked"
+        );
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// A (audit of caadb55, `zz_audit_timeout_race.rs`): a revocation runs
+    /// right before a share POST whose answer is then lost. The line ends
+    /// revoked, or reported: never a live share with a "revoked, nothing
+    /// posted" answer. The first case is the auditor's scenario as written,
+    /// with what the fix then asks of Meta scripted after it.
+    #[tokio::test]
+    async fn a_timed_out_share_racing_a_revocation_ends_revoked_or_reported() {
+        let (h, hooked, other) = hooked_harness(CreditSharing::ShareAndAttach, Arc::default());
+        script_until_subscribe(&h.t, owner());
+        h.t.push_json(200, success()); // assigned_users
+        h.t.push_json(200, nothing_shared()); // the share's check
+        h.t.push_json(200, nothing_shared()); // the revocation's lookup, before the POST
+        h.t.push_error(|| TransportError::Timeout); // the POST: applied by Meta, answer lost
+        // The share sees the revocation's marker and revokes by business:
+        // Meta lists the share now.
+        h.t.push_json(200, shared_record(ALLOCATION));
+        h.t.push_json(200, active());
+        h.t.push_json(200, success());
+        h.t.push_json(200, deleted());
+        hooked.before(
+            Method::POST,
+            "/whatsapp_credit_sharing_and_attach",
+            move || Box::pin(async move { revoke_before_the_post(&other).await }),
+        );
+        let err = h
+            .onboard(&request().currency(WabaCurrency::Usd))
+            .await
+            .unwrap_err();
+        assert_eq!(step(&err), SHARE_CREDIT_LINE);
+        assert!(
+            matches!(
+                err.credit(),
+                Some(CreditError::Revoked { posted: true, .. })
+            ),
+            "{err}"
+        );
+        assert!(err.may_have_been_sent() && !err.is_retryable());
+        let reqs = h.t.requests();
+        assert_eq!(deletes(&reqs), [format!("/v25.0/{ALLOCATION}")]);
+        assert!(reqs.iter().all(|r| !r.path().ends_with("/register")));
+        let marker = h
+            .vault
+            .revoked_business(&BusinessId::new(BUSINESS))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            marker.allocation_config_ids,
+            [AllocationConfigId::new(ALLOCATION)]
+        );
+        h.t.push_json(200, success()); // subscribe
+        h.t.push_json(200, success()); // assigned_users
+        let err =
+            h.es.resume(&waba(), &request().currency(WabaCurrency::Usd), &h.vault)
+                .await
+                .unwrap_err();
+        // True now: the share was revoked (the DELETE above was confirmed).
+        assert!(EmbeddedSignup::is_credit_line_revoked(&err), "{err}");
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// A, continued: Meta's lookup does not list the lost share yet, so
+    /// nothing can be revoked: it is reported (`Reconcile`), stays pending,
+    /// and every later answer says so until a revocation revokes it.
+    #[tokio::test]
+    async fn a_timed_out_share_meta_does_not_list_yet_is_reported() {
+        let (h, hooked, other) = hooked_harness(CreditSharing::ShareAndAttach, Arc::default());
+        script_until_subscribe(&h.t, owner());
+        h.t.push_json(200, success()); // assigned_users
+        h.t.push_json(200, nothing_shared()); // the share's check
+        h.t.push_json(200, nothing_shared()); // the revocation's lookup, before the POST
+        h.t.push_error(|| TransportError::Timeout); // the POST
+        h.t.push_json(200, nothing_shared()); // the share's own revocation
+        hooked.before(
+            Method::POST,
+            "/whatsapp_credit_sharing_and_attach",
+            move || Box::pin(async move { revoke_before_the_post(&other).await }),
+        );
+        let err = h
+            .onboard(&request().currency(WabaCurrency::Usd))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err.credit(), Some(CreditError::Reconcile(_))),
+            "{err}"
+        );
+        assert!(err.may_have_been_sent() && !err.is_retryable());
+        assert!(deletes(&h.t.requests()).is_empty());
+        assert!(
+            h.vault
+                .credit(&waba())
+                .await
+                .unwrap()
+                .unwrap()
+                .pending_share
+                .is_some()
+        );
+        assert_eq!(h.t.remaining(), 0);
+
+        // The auditor's resume: a share whose outcome is unknown, and the
+        // business revoked since, is Reconcile, never "revoked, nothing
+        // posted", and sends no credit call.
+        let before = h.t.requests().len();
+        h.t.push_json(200, success()); // subscribe
+        h.t.push_json(200, success()); // assigned_users
+        let err =
+            h.es.resume(&waba(), &request().currency(WabaCurrency::Usd), &h.vault)
+                .await
+                .unwrap_err();
+        assert_eq!(step(&err), SHARE_CREDIT_LINE);
+        assert!(
+            matches!(err.credit(), Some(CreditError::Reconcile(_))),
+            "{err}"
+        );
+        assert!(err.may_have_been_sent());
+        assert_eq!(credit_calls(&h.t.requests()[before..]), 0);
+        assert_eq!(h.t.remaining(), 0);
+
+        // The PARTNER_REMOVED handler's revocation, while Meta still lists
+        // nothing: incomplete, retryable, never done.
+        h.t.push_json(200, nothing_shared());
+        let err =
+            h.es.revoke_credit_line(&waba(), None, &h.vault)
+                .await
+                .unwrap_err();
+        let incomplete = err.credit().and_then(CreditError::revocation).unwrap();
+        assert!(incomplete.share_pending && err.is_retryable(), "{err}");
+        // Called again once Meta lists it: revoked, and settled.
+        h.t.push_json(200, shared_record(ALLOCATION));
+        h.t.push_json(200, active());
+        h.t.push_json(200, success());
+        h.t.push_json(200, deleted());
+        let report =
+            h.es.revoke_credit_line(&waba(), None, &h.vault)
+                .await
+                .unwrap();
+        assert_eq!(report.revoked, [AllocationConfigId::new(ALLOCATION)]);
+        assert_eq!(
+            h.vault
+                .credit(&waba())
+                .await
+                .unwrap()
+                .unwrap()
+                .pending_share,
+            None
+        );
+        h.t.push_json(200, success()); // subscribe
+        h.t.push_json(200, success()); // assigned_users
+        let err =
+            h.es.resume(&waba(), &request().currency(WabaCurrency::Usd), &h.vault)
+                .await
+                .unwrap_err();
+        assert!(EmbeddedSignup::is_credit_line_revoked(&err), "{err}");
+        assert!(!err.may_have_been_sent());
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// Z01: a marker that cannot be read after the POST counts as a
+    /// revocation: the new allocation is revoked, and the marker replaced.
+    #[tokio::test]
+    async fn an_unreadable_marker_after_the_post_revokes_the_share() {
+        let (h, hooked, other) = hooked_harness(CreditSharing::ShareAndAttach, Arc::default());
+        script_until_subscribe(&h.t, owner());
+        h.t.push_json(200, success()); // assigned_users
+        h.t.push_json(200, nothing_shared());
+        h.t.push_json(200, shared_and_attached());
+        h.t.push_json(200, shared_record(ALLOCATION));
+        h.t.push_json(200, active());
+        h.t.push_json(200, success());
+        h.t.push_json(200, deleted());
+        hooked.before(
+            Method::POST,
+            "/whatsapp_credit_sharing_and_attach",
+            move || {
+                Box::pin(async move {
+                    // A marker sealed under a key since dropped, say.
+                    other
+                        .vault
+                        .kv()
+                        .put(
+                            &wa_core::store::StoreKey::new(
+                                super::super::vault::TOKEN_NAMESPACE,
+                                format!("revoked/{BUSINESS}"),
+                            ),
+                            b"{}".to_vec(),
+                            wa_core::store::Expiry::Never,
+                        )
+                        .await
+                        .unwrap();
+                })
+            },
+        );
+        let err = h
+            .onboard(&request().currency(WabaCurrency::Usd))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                err.credit(),
+                Some(CreditError::Revoked { posted: true, .. })
+            ),
+            "{err}"
+        );
+        assert_eq!(deletes(&h.t.requests()), [format!("/v25.0/{ALLOCATION}")]);
+        assert!(
+            h.t.requests()
+                .iter()
+                .all(|r| !r.path().ends_with("/register"))
+        );
+        assert_eq!(
+            h.vault
+                .revoked_business(&BusinessId::new(BUSINESS))
+                .await
+                .unwrap()
+                .unwrap()
+                .allocation_config_ids,
+            [AllocationConfigId::new(ALLOCATION)],
+            "replaced by a readable marker"
+        );
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// Z21: a revocation that runs while `resume` checks a line that already
+    /// funds the WABA: nothing is posted, and the business is reported
+    /// revoked (the revocation revoked that record), not funded.
+    #[tokio::test]
+    async fn a_revocation_during_the_check_is_reported_without_a_post() {
+        let (h, hooked, other) = hooked_harness(CreditSharing::ShareAndAttach, Arc::default());
+        onboarded(&h).await;
+        let before = h.t.requests().len();
+        h.t.push_json(200, success()); // subscribe
+        h.t.push_json(200, success()); // assigned_users
+        h.t.push_json(200, shared_record(ALLOCATION));
+        h.t.push_json(200, active());
+        h.t.push_json(200, receiving_credential(ALLOCATION, CREDENTIAL));
+        // The revocation, right before the WABA's funding is read.
+        h.t.push_json(200, shared_record(ALLOCATION));
+        h.t.push_json(200, active());
+        h.t.push_json(200, success());
+        h.t.push_json(200, deleted());
+        h.t.push_json(200, funding(CREDENTIAL));
+        hooked.before(Method::GET, "/102290129340398", move || {
+            Box::pin(async move {
+                let report = other
+                    .es
+                    .revoke_credit_line(&waba(), None, &other.vault)
+                    .await
+                    .unwrap();
+                assert_eq!(report.revoked, [AllocationConfigId::new(ALLOCATION)]);
+            })
+        });
+        let err =
+            h.es.resume(&waba(), &request().currency(WabaCurrency::Usd), &h.vault)
+                .await
+                .unwrap_err();
+        assert_eq!(step(&err), SHARE_CREDIT_LINE);
+        assert!(
+            matches!(
+                err.credit(),
+                Some(CreditError::Revoked { posted: false, .. })
+            ),
+            "{err}"
+        );
+        assert!(!err.may_have_been_sent());
+        let resumed = &h.t.requests()[before..];
+        assert_eq!(posts_to(resumed, "/whatsapp_credit_sharing_and_attach"), 0);
+        assert!(resumed.iter().all(|r| !r.path().ends_with("/register")));
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// Z13, Z34, Z14: the two-call method shared, then lost its lease (or
+    /// could not renew it) before the attach: nothing is attached, and the
+    /// answer says the share went out; `resume` later attaches it without
+    /// sharing again.
+    #[tokio::test]
+    async fn a_lease_lost_between_the_two_calls_attaches_nothing() {
+        let (h, hooked, other) = hooked_harness(CreditSharing::ShareThenAttach, Arc::default());
+        script_until_subscribe(&h.t, owner());
+        h.t.push_json(200, nothing_shared());
+        h.t.push_json(
+            200,
+            json!({"success": true, "allocation_config_id": ALLOCATION}),
+        );
+        hooked.before(Method::POST, "/whatsapp_credit_sharing", move || {
+            Box::pin(async move {
+                // The lease expired during the share; another onboarding
+                // took it.
+                other.vault.kv().delete(&lease_key()).await.unwrap();
+                other.vault.lease_credit(&waba()).await.unwrap();
+            })
+        });
+        let request = request().currency(WabaCurrency::Usd);
+        let err = h.onboard(&request).await.unwrap_err();
+        assert!(
+            matches!(err.credit(), Some(CreditError::Busy { posted: true, .. })),
+            "{err}"
+        );
+        assert!(err.may_have_been_sent() && err.is_retryable(), "{err}");
+        assert_eq!(posts_to(&h.t.requests(), "/whatsapp_credit_sharing"), 1);
+        assert_eq!(
+            posts_to(&h.t.requests(), "/whatsapp_credit_attach"),
+            0,
+            "no attach without the lease"
+        );
+        let credit = h.vault.credit(&waba()).await.unwrap().unwrap();
+        assert_eq!(
+            credit.allocation_config_id,
+            Some(AllocationConfigId::new(ALLOCATION))
+        );
+        assert!(
+            credit.pending_share.is_some(),
+            "the attach is still unknown"
+        );
+        assert_eq!(h.t.remaining(), 0);
+
+        // Later: the other holder is gone; resume attaches the recorded
+        // share without sharing again.
+        h.vault.kv().delete(&lease_key()).await.unwrap();
+        let before = h.t.requests().len();
+        h.t.push_json(200, success()); // subscribe
+        h.t.push_json(200, nothing_shared()); // the lookup misses it
+        h.t.push_json(200, active()); // the recorded one
+        h.t.push_json(200, receiving_credential(ALLOCATION, CREDENTIAL));
+        h.t.push_json(200, json!({"id": WABA})); // not funded yet
+        h.t.push_json(
+            200,
+            json!({"success": true, "waba_id": WABA, "allocation_config_id": ALLOCATION}),
+        );
+        h.t.push_json(200, success()); // register
+        h.es.resume(&waba(), &request, &h.vault).await.unwrap();
+        let resumed = &h.t.requests()[before..];
+        assert_eq!(posts_to(resumed, "/whatsapp_credit_sharing"), 0);
+        assert_eq!(posts_to(resumed, "/whatsapp_credit_attach"), 1);
+        assert_eq!(h.t.remaining(), 0);
+
+        // The renewal itself fails (the store is down) after the share.
+        let kv = Arc::new(TestKv::default());
+        let (h, hooked, _) = hooked_harness(CreditSharing::ShareThenAttach, kv.clone());
+        script_until_subscribe(&h.t, owner());
+        h.t.push_json(200, nothing_shared());
+        h.t.push_json(
+            200,
+            json!({"success": true, "allocation_config_id": ALLOCATION}),
+        );
+        hooked.before(Method::POST, "/whatsapp_credit_sharing", move || {
+            Box::pin(async move { TestKv::refuse(&kv.refuse_lease_writes) })
+        });
+        let err = h.onboard(&request).await.unwrap_err();
+        assert!(
+            matches!(err.credit(), Some(CreditError::Busy { posted: true, .. })),
+            "a renewal failure after a post is typed: {err}"
+        );
+        assert!(err.may_have_been_sent());
+        assert_eq!(posts_to(&h.t.requests(), "/whatsapp_credit_attach"), 0);
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// Z26, Z28: a share the ledger cannot record is Reconcile, never a raw
+    /// storage error, and the two-call method attaches nothing it could not
+    /// record. A raced share that can be neither revoked nor recorded is
+    /// Reconcile too.
+    #[tokio::test]
+    async fn a_share_the_ledger_cannot_record_is_reconciled() {
+        // One call: shared, not recorded.
+        let kv = Arc::new(TestKv::default());
+        let (h, hooked, _) = hooked_harness(CreditSharing::ShareAndAttach, kv.clone());
+        script_until_subscribe(&h.t, owner());
+        h.t.push_json(200, success()); // assigned_users
+        h.t.push_json(200, nothing_shared());
+        h.t.push_json(200, shared_and_attached());
+        let refuse = kv.clone();
+        hooked.before(
+            Method::POST,
+            "/whatsapp_credit_sharing_and_attach",
+            move || Box::pin(async move { TestKv::refuse(&refuse.refuse_credit_writes) }),
+        );
+        let err = h
+            .onboard(&request().currency(WabaCurrency::Usd))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err.credit(), Some(CreditError::Reconcile(_))),
+            "{err}"
+        );
+        assert!(err.may_have_been_sent() && !err.is_retryable());
+        assert!(
+            h.t.requests()
+                .iter()
+                .all(|r| !r.path().ends_with("/register"))
+        );
+        assert_eq!(h.t.remaining(), 0);
+
+        // Two calls: the share intent cannot be recorded, so no attach.
+        let kv = Arc::new(TestKv::default());
+        let (h, hooked, _) = hooked_harness(CreditSharing::ShareThenAttach, kv.clone());
+        script_until_subscribe(&h.t, owner());
+        h.t.push_json(200, nothing_shared());
+        h.t.push_json(
+            200,
+            json!({"success": true, "allocation_config_id": ALLOCATION}),
+        );
+        hooked.before(Method::POST, "/whatsapp_credit_sharing", move || {
+            Box::pin(async move { TestKv::refuse(&kv.refuse_credit_writes) })
+        });
+        let err = h
+            .onboard(&request().currency(WabaCurrency::Usd))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err.credit(), Some(CreditError::Reconcile(m)) if m.contains("nothing was attached")),
+            "{err}"
+        );
+        assert!(err.may_have_been_sent());
+        assert_eq!(posts_to(&h.t.requests(), "/whatsapp_credit_attach"), 0);
+        assert_eq!(h.t.remaining(), 0);
+
+        // Raced, not recorded, and the revocation fails: Reconcile.
+        let kv = Arc::new(TestKv::default());
+        let (h, hooked, other) = hooked_harness(CreditSharing::ShareAndAttach, kv.clone());
+        script_until_subscribe(&h.t, owner());
+        h.t.push_json(200, success()); // assigned_users
+        h.t.push_json(200, nothing_shared()); // the share's check
+        h.t.push_json(200, nothing_shared()); // the revocation's lookup
+        h.t.push_json(200, shared_and_attached());
+        let failure = json!({"error": {"message": "unknown", "type": "OAuthException", "code": 1}});
+        for _ in 0..4 {
+            h.t.push_json(500, failure.clone()); // lookup, status, DELETE, status
+        }
+        hooked.before(
+            Method::POST,
+            "/whatsapp_credit_sharing_and_attach",
+            move || {
+                Box::pin(async move {
+                    revoke_before_the_post(&other).await;
+                    TestKv::refuse(&kv.refuse_credit_writes);
+                })
+            },
+        );
+        let err = h
+            .onboard(&request().currency(WabaCurrency::Usd))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err.credit(), Some(CreditError::Reconcile(m)) if m.contains("neither revoked nor recorded")),
+            "{err}"
+        );
+        assert!(err.may_have_been_sent() && !err.is_retryable());
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// Z18: an allocation a racing share records after the revocation's
+    /// first read, which Meta's lookup does not list yet, is still revoked.
+    #[tokio::test]
+    async fn a_revocation_revokes_an_allocation_recorded_meanwhile() {
+        let (h, hooked, other) = hooked_harness(CreditSharing::ShareAndAttach, Arc::default());
+        h.t.push_json(200, shared_record("EARLIER")); // the hint has records
+        h.t.push_json(200, nothing_shared()); // the lookup: not listed yet
+        h.t.push_json(200, active()); // the recorded one
+        h.t.push_json(200, success());
+        h.t.push_json(200, deleted());
+        hooked.before(
+            Method::GET,
+            "/owning_credit_allocation_configs",
+            move || {
+                Box::pin(async move {
+                    other
+                        .vault
+                        .update_credit(&waba(), |c| {
+                            c.allocation_config_id = Some(AllocationConfigId::new(ALLOCATION));
+                            true
+                        })
+                        .await
+                        .unwrap();
+                })
+            },
+        );
+        let report =
+            h.es.revoke_credit_line(&waba(), Some(&BusinessId::new(BUSINESS)), &h.vault)
+                .await
+                .unwrap();
+        assert_eq!(report.revoked, [AllocationConfigId::new(ALLOCATION)]);
+        assert_eq!(deletes(&h.t.requests()), [format!("/v25.0/{ALLOCATION}")]);
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// Z08: after a key rotation, reading the ledger re-seals it; the
+    /// version then in hand is the new one, so an opted-in re-share clears
+    /// its own marker instead of taking its re-seal for a revocation.
+    #[tokio::test]
+    async fn a_re_share_after_a_key_rotation_is_not_a_revocation() {
+        let kv = Arc::new(TestKv::default());
+        let (h, _, _) = hooked_harness(CreditSharing::ShareAndAttach, kv.clone());
+        onboarded(&h).await;
+        revoked(&h).await;
+        let rotated = TokenVault::new(
+            kv,
+            VaultKeys::new(VaultKey::new("k2", SecretBytes::new([7; 32])).unwrap())
+                .with_previous(VaultKey::new("k1", SecretBytes::new([42; 32])).unwrap()),
+        )
+        .unwrap()
+        .with_clock(Arc::new(ManualClock::new(datetime!(2026-09-24 12:00 UTC))));
+        let before = h.t.requests().len();
+        h.t.push_json(200, success()); // subscribe
+        h.t.push_json(200, success()); // assigned_users
+        h.t.push_json(200, shared_record(ALLOCATION));
+        h.t.push_json(200, deleted());
+        h.t.push_json(
+            200,
+            json!({"allocation_config_id": "NEW_ALLOCATION", "waba_id": WABA}),
+        );
+        h.t.push_json(200, success()); // register
+        let done =
+            h.es.resume(
+                &waba(),
+                &request()
+                    .currency(WabaCurrency::Usd)
+                    .reshare_after_revocation(),
+                &rotated,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            done.allocation_config_id,
+            Some(AllocationConfigId::new("NEW_ALLOCATION"))
+        );
+        assert!(
+            deletes(&h.t.requests()[before..]).is_empty(),
+            "no self-revocation"
+        );
+        assert!(
+            rotated
+                .revoked_business(&BusinessId::new(BUSINESS))
+                .await
+                .unwrap()
+                .is_none(),
+            "the opt-in cleared the marker"
         );
         assert_eq!(h.t.remaining(), 0);
     }
@@ -2930,11 +3750,19 @@ mod tests {
             "/whatsapp_credit_sharing_and_attach",
             move || {
                 Box::pin(async move {
-                    other
+                    // Only the earlier, revoked record exists yet, and the
+                    // re-share is in flight: not reported complete.
+                    let err = other
                         .es
                         .revoke_credit_line(&waba(), None, &other.vault)
                         .await
-                        .unwrap();
+                        .unwrap_err();
+                    let incomplete = err.credit().and_then(CreditError::revocation).unwrap();
+                    assert!(incomplete.share_pending, "{err}");
+                    assert_eq!(
+                        incomplete.report.already_revoked,
+                        [AllocationConfigId::new(ALLOCATION)]
+                    );
                 })
             },
         );
@@ -3146,6 +3974,83 @@ mod tests {
         assert_eq!(h.t.remaining(), 0);
     }
 
+    /// Item 5 (audit M2): an approval is bound to the token record it was
+    /// given for. A credit record without one (here the one a revocation
+    /// writes the business into, for a token stored in Tech Provider mode)
+    /// is no approval, and neither is one given for an earlier token record.
+    #[tokio::test]
+    async fn an_approval_holds_only_for_the_token_it_was_given_for() {
+        let h = harness(CreditSharing::ShareAndAttach);
+        let request = request().currency(WabaCurrency::Usd);
+        h.vault
+            .store(
+                &StoredBusinessToken::new(WABA, AccessToken::new(TOKEN))
+                    .business_id(BUSINESS)
+                    .phone_number_ids([PHONE]),
+            )
+            .await
+            .unwrap();
+        h.t.push_json(200, shared_record(ALLOCATION));
+        h.t.push_json(200, deleted());
+        h.es.revoke_credit_line(&waba(), None, &h.vault)
+            .await
+            .unwrap();
+        let credit = h.vault.credit(&waba()).await.unwrap().unwrap();
+        assert_eq!(credit.business_id, Some(BusinessId::new(BUSINESS)));
+        assert_eq!(credit.approved_at, None, "vacuous otherwise");
+        let before = h.t.requests().len();
+        let err = h.es.resume(&waba(), &request, &h.vault).await.unwrap_err();
+        assert_eq!(step(&err), APPROVE);
+        assert!(
+            matches!(err.credit(), Some(CreditError::ApprovalRequired(_))),
+            "{err}"
+        );
+        assert_eq!(h.t.requests().len(), before, "nothing sent");
+
+        // Approved through onboarding, then the token record replaced (a
+        // Tech Provider onboarding after an offboard, `TokenVault::store`).
+        let h = harness(CreditSharing::ShareAndAttach);
+        onboarded(&h).await;
+        let mut again = StoredBusinessToken::new(WABA, AccessToken::new(TOKEN))
+            .business_id(BUSINESS)
+            .phone_number_ids([PHONE]);
+        again.created_at = Some(datetime!(2026-09-25 09:00 UTC));
+        h.vault.store(&again).await.unwrap();
+        let before = h.t.requests().len();
+        let err = h.es.resume(&waba(), &request, &h.vault).await.unwrap_err();
+        assert_eq!(step(&err), APPROVE, "{err}");
+        assert_eq!(h.t.requests().len(), before, "nothing sent");
+        // Approved again, for this token record: resume goes on.
+        h.t.push_json(200, success()); // subscribe
+        h.t.push_json(200, success()); // assigned_users
+        h.t.push_json(200, shared_record(ALLOCATION));
+        h.t.push_json(200, active());
+        h.t.push_json(200, receiving_credential(ALLOCATION, CREDENTIAL));
+        h.t.push_json(200, funding(CREDENTIAL));
+        h.t.push_json(200, success()); // register
+        h.es.resume_with_approval(&waba(), &request, &h.vault, |_| async { Ok(()) })
+            .await
+            .unwrap();
+        assert_eq!(
+            h.vault
+                .credit(&waba())
+                .await
+                .unwrap()
+                .unwrap()
+                .approved_token_created_at,
+            Some(datetime!(2026-09-25 09:00 UTC))
+        );
+        h.t.push_json(200, success()); // subscribe
+        h.t.push_json(200, success()); // assigned_users
+        h.t.push_json(200, shared_record(ALLOCATION));
+        h.t.push_json(200, active());
+        h.t.push_json(200, receiving_credential(ALLOCATION, CREDENTIAL));
+        h.t.push_json(200, funding(CREDENTIAL));
+        h.t.push_json(200, success()); // register
+        h.es.resume(&waba(), &request, &h.vault).await.unwrap();
+        assert_eq!(h.t.remaining(), 0);
+    }
+
     /// Fix 4: an unreadable marker is replaced and the revocation goes on;
     /// `offboard` then deletes the token.
     #[tokio::test]
@@ -3207,12 +4112,91 @@ mod tests {
             incomplete.report.revoked,
             [AllocationConfigId::new(ALLOCATION)]
         );
-        assert!(matches!(
-            incomplete.source.as_deref(),
-            Some(Error::Storage(_))
-        ));
+        assert!(incomplete.source.is_none(), "Meta's side is done: {err}");
+        assert!(
+            matches!(incomplete.ledger.as_deref(), Some(Error::Storage(_))),
+            "{err}"
+        );
+        assert!(err.is_retryable(), "calling again writes the marker again");
+        assert_eq!(err.kind(), ErrorKind::ServiceUnavailable);
         assert!(err.may_have_been_sent(), "the DELETE went out");
         assert_eq!(deletes(&h.t.requests()), [format!("/v25.0/{ALLOCATION}")]);
+        assert_eq!(h.t.remaining(), 0);
+
+        // A DELETE whose answer was lost, on a record Meta then reports
+        // DELETED: found revoked, and this call may have done it.
+        h.t.push_json(200, shared_record("A2"));
+        h.t.push_json(200, active());
+        h.t.push_error(|| TransportError::Timeout);
+        h.t.push_json(200, deleted());
+        h.t.push_json(200, deleted()); // the recorded allocation, revoked above
+        let err =
+            h.es.revoke_credit_line(&waba(), None, &h.vault)
+                .await
+                .unwrap_err();
+        let incomplete = err.credit().and_then(CreditError::revocation).unwrap();
+        assert!(
+            incomplete
+                .report
+                .already_revoked
+                .contains(&AllocationConfigId::new("A2")),
+            "{err}"
+        );
+        assert!(incomplete.deletes_sent, "{err}");
+        assert!(err.may_have_been_sent());
+        assert_eq!(h.t.remaining(), 0);
+
+        // Meta's side fails too: both failures are kept.
+        let failure = json!({"error": {"message": "unknown", "type": "OAuthException", "code": 1}});
+        h.t.push_json(500, failure.clone()); // the lookup
+        h.t.push_json(500, failure.clone()); // the recorded allocation's status
+        h.t.push_json(500, failure.clone()); // its DELETE
+        h.t.push_json(500, failure); // its status again
+        let err =
+            h.es.revoke_credit_line(&waba(), None, &h.vault)
+                .await
+                .unwrap_err();
+        let incomplete = err.credit().and_then(CreditError::revocation).unwrap();
+        assert!(incomplete.source.is_some(), "{err}");
+        assert!(
+            matches!(incomplete.ledger.as_deref(), Some(Error::Storage(_))),
+            "{err}"
+        );
+        assert!(err.is_retryable(), "{err}");
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// Item 3: a caller's business whose check failed is not marked before
+    /// the lookup, but is marked (and recorded for the WABA) once the
+    /// revocation's own lookup attributes records to it.
+    #[tokio::test]
+    async fn a_business_whose_check_failed_is_marked_once_its_records_are_found() {
+        let h = harness(CreditSharing::ShareAndAttach);
+        let failure = json!({"error": {"message": "unknown", "type": "OAuthException", "code": 1}});
+        h.t.push_json(500, failure); // the check of the caller's business
+        h.t.push_json(200, shared_record(ALLOCATION)); // the lookup
+        h.t.push_json(200, active());
+        h.t.push_json(200, success());
+        h.t.push_json(200, deleted());
+        let report =
+            h.es.revoke_credit_line(&waba(), Some(&BusinessId::new(BUSINESS)), &h.vault)
+                .await
+                .unwrap();
+        assert_eq!(report.revoked, [AllocationConfigId::new(ALLOCATION)]);
+        assert_eq!(
+            h.vault
+                .revoked_business(&BusinessId::new(BUSINESS))
+                .await
+                .unwrap()
+                .expect("marked after the lookup")
+                .allocation_config_ids,
+            [AllocationConfigId::new(ALLOCATION)]
+        );
+        assert_eq!(
+            h.vault.credit(&waba()).await.unwrap().unwrap().business_id,
+            Some(BusinessId::new(BUSINESS)),
+            "recorded, so rotate reaches the marker"
+        );
         assert_eq!(h.t.remaining(), 0);
     }
 
@@ -3514,7 +4498,7 @@ mod tests {
             "/whatsapp_credit_sharing_and_attach",
             move || {
                 Box::pin(async move {
-                    other.vault.record_approval(&waba()).await.unwrap();
+                    other.vault.record_approval(&waba(), None).await.unwrap();
                 })
             },
         );
@@ -3547,7 +4531,13 @@ mod tests {
         h.t.push_json(200, success()); // assigned_users
         h.t.push_json(200, nothing_shared());
         h.t.push_error(|| TransportError::Timeout);
-        h.onboard(&request).await.unwrap_err();
+        let err = h.onboard(&request).await.unwrap_err();
+        // A lost answer is never an invitation to retry at once.
+        assert!(
+            matches!(err.credit(), Some(CreditError::Reconcile(_))),
+            "{err}"
+        );
+        assert!(err.may_have_been_sent() && !err.is_retryable(), "{err}");
         let credit = h.vault.credit(&waba()).await.unwrap().unwrap();
         assert_eq!(credit.pending_share, Some(datetime!(2026-09-24 12:00 UTC)));
         assert_eq!(credit.allocation_config_id, None);
@@ -3572,7 +4562,10 @@ mod tests {
         );
         assert_eq!(h.t.remaining(), 0);
 
-        // Nothing funds the WABA: the share did not go through, post again.
+        // Nothing funds the WABA: taken as "the share did not go through",
+        // and posted again. That relies on the lookup and the WABA's
+        // `primary_funding_id` showing a share as soon as Meta applied it,
+        // which Meta does not document (the guide says so).
         h.t.push_json(200, success()); // subscribe
         h.t.push_json(200, success()); // assigned_users
         h.t.push_json(200, nothing_shared());
@@ -3587,9 +4580,15 @@ mod tests {
             Some(AllocationConfigId::new(ALLOCATION))
         );
         assert_eq!(h.t.remaining(), 0);
+    }
 
-        // Offboarding such a WABA: revocation (which marks the business)
-        // finds nothing, so the token is kept until someone reconciles.
+    /// Fix 8, (c) and item 6: offboarding a WABA whose share has no recorded
+    /// outcome. The revocation (which marks the business) revokes nothing,
+    /// so the pending share is not settled: incomplete (call again), and
+    /// the token is kept.
+    #[tokio::test]
+    async fn offboarding_a_share_whose_outcome_was_lost_needs_it_revoked() {
+        let request = request().currency(WabaCurrency::Usd);
         let h = harness(CreditSharing::ShareAndAttach);
         script_until_subscribe(&h.t, owner());
         h.t.push_json(200, success()); // assigned_users
@@ -3599,11 +4598,55 @@ mod tests {
         h.t.push_json(200, nothing_shared());
         let err = h.es.offboard(&waba(), None, &h.vault).await.unwrap_err();
         assert_eq!(step(&err), REVOKE_CREDIT_LINE);
-        assert!(
-            matches!(err.credit(), Some(CreditError::Reconcile(_))),
-            "{err}"
+        let incomplete = err.credit().and_then(CreditError::revocation).unwrap();
+        assert!(incomplete.share_pending, "{err}");
+        assert!(err.is_retryable() && !err.may_have_been_sent(), "{err}");
+        assert!(h.vault.get(&waba()).await.unwrap().is_some(), "token kept");
+        assert_eq!(h.t.remaining(), 0);
+
+        // Only an old DELETED record is found: that says nothing about the
+        // pending share either (item 6), so the token is still kept.
+        h.t.push_json(200, shared_record("OLD"));
+        h.t.push_json(200, deleted());
+        let err = h.es.offboard(&waba(), None, &h.vault).await.unwrap_err();
+        let incomplete = err.credit().and_then(CreditError::revocation).unwrap();
+        assert!(incomplete.share_pending, "{err}");
+        assert_eq!(
+            incomplete.report.already_revoked,
+            [AllocationConfigId::new("OLD")]
         );
         assert!(h.vault.get(&waba()).await.unwrap().is_some(), "token kept");
+        assert_eq!(h.t.remaining(), 0);
+
+        // Meta lists the share now: it is revoked, which settles the flag,
+        // and offboarding goes on; a repeat still succeeds.
+        h.t.push_json(200, shared_record(ALLOCATION));
+        h.t.push_json(200, active());
+        h.t.push_json(200, success());
+        h.t.push_json(200, deleted());
+        let off = h.es.offboard(&waba(), None, &h.vault).await.unwrap();
+        assert_eq!(
+            off.credit.unwrap().revoked,
+            [AllocationConfigId::new(ALLOCATION)]
+        );
+        assert!(off.token_deleted);
+        assert_eq!(
+            h.vault
+                .credit(&waba())
+                .await
+                .unwrap()
+                .unwrap()
+                .pending_share,
+            None,
+            "settled by the revocation"
+        );
+        h.t.push_json(200, shared_record(ALLOCATION));
+        h.t.push_json(200, deleted());
+        let again = h.es.offboard(&waba(), None, &h.vault).await.unwrap();
+        assert_eq!(
+            again.credit.unwrap().already_revoked,
+            [AllocationConfigId::new(ALLOCATION)]
+        );
         assert_eq!(h.t.remaining(), 0);
     }
 
@@ -3627,7 +4670,7 @@ mod tests {
             .store(&StoredBusinessToken::new(WABA, AccessToken::new(TOKEN)))
             .await
             .unwrap();
-        h.vault.record_approval(&waba()).await.unwrap();
+        h.vault.record_approval(&waba(), None).await.unwrap();
         assert!(
             h.es.offboard(&waba(), None, &h.vault)
                 .await

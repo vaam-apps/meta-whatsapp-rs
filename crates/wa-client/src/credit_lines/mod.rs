@@ -605,20 +605,24 @@ impl CreditLines {
         credit_line: &CreditLineId,
         business_id: &BusinessId,
     ) -> Result<CreditRevocation> {
-        self.revoke_all(credit_line, Some(business_id), &[]).await
+        self.revoke_all(credit_line, Some(business_id), &[])
+            .await
+            .into_result()
     }
 
     /// [`Self::revoke_for_business`] for `business` (when known), plus
     /// `known`, allocation ids recorded at onboarding that the lookup may
     /// not return. A known id is never revoked if its status names another
-    /// business than `business`.
+    /// business than `business`. Never fails by itself: what is left
+    /// undone is in the outcome ([`RevokeAll::into_result`]).
     pub(crate) async fn revoke_all(
         &self,
         credit_line: &CreditLineId,
         business: Option<&BusinessId>,
         known: &[AllocationConfigId],
-    ) -> Result<CreditRevocation> {
+    ) -> RevokeAll {
         let mut out = RevocationIncomplete::new(CreditRevocation::new(business.cloned()));
+        let mut named: Vec<AllocationConfigId> = Vec::new();
         let mut first_failure: Option<Error> = None;
         let mut targets: Vec<AllocationConfigId> = Vec::new();
         let records = match business {
@@ -635,10 +639,11 @@ impl CreditLines {
         };
         if let Some(business) = business {
             for record in records {
-                let named = record.receiving_business.and_then(|b| b.id);
-                match (record.id, named) {
-                    (Some(id), Some(named)) if &named == business => {
+                let receiving = record.receiving_business.and_then(|b| b.id);
+                match (record.id, receiving) {
+                    (Some(id), Some(owner)) if &owner == business => {
                         if !targets.contains(&id) {
+                            named.push(id.clone());
                             targets.push(id);
                         }
                     }
@@ -682,24 +687,11 @@ impl CreditLines {
                 }
             }
         }
-        if first_failure.is_none()
-            && out.failed.is_empty()
-            && out.unconfirmed.is_empty()
-            && out.unattributed.is_empty()
-        {
-            return Ok(out.report);
-        }
         out.source = first_failure.map(Box::new);
-        tracing::warn!(
-            revoked = ?out.report.revoked,
-            already_revoked = ?out.report.already_revoked,
-            failed = ?out.failed,
-            unconfirmed = ?out.unconfirmed,
-            unattributed = ?out.unattributed,
-            kind = ?out.source.as_ref().map(|e| e.kind()),
-            "credit line revocation incomplete"
-        );
-        Err(out.into())
+        RevokeAll {
+            outcome: out,
+            named,
+        }
     }
 
     /// Revoke one record unless it is already `DELETED` or names another
@@ -772,6 +764,46 @@ impl CreditLines {
 /// bound so a paging loop cannot run away; one customer business has one
 /// record per credit line in Meta's examples.
 pub const MAX_ALLOCATION_PAGES: usize = 20;
+
+/// What [`CreditLines::revoke_all`] did: its report, what it left undone,
+/// and which records the business lookup attributed to the business.
+pub(crate) struct RevokeAll {
+    /// The report, and whatever is left undone (nothing, when
+    /// [`RevocationIncomplete::is_incomplete`] is `false`).
+    /// `deletes_sent` is kept even when nothing is left undone.
+    pub(crate) outcome: RevocationIncomplete,
+    /// The ids the business lookup returned naming the business (not the
+    /// `known` ones, unless the lookup returned them too).
+    pub(crate) named: Vec<AllocationConfigId>,
+}
+
+impl RevokeAll {
+    /// The report, or [`CreditError::RevocationIncomplete`](wa_core::error::CreditError::RevocationIncomplete)
+    /// when anything is left undone.
+    pub(crate) fn into_result(self) -> Result<CreditRevocation> {
+        finish(self.outcome)
+    }
+}
+
+/// `out`'s report, or `out` as [`CreditError::RevocationIncomplete`](wa_core::error::CreditError::RevocationIncomplete)
+/// when anything is left undone (logged, by kind and id only).
+pub(crate) fn finish(out: RevocationIncomplete) -> Result<CreditRevocation> {
+    if !out.is_incomplete() {
+        return Ok(out.report);
+    }
+    tracing::warn!(
+        revoked = ?out.report.revoked,
+        already_revoked = ?out.report.already_revoked,
+        failed = ?out.failed,
+        unconfirmed = ?out.unconfirmed,
+        unattributed = ?out.unattributed,
+        share_pending = out.share_pending,
+        kind = ?out.source.as_ref().map(|e| e.kind()),
+        ledger = ?out.ledger.as_ref().map(|e| e.kind()),
+        "credit line revocation incomplete"
+    );
+    Err(out.into())
+}
 
 /// What happened to one record.
 enum Revoked {
@@ -1403,6 +1435,82 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(report.already_revoked, [AllocationConfigId::new("A4")]);
+        assert_eq!(t.remaining(), 0);
+    }
+
+    /// Z29, Z30: `deletes_sent` counts every DELETE that may have taken
+    /// effect: one whose answer was lost, whether Meta then reports the
+    /// record DELETED or still active. A refused one (4xx) is not counted.
+    #[tokio::test]
+    async fn a_delete_whose_answer_was_lost_counts_as_sent() {
+        let t = ScriptedTransport::new();
+        t.push_json(
+            200,
+            json!({"data": [
+                {"id": "A1", "receiving_business": {"id": CUSTOMER}},
+                {"id": "A2", "receiving_business": {"id": CUSTOMER}}
+            ]}),
+        );
+        // A1: the DELETE times out, then Meta reports it DELETED.
+        t.push_json(200, status(CUSTOMER, false));
+        t.push_error(|| TransportError::Timeout);
+        t.push_json(200, status(CUSTOMER, true));
+        // A2: the DELETE is refused, the record still active.
+        t.push_json(200, status(CUSTOMER, false));
+        t.push_json(
+            403,
+            json!({"error": {"message": "(#200) Permissions error", "type": "OAuthException", "code": 200}}),
+        );
+        t.push_json(200, status(CUSTOMER, false));
+        let err = system(&t)
+            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER))
+            .await
+            .unwrap_err();
+        let report = incomplete(&err);
+        assert_eq!(
+            report.report.already_revoked,
+            [AllocationConfigId::new("A1")]
+        );
+        assert_eq!(report.failed, [AllocationConfigId::new("A2")]);
+        assert!(report.deletes_sent, "A1's DELETE may have done it");
+        assert!(err.may_have_been_sent(), "{err}");
+        assert_eq!(t.remaining(), 0);
+
+        // A3: the DELETE times out and Meta still reports it active.
+        t.push_json(
+            200,
+            json!({"id": "A3", "receiving_business": {"id": CUSTOMER}}),
+        );
+        t.push_json(200, status(CUSTOMER, false));
+        t.push_error(|| TransportError::Timeout);
+        t.push_json(200, status(CUSTOMER, false));
+        let err = system(&t)
+            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER))
+            .await
+            .unwrap_err();
+        let report = incomplete(&err);
+        assert_eq!(report.failed, [AllocationConfigId::new("A3")]);
+        assert!(report.deletes_sent, "the DELETE may still take effect");
+        assert!(err.is_retryable(), "a timeout: call again");
+        assert_eq!(t.remaining(), 0);
+
+        // Refused only: nothing sent.
+        t.push_json(
+            200,
+            json!({"id": "A5", "receiving_business": {"id": CUSTOMER}}),
+        );
+        t.push_json(200, status(CUSTOMER, false));
+        t.push_json(
+            403,
+            json!({"error": {"message": "(#200) Permissions error", "type": "OAuthException", "code": 200}}),
+        );
+        t.push_json(200, status(CUSTOMER, false));
+        let err = system(&t)
+            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER))
+            .await
+            .unwrap_err();
+        assert!(!incomplete(&err).deletes_sent);
+        assert!(!err.may_have_been_sent(), "{err}");
         assert_eq!(t.remaining(), 0);
     }
 

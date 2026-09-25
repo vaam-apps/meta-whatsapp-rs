@@ -443,6 +443,8 @@ impl EmbeddedSignup {
         .map_err(|e| e.in_step(VERIFY_ASSETS))?;
         done.push(VERIFY_ASSETS);
 
+        // The token record stored below: an approval is recorded for it.
+        let created_at = vault.now();
         if let Some(approve) = approve {
             let verified = VerifiedOnboarding {
                 waba_id: assets.waba_id.clone(),
@@ -450,7 +452,7 @@ impl EmbeddedSignup {
                 phone_number_id: assets.phone_number_id.clone(),
                 phone_number_ids: assets.phone_number_ids.clone(),
             };
-            self.approve(plan.as_ref(), vault, verified, approve)
+            self.approve(plan.as_ref(), vault, verified, approve, Some(created_at))
                 .await
                 .map_err(|e| e.in_step(APPROVE))?;
             done.push(APPROVE);
@@ -467,6 +469,7 @@ impl EmbeddedSignup {
         stored.business_id.clone_from(&assets.business_id);
         stored.phone_number_ids.clone_from(&assets.phone_number_ids);
         stored.expires_at = expires_at;
+        stored.created_at = Some(created_at);
         vault
             .store(&stored)
             .await
@@ -498,13 +501,15 @@ impl EmbeddedSignup {
     }
 
     /// Run the integrator's approval and, in Solution Partner mode, record
-    /// it in the credit ledger.
+    /// it in the credit ledger for the token record created at
+    /// `token_created_at`.
     async fn approve<F, Fut>(
         &self,
         plan: Option<&CreditPlan<'_>>,
         vault: &TokenVault,
         verified: VerifiedOnboarding,
         approve: F,
+        token_created_at: Option<OffsetDateTime>,
     ) -> Result<()>
     where
         F: FnOnce(VerifiedOnboarding) -> Fut,
@@ -513,7 +518,7 @@ impl EmbeddedSignup {
         let waba_id = verified.waba_id.clone();
         approve(verified).await?;
         if plan.is_some() {
-            vault.record_approval(&waba_id).await?;
+            vault.record_approval(&waba_id, token_created_at).await?;
         }
         Ok(())
     }
@@ -619,7 +624,7 @@ impl EmbeddedSignup {
                     phone_number_id: phone_number_id.clone(),
                     phone_number_ids: stored.phone_number_ids.clone(),
                 };
-                self.approve(plan.as_ref(), vault, verified, approve)
+                self.approve(plan.as_ref(), vault, verified, approve, stored.created_at)
                     .await
                     .map_err(|e| e.in_step(APPROVE))?;
                 done.push(APPROVE);
@@ -629,10 +634,10 @@ impl EmbeddedSignup {
                     .credit(waba_id)
                     .await
                     .map_err(|e| e.in_step(APPROVE))?
-                    .is_some_and(|c| c.approved_at.is_some());
+                    .is_some_and(|c| c.approves(stored.created_at));
                 if !approved {
                     return Err(Error::from(CreditError::ApprovalRequired(
-                        "no approval of this WABA is recorded (a token stored in Tech Provider mode, or before approvals were recorded): resume with EmbeddedSignup::resume_with_approval".into(),
+                        "no approval of this WABA's stored token is recorded (a token stored in Tech Provider mode, stored again since the approval, or before approvals were recorded): resume with EmbeddedSignup::resume_with_approval".into(),
                     ))
                     .in_step(APPROVE));
                 }

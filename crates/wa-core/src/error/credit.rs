@@ -53,12 +53,15 @@ impl CreditRevocation {
 #[derive(Debug, thiserror::Error)]
 #[error(
     "credit line revocation incomplete: revoked {revoked:?}, already revoked {already:?}, \
-     failed {failed:?}, not confirmed yet {unconfirmed:?}, naming no business {unattributed:?}",
+     failed {failed:?}, not confirmed yet {unconfirmed:?}, naming no business {unattributed:?}\
+     {pending}{ledger}",
     revoked = .report.revoked,
     already = .report.already_revoked,
     failed = .failed,
     unconfirmed = .unconfirmed,
-    unattributed = .unattributed
+    unattributed = .unattributed,
+    pending = if *.share_pending { ", and a share with no recorded outcome was not found" } else { "" },
+    ledger = if .ledger.is_some() { ", and the credit ledger was not updated" } else { "" }
 )]
 #[non_exhaustive]
 pub struct RevocationIncomplete {
@@ -75,12 +78,25 @@ pub struct RevocationIncomplete {
     /// revoked, because they could be another customer's: check them in
     /// Meta Business Suite.
     pub unattributed: Vec<AllocationConfigId>,
+    /// The WABA's credit ledger shows a share posted whose outcome is
+    /// unknown (`StoredCredit::pending_share` in wa-client: a share whose
+    /// answer was lost, or one still in flight), and this call revoked no
+    /// record: that share may be live and not listed by Meta's lookup yet.
+    /// Call again; if it keeps revoking nothing, check the WABA's funding
+    /// in Meta Business Suite.
+    pub share_pending: bool,
     /// Whether a `DELETE` this call sent may have taken effect (one
     /// succeeded, or one failed without proving Meta did nothing).
     pub deletes_sent: bool,
-    /// The first failure behind it (a lookup, a `DELETE`, a record naming
-    /// another business, the vault's ledger), if any. `None` when the only
-    /// problems are [`Self::unconfirmed`] or [`Self::unattributed`] records.
+    /// The vault's credit ledger could not be updated (the revocation
+    /// marker, the business recorded for the WABA, or a settled share):
+    /// onboarding may not know yet that the business is revoked. Does not
+    /// make the revocation unretryable: calling it again writes them again.
+    pub ledger: Option<Box<Error>>,
+    /// The first failure on Meta's side behind it (a lookup, a `DELETE`, a
+    /// record naming another business), if any. `None` when the only
+    /// problems are [`Self::unconfirmed`] or [`Self::unattributed`]
+    /// records, [`Self::share_pending`] or [`Self::ledger`].
     #[source]
     pub source: Option<Box<Error>>,
 }
@@ -93,15 +109,29 @@ impl RevocationIncomplete {
             failed: Vec::new(),
             unconfirmed: Vec::new(),
             unattributed: Vec::new(),
+            share_pending: false,
             deletes_sent: false,
+            ledger: None,
             source: None,
         }
     }
 
+    /// Whether anything is left undone: a failure, a record not revoked or
+    /// not confirmed, a pending share nothing settled, or a ledger write.
+    pub fn is_incomplete(&self) -> bool {
+        self.source.is_some()
+            || !self.failed.is_empty()
+            || !self.unconfirmed.is_empty()
+            || !self.unattributed.is_empty()
+            || self.share_pending
+            || self.ledger.is_some()
+    }
+
     /// Calling the revocation again may finish it: no record names no
-    /// business (those need a person), and the underlying failure, if any,
-    /// is itself retryable. A record Meta has not confirmed `DELETED` yet
-    /// is retryable.
+    /// business (those need a person), and the underlying failure on Meta's
+    /// side, if any, is itself retryable. A record Meta has not confirmed
+    /// `DELETED` yet, a pending share not found yet and a ledger write that
+    /// failed are retryable.
     pub fn is_retryable(&self) -> bool {
         self.unattributed.is_empty() && self.source.as_ref().is_none_or(|e| e.is_retryable())
     }
@@ -111,6 +141,20 @@ impl RevocationIncomplete {
     /// sent.
     pub fn may_have_been_sent(&self) -> bool {
         self.deletes_sent || self.source.as_ref().is_some_and(|e| e.may_have_been_sent())
+    }
+
+    /// Classification: the underlying failure's kind when there is one;
+    /// else [`ErrorKind::Unknown`] when records naming no business are left
+    /// (a person must check them, like [`CreditError::Reconcile`]), and
+    /// [`ErrorKind::ServiceUnavailable`] when only what a later call can
+    /// finish is left (unconfirmed records, a pending share not found yet,
+    /// a ledger write).
+    pub fn kind(&self) -> ErrorKind {
+        match &self.source {
+            Some(source) => source.kind(),
+            None if !self.unattributed.is_empty() => ErrorKind::Unknown,
+            None => ErrorKind::ServiceUnavailable,
+        }
     }
 }
 
@@ -129,8 +173,10 @@ pub enum CreditError {
     ///
     /// `posted` is `true` when this call's share went out and a revocation
     /// raced it: the new allocation was revoked at once (or, if that failed,
-    /// is recorded for the next revocation), so reconcile before relying
-    /// on the WABA's funding.
+    /// is recorded in the ledger for the next revocation), so reconcile
+    /// before relying on the WABA's funding. A raced share that could be
+    /// neither revoked nor recorded, or whose answer was lost and which the
+    /// revocation could not find, is [`Self::Reconcile`] instead.
     #[error("{reason}")]
     Revoked {
         /// The business, when known.
@@ -146,9 +192,10 @@ pub enum CreditError {
     /// `posted` is `false` unless this call had already posted the first of
     /// the two-call method's requests (`whatsapp_credit_sharing`, whose
     /// allocation is then recorded) when it lost the lease before the
-    /// attach: a later `resume` checks that allocation and attaches it
-    /// without sharing again. Any other failure after a post is
-    /// [`Self::Reconcile`] or [`Self::Revoked`], never this.
+    /// attach, or could not renew it: a later `resume` checks that
+    /// allocation and attaches it without sharing again. Any other failure
+    /// after a post is [`Self::Reconcile`], [`Self::Revoked`] or
+    /// [`Self::AttachFailed`], never this.
     #[error("credit line step busy: {reason}")]
     Busy {
         /// What was busy.
@@ -180,47 +227,71 @@ pub enum CreditError {
     /// retryable.
     #[error("approval required: {0}")]
     ApprovalRequired(String),
-    /// The ledger shows a share whose outcome is unknown (a post that timed
-    /// out, a revocation that found nothing to revoke) and Meta's records
-    /// cannot settle it: check the WABA's funding and the line's records in
-    /// Meta Business Suite before anything else. `may_have_been_sent` is
-    /// `true`: a share this deployment posted may be live. Not retryable.
+    /// A share may be live and nothing here can settle it: its answer was
+    /// lost (a timeout, a 5xx), a revocation ran meanwhile and found no
+    /// record of it, or the ledger shows a share whose outcome is unknown
+    /// on a WABA something funds. Check the WABA's funding and the line's
+    /// records in Meta Business Suite before anything else;
+    /// `EmbeddedSignup::resume` checks Meta's records before it posts again.
+    /// `may_have_been_sent` is `true`: a share this deployment posted may be
+    /// live. Not retryable: repeating the call at once is exactly what must
+    /// not happen.
     #[error("reconcile first: {0}")]
     Reconcile(String),
+    /// The two-call method (`CreditSharing::ShareThenAttach`) shared the
+    /// line with the owner business, recorded that allocation in the
+    /// ledger, and then the attach failed without reaching Meta (`source`).
+    /// `resume` attaches the recorded allocation without sharing again.
+    /// `may_have_been_sent` is `true` (the share went out); retryable and
+    /// kind as `source`.
+    #[error("credit line shared as {allocation_config_id}, not attached: {source}")]
+    AttachFailed {
+        /// The allocation the share made, recorded in the ledger.
+        allocation_config_id: AllocationConfigId,
+        /// Why the attach failed.
+        #[source]
+        source: Box<Error>,
+    },
     /// A revocation stopped part-way; the report says what it did.
     #[error(transparent)]
     RevocationIncomplete(Box<RevocationIncomplete>),
 }
 
 impl CreditError {
-    /// Classification, as [`Error::kind`] reports it: `ServiceUnavailable`
-    /// for [`Self::Busy`] (try later), a revocation's underlying failure
-    /// (`ServiceUnavailable` when only records Meta has not confirmed yet
-    /// remain, `Unknown` when only unattributed ones do), and
-    /// `InvalidParameter` for the refusals the request or the integrator
-    /// must change.
+    /// Classification, as [`Error::kind`] reports it:
+    ///
+    /// - `ServiceUnavailable` for [`Self::Busy`] (try later);
+    /// - `Unknown` for the states only a person can settle:
+    ///   [`Self::Reconcile`], and a [`RevocationIncomplete`] left with
+    ///   records naming no business;
+    /// - a revocation's underlying failure, else `ServiceUnavailable` when
+    ///   only what a later call can finish is left
+    ///   ([`RevocationIncomplete::kind`]);
+    /// - the attach's failure for [`Self::AttachFailed`];
+    /// - `InvalidParameter` for the refusals the request or the integrator
+    ///   must change ([`Self::Revoked`], [`Self::OwnerUnknown`],
+    ///   [`Self::StatusUnknown`], [`Self::ApprovalRequired`]).
     pub fn kind(&self) -> ErrorKind {
         match self {
             Self::Busy { .. } => ErrorKind::ServiceUnavailable,
-            Self::RevocationIncomplete(r) => match &r.source {
-                Some(source) => source.kind(),
-                None if !r.unconfirmed.is_empty() => ErrorKind::ServiceUnavailable,
-                None => ErrorKind::Unknown,
-            },
+            Self::Reconcile(_) => ErrorKind::Unknown,
+            Self::RevocationIncomplete(r) => r.kind(),
+            Self::AttachFailed { source, .. } => source.kind(),
             Self::Revoked { .. }
             | Self::OwnerUnknown(_)
             | Self::StatusUnknown { .. }
-            | Self::ApprovalRequired(_)
-            | Self::Reconcile(_) => ErrorKind::InvalidParameter,
+            | Self::ApprovalRequired(_) => ErrorKind::InvalidParameter,
         }
     }
 
-    /// Whether the same call may succeed later: [`Self::Busy`], and a
-    /// [`RevocationIncomplete`] that [says so](RevocationIncomplete::is_retryable).
+    /// Whether the same call may succeed later: [`Self::Busy`], a
+    /// [`RevocationIncomplete`] that [says so](RevocationIncomplete::is_retryable),
+    /// and an [`Self::AttachFailed`] whose attach error is.
     pub fn is_retryable(&self) -> bool {
         match self {
             Self::Busy { .. } => true,
             Self::RevocationIncomplete(r) => r.is_retryable(),
+            Self::AttachFailed { source, .. } => source.is_retryable(),
             Self::Revoked { .. }
             | Self::OwnerUnknown(_)
             | Self::StatusUnknown { .. }
@@ -231,11 +302,11 @@ impl CreditError {
 
     /// Whether something on Meta's side may have changed (see each
     /// variant): a raced share ([`Self::Revoked`] with `posted`), a share
-    /// to reconcile, a revocation's `DELETE`s.
+    /// to reconcile, a share whose attach failed, a revocation's `DELETE`s.
     pub fn may_have_been_sent(&self) -> bool {
         match self {
             Self::Revoked { posted, .. } | Self::Busy { posted, .. } => *posted,
-            Self::Reconcile(_) => true,
+            Self::Reconcile(_) | Self::AttachFailed { .. } => true,
             Self::RevocationIncomplete(r) => r.may_have_been_sent(),
             Self::OwnerUnknown(_) | Self::StatusUnknown { .. } | Self::ApprovalRequired(_) => false,
         }

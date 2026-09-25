@@ -81,6 +81,12 @@ pub struct StoredCredit {
     /// (`onboard_with_approval`, `resume_with_approval`). Solution Partner
     /// mode shares nothing for a WABA without it.
     pub approved_at: Option<OffsetDateTime>,
+    /// The `created_at` of the token record the approval was given for
+    /// ([`StoredBusinessToken::created_at`](super::StoredBusinessToken::created_at)):
+    /// `resume` takes the approval only for that token record, so a token
+    /// stored again for the WABA (a Tech Provider onboarding after an
+    /// offboard, your own `TokenVault::store`) needs a new approval.
+    pub approved_token_created_at: Option<OffsetDateTime>,
     /// Set just before a share is posted and cleared once its allocation is
     /// recorded: while set, a share may have gone through that the ledger
     /// does not know (a post that timed out, a process that died).
@@ -96,8 +102,17 @@ impl StoredCredit {
             currency: None,
             shared_at: None,
             approved_at: None,
+            approved_token_created_at: None,
             pending_share: None,
         }
+    }
+
+    /// Whether the integrator's approval is recorded for the token record
+    /// created at `token_created_at` (see [`Self::approved_token_created_at`]).
+    pub(super) fn approves(&self, token_created_at: Option<OffsetDateTime>) -> bool {
+        self.approved_at.is_some()
+            && self.approved_token_created_at.is_some()
+            && self.approved_token_created_at == token_created_at
     }
 
     /// Whether this record shows that the credit line was, or may have
@@ -138,6 +153,8 @@ struct CreditPlain {
     #[serde(default, with = "time::serde::timestamp::option")]
     approved_at: Option<OffsetDateTime>,
     #[serde(default, with = "time::serde::timestamp::option")]
+    approved_token_created_at: Option<OffsetDateTime>,
+    #[serde(default, with = "time::serde::timestamp::option")]
     pending_share: Option<OffsetDateTime>,
 }
 
@@ -150,6 +167,7 @@ impl CreditPlain {
             currency: credit.currency.as_ref().map(|c| c.as_str().to_owned()),
             shared_at: credit.shared_at,
             approved_at: credit.approved_at,
+            approved_token_created_at: credit.approved_token_created_at,
             pending_share: credit.pending_share,
         }
     }
@@ -162,6 +180,7 @@ impl CreditPlain {
             currency: self.currency.map(currency_from),
             shared_at: self.shared_at,
             approved_at: self.approved_at,
+            approved_token_created_at: self.approved_token_created_at,
             pending_share: self.pending_share,
         }
     }
@@ -344,11 +363,17 @@ impl TokenVault {
         Ok(None)
     }
 
-    /// Record the integrator's approval of onboarding `waba_id`.
-    pub(super) async fn record_approval(&self, waba_id: &WabaId) -> Result<()> {
+    /// Record the integrator's approval of onboarding `waba_id` with the
+    /// token record created at `token_created_at`.
+    pub(super) async fn record_approval(
+        &self,
+        waba_id: &WabaId,
+        token_created_at: Option<OffsetDateTime>,
+    ) -> Result<()> {
         let now = self.now();
         self.update_credit(waba_id, |c| {
             c.approved_at = Some(now);
+            c.approved_token_created_at = token_created_at;
             true
         })
         .await?
@@ -762,7 +787,9 @@ mod tests {
         let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
         let v = vault(&kv, VaultKeys::new(key("k1", 7)));
         let waba = WabaId::new("W1");
-        v.record_approval(&waba).await.unwrap();
+        v.record_approval(&waba, Some(datetime!(2026-09-24 11:00 UTC)))
+            .await
+            .unwrap();
         let first = v.credit(&waba).await.unwrap().unwrap();
         assert_eq!(first.approved_at, Some(datetime!(2026-09-24 12:00 UTC)));
         assert!(!first.records_a_share(), "an approval is not a share");
@@ -933,6 +960,11 @@ mod tests {
         .await
         .unwrap();
         put(&kv, "credit/CORRUPT", b"{}".to_vec()).await;
+        // And the other way round: a corrupt token, a readable ledger.
+        old.put_credit(&credit("CORRUPT_TOKEN"), None)
+            .await
+            .unwrap();
+        put(&kv, "waba/CORRUPT_TOKEN", b"{}".to_vec()).await;
 
         let new = vault(
             &kv,
@@ -945,6 +977,10 @@ mod tests {
         assert!(
             new.rotate(&WabaId::new("CORRUPT")).await.is_err(),
             "the corrupt record is reported"
+        );
+        assert!(
+            new.rotate(&WabaId::new("CORRUPT_TOKEN")).await.is_err(),
+            "the corrupt token is reported"
         );
 
         let only_new = vault(&kv, VaultKeys::new(key("new", 2)));
@@ -963,6 +999,14 @@ mod tests {
                 .unwrap()
                 .is_some(),
             "the token was rotated despite its corrupt credit record"
+        );
+        assert_eq!(
+            only_new
+                .credit(&WabaId::new("CORRUPT_TOKEN"))
+                .await
+                .unwrap(),
+            Some(credit("CORRUPT_TOKEN")),
+            "the ledger was rotated despite its corrupt token"
         );
     }
 

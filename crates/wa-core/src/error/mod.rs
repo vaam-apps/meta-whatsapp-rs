@@ -372,8 +372,21 @@ mod tests {
             ),
             (SinkError::Closed.into(), false),
             (WebhookError::SignatureMismatch.into(), false),
-            // Credit line refusals: only a raced share, a share to
-            // reconcile and a revocation's DELETEs reached Meta.
+        ] {
+            assert_eq!(err.may_have_been_sent(), sent, "{err}");
+        }
+    }
+
+    /// Credit line refusals: only a raced share, a share to reconcile, a
+    /// share whose attach failed and a revocation's DELETEs reached Meta.
+    #[test]
+    fn credit_errors_say_whether_meta_could_have_acted() {
+        let api = |status: Option<u16>| {
+            let mut g = GraphApiError::new(131047, "x");
+            g.http_status = status;
+            Error::from(g)
+        };
+        for (err, sent) in [
             (credit_revoked(false).into(), false),
             (credit_revoked(true).into(), true),
             (busy(false).into(), false),
@@ -389,6 +402,15 @@ mod tests {
             ),
             (CreditError::ApprovalRequired("x".into()).into(), false),
             (CreditError::Reconcile("x".into()).into(), true),
+            // The two-call method's share went out; its attach did not.
+            (
+                CreditError::AttachFailed {
+                    allocation_config_id: "A".into(),
+                    source: Box::new(api(Some(400))),
+                }
+                .into(),
+                true,
+            ),
             (incomplete(false, None).into(), false),
             (incomplete(true, None).into(), true),
             (
@@ -402,6 +424,18 @@ mod tests {
             (
                 Error::from(incomplete(true, None)).in_step("revoke_credit_line"),
                 true,
+            ),
+            // A ledger write, or a pending share nothing found, sends nothing.
+            (
+                {
+                    let mut r = incomplete(false, None);
+                    r.share_pending = true;
+                    r.ledger = Some(Box::new(
+                        StorageError::Backend(anyhow::anyhow!("db down")).into(),
+                    ));
+                    r.into()
+                },
+                false,
             ),
         ] {
             assert_eq!(err.may_have_been_sent(), sent, "{err}");
@@ -446,11 +480,28 @@ mod tests {
         for refusal in [
             CreditError::OwnerUnknown("x".into()),
             CreditError::ApprovalRequired("x".into()),
-            CreditError::Reconcile("x".into()),
         ] {
             assert!(!refusal.is_retryable(), "{refusal}");
             assert_eq!(refusal.kind(), ErrorKind::InvalidParameter);
         }
+        // Only a person can settle a share to reconcile, or records naming
+        // no business: one kind for both.
+        let reconcile = CreditError::Reconcile("x".into());
+        assert!(!reconcile.is_retryable());
+        assert_eq!(reconcile.kind(), ErrorKind::Unknown);
+        let attach = |source: Error| CreditError::AttachFailed {
+            allocation_config_id: "A".into(),
+            source: Box::new(source),
+        };
+        let refused = attach(ValidationError::new("waba_currency", "x").into());
+        assert!(!refused.is_retryable());
+        assert_eq!(refused.kind(), ErrorKind::InvalidParameter);
+        let busy_attach = attach(Error::Http {
+            status: 503,
+            body_snippet: String::new(),
+        });
+        assert!(busy_attach.is_retryable());
+        assert_eq!(busy_attach.kind(), ErrorKind::ServiceUnavailable);
 
         let mut unconfirmed = incomplete(true, None);
         unconfirmed.unconfirmed.push("A1".into());
@@ -461,6 +512,40 @@ mod tests {
         unattributed.unattributed.push("U1".into());
         assert!(!unattributed.is_retryable());
         assert_eq!(CreditError::from(unattributed).kind(), ErrorKind::Unknown);
+        let mut mixed = incomplete(true, None);
+        mixed.unconfirmed.push("A1".into());
+        mixed.unattributed.push("U1".into());
+        assert!(!mixed.is_retryable());
+        assert_eq!(
+            CreditError::from(mixed).kind(),
+            ErrorKind::Unknown,
+            "not retryable, so not ServiceUnavailable"
+        );
+        // A pending share not found yet, or a ledger write that failed:
+        // call again.
+        let mut pending = incomplete(false, None);
+        pending.share_pending = true;
+        assert!(pending.is_incomplete() && pending.is_retryable());
+        assert!(
+            pending.to_string().contains("no recorded outcome"),
+            "{pending}"
+        );
+        assert_eq!(
+            CreditError::from(pending).kind(),
+            ErrorKind::ServiceUnavailable
+        );
+        let mut ledger = incomplete(true, None);
+        ledger.ledger = Some(Box::new(
+            StorageError::Backend(anyhow::anyhow!("db down")).into(),
+        ));
+        assert!(ledger.is_incomplete());
+        assert!(ledger.is_retryable(), "a storage failure is written again");
+        assert!(ledger.to_string().contains("ledger"), "{ledger}");
+        assert_eq!(
+            CreditError::from(ledger).kind(),
+            ErrorKind::ServiceUnavailable
+        );
+        assert!(!incomplete(true, None).is_incomplete());
         let transient = incomplete(false, Some(Error::Transport(TransportError::Timeout)));
         assert!(transient.is_retryable());
         let mut both = incomplete(false, Some(Error::Transport(TransportError::Timeout)));
