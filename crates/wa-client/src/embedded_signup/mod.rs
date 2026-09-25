@@ -205,7 +205,7 @@
 //!   `PARTNER_REMOVED` ends revoked. A revocation that stops part-way is
 //!   [`CreditError::RevocationIncomplete`](wa_core::error::CreditError::RevocationIncomplete),
 //!   with the report.
-
+//!
 //! The lower-level calls are in [`crate::credit_lines`].
 //!
 //! # The session info is a claim

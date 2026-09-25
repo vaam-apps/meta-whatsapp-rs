@@ -365,7 +365,7 @@ mod tests {
         assert!(fund_again(request()).reshare_after_revocation);
     }
 
-    fn partner_event(event: &str, info: serde_json::Value) -> WebhookEvent {
+    fn partner_event(event: &str, info: &serde_json::Value) -> WebhookEvent {
         // Meta's examples (webhooks/reference/account_update): the entry id
         // is a business portfolio, the WABA is in waba_info.
         let body = json!({"object": "whatsapp_business_account", "entry": [{
@@ -381,14 +381,14 @@ mod tests {
     fn removed() -> WebhookEvent {
         partner_event(
             "PARTNER_REMOVED",
-            json!({"waba_id": WABA, "owner_business_id": OWNER}),
+            &json!({"waba_id": WABA, "owner_business_id": OWNER}),
         )
     }
 
     fn uninstalled(app: &str) -> WebhookEvent {
         partner_event(
             "PARTNER_APP_UNINSTALLED",
-            json!({"waba_id": WABA, "owner_business_id": OWNER, "partner_app_id": app}),
+            &json!({"waba_id": WABA, "owner_business_id": OWNER, "partner_app_id": app}),
         )
     }
 
@@ -544,7 +544,7 @@ mod tests {
             json!({"id": "58501441721238", "receiving_business": business}),
         ); // the business has records: marked
         script_revocation(&transport);
-        let event = partner_event("PARTNER_REMOVED", json!({"owner_business_id": OWNER}));
+        let event = partner_event("PARTNER_REMOVED", &json!({"owner_business_id": OWNER}));
         assert_eq!(event.waba_id(), None);
         let PartnerAction::Revoked(revoked) = on_account_update(&es, &vault, &event).await.unwrap()
         else {

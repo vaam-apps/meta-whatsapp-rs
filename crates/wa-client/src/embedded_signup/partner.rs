@@ -945,7 +945,8 @@ async fn share_leased(
     };
     if raced {
         return Err(if posted {
-            revoke_raced_share(&system, vault, line, &owner, &allocation).await
+            let recorded = matches!(recorded, Ok(Some(_)));
+            revoke_raced_share(&system, vault, line, &owner, &allocation, recorded).await
         } else {
             revoked(&owner, "a revocation ran while this step checked the line")
         });
@@ -1043,6 +1044,7 @@ async fn revoke_raced_share(
     line: &CreditLineId,
     owner: &BusinessId,
     allocation: &AllocationConfigId,
+    recorded: bool,
 ) -> Error {
     let outcome = system
         .revoke_all(line, Some(owner), std::slice::from_ref(allocation))
@@ -1058,11 +1060,15 @@ async fn revoke_raced_share(
     if let Err(e) = vault.mark_revoked(owner, &ids).await {
         tracing::warn!(kind = ?e.kind(), "revocation marker not updated after a raced share");
     }
-    let what = match &outcome {
-        Ok(_) => "was revoked at once".to_owned(),
-        Err(e) => {
+    let what = match (&outcome, recorded) {
+        (Ok(_), _) => "was revoked at once",
+        (Err(e), true) => {
             tracing::warn!(kind = ?e.kind(), "raced share not revoked");
-            "could not be revoked: it is recorded in the credit ledger, call revoke_credit_line again".to_owned()
+            "could not be revoked: it is recorded in the credit ledger, call revoke_credit_line again"
+        }
+        (Err(e), false) => {
+            tracing::warn!(kind = ?e.kind(), "raced share neither revoked nor recorded");
+            "could be neither revoked nor recorded: revoke it in Meta Business Suite"
         }
     };
     CreditError::Revoked {
