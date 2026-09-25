@@ -154,7 +154,10 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   acknowledged funding) is appended to `StoredCredit::cleared_shares`,
   sealed with the record; revocation and offboarding then behave as if
   nothing had been posted. Refused before anything is sent when nothing
-  is pending.
+  is pending. A share whose post outlived its 300 s lease and whose
+  answer is lost (or not recorded) sets the pending flag again, even when
+  a clearance took the expired lease and cleared it meanwhile; keep the
+  request timeout (`ClientBuilder::timeout`) well below the lease.
 - **`EmbeddedSignup::onboard_with_approval`** (and
   `resume_with_approval`): your check of the verified WABA, owner business
   and numbers (`VerifiedOnboarding`) runs after `verify_assets` and before

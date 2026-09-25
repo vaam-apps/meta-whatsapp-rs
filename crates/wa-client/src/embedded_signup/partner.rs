@@ -1388,6 +1388,12 @@ async fn after_failed_post(
     if revoked_since(share.vault, share.owner, marker, false).await {
         return revoke_raced(share, posted.shared.as_ref(), posted.recorded).await;
     }
+    // The share may be live: it stays pending whatever cleared the flag
+    // while the post was out (an operator's clearance that took the lease
+    // once it expired under a post slower than the lease, say).
+    if let Err(k) = keep_pending(share.vault, share.waba).await {
+        tracing::warn!(waba_id = %share.waba, kind = ?k.kind(), "pending share flag not kept");
+    }
     if e.credit().is_some() {
         // Already says what was posted (Busy, Reconcile, AttachFailed).
         return e;
@@ -1436,10 +1442,17 @@ async fn record_share(
     }
     match recorded {
         Ok(Some(_)) => Ok(allocation),
-        Ok(None) | Err(_) if posted => Err(CreditError::Reconcile(format!(
-            "allocation {allocation} was shared with the WABA, but the credit ledger could not record it; resume checks the line before posting again"
-        ))
-        .into()),
+        Ok(None) | Err(_) if posted => {
+            // Not recorded: the ledger must at least say a share may be live,
+            // whatever cleared the flag meanwhile.
+            if let Err(k) = keep_pending(vault, waba).await {
+                tracing::warn!(waba_id = %waba, kind = ?k.kind(), "pending share flag not kept");
+            }
+            Err(CreditError::Reconcile(format!(
+                "allocation {allocation} was shared with the WABA, but the credit ledger could not record it; resume checks the line before posting again"
+            ))
+            .into())
+        }
         Ok(None) => Err(super::ledger::busy(
             "the WABA's credit record kept changing while this step ran",
         )),
@@ -1847,6 +1860,8 @@ mod tests {
         touch_marker_before_clear: std::sync::atomic::AtomicBool,
         refuse_marker_writes: std::sync::atomic::AtomicBool,
         refuse_credit_writes: std::sync::atomic::AtomicBool,
+        /// Refuse the next write of a credit record only.
+        refuse_one_credit_write: std::sync::atomic::AtomicBool,
         refuse_lease_writes: std::sync::atomic::AtomicBool,
     }
 
@@ -1861,6 +1876,10 @@ mod tests {
             let k = key.key();
             if (k.starts_with("revoked/") && on(&self.refuse_marker_writes))
                 || (k.starts_with("credit/") && on(&self.refuse_credit_writes))
+                || (k.starts_with("credit/")
+                    && self
+                        .refuse_one_credit_write
+                        .swap(false, std::sync::atomic::Ordering::SeqCst))
                 || (k.starts_with("credit-lease/") && on(&self.refuse_lease_writes))
             {
                 return Err(wa_core::error::StorageError::Backend(anyhow::anyhow!(
@@ -5930,6 +5949,91 @@ mod tests {
         let (credit, now) = h.vault.credit_versioned(&waba()).await.unwrap().unwrap();
         assert_eq!(now, version, "nothing written");
         assert_eq!(credit.allocation_config_id, None);
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// A post slower than its lease: an operator's clearance takes the
+    /// expired lease and clears the share it flagged (Meta does not list
+    /// it yet), then the post's answer is lost. The share stays pending.
+    #[tokio::test]
+    async fn a_lost_answer_stays_pending_after_a_clearance_during_its_post() {
+        let (h, hooked, other) = hooked_harness(CreditSharing::ShareAndAttach, Arc::default());
+        script_until_subscribe(&h.t, owner());
+        h.t.push_json(200, success()); // assigned_users
+        h.t.push_json(200, nothing_shared()); // the share's lookup
+        h.t.push_json(200, nothing_shared()); // the clearance's lookup
+        h.t.push_json(200, no_funding()); // and its funding read
+        h.t.push_error(|| TransportError::Timeout); // the post's answer
+        hooked.before(
+            Method::POST,
+            "/whatsapp_credit_sharing_and_attach",
+            move || {
+                Box::pin(async move {
+                    other.vault.kv().delete(&lease_key()).await.unwrap();
+                    let out = other
+                        .es
+                        .clear_pending_share(&waba(), "ops", None, &other.vault)
+                        .await
+                        .unwrap();
+                    assert!(matches!(out, PendingShareClearance::Cleared(_)), "{out:?}");
+                })
+            },
+        );
+        let err = h
+            .onboard(&request().currency(WabaCurrency::Usd))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err.credit(), Some(CreditError::Reconcile(_))),
+            "{err}"
+        );
+        let credit = h.vault.credit(&waba()).await.unwrap().unwrap();
+        assert_eq!(credit.cleared_shares.len(), 1, "the clearance ran");
+        assert!(credit.pending_share.is_some(), "pending again");
+        assert!(credit.records_a_share());
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// The same race, but the post answers and the ledger fails to record
+    /// its allocation: the share stays pending, so the ledger still says a
+    /// share may be live.
+    #[tokio::test]
+    async fn an_unrecorded_share_stays_pending_after_a_clearance_during_its_post() {
+        let kv = Arc::new(TestKv::default());
+        let (h, hooked, other) = hooked_harness(CreditSharing::ShareAndAttach, kv.clone());
+        script_until_subscribe(&h.t, owner());
+        h.t.push_json(200, success()); // assigned_users
+        h.t.push_json(200, nothing_shared()); // the share's lookup
+        h.t.push_json(200, nothing_shared()); // the clearance's lookup
+        h.t.push_json(200, no_funding()); // and its funding read
+        h.t.push_json(200, shared_and_attached());
+        hooked.before(
+            Method::POST,
+            "/whatsapp_credit_sharing_and_attach",
+            move || {
+                Box::pin(async move {
+                    other.vault.kv().delete(&lease_key()).await.unwrap();
+                    let out = other
+                        .es
+                        .clear_pending_share(&waba(), "ops", None, &other.vault)
+                        .await
+                        .unwrap();
+                    assert!(matches!(out, PendingShareClearance::Cleared(_)), "{out:?}");
+                    TestKv::refuse(&kv.refuse_one_credit_write);
+                })
+            },
+        );
+        let err = h
+            .onboard(&request().currency(WabaCurrency::Usd))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err.credit(), Some(CreditError::Reconcile(_))),
+            "{err}"
+        );
+        let credit = h.vault.credit(&waba()).await.unwrap().unwrap();
+        assert_eq!(credit.allocation_config_id, None, "not recorded");
+        assert!(credit.pending_share.is_some(), "pending again");
         assert_eq!(h.t.remaining(), 0);
     }
 

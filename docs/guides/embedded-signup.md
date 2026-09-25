@@ -446,7 +446,11 @@ Which merchant may have a WABA stays your policy (open decision 6).
   `CreditError::Busy` (`EmbeddedSignup::is_credit_step_busy`, retryable:
   resume later). Its `posted` is `true` when the two-call method had
   already shared (and recorded) the line before it lost the lease: the
-  attach is what a later `resume` does.
+  attach is what a later `resume` does. The lease lasts 300 s: keep the
+  client's request timeout (`ClientBuilder::timeout`, 30 s by default)
+  well below it, so no post outlives it. A post that does anyway and
+  whose answer is lost (or not recorded) flags its share pending again,
+  even if an operator cleared the flag meanwhile.
 - **A revoked business stays revoked.** When `revoke_credit_line` marked
   the business revoked, or Meta reports only `DELETED` records for it,
   `onboard_with_approval` and `resume` refuse (`CreditError::Revoked`,

@@ -418,9 +418,12 @@ cannot be taken back, so the design is fail-closed:
   `whatsapp_credit_sharing` with the **verified** owner business (system
   user token), then `whatsapp_credit_attach` with the merchant's business
   token.
-- `share_credit_line` holds a per-WABA lease (`put_if_absent` with
-  expiry, renewed by compare-and-swap right before each POST; lost, the
-  step posts nothing more) and checks before it posts, in `onboard` and
+- `share_credit_line` holds a per-WABA lease (`put_if_absent` with a
+  300 s expiry, renewed by compare-and-swap right before each POST; lost,
+  the step posts nothing more; the request timeout must stay well below
+  it, and a post that outlives it anyway, whose answer is lost or not
+  recorded, sets the pending-share flag again whatever cleared it
+  meanwhile) and checks before it posts, in `onboard` and
   `resume` alike: the line's records for the owner business
   (`owning_credit_allocation_configs`, only records naming that business)
   plus the recorded allocation, each with its `request_status` (the lookup

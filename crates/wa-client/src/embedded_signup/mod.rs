@@ -162,9 +162,11 @@
 //!   may onboard a WABA is your policy; wa-rs decides none
 //!   (`OPEN_QUESTIONS.md` #6).
 //! - `share_credit_line` **checks before it posts**, in `onboard` and in
-//!   `resume` alike, holding a short per-WABA lease renewed right before
-//!   each post (a concurrent attempt, or a lease lost to a slow step, is
-//!   [`CreditError::Busy`](wa_core::error::CreditError::Busy)): the records
+//!   `resume` alike, holding a short per-WABA lease (300 s) renewed right
+//!   before each post (a concurrent attempt, or a lease lost to a slow
+//!   step, is [`CreditError::Busy`](wa_core::error::CreditError::Busy);
+//!   keep the client's request timeout, [`ClientBuilder::timeout`](crate::ClientBuilder::timeout),
+//!   well below the lease, so no post outlives it): the records
 //!   of your line shared with the customer business
 //!   (`owning_credit_allocation_configs`) and the allocation recorded in the
 //!   vault, each with its `request_status`; an active one whose receiving
