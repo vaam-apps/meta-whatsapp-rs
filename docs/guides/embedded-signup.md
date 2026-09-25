@@ -502,7 +502,13 @@ added]; whether adding the system user again is harmless [repeated on
 `resume`]; whether the lookup lists revoked records [each record's
 `request_status` is read]; whether a business can attach a line shared
 with it to other WABAs itself [not controlled: reconcile your credit line
-invoice against the WABAs you onboarded].
+invoice against the WABAs you onboarded]; whether the lookup lists a
+record as soon as its share returns [assumed: a revocation that runs while
+a share is posted relies on the share seeing the revocation's marker, or
+on the revocation's lookup (and its re-read of the ledger) seeing the new
+record; were Meta's lookup to lag, a share posted in that window could
+survive a revocation that returned `Ok`, so check the business in Meta
+Business Suite after revoking one that was being onboarded].
 
 ## Coexistence (merchants keeping the WhatsApp Business app)
 

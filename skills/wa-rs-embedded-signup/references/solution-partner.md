@@ -1,6 +1,6 @@
 # Solution Partner deployments
 
-> **Verified against wa-rs b3d2dcad64bc5f0dd9374dc84a387ec978707ab0 (2026-09-25).** Also checked against Meta's
+> **Verified against wa-rs 26d9195ab44476920b53e7c99bc7218fe6d8c344 (2026-09-25).** Also checked against Meta's
 > `solution-providers/share-and-revoke-credit-lines`,
 > `solution-providers/manage-system-users` and
 > `webhooks/reference/account_update` pages as fetched on 2026-09-24.
@@ -246,6 +246,10 @@ that merchant with it.
   wa-rs reads each record's status rather than assume.
 - Which `request_status` values exist besides `DELETED`: any other is
   treated as unknown (`StatusUnknown`), never as active.
+- Whether the lookup lists a record as soon as its share returns. A
+  revocation racing a share relies on it (or on the share seeing the
+  marker): after revoking a business that was being onboarded, check it
+  in Meta Business Suite.
 - Whether a business can attach a line shared with it to other WABAs
   itself: reconcile your credit line invoice against the WABAs you
   onboarded.
