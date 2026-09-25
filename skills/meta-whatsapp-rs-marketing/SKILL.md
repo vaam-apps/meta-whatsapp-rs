@@ -1,14 +1,14 @@
 ---
-name: wa-rs-marketing
-description: "WhatsApp marketing with wa-rs - collecting opt-ins with In-App Signup deep links (the terms rule 2494168 vs 2494176) and QR codes, sending marketing templates on the Cloud API or the Marketing Messages API (onboarding status, MarketingOptions, TemplateSyncing 134101, BSUID limits), honouring opt-outs (131050, user_preferences stop and resume) and the per-user marketing limit (131049) without ever retrying them, and messaging and template analytics. Load when building campaigns, promotions, newsletters, opt-in or opt-out handling, or marketing reports on WhatsApp."
+name: meta-whatsapp-rs-marketing
+description: "WhatsApp marketing with meta-whatsapp-rs - collecting opt-ins with In-App Signup deep links (the terms rule 2494168 vs 2494176) and QR codes, sending marketing templates on the Cloud API or the Marketing Messages API (onboarding status, MarketingOptions, TemplateSyncing 134101, BSUID limits), honouring opt-outs (131050, user_preferences stop and resume) and the per-user marketing limit (131049) without ever retrying them, and messaging and template analytics. Load when building campaigns, promotions, newsletters, opt-in or opt-out handling, or marketing reports on WhatsApp."
 ---
 
-# wa-rs-marketing
+# meta-whatsapp-rs-marketing
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/marketing.rs](examples/marketing.rs), compiled
-and tested by wa-rs's own gate.
+and tested by meta-whatsapp-rs's own gate.
 
 ## When to use
 
@@ -127,7 +127,7 @@ let delivered = analytics
 - A quick-reply "Stop promotions" arrives as an inbound `Button` message:
   treat it as an opt-out in your code.
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - No consent registry, campaign scheduler, audience segmentation or
   conversion tracking.

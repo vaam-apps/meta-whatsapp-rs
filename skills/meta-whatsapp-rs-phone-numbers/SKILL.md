@@ -1,14 +1,14 @@
 ---
-name: wa-rs-phone-numbers
-description: "Managing WhatsApp business phone numbers and their WABA with wa-rs - registering a number for Cloud API with its two-step verification PIN (TwoStepPin, the 10-per-72-hours limit), changing the PIN and the display name, the business profile (about, email, websites), conversational components (ice breakers, commands), subscribing the app to a WABA's webhooks and per-number callback overrides, number health, and the coexistence data sync. Load when registering or configuring a number, editing the WhatsApp business profile, checking a number's quality, or making sure webhooks arrive for a WABA."
+name: meta-whatsapp-rs-phone-numbers
+description: "Managing WhatsApp business phone numbers and their WABA with meta-whatsapp-rs - registering a number for Cloud API with its two-step verification PIN (TwoStepPin, the 10-per-72-hours limit), changing the PIN and the display name, the business profile (about, email, websites), conversational components (ice breakers, commands), subscribing the app to a WABA's webhooks and per-number callback overrides, number health, and the coexistence data sync. Load when registering or configuring a number, editing the WhatsApp business profile, checking a number's quality, or making sure webhooks arrive for a WABA."
 ---
 
-# wa-rs-phone-numbers
+# meta-whatsapp-rs-phone-numbers
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/numbers.rs](examples/numbers.rs), compiled and
-tested by wa-rs's own gate.
+tested by meta-whatsapp-rs's own gate.
 
 ## When to use
 
@@ -106,7 +106,7 @@ number.sync_smb_app_data(SmbSyncType::History).await?; // a second call: SyncNot
 - Ids are path segments: a phone number id containing `/` cannot address
   another object (the client percent-encodes it).
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - No PIN policy (who chooses it, storage, recovery)
   ([open question 4](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)).

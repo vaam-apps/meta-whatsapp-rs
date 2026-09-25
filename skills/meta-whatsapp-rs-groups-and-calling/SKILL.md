@@ -1,17 +1,17 @@
 ---
-name: wa-rs-groups-and-calling
-description: "What a merchant inbox built on wa-rs needs beyond one-to-one text - blocking and unblocking a customer (block_users, BSUID or phone, the 24-hour rule, partial failures 139100), WhatsApp group chats (Groups API - create by request id and webhook, invite links, join requests, participants, pins, group messages in the inbox), and WhatsApp calls (Calling API signalling only - settings, permissions, reject or accept with SDP, call webhooks; no audio). Load when adding a block button, group chats or call handling to a CMS or support inbox, or when group or call webhooks arrive."
+name: meta-whatsapp-rs-groups-and-calling
+description: "What a merchant inbox built on meta-whatsapp-rs needs beyond one-to-one text - blocking and unblocking a customer (block_users, BSUID or phone, the 24-hour rule, partial failures 139100), WhatsApp group chats (Groups API - create by request id and webhook, invite links, join requests, participants, pins, group messages in the inbox), and WhatsApp calls (Calling API signalling only - settings, permissions, reject or accept with SDP, call webhooks; no audio). Load when adding a block button, group chats or call handling to a CMS or support inbox, or when group or call webhooks arrive."
 ---
 
-# wa-rs-groups-and-calling
+# meta-whatsapp-rs-groups-and-calling
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/groups_calls.rs](examples/groups_calls.rs),
-compiled and tested by wa-rs's own gate (Meta-shaped answers and
+compiled and tested by meta-whatsapp-rs's own gate (Meta-shaped answers and
 webhooks). Everything else: the rustdoc of `wa_rs::client::block_users`,
 `wa_rs::client::groups` and `wa_rs::client::calling`
-(`cargo doc -p wa-rs --all-features --open`).
+(`cargo doc -p meta-whatsapp-rs --all-features --open`).
 
 ## When to use
 
@@ -113,7 +113,7 @@ Calls arrive as `WebhookEvent::CallUpdated` and `CallStatusUpdated`
   unless the customer wrote in the last 24 hours
   ([open question 32](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)).
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - No audio: no WebRTC or SIP media stack, no storage of call recordings
   or transcripts.

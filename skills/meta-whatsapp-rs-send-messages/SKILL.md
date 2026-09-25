@@ -1,14 +1,14 @@
 ---
-name: wa-rs-send-messages
-description: "Sending free-form WhatsApp messages with wa-rs - OutboundMessage text, image, video, audio, document, sticker, location, contact cards and reactions, choosing the recipient (Recipient::phone in E.164 with a plus, Recipient::user for a BSUID, groups), quoted replies with reply_to, callback_data for status webhooks, read receipts and typing indicators, the 24-hour customer service window, and what the send response means. Load when writing code that sends a WhatsApp message other than a template, answers a customer, or marks messages as read."
+name: meta-whatsapp-rs-send-messages
+description: "Sending free-form WhatsApp messages with meta-whatsapp-rs - OutboundMessage text, image, video, audio, document, sticker, location, contact cards and reactions, choosing the recipient (Recipient::phone in E.164 with a plus, Recipient::user for a BSUID, groups), quoted replies with reply_to, callback_data for status webhooks, read receipts and typing indicators, the 24-hour customer service window, and what the send response means. Load when writing code that sends a WhatsApp message other than a template, answers a customer, or marks messages as read."
 ---
 
-# wa-rs-send-messages
+# meta-whatsapp-rs-send-messages
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/send.rs](examples/send.rs), compiled and tested
-by wa-rs's own gate. Every constructor and content type:
+by meta-whatsapp-rs's own gate. Every constructor and content type:
 [references/message-types.md](references/message-types.md).
 
 ## When to use
@@ -120,7 +120,7 @@ late "typing…" after the answer looks broken).
 - Direct Send (`category(DirectSendCategory::…)`, `ttl_seconds`) is a Meta
   beta; the rest of the builder works without it.
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - No send queue, rate limiting across your fleet, or retry scheduler.
 - Payment message types are not modelled: `MessageContent::Raw` is the

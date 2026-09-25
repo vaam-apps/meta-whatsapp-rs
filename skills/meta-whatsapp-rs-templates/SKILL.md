@@ -1,14 +1,14 @@
 ---
-name: wa-rs-templates
-description: "Managing WhatsApp message templates with wa-rs - TemplateDefinition and TemplateComponent (header, body, footer, buttons, carousel, limited-time offer), categories (utility, marketing, authentication), positional vs named placeholders and their examples, media header handles, creating, listing (list_stream), editing, deleting, the template library, local validation, and following review with TemplateStatusUpdated webhooks. Load when creating or changing templates, syncing a template catalog, or reacting to a template being approved, rejected, paused or re-categorized."
+name: meta-whatsapp-rs-templates
+description: "Managing WhatsApp message templates with meta-whatsapp-rs - TemplateDefinition and TemplateComponent (header, body, footer, buttons, carousel, limited-time offer), categories (utility, marketing, authentication), positional vs named placeholders and their examples, media header handles, creating, listing (list_stream), editing, deleting, the template library, local validation, and following review with TemplateStatusUpdated webhooks. Load when creating or changing templates, syncing a template catalog, or reacting to a template being approved, rejected, paused or re-categorized."
 ---
 
-# wa-rs-templates
+# meta-whatsapp-rs-templates
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/manage.rs](examples/manage.rs), compiled and
-tested by wa-rs's own gate.
+tested by meta-whatsapp-rs's own gate.
 
 ## When to use
 
@@ -114,7 +114,7 @@ while let Some(template) = stream.next().await {
   `wa_rs::webhooks::fields::TemplateCategory` is not
   `wa_rs::client::templates::TemplateCategory`. Alias one on import.
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - No archive/unarchive (Meta documents no endpoint for it).
 - It does not store which templates are approved: keep your own table,

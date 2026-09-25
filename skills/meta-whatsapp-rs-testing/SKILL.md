@@ -1,25 +1,25 @@
 ---
-name: wa-rs-testing
-description: "Testing code that uses wa-rs without Meta, a network or a database - ScriptedTransport (scripted Graph answers and failures, asserting method, path, bearer token and exact JSON, remaining() == 0), the memory stores, ManualClock for expiry and the 24-hour window, and signed webhook fixtures delivered through WebhookHandler. Load when writing unit or integration tests for WhatsApp sending, webhooks, OTP, the inbox or onboarding code built on wa-rs, or when a test needs to fake a Meta error or timeout."
+name: meta-whatsapp-rs-testing
+description: "Testing code that uses meta-whatsapp-rs without Meta, a network or a database - ScriptedTransport (scripted Graph answers and failures, asserting method, path, bearer token and exact JSON, remaining() == 0), the memory stores, ManualClock for expiry and the 24-hour window, and signed webhook fixtures delivered through WebhookHandler. Load when writing unit or integration tests for WhatsApp sending, webhooks, OTP, the inbox or onboarding code built on meta-whatsapp-rs, or when a test needs to fake a Meta error or timeout."
 ---
 
-# wa-rs-testing
+# meta-whatsapp-rs-testing
 
-> **Verified against wa-rs 6909be3b54768abc3d5f9b04543a49f32b072669 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/integration.rs](examples/integration.rs) — four
-tests wa-rs runs in its own gate. Every other skill's `examples/*.rs` ends
+tests meta-whatsapp-rs runs in its own gate. Every other skill's `examples/*.rs` ends
 with tests in the same style.
 
 ## When to use
 
 Any test of your code that sends, receives webhooks, stores tokens or
-verifies codes. wa-rs's own tests use exactly these doubles.
+verifies codes. meta-whatsapp-rs's own tests use exactly these doubles.
 
 ## Set up
 
-`ScriptedTransport` is behind wa-rs's `testing` feature. Enable it for
-test builds only, on the same wa-rs dependency (no second pin to keep in
+`ScriptedTransport` is behind meta-whatsapp-rs's `testing` feature. Enable it for
+test builds only, on the same meta-whatsapp-rs dependency (no second pin to keep in
 step), and `wa_rs::core::testing` exists in your tests:
 
 ```toml
@@ -121,7 +121,7 @@ let key = inbox.key(CUSTOMER);
   does not move them. Test expiry logic on the memory stores; test the
   adapters with their conformance suites (`wa-rs-storage`).
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - No mock HTTP server and no recorded fixtures of Meta's API: the scripts
   are yours, from Meta's documented examples.

@@ -1,20 +1,20 @@
 ---
-name: wa-rs-setup
-description: "Setting up wa-rs for WhatsApp - what to create on Meta's side first (app, WABA, phone number id, system user token, app secret, verify token), building the Client with wa_rs::client, wa_rs::client_builder or Client::builder (transport, timeout, retry policy, API version pinning, proxy endpoint), per-merchant clients with with_token, and calling a Graph endpoint wa-rs does not wrap without leaking the token. Load when creating the WhatsApp client, wiring tokens and configuration, upgrading the Graph API version, or calling an unwrapped endpoint."
+name: meta-whatsapp-rs-setup
+description: "Setting up meta-whatsapp-rs for WhatsApp - what to create on Meta's side first (app, WABA, phone number id, system user token, app secret, verify token), building the Client with wa_rs::client, wa_rs::client_builder or Client::builder (transport, timeout, retry policy, API version pinning, proxy endpoint), per-merchant clients with with_token, and calling a Graph endpoint meta-whatsapp-rs does not wrap without leaking the token. Load when creating the WhatsApp client, wiring tokens and configuration, upgrading the Graph API version, or calling an unwrapped endpoint."
 ---
 
-# wa-rs-setup
+# meta-whatsapp-rs-setup
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/client.rs](examples/client.rs), compiled and
-tested by wa-rs's own gate.
+tested by meta-whatsapp-rs's own gate.
 
 ## When to use
 
 Before the first message: the Meta-side checklist, then one `Client` per
 process. Also when tuning timeouts and retries, pinning the Graph API
-version, or reaching an edge wa-rs does not wrap.
+version, or reaching an edge meta-whatsapp-rs does not wrap.
 
 ## On Meta's side, once
 
@@ -93,7 +93,7 @@ Ids are distinct newtypes (`PhoneNumberId`, `WabaId`, `MessageId`, …)
 built from `&str` or `String`: a WABA id cannot go where a phone number id
 is expected. `messages()` takes the phone number **id**, not the number.
 
-## An endpoint wa-rs does not wrap
+## An endpoint meta-whatsapp-rs does not wrap
 
 ```rust
 client
@@ -122,7 +122,7 @@ decoding and the credential host allowlist. Mark a POST
 - `ClientBuilder::build` fails without a transport (`Error::Config`);
   `wa_rs::client_builder` fails only when TLS cannot initialise.
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - No token acquisition or refresh: system user tokens come from Business
   Settings, merchants' tokens from Embedded Signup, and an expired one

@@ -1,11 +1,11 @@
 ---
-name: wa-rs-storage
-description: "Choosing and running wa-rs storage - the KvStore (token vault, OTP challenges, webhook dedup, signup sessions) and ConversationStore (inbox history) ports, MemoryKvStore and MemoryConversationStore for tests, PostgresKvStore and PostgresConversationStore (migrate at startup, table prefixes, purge_expired, U+0000 kept in message content and refused in ids and keys, the lossless-content upgrade), RedisKvStore (noeviction, persistence, prefixes, bring your own TLS connection), server clocks, and writing your own adapter that passes the conformance suites. Load when wiring databases for wa-rs, deploying Postgres or Redis for it, or implementing a custom KvStore or ConversationStore."
+name: meta-whatsapp-rs-storage
+description: "Choosing and running meta-whatsapp-rs storage - the KvStore (token vault, OTP challenges, webhook dedup, signup sessions) and ConversationStore (inbox history) ports, MemoryKvStore and MemoryConversationStore for tests, PostgresKvStore and PostgresConversationStore (migrate at startup, table prefixes, purge_expired, U+0000 kept in message content and refused in ids and keys, the lossless-content upgrade), RedisKvStore (noeviction, persistence, prefixes, bring your own TLS connection), server clocks, and writing your own adapter that passes the conformance suites. Load when wiring databases for meta-whatsapp-rs, deploying Postgres or Redis for it, or implementing a custom KvStore or ConversationStore."
 ---
 
-# wa-rs-storage
+# meta-whatsapp-rs-storage
 
-> **Verified against wa-rs 0e63aba8378556b4e34cf4cd5b5392f18f2a5e00 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/stores.rs](examples/stores.rs), compiled by
 wa-rs's own gate; its tests run the conformance suites on the memory
@@ -13,7 +13,7 @@ stores.
 
 ## When to use
 
-Before production: everything stateful in wa-rs sits on two ports, and
+Before production: everything stateful in meta-whatsapp-rs sits on two ports, and
 the typed stores (vault, OTP, dedup, sessions) are built on `KvStore`, so
 one adapter serves them all.
 
@@ -35,7 +35,7 @@ one adapter serves them all.
 ## Postgres: the simple choice
 
 ```rust
-let pool = sqlx::PgPool::connect(database_url).await?; // sqlx as wa-rs re-exports it
+let pool = sqlx::PgPool::connect(database_url).await?; // sqlx as meta-whatsapp-rs re-exports it
 postgres::migrate(&pool).await?; // idempotent, under a lock: any instance may run it
 let kv = PostgresKvStore::new(pool.clone());
 let purger = kv.clone();
@@ -45,7 +45,7 @@ tokio::spawn(async move {
     loop {
         every.tick().await;
         if let Err(e) = purger.purge_expired().await {
-            tracing::warn!(error = %e, "purging expired wa-rs rows failed");
+            tracing::warn!(error = %e, "purging expired meta-whatsapp-rs rows failed");
         }
     }
 });
@@ -81,7 +81,7 @@ forgets every merchant's token. Only with `maxmemory-policy noeviction`,
 on an instance of its own: every key with a TTL enforces a limit (OTP
 issue logs and cooldowns, dedup markers, sessions), and a `volatile-*`
 policy evicts them silently. Size `maxmemory` for 7 days of dedup markers.
-No `ConversationStore` on Redis. `redis` here is wa-rs's re-export
+No `ConversationStore` on Redis. `redis` here is meta-whatsapp-rs's re-export
 (`wa_rs::adapters::store::redis`, feature `redis`), so the connection types
 always match `RedisKvStore::new` — no redis dependency of your own. For
 `rediss://`, add your own `redis` with `tokio-rustls-comp` at the same
@@ -136,7 +136,7 @@ until the pull request that made U+0000 lossless (PR #7, 2026-09-25).
 - Keep the vault key and the OTP pepper out of the database that holds
   these rows.
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - No built-in Redis TLS
   ([open question 19](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#storage)),

@@ -1,14 +1,14 @@
 ---
-name: wa-rs-media
-description: "WhatsApp media with wa-rs - uploading files (supported MIME types and size limits checked first), sending the media id, downloading media a customer sent with SHA-256 verification (download_bytes with a size cap, or a verified stream), media id and URL lifetimes, the host allowlist that keeps the access token on Meta's media host, and Resumable Upload handles for template header examples. Load when uploading or downloading images, documents, audio, video or stickers, handling media from webhooks, or creating a template with a media header."
+name: meta-whatsapp-rs-media
+description: "WhatsApp media with meta-whatsapp-rs - uploading files (supported MIME types and size limits checked first), sending the media id, downloading media a customer sent with SHA-256 verification (download_bytes with a size cap, or a verified stream), media id and URL lifetimes, the host allowlist that keeps the access token on Meta's media host, and Resumable Upload handles for template header examples. Load when uploading or downloading images, documents, audio, video or stickers, handling media from webhooks, or creating a template with a media header."
 ---
 
-# wa-rs-media
+# meta-whatsapp-rs-media
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/media.rs](examples/media.rs), compiled and
-tested by wa-rs's own gate.
+tested by meta-whatsapp-rs's own gate.
 
 ## When to use
 
@@ -99,7 +99,7 @@ files: `start_upload_session`, `upload_chunk`, `upload_session_status`.
   Meta refuse media not uploaded on that number (off by default: its
   effect on webhook media is undocumented).
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - No storage of media: the bytes are yours to keep.
 - No virus scanning, transcoding or image resizing; unsupported types are

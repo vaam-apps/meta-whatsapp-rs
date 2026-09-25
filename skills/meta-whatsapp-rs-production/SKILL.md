@@ -1,14 +1,14 @@
 ---
-name: wa-rs-production
-description: "Running wa-rs in production - the secrets (system user token, app secrets, verify token, vault key, OTP pepper) loaded once and checked at boot, what wa-rs logs and never logs, Meta's limits (throughput, pair rate, messaging tiers, management rate limits, registration budget), timeouts and retries, pinning and upgrading the Graph API version, several instances (shared stores, clocks, SSE relay), and the open product decisions to read before going live. Load when preparing a deployment, reviewing security or logging of a WhatsApp integration, scaling to several instances, or upgrading the wa-rs revision or Graph API version."
+name: meta-whatsapp-rs-production
+description: "Running meta-whatsapp-rs in production - the secrets (system user token, app secrets, verify token, vault key, OTP pepper) loaded once and checked at boot, what meta-whatsapp-rs logs and never logs, Meta's limits (throughput, pair rate, messaging tiers, management rate limits, registration budget), timeouts and retries, pinning and upgrading the Graph API version, several instances (shared stores, clocks, SSE relay), and the open product decisions to read before going live. Load when preparing a deployment, reviewing security or logging of a WhatsApp integration, scaling to several instances, or upgrading the meta-whatsapp-rs revision or Graph API version."
 ---
 
-# wa-rs-production
+# meta-whatsapp-rs-production
 
-> **Verified against wa-rs 0e63aba8378556b4e34cf4cd5b5392f18f2a5e00 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/production.rs](examples/production.rs),
-compiled and tested by wa-rs's own gate. Longer walkthrough:
+compiled and tested by meta-whatsapp-rs's own gate. Longer walkthrough:
 [production guide](https://github.com/vaam-apps/wa-rs/blob/main/docs/guides/production.md).
 
 ## When to use
@@ -73,7 +73,7 @@ share Meta never lists (`clear_pending_share`, with an operator id).
 
 ## Limits and retries
 
-| Meta's limit | Value | In wa-rs |
+| Meta's limit | Value | In meta-whatsapp-rs |
 | --- | --- | --- |
 | throughput per number | 80 msg/s by default | `RateLimited` (130429), replayed within the retry budget |
 | same user | about 1 message per 6 s | `PairRateLimited` (131056), replayed within the budget |
@@ -97,7 +97,7 @@ idempotent (tag sends with `callback_data`, reconcile with status webhooks;
 
 ## Versions
 
-- `ApiVersion::DEFAULT` is v25.0; pin wa-rs by `rev`, and the Graph
+- `ApiVersion::DEFAULT` is v25.0; pin meta-whatsapp-rs by `rev`, and the Graph
   version moves only with it — or hold one with
   `.api_version(ApiVersion::new(25, 0))`. Use the same version in the
   Embedded Signup page's `FB.init`.
@@ -141,7 +141,7 @@ timeouts longer than your slowest sink.
   nothing: rows and summaries recorded before stay as written (a U+FFFD
   an older revision stored for a NUL stays one).
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 Read [OPEN_QUESTIONS.md](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md)
 before going live: the OTP issue limit, PIN policy, the missing

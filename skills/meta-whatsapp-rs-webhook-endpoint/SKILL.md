@@ -1,14 +1,14 @@
 ---
-name: wa-rs-webhook-endpoint
-description: "The WhatsApp webhook endpoint with wa-rs - WebhookHandler with the app secrets (X-Hub-Signature-256 over the raw body, several secrets while rotating), the verify token GET handshake, the 3 MiB body limit, DedupGuard leases against Meta's 7-day retries, the axum router, doing the same in any other framework, and the exact status code Meta must get for each outcome (200, 401, 413, 503, 500, 403). Load when creating, deploying or changing the HTTP endpoint Meta calls, porting it to another web framework, or debugging webhook deliveries that Meta keeps retrying."
+name: meta-whatsapp-rs-webhook-endpoint
+description: "The WhatsApp webhook endpoint with meta-whatsapp-rs - WebhookHandler with the app secrets (X-Hub-Signature-256 over the raw body, several secrets while rotating), the verify token GET handshake, the 3 MiB body limit, DedupGuard leases against Meta's 7-day retries, the axum router, doing the same in any other framework, and the exact status code Meta must get for each outcome (200, 401, 413, 503, 500, 403). Load when creating, deploying or changing the HTTP endpoint Meta calls, porting it to another web framework, or debugging webhook deliveries that Meta keeps retrying."
 ---
 
-# wa-rs-webhook-endpoint
+# meta-whatsapp-rs-webhook-endpoint
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/endpoint.rs](examples/endpoint.rs), compiled and
-tested by wa-rs's own gate (axum through `tower::ServiceExt::oneshot`,
+tested by meta-whatsapp-rs's own gate (axum through `tower::ServiceExt::oneshot`,
 and the framework-free functions).
 
 ## When to use
@@ -123,7 +123,7 @@ Keep sink calls well under the lease (`.with_lease(d)` to change it).
 - The callback URL must be HTTPS with a valid certificate; in
   development, put a tunnel in front.
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - No dead-letter queue: one permanently failing event fails its batch
   ([open question 30](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#webhooks-and-live-updates)).

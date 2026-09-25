@@ -1,14 +1,14 @@
 ---
-name: wa-rs-errors
-description: "Handling wa-rs errors correctly - the Error tree (Api, Http, Transport, Decode, Validation, Step, ...), classifying failures with err.kind() and ErrorKind instead of message text, what each Graph error code means (131047 window closed, 131050 opted out, 131049 per-user limit, 131062 BSUID refused, 133016 registration lock, ...), why a failed send is never replayed after a timeout or 5xx, and how a job queue decides between resend, never and reconcile. Load when writing a match on a wa-rs error, a retry or job queue around sends, or when an error code from Meta needs interpreting."
+name: meta-whatsapp-rs-errors
+description: "Handling meta-whatsapp-rs errors correctly - the Error tree (Api, Http, Transport, Decode, Validation, Step, ...), classifying failures with err.kind() and ErrorKind instead of message text, what each Graph error code means (131047 window closed, 131050 opted out, 131049 per-user limit, 131062 BSUID refused, 133016 registration lock, ...), why a failed send is never replayed after a timeout or 5xx, and how a job queue decides between resend, never and reconcile. Load when writing a match on a meta-whatsapp-rs error, a retry or job queue around sends, or when an error code from Meta needs interpreting."
 ---
 
-# wa-rs-errors
+# meta-whatsapp-rs-errors
 
-> **Verified against wa-rs 0da9390d42a51de4df427476b333062a6f94eacf (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/handle.rs](examples/handle.rs), compiled and
-tested by wa-rs's own gate. Every code, its `ErrorKind` and what to do:
+tested by meta-whatsapp-rs's own gate. Every code, its `ErrorKind` and what to do:
 [references/error-kinds.md](references/error-kinds.md).
 
 ## When to use
@@ -127,7 +127,7 @@ pub fn after_failed_send(e: &Error) -> Resend {
   lifts it into `wa_rs::Error`. `OtpService::new` reports a bad config as
   `Error::Config`.
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - No retry scheduler, outbox or dead-letter queue for sends: a job queue
   on top is yours, and it must be idempotent (tag sends with

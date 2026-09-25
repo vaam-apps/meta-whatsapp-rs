@@ -1,14 +1,14 @@
 ---
-name: wa-rs-documents
-description: "Invoices, receipts and vouchers for WhatsApp with wa-rs's Typst renderer (feature typst) - the built-in templates and their typed inputs (pre-formatted money and dates), Renderer::with_today for deterministic output, rendering off the async runtime, PDF for document messages and template document headers, PNG for image headers, custom Typst templates and the sandbox (bundled fonts, no files, no packages), then upload and send. Never for OTP codes or secrets. Load when generating any PDF or image to send over WhatsApp."
+name: meta-whatsapp-rs-documents
+description: "Invoices, receipts and vouchers for WhatsApp with meta-whatsapp-rs's Typst renderer (feature typst) - the built-in templates and their typed inputs (pre-formatted money and dates), Renderer::with_today for deterministic output, rendering off the async runtime, PDF for document messages and template document headers, PNG for image headers, custom Typst templates and the sandbox (bundled fonts, no files, no packages), then upload and send. Never for OTP codes or secrets. Load when generating any PDF or image to send over WhatsApp."
 ---
 
-# wa-rs-documents
+# meta-whatsapp-rs-documents
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/documents.rs](examples/documents.rs), compiled
-and tested by wa-rs's own gate (it renders a real receipt PDF). Runnable
+and tested by meta-whatsapp-rs's own gate (it renders a real receipt PDF). Runnable
 program: [`invoice_document.rs`](https://github.com/vaam-apps/wa-rs/blob/main/crates/wa-rs/examples/invoice_document.rs).
 
 ## When to use
@@ -110,7 +110,7 @@ falls back.
   screenshotted. A voucher's `code` is a promotional code meant to be
   shared, nothing more.
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - No tax or total computation, number or date formatting, label
   localization, e-invoicing formats (Factur-X, UBL) or PDF signing.

@@ -1,21 +1,21 @@
 ---
-name: wa-rs-commerce
-description: "WhatsApp commerce with wa-rs - commerce settings (cart, catalog visibility), single-product, multi-product (up to 30 products) and catalog messages from a Meta catalog, catalog and multi-product templates to reach customers outside the 24-hour window, and carts coming back as order webhooks (OrderContent, product_items) to re-check and fulfil. Load when showing products or a catalog in WhatsApp, enabling the cart, handling orders placed in WhatsApp, or sending product templates."
+name: meta-whatsapp-rs-commerce
+description: "WhatsApp commerce with meta-whatsapp-rs - commerce settings (cart, catalog visibility), single-product, multi-product (up to 30 products) and catalog messages from a Meta catalog, catalog and multi-product templates to reach customers outside the 24-hour window, and carts coming back as order webhooks (OrderContent, product_items) to re-check and fulfil. Load when showing products or a catalog in WhatsApp, enabling the cart, handling orders placed in WhatsApp, or sending product templates."
 ---
 
-# wa-rs-commerce
+# meta-whatsapp-rs-commerce
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/commerce.rs](examples/commerce.rs), compiled and
-tested by wa-rs's own gate.
+tested by meta-whatsapp-rs's own gate.
 
 ## When to use
 
 A shop whose catalog is connected to its WhatsApp Business Account:
 showing products, letting customers build a cart in WhatsApp, receiving
 the order. Upload and manage the catalog itself in Meta's Commerce Manager
-or Catalog API — not through wa-rs.
+or Catalog API — not through meta-whatsapp-rs.
 
 ## Commerce settings
 
@@ -101,10 +101,10 @@ key the order by the message id.
 - Product, list and catalog messages are interactive, hence free-form:
   outside the window they fail with 131047; use the templates.
 - A retailer id that is not in the connected catalog is refused by Meta,
-  not locally: wa-rs checks presence and counts only.
+  not locally: meta-whatsapp-rs checks presence and counts only.
 - `item_price` is a float in Meta's example: never compute money from it.
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - No catalog upload or inventory management, no payment collection
   (payments are out of scope, see

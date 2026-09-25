@@ -1,14 +1,14 @@
 ---
-name: wa-rs-flows
-description: "WhatsApp Flows with wa-rs - creating a Flow from its JSON (CreateFlow, categories, validation errors), publishing, previews and assets, uploading the business public key, sending a Flow message, and the Flow data endpoint (feature flows-endpoint) - verify X-Hub-Signature-256 first, decrypt with FlowEndpointKey (RSA-OAEP + AES-GCM), answer ping, INIT, data_exchange and error notifications with FlowResponse, and the 421 and 432 status codes. Load when building WhatsApp Flows (forms, bookings, sign-ups) or the HTTPS endpoint a Flow calls."
+name: meta-whatsapp-rs-flows
+description: "WhatsApp Flows with meta-whatsapp-rs - creating a Flow from its JSON (CreateFlow, categories, validation errors), publishing, previews and assets, uploading the business public key, sending a Flow message, and the Flow data endpoint (feature flows-endpoint) - verify X-Hub-Signature-256 first, decrypt with FlowEndpointKey (RSA-OAEP + AES-GCM), answer ping, INIT, data_exchange and error notifications with FlowResponse, and the 421 and 432 status codes. Load when building WhatsApp Flows (forms, bookings, sign-ups) or the HTTPS endpoint a Flow calls."
 ---
 
-# wa-rs-flows
+# meta-whatsapp-rs-flows
 
-> **Verified against wa-rs 92f9692ed24b96c43bedcca2e7088cf196753064 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/flows.rs](examples/flows.rs), compiled and
-tested by wa-rs's own gate.
+tested by meta-whatsapp-rs's own gate.
 
 ## When to use
 
@@ -111,7 +111,7 @@ Answer 200 with `sealer.seal(&response)?` as `text/plain`
 - The RSA step uses aws-lc-rs (constant time), never the `rsa` crate
   (RUSTSEC-2023-0071): keep it that way in your own code.
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - No Flow JSON builder or validator: write the JSON (Meta's Flow
   Builder) and read `validation_errors`.

@@ -1,11 +1,11 @@
 ---
-name: wa-rs-otp-login
-description: "WhatsApp OTP login and phone verification with wa-rs - creating the authentication template (copy code, one-tap, zero-tap), OtpService issuing and verifying one-time passcodes (IssueOutcome, VerifyOutcome), why recipients must be E.164 with a plus sign, the per-number issue limit, resend cooldown and attempt limits, the required OtpConfig::namespace (the tenant), the pepper and store custody, and what to do after a timeout. Load when building sign-in, sign-up, password reset or phone-number verification with WhatsApp codes."
+name: meta-whatsapp-rs-otp-login
+description: "WhatsApp OTP login and phone verification with meta-whatsapp-rs - creating the authentication template (copy code, one-tap, zero-tap), OtpService issuing and verifying one-time passcodes (IssueOutcome, VerifyOutcome), why recipients must be E.164 with a plus sign, the per-number issue limit, resend cooldown and attempt limits, the required OtpConfig::namespace (the tenant), the pepper and store custody, and what to do after a timeout. Load when building sign-in, sign-up, password reset or phone-number verification with WhatsApp codes."
 ---
 
-# wa-rs-otp-login
+# meta-whatsapp-rs-otp-login
 
-> **Verified against wa-rs 92f9692ed24b96c43bedcca2e7088cf196753064 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/otp.rs](examples/otp.rs), compiled and tested by
 wa-rs's own gate (issue → verify once, expiry with a `ManualClock`,
@@ -144,7 +144,7 @@ the namespace changes its keys (`NotFound`, limits restart).
   message or another template (`otp_template_message` is the exact payload
   `OtpService` sends).
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - No session or JWT after `Verified`, no account linking, no SMS fallback
   when WhatsApp is undeliverable (`ErrorKind::Undeliverable`, 131026), no

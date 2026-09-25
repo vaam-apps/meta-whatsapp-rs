@@ -1,13 +1,13 @@
 ---
-name: wa-rs-embedded-signup
-description: "Letting each merchant of a multi-tenant CMS connect their own WhatsApp number with Embedded Signup and wa-rs (Tech Provider, or Solution Partner funding merchants with its credit line, chosen per deployment) - Meta prerequisites, LaunchOptions for FB.login, SignupSessions binding the attempt to the merchant (start, redeem), parsing the WA_EMBEDDED_SIGNUP event, EmbeddedSignup::onboard and onboard_with_approval (code exchange, token checks, your approval gate, encrypted storage, subscribe, credit line sharing, register with the merchant's PIN), the Error::Step names, resume after a failed step, offboarding and revoking the credit line when a merchant leaves, coexistence. Load when building the Connect WhatsApp button, its callback endpoint, offboarding, or recovering a half-finished onboarding."
+name: meta-whatsapp-rs-embedded-signup
+description: "Letting each merchant of a multi-tenant CMS connect their own WhatsApp number with Embedded Signup and meta-whatsapp-rs (Tech Provider, or Solution Partner funding merchants with its credit line, chosen per deployment) - Meta prerequisites, LaunchOptions for FB.login, SignupSessions binding the attempt to the merchant (start, redeem), parsing the WA_EMBEDDED_SIGNUP event, EmbeddedSignup::onboard and onboard_with_approval (code exchange, token checks, your approval gate, encrypted storage, subscribe, credit line sharing, register with the merchant's PIN), the Error::Step names, resume after a failed step, offboarding and revoking the credit line when a merchant leaves, coexistence. Load when building the Connect WhatsApp button, its callback endpoint, offboarding, or recovering a half-finished onboarding."
 ---
 
-# wa-rs-embedded-signup
+# meta-whatsapp-rs-embedded-signup
 
-> **Verified against wa-rs 0e63aba8378556b4e34cf4cd5b5392f18f2a5e00 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
-Reference code, compiled and tested by wa-rs's own gate:
+Reference code, compiled and tested by meta-whatsapp-rs's own gate:
 [examples/onboarding.rs](examples/onboarding.rs), [examples/solution_partner.rs](examples/solution_partner.rs). The page side: [references/frontend.md](references/frontend.md). A full
 **Tech Provider** server: [`embedded_signup.rs`](https://github.com/vaam-apps/wa-rs/blob/main/crates/wa-rs/examples/embedded_signup.rs).
 
@@ -144,7 +144,7 @@ it acts with whatever token is stored for that WABA.
 ~~`redeem` first, then parse the event, code and PIN~~ (until 2026-09-24):
 a malformed post spent the attempt. Check everything local first.
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - ~~Only the Tech Provider flow~~ (before 581f9b1). No pre-verified
   number pools or multi-WABA onboarding; no token refresh (an expired

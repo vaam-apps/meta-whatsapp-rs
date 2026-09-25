@@ -1,14 +1,14 @@
 ---
-name: wa-rs-webhook-events
-description: "Understanding and handling wa-rs WebhookEvent values - inbound customer messages (text, media, button and list replies, orders, reactions) keyed by BSUID, delivery statuses with callback data, pricing and errors (131049, 131050 arrive here), user preference opt-outs, BSUID changes, template and account updates, and forward compatibility (Unknown fields, Invalid and Unknown message types, open enums, the required wildcard arm). Load when writing the code that reacts to WhatsApp webhooks - routing messages, tracking delivery, recording opt-outs, alerting on account or template changes."
+name: meta-whatsapp-rs-webhook-events
+description: "Understanding and handling meta-whatsapp-rs WebhookEvent values - inbound customer messages (text, media, button and list replies, orders, reactions) keyed by BSUID, delivery statuses with callback data, pricing and errors (131049, 131050 arrive here), user preference opt-outs, BSUID changes, template and account updates, and forward compatibility (Unknown fields, Invalid and Unknown message types, open enums, the required wildcard arm). Load when writing the code that reacts to WhatsApp webhooks - routing messages, tracking delivery, recording opt-outs, alerting on account or template changes."
 ---
 
-# wa-rs-webhook-events
+# meta-whatsapp-rs-webhook-events
 
-> **Verified against wa-rs 0e63aba8378556b4e34cf4cd5b5392f18f2a5e00 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/events.rs](examples/events.rs), compiled and
-tested by wa-rs's own gate with Meta-shaped payloads. Every variant and
+tested by meta-whatsapp-rs's own gate with Meta-shaped payloads. Every variant and
 payload type: [references/events.md](references/events.md).
 
 ## When to use
@@ -72,7 +72,7 @@ tagged `"event"` with the same snake-case name as `event.kind()`.
 | `AccountUpdated`, `PhoneNumberQualityUpdated`, `PhoneNumberNameUpdated`, `AccountAlert` | account restrictions, limits, names |
 | `MessageEchoed`, `HistorySynced`, `AppStateSynced` | coexistence (WhatsApp Business app) |
 | `ErrorReported` | app- or system-level errors |
-| `Unknown` | a field or shape this wa-rs version does not type: log `field` |
+| `Unknown` | a field or shape this meta-whatsapp-rs version does not type: log `field` |
 | `Unparsed` | a signed body that is not a webhook envelope: alert |
 
 Helpers: `event.phone_number_id()` (route to the merchant),
@@ -123,7 +123,7 @@ pub fn quality(score: &TemplateQualityScore) -> QualityRating {
   (`wa-rs-media`).
 - Customer data: never log `WebhookEvent`'s `Debug` (names, numbers, text).
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - Messaging handovers, `message_echoes` and `consumer_profile` have no
   documented payload: they arrive as `Unknown`.

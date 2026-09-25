@@ -1,14 +1,14 @@
 ---
-name: wa-rs-live-updates
-description: "Where WhatsApp webhook events go after wa-rs verifies them - writing your own EventSink, FanoutSink to several sinks, BroadcastSink plus the SSE stream for a live UI (allow-list filter, lagged events, per-subscriber cost), ChannelSink to a background worker (Wait vs TryOrFail), FilterSink, FnSink, TracingSink, idempotency and the at-least-once guarantee, and what is lost on a crash. Load when wiring what happens to webhook events, streaming live chat updates to a browser, or moving slow work off the webhook request."
+name: meta-whatsapp-rs-live-updates
+description: "Where WhatsApp webhook events go after meta-whatsapp-rs verifies them - writing your own EventSink, FanoutSink to several sinks, BroadcastSink plus the SSE stream for a live UI (allow-list filter, lagged events, per-subscriber cost), ChannelSink to a background worker (Wait vs TryOrFail), FilterSink, FnSink, TracingSink, idempotency and the at-least-once guarantee, and what is lost on a crash. Load when wiring what happens to webhook events, streaming live chat updates to a browser, or moving slow work off the webhook request."
 ---
 
-# wa-rs-live-updates
+# meta-whatsapp-rs-live-updates
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/sinks.rs](examples/sinks.rs), compiled and
-tested by wa-rs's own gate. Sinks are in `wa_rs::adapters::sink` (feature
+tested by meta-whatsapp-rs's own gate. Sinks are in `wa_rs::adapters::sink` (feature
 `sinks`, on by default); `sse` is in `wa_rs::webhooks` (feature `axum`).
 
 ## When to use
@@ -100,7 +100,7 @@ while let Some(event) = jobs.recv().await {
   events yourself (Postgres `LISTEN/NOTIFY`, Redis pub/sub) or pin a
   merchant's traffic to one instance.
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - No dead-letter store for events a sink cannot take
   ([open question 30](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#webhooks-and-live-updates)),

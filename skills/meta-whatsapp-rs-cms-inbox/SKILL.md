@@ -1,15 +1,15 @@
 ---
-name: wa-rs-cms-inbox
-description: "The merchant-to-customer chat inbox of a multi-tenant CMS built on wa-rs (wa_rs::inbox) - InboxSink recording webhook messages, statuses and coexistence echoes and history into a ConversationStore, Inbox listing conversations and history and replying with the merchant's token, the tenant ownership check before the token vault, conversation keys (BSUID, wa_id, group), the 24-hour window with a template fallback, quoted replies, unread counts, NUL handling on Postgres, and what the inbox does not record. Load when building inbox screens, reply endpoints, or the webhook-to-inbox pipeline of a CMS."
+name: meta-whatsapp-rs-cms-inbox
+description: "The merchant-to-customer chat inbox of a multi-tenant CMS built on meta-whatsapp-rs (wa_rs::inbox) - InboxSink recording webhook messages, statuses and coexistence echoes and history into a ConversationStore, Inbox listing conversations and history and replying with the merchant's token, the tenant ownership check before the token vault, conversation keys (BSUID, wa_id, group), the 24-hour window with a template fallback, quoted replies, unread counts, NUL handling on Postgres, and what the inbox does not record. Load when building inbox screens, reply endpoints, or the webhook-to-inbox pipeline of a CMS."
 ---
 
-# wa-rs-cms-inbox
+# meta-whatsapp-rs-cms-inbox
 
-> **Verified against wa-rs 0e63aba8378556b4e34cf4cd5b5392f18f2a5e00 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/inbox.rs](examples/inbox.rs), compiled and
-tested by wa-rs's own gate. The full server (webhook endpoint, SSE,
-bearer-token tenants), exercised in-process by wa-rs's tests:
+tested by meta-whatsapp-rs's own gate. The full server (webhook endpoint, SSE,
+bearer-token tenants), exercised in-process by meta-whatsapp-rs's tests:
 [`cms_inbox.rs`](https://github.com/vaam-apps/wa-rs/blob/main/crates/wa-rs/examples/cms_inbox.rs).
 
 ## When to use
@@ -142,7 +142,7 @@ becomes U+FFFD~~: until the pull request that made U+0000 lossless
 (PR #7, 2026-09-25). 4b47bf7, 6d50701, a9593f3, af5b1f8 and that pull
 request change the `ConversationStore` contract.
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - Not recorded: calls (a call reopens the window on Meta's side but
   `Inbox::window` cannot see it:

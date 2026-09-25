@@ -1,14 +1,14 @@
 ---
-name: wa-rs-send-templates
-description: "Sending an approved WhatsApp template with wa-rs - TemplateMessage with its language code, positional (Parameter::text) vs named (Parameter::named) parameters, header media, currency and date parameters, button parameters by index (URL suffix, quick-reply payload, copy code, Flow, catalog, multi-product), carousels and limited-time offers, what is validated locally and what only Meta can check (132000, 132001). Load when sending a template message - order updates, notifications, campaigns, anything outside the 24-hour window."
+name: meta-whatsapp-rs-send-templates
+description: "Sending an approved WhatsApp template with meta-whatsapp-rs - TemplateMessage with its language code, positional (Parameter::text) vs named (Parameter::named) parameters, header media, currency and date parameters, button parameters by index (URL suffix, quick-reply payload, copy code, Flow, catalog, multi-product), carousels and limited-time offers, what is validated locally and what only Meta can check (132000, 132001). Load when sending a template message - order updates, notifications, campaigns, anything outside the 24-hour window."
 ---
 
-# wa-rs-send-templates
+# meta-whatsapp-rs-send-templates
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/send.rs](examples/send.rs), compiled and tested
-by wa-rs's own gate.
+by meta-whatsapp-rs's own gate.
 
 ## When to use
 
@@ -92,7 +92,7 @@ the template.
   non-empty language, coupon codes ≤ 20 characters, carousels ≤ 10 cards,
   multi-product sections (1–10 sections, 24-character titles, 30
   products), quick-reply payloads ≤ 512, call-button TTL 1–43200 minutes.
-- Only by Meta, because wa-rs does not know the approved definition:
+- Only by Meta, because meta-whatsapp-rs does not know the approved definition:
   parameter count and kind (`ErrorKind::TemplateParameterMismatch`,
   132000), the template existing in that language
   (`ErrorKind::TemplateNotFound`, 132001), paused or disabled templates
@@ -110,7 +110,7 @@ the template.
 - Marketing templates may be refused per user (131049, 131050): see
   `wa-rs-marketing` and `wa-rs-errors`.
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - No lookup of the approved definition, so no local check of parameter
   counts; cache your approved templates (`wa-rs-templates`) if you want

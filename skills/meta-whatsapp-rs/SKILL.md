@@ -1,11 +1,11 @@
 ---
-name: wa-rs
-description: "Start here for wa-rs, the Rust toolkit for Meta's WhatsApp Business Platform (Cloud API client, webhooks, storage adapters, Typst documents). How to add it as a git dependency, its Cargo features and crates, the rules every integration follows (E.164 numbers with a plus, BSUID keys, branch on ErrorKind, sends never retried blindly), and which wa-rs-* skill covers which task. Load when a project depends on wa-rs or is about to, when someone asks how to do anything with WhatsApp in Rust, or when unsure which wa-rs skill applies."
+name: meta-whatsapp-rs
+description: "Start here for meta-whatsapp-rs, the Rust toolkit for Meta's WhatsApp Business Platform (Cloud API client, webhooks, storage adapters, Typst documents). How to add it as a git dependency, its Cargo features and crates, the rules every integration follows (E.164 numbers with a plus, BSUID keys, branch on ErrorKind, sends never retried blindly), and which meta-whatsapp-rs-* skill covers which task. Load when a project depends on meta-whatsapp-rs or is about to, when someone asks how to do anything with WhatsApp in Rust, or when unsure which meta-whatsapp-rs skill applies."
 ---
 
-# wa-rs
+# meta-whatsapp-rs
 
-> **Verified against wa-rs 8bc676747a09a3c9225a53954030ed7d4eb44adf (2026-09-24).** On another revision, trust the code over this page (see "Versioning" below).
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 wa-rs is a Cargo workspace for Meta's WhatsApp Business Platform: a typed
 client for the Cloud API and the Business Management API (Graph API
@@ -16,7 +16,7 @@ and WhatsApp OTP login.
 
 ## When to use
 
-Load this first for any code that depends on wa-rs; it routes to the
+Load this first for any code that depends on meta-whatsapp-rs; it routes to the
 task skills below. Load the task skill before writing that kind of code.
 
 ## Install
@@ -88,7 +88,7 @@ the inbox. It leaves out `Result`: write `wa_rs::Result`.
 | Secrets, logs, limits, several instances, going live | `wa-rs-production` |
 
 Anything else the client wraps: its rustdoc
-(`cargo doc -p wa-rs --all-features --open`), starting at `wa_rs::client`.
+(`cargo doc -p meta-whatsapp-rs --all-features --open`), starting at `wa_rs::client`.
 
 ## Rules every integration follows
 
@@ -125,13 +125,13 @@ match messages.send(&text).await {
 
 ## Versioning
 
-Each skill names the wa-rs commit it was verified against, under its
+Each skill names the meta-whatsapp-rs commit it was verified against, under its
 title: every name it uses was checked against the source at that commit,
-and every Rust block is an excerpt of code wa-rs compiles and tests in its
+and every Rust block is an excerpt of code meta-whatsapp-rs compiles and tests in its
 own gate. On another `rev`, trust the rustdoc
-(`cargo doc -p wa-rs --all-features --open`) over the skill.
+(`cargo doc -p meta-whatsapp-rs --all-features --open`) over the skill.
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - No tenant model, no job queue or outbox, no consent registry.
 - Not wrapped: Solution Partner APIs beyond credit lines (partner-led

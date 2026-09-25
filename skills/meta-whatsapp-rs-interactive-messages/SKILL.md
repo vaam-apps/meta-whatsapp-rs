@@ -1,14 +1,14 @@
 ---
-name: wa-rs-interactive-messages
-description: "Interactive WhatsApp messages with wa-rs - reply buttons (ReplyButtons, up to 3), list messages (ListMessage, up to 10 rows), CTA URL buttons (CtaUrl), location requests, WhatsApp Flow messages (FlowParameters, FlowRef, flow token, first screen), media card carousels (MediaCarousel), their documented limits checked locally, and how the customer's tap comes back in the webhook. Load when building a WhatsApp message with buttons, a menu or list, a link button, a location request, a Flow or a carousel, or handling the reply to one."
+name: meta-whatsapp-rs-interactive-messages
+description: "Interactive WhatsApp messages with meta-whatsapp-rs - reply buttons (ReplyButtons, up to 3), list messages (ListMessage, up to 10 rows), CTA URL buttons (CtaUrl), location requests, WhatsApp Flow messages (FlowParameters, FlowRef, flow token, first screen), media card carousels (MediaCarousel), their documented limits checked locally, and how the customer's tap comes back in the webhook. Load when building a WhatsApp message with buttons, a menu or list, a link button, a location request, a Flow or a carousel, or handling the reply to one."
 ---
 
-# wa-rs-interactive-messages
+# meta-whatsapp-rs-interactive-messages
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/interactive.rs](examples/interactive.rs),
-compiled and tested by wa-rs's own gate.
+compiled and tested by meta-whatsapp-rs's own gate.
 
 ## When to use
 
@@ -120,7 +120,7 @@ cards 2–10, card body 160 with at most 2 line breaks.
 - A Flow token is echoed to your endpoint and in the reply: it is a
   correlation id, not a secret.
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - It does not remember what you asked: correlate replies yourself, by the
   button or row id, the Flow token, or the quoted message

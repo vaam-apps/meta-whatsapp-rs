@@ -1,14 +1,14 @@
 ---
-name: wa-rs-token-vault
-description: "Keeping merchants' WhatsApp business tokens with wa-rs's TokenVault - AES-256-GCM encryption at rest on any KvStore, the vault key (VaultKey, VaultKeys, key ids, custody), rotating keys (with_previous, rotate), finding the token for a webhook's phone number id (get_by_phone_number), turning it into a per-merchant client with with_token, expiry, offboarding, and why store() must only get ids Meta verified. Load when code needs to act as a merchant, route a webhook to a merchant's token, rotate or configure the vault key, or disconnect a merchant."
+name: meta-whatsapp-rs-token-vault
+description: "Keeping merchants' WhatsApp business tokens with meta-whatsapp-rs's TokenVault - AES-256-GCM encryption at rest on any KvStore, the vault key (VaultKey, VaultKeys, key ids, custody), rotating keys (with_previous, rotate), finding the token for a webhook's phone number id (get_by_phone_number), turning it into a per-merchant client with with_token, expiry, offboarding, and why store() must only get ids Meta verified. Load when code needs to act as a merchant, route a webhook to a merchant's token, rotate or configure the vault key, or disconnect a merchant."
 ---
 
-# wa-rs-token-vault
+# meta-whatsapp-rs-token-vault
 
-> **Verified against wa-rs 0da9390d42a51de4df427476b333062a6f94eacf (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/vault.rs](examples/vault.rs), compiled and
-tested by wa-rs's own gate (routing, rotation, wrong key, offboarding).
+tested by meta-whatsapp-rs's own gate (routing, rotation, wrong key, offboarding).
 
 ## When to use
 
@@ -113,7 +113,7 @@ is gone).
 - One `Client` per process, `with_token` per request: never build a
   client per merchant.
 
-## What wa-rs does not do
+## What meta-whatsapp-rs does not do
 
 - No token refresh: `expires_at` records Meta's expiry when there is one;
   an `ErrorKind::Authentication` (190) on a merchant's calls means running
