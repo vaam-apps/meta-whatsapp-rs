@@ -106,7 +106,8 @@ Say in the PR description what happened to each, with a link or
 - No `SKILL.md` outside `skills/<name>/` and `.claude/skills/<name>/`:
   the installer would offer it (a root one hides every other skill).
 - `just skills-check` (part of `just ci`) checks that every stamp's commit
-  exists and is an ancestor of HEAD.
+  is in HEAD's history: an ancestor of HEAD, or a branch commit that a
+  squash commit in that history lists as `Squashed-commit: <sha>`.
 - Developer skills in `.claude/skills/` carry `metadata: internal: true`
   so the installer does not offer them. Check what it offers from your
   checkout with `npx -y skills add <path-to-checkout> --list`: only the
@@ -116,3 +117,28 @@ Say in the PR description what happened to each, with a link or
 
 [Conventional Commits](https://www.conventionalcommits.org/):
 `feat(webhooks): …`, `fix(client): …`, `docs(skills): …`.
+
+## Merging
+
+Pull requests are **squash-merged** (every PR merged after PR #5, from
+2026-09-25; PRs #1, #2, #4 and #5 were merge commits). Merge commits and
+rebase merges are not used: a rebase rewrites every commit and lists none.
+A squash replaces the branch's commits with one, so:
+
+- In the CHANGELOG, docs, `OPEN_QUESTIONS.md` and code comments, cite a
+  pull request as "PR #12" (a bare `#N` is an open question's number) or a
+  commit already on `main`, never a commit of the branch under review: it
+  will not exist on `main`.
+- Skill stamps may name the branch's last code commit, as before. The
+  squash commit's body must then list every commit of the PR, one
+  `Squashed-commit: <full sha>` line each, which `just squash-body <pr>`
+  prints (from GitHub's list of the PR's commits, with their
+  `Co-authored-by:` lines); `just skills-check` accepts a stamp that a
+  squash commit **on main** lists. Merge only the head you reviewed:
+
+  ```bash
+  head=$(gh pr view 12 --json headRefOid --jq .headRefOid)
+  gh pr merge 12 --squash --match-head-commit "$head" --body "$(just squash-body 12)"
+  ```
+
+  A PR's own CI cannot prove this step: main's CI after the merge does.

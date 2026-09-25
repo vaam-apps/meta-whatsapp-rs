@@ -103,7 +103,11 @@ there. The rules:
 
 1. **Your `Cargo.toml` pins you, not the skill.** Same commit as the
    stamp: trust the skill. Another commit: trust the code (rustdoc,
-   source) wherever they disagree.
+   source) wherever they disagree. A stamp may name a pull request's
+   commit that was squash-merged: the `main` commit that carries it is the
+   one listing it, found with
+   `git log origin/main --grep "Squashed-commit: <sha>"`, and GitHub still
+   shows the stamped commit itself at `/commit/<sha>`.
 2. **A newer skill on an older wa-rs is the dangerous case**: it describes
    API your revision lacks. Bump the `rev`, or use the skill's git history
    at the stamp nearest your revision.
@@ -141,8 +145,9 @@ there. The rules:
   skill and every `references/*.md` is stamped under its title (and any
   other stamp is well-formed), every skill is short, and listed
   here and in the `wa-rs` hub.
-- `just skills-check`: every stamp's commit exists and is an ancestor of
-  the checked-out commit.
+- `just skills-check`: every stamp's commit is in the checked-out
+  commit's history, as an ancestor or as a pull request's commit that a
+  squash commit on main lists in its Squashed-commit lines.
 
 What no check can prove: that the prose's *semantics* are right (a real
 constant with a wrong value, a real method called on the wrong type

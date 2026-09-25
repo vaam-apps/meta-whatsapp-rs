@@ -91,7 +91,7 @@ deny:
 # This needs the git history: CI checks out with fetch-depth 0, and a shallow
 # clone fails here.
 #
-# Consumer skills: every `Verified against wa-rs <sha>` stamp is a commit in HEAD's history
+# Consumer skills: every `Verified against wa-rs <sha>` stamp is a commit in HEAD's history, or a branch commit a squash commit on main lists
 skills-check:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -111,22 +111,54 @@ skills-check:
         echo "no stamps found under skills/"
         exit 1
     fi
+    # A squash merge replaces a branch's commits with one, whose body lists
+    # them (`Squashed-commit: <sha>`, `just squash-body`). Only listings
+    # already on main count: on a pull request, a line in the branch's own
+    # commits proves nothing (the branch's real stamps are its ancestors).
+    onmain=$(git merge-base HEAD origin/main 2>/dev/null) || {
+        echo "skills-check: no origin/main to check squash listings against (fetch it)"
+        exit 1
+    }
     for sha in $stamps; do
         files=$(grep -rlE "Verified against wa-rs $sha([^0-9a-f]|$)" skills | wc -l)
         if [ "${#sha}" -ne 40 ]; then
             echo "stamp $sha: not a full 40-character commit id ($files files)"
             status=1
-        elif ! git cat-file -e "$sha^{commit}" 2>/dev/null; then
-            echo "stamp $sha: no such commit ($files files)"
-            status=1
-        elif ! git merge-base --is-ancestor "$sha" HEAD; then
-            echo "stamp $sha: not an ancestor of HEAD ($files files)"
-            status=1
-        else
+        elif git cat-file -e "$sha^{commit}" 2>/dev/null && git merge-base --is-ancestor "$sha" HEAD; then
             echo "stamp $sha: ok ($files files)"
+        else
+            # No pipe into `head`: under pipefail, git dying of SIGPIPE on a
+            # second listing would fail the recipe at random.
+            squash=$(git log -n 1 -E --format=%H --grep="^Squashed-commit: $sha[[:space:]]*\$" "$onmain")
+            if [ -n "$squash" ]; then
+                echo "stamp $sha: ok, squashed into $squash ($files files)"
+            elif git cat-file -e "$sha^{commit}" 2>/dev/null; then
+                echo "stamp $sha: not an ancestor of HEAD, and no squash commit on main lists it ($files files)"
+                status=1
+            else
+                echo "stamp $sha: no such commit, and no squash commit on main lists it ($files files)"
+                status=1
+            fi
         fi
     done
     exit "$status"
+
+# The body of a pull request's squash commit: one `Squashed-commit: <sha>`
+# line per commit of the PR, as GitHub lists them (so stamps naming a branch
+# commit still resolve on main: `skills-check`), then the commits'
+# `Co-authored-by:` lines (a custom body replaces GitHub's default one).
+# Refuses a PR without commits. Usage: CONTRIBUTING.md § Merging.
+squash-body pr:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    commits=$(gh pr view {{pr}} --json commits --jq '.commits[].oid')
+    if [ -z "$commits" ]; then
+        echo "PR {{pr}}: no commits listed" >&2
+        exit 1
+    fi
+    for c in $commits; do echo "Squashed-commit: $c"; done
+    coauthors=$(gh pr view {{pr}} --json commits --jq '.commits[].messageBody' | grep -iE '^co-authored-by:' | sort -u || true)
+    if [ -n "$coauthors" ]; then printf '\n%s\n' "$coauthors"; fi
 
 # The gate. CI runs exactly this.
 ci: lint check test skills-check doc features deny test-live

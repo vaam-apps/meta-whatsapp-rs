@@ -117,6 +117,8 @@ Docker for `just test-live`.
 | `just features` | each adapter/client feature compiled alone |
 | `just test-live` / `just test-live-down` | live adapter tests; stop the services |
 | `just deny` | licenses, advisories, bans, sources |
+| `just skills-check` | every skill stamp's commit is on main (directly or squash-merged) |
+| `just squash-body <pr>` | the squash commit body for a PR (CONTRIBUTING.md § Merging) |
 | `just meta-docs [--force]` | mirror Meta's docs into `.meta-docs/` |
 
 Builds are heavy (typst, aws-lc-sys, sqlx). On a shared machine, cap

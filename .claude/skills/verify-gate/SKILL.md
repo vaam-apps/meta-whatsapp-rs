@@ -17,6 +17,9 @@ needs the git history (a shallow clone fails it).
 
 ## Traps
 
+- **A green PR does not prove main after a squash.** `skills-check` passes
+  on main only if the squash body is `just squash-body <pr>`: without it,
+  stamps naming the PR's commits resolve nowhere and main turns red.
 - **Skipped ≠ passed.** `live_*` tests print `ok` when their service URL is
   unset. Only `just test-live` sets `WA_RS_REQUIRE_LIVE=1`, which turns a
   missing service into a failure. Check its output shows the live tests
