@@ -62,12 +62,14 @@ answers by status (a run of 503s: sinks outlast the dedup lease),
 
 A deployment funding merchants with its credit line
 (`wa-rs-embedded-signup`, `references/solution-partner.md` there):
-onboarding only through `onboard_with_approval`; `PartnerRemoved` wired to
-`revoke_credit_line` (unless its `solution_partner_business_ids` omit your
-business), `PartnerAppUninstalled` of **your** app to `offboard`; the key
-rotation above; an alert on `CreditError::Reconcile` and on a
-`RevocationIncomplete` that is not retryable (`ErrorKind::Unknown`: a
-person checks Meta Business Suite), and a retry of one that is.
+onboarding only through `onboard_with_approval`; every `PartnerRemoved`
+wired to `revoke_credit_line` at once, coexistence disconnections included
+(unless its `solution_partner_business_ids` omit your business),
+`PartnerAppUninstalled` of **your** app to `offboard`; the key rotation
+above; an alert on `CreditError::Reconcile` and on a `RevocationIncomplete`
+that is not retryable (`ErrorKind::Unknown`: a person checks Meta Business
+Suite), and a retry of one that is; a staff-only admin action for a lost
+share Meta never lists (`clear_pending_share`, with an operator id).
 
 ## Limits and retries
 
@@ -143,10 +145,10 @@ timeouts longer than your slowest sink.
 
 Read [OPEN_QUESTIONS.md](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md)
 before going live: the OTP issue limit, PIN policy, the missing
-dead-letter path for webhook batches, token refresh, Redis TLS, a revoked
-message keeping its content in the inbox (38). No metrics exporter, no
-health endpoint, no
-secret manager integration. ~~Whether the OTP namespace becomes
+dead-letter path for webhook batches, token refresh, Redis TLS. No
+metrics exporter, no health endpoint, no secret manager integration. A
+revoked message keeps its content in the inbox (decided 2026-09-25;
+`wa-rs-cms-inbox`). ~~Whether the OTP namespace becomes
 required~~: decided in d67b3ac (2026-09-24), it is (`wa-rs-otp-login`).
 ~~The provisional U+0000 replacement~~: until the pull request that
 made U+0000 lossless (PR #TBD, 2026-09-25); message content keeps it
