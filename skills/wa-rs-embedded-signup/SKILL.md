@@ -5,7 +5,7 @@ description: "Letting each merchant of a multi-tenant CMS connect their own What
 
 # wa-rs-embedded-signup
 
-> **Verified against wa-rs c6081a36ed7be2bef8afb2c4d957bb5e44661cdd (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against wa-rs aef2f252d2250c3d7f5e8556155905e3388ccfd3 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code, compiled and tested by wa-rs's own gate:
 [examples/onboarding.rs](examples/onboarding.rs), [examples/solution_partner.rs](examples/solution_partner.rs). The page side: [references/frontend.md](references/frontend.md). A full
