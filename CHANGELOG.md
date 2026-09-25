@@ -137,15 +137,19 @@ volumes (Claude config, shell history, cargo caches) start empty
   tables (`wa_server_*`) migrated after the library's under an advisory
   lock, expand-only; the admin API (tenants, keys, platform keys,
   attaching the platform's own WABA after listing its numbers from Meta
-  and subscribing the app to it, reading a binding, the D4 unbind, which
-  deletes the token too, vault key rotation) and CLI (the first admin
-  key, listing and revoking keys, `vault rotate`; on memory storage in
+  and subscribing the app to it (a refused subscription leaves it
+  attached and says so, `step: subscribe_app`, `resumable: true`),
+  reading a binding, the D4 unbind, which deletes the token, usable or
+  not, before the bindings, vault key rotation within the request
+  deadline) and CLI (the first admin key, listing and revoking keys,
+  `vault rotate` on Postgres, without a deadline; on memory storage in
   development, `serve` prints a one-time admin key instead); the numbers
   and business profile routes and disconnection, each behind the
   authorization order (key, tenant, scope, ownership, then the vault);
   errors whose codes are `ErrorKind::as_str()`, plus `405
   method_not_allowed` and `409 tenant_exists`, with Meta's `details` only
-  where the design allows it, bounded; JSON request logs with the key's
+  where the design allows it, bounded and stripped of control and format
+  characters and line separators; JSON request logs with the key's
   public id and audit events for operators' changes, without secrets,
   tokens or phone numbers; a committed OpenAPI 3.1 document
   (`crates/meta-whatsapp-server/openapi/v1.json`) that a test compares

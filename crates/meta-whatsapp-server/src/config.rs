@@ -15,6 +15,8 @@
 //! | memory storage (no `DATABASE_URL`) outside `WA_SERVER_ENV=development` | `MemoryOutsideDevelopment` |
 //! | identical public and internal binds | `SameBinds` |
 //! | `WA_ONBOARDING_MODE=solution_partner` without its four settings | `PartnerSettingMissing` |
+//! | a plain-`http` `WA_GRAPH_ENDPOINT` outside development (every token travels to it) | `Invalid` |
+//! | a vault key id used twice (`WA_VAULT_KEY_ID`'s and `WA_VAULT_PREVIOUS_KEYS`') | `Invalid` |
 //!
 //! and on anything it cannot parse (`Invalid`), a variable set twice
 //! (`Ambiguous`) or a secret file it cannot read (`Unreadable`).

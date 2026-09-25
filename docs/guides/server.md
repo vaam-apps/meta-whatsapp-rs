@@ -57,7 +57,7 @@ The commands:
 | `meta-whatsapp-server admin create-platform-key --tenants '*' --scopes numbers [--expires-at …]` | mints a platform key and prints it once |
 | `meta-whatsapp-server admin list-keys [--tenant <id>]` | lists the admin and platform keys (or a tenant's), never a secret |
 | `meta-whatsapp-server admin revoke-key <key_id>` | revokes a key of any kind |
-| `meta-whatsapp-server vault rotate` | re-encrypts every WABA's token under the active vault key (as `POST /v1/admin/vault/rotate`) |
+| `meta-whatsapp-server vault rotate` | re-encrypts every WABA's token under the active vault key (as `POST /v1/admin/vault/rotate`, without its request deadline; Postgres only: memory storage is per process) |
 
 ## Configure
 
@@ -69,7 +69,7 @@ read yet: set, it stops the start.
 | Variable | Default | What |
 | --- | --- | --- |
 | `DATABASE_URL` | required outside development | Postgres (a secret: it holds a password) |
-| `WA_SERVER_ENV` | `production` | `development` allows memory storage and a throwaway vault key |
+| `WA_SERVER_ENV` | `production` | `development` allows memory storage, a throwaway vault key and a plain-`http` `WA_GRAPH_ENDPOINT` |
 | `WA_SERVER_PUBLIC_BIND`, `WA_SERVER_INTERNAL_BIND` | `127.0.0.1:8080`, `127.0.0.1:8081` | must differ |
 | `WA_APP_SECRET` | required | the Meta app's secret (`WA_APP_SECRET_PREVIOUS` too while rotating) |
 | `WA_VERIFY_TOKEN` | required | the token you enter in the App Dashboard for the webhook |
@@ -182,9 +182,14 @@ curl -sS -X POST http://127.0.0.1:8081/v1/admin/tenants/merchant-42/wabas \
   -d @attach.json
 ```
 
-A token Meta rejects is `422 invalid_request` on `token`. If Meta refuses
-the subscription, the WABA stays attached and the call answers Meta's
-error: repeat it once fixed. A WABA bound to one tenant is refused to
+A token Meta rejects while the numbers are listed is `422
+invalid_request` on `token`, and nothing is bound or stored. Subscribing
+the app comes last, once the WABA is bound and the token stored: if Meta
+refuses it, the WABA stays attached and the call answers Meta's error
+with `"step": "subscribe_app"` and `"resumable": true`; repeat it once
+fixed. A token Meta rejects at that point is `409 reconnect_required`
+(its numbers are marked so): repeat the attach with a valid token. A
+WABA bound to one tenant is refused to
 another (`409 waba_owned_by_another_tenant`, decision D4, also for one of
 its numbers); `GET /v1/admin/wabas/{waba_id}` says who holds it, and
 `DELETE /v1/admin/wabas/{waba_id}/binding` frees it: the service
@@ -203,7 +208,18 @@ new `WA_VAULT_KEY_ID`) and the old one in `WA_VAULT_PREVIOUS_KEYS`,
 deploy, then call `POST /v1/admin/vault/rotate` (or run
 `meta-whatsapp-server vault rotate`): it re-encrypts every bound WABA's
 token under the new key and answers `{wabas, rotated, failed}`. Drop the
-old key once `failed` is empty.
+old key once `failed` is empty. The route is a request like any other,
+cut at 55 s: a walk too large to finish in time answers `504 timeout`
+with part of the tokens rotated. Repeating it is safe (tokens already
+under the new key are only read), and the command has no deadline.
+
+This advice holds because, in M1a, every record in the vault belongs to
+a bound WABA, which is what the rotation walks. From M3, Solution
+Partner onboarding keeps records past a WABA's binding (its credit
+ledger outlives the token, and a business's revocation marker outlives
+both); until the rotation walks those too, `failed` being empty will
+not mean that nothing still needs the old key. M3's notes will say when
+it does.
 
 ## A first call
 
@@ -251,7 +267,8 @@ Every error answers one body:
   the `ErrorCode` schema of the OpenAPI document) and Meta's code under
   `graph`; Meta's own error message never reaches you. `graph.details` is
   Meta's text, not the service's (at most 512 characters, without control
-  characters): show it to an operator, never branch on it.
+  or format characters or line separators): show it to an operator,
+  never branch on it.
 - A path called with a method it does not take is `405
   method_not_allowed`, with `Allow`.
 - **Resend only when `may_have_been_sent` is `false`.** A `504 timeout`
