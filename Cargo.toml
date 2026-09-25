@@ -121,6 +121,11 @@ utoipa-axum = "0.3"
 prometheus-client = "0.25"
 # The command line: serve, migrate, openapi, healthcheck, admin keys.
 clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
+# The listeners' accept loop (crates/meta-whatsapp-server/src/listen.rs):
+# axum::serve sets no timer, so hyper's header read timeout is off, and has
+# no connection cap. Both are already in the tree through axum.
+hyper = { version = "1", default-features = false }
+hyper-util = { version = "0.1", default-features = false }
 
 # Dev.
 # Examples only: makes the library's `tracing` output visible (RUST_LOG).

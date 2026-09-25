@@ -478,6 +478,13 @@ impl ApiError {
         self
     }
 
+    /// Set `may_have_been_sent`.
+    #[must_use]
+    pub fn with_may_have_been_sent(mut self, sent: bool) -> Self {
+        self.0.may_have_been_sent = sent;
+        self
+    }
+
     /// The HTTP status.
     pub fn status(&self) -> StatusCode {
         self.0.status

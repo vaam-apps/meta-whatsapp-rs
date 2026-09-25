@@ -16,7 +16,7 @@
 //! | [`api`] | both routers and the OpenAPI document |
 //! | [`error`] | the error body, codes and statuses |
 //! | [`telemetry`], [`metrics`] | request logs and Prometheus metrics |
-//! | [`serve`], [`cli`] | the process |
+//! | [`serve`], [`listen`], [`cli`] | the process, its listeners' accept loop |
 
 pub mod api;
 pub mod auth;
@@ -24,6 +24,7 @@ pub mod cli;
 pub mod config;
 pub mod error;
 pub mod keys;
+pub mod listen;
 pub mod metrics;
 pub mod model;
 pub mod serve;

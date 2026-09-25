@@ -44,6 +44,10 @@ tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["json"] }
 
 clap.workspace = true
+# The accept loop: a header read timeout and a connection cap
+# (src/listen.rs).
+hyper = { workspace = true, features = ["server", "http1"] }
+hyper-util = { workspace = true, features = ["tokio", "server", "server-graceful", "service"] }
 prometheus-client.workspace = true
 utoipa.workspace = true
 utoipa-axum.workspace = true

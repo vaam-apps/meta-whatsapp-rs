@@ -18,11 +18,11 @@ use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use crate::api;
 use crate::config::{Config, DatabaseUrl, MigrateMode, Storage};
 use crate::metrics::Metrics;
 use crate::state::AppState;
 use crate::store::{MemoryStore, PgStore, Store, migrate};
+use crate::{api, listen};
 
 /// Connections per replica.
 const POOL_SIZE: u32 = 10;
@@ -133,14 +133,16 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     let wait = |mut rx: watch::Receiver<bool>| async move {
         let _ = rx.wait_for(|stop| *stop).await;
     };
-    let mut public_task = tokio::spawn(axum_serve(
+    let mut public_task = tokio::spawn(listen::serve(
         public,
         api::public_router(&state),
+        listen::PUBLIC_LIMITS,
         wait(stopped.clone()),
     ));
-    let mut internal_task = tokio::spawn(axum_serve(
+    let mut internal_task = tokio::spawn(listen::serve(
         internal,
         api::internal_router(&state),
+        listen::INTERNAL_LIMITS,
         wait(stopped),
     ));
 
@@ -240,16 +242,6 @@ pub async fn first_to_stop(
         result = public => ended("public", result),
         result = internal => ended("internal", result),
     }
-}
-
-async fn axum_serve(
-    listener: TcpListener,
-    router: meta_whatsapp_rs::webhooks::axum::Router,
-    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
-) -> std::io::Result<()> {
-    meta_whatsapp_rs::webhooks::axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown)
-        .await
 }
 
 /// `SIGTERM` or `SIGINT`.

@@ -20,11 +20,12 @@ pub mod webhooks;
 
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 
 use futures::FutureExt;
 use meta_whatsapp_rs::webhooks::axum;
 use meta_whatsapp_rs::webhooks::axum::Router;
-use meta_whatsapp_rs::webhooks::axum::extract::{DefaultBodyLimit, Request};
+use meta_whatsapp_rs::webhooks::axum::extract::{DefaultBodyLimit, Request, State};
 use meta_whatsapp_rs::webhooks::axum::middleware::{self, Next};
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 use meta_whatsapp_rs::webhooks::axum::routing::get;
@@ -42,6 +43,14 @@ use crate::telemetry::{Listener, Observed, observe};
 /// Largest request body on the internal listener (docs/design/server.md,
 /// section 4.1).
 pub const MAX_BODY_BYTES: usize = 64 * 1024;
+
+/// How long a request may take to be answered, on either listener (the
+/// response's head: a streamed body goes on). Past it the request is cut
+/// and answered `504 timeout`, with `may_have_been_sent: true`: a Graph
+/// call in flight may have taken effect. Longer than one Graph attempt
+/// (30 s), shorter than an ingress's usual minute; a call whose retries
+/// would run past it is cut instead.
+pub const REQUEST_DEADLINE: Duration = Duration::from_secs(55);
 
 /// The public listener's routes (not in the OpenAPI document: Meta's
 /// contract, not the integrators').
@@ -161,6 +170,24 @@ async fn not_found() -> ApiError {
     ApiError::not_found()
 }
 
+/// Answer `504 timeout` for a request not answered within `limit`.
+async fn deadline(State(limit): State<Duration>, request: Request, next: Next) -> Response {
+    let Ok(response) = tokio::time::timeout(limit, next.run(request)).await else {
+        tracing::warn!(deadline_s = limit.as_secs(), "request cut at its deadline");
+        return ApiError::new("timeout")
+            .retryable(true)
+            .with_may_have_been_sent(true)
+            .into_response();
+    };
+    response
+}
+
+/// `router` with a deadline of `limit` on every request (see
+/// [`REQUEST_DEADLINE`]).
+pub fn with_deadline(router: Router, limit: Duration) -> Router {
+    router.layer(middleware::from_fn_with_state(limit, deadline))
+}
+
 /// The internal listener's router.
 pub fn internal_router(state: &AppState) -> Router {
     let admin =
@@ -179,12 +206,12 @@ pub fn internal_router(state: &AppState) -> Router {
         routes: Arc::new(internal_routes()),
         metrics: state.metrics().clone(),
     };
-    router
+    let router = router
         .fallback(not_found)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::from_fn(catch_panic))
-        .layer(middleware::from_fn_with_state(observed, observe))
-        .with_state(state.clone())
+        .with_state(state.clone());
+    with_deadline(router, REQUEST_DEADLINE).layer(middleware::from_fn_with_state(observed, observe))
 }
 
 /// The public listener's router: Meta's webhook and `/livez`, nothing
@@ -195,17 +222,67 @@ pub fn public_router(state: &AppState) -> Router {
         routes: Arc::new(PUBLIC_ROUTES.map(str::to_owned).to_vec()),
         metrics: state.metrics().clone(),
     };
-    axum::Router::new()
+    let router = axum::Router::new()
         .route("/webhooks/meta", get(webhooks::verify))
         .route("/livez", get(ops::livez))
         .fallback(not_found)
         .layer(middleware::from_fn(catch_panic))
-        .layer(middleware::from_fn_with_state(observed, observe))
-        .with_state(state.clone())
+        .with_state(state.clone());
+    with_deadline(router, REQUEST_DEADLINE).layer(middleware::from_fn_with_state(observed, observe))
 }
 
 #[cfg(test)]
 mod tests {
+    use meta_whatsapp_rs::webhooks::axum::body::Body;
+    use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
+    use tower::ServiceExt as _;
+
+    use super::*;
+
+    /// A request not answered within its deadline is cut: `504 timeout`,
+    /// and it may have taken effect. Decisive: the deadline layer.
+    #[tokio::test(start_paused = true)]
+    async fn a_request_past_its_deadline_is_504_and_may_have_taken_effect() {
+        let slow = Router::new()
+            .route(
+                "/slow",
+                get(|| async {
+                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                    "late"
+                }),
+            )
+            .route("/fast", get(|| async { "ok" }));
+        let router = with_deadline(slow, REQUEST_DEADLINE);
+        let started = tokio::time::Instant::now();
+        let response = router
+            .clone()
+            .oneshot(
+                meta_whatsapp_rs::webhooks::axum::http::Request::get("/slow")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+        assert_eq!(started.elapsed(), REQUEST_DEADLINE);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error"]["code"], "timeout");
+        assert_eq!(body["error"]["may_have_been_sent"], true);
+        let fast = router
+            .oneshot(
+                meta_whatsapp_rs::webhooks::axum::http::Request::get("/fast")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(fast.status(), StatusCode::OK);
+    }
+
     /// Every API route is added with `routes!`, which documents it: the
     /// only plain axum routes are the public listener's, which the document
     /// leaves out on purpose. A route added any other way would escape the
