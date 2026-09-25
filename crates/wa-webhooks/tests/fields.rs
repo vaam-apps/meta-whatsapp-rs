@@ -203,6 +203,97 @@ fn account_update_waba_id_is_the_customers_waba_not_a_business() {
     }
 }
 
+/// An `account_update` that does not parse into the typed value keeps the
+/// WABA its raw `waba_info` names, not the entry's business id.
+#[test]
+fn an_unparsed_account_update_is_keyed_by_its_waba_info() {
+    const PARTNER_BUSINESS: &str = "2949482758682047";
+    let unknown = |info: serde_json::Value, field: &str| {
+        let body = json!({"object": "whatsapp_business_account", "entry": [{
+            "id": PARTNER_BUSINESS, "time": 1748477359,
+            // `restriction_info` is not a list: the typed value does not parse.
+            "changes": [{"field": field, "value": {"event": "PARTNER_REMOVED", "restriction_info": 5, "waba_info": info}}]
+        }]});
+        match WebhookPayload::from_slice(body.to_string().as_bytes())
+            .unwrap()
+            .into_events()
+            .remove(0)
+        {
+            WebhookEvent::Unknown {
+                waba_id,
+                parse_error,
+                ..
+            } => {
+                assert!(parse_error.is_some(), "vacuous: it parsed");
+                waba_id.into_inner()
+            }
+            other => panic!("{other:?}"),
+        }
+    };
+    assert_eq!(
+        unknown(json!({"waba_id": "980198427658004"}), "account_update"),
+        "980198427658004"
+    );
+    // No usable WABA in it: the entry id, as documented.
+    for info in [
+        json!({"owner_business_id": "2329417887457253"}),
+        json!({"waba_id": " "}),
+        json!({"waba_id": 980_198_427_658_004_u64}),
+    ] {
+        assert_eq!(
+            unknown(info.clone(), "account_update"),
+            PARTNER_BUSINESS,
+            "{info}"
+        );
+    }
+    // Only `account_update` reads it.
+    assert_eq!(
+        unknown(json!({"waba_id": "980198427658004"}), "account_alerts"),
+        PARTNER_BUSINESS
+    );
+}
+
+/// An `account_update` stored by a revision whose `waba_id` was the entry
+/// id (and that had no `entry_id`) reads back keyed by its WABA, never by
+/// the business portfolio the entry id is for `PARTNER_*` updates.
+#[test]
+fn an_account_update_stored_before_entry_id_reads_back_by_its_waba() {
+    for fixture in [
+        "fields/account_update_partner_removed.json",
+        "fields/account_update_partner_app_uninstalled.json",
+        "fields/account_update_deleted.json",
+    ] {
+        let event = one(fixture);
+        let mut old = serde_json::to_value(&event).unwrap();
+        let entry = old["entry_id"].take();
+        old.as_object_mut().unwrap().remove("entry_id");
+        old["waba_id"] = entry;
+        let back: WebhookEvent = serde_json::from_value(old).unwrap();
+        assert_eq!(back, event, "{fixture}");
+    }
+    // A `waba_info` that names no WABA: none, and the business stays the
+    // entry id.
+    let old = json!({"event": "account_updated", "waba_id": "2949482758682047",
+        "update": {"event": "PARTNER_REMOVED", "waba_info": {"owner_business_id": "2329417887457253"}}});
+    let back: WebhookEvent = serde_json::from_value(old).unwrap();
+    assert_eq!(back.waba_id(), None);
+    let WebhookEvent::AccountUpdated { entry_id, .. } = &back else {
+        panic!("{back:?}")
+    };
+    assert_eq!(entry_id, "2949482758682047");
+    // No entry id at all: only `waba_info` names the WABA.
+    let old = json!({"event": "account_updated",
+        "update": {"event": "PARTNER_REMOVED", "waba_info": {"waba_id": "980198427658004"}}});
+    let back: WebhookEvent = serde_json::from_value(old).unwrap();
+    assert_eq!(
+        back.waba_id().map(wa_core::ids::WabaId::as_str),
+        Some("980198427658004")
+    );
+    let old = json!({"event": "account_updated", "update": {"event": "ACCOUNT_DELETED"}});
+    let back: WebhookEvent = serde_json::from_value(old).unwrap();
+    assert_eq!(back.waba_id(), None, "never a blank WABA");
+}
+
 /// `embedded-signup/website-optional` and `marketing-messages/onboarding`
 /// document `account_update` shapes the reference page does not show.
 #[test]
