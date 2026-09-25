@@ -9,7 +9,17 @@
 //! lock) from before it draws its sequence until it commits: inserts
 //! commit one at a time, in sequence order. The price is that inserts do
 //! not run in parallel across replicas (each holds the lock for one
-//! statement and its commit).
+//! statement and its commit). Advisory locks are the database's, not a
+//! schema's: deployments sharing one database share the lock.
+//!
+//! **A tenant's events never outlive it.** `tenant_id` references the
+//! tenant with `ON DELETE SET NULL`: deleting a tenant turns its events
+//! into operator-only rows in the deleting transaction. And an insert
+//! routed to a tenant keeps that tenant only while the binding it was
+//! routed by still names it, read under a `FOR KEY SHARE` lock that holds
+//! off an unbinding until the insert commits: an event routed just before
+//! its tenant was unbound, deleted and created again under the same id is
+//! recorded operator-only, never shown to the new tenant.
 
 use std::time::Duration;
 
@@ -100,11 +110,28 @@ impl EventStore for PgEventStore {
             .execute(&mut *tx)
             .await
             .map_err(backend)?;
-        let sequence: Option<i64> = sqlx::query_scalar(
+        // The tenant, while the binding the event was routed by (its
+        // number, under the WABA it names; else its WABA) still names it:
+        // the same rule as `crate::events::owner`. Locked, so an unbinding
+        // waits for this commit.
+        let inserted: Option<(i64, Option<String>)> = sqlx::query_as(
             "INSERT INTO wa_server_events \
              (id, dedup_key, tenant_id, phone_number_id, waba_id, event_type, data) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7::json) \
-             ON CONFLICT (dedup_key) DO NOTHING RETURNING sequence",
+             SELECT $1, $2, \
+               CASE \
+                 WHEN $3::text IS NULL THEN NULL \
+                 WHEN $4::text IS NOT NULL THEN ( \
+                   SELECT n.tenant_id FROM wa_server_numbers n \
+                   WHERE n.phone_number_id = $4 AND n.tenant_id = $3 \
+                     AND ($5::text IS NULL OR n.waba_id = $5) \
+                   FOR KEY SHARE) \
+                 ELSE ( \
+                   SELECT w.tenant_id FROM wa_server_wabas w \
+                   WHERE w.waba_id = $5 AND w.tenant_id = $3 \
+                   FOR KEY SHARE) \
+               END, \
+               $4, $5, $6, $7::json \
+             ON CONFLICT (dedup_key) DO NOTHING RETURNING sequence, tenant_id",
         )
         .bind(&event.id)
         .bind(event.dedup_key.as_deref())
@@ -117,7 +144,18 @@ impl EventStore for PgEventStore {
         .await
         .map_err(backend)?;
         tx.commit().await.map_err(backend)?;
-        Ok(sequence)
+        let Some((sequence, tenant)) = inserted else {
+            return Ok(None);
+        };
+        if event.tenant.is_some() && tenant.is_none() {
+            tracing::warn!(
+                sequence,
+                event_type = %event.event_type,
+                "an event's tenant lost the binding it was routed by while it was recorded: \
+                 kept operator-only"
+            );
+        }
+        Ok(Some(sequence))
     }
 
     async fn page(&self, query: &EventQuery) -> StoreResult<EventPage> {

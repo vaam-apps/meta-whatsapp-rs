@@ -2,22 +2,25 @@
 //! `WA_SERVER_ENV=development` and tests.
 
 use std::collections::BTreeMap;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use async_trait::async_trait;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use time::{Duration, OffsetDateTime};
 
-use super::{Store, StoreResult, listing};
+use super::{MemoryEventStore, Store, StoreResult, listing};
 use crate::model::{
     ApiKeyRecord, BindOutcome, DeleteTenantOutcome, KeyOwner, KeyScope, Listing, NewApiKey,
     NumberBinding, NumberStatus, PageRequest, Tenant, TenantId, TenantStatus, WabaBinding,
 };
 
-/// In-memory [`Store`].
+/// In-memory [`Store`]. Its event outbox is [`MemoryStore::outbox`]: one
+/// process's database, so that deleting a tenant reaches its events as it
+/// does on Postgres.
 #[derive(Debug, Default)]
 pub struct MemoryStore {
     state: Mutex<State>,
+    outbox: Arc<MemoryEventStore>,
 }
 
 #[derive(Debug, Default)]
@@ -32,6 +35,12 @@ impl MemoryStore {
     /// An empty store.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The event outbox of this store: deleting a tenant here turns its
+    /// events into operator-only rows there.
+    pub fn outbox(&self) -> Arc<MemoryEventStore> {
+        self.outbox.clone()
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -132,6 +141,9 @@ impl Store for MemoryStore {
         state
             .keys
             .retain(|_, key| !matches!(&key.owner, KeyOwner::Tenant(t) if t == id));
+        // Under the store's lock, as Postgres does it in the deleting
+        // transaction.
+        self.outbox.forget_tenant(id);
         Ok(DeleteTenantOutcome::Deleted)
     }
 

@@ -644,3 +644,11 @@ async fn deliveries_are_taken_on_the_public_listener_only() {
     assert_eq!(internal.status, StatusCode::NOT_FOUND);
     assert!(h.outbox.inserts().is_empty());
 }
+
+/// Fix #1 of the M1c review, in memory: a tenant deleted and created again
+/// under the same id polls nothing of the deleted one's events
+/// (`common::scenarios`; on Postgres: `live_postgres.rs`).
+#[tokio::test]
+async fn a_recreated_tenant_polls_nothing_from_before() {
+    common::scenarios::a_recreated_tenant_polls_nothing_from_before(&Harness::new()).await;
+}

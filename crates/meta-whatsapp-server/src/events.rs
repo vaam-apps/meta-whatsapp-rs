@@ -159,24 +159,6 @@ impl Inbound {
             outbox,
         })
     }
-
-    /// On memory stores, for unit tests.
-    ///
-    /// # Errors
-    ///
-    /// A blank `app_secret`.
-    #[cfg(test)]
-    pub(crate) fn in_memory(
-        app_secret: AppSecret,
-        kv: Arc<dyn KvStore>,
-    ) -> meta_whatsapp_rs::Result<Self> {
-        Self::new(
-            vec![app_secret],
-            kv,
-            Arc::new(meta_whatsapp_rs::adapters::store::MemoryConversationStore::new()),
-            Arc::new(crate::store::MemoryEventStore::new()),
-        )
-    }
 }
 
 /// The webhook handler and the outbox, as the routes use them.

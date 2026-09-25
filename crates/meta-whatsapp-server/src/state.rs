@@ -133,13 +133,18 @@ impl AppState {
             .transport(ScriptedTransport::new())
             .build()
             .unwrap();
-        let inbound = Inbound::in_memory(
-            meta_whatsapp_rs::core::secret::AppSecret::new("app-secret-for-unit-tests"),
+        let store = crate::store::MemoryStore::new();
+        let inbound = Inbound::new(
+            vec![meta_whatsapp_rs::core::secret::AppSecret::new(
+                "app-secret-for-unit-tests",
+            )],
             kv,
+            Arc::new(meta_whatsapp_rs::adapters::store::MemoryConversationStore::new()),
+            store.outbox(),
         )
         .unwrap();
         Self::new(
-            Arc::new(crate::store::MemoryStore::new()),
+            Arc::new(store),
             vault,
             client,
             VerifyToken::new("verify-token-for-unit-tests"),

@@ -6,6 +6,7 @@
 pub mod capture;
 pub mod events_suite;
 pub mod meta;
+pub mod scenarios;
 pub mod store_suite;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -33,7 +34,7 @@ use meta_whatsapp_server::metrics::Metrics;
 use meta_whatsapp_server::model::{AllowedTenants, KeyOwner, Scope, TenantId};
 use meta_whatsapp_server::state::AppState;
 use meta_whatsapp_server::store::events::{EventPage, EventQuery, NewEvent};
-use meta_whatsapp_server::store::{EventStore, MemoryEventStore, MemoryStore, Store};
+use meta_whatsapp_server::store::{EventStore, MemoryStore, Store};
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -108,13 +109,29 @@ impl KvStore for CountingKv {
     }
 }
 
+/// What an insert into [`RecordingEvents`] does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fate {
+    /// It goes to the store.
+    Pass,
+    /// It fails (a storage error).
+    Fail,
+    /// It never finishes: the request is cut there, as a crash would.
+    Hang,
+}
+
+/// Work run just before the next insert reaches the store.
+pub type BeforeInsert =
+    Box<dyn FnOnce() -> futures::future::BoxFuture<'static, ()> + Send + Sync + 'static>;
+
 /// An [`EventStore`] that records every insert the sink makes, and can
-/// fail the next ones.
+/// fail or hang the next ones, or run something just before one.
 pub struct RecordingEvents {
     inner: Arc<dyn EventStore>,
     inserted: Mutex<Vec<(NewEvent, Option<i64>)>>,
-    /// The next inserts' fates: `true` fails one (a storage error).
-    script: Mutex<std::collections::VecDeque<bool>>,
+    /// The next inserts' fates; then they pass.
+    script: Mutex<std::collections::VecDeque<Fate>>,
+    before: Mutex<Option<BeforeInsert>>,
 }
 
 impl RecordingEvents {
@@ -123,6 +140,7 @@ impl RecordingEvents {
             inner,
             inserted: Mutex::new(Vec::new()),
             script: Mutex::new(std::collections::VecDeque::new()),
+            before: Mutex::new(None),
         }
     }
 
@@ -133,7 +151,23 @@ impl RecordingEvents {
 
     /// The next inserts' fates, in order (`true`: fails); then they pass.
     pub fn script(&self, fates: &[bool]) {
+        self.fates(
+            &fates
+                .iter()
+                .map(|&fail| if fail { Fate::Fail } else { Fate::Pass })
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    /// The next inserts' fates, in order; then they pass.
+    pub fn fates(&self, fates: &[Fate]) {
         *self.script.lock().unwrap() = fates.iter().copied().collect();
+    }
+
+    /// Run `work` just before the next insert reaches the store (after the
+    /// sink routed the event).
+    pub fn before_next_insert(&self, work: BeforeInsert) {
+        *self.before.lock().unwrap() = Some(work);
     }
 
     /// Every insert so far and its outcome (`None`: already stored).
@@ -154,11 +188,24 @@ impl RecordingEvents {
 #[async_trait]
 impl EventStore for RecordingEvents {
     async fn insert(&self, event: &NewEvent) -> Result<Option<i64>, StorageError> {
-        let fails = self.script.lock().unwrap().pop_front().unwrap_or(false);
-        if fails {
-            return Err(StorageError::Backend(anyhow::anyhow!(
-                "scripted outbox failure"
-            )));
+        let fate = self
+            .script
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or(Fate::Pass);
+        match fate {
+            Fate::Pass => {}
+            Fate::Fail => {
+                return Err(StorageError::Backend(anyhow::anyhow!(
+                    "scripted outbox failure"
+                )));
+            }
+            Fate::Hang => futures::future::pending::<()>().await,
+        }
+        let before = self.before.lock().unwrap().take();
+        if let Some(work) = before {
+            work().await;
         }
         let outcome = self.inner.insert(event).await?;
         self.inserted.lock().unwrap().push((event.clone(), outcome));
@@ -199,11 +246,12 @@ pub struct Stores {
 impl Stores {
     /// Everything in memory.
     pub fn memory() -> Self {
+        let store = MemoryStore::new();
         Self {
-            store: Arc::new(MemoryStore::new()),
+            events: store.outbox(),
+            store: Arc::new(store),
             kv: Arc::new(MemoryKvStore::new()),
             conversations: Arc::new(MemoryConversationStore::new()),
-            events: Arc::new(MemoryEventStore::new()),
         }
     }
 

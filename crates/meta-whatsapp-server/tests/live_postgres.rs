@@ -48,7 +48,7 @@ async fn live_postgres_event_store_passes_the_suite() {
     };
     let pool = db.pool(5).await;
     migrate(&pool).await.unwrap();
-    common::events_suite::run(&PgEventStore::new(pool)).await;
+    common::events_suite::run(&PgEventStore::new(pool.clone()), &PgStore::new(pool)).await;
 }
 
 /// Two instances starting at once on an empty database both migrate, and
@@ -379,7 +379,7 @@ async fn live_postgres_polling_during_concurrent_inserts_misses_nothing() {
     let pool = db.pool(12).await;
     migrate(&pool).await.unwrap();
     let h = Harness::with(Stores::postgres(&pool));
-    h.tenant("tenant-a").await;
+    common::events_suite::bind(h.store.as_ref(), "tenant-a", "1").await;
     let key = h.tenant_key("tenant-a", &[Scope::Events]).await;
     let writers: Vec<_> = (0..8)
         .map(|w| {
@@ -450,7 +450,7 @@ async fn live_postgres_an_insert_in_flight_is_never_skipped() {
     let pool = db.pool(6).await;
     migrate(&pool).await.unwrap();
     let h = Harness::with(Stores::postgres(&pool));
-    h.tenant("tenant-a").await;
+    common::events_suite::bind(h.store.as_ref(), "tenant-a", "1").await;
     let key = h.tenant_key("tenant-a", &[Scope::Events]).await;
     let events_after = |after: Option<i64>| {
         let path = after.map_or_else(
@@ -523,7 +523,7 @@ async fn live_postgres_one_replica_purges_at_a_time() {
     let store = PgEventStore::new(pool.clone());
     store
         .insert(&common::events_suite::row(
-            Some("tenant-a"),
+            None,
             "message_received",
             "1",
             None,
@@ -547,4 +547,90 @@ async fn live_postgres_one_replica_purges_at_a_time() {
         store.purge(std::time::Duration::ZERO).await.unwrap(),
         Some(1)
     );
+}
+
+/// Fix #1 of the M1c review, on Postgres: a tenant deleted and created
+/// again under the same id polls nothing of the deleted one's events
+/// (`common::scenarios`), which stay as operator-only rows until
+/// retention. Decisive: the outbox's foreign key to the tenant.
+#[tokio::test]
+async fn live_postgres_a_recreated_tenant_polls_nothing_from_before() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let h = harness(&db).await;
+    common::scenarios::a_recreated_tenant_polls_nothing_from_before(&h).await;
+    let old: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT tenant_id FROM wa_server_events WHERE data::text LIKE '%wamid.OLD-A%'",
+    )
+    .fetch_all(&db.pool(1).await)
+    .await
+    .unwrap();
+    assert_eq!(old, [None], "kept, operator-only");
+}
+
+/// The race fix #1 leaves without the insert's re-check: an event routed to
+/// a tenant whose number is unbound, and the tenant deleted and created
+/// again under the same id, before the event reaches the outbox (all
+/// between the routing and the insert), is recorded operator-only: the
+/// new tenant never polls it. Decisive: the insert keeping the tenant only
+/// while the binding it was routed by still names it (the foreign key
+/// alone accepts the new tenant).
+#[tokio::test]
+async fn live_postgres_an_event_routed_before_its_tenant_was_recreated_is_nobodys() {
+    use meta_whatsapp_rs::core::ids::WabaId;
+    use meta_whatsapp_server::model::DeleteTenantOutcome;
+
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let h = harness(&db).await;
+    let tenant = h.tenant("tenant-a").await;
+    h.connect("tenant-a", EXAMPLE_WABA, &[EXAMPLE_PN], "TOKEN-OF-A")
+        .await;
+    let store = h.store.clone();
+    h.outbox.before_next_insert(Box::new(move || {
+        Box::pin(async move {
+            assert!(store.unbind_waba(&WabaId::new(EXAMPLE_WABA)).await.unwrap());
+            assert_eq!(
+                store.delete_tenant(&tenant).await.unwrap(),
+                DeleteTenantOutcome::Deleted
+            );
+            store.create_tenant(&tenant, "").await.unwrap().unwrap();
+        })
+    }));
+    let body = bytes(&text(EXAMPLE_WABA, EXAMPLE_PN, "wamid.IN-FLIGHT"));
+    assert_eq!(h.webhook(&body).await.status, StatusCode::OK);
+    let rows = outbox_rows(&db.pool(1).await).await;
+    assert_eq!(rows, [(None, "message_received".to_owned())]);
+    let key = h.tenant_key("tenant-a", &[Scope::Events]).await;
+    let polled = h.call(Call::get("/v1/events").key(&key)).await;
+    assert_eq!(polled.json()["data"], serde_json::json!([]));
+
+    // The same rule as the routing: a number the tenant now holds under
+    // another WABA than the event names is a stale binding.
+    h.connect("tenant-a", EXAMPLE_WABA, &[EXAMPLE_PN], "TOKEN-OF-A")
+        .await;
+    let store = h.store.clone();
+    let tenant = TenantId::parse("tenant-a").unwrap();
+    h.outbox.before_next_insert(Box::new(move || {
+        Box::pin(async move {
+            assert!(store.unbind_waba(&WabaId::new(EXAMPLE_WABA)).await.unwrap());
+            store
+                .bind_waba(
+                    &tenant,
+                    &WabaId::new("102290129349999"),
+                    &[meta_whatsapp_rs::core::ids::PhoneNumberId::new(EXAMPLE_PN)],
+                )
+                .await
+                .unwrap();
+        })
+    }));
+    let body = bytes(&text(EXAMPLE_WABA, EXAMPLE_PN, "wamid.MOVED"));
+    assert_eq!(h.webhook(&body).await.status, StatusCode::OK);
+    let rows = outbox_rows(&db.pool(1).await).await;
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1], (None, "message_received".to_owned()));
+    let polled = h.call(Call::get("/v1/events").key(&key)).await;
+    assert_eq!(polled.json()["data"], serde_json::json!([]));
 }

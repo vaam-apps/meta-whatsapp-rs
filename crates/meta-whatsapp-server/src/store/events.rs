@@ -157,6 +157,18 @@ impl MemoryEventStore {
     fn lock(&self) -> MutexGuard<'_, MemoryState> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    /// `tenant` was deleted ([`super::MemoryStore::delete_tenant`], under
+    /// the store's lock): its events become operator-only rows, so a
+    /// tenant created later with the same id never polls them.
+    pub(crate) fn forget_tenant(&self, tenant: &TenantId) {
+        let mut state = self.lock();
+        for row in state.rows.values_mut() {
+            if row.tenant.as_ref() == Some(tenant) {
+                row.tenant = None;
+            }
+        }
+    }
 }
 
 #[async_trait]

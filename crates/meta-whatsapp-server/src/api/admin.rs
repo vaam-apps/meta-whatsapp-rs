@@ -278,7 +278,9 @@ pub async fn update_tenant(
 
 /// Delete a tenant: disconnect every WABA it has (as
 /// `DELETE /v1/wabas/{waba_id}` does), then delete it and its keys. Stops
-/// at the first WABA that cannot be disconnected; the tenant stays.
+/// at the first WABA that cannot be disconnected; the tenant stays. Its
+/// events stay only as operator-only rows: a tenant created later with the
+/// same id never polls them.
 #[utoipa::path(
     delete,
     path = "/v1/admin/tenants/{id}",

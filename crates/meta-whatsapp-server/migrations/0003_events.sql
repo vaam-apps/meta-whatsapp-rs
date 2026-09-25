@@ -9,12 +9,17 @@
 -- library's inbox tables made the same choice). Inserts take an advisory
 -- transaction lock, so sequences commit in order and a poll that saw one
 -- sequence saw every event before it.
+--
+-- `tenant_id` references the tenant: deleting a tenant turns its events
+-- into operator-only rows in the same transaction, so a tenant created
+-- later with the same id never polls them (they stay until retention
+-- purges them), and an insert racing the deletion waits for it and fails.
 
 CREATE TABLE wa_server_events (
     sequence BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     id TEXT COLLATE "C" NOT NULL UNIQUE,
     dedup_key TEXT COLLATE "C" UNIQUE,
-    tenant_id TEXT COLLATE "C",
+    tenant_id TEXT COLLATE "C" REFERENCES wa_server_tenants (id) ON DELETE SET NULL,
     phone_number_id TEXT COLLATE "C",
     waba_id TEXT COLLATE "C",
     event_type TEXT COLLATE "C" NOT NULL,

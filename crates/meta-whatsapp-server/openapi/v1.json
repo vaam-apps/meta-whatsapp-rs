@@ -594,7 +594,7 @@
         "tags": [
           "admin"
         ],
-        "summary": "Delete a tenant: disconnect every WABA it has (as\n`DELETE /v1/wabas/{waba_id}` does), then delete it and its keys. Stops\nat the first WABA that cannot be disconnected; the tenant stays.",
+        "summary": "Delete a tenant: disconnect every WABA it has (as\n`DELETE /v1/wabas/{waba_id}` does), then delete it and its keys. Stops\nat the first WABA that cannot be disconnected; the tenant stays. Its\nevents stay only as operator-only rows: a tenant created later with the\nsame id never polls them.",
         "operationId": "delete_tenant",
         "parameters": [
           {

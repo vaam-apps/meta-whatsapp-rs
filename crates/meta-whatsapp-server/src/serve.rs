@@ -26,9 +26,7 @@ use crate::events::{HOUSEKEEPING_INTERVAL, Inbound, purge_outbox};
 use crate::metrics::Metrics;
 use crate::model::KeyOwner;
 use crate::state::AppState;
-use crate::store::{
-    EventStore, MemoryEventStore, MemoryStore, PgEventStore, PgStore, Store, migrate,
-};
+use crate::store::{EventStore, MemoryStore, PgEventStore, PgStore, Store, migrate};
 use crate::{api, listen};
 
 /// Connections per replica.
@@ -94,11 +92,12 @@ pub async fn backends(config: &Config) -> anyhow::Result<Backends> {
         }
         Storage::Memory => {
             tracing::warn!("memory storage: everything is lost on restart (development only)");
+            let store = MemoryStore::new();
             Ok(Backends {
-                store: Arc::new(MemoryStore::new()),
+                events: store.outbox(),
+                store: Arc::new(store),
                 kv: Arc::new(MemoryKvStore::new()),
                 conversations: Arc::new(MemoryConversationStore::new()),
-                events: Arc::new(MemoryEventStore::new()),
                 pool: None,
             })
         }
@@ -532,7 +531,7 @@ mod tests {
     #[tokio::test]
     async fn housekeeping_purges_past_retention_until_stopped() {
         use crate::store::events::{EventQuery, NewEvent};
-        let events: Arc<dyn EventStore> = Arc::new(MemoryEventStore::new());
+        let events: Arc<dyn EventStore> = Arc::new(crate::store::MemoryEventStore::new());
         let row = |id: &str| NewEvent {
             id: id.to_owned(),
             dedup_key: None,
