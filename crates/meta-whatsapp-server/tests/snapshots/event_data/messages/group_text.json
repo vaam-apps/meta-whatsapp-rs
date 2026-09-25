@@ -1,0 +1,27 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {
+          "name": "Tiago Mingo"
+        },
+        "wa_id": "16505551234"
+      },
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "from": "16505551234",
+        "group_id": "HBgLMTY1MDM4Nzk0MzkVAgASGBQzQTRBNjU5OUFFRTAzODEwMTQ0RgA",
+        "id": "wamid.HASDI128HJOPUERIH82ahdasd09ASDHi5>",
+        "text": {
+          "body": "What does everyone think about this?"
+        },
+        "timestamp": "1744344496",
+        "type": "text"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

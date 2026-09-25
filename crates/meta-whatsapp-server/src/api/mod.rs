@@ -3,8 +3,8 @@
 //!
 //! | Listener | Routes |
 //! | --- | --- |
-//! | public (`WA_SERVER_PUBLIC_BIND`) | `GET /webhooks/meta`, `GET /livez`, nothing else |
-//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key, scope `numbers`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
+//! | public (`WA_SERVER_PUBLIC_BIND`) | `GET` and `POST /webhooks/meta` (Meta's subscription check and deliveries, bodies up to 3 MiB), `GET /livez`, nothing else |
+//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key, scope `numbers`), `/v1/events` (scope `events`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
 //!
 //! Every API route is registered through utoipa-axum's `routes!`, which
 //! adds the handler and its `#[utoipa::path]` documentation at once: a
@@ -14,6 +14,7 @@
 
 pub mod admin;
 pub mod common;
+pub mod events;
 pub mod numbers;
 pub mod ops;
 pub mod webhooks;
@@ -36,6 +37,7 @@ use utoipa_axum::routes;
 
 use crate::auth::{admin_guard, guard, tenant_guard};
 use crate::error::{ApiError, ErrorBody, ErrorCode, KnownErrorCode};
+use crate::events::MAX_WEBHOOK_BODY_BYTES;
 use crate::model::Scope;
 use crate::state::AppState;
 use crate::telemetry::{Listener, Observed, observe};
@@ -86,10 +88,11 @@ impl Modify for Security {
                        `error.code` (`ErrorCode`), and resend only when `may_have_been_sent` is false."
     ),
     modifiers(&Security),
-    components(schemas(ErrorBody, ErrorCode, KnownErrorCode)),
+    components(schemas(ErrorBody, ErrorCode, KnownErrorCode, events::EventType, events::KnownEventType)),
     tags(
         (name = "admin", description = "Tenants, keys, WABA bindings and the vault key (admin key)"),
         (name = "numbers", description = "WABAs, numbers and business profiles (scope `numbers`)"),
+        (name = "events", description = "Meta's webhook events, routed to their tenant (scope `events`)"),
         (name = "operations", description = "Health, metrics, this document, versions (no key)"),
     )
 )]
@@ -122,6 +125,10 @@ fn numbers_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(numbers::disconnect_waba))
 }
 
+fn events_routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new().routes(routes!(events::list_events))
+}
+
 fn ops_routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(ops::livez))
@@ -136,6 +143,7 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
     let (_, mut document) = OpenApiRouter::<AppState>::with_openapi(ApiDoc::openapi())
         .merge(admin_routes())
         .merge(numbers_routes())
+        .merge(events_routes())
         .merge(ops_routes())
         .split_for_parts();
     add_default_errors(&mut document);
@@ -238,9 +246,14 @@ pub fn internal_router(state: &AppState) -> Router {
         guard(state, Scope::Numbers),
         tenant_guard,
     ));
+    let events = events_routes().route_layer(middleware::from_fn_with_state(
+        guard(state, Scope::Events),
+        tenant_guard,
+    ));
     let (router, _) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .merge(admin)
         .merge(numbers)
+        .merge(events)
         .merge(ops_routes())
         .split_for_parts();
     let observed = Observed {
@@ -260,15 +273,17 @@ pub fn internal_router(state: &AppState) -> Router {
 /// The public listener's router: Meta's webhook and `/livez`, nothing
 /// else.
 pub fn public_router(state: &AppState) -> Router {
+    // Meta's subscription check and its deliveries.
+    let webhook = get(webhooks::verify).post(webhooks::receive);
     let routes = axum::Router::new()
-        .route("/webhooks/meta", get(webhooks::verify))
+        .route("/webhooks/meta", webhook)
         .route("/livez", get(ops::livez));
     public_router_with(routes, state)
 }
 
-/// The public listener's router around `paths`: its layers, deadline
-/// included, are the ones [`public_router`] serves (a test adds a slow
-/// route, which no public route is in M1a).
+/// The public listener's router around `paths`: its layers, the body limit
+/// and the deadline included, are the ones [`public_router`] serves (a test
+/// adds a slow route).
 fn public_router_with(paths: axum::Router<AppState>, state: &AppState) -> Router {
     let observed = Observed {
         listener: Listener::Public,
@@ -278,6 +293,8 @@ fn public_router_with(paths: axum::Router<AppState>, state: &AppState) -> Router
     let router = paths
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
+        // Meta's payloads reach 3 MB (axum's own default is 2 MiB).
+        .layer(DefaultBodyLimit::max(MAX_WEBHOOK_BODY_BYTES))
         .layer(middleware::from_fn(catch_panic))
         .with_state(state.clone());
     with_deadline(router, REQUEST_DEADLINE).layer(middleware::from_fn_with_state(observed, observe))
@@ -375,6 +392,7 @@ mod tests {
             ("mod.rs", include_str!("mod.rs")),
             ("admin.rs", include_str!("admin.rs")),
             ("numbers.rs", include_str!("numbers.rs")),
+            ("events.rs", include_str!("events.rs")),
             ("ops.rs", include_str!("ops.rs")),
             ("webhooks.rs", include_str!("webhooks.rs")),
             ("common.rs", include_str!("common.rs")),
@@ -393,7 +411,7 @@ mod tests {
         assert_eq!(
             plain,
             [
-                "mod.rs: .route(\"/webhooks/meta\", get(webhooks::verify))",
+                "mod.rs: .route(\"/webhooks/meta\", webhook)",
                 "mod.rs: .route(\"/livez\", get(ops::livez));",
             ]
         );

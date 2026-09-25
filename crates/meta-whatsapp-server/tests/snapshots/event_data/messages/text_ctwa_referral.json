@@ -1,0 +1,39 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {
+          "name": "Sheena Nelson"
+        },
+        "wa_id": "16505551234"
+      },
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "from": "16505551234",
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQUQ0N0VFMDA2MTQ0RkJFNkNDNAA=",
+        "referral": {
+          "body": "Summer Succulents are here!",
+          "ctwa_clid": "Aff-n8ZTODiE79d22KtAwQKj9e_mIEOOj27vDVwFjN80dp4_0NiNhEgpGo0AHemvuSoifXaytfTzcchptiErTKCqTrJ5nW1h7IHYeYymGb5K5J5iTROpBhWAGaIAeUzHL50",
+          "headline": "Chat with us",
+          "image_url": "https://scontent.xx.fbcdn.net/v/t45.1...",
+          "media_type": "image",
+          "source_id": "120226305854810726",
+          "source_type": "ad",
+          "source_url": "https://fb.me/3cr4Wqqkv",
+          "welcome_message": {
+            "text": "Hi there! Let us know how we can help!"
+          }
+        },
+        "text": {
+          "body": "Can I get more info about this?"
+        },
+        "timestamp": "1750275992",
+        "type": "text"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

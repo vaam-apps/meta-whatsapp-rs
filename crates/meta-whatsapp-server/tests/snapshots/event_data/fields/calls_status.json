@@ -1,0 +1,27 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {
+          "username": "pablomorales"
+        },
+        "user_id": "US.13491208655302741918",
+        "wa_id": "163155536021"
+      },
+      "display_phone_number": "16315553601",
+      "event": "call_status_updated",
+      "phone_number_id": "106540352242922",
+      "status": {
+        "biz_opaque_callback_data": "random_string",
+        "id": "wacid.ABGGFjFVU2AfAgo6V",
+        "recipient_id": "163155536021",
+        "recipient_user_id": "US.13491208655302741918",
+        "status": "RINGING",
+        "timestamp": "1671644824",
+        "type": "call"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "call_status_updated"
+  }
+]

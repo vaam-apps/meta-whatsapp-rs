@@ -1,0 +1,17 @@
+[
+  {
+    "data": {
+      "event": "flow_updated",
+      "time": "1684969340",
+      "update": {
+        "event": "FLOW_STATUS_CHANGE",
+        "flow_id": "6627390910605886",
+        "message": "Flow Webhook 3 changed status from DRAFT to PUBLISHED",
+        "new_status": "PUBLISHED",
+        "old_status": "DRAFT"
+      },
+      "waba_id": "644600416743275"
+    },
+    "type": "flow_updated"
+  }
+]

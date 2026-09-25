@@ -1,0 +1,32 @@
+[
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "event": "group_updated",
+      "field": "group_status_update",
+      "phone_number_id": "106540352242922",
+      "update": {
+        "group_id": "Y2FwaV9ncm91cDoxNzA1NTU1MDEzOToxMjAzNjM0MDQ2OTQyMzM4MjAZD",
+        "timestamp": "1750100800",
+        "type": "group_suspend"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "group_updated"
+  },
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "event": "group_updated",
+      "field": "group_status_update",
+      "phone_number_id": "106540352242922",
+      "update": {
+        "group_id": "Y2FwaV9ncm91cDoxNzA1NTU1MDEzOToxMjAzNjM0MDQ2OTQyMzM4MjAZD",
+        "timestamp": "1750100900",
+        "type": "group_suspend_cleared"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "group_updated"
+  }
+]

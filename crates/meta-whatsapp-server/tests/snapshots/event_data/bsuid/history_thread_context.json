@@ -1,0 +1,65 @@
+[
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "event": "history_synced",
+      "history": {
+        "history": [
+          {
+            "metadata": {
+              "chunk_order": 2,
+              "phase": 1,
+              "progress": 100
+            },
+            "threads": [
+              {
+                "context": {
+                  "parent_user_id": "US.ENT.11815799212886844830",
+                  "user_id": "US.13491208655302741918",
+                  "username": "realsheenanelson"
+                },
+                "messages": [
+                  {
+                    "from_parent_user_id": "US.ENT.11815799212886844830",
+                    "from_user_id": "US.13491208655302741918",
+                    "history_context": {
+                      "status": "READ"
+                    },
+                    "id": "wamid.N0FCNjMAHBgLMTY0NjcwNDM1OTUVAgARGBIyNDlBOEI5QUQ4NDc1",
+                    "text": {
+                      "body": "Do you ship to Canada?"
+                    },
+                    "timestamp": "1739230990",
+                    "type": "text"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "message_echoes": [
+          {
+            "from": "15550783881",
+            "id": "wamid.BIyNDlBOEI5N0FCNjMAHBgLMTY0NjcwNDM1OTUVAgARGQUQ4NDc2",
+            "image": {
+              "id": "24230790383178627",
+              "mime_type": "image/jpeg",
+              "sha256": "3f9d94d399fa61c191bc1d4ca71375a035cd9b9f5b1128e1f0963a415c16b0cc"
+            },
+            "timestamp": "1739231000",
+            "to_user_id": "US.13491208655302741918",
+            "type": "image"
+          }
+        ],
+        "messaging_product": "whatsapp",
+        "metadata": {
+          "display_phone_number": "15550783881",
+          "phone_number_id": "106540352242922"
+        }
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "history_synced"
+  }
+]

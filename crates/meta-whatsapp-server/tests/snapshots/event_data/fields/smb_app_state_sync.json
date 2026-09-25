@@ -1,0 +1,23 @@
+[
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "event": "app_state_synced",
+      "item": {
+        "action": "add",
+        "contact": {
+          "first_name": "Pablo",
+          "full_name": "Pablo Morales",
+          "phone_number": "16505551234"
+        },
+        "metadata": {
+          "timestamp": "1739321024"
+        },
+        "type": "contact"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "app_state_synced"
+  }
+]

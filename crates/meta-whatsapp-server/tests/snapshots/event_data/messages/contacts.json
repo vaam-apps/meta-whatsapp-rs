@@ -1,0 +1,42 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {
+          "name": "Sheena Nelson"
+        },
+        "wa_id": "16505551234"
+      },
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "contacts": [
+          {
+            "name": {
+              "first_name": "Barbara",
+              "formatted_name": "Barbara J. Johnson",
+              "last_name": "Johnson"
+            },
+            "org": {
+              "company": "Social Tsunami"
+            },
+            "phones": [
+              {
+                "phone": "+1 (415) 555-0829",
+                "type": "MOBILE",
+                "wa_id": "14125550829"
+              }
+            ]
+          }
+        ],
+        "from": "16505551234",
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQTRBNjU5OUFFRTAzODEwMTQ0RgA=",
+        "timestamp": "1744344496",
+        "type": "contacts"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

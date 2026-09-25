@@ -1,0 +1,21 @@
+[
+  {
+    "data": {
+      "entry_id": "102290129340398",
+      "event": "account_updated",
+      "time": "1743138982",
+      "update": {
+        "event": "PARTNER_CLIENT_CERTIFICATION_STATUS_UPDATE",
+        "partner_client_certification_info": {
+          "client_business_id": "2729063490586005",
+          "rejection_reasons": [
+            "NONE"
+          ],
+          "status": "APPROVED"
+        }
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "account_updated"
+  }
+]

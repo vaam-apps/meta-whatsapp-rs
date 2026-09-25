@@ -1,0 +1,15 @@
+[
+  {
+    "data": {
+      "entry_id": "102290129340398",
+      "event": "account_updated",
+      "time": "1743138982",
+      "update": {
+        "country": "IN",
+        "event": "BUSINESS_PRIMARY_LOCATION_COUNTRY_UPDATE"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "account_updated"
+  }
+]

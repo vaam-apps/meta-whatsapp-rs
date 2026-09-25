@@ -1,0 +1,36 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {
+          "name": "Sheena Nelson"
+        },
+        "wa_id": "16505551234"
+      },
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "errors": [
+          {
+            "code": 131051,
+            "error_data": {
+              "details": "Message type is currently not supported."
+            },
+            "message": "Message type unknown",
+            "title": "Message type unknown"
+          }
+        ],
+        "from": "16505551234",
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQUFERjg0NDEzNDdFODU3MUMxMAA=",
+        "timestamp": "1750090702",
+        "type": "unsupported",
+        "unsupported": {
+          "type": "edit"
+        }
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

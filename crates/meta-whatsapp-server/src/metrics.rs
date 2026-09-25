@@ -12,6 +12,10 @@
 //! | `wa_server_http_requests_total` | `listener`, `method`, `route`, `status`, `code` (empty on success) |
 //! | `wa_server_http_request_duration_seconds` | `listener`, `method`, `route` |
 //! | `wa_server_graph_errors_total` | `code` (the API error code of a failed Graph call) |
+//! | `wa_server_webhook_deliveries_total` | `outcome`: Meta's `POST /webhooks/meta` answered `delivered` (200), `unauthenticated` (401), `payload_too_large` (413), `in_flight` (503: another request holds an event's dedup lease; a run of them means sinks outlast the lease), `failed` (500) |
+//! | `wa_server_webhook_events_total` | `event_type` (the event's type), `audience` (`tenant` or `operator`: an operator-only row) |
+//! | `wa_server_webhook_duplicate_events_total` | `stage`: `dedup` (the dedup lease had seen it), `outbox` (the outbox had it) |
+//! | `wa_server_webhook_sink_failures_total` | `stage`: `routing`, `serialization`, `inbox`, `outbox` |
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -46,6 +50,22 @@ struct CodeLabels {
     code: String,
 }
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct OutcomeLabels {
+    outcome: String,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct EventLabels {
+    event_type: String,
+    audience: String,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct StageLabels {
+    stage: String,
+}
+
 type DurationFamily = Family<RouteLabels, Histogram, fn() -> Histogram>;
 
 /// An HTTP method as a label or a log field: the methods an API client
@@ -72,6 +92,10 @@ pub struct Metrics {
     requests: Family<RequestLabels, Counter>,
     durations: DurationFamily,
     graph_errors: Family<CodeLabels, Counter>,
+    webhook_deliveries: Family<OutcomeLabels, Counter>,
+    webhook_events: Family<EventLabels, Counter>,
+    webhook_duplicates: Family<StageLabels, Counter>,
+    webhook_failures: Family<StageLabels, Counter>,
 }
 
 impl std::fmt::Debug for Metrics {
@@ -113,11 +137,39 @@ impl Metrics {
             "Failed Graph API calls, by the API error code they were answered with",
             graph_errors.clone(),
         );
+        let webhook_deliveries = Family::<OutcomeLabels, Counter>::default();
+        let webhook_events = Family::<EventLabels, Counter>::default();
+        let webhook_duplicates = Family::<StageLabels, Counter>::default();
+        let webhook_failures = Family::<StageLabels, Counter>::default();
+        registry.register(
+            "webhook_deliveries",
+            "Meta's webhook deliveries, by outcome",
+            webhook_deliveries.clone(),
+        );
+        registry.register(
+            "webhook_events",
+            "Webhook events recorded in the outbox, by type and audience (tenant or operator)",
+            webhook_events.clone(),
+        );
+        registry.register(
+            "webhook_duplicate_events",
+            "Webhook events already recorded, by the stage that recognised them",
+            webhook_duplicates.clone(),
+        );
+        registry.register(
+            "webhook_sink_failures",
+            "Webhook events that failed to be recorded, by stage (Meta redelivers them)",
+            webhook_failures.clone(),
+        );
         Self {
             registry: Arc::new(Mutex::new(registry)),
             requests,
             durations,
             graph_errors,
+            webhook_deliveries,
+            webhook_events,
+            webhook_duplicates,
+            webhook_failures,
         }
     }
 
@@ -157,6 +209,49 @@ impl Metrics {
         self.graph_errors
             .get_or_create(&CodeLabels {
                 code: code.to_owned(),
+            })
+            .inc();
+    }
+
+    /// Count one of Meta's webhook deliveries by its outcome (a fixed set:
+    /// see the module docs).
+    pub fn webhook_delivery(&self, outcome: &'static str) {
+        self.webhook_deliveries
+            .get_or_create(&OutcomeLabels {
+                outcome: outcome.to_owned(),
+            })
+            .inc();
+    }
+
+    /// Count an event recorded in the outbox. `event_type` is the library's
+    /// `WebhookEvent::kind` (a fixed set), `audience` `tenant` or
+    /// `operator`.
+    pub fn webhook_event(&self, event_type: &'static str, audience: &'static str) {
+        self.webhook_events
+            .get_or_create(&EventLabels {
+                event_type: event_type.to_owned(),
+                audience: audience.to_owned(),
+            })
+            .inc();
+    }
+
+    /// Count `n` events already recorded, recognised at `stage` (`dedup`
+    /// or `outbox`).
+    pub fn webhook_duplicates(&self, stage: &'static str, n: u64) {
+        if n > 0 {
+            self.webhook_duplicates
+                .get_or_create(&StageLabels {
+                    stage: stage.to_owned(),
+                })
+                .inc_by(n);
+        }
+    }
+
+    /// Count an event that failed to be recorded at `stage`.
+    pub fn webhook_failure(&self, stage: &'static str) {
+        self.webhook_failures
+            .get_or_create(&StageLabels {
+                stage: stage.to_owned(),
             })
             .inc();
     }

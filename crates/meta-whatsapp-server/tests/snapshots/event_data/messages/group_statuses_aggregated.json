@@ -1,0 +1,90 @@
+[
+  {
+    "data": {
+      "contact": null,
+      "display_phone_number": "15550783881",
+      "event": "status_updated",
+      "phone_number_id": "106540352242922",
+      "status": {
+        "conversation": {
+          "id": "b1946ac92492d2347c6235b4d2611184",
+          "origin": {
+            "type": "group_marketing"
+          },
+          "pricing": {
+            "billable": true,
+            "category": "group_marketing",
+            "pricing_model": "PMP"
+          }
+        },
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgARGBI4QUFBQkJCQ0NDREREMTIzNDUA",
+        "recipient_id": "Y2FwaV9ncm91cDoxNzA1NTU1MDEzOToxMjAzNjM0MDQ2OTQyMzM4MjAZD",
+        "recipient_participant_id": "16505551234",
+        "recipient_type": "group",
+        "status": "read",
+        "timestamp": "1750101000"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "status_updated"
+  },
+  {
+    "data": {
+      "contact": null,
+      "display_phone_number": "15550783881",
+      "event": "status_updated",
+      "phone_number_id": "106540352242922",
+      "status": {
+        "conversation": {
+          "id": "b1946ac92492d2347c6235b4d2611184",
+          "origin": {
+            "type": "group_marketing"
+          },
+          "pricing": {
+            "billable": true,
+            "category": "group_marketing",
+            "pricing_model": "PMP"
+          }
+        },
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgARGBI4QUFBQkJCQ0NDREREMTIzNDUA",
+        "recipient_id": "Y2FwaV9ncm91cDoxNzA1NTU1MDEzOToxMjAzNjM0MDQ2OTQyMzM4MjAZD",
+        "recipient_participant_id": "16505551235",
+        "recipient_participant_user_id": "US.13491208655302741919",
+        "recipient_type": "group",
+        "status": "read",
+        "timestamp": "1750101001"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "status_updated"
+  },
+  {
+    "data": {
+      "contact": null,
+      "display_phone_number": "15550783881",
+      "event": "status_updated",
+      "phone_number_id": "106540352242922",
+      "status": {
+        "conversation": {
+          "id": "b1946ac92492d2347c6235b4d2611184",
+          "origin": {
+            "type": "group_service"
+          }
+        },
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgARGBI4QUFBQkJCQ0NDREREMTIzNDUA",
+        "pricing": {
+          "billable": false,
+          "category": "group_service",
+          "pricing_model": "PMP"
+        },
+        "recipient_id": "Y2FwaV9ncm91cDoxNzA1NTU1MDEzOToxMjAzNjM0MDQ2OTQyMzM4MjAZD",
+        "recipient_participant_id": "16505551236",
+        "recipient_type": "group",
+        "status": "delivered",
+        "timestamp": "1750100990"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "status_updated"
+  }
+]

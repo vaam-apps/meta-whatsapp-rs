@@ -1,0 +1,19 @@
+[
+  {
+    "data": {
+      "entry_id": "2949482758682047",
+      "event": "account_updated",
+      "time": "1748477359",
+      "update": {
+        "event": "PARTNER_APP_UNINSTALLED",
+        "waba_info": {
+          "owner_business_id": "1284923862322270",
+          "partner_app_id": "869361281603019",
+          "waba_id": "184943124712545"
+        }
+      },
+      "waba_id": "184943124712545"
+    },
+    "type": "account_updated"
+  }
+]

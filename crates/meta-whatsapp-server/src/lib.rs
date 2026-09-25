@@ -14,6 +14,7 @@
 //! | [`keys`] | the API key format, digests, constant-time comparison |
 //! | [`auth`] | the authorization order: key, tenant, scope, ownership, vault |
 //! | [`api`] | both routers and the OpenAPI document |
+//! | [`events`] | Meta's webhooks into the inbox and the event outbox, and polling it |
 //! | [`error`] | the error body, codes and statuses |
 //! | [`telemetry`], [`metrics`] | request logs and Prometheus metrics |
 //! | [`serve`], [`listen`], [`cli`] | the process, its listeners' accept loop |
@@ -23,6 +24,7 @@ pub mod auth;
 pub mod cli;
 pub mod config;
 pub mod error;
+pub mod events;
 pub mod keys;
 pub mod listen;
 pub mod metrics;

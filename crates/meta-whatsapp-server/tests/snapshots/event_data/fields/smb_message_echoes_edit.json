@@ -1,0 +1,35 @@
+[
+  {
+    "data": {
+      "contact": null,
+      "display_phone_number": "15550783881",
+      "echo": {
+        "edit": {
+          "message": {
+            "context": {
+              "id": "M0"
+            },
+            "image": {
+              "caption": "Updated image caption",
+              "id": "1234567890",
+              "mime_type": "image/jpeg",
+              "sha256": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+              "url": "https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=133..."
+            },
+            "type": "image"
+          },
+          "original_message_id": "wamid.HBgLMTQxMjU1NTA4MjkVAgASGBQzQUNCNjk5RDUwNUZGMUZEM0VBRAA="
+        },
+        "from": "15550783881",
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQkJERjg0NDEzNDdFODU3MUMxMAA=",
+        "timestamp": "1749854620",
+        "to": "16505551234",
+        "type": "edit"
+      },
+      "event": "message_echoed",
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_echoed"
+  }
+]

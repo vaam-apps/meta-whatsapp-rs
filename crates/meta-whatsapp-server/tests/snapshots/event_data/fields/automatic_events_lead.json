@@ -1,0 +1,17 @@
+[
+  {
+    "data": {
+      "detected": {
+        "ctwa_clid": "Afc3nYt4TTydumlFFsatFz8bR2yHCtVA92Veu_zDE4DgAI-QqCwM6eC3-K3lTGHRiLxRTVXFEsdyKQQSa-2obZyuGBq_EYypt_OwbMihBV0pbUoRmrGnEjwFTHop-Px0TfA",
+        "event_name": "LeadSubmitted",
+        "id": "wamid.HBgLMTIwNjY3NzQ3OTgVAgASGBQzQUY3MDVCQzFBODE5ODU4MUZEOQA=",
+        "timestamp": "1749069089"
+      },
+      "display_phone_number": "15550783881",
+      "event": "automatic_event_detected",
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "automatic_event_detected"
+  }
+]

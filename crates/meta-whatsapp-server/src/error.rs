@@ -844,6 +844,8 @@ mod tests {
             include_str!("api/ops.rs"),
             include_str!("api/common.rs"),
             include_str!("api/webhooks.rs"),
+            include_str!("api/events.rs"),
+            include_str!("events.rs"),
         ];
         let mut named = 0;
         for source in sources {

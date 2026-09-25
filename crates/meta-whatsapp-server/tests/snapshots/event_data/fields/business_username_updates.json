@@ -1,0 +1,27 @@
+[
+  {
+    "data": {
+      "event": "business_username_updated",
+      "time": "1767168300",
+      "update": {
+        "display_phone_number": "15550783881",
+        "status": "approved",
+        "username": "luckyshrub"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "business_username_updated"
+  },
+  {
+    "data": {
+      "event": "business_username_updated",
+      "time": "1767168300",
+      "update": {
+        "display_phone_number": "15550783882",
+        "status": "deleted"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "business_username_updated"
+  }
+]

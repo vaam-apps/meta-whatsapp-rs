@@ -82,6 +82,10 @@ fn a_valid_production_configuration_starts_with_safe_defaults() {
     assert_eq!(config.migrate, MigrateMode::Auto);
     assert_eq!(config.log_format, LogFormat::Json);
     assert_eq!(config.shutdown_grace.as_secs(), 25);
+    // Retention is the owner's decision D10, still open: the design's
+    // proposal until then.
+    assert_eq!(config.outbox_retention.as_secs(), 7 * 24 * 3600);
+    assert_eq!(config.app_secrets.len(), 1);
     assert_eq!(config.graph_endpoint.version().to_string(), "v25.0");
     assert!(matches!(config.onboarding, OnboardingMode::TechProvider));
     assert!(!config.vault_key_is_throwaway);
@@ -277,6 +281,10 @@ fn refuses_what_it_cannot_parse_without_quoting_it() {
         ("WA_GRAPH_ENDPOINT", "ftp://graph.example"),
         ("WA_SERVER_MIGRATE", "sometimes"),
         ("WA_SERVER_SHUTDOWN_GRACE", "soon"),
+        ("WA_SERVER_OUTBOX_RETENTION", "a week"),
+        // Zero would purge every event at the next housekeeping round.
+        ("WA_SERVER_OUTBOX_RETENTION", "0"),
+        ("WA_SERVER_OUTBOX_RETENTION", "0d"),
         ("WA_SERVER_LOG_FORMAT", "xml"),
         ("WA_ONBOARDING_MODE", "reseller"),
         ("WA_APP_ID", "not-digits"),
@@ -312,6 +320,8 @@ fn previous_vault_keys_and_other_settings_parse() {
                 "https://graph-proxy.internal:9999/graph",
             )
             .set("WA_SERVER_SHUTDOWN_GRACE", "2m")
+            .set("WA_SERVER_OUTBOX_RETENTION", "30d")
+            .set("WA_APP_SECRET_PREVIOUS", "the-previous-app-secret")
             .set("WA_SERVER_MIGRATE", "skip")
             .set("WA_SERVER_LOG_FORMAT", "text")
             .set("WA_APP_ID", "1234567890"),
@@ -328,6 +338,9 @@ fn previous_vault_keys_and_other_settings_parse() {
         Some("graph-proxy.internal")
     );
     assert_eq!(config.shutdown_grace.as_secs(), 120);
+    assert_eq!(config.outbox_retention.as_secs(), 30 * 24 * 3600);
+    // Deliveries signed with either app secret verify while rotating.
+    assert_eq!(config.app_secrets.len(), 2);
     assert_eq!(config.migrate, MigrateMode::Skip);
     assert_eq!(config.log_format, LogFormat::Text);
     assert_eq!(config.app_id.unwrap().as_str(), "1234567890");

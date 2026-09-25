@@ -1,0 +1,23 @@
+[
+  {
+    "data": {
+      "contact": null,
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "from": "16505551234",
+        "id": "wamid.HBgLMTk4MzU1NTE5NzQVAgASGAoxMTgyMDg2MjY3AA==",
+        "system": {
+          "body": "User Sheena Nelson changed from 16505551234 to 12195555358",
+          "type": "user_changed_number",
+          "wa_id": "12195555358"
+        },
+        "timestamp": "1750269342",
+        "type": "system"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

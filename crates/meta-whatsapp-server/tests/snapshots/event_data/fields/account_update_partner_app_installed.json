@@ -1,0 +1,24 @@
+[
+  {
+    "data": {
+      "entry_id": "2949482758682047",
+      "event": "account_updated",
+      "time": "1745337174",
+      "update": {
+        "event": "PARTNER_APP_INSTALLED",
+        "waba_info": {
+          "owner_business_id": "2329417887457253",
+          "partner_app_id": "5731794616896507",
+          "solution_id": "1715120619246906",
+          "solution_partner_business_ids": [
+            "2949482758682047",
+            "520744086200222"
+          ],
+          "waba_id": "1191624265890717"
+        }
+      },
+      "waba_id": "1191624265890717"
+    },
+    "type": "account_updated"
+  }
+]

@@ -1,0 +1,15 @@
+[
+  {
+    "data": {
+      "event": "security_updated",
+      "time": "1748811473",
+      "update": {
+        "display_phone_number": "15550783881",
+        "event": "PIN_RESET_REQUEST",
+        "requester": "61555822107539"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "security_updated"
+  }
+]

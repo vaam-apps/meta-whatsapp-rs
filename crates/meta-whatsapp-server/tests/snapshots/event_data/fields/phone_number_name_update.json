@@ -1,0 +1,15 @@
+[
+  {
+    "data": {
+      "event": "phone_number_name_updated",
+      "time": "1739321024",
+      "update": {
+        "decision": "APPROVED",
+        "display_phone_number": "15550783881",
+        "requested_verified_name": "Lucky Shrub"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "phone_number_name_updated"
+  }
+]

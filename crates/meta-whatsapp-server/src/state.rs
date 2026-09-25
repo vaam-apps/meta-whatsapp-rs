@@ -9,6 +9,7 @@ use meta_whatsapp_rs::core::config::ApiVersion;
 use meta_whatsapp_rs::core::secret::VerifyToken;
 
 use crate::auth::Tokens;
+use crate::events::{Events, Inbound};
 use crate::metrics::Metrics;
 use crate::store::Store;
 
@@ -24,6 +25,7 @@ struct Inner {
     client: Client,
     verify_token: VerifyToken,
     metrics: Metrics,
+    events: Events,
     shutting_down: AtomicBool,
 }
 
@@ -35,14 +37,22 @@ impl std::fmt::Debug for AppState {
 
 impl AppState {
     /// State on `store` and `vault`, calling Graph with `client` (built
-    /// without a default token: each call runs with the tenant's token).
+    /// without a default token: each call runs with the tenant's token),
+    /// receiving Meta's webhooks into `inbound`'s stores.
     pub fn new(
         store: Arc<dyn Store>,
         vault: TokenVault,
         client: Client,
         verify_token: VerifyToken,
         metrics: Metrics,
+        inbound: Inbound,
     ) -> Self {
+        let events = Events::new(
+            inbound,
+            store.clone(),
+            verify_token.clone(),
+            metrics.clone(),
+        );
         Self {
             inner: Arc::new(Inner {
                 store,
@@ -50,6 +60,7 @@ impl AppState {
                 client,
                 verify_token,
                 metrics,
+                events,
                 shutting_down: AtomicBool::new(false),
             }),
         }
@@ -81,6 +92,11 @@ impl AppState {
         &self.inner.metrics
     }
 
+    /// Meta's webhook pipeline and the event outbox.
+    pub(crate) fn events(&self) -> &Events {
+        &self.inner.events
+    }
+
     /// The Graph API version calls use.
     pub fn graph_api_version(&self) -> ApiVersion {
         self.inner.client.endpoint().version()
@@ -107,8 +123,9 @@ impl AppState {
         use meta_whatsapp_rs::client::embedded_signup::{VaultKey, VaultKeys};
         use meta_whatsapp_rs::core::testing::ScriptedTransport;
 
+        let kv = Arc::new(MemoryKvStore::new());
         let vault = TokenVault::new(
-            Arc::new(MemoryKvStore::new()),
+            kv.clone(),
             VaultKeys::new(VaultKey::generate("test").unwrap()),
         )
         .unwrap();
@@ -116,12 +133,18 @@ impl AppState {
             .transport(ScriptedTransport::new())
             .build()
             .unwrap();
+        let inbound = Inbound::in_memory(
+            meta_whatsapp_rs::core::secret::AppSecret::new("app-secret-for-unit-tests"),
+            kv,
+        )
+        .unwrap();
         Self::new(
             Arc::new(crate::store::MemoryStore::new()),
             vault,
             client,
             VerifyToken::new("verify-token-for-unit-tests"),
             Metrics::new(),
+            inbound,
         )
     }
 }

@@ -5,10 +5,15 @@
 //! The library's records (the token vault, OTP challenges, signup
 //! sessions, webhook dedup) stay in its `KvStore`; these are the tables
 //! the design adds (`wa_server_*`, docs/design/server.md, section 2.2).
+//! The event outbox has a store of its own: [`events::EventStore`].
 
+pub mod events;
+mod events_postgres;
 mod memory;
 mod postgres;
 
+pub use events::{EventStore, MemoryEventStore, PgEventStore};
+pub use events_postgres::{HOUSEKEEPING_LOCK, OUTBOX_LOCK};
 pub use memory::MemoryStore;
 pub use postgres::{MIGRATION_LOCK, MIGRATIONS_TABLE, PgStore, migrate, migrations};
 

@@ -4,21 +4,23 @@
 #![allow(dead_code)] // each test binary uses a different subset
 
 pub mod capture;
+pub mod events_suite;
+pub mod meta;
 pub mod store_suite;
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use http_body_util::BodyExt;
-use meta_whatsapp_rs::adapters::store::MemoryKvStore;
+use meta_whatsapp_rs::adapters::store::{MemoryConversationStore, MemoryKvStore};
 use meta_whatsapp_rs::client::embedded_signup::{
     StoredBusinessToken, TOKEN_NAMESPACE, TokenVault, VaultKey, VaultKeys,
 };
 use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
-use meta_whatsapp_rs::core::secret::{AccessToken, VerifyToken};
-use meta_whatsapp_rs::core::store::{Expiry, KvStore, StoreKey, Versioned};
+use meta_whatsapp_rs::core::secret::{AccessToken, AppSecret, VerifyToken};
+use meta_whatsapp_rs::core::store::{ConversationStore, Expiry, KvStore, StoreKey, Versioned};
 use meta_whatsapp_rs::core::testing::ScriptedTransport;
 use meta_whatsapp_rs::webhooks::axum::Router;
 use meta_whatsapp_rs::webhooks::axum::body::Body;
@@ -26,15 +28,23 @@ use meta_whatsapp_rs::webhooks::axum::http::{HeaderMap, Method, Request, StatusC
 use meta_whatsapp_rs::{Client, RetryPolicy};
 use meta_whatsapp_server::api::admin::mint;
 use meta_whatsapp_server::api::{internal_router, public_router};
+use meta_whatsapp_server::events::Inbound;
 use meta_whatsapp_server::metrics::Metrics;
 use meta_whatsapp_server::model::{AllowedTenants, KeyOwner, Scope, TenantId};
 use meta_whatsapp_server::state::AppState;
-use meta_whatsapp_server::store::{MemoryStore, Store};
+use meta_whatsapp_server::store::events::{EventPage, EventQuery, NewEvent};
+use meta_whatsapp_server::store::{EventStore, MemoryEventStore, MemoryStore, Store};
 use serde_json::Value;
 use tower::ServiceExt;
 
 /// The verify token of every test service.
 pub const VERIFY_TOKEN: &str = "verify-token-for-tests";
+
+/// The app secret Meta's test deliveries are signed with.
+pub const APP_SECRET: &str = "app-secret-for-tests";
+
+/// A second app secret, the previous one while rotating.
+pub const PREVIOUS_APP_SECRET: &str = "previous-app-secret-for-tests";
 
 /// A `KvStore` that counts reads of the token vault's namespace.
 #[derive(Debug)]
@@ -98,6 +108,72 @@ impl KvStore for CountingKv {
     }
 }
 
+/// An [`EventStore`] that records every insert the sink makes, and can
+/// fail the next ones.
+pub struct RecordingEvents {
+    inner: Arc<dyn EventStore>,
+    inserted: Mutex<Vec<(NewEvent, Option<i64>)>>,
+    /// The next inserts' fates: `true` fails one (a storage error).
+    script: Mutex<std::collections::VecDeque<bool>>,
+}
+
+impl RecordingEvents {
+    pub fn new(inner: Arc<dyn EventStore>) -> Self {
+        Self {
+            inner,
+            inserted: Mutex::new(Vec::new()),
+            script: Mutex::new(std::collections::VecDeque::new()),
+        }
+    }
+
+    /// Fail the next `n` inserts (a storage error).
+    pub fn fail_next(&self, n: usize) {
+        self.script(&vec![true; n]);
+    }
+
+    /// The next inserts' fates, in order (`true`: fails); then they pass.
+    pub fn script(&self, fates: &[bool]) {
+        *self.script.lock().unwrap() = fates.iter().copied().collect();
+    }
+
+    /// Every insert so far and its outcome (`None`: already stored).
+    pub fn inserts(&self) -> Vec<(NewEvent, Option<i64>)> {
+        self.inserted.lock().unwrap().clone()
+    }
+
+    /// The rows written (inserts that stored a row).
+    pub fn rows(&self) -> Vec<NewEvent> {
+        self.inserts()
+            .into_iter()
+            .filter(|(_, sequence)| sequence.is_some())
+            .map(|(row, _)| row)
+            .collect()
+    }
+}
+
+#[async_trait]
+impl EventStore for RecordingEvents {
+    async fn insert(&self, event: &NewEvent) -> Result<Option<i64>, StorageError> {
+        let fails = self.script.lock().unwrap().pop_front().unwrap_or(false);
+        if fails {
+            return Err(StorageError::Backend(anyhow::anyhow!(
+                "scripted outbox failure"
+            )));
+        }
+        let outcome = self.inner.insert(event).await?;
+        self.inserted.lock().unwrap().push((event.clone(), outcome));
+        Ok(outcome)
+    }
+
+    async fn page(&self, query: &EventQuery) -> Result<EventPage, StorageError> {
+        self.inner.page(query).await
+    }
+
+    async fn purge(&self, older_than: std::time::Duration) -> Result<Option<u64>, StorageError> {
+        self.inner.purge(older_than).await
+    }
+}
+
 /// The service under test.
 pub struct Harness {
     pub state: AppState,
@@ -107,6 +183,41 @@ pub struct Harness {
     pub kv: Arc<CountingKv>,
     pub vault: TokenVault,
     pub store: Arc<dyn Store>,
+    pub conversations: Arc<dyn ConversationStore>,
+    /// The outbox, recording what the sink writes.
+    pub outbox: Arc<RecordingEvents>,
+}
+
+/// The stores a [`Harness`] runs on.
+pub struct Stores {
+    pub store: Arc<dyn Store>,
+    pub kv: Arc<dyn KvStore>,
+    pub conversations: Arc<dyn ConversationStore>,
+    pub events: Arc<dyn EventStore>,
+}
+
+impl Stores {
+    /// Everything in memory.
+    pub fn memory() -> Self {
+        Self {
+            store: Arc::new(MemoryStore::new()),
+            kv: Arc::new(MemoryKvStore::new()),
+            conversations: Arc::new(MemoryConversationStore::new()),
+            events: Arc::new(MemoryEventStore::new()),
+        }
+    }
+
+    /// Everything on Postgres, on `pool` (migrated).
+    pub fn postgres(pool: &meta_whatsapp_rs::adapters::store::postgres::sqlx::PgPool) -> Self {
+        use meta_whatsapp_rs::adapters::store::{PostgresConversationStore, PostgresKvStore};
+        use meta_whatsapp_server::store::{PgEventStore, PgStore};
+        Self {
+            store: Arc::new(PgStore::new(pool.clone())),
+            kv: Arc::new(PostgresKvStore::new(pool.clone())),
+            conversations: Arc::new(PostgresConversationStore::new(pool.clone())),
+            events: Arc::new(PgEventStore::new(pool.clone())),
+        }
+    }
 }
 
 /// An answer.
@@ -216,12 +327,28 @@ pub async fn send(router: &Router, request: Request<Body>) -> Reply {
 impl Harness {
     /// On a memory store.
     pub fn new() -> Self {
-        Self::on(Arc::new(MemoryStore::new()), Arc::new(MemoryKvStore::new()))
+        Self::with(Stores::memory())
     }
 
-    /// On `store` and `kv`.
+    /// On `store` and `kv`, the inbox and the outbox in memory.
     pub fn on(store: Arc<dyn Store>, kv: Arc<dyn KvStore>) -> Self {
+        Self::with(Stores {
+            store,
+            kv,
+            ..Stores::memory()
+        })
+    }
+
+    /// On `stores`.
+    pub fn with(stores: Stores) -> Self {
+        let Stores {
+            store,
+            kv,
+            conversations,
+            events,
+        } = stores;
         let kv = Arc::new(CountingKv::new(kv));
+        let outbox = Arc::new(RecordingEvents::new(events));
         let vault = TokenVault::new(
             kv.clone(),
             VaultKeys::new(VaultKey::generate("test").unwrap()),
@@ -233,12 +360,23 @@ impl Harness {
             .retry(RetryPolicy::NONE)
             .build()
             .unwrap();
+        let inbound = Inbound::new(
+            vec![
+                AppSecret::new(APP_SECRET),
+                AppSecret::new(PREVIOUS_APP_SECRET),
+            ],
+            kv.clone(),
+            conversations.clone(),
+            outbox.clone(),
+        )
+        .unwrap();
         let state = AppState::new(
             store.clone(),
             vault.clone(),
             client,
             VerifyToken::new(VERIFY_TOKEN),
             Metrics::new(),
+            inbound,
         );
         Self {
             internal: internal_router(&state),
@@ -248,7 +386,14 @@ impl Harness {
             kv,
             vault,
             store,
+            conversations,
+            outbox,
         }
+    }
+
+    /// Deliver `body` to `POST /webhooks/meta`, signed with [`APP_SECRET`].
+    pub async fn webhook(&self, body: &[u8]) -> Reply {
+        send(&self.public, signed(body).build()).await
     }
 
     /// Call the internal listener.
@@ -321,6 +466,16 @@ impl Harness {
             .await
             .unwrap();
     }
+}
+
+/// A `POST /webhooks/meta` of `body`, signed as Meta signs it, with
+/// [`APP_SECRET`].
+pub fn signed(body: &[u8]) -> Call {
+    let signature = meta_whatsapp_rs::webhooks::sign(&AppSecret::new(APP_SECRET), body);
+    Call::new(Method::POST, "/webhooks/meta")
+        .header("content-type", "application/json")
+        .header("x-hub-signature-256", &signature)
+        .body(Body::from(body.to_vec()))
 }
 
 /// Every scope.

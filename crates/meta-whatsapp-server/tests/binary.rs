@@ -309,6 +309,79 @@ fn vault_rotate_refuses_memory_storage() {
     );
 }
 
+/// The served binary takes Meta's deliveries on the public listener,
+/// verified with `WA_APP_SECRET` or `WA_APP_SECRET_PREVIOUS`, into its
+/// outbox (an operator-only event here, counted on `/metrics`); an
+/// unsigned or forged one is `401`. Decisive: `serve` wiring the
+/// configured app secrets and stores into the pipeline.
+#[test]
+fn serve_receives_signed_deliveries() {
+    use meta_whatsapp_rs::core::secret::AppSecret;
+    use meta_whatsapp_rs::webhooks::sign;
+
+    let (public, internal) = two_ports();
+    let mut child = base(&mut Command::new(BIN), public, internal)
+        .env("WA_SERVER_ENV", "development")
+        .env(
+            "WA_APP_SECRET_PREVIOUS",
+            "previous-app-secret-for-the-binary-test",
+        )
+        .arg("serve")
+        .spawn()
+        .unwrap();
+    wait_live(internal, &mut child);
+    wait_live(public, &mut child);
+    let body = r#"{"object": "whatsapp_business_account", "entry": [{"id": "102290129340398",
+        "changes": [{"field": "a_field_meta_adds_later", "value": {"note": "anything"}}]}]}"#;
+    let post = |signature: Option<String>| {
+        let mut headers = vec![("Content-Type".to_owned(), "application/json".to_owned())];
+        if let Some(signature) = signature {
+            headers.push(("X-Hub-Signature-256".to_owned(), signature));
+        }
+        let headers: Vec<(&str, &str)> = headers
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.as_str()))
+            .collect();
+        http(public, "POST", "/webhooks/meta", &headers, body)
+            .unwrap()
+            .0
+    };
+    assert_eq!(post(None), 401);
+    assert_eq!(
+        post(Some(sign(
+            &AppSecret::new("a-forger-s-secret"),
+            body.as_bytes()
+        ))),
+        401
+    );
+    for secret in [
+        "app-secret-for-the-binary-test",
+        "previous-app-secret-for-the-binary-test",
+    ] {
+        assert_eq!(
+            post(Some(sign(&AppSecret::new(secret), body.as_bytes()))),
+            200
+        );
+    }
+    let (status, metrics) = http(internal, "GET", "/metrics", &[], "").unwrap();
+    assert_eq!(status, 200);
+    let recorded = metrics
+        .lines()
+        .find(|l| {
+            l.starts_with(
+                "wa_server_webhook_events_total{event_type=\"unknown\",audience=\"operator\"}",
+            )
+        })
+        .unwrap_or_else(|| panic!("{metrics}"));
+    // The same body twice: one event (the second is a duplicate).
+    assert!(recorded.ends_with(" 1"), "{recorded}");
+    assert!(
+        metrics.contains("wa_server_webhook_deliveries_total{outcome=\"unauthenticated\"} 2"),
+        "{metrics}"
+    );
+    terminate(&mut child);
+}
+
 #[test]
 fn a_refused_configuration_exits_naming_the_variable_not_the_value() {
     let (public, internal) = two_ports();

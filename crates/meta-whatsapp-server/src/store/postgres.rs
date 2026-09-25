@@ -38,11 +38,18 @@ pub const MIGRATION_LOCK: i64 = 0x4609_2c1b_ffac_b625;
 
 /// `(version, description, SQL)` of each service migration, in order.
 /// Stable, byte for byte, once released: sqlx records each file's checksum.
-const MIGRATION_FILES: &[(i64, &str, &str)] = &[(
-    1,
-    "tenants keys bindings",
-    include_str!("../../migrations/0001_tenants_keys_bindings.sql"),
-)];
+const MIGRATION_FILES: &[(i64, &str, &str)] = &[
+    (
+        1,
+        "tenants keys bindings",
+        include_str!("../../migrations/0001_tenants_keys_bindings.sql"),
+    ),
+    (
+        3,
+        "events",
+        include_str!("../../migrations/0003_events.sql"),
+    ),
+];
 
 /// The service's migrations, as sqlx runs and records them.
 pub fn migrations() -> Vec<Migration> {
@@ -605,10 +612,16 @@ mod tests {
     /// `(version, SHA-384 hex)` of every service migration, as sqlx records
     /// it. A new migration adds a line; an existing line never changes (an
     /// edited migration makes `migrate` refuse every database it ran on).
-    const PINNED_CHECKSUMS: [(i64, &str); 1] = [(
-        1,
-        "4d1c5a2555461deec494d1d0f8a6be354e0f092115ee74abdc6e270670a441d3856222ca2ade7598a98e62dc80075a47",
-    )];
+    const PINNED_CHECKSUMS: [(i64, &str); 2] = [
+        (
+            1,
+            "4d1c5a2555461deec494d1d0f8a6be354e0f092115ee74abdc6e270670a441d3856222ca2ade7598a98e62dc80075a47",
+        ),
+        (
+            3,
+            "9f40fe3889e450540ddcb8329abf350d17f7e3278a6b0c27c4912c06e03e00a3583141960a8ee4ab691fc35a644506f3",
+        ),
+    ];
 
     #[test]
     fn the_migrations_and_their_checksums_are_pinned() {

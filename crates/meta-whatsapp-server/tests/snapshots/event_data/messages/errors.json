@@ -1,0 +1,21 @@
+[
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "error": {
+        "code": 130429,
+        "error_data": {
+          "details": "Message failed to send because there were too many messages sent from this phone number in a short period of time"
+        },
+        "href": "/documentation/business-messaging/whatsapp/support/error-codes",
+        "message": "Rate limit hit",
+        "title": "Rate limit hit"
+      },
+      "event": "error_reported",
+      "field": "messages",
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "error_reported"
+  }
+]

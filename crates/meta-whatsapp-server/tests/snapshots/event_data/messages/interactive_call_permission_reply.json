@@ -1,0 +1,41 @@
+[
+  {
+    "data": {
+      "contact": {
+        "parent_user_id": "US.ENT.11815799212886844830",
+        "profile": {
+          "name": "Sheena Nelson",
+          "username": "realsheenanelson"
+        },
+        "user_id": "US.13491208655302741918",
+        "wa_id": "16505551234"
+      },
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "context": {
+          "from": "15550783881",
+          "id": "wamid.gBGGFlaCmZ9plHrf2Mh-o"
+        },
+        "from": "16505551234",
+        "from_parent_user_id": "US.ENT.11815799212886844830",
+        "from_user_id": "US.13491208655302741918",
+        "id": "wamid.sH0kFlaCGg0xcvZbgmg90lHrg2dL",
+        "interactive": {
+          "call_permission_reply": {
+            "expiration_timestamp": "1768550400",
+            "is_permanent": false,
+            "response": "accept",
+            "response_source": "user_action"
+          },
+          "type": "call_permission_reply"
+        },
+        "timestamp": "1767168000",
+        "type": "interactive"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

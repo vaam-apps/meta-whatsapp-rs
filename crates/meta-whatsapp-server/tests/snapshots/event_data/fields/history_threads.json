@@ -1,0 +1,84 @@
+[
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "event": "history_synced",
+      "history": {
+        "history": [
+          {
+            "metadata": {
+              "chunk_order": 1,
+              "phase": 0,
+              "progress": 55
+            },
+            "threads": [
+              {
+                "id": "16505551234",
+                "messages": [
+                  {
+                    "from": "15550783881",
+                    "history_context": {
+                      "status": "READ"
+                    },
+                    "id": "wamid.HBgLMTY0NjcwNDM1OTUVAgARGBIyNDlBOEI5QUQ4NDc0N0FCNjMA",
+                    "text": {
+                      "body": "Here's the info you requested! https://www.meta.com/quest/quest-3/"
+                    },
+                    "timestamp": "1739230955",
+                    "type": "text"
+                  },
+                  {
+                    "from": "15550783881",
+                    "history_context": {
+                      "status": "PLAYED"
+                    },
+                    "id": "wamid.QyNUEHBgLMTY0NjcwNDM1OTUVAgARGBI1Rj3NEYxMzAzMzQ5MkEA",
+                    "timestamp": "1739230970",
+                    "type": "media_placeholder"
+                  },
+                  {
+                    "from": "16505551234",
+                    "history_context": {
+                      "status": "READ"
+                    },
+                    "id": "wamid.N0FCNjMAHBgLMTY0NjcwNDM1OTUVAgARGBIyNDlBOEI5QUQ4NDc0",
+                    "text": {
+                      "body": "Thanks!"
+                    },
+                    "timestamp": "1739230970",
+                    "type": "text"
+                  }
+                ]
+              },
+              {
+                "id": "12125557890",
+                "messages": [
+                  {
+                    "from": "15550783881",
+                    "history_context": {
+                      "status": "DELIVERED"
+                    },
+                    "id": "wamid.BIyNDlBOEI5N0FCNjMAHBgLMTY0NjcwNDM1OTUVAgARGQUQ4NDc0",
+                    "text": {
+                      "body": "Thanks for your order! As a thank you, use code THANKS30 to get 30% of your next order."
+                    },
+                    "timestamp": "1739230970",
+                    "type": "text"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "messaging_product": "whatsapp",
+        "metadata": {
+          "display_phone_number": "15550783881",
+          "phone_number_id": "106540352242922"
+        }
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "history_synced"
+  }
+]

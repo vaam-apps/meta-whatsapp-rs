@@ -11,19 +11,24 @@ use meta_whatsapp_rs::adapters::store::postgres::sqlx::PgPool;
 use meta_whatsapp_rs::adapters::store::postgres::sqlx::postgres::{
     PgConnectOptions, PgPoolOptions,
 };
-use meta_whatsapp_rs::adapters::store::{MemoryKvStore, PostgresKvStore};
+use meta_whatsapp_rs::adapters::store::{
+    MemoryConversationStore, MemoryKvStore, PostgresConversationStore, PostgresKvStore,
+};
 use meta_whatsapp_rs::client::embedded_signup::{TokenVault, VaultKeys};
-use meta_whatsapp_rs::core::store::KvStore;
+use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::api::admin::mint;
 use crate::config::{Config, DatabaseUrl, MigrateMode, Storage};
+use crate::events::{HOUSEKEEPING_INTERVAL, Inbound, purge_outbox};
 use crate::metrics::Metrics;
 use crate::model::KeyOwner;
 use crate::state::AppState;
-use crate::store::{MemoryStore, PgStore, Store, migrate};
+use crate::store::{
+    EventStore, MemoryEventStore, MemoryStore, PgEventStore, PgStore, Store, migrate,
+};
 use crate::{api, listen};
 
 /// Connections per replica.
@@ -60,8 +65,12 @@ fn redacted(error: &meta_whatsapp_rs::adapters::store::postgres::sqlx::Error) ->
 pub struct Backends {
     /// The service's records.
     pub store: Arc<dyn Store>,
-    /// The library's key/value store (the token vault's).
+    /// The library's key/value store (the token vault's, webhook dedup's).
     pub kv: Arc<dyn KvStore>,
+    /// The library's conversation store (the inbox's).
+    pub conversations: Arc<dyn ConversationStore>,
+    /// The event outbox.
+    pub events: Arc<dyn EventStore>,
     /// The pool, with Postgres.
     pub pool: Option<PgPool>,
 }
@@ -78,6 +87,8 @@ pub async fn backends(config: &Config) -> anyhow::Result<Backends> {
             Ok(Backends {
                 store: Arc::new(PgStore::new(pool.clone())),
                 kv: Arc::new(PostgresKvStore::new(pool.clone())),
+                conversations: Arc::new(PostgresConversationStore::new(pool.clone())),
+                events: Arc::new(PgEventStore::new(pool.clone())),
                 pool: Some(pool),
             })
         }
@@ -86,6 +97,8 @@ pub async fn backends(config: &Config) -> anyhow::Result<Backends> {
             Ok(Backends {
                 store: Arc::new(MemoryStore::new()),
                 kv: Arc::new(MemoryKvStore::new()),
+                conversations: Arc::new(MemoryConversationStore::new()),
+                events: Arc::new(MemoryEventStore::new()),
                 pool: None,
             })
         }
@@ -121,14 +134,29 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     let Config {
         vault_keys,
         verify_token,
+        app_secrets,
         public_bind,
         internal_bind,
         shutdown_grace,
+        outbox_retention,
         ..
     } = config;
-    let vault = vault(backends.kv, vault_keys)?;
+    let vault = vault(backends.kv.clone(), vault_keys)?;
     let memory = backends.pool.is_none();
-    let state = AppState::new(backends.store, vault, client, verify_token, Metrics::new());
+    let inbound = Inbound::new(
+        app_secrets,
+        backends.kv.clone(),
+        backends.conversations.clone(),
+        backends.events.clone(),
+    )?;
+    let state = AppState::new(
+        backends.store,
+        vault,
+        client,
+        verify_token,
+        Metrics::new(),
+        inbound,
+    );
     if memory {
         // Memory storage exists in development only (the configuration
         // refuses it elsewhere), and the CLI cannot reach it: the first
@@ -159,6 +187,13 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     tracing::info!(%public_bind, %internal_bind, "listening");
 
     let (stop, stopped) = watch::channel(false);
+    let housekeeping = tokio::spawn(housekeeping(
+        backends.events.clone(),
+        backends.pool.clone().map(PostgresKvStore::new),
+        outbox_retention,
+        HOUSEKEEPING_INTERVAL,
+        stop_signal(stopped.clone()),
+    ));
     let public_task = tokio::spawn(listen::serve(
         public,
         api::public_router(&state),
@@ -180,10 +215,46 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         shutdown_grace,
     )
     .await;
+    housekeeping.abort();
     if let Some(pool) = backends.pool {
         pool.close().await;
     }
     served
+}
+
+/// Housekeeping, every `every` until `stop`: purge the outbox past
+/// `retention` and, on Postgres, the library's dead key/value rows (webhook
+/// dedup markers add one per event). Each round runs on one replica at a
+/// time (the outbox purge's advisory lock; a replica that does not get it
+/// skips the round). A failure is logged and retried next round.
+pub async fn housekeeping(
+    events: Arc<dyn EventStore>,
+    kv: Option<PostgresKvStore>,
+    retention: Duration,
+    every: Duration,
+    stop: impl Future<Output = ()>,
+) {
+    let mut ticks = tokio::time::interval(every);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut stop = std::pin::pin!(stop);
+    loop {
+        tokio::select! {
+            () = &mut stop => return,
+            _ = ticks.tick() => {}
+        }
+        match purge_outbox(events.as_ref(), retention).await {
+            Ok(Some(_)) => {
+                if let Some(kv) = &kv
+                    && let Err(error) = kv.purge_expired().await
+                {
+                    tracing::warn!(error = %error, "purging expired key/value rows failed");
+                }
+            }
+            // Another replica holds the lock this round.
+            Ok(None) => {}
+            Err(error) => tracing::warn!(error = %error, "purging the outbox failed"),
+        }
+    }
 }
 
 /// Completes once `stop` says so: the shutdown future of a listener.
@@ -454,6 +525,58 @@ mod tests {
         for addr in [public_addr, internal_addr] {
             assert!(tokio::net::TcpStream::connect(addr).await.is_err());
         }
+    }
+
+    /// Housekeeping purges the outbox past retention, round after round,
+    /// and stops with the service. Decisive: the purge in the loop.
+    #[tokio::test]
+    async fn housekeeping_purges_past_retention_until_stopped() {
+        use crate::store::events::{EventQuery, NewEvent};
+        let events: Arc<dyn EventStore> = Arc::new(MemoryEventStore::new());
+        let row = |id: &str| NewEvent {
+            id: id.to_owned(),
+            dedup_key: None,
+            tenant: crate::model::TenantId::parse("tenant-a"),
+            phone_number_id: None,
+            waba_id: None,
+            event_type: "message_received".to_owned(),
+            data: "{}".to_owned(),
+        };
+        let first = events.insert(&row("evt_1")).await.unwrap().unwrap();
+        let (stop, stopped) = watch::channel(false);
+        let task = tokio::spawn(housekeeping(
+            events.clone(),
+            None,
+            Duration::from_millis(1),
+            Duration::from_millis(20),
+            stop_signal(stopped),
+        ));
+        let query = EventQuery {
+            tenant: crate::model::TenantId::parse("tenant-a").unwrap(),
+            after: None,
+            types: None,
+            phone_number_id: None,
+            limit: 10,
+        };
+        let purged_through = |events: Arc<dyn EventStore>, query: EventQuery| async move {
+            events.page(&query).await.unwrap().purged_through
+        };
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while purged_through(events.clone(), query.clone()).await < first {
+            assert!(tokio::time::Instant::now() < deadline, "never purged");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // A later event goes in a later round.
+        let second = events.insert(&row("evt_2")).await.unwrap().unwrap();
+        while purged_through(events.clone(), query.clone()).await < second {
+            assert!(tokio::time::Instant::now() < deadline, "no second round");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        stop.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("stopped with the service")
+            .unwrap();
     }
 
     /// The signal stops serving while both listeners run.

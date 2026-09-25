@@ -230,6 +230,10 @@ pub struct Config {
     pub migrate: MigrateMode,
     /// `WA_SERVER_SHUTDOWN_GRACE`.
     pub shutdown_grace: Duration,
+    /// `WA_SERVER_OUTBOX_RETENTION`: how long the event outbox keeps an
+    /// event (default [`crate::events::DEFAULT_OUTBOX_RETENTION`], 7 days,
+    /// until the owner decides retention, the design's decision D10).
+    pub outbox_retention: Duration,
     /// `WA_SERVER_LOG_FORMAT`.
     pub log_format: LogFormat,
     /// `RUST_LOG`.
@@ -250,6 +254,7 @@ impl fmt::Debug for Config {
             )
             .field("graph_endpoint", &self.graph_endpoint)
             .field("migrate", &self.migrate)
+            .field("outbox_retention", &self.outbox_retention)
             .finish_non_exhaustive()
     }
 }
@@ -424,6 +429,7 @@ impl Config {
             graph_endpoint,
             migrate: runtime.migrate,
             shutdown_grace: runtime.shutdown_grace,
+            outbox_retention: runtime.outbox_retention,
             log_format: runtime.log_format,
             log_filter: runtime.log_filter,
         })
@@ -507,6 +513,7 @@ impl Config {
 struct Runtime {
     migrate: MigrateMode,
     shutdown_grace: Duration,
+    outbox_retention: Duration,
     log_format: LogFormat,
     log_filter: String,
 }
@@ -522,12 +529,25 @@ fn migrate_mode(r: &Reader<'_>) -> Result<MigrateMode, ConfigError> {
     }
 }
 
-/// `WA_SERVER_MIGRATE`, `WA_SERVER_SHUTDOWN_GRACE`, `WA_SERVER_LOG_FORMAT`,
-/// `RUST_LOG`.
+/// `WA_SERVER_MIGRATE`, `WA_SERVER_SHUTDOWN_GRACE`,
+/// `WA_SERVER_OUTBOX_RETENTION`, `WA_SERVER_LOG_FORMAT`, `RUST_LOG`.
 fn runtime(r: &Reader<'_>) -> Result<Runtime, ConfigError> {
     let shutdown_grace = match r.plain("WA_SERVER_SHUTDOWN_GRACE")? {
         None => DEFAULT_SHUTDOWN_GRACE,
         Some(value) => duration("WA_SERVER_SHUTDOWN_GRACE", &value)?,
+    };
+    let outbox_retention = match r.plain("WA_SERVER_OUTBOX_RETENTION")? {
+        None => crate::events::DEFAULT_OUTBOX_RETENTION,
+        Some(value) => match duration("WA_SERVER_OUTBOX_RETENTION", &value)? {
+            // Zero would purge every event at the next housekeeping.
+            zero if zero.is_zero() => {
+                return Err(ConfigError::Invalid {
+                    name: "WA_SERVER_OUTBOX_RETENTION",
+                    reason: "expected a positive duration such as 7d",
+                });
+            }
+            retention => retention,
+        },
     };
     let log_format = match r.plain("WA_SERVER_LOG_FORMAT")?.as_deref() {
         None | Some("json") => LogFormat::Json,
@@ -542,6 +562,7 @@ fn runtime(r: &Reader<'_>) -> Result<Runtime, ConfigError> {
     Ok(Runtime {
         migrate: migrate_mode(r)?,
         shutdown_grace,
+        outbox_retention,
         log_format,
         log_filter: r.plain("RUST_LOG")?.unwrap_or_else(|| "info".to_owned()),
     })

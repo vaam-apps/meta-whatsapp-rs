@@ -1,0 +1,17 @@
+[
+  {
+    "data": {
+      "entry_id": "102290129340398",
+      "event": "account_updated",
+      "time": "1743451903",
+      "update": {
+        "event": "ACCOUNT_VIOLATION",
+        "violation_info": {
+          "violation_type": "ADULT"
+        }
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "account_updated"
+  }
+]

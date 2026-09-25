@@ -1,0 +1,20 @@
+[
+  {
+    "data": {
+      "alert": {
+        "alert_info": {
+          "alert_description": "Limits cannot be increased for your business <BUSINESS_PORTFOLIO_NAME>. Use WhatsApp Business platform actively for several days and follow our messaging policies.",
+          "alert_severity": "WARNING",
+          "alert_status": "ACTIVE",
+          "alert_type": "INCREASED_CAPABILITIES_ELIGIBILITY_DEFERRED"
+        },
+        "entity_id": "506914307656634",
+        "entity_type": "BUSINESS"
+      },
+      "event": "account_alert",
+      "time": "1745612159",
+      "waba_id": "102290129340398"
+    },
+    "type": "account_alert"
+  }
+]

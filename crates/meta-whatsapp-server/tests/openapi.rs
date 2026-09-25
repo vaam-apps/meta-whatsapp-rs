@@ -183,13 +183,17 @@ async fn the_public_listener_serves_metas_check_and_livez_only() {
         assert_eq!(reply.status, StatusCode::FORBIDDEN, "{query}");
         assert!(reply.text.is_empty());
     }
-    // Deliveries arrive with M1c: no POST yet, so Meta retries.
+    // Deliveries: an unsigned one is a bare 401 (tests/webhooks.rs has the
+    // rest); any other method is 405.
     let post = send(&h.public, Call::new(Method::POST, "/webhooks/meta").build()).await;
+    assert_eq!(post.status, StatusCode::UNAUTHORIZED);
+    assert!(post.text.is_empty());
+    let put = send(&h.public, Call::new(Method::PUT, "/webhooks/meta").build()).await;
     assert_eq!(
-        (post.status, post.code().as_str()),
+        (put.status, put.code().as_str()),
         (StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed")
     );
-    assert_eq!(post.headers["allow"], "GET,HEAD");
+    assert_eq!(put.headers["allow"], "GET,HEAD,POST");
     assert_eq!(
         send(&h.public, Call::get("/livez").build()).await.status,
         StatusCode::OK

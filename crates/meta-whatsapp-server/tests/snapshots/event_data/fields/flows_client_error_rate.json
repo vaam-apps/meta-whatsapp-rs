@@ -1,0 +1,30 @@
+[
+  {
+    "data": {
+      "event": "flow_updated",
+      "time": "1674160476",
+      "update": {
+        "alert_state": "ACTIVATED",
+        "error_rate": 14.28,
+        "errors": [
+          {
+            "error_count": 2,
+            "error_rate": 66.66,
+            "error_type": "INVALID_SCREEN_TRANSITION"
+          },
+          {
+            "error_count": 1,
+            "error_rate": 33.33,
+            "error_type": "PUBLIC_KEY_MISSING"
+          }
+        ],
+        "event": "CLIENT_ERROR_RATE",
+        "flow_id": "691244242662581",
+        "message": "The flow client request error rate has reached the 5% threshold in the last 60 minutes. A higher error rate will make it harder for users to complete the flow, resulting in drop-offs.",
+        "threshold": 10.0
+      },
+      "waba_id": "106181168862417"
+    },
+    "type": "flow_updated"
+  }
+]

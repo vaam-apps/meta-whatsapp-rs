@@ -1,0 +1,113 @@
+[
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "event": "group_updated",
+      "field": "group_participants_update",
+      "phone_number_id": "106540352242922",
+      "update": {
+        "added_participants": [
+          {
+            "parent_user_id": "US.ENT.11815799212886844830",
+            "user_id": "US.13491208655302741918",
+            "username": "pablomorales",
+            "wa_id": "16505551234"
+          }
+        ],
+        "group_id": "Y2FwaV9ncm91cDoxNzA1NTU1MDEzOToxMjAzNjM0MDQ2OTQyMzM4MjAZD",
+        "reason": "invite_link",
+        "timestamp": "1750100300",
+        "type": "group_participants_add"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "group_updated"
+  },
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "event": "group_updated",
+      "field": "group_participants_update",
+      "phone_number_id": "106540352242922",
+      "update": {
+        "group_id": "Y2FwaV9ncm91cDoxNzA1NTU1MDEzOToxMjAzNjM0MDQ2OTQyMzM4MjAZD",
+        "join_request_id": "MTIzNDU2Nzg5MDEyMzQ1Ng",
+        "timestamp": "1750100400",
+        "type": "group_join_request_created",
+        "user_id": "US.13491208655302741919",
+        "wa_id": "16505551235"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "group_updated"
+  },
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "event": "group_updated",
+      "field": "group_participants_update",
+      "phone_number_id": "106540352242922",
+      "update": {
+        "errors": [
+          {
+            "code": 131009,
+            "error_data": {
+              "details": "1 of 2 participants could not be removed"
+            },
+            "message": "Failed to remove some participants from the group",
+            "title": "Not All Participants Remove Succeeded"
+          }
+        ],
+        "failed_participants": [
+          {
+            "errors": [
+              {
+                "code": 131009,
+                "error_data": {
+                  "details": "Participant is not in the group"
+                },
+                "message": "Parameter value is not valid",
+                "title": "Parameter value is not valid"
+              }
+            ],
+            "input": "US.13491208655302741919"
+          }
+        ],
+        "group_id": "Y2FwaV9ncm91cDoxNzA1NTU1MDEzOToxMjAzNjM0MDQ2OTQyMzM4MjAZD",
+        "initiated_by": "business",
+        "removed_participants": [
+          {
+            "input": "16505551234"
+          }
+        ],
+        "request_id": "9d4a5fc08eab7b3c",
+        "timestamp": "1750100500",
+        "type": "group_participants_remove"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "group_updated"
+  },
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "event": "group_updated",
+      "field": "group_participants_update",
+      "phone_number_id": "106540352242922",
+      "update": {
+        "group_id": "Y2FwaV9ncm91cDoxNzA1NTU1MDEzOToxMjAzNjM0MDQ2OTQyMzM4MjAZD",
+        "initiated_by": "participant",
+        "removed_participants": [
+          {
+            "user_id": "US.13491208655302741920",
+            "wa_id": "16505551236"
+          }
+        ],
+        "timestamp": "1750100600",
+        "type": "group_participants_remove"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "group_updated"
+  }
+]

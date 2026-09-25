@@ -1,0 +1,47 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {
+          "name": "Sheena Nelson",
+          "username": "realsheenanelson"
+        },
+        "user_id": "US.13491208655302741918"
+      },
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "contacts": [
+          {
+            "origin": "other",
+            "phones": [
+              {
+                "phone": "+14125550829",
+                "type": "CELL",
+                "wa_id": "14125550829"
+              }
+            ],
+            "vcard": "BEGIN:VCARD\nVERSION:3.0\nFN:Barbara J. Johnson\nTEL;type=CELL:+14125550829\nEND:VCARD"
+          },
+          {
+            "origin": "contact_request",
+            "phones": [
+              {
+                "phone": "+16505551234",
+                "type": "MOBILE",
+                "wa_id": "16505551234"
+              }
+            ]
+          }
+        ],
+        "from_user_id": "US.13491208655302741918",
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQkNEMTIzNDU2Nzg5MEFCQ0QA",
+        "timestamp": "1767168100",
+        "type": "contacts"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

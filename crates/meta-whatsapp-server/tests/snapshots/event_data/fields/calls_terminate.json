@@ -1,0 +1,53 @@
+[
+  {
+    "data": {
+      "call": {
+        "biz_opaque_callback_data": "random_string",
+        "direction": "BUSINESS_INITIATED",
+        "duration": 120,
+        "end_time": "1671644944",
+        "event": "terminate",
+        "from": "16315553602",
+        "id": "wacid.ABGGFjFVU2AfAgo6V-Hc5eCgK5Gh",
+        "start_time": "1671644824",
+        "status": "COMPLETED",
+        "timestamp": "1671644824",
+        "to": "16315553601",
+        "to_parent_user_id": "US.ENT.11815799212886844830",
+        "to_user_id": "US.13491208655302741918"
+      },
+      "contact": {
+        "parent_user_id": "US.ENT.11815799212886844830",
+        "profile": {
+          "name": "Pablo Morales",
+          "username": "pablomorales"
+        },
+        "user_id": "US.13491208655302741918",
+        "wa_id": "16315553601"
+      },
+      "display_phone_number": "16505553602",
+      "event": "call_updated",
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "call_updated"
+  },
+  {
+    "data": {
+      "display_phone_number": "16505553602",
+      "error": {
+        "code": 131000,
+        "error_data": {
+          "details": "Call terminated unexpectedly"
+        },
+        "href": "/documentation/business-messaging/whatsapp/support/error-codes",
+        "message": "Something went wrong"
+      },
+      "event": "error_reported",
+      "field": "calls",
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "error_reported"
+  }
+]

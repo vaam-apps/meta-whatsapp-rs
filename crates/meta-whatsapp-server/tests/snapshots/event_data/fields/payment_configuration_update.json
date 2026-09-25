@@ -1,0 +1,18 @@
+[
+  {
+    "data": {
+      "event": "payment_configuration_updated",
+      "time": "1739321024",
+      "update": {
+        "configuration_name": "razorpay-prod",
+        "created_timestamp": "1748827100",
+        "provider_mid": "acc_GP4lfNA0iIMn5B",
+        "provider_name": "razorpay",
+        "status": "Needs Testing",
+        "updated_timestamp": "1749320300"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "payment_configuration_updated"
+  }
+]
