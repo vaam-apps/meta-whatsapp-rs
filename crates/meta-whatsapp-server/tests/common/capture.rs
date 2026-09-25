@@ -496,6 +496,34 @@ async fn send_media_and_templates(h: &Harness, admin: &str) -> Vec<String> {
         )
         .await;
     assert_eq!(removed.status.as_u16(), 204, "{}", removed.text);
+    // One language by id (looked up among the WABA's templates of that
+    // name), then an id that is not the WABA's: refused, not audited.
+    h.graph.push_json(
+        200,
+        json!({"data": [{"id": "1407680676729941", "name": "order_confirmation"}]}),
+    );
+    h.graph.push_json(200, json!({"success": true}));
+    let removed = h
+        .call(
+            Call::new(
+                Method::DELETE,
+                format!("/v1/wabas/{waba}/templates?name=order_confirmation&id=1407680676729941"),
+            )
+            .key(&key),
+        )
+        .await;
+    assert_eq!(removed.status.as_u16(), 204, "{}", removed.text);
+    h.graph.push_json(200, json!({"data": []}));
+    let refused = h
+        .call(
+            Call::new(
+                Method::DELETE,
+                format!("/v1/wabas/{waba}/templates?name=order_confirmation&id=1407680676729942"),
+            )
+            .key(&key),
+        )
+        .await;
+    assert_eq!(refused.status.as_u16(), 404, "{}", refused.text);
     vec![
         key.clone(),
         key.rsplit('_').next().unwrap().to_owned(),
@@ -584,14 +612,28 @@ fn check_audit(logs: &str) {
         }
     }
     assert!(changes >= 10, "{changes} admin changes");
-    // A tenant's template deletion is audited too, with its key's id.
-    assert!(
-        events.iter().any(|e| e["target"] == "audit"
-            && e["fields"]["action"] == "templates_deleted"
-            && e["fields"]["key_id"].is_string()
-            && e["fields"]["tenant"] == "merchant-42"),
-        "no audit event for a template deletion"
+    // A tenant's template deletions are audited too, each under its own
+    // action (every language of a name, then one id; the refused one is
+    // not), with the tenant, the WABA and its key's id.
+    let deletions: Vec<&serde_json::Value> = events
+        .iter()
+        .filter(|e| e["target"] == "audit" && e["fields"]["message"] == "tenant change")
+        .map(|e| &e["fields"])
+        .collect();
+    let actions: Vec<&str> = deletions
+        .iter()
+        .filter_map(|fields| fields["action"].as_str())
+        .collect();
+    assert_eq!(
+        actions,
+        ["templates_deleted", "template_deleted"],
+        "the template deletions' audit events"
     );
+    for fields in deletions {
+        assert!(fields["key_id"].is_string(), "{fields}");
+        assert_eq!(fields["tenant"], "merchant-42", "{fields}");
+        assert_eq!(fields["waba_id"], "102290129340398", "{fields}");
+    }
 }
 
 /// Every success status an operation answered is one its document lists

@@ -447,61 +447,6 @@ async fn deletions_are_metas_requests() {
     assert_eq!(h.graph.remaining(), 0);
 }
 
-/// A deletion is an `audit` event naming what went: `templates_deleted`
-/// for every language of a name, `template_deleted` for one id, each with
-/// the tenant, the WABA and the public id of the key that asked. A
-/// deletion refused (another WABA's id) is none. Decisive: the action
-/// named after the deletion.
-#[tokio::test]
-async fn each_deletion_is_audited_under_its_own_action() {
-    use common::capture::{Captured, subscriber};
-
-    let (h, key) = connected().await;
-    let captured = Captured::default();
-    let _guard = tracing::subscriber::set_default(subscriber(&captured));
-    let delete = |query: &str| {
-        Call::new(Method::DELETE, format!("/v1/wabas/{WABA}/templates{query}")).key(&key)
-    };
-    h.graph.push_json(200, json!({"success": true}));
-    let by_name = h.call(delete("?name=order_confirmation")).await;
-    assert_eq!(by_name.status, StatusCode::NO_CONTENT, "{}", by_name.text);
-    h.graph.push_json(
-        200,
-        json!({"data": [{"id": "1407680676729941", "name": "order_confirmation"}]}),
-    );
-    h.graph.push_json(200, json!({"success": true}));
-    let by_id = h
-        .call(delete("?name=order_confirmation&id=1407680676729941"))
-        .await;
-    assert_eq!(by_id.status, StatusCode::NO_CONTENT, "{}", by_id.text);
-    // Not the WABA's: refused, nothing deleted, nothing audited.
-    h.graph.push_json(200, json!({"data": []}));
-    let refused = h
-        .call(delete("?name=order_confirmation&id=1407680676729942"))
-        .await;
-    assert_eq!(refused.status, StatusCode::NOT_FOUND, "{}", refused.text);
-    assert_eq!(h.graph.remaining(), 0);
-
-    let audited: Vec<Value> = captured
-        .text()
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|event| event["target"] == "audit")
-        .map(|event| event["fields"].clone())
-        .collect();
-    let actions: Vec<&str> = audited
-        .iter()
-        .map(|fields| fields["action"].as_str().unwrap())
-        .collect();
-    assert_eq!(actions, ["templates_deleted", "template_deleted"]);
-    for fields in &audited {
-        assert_eq!(fields["tenant"], TENANT, "{fields}");
-        assert_eq!(fields["waba_id"], WABA, "{fields}");
-        let key_id = fields["key_id"].as_str().unwrap();
-        assert!(key.starts_with(&format!("wak_{key_id}_")), "{fields}");
-    }
-}
-
 /// Template management's own bucket: 2 a second by default, per tenant.
 #[tokio::test]
 async fn template_management_is_rate_limited_by_default() {
