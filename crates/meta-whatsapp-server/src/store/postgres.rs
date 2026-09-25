@@ -321,12 +321,22 @@ impl Store for PgStore {
         }
         // Keys and events go with it (ON DELETE CASCADE); its event stream
         // records them purged, so a tenant created later with the same id
-        // goes on after them and an old cursor is `410 cursor_expired`.
+        // goes on after them and an old cursor is `410 cursor_expired`; and
+        // a platform key allowed it does not carry the allowance over to
+        // that tenant.
         sqlx::query("DELETE FROM wa_server_tenants WHERE id = $1")
             .bind(id.as_str())
             .execute(&mut *tx)
             .await
             .map_err(backend)?;
+        sqlx::query(
+            "UPDATE wa_server_api_keys SET allowed_tenants = array_remove(allowed_tenants, $1) \
+             WHERE $1 = ANY(allowed_tenants)",
+        )
+        .bind(id.as_str())
+        .execute(&mut *tx)
+        .await
+        .map_err(backend)?;
         sqlx::query(
             "UPDATE wa_server_event_streams SET purged_through = last_sequence WHERE stream = $1",
         )

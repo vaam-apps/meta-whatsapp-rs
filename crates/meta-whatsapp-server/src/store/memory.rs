@@ -10,8 +10,9 @@ use time::{Duration, OffsetDateTime};
 
 use super::{MemoryEventStore, Store, StoreResult, listing};
 use crate::model::{
-    ApiKeyRecord, BindOutcome, DeleteTenantOutcome, KeyOwner, KeyScope, Listing, NewApiKey,
-    NumberBinding, NumberStatus, PageRequest, Tenant, TenantId, TenantStatus, WabaBinding,
+    AllowedTenants, ApiKeyRecord, BindOutcome, DeleteTenantOutcome, KeyOwner, KeyScope, Listing,
+    NewApiKey, NumberBinding, NumberStatus, PageRequest, Tenant, TenantId, TenantStatus,
+    WabaBinding,
 };
 
 /// In-memory [`Store`]. Its event outbox is [`MemoryStore::outbox`]: one
@@ -141,6 +142,13 @@ impl Store for MemoryStore {
         state
             .keys
             .retain(|_, key| !matches!(&key.owner, KeyOwner::Tenant(t) if t == id));
+        // A platform key allowed this tenant does not carry the allowance
+        // over to a tenant created later with the same id.
+        for key in state.keys.values_mut() {
+            if let KeyOwner::Platform(AllowedTenants::Only(list)) = &mut key.owner {
+                list.retain(|t| t != id);
+            }
+        }
         // Under the store's lock, as Postgres does it in the deleting
         // transaction.
         self.outbox.forget_tenant(id);

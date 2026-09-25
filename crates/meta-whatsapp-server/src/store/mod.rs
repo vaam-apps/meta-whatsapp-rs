@@ -55,7 +55,9 @@ pub trait Store: Send + Sync + 'static {
         status: Option<TenantStatus>,
     ) -> StoreResult<Option<Tenant>>;
 
-    /// Delete a tenant and its keys, unless it still has WABAs.
+    /// Delete a tenant, its keys and its events, unless it still has
+    /// WABAs; platform keys stop allowing it (a tenant created later with
+    /// the same id is another tenant for them).
     async fn delete_tenant(&self, id: &TenantId) -> StoreResult<DeleteTenantOutcome>;
 
     /// Store a new key; `None` when its id is taken (the caller draws a
