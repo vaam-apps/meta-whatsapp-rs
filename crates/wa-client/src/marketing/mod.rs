@@ -66,8 +66,8 @@ mod send;
 mod tests;
 
 pub use onboarding::{
-    BusinessOnboardingStatus, ClientWaba, MarketingAccount, MarketingBusiness, OnboardingRequest,
-    OnboardingStatus, OwnerBusinessInfo, TermsStatus,
+    BusinessOnboardingStatus, ClientWaba, ListClientWabas, MarketingAccount, MarketingBusiness,
+    OnboardingRequested, OnboardingStatus, OwnerBusinessInfo, TermsStatus,
 };
 pub use send::{
     Marketing, MarketingOptions, MessageStatus, ProductPolicy, SendResponse, SentContact,

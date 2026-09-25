@@ -629,6 +629,88 @@ async fn template_stream_follows_cursors() {
     assert_eq!(t.remaining(), 0);
 }
 
+/// Every analytics list takes its cursor in its query (the docs' example
+/// responses carry `paging.cursors`): the one-page methods send it, the
+/// streams refuse it before any request.
+#[tokio::test]
+async fn analytics_lists_take_cursors_in_their_query() {
+    let t = ScriptedTransport::new();
+    for _ in 0..3 {
+        t.push_json(200, json!({"data": []}));
+    }
+    let api = client(&t).analytics(WABA);
+    let template = TemplateAnalyticsQuery {
+        after: Some("MjQZD".into()),
+        ..TemplateAnalyticsQuery::new(at(1), at(2), vec!["1".into()])
+    };
+    let group_of_templates = TemplateGroupAnalyticsQuery {
+        before: Some("MAZDZD".into()),
+        ..TemplateGroupAnalyticsQuery::new(at(1), at(2), vec!["7".into()])
+    };
+    let group = GroupAnalyticsQuery {
+        after: Some("MjQZD".into()),
+        ..GroupAnalyticsQuery::new(at(1), at(2), vec!["G".into()], vec![GroupMetric::Sent])
+    };
+    api.template(&template).await.unwrap();
+    api.template_group(&group_of_templates).await.unwrap();
+    api.groups(&group).await.unwrap();
+    let reqs = t.requests();
+    assert_eq!(reqs[0].path(), format!("/v25.0/{WABA}/template_analytics"));
+    assert_eq!(reqs[0].query("after").as_deref(), Some("MjQZD"));
+    assert_eq!(reqs[0].query("before"), None);
+    assert_eq!(
+        reqs[1].path(),
+        format!("/v25.0/{WABA}/template_group_analytics")
+    );
+    assert_eq!(reqs[1].query("before").as_deref(), Some("MAZDZD"));
+    assert_eq!(reqs[2].path(), format!("/v25.0/{WABA}/group_analytics"));
+    assert_eq!(reqs[2].query("after").as_deref(), Some("MjQZD"));
+    assert_eq!(t.remaining(), 0);
+
+    let first: Vec<_> = api.template_stream(&template).collect().await;
+    let second: Vec<_> = api
+        .template_group_stream(&group_of_templates)
+        .collect()
+        .await;
+    let third: Vec<_> = api.groups_stream(&group).collect().await;
+    assert_eq!(validation_field(first[0].as_ref().unwrap_err()), "after");
+    assert_eq!(validation_field(second[0].as_ref().unwrap_err()), "before");
+    assert_eq!(validation_field(third[0].as_ref().unwrap_err()), "after");
+    assert_eq!((first.len(), second.len(), third.len()), (1, 1, 1));
+    assert_eq!(t.requests().len(), 3, "refused before any request");
+}
+
+#[tokio::test]
+async fn groups_stream_follows_cursors() {
+    let t = ScriptedTransport::new();
+    t.push_json(
+        200,
+        json!({"data": [{"granularity": "DAILY", "data_points": []}],
+            "paging": {"cursors": {"before": "MAZDZD", "after": "MjQZD"},
+                "next": "https://graph.facebook.com/v25.0/x/group_analytics?after=MjQZD"}}),
+    );
+    t.push_json(
+        200,
+        json!({"data": [{"granularity": "DAILY", "data_points": []}]}),
+    );
+    let sets: Vec<GroupAnalytics> = client(&t)
+        .analytics(WABA)
+        .groups_stream(&GroupAnalyticsQuery::new(
+            at(1),
+            at(2),
+            vec!["G".into()],
+            vec![GroupMetric::Sent],
+        ))
+        .map(Result::unwrap)
+        .collect()
+        .await;
+    assert_eq!(sets.len(), 2);
+    let second = &t.requests()[1];
+    assert_eq!(second.query("after").as_deref(), Some("MjQZD"));
+    assert_eq!(second.query("group_ids").as_deref(), Some(r#"["G"]"#));
+    assert_eq!(t.remaining(), 0);
+}
+
 // ── Template group analytics ────────────────────────────────────────────
 
 #[tokio::test]
@@ -677,7 +759,7 @@ async fn template_group_matches_docs_example() {
     );
     let points = &page.data[0].data_points;
     assert_eq!(points.len(), 2);
-    assert_eq!(points[0].template_group_id, "1044106240855852");
+    assert_eq!(points[0].template_group_id.as_str(), "1044106240855852");
     assert_eq!(points[0].read, Some(1399));
     assert_eq!(points[1].start, AnalyticsTime::Timestamp(at(1739404800)));
     assert_eq!(t.remaining(), 0);
@@ -688,7 +770,9 @@ async fn template_group_ids_must_be_1_to_10() {
     let t = ScriptedTransport::new();
     let api = client(&t).analytics(WABA);
     for n in [0, 11] {
-        let ids = (0..n).map(|i| i.to_string()).collect();
+        let ids = (0..n)
+            .map(|i| TemplateGroupId::new(i.to_string()))
+            .collect();
         let q = TemplateGroupAnalyticsQuery::new(at(1), at(2), ids);
         let err = api.template_group(&q).await.unwrap_err();
         assert_eq!(validation_field(&err), "template_group_ids", "{n}");
@@ -700,7 +784,9 @@ async fn template_group_ids_must_be_1_to_10() {
     }
     assert!(t.requests().is_empty());
     t.push_json(200, json!({"data": []}));
-    let ten = (0..10).map(|i| i.to_string()).collect();
+    let ten = (0..10)
+        .map(|i| TemplateGroupId::new(i.to_string()))
+        .collect();
     api.template_group(&TemplateGroupAnalyticsQuery::new(at(1), at(2), ten))
         .await
         .unwrap();
@@ -729,18 +815,18 @@ async fn groups_match_docs_example() {
     );
     let page = client(&t)
         .analytics(WABA)
-        .groups(&GroupAnalyticsQuery {
-            start: at(1764662400),
-            end: at(1764921600),
-            group_ids: vec!["GROUP_ID".into()],
-            metric_types: vec![
+        .groups(&GroupAnalyticsQuery::new(
+            at(1764662400),
+            at(1764921600),
+            vec!["GROUP_ID".into()],
+            vec![
                 M::Sent,
                 M::Delivered,
                 M::Read,
                 M::ParticipantsJoined,
                 M::ParticipantsLeft,
             ],
-        })
+        ))
         .await
         .unwrap();
     let req = t.last_request().unwrap();
@@ -776,12 +862,7 @@ async fn group_analytics_needs_one_group_and_a_metric() {
     let t = ScriptedTransport::new();
     let api = client(&t).analytics(WABA);
     for ids in [vec![], vec!["G1".into(), "G2".into()]] {
-        let q = GroupAnalyticsQuery {
-            start: at(1),
-            end: at(2),
-            group_ids: ids,
-            metric_types: vec![GroupMetric::Sent],
-        };
+        let q = GroupAnalyticsQuery::new(at(1), at(2), ids, vec![GroupMetric::Sent]);
         let err = api.groups(&q).await.unwrap_err();
         assert_eq!(validation_field(&err), "group_ids");
         let items: Vec<_> = api.groups_stream(&q).collect().await;
@@ -791,12 +872,12 @@ async fn group_analytics_needs_one_group_and_a_metric() {
         );
     }
     let err = api
-        .groups(&GroupAnalyticsQuery {
-            start: at(1),
-            end: at(2),
-            group_ids: vec!["G1".into()],
-            metric_types: vec![],
-        })
+        .groups(&GroupAnalyticsQuery::new(
+            at(1),
+            at(2),
+            vec!["G1".into()],
+            vec![],
+        ))
         .await
         .unwrap_err();
     assert_eq!(validation_field(&err), "metric_types");

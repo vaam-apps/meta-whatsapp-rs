@@ -120,7 +120,7 @@
 //!     Arc::new(MemoryKvStore::new()),
 //!     Arc::new(SystemClock),
 //!     OtpPepper::new(std::env::var("WA_OTP_PEPPER")?)?, // >= 32 bytes, kept out of the store
-//!     OtpConfig::default(),
+//!     OtpConfig::new("my-app"), // the tenant (or app) these codes are for
 //! )?;
 //! let user = Recipient::phone("+16505551234"); // strict E.164, with `+`
 //! if let IssueOutcome::Sent(challenge) = otp.issue(&user, "login").await? {

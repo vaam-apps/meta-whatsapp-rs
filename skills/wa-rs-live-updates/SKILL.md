@@ -5,7 +5,7 @@ description: "Where WhatsApp webhook events go after wa-rs verifies them - writi
 
 # wa-rs-live-updates
 
-> **Verified against wa-rs 3a3db05aa425c1737d8bb9239206036dbc81969f (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/sinks.rs](examples/sinks.rs), compiled and
 tested by wa-rs's own gate. Sinks are in `wa_rs::adapters::sink` (feature

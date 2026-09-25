@@ -120,9 +120,52 @@ pub struct ClientWaba {
     pub message_template_namespace: Option<String>,
 }
 
-/// Result of the partner Intent API.
+/// Query of [`MarketingBusiness::client_wabas_with_status`]: which
+/// `marketing_messages_onboarding_status` values to list, and where
+/// (`reference/business/client-whatsapp-business-accounts-api`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListClientWabas {
+    /// The statuses a WABA may have to be listed (`filtering`, `IN`).
+    pub statuses: Vec<OnboardingStatus>,
+    /// Cursor from a previous page's `paging.cursors.after`
+    /// ([`Page::next_cursor`]); for the one-page method only, the stream
+    /// manages its own.
+    pub after: Option<String>,
+    /// Cursor from a previous page's `paging.cursors.before`.
+    pub before: Option<String>,
+}
+
+impl ListClientWabas {
+    /// The first page of the client WABAs whose status is one of `statuses`
+    /// (`[OnboardingStatus::Eligible]` for who can be onboarded).
+    pub fn new(statuses: impl IntoIterator<Item = OnboardingStatus>) -> Self {
+        Self {
+            statuses: statuses.into_iter().collect(),
+            after: None,
+            before: None,
+        }
+    }
+
+    /// Continue after this cursor.
+    #[must_use]
+    pub fn after(mut self, cursor: impl Into<String>) -> Self {
+        self.after = Some(cursor.into());
+        self
+    }
+
+    /// Go back before this cursor.
+    #[must_use]
+    pub fn before(mut self, cursor: impl Into<String>) -> Self {
+        self.before = Some(cursor.into());
+        self
+    }
+}
+
+/// Result of the partner Intent API ([`MarketingBusiness::request_onboarding`]):
+/// the request Meta sent to the business's admins. A response, unlike
+/// `embedded_signup::OnboardingRequest`, which you build.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OnboardingRequest {
+pub struct OnboardingRequested {
     /// Id of the onboarding request, for tracking.
     pub request_id: String,
 }
@@ -265,28 +308,36 @@ impl MarketingBusiness {
         Ok(r.marketing_messages_onboarding_status)
     }
 
-    /// Client WABAs shared with this (partner) portfolio whose
-    /// `marketing_messages_onboarding_status` is one of `statuses`
+    /// One page of the client WABAs shared with this (partner) portfolio
+    /// whose `marketing_messages_onboarding_status` is one of
+    /// `query.statuses`
     /// (`GET /{BUSINESS_ID}/client_whatsapp_business_accounts?filtering=…`).
-    /// Pass `[OnboardingStatus::Eligible]` to find who can be onboarded.
+    /// `ListClientWabas::new([OnboardingStatus::Eligible])` finds who can
+    /// be onboarded; the next page is the same query with `after` set to
+    /// this page's [`Page::next_cursor`].
     pub async fn client_wabas_with_status(
         &self,
-        statuses: &[OnboardingStatus],
-        after: Option<&str>,
+        query: &ListClientWabas,
     ) -> Result<Page<ClientWaba>> {
-        self.client_wabas_request(statuses)
-            .query_opt("after", after)
+        self.client_wabas_request(&query.statuses)
+            .query_opt("after", query.after.as_deref())
+            .query_opt("before", query.before.as_deref())
             .send()
             .await
     }
 
     /// Every page of [`Self::client_wabas_with_status`], following
-    /// `paging.cursors.after` on the configured endpoint.
+    /// `paging.cursors.after` on the configured endpoint. The stream
+    /// manages the cursors itself: a query with `after` or `before` set is
+    /// refused (the stream's single item is that validation error).
     pub fn client_wabas_with_status_stream(
         &self,
-        statuses: &[OnboardingStatus],
+        query: &ListClientWabas,
     ) -> impl Stream<Item = Result<ClientWaba>> + Send + 'static + use<> {
-        self.client_wabas_request(statuses).paginate()
+        crate::request::paginate_or_error(
+            crate::request::reject_cursors(query.after.as_deref(), query.before.as_deref())
+                .map(|()| self.client_wabas_request(&query.statuses)),
+        )
     }
 
     fn client_wabas_request(&self, statuses: &[OnboardingStatus]) -> GraphRequest {
@@ -322,7 +373,10 @@ impl MarketingBusiness {
     /// the pending request's id; the guide says it fails with "Your business
     /// has already sent this request". Until the two agree, a lost response
     /// is surfaced rather than replayed into a possible error.
-    pub async fn request_onboarding(&self, solution_id: Option<&str>) -> Result<OnboardingRequest> {
+    pub async fn request_onboarding(
+        &self,
+        solution_id: Option<&str>,
+    ) -> Result<OnboardingRequested> {
         self.client
             .post_at(&[self.business_id.as_str(), "onboard_partners_to_mm_lite"])
             .query_opt("solution_id", solution_id)

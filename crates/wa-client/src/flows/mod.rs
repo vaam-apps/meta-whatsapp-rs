@@ -62,7 +62,7 @@
 //! # async fn demo(client: wa_client::Client, pem: &str, body: &[u8], sig: Option<&str>,
 //! #     secrets: &[wa_core::secret::AppSecret]) -> anyhow::Result<(u16, String)> {
 //! use wa_client::flows::endpoint::{
-//!     EncryptedFlowRequest, EndpointStatus, FlowAction, FlowEndpointKey, FlowResponse,
+//!     EncryptedFlowRequest, EndpointStatus, EndpointAction, FlowEndpointKey, FlowResponse,
 //!     verify_request_signature,
 //! };
 //!
@@ -81,7 +81,7 @@
 //!     return Ok((EndpointStatus::DecryptionFailed.code(), String::new()));
 //! };
 //! let response = match request.action {
-//!     FlowAction::Ping => FlowResponse::health_check(),
+//!     EndpointAction::Ping => FlowResponse::health_check(),
 //!     _ => FlowResponse::next_screen("WELCOME", serde_json::json!({"greeting": "Hi"})),
 //! };
 //! Ok((EndpointStatus::Ok.code(), sealer.seal(&response)?))
@@ -102,6 +102,6 @@ pub use encryption::{BusinessEncryption, BusinessPublicKey, PublicKeySignatureSt
 pub use management::{Flow, Flows};
 pub use types::{
     CreateFlow, CreatedFlow, FlowAsset, FlowAssetType, FlowCategory, FlowDetails, FlowJsonUpload,
-    FlowPreview, FlowStatus, FlowValidationError, FlowValidationPointer, MAX_FLOW_JSON_BYTES,
-    UpdateFlow,
+    FlowPreview, FlowStatus, FlowValidationError, FlowValidationPointer, ListFlowAssets, ListFlows,
+    MAX_FLOW_JSON_BYTES, UpdateFlow,
 };

@@ -10,10 +10,11 @@ use wa_core::paging::Page;
 use wa_core::transport::Multipart;
 
 use super::types::{
-    CreateFlow, CreatedFlow, FlowAsset, FlowDetails, FlowJsonUpload, FlowPreview, UpdateFlow,
-    validate_flow_json_len,
+    CreateFlow, CreatedFlow, FlowAsset, FlowDetails, FlowJsonUpload, FlowPreview, ListFlowAssets,
+    ListFlows, UpdateFlow, validate_flow_json_len,
 };
 use crate::Client;
+use crate::request::{paginate_or_error, reject_cursors};
 
 /// Every field `GET /{FLOW_ID}` documents except `preview` (which has its own
 /// call, [`Flow::preview`], because asking for it mints a link) and the
@@ -87,23 +88,32 @@ impl Flows {
     }
 
     /// One page of this account's Flows (`GET /{WABA_ID}/flows`), with the
-    /// default fields. Pass the previous page's
-    /// [`Page::next_cursor`] as `after` to continue.
-    pub async fn list(&self, after: Option<&str>) -> Result<Page<FlowDetails>> {
+    /// default fields. The next page: `ListFlows::new().after(..)` with
+    /// this page's [`Page::next_cursor`].
+    pub async fn list(&self, query: &ListFlows) -> Result<Page<FlowDetails>> {
         self.client
             .get_at(&[self.waba_id.as_str(), "flows"])
-            .query_opt("after", after)
+            .query_opt("after", query.after.as_deref())
+            .query_opt("before", query.before.as_deref())
             .context("list flows response")
             .send()
             .await
     }
 
-    /// Every Flow of this account, following cursors page by page.
-    pub fn list_stream(&self) -> impl Stream<Item = Result<FlowDetails>> + Send + 'static {
-        self.client
-            .get_at(&[self.waba_id.as_str(), "flows"])
-            .context("list flows response")
-            .paginate()
+    /// Every Flow of this account, following cursors page by page. The
+    /// stream manages them itself: a query with `after` or `before` set is
+    /// refused (the stream's single item is that validation error).
+    pub fn list_stream(
+        &self,
+        query: &ListFlows,
+    ) -> impl Stream<Item = Result<FlowDetails>> + Send + 'static {
+        paginate_or_error(
+            reject_cursors(query.after.as_deref(), query.before.as_deref()).map(|()| {
+                self.client
+                    .get_at(&[self.waba_id.as_str(), "flows"])
+                    .context("list flows response")
+            }),
+        )
     }
 }
 
@@ -188,22 +198,33 @@ impl Flow {
             .await
     }
 
-    /// One page of the Flow's assets (`GET /{FLOW_ID}/assets`).
-    pub async fn assets(&self, after: Option<&str>) -> Result<Page<FlowAsset>> {
+    /// One page of the Flow's assets (`GET /{FLOW_ID}/assets`). The next
+    /// page: `ListFlowAssets::new().after(..)` with this page's
+    /// [`Page::next_cursor`].
+    pub async fn assets(&self, query: &ListFlowAssets) -> Result<Page<FlowAsset>> {
         self.client
             .get_at(&[self.flow_id.as_str(), "assets"])
-            .query_opt("after", after)
+            .query_opt("after", query.after.as_deref())
+            .query_opt("before", query.before.as_deref())
             .context("flow assets response")
             .send()
             .await
     }
 
-    /// Every asset of the Flow, following cursors.
-    pub fn assets_stream(&self) -> impl Stream<Item = Result<FlowAsset>> + Send + 'static {
-        self.client
-            .get_at(&[self.flow_id.as_str(), "assets"])
-            .context("flow assets response")
-            .paginate()
+    /// Every asset of the Flow, following cursors. The stream manages them
+    /// itself: a query with `after` or `before` set is refused (the
+    /// stream's single item is that validation error).
+    pub fn assets_stream(
+        &self,
+        query: &ListFlowAssets,
+    ) -> impl Stream<Item = Result<FlowAsset>> + Send + 'static {
+        paginate_or_error(
+            reject_cursors(query.after.as_deref(), query.before.as_deref()).map(|()| {
+                self.client
+                    .get_at(&[self.flow_id.as_str(), "assets"])
+                    .context("flow assets response")
+            }),
+        )
     }
 
     /// Publish the Flow (`POST /{FLOW_ID}/publish`). Irreversible: a

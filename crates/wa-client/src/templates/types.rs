@@ -116,21 +116,10 @@ string_enum! {
     }
 }
 
-string_enum! {
-    /// Template quality rating (`WhatsAppBusinessHSMQualityScore`), see
-    /// `templates/template-quality`.
-    pub enum QualityRating {
-        /// High quality.
-        Green => "GREEN",
-        /// Medium quality; may be paused or disabled soon.
-        Yellow => "YELLOW",
-        /// Low quality; paused automatically (`templates/template-pausing`).
-        Red => "RED",
-        /// No feedback yet (every new template starts here). This is a
-        /// documented value, not the catch-all.
-        Unknown => "UNKNOWN",
-    }
-}
+/// Template quality rating (`WhatsAppBusinessHSMQualityScore`), see
+/// `templates/template-quality`; the same type phone numbers use (see
+/// [`crate::common`]).
+pub use crate::common::QualityRating;
 
 string_enum! {
     /// `rejected_reason` (`WhatsAppBusinessHSMRejectionReason`).

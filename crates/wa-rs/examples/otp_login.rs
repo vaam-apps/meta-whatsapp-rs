@@ -13,12 +13,10 @@
 //! number).
 //!
 //! Codes, cooldowns and issue limits are scoped to the sending phone number
-//! id and `OtpConfig::namespace`. One tenant per number, as here, needs
-//! nothing more; when one number sends codes for several merchants or
-//! tenants, give each tenant's service its own namespace (the tenant id):
-//! `OtpConfig { namespace: Some(tenant_id), ..OtpConfig::default() }`.
-//! With the default `None` they share one scope, and a code sent for one
-//! tenant verifies at another.
+//! id and `OtpConfig::namespace`, which every service must name: the tenant
+//! (or app) the codes are for, e.g. `OtpConfig::new(tenant_id)`. Services
+//! that send from one number for several merchants or tenants then never
+//! see each other's codes.
 //!
 //! | Variable | Required | What |
 //! | --- | --- | --- |
@@ -28,10 +26,12 @@
 //! | `WA_OTP_TEMPLATE` | yes | an approved authentication template (copy code or one-tap) |
 //! | `WA_OTP_LANGUAGE` | no | the language it was approved in (default `en_US`) |
 //! | `WA_OTP_PEPPER` | yes | at least 32 random bytes (`openssl rand -base64 32`); keep it out of the database |
+//! | `WA_OTP_NAMESPACE` | yes | the tenant (or app) the codes are for, a constant of your deployment; changing it invalidates outstanding codes |
 //!
 //! ```text
 //! WA_TOKEN=… WA_PHONE_NUMBER_ID=… WA_TO=+16505551234 WA_OTP_TEMPLATE=login_code \
-//!   WA_OTP_PEPPER="$(openssl rand -base64 32)" cargo run -p wa-rs --example otp_login
+//!   WA_OTP_NAMESPACE=my-shop WA_OTP_PEPPER="$(openssl rand -base64 32)" \
+//!   cargo run -p wa-rs --example otp_login
 //! ```
 
 use std::sync::Arc;
@@ -53,9 +53,9 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
-    // The default config: 6 digits, valid 10 minutes (keep it equal to the
-    // template's code_expiration_minutes), 5 attempts, 30 s between codes,
-    // at most 5 codes per number and hour.
+    // The default config for one tenant: 6 digits, valid 10 minutes (keep
+    // it equal to the template's code_expiration_minutes), 5 attempts, 30 s
+    // between codes, at most 5 codes per number and hour.
     let otp = OtpService::new(
         wa_rs::client(env("WA_TOKEN")?)?,
         env("WA_PHONE_NUMBER_ID")?,
@@ -63,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(MemoryKvStore::new()), // Postgres or Redis with several instances
         Arc::new(SystemClock),
         OtpPepper::new(env("WA_OTP_PEPPER")?)?, // >= 32 bytes, not stored with the codes
-        OtpConfig::default(),
+        OtpConfig::new(env("WA_OTP_NAMESPACE")?), // the tenant: required, never a default
     )?;
     let user = Recipient::phone(env("WA_TO")?); // strict E.164, with `+`
 

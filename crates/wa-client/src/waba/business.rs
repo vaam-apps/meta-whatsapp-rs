@@ -10,6 +10,7 @@ use wa_core::paging::Page;
 
 use super::types::{BusinessInfo, Filter, MessagingCustomerBase, WabaInfo, WabaSort};
 use crate::phone_numbers::fields_param;
+use crate::request::{paginate_or_error, reject_cursors};
 use crate::{Client, GraphRequest};
 
 /// Entry point, see [`Client::business`].
@@ -40,6 +41,12 @@ pub struct WabaListQuery {
     pub filtering: Vec<Filter>,
     /// Sort by creation time.
     pub sort: Option<WabaSort>,
+    /// Cursor from a previous page's `paging.cursors.after`
+    /// ([`Page::next_cursor`]); for the one-page methods only, the streams
+    /// manage their own.
+    pub after: Option<String>,
+    /// Cursor from a previous page's `paging.cursors.before`.
+    pub before: Option<String>,
 }
 
 impl WabaListQuery {
@@ -70,6 +77,20 @@ impl WabaListQuery {
     #[must_use]
     pub fn sort(mut self, sort: WabaSort) -> Self {
         self.sort = Some(sort);
+        self
+    }
+
+    /// Continue after this cursor.
+    #[must_use]
+    pub fn after(mut self, cursor: impl Into<String>) -> Self {
+        self.after = Some(cursor.into());
+        self
+    }
+
+    /// Go back before this cursor.
+    #[must_use]
+    pub fn before(mut self, cursor: impl Into<String>) -> Self {
+        self.before = Some(cursor.into());
         self
     }
 }
@@ -139,18 +160,19 @@ impl Business {
         &self,
         query: &WabaListQuery,
     ) -> Result<Page<WabaInfo>> {
-        self.waba_list("client_whatsapp_business_accounts", query)
+        self.waba_page("client_whatsapp_business_accounts", query)
             .send()
             .await
     }
 
-    /// All client WABAs, following cursors.
+    /// All client WABAs, following cursors. The stream manages them
+    /// itself: a query with `after` or `before` set is refused (the
+    /// stream's single item is that validation error).
     pub fn client_whatsapp_business_accounts_stream(
         &self,
         query: &WabaListQuery,
     ) -> impl Stream<Item = Result<WabaInfo>> + Send + 'static + use<> {
-        self.waba_list("client_whatsapp_business_accounts", query)
-            .paginate()
+        self.waba_stream("client_whatsapp_business_accounts", query)
     }
 
     /// `GET /{BUSINESS_ID}/owned_whatsapp_business_accounts`: WABAs this
@@ -159,18 +181,38 @@ impl Business {
         &self,
         query: &WabaListQuery,
     ) -> Result<Page<WabaInfo>> {
-        self.waba_list("owned_whatsapp_business_accounts", query)
+        self.waba_page("owned_whatsapp_business_accounts", query)
             .send()
             .await
     }
 
-    /// All owned WABAs, following cursors.
+    /// All owned WABAs, following cursors. The stream manages them itself:
+    /// a query with `after` or `before` set is refused (the stream's single
+    /// item is that validation error).
     pub fn owned_whatsapp_business_accounts_stream(
         &self,
         query: &WabaListQuery,
     ) -> impl Stream<Item = Result<WabaInfo>> + Send + 'static + use<> {
-        self.waba_list("owned_whatsapp_business_accounts", query)
-            .paginate()
+        self.waba_stream("owned_whatsapp_business_accounts", query)
+    }
+
+    /// One page of `edge`, at the query's cursor.
+    fn waba_page(&self, edge: &str, query: &WabaListQuery) -> GraphRequest {
+        self.waba_list(edge, query)
+            .query_opt("after", query.after.as_deref())
+            .query_opt("before", query.before.as_deref())
+    }
+
+    /// Every page of `edge`; the stream owns the cursors.
+    fn waba_stream(
+        &self,
+        edge: &str,
+        query: &WabaListQuery,
+    ) -> impl Stream<Item = Result<WabaInfo>> + Send + 'static + use<> {
+        paginate_or_error(
+            reject_cursors(query.after.as_deref(), query.before.as_deref())
+                .map(|()| self.waba_list(edge, query)),
+        )
     }
 
     /// `POST /{BUSINESS_ID}/messaging_customer_base` (`in-app-signup`):
@@ -305,7 +347,51 @@ mod tests {
             .collect()
             .await;
         assert_eq!(ids, vec!["1", "2"]);
+        assert_eq!(t.requests()[1].query("after").as_deref(), Some("a"));
         assert_eq!(t.remaining(), 0);
+    }
+
+    /// The docs example's cursors, fed back: the one-page methods send
+    /// them, the streams refuse them before any request.
+    #[tokio::test]
+    async fn client_and_owned_wabas_take_cursors_in_their_query() {
+        let t = ScriptedTransport::new();
+        t.push_json(200, manage_accounts_example());
+        t.push_json(200, manage_accounts_example());
+        let b = client(&t).business("805021500648488");
+        let page = b
+            .client_whatsapp_business_accounts(&WabaListQuery::new())
+            .await
+            .unwrap();
+        let after = page.paging.unwrap().cursors.unwrap().after.unwrap();
+        b.owned_whatsapp_business_accounts(&WabaListQuery::new().after(after).before("abcdefghij"))
+            .await
+            .unwrap();
+        let req = t.last_request().unwrap();
+        assert_eq!(req.query("after").as_deref(), Some("klmnopqr"));
+        assert_eq!(req.query("before").as_deref(), Some("abcdefghij"));
+        assert_eq!(t.requests()[0].query("after"), None);
+        assert_eq!(t.remaining(), 0);
+        for query in [
+            WabaListQuery::new().after("klmnopqr"),
+            WabaListQuery::new().before("abcdefghij"),
+        ] {
+            let client_wabas: Vec<_> = b
+                .client_whatsapp_business_accounts_stream(&query)
+                .collect()
+                .await;
+            let owned: Vec<_> = b
+                .owned_whatsapp_business_accounts_stream(&query)
+                .collect()
+                .await;
+            for refused in [client_wabas, owned] {
+                assert!(
+                    matches!(&refused[..], [Err(wa_core::Error::Validation(_))]),
+                    "{refused:?}"
+                );
+            }
+        }
+        assert_eq!(t.requests().len(), 2);
     }
 
     #[tokio::test]

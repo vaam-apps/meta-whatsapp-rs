@@ -198,9 +198,12 @@ pub struct TemplateListQuery {
     pub source: Option<TemplateSource>,
     /// Only templates whose `correct_category` is this.
     pub correct_category: Option<TemplateCategory>,
-    /// Cursor to the page after (ignored by `list_stream`).
+    /// Cursor from a previous page's `paging.cursors.after`
+    /// ([`Page::next_cursor`](wa_core::paging::Page::next_cursor)); for
+    /// `list` only, `list_stream` refuses it (it manages its own).
     pub after: Option<String>,
-    /// Cursor to the page before (ignored by `list_stream`).
+    /// Cursor from a previous page's `paging.cursors.before`; for `list`
+    /// only, like `after`.
     pub before: Option<String>,
 }
 

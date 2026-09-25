@@ -5,7 +5,7 @@ description: "Managing WhatsApp message templates with wa-rs - TemplateDefinitio
 
 # wa-rs-templates
 
-> **Verified against wa-rs 3a3db05aa425c1737d8bb9239206036dbc81969f (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/manage.rs](examples/manage.rs), compiled and
 tested by wa-rs's own gate.
@@ -83,9 +83,12 @@ while let Some(template) = stream.next().await {
 }
 ```
 
-- `list(&query)` returns one `Page<TemplateInfo>`; `list_stream` follows
-  the cursors. `get(&id)`, `get_fields(&id, &["status"])`. Cache the list:
-  management endpoints are rate limited per WABA.
+- `list(&query)` returns one `Page<TemplateInfo>` (the next page: the
+  same query with `after` = `page.next_cursor()`); `list_stream` follows
+  the cursors itself and refuses a query that sets `after` or `before`
+  (~~it ignored them~~: until 6034804, 2026-09-24).
+  `get(&id)`, `get_fields(&id, &["status"])`. Cache the list: management
+  endpoints are rate limited per WABA.
 - `edit(&id, &TemplateEdit::components(vec![..]))` **replaces every
   component**. Only `APPROVED`, `REJECTED` or `PAUSED` templates can be
   edited; an approved one keeps its category and allows 10 edits in 30

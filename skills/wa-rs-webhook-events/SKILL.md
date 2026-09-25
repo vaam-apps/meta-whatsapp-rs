@@ -5,7 +5,7 @@ description: "Understanding and handling wa-rs WebhookEvent values - inbound cus
 
 # wa-rs-webhook-events
 
-> **Verified against wa-rs 3a3db05aa425c1737d8bb9239206036dbc81969f (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/events.rs](examples/events.rs), compiled and
 tested by wa-rs's own gate with Meta-shaped payloads. Every variant and
@@ -108,9 +108,10 @@ To answer by phone, prepend `+` to the `wa_id`.
 
 - Messaging handovers, `message_echoes` and `consumer_profile` have no
   documented payload: they arrive as `Unknown`.
-- It does not merge conversations when a BSUID changes, nor record
-  coexistence echoes and history in the inbox
-  ([open question 17](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#webhooks)).
+- It does not merge conversations when a BSUID changes. The inbox records
+  `MessageEchoed` and `HistorySynced` (`wa-rs-cms-inbox`), but not the
+  contacts of `AppStateSynced`. ~~Nor does it record coexistence echoes
+  and history in the inbox~~: true until a3582b8 (2026-09-24).
 
 ## Related skills
 

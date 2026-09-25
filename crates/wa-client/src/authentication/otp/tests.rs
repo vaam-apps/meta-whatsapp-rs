@@ -29,6 +29,8 @@ use crate::RetryPolicy;
 const PHONE: &str = "+12015553931";
 const DIGITS: &str = "12015553931";
 const PEPPER: &[u8] = b"0123456789abcdef0123456789abcdef-test-pepper";
+/// The tenant every service here issues codes for, unless a test says.
+const TENANT: &str = "shop-a";
 
 /// What a concurrent writer does to the challenge record, injected right
 /// before a compare-and-swap on it.
@@ -263,7 +265,7 @@ fn is_recipient_error(e: &Error) -> bool {
 
 #[tokio::test]
 async fn issue_sends_the_documented_payload_then_verifies_once() {
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     let (challenge, code) = issue(&f).await;
 
     let req = f.transport.last_request().unwrap();
@@ -313,7 +315,7 @@ async fn issue_sends_the_documented_payload_then_verifies_once() {
 
 #[tokio::test]
 async fn the_code_goes_to_exactly_the_number_it_is_bound_to() {
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     accept(&f.transport);
     let formatted = Recipient::phone(" +1 (201) 555-3931 ");
     let IssueOutcome::Sent(_) = f.otp.issue(&formatted, "login").await.unwrap() else {
@@ -334,7 +336,7 @@ async fn the_code_goes_to_exactly_the_number_it_is_bound_to() {
         VerifyOutcome::Verified
     );
 
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     accept(&f.transport);
     let _ = f.otp.issue(&both, "login").await.unwrap();
     let body = f.transport.last_request().unwrap().json().unwrap();
@@ -344,7 +346,7 @@ async fn the_code_goes_to_exactly_the_number_it_is_bound_to() {
 
 #[tokio::test]
 async fn numbers_without_their_plus_or_not_e164_are_refused() {
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     // Without `+`, Meta prepends the sending number's country code: these
     // digits would reach +<business cc>12015553931, a different person.
     for raw in [
@@ -386,7 +388,7 @@ async fn a_code_sent_without_plus_can_never_verify_the_plus_number() {
     // The draft keyed "12015553931" and "+12015553931" identically although
     // Meta delivers them to different people. Now the first is refused, so
     // no code can be bound to it.
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     let e = f
         .otp
         .issue(&Recipient::phone(DIGITS), "login")
@@ -401,7 +403,7 @@ async fn a_code_sent_without_plus_can_never_verify_the_plus_number() {
 
 #[tokio::test]
 async fn recipients_without_a_phone_number_are_refused_before_any_write() {
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     for r in [
         Recipient::user("US.13491208655302741918"),
         Recipient::group("Y2FwaV9ncm91cDox"),
@@ -421,7 +423,7 @@ async fn recipients_without_a_phone_number_are_refused_before_any_write() {
 
 #[tokio::test]
 async fn purposes_are_independent() {
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     let (_, code) = issue(&f).await;
     assert_eq!(
         f.otp
@@ -477,8 +479,8 @@ async fn issue_at(otp: &OtpService, t: &ScriptedTransport) -> String {
 /// logged into the same phone number's account at another.
 #[tokio::test]
 async fn a_code_only_verifies_at_the_service_that_sent_it() {
-    let f = fixture(OtpConfig::default());
-    let (b, tb) = neighbour(&f, "222222222222222", OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
+    let (b, tb) = neighbour(&f, "222222222222222", OtpConfig::new(TENANT));
     let code_a = issue_at(&f.otp, &f.transport).await;
     assert_eq!(
         b.verify(&user(), "login", &code_a).await.unwrap(),
@@ -516,7 +518,7 @@ async fn cooldowns_and_issue_limits_are_per_service() {
             max_issues: 1,
             window: Duration::from_hours(1),
         }),
-        ..OtpConfig::default()
+        ..OtpConfig::new(TENANT)
     };
     let f = fixture(config.clone());
     let (b, tb) = neighbour(&f, "222222222222222", config);
@@ -529,8 +531,8 @@ async fn cooldowns_and_issue_limits_are_per_service() {
     let _ = issue_at(&b, &tb).await;
     assert_eq!(tb.remaining(), 0);
 
-    let f = fixture(OtpConfig::default());
-    let (b, tb) = neighbour(&f, "222222222222222", OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
+    let (b, tb) = neighbour(&f, "222222222222222", OtpConfig::new(TENANT));
     let _ = issue_at(&f.otp, &f.transport).await;
     assert!(matches!(
         f.otp.issue(&user(), "login").await.unwrap(),
@@ -541,42 +543,89 @@ async fn cooldowns_and_issue_limits_are_per_service() {
 }
 
 /// One sending number shared by several tenants of the integrator (a
-/// platform's own number): `OtpConfig::namespace` separates them.
+/// platform's own number): the required `OtpConfig::namespace` separates
+/// them, whatever else they share (store, pepper, clock).
 #[tokio::test]
 async fn a_namespace_separates_tenants_on_one_number() {
-    let tenant = |ns: &str| OtpConfig {
-        namespace: Some(ns.to_owned()),
-        ..OtpConfig::default()
-    };
-    let f = fixture(tenant("shop-a"));
-    let (b, tb) = neighbour(&f, "105954558954427", tenant("shop-b"));
-    let (same, _) = neighbour(&f, "105954558954427", tenant("shop-a"));
-    let (none, _) = neighbour(&f, "105954558954427", OtpConfig::default());
+    let f = fixture(OtpConfig::new("shop-a"));
+    let (b, tb) = neighbour(&f, "105954558954427", OtpConfig::new("shop-b"));
+    let (same, _) = neighbour(&f, "105954558954427", OtpConfig::new("shop-a"));
+    // A namespace that only extends the other one is another tenant.
+    let (longer, _) = neighbour(&f, "105954558954427", OtpConfig::new("shop-a2"));
     let code = issue_at(&f.otp, &f.transport).await;
-    for other in [&b, &none] {
+    for other in [&b, &longer] {
         assert_eq!(
             other.verify(&user(), "login", &code).await.unwrap(),
             VerifyOutcome::NotFound
         );
     }
+    // B's cooldown and limit are its own: A's send does not hold it back.
     let _ = issue_at(&b, &tb).await;
     assert_eq!(
         same.verify(&user(), "login", &code).await.unwrap(),
         VerifyOutcome::Verified,
         "same number and namespace is the same service"
     );
-    for blank in ["", " "] {
+}
+
+/// There is no default namespace to forget: a blank one is refused when
+/// the service is built, and so is one that only looks like another (edge
+/// whitespace, control characters, invisible format characters).
+#[test]
+fn a_blank_namespace_is_a_config_error() {
+    for blank in [
+        "",
+        " ",
+        "\t\n",
+        " shop-a",
+        "shop-a ",
+        "shop-a\n",
+        "shop\u{7}-a",
+        // Format characters (general category Cf): invisible, so each of
+        // these prints as `shop-a`.
+        "shop\u{200B}-a",
+        "\u{FEFF}shop-a",
+        "shop-a\u{200D}",
+        "shop\u{AD}-a",
+        "shop-a\u{202E}",
+        "\u{2066}shop-a\u{2069}",
+        "shop-a\u{E0041}",
+    ] {
+        let t = ScriptedTransport::new();
         let e = OtpService::new(
-            client(&tb, RetryPolicy::NONE),
+            client(&t, RetryPolicy::NONE),
             "105954558954427",
             OtpTemplate::new("verification_code", "en_US"),
-            f.kv.clone(),
-            Arc::new(f.clock.clone()),
+            Arc::new(MemoryKvStore::new()),
+            Arc::new(ManualClock::new(datetime!(2026-09-24 12:00 UTC))),
             OtpPepper::new(PEPPER).unwrap(),
-            tenant(blank),
+            OtpConfig::new(blank),
         )
         .unwrap_err();
         assert!(matches!(e, Error::Config(_)), "{blank:?}: {e}");
+        assert_eq!(
+            OtpConfig::new(blank).validate().unwrap_err().field,
+            "namespace"
+        );
+    }
+}
+
+/// The namespace check refuses what prints alike, nothing more: inner
+/// spaces, punctuation and any script are accepted.
+#[test]
+fn a_namespace_may_use_any_visible_text() {
+    for namespace in [
+        "shop a",
+        "boutique-é",
+        "店舗 42",
+        "متجر",
+        "tenant|42",
+        "🛍️ shop",
+    ] {
+        assert!(
+            OtpConfig::new(namespace).validate().is_ok(),
+            "{namespace:?}"
+        );
     }
 }
 
@@ -584,23 +633,95 @@ async fn a_namespace_separates_tenants_on_one_number() {
 /// separator cannot be shifted into each other.
 #[tokio::test]
 async fn the_scope_encoding_is_unambiguous() {
-    let f = fixture(OtpConfig::default());
-    let ns = |s: &str| OtpConfig {
-        namespace: Some(s.to_owned()),
-        ..OtpConfig::default()
-    };
-    let (x, _) = neighbour(&f, "1|2", ns("3"));
-    let (y, _) = neighbour(&f, "1", ns("2|3"));
+    let f = fixture(OtpConfig::new(TENANT));
     let phone = Phone::of(&user()).unwrap();
-    assert_ne!(
-        x.key(&phone, "login").unwrap(),
-        y.key(&phone, "login").unwrap()
+    let keys: std::collections::BTreeSet<String> =
+        [("1|2", "3"), ("1", "2|3"), ("1:2,", "3"), ("1", "2,1:3")]
+            .into_iter()
+            .map(|(number, ns)| {
+                let (service, _) = neighbour(&f, number, OtpConfig::new(ns));
+                service.key(&phone, "login").unwrap()
+            })
+            .collect();
+    assert_eq!(keys.len(), 4, "{keys:?}");
+}
+
+/// The store key, recomputed from its specification: HMAC-SHA256(pepper,
+/// `wa.otp.key | netstring(phone_number_id) netstring(namespace) | digits |
+/// purpose`). A service that set a namespace while it was optional derived
+/// exactly these bytes, so making the namespace required left its
+/// outstanding codes valid; any change here invalidates everyone's.
+#[test]
+fn the_key_derivation_is_pinned() {
+    let f = fixture(OtpConfig::new("shop-a"));
+    let mut mac = Hmac::<Sha256>::new_from_slice(PEPPER).unwrap();
+    mac.update(b"wa.otp.key|15:105954558954427,6:shop-a,|12015553931|login");
+    let expected = hex::encode(mac.finalize().into_bytes());
+    let phone = Phone::of(&user()).unwrap();
+    assert_eq!(f.otp.key(&phone, "login").unwrap(), expected);
+}
+
+/// The code hash, recomputed from its specification: HMAC-SHA256(pepper,
+/// `wa.otp.code | key | challenge id | code`). The key is in it (security
+/// review L6), so a record is only good under the key it was written to.
+#[tokio::test]
+async fn the_code_hash_is_pinned_and_covers_the_key() {
+    let f = fixture(OtpConfig::new(TENANT));
+    let (challenge, code) = issue(&f).await;
+    let key = f.otp.key(&Phone::of(&user()).unwrap(), "login").unwrap();
+    let mut mac = Hmac::<Sha256>::new_from_slice(PEPPER).unwrap();
+    mac.update(format!("wa.otp.code|{key}|{}|{code}", challenge.id).as_bytes());
+    assert_eq!(
+        stored(&f).await.unwrap().mac,
+        hex::encode(mac.finalize().into_bytes())
+    );
+}
+
+/// Security review L6: someone who can write the store (a shared Redis)
+/// but lacks the pepper asks for a code for their own number, then copies
+/// their record over the victim's key. The code hash used to cover the
+/// challenge id and the code only, so their own code verified as the
+/// victim; across purposes and namespaces too.
+#[tokio::test]
+async fn a_record_copied_to_another_key_never_verifies() {
+    let f = fixture(OtpConfig::new(TENANT));
+    let attacker = Recipient::phone("+12015550000");
+    accept(&f.transport);
+    assert!(matches!(
+        f.otp.issue(&attacker, "login").await.unwrap(),
+        IssueOutcome::Sent(_)
+    ));
+    let code = code_in(&f.transport.last_request().unwrap());
+    let own = f.otp.key(&Phone::of(&attacker).unwrap(), "login").unwrap();
+    let (record, _, _) = f.otp.challenges.get(&own).await.unwrap().unwrap();
+    let (other_tenant, _) = neighbour(&f, "105954558954427", OtpConfig::new("shop-b"));
+    for (service, victim, purpose) in [
+        (&f.otp, user(), "login"),
+        (&f.otp, attacker.clone(), "reset_password"),
+        (&other_tenant, attacker.clone(), "login"),
+    ] {
+        let key = service.key(&Phone::of(&victim).unwrap(), purpose).unwrap();
+        service
+            .challenges
+            .put(&key, &record, Expiry::After(Duration::from_mins(10)))
+            .await
+            .unwrap();
+        let outcome = service.verify(&victim, purpose, &code).await.unwrap();
+        assert!(
+            matches!(outcome, VerifyOutcome::Invalid { .. }),
+            "{purpose}: a copied record verified: {outcome:?}"
+        );
+    }
+    // Under its own key it still does.
+    assert_eq!(
+        f.otp.verify(&attacker, "login", &code).await.unwrap(),
+        VerifyOutcome::Verified
     );
 }
 
 #[tokio::test]
 async fn wrong_codes_count_down_then_lock_even_the_right_code() {
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     let (_, code) = issue(&f).await;
     let bad = wrong(&code);
     for left in (0..5).rev() {
@@ -620,7 +741,7 @@ async fn wrong_codes_count_down_then_lock_even_the_right_code() {
 
 #[tokio::test]
 async fn the_last_allowed_attempt_can_still_succeed() {
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     let (_, code) = issue(&f).await;
     for _ in 0..4 {
         let _ = f.otp.verify(&user(), "login", &wrong(&code)).await.unwrap();
@@ -633,7 +754,7 @@ async fn the_last_allowed_attempt_can_still_succeed() {
 
 #[tokio::test]
 async fn codes_expire_at_the_ttl() {
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     let (_, code) = issue(&f).await;
     f.clock.advance(Duration::from_secs(10 * 60 - 1));
     assert_eq!(
@@ -655,7 +776,7 @@ async fn codes_expire_at_the_ttl() {
 
 #[tokio::test]
 async fn resend_cooldown_then_the_new_code_replaces_the_old() {
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     let (_, old) = issue(&f).await;
     f.clock.advance(Duration::from_secs(10));
     assert_eq!(
@@ -687,7 +808,10 @@ async fn resend_cooldown_then_the_new_code_replaces_the_old() {
 #[tokio::test]
 async fn the_sixth_code_in_an_hour_is_refused_and_the_window_slides() {
     // The default config: 30 s cooldown, 5 codes per rolling hour.
-    assert_eq!(OtpConfig::default().issue_limit, Some(IssueLimit::DEFAULT));
+    assert_eq!(
+        OtpConfig::new(TENANT).issue_limit,
+        Some(IssueLimit::DEFAULT)
+    );
     assert_eq!(
         IssueLimit::DEFAULT,
         IssueLimit {
@@ -695,7 +819,7 @@ async fn the_sixth_code_in_an_hour_is_refused_and_the_window_slides() {
             window: Duration::from_hours(1)
         }
     );
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     // 12:00, 12:10, 12:20, 12:30, 12:40.
     let mut current = String::new();
     for i in 0..5 {
@@ -752,7 +876,7 @@ async fn the_sixth_code_in_an_hour_is_refused_and_the_window_slides() {
 async fn the_issue_limit_can_be_turned_off_explicitly() {
     let f = fixture(OtpConfig {
         issue_limit: None,
-        ..OtpConfig::default()
+        ..OtpConfig::new(TENANT)
     });
     for _ in 0..12 {
         let _ = issue(&f).await;
@@ -771,7 +895,7 @@ async fn the_issue_limit_can_be_turned_off_explicitly() {
 
 #[tokio::test]
 async fn a_rejected_send_removes_the_challenge() {
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     f.transport.push_json(
         400,
         json!({"error": {"message": "(#132001) Template name does not exist in the translation",
@@ -790,7 +914,7 @@ async fn a_rejected_send_removes_the_challenge() {
     let _ = issue(&f).await;
 
     // A connection that never opened sent nothing either.
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     f.transport
         .push_error(|| TransportError::Connect(anyhow::anyhow!("refused")));
     assert!(f.otp.issue(&user(), "login").await.is_err());
@@ -802,7 +926,7 @@ async fn a_rejected_send_removes_the_challenge() {
 /// the messages module's redacted decode error, not a private copy of both.
 #[tokio::test]
 async fn the_code_is_sent_through_messages_send() {
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     f.transport.push_json(
         200,
         json!({"contacts": [{"input": PHONE, "wa_id": DIGITS}], "messages": []}),
@@ -822,7 +946,7 @@ async fn a_send_that_may_have_arrived_keeps_the_challenge() {
     // Even with retries on, a timed-out send is not replayed (it may have
     // been delivered), and the code stays verifiable for the same reason.
     let f = fixture_with(
-        OtpConfig::default(),
+        OtpConfig::new(TENANT),
         RetryPolicy::default(),
         "105954558954427",
     );
@@ -844,7 +968,7 @@ async fn a_send_that_may_have_arrived_keeps_the_challenge() {
     );
 
     // A 2xx whose body cannot be read: Meta accepted the message.
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     f.transport
         .push_json(200, json!({"messaging_product": "whatsapp"}));
     let err = f.otp.issue(&user(), "login").await.unwrap_err();
@@ -857,7 +981,7 @@ async fn a_send_that_may_have_arrived_keeps_the_challenge() {
 
     // An unparseable 2xx: kept too, and the error does not quote the body,
     // which names the recipient.
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     f.transport.push_bytes(
         200,
         "application/json",
@@ -872,12 +996,38 @@ async fn a_send_that_may_have_arrived_keeps_the_challenge() {
     assert!(stored(&f).await.is_some());
 
     // A gateway 5xx without a Graph error: unknown, kept.
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     f.transport
         .push_bytes(502, "text/html", "<html>bad gateway</html>");
     let err = f.otp.issue(&user(), "login").await.unwrap_err();
     assert!(matches!(err, Error::Http { status: 502, .. }), "{err}");
     assert!(stored(&f).await.is_some());
+
+    // Neither a rejection nor a success (da39cf0: this used to drop it).
+    let f = fixture(OtpConfig::new(TENANT));
+    f.transport
+        .push_bytes(302, "text/html", "<html>moved</html>");
+    let err = f.otp.issue(&user(), "login").await.unwrap_err();
+    assert!(matches!(err, Error::Http { status: 302, .. }), "{err}");
+    assert!(stored(&f).await.is_some());
+}
+
+/// Throttling proves Meta did nothing, whatever the HTTP status: the
+/// challenge goes, and no cooldown is left behind.
+#[tokio::test]
+async fn a_throttled_send_removes_the_challenge_on_any_status() {
+    for status in [400, 503] {
+        let f = fixture(OtpConfig::new(TENANT));
+        f.transport.push_json(
+            status,
+            json!({"error": {"message": "(#130429) Rate limit hit", "type": "OAuthException",
+                "code": 130_429}}),
+        );
+        let err = f.otp.issue(&user(), "login").await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::RateLimited, "{status}: {err}");
+        assert!(stored(&f).await.is_none(), "{status}");
+        let _ = issue(&f).await;
+    }
 }
 
 #[test]
@@ -910,6 +1060,10 @@ fn only_provable_rejections_count_as_not_sent() {
         (http(404), false),
         (http(429), false),
         (http(502), true),
+        // Neither a rejection nor a success: unknown, so the challenge
+        // stays (this service used its own rule until the unification with
+        // `Error::may_have_been_sent`, and dropped it).
+        (http(302), true),
         (TransportError::Timeout.into(), true),
         (
             TransportError::Backend(anyhow::anyhow!("reset")).into(),
@@ -924,7 +1078,7 @@ fn only_provable_rejections_count_as_not_sent() {
             true,
         ),
     ] {
-        assert_eq!(may_have_been_sent(&error), sent, "{error}");
+        assert_eq!(error.may_have_been_sent(), sent, "{error}");
     }
 }
 
@@ -932,7 +1086,7 @@ fn only_provable_rejections_count_as_not_sent() {
 async fn ids_cannot_escape_their_path_segment() {
     // An id with `/` stays one segment: it cannot address another object.
     let f = fixture_with(
-        OtpConfig::default(),
+        OtpConfig::new(TENANT),
         RetryPolicy::NONE,
         "105954558954427/subscribed_apps",
     );
@@ -954,7 +1108,7 @@ async fn ids_cannot_escape_their_path_segment() {
             Arc::new(MemoryKvStore::with_clock(Arc::new(clock.clone()))),
             Arc::new(clock),
             OtpPepper::new(PEPPER).unwrap(),
-            OtpConfig::default(),
+            OtpConfig::new(TENANT),
         )
         .unwrap_err();
         assert!(matches!(e, Error::Config(_)), "{bad:?}: {e}");
@@ -963,7 +1117,7 @@ async fn ids_cannot_escape_their_path_segment() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_wrong_guesses_never_exceed_max_attempts() {
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     let (_, code) = issue(&f).await;
     let bad = wrong(&code);
     let tasks: Vec<_> = (0..20)
@@ -992,7 +1146,7 @@ async fn concurrent_wrong_guesses_never_exceed_max_attempts() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_issues_send_once() {
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     accept(&f.transport);
     let tasks: Vec<_> = (0..8)
         .map(|_| {
@@ -1021,7 +1175,7 @@ async fn a_reissue_that_loses_the_race_cools_down_instead_of_overwriting() {
     // A code exists and its cooldown is over. Between this issue's read and
     // its write, a concurrent issue writes a fresh challenge: this one must
     // back off, not overwrite it and send a second code.
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     let _ = issue(&f).await;
     f.clock.advance(Duration::from_secs(30));
     f.kv.arm(0, Interference::Reissue(to_ms(f.clock.now())));
@@ -1037,7 +1191,7 @@ async fn a_reissue_that_loses_the_race_cools_down_instead_of_overwriting() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_reissues_send_once() {
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     let _ = issue(&f).await;
     f.clock.advance(Duration::from_secs(30));
     accept(&f.transport);
@@ -1069,7 +1223,7 @@ async fn concurrent_issues_never_exceed_the_issue_limit() {
     // requests and 20 messages.
     let f = fixture(OtpConfig {
         resend_cooldown: Duration::ZERO,
-        ..OtpConfig::default()
+        ..OtpConfig::new(TENANT)
     });
     for _ in 0..5 {
         accept(&f.transport);
@@ -1096,7 +1250,7 @@ async fn concurrent_issues_never_exceed_the_issue_limit() {
 async fn concurrent_right_guesses_verify_exactly_once() {
     let f = fixture(OtpConfig {
         max_attempts: 50,
-        ..OtpConfig::default()
+        ..OtpConfig::new(TENANT)
     });
     let (_, code) = issue(&f).await;
     let tasks: Vec<_> = (0..10)
@@ -1121,7 +1275,7 @@ async fn concurrent_right_guesses_verify_exactly_once() {
 async fn a_guess_that_loses_the_count_race_is_rechecked_not_compared() {
     // Between this guess's read and its count, other guesses use up every
     // attempt. The right code must not be compared for free.
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     let (_, code) = issue(&f).await;
     f.kv.arm(0, Interference::SetAttempts(5));
     assert_eq!(
@@ -1135,7 +1289,7 @@ async fn a_guess_that_loses_the_count_race_is_rechecked_not_compared() {
 async fn a_code_consumed_by_a_concurrent_guess_does_not_verify_again() {
     // This guess is counted, then another correct guess consumes the
     // challenge before this one does.
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     let (_, code) = issue(&f).await;
     f.kv.arm(1, Interference::Consume);
     assert_eq!(
@@ -1148,7 +1302,7 @@ async fn a_code_consumed_by_a_concurrent_guess_does_not_verify_again() {
 async fn a_code_replaced_while_it_is_consumed_does_not_verify() {
     // This guess is counted, then a new code replaces the challenge before
     // the consume: the old code must not verify, nor delete the new one.
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     let (_, code) = issue(&f).await;
     f.kv.arm(1, Interference::Replace);
     assert_eq!(
@@ -1164,7 +1318,7 @@ async fn a_code_replaced_while_it_is_consumed_does_not_verify() {
 async fn the_store_never_sees_the_code_or_the_phone_number() {
     let f = fixture(OtpConfig {
         code_length: 8,
-        ..OtpConfig::default()
+        ..OtpConfig::new(TENANT)
     });
     let (_, code) = issue(&f).await;
     let _ = f.otp.verify(&user(), "login", &wrong(&code)).await.unwrap();
@@ -1194,7 +1348,7 @@ async fn every_hmac_is_keyed_by_the_pepper() {
     // Same store, same clock, another pepper: the record is not found (the
     // key is keyed), and with the other pepper's key it still does not
     // match (the code hash is keyed).
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     let (_, code) = issue(&f).await;
     let other = OtpService {
         pepper: OtpPepper::new(vec![7u8; 32]).unwrap(),
@@ -1224,7 +1378,7 @@ async fn every_hmac_is_keyed_by_the_pepper() {
 
 #[tokio::test]
 async fn debug_output_never_contains_the_code_or_the_pepper() {
-    let f = fixture(OtpConfig::default());
+    let f = fixture(OtpConfig::new(TENANT));
     let (challenge, code) = issue(&f).await;
     let outcome = f.otp.verify(&user(), "login", &wrong(&code)).await.unwrap();
     let pepper = String::from_utf8_lossy(PEPPER).into_owned();
@@ -1253,7 +1407,7 @@ async fn huge_cooldowns_and_windows_saturate_instead_of_panicking() {
             max_issues: 1,
             window: Duration::MAX,
         }),
-        ..OtpConfig::default()
+        ..OtpConfig::new(TENANT)
     });
     let _ = issue(&f).await;
     assert!(matches!(
@@ -1299,7 +1453,7 @@ fn an_rng_failure_is_a_crypto_error() {
 #[test]
 fn config_and_pepper_are_checked() {
     let with = |f: fn(&mut OtpConfig)| {
-        let mut c = OtpConfig::default();
+        let mut c = OtpConfig::new(TENANT);
         f(&mut c);
         c
     };
@@ -1327,7 +1481,7 @@ fn config_and_pepper_are_checked() {
                 });
             }),
         ),
-        ("namespace", with(|c| c.namespace = Some(" ".into()))),
+        ("namespace", with(|c| c.namespace = " ".into())),
     ] {
         let e = bad.validate().unwrap_err();
         assert_eq!(e.field, field, "{bad:?}");
@@ -1344,7 +1498,7 @@ fn config_and_pepper_are_checked() {
         );
         assert!(matches!(built, Err(Error::Config(_))), "{bad:?}");
     }
-    assert!(OtpConfig::default().validate().is_ok());
+    assert!(OtpConfig::new(TENANT).validate().is_ok());
     assert!(OtpPepper::new(vec![7u8; 31]).is_err());
     assert!(OtpPepper::new(vec![7u8; 32]).is_ok());
     assert!(OtpPepper::from_secret(SecretBytes::new(vec![7u8; 31])).is_err());

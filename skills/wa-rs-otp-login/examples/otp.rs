@@ -25,13 +25,13 @@ pub async fn create_login_template(
     client.authentication(waba_id).create(&template).await
 }
 
-/// One service per sending number (and tenant), built at startup.
+/// One service per sending number and tenant, built at startup.
 pub fn otp_service(
     client: Client, // the sending number's token
     phone_number_id: PhoneNumberId,
-    kv: Arc<dyn KvStore>,   // shared: Postgres or Redis with several instances
-    pepper: Vec<u8>,        // >= 32 random bytes from your secret manager, not the database
-    tenant: Option<String>, // Some(tenant id) when one number serves several tenants
+    kv: Arc<dyn KvStore>, // shared: Postgres or Redis with several instances
+    pepper: Vec<u8>,      // >= 32 random bytes from your secret manager, not the database
+    tenant: &str,         // your tenant id: required, never blank
 ) -> wa_rs::Result<OtpService> {
     OtpService::new(
         client,
@@ -40,11 +40,16 @@ pub fn otp_service(
         kv,
         Arc::new(SystemClock),
         OtpPepper::new(pepper)?,
-        OtpConfig {
-            namespace: tenant, // default config: 6 digits, 10 min, 5 attempts, 30 s, 5/hour
-            ..OtpConfig::default()
-        },
+        OtpConfig::new(tenant), // 6 digits, 10 min, 5 attempts, 30 s, 5/hour
     )
+}
+
+/// Other settings: struct update syntax over the tenant's defaults.
+pub fn eight_digit_config(tenant: &str) -> OtpConfig {
+    OtpConfig {
+        code_length: 8,
+        ..OtpConfig::new(tenant)
+    }
 }
 
 /// What the login API answers.
@@ -99,7 +104,7 @@ pub fn with_clock(
         kv,
         clock,
         OtpPepper::new(vec![7u8; 32])?,
-        OtpConfig::default(),
+        OtpConfig::new("tenant-42"),
     )
 }
 
@@ -208,13 +213,9 @@ mod tests {
     fn a_blank_namespace_is_a_config_error() {
         let (_, client) = scripted();
         let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
-        let built = otp_service(
-            client,
-            "106540352242922".into(),
-            kv,
-            vec![7; 32],
-            Some(" ".into()),
-        );
+        let built = otp_service(client, "106540352242922".into(), kv, vec![7; 32], " ");
         assert!(matches!(built, Err(Error::Config(_))));
+        assert!(eight_digit_config("tenant-42").validate().is_ok());
+        assert_eq!(eight_digit_config("tenant-42").namespace, "tenant-42");
     }
 }

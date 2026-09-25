@@ -283,8 +283,9 @@ PIN (the number is already registered; validation refuses it). When
 `onboarded.needs_coexistence_sync()`, call
 `merchant.phone_number(pnid).sync_smb_app_data(SmbSyncType::SmbAppStateSync)`
 and `…(SmbSyncType::History)` once each within 24 hours, and subscribe to
-`history`, `smb_app_state_sync` and `smb_message_echoes`. The inbox does not
-record echoes or history yet.
+`history`, `smb_app_state_sync` and `smb_message_echoes`. `InboxSink`
+records the echoes and the synced history in the merchant's conversations
+([CMS inbox guide](cms-inbox.md#coexistence-the-merchant-also-uses-the-whatsapp-business-app)).
 
 ## Pitfalls
 

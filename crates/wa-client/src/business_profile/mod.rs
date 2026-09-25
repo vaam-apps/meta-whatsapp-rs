@@ -21,7 +21,7 @@
 
 use serde::{Deserialize, Serialize};
 use wa_core::error::{ValidationError, snippet};
-use wa_core::ids::{PhoneNumberId, UploadHandle};
+use wa_core::ids::{BusinessProfileId, PhoneNumberId, UploadHandle};
 use wa_core::{Error, Result};
 
 use crate::Client;
@@ -43,7 +43,7 @@ pub struct BusinessProfile {
 #[derive(Debug, Clone)]
 pub struct BusinessProfileNode {
     client: Client,
-    profile_id: String,
+    profile_id: BusinessProfileId,
 }
 
 impl Client {
@@ -56,9 +56,11 @@ impl Client {
     }
 
     /// [`BusinessProfileNode`] API for a WhatsApp Business Profile id (not
-    /// a phone number id). `wa-core` has no newtype for this id yet, hence
-    /// the plain string.
-    pub fn business_profile_node(&self, profile_id: impl Into<String>) -> BusinessProfileNode {
+    /// a phone number id).
+    pub fn business_profile_node(
+        &self,
+        profile_id: impl Into<BusinessProfileId>,
+    ) -> BusinessProfileNode {
         BusinessProfileNode {
             client: self.clone(),
             profile_id: profile_id.into(),
@@ -133,7 +135,7 @@ impl BusinessProfile {
 
 impl BusinessProfileNode {
     /// The profile id this API is scoped to.
-    pub fn id(&self) -> &str {
+    pub fn id(&self) -> &BusinessProfileId {
         &self.profile_id
     }
 
@@ -335,7 +337,7 @@ pub enum Vertical {
 pub struct Profile {
     /// Profile id (profile node only).
     #[serde(default)]
-    pub id: Option<String>,
+    pub id: Option<BusinessProfileId>,
     /// Always `whatsapp`.
     #[serde(default)]
     pub messaging_product: Option<String>,
@@ -439,7 +441,7 @@ struct WireUpdate<'a> {
 pub struct ProfileNodeUpdated {
     /// The updated profile's id.
     #[serde(default)]
-    pub id: Option<String>,
+    pub id: Option<BusinessProfileId>,
     /// `true` on success.
     #[serde(default)]
     pub success: Option<bool>,
@@ -778,7 +780,10 @@ mod tests {
             ])
             .await
             .unwrap();
-        assert_eq!(profile.id.as_deref(), Some("5550001"));
+        assert_eq!(
+            profile.id.as_ref().map(BusinessProfileId::as_str),
+            Some("5550001")
+        );
         assert_eq!(profile.verified_name.as_deref(), Some("Lucky Shrub"));
         assert_eq!(profile.vertical, Some(Vertical::MatrimonyService));
         let updated = node
@@ -788,7 +793,10 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(updated.id.as_deref(), Some("5550001"));
+        assert_eq!(
+            updated.id.as_ref().map(BusinessProfileId::as_str),
+            Some("5550001")
+        );
         let reqs = t.requests();
         assert_eq!(reqs[0].method, Method::GET);
         assert_eq!(reqs[0].path(), "/v25.0/5550001");

@@ -150,10 +150,10 @@ it with your own sessions and tenant table; keep the checks where they are.
 ### OTP login
 
 From [`otp_login.rs`](crates/wa-rs/examples/otp_login.rs). Codes are stored
-as keyed hashes and bound to the sending number and `OtpConfig::namespace`
-(set it to the tenant id when one number sends codes for several tenants:
-with the default, they share codes), issuing is rate-limited per number,
-and verify attempts are counted atomically:
+as keyed hashes and bound to the sending number and the required
+`OtpConfig::namespace` (the tenant the codes are for, so tenants sharing a
+number never share codes), issuing is rate-limited per number, and verify
+attempts are counted atomically:
 
 ```rust
 let otp = OtpService::new(
@@ -163,7 +163,7 @@ let otp = OtpService::new(
     Arc::new(MemoryKvStore::new()), // Postgres or Redis with several instances
     Arc::new(SystemClock),
     OtpPepper::new(env("WA_OTP_PEPPER")?)?, // >= 32 bytes, not stored with the codes
-    OtpConfig::default(),
+    OtpConfig::new(env("WA_OTP_NAMESPACE")?), // the tenant: required, never a default
 )?;
 let user = Recipient::phone(env("WA_TO")?); // strict E.164, with `+`
 

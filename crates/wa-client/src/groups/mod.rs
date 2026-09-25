@@ -44,7 +44,7 @@ use wa_core::recipient::Recipient;
 use wa_core::transport::Multipart;
 use wa_core::{Error, GraphApiError, Result};
 
-use crate::request::{paginate_or_error, stream_or_error};
+use crate::request::{paginate_or_error, reject_cursors, stream_or_error};
 use crate::{Client, GraphRequest};
 
 #[cfg(test)]
@@ -597,18 +597,6 @@ fn validate_list_limit(limit: Option<u32>) -> Result<()> {
         .into()),
         _ => Ok(()),
     }
-}
-
-fn reject_cursors(after: Option<&str>, before: Option<&str>) -> Result<()> {
-    if after.is_some() {
-        return Err(ValidationError::new("after", "streams manage cursors; leave it unset").into());
-    }
-    if before.is_some() {
-        return Err(
-            ValidationError::new("before", "streams manage cursors; leave it unset").into(),
-        );
-    }
-    Ok(())
 }
 
 fn validate_subject(subject: &str) -> Result<()> {

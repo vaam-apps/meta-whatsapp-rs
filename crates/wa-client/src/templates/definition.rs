@@ -27,6 +27,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use wa_core::Result;
 use wa_core::error::ValidationError;
+use wa_core::ids::FlowId;
 
 use super::macros::string_enum;
 use super::types::{
@@ -807,15 +808,9 @@ impl SupportedApp {
     }
 }
 
-string_enum! {
-    /// Flow button `flow_action`.
-    pub enum FlowAction {
-        /// Open a screen (`navigate_screen`). Meta's default.
-        Navigate => "navigate",
-        /// Start with a call to the Flow's data endpoint.
-        DataExchange => "data_exchange",
-    }
-}
+/// Flow button `flow_action`; the same type Flow messages use (see
+/// [`crate::common`]).
+pub use crate::common::FlowAction;
 
 /// `FLOW` button. Fields from the reference schema and
 /// `flows/guides/flows-templates`; the docs mirror has no complete creation
@@ -826,7 +821,7 @@ pub struct FlowButton {
     pub text: String,
     /// Flow id. Exactly one of `flow_id`, `flow_name`, `flow_json`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub flow_id: Option<String>,
+    pub flow_id: Option<FlowId>,
     /// Flow name (alternative to `flow_id`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flow_name: Option<String>,
@@ -843,7 +838,7 @@ pub struct FlowButton {
 
 impl FlowButton {
     /// A button opening the Flow with id `flow_id`.
-    pub fn by_id(text: impl Into<String>, flow_id: impl Into<String>) -> Self {
+    pub fn by_id(text: impl Into<String>, flow_id: impl Into<FlowId>) -> Self {
         Self {
             text: text.into(),
             flow_id: Some(flow_id.into()),

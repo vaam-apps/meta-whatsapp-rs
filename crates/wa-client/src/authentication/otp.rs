@@ -19,15 +19,19 @@
 //! - **Storage**: namespace `wa.otp`, key = hex HMAC-SHA256(pepper,
 //!   `"wa.otp.key|" + scope + "|" + digits + "|" + purpose`). No phone
 //!   number or code is ever stored or used as a key. The record holds the
-//!   challenge id, HMAC-SHA256(pepper, `"wa.otp.code|" + challenge id + "|" +
-//!   code`), the attempt count, the expiry and the send time. The two HMAC
-//!   inputs carry different prefixes so a key can never be replayed as a
-//!   code hash. The issue log (`wa.otp.rate`, same key) holds send times
-//!   only.
-//! - **Scope**: the sending `phone_number_id` and the optional
-//!   [`OtpConfig::namespace`], length-prefixed (netstrings, so neither can be
-//!   shifted into the other). Services that share a store and a pepper —
-//!   several merchants of one integrator — therefore never see each other's
+//!   challenge id, HMAC-SHA256(pepper, `"wa.otp.code|" + key + "|" +
+//!   challenge id + "|" + code`), the attempt count, the expiry and the
+//!   send time. The two HMAC inputs carry different prefixes so a key can
+//!   never be replayed as a code hash, and the code hash covers the key it
+//!   is stored under: whoever can write the store but lacks the pepper
+//!   cannot copy their own record over someone else's key (another number,
+//!   purpose or namespace) and verify there with their own code. The issue
+//!   log (`wa.otp.rate`, same key) holds send times only.
+//! - **Scope**: the sending `phone_number_id` and the required
+//!   [`OtpConfig::namespace`] (the tenant), length-prefixed (netstrings, so
+//!   neither can be shifted into the other). Services that share a store
+//!   and a pepper — several merchants of one integrator, on their own
+//!   numbers or on one shared number — therefore never see each other's
 //!   codes, cooldowns or issue limits: without it, a code merchant A sent
 //!   verified at merchant B for the same phone number and purpose.
 //! - **Rate limits**: see [`OtpConfig::resend_cooldown`] and
@@ -37,8 +41,9 @@
 //!   against what was read (so two concurrent issues cannot both send), then
 //!   the send. A send Meta provably did not accept (a 4xx, throttling, a
 //!   local refusal) removes the record again; one that may have been
-//!   accepted (unreadable 2xx, timeout, any non-throttling 5xx) keeps it,
-//!   because the code may be on its way.
+//!   accepted (unreadable 2xx, timeout, any non-throttling 5xx, any other
+//!   status) keeps it, because the code may be on its way. The line is
+//!   [`Error::may_have_been_sent`], the same one integrators use.
 //! - **Verify**: counts the attempt with compare-and-swap *before*
 //!   comparing, so concurrent guesses cannot exceed `max_attempts`;
 //!   compares the HMACs in constant time (`subtle`); a match deletes the
@@ -62,8 +67,9 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use time::{OffsetDateTime, PrimitiveDateTime};
+use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 use wa_core::clock::Clock;
-use wa_core::error::{ConfigError, CryptoError, StorageError, TransportError, ValidationError};
+use wa_core::error::{ConfigError, CryptoError, StorageError, ValidationError};
 use wa_core::ids::{MessageId, PhoneNumberId};
 use wa_core::recipient::Recipient;
 use wa_core::secret::SecretBytes;
@@ -153,7 +159,7 @@ pub struct IssueLimit {
 }
 
 impl IssueLimit {
-    /// 5 codes per rolling hour, the [`OtpConfig::default`] limit.
+    /// 5 codes per rolling hour, the [`OtpConfig::new`] limit.
     pub const DEFAULT: Self = Self {
         max_issues: 5,
         window: Duration::from_hours(1),
@@ -166,8 +172,23 @@ impl Default for IssueLimit {
     }
 }
 
-/// Service settings. [`OtpConfig::default`]: 6 digits, 10 minutes, 5
-/// attempts, 30 s cooldown, at most 5 codes per rolling hour.
+/// Service settings. [`OtpConfig::new`] takes the one setting without a
+/// default, the [namespace](Self::namespace), and sets the rest: 6 digits,
+/// 10 minutes, 5 attempts, 30 s cooldown, at most 5 codes per rolling hour.
+/// Change any of them with struct update syntax:
+///
+/// ```
+/// use wa_client::authentication::OtpConfig;
+///
+/// let config = OtpConfig {
+///     code_length: 8,
+///     ..OtpConfig::new("tenant-42")
+/// };
+/// assert!(config.validate().is_ok());
+/// ```
+///
+/// There is no `Default`: a namespace nobody chose would let every service
+/// that forgot it share one scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OtpConfig {
     /// Digits per code, 4 to 8. (iOS keyboard suggestions pick up numeric
@@ -209,30 +230,37 @@ pub struct OtpConfig {
     /// `None` is the explicit opt-out: set it only when an equivalent
     /// per-number limit is enforced in front of this service.
     pub issue_limit: Option<IssueLimit>,
-    /// Tenant (or app) this service issues codes for, when one sending
-    /// number serves several: a code, cooldown or issue limit of one
-    /// namespace is invisible to every other. Not needed to separate
-    /// merchants with their own numbers — challenges are always bound to
-    /// the sending `phone_number_id`. Must not be blank; `None` (the
-    /// default) is its own namespace. Changing it invalidates outstanding
-    /// codes.
-    pub namespace: Option<String>,
+    /// Tenant (or app) this service issues codes for — the tenant id of
+    /// your platform, for instance. Required: not blank, without leading or
+    /// trailing whitespace, without control (`Cc`) or format (`Cf`: U+200B,
+    /// U+FEFF, bidi controls, …) characters. A server-side
+    /// constant (from your configuration or your tenant table), never a
+    /// value taken from the request: a caller who picks the namespace picks
+    /// whose codes, cooldowns and limits they get.
+    ///
+    /// A code, cooldown or issue limit of one namespace is invisible to
+    /// every other, on top of the binding to the sending `phone_number_id`:
+    /// two tenants that send from the same number (a platform's own
+    /// number) can never verify or rate-limit each other's codes. Keep it
+    /// stable: changing it invalidates outstanding codes and resets the
+    /// issue limits.
+    pub namespace: String,
 }
 
-impl Default for OtpConfig {
-    fn default() -> Self {
+impl OtpConfig {
+    /// The default settings for the service of `namespace` (see
+    /// [`Self::namespace`]; checked by [`Self::validate`]).
+    pub fn new(namespace: impl Into<String>) -> Self {
         Self {
             code_length: 6,
             ttl: Duration::from_mins(10),
             max_attempts: 5,
             resend_cooldown: Duration::from_secs(30),
             issue_limit: Some(IssueLimit::DEFAULT),
-            namespace: None,
+            namespace: namespace.into(),
         }
     }
-}
 
-impl OtpConfig {
     /// Check the settings; the error names the offending field.
     /// [`OtpService::new`] reports the same failure as
     /// [`Error::Config`].
@@ -252,12 +280,25 @@ impl OtpConfig {
         {
             return bad("issue_limit", "needs max_issues >= 1 and a non-zero window");
         }
-        if self
-            .namespace
-            .as_deref()
-            .is_some_and(|ns| ns.trim().is_empty())
+        if self.namespace.trim().is_empty() {
+            return bad(
+                "namespace",
+                "must not be blank: name the tenant (or app) the service issues codes for",
+            );
+        }
+        // `" shop"`, `"shop\u{200B}"` and `"shop"` would be three tenants
+        // that print alike.
+        if self.namespace.trim() != self.namespace
+            || self
+                .namespace
+                .chars()
+                .any(|c| c.is_control() || c.general_category() == GeneralCategory::Format)
         {
-            return bad("namespace", "must not be blank (use None for no namespace)");
+            return bad(
+                "namespace",
+                "must not have leading or trailing whitespace, control characters or \
+                 format characters (U+200B, U+FEFF, bidi controls, …)",
+            );
         }
         Ok(())
     }
@@ -458,35 +499,6 @@ impl Phone {
     }
 }
 
-/// Whether a failed send may still have been accepted by Meta. If so, the
-/// code may be on its way and its challenge stays verifiable: dropping it
-/// would turn a code the user receives into a dead one, and keeping a code
-/// nobody received gives a guesser nothing it would not have had anyway
-/// (the attempts and the issue slot are counted either way).
-///
-/// The split follows the retry policy's (`crate::retry`): a 4xx or a
-/// throttling error is a rejection; a 5xx, with or without a Graph error
-/// object (`1`, `2`, `131000`, …), proves nothing about whether the message
-/// went out, which is also why such a send is never replayed.
-///
-/// `TransportError::Connect` counts as "never left" because its contract is
-/// a failure to connect (DNS, TCP, TLS); a transport adapter that reported
-/// a mid-request reset as `Connect` would break that contract, not this.
-fn may_have_been_sent(error: &Error) -> bool {
-    match error {
-        Error::Api(e) => {
-            e.http_status.is_some_and(|s| s >= 500) && !e.kind().is_rejected_before_processing()
-        }
-        Error::Http { status, .. } => *status >= 500,
-        // Refused locally: never left.
-        Error::Validation(_)
-        | Error::Config(_)
-        | Error::Transport(TransportError::Build(_) | TransportError::Connect(_)) => false,
-        // An unreadable 2xx, a timeout, anything else: unknown.
-        _ => true,
-    }
-}
-
 /// Append `bytes` as a netstring (`<len>:<bytes>,`), a self-delimiting
 /// encoding: no sequence of netstrings can be re-split differently.
 fn netstring(out: &mut Vec<u8>, bytes: &[u8]) {
@@ -497,15 +509,14 @@ fn netstring(out: &mut Vec<u8>, bytes: &[u8]) {
 }
 
 /// What every store key of a service is bound to: its sending number and
-/// its namespace. Prefix-free: a netstring, then `-` (no namespace; a
-/// netstring never starts with `-`) or a second netstring.
-fn scope(phone_number_id: &PhoneNumberId, namespace: Option<&str>) -> Vec<u8> {
+/// its namespace, as two netstrings (prefix-free, so neither can be shifted
+/// into the other). The same bytes a service with that namespace derived
+/// when the namespace was optional, so its outstanding codes survived the
+/// change.
+fn scope(phone_number_id: &PhoneNumberId, namespace: &str) -> Vec<u8> {
     let mut out = Vec::new();
     netstring(&mut out, phone_number_id.as_str().as_bytes());
-    match namespace {
-        Some(ns) => netstring(&mut out, ns.as_bytes()),
-        None => out.push(b'-'),
-    }
+    netstring(&mut out, namespace.as_bytes());
     out
 }
 
@@ -569,7 +580,7 @@ impl OtpService {
             .map_err(|e| ConfigError::new(format!("OTP phone_number_id: {}", e.reason)))?;
         crate::templates::validate::name(&template.name, "template.name")?;
         crate::templates::not_empty(&template.language, "template.language")?;
-        let scope = scope(&phone_number_id, config.namespace.as_deref()).into();
+        let scope = scope(&phone_number_id, &config.namespace).into();
         Ok(Self {
             client,
             phone_number_id,
@@ -599,6 +610,20 @@ impl OtpService {
         Ok(mac.finalize().into_bytes().into())
     }
 
+    /// The code hash of challenge `id` stored under `key`. The key is part
+    /// of it: a record copied to another key never verifies there. The
+    /// input is unambiguous about the key because `key` comes first and is
+    /// always 64 hex characters this service computed: whatever `id` (at
+    /// verify, `record.id`, read back from the store) and `code` (the
+    /// user's input) contain, `|` included, two different keys never hash
+    /// the same bytes.
+    fn code_mac(&self, key: &str, id: &str, code: &str) -> Result<[u8; 32]> {
+        self.mac(
+            CODE_DOMAIN,
+            &[key.as_bytes(), id.as_bytes(), code.as_bytes()],
+        )
+    }
+
     /// Store key for a phone number and purpose, bound to this service's
     /// scope. The scope is prefix-free and digits contain no `|`, so
     /// `scope|digits|purpose` is unambiguous.
@@ -620,7 +645,9 @@ impl OtpService {
 
     /// Generate a code, store its hash, and send it to `recipient` with the
     /// authentication template. `purpose` separates independent flows for
-    /// the same number (`"login"`, `"reset_password"`, …).
+    /// the same number (`"login"`, `"reset_password"`, …): a constant of
+    /// your code, never a value from the request, or a caller could verify
+    /// one flow with a code sent for another.
     ///
     /// `recipient` must carry an E.164 phone number with its leading `+`
     /// (spaces, hyphens and parentheses are ignored): that exact number is
@@ -656,7 +683,7 @@ impl OtpService {
         let code = random_code(self.config.code_length)?;
         let expires_at = plus(now, self.config.ttl);
         let record = StoredChallenge {
-            mac: hex::encode(self.mac(CODE_DOMAIN, &[id.as_bytes(), code.as_bytes()])?),
+            mac: hex::encode(self.code_mac(&key, &id, &code)?),
             id: id.clone(),
             attempts: 0,
             expires_at: to_ms(expires_at),
@@ -709,7 +736,13 @@ impl OtpService {
                 }))
             }
             Err(error) => {
-                if !may_have_been_sent(&error)
+                // Only a provable rejection removes the challenge. If the
+                // send may have been accepted, the code may be on its way
+                // and stays verifiable: dropping it would turn a code the
+                // user receives into a dead one, and keeping a code nobody
+                // received gives a guesser nothing (the attempt and the
+                // issue slot are counted either way).
+                if !error.may_have_been_sent()
                     && let Err(cleanup) = self.remove(&key, &id).await
                 {
                     tracing::warn!(challenge = %id, error = %cleanup, "could not remove unsent OTP challenge");
@@ -852,7 +885,7 @@ impl OtpService {
                     "OTP record `{NAMESPACE}/{key}` has a malformed hash"
                 )))
             })?;
-            let candidate = self.mac(CODE_DOMAIN, &[record.id.as_bytes(), code.as_bytes()])?;
+            let candidate = self.code_mac(&key, &record.id, code)?;
             if bool::from(candidate.as_slice().ct_eq(expected.as_slice())) {
                 return self.consume(&key, &record.id, counted).await;
             }

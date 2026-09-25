@@ -184,19 +184,31 @@ impl Error {
     /// nonetheless have been delivered, so resending risks a duplicate.
     ///
     /// `false` means Meta provably did nothing — a Graph error on a 4xx
-    /// response, a local validation/configuration/crypto error, or a
-    /// request that was never built or never connected — so it is safe to
-    /// fix and resend. Storage, sink and webhook errors are `false` too:
-    /// wa-rs raises them before a send, and after one it logs them instead
-    /// of returning them (the inbox records a sent reply without failing).
-    /// `true` for a timeout, a 5xx or any other non-4xx status, an answer
-    /// that arrived but was unreadable or failed an integrity check, or
-    /// anything unknown: reconcile with status webhooks (match on
-    /// `biz_opaque_callback_data`) before sending again.
+    /// response (or built without a status), a throttling error on any
+    /// status (the kinds for which
+    /// [`ErrorKind::is_rejected_before_processing`] holds, which is also
+    /// when the client replays a send), a local
+    /// validation/configuration/crypto error, or a request that was never
+    /// built or never connected — so it is safe to fix and resend. Storage,
+    /// sink and webhook errors are `false` too: wa-rs raises them before a
+    /// send, and after one it logs them instead of returning them (the
+    /// inbox records a sent reply without failing). `true` for a timeout,
+    /// any other 5xx or non-4xx status, an answer that arrived but was
+    /// unreadable or failed an integrity check, or anything unknown:
+    /// reconcile with status webhooks (match on `biz_opaque_callback_data`)
+    /// before sending again.
+    ///
+    /// The OTP service uses it too: a challenge is removed only when this
+    /// is `false`.
     pub fn may_have_been_sent(&self) -> bool {
         // Exhaustive on purpose: a new variant has to decide here.
         match self {
-            Self::Api(e) => e.http_status.is_some_and(|s| s >= 500),
+            // A Graph error on a 1xx-3xx answer is as unknown as one on a
+            // 5xx: only a 4xx is a rejection.
+            Self::Api(e) => {
+                e.http_status.is_some_and(|s| !(400..500).contains(&s))
+                    && !e.kind().is_rejected_before_processing()
+            }
             Self::Http { status, .. } => !(400..500).contains(status),
             Self::Transport(e) => match e {
                 TransportError::Connect(_) | TransportError::Build(_) => false,
@@ -278,12 +290,30 @@ mod tests {
             body_snippet: String::new(),
         };
         let decode = Error::decode("send", serde_json::from_str::<u8>("x").unwrap_err(), b"x");
+        let throttled = |code, status| {
+            let mut g = GraphApiError::new(code, "x");
+            g.http_status = Some(status);
+            Error::from(g)
+        };
         for (err, sent) in [
             (api(Some(400)), false),
             (api(Some(429)), false),
             (api(Some(500)), true),
+            (api(Some(499)), false),
+            (api(Some(302)), true),
+            (api(Some(200)), true),
             (api(None), false),
+            // Throttling proves Meta did nothing, whatever the status: the
+            // retry policy replays a send on it (and the OTP service drops
+            // the challenge).
+            (throttled(130_429, 503), false),
+            (throttled(131_056, 500), false),
+            (throttled(131_000, 503), true),
+            (throttled(130_429, 302), false),
+            (http(400), false),
             (http(404), false),
+            (http(499), false),
+            (http(500), true),
             (http(502), true),
             (Error::Transport(TransportError::Timeout), true),
             (

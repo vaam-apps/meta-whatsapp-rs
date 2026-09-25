@@ -289,6 +289,78 @@ pub struct CreatedFlow {
     pub validation_errors: Vec<FlowValidationError>,
 }
 
+/// Which page of [`Flows::list`](super::Flows::list) to read
+/// (`flows/guides/flowsapi#list`). The stream,
+/// [`Flows::list_stream`](super::Flows::list_stream), manages the cursors
+/// itself and refuses a query that sets one. Build it with
+/// [`ListFlows::new`] and the builders.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ListFlows {
+    /// Cursor from a previous page's `paging.cursors.after`
+    /// ([`Page::next_cursor`](wa_core::paging::Page::next_cursor)).
+    pub after: Option<String>,
+    /// Cursor from a previous page's `paging.cursors.before`.
+    pub before: Option<String>,
+}
+
+impl ListFlows {
+    /// The first page.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Continue after this cursor.
+    #[must_use]
+    pub fn after(mut self, cursor: impl Into<String>) -> Self {
+        self.after = Some(cursor.into());
+        self
+    }
+
+    /// Go back before this cursor.
+    #[must_use]
+    pub fn before(mut self, cursor: impl Into<String>) -> Self {
+        self.before = Some(cursor.into());
+        self
+    }
+}
+
+/// Which page of [`Flow::assets`](super::Flow::assets) to read
+/// (`flows/guides/flowsapi#asset-list`). The stream,
+/// [`Flow::assets_stream`](super::Flow::assets_stream), manages the cursors
+/// itself and refuses a query that sets one. Build it with
+/// [`ListFlowAssets::new`] and the builders.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ListFlowAssets {
+    /// Cursor from a previous page's `paging.cursors.after`
+    /// ([`Page::next_cursor`](wa_core::paging::Page::next_cursor)).
+    pub after: Option<String>,
+    /// Cursor from a previous page's `paging.cursors.before`.
+    pub before: Option<String>,
+}
+
+impl ListFlowAssets {
+    /// The first page.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Continue after this cursor.
+    #[must_use]
+    pub fn after(mut self, cursor: impl Into<String>) -> Self {
+        self.after = Some(cursor.into());
+        self
+    }
+
+    /// Go back before this cursor.
+    #[must_use]
+    pub fn before(mut self, cursor: impl Into<String>) -> Self {
+        self.before = Some(cursor.into());
+        self
+    }
+}
+
 /// Body of `POST /{FLOW_ID}`: metadata to change. Unset fields keep their
 /// current value.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]

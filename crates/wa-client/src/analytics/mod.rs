@@ -37,10 +37,10 @@ use serde::{Deserialize, Deserializer, Serialize};
 use time::{Date, Month, OffsetDateTime};
 use wa_core::Result;
 use wa_core::error::ValidationError;
-use wa_core::ids::{GroupId, TemplateId, WabaId};
+use wa_core::ids::{GroupId, TemplateGroupId, TemplateId, WabaId};
 use wa_core::paging::Page;
 
-use crate::request::paginate_or_error;
+use crate::request::{paginate_or_error, reject_cursors};
 use crate::{Client, GraphRequest};
 
 #[cfg(test)]
@@ -205,16 +205,26 @@ impl Analytics {
         &self,
         query: &TemplateAnalyticsQuery,
     ) -> Result<Page<TemplateAnalytics>> {
-        self.template_request(query)?.send().await
+        self.template_request(query)?
+            .query_opt("after", query.after.as_deref())
+            .query_opt("before", query.before.as_deref())
+            .send()
+            .await
     }
 
-    /// Every page of [`Self::template`]. A validation failure is yielded as
-    /// the stream's single item.
+    /// Every page of [`Self::template`].
+    ///
+    /// The stream manages the cursors itself: a query with `after` or
+    /// `before` set is refused, like any other validation failure, as the
+    /// stream's single item.
     pub fn template_stream(
         &self,
         query: &TemplateAnalyticsQuery,
     ) -> impl Stream<Item = Result<TemplateAnalytics>> + Send + 'static {
-        paginate_or_error(self.template_request(query))
+        paginate_or_error(
+            reject_cursors(query.after.as_deref(), query.before.as_deref())
+                .and_then(|()| self.template_request(query)),
+        )
     }
 
     fn template_request(&self, query: &TemplateAnalyticsQuery) -> Result<GraphRequest> {
@@ -244,15 +254,26 @@ impl Analytics {
         &self,
         query: &TemplateGroupAnalyticsQuery,
     ) -> Result<Page<TemplateGroupAnalytics>> {
-        self.template_group_request(query)?.send().await
+        self.template_group_request(query)?
+            .query_opt("after", query.after.as_deref())
+            .query_opt("before", query.before.as_deref())
+            .send()
+            .await
     }
 
     /// Every page of [`Self::template_group`].
+    ///
+    /// The stream manages the cursors itself: a query with `after` or
+    /// `before` set is refused, like any other validation failure, as the
+    /// stream's single item.
     pub fn template_group_stream(
         &self,
         query: &TemplateGroupAnalyticsQuery,
     ) -> impl Stream<Item = Result<TemplateGroupAnalytics>> + Send + 'static {
-        paginate_or_error(self.template_group_request(query))
+        paginate_or_error(
+            reject_cursors(query.after.as_deref(), query.before.as_deref())
+                .and_then(|()| self.template_group_request(query)),
+        )
     }
 
     fn template_group_request(&self, query: &TemplateGroupAnalyticsQuery) -> Result<GraphRequest> {
@@ -262,7 +283,7 @@ impl Analytics {
             MAX_TEMPLATE_GROUP_IDS,
         )?;
         validate_waba_timezone(query.use_waba_timezone, query.start, query.end)?;
-        let ids = query.template_group_ids.iter().map(String::as_str);
+        let ids = query.template_group_ids.iter().map(TemplateGroupId::as_str);
         Ok(self
             .client
             .get_at(&[self.waba_id.as_str(), "template_group_analytics"])
@@ -278,15 +299,26 @@ impl Analytics {
     /// Messages and joins/leaves per group, daily:
     /// `GET /{waba-id}/group_analytics` (`analytics#group-analytics`).
     pub async fn groups(&self, query: &GroupAnalyticsQuery) -> Result<Page<GroupAnalytics>> {
-        self.groups_request(query)?.send().await
+        self.groups_request(query)?
+            .query_opt("after", query.after.as_deref())
+            .query_opt("before", query.before.as_deref())
+            .send()
+            .await
     }
 
     /// Every page of [`Self::groups`].
+    ///
+    /// The stream manages the cursors itself: a query with `after` or
+    /// `before` set is refused, like any other validation failure, as the
+    /// stream's single item.
     pub fn groups_stream(
         &self,
         query: &GroupAnalyticsQuery,
     ) -> impl Stream<Item = Result<GroupAnalytics>> + Send + 'static {
-        paginate_or_error(self.groups_request(query))
+        paginate_or_error(
+            reject_cursors(query.after.as_deref(), query.before.as_deref())
+                .and_then(|()| self.groups_request(query)),
+        )
     }
 
     fn groups_request(&self, query: &GroupAnalyticsQuery) -> Result<GraphRequest> {
@@ -1140,6 +1172,12 @@ pub struct TemplateAnalyticsQuery {
     pub product_type: Option<TemplateProductType>,
     /// Report in the WABA's timezone; `start`/`end` must then be dates.
     pub use_waba_timezone: Option<bool>,
+    /// Cursor from a previous page's `paging.cursors.after`
+    /// ([`Page::next_cursor`]); for the one-page method only, the stream
+    /// manages its own.
+    pub after: Option<String>,
+    /// Cursor from a previous page's `paging.cursors.before`.
+    pub before: Option<String>,
 }
 
 impl TemplateAnalyticsQuery {
@@ -1156,6 +1194,8 @@ impl TemplateAnalyticsQuery {
             metric_types: Vec::new(),
             product_type: None,
             use_waba_timezone: None,
+            after: None,
+            before: None,
         }
     }
 }
@@ -1168,11 +1208,17 @@ pub struct TemplateGroupAnalyticsQuery {
     /// Range end.
     pub end: AnalyticsTime,
     /// 1–10 template groups.
-    pub template_group_ids: Vec<String>,
+    pub template_group_ids: Vec<TemplateGroupId>,
     /// Metrics to return; empty means all.
     pub metric_types: Vec<TemplateGroupMetric>,
     /// Report in the WABA's timezone; `start`/`end` must then be dates.
     pub use_waba_timezone: Option<bool>,
+    /// Cursor from a previous page's `paging.cursors.after`
+    /// ([`Page::next_cursor`]); for the one-page method only, the stream
+    /// manages its own.
+    pub after: Option<String>,
+    /// Cursor from a previous page's `paging.cursors.before`.
+    pub before: Option<String>,
 }
 
 impl TemplateGroupAnalyticsQuery {
@@ -1180,7 +1226,7 @@ impl TemplateGroupAnalyticsQuery {
     pub fn new(
         start: impl Into<AnalyticsTime>,
         end: impl Into<AnalyticsTime>,
-        template_group_ids: Vec<String>,
+        template_group_ids: Vec<TemplateGroupId>,
     ) -> Self {
         Self {
             start: start.into(),
@@ -1188,6 +1234,8 @@ impl TemplateGroupAnalyticsQuery {
             template_group_ids,
             metric_types: Vec::new(),
             use_waba_timezone: None,
+            after: None,
+            before: None,
         }
     }
 }
@@ -1203,6 +1251,32 @@ pub struct GroupAnalyticsQuery {
     pub group_ids: Vec<GroupId>,
     /// At least one metric.
     pub metric_types: Vec<GroupMetric>,
+    /// Cursor from a previous page's `paging.cursors.after`
+    /// ([`Page::next_cursor`]); for the one-page method only, the stream
+    /// manages its own.
+    pub after: Option<String>,
+    /// Cursor from a previous page's `paging.cursors.before`.
+    pub before: Option<String>,
+}
+
+impl GroupAnalyticsQuery {
+    /// `metric_types` of `group_ids` (exactly one group, for now) between
+    /// `start` and `end`, from the first page.
+    pub fn new(
+        start: OffsetDateTime,
+        end: OffsetDateTime,
+        group_ids: Vec<GroupId>,
+        metric_types: Vec<GroupMetric>,
+    ) -> Self {
+        Self {
+            start,
+            end,
+            group_ids,
+            metric_types,
+            after: None,
+            before: None,
+        }
+    }
 }
 
 // ── Responses ────────────────────────────────────────────────────────────
@@ -1482,7 +1556,7 @@ pub struct TemplateGroupAnalytics {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct TemplateGroupDataPoint {
     /// The template group.
-    pub template_group_id: String,
+    pub template_group_id: TemplateGroupId,
     /// Day start.
     pub start: AnalyticsTime,
     /// Day end.

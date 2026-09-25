@@ -1,8 +1,11 @@
 //! Response types for business phone numbers.
 //!
-//! Every enum here has a catch-all (`Unknown`): Meta adds values (messaging
-//! limit tiers are being reworked, v4 Embedded Signup added statuses), and a
-//! new value must never fail a whole `GET`.
+//! Every enum here has a catch-all: Meta adds values (messaging limit tiers
+//! are being reworked, v4 Embedded Signup added statuses), and a new value
+//! must never fail a whole `GET`. For the enums defined here it is a unit
+//! `Unknown`; [`QualityRating`] (shared, from `crate::common`) keeps the
+//! value in `Other(String)`, and its `Unknown` is Meta's documented
+//! `UNKNOWN` (`OPEN_QUESTIONS.md` #27).
 
 use serde::{Deserialize, Serialize};
 use wa_core::ids::PhoneNumberId;
@@ -85,24 +88,10 @@ pub struct PhoneNumberInfo {
     pub webhook_configuration: Option<WebhookConfiguration>,
 }
 
-/// Quality rating of a business phone number.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-#[non_exhaustive]
-pub enum QualityRating {
-    /// High quality.
-    Green,
-    /// Medium quality.
-    Yellow,
-    /// Low quality.
-    Red,
-    /// Not determined yet (new numbers).
-    #[serde(rename = "NA")]
-    NotApplicable,
-    /// `UNKNOWN`, or a value this crate does not know yet.
-    #[serde(other)]
-    Unknown,
-}
+/// Quality rating of a business phone number; the same type template
+/// quality scores use (see [`crate::common`]). A value Meta adds later is
+/// kept in `QualityRating::Other`.
+pub use crate::common::QualityRating;
 
 /// Whether the number's ownership was verified with a code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]

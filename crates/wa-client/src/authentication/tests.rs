@@ -404,7 +404,7 @@ fn module_doc_example_is_valid() {
     .message_send_ttl_seconds(600);
     template.validate().unwrap();
     assert_eq!(
-        OtpConfig::default().ttl,
+        OtpConfig::new("tenant").ttl,
         std::time::Duration::from_secs(u64::from(template.code_expiration_minutes.unwrap()) * 60),
         "the doc pairs code_expiration_minutes with the default OTP ttl"
     );

@@ -64,7 +64,7 @@ use wa_core::ids::{BusinessId, WabaId};
 use wa_core::paging::Page;
 
 use crate::phone_numbers::{CreatedPhoneNumber, PhoneNumberInfo, fields_param};
-use crate::request::paginate_or_error;
+use crate::request::{paginate_or_error, reject_cursors};
 use crate::{Client, GraphRequest};
 
 /// Entry point, see [`Client::waba`].
@@ -96,6 +96,12 @@ pub struct PhoneNumbersQuery {
     pub sort: Option<String>,
     /// Page size, 1–100.
     pub limit: Option<u32>,
+    /// Cursor from a previous page's `paging.cursors.after`
+    /// ([`Page::next_cursor`]); for [`Waba::phone_numbers`] only, the
+    /// stream manages its own.
+    pub after: Option<String>,
+    /// Cursor from a previous page's `paging.cursors.before`.
+    pub before: Option<String>,
 }
 
 impl PhoneNumbersQuery {
@@ -133,6 +139,70 @@ impl PhoneNumbersQuery {
     #[must_use]
     pub fn limit(mut self, limit: u32) -> Self {
         self.limit = Some(limit);
+        self
+    }
+
+    /// Continue after this cursor.
+    #[must_use]
+    pub fn after(mut self, cursor: impl Into<String>) -> Self {
+        self.after = Some(cursor.into());
+        self
+    }
+
+    /// Go back before this cursor.
+    #[must_use]
+    pub fn before(mut self, cursor: impl Into<String>) -> Self {
+        self.before = Some(cursor.into());
+        self
+    }
+}
+
+/// Options for listing a WABA's assigned users
+/// (`reference/whatsapp-business-account/assigned-users-management-api`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ListAssignedUsers {
+    /// The business portfolio the assignments are read for (`business`,
+    /// required).
+    pub business: BusinessId,
+    /// Page size, 1–100 (Meta's default: 25).
+    pub limit: Option<u32>,
+    /// Cursor from a previous page's `paging.cursors.after`; for
+    /// [`Waba::assigned_users`] only, the stream manages its own.
+    pub after: Option<String>,
+    /// Cursor from a previous page's `paging.cursors.before`.
+    pub before: Option<String>,
+}
+
+impl ListAssignedUsers {
+    /// The users assigned for `business`, Meta's page size.
+    pub fn new(business: impl Into<BusinessId>) -> Self {
+        Self {
+            business: business.into(),
+            limit: None,
+            after: None,
+            before: None,
+        }
+    }
+
+    /// Page size (1–100).
+    #[must_use]
+    pub fn limit(mut self, limit: u32) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
+    /// Continue after this cursor.
+    #[must_use]
+    pub fn after(mut self, cursor: impl Into<String>) -> Self {
+        self.after = Some(cursor.into());
+        self
+    }
+
+    /// Go back before this cursor.
+    #[must_use]
+    pub fn before(mut self, cursor: impl Into<String>) -> Self {
+        self.before = Some(cursor.into());
         self
     }
 }
@@ -204,16 +274,27 @@ impl Waba {
 
     /// `GET /{WABA_ID}/phone_numbers`, one page. Meta sorts by Embedded
     /// Signup completion, most recent first, unless `sort` says otherwise.
+    /// The next page: the same query with `after` set to this page's
+    /// [`Page::next_cursor`].
     pub async fn phone_numbers(&self, query: &PhoneNumbersQuery) -> Result<Page<PhoneNumberInfo>> {
-        self.phone_numbers_request(query)?.send().await
+        self.phone_numbers_request(query)?
+            .query_opt("after", query.after.as_deref())
+            .query_opt("before", query.before.as_deref())
+            .send()
+            .await
     }
 
-    /// All phone numbers, following cursors.
+    /// All phone numbers, following cursors. The stream manages them
+    /// itself: a query with `after` or `before` set is refused (the
+    /// stream's single item is that validation error).
     pub fn phone_numbers_stream(
         &self,
         query: &PhoneNumbersQuery,
     ) -> impl Stream<Item = Result<PhoneNumberInfo>> + Send + 'static + use<> {
-        paginate_or_error(self.phone_numbers_request(query))
+        paginate_or_error(
+            reject_cursors(query.after.as_deref(), query.before.as_deref())
+                .and_then(|()| self.phone_numbers_request(query)),
+        )
     }
 
     /// `POST /{WABA_ID}/phone_numbers`: add a number to the WABA (only
@@ -230,6 +311,11 @@ impl Waba {
     }
 
     /// `GET /{WABA_ID}/subscribed_apps`.
+    ///
+    /// Unlike the other lists, it takes no cursor: the reference documents
+    /// neither `after`/`before` nor a `paging` object (a WABA has a handful
+    /// of subscribed apps). Should Meta page it anyway,
+    /// [`Self::subscribed_apps_stream`] follows the cursors.
     pub async fn subscribed_apps(&self) -> Result<Page<SubscribedApp>> {
         self.subscribed_apps_request().send().await
     }
@@ -279,24 +365,42 @@ impl Waba {
             .await
     }
 
-    fn assigned_users_request(&self, business: &BusinessId) -> GraphRequest {
-        self.client
+    fn assigned_users_request(&self, query: &ListAssignedUsers) -> Result<GraphRequest> {
+        if let Some(limit) = query.limit
+            && !(1..=100).contains(&limit)
+        {
+            return Err(ValidationError::new("limit", "must be 1-100").into());
+        }
+        Ok(self
+            .client
             .get_at(&[self.waba_id.as_str(), "assigned_users"])
-            .query("business", business)
-            .context("assigned users")
+            .query("business", &query.business)
+            .query_opt("limit", query.limit)
+            .context("assigned users"))
     }
 
-    /// `GET /{WABA_ID}/assigned_users?business=…`, one page.
-    pub async fn assigned_users(&self, business: &BusinessId) -> Result<Page<AssignedUser>> {
-        self.assigned_users_request(business).send().await
+    /// `GET /{WABA_ID}/assigned_users?business=…`, one page. The next page:
+    /// the same query with `after` set to this page's
+    /// [`Page::next_cursor`].
+    pub async fn assigned_users(&self, query: &ListAssignedUsers) -> Result<Page<AssignedUser>> {
+        self.assigned_users_request(query)?
+            .query_opt("after", query.after.as_deref())
+            .query_opt("before", query.before.as_deref())
+            .send()
+            .await
     }
 
-    /// All assigned users, following cursors.
+    /// All assigned users, following cursors. The stream manages them
+    /// itself: a query with `after` or `before` set is refused (the
+    /// stream's single item is that validation error).
     pub fn assigned_users_stream(
         &self,
-        business: &BusinessId,
+        query: &ListAssignedUsers,
     ) -> impl Stream<Item = Result<AssignedUser>> + Send + 'static + use<> {
-        self.assigned_users_request(business).paginate()
+        paginate_or_error(
+            reject_cursors(query.after.as_deref(), query.before.as_deref())
+                .and_then(|()| self.assigned_users_request(query)),
+        )
     }
 
     /// `POST /{WABA_ID}/assigned_users?user=…&tasks=[…]`: grant a user (e.g.
@@ -471,6 +575,89 @@ mod tests {
         assert_eq!(t.requests().len(), 2);
     }
 
+    /// Every list takes its cursor in its query: the one-page method sends
+    /// it, the stream refuses it (it manages the cursors) before any request.
+    #[tokio::test]
+    async fn phone_numbers_and_assigned_users_take_cursors_in_their_query() {
+        let t = ScriptedTransport::new();
+        t.push_json(200, json!({"data": []}));
+        t.push_json(200, json!({"data": []}));
+        t.push_json(200, json!({"data": []}));
+        let w = client(&t).waba("W");
+        w.phone_numbers(&PhoneNumbersQuery::new().after("QVFIU"))
+            .await
+            .unwrap();
+        w.phone_numbers(&PhoneNumbersQuery::new().before("QVFIB"))
+            .await
+            .unwrap();
+        w.assigned_users(&ListAssignedUsers::new("B").limit(100).after("MjQZD"))
+            .await
+            .unwrap();
+        let reqs = t.requests();
+        assert_eq!(reqs[0].query("after").as_deref(), Some("QVFIU"));
+        assert_eq!(reqs[0].query("before"), None);
+        assert_eq!(reqs[1].query("before").as_deref(), Some("QVFIB"));
+        assert_eq!(reqs[2].path(), "/v25.0/W/assigned_users");
+        assert_eq!(reqs[2].query("business").as_deref(), Some("B"));
+        assert_eq!(reqs[2].query("limit").as_deref(), Some("100"));
+        assert_eq!(reqs[2].query("after").as_deref(), Some("MjQZD"));
+        assert_eq!(t.remaining(), 0);
+
+        let refused: Vec<_> = w
+            .phone_numbers_stream(&PhoneNumbersQuery::new().after("x"))
+            .collect()
+            .await;
+        assert!(
+            matches!(&refused[..], [Err(wa_core::Error::Validation(v))] if v.field == "after"),
+            "{refused:?}"
+        );
+        let refused: Vec<_> = w
+            .assigned_users_stream(&ListAssignedUsers::new("B").before("x"))
+            .collect()
+            .await;
+        assert!(
+            matches!(&refused[..], [Err(wa_core::Error::Validation(v))] if v.field == "before"),
+            "{refused:?}"
+        );
+        for limit in [0, 101] {
+            let err = w
+                .assigned_users(&ListAssignedUsers::new("B").limit(limit))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, wa_core::Error::Validation(v) if v.field == "limit"),
+                "{limit}: {err}"
+            );
+        }
+        assert_eq!(t.requests().len(), 3, "refused before any request");
+    }
+
+    #[tokio::test]
+    async fn assigned_users_stream_follows_cursors() {
+        let t = ScriptedTransport::new();
+        t.push_json(
+            200,
+            json!({"data": [{"id": "1", "name": "Anna Flex", "tasks": ["MANAGE"]}],
+                "paging": {"cursors": {"before": "MAZDZD", "after": "MjQZD"},
+                    "next": "https://graph.facebook.com/v25.0/W/assigned_users?after=MjQZD"}}),
+        );
+        t.push_json(
+            200,
+            json!({"data": [{"id": "2", "name": "Jasper Brown", "tasks": ["DEVELOP"]}]}),
+        );
+        let users: Vec<String> = client(&t)
+            .waba("W")
+            .assigned_users_stream(&ListAssignedUsers::new("B"))
+            .map(|u| u.unwrap().id)
+            .collect()
+            .await;
+        assert_eq!(users, ["1", "2"]);
+        let second = &t.requests()[1];
+        assert_eq!(second.query("after").as_deref(), Some("MjQZD"));
+        assert_eq!(second.query("business").as_deref(), Some("B"));
+        assert_eq!(t.remaining(), 0);
+    }
+
     #[tokio::test]
     async fn create_phone_number_posts_guide_example() {
         // solution-providers/registering-phone-numbers, step 1.
@@ -621,7 +808,10 @@ mod tests {
         t.push_json(200, json!({"success": true}));
         t.push_json(200, json!({"success": true}));
         let w = client(&t).waba("W");
-        let users = w.assigned_users(&BusinessId::new("B")).await.unwrap();
+        let users = w
+            .assigned_users(&ListAssignedUsers::new("B"))
+            .await
+            .unwrap();
         assert_eq!(users.data[0].tasks, vec![WabaTask::Manage]);
         w.assign_user("1972555232742222", &[WabaTask::Manage])
             .await
@@ -630,6 +820,7 @@ mod tests {
         let reqs = t.requests();
         assert_eq!(reqs[0].path(), "/v25.0/W/assigned_users");
         assert_eq!(reqs[0].query("business").as_deref(), Some("B"));
+        assert_eq!(reqs[0].query("after"), None);
         assert_eq!(reqs[1].method, Method::POST);
         assert_eq!(reqs[1].query("user").as_deref(), Some("1972555232742222"));
         assert_eq!(reqs[1].query("tasks").as_deref(), Some(r#"["MANAGE"]"#));

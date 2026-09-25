@@ -64,7 +64,7 @@
 //! ```no_run
 //! use serde_json::json;
 //! use wa_client::flows::endpoint::{
-//!     EncryptedFlowRequest, EndpointStatus, FlowAction, FlowEndpointKey, FlowResponse,
+//!     EncryptedFlowRequest, EndpointStatus, EndpointAction, FlowEndpointKey, FlowResponse,
 //!     verify_request_signature,
 //! };
 //! use wa_core::secret::AppSecret;
@@ -86,10 +86,10 @@
 //!         return Ok((EndpointStatus::DecryptionFailed.code(), String::new()));
 //!     };
 //!     let response = match &request.action {
-//!         FlowAction::Ping => FlowResponse::health_check(),
+//!         EndpointAction::Ping => FlowResponse::health_check(),
 //!         _ if request.error_notification().is_some() => FlowResponse::acknowledge_error(),
-//!         FlowAction::Init => FlowResponse::next_screen("WELCOME", json!({"name": "Ada"})),
-//!         FlowAction::DataExchange => {
+//!         EndpointAction::Init => FlowResponse::next_screen("WELCOME", json!({"name": "Ada"})),
+//!         EndpointAction::DataExchange => {
 //!             FlowResponse::complete(request.flow_token.clone().unwrap_or_default())
 //!         }
 //!         _ => FlowResponse::next_screen("WELCOME", json!({})),
@@ -207,8 +207,10 @@ pub struct EncryptedFlowRequest {
 }
 
 wire_enum! {
-    /// Why WhatsApp called the endpoint.
-    pub enum FlowAction {
+    /// Why WhatsApp called the endpoint (`action` of a Flow endpoint
+    /// request). Not the `flow_action` a Flow message or template button
+    /// starts with: that is [`crate::common::FlowAction`].
+    pub enum EndpointAction {
         /// Periodic health check; answer [`FlowResponse::health_check`].
         Ping = "ping",
         /// The user opened the Flow (the message was sent with
@@ -238,7 +240,7 @@ pub struct FlowRequest {
     /// Data API version, `3.0` today.
     pub version: String,
     /// What triggered the request.
-    pub action: FlowAction,
+    pub action: EndpointAction,
     /// Screen the request comes from; may be absent for `INIT` and `BACK`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub screen: Option<String>,

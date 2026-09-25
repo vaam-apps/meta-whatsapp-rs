@@ -1,7 +1,9 @@
 //! In-process [`ConversationStore`]. Honours the full contract (dedup on id,
 //! the [`DeliveryStatus::supersedes`] rule, `(timestamp, id)` ordering with
-//! exclusive cursors, unread counting) within one process; history is lost
-//! on restart. Use it for tests, development and demos.
+//! exclusive cursors, unread counting, synced history that opens no window,
+//! media placeholders filled once and never after a revoke, tombstones kept
+//! out of the summary) within one process; history is lost on restart. Use
+//! it for tests, development and demos.
 
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
@@ -42,7 +44,8 @@ struct State {
 ///
 /// Unread counts are by **arrival**: an inbound message appended after the
 /// last [`ConversationStore::mark_read`] counts even if its timestamp is
-/// older (a late webhook the merchant has not seen yet). The Postgres
+/// older (a late webhook the merchant has not seen yet); synced history
+/// ([`ConversationStore::append_synced`]) never counts. The Postgres
 /// adapter counts the same way.
 #[derive(Clone, Default)]
 pub struct MemoryConversationStore {
@@ -69,30 +72,49 @@ impl MemoryConversationStore {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Insert `message` unless its id is known. `live` messages (not synced
+    /// history) move the window and count as unread when inbound.
+    async fn insert(&self, message: StoredMessage, live: bool) -> Result<bool, StorageError> {
+        let mut st = self.state.lock().await;
+        Ok(st.insert(message, live))
+    }
 }
 
-#[async_trait]
-impl ConversationStore for MemoryConversationStore {
-    async fn append(&self, message: StoredMessage) -> Result<bool, StorageError> {
-        let mut st = self.state.lock().await;
-        if st.messages.contains_key(&message.id) {
-            return Ok(false);
+impl State {
+    /// Store `message` in the history unless its id is known, without
+    /// touching the summary. Returns whether it was stored.
+    fn insert_row(&mut self, message: StoredMessage) -> bool {
+        if self.messages.contains_key(&message.id) {
+            return false;
         }
+        self.history
+            .entry(message.conversation.clone())
+            .or_default()
+            .insert((message.timestamp, message.id.clone()));
+        self.messages.insert(message.id.clone(), message);
+        true
+    }
+
+    /// See [`MemoryConversationStore::insert`].
+    fn insert(&mut self, message: StoredMessage, live: bool) -> bool {
+        let st = self;
         let key = message.conversation.clone();
         let at = message.timestamp;
-        let inbound = message.direction == Direction::Inbound;
-        st.history
-            .entry(key.clone())
-            .or_default()
-            .insert((at, message.id.clone()));
+        let id = message.id.clone();
+        let text = message.text.clone();
+        let opens_window = live && message.direction == Direction::Inbound;
+        if !st.insert_row(message) {
+            return false;
+        }
         match st.conversations.get_mut(&key) {
             Some(s) => {
-                if (at, &message.id) > (s.last_message_at, &s.last_message_id) {
+                if (at, &id) > (s.last_message_at, &s.last_message_id) {
                     s.last_message_at = at;
-                    s.last_message_id = message.id.clone();
-                    s.last_text.clone_from(&message.text);
+                    s.last_message_id = id;
+                    s.last_text = text;
                 }
-                if inbound {
+                if opens_window {
                     s.last_inbound_at = Some(s.last_inbound_at.map_or(at, |t| t.max(at)));
                     s.unread += 1;
                 }
@@ -102,15 +124,78 @@ impl ConversationStore for MemoryConversationStore {
                     key,
                     Summary {
                         last_message_at: at,
-                        last_message_id: message.id.clone(),
-                        last_text: message.text.clone(),
-                        last_inbound_at: inbound.then_some(at),
-                        unread: u64::from(inbound),
+                        last_message_id: id,
+                        last_text: text,
+                        last_inbound_at: opens_window.then_some(at),
+                        unread: u64::from(opens_window),
                     },
                 );
             }
         }
-        st.messages.insert(message.id.clone(), message);
+        true
+    }
+}
+
+#[async_trait]
+impl ConversationStore for MemoryConversationStore {
+    async fn append(&self, message: StoredMessage) -> Result<bool, StorageError> {
+        self.insert(message, true).await
+    }
+
+    async fn append_synced(&self, messages: Vec<StoredMessage>) -> Result<Vec<bool>, StorageError> {
+        let mut st = self.state.lock().await;
+        Ok(messages.into_iter().map(|m| st.insert(m, false)).collect())
+    }
+
+    async fn revoke(
+        &self,
+        key: &ConversationKey,
+        id: &MessageId,
+        direction: Direction,
+        at: OffsetDateTime,
+    ) -> Result<bool, StorageError> {
+        let mut st = self.state.lock().await;
+        if let Some(message) = st.messages.get_mut(id) {
+            if message.conversation.phone_number_id != key.phone_number_id
+                || message.direction != direction
+                || !DeliveryStatus::Deleted.supersedes(message.status)
+            {
+                return Ok(false);
+            }
+            message.status = DeliveryStatus::Deleted;
+            message.status_at = Some(at);
+            return Ok(true);
+        }
+        // History only: a tombstone is never part of the summary.
+        Ok(st.insert_row(StoredMessage::tombstone(key, id, direction, at)))
+    }
+
+    async fn fill_media_placeholder(
+        &self,
+        phone_number_id: &PhoneNumberId,
+        id: &MessageId,
+        kind: String,
+        text: Option<String>,
+        payload: serde_json::Value,
+    ) -> Result<bool, StorageError> {
+        let mut guard = self.state.lock().await;
+        let st = &mut *guard;
+        // Never a revoked one: the content is what its sender deleted.
+        let Some(message) = st.messages.get_mut(id).filter(|m| {
+            &m.conversation.phone_number_id == phone_number_id
+                && m.kind == StoredMessage::MEDIA_PLACEHOLDER
+                && m.status != DeliveryStatus::Deleted
+        }) else {
+            return Ok(false);
+        };
+        message.kind = kind;
+        message.text = text;
+        message.payload = payload;
+        if let Some(s) = st.conversations.get_mut(&message.conversation)
+            && &s.last_message_id == id
+        {
+            s.last_text.clone_from(&message.text);
+        }
         Ok(true)
     }
 

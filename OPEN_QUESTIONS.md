@@ -4,6 +4,11 @@ Decisions the implementation deliberately did **not** make. Each entry says
 what the code does today, so nothing here is a hidden default. Close an
 entry by deciding it in an issue/PR and deleting it here.
 
+Numbers are permanent (the code, docs and skills cite them) and not in
+order within a section. Markdown renders a list with its first item's
+number and counts up from there, so an entry out of sequence starts a list
+of its own, after an HTML comment; keep that when you add one.
+
 ## Naming and publishing
 
 1. **Crate names.** `wa-rs` is taken on crates.io by an unrelated project,
@@ -55,17 +60,6 @@ entry by deciding it in an issue/PR and deleting it here.
     one scope. Confirm or tune; opting out is explicit.
 14. **Pepper custody.** The HMAC pepper (`SecretBytes`) is supplied by the
     integrator; changing it invalidates outstanding codes.
-34. **Should `OtpConfig::namespace` be required?** Codes are scoped to the
-    sending `phone_number_id` plus the namespace, which is optional
-    (`None` by default). Two `OtpService`s that send from the *same* number
-    with the default config therefore share a scope: a code one merchant's
-    service sent verifies at the other's, and their cooldowns and limits
-    are pooled. Today the docs tell integrators to set the namespace to the
-    tenant id whenever one number sends codes for several merchants or
-    tenants. Making it required (or a constructor argument) would make
-    that impossible to forget, at the cost of a breaking API change and a
-    one-time key change for everyone (outstanding codes become `NotFound`).
-    An API decision for the maintainer.
 
 ## Webhooks
 
@@ -73,8 +67,6 @@ entry by deciding it in an issue/PR and deleting it here.
     finds another request mid-delivery gets 503 and Meta retries.
 16. **Blank verify token** fails when a verification request arrives, not at
     startup — failing early would change the handler builder's API.
-17. **Coexistence echoes and history** are parsed but not recorded by the
-    inbox.
 
 ## Storage
 
@@ -129,7 +121,8 @@ entry by deciding it in an issue/PR and deleting it here.
 
 ## API conventions
 
-Found by the conventions review of 8ee6fab; counts are from that commit.
+Found by the conventions reviews of 8ee6fab (27–29; counts are from that
+commit) and of b805dac (36).
 
 27. **One catch-all variant for every open enum.** Enums Meta may extend
     have a catch-all so a new value never fails parsing, but it comes in
@@ -145,6 +138,11 @@ Found by the conventions review of 8ee6fab; counts are from that commit.
     in wa-core generates them all) before integrators pin a revision:
     changing it later breaks their `match`es. Until then new code follows
     its module and adds no new unit `Unknown`.
+    One struct already mixes the meanings: in `PhoneNumberInfo`,
+    `quality_rating` is the shared `common::QualityRating`, whose `Unknown`
+    is Meta's documented `UNKNOWN` (its catch-all is `Other(String)`),
+    while every other enum of the struct uses a unit `Unknown` as its
+    catch-all.
 28. **`#[non_exhaustive]` policy.** 25 of the 144 `Deserialize` structs in
     wa-client have it (all in the onboarding modules), none of the 104 in
     wa-webhooks; every macro-generated enum has it, the hand-written
@@ -161,6 +159,23 @@ Found by the conventions review of 8ee6fab; counts are from that commit.
     `axum = "0.8"` still unifies with it. The alternative, telling
     integrators to pin their own versions and dropping the re-exports, was
     not taken; confirm the direction.
+
+<!-- 36 starts its own list so it renders as 36, not 30. -->
+
+36. **Two types for one quality rating.** `wa_client::common::QualityRating`
+    (templates and phone numbers: `GREEN`, `YELLOW`, `RED`, `NA`,
+    `UNKNOWN`, `Other(String)`) and `wa_webhooks::fields::templates::TemplateQualityScore`
+    (the `message_template_quality_update` webhook: `GREEN`, `YELLOW`,
+    `RED`, `UNKNOWN`, `Other(String)`) are the same concept in two crates,
+    neither of which depends on the other. Options: move one type to
+    `wa-core` and re-export it from both, or keep two and document the
+    mapping. Merging changes the webhook type's variants (it gains
+    `NotApplicable`: `"NA"` is `Other("NA")` today) and its case rule (the
+    client's type matches values case-insensitively, the webhook's
+    exactly), which breaks a `match` on it: an arm on `Other("NA")` or on
+    a lower-case `Other` value stops matching, and unless
+    `TemplateQualityScore` stays as an alias, every `match` naming it stops
+    compiling. Today: two types.
 
 ## Webhooks and live updates
 
@@ -195,7 +210,7 @@ Found by the security review of 8ee6fab.
 ## CMS inbox
 
 Found while writing the integrator guides and checking them against
-7940d15.
+7940d15 (32, 33), and by the security review of b805dac (37, 38).
 
 32. **A call reopens the window, the inbox cannot see it.** Meta starts or
     refreshes the 24-hour customer service window when the customer
@@ -221,3 +236,47 @@ Found while writing the integrator guides and checking them against
     Options: key messages by `(phone_number_id, id)` (a migration of the
     primary key; history cursors are already per conversation), or keep it
     and document it (what the guides and skills do today).
+
+<!-- 37 starts its own list so it renders as 37, not 34 (38 follows it). -->
+
+37. **Should a revoke also match its conversation?**
+    `ConversationStore::revoke` deletes message `id` if it was stored for
+    the business number the revoke arrived on and in the revoke's
+    direction (a customer revokes what they sent, the business what it
+    sent). The security review of b805dac asked for the conversation to
+    match too; the remediation did not do it, and the port leaves it
+    unspecified until this is decided (the in-repo adapters do not match
+    it, and the conformance suite requires neither). A revoke's
+    conversation key and its message's can differ for the same customer:
+    a message recorded under the phone number (a history thread without a
+    BSUID) and revoked by a live webhook keyed by the BSUID, or a customer
+    whose BSUID changed with their number (`UserIdChanged`).
+    - *Keep number + direction (today).* A revoke finds its message (of
+      its number and direction) however the two were keyed. The cost: a
+      revoke keyed to conversation A marks a message stored under
+      conversation B `Deleted` when the number and direction match, so
+      nothing checks that the revoke and the message belong to the same
+      customer.
+    - *Match the conversation too.* A revoke only ever deletes a message
+      of the conversation it names. The cost: when the keys differ as
+      above, the message is not marked deleted and the merchant's inbox
+      keeps showing it as a live message, with the content its sender
+      deleted.
+
+    Under either option, a revoke that arrives before its message leaves
+    its tombstone in the revoke's conversation; when the message's thread
+    is keyed differently, that thread shows nothing for it (message ids
+    are unique per store, #33, so the message is not stored there either).
+38. **A revoked message keeps its content.** When a revoke finds its
+    message stored, the row becomes `Deleted` and keeps its text and
+    payload (the merchant's inbox still shows what the customer deleted).
+    When the revoke arrives first, the tombstone keeps the content out:
+    the message finds its id taken, and the only method that writes
+    content into a stored row, `fill_media_placeholder`, refuses a
+    tombstone (not a placeholder) and a revoked placeholder. Meta's revoke
+    webhook describes the event as the user deleting the message
+    (`webhooks/reference/messages/revoke`). Options: erase `text` and
+    `payload` on revoke (a port change: `revoke` would rewrite the row,
+    and the conversation preview when it is the latest message), or keep
+    the content for the merchant's records and document it (what the
+    guides say today).

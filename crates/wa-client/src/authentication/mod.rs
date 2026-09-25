@@ -57,7 +57,7 @@
 //!     kv,
 //!     Arc::new(SystemClock),
 //!     OtpPepper::new(std::env::var("OTP_PEPPER")?.into_bytes())?,
-//!     OtpConfig::default(),
+//!     OtpConfig::new("tenant-42"), // the tenant these codes are for
 //! )?;
 //!
 //! let user = Recipient::phone("+16505551234");
