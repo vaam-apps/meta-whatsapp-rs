@@ -9,6 +9,11 @@
 //! backends that expire on their own wall clock (Postgres `now()`, Redis
 //! TTLs) pass a closure that sleeps; the suite only uses sub-second-scale
 //! expiries in that case via [`run_with_real_time`].
+//!
+//! Values are bytes: any byte sequence round-trips, U+0000 and invalid
+//! UTF-8 included. A key (namespace or key) holding U+0000 may be refused
+//! with an error (Postgres keeps keys as `text`, which cannot hold it) or
+//! kept exactly (memory, Redis), never stored as another key.
 
 use std::time::Duration;
 
@@ -63,6 +68,8 @@ pub async fn run_with_real_time<S: KvStore + ?Sized>(store: &S, tick: Duration) 
 /// Checks that need no control over time, so both entry points run them.
 async fn clock_independent<S: KvStore + ?Sized>(store: &S) {
     empty_value_is_a_value(store).await;
+    values_are_any_bytes(store).await;
+    a_nul_in_a_key_is_kept_or_refused(store).await;
     keep_preserves_expiry(store).await;
     born_expired_is_invisible(store).await;
     versions_increase_across_every_write(store).await;
@@ -418,6 +425,87 @@ async fn empty_value_is_a_value<S: KvStore + ?Sized>(store: &S) {
         "an empty value blocks put_if_absent"
     );
     assert!(store.delete(&k).await.unwrap());
+}
+
+/// Values are bytes: every byte round-trips through every write, NUL,
+/// invalid UTF-8 and the bytes of U+FFFD included.
+async fn values_are_any_bytes<S: KvStore + ?Sized>(store: &S) {
+    let first = vec![0, b'a', 0, 0xff, 0xfe, 0xc3, 0x28, 0, 0xef, 0xbf, 0xbd, 0];
+    let second = vec![0; 3];
+    let k = key("bytes");
+    let v = store.put(&k, first.clone(), Expiry::Never).await.unwrap();
+    assert_eq!(store.get(&k).await.unwrap().unwrap().value, first, "put");
+    store
+        .compare_and_swap(&k, v, Some(second.clone()), Expiry::Keep)
+        .await
+        .unwrap()
+        .expect("the swap applies");
+    assert_eq!(
+        store.get(&k).await.unwrap().unwrap().value,
+        second,
+        "compare_and_swap"
+    );
+    let fresh = key("bytes-absent");
+    store
+        .put_if_absent(&fresh, first.clone(), Expiry::Never)
+        .await
+        .unwrap()
+        .expect("a new key");
+    assert_eq!(
+        store.get(&fresh).await.unwrap().unwrap().value,
+        first,
+        "put_if_absent"
+    );
+    store.delete(&k).await.unwrap();
+    store.delete(&fresh).await.unwrap();
+}
+
+/// A key holding U+0000 is either refused (an error, as on Postgres, whose
+/// key columns are `text`) or kept exactly (memory, Redis); it is never
+/// stored as another key, such as the one with U+FFFD in its place or the
+/// one without it.
+async fn a_nul_in_a_key_is_kept_or_refused<S: KvStore + ?Sized>(store: &S) {
+    let base = format!("nul-{}", unique());
+    let fffd = StoreKey::new("wa.conformance", format!("{base}\u{FFFD}"));
+    let stripped = StoreKey::new("wa.conformance", base.clone());
+    for (other, value) in [(&fffd, b"fffd"), (&stripped, b"none")] {
+        store
+            .put(other, value.to_vec(), Expiry::Never)
+            .await
+            .unwrap();
+    }
+    for nul in [
+        StoreKey::new("wa.conformance", format!("{base}\0")),
+        StoreKey::new("wa.conformance\0", format!("{base}\u{FFFD}")),
+    ] {
+        match store.put(&nul, b"nul".to_vec(), Expiry::Never).await {
+            Ok(_) => {
+                assert_eq!(
+                    store.get(&nul).await.unwrap().unwrap().value,
+                    b"nul",
+                    "{nul:?}: an accepted key reads back"
+                );
+                assert!(store.delete(&nul).await.unwrap());
+            }
+            Err(_) => {
+                if let Ok(found) = store.get(&nul).await {
+                    assert!(found.is_none(), "{nul:?}: refused, yet stored");
+                }
+            }
+        }
+        assert_eq!(
+            store.get(&fffd).await.unwrap().unwrap().value,
+            b"fffd",
+            "{nul:?}: the U+FFFD key is another key"
+        );
+        assert_eq!(
+            store.get(&stripped).await.unwrap().unwrap().value,
+            b"none",
+            "{nul:?}: the key without the NUL is another key"
+        );
+    }
+    store.delete(&fffd).await.unwrap();
+    store.delete(&stripped).await.unwrap();
 }
 
 async fn keep_preserves_expiry<S: KvStore + ?Sized>(store: &S) {

@@ -58,17 +58,35 @@ let conversations: Arc<dyn ConversationStore> = Arc::new(PostgresConversationSto
   server's** clock: keep it on NTP.
 - Call `PostgresKvStore::purge_expired()` periodically (dedup markers add a
   row per event).
-- **Postgres cannot store U+0000**, and a refusal on every retry would hold
-  back the whole webhook batch until Meta drops it. So `InboxSink` (and
-  `Inbox::send`, for your replies) replaces U+0000 with U+FFFD, the
-  replacement character, in the stored text, kind, payload and status
-  error: a customer's NUL shows up as `�` instead of failing the delivery.
-  The replacement is lossy and provisional (a maintainer decision, taken
-  without asking; it may be reversed:
-  [open question](../../OPEN_QUESTIONS.md#storage) 18). Meta-assigned
-  fields (the message id, the contact, the phone number id) are stored as
-  sent, so a NUL there is still refused, as is NUL in anything you write
-  to the store directly.
+- **Message content keeps U+0000.** `InboxSink` (and `Inbox::send`, for
+  your replies) records the text, kind, payload and status error exactly
+  as sent, and the Postgres store keeps them: `kind_utf8`, `text_utf8`
+  and `wa_conversations.last_text_utf8` are `BYTEA` (the UTF-8 bytes),
+  `payload_json` and `error_json` are `json`. Your UI gets the NUL back:
+  render or strip it there. If you query these tables yourself, decode the
+  `*_utf8` columns as UTF-8 in your application and search on bytes
+  (`position(convert_to($1, 'UTF8') IN text_utf8) > 0`): `convert_from`
+  fails on a row holding a NUL, and that one row fails the whole
+  statement. Never index or extract payload fields in SQL: `->`, `->>`, a
+  cast to `jsonb` and every `jsonb` operator fail on a document holding a
+  NUL anywhere (an index on one would fail the insert, and the webhook
+  with it), and `json` has no equality, so `=`, `DISTINCT`, `GROUP BY` and
+  `UNION` on it fail on every row. Meta-assigned ids (the message id, the
+  contact, the phone number id) stay `TEXT`: the Postgres store refuses a
+  NUL there (Meta never assigns one; a history item with one is skipped).
+  The rest is in the `wa_adapters::store::postgres` docs.
+- **Upgrading a database written before lossless content** is a one-way
+  schema change (migration 3): back up first (a rollback is a restore,
+  which loses what was recorded since), stop the older instances that
+  write to the inbox tables, drop your own objects on the content columns
+  (the migration refuses to run under an index or constraint on the
+  payload, and a trigger that names an old column would fail every
+  insert), then run `migrate` once from a one-off job before starting the
+  new revision. The ordered steps and timings:
+  [production.md](production.md#7-before-going-live); the pre-flight
+  query that lists your objects: the `wa_adapters::store::postgres` docs.
+  Existing rows keep their content: a NUL an older revision stored as
+  U+FFFD stays U+FFFD.
 - A message id is stored once per store: if the same id ever arrives on two
   of your business numbers (e.g. a group both are in), it is kept only under
   the first conversation that recorded it

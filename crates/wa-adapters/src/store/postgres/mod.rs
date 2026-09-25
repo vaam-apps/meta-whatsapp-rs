@@ -39,14 +39,172 @@
 //! `MemoryKvStore` does (`OffsetDateTime` could not read such a deadline
 //! back).
 //!
-//! # Limitation: no U+0000
+//! # Content keeps U+0000
 //!
-//! Postgres `text` and `jsonb` cannot hold the NUL character. A message
-//! whose id, contact, kind, text, payload or error contains U+0000, or a
-//! `StoreKey` that does, is rejected with `StorageError::Backend` — on every
-//! retry, so a webhook carrying one would be redelivered by Meta until it
-//! gives up. The memory and Redis stores accept it. If your pipeline can see
-//! NUL characters, strip or replace them before `append`.
+//! Postgres `text` cannot hold the NUL character and `jsonb` refuses a
+//! `\u0000` escape, so [`PostgresConversationStore`] keeps message content
+//! in types that can (migration `0003`):
+//!
+//! | Content | Column | Type |
+//! | --- | --- | --- |
+//! | `kind`, `text` | `kind_utf8`, `text_utf8` | `BYTEA`, the UTF-8 bytes |
+//! | `payload`, `error` | `payload_json`, `error_json` | `JSON`, the document's text as written |
+//! | the summary's `last_text` | `last_text_utf8` | `BYTEA`, the UTF-8 bytes |
+//!
+//! Every string round-trips exactly, U+0000 included, in JSON strings and
+//! object keys alike, and a NUL never reads back as U+FFFD (nor two keys
+//! differing only by one as a single key). A `*_utf8` value that is not
+//! UTF-8 (only a hand edit can make one) reads as `StorageError::Corrupt`
+//! naming the column, never as a replacement character. What it costs, if
+//! you query these tables yourself:
+//!
+//! - **Search and preview are bytes.** Decode `text_utf8` and
+//!   `last_text_utf8` in your application (they are UTF-8).
+//!   `convert_from(text_utf8, 'UTF8')` fails on a row holding a NUL, and
+//!   that one row fails the whole statement; search in SQL on the bytes
+//!   instead, e.g. `position(convert_to($1, 'UTF8') IN text_utf8) > 0`
+//!   (exact and case-sensitive), or keep your own search index.
+//! - **Payload fields are neither indexable nor safe to extract.** `json`
+//!   has no equality operator and no b-tree or GIN operator class: `=`,
+//!   `DISTINCT`, `GROUP BY` and `UNION` on `payload_json` or `error_json`
+//!   fail on every row, and the `jsonb` operators and functions (`@>`,
+//!   `?`, `jsonb_*`, `jsonb_path_*`) need a cast to `jsonb`. That cast,
+//!   `->`, `->>`, `#>>` and the `json_*` functions that read keys or
+//!   fields fail on a document holding `\u0000` *anywhere*, even under
+//!   another key, and that one row fails the whole statement. Never put an
+//!   expression index, a check constraint or a generated column on
+//!   `payload_json` or `error_json`: the insert of such a message would
+//!   fail, and the webhook batch with it. Read the payload in your
+//!   application instead.
+//! - **Names and types changed.** SQL that names `kind`, `text`,
+//!   `payload`, `error` or `last_text` fails ("column does not exist"), and
+//!   change-data-capture or ETL consumers of these tables see the new
+//!   names, `bytea` and `json`.
+//! - **Size**: `json` keeps the text (no binary form), usually a little
+//!   smaller than `jsonb` for message payloads; each `->` re-parses it.
+//!
+//! Ordering never involves content: history pages by `(ts, id)`, the inbox by
+//! `(last_message_at, contact)`, all `COLLATE "C"` or timestamps.
+//!
+//! **Identifiers keep `TEXT` and refuse U+0000**: a message id, contact (a
+//! BSUID, `wa_id` or group id) or phone number id holding one, and a
+//! [`StoreKey`](wa_core::store::StoreKey) namespace or key holding one, are
+//! rejected with `StorageError::Backend`. Meta assigns those ids and never
+//! with a NUL; `wa_rs::inbox::InboxSink` skips a history item that has one.
+//! (The memory and Redis stores accept NUL there.) `PostgresKvStore` values
+//! are `BYTEA`: any bytes, NUL included.
+//!
+//! # Upgrading to lossless content (migration `0003`)
+//!
+//! Migration 3 converts the content columns of existing rows in place and
+//! renames them, in one transaction under an `ACCESS EXCLUSIVE` lock on the
+//! messages and conversations tables: nothing sees it half done, and when
+//! it fails it changes nothing. Existing rows keep their content byte for
+//! byte: a NUL that an older revision stored as U+FFFD stays U+FFFD, the
+//! original is gone. The key/value table is unchanged. In this order:
+//!
+//! 1. **Back up** the messages and conversations tables of every table
+//!    prefix. The only way back is a restore: an older revision's
+//!    [`migrate`] refuses the upgraded database (it does not know migration
+//!    3). A restore loses what was recorded after the upgrade: webhooks the
+//!    upgraded instances acknowledged are not delivered again, and replies
+//!    sent meanwhile reached the customer but leave the history.
+//! 2. **Stop every instance of the older revision that writes to these
+//!    tables** (webhook receivers, anything calling `Inbox::send`).
+//!    Stopping the webhook receivers pauses every consumer of those
+//!    webhooks, not only the inbox (OTP delivery statuses,
+//!    `PARTNER_REMOVED` revocations): Meta redelivers what failed with its
+//!    own backoff, for up to 7 days, and that backoff decides how long the
+//!    backlog takes once you are back. An older instance left running
+//!    cannot corrupt anything, but it fails: every one of its inbox
+//!    statements that touches content names a column that no longer
+//!    exists, so its webhooks answer 500 (Meta redelivers them, to the
+//!    upgraded instances), its inbox reads fail, and a reply it sends
+//!    reaches the customer but is not recorded (it logs "message sent but
+//!    not recorded").
+//! 3. **Find and drop the objects of your own on the content columns**
+//!    (`kind`, `text`, `payload` and `error` of `wa_messages`, `last_text`
+//!    of `wa_conversations`). This query lists them, with every trigger on
+//!    the two tables and every function whose body names them (for another
+//!    prefix, replace `wa_messages` and `wa_conversations`); on the
+//!    adapter's own tables it lists nothing:
+//!
+//!    ```sql
+//!    SELECT pg_describe_object(d.classid, d.objid, d.objsubid) AS object,
+//!           d.refobjid::regclass::text AS tbl, a.attname::text AS col
+//!    FROM pg_depend d, pg_attribute a
+//!    WHERE d.refclassid = 'pg_class'::regclass
+//!      AND d.refobjid IN ('wa_messages'::regclass, 'wa_conversations'::regclass)
+//!      AND a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
+//!      AND a.attname IN ('kind', 'text', 'payload', 'error', 'last_text')
+//!      AND NOT (d.classid = 'pg_constraint'::regclass
+//!               AND (SELECT contype FROM pg_constraint WHERE oid = d.objid) = 'n')
+//!    UNION
+//!    SELECT pg_describe_object('pg_trigger'::regclass, t.oid, 0), t.tgrelid::regclass::text, NULL
+//!    FROM pg_trigger t
+//!    WHERE t.tgrelid IN ('wa_messages'::regclass, 'wa_conversations'::regclass)
+//!      AND NOT t.tgisinternal
+//!    UNION
+//!    SELECT 'function ' || p.oid::regprocedure::text, NULL, NULL
+//!    FROM pg_proc p
+//!    WHERE p.prosrc ~ '(wa_messages|wa_conversations)'
+//!    ORDER BY 1
+//!    ```
+//!
+//!    - **Anything on `payload` or `error`** (an expression or partial
+//!      index, a check constraint, a view, a policy, a generated column):
+//!      migration 3 refuses to run while one exists, names it, and changes
+//!      nothing. An expression that reads a field would survive the
+//!      conversion (no existing row holds a NUL) and then fail the insert
+//!      of every payload holding one. None of them can be recreated on the
+//!      `json` columns.
+//!    - **On `kind`, `text` or `last_text`**: a view, rule, materialized
+//!      view, policy or generated column, and a trigram (`gin_trgm_ops`,
+//!      `gist_trgm_ops`), `text_pattern_ops`, full-text or `lower()` index
+//!      make the migration fail, changing nothing. A plain b-tree or hash
+//!      index is rebuilt on the bytes and kept (it can be created on a
+//!      `*_utf8` column later too).
+//!    - **Triggers and functions**: Postgres does not check their bodies,
+//!      so the migration succeeds, and a trigger that names a content
+//!      column (`NEW.text`, `NEW.payload`) then fails every insert: the
+//!      inbox is down and every webhook batch answers 500. Rewrite them
+//!      for the new names and types, or drop them.
+//! 4. **Run [`migrate`] once, from a one-off job**, rather than from every
+//!    instance at startup. The conversion rewrites both tables: 200,006
+//!    messages (a 153 MB table) took 1 to 2 seconds on an otherwise idle
+//!    Postgres 18 on a local solid-state disk, and reads and writes of both
+//!    tables waited for it (the key/value table did not). The lock waits without
+//!    limit behind any transaction open on those tables, and every later
+//!    query on them queues behind the waiting lock; a role's or server's
+//!    `statement_timeout` shorter than the rewrite cancels it (changing
+//!    nothing), and a job restarted on failure then loops. Give the job's
+//!    connection a `lock_timeout` (it then fails, changing nothing, instead
+//!    of stalling the inbox) and no `statement_timeout`:
+//!
+//!    ```no_run
+//!    # async fn job(url: &str) -> Result<(), Box<dyn std::error::Error>> {
+//!    use std::str::FromStr;
+//!    use wa_adapters::store::postgres::{self, sqlx};
+//!
+//!    let options = sqlx::postgres::PgConnectOptions::from_str(url)?
+//!        .options([("lock_timeout", "10s"), ("statement_timeout", "0")]);
+//!    let pool = sqlx::postgres::PgPoolOptions::new()
+//!        .max_connections(1)
+//!        .connect_with(options)
+//!        .await?;
+//!    postgres::migrate(&pool).await?; // once per table prefix
+//!    # Ok(()) }
+//!    ```
+//!
+//!    Keep free disk for about the size of `wa_messages` and its indexes
+//!    (the rewrite writes a new copy before it drops the old one), plus the
+//!    WAL it generates. Each [`TablePrefix`] has its own migration history:
+//!    run [`migrate_with_prefix`] once for each.
+//! 5. **Update SQL of your own** to the new names and types (see "Content
+//!    keeps U+0000" above), and recreate what you dropped that still can
+//!    be.
+//! 6. **Start the new revision.** Its [`migrate`] at startup is then a
+//!    no-op.
 
 mod conversation;
 mod kv;
@@ -227,7 +385,14 @@ mod tests {
                 "migration {} uses the prefix",
                 m.version
             );
-            for stmt in ["CREATE TABLE ", "CREATE INDEX ", "CREATE SEQUENCE ", " ON "] {
+            for stmt in [
+                "CREATE TABLE ",
+                "CREATE INDEX ",
+                "CREATE SEQUENCE ",
+                " ON ",
+                "ALTER TABLE ",
+                "LOCK TABLE ",
+            ] {
                 for (i, _) in sql.match_indices(stmt) {
                     let rest = &sql[i + stmt.len()..];
                     assert!(

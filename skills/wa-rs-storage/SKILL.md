@@ -1,11 +1,11 @@
 ---
 name: wa-rs-storage
-description: "Choosing and running wa-rs storage - the KvStore (token vault, OTP challenges, webhook dedup, signup sessions) and ConversationStore (inbox history) ports, MemoryKvStore and MemoryConversationStore for tests, PostgresKvStore and PostgresConversationStore (migrate at startup, table prefixes, purge_expired, no U+0000), RedisKvStore (noeviction, persistence, prefixes, bring your own TLS connection), server clocks, and writing your own adapter that passes the conformance suites. Load when wiring databases for wa-rs, deploying Postgres or Redis for it, or implementing a custom KvStore or ConversationStore."
+description: "Choosing and running wa-rs storage - the KvStore (token vault, OTP challenges, webhook dedup, signup sessions) and ConversationStore (inbox history) ports, MemoryKvStore and MemoryConversationStore for tests, PostgresKvStore and PostgresConversationStore (migrate at startup, table prefixes, purge_expired, U+0000 kept in message content and refused in ids and keys, the lossless-content upgrade), RedisKvStore (noeviction, persistence, prefixes, bring your own TLS connection), server clocks, and writing your own adapter that passes the conformance suites. Load when wiring databases for wa-rs, deploying Postgres or Redis for it, or implementing a custom KvStore or ConversationStore."
 ---
 
 # wa-rs-storage
 
-> **Verified against wa-rs 92f9692ed24b96c43bedcca2e7088cf196753064 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against wa-rs e4e327d9203d2843c5b493f547c2480b2db60691 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/stores.rs](examples/stores.rs), compiled by
 wa-rs's own gate; its tests run the conformance suites on the memory
@@ -57,6 +57,17 @@ separate from yours. Another prefix (two deployments, one schema):
 `TablePrefix::new("shop_wa_")?`, `postgres::migrate_with_prefix`,
 `PostgresKvStore::with_prefix`.
 
+Message content keeps U+0000: `wa_messages.kind_utf8`, `text_utf8` and
+`wa_conversations.last_text_utf8` are `BYTEA` (UTF-8), `payload_json`
+and `error_json` are `json`. Your own SQL decodes the `*_utf8` columns as
+UTF-8 and searches the bytes (a recipe is in the `postgres` module docs);
+it never indexes, extracts or compares payload fields (`->`, `->>`, a
+cast to `jsonb` fail on a document holding a NUL, so an index on one
+fails the insert; `json` has no `=`). Upgrading a database written before
+that is one-way: back up, stop the older writers, drop your own objects
+on those columns, run `migrate` once from a job, in that order
+([references/lossless-upgrade.md](references/lossless-upgrade.md)).
+
 ## Redis
 
 ```rust
@@ -102,21 +113,24 @@ count; `fill_media_placeholder` rewrites only a row whose `kind` is
 `StoredMessage::MEDIA_PLACEHOLDER` and whose status is not `Deleted`;
 `revoke` matches number and direction and stores
 `StoredMessage::tombstone` when the id is unknown, as history only (the
-summary never sees it). The suite checks all three.
+summary never sees it). The suite checks all three, and that content
+(kind, text, payload strings and keys, status error, preview) reads back
+exactly, U+0000 included. A `KvStore` keeps values as any bytes; a key
+holding U+0000 may be refused, never stored as another key.
 ~~Six methods to implement~~: until 6d50701 and a9593f3 (2026-09-24),
 which added `append_synced`, `fill_media_placeholder` and `revoke`.
 ~~A tombstone is part of the summary; a revoked placeholder may be
-filled~~: until af5b1f8 (2026-09-25).
+filled~~: until af5b1f8 (2026-09-25). ~~Content may lose U+0000~~:
+until the pull request that made U+0000 lossless (PR #TBD, 2026-09-25).
 
 ## Pitfalls
 
 - **Memory stores give each instance its own dedup, OTP limits and
   vault**: tests and single-instance demos only.
-- **Postgres cannot store U+0000** in `text`/`jsonb`: the stores refuse it
-  (`StorageError::Backend`). The inbox stores it as U+FFFD in message
-  content (provisional,
-  [open question 18](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#storage));
-  anything else you hand the store must be clean.
+- **U+0000 on Postgres**: message content keeps it (above); ids,
+  contacts, phone number ids and `StoreKey`s are `text` and refuse it
+  (`StorageError::Backend`). Meta never assigns an id with one; keys of
+  your own must not carry one.
 - Postgres and Redis decide expiry by their own clock: keep hosts on NTP.
   `Expiry::After` past year 9999 means never.
 - Keep the vault key and the OTP pepper out of the database that holds

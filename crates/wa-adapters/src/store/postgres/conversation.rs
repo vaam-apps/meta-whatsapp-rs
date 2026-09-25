@@ -1,5 +1,12 @@
 //! [`ConversationStore`] on Postgres.
 //!
+//! - Content keeps U+0000: `kind`, `text` and the summary's preview are
+//!   `BYTEA` (their UTF-8 bytes), `payload` and `error` are `json` bound as
+//!   JSON text (see the [module docs](super#content-keeps-u0000)). Ids,
+//!   contacts and phone number ids are `TEXT COLLATE "C"`, and they alone
+//!   (with the timestamps) order and match rows; the only comparison on
+//!   content is `fill_media_placeholder`'s, of `kind_utf8` with the
+//!   placeholder's bytes.
 //! - `append` is a single statement: the message insert (`ON CONFLICT (id)
 //!   DO NOTHING`) feeds the inbox-summary upsert through a data-modifying
 //!   CTE, so a duplicate id changes nothing and the summary can never
@@ -88,11 +95,18 @@ struct Sql {
     last_inbound_at: Arc<str>,
 }
 
-const MESSAGE_COLUMNS: &str =
-    "id, phone_number_id, contact, direction, kind, text, payload, status, ts, status_at, error";
+const MESSAGE_COLUMNS: &str = "id, phone_number_id, contact, direction, kind_utf8, text_utf8, \
+     payload_json, status, ts, status_at, error_json";
 
 const SUMMARY_COLUMNS: &str =
-    "phone_number_id, contact, last_message_at, last_inbound_at, last_text, unread";
+    "phone_number_id, contact, last_message_at, last_inbound_at, last_text_utf8, unread";
+
+/// The eleven values of a message row, in [`MESSAGE_COLUMNS`] order. The
+/// content travels as bytes (`kind_utf8`, `text_utf8`: `BYTEA`) and as
+/// JSON text cast to `json` (`payload_json`, `error_json`): neither Postgres
+/// `text` nor `jsonb` can hold U+0000, and content keeps it (see the
+/// [module docs](super#content-keeps-u0000)).
+const MESSAGE_VALUES: &str = "$1, $2, $3, $4, $5, $6, $7::json, $8, $9, $10, $11::json";
 
 /// The summary's "newest message" is the max by `(ts, id)`, the same order
 /// the history pages in.
@@ -107,19 +121,19 @@ fn append_sql(messages: &str, conversations: &str, inbound_at: &str, unread: &st
     format!(
         "WITH inserted AS ( \
            INSERT INTO {messages} ({MESSAGE_COLUMNS}) \
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+           VALUES ({MESSAGE_VALUES}) \
            ON CONFLICT (id) DO NOTHING \
-           RETURNING id, phone_number_id, contact, direction, text, ts \
+           RETURNING id, phone_number_id, contact, direction, text_utf8, ts \
          ) \
          INSERT INTO {conversations} AS c \
-           (phone_number_id, contact, last_message_at, last_message_id, last_text, \
+           (phone_number_id, contact, last_message_at, last_message_id, last_text_utf8, \
             last_inbound_at, unread) \
-         SELECT phone_number_id, contact, ts, id, text, {inbound_at}, {unread} \
+         SELECT phone_number_id, contact, ts, id, text_utf8, {inbound_at}, {unread} \
          FROM inserted \
          ON CONFLICT (phone_number_id, contact) DO UPDATE SET \
            last_message_at = CASE WHEN {newer} THEN EXCLUDED.last_message_at ELSE c.last_message_at END, \
            last_message_id = CASE WHEN {newer} THEN EXCLUDED.last_message_id ELSE c.last_message_id END, \
-           last_text = CASE WHEN {newer} THEN EXCLUDED.last_text ELSE c.last_text END, \
+           last_text_utf8 = CASE WHEN {newer} THEN EXCLUDED.last_text_utf8 ELSE c.last_text_utf8 END, \
            last_inbound_at = GREATEST(c.last_inbound_at, EXCLUDED.last_inbound_at), \
            unread = c.unread + EXCLUDED.unread \
          RETURNING 1 AS appended"
@@ -133,28 +147,28 @@ fn append_synced_sql(messages: &str, conversations: &str) -> String {
     format!(
         "WITH input AS ( \
            SELECT DISTINCT ON (id) * FROM UNNEST($1::text[], $2::text[], $3::text[], \
-             $4::text[], $5::text[], $6::text[], $7::jsonb[], $8::text[], \
-             $9::timestamptz[], $10::timestamptz[], $11::jsonb[]) \
+             $4::text[], $5::bytea[], $6::bytea[], $7::json[], $8::text[], \
+             $9::timestamptz[], $10::timestamptz[], $11::json[]) \
              WITH ORDINALITY AS t({MESSAGE_COLUMNS}, n) \
            ORDER BY id, n \
          ), inserted AS ( \
            INSERT INTO {messages} ({MESSAGE_COLUMNS}) \
            SELECT {MESSAGE_COLUMNS} FROM input \
            ON CONFLICT (id) DO NOTHING \
-           RETURNING id, phone_number_id, contact, text, ts \
+           RETURNING id, phone_number_id, contact, text_utf8, ts \
          ), latest AS ( \
-           SELECT DISTINCT ON (phone_number_id, contact) phone_number_id, contact, ts, id, text \
+           SELECT DISTINCT ON (phone_number_id, contact) phone_number_id, contact, ts, id, text_utf8 \
            FROM inserted \
            ORDER BY phone_number_id, contact, ts DESC, id COLLATE \"C\" DESC \
          ), summary AS ( \
            INSERT INTO {conversations} AS c \
-             (phone_number_id, contact, last_message_at, last_message_id, last_text, \
+             (phone_number_id, contact, last_message_at, last_message_id, last_text_utf8, \
               last_inbound_at, unread) \
-           SELECT phone_number_id, contact, ts, id, text, NULL, 0 FROM latest \
+           SELECT phone_number_id, contact, ts, id, text_utf8, NULL, 0 FROM latest \
            ON CONFLICT (phone_number_id, contact) DO UPDATE SET \
              last_message_at = CASE WHEN {newer} THEN EXCLUDED.last_message_at ELSE c.last_message_at END, \
              last_message_id = CASE WHEN {newer} THEN EXCLUDED.last_message_id ELSE c.last_message_id END, \
-             last_text = CASE WHEN {newer} THEN EXCLUDED.last_text ELSE c.last_text END \
+             last_text_utf8 = CASE WHEN {newer} THEN EXCLUDED.last_text_utf8 ELSE c.last_text_utf8 END \
          ) \
          SELECT id FROM inserted"
     )
@@ -177,20 +191,21 @@ impl Sql {
             // its conversation's summary.
             tombstone: arc(format!(
                 "INSERT INTO {messages} ({MESSAGE_COLUMNS}) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+                 VALUES ({MESSAGE_VALUES}) \
                  ON CONFLICT (id) DO NOTHING \
                  RETURNING 1 AS appended"
             )),
             // Data-modifying CTEs always run to completion, whether or not
-            // the final SELECT reads them. `$7`: the `deleted` status, which
-            // a placeholder is never filled in.
+            // the final SELECT reads them. `$6`: the placeholder kind, as
+            // bytes (`kind_utf8` is compared byte for byte). `$7`: the
+            // `deleted` status, which a placeholder is never filled in.
             fill_placeholder: arc(format!(
                 "WITH filled AS ( \
-                   UPDATE {messages} SET kind = $3, text = $4, payload = $5 \
-                   WHERE id = $1 AND phone_number_id = $2 AND kind = $6 AND status <> $7 \
-                   RETURNING id, phone_number_id, contact, text \
+                   UPDATE {messages} SET kind_utf8 = $3, text_utf8 = $4, payload_json = $5::json \
+                   WHERE id = $1 AND phone_number_id = $2 AND kind_utf8 = $6 AND status <> $7 \
+                   RETURNING id, phone_number_id, contact, text_utf8 \
                  ), preview AS ( \
-                   UPDATE {conversations} AS c SET last_text = f.text \
+                   UPDATE {conversations} AS c SET last_text_utf8 = f.text_utf8 \
                    FROM filled f \
                    WHERE c.phone_number_id = f.phone_number_id AND c.contact = f.contact \
                      AND c.last_message_id = f.id \
@@ -204,7 +219,8 @@ impl Sql {
                  WHERE id = $1 AND phone_number_id = $2 AND ($3::text IS NULL OR direction = $3)"
             )),
             status_swap: arc(format!(
-                "UPDATE {messages} SET status = $4, status_at = $5, error = COALESCE($6, error) \
+                "UPDATE {messages} SET status = $4, status_at = $5, \
+                   error_json = COALESCE($6::json, error_json) \
                  WHERE id = $1 AND phone_number_id = $2 AND status = $3 \
                    AND ($7::text IS NULL OR direction = $7)"
             )),
@@ -300,6 +316,30 @@ fn parse_status(s: String) -> Result<DeliveryStatus, StorageError> {
     })
 }
 
+/// Content as the text a `json` column stores. `serde_json` writes U+0000
+/// as the escape `\u0000`, which `json` keeps as written (`jsonb` refuses
+/// it). `what` names the field in an error, never the message.
+fn json_text(value: &serde_json::Value, what: &str) -> Result<String, StorageError> {
+    serde_json::to_string(value).map_err(|source| StorageError::Corrupt {
+        key: what.to_owned(),
+        source,
+    })
+}
+
+/// A `BYTEA` content column back to its text. Our writes are always UTF-8;
+/// bytes that are not (a row edited by hand) are
+/// [`StorageError::Corrupt`], never replaced. The error names the column,
+/// never the content.
+fn utf8(column: &str, bytes: Vec<u8>) -> Result<String, StorageError> {
+    String::from_utf8(bytes).map_err(|e| StorageError::Corrupt {
+        key: column.to_owned(),
+        source: serde::de::Error::custom(format_args!(
+            "not UTF-8 (valid up to byte {})",
+            e.utf8_error().valid_up_to()
+        )),
+    })
+}
+
 fn message_from_row(row: &PgRow) -> Result<StoredMessage, StorageError> {
     let id: String = row.try_get("id").map_err(backend)?;
     let direction: String = row.try_get("direction").map_err(backend)?;
@@ -307,16 +347,18 @@ fn message_from_row(row: &PgRow) -> Result<StoredMessage, StorageError> {
     let status = parse_status(status)?;
     let phone_number_id: String = row.try_get("phone_number_id").map_err(backend)?;
     let contact: String = row.try_get("contact").map_err(backend)?;
+    let kind: Vec<u8> = row.try_get("kind_utf8").map_err(backend)?;
+    let text: Option<Vec<u8>> = row.try_get("text_utf8").map_err(backend)?;
     Ok(StoredMessage {
         conversation: ConversationKey::new(phone_number_id, contact),
         direction: parse_direction(&direction)?,
-        kind: row.try_get("kind").map_err(backend)?,
-        text: row.try_get("text").map_err(backend)?,
-        payload: row.try_get("payload").map_err(backend)?,
+        kind: utf8("kind_utf8", kind)?,
+        text: text.map(|t| utf8("text_utf8", t)).transpose()?,
+        payload: row.try_get("payload_json").map_err(backend)?,
         status,
         timestamp: row.try_get("ts").map_err(backend)?,
         status_at: row.try_get("status_at").map_err(backend)?,
-        error: row.try_get("error").map_err(backend)?,
+        error: row.try_get("error_json").map_err(backend)?,
         id: MessageId::new(id),
     })
 }
@@ -325,11 +367,12 @@ fn summary_from_row(row: &PgRow) -> Result<ConversationSummary, StorageError> {
     let phone_number_id: String = row.try_get("phone_number_id").map_err(backend)?;
     let contact: String = row.try_get("contact").map_err(backend)?;
     let unread: i64 = row.try_get("unread").map_err(backend)?;
+    let last_text: Option<Vec<u8>> = row.try_get("last_text_utf8").map_err(backend)?;
     Ok(ConversationSummary {
         key: ConversationKey::new(phone_number_id, contact),
         last_message_at: row.try_get("last_message_at").map_err(backend)?,
         last_inbound_at: row.try_get("last_inbound_at").map_err(backend)?,
-        last_text: row.try_get("last_text").map_err(backend)?,
+        last_text: last_text.map(|t| utf8("last_text_utf8", t)).transpose()?,
         // Never negative: it only grows by 1 and resets to 0.
         unread: u64::try_from(unread).unwrap_or(0),
     })
@@ -339,18 +382,24 @@ impl PostgresConversationStore {
     /// Run an append statement (`sql`) for `message`.
     async fn insert(&self, sql: &Arc<str>, message: &StoredMessage) -> Result<bool, StorageError> {
         let status = status_str(message.status)?;
+        let payload = json_text(&message.payload, "message payload")?;
+        let error = message
+            .error
+            .as_ref()
+            .map(|e| json_text(e, "message error"))
+            .transpose()?;
         let row = sqlx::query(AssertSqlSafe(Arc::clone(sql)))
             .bind(message.id.as_str())
             .bind(message.conversation.phone_number_id.as_str())
             .bind(message.conversation.contact.as_str())
             .bind(direction_str(message.direction))
-            .bind(message.kind.as_str())
-            .bind(message.text.as_deref())
-            .bind(&message.payload)
+            .bind(message.kind.as_bytes())
+            .bind(message.text.as_deref().map(str::as_bytes))
+            .bind(payload)
             .bind(status)
             .bind(message.timestamp)
             .bind(message.status_at)
-            .bind(message.error.as_ref())
+            .bind(error)
             .fetch_optional(&self.pool)
             .await
             .map_err(backend)?;
@@ -370,6 +419,7 @@ impl PostgresConversationStore {
         error: Option<&serde_json::Value>,
     ) -> Result<bool, StorageError> {
         let new = status_str(status)?;
+        let error = error.map(|e| json_text(e, "message error")).transpose()?;
         let direction = direction.map(direction_str);
         for _ in 0..MAX_STATUS_ROUNDS {
             let current: Option<String> =
@@ -395,7 +445,7 @@ impl PostgresConversationStore {
                 .bind(&current)
                 .bind(&new)
                 .bind(at)
-                .bind(error)
+                .bind(error.as_deref())
                 .bind(direction)
                 .execute(&self.pool)
                 .await
@@ -441,13 +491,18 @@ impl ConversationStore for PostgresConversationStore {
             numbers.push(m.conversation.phone_number_id.as_str());
             contacts.push(m.conversation.contact.as_str());
             directions.push(direction_str(m.direction));
-            kinds.push(m.kind.as_str());
-            texts.push(m.text.as_deref());
-            payloads.push(&m.payload);
+            kinds.push(m.kind.as_bytes());
+            texts.push(m.text.as_deref().map(str::as_bytes));
+            payloads.push(json_text(&m.payload, "message payload")?);
             statuses.push(status_str(m.status)?);
             timestamps.push(m.timestamp);
             status_ats.push(m.status_at);
-            errors.push(m.error.as_ref());
+            errors.push(
+                m.error
+                    .as_ref()
+                    .map(|e| json_text(e, "message error"))
+                    .transpose()?,
+            );
         }
         let inserted: Vec<String> =
             sqlx::query_scalar(AssertSqlSafe(Arc::clone(&self.sql.append_synced)))
@@ -506,10 +561,10 @@ impl ConversationStore for PostgresConversationStore {
         let filled: i64 = sqlx::query_scalar(AssertSqlSafe(Arc::clone(&self.sql.fill_placeholder)))
             .bind(id.as_str())
             .bind(phone_number_id.as_str())
-            .bind(kind)
-            .bind(text)
-            .bind(payload)
-            .bind(StoredMessage::MEDIA_PLACEHOLDER)
+            .bind(kind.into_bytes())
+            .bind(text.map(String::into_bytes))
+            .bind(json_text(&payload, "message payload")?)
+            .bind(StoredMessage::MEDIA_PLACEHOLDER.as_bytes())
             .bind(status_str(DeliveryStatus::Deleted)?)
             .fetch_one(&self.pool)
             .await

@@ -17,7 +17,7 @@ memory = ["tokio/sync"]
 # crypto crate the workspace already uses for RSA-OAEP).
 reqwest = ["dep:reqwest"]
 # Postgres KvStore + ConversationStore (sqlx), with embedded migrations.
-postgres = ["dep:sqlx"]
+postgres = ["dep:sqlx", "dep:serde"]
 # Redis KvStore.
 redis = ["dep:redis"]
 # Channel, broadcast, fan-out, filter, fn and tracing sinks, and event streams.
@@ -40,6 +40,9 @@ tracing.workspace = true
 # upload, `http2` because graph.facebook.com negotiates it. No default
 # features: no system-proxy discovery or charset sniffing we do not use.
 reqwest = { workspace = true, optional = true, features = ["rustls", "stream", "multipart", "http2"] }
+# Postgres: `serde::de::Error::custom`, so a stored column that does not
+# decode is `StorageError::Corrupt` (whose source is a `serde_json::Error`).
+serde = { workspace = true, optional = true }
 # `macros` only for `sqlx::migrate!` (embedding); every query is a runtime
 # query, so building never needs DATABASE_URL. TLS uses aws-lc-rs to match
 # reqwest, so one crypto provider serves both.

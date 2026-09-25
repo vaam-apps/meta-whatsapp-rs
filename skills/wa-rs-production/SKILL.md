@@ -5,7 +5,7 @@ description: "Running wa-rs in production - the secrets (system user token, app 
 
 # wa-rs-production
 
-> **Verified against wa-rs 0da9390d42a51de4df427476b333062a6f94eacf (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against wa-rs e4e327d9203d2843c5b493f547c2480b2db60691 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/production.rs](examples/production.rs),
 compiled and tested by wa-rs's own gate. Longer walkthrough:
@@ -128,18 +128,29 @@ timeouts longer than your slowest sink.
   suite; 8238853 makes OTP codes in flight
   answer `Invalid` once; 8238853 and 7e4801f refuse a namespace with edge
   whitespace, control or format characters at `OtpService::new`, and
-  fixing it restarts codes and limits (`wa-rs-otp-login`). Upgrades
-  back-fill nothing: rows and summaries recorded before stay as written.
+  fixing it restarts codes and limits (`wa-rs-otp-login`). Lossless
+  message content (PR #TBD, 2026-09-25) is Postgres migration 3, one-way:
+  back up first (a rollback is a restore, losing what was recorded
+  since), stop the older instances that write to the inbox tables, drop
+  your own objects on the content columns, run `migrate` once from a job
+  with a lock timeout, then start (steps: `wa-rs-storage`). An older
+  instance left running fails on every content statement (500s Meta
+  redelivers, replies sent but not recorded). Upgrades back-fill
+  nothing: rows and summaries recorded before stay as written (a U+FFFD
+  an older revision stored for a NUL stays one).
 
 ## What wa-rs does not do
 
 Read [OPEN_QUESTIONS.md](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md)
-before going live: the OTP issue limit, PIN policy, the provisional
-U+0000 replacement, the missing dead-letter path for webhook batches,
-token refresh, Redis TLS, a revoked message keeping its content in the
-inbox (38). No metrics exporter, no health endpoint, no
+before going live: the OTP issue limit, PIN policy, the missing
+dead-letter path for webhook batches, token refresh, Redis TLS, a revoked
+message keeping its content in the inbox (38). No metrics exporter, no
+health endpoint, no
 secret manager integration. ~~Whether the OTP namespace becomes
 required~~: decided in d67b3ac (2026-09-24), it is (`wa-rs-otp-login`).
+~~The provisional U+0000 replacement~~: until the pull request that
+made U+0000 lossless (PR #TBD, 2026-09-25); message content keeps it
+(`wa-rs-storage`).
 
 ## Related skills
 

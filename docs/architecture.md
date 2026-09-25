@@ -572,13 +572,27 @@ Logs carry sizes, digests and field names only — never payload values.
 - Postgres: one table-wide version sequence (versions never reused, even
   after purge); deleted keys leave marker rows purged after 10 minutes;
   migrations are templates with a validated table prefix and a per-prefix
-  history table, applied under a database-wide lock. **Limitation:** Postgres
-  cannot store U+0000; the stores refuse a value containing it (memory and
-  Redis accept it). `InboxSink` and `Inbox::send` replace U+0000 with
-  U+FFFD in the content they record (kind, text, payload, status error;
-  ids and contacts are stored as Meta sent them, so a NUL there is still
-  refused). Lossy, and provisional: `OPEN_QUESTIONS.md` #18 records it as a
-  maintainer decision taken without asking. `messages.id` is the primary key on its own, so
+  history table, applied under a database-wide lock. **Message content
+  keeps U+0000** (decided by the owner, formerly `OPEN_QUESTIONS.md` #18):
+  Postgres `text` cannot hold it and `jsonb` refuses a `\u0000` escape, so
+  `kind`, `text` and the summary's preview are `BYTEA` (`kind_utf8`,
+  `text_utf8`, `last_text_utf8`, the UTF-8 bytes) and `payload` and
+  `error` are `json` (`payload_json`, `error_json`, the text as written);
+  migration 3 converted the older `text`/`jsonb` columns in place, in one
+  transaction, and existing rows kept their content (a U+FFFD an older
+  revision stored for a NUL stays U+FFFD); it refuses to run under an
+  object of the operator's own that depends on the payload or error
+  column (an expression index there would fail every later insert of a
+  payload holding a NUL), and a content column that is not UTF-8 reads as
+  `StorageError::Corrupt`. The cost is SQL-side: search
+  on bytes (`position(convert_to(…) IN text_utf8)`), no index or field
+  extraction on a payload holding a NUL. Ordering never involves content.
+  **Identifiers refuse U+0000**: ids, contacts and phone number ids stay
+  `TEXT COLLATE "C"` (Meta never assigns one with a NUL), as do
+  `KvStore` keys; memory and Redis accept it there, and the key/value
+  conformance suite allows either answer but never another key.
+  `KvStore` values are `BYTEA`. `messages.id` is the primary key on its
+  own, so
   a message id is stored once per store whatever the business number (the
   memory store does the same; `OPEN_QUESTIONS.md` #33).
 - Redis: per-namespace version counter (a per-key counter would leak one key
@@ -625,9 +639,11 @@ exposes the 24-hour `CustomerServiceWindow`, and sends replies.
   arrived on (`update_status` takes the `phone_number_id`); a revoke also
   only a message of its direction (`ConversationStore::revoke`: a customer
   revokes what they sent, the business what it sent).
-- Content never fails a delivery: U+0000 in recorded content is stored as
-  U+FFFD (see Adapters). Storage errors still do (500, Meta redelivers the
-  batch).
+- Content never fails a delivery: it is recorded exactly, U+0000
+  included, and every adapter stores it (see Adapters). Storage errors
+  still do (500, Meta redelivers the batch), as does, on Postgres, U+0000
+  in a Meta-assigned id of a live message (`OPEN_QUESTIONS.md` #30; a
+  history item with one is skipped, below).
 - A storage (or serialization) failure *after* a successful send is
   logged without the message's content, never returned — an error would
   invite a retry that sends twice.

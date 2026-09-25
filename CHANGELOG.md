@@ -16,6 +16,10 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   below.
 - #17 (coexistence echoes and history not recorded by the inbox):
   resolved in a3582b8; what that needs a port change for is #35.
+- #18 (Postgres and U+0000): decided by the owner on 2026-09-25, "store
+  raw bytes". This reverts fd4667e's provisional replacement of U+0000
+  with U+FFFD in `InboxSink` and `Inbox::send`: message content keeps it,
+  and the Postgres store holds it (below, Changed).
 - #34 (should `OtpConfig::namespace` be required?): decided yes by the
   maintainer, done in d67b3ac.
 - #35 (synced coexistence history went through `append` like live
@@ -355,6 +359,70 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   instead of a private copy. The only difference a send could reach is
   gone: a 1xx–3xx answer without a Graph error used to drop the challenge
   and now keeps it (unknown, so the code may be on its way).
+- **Breaking for Postgres deployments — message content keeps U+0000**
+  (`OPEN_QUESTIONS.md` #18, decided). `InboxSink` and `Inbox::send` record
+  the kind, text, payload (strings and object keys) and status error
+  exactly as sent, and `PostgresConversationStore` stores them: migration
+  3 of `postgres::migrate` converts `wa_messages.kind` and `text` and
+  `wa_conversations.last_text` to `BYTEA` (their UTF-8 bytes), and
+  `payload` and `error` from `JSONB` to `JSON` (the text as written, which
+  keeps a `\u0000` escape), renamed `kind_utf8`, `text_utf8`,
+  `last_text_utf8`, `payload_json` and `error_json`. It runs in one
+  transaction under an exclusive lock on both tables. Ids, contacts and
+  phone number ids stay `TEXT` and still refuse U+0000: Meta never assigns
+  one. **Existing rows keep their content byte for byte**: a NUL that
+  fd4667e stored as U+FFFD stays U+FFFD, since nothing tells the two
+  apart. A content column that is not UTF-8 (only a hand edit makes one)
+  reads as `StorageError::Corrupt` naming the column. **Upgrading, in
+  this order** (details and a pre-flight query in the
+  `wa_adapters::store::postgres` docs, "Upgrading to lossless content"):
+  1. **Back up** both tables of every table prefix. The only way back is
+     a restore, and it loses what was recorded after the upgrade: webhooks
+     the upgraded instances acknowledged are not delivered again, and
+     replies sent meanwhile reached the customer but leave the history.
+  2. **Stop every instance of the older revision** that writes to these
+     tables (webhook receivers, anything calling `Inbox::send`). That
+     pauses every webhook consumer they serve, OTP delivery statuses and
+     `PARTNER_REMOVED` revocations included; Meta's backoff decides how
+     long the backlog takes to drain afterwards.
+  3. **Drop the objects of your own on the content columns.** Migration 3
+     refuses to run under anything that depends on `payload` or `error`
+     (an expression such as `payload->>'type'` would survive the
+     conversion and then fail every insert of a payload holding a NUL,
+     and its webhook batch with it), naming it and changing nothing;
+     Postgres itself refuses views, rules, trigram, `text_pattern_ops`,
+     full-text or `lower()` indexes on the others. Triggers and functions
+     that name `kind`, `text`, `payload`, `error` or `last_text` are not
+     checked by Postgres and would then fail every insert: rewrite them.
+     A plain b-tree index on text is rebuilt on the bytes.
+  4. **Run `migrate` once, from a one-off job**, per table prefix, with a
+     `lock_timeout` and no `statement_timeout` on its connection, and free
+     disk for a copy of `wa_messages` and its indexes. Both tables are
+     locked for the rewrite (200,006 messages, a 153 MB table: 1 to 2
+     seconds on a local Postgres 18), and the lock waits behind any open
+     transaction on them while every later query queues behind it.
+  5. **Update SQL of your own**: decode the `*_utf8` columns as UTF-8; on
+     the `json` columns `=`, `DISTINCT`, `GROUP BY` and `UNION` fail on
+     every row, and `->`, `->>`, a cast to `jsonb` or a `jsonb` operator
+     fails on a document holding a NUL, failing the whole statement;
+     change-data-capture consumers see the new names and types.
+  6. **Start the new revision.**
+
+  An older instance left running corrupts nothing, but every inbox
+  statement of it that touches content fails on a renamed column: its
+  webhooks answer 500 (Meta redelivers them to the upgraded instances),
+  its inbox reads fail, a reply it sends reaches the customer but is not
+  recorded, and its own `migrate` refuses the upgraded database
+  (`VersionMissing(3)`). **Custom stores:** a `ConversationStore` of your
+  own now receives U+0000 from `InboxSink` and `Inbox::send`, which no
+  longer replace it; one that cannot store it fails the webhook batch
+  (Meta redelivers it until it gives up, with every other event in it)
+  and logs replies as "message sent but not recorded".
+  `conversation_conformance::run` now requires content to round-trip
+  exactly, U+0000 included, and `conformance::run` requires `KvStore`
+  values to be any bytes and a key holding U+0000 to be refused or kept
+  exactly, never stored as another key (the one with U+FFFD in its place,
+  or the one without it).
 
 Breaking for anyone pinned to an earlier revision (nothing is released
 yet): `ConversationStore::update_status(phone_number_id, id, status, at,
@@ -424,9 +492,10 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
 - **M1 — one NUL in a customer's message blocked the whole webhook batch on
   Postgres.** Postgres cannot store U+0000, so `InboxSink` failed every
   delivery of that batch until Meta dropped it after 7 days, with every
-  other event in it. `InboxSink` and `Inbox::send` now store U+0000 in
+  other event in it. `InboxSink` and `Inbox::send` stored U+0000 in
   message content as U+FFFD (lossy, and provisional: the choice was
-  reserved for the maintainer, `OPEN_QUESTIONS.md` #18).
+  reserved for the maintainer, `OPEN_QUESTIONS.md` #18). Superseded: the
+  owner decided #18, and message content now keeps U+0000 (Changed).
 - **L1 — a status or revoke on one number could change another number's
   message.** `ConversationStore::update_status` matched the message id
   alone; it now takes the business `phone_number_id` first and both stores
