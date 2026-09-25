@@ -6,8 +6,9 @@
 mod common;
 
 use common::{Call, Harness, VERIFY_TOKEN, send};
+use meta_whatsapp_rs::webhooks::axum::body::Body;
 use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode};
-use meta_whatsapp_server::api::{PUBLIC_ROUTES, openapi_document};
+use meta_whatsapp_server::api::{MAX_BODY_BYTES, PUBLIC_ROUTES, internal_routes, openapi_document};
 use serde_json::Value;
 
 const COMMITTED: &str = include_str!("../openapi/v1.json");
@@ -163,19 +164,90 @@ async fn the_public_listener_serves_metas_check_and_livez_only() {
         send(&h.public, Call::get("/livez").build()).await.status,
         StatusCode::OK
     );
-    // Nothing of the API, the operations or the admin is on it.
-    for path in [
-        "/v1/numbers",
-        "/v1/admin/tenants",
-        "/metrics",
-        "/readyz",
-        "/v1/openapi.json",
-        "/v1/version",
-    ] {
-        let reply = send(&h.public, Call::get(path).build()).await;
-        assert_eq!(reply.status, StatusCode::NOT_FOUND, "{path}");
+    // Nothing of the API, the operations or the admin is on it: every
+    // operation of the internal listener, with a valid admin key and
+    // tenant key for good measure, is a 404 there.
+    let admin = h.admin_key().await;
+    h.tenant("merchant-42").await;
+    h.connect(
+        "merchant-42",
+        "102290129340398",
+        &["106540352242922"],
+        "TOKEN",
+    )
+    .await;
+    let tenant_key = h.tenant_key("merchant-42", &common::ALL_SCOPES).await;
+    let sample = common::Sample {
+        tenant: "merchant-42".to_owned(),
+        waba: "102290129340398".to_owned(),
+        pn: "106540352242922".to_owned(),
+        key_id: "placeholder".to_owned(),
+    };
+    let mut checked = 0;
+    for operation in common::spec_operations() {
+        if PUBLIC_ROUTES.contains(&operation.template.as_str()) {
+            continue;
+        }
+        let key = if operation.admin() {
+            &admin
+        } else {
+            &tenant_key
+        };
+        let reply = send(
+            &h.public,
+            common::sample_call(&operation, &sample, Some(key)).build(),
+        )
+        .await;
+        assert_eq!(
+            reply.status,
+            StatusCode::NOT_FOUND,
+            "{} on the public listener",
+            operation.label()
+        );
+        checked += 1;
     }
+    assert!(checked >= 20, "{checked}");
+    // The document and the listener's route templates are one list.
+    let templates: std::collections::BTreeSet<String> = common::spec_operations()
+        .into_iter()
+        .map(|o| o.template)
+        .collect();
+    assert_eq!(templates, internal_routes().into_iter().collect());
+    assert!(h.graph.requests().is_empty());
     assert_eq!(PUBLIC_ROUTES, ["/webhooks/meta", "/livez"]);
+}
+
+/// Bodies over 64 KiB are refused with `413 payload_too_large`, at 64 KiB
+/// they are read. Decisive: the body limit layer.
+#[tokio::test]
+async fn bodies_over_64_kib_are_413() {
+    let h = Harness::new();
+    let admin = h.admin_key().await;
+    let body = |len: usize| {
+        let head = r#"{"id": "merchant-42", "name": ""#;
+        let tail = r#""}"#;
+        format!("{head}{}{tail}", "x".repeat(len - head.len() - tail.len()))
+    };
+    let at_limit = body(MAX_BODY_BYTES);
+    assert_eq!(at_limit.len(), 64 * 1024);
+    let over = body(MAX_BODY_BYTES + 1);
+    for (text, expected) in [
+        (
+            at_limit,
+            (StatusCode::UNPROCESSABLE_ENTITY, "invalid_request"),
+        ),
+        (over, (StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large")),
+    ] {
+        let reply = h
+            .call(
+                Call::new(Method::POST, "/v1/admin/tenants")
+                    .key(&admin)
+                    .header("content-type", "application/json")
+                    .body(Body::from(text)),
+            )
+            .await;
+        assert_eq!((reply.status, reply.code().as_str()), expected);
+    }
 }
 
 /// Anyone on the internet may send any token as a method to the public

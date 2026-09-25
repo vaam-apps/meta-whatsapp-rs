@@ -326,6 +326,114 @@ impl Harness {
 /// Every scope.
 pub const ALL_SCOPES: [Scope; 9] = Scope::ALL;
 
+// ─── The committed document, as a table of calls ─────────────────────────
+
+/// The committed OpenAPI document.
+pub const SPEC: &str = include_str!("../../openapi/v1.json");
+
+/// One operation of the committed document.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Operation {
+    pub method: Method,
+    pub template: String,
+    /// It declares the API key (`security`).
+    pub keyed: bool,
+}
+
+impl Operation {
+    /// An admin route (admin key only).
+    pub fn admin(&self) -> bool {
+        self.template.starts_with("/v1/admin/")
+    }
+
+    /// `METHOD template`.
+    pub fn label(&self) -> String {
+        format!("{} {}", self.method, self.template)
+    }
+}
+
+/// Every operation of the committed document, in document order. A route
+/// served by the internal listener is in it (utoipa-axum's `routes!`
+/// documents what it serves), so iterating this covers new routes.
+pub fn spec_operations() -> Vec<Operation> {
+    let spec: Value = serde_json::from_str(SPEC).unwrap();
+    let mut operations = Vec::new();
+    for (path, item) in spec["paths"].as_object().unwrap() {
+        for (method, operation) in item.as_object().unwrap() {
+            operations.push(Operation {
+                method: Method::from_bytes(method.to_uppercase().as_bytes()).unwrap(),
+                template: path.clone(),
+                keyed: operation.get("security").is_some(),
+            });
+        }
+    }
+    operations
+}
+
+/// The values a sample call puts in a template's parameters.
+#[derive(Debug, Clone)]
+pub struct Sample {
+    pub tenant: String,
+    pub waba: String,
+    pub pn: String,
+    pub key_id: String,
+}
+
+impl Sample {
+    /// `template` with these values; any other parameter is `placeholder`.
+    pub fn fill(&self, template: &str) -> String {
+        let mut out = String::new();
+        let mut rest = template;
+        while let Some(start) = rest.find('{') {
+            out.push_str(&rest[..start]);
+            let end = rest[start..].find('}').unwrap() + start;
+            out.push_str(match &rest[start + 1..end] {
+                "pn" => &self.pn,
+                "waba_id" => &self.waba,
+                "id" => &self.tenant,
+                "key_id" => &self.key_id,
+                _ => "placeholder",
+            });
+            rest = &rest[end + 1..];
+        }
+        out.push_str(rest);
+        out
+    }
+}
+
+/// A body the operation accepts, so that a refusal is never the body's
+/// fault; `{}` for a body-taking operation this table does not know yet
+/// (whatever it answers then shows up in the tests iterating the
+/// document).
+pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
+    Some(match (method.as_str(), template) {
+        ("POST", "/v1/admin/tenants") => serde_json::json!({"id": "sample-new-tenant"}),
+        ("PATCH", "/v1/admin/tenants/{id}") => serde_json::json!({"name": "Renamed"}),
+        ("POST", "/v1/admin/tenants/{id}/keys") => serde_json::json!({"scopes": ["numbers"]}),
+        ("POST", "/v1/admin/platform-keys") => {
+            serde_json::json!({"tenants": "*", "scopes": ["numbers"]})
+        }
+        ("POST", "/v1/admin/tenants/{id}/wabas") => {
+            serde_json::json!({"waba_id": "555000111", "token": "SYSTEM-TOKEN-FOR-SAMPLES"})
+        }
+        ("PATCH", "/v1/numbers/{pn}/profile") => serde_json::json!({"about": "Open 9 to 5"}),
+        ("POST" | "PATCH" | "PUT", _) => serde_json::json!({}),
+        _ => return None,
+    })
+}
+
+/// A sample call of `operation` with `key` (none for an unkeyed one).
+pub fn sample_call(operation: &Operation, sample: &Sample, key: Option<&str>) -> Call {
+    let mut call = Call::new(operation.method.clone(), sample.fill(&operation.template));
+    if let Some(key) = key {
+        call = call.key(key);
+    }
+    if let Some(body) = sample_body(&operation.method, &operation.template) {
+        call = call.json(&body);
+    }
+    call
+}
+
 // ─── Live Postgres ───────────────────────────────────────────────────────
 
 /// `META_WHATSAPP_RS_TEST_POSTGRES_URL`, or `None` (after saying so) when it

@@ -206,42 +206,67 @@ async fn a_foreign_number_looks_like_a_missing_one() {
     assert_eq!(foreign, missing);
 }
 
-/// Step 1 happens before the body is read: an unauthenticated request is
-/// `401` and its body is never polled.
+/// Step 1 on every keyed operation of the committed document: without a
+/// key it is `401` and the body is never polled; with a key of the wrong
+/// kind (a tenant key on `/v1/admin`, an admin key elsewhere) `403
+/// forbidden`, before the body is read and before the vault is.
+/// Decisive: the guards, and step 1 before any extractor reads the body.
 #[tokio::test]
-async fn no_key_is_401_before_the_body_is_read() {
-    let h = Harness::new();
-    h.tenant(A).await;
-    h.connect(A, WABA_A, &[PN_A], "TOKEN-OF-A").await;
-    for (method, path) in [
-        (Method::POST, "/v1/admin/tenants".to_owned()),
-        (Method::PATCH, format!("/v1/numbers/{PN_A}/profile")),
-    ] {
-        let polled = Arc::new(AtomicBool::new(false));
-        let flag = polled.clone();
-        let body = Body::from_stream(futures::stream::poll_fn(move |_| {
-            flag.store(true, Ordering::SeqCst);
-            Poll::Ready(Some(Ok::<_, std::io::Error>(Bytes::from_static(b"{}"))))
-        }));
-        let reply = h
-            .call(
-                Call::new(method.clone(), &path)
-                    .header("content-type", "application/json")
-                    .body(body),
-            )
-            .await;
-        assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{method} {path}");
-        assert_eq!(reply.code(), "unauthenticated");
-        assert_eq!(
-            reply.headers.get("www-authenticate").unwrap(),
-            "Bearer",
-            "{method} {path}"
-        );
-        assert!(
-            !polled.load(Ordering::SeqCst),
-            "{method} {path}: the body was read"
-        );
+async fn every_keyed_operation_needs_a_key_of_its_kind_before_the_body() {
+    let h = two_tenants().await;
+    let admin = h.admin_key().await;
+    let tenant_key = h.tenant_key(A, &ALL_SCOPES).await;
+    let sample = common::Sample {
+        tenant: A.to_owned(),
+        waba: WABA_A.to_owned(),
+        pn: PN_A.to_owned(),
+        key_id: "placeholder".to_owned(),
+    };
+    let reads = h.kv.vault_reads();
+    let mut keyed = 0;
+    for operation in common::spec_operations() {
+        if !operation.keyed {
+            continue;
+        }
+        keyed += 1;
+        let wrong_kind = if operation.admin() {
+            &tenant_key
+        } else {
+            &admin
+        };
+        for (key, expected) in [
+            (None, (StatusCode::UNAUTHORIZED, "unauthenticated")),
+            (Some(wrong_kind), (StatusCode::FORBIDDEN, "forbidden")),
+        ] {
+            let polled = Arc::new(AtomicBool::new(false));
+            let flag = polled.clone();
+            let body = Body::from_stream(futures::stream::poll_fn(move |_| {
+                flag.store(true, Ordering::SeqCst);
+                Poll::Ready(Some(Ok::<_, std::io::Error>(Bytes::from_static(b"{}"))))
+            }));
+            let mut call = Call::new(operation.method.clone(), sample.fill(&operation.template))
+                .header("content-type", "application/json")
+                .body(body);
+            if let Some(key) = key {
+                call = call.key(key);
+            }
+            let reply = h.call(call).await;
+            let label = format!("{} with {key:?}", operation.label());
+            assert_eq!(
+                (reply.status, reply.code().as_str()),
+                expected,
+                "{label}: {}",
+                reply.text
+            );
+            if expected.0 == StatusCode::UNAUTHORIZED {
+                assert_eq!(reply.headers["www-authenticate"], "Bearer", "{label}");
+            }
+            assert!(!polled.load(Ordering::SeqCst), "{label}: the body was read");
+        }
     }
+    assert!(keyed >= 19, "{keyed} keyed operations");
+    assert_eq!(h.kv.vault_reads(), reads, "no refused call read the vault");
+    assert!(h.graph.requests().is_empty());
 }
 
 /// Every way a key fails step 1 is the same `401`.

@@ -1,6 +1,7 @@
 //! The M1.7 log capture, shared by `logs.rs` (memory) and
 //! `live_postgres.rs` (Postgres).
 
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
@@ -32,6 +33,7 @@ impl Captured {
 const SYSTEM_TOKEN: &str = "EAAG-system-user-token-for-the-log-test";
 pub const PHONE_1: &str = "+1 631-555-1111";
 pub const PHONE_2: &str = "+1 631-555-2222";
+pub const PHONE_3: &str = "+1 631-555-3333";
 
 /// Runs admin and numbers calls carrying secrets and phone numbers, and
 /// returns every secret they carried and what was logged.
@@ -146,7 +148,8 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
     let _ = h
         .call(Call::get("/v1/numbers/1972385232742141").key(&tenant_key))
         .await;
-    // Meta's subscription check, with the verify token in the query.
+    // Meta's subscription check, with the verify token in the query, and a
+    // made-up method (never logged as sent).
     let _ = send(
         &h.public,
         Call::get(format!(
@@ -155,9 +158,111 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
         .build(),
     )
     .await;
+    let made_up = Method::from_bytes(MADE_UP_METHOD.as_bytes()).unwrap();
+    let _ = send(&h.public, Call::new(made_up, "/livez").build()).await;
+
+    // Every other operation of the committed document, so that `check`
+    // finds each one in the logs.
+    let get = |path: &str, key: &str| Call::get(path).key(key);
+    let delete = |path: &str, key: &str| Call::new(Method::DELETE, path).key(key);
+    for call in [
+        get("/v1/admin/tenants", &admin),
+        get("/v1/admin/tenants/merchant-42", &admin),
+        Call::new(Method::PATCH, "/v1/admin/tenants/merchant-42")
+            .key(&admin)
+            .json(&json!({"name": "Lucky Shrub Ltd"})),
+        get("/v1/admin/tenants/merchant-42/keys", &admin),
+        get("/v1/admin/platform-keys", &admin),
+        get("/v1/wabas", &tenant_key),
+    ] {
+        let _ = h.call(call).await;
+    }
+    // Spare keys to revoke, a spare tenant to delete.
+    let spare = h
+        .call(post(
+            "/v1/admin/tenants/merchant-42/keys",
+            &admin,
+            json!({"scopes": ["numbers"]}),
+        ))
+        .await
+        .json();
+    let spare_platform = h
+        .call(post(
+            "/v1/admin/platform-keys",
+            &admin,
+            json!({"tenants": ["merchant-42"], "scopes": ["numbers"]}),
+        ))
+        .await
+        .json();
+    for minted in [&spare, &spare_platform] {
+        secrets.push(minted["key"].as_str().unwrap().to_owned());
+    }
+    let _ = h
+        .call(post(
+            "/v1/admin/tenants",
+            &admin,
+            json!({"id": "spare-tenant"}),
+        ))
+        .await;
+    for call in [
+        delete(
+            &format!(
+                "/v1/admin/tenants/merchant-42/keys/{}",
+                spare["api_key"]["key_id"].as_str().unwrap()
+            ),
+            &admin,
+        ),
+        delete(
+            &format!(
+                "/v1/admin/platform-keys/{}",
+                spare_platform["api_key"]["key_id"].as_str().unwrap()
+            ),
+            &admin,
+        ),
+        delete("/v1/admin/tenants/spare-tenant", &admin),
+    ] {
+        assert_eq!(h.call(call).await.status.as_u16(), 204);
+    }
+    // A second WABA, attached then unbound; the first one disconnected by
+    // its tenant.
+    h.graph.push_json(
+        200,
+        json!({"data": [{"id": "1972385232742143", "display_phone_number": PHONE_3}]}),
+    );
+    h.graph.push_json(200, json!({"success": true}));
+    let second = h
+        .call(post(
+            "/v1/admin/tenants/merchant-42/wabas",
+            &admin,
+            json!({"waba_id": "102290129340399", "token": SYSTEM_TOKEN}),
+        ))
+        .await;
+    assert_eq!(second.status.as_u16(), 201, "{}", second.text);
+    let unbound = h
+        .call(delete("/v1/admin/wabas/102290129340399/binding", &admin))
+        .await;
+    assert_eq!(unbound.status.as_u16(), 204, "{}", unbound.text);
+    h.graph.push_json(200, json!({"success": true}));
+    let disconnected = h
+        .call(delete("/v1/wabas/102290129340398", &tenant_key))
+        .await;
+    assert_eq!(disconnected.status.as_u16(), 204, "{}", disconnected.text);
+    // Operations, keyless.
+    for path in [
+        "/livez",
+        "/readyz",
+        "/metrics",
+        "/v1/openapi.json",
+        "/v1/version",
+    ] {
+        assert_eq!(h.call(Call::get(path)).await.status.as_u16(), 200, "{path}");
+    }
     assert_eq!(h.graph.remaining(), 0);
     secrets
 }
+
+/// A method no client sends, which the logs must not repeat.
+const MADE_UP_METHOD: &str = "MADEUPMETHODFORTHELOGS";
 
 /// A JSON subscriber at `TRACE` for every target, writing to the capture.
 pub fn subscriber(captured: &Captured) -> impl tracing::Subscriber + Send + Sync + 'static {
@@ -171,11 +276,42 @@ pub fn subscriber(captured: &Captured) -> impl tracing::Subscriber + Send + Sync
         .finish()
 }
 
+/// `(method, route)` of every request span in the captured JSON logs.
+fn logged_requests(logs: &str) -> BTreeSet<(String, String)> {
+    let mut requests = BTreeSet::new();
+    for line in logs.lines() {
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let span = &event["span"];
+        if span["name"] == "request"
+            && let (Some(method), Some(route)) = (span["method"].as_str(), span["route"].as_str())
+        {
+            requests.insert((method.to_owned(), route.to_owned()));
+        }
+    }
+    requests
+}
+
 /// What M1.7 asks of the captured logs.
 pub fn check(logs: &str, secrets: &[String]) {
-    // The capture works: requests are logged, with their route templates.
-    assert!(logs.contains("\"route\":\"/v1/numbers/{pn}\""), "{logs}");
-    assert!(logs.contains("\"route\":\"/v1/admin/tenants/{id}/wabas\""));
+    // The capture works, and covers every operation of the committed
+    // document: requests are logged with their route templates.
+    let logged = logged_requests(logs);
+    for operation in super::spec_operations() {
+        let wanted = (operation.method.to_string(), operation.template.clone());
+        assert!(
+            logged.contains(&wanted),
+            "{} was not exercised (tests/common/capture.rs): {logged:?}",
+            operation.label()
+        );
+    }
+    assert!(logged.contains(&("GET".to_owned(), "/webhooks/meta".to_owned())));
+    assert!(logged.contains(&("other".to_owned(), "/livez".to_owned())));
+    assert!(
+        !logs.contains(MADE_UP_METHOD),
+        "a made-up method was logged"
+    );
     assert!(logs.contains("\"tenant\":\"merchant-42\""));
     assert!(
         logs.contains("graph request"),
@@ -187,7 +323,14 @@ pub fn check(logs: &str, secrets: &[String]) {
             "a secret was logged:\n{logs}"
         );
     }
-    for phone in [PHONE_1, PHONE_2, "16315551111", "6315551111"] {
+    for phone in [
+        PHONE_1,
+        PHONE_2,
+        PHONE_3,
+        "16315551111",
+        "6315551111",
+        "6315553333",
+    ] {
         assert!(
             !logs.contains(phone),
             "a phone number was logged: {phone}\n{logs}"

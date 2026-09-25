@@ -5,9 +5,9 @@
 
 mod common;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
-use common::{Call, Harness};
+use common::{Call, Harness, Sample, sample_call, spec_operations};
 use meta_whatsapp_rs::ErrorKind;
 use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode};
 use meta_whatsapp_server::error::{CODES, code_info, kind_code};
@@ -263,8 +263,22 @@ async fn each_kind_answers_its_code_and_no_meta_text() {
     }
 }
 
-/// Every route that calls Meta, with Meta's error text, a non-Graph answer
-/// and an unreadable one: the sentinel reaches no response.
+/// The operations of the committed document that ask Meta something when
+/// called with `common::sample_call`. The test below finds them by calling
+/// every operation, and fails when they differ from this list: a new route
+/// is looked at before it passes.
+const CALLS_META: &[&str] = &[
+    "GET /v1/numbers/{pn}",
+    "GET /v1/numbers/{pn}/profile",
+    "PATCH /v1/numbers/{pn}/profile",
+    "DELETE /v1/wabas/{waba_id}",
+    "POST /v1/admin/tenants/{id}/wabas",
+    "DELETE /v1/admin/tenants/{id}",
+];
+
+/// M1.5's sentinel, on every operation of the committed document: Meta's
+/// error texts, a non-Graph answer and an unreadable one reach no
+/// response. Decisive: a Meta text copied into a body, on any route.
 #[tokio::test]
 async fn a_sentinel_in_metas_answer_reaches_no_response() {
     let answers: Vec<(u16, String)> = vec![
@@ -279,35 +293,41 @@ async fn a_sentinel_in_metas_answer_reaches_no_response() {
             format!("{{\"id\": \"{SENTINEL}\", \"quality_rating\": 7"),
         ),
     ];
-    for (status, body) in &answers {
-        let h = Harness::new();
-        let admin = h.admin_key().await;
-        h.tenant(TENANT).await;
-        h.connect(TENANT, WABA, &[PN], "TOKEN").await;
-        let key = h.tenant_key(TENANT, &[Scope::Numbers]).await;
-        let calls = [
-            Call::get(format!("/v1/numbers/{PN}")).key(&key),
-            Call::get(format!("/v1/numbers/{PN}/profile")).key(&key),
-            Call::new(Method::PATCH, format!("/v1/numbers/{PN}/profile"))
-                .key(&key)
-                .json(&json!({"about": "x"})),
-            Call::new(Method::DELETE, format!("/v1/wabas/{WABA}")).key(&key),
-            Call::new(Method::POST, format!("/v1/admin/tenants/{TENANT}/wabas"))
-                .key(&admin)
-                .json(&json!({"waba_id": "555", "token": "SYSTEM"})),
-            Call::new(Method::DELETE, format!("/v1/admin/tenants/{TENANT}")).key(&admin),
-        ];
-        for call in calls {
+    let sample = Sample {
+        tenant: TENANT.to_owned(),
+        waba: WABA.to_owned(),
+        pn: PN.to_owned(),
+        key_id: "placeholder".to_owned(),
+    };
+    let mut calling = BTreeSet::new();
+    let mut quiet = BTreeSet::new();
+    for operation in spec_operations() {
+        for (status, body) in &answers {
+            let h = Harness::new();
+            let admin = h.admin_key().await;
+            h.tenant(TENANT).await;
+            h.connect(TENANT, WABA, &[PN], "TOKEN").await;
+            let key = h.tenant_key(TENANT, &Scope::ALL).await;
+            let key = match (operation.keyed, operation.admin()) {
+                (false, _) => None,
+                (true, true) => Some(admin.as_str()),
+                (true, false) => Some(key.as_str()),
+            };
             h.graph
                 .push_bytes(*status, "application/json", body.clone().into_bytes());
-            let request = call.build();
-            let label = format!("{} {} ← {status}", request.method(), request.uri());
-            let reply = common::send(&h.internal, request).await;
+            let reply = h.call(sample_call(&operation, &sample, key)).await;
+            let label = format!("{} <- {status}", operation.label());
+            assert!(!reply.text.contains(SENTINEL), "{label}: {}", reply.text);
+            if h.graph.remaining() == 1 {
+                quiet.insert(operation.label());
+                continue;
+            }
+            calling.insert(operation.label());
             assert!(
                 reply.status.is_client_error() || reply.status.is_server_error(),
-                "{label}"
+                "{label}: {}",
+                reply.status
             );
-            assert!(!reply.text.contains(SENTINEL), "{label}: {}", reply.text);
             let code = reply.code();
             assert!(CODES.iter().any(|(c, _, _)| *c == code), "{label}: {code}");
             if *status >= 500 || *status == 200 {
@@ -317,8 +337,14 @@ async fn a_sentinel_in_metas_answer_reaches_no_response() {
                 );
             }
         }
-        assert_eq!(h.graph.remaining(), 0, "{status}");
     }
+    let listed: BTreeSet<String> = CALLS_META.iter().map(|s| (*s).to_owned()).collect();
+    assert_eq!(calling, listed, "the operations that call Meta");
+    assert!(
+        calling.is_disjoint(&quiet),
+        "an operation called Meta for some answers only"
+    );
+    assert!(quiet.len() >= 15, "{quiet:?}");
 }
 
 /// `may_have_been_sent` and `retryable` are the library's.
