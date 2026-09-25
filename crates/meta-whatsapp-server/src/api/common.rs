@@ -38,6 +38,78 @@ where
     }
 }
 
+/// A Meta object carried by a request (a send's `template`, a template
+/// definition), read into the library's type `T`. Request bodies reject
+/// unknown fields (docs/design/server.md, section 4.1), and `T` would drop
+/// a key it does not know without a word: the object is read, written
+/// back, and a key of the request missing from what the library would send
+/// (a misspelling, a field Meta documents that the library lacks) is `422
+/// invalid_request` on its path under `field` (`template.components[0].x`),
+/// never silently left out. A key holding nothing (`null`, `[]`, `{}`) may
+/// be left out.
+pub fn meta_object<T>(field: &'static str, value: &serde_json::Value) -> Result<T, ApiError>
+where
+    T: serde::de::DeserializeOwned + serde::Serialize,
+{
+    let object = T::deserialize(value)
+        .map_err(|_| ApiError::invalid(if field.is_empty() { "body" } else { field }))?;
+    let sent = serde_json::to_value(&object).map_err(|_| ApiError::internal())?;
+    match dropped_key(value, &sent, field) {
+        Some(path) => Err(ApiError::invalid(path)),
+        None => Ok(object),
+    }
+}
+
+/// The path of the first key of `request` that `sent` lacks (see
+/// [`meta_object`]). A key that is not a plain name is reported as its
+/// parent's path: the answer never echoes arbitrary input.
+fn dropped_key(
+    request: &serde_json::Value,
+    sent: &serde_json::Value,
+    path: &str,
+) -> Option<String> {
+    use serde_json::Value;
+    let empty = |v: &Value| match v {
+        Value::Null => true,
+        Value::Array(a) => a.is_empty(),
+        Value::Object(o) => o.is_empty(),
+        _ => false,
+    };
+    let join = |key: &str| {
+        let plain = !key.is_empty()
+            && key.len() <= 64
+            && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
+        match (path.is_empty(), plain) {
+            (_, false) if !path.is_empty() => path.to_owned(),
+            (_, false) => "body".to_owned(),
+            (true, true) => key.to_owned(),
+            (false, true) => format!("{path}.{key}"),
+        }
+    };
+    match (request, sent) {
+        (Value::Object(request), Value::Object(sent)) => {
+            request.iter().find_map(|(key, value)| match sent.get(key) {
+                None if empty(value) => None,
+                None => Some(join(key)),
+                Some(written) => dropped_key(value, written, &join(key)),
+            })
+        }
+        (Value::Array(request), Value::Array(sent)) => {
+            if request.len() != sent.len() {
+                return Some(if path.is_empty() { "body" } else { path }.to_owned());
+            }
+            request
+                .iter()
+                .zip(sent)
+                .enumerate()
+                .find_map(|(i, (value, written))| {
+                    dropped_key(value, written, &format!("{path}[{i}]"))
+                })
+        }
+        _ => None,
+    }
+}
+
 /// Longest Meta id a path or a query may name.
 const MAX_GRAPH_ID_LEN: usize = 64;
 

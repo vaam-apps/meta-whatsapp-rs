@@ -2220,7 +2220,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` (with `field`: `to.phone` without `+`, …), `unsupported_message_type`, `idempotency_key_reused`, Meta's `template_*`, …: nothing was sent",
+            "description": "`invalid_request` (with `field`: `to.phone` without `+`, a `template` key the service would not send to Meta, …), `unsupported_message_type`, `idempotency_key_reused`, Meta's `template_*`, …: nothing was sent",
             "content": {
               "application/json": {
                 "schema": {
@@ -3249,7 +3249,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` (with `field`: the definition breaks a documented limit), `template_rejected`, `invalid_parameter`, `idempotency_key_reused`",
+            "description": "`invalid_request` (with `field`: the definition breaks a documented limit, or holds a key the service would not send to Meta), `template_rejected`, `invalid_parameter`, `idempotency_key_reused`",
             "content": {
               "application/json": {
                 "schema": {

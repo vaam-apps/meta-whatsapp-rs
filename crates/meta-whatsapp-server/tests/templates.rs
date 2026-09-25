@@ -292,6 +292,31 @@ async fn a_creation_is_checked_locally_then_posted() {
     );
     let reply = h.call(create(&json!({"name": "x"}))).await;
     assert_eq!(reply.code(), "invalid_request");
+    // A key the library would drop (misspelled, or not modelled) is
+    // refused, never left out of what Meta receives.
+    let mut misspelled = sample_template_definition();
+    misspelled["sub_catgory"] = json!("CUSTOM");
+    let reply = h.call(create(&misspelled)).await;
+    assert_eq!(
+        (reply.status, reply.json()["error"]["field"].as_str()),
+        (StatusCode::UNPROCESSABLE_ENTITY, Some("sub_catgory"))
+    );
+    // templates/authentication-templates/autofill-button-authentication-templates,
+    // "Example request": the app's package and hash on the button itself.
+    let autofill = json!({"name": "authentication_code_autofill_button", "language": "en_US",
+        "category": "AUTHENTICATION", "components": [
+            {"type": "BODY", "add_security_recommendation": true},
+            {"type": "FOOTER", "code_expiration_minutes": 10},
+            {"type": "BUTTONS", "buttons": [{"type": "OTP", "otp_type": "ONE_TAP", "text": "Copy Code",
+                "autofill_text": "Autofill", "package_name": "com.example.luckyshrub",
+                "signature_hash": "K8a/AINcGX7"}]}]});
+    let reply = h.call(create(&autofill)).await;
+    assert_eq!(
+        reply.json()["error"]["field"],
+        "components[2].buttons[0].package_name",
+        "{}",
+        reply.text
+    );
     assert_eq!(h.graph.requests().len(), before, "nothing reached Meta");
     // Meta's refusals.
     for (code, expected) in [

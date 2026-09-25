@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 
-use super::common::ApiJson;
+use super::common::{ApiJson, meta_object};
 use crate::auth::{Caller, OwnedNumber};
 use crate::error::{ApiError, ErrorBody};
 use crate::idempotency::{self, Fingerprint, KeyHeader, Success};
@@ -931,8 +931,7 @@ fn build(request: SendMessage) -> Result<OutboundMessage, ApiError> {
         }
         MessageType::Template => {
             let template: TemplateMessage =
-                serde_json::from_value(required("template", request.template)?)
-                    .map_err(|_| ApiError::invalid("template"))?;
+                meta_object("template", &required("template", request.template)?)?;
             template.into()
         }
         MessageType::Interactive => {
@@ -1022,7 +1021,7 @@ fn accepted(response: SendResponse) -> Result<MessageAccepted, ApiError> {
         (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`permission`, `marketing_not_allowed`, …)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
         (status = 409, description = "`customer_service_window_closed`, `marketing_opted_out`, `number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`, …", body = ErrorBody),
-        (status = 422, description = "`invalid_request` (with `field`: `to.phone` without `+`, …), `unsupported_message_type`, `idempotency_key_reused`, Meta's `template_*`, …: nothing was sent", body = ErrorBody),
+        (status = 422, description = "`invalid_request` (with `field`: `to.phone` without `+`, a `template` key the service would not send to Meta, …), `unsupported_message_type`, `idempotency_key_reused`, Meta's `template_*`, …: nothing was sent", body = ErrorBody),
         (status = 429, description = "`too_many_requests` (the service's limits, `Retry-After`) or Meta's throttling", body = ErrorBody),
         (status = 502, description = "Meta failed: see `may_have_been_sent`", body = ErrorBody),
         (status = 504, description = "`timeout`: the message may have been sent (`may_have_been_sent: true`)", body = ErrorBody),
@@ -1341,6 +1340,23 @@ mod tests {
             ),
             (
                 json!({"to": to, "type": "template", "template": {"language": "en"}}),
+                "invalid_request template",
+            ),
+            // A key the library would drop is refused, never left out.
+            (
+                json!({"to": to, "type": "template", "template": {"name": "order_confirmation",
+                       "language": {"code": "en_US"}, "namespace": "a1b2c3"}}),
+                "invalid_request template.namespace",
+            ),
+            (
+                json!({"to": to, "type": "template", "template": {"name": "order_confirmation",
+                       "language": {"code": "en_US"},
+                       "components": [{"type": "body", "parameters": [{"type": "text", "text": "Pablo", "txet": "x"}]}]}}),
+                "invalid_request template.components[0].parameters[0].txet",
+            ),
+            (
+                json!({"to": to, "type": "template", "template": {"name": "order_confirmation",
+                       "language": {"code": "en_US"}, "bad key!": 1}}),
                 "invalid_request template",
             ),
             (

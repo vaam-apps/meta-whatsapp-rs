@@ -49,7 +49,7 @@ use serde_json::Value;
 use tokio::time::{Duration, Instant};
 use utoipa::ToSchema;
 
-use super::common::{ApiJson, PageParams, PageQuery, encode_cursor, graph_id};
+use super::common::{ApiJson, PageParams, PageQuery, encode_cursor, graph_id, meta_object};
 use crate::auth::{Caller, OwnedWaba};
 use crate::error::{ApiError, ErrorBody};
 use crate::idempotency::{self, Fingerprint, KeyHeader, Success};
@@ -544,7 +544,7 @@ pub async fn create(
         (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
         (status = 404, description = "`not_found`: no such WABA for this tenant", body = ErrorBody),
         (status = 409, description = "`template_limit_reached`, `number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`", body = ErrorBody),
-        (status = 422, description = "`invalid_request` (with `field`: the definition breaks a documented limit), `template_rejected`, `invalid_parameter`, `idempotency_key_reused`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` (with `field`: the definition breaks a documented limit, or holds a key the service would not send to Meta), `template_rejected`, `invalid_parameter`, `idempotency_key_reused`", body = ErrorBody),
         (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
         (status = 502, description = "Meta failed", body = ErrorBody),
         (status = 504, description = "`timeout`: the template may have been created", body = ErrorBody),
@@ -559,9 +559,9 @@ pub async fn create_template(
     ApiJson(body): ApiJson<Value>,
 ) -> Response {
     let fingerprint = Fingerprint::json(&Method::POST, uri.path(), &body);
-    let definition: TemplateDefinition = match serde_json::from_value(body) {
+    let definition: TemplateDefinition = match meta_object("", &body) {
         Ok(definition) => definition,
-        Err(_) => return ApiError::invalid("body").into_response(),
+        Err(error) => return error.into_response(),
     };
     if let Err(invalid) = definition.validate() {
         return ApiError::invalid(invalid.field).into_response();
