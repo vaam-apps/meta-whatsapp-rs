@@ -40,15 +40,17 @@
 //! without a second message. The events the library gives no dedup key
 //! (`error_reported`, `unparsed`) are keyed by the signed body they came in
 //! and their position in it ([`EventKey::Delivery`]): Meta redelivers a
-//! body byte for byte, so a redelivered batch records them once too (and an
-//! identical body sent again later is taken for a redelivery: nothing in it
-//! tells the two apart).
+//! body byte for byte, so a redelivered batch records them once too, within
+//! [`KEYLESS_DEDUP_WINDOW`]. The library never deduplicates them (the same
+//! error recurs, and carries no date): an identical body after the window
+//! is recorded again, as a new occurrence with an id of its own.
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use meta_whatsapp_rs::core::clock::{Clock, SystemClock};
 use meta_whatsapp_rs::core::error::{SinkError, StorageError};
 use meta_whatsapp_rs::core::ids::PhoneNumberId;
 use meta_whatsapp_rs::core::secret::{AppSecret, VerifyToken};
@@ -67,7 +69,9 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use crate::error::ApiError;
 use crate::metrics::Metrics;
 use crate::model::TenantId;
-use crate::store::events::{EventQuery, EventStore, NewEvent, OutboxBusy, StoredEvent};
+use crate::store::events::{
+    DedupWindow, EventQuery, EventStore, NewEvent, OutboxBusy, StoredEvent,
+};
 use crate::store::{Store, StoreResult};
 
 /// Largest webhook body read: 3 MiB, the library's default (Meta documents
@@ -93,6 +97,15 @@ pub const MAX_DELIVERIES_RECORDING: usize = 4;
 
 /// How long a delivery waits for its turn to record: past it, `503`.
 pub const RECORDING_WAIT: Duration = Duration::from_secs(10);
+
+/// How long an event the library gives no dedup key (`error_reported`,
+/// `unparsed`) is deduplicated for: the same body and position within it
+/// is Meta's redelivery; after it, a new occurrence, recorded again under
+/// a new id. Meta redelivers promptly after a failure; the library itself
+/// never deduplicates these events, since the same error legitimately
+/// recurs and carries no date. A coordinator's decision of 2026-09-25,
+/// reversible (docs/design/server.md, section 2.3).
+pub const KEYLESS_DEDUP_WINDOW: Duration = Duration::from_hours(1);
 
 /// Default `WA_SERVER_OUTBOX_RETENTION`: 7 days, the design's proposal.
 /// Retention is decision D10 of the design, still open: this default
@@ -164,6 +177,7 @@ pub struct Inbound {
     kv: Arc<dyn KvStore>,
     conversations: Arc<dyn ConversationStore>,
     outbox: Arc<dyn EventStore>,
+    clock: Arc<dyn Clock>,
 }
 
 impl std::fmt::Debug for Inbound {
@@ -177,7 +191,9 @@ impl std::fmt::Debug for Inbound {
 impl Inbound {
     /// Verify deliveries against `app_secrets` (the active one, then the
     /// previous one while rotating), lease dedup claims in `kv`, record
-    /// into `conversations` and `outbox`.
+    /// into `conversations` and `outbox`. Event ids are derived from the
+    /// first app secret ([`EventIdKey`]): after a rotation, an event
+    /// recorded again (its row purged) gets another id.
     ///
     /// # Errors
     ///
@@ -203,7 +219,16 @@ impl Inbound {
             kv,
             conversations,
             outbox,
+            clock: Arc::new(SystemClock),
         })
+    }
+
+    /// Read "now" from `clock` (the system clock by default): the replay
+    /// window and [`KEYLESS_DEDUP_WINDOW`] are measured on it.
+    #[must_use]
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
     }
 }
 
@@ -235,6 +260,8 @@ pub(crate) enum Rejection {
     SlowBody = 3,
     /// No place or turn: `503`.
     Busy = 4,
+    /// The body broke off before it all arrived (a reset connection).
+    Broken = 5,
 }
 
 /// Warnings about refused deliveries, at most one a minute for each
@@ -247,7 +274,7 @@ pub(crate) struct RejectionLog {
     started: std::time::Instant,
     /// Per rejection: the millisecond (since `started`) from which the next
     /// line may be written, and the refusals not written since the last.
-    slots: [(AtomicU64, AtomicU64); 5],
+    slots: [(AtomicU64, AtomicU64); 6],
 }
 
 impl RejectionLog {
@@ -312,6 +339,7 @@ impl Events {
             metrics,
             ids: inbound.ids,
             replay_window: dedup.ttl(),
+            clock: inbound.clock,
         };
         Self {
             verifier: inbound.verifier,
@@ -400,7 +428,9 @@ pub enum EventKey {
     /// An event the library gives no key (`error_reported`, `unparsed`):
     /// the SHA-256 of the signed body it came in and its position among
     /// that body's keyless events. Meta redelivers a batch byte for byte,
-    /// so a redelivery reproduces the key, and the event is recorded once.
+    /// so a redelivery reproduces the key, and the event is recorded once
+    /// within [`KEYLESS_DEDUP_WINDOW`]; after it, again, as a new
+    /// occurrence.
     Delivery {
         /// SHA-256 of the signed body.
         body_sha256: [u8; 32],
@@ -644,7 +674,9 @@ pub fn outbox_key(key: &EventKey, phone_number_id: Option<&str>, data: &str) -> 
 
 /// The key event ids are derived with: HMAC-SHA256 under the (first) app
 /// secret of a fixed label, so every replica derives the same ids, and an
-/// id tells nothing of the event it names.
+/// id tells nothing of the event it names. Another first app secret (a
+/// rotation) is another key: an event recorded again after it (its row
+/// purged) gets another id.
 #[derive(Clone)]
 pub struct EventIdKey([u8; 32]);
 
@@ -679,8 +711,10 @@ impl EventIdKey {
 
     /// The id of the event whose outbox key is `outbox_key`: `evt_` and 32
     /// hex digits. The same event gets the same id every time it is
-    /// recorded, a replay after its row was purged included (security
-    /// review L3): receivers deduplicate on it.
+    /// recorded under this key, a replay after its row was purged included
+    /// (security review L3): receivers deduplicate on it. (An event the
+    /// library gives no dedup key has an id per occurrence:
+    /// [`KEYLESS_DEDUP_WINDOW`].)
     pub fn event_id(&self, outbox_key: &str) -> Option<String> {
         let mac = hmac_sha256(&self.0, outbox_key.as_bytes())?;
         Some(format!("evt_{}", hex::encode(&mac[..16])))
@@ -702,6 +736,8 @@ pub struct ServiceSink {
     /// lease's memory (`DedupGuard::ttl`), past which a captured body would
     /// otherwise be recorded again.
     replay_window: Duration,
+    /// "Now", for the replay window and [`KEYLESS_DEDUP_WINDOW`].
+    clock: Arc<dyn Clock>,
 }
 
 impl std::fmt::Debug for ServiceSink {
@@ -729,7 +765,8 @@ impl ServiceSink {
     /// outbox.
     async fn record(&self, event: WebhookEvent, key: &EventKey) -> Result<(), SinkError> {
         let kind = event.kind();
-        let not_before = OffsetDateTime::now_utc() - self.replay_window;
+        let now = self.clock.now();
+        let not_before = now - self.replay_window;
         let route = route(self.store.as_ref(), &event, not_before)
             .await
             .map_err(|e| self.failed("routing", kind, storage(e)))?;
@@ -740,7 +777,22 @@ impl ServiceSink {
         })?;
         let phone_number_id = event.phone_number_id().map(|pn| pn.as_str().to_owned());
         let dedup_key = outbox_key(key, phone_number_id.as_deref(), &data);
-        let id = self.ids.event_id(&dedup_key).ok_or_else(|| {
+        // A library key names one event: its id, whenever it is recorded.
+        // A keyless event is deduplicated within a window only, and each
+        // occurrence recorded is an event of its own: its id covers when it
+        // was received (two occurrences recorded are a window apart, on the
+        // same clock, so their ids differ).
+        let (id_of, dedup_window) = match key {
+            EventKey::Library(_) => (dedup_key.clone(), None),
+            EventKey::Delivery { .. } => (
+                format!("{dedup_key}@{}", now.unix_timestamp_nanos()),
+                Some(DedupWindow {
+                    now,
+                    until: now + KEYLESS_DEDUP_WINDOW,
+                }),
+            ),
+        };
+        let id = self.ids.event_id(&id_of).ok_or_else(|| {
             self.failed(
                 "serialization",
                 kind,
@@ -750,6 +802,8 @@ impl ServiceSink {
         let row = NewEvent {
             id,
             dedup_key: Some(dedup_key),
+            dedup_window,
+            meta_time: meta_time(&event),
             tenant: route.tenant.clone(),
             phone_number_id,
             waba_id: event.waba_id().map(|waba| waba.as_str().to_owned()),

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_server::model::TenantId;
-use meta_whatsapp_server::store::events::{EventQuery, NewEvent};
+use meta_whatsapp_server::store::events::{DedupWindow, EventQuery, NewEvent};
 use meta_whatsapp_server::store::{EventStore, Store};
 
 fn tenant(id: &str) -> TenantId {
@@ -43,6 +43,8 @@ pub fn row(tenant_id: Option<&str>, event_type: &str, pn: &str, dedup: Option<&s
     NewEvent {
         id: format!("evt_suite_{n}_{}", super::unique()),
         dedup_key: dedup.map(str::to_owned),
+        dedup_window: None,
+        meta_time: None,
         tenant: tenant_id.map(tenant),
         phone_number_id: Some(pn.to_owned()),
         waba_id: Some(waba_of(pn)),
@@ -195,6 +197,64 @@ pub async fn dedup(store: &dyn EventStore) {
     }
     let page = store.page(&query("suite-d", None, 10)).await.unwrap();
     assert_eq!(page.events.len(), 3);
+}
+
+/// A keyless event's row holds its dedup key only until its window ends
+/// (`DedupWindow`, on the caller's clock, never the store's): the same key
+/// before then is a redelivery; at or after it, a new occurrence, recorded
+/// under its own id while the earlier row keeps its sequence and id. A
+/// row with no window (a library key) holds its key for good. Decisive:
+/// the release of an ended window's key, and its bound.
+pub async fn dedup_window(store: &dyn EventStore) {
+    use time::{Duration, macros::datetime};
+    let key = format!("keyless-{}", super::unique());
+    // Far from the store's own clock, either way: only the window counts.
+    let t0 = datetime!(2031-01-01 0:00 UTC);
+    let at = |offset: Duration| {
+        let now = t0 + offset;
+        NewEvent {
+            dedup_window: Some(DedupWindow {
+                now,
+                until: now + Duration::HOUR,
+            }),
+            ..row(Some("suite-w"), "error_reported", "51", Some(&key))
+        }
+    };
+    let insert = |event: NewEvent| async move { store.insert(&event).await.unwrap() };
+    let first = at(Duration::ZERO);
+    assert_eq!(insert(first.clone()).await, Some(1));
+    assert_eq!(
+        insert(at(Duration::minutes(59))).await,
+        None,
+        "a redelivery"
+    );
+    assert_eq!(
+        insert(at(Duration::HOUR - Duration::SECOND)).await,
+        None,
+        "the window's last second"
+    );
+    let second = at(Duration::HOUR);
+    assert_eq!(insert(second.clone()).await, Some(2), "a new occurrence");
+    // The new occurrence holds the key now, for its own hour.
+    assert_eq!(insert(at(Duration::minutes(119))).await, None);
+    assert_eq!(insert(at(Duration::minutes(120))).await, Some(3));
+    let page = store.page(&query("suite-w", None, 10)).await.unwrap();
+    let ids: Vec<&str> = page.events.iter().map(|e| e.id.as_str()).collect();
+    assert_eq!(ids[..2], [first.id.as_str(), second.id.as_str()]);
+    assert_eq!(ids.len(), 3);
+
+    // A library key's row holds it whatever the window of what comes next.
+    let library = format!("library-{}", super::unique());
+    let held = row(Some("suite-w"), "message_received", "51", Some(&library));
+    assert_eq!(insert(held).await, Some(4));
+    let later = NewEvent {
+        dedup_window: Some(DedupWindow {
+            now: t0 + Duration::days(3650),
+            until: t0 + Duration::days(3651),
+        }),
+        ..row(Some("suite-w"), "message_received", "51", Some(&library))
+    };
+    assert_eq!(insert(later).await, None);
 }
 
 /// `types` and `phone_number_id` narrow a page.
@@ -351,6 +411,7 @@ pub async fn run(store: &dyn EventStore, tenants: &dyn Store) {
         ("suite-a", "12"),
         ("suite-b", "21"),
         ("suite-d", "41"),
+        ("suite-w", "51"),
         ("suite-f", "61"),
         ("suite-f", "62"),
         ("suite-p", "71"),
@@ -364,6 +425,7 @@ pub async fn run(store: &dyn EventStore, tenants: &dyn Store) {
     insert_and_page(store).await;
     page_budget(store).await;
     dedup(store).await;
+    dedup_window(store).await;
     filters(store).await;
     tenant_deleted(store, tenants).await;
     purge_is_per_stream(store).await;

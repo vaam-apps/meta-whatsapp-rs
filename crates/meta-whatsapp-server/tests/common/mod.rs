@@ -18,6 +18,7 @@ use meta_whatsapp_rs::adapters::store::{MemoryConversationStore, MemoryKvStore};
 use meta_whatsapp_rs::client::embedded_signup::{
     StoredBusinessToken, TOKEN_NAMESPACE, TokenVault, VaultKey, VaultKeys,
 };
+use meta_whatsapp_rs::core::clock::ManualClock;
 use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_rs::core::secret::{AccessToken, AppSecret, VerifyToken};
@@ -233,6 +234,9 @@ pub struct Harness {
     pub conversations: Arc<dyn ConversationStore>,
     /// The outbox, recording what the sink writes.
     pub outbox: Arc<RecordingEvents>,
+    /// The webhook pipeline's "now" (the replay window, the keyless dedup
+    /// window): the time the harness was built until a test moves it.
+    pub clock: ManualClock,
 }
 
 /// The stores a [`Harness`] runs on.
@@ -387,8 +391,15 @@ impl Harness {
         })
     }
 
-    /// On `stores`.
+    /// On `stores`, verifying deliveries against [`APP_SECRET`] and
+    /// [`PREVIOUS_APP_SECRET`].
     pub fn with(stores: Stores) -> Self {
+        Self::with_app_secrets(stores, &[APP_SECRET, PREVIOUS_APP_SECRET])
+    }
+
+    /// On `stores`, verifying deliveries against `app_secrets` (the first
+    /// one derives event ids).
+    pub fn with_app_secrets(stores: Stores, app_secrets: &[&str]) -> Self {
         let Stores {
             store,
             kv,
@@ -408,16 +419,15 @@ impl Harness {
             .retry(RetryPolicy::NONE)
             .build()
             .unwrap();
+        let clock = ManualClock::new(time::OffsetDateTime::now_utc());
         let inbound = Inbound::new(
-            vec![
-                AppSecret::new(APP_SECRET),
-                AppSecret::new(PREVIOUS_APP_SECRET),
-            ],
+            app_secrets.iter().copied().map(AppSecret::new).collect(),
             kv.clone(),
             conversations.clone(),
             outbox.clone(),
         )
-        .unwrap();
+        .unwrap()
+        .with_clock(Arc::new(clock.clone()));
         let state = AppState::new(
             store.clone(),
             vault.clone(),
@@ -436,6 +446,7 @@ impl Harness {
             store,
             conversations,
             outbox,
+            clock,
         }
     }
 

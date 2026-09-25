@@ -19,7 +19,7 @@ use common::meta::{
     EXAMPLE_PN, EXAMPLE_TEXT, EXAMPLE_WABA, EXAMPLE_WAMID, bytes, example_text, fixture, status,
     template_approved, text, unknown_field, with_ids,
 };
-use common::{Call, Harness, PREVIOUS_APP_SECRET, Reply, send, signed};
+use common::{APP_SECRET, Call, Harness, PREVIOUS_APP_SECRET, Reply, Stores, send, signed};
 use meta_whatsapp_rs::core::secret::AppSecret;
 use meta_whatsapp_rs::core::store::{ConversationKey, KvStore};
 use meta_whatsapp_rs::webhooks::axum::body::{Body, Bytes};
@@ -713,7 +713,8 @@ async fn a_redelivered_batch_records_its_keyless_events_once() {
 
 /// Keyless events are one row per body and position: two identical errors
 /// in one body are two rows, the same error in another body a third, and
-/// an unparsed body sent twice one row.
+/// an unparsed body sent twice one row (within the dedup window: the
+/// harness's clock does not move here).
 #[tokio::test]
 async fn keyless_events_are_told_apart_by_body_and_position() {
     let h = two_tenants().await;
@@ -747,6 +748,14 @@ async fn keyless_events_are_told_apart_by_body_and_position() {
         .filter(|r| r.event_type == "unparsed")
         .count();
     assert_eq!(unparsed_rows, 1);
+}
+
+/// Keyless events are deduplicated within an hour only
+/// (`common::scenarios`; on Postgres: `live_postgres.rs`).
+#[tokio::test]
+async fn keyless_events_are_deduplicated_within_the_window_only() {
+    common::scenarios::keyless_events_are_deduplicated_within_the_window_only(&Harness::new())
+        .await;
 }
 
 /// The outbox key: the same key for the same event, another for another
@@ -912,6 +921,38 @@ async fn an_event_keeps_its_id_when_recorded_again() {
     assert_ne!(h.outbox.rows()[2].id, first.id);
 }
 
+/// Event ids are keyed by the first app secret (`EventIdKey`): the same
+/// event recorded by a deployment whose first app secret is another gets
+/// another id, and the same id when only the previous secret differs. So
+/// rotating `WA_APP_SECRET` changes the id of an event recorded again
+/// after its row was purged. Decisive: the app secret in the ids' key.
+#[tokio::test]
+async fn event_ids_are_keyed_by_the_first_app_secret() {
+    let body = example_text();
+    let recorded = |h: Harness| {
+        let body = body.clone();
+        async move {
+            assert_eq!(h.webhook(&body).await.status, StatusCode::OK);
+            let [row] = h.outbox.rows().try_into().unwrap();
+            (row.id, row.dedup_key)
+        }
+    };
+    let (id, key) = recorded(Harness::new()).await;
+    let (rotated, rotated_key) = recorded(Harness::with_app_secrets(
+        Stores::memory(),
+        &[PREVIOUS_APP_SECRET, APP_SECRET],
+    ))
+    .await;
+    let (same_first, _) = recorded(Harness::with_app_secrets(
+        Stores::memory(),
+        &[APP_SECRET, "another-previous-app-secret"],
+    ))
+    .await;
+    assert_eq!(key, rotated_key, "the same event");
+    assert_ne!(id, rotated, "another first app secret, another id");
+    assert_eq!(id, same_first, "only the first app secret counts");
+}
+
 /// Security review L3: an event Meta dated before what the dedup lease
 /// remembers (7 days) is a replay, routed to nobody whoever holds its
 /// number; within it, it routes as usual.
@@ -1000,6 +1041,43 @@ async fn deliveries_past_capacity_are_503_and_slow_bodies_408() {
         ),
         64
     );
+}
+
+/// Security review M2: a delivery waits at most `RECORDING_WAIT` for its
+/// turn to record, then is `503` (Meta retries). With every turn held by a
+/// delivery stuck in the outbox, the next one is answered after the wait,
+/// not when the stuck ones' deadline frees a turn. Decisive: the recording
+/// wait.
+#[tokio::test(start_paused = true)]
+async fn a_delivery_with_no_turn_to_record_is_503_after_the_wait() {
+    use meta_whatsapp_server::events::{MAX_DELIVERIES_RECORDING, RECORDING_WAIT};
+    let h = two_tenants().await;
+    h.outbox
+        .fates(&[common::Fate::Hang; MAX_DELIVERIES_RECORDING]);
+    let stuck: Vec<_> = (0..MAX_DELIVERIES_RECORDING)
+        .map(|i| {
+            let body = bytes(&text(WABA_A, PN_A, &format!("wamid.stuck-{i}")));
+            let request = signed(&body).build();
+            let router = h.public.clone();
+            tokio::spawn(async move { send(&router, request).await.status })
+        })
+        .collect();
+    // They take every turn (paused time moves once every task waits).
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    let started = tokio::time::Instant::now();
+    let reply = h
+        .webhook(&bytes(&text(WABA_A, PN_A, "wamid.waiting")))
+        .await;
+    assert_eq!(reply.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(started.elapsed(), RECORDING_WAIT);
+    assert_eq!(
+        metric(&h, "wa_server_webhook_deliveries_total{outcome=\"busy\"}"),
+        1
+    );
+    assert!(h.outbox.rows().is_empty());
+    for task in stuck {
+        task.abort();
+    }
 }
 
 /// A body that starts and then stalls is cut too.

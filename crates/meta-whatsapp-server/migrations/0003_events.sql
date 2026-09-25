@@ -17,6 +17,11 @@
 -- `tenant_id` references the tenant: deleting a tenant deletes its events
 -- in the same transaction, so a tenant created later with the same id
 -- never polls them.
+--
+-- `dedup_key` is held for as long as the row is stored, except by events
+-- the library gives no dedup key (errors, bodies that are not webhooks):
+-- those hold it until `dedup_until` (an hour after they were received,
+-- on the service's clock), then give it up to a later occurrence.
 
 CREATE TABLE wa_server_event_streams (
     stream TEXT COLLATE "C" PRIMARY KEY,
@@ -30,6 +35,7 @@ CREATE TABLE wa_server_events (
     sequence BIGINT NOT NULL,
     id TEXT COLLATE "C" NOT NULL UNIQUE,
     dedup_key TEXT COLLATE "C" UNIQUE,
+    dedup_until TIMESTAMPTZ,
     phone_number_id TEXT COLLATE "C",
     waba_id TEXT COLLATE "C",
     event_type TEXT COLLATE "C" NOT NULL,

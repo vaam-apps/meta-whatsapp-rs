@@ -539,6 +539,8 @@ mod tests {
         let row = |id: &str| NewEvent {
             id: id.to_owned(),
             dedup_key: None,
+            dedup_window: None,
+            meta_time: None,
             tenant: crate::model::TenantId::parse("tenant-a"),
             phone_number_id: None,
             waba_id: None,

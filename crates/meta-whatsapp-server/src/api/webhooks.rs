@@ -117,7 +117,13 @@ async fn deliver(state: &AppState, request: Request) -> (StatusCode, &'static st
             return (StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large");
         }
         Ok(Err(rejection)) => {
-            tracing::warn!(status = %rejection.status(), "could not read a webhook body");
+            if let Some(suppressed) = rejections.admit(Rejection::Broken) {
+                tracing::warn!(
+                    suppressed,
+                    status = %rejection.status(),
+                    "could not read a webhook body"
+                );
+            }
             return (rejection.status(), "failed");
         }
         Err(_) => {

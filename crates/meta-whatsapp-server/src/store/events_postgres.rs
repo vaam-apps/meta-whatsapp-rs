@@ -13,12 +13,26 @@
 //! tenant with `ON DELETE CASCADE`, and deleting a tenant also records its
 //! stream purged through its last sequence (`PgStore::delete_tenant`), in
 //! the deleting transaction: a tenant created later with the same id polls
-//! none of them, and its sequences go on after them. And an insert routed
-//! to a tenant keeps that tenant only while the binding it was routed by
-//! still names it, read under a `FOR KEY SHARE` lock that holds off an
-//! unbinding until the insert commits: an event routed just before its
-//! tenant was unbound, deleted and created again under the same id is
-//! recorded operator-only, never shown to the new tenant.
+//! none of them, and its sequences go on after them.
+//!
+//! **The insert checks the routing again.** An insert routed to a tenant
+//! keeps that tenant only while the binding it was routed by (the number,
+//! under the WABA the event names; else the WABA) still names it and, for
+//! an event Meta dated ([`NewEvent::meta_time`]), that WABA's binding
+//! began no later than the event's second, as `crate::events::owner`
+//! requires. It reads the binding under a `FOR KEY SHARE` lock that holds
+//! off an unbinding (and so the tenant's deletion) until the insert
+//! commits. So an event routed just before its WABA moved to another
+//! tenant, or before its tenant was unbound, deleted, created again under
+//! the same id and bound again, is recorded operator-only, never shown to
+//! the new tenant. An undated event (an error, a sync) has only the
+//! tenant's id to go by: in that last race it reaches the new tenant.
+//!
+//! **Keyless events hold their dedup key for an hour.** A row with a
+//! `dedup_until` gives its key up to a later occurrence received at or
+//! after it (both on the webhook pipeline's clock, never the database's),
+//! in the inserting transaction; a row without one holds its key until it
+//! is purged.
 //!
 //! **A page reads no more data than it answers.** The page's rows are
 //! chosen from their sizes (`data_bytes`) first, then only those rows'
@@ -129,10 +143,29 @@ impl EventStore for PgEventStore {
             .execute(&mut *tx)
             .await
             .map_err(backend)?;
+        // A keyless event's earlier occurrence whose dedup window ended
+        // (both on the webhook pipeline's clock) gives the key up and keeps
+        // its row: this one is a new occurrence, not a redelivery. A
+        // statement of its own, so the insert below sees the key free. A
+        // library key's row (`dedup_until` null) never gives it up.
+        if let (Some(key), Some(window)) = (event.dedup_key.as_deref(), event.dedup_window) {
+            sqlx::query(
+                "UPDATE wa_server_events SET dedup_key = NULL \
+                 WHERE dedup_key = $1 AND dedup_until <= $2",
+            )
+            .bind(key)
+            .bind(window.now)
+            .execute(&mut *tx)
+            .await
+            .map_err(busy_or_backend)?;
+        }
         // 1. The tenant, while the binding the event was routed by (its
         //    number, under the WABA it names; else its WABA) still names
-        //    it: the same rule as `crate::events::owner`. Locked, so an
-        //    unbinding waits for this commit.
+        //    it, and, for an event Meta dated, while that WABA's binding
+        //    began no later than the event's second: the same rule as
+        //    `crate::events::owner`. Locked, so an unbinding waits for this
+        //    commit (a number's WABA cannot go while the number is locked:
+        //    deleting it deletes the number).
         // 2. Nothing when the dedup key is stored (no sequence drawn).
         // 3. The stream's next sequence: its row stays locked until the
         //    commit, so the stream's inserts commit in order.
@@ -144,10 +177,15 @@ impl EventStore for PgEventStore {
                    SELECT n.tenant_id FROM wa_server_numbers n \
                    WHERE n.phone_number_id = $4 AND n.tenant_id = $3 \
                      AND ($5::text IS NULL OR n.waba_id = $5) \
+                     AND ($9::bigint IS NULL OR EXISTS ( \
+                       SELECT 1 FROM wa_server_wabas nw \
+                       WHERE nw.waba_id = n.waba_id \
+                         AND nw.attached_at < to_timestamp($9::bigint + 1))) \
                    FOR KEY SHARE) \
                  ELSE ( \
                    SELECT w.tenant_id FROM wa_server_wabas w \
                    WHERE w.waba_id = $5 AND w.tenant_id = $3 \
+                     AND ($9::bigint IS NULL OR w.attached_at < to_timestamp($9::bigint + 1)) \
                    FOR KEY SHARE) \
                END AS tenant_id \
              ), fresh AS ( \
@@ -161,9 +199,9 @@ impl EventStore for PgEventStore {
                RETURNING s.last_sequence \
              ) \
              INSERT INTO wa_server_events \
-             (tenant_id, sequence, id, dedup_key, phone_number_id, waba_id, event_type, data, \
-              data_bytes) \
-             SELECT fresh.tenant_id, drawn.last_sequence, $1, $2, $4, $5, $6, $7::json, $8 \
+             (tenant_id, sequence, id, dedup_key, dedup_until, phone_number_id, waba_id, \
+              event_type, data, data_bytes) \
+             SELECT fresh.tenant_id, drawn.last_sequence, $1, $2, $10, $4, $5, $6, $7::json, $8 \
              FROM fresh, drawn \
              ON CONFLICT (dedup_key) DO NOTHING RETURNING sequence, tenant_id",
         )
@@ -175,6 +213,8 @@ impl EventStore for PgEventStore {
         .bind(&event.event_type)
         .bind(&event.data)
         .bind(data_bytes)
+        .bind(event.meta_time.map(OffsetDateTime::unix_timestamp))
+        .bind(event.dedup_window.map(|window| window.until))
         .fetch_optional(&mut *tx)
         .await
         .map_err(busy_or_backend)?;
@@ -186,8 +226,8 @@ impl EventStore for PgEventStore {
             tracing::warn!(
                 sequence,
                 event_type = %event.event_type,
-                "an event's tenant lost the binding it was routed by while it was recorded: \
-                 kept operator-only"
+                "an event's tenant lost the binding it was routed by while it was recorded \
+                 (or holds it again, bound after the event): kept operator-only"
             );
         }
         Ok(Some(sequence))

@@ -32,6 +32,16 @@ pub struct NewEvent {
     /// with the same key is a no-op. The sink gives every event one; a row
     /// without one is never deduplicated.
     pub dedup_key: Option<String>,
+    /// How long its row holds [`Self::dedup_key`]: `None`, for as long as
+    /// it is stored (the library's dedup keys); for an event the library
+    /// gives no dedup key (`error_reported`, `unparsed`), a window
+    /// (`crate::events::KEYLESS_DEDUP_WINDOW`) on the webhook pipeline's
+    /// clock.
+    pub dedup_window: Option<DedupWindow>,
+    /// When Meta dated the event (`crate::events::meta_time`), `None` when
+    /// it carries no date. [`PgEventStore`] keeps [`Self::tenant`] only if
+    /// the WABA binding it was routed by began no later than this second.
+    pub meta_time: Option<OffsetDateTime>,
     /// The tenant it is routed to; `None` for an operator-only row.
     pub tenant: Option<TenantId>,
     /// The business phone number it is about, when it names one.
@@ -54,6 +64,20 @@ impl std::fmt::Debug for NewEvent {
             .field("data_bytes", &self.data.len())
             .finish_non_exhaustive()
     }
+}
+
+/// A keyless event's dedup window, on the webhook pipeline's clock (both
+/// ends: the stores never compare it with their own clock).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DedupWindow {
+    /// When the event was received. A stored row holding the same key whose
+    /// window ended at or before it is an earlier occurrence, not a
+    /// redelivery: it gives the key up (keeping its row, sequence and id)
+    /// and this event is recorded.
+    pub now: OffsetDateTime,
+    /// Until when this event's row holds the key: the same key before it
+    /// is a redelivery, recorded nothing.
+    pub until: OffsetDateTime,
 }
 
 /// An event as stored.
@@ -139,7 +163,10 @@ pub struct OutboxBusy;
 pub trait EventStore: Send + Sync + 'static {
     /// Append `event` to its tenant's stream (or the operator-only one),
     /// committed in the stream's sequence order; its sequence. `None` when
-    /// an event with the same dedup key is stored (nothing is written).
+    /// an event with the same dedup key is stored (nothing is written),
+    /// unless `event` has a [`NewEvent::dedup_window`] and the stored row's
+    /// window ended at or before its `now`: that row gives the key up, and
+    /// `event` is recorded.
     async fn insert(&self, event: &NewEvent) -> StoreResult<Option<i64>>;
 
     /// A tenant's events after the query's cursor, and its stream's bounds,
@@ -156,7 +183,7 @@ pub trait EventStore: Send + Sync + 'static {
 /// (`WA_SERVER_ENV=development` and tests). Unlike [`PgEventStore`], its
 /// insert does not re-read the binding an event was routed by: a tenant
 /// deleted and created again while one of its events is being recorded
-/// may receive it (Postgres closes that race; see its module docs).
+/// may receive it (Postgres narrows that race; see its module docs).
 #[derive(Debug, Default)]
 pub struct MemoryEventStore {
     state: Mutex<MemoryState>,
@@ -166,15 +193,24 @@ pub struct MemoryEventStore {
 struct MemoryState {
     /// By tenant id; `""` is the operator-only stream.
     streams: HashMap<String, Stream>,
-    /// Dedup key → the stream holding it.
-    dedup: HashMap<String, String>,
+    /// Dedup key → the stream and sequence of the row holding it.
+    dedup: HashMap<String, (String, i64)>,
 }
 
 #[derive(Debug, Default)]
 struct Stream {
-    rows: BTreeMap<i64, (Option<String>, StoredEvent)>,
+    rows: BTreeMap<i64, MemoryRow>,
     last: i64,
     purged_through: i64,
+}
+
+#[derive(Debug)]
+struct MemoryRow {
+    /// The dedup key it holds (`None` once a later occurrence took it).
+    dedup_key: Option<String>,
+    /// Until when it holds it: `None`, for as long as it is stored.
+    dedup_until: Option<OffsetDateTime>,
+    event: StoredEvent,
 }
 
 /// The stream of `tenant`: its id, or `""` for operator-only rows.
@@ -203,18 +239,33 @@ impl MemoryEventStore {
         };
         stream.rows.clear();
         stream.purged_through = stream.last;
-        state.dedup.retain(|_, s| s != tenant.as_str());
+        state.dedup.retain(|_, (s, _)| s != tenant.as_str());
     }
 }
 
 #[async_trait]
 impl EventStore for MemoryEventStore {
     async fn insert(&self, event: &NewEvent) -> StoreResult<Option<i64>> {
-        let mut state = self.lock();
+        let mut guard = self.lock();
+        let state = &mut *guard;
         if let Some(key) = &event.dedup_key
-            && state.dedup.contains_key(key)
+            && let Some((held_by, held_at)) = state.dedup.get(key)
         {
-            return Ok(None);
+            let held = state
+                .streams
+                .get_mut(held_by)
+                .and_then(|stream| stream.rows.get_mut(held_at));
+            match (held, event.dedup_window) {
+                // An earlier occurrence, whose window ended: it gives the
+                // key up and keeps its row.
+                (Some(row), Some(window))
+                    if row.dedup_until.is_some_and(|until| until <= window.now) =>
+                {
+                    row.dedup_key = None;
+                    state.dedup.remove(key);
+                }
+                _ => return Ok(None),
+            }
         }
         let name = stream_of(event.tenant.as_ref());
         let stream = state.streams.entry(name.clone()).or_default();
@@ -222,9 +273,10 @@ impl EventStore for MemoryEventStore {
         let sequence = stream.last;
         stream.rows.insert(
             sequence,
-            (
-                event.dedup_key.clone(),
-                StoredEvent {
+            MemoryRow {
+                dedup_key: event.dedup_key.clone(),
+                dedup_until: event.dedup_window.map(|window| window.until),
+                event: StoredEvent {
                     sequence,
                     id: event.id.clone(),
                     tenant: event.tenant.clone(),
@@ -234,10 +286,10 @@ impl EventStore for MemoryEventStore {
                     data: event.data.clone(),
                     created_at: OffsetDateTime::now_utc(),
                 },
-            ),
+            },
         );
         if let Some(key) = &event.dedup_key {
-            state.dedup.insert(key.clone(), name);
+            state.dedup.insert(key.clone(), (name, sequence));
         }
         Ok(Some(sequence))
     }
@@ -256,7 +308,7 @@ impl EventStore for MemoryEventStore {
         let mut matching = stream
             .rows
             .range(after.saturating_add(1)..)
-            .map(|(_, (_, row))| row)
+            .map(|(_, row)| &row.event)
             .filter(|row| {
                 query
                     .types
@@ -298,8 +350,8 @@ impl EventStore for MemoryEventStore {
             let Some(through) = stream
                 .rows
                 .values()
-                .filter(|(_, row)| row.created_at < cutoff)
-                .map(|(_, row)| row.sequence)
+                .filter(|row| row.event.created_at < cutoff)
+                .map(|row| row.event.sequence)
                 .max()
             else {
                 continue;
@@ -307,7 +359,7 @@ impl EventStore for MemoryEventStore {
             let kept = stream.rows.split_off(&(through + 1));
             let removed = std::mem::replace(&mut stream.rows, kept);
             purged += u64::try_from(removed.len()).unwrap_or(u64::MAX);
-            gone.extend(removed.into_values().filter_map(|(key, _)| key));
+            gone.extend(removed.into_values().filter_map(|row| row.dedup_key));
             stream.purged_through = stream.purged_through.max(through);
         }
         for key in gone {

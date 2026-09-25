@@ -5,7 +5,7 @@ use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode};
 use meta_whatsapp_server::model::Scope;
 use serde_json::{Value, json};
 
-use super::meta::{bytes, text};
+use super::meta::{bytes, fixture, text, with_ids};
 use super::{Call, Harness};
 
 /// Every event `tenant` polls (a fresh key with the `events` scope).
@@ -90,4 +90,64 @@ pub async fn a_recreated_tenant_polls_nothing_from_before(h: &Harness) {
     assert_eq!(new[0]["sequence"], 2, "after the deleted tenant's");
     assert_eq!(message_ids(&polled(h, "tenant-b").await), ["wamid.B"]);
     assert_eq!(h.graph.remaining(), 0);
+}
+
+/// The coordinator's decision of 2026-09-25 (reversible): the events the
+/// library gives no dedup key are deduplicated within
+/// `KEYLESS_DEDUP_WINDOW` only, on the webhook pipeline's clock (the
+/// harness's, moved by hand here). Meta's error body redelivered in the
+/// window's last second is one row; the same body an hour after the first
+/// is a second row (a new occurrence, with its own id and the next
+/// sequence; the first stays); within that one's hour, nothing more. A
+/// body that is not a webhook likewise. Decisive: the window (without it,
+/// the later occurrence is never recorded; without the key, the
+/// redelivery is recorded twice).
+pub async fn keyless_events_are_deduplicated_within_the_window_only(h: &Harness) {
+    use meta_whatsapp_server::events::KEYLESS_DEDUP_WINDOW;
+    use std::time::Duration;
+    const WABA_A: &str = "102290129340398";
+    const PN_A: &str = "106540352242922";
+    const SECOND: Duration = Duration::from_secs(1);
+    let last_second = KEYLESS_DEDUP_WINDOW.checked_sub(SECOND).unwrap();
+    h.tenant("tenant-a").await;
+    h.connect("tenant-a", WABA_A, &[PN_A], "TOKEN-OF-A").await;
+    let error = bytes(&with_ids(fixture("messages/errors.json"), WABA_A, PN_A));
+    let errors = || async {
+        polled(h, "tenant-a")
+            .await
+            .into_iter()
+            .filter(|e| e["type"] == "error_reported")
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(h.webhook(&error).await.status, StatusCode::OK);
+    h.clock.advance(last_second);
+    assert_eq!(h.webhook(&error).await.status, StatusCode::OK);
+    assert_eq!(errors().await.len(), 1, "a redelivery within the window");
+    h.clock.advance(SECOND);
+    assert_eq!(h.webhook(&error).await.status, StatusCode::OK);
+    let both = errors().await;
+    assert_eq!(both.len(), 2, "the same body after the window");
+    assert_eq!(
+        (&both[0]["sequence"], &both[1]["sequence"]),
+        (&json!(1), &json!(2))
+    );
+    assert_ne!(both[0]["id"], both[1]["id"], "a new occurrence, a new id");
+    assert_eq!(both[0]["data"], both[1]["data"]);
+    h.clock.advance(last_second);
+    assert_eq!(h.webhook(&error).await.status, StatusCode::OK);
+    assert_eq!(errors().await, both, "within the new occurrence's window");
+
+    let unparsed = br#"{"not": "a webhook envelope"}"#;
+    let unparsed_rows = || {
+        h.outbox
+            .rows()
+            .into_iter()
+            .filter(|r| r.event_type == "unparsed")
+            .count()
+    };
+    for step in [Duration::ZERO, last_second, SECOND] {
+        h.clock.advance(step);
+        assert_eq!(h.webhook(unparsed).await.status, StatusCode::OK);
+    }
+    assert_eq!(unparsed_rows(), 2);
 }

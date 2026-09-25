@@ -38,8 +38,8 @@ impl MemoryStore {
         Self::default()
     }
 
-    /// The event outbox of this store: deleting a tenant here turns its
-    /// events into operator-only rows there.
+    /// The event outbox of this store: deleting a tenant here deletes its
+    /// events there, and records its stream purged.
     pub fn outbox(&self) -> Arc<MemoryEventStore> {
         self.outbox.clone()
     }
