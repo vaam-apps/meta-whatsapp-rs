@@ -478,6 +478,19 @@ impl ApiError {
         self
     }
 
+    /// The same error, answered as `422 invalid_request` on `field` (Meta
+    /// refused a value the request carried): `graph`, `retryable` and
+    /// `may_have_been_sent` stay.
+    #[must_use]
+    pub fn as_invalid(mut self, field: impl Into<String>) -> Self {
+        let invalid = Self::invalid(field);
+        self.0.status = invalid.0.status;
+        self.0.code = invalid.0.code;
+        self.0.message = invalid.0.message;
+        self.0.field = invalid.0.field;
+        self
+    }
+
     /// Set `may_have_been_sent`.
     #[must_use]
     pub fn with_may_have_been_sent(mut self, sent: bool) -> Self {

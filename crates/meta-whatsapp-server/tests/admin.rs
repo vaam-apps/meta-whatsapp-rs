@@ -483,6 +483,18 @@ async fn a_token_meta_refuses_binds_nothing() {
     for (body, field) in [
         (json!({"waba_id": "", "token": SYSTEM_TOKEN}), "waba_id"),
         (json!({"waba_id": "1 2", "token": SYSTEM_TOKEN}), "waba_id"),
+        (
+            json!({"waba_id": "0102290129340398", "token": SYSTEM_TOKEN}),
+            "waba_id",
+        ),
+        (
+            json!({"waba_id": "10229012934039a", "token": SYSTEM_TOKEN}),
+            "waba_id",
+        ),
+        (
+            json!({"waba_id": "1".repeat(65), "token": SYSTEM_TOKEN}),
+            "waba_id",
+        ),
         (json!({"waba_id": WABA, "token": " "}), "token"),
         (json!({"waba_id": WABA}), "body"),
     ] {
@@ -585,20 +597,62 @@ async fn a_waba_without_a_token_blocks_deletion_until_unbound() {
     assert!(h.graph.requests().is_empty());
 }
 
-/// Meta refusing to subscribe the app binds nothing and stores nothing:
-/// the WABA would deliver no webhook. Decisive: subscribing before the
-/// binding and the vault write.
+/// Meta refusing to subscribe the app is answered with its error; the
+/// WABA stays attached (the token is stored after the binding, as
+/// onboarding does), and repeating the attach subscribes it. Decisive: the
+/// subscription itself (its refusal must surface).
 #[tokio::test]
-async fn a_refused_subscription_binds_nothing() {
+async fn a_refused_subscription_is_reported_and_a_repeat_finishes_it() {
     let h = Harness::new();
     let admin = h.admin_key().await;
     h.tenant("merchant-a").await;
     h.graph.push_json(200, phone_numbers_page());
-    // subscribed-apps-api, POST, 403 example shape.
+    // subscribed-apps-api, POST, an error of the documented shape.
     h.graph.push_json(
         403,
         json!({"error": {"message": "(#200) Permissions error", "type": "OAuthException",
                          "code": 200, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+    );
+    let attach = || {
+        post(
+            "/v1/admin/tenants/merchant-a/wabas",
+            &admin,
+            &json!({"waba_id": WABA, "token": SYSTEM_TOKEN}),
+        )
+    };
+    let reply = h.call(attach()).await;
+    assert_eq!(
+        (reply.status, reply.code().as_str()),
+        (StatusCode::FORBIDDEN, "permission")
+    );
+    let requests = h.graph.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1].method, Method::POST);
+    assert_eq!(requests[1].path(), format!("/v25.0/{WABA}/subscribed_apps"));
+    assert!(h.store.waba(&WabaId::new(WABA)).await.unwrap().is_some());
+    assert!(h.vault.get(&WabaId::new(WABA)).await.unwrap().is_some());
+
+    h.graph.push_json(200, phone_numbers_page());
+    h.graph.push_json(200, json!({"success": true}));
+    let again = h.call(attach()).await;
+    assert_eq!(again.status, StatusCode::CREATED, "{}", again.text);
+    assert_eq!(h.graph.requests().len(), 4);
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// A token Meta rejects (`190`) is the request's input: `422
+/// invalid_request` on `token`, with Meta's code, and nothing bound
+/// (conventions review S5; a stored token's `190` is
+/// `reconnect_required`).
+#[tokio::test]
+async fn a_token_meta_rejects_is_invalid_input() {
+    let h = Harness::new();
+    let admin = h.admin_key().await;
+    h.tenant("merchant-a").await;
+    h.graph.push_json(
+        401,
+        json!({"error": {"message": "Invalid OAuth access token", "type": "OAuthException",
+                         "code": 190, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
     );
     let reply = h
         .call(post(
@@ -609,19 +663,71 @@ async fn a_refused_subscription_binds_nothing() {
         .await;
     assert_eq!(
         (reply.status, reply.code().as_str()),
-        (StatusCode::FORBIDDEN, "permission")
+        (StatusCode::UNPROCESSABLE_ENTITY, "invalid_request")
     );
-    let requests = h.graph.requests();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(requests[1].path(), format!("/v25.0/{WABA}/subscribed_apps"));
+    let body = reply.json();
+    assert_eq!(body["error"]["field"], "token");
+    assert_eq!(body["error"]["graph"]["code"], 190);
+    assert!(!reply.text.contains(SYSTEM_TOKEN));
     assert!(h.store.waba(&WabaId::new(WABA)).await.unwrap().is_none());
-    assert!(
-        h.store
-            .number(&PhoneNumberId::new("1972385232742141"))
-            .await
-            .unwrap()
-            .is_none()
-    );
     assert!(h.vault.get(&WabaId::new(WABA)).await.unwrap().is_none());
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// A listing that never ends (a fresh cursor on every page) stops past
+/// 1,000 numbers: `502 upstream`, nothing bound, stored or subscribed
+/// (security review L3). 1,000 numbers exactly are attached.
+#[tokio::test]
+async fn a_listing_past_a_thousand_numbers_is_refused() {
+    let page = |n: usize, last: bool| {
+        let data: Vec<Value> = (0..100)
+            .map(|i| json!({"id": format!("{}", 1_000_000 + n * 100 + i)}))
+            .collect();
+        if last {
+            json!({"data": data})
+        } else {
+            json!({"data": data, "paging": {"cursors": {"after": format!("c{n}")},
+                   "next": format!("https://graph.facebook.com/v25.0/{WABA}/phone_numbers?after=c{n}")}})
+        }
+    };
+    let h = Harness::new();
+    let admin = h.admin_key().await;
+    h.tenant("merchant-a").await;
+    for n in 0..11 {
+        h.graph.push_json(200, page(n, false));
+    }
+    let attach = || {
+        post(
+            "/v1/admin/tenants/merchant-a/wabas",
+            &admin,
+            &json!({"waba_id": WABA, "token": SYSTEM_TOKEN}),
+        )
+    };
+    let reply = h.call(attach()).await;
+    assert_eq!(
+        (reply.status, reply.code().as_str()),
+        (StatusCode::BAD_GATEWAY, "upstream")
+    );
+    assert_eq!(h.graph.remaining(), 0, "11 pages read, no more");
+    assert!(
+        h.graph
+            .requests()
+            .iter()
+            .all(|r| r.path() == format!("/v25.0/{WABA}/phone_numbers")),
+        "nothing subscribed"
+    );
+    assert!(h.store.waba(&WabaId::new(WABA)).await.unwrap().is_none());
+    assert!(h.vault.get(&WabaId::new(WABA)).await.unwrap().is_none());
+
+    for n in 0..10 {
+        h.graph.push_json(200, page(n, n == 9));
+    }
+    h.graph.push_json(200, json!({"success": true}));
+    let reply = h.call(attach()).await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.text);
+    assert_eq!(
+        reply.json()["phone_number_ids"].as_array().unwrap().len(),
+        1000
+    );
     assert_eq!(h.graph.remaining(), 0);
 }

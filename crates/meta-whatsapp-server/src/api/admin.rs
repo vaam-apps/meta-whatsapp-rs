@@ -4,7 +4,8 @@
 
 use std::collections::BTreeSet;
 
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
+use meta_whatsapp_rs::ErrorKind;
 use meta_whatsapp_rs::client::embedded_signup::StoredBusinessToken;
 use meta_whatsapp_rs::client::waba::PhoneNumbersQuery;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
@@ -803,12 +804,20 @@ pub struct AttachedWaba {
     pub phone_number_ids: Vec<String>,
 }
 
-/// Longest id accepted in a body.
-const MAX_ID_LEN: usize = 128;
+/// Longest WABA id accepted in a body.
+const MAX_ID_LEN: usize = 64;
 
+/// Most numbers attach binds for one WABA (Meta allows far fewer): past
+/// it the listing is refused as `upstream` rather than followed for ever.
+pub const MAX_WABA_NUMBERS: usize = 1000;
+
+/// A Meta id from a body: digits only, as Meta writes them (D4 compares
+/// the exact string, so `0102…` and `102…` must not both pass).
 fn graph_id(field: &'static str, id: &str) -> Result<String, ApiError> {
-    let valid =
-        !id.is_empty() && id.len() <= MAX_ID_LEN && id.bytes().all(|b| b.is_ascii_graphic());
+    let valid = !id.is_empty()
+        && id.len() <= MAX_ID_LEN
+        && id.bytes().all(|b| b.is_ascii_digit())
+        && !id.starts_with('0');
     if valid {
         Ok(id.to_owned())
     } else {
@@ -818,9 +827,9 @@ fn graph_id(field: &'static str, id: &str) -> Result<String, ApiError> {
 
 /// Attach one of the platform's own WABAs to a tenant: list its numbers
 /// from Meta with the given token (so no id is bound on the caller's word),
-/// subscribe the app to the WABA's webhooks with it, bind the WABA and
-/// those numbers to the tenant (refused when another tenant has it,
-/// decision D4), then store the token in the vault.
+/// bind the WABA and those numbers to the tenant (refused when another
+/// tenant has it, decision D4), store the token in the vault, then
+/// subscribe the app to the WABA's webhooks with it.
 #[utoipa::path(
     post,
     path = "/v1/admin/tenants/{id}/wabas",
@@ -829,13 +838,13 @@ fn graph_id(field: &'static str, id: &str) -> Result<String, ApiError> {
     params(("id" = String, Path, description = "Tenant id")),
     request_body = AttachWaba,
     responses(
-        (status = 201, description = "Attached: its numbers bound, the app subscribed to its webhooks, the token stored", body = AttachedWaba),
+        (status = 201, description = "Attached: its numbers bound, the token stored, the app subscribed to its webhooks", body = AttachedWaba),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "Not an admin key, or Meta refused the token (nothing bound or stored)", body = ErrorBody),
+        (status = 403, description = "Not an admin key, or Meta refused the token access to the WABA (nothing bound or stored), or to subscribe the app (the WABA stays attached: repeat the call)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such tenant", body = ErrorBody),
-        (status = 409, description = "`waba_owned_by_another_tenant`, or Meta refused the token (`reconnect_required`)", body = ErrorBody),
-        (status = 422, description = "`invalid_request` on `waba_id`, `token` or `body`; Meta's `invalid_parameter`", body = ErrorBody),
-        (status = 502, description = "Meta failed", body = ErrorBody),
+        (status = 409, description = "`waba_owned_by_another_tenant`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `waba_id` (digits), `token` (blank, or not a valid token for Meta) or `body`; Meta's `invalid_parameter`", body = ErrorBody),
+        (status = 502, description = "Meta failed, or listed more than 1,000 numbers (`upstream`)", body = ErrorBody),
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
 )]
@@ -870,24 +879,32 @@ pub async fn attach_waba(
     let meta_failed = |error: &meta_whatsapp_rs::Error| {
         let api = ApiError::from_library(error);
         state.metrics().graph_error(api.code());
-        api
+        // The token is the request's: Meta refusing it is the caller's
+        // input to fix, not a stored token to reconnect.
+        if error.kind() == ErrorKind::Authentication {
+            api.as_invalid("token")
+        } else {
+            api
+        }
     };
-    // Every number Meta lists on the WABA, with the given token.
+    // Every number Meta lists on the WABA, with the given token; a listing
+    // that never ends (a cursor per page, from a stub or a fault) stops.
     let numbers: Vec<PhoneNumberId> = waba
         .phone_numbers_stream(&PhoneNumbersQuery::new())
+        .take(MAX_WABA_NUMBERS + 1)
         .map_ok(|n| n.id)
         .try_collect()
         .await
         .map_err(|error| meta_failed(&error))?;
-    // Subscribe the app to the WABA's webhooks, as onboarding does: a WABA
-    // the app is not subscribed to delivers no webhook, and disconnecting
-    // unsubscribes it (docs/design/server.md, section 3.4), so attaching it
-    // again after a disconnect must subscribe it again. Safe to repeat;
-    // done before anything is bound or stored, so a refusal leaves nothing.
-    waba.subscribe_app(None)
-        .await
-        .map_err(|error| meta_failed(&error))?;
-    // D4 again, atomically with the binding.
+    if numbers.len() > MAX_WABA_NUMBERS {
+        tracing::warn!(
+            max = MAX_WABA_NUMBERS,
+            "Meta listed more numbers on a WABA than attach binds"
+        );
+        return Err(ApiError::new("upstream"));
+    }
+    // D4 again, atomically with the binding. Binding before storing: a
+    // store first would overwrite the owner's token before D4 refused.
     match state.store().bind_waba(&tenant, &waba_id, &numbers).await? {
         BindOutcome::Bound => {}
         BindOutcome::OwnedByAnotherTenant => {
@@ -896,6 +913,15 @@ pub async fn attach_waba(
     }
     let record = StoredBusinessToken::new(waba_id.clone(), token).phone_number_ids(numbers.clone());
     state.tokens().store(&record).await?;
+    // Subscribe the app to the WABA's webhooks, as onboarding does after
+    // storing the token: a WABA the app is not subscribed to delivers no
+    // webhook, and disconnecting unsubscribes it (docs/design/server.md,
+    // section 3.4), so attaching again must subscribe again. Safe to
+    // repeat: after a refusal the WABA stays attached, and repeating the
+    // attach finishes it.
+    waba.subscribe_app(None)
+        .await
+        .map_err(|error| meta_failed(&error))?;
     Ok(json(
         StatusCode::CREATED,
         AttachedWaba {
