@@ -1,6 +1,10 @@
 # Design: a deployable meta-whatsapp-rs service (`meta-whatsapp-server`)
 
-> **Design only: no service code exists yet.** Written against `main` =
+> **Milestone M1a is implemented** in `crates/meta-whatsapp-server` (the
+> crate, configuration, listeners, storage, tenants and keys, the admin
+> API, the numbers routes, errors, operations, the committed OpenAPI
+> document; [coverage.md](../coverage.md) row 33 says what is missing); the
+> rest is design. Written against `main` =
 > bbf24a3 (2026-09-24), Graph API v25.0; the library changes it assumed have
 > since landed on `main` (#4: `OtpConfig::namespace` required, the Intent
 > API's result renamed `marketing::OnboardingRequested`; #5: Solution Partner
@@ -718,12 +722,12 @@ Tests use `ScriptedTransport` (method, path, token, exact JSON,
 
 | # | Library change (own PR, own parity) | When | Kind |
 | --- | --- | --- | --- |
-| L1 | `ErrorKind::as_str()`, stable snake_case, pinned by a test | M1 | additive |
+| L1 | `ErrorKind::as_str()`, stable snake_case, pinned by a test (with `ErrorKind::ALL`) | done (M1a) | additive |
 | L2 | `OtpConfig::namespace` required | done (#4) | breaking |
 | L3 | Solution Partner credit-line step in onboarding | done (#5: `onboard_with_approval`, `offboard`, credit ledger) | additive |
 | L4 | a code-less `OnboardingRequest` for `resume` (OQ #10) | M3, optional | additive |
 | L5 | `ConversationStore` erasure | if D10 asks | port change |
-| L6 | [architecture.md](../architecture.md): dependency rule for binaries, a "Service" section | M1 | docs |
+| L6 | [architecture.md](../architecture.md): dependency rule for binaries, a "Service" section | done (M1a) | docs |
 
 | | Scope | Docs and skills it adds |
 | --- | --- | --- |

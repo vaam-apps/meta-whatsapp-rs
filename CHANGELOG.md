@@ -119,6 +119,29 @@ volumes (Claude config, shell history, cargo caches) start empty
 
 ### Added
 
+- **meta-whatsapp-server, milestone M1a**: the HTTP service of
+  docs/design/server.md, for apps not written in Rust
+  (`crates/meta-whatsapp-server`, binary `meta-whatsapp-server`, not
+  published). One deployment per Meta app, many tenants; tenant keys,
+  platform keys acting for a tenant named in `WA-Tenant`, and admin keys,
+  all `wak_<id>_<secret>`, kept as SHA-256 digests and compared in
+  constant time; a configuration that refuses to start on a blank secret,
+  a missing vault key or pepper with Postgres, memory storage in
+  production, identical binds or partial Solution Partner settings; a
+  public listener (`GET /webhooks/meta`, Meta's subscription check, and
+  `/livez`) and an internal one (the `/v1` API, `/readyz`, `/metrics`,
+  `/v1/openapi.json`, `/v1/version`); its own Postgres tables
+  (`wa_server_*`) migrated after the library's under an advisory lock;
+  the admin API (tenants, keys, platform keys, attaching the platform's own
+  WABA after listing its numbers from Meta, the D4 unbind), the numbers
+  and business profile routes and disconnection, each behind the
+  authorization order (key, tenant, scope, ownership, then the vault);
+  errors whose codes are `ErrorKind::as_str()`; JSON request logs without
+  keys, tokens or phone numbers; a committed OpenAPI 3.1 document
+  (`crates/meta-whatsapp-server/openapi/v1.json`) that a test compares with
+  the generated one. `just test-live` runs its Postgres tests too. Guide:
+  docs/guides/server.md. Sends, webhooks in, the inbox, Embedded Signup,
+  OTP, the image and the TypeScript client are the next milestones.
 - **`ErrorKind::as_str()` and `ErrorKind::ALL`**: every error kind has a
   stable `snake_case` name (`TemplateParameterMismatch` →
   `"template_parameter_mismatch"`), for an HTTP API's error code, a log

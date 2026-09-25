@@ -33,6 +33,8 @@ crates/
   meta-whatsapp-typst      Typst → PDF/PNG for document and image messages.
   meta-whatsapp-rs         facade: re-exports, prelude, `client(token)`, the CMS inbox,
                            feature flags, runnable examples. What integrators depend on.
+  meta-whatsapp-server     the HTTP service (a binary on the facade): tenants, keys, the /v1
+                           API for apps not written in Rust. See "Service" below.
 .xtask                     repo automation (`cargo xtask meta-docs`): a workspace of its own,
                            with its own Cargo.lock, excluded from the root one, so its ureq
                            (rustls with `ring`) never enters a library or test build.

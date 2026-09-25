@@ -194,6 +194,32 @@ run them on Postgres; with the same `DATABASE_URL`, `WA_VAULT_KEY` and
 in the second (list the connected number under that tenant's
 `phone_number_ids`).
 
+## Not writing Rust? Run the service
+
+Apps in other stacks (a Medusa store, a CMS backend) use meta-whatsapp-rs
+through **meta-whatsapp-server**, an HTTP service built on the library and
+deployed next to them: one deployment per Meta app, many tenants, keys per
+tenant or per platform, the `/v1` REST API described by a committed OpenAPI
+document ([`crates/meta-whatsapp-server/openapi/v1.json`](crates/meta-whatsapp-server/openapi/v1.json)).
+Milestone M1a is here: tenants, keys, the admin API, the platform's own
+WABAs, numbers and business profiles, health, metrics. Sending messages,
+Meta's webhooks, the inbox, Embedded Signup, OTP, the Docker image and the
+TypeScript client come in the next milestones
+([docs/design/server.md](docs/design/server.md), section 9).
+
+```bash
+cargo build --release -p meta-whatsapp-server
+export DATABASE_URL=postgres://… WA_APP_SECRET=… WA_VERIFY_TOKEN=…
+export WA_VAULT_KEY="$(openssl rand -base64 32)" WA_OTP_PEPPER="$(openssl rand -hex 32)"
+./target/release/meta-whatsapp-server admin create-admin-key   # printed once
+./target/release/meta-whatsapp-server serve                    # 127.0.0.1:8080 (Meta), :8081 (API)
+```
+
+It refuses to start on an unsafe setting (a blank secret, no vault key,
+memory storage in production). Run, configure, create tenants and keys,
+make a first call: [docs/guides/server.md](docs/guides/server.md). For the
+coding agents of those apps: the `meta-whatsapp-rs-server` skill.
+
 ## Feature flags
 
 | Feature | Default | Adds |
@@ -219,12 +245,13 @@ in the second (list the connected number under that tenant's
 | `meta-whatsapp-webhooks` | Signature/verify-token checks, typed payloads, normalized events, dedup, axum router + SSE. |
 | `meta-whatsapp-adapters` | reqwest transport; memory, Postgres, Redis stores; channel/broadcast/fan-out sinks. |
 | `meta-whatsapp-typst` | Typst → PDF/PNG (invoices, receipts, vouchers) for document and image messages. |
+| `meta-whatsapp-server` | The HTTP service (a binary, not a dependency): tenants, keys, the `/v1` API over the facade. See [Not writing Rust? Run the service](#not-writing-rust-run-the-service). |
 
 ## Development
 
 ```bash
 just            # list recipes
-just ci         # the gate CI runs: lint, check, test, skills-check, doc, features, deny, test-live
+just ci         # the gate CI runs: lint, check, test, skills-check, skills-ts, doc, features, deny, test-live
 just test       # unit and in-process tests (live adapter tests skip)
 just test-live  # adapter tests against real Postgres and Redis
 just meta-docs  # mirror Meta's docs locally (gitignored) for grep
@@ -238,7 +265,7 @@ Agents: see [AGENTS.md](AGENTS.md). Claude Code project skills and agents
 live in `.claude/`.
 
 Coding agents in the repositories that *use* meta-whatsapp-rs (the store, the CMS) get
-consumer skills from [`skills/`](skills/README.md): 24 small, task-shaped
+consumer skills from [`skills/`](skills/README.md): 25 small, task-shaped
 skills (`meta-whatsapp-rs` is the map; `meta-whatsapp-rs-send-messages`, `meta-whatsapp-rs-webhook-endpoint`,
 `meta-whatsapp-rs-otp-login`, `meta-whatsapp-rs-cms-inbox`, …). Install all of them with
 `npx skills add vaam-apps/meta-whatsapp-rs`, or a subset with
@@ -260,7 +287,7 @@ workspace stays `publish = false` until a release is decided.
 
 | Read | For |
 | --- | --- |
-| [docs/guides/](docs/guides/README.md) | integrator guides: Meta setup, Embedded Signup, webhooks, CMS inbox, marketing, OTP login, documents, production |
+| [docs/guides/](docs/guides/README.md) | integrator guides: Meta setup, Embedded Signup, webhooks, CMS inbox, marketing, OTP login, documents, production, the HTTP service |
 | [docs/coverage.md](docs/coverage.md) | what is implemented, per Meta feature |
 | [docs/architecture.md](docs/architecture.md) | the design spec: ports, error tree, security rules |
 | [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) | product decisions still open (read before production) |
