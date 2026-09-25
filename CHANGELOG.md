@@ -19,9 +19,9 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
 - #34 (should `OtpConfig::namespace` be required?): decided yes by the
   maintainer, done in d67b3ac.
 - #35 (synced coexistence history went through `append` like live
-  messages): resolved by the `ConversationStore` port change below. The
-  coordinating agent decided it on 2026-09-24 and told the maintainer in
-  that session; confirmed by the owner on 2026-09-25.
+  messages): resolved by the `ConversationStore` port change below;
+  decided by the owner on 2026-09-25, confirming the call the
+  coordinating agent made (and told the maintainer of) on 2026-09-24.
 - #36 (two types for one quality rating): decided by the owner on
   2026-09-25, keep both. `wa_client::common::QualityRating` and
   `wa_webhooks::fields::templates::TemplateQualityScore` document the

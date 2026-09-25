@@ -5814,9 +5814,10 @@ mod tests {
         assert_eq!(h.t.remaining(), 0);
     }
 
-    /// Refused before anything is sent or written: not a Solution Partner,
-    /// no operator named, nothing pending, no token to read the WABA's
-    /// funding with. A failed check clears nothing.
+    /// Refused before anything is sent (the lease taken meanwhile is
+    /// released): not a Solution Partner, no operator named, nothing
+    /// pending, no token to read the WABA's funding with. A failed check
+    /// clears nothing.
     #[tokio::test]
     async fn a_clearance_is_refused_before_anything_is_sent() {
         let field = |err: &Error| match err {
