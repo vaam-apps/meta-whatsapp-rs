@@ -108,6 +108,12 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     if config.vault_key_is_throwaway {
         tracing::warn!("WA_VAULT_KEY is not set: throwaway vault key (development only)");
     }
+    if let Some(host) = config.graph_endpoint_override() {
+        tracing::warn!(
+            host = %host,
+            "WA_GRAPH_ENDPOINT is set: Graph calls, and the tokens they carry, go to this host, not graph.facebook.com"
+        );
+    }
     let backends = backends(&config).await?;
     let client = graph_client(&config)?;
     let Config {

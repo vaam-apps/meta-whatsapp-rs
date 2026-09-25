@@ -404,7 +404,7 @@ impl Config {
             None => None,
         };
         let onboarding = onboarding(&r)?;
-        let graph_endpoint = graph_endpoint(&r)?;
+        let graph_endpoint = graph_endpoint(&r, environment)?;
         let runtime = runtime(&r)?;
         Ok(Self {
             environment,
@@ -464,8 +464,10 @@ fn meta_app(r: &Reader<'_>) -> Result<MetaApp, ConfigError> {
     })
 }
 
-/// `WA_GRAPH_API_VERSION` and `WA_GRAPH_ENDPOINT`.
-fn graph_endpoint(r: &Reader<'_>) -> Result<GraphEndpoint, ConfigError> {
+/// `WA_GRAPH_API_VERSION` and `WA_GRAPH_ENDPOINT`. Every merchant's and
+/// system user's token goes to that endpoint: plain `http` only in
+/// development (a local stub).
+fn graph_endpoint(r: &Reader<'_>, environment: Environment) -> Result<GraphEndpoint, ConfigError> {
     let version = match r.plain("WA_GRAPH_API_VERSION")? {
         None => ApiVersion::DEFAULT,
         Some(v) => v.parse().map_err(|_| ConfigError::Invalid {
@@ -473,12 +475,29 @@ fn graph_endpoint(r: &Reader<'_>) -> Result<GraphEndpoint, ConfigError> {
             reason: "expected vNN.N, e.g. v25.0",
         })?,
     };
-    match r.plain("WA_GRAPH_ENDPOINT")? {
-        None => Ok(GraphEndpoint::production(version)),
-        Some(url) => GraphEndpoint::custom(&url, version).map_err(|_| ConfigError::Invalid {
+    let Some(url) = r.plain("WA_GRAPH_ENDPOINT")? else {
+        return Ok(GraphEndpoint::production(version));
+    };
+    let endpoint = GraphEndpoint::custom(&url, version).map_err(|_| ConfigError::Invalid {
+        name: "WA_GRAPH_ENDPOINT",
+        reason: "expected an absolute http(s) URL",
+    })?;
+    if endpoint.base().scheme() != "https" && environment != Environment::Development {
+        return Err(ConfigError::Invalid {
             name: "WA_GRAPH_ENDPOINT",
-            reason: "expected an absolute http(s) URL",
-        }),
+            reason: "https is required outside WA_SERVER_ENV=development (the tokens travel to it)",
+        });
+    }
+    Ok(endpoint)
+}
+
+impl Config {
+    /// The host Graph calls go to when it is not Meta's (`WA_GRAPH_ENDPOINT`
+    /// set), for the warning `serve` logs at start.
+    pub fn graph_endpoint_override(&self) -> Option<String> {
+        let base = self.graph_endpoint.base();
+        (base.as_str() != GraphEndpoint::PRODUCTION)
+            .then(|| base.host_str().unwrap_or_default().to_owned())
     }
 }
 
@@ -571,6 +590,9 @@ fn vault_keys(r: &Reader<'_>, postgres: bool) -> Result<(VaultKeys, bool), Confi
         None if postgres => return Err(ConfigError::VaultKeyRequired),
         None => (VaultKey::generate(id).map_err(|_| invalid_id)?, true),
     };
+    // Ids name the key each record was sealed with: one id for two keys
+    // would leave the second unreachable, and its records undecryptable.
+    let mut ids = vec![active.id().to_owned()];
     let mut keys = VaultKeys::new(active);
     if let Some(previous) = r.optional_secret("WA_VAULT_PREVIOUS_KEYS")? {
         let invalid = ConfigError::Invalid {
@@ -583,6 +605,13 @@ fn vault_keys(r: &Reader<'_>, postgres: bool) -> Result<(VaultKeys, bool), Confi
                 .rsplit_once(':')
                 .ok_or_else(|| invalid.clone())?;
             let key = VaultKey::from_base64(id, encoded).map_err(|_| invalid.clone())?;
+            if ids.iter().any(|seen| seen == id) {
+                return Err(ConfigError::Invalid {
+                    name: "WA_VAULT_PREVIOUS_KEYS",
+                    reason: "a key id appears twice (WA_VAULT_KEY_ID's included): each key needs its own",
+                });
+            }
+            ids.push(id.to_owned());
             keys = keys.with_previous(key);
         }
     }

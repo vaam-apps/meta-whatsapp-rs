@@ -307,7 +307,10 @@ fn previous_vault_keys_and_other_settings_parse() {
                 &format!("k1:{VAULT_KEY}, k0:{VAULT_KEY}"),
             )
             .set("WA_GRAPH_API_VERSION", "v24.0")
-            .set("WA_GRAPH_ENDPOINT", "http://127.0.0.1:9999/graph")
+            .set(
+                "WA_GRAPH_ENDPOINT",
+                "https://graph-proxy.internal:9999/graph",
+            )
             .set("WA_SERVER_SHUTDOWN_GRACE", "2m")
             .set("WA_SERVER_MIGRATE", "skip")
             .set("WA_SERVER_LOG_FORMAT", "text")
@@ -318,10 +321,66 @@ fn previous_vault_keys_and_other_settings_parse() {
     assert_eq!(config.graph_endpoint.version().to_string(), "v24.0");
     assert_eq!(
         config.graph_endpoint.base().as_str(),
-        "http://127.0.0.1:9999/graph/"
+        "https://graph-proxy.internal:9999/graph/"
+    );
+    assert_eq!(
+        config.graph_endpoint_override().as_deref(),
+        Some("graph-proxy.internal")
     );
     assert_eq!(config.shutdown_grace.as_secs(), 120);
     assert_eq!(config.migrate, MigrateMode::Skip);
     assert_eq!(config.log_format, LogFormat::Text);
     assert_eq!(config.app_id.unwrap().as_str(), "1234567890");
+}
+
+/// Every merchant's and system user's token travels to the Graph endpoint:
+/// plain `http` only for a local stub in development (security review L1).
+#[test]
+fn refuses_a_plain_http_graph_endpoint_outside_development() {
+    let stub = "http://127.0.0.1:9999/graph";
+    let error = refused(&production().set("WA_GRAPH_ENDPOINT", stub));
+    assert!(
+        matches!(
+            error,
+            ConfigError::Invalid {
+                name: "WA_GRAPH_ENDPOINT",
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(!error.to_string().contains("127.0.0.1"), "{error}");
+    let dev = Config::from_env(&development().set("WA_GRAPH_ENDPOINT", stub)).unwrap();
+    assert_eq!(dev.graph_endpoint_override().as_deref(), Some("127.0.0.1"));
+    // The default endpoint is Meta's, and no override is reported.
+    let default = Config::from_env(&production()).unwrap();
+    assert_eq!(default.graph_endpoint_override(), None);
+}
+
+/// Each vault key needs its own id: records name the key that sealed them
+/// (security review L2).
+#[test]
+fn refuses_a_vault_key_id_used_twice() {
+    for (active, previous) in [
+        (None, format!("k1:{VAULT_KEY}")),
+        (Some("k2"), format!("k1:{VAULT_KEY},k2:{VAULT_KEY}")),
+        (Some("k3"), format!("k1:{VAULT_KEY}, k1:{VAULT_KEY}")),
+    ] {
+        let mut vars = production().set("WA_VAULT_PREVIOUS_KEYS", &previous);
+        if let Some(id) = active {
+            vars = vars.set("WA_VAULT_KEY_ID", id);
+        }
+        let error = refused(&vars);
+        assert!(
+            matches!(
+                error,
+                ConfigError::Invalid {
+                    name: "WA_VAULT_PREVIOUS_KEYS",
+                    ..
+                }
+            ),
+            "{active:?} + {previous}: {error:?}"
+        );
+        assert!(!error.to_string().contains(VAULT_KEY));
+    }
 }
