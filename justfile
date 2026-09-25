@@ -56,6 +56,9 @@ doc:
 # (tests/signature.rs uses SIGNATURE_HEADER) must build without axum. The doc
 # line builds rustdoc without default features (meta-whatsapp-rs included): a link to a
 # feature-gated item must be gated with it; `just doc` covers --all-features.
+# It leaves meta-whatsapp-server out: the service turns on the facade's
+# reqwest, memory, postgres and axum, and in one --workspace build those
+# features would be on for every crate, hiding an ungated link.
 #
 # Each feature on its own, so a missing cfg gate cannot hide behind --all-features
 features:
@@ -79,7 +82,7 @@ features:
     cargo check -p meta-whatsapp-rs --no-default-features --features typst
     cargo check -p meta-whatsapp-rs --no-default-features --features flows-endpoint
     cargo check -p meta-whatsapp-rs
-    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-default-features --no-deps
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude meta-whatsapp-server --no-default-features --no-deps
 
 # Licenses, advisories, duplicate versions, sources
 deny:

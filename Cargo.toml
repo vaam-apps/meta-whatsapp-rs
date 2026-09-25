@@ -15,6 +15,9 @@ members = [
 # client (ureq → rustls with `ring`) must not be resolved into the
 # library's builds and tests. See .xtask/Cargo.toml.
 exclude = [".xtask"]
+# The service is a member (every `--workspace` recipe, and so `just ci`,
+# covers it) but not a default one: a bare `cargo build` or `cargo test` in
+# the root builds the library alone, with the features its crates choose.
 default-members = [
   "crates/meta-whatsapp-core",
   "crates/meta-whatsapp-client",
@@ -22,7 +25,6 @@ default-members = [
   "crates/meta-whatsapp-adapters",
   "crates/meta-whatsapp-typst",
   "crates/meta-whatsapp-rs",
-  "crates/meta-whatsapp-server",
 ]
 
 [workspace.package]
@@ -127,8 +129,8 @@ clap = { version = "4", default-features = false, features = ["std", "derive", "
 hyper = { version = "1", default-features = false }
 hyper-util = { version = "0.1", default-features = false }
 
-# Dev.
-# Examples only: makes the library's `tracing` output visible (RUST_LOG).
+# Dev, and the service's logs (crates/meta-whatsapp-server adds `json`):
+# the examples use it to make the library's `tracing` output visible.
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
 pretty_assertions = "1"
 tower = "0.5"
