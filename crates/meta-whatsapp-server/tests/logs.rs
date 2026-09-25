@@ -3,7 +3,7 @@
 //! deliveries (signed, unsigned, forged) and polling their events, at
 //! `TRACE` for every target (the library's included), holds no secret,
 //! key, token, message text, phone number or contact.
-//! `live_postgres.rs` repeats it on Postgres.
+//! `live_logs.rs` repeats it on Postgres.
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test crate: a panic is the report
 
 mod common;

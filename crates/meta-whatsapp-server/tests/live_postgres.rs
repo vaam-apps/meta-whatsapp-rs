@@ -3,15 +3,13 @@
 //! `META_WHATSAPP_RS_REQUIRE_LIVE=1`, which turns the skip into a failure.
 //! Every test runs in a fresh schema.
 //!
-//! Acceptance test M1.7: parallel migrations of two instances succeed, two
-//! instances on one database deduplicate the same webhook, and the log
-//! capture of `logs.rs` (admin, numbers, webhooks and events) holds on
-//! Postgres.
+//! Acceptance test M1.7: parallel migrations of two instances succeed, and
+//! two instances on one database deduplicate the same webhook (the log
+//! capture on Postgres is `live_logs.rs`).
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test crate: a panic is the report
 
 mod common;
 
-use common::capture::{Captured, check, exercise, subscriber};
 use common::meta::{EXAMPLE_PN, EXAMPLE_WABA, EXAMPLE_WAMID, bytes, example_text, text};
 use common::{ALL_SCOPES, Call, Harness, Stores, TestDb};
 use meta_whatsapp_rs::adapters::store::postgres::sqlx;
@@ -193,22 +191,6 @@ async fn live_postgres_another_tenants_number_is_not_found_before_the_vault() {
 
 /// M1.7 on Postgres: sqlx's own events join the capture, and still no
 /// secret, key or phone number is logged.
-#[tokio::test]
-async fn live_postgres_logs_hold_no_secret_key_or_phone_number() {
-    let Some(db) = TestDb::new().await else {
-        return;
-    };
-    let h = harness(&db).await;
-    let captured = Captured::default();
-    let _guard = tracing::subscriber::set_default(subscriber(&captured));
-    let secrets = exercise(&h).await;
-    let logs = captured.text();
-    check(&logs, &secrets);
-    // The Postgres store's secret digests are bound parameters, never SQL
-    // text.
-    assert!(!logs.contains("secret_sha256 = '"));
-}
-
 /// The value of a metric series of `h`, 0 when absent.
 fn metric(h: &Harness, series: &str) -> u64 {
     h.state
