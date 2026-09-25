@@ -5,7 +5,7 @@ description: "The merchant-to-customer chat inbox of a multi-tenant CMS built on
 
 # wa-rs-cms-inbox
 
-> **Verified against wa-rs e4e327d9203d2843c5b493f547c2480b2db60691 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against wa-rs 0e63aba8378556b4e34cf4cd5b5392f18f2a5e00 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/inbox.rs](examples/inbox.rs), compiled and
 tested by wa-rs's own gate. The full server (webhook endpoint, SSE,

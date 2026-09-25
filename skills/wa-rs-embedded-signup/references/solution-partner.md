@@ -1,6 +1,6 @@
 # Solution Partner deployments
 
-> **Verified against wa-rs 4d6ba52a33513a41b9d0275702931268d6b2142c (2026-09-25).** Also checked against Meta's
+> **Verified against wa-rs 0e63aba8378556b4e34cf4cd5b5392f18f2a5e00 (2026-09-25).** Also checked against Meta's
 > `solution-providers/share-and-revoke-credit-lines`,
 > `solution-providers/manage-system-users` and
 > `webhooks/reference/account_update` pages as fetched on 2026-09-24.
