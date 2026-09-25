@@ -392,7 +392,9 @@ pub struct ErrorBody {
     pub error: ErrorObject,
 }
 
-/// See the [module docs](self).
+/// An error: its stable code, the service's sentence for it, whether to
+/// retry, whether the request may have taken effect, and Meta's error when
+/// Meta answered with one.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ErrorObject {
     /// Stable error code (one of the `ErrorCode` values).

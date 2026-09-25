@@ -1902,7 +1902,7 @@
       },
       "ErrorObject": {
         "type": "object",
-        "description": "See the [module docs](self).",
+        "description": "An error: its stable code, the service's sentence for it, whether to\nretry, whether the request may have taken effect, and Meta's error when\nMeta answered with one.",
         "required": [
           "code",
           "message",
