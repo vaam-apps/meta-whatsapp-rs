@@ -192,7 +192,8 @@ pub struct Offboarded {
 #[must_use = "a pending share is cleared only when this is `Cleared`"]
 pub enum PendingShareClearance {
     /// Meta shows no record of your line that may be live for the WABA's
-    /// owner business: the pending share is cleared, and this entry was
+    /// owner business, and nothing funds the WABA but what the call
+    /// acknowledged: the pending share is cleared, and this entry was
     /// appended to [`StoredCredit::cleared_shares`].
     Cleared(ClearedShare),
     /// **Nothing was cleared**: Meta shows your line funding the WABA, a
