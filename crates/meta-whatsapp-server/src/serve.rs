@@ -134,9 +134,19 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     };
     let public_server = axum_serve(public, api::public_router(&state), wait(stopped.clone()));
     let internal_server = axum_serve(internal, api::internal_router(&state), wait(stopped));
-    let servers = tokio::spawn(async move { tokio::join!(public_server, internal_server) });
+    let mut servers = tokio::spawn(async move { tokio::join!(public_server, internal_server) });
 
-    shutdown_signal().await;
+    // A listener that stops on its own (an accept loop failing) stops the
+    // process too, rather than leaving it up with nothing served.
+    tokio::select! {
+        () = shutdown_signal() => {}
+        finished = &mut servers => {
+            let (public, internal) = finished.context("listener task")?;
+            public.context("public listener")?;
+            internal.context("internal listener")?;
+            anyhow::bail!("a listener stopped");
+        }
+    }
     tracing::info!("shutting down");
     state.begin_shutdown();
     let _ = stop.send(true);
