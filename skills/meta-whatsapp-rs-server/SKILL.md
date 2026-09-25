@@ -5,7 +5,7 @@ description: "Using WhatsApp through meta-whatsapp-server, the meta-whatsapp-rs 
 
 # meta-whatsapp-rs-server
 
-> **Verified against meta-whatsapp-rs db34df243f70482a12ae52fc57b420d28c4d3bd2 (2026-09-25).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 67a6684f5fbcc542da3c3a7b69c42a5a3ef53bf0 (2026-09-25).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/client.ts](examples/client.ts), type-checked by
 meta-whatsapp-rs's own gate against the service's committed OpenAPI
@@ -37,9 +37,10 @@ Embedded Signup and OTP are not there yet (docs/design/server.md, section
 ## Deploy
 
 One deployment per Meta app. The public listener (default
-`127.0.0.1:8080`) serves only `GET /webhooks/meta`, Meta's subscription
-check; the internal one (`127.0.0.1:8081`) serves everything else and must
-stay on your private network. There is no image yet: build it.
+`127.0.0.1:8080`) serves only `GET /webhooks/meta` (Meta's subscription
+check) and `GET /livez`; the internal one (`127.0.0.1:8081`) serves
+everything else and must stay on your private network. There is no image
+yet: build it.
 
 ```bash
 cargo build --release -p meta-whatsapp-server
