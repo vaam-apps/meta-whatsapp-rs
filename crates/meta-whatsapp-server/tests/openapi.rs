@@ -54,6 +54,11 @@ fn the_document_describes_keys_tenants_and_errors_everywhere() {
                     .any(|p| p["name"] == "WA-Tenant" && p["in"] == "header")
             });
             assert_eq!(names_tenant, tenant_route, "{label}: WA-Tenant");
+            assert_eq!(
+                operation["responses"]["default"]["content"]["application/json"]["schema"]["$ref"],
+                "#/components/schemas/ErrorBody",
+                "{label}: default"
+            );
             for (status, response) in operation["responses"].as_object().unwrap() {
                 if status.starts_with('4') || status.starts_with('5') {
                     assert_eq!(
@@ -66,11 +71,29 @@ fn the_document_describes_keys_tenants_and_errors_everywhere() {
         }
     }
     assert!(operations >= 24, "{operations} operations");
-    // The codes are in the document, for generated clients.
-    let codes = spec["components"]["schemas"]["ErrorCode"]["enum"]
-        .as_array()
-        .unwrap();
+    // The codes are in the document, for generated clients, as an open
+    // set: the known ones, or any string.
+    let error_code = &spec["components"]["schemas"]["ErrorCode"]["anyOf"];
+    let codes = error_code[0]["enum"].as_array().unwrap();
     assert!(codes.iter().any(|c| c == "waba_owned_by_another_tenant"));
+    assert_eq!(error_code[1], serde_json::json!({"type": "string"}));
+    // Paging: 1 to 100, 50 by default.
+    let limit = spec["paths"]["/v1/numbers"]["get"]["parameters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "limit")
+        .unwrap()["schema"]
+        .clone();
+    assert_eq!(
+        (&limit["minimum"], &limit["maximum"], &limit["default"]),
+        (
+            &serde_json::json!(1),
+            &serde_json::json!(100),
+            &serde_json::json!(50)
+        ),
+        "{limit}"
+    );
 }
 
 #[tokio::test]

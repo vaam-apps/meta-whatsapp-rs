@@ -17,12 +17,12 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 
-use super::common::{ApiJson, PageQuery, json, next_cursor, parse_rfc3339, rfc3339};
+use super::common::{ApiJson, PageParams, PageQuery, json, next_cursor, parse_rfc3339, rfc3339};
 use crate::auth::{AdminCaller, OwnedWaba};
 use crate::error::{ApiError, ErrorBody};
 use crate::keys::MintedKey;
 use crate::model::{
-    AllowedTenants, ApiKeyRecord, BindOutcome, DeleteTenantOutcome, KeyOwner, KeyScope,
+    AllowedTenants, ApiKeyRecord, BindOutcome, DeleteTenantOutcome, KeyKind, KeyOwner, KeyScope,
     MAX_NAME_CHARS, NewApiKey, PageRequest, Scope, Tenant, TenantId, TenantStatus,
 };
 use crate::state::AppState;
@@ -52,6 +52,7 @@ fn key_subject(key_id: &str) -> Subject<'_> {
 
 /// A tenant.
 #[derive(Debug, Serialize, ToSchema)]
+#[schema(as = Tenant)]
 pub struct TenantView {
     /// The integrator's id: 1 to 64 characters of `[A-Za-z0-9._:-]`.
     pub id: String,
@@ -85,6 +86,7 @@ impl From<Tenant> for TenantView {
 /// A tenant's status.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
+#[schema(as = TenantStatus)]
 pub enum TenantStatusName {
     /// Its keys work.
     Active,
@@ -98,6 +100,7 @@ pub struct TenantList {
     /// The tenants, in id order.
     pub data: Vec<TenantView>,
     /// Pass as `cursor` for the next page; `null` on the last one.
+    #[schema(required = true)]
     pub next_cursor: Option<String>,
 }
 
@@ -181,8 +184,7 @@ pub async fn create_tenant(
     tag = "admin",
     security(("api_key" = [])),
     params(
-        ("limit" = Option<u32>, Query, description = "Page size, 1 to 100 (default 50)"),
-        ("cursor" = Option<String>, Query, description = "`next_cursor` of the previous page"),
+        PageParams,
     ),
     responses(
         (status = 200, description = "Tenants, in id order", body = TenantList),
@@ -354,6 +356,7 @@ pub async fn delete_tenant(
 /// A scope of a tenant or platform key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
+#[schema(as = Scope)]
 pub enum ScopeName {
     /// Messages.
     Send,
@@ -408,7 +411,7 @@ impl From<Scope> for ScopeName {
 }
 
 /// The tenants a platform key may name: `"*"` for any, or a list.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum TenantsSpec {
     /// `"*"`: any tenant.
@@ -417,16 +420,68 @@ pub enum TenantsSpec {
     Only(Vec<String>),
 }
 
+impl utoipa::PartialSchema for TenantsSpec {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, OneOfBuilder, Type};
+        OneOfBuilder::new()
+            .item(
+                ObjectBuilder::new()
+                    .schema_type(Type::String)
+                    .enum_values(Some(["*"]))
+                    .description(Some("Any tenant.")),
+            )
+            .item(
+                ArrayBuilder::new()
+                    .items(ObjectBuilder::new().schema_type(Type::String))
+                    .min_items(Some(1))
+                    .description(Some("These tenant ids.")),
+            )
+            .description(Some(
+                "The tenants a platform key may name with WA-Tenant: \"*\" for any, or a \
+                 non-empty list of tenant ids.",
+            ))
+            .into()
+    }
+}
+
+impl ToSchema for TenantsSpec {}
+
+/// Whose key it is.
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+#[schema(as = KeyKind)]
+pub enum KeyKindName {
+    /// A tenant key: its tenant.
+    Tenant,
+    /// A platform key: the tenant `WA-Tenant` names, within its set.
+    Platform,
+    /// An admin key: `/v1/admin` only.
+    Admin,
+}
+
+impl From<KeyKind> for KeyKindName {
+    fn from(kind: KeyKind) -> Self {
+        match kind {
+            KeyKind::Tenant => Self::Tenant,
+            KeyKind::Platform => Self::Platform,
+            KeyKind::Admin => Self::Admin,
+        }
+    }
+}
+
 /// An API key, as listed (never its secret).
 #[derive(Debug, Serialize, ToSchema)]
+#[schema(as = Key)]
 pub struct KeyView {
     /// Public id (the part of the key between `wak_` and the secret).
     pub key_id: String,
-    /// `tenant`, `platform` or `admin`.
-    pub kind: String,
+    /// Whose key it is.
+    pub kind: KeyKindName,
     /// A tenant key's tenant.
+    #[schema(required = true)]
     pub tenant_id: Option<String>,
     /// A platform key's tenants.
+    #[schema(required = true)]
     pub tenants: Option<TenantsSpec>,
     /// Scopes on tenant routes.
     pub scopes: Vec<ScopeName>,
@@ -436,13 +491,13 @@ pub struct KeyView {
     #[schema(format = DateTime)]
     pub created_at: String,
     /// When it stops working (RFC 3339).
-    #[schema(format = DateTime)]
+    #[schema(format = DateTime, required = true)]
     pub expires_at: Option<String>,
     /// When it was revoked (RFC 3339).
-    #[schema(format = DateTime)]
+    #[schema(format = DateTime, required = true)]
     pub revoked_at: Option<String>,
     /// When it was last used, to the minute (RFC 3339).
-    #[schema(format = DateTime)]
+    #[schema(format = DateTime, required = true)]
     pub last_used_at: Option<String>,
 }
 
@@ -461,7 +516,7 @@ impl From<ApiKeyRecord> for KeyView {
         };
         Self {
             key_id: k.key_id,
-            kind: k.owner.kind().as_str().to_owned(),
+            kind: k.owner.kind().into(),
             tenant_id,
             tenants,
             scopes: k.scopes.into_iter().map(ScopeName::from).collect(),
@@ -476,6 +531,7 @@ impl From<ApiKeyRecord> for KeyView {
 
 /// A key just minted: the whole key, shown this once, and its record.
 #[derive(Serialize, ToSchema)]
+#[schema(as = MintedKey)]
 pub struct MintedKeyView {
     /// The key, `wak_<key_id>_<secret>`: send it as
     /// `Authorization: Bearer <key>`. Shown once; only its digest is kept.
@@ -490,6 +546,7 @@ pub struct KeyList {
     /// The keys, in id order, revoked ones included.
     pub data: Vec<KeyView>,
     /// Pass as `cursor` for the next page; `null` on the last one.
+    #[schema(required = true)]
     pub next_cursor: Option<String>,
 }
 
@@ -652,8 +709,7 @@ pub async fn mint_tenant_key(
     security(("api_key" = [])),
     params(
         ("id" = String, Path, description = "Tenant id"),
-        ("limit" = Option<u32>, Query, description = "Page size, 1 to 100 (default 50)"),
-        ("cursor" = Option<String>, Query, description = "`next_cursor` of the previous page"),
+        PageParams,
     ),
     responses(
         (status = 200, description = "The keys", body = KeyList),
@@ -793,8 +849,7 @@ pub fn allowed_tenants(spec: TenantsSpec) -> Result<AllowedTenants, ApiError> {
     tag = "admin",
     security(("api_key" = [])),
     params(
-        ("limit" = Option<u32>, Query, description = "Page size, 1 to 100 (default 50)"),
-        ("cursor" = Option<String>, Query, description = "`next_cursor` of the previous page"),
+        PageParams,
     ),
     responses(
         (status = 200, description = "The keys", body = KeyList),

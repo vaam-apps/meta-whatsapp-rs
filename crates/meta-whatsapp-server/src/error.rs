@@ -373,11 +373,14 @@ pub struct GraphErrorInfo {
     /// Meta's error code, e.g. `131047`.
     pub code: i64,
     /// Meta's subcode, when it sent one (deprecated by Meta since v16).
+    #[schema(required = true)]
     pub subcode: Option<i64>,
     /// Trace id for Meta's support.
+    #[schema(required = true)]
     pub fbtrace_id: Option<String>,
     /// Meta's own text (`error_data.details`), on the routes that keep it:
     /// not the service's, and not a stable value to branch on.
+    #[schema(required = true)]
     pub details: Option<String>,
 }
 
@@ -432,14 +435,19 @@ pub struct ErrorObject {
     /// sent): if `true`, reconcile before repeating it.
     pub may_have_been_sent: bool,
     /// The request field at fault, for `invalid_request`.
+    #[schema(required = true)]
     pub field: Option<String>,
     /// The step a multi-step operation stopped at.
+    #[schema(required = true)]
     pub step: Option<&'static str>,
     /// Whether the stopped operation can be resumed.
+    #[schema(required = true)]
     pub resumable: Option<bool>,
     /// Meta's error, when Meta answered with one.
+    #[schema(required = true)]
     pub graph: Option<GraphErrorInfo>,
     /// The request's id (`X-Request-Id`).
+    #[schema(required = true)]
     pub request_id: Option<String>,
 }
 
@@ -667,17 +675,23 @@ impl From<Error> for ApiError {
     }
 }
 
-/// The `ErrorCode` schema: every code in [`CODES`], as a string enum.
+/// The `ErrorCode` schema: every code in [`CODES`], and any other string,
+/// since codes grow within `v1`.
 pub struct ErrorCode;
 
 impl utoipa::PartialSchema for ErrorCode {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
-        utoipa::openapi::schema::ObjectBuilder::new()
-            .schema_type(utoipa::openapi::schema::Type::String)
-            .enum_values(Some(CODES.iter().map(|(code, _, _)| *code)))
+        use utoipa::openapi::schema::{AnyOfBuilder, ObjectBuilder, Type};
+        AnyOfBuilder::new()
+            .item(
+                ObjectBuilder::new()
+                    .schema_type(Type::String)
+                    .enum_values(Some(CODES.iter().map(|(code, _, _)| *code))),
+            )
+            .item(ObjectBuilder::new().schema_type(Type::String))
             .description(Some(
-                "Stable error code. Codes only grow within v1: handle an unknown one by its \
-                 HTTP status class.",
+                "Stable error code: one of the listed ones today. Codes only grow within v1: \
+                 handle an unknown one by its HTTP status class.",
             ))
             .into()
     }

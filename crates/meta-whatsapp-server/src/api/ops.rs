@@ -18,7 +18,17 @@ pub const API_VERSION: &str = "v1";
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Health {
     /// `ok` (alive) or `ready`.
-    pub status: &'static str,
+    pub status: HealthStatus,
+}
+
+/// What a probe says.
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HealthStatus {
+    /// The process is alive (`/livez`).
+    Ok,
+    /// It takes traffic (`/readyz`).
+    Ready,
 }
 
 /// `GET /livez`: the process is alive.
@@ -29,7 +39,9 @@ pub struct Health {
     responses((status = 200, description = "Alive", body = Health))
 )]
 pub async fn livez() -> Json<Health> {
-    Json(Health { status: "ok" })
+    Json(Health {
+        status: HealthStatus::Ok,
+    })
 }
 
 /// `GET /readyz`: the service takes traffic: storage answers and it is not
@@ -48,7 +60,9 @@ pub async fn readyz(State(state): State<AppState>) -> Result<Json<Health>, ApiEr
         return Err(ApiError::new("shutting_down").retryable(true));
     }
     state.store().ping().await.map_err(ApiError::from)?;
-    Ok(Json(Health { status: "ready" }))
+    Ok(Json(Health {
+        status: HealthStatus::Ready,
+    }))
 }
 
 /// `GET /metrics`: Prometheus text exposition.
@@ -56,7 +70,7 @@ pub async fn readyz(State(state): State<AppState>) -> Result<Json<Health>, ApiEr
     get,
     path = "/metrics",
     tag = "operations",
-    responses((status = 200, description = "Prometheus metrics", content_type = "text/plain", body = String))
+    responses((status = 200, description = "Prometheus metrics, in the OpenMetrics text format", content_type = "application/openmetrics-text", body = String))
 )]
 pub async fn metrics(State(state): State<AppState>) -> Response {
     let mut response = state.metrics().render().into_response();

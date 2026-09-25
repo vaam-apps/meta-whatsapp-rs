@@ -332,9 +332,37 @@ fn check_audit(logs: &str) {
     assert!(changes >= 10, "{changes} admin changes");
 }
 
+/// Every success status an operation answered is one its document lists
+/// (conventions review S1; errors fall under each operation's `default`).
+fn check_declared_statuses(logs: &str) {
+    let spec: serde_json::Value = serde_json::from_str(super::SPEC).unwrap();
+    for line in logs.lines() {
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let span = &event["span"];
+        if event["fields"]["message"] != "request" || span["name"] != "request" {
+            continue;
+        }
+        let status = event["fields"]["status"].as_u64().unwrap_or_default();
+        let (Some(method), Some(route)) = (span["method"].as_str(), span["route"].as_str()) else {
+            continue;
+        };
+        let operation = &spec["paths"][route][method.to_lowercase()];
+        if operation.is_null() || !(200..300).contains(&status) {
+            continue;
+        }
+        assert!(
+            operation["responses"].get(status.to_string()).is_some(),
+            "{method} {route} answered {status}, which its document does not list"
+        );
+    }
+}
+
 /// What M1.7 asks of the captured logs.
 pub fn check(logs: &str, secrets: &[String]) {
     check_audit(logs);
+    check_declared_statuses(logs);
     // The capture works, and covers every operation of the committed
     // document: requests are logged with their route templates.
     let logged = logged_requests(logs);

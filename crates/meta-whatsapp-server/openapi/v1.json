@@ -30,6 +30,16 @@
                 }
               }
             }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         }
       }
@@ -43,11 +53,21 @@
         "operationId": "metrics",
         "responses": {
           "200": {
-            "description": "Prometheus metrics",
+            "description": "Prometheus metrics, in the OpenMetrics text format",
             "content": {
-              "text/plain": {
+              "application/openmetrics-text": {
                 "schema": {
                   "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -82,6 +102,16 @@
                 }
               }
             }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         }
       }
@@ -97,18 +127,20 @@
           {
             "name": "limit",
             "in": "query",
-            "description": "Page size, 1 to 100 (default 50)",
+            "description": "Page size.",
             "required": false,
             "schema": {
               "type": "integer",
               "format": "int32",
-              "minimum": 0
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1
             }
           },
           {
             "name": "cursor",
             "in": "query",
-            "description": "`next_cursor` of the previous page",
+            "description": "`next_cursor` of the previous page.",
             "required": false,
             "schema": {
               "type": "string"
@@ -138,6 +170,16 @@
           },
           "403": {
             "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
             "content": {
               "application/json": {
                 "schema": {
@@ -175,7 +217,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MintedKeyView"
+                  "$ref": "#/components/schemas/MintedKey"
                 }
               }
             }
@@ -202,6 +244,16 @@
           },
           "422": {
             "description": "`invalid_request` on `tenants`, `scopes`, `name`, `expires_at` or `body`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
             "content": {
               "application/json": {
                 "schema": {
@@ -269,6 +321,16 @@
                 }
               }
             }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -289,18 +351,20 @@
           {
             "name": "limit",
             "in": "query",
-            "description": "Page size, 1 to 100 (default 50)",
+            "description": "Page size.",
             "required": false,
             "schema": {
               "type": "integer",
               "format": "int32",
-              "minimum": 0
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1
             }
           },
           {
             "name": "cursor",
             "in": "query",
-            "description": "`next_cursor` of the previous page",
+            "description": "`next_cursor` of the previous page.",
             "required": false,
             "schema": {
               "type": "string"
@@ -347,6 +411,16 @@
                 }
               }
             }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -377,7 +451,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TenantView"
+                  "$ref": "#/components/schemas/Tenant"
                 }
               }
             }
@@ -421,6 +495,16 @@
                 }
               }
             }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -454,7 +538,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TenantView"
+                  "$ref": "#/components/schemas/Tenant"
                 }
               }
             }
@@ -481,6 +565,16 @@
           },
           "404": {
             "description": "`not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
             "content": {
               "application/json": {
                 "schema": {
@@ -576,6 +670,16 @@
                 }
               }
             }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -617,7 +721,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TenantView"
+                  "$ref": "#/components/schemas/Tenant"
                 }
               }
             }
@@ -661,6 +765,16 @@
                 }
               }
             }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -690,18 +804,20 @@
           {
             "name": "limit",
             "in": "query",
-            "description": "Page size, 1 to 100 (default 50)",
+            "description": "Page size.",
             "required": false,
             "schema": {
               "type": "integer",
               "format": "int32",
-              "minimum": 0
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1
             }
           },
           {
             "name": "cursor",
             "in": "query",
-            "description": "`next_cursor` of the previous page",
+            "description": "`next_cursor` of the previous page.",
             "required": false,
             "schema": {
               "type": "string"
@@ -741,6 +857,16 @@
           },
           "404": {
             "description": "`not_found`: no such tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
             "content": {
               "application/json": {
                 "schema": {
@@ -789,7 +915,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MintedKeyView"
+                  "$ref": "#/components/schemas/MintedKey"
                 }
               }
             }
@@ -826,6 +952,16 @@
           },
           "422": {
             "description": "`invalid_request` on `scopes`, `name`, `expires_at` or `body`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
             "content": {
               "application/json": {
                 "schema": {
@@ -895,6 +1031,16 @@
           },
           "404": {
             "description": "`not_found`: no such key for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
             "content": {
               "application/json": {
                 "schema": {
@@ -1019,6 +1165,16 @@
                 }
               }
             }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1079,6 +1235,16 @@
                 }
               }
             }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1111,18 +1277,20 @@
           {
             "name": "limit",
             "in": "query",
-            "description": "Page size, 1 to 100 (default 50)",
+            "description": "Page size.",
             "required": false,
             "schema": {
               "type": "integer",
               "format": "int32",
-              "minimum": 0
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1
             }
           },
           {
             "name": "cursor",
             "in": "query",
-            "description": "`next_cursor` of the previous page",
+            "description": "`next_cursor` of the previous page.",
             "required": false,
             "schema": {
               "type": "string"
@@ -1162,6 +1330,16 @@
           },
           "422": {
             "description": "`invalid_request` on `limit` or `cursor`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
             "content": {
               "application/json": {
                 "schema": {
@@ -1278,6 +1456,16 @@
                 }
               }
             }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1323,7 +1511,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProfileView"
+                  "$ref": "#/components/schemas/Profile"
                 }
               }
             }
@@ -1387,6 +1575,16 @@
                 }
               }
             }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1399,8 +1597,8 @@
         "tags": [
           "numbers"
         ],
-        "summary": "`PATCH /v1/numbers/{pn}/profile`: change the given fields, answer the\nwhole profile.",
-        "operationId": "patch_profile",
+        "summary": "`PATCH /v1/numbers/{pn}/profile`: change the given fields, answer the\nwhole profile. (Operation `update_profile`, like `update_tenant`.)",
+        "operationId": "update_profile",
         "parameters": [
           {
             "name": "pn",
@@ -1440,7 +1638,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProfileView"
+                  "$ref": "#/components/schemas/Profile"
                 }
               }
             }
@@ -1514,6 +1712,16 @@
                 }
               }
             }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1540,6 +1748,16 @@
                 }
               }
             }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         }
       }
@@ -1558,6 +1776,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Version"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -1588,18 +1816,20 @@
           {
             "name": "limit",
             "in": "query",
-            "description": "Page size, 1 to 100 (default 50)",
+            "description": "Page size.",
             "required": false,
             "schema": {
               "type": "integer",
               "format": "int32",
-              "minimum": 0
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1
             }
           },
           {
             "name": "cursor",
             "in": "query",
-            "description": "`next_cursor` of the previous page",
+            "description": "`next_cursor` of the previous page.",
             "required": false,
             "schema": {
               "type": "string"
@@ -1639,6 +1869,16 @@
           },
           "422": {
             "description": "`invalid_request` on `limit` or `cursor`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
             "content": {
               "application/json": {
                 "schema": {
@@ -1748,6 +1988,16 @@
                 }
               }
             }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1842,75 +2092,82 @@
         }
       },
       "ErrorCode": {
-        "type": "string",
-        "description": "Stable error code. Codes only grow within v1: handle an unknown one by its HTTP status class.",
-        "enum": [
-          "unauthenticated",
-          "method_not_allowed",
-          "invalid_request",
-          "invalid_parameter",
-          "unsupported_message_type",
-          "recipient_not_supported",
-          "undeliverable",
-          "template_parameter_mismatch",
-          "template_not_found",
-          "template_text_too_long",
-          "template_policy_violation",
-          "template_rejected",
-          "idempotency_key_reused",
-          "customer_service_window_closed",
-          "marketing_opted_out",
-          "blocked_by_business",
-          "experiment_holdout",
-          "template_paused",
-          "template_disabled",
-          "template_syncing",
-          "template_unavailable",
-          "template_limit_reached",
-          "flow_unavailable",
-          "registration",
-          "two_step_verification",
-          "sync_not_allowed",
-          "duplicate_onboarding",
-          "number_not_connected",
-          "reconnect_required",
-          "waba_owned_by_another_tenant",
-          "tenant_exists",
-          "idempotency_in_progress",
-          "outcome_unknown",
-          "permission",
-          "account_restricted",
-          "country_restricted",
-          "payment",
-          "feature_not_available",
-          "marketing_not_allowed",
-          "forbidden",
-          "tenant_suspended",
-          "stale_attempt",
-          "rate_limited",
-          "pair_rate_limited",
-          "spam_rate_limited",
-          "ecosystem_engagement_limit",
-          "classification_limit_reached",
-          "too_many_requests",
-          "too_many_streams",
-          "not_found",
-          "nothing_to_resume",
-          "cursor_expired",
-          "payload_too_large",
-          "media_too_large",
-          "service_unavailable",
-          "unknown",
-          "upstream",
-          "integrity",
-          "media_download_failed",
-          "media_upload_failed",
-          "onboarding_failed",
-          "timeout",
-          "storage_unavailable",
-          "shutting_down",
-          "internal"
-        ]
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": [
+              "unauthenticated",
+              "method_not_allowed",
+              "invalid_request",
+              "invalid_parameter",
+              "unsupported_message_type",
+              "recipient_not_supported",
+              "undeliverable",
+              "template_parameter_mismatch",
+              "template_not_found",
+              "template_text_too_long",
+              "template_policy_violation",
+              "template_rejected",
+              "idempotency_key_reused",
+              "customer_service_window_closed",
+              "marketing_opted_out",
+              "blocked_by_business",
+              "experiment_holdout",
+              "template_paused",
+              "template_disabled",
+              "template_syncing",
+              "template_unavailable",
+              "template_limit_reached",
+              "flow_unavailable",
+              "registration",
+              "two_step_verification",
+              "sync_not_allowed",
+              "duplicate_onboarding",
+              "number_not_connected",
+              "reconnect_required",
+              "waba_owned_by_another_tenant",
+              "tenant_exists",
+              "idempotency_in_progress",
+              "outcome_unknown",
+              "permission",
+              "account_restricted",
+              "country_restricted",
+              "payment",
+              "feature_not_available",
+              "marketing_not_allowed",
+              "forbidden",
+              "tenant_suspended",
+              "stale_attempt",
+              "rate_limited",
+              "pair_rate_limited",
+              "spam_rate_limited",
+              "ecosystem_engagement_limit",
+              "classification_limit_reached",
+              "too_many_requests",
+              "too_many_streams",
+              "not_found",
+              "nothing_to_resume",
+              "cursor_expired",
+              "payload_too_large",
+              "media_too_large",
+              "service_unavailable",
+              "unknown",
+              "upstream",
+              "integrity",
+              "media_download_failed",
+              "media_upload_failed",
+              "onboarding_failed",
+              "timeout",
+              "storage_unavailable",
+              "shutting_down",
+              "internal"
+            ]
+          },
+          {
+            "type": "string"
+          }
+        ],
+        "description": "Stable error code: one of the listed ones today. Codes only grow within v1: handle an unknown one by its HTTP status class."
       },
       "ErrorObject": {
         "type": "object",
@@ -1919,7 +2176,12 @@
           "code",
           "message",
           "retryable",
-          "may_have_been_sent"
+          "may_have_been_sent",
+          "field",
+          "step",
+          "resumable",
+          "graph",
+          "request_id"
         ],
         "properties": {
           "code": {
@@ -1983,7 +2245,10 @@
         "type": "object",
         "description": "Meta's error, as the body carries it: the code and trace id, and, on\nthe routes that opt in, `error_data.details`. Never Meta's `message` or\ntitles.",
         "required": [
-          "code"
+          "code",
+          "subcode",
+          "fbtrace_id",
+          "details"
         ],
         "properties": {
           "code": {
@@ -2023,43 +2288,33 @@
         ],
         "properties": {
           "status": {
-            "type": "string",
+            "$ref": "#/components/schemas/HealthStatus",
             "description": "`ok` (alive) or `ready`."
           }
         }
       },
-      "KeyList": {
-        "type": "object",
-        "description": "A page of keys.",
-        "required": [
-          "data"
-        ],
-        "properties": {
-          "data": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/KeyView"
-            },
-            "description": "The keys, in id order, revoked ones included."
-          },
-          "next_cursor": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Pass as `cursor` for the next page; `null` on the last one."
-          }
-        }
+      "HealthStatus": {
+        "type": "string",
+        "description": "What a probe says.",
+        "enum": [
+          "ok",
+          "ready"
+        ]
       },
-      "KeyView": {
+      "Key": {
         "type": "object",
         "description": "An API key, as listed (never its secret).",
         "required": [
           "key_id",
           "kind",
+          "tenant_id",
+          "tenants",
           "scopes",
           "name",
-          "created_at"
+          "created_at",
+          "expires_at",
+          "revoked_at",
+          "last_used_at"
         ],
         "properties": {
           "created_at": {
@@ -2080,8 +2335,8 @@
             "description": "Public id (the part of the key between `wak_` and the secret)."
           },
           "kind": {
-            "type": "string",
-            "description": "`tenant`, `platform` or `admin`."
+            "$ref": "#/components/schemas/KeyKind",
+            "description": "Whose key it is."
           },
           "last_used_at": {
             "type": [
@@ -2106,7 +2361,7 @@
           "scopes": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/ScopeName"
+              "$ref": "#/components/schemas/Scope"
             },
             "description": "Scopes on tenant routes."
           },
@@ -2127,6 +2382,39 @@
                 "type": "null"
               }
             ]
+          }
+        }
+      },
+      "KeyKind": {
+        "type": "string",
+        "description": "Whose key it is.",
+        "enum": [
+          "tenant",
+          "platform",
+          "admin"
+        ]
+      },
+      "KeyList": {
+        "type": "object",
+        "description": "A page of keys.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Key"
+            },
+            "description": "The keys, in id order, revoked ones included."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; `null` on the last one."
           }
         }
       },
@@ -2156,7 +2444,7 @@
           "scopes": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/ScopeName"
+              "$ref": "#/components/schemas/Scope"
             },
             "description": "At least one scope."
           },
@@ -2192,14 +2480,14 @@
           "scopes": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/ScopeName"
+              "$ref": "#/components/schemas/Scope"
             },
             "description": "At least one scope."
           }
         },
         "additionalProperties": false
       },
-      "MintedKeyView": {
+      "MintedKey": {
         "type": "object",
         "description": "A key just minted: the whole key, shown this once, and its record.",
         "required": [
@@ -2208,12 +2496,41 @@
         ],
         "properties": {
           "api_key": {
-            "$ref": "#/components/schemas/KeyView",
+            "$ref": "#/components/schemas/Key",
             "description": "The key's record."
           },
           "key": {
             "type": "string",
             "description": "The key, `wak_<key_id>_<secret>`: send it as\n`Authorization: Bearer <key>`. Shown once; only its digest is kept."
+          }
+        }
+      },
+      "Number": {
+        "type": "object",
+        "description": "A number of the tenant and its connection status.",
+        "required": [
+          "phone_number_id",
+          "waba_id",
+          "status",
+          "updated_at"
+        ],
+        "properties": {
+          "phone_number_id": {
+            "type": "string",
+            "description": "Phone number id."
+          },
+          "status": {
+            "$ref": "#/components/schemas/NumberStatus",
+            "description": "Its connection status."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the status last changed (RFC 3339)."
+          },
+          "waba_id": {
+            "type": "string",
+            "description": "Its WABA."
           }
         }
       },
@@ -2223,7 +2540,12 @@
         "required": [
           "phone_number_id",
           "waba_id",
-          "status"
+          "status",
+          "display_phone_number",
+          "verified_name",
+          "quality_rating",
+          "name_status",
+          "throughput"
         ],
         "properties": {
           "display_phone_number": {
@@ -2252,13 +2574,13 @@
             "description": "Quality rating, as Meta reports it (`GREEN`, `YELLOW`, `RED`, …)."
           },
           "status": {
-            "type": "string",
-            "description": "The service's connection status."
+            "$ref": "#/components/schemas/NumberStatus",
+            "description": "The service's connection status (`connected`: the details come\nfrom Meta)."
           },
           "throughput": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/ThroughputView",
+                "$ref": "#/components/schemas/Throughput",
                 "description": "Throughput."
               },
               {
@@ -2283,13 +2605,14 @@
         "type": "object",
         "description": "A page of numbers.",
         "required": [
-          "data"
+          "data",
+          "next_cursor"
         ],
         "properties": {
           "data": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/NumberView"
+              "$ref": "#/components/schemas/Number"
             },
             "description": "The numbers, in id order."
           },
@@ -2302,33 +2625,68 @@
           }
         }
       },
-      "NumberView": {
+      "NumberStatus": {
+        "type": "string",
+        "description": "A number's connection status.",
+        "enum": [
+          "connected",
+          "reconnect_required",
+          "disconnected"
+        ]
+      },
+      "Profile": {
         "type": "object",
-        "description": "A number of the tenant and its connection status.",
+        "description": "A business profile.",
         "required": [
-          "phone_number_id",
-          "waba_id",
-          "status",
-          "updated_at"
+          "about",
+          "address",
+          "description",
+          "email",
+          "websites",
+          "vertical"
         ],
         "properties": {
-          "phone_number_id": {
-            "type": "string",
-            "description": "Phone number id."
+          "about": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "\"About\" text."
           },
-          "status": {
-            "type": "string",
-            "description": "`connected`, `reconnect_required` or `disconnected`.",
-            "example": "connected"
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Address."
           },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time",
-            "description": "When the status last changed (RFC 3339)."
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Description."
           },
-          "waba_id": {
-            "type": "string",
-            "description": "Its WABA."
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Contact email."
+          },
+          "vertical": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Industry, as Meta names it (`RETAIL`, `OTHER`, …)."
+          },
+          "websites": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Websites."
           }
         }
       },
@@ -2384,58 +2742,7 @@
         },
         "additionalProperties": false
       },
-      "ProfileView": {
-        "type": "object",
-        "description": "A business profile.",
-        "required": [
-          "websites"
-        ],
-        "properties": {
-          "about": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "\"About\" text."
-          },
-          "address": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Address."
-          },
-          "description": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Description."
-          },
-          "email": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Contact email."
-          },
-          "vertical": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Industry, as Meta names it (`RETAIL`, `OTHER`, …)."
-          },
-          "websites": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Websites."
-          }
-        }
-      },
-      "ScopeName": {
+      "Scope": {
         "type": "string",
         "description": "A scope of a tenant or platform key.",
         "enum": [
@@ -2450,38 +2757,7 @@
           "numbers"
         ]
       },
-      "TenantList": {
-        "type": "object",
-        "description": "A page of tenants.",
-        "required": [
-          "data"
-        ],
-        "properties": {
-          "data": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/TenantView"
-            },
-            "description": "The tenants, in id order."
-          },
-          "next_cursor": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Pass as `cursor` for the next page; `null` on the last one."
-          }
-        }
-      },
-      "TenantStatusName": {
-        "type": "string",
-        "description": "A tenant's status.",
-        "enum": [
-          "active",
-          "suspended"
-        ]
-      },
-      "TenantView": {
+      "Tenant": {
         "type": "object",
         "description": "A tenant.",
         "required": [
@@ -2506,7 +2782,7 @@
             "description": "A label for operators."
           },
           "status": {
-            "$ref": "#/components/schemas/TenantStatusName",
+            "$ref": "#/components/schemas/TenantStatus",
             "description": "`active` or `suspended`."
           },
           "updated_at": {
@@ -2516,25 +2792,64 @@
           }
         }
       },
+      "TenantList": {
+        "type": "object",
+        "description": "A page of tenants.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Tenant"
+            },
+            "description": "The tenants, in id order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; `null` on the last one."
+          }
+        }
+      },
+      "TenantStatus": {
+        "type": "string",
+        "description": "A tenant's status.",
+        "enum": [
+          "active",
+          "suspended"
+        ]
+      },
       "TenantsSpec": {
         "oneOf": [
           {
             "type": "string",
-            "description": "`\"*\"`: any tenant."
+            "description": "Any tenant.",
+            "enum": [
+              "*"
+            ]
           },
           {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "These tenant ids."
+            "description": "These tenant ids.",
+            "minItems": 1
           }
         ],
-        "description": "The tenants a platform key may name: `\"*\"` for any, or a list."
+        "description": "The tenants a platform key may name with WA-Tenant: \"*\" for any, or a non-empty list of tenant ids."
       },
-      "ThroughputView": {
+      "Throughput": {
         "type": "object",
         "description": "A number's throughput.",
+        "required": [
+          "level"
+        ],
         "properties": {
           "level": {
             "type": [
@@ -2559,7 +2874,7 @@
           "status": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/TenantStatusName",
+                "$ref": "#/components/schemas/TenantStatus",
                 "description": "`suspended` to suspend the tenant, `active` to lift it."
               },
               {
@@ -2598,30 +2913,7 @@
           }
         }
       },
-      "WabaList": {
-        "type": "object",
-        "description": "A page of WABAs.",
-        "required": [
-          "data"
-        ],
-        "properties": {
-          "data": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/WabaView"
-            },
-            "description": "The WABAs, in id order."
-          },
-          "next_cursor": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Pass as `cursor` for the next page; `null` on the last one."
-          }
-        }
-      },
-      "WabaView": {
+      "Waba": {
         "type": "object",
         "description": "A WABA of the tenant.",
         "required": [
@@ -2637,6 +2929,30 @@
           "waba_id": {
             "type": "string",
             "description": "WhatsApp Business Account id."
+          }
+        }
+      },
+      "WabaList": {
+        "type": "object",
+        "description": "A page of WABAs.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Waba"
+            },
+            "description": "The WABAs, in id order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; `null` on the last one."
           }
         }
       }

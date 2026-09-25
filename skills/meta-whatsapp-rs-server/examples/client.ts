@@ -9,7 +9,7 @@ import type { components, paths } from "./meta-whatsapp-server";
 
 export type ErrorObject = components["schemas"]["ErrorObject"];
 export type ErrorCode = components["schemas"]["ErrorCode"];
-export type NumberView = components["schemas"]["NumberView"];
+export type PhoneNumber = components["schemas"]["Number"];
 export type ProfilePatch = components["schemas"]["ProfilePatch"];
 // Annotate request literals with the generated types: TypeScript then
 // rejects a misspelled field, which it does not through the generic call.
@@ -60,8 +60,8 @@ export function nextStep(error: ErrorObject): Next {
 }
 
 // Every number of the tenant, following the cursors.
-export async function allNumbers(api: WhatsApp): Promise<NumberView[]> {
-  const numbers: NumberView[] = [];
+export async function allNumbers(api: WhatsApp): Promise<PhoneNumber[]> {
+  const numbers: PhoneNumber[] = [];
   let cursor: string | undefined;
   do {
     const query: NumbersQuery = cursor === undefined ? { limit: 100 } : { limit: 100, cursor };

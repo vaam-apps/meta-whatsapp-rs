@@ -17,10 +17,10 @@ use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use super::common::{ApiJson, PageQuery, next_cursor, rfc3339};
+use super::common::{ApiJson, PageParams, PageQuery, next_cursor, rfc3339};
 use crate::auth::{Caller, OwnedNumber, OwnedWaba};
 use crate::error::{ApiError, ErrorBody};
-use crate::model::{NumberBinding, WabaBinding};
+use crate::model::{NumberBinding, NumberStatus, WabaBinding};
 use crate::state::AppState;
 
 /// The fields `GET /v1/numbers/{pn}` asks Meta for.
@@ -44,6 +44,7 @@ pub const PROFILE_FIELDS: [ProfileField; 6] = [
 
 /// A WABA of the tenant.
 #[derive(Debug, Serialize, ToSchema)]
+#[schema(as = Waba)]
 pub struct WabaView {
     /// WhatsApp Business Account id.
     pub waba_id: String,
@@ -67,19 +68,43 @@ pub struct WabaList {
     /// The WABAs, in id order.
     pub data: Vec<WabaView>,
     /// Pass as `cursor` for the next page; `null` on the last one.
+    #[schema(required = true)]
     pub next_cursor: Option<String>,
+}
+
+/// A number's connection status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+#[schema(as = NumberStatus)]
+pub enum NumberStatusName {
+    /// Usable.
+    Connected,
+    /// Meta rejected the WABA's token (`190`): attach or onboard it again.
+    ReconnectRequired,
+    /// Offboarded; history is kept.
+    Disconnected,
+}
+
+impl From<NumberStatus> for NumberStatusName {
+    fn from(status: NumberStatus) -> Self {
+        match status {
+            NumberStatus::Connected => Self::Connected,
+            NumberStatus::ReconnectRequired => Self::ReconnectRequired,
+            NumberStatus::Disconnected => Self::Disconnected,
+        }
+    }
 }
 
 /// A number of the tenant and its connection status.
 #[derive(Debug, Serialize, ToSchema)]
+#[schema(as = Number)]
 pub struct NumberView {
     /// Phone number id.
     pub phone_number_id: String,
     /// Its WABA.
     pub waba_id: String,
-    /// `connected`, `reconnect_required` or `disconnected`.
-    #[schema(example = "connected")]
-    pub status: String,
+    /// Its connection status.
+    pub status: NumberStatusName,
     /// When the status last changed (RFC 3339).
     #[schema(format = DateTime)]
     pub updated_at: String,
@@ -90,7 +115,7 @@ impl From<NumberBinding> for NumberView {
         Self {
             phone_number_id: n.phone_number_id.into_inner(),
             waba_id: n.waba_id.into_inner(),
-            status: n.status.as_str().to_owned(),
+            status: n.status.into(),
             updated_at: rfc3339(n.updated_at),
         }
     }
@@ -102,13 +127,16 @@ pub struct NumberList {
     /// The numbers, in id order.
     pub data: Vec<NumberView>,
     /// Pass as `cursor` for the next page; `null` on the last one.
+    #[schema(required = true)]
     pub next_cursor: Option<String>,
 }
 
 /// A number's throughput.
 #[derive(Debug, Serialize, ToSchema)]
+#[schema(as = Throughput)]
 pub struct ThroughputView {
     /// Throughput level, as Meta reports it.
+    #[schema(required = true)]
     pub level: Option<String>,
 }
 
@@ -119,34 +147,46 @@ pub struct NumberDetails {
     pub phone_number_id: String,
     /// Its WABA.
     pub waba_id: String,
-    /// The service's connection status.
-    pub status: String,
+    /// The service's connection status (`connected`: the details come
+    /// from Meta).
+    pub status: NumberStatusName,
     /// The number as WhatsApp displays it.
+    #[schema(required = true)]
     pub display_phone_number: Option<String>,
     /// Approved display name.
+    #[schema(required = true)]
     pub verified_name: Option<String>,
     /// Quality rating, as Meta reports it (`GREEN`, `YELLOW`, `RED`, …).
+    #[schema(required = true)]
     pub quality_rating: Option<String>,
     /// Display name review status, as Meta reports it.
+    #[schema(required = true)]
     pub name_status: Option<String>,
     /// Throughput.
+    #[schema(required = true)]
     pub throughput: Option<ThroughputView>,
 }
 
 /// A business profile.
 #[derive(Debug, Serialize, ToSchema)]
+#[schema(as = Profile)]
 pub struct ProfileView {
     /// "About" text.
+    #[schema(required = true)]
     pub about: Option<String>,
     /// Address.
+    #[schema(required = true)]
     pub address: Option<String>,
     /// Description.
+    #[schema(required = true)]
     pub description: Option<String>,
     /// Contact email.
+    #[schema(required = true)]
     pub email: Option<String>,
     /// Websites.
     pub websites: Vec<String>,
     /// Industry, as Meta names it (`RETAIL`, `OTHER`, …).
+    #[schema(required = true)]
     pub vertical: Option<String>,
 }
 
@@ -191,7 +231,7 @@ fn details(owned: &OwnedNumber, info: PhoneNumberInfo) -> NumberDetails {
     NumberDetails {
         phone_number_id: owned.phone_number_id().as_str().to_owned(),
         waba_id: owned.waba_id().as_str().to_owned(),
-        status: "connected".to_owned(),
+        status: NumberStatusName::Connected,
         quality_rating: wire(info.quality_rating.as_ref()),
         name_status: wire(info.name_status.as_ref()),
         throughput: info.throughput.map(|t| ThroughputView { level: t.level }),
@@ -208,8 +248,7 @@ fn details(owned: &OwnedNumber, info: PhoneNumberInfo) -> NumberDetails {
     security(("api_key" = [])),
     params(
         ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
-        ("limit" = Option<u32>, Query, description = "Page size, 1 to 100 (default 50)"),
-        ("cursor" = Option<String>, Query, description = "`next_cursor` of the previous page"),
+        PageParams,
     ),
     responses(
         (status = 200, description = "The tenant's WABAs", body = WabaList),
@@ -239,8 +278,7 @@ pub async fn list_wabas(
     security(("api_key" = [])),
     params(
         ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
-        ("limit" = Option<u32>, Query, description = "Page size, 1 to 100 (default 50)"),
-        ("cursor" = Option<String>, Query, description = "`next_cursor` of the previous page"),
+        PageParams,
     ),
     responses(
         (status = 200, description = "The tenant's numbers", body = NumberList),
@@ -337,7 +375,7 @@ pub async fn get_profile(
 }
 
 /// `PATCH /v1/numbers/{pn}/profile`: change the given fields, answer the
-/// whole profile.
+/// whole profile. (Operation `update_profile`, like `update_tenant`.)
 #[utoipa::path(
     patch,
     path = "/v1/numbers/{pn}/profile",
@@ -359,7 +397,7 @@ pub async fn get_profile(
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
 )]
-pub async fn patch_profile(
+pub async fn update_profile(
     State(state): State<AppState>,
     owned: OwnedNumber,
     ApiJson(patch): ApiJson<ProfilePatch>,

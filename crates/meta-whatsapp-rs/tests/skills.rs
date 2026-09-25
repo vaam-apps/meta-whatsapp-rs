@@ -2904,10 +2904,18 @@ impl Spec {
         let schemas = doc["components"]["schemas"].as_object().unwrap();
         spec.schemas.extend(schemas.keys().cloned());
         collect_words(&doc["components"], &mut spec.words);
+        // The codes: an enum, or the enum of an open set (`anyOf` the
+        // known codes and any string).
+        let error_code = &schemas["ErrorCode"];
+        let known = error_code["enum"].as_array().or_else(|| {
+            error_code["anyOf"]
+                .as_array()?
+                .iter()
+                .find_map(|s| s["enum"].as_array())
+        });
         spec.codes.extend(
-            schemas["ErrorCode"]["enum"]
-                .as_array()
-                .unwrap()
+            known
+                .expect("ErrorCode lists the codes")
                 .iter()
                 .map(|c| c.as_str().unwrap().to_owned()),
         );

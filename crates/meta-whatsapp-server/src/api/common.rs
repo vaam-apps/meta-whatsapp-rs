@@ -41,6 +41,18 @@ where
 /// Default page size.
 pub const DEFAULT_PAGE_SIZE: usize = 50;
 
+/// The paging parameters, as the OpenAPI document declares them
+/// ([`PageQuery`] reads them).
+#[derive(Debug, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct PageParams {
+    /// Page size.
+    #[param(minimum = 1, maximum = 100, default = 50)]
+    pub limit: Option<u32>,
+    /// `next_cursor` of the previous page.
+    pub cursor: Option<String>,
+}
+
 /// `?limit=` (1 to 100, default 50) and `?cursor=` (from `next_cursor`).
 #[derive(Debug)]
 pub struct PageQuery(pub PageRequest);

@@ -116,7 +116,7 @@ fn numbers_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(numbers::list_wabas))
         .routes(routes!(numbers::list_numbers))
         .routes(routes!(numbers::get_number))
-        .routes(routes!(numbers::get_profile, numbers::patch_profile))
+        .routes(routes!(numbers::get_profile, numbers::update_profile))
         .routes(routes!(numbers::disconnect_waba))
 }
 
@@ -131,12 +131,46 @@ fn ops_routes() -> OpenApiRouter<AppState> {
 
 /// The OpenAPI document of the internal listener's routes.
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    let (_, document) = OpenApiRouter::<AppState>::with_openapi(ApiDoc::openapi())
+    let (_, mut document) = OpenApiRouter::<AppState>::with_openapi(ApiDoc::openapi())
         .merge(admin_routes())
         .merge(numbers_routes())
         .merge(ops_routes())
         .split_for_parts();
+    add_default_errors(&mut document);
     document
+}
+
+/// Every operation may also answer statuses it does not list (a `503
+/// storage_unavailable`, a `429`, a `413`, a `504` at the deadline): each
+/// gets a `default` response with the error body, so a generated client
+/// types every failure.
+fn add_default_errors(document: &mut utoipa::openapi::OpenApi) {
+    use utoipa::openapi::{ContentBuilder, Ref, ResponseBuilder};
+    let default = ResponseBuilder::new()
+        .description("Any other error: branch on `error.code`")
+        .content(
+            "application/json",
+            ContentBuilder::new()
+                .schema(Some(Ref::from_schema_name("ErrorBody")))
+                .build(),
+        )
+        .build();
+    for item in document.paths.paths.values_mut() {
+        let operations = [
+            &mut item.get,
+            &mut item.put,
+            &mut item.post,
+            &mut item.delete,
+            &mut item.patch,
+        ];
+        for operation in operations.into_iter().flatten() {
+            operation
+                .responses
+                .responses
+                .entry("default".to_owned())
+                .or_insert_with(|| default.clone().into());
+        }
+    }
 }
 
 /// The OpenAPI document as committed: pretty JSON and a final newline.
