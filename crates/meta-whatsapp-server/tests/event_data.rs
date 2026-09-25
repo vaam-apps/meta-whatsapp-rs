@@ -15,7 +15,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use meta_whatsapp_rs::webhooks::WebhookPayload;
-use meta_whatsapp_server::events::{OPERATOR_EVENT_TYPES, TENANT_EVENT_TYPES, event_data};
+use meta_whatsapp_server::events::{
+    OPERATOR_EVENT_TYPES, TENANT_EVENT_TYPES, event_data, meta_time,
+};
 use serde_json::Value;
 
 fn fixtures_dir() -> PathBuf {
@@ -132,6 +134,58 @@ fn every_library_event_type_is_classified() {
         for event in served(&fixture).as_array().unwrap() {
             let kind = event["type"].as_str().unwrap();
             assert!(classified.contains(kind), "{fixture}: {kind}");
+        }
+    }
+}
+
+/// Every event of Meta's examples is dated ([`meta_time`]: the routing
+/// refuses an event dated before its binding, security review M3), but
+/// for the kinds that carry no date of their own: history and contact
+/// syncs, errors. Each date is the one Meta's example says. A library
+/// change that loses a date fails here.
+#[test]
+fn every_dated_event_type_has_its_meta_time() {
+    const UNDATED: [&str; 3] = ["history_synced", "app_state_synced", "error_reported"];
+    let mut dated = BTreeSet::new();
+    for fixture in fixtures() {
+        let body = std::fs::read(fixtures_dir().join(&fixture)).unwrap();
+        for event in WebhookPayload::from_slice(&body).unwrap().into_events() {
+            let kind = event.kind();
+            let time = meta_time(&event);
+            if UNDATED.contains(&kind) {
+                assert_eq!(time, None, "{fixture}: {kind}");
+                continue;
+            }
+            let data = serde_json::to_value(&event).unwrap();
+            // The date Meta's example gives: the item's own, else the
+            // entry's.
+            let seconds = |v: &Value| v.as_i64().or_else(|| v.as_str()?.parse().ok());
+            let own = [
+                "message",
+                "status",
+                "echo",
+                "call",
+                "preference",
+                "update",
+                "detected",
+            ]
+            .iter()
+            .find_map(|item| seconds(&data[item]["timestamp"]));
+            let expected = own.or_else(|| seconds(&data["time"]));
+            assert_eq!(
+                time.map(time::OffsetDateTime::unix_timestamp),
+                expected,
+                "{fixture}: {kind}"
+            );
+            if time.is_some() {
+                dated.insert(kind);
+            }
+        }
+    }
+    // Every tenant type but the undated ones is dated in some example.
+    for kind in TENANT_EVENT_TYPES {
+        if !UNDATED.contains(&kind) {
+            assert!(dated.contains(kind), "no dated example of {kind}");
         }
     }
 }

@@ -8,20 +8,26 @@
 //!                        against every app secret (401 before parsing), parse,
 //!                        per event: DedupGuard lease (Postgres KvStore, 503 while
 //!                        another request holds it) ─► ServiceSink:
-//!                          1. route: the tenant owning the number, else the WABA
+//!                          1. route: the tenant owning the number, else the WABA,
+//!                             since before the event
 //!                          2. inbox (InboxSink), when a tenant owns it
 //!                          3. outbox row: the tenant, or none (operator-only)
 //! GET /v1/events ─► poll: the caller's tenant's rows after a sequence of its own
 //! ```
 //!
 //! **Routing is an allow-list.** An event naming a business phone number
-//! belongs to the tenant that number is bound to, and only when the event's
-//! WABA, if it names one, is the number's WABA in the bindings; an event
-//! naming only a WABA belongs to the WABA's tenant. The outbox row carries
-//! that tenant only for the types in [`TENANT_EVENT_TYPES`]; `unknown`,
-//! `unparsed`, `partner_solution_updated`, any type a later library adds,
-//! and every event of a number or WABA no tenant holds are operator-only
-//! rows (no tenant: never polled, logged with size and digest, counted).
+//! (or, untyped, whose raw `metadata` names one) belongs to the tenant that
+//! number is bound to, and only when the event's WABA, if it names one, is
+//! the number's WABA in the bindings; an event naming only a WABA belongs
+//! to the WABA's tenant. And only when Meta dated it no earlier than that
+//! WABA's binding began ([`meta_time`]): a WABA moved from one tenant to
+//! another does not bring the first one's retried events to the second.
+//! The outbox row carries that tenant only for the types in
+//! [`TENANT_EVENT_TYPES`]; `unknown`, `unparsed`, `partner_solution_updated`,
+//! any type a later library adds, and every event of a number or WABA no
+//! tenant holds (or held then) are operator-only rows (no tenant: never
+//! polled, logged with size and digest, counted), and the inbox records
+//! only an owned event.
 //!
 //! **Meta's retries are safe.** A sink error answers `500`, the dedup claim
 //! is released, and Meta redelivers the batch: the events before it are
@@ -44,6 +50,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use meta_whatsapp_rs::core::error::{SinkError, StorageError};
+use meta_whatsapp_rs::core::ids::PhoneNumberId;
 use meta_whatsapp_rs::core::secret::{AppSecret, VerifyToken};
 use meta_whatsapp_rs::core::sink::EventSink;
 use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
@@ -54,6 +61,7 @@ use meta_whatsapp_rs::webhooks::{
     WebhookHandler,
 };
 use sha2::{Digest, Sha256};
+use time::OffsetDateTime;
 
 use crate::error::ApiError;
 use crate::metrics::Metrics;
@@ -298,35 +306,118 @@ impl EventSink<WebhookEvent> for DeliverySink {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Route {
     /// The tenant holding the event's number (or, for an event naming no
-    /// number, its WABA): the inbox records the event.
+    /// number, its WABA) since before the event: the inbox records the
+    /// event.
     pub owner: Option<TenantId>,
     /// The outbox row's tenant: the owner, for a [`tenant_visible`] type;
     /// else `None`, an operator-only row.
     pub tenant: Option<TenantId>,
+    /// Why the row is operator-only (a fixed set, for the log): `unowned`
+    /// (no binding holds its number or WABA, or a stale one), `before_binding`
+    /// (Meta dated it before its binding: a previous holder's), or `type`
+    /// (a type no tenant receives). `None` for a tenant's row.
+    pub operator_only: Option<&'static str>,
 }
 
-/// The tenant holding `event`'s number or WABA, by the bindings (see the
-/// module docs).
+/// When Meta says the event happened: the message's, status's, call's…
+/// own time, else its entry's. `None` for events with no date of their
+/// own: history and contact syncs (they carry the past on purpose),
+/// errors, bodies that are not webhooks.
+pub fn meta_time(event: &WebhookEvent) -> Option<OffsetDateTime> {
+    use WebhookEvent as E;
+    match event {
+        E::MessageReceived { message, .. } => Some(message.timestamp),
+        E::StatusUpdated { status, .. } => Some(status.timestamp),
+        E::MessageEchoed { echo, .. } => Some(echo.timestamp),
+        E::CallUpdated { call, .. } => Some(call.timestamp),
+        E::CallStatusUpdated { status, .. } => Some(status.timestamp),
+        E::UserPreferenceChanged { preference, .. } => Some(preference.timestamp),
+        E::UserIdChanged { update, .. } => Some(update.timestamp),
+        E::AutomaticEventDetected { detected, .. } => Some(detected.timestamp),
+        E::GroupUpdated { update, .. } => update.timestamp,
+        E::AccountSettingsUpdated { time, update, .. } => update.timestamp.or(*time),
+        E::FlowUpdated { time, .. }
+        | E::AccountAlert { time, .. }
+        | E::AccountReviewUpdated { time, .. }
+        | E::AccountUpdated { time, .. }
+        | E::BusinessCapabilityUpdated { time, .. }
+        | E::BusinessUsernameUpdated { time, .. }
+        | E::PartnerSolutionUpdated { time, .. }
+        | E::PaymentConfigurationUpdated { time, .. }
+        | E::PhoneNumberNameUpdated { time, .. }
+        | E::PhoneNumberQualityUpdated { time, .. }
+        | E::SecurityUpdated { time, .. }
+        | E::TemplateComponentsUpdated { time, .. }
+        | E::TemplateQualityUpdated { time, .. }
+        | E::TemplateStatusUpdated { time, .. }
+        | E::TemplateCategoryUpdated { time, .. }
+        | E::TemplateCategoryMisuseDetected { time, .. }
+        | E::Unknown { time, .. } => *time,
+        // History and contact syncs import the past; errors and bodies
+        // that are not webhooks carry no date. A type a later library adds
+        // has none until listed here.
+        _ => None,
+    }
+}
+
+/// The business number an event is about: the one it names, or, for a
+/// change the library did not type, the `metadata.phone_number_id` of its
+/// raw value (the inbox still reads an untyped `history` change by it).
+pub fn event_number(event: &WebhookEvent) -> Option<PhoneNumberId> {
+    if let Some(pn) = event.phone_number_id() {
+        return Some(pn.clone());
+    }
+    let WebhookEvent::Unknown { raw, .. } = event else {
+        return None;
+    };
+    raw.get("metadata")?
+        .get("phone_number_id")?
+        .as_str()
+        .filter(|pn| !pn.is_empty())
+        .map(PhoneNumberId::new)
+}
+
+/// The tenant holding `event`'s number or WABA, by the bindings, and why
+/// nobody does (see [`Route::operator_only`]).
+///
+/// - Number first: the event's number (or an untyped change's
+///   `metadata.phone_number_id`), bound under the WABA the event names;
+///   else, naming no number, its WABA.
+/// - Since before the event: Meta's date for it ([`meta_time`]) is not
+///   before the second the WABA's binding began. A WABA unbound from one
+///   tenant and bound to another does not bring the first one's events
+///   (Meta retries for up to 7 days) to the second.
 ///
 /// # Errors
 ///
 /// The store failing.
-pub async fn owner(store: &dyn Store, event: &WebhookEvent) -> StoreResult<Option<TenantId>> {
-    if let Some(pn) = event.phone_number_id() {
-        let Some(binding) = store.number(pn).await? else {
-            return Ok(None);
+pub async fn owner(
+    store: &dyn Store,
+    event: &WebhookEvent,
+) -> StoreResult<Result<TenantId, &'static str>> {
+    let binding = if let Some(pn) = event_number(event) {
+        let Some(number) = store.number(&pn).await? else {
+            return Ok(Err("unowned"));
         };
         // A number bound under another WABA than the event names: the
         // bindings are stale, and neither tenant is certainly the owner.
-        if event.waba_id().is_some_and(|waba| *waba != binding.waba_id) {
-            return Ok(None);
+        if event.waba_id().is_some_and(|waba| *waba != number.waba_id) {
+            return Ok(Err("unowned"));
         }
-        return Ok(Some(binding.tenant_id));
-    }
-    let Some(waba) = event.waba_id() else {
-        return Ok(None);
+        store.waba(&number.waba_id).await?
+    } else if let Some(waba) = event.waba_id() {
+        store.waba(waba).await?
+    } else {
+        None
     };
-    Ok(store.waba(waba).await?.map(|binding| binding.tenant_id))
+    let Some(binding) = binding else {
+        return Ok(Err("unowned"));
+    };
+    if meta_time(event).is_some_and(|at| at.unix_timestamp() < binding.attached_at.unix_timestamp())
+    {
+        return Ok(Err("before_binding"));
+    }
+    Ok(Ok(binding.tenant_id))
 }
 
 /// Where `event` goes: its owner, and the outbox row's tenant.
@@ -335,9 +426,23 @@ pub async fn owner(store: &dyn Store, event: &WebhookEvent) -> StoreResult<Optio
 ///
 /// The store failing.
 pub async fn route(store: &dyn Store, event: &WebhookEvent) -> StoreResult<Route> {
-    let owner = owner(store, event).await?;
-    let tenant = owner.clone().filter(|_| tenant_visible(event.kind()));
-    Ok(Route { owner, tenant })
+    Ok(match owner(store, event).await? {
+        Ok(owner) if tenant_visible(event.kind()) => Route {
+            tenant: Some(owner.clone()),
+            owner: Some(owner),
+            operator_only: None,
+        },
+        Ok(owner) => Route {
+            owner: Some(owner),
+            tenant: None,
+            operator_only: Some("type"),
+        },
+        Err(reason) => Route {
+            owner: None,
+            tenant: None,
+            operator_only: Some(reason),
+        },
+    })
 }
 
 /// The JSON an event is stored and served as (`data` of the envelope): the
@@ -471,11 +576,7 @@ impl ServiceSink {
             tracing::info!(
                 event_type = kind,
                 sequence,
-                reason = if route.owner.is_some() {
-                    "type"
-                } else {
-                    "unowned"
-                },
+                reason = route.operator_only.unwrap_or("unowned"),
                 data_bytes = row.data.len(),
                 data_sha256 = %hex::encode(Sha256::digest(row.data.as_bytes())),
                 "operator-only event recorded"

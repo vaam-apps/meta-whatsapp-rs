@@ -815,3 +815,68 @@ async fn a_crash_between_the_inbox_and_the_outbox_is_redelivered_safely() {
     assert_eq!(polled(&h, A).await.len(), 1);
     assert_eq!(inbox(&h, PN_A, "16505551234").await, 1, "one message");
 }
+
+/// Security review M3: an event Meta dated before its WABA's binding began
+/// is a previous holder's, operator-only, and never reaches the inbox:
+/// WABA W is bound to A, unbound, bound to B; Meta's retry of a message
+/// dated before B's binding goes to nobody, one dated after it to B.
+/// Decisive: the binding epoch in the routing.
+#[tokio::test]
+async fn an_event_dated_before_its_binding_is_nobodys() {
+    let h = Harness::new();
+    h.tenant(A).await;
+    h.tenant(B).await;
+    h.connect(A, WABA_A, &[PN_A], "TOKEN-OF-A").await;
+    assert!(
+        h.store
+            .unbind_waba(&meta_whatsapp_rs::core::ids::WabaId::new(WABA_A))
+            .await
+            .unwrap()
+    );
+    h.connect(B, WABA_A, &[PN_A], "TOKEN-OF-B").await;
+    let an_hour_ago = common::meta::now() - 3600;
+    let old = common::meta::dated(text(WABA_A, PN_A, "wamid.OF-A"), an_hour_ago);
+    assert_eq!(h.webhook(&bytes(&old)).await.status, StatusCode::OK);
+    assert_eq!(tenants_of(&h.outbox.rows()), [None]);
+    assert!(polled(&h, B).await.is_empty());
+    assert!(polled(&h, A).await.is_empty());
+    assert_eq!(inbox(&h, PN_A, "16505551234").await, 0, "no inbox write");
+    let new = text(WABA_A, PN_A, "wamid.OF-B");
+    assert_eq!(h.webhook(&bytes(&new)).await.status, StatusCode::OK);
+    assert_eq!(polled(&h, B).await.len(), 1);
+    assert_eq!(inbox(&h, PN_A, "16505551234").await, 1);
+}
+
+/// `history` Meta's `messages` variant the library could not type (one
+/// malformed message): routed as a `history` of the number its raw
+/// `metadata` names.
+fn untyped_history(waba: &str, pn: &str) -> Value {
+    let mut payload = with_ids(fixture("fields/history_threads.json"), waba, pn);
+    payload["entry"][0]["changes"][0]["value"]["history"][0]["threads"][0]["messages"][1]["timestamp"] =
+        json!("not a time");
+    payload
+}
+
+/// Security review L1: a `history` change the library did not type is
+/// recorded by the inbox under the number its raw `metadata` names, so it
+/// is routed by that number, under the WABA the entry names, as typed
+/// events are: under A's WABA but naming B's number, it reaches nobody's
+/// inbox. Decisive: routing an untyped change by its raw number.
+#[tokio::test]
+async fn an_untyped_history_change_is_routed_by_its_number() {
+    let h = two_tenants().await;
+    let body = bytes(&untyped_history(WABA_A, PN_B));
+    let [event] = events_of(&body).try_into().unwrap();
+    assert_eq!(event.kind(), "unknown", "the change stays untyped");
+    assert_eq!(h.webhook(&body).await.status, StatusCode::OK);
+    assert_eq!(
+        inbox(&h, PN_B, "16505551234").await,
+        0,
+        "B's inbox untouched"
+    );
+    // Its own number, under its own WABA: A's inbox recovers what parses.
+    let body = bytes(&untyped_history(WABA_A, PN_A));
+    assert_eq!(h.webhook(&body).await.status, StatusCode::OK);
+    assert!(inbox(&h, PN_A, "16505551234").await > 0);
+    assert!(h.outbox.rows().iter().all(|r| r.tenant.is_none()));
+}
