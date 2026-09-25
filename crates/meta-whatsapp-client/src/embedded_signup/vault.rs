@@ -94,7 +94,9 @@ use time::OffsetDateTime;
 pub const TOKEN_NAMESPACE: &str = "wa.token";
 
 /// Domain separation for the associated data; bump with the record format.
-const AAD_TAG: &[u8] = b"meta-whatsapp-rs/token-vault/v1";
+/// MUST NEVER CHANGE: Stored tokens are encrypted with this tag; renaming it
+/// makes every encrypted token and ledger record undecryptable.
+const AAD_TAG: &[u8] = b"wa-rs/token-vault/v1";
 const RECORD_VERSION: u8 = 1;
 const NONCE_LEN: usize = 12;
 const KEY_LEN: usize = 32;
@@ -686,7 +688,9 @@ impl TokenVault {
 }
 
 /// Domain separation for the ledger records' associated data.
-const LEDGER_AAD_TAG: &[u8] = b"meta-whatsapp-rs/token-vault/ledger/v1";
+/// MUST NEVER CHANGE: Ledger records are encrypted with this tag; renaming it
+/// makes every encrypted ledger record undecryptable.
+const LEDGER_AAD_TAG: &[u8] = b"wa-rs/token-vault/ledger/v1";
 
 /// A sealed credit ledger record, as stored.
 #[derive(Serialize, Deserialize)]
