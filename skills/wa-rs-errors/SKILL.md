@@ -5,7 +5,7 @@ description: "Handling wa-rs errors correctly - the Error tree (Api, Http, Trans
 
 # wa-rs-errors
 
-> **Verified against wa-rs 6909be3b54768abc3d5f9b04543a49f32b072669 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against wa-rs b3d2dcad64bc5f0dd9374dc84a387ec978707ab0 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/handle.rs](examples/handle.rs), compiled and
 tested by wa-rs's own gate. Every code, its `ErrorKind` and what to do:

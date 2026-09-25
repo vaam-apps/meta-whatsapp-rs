@@ -1,6 +1,6 @@
 # `WebhookEvent` reference
 
-> **Verified against wa-rs e4e98e5259e3552aa293cbb7c0d3ec93d20e7991 (2026-09-25).** Source: `crates/wa-webhooks/src/event.rs`,
+> **Verified against wa-rs b3d2dcad64bc5f0dd9374dc84a387ec978707ab0 (2026-09-25).** Source: `crates/wa-webhooks/src/event.rs`,
 > `crates/wa-webhooks/src/fields/*`. The enum is `#[non_exhaustive]`.
 
 Payload types live in `wa_rs::webhooks::fields` (flat re-exports of every

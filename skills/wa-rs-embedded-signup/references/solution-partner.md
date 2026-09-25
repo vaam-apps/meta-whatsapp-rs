@@ -1,6 +1,6 @@
 # Solution Partner deployments
 
-> **Verified against wa-rs e4e98e5259e3552aa293cbb7c0d3ec93d20e7991 (2026-09-25).** Also checked against Meta's
+> **Verified against wa-rs b3d2dcad64bc5f0dd9374dc84a387ec978707ab0 (2026-09-25).** Also checked against Meta's
 > `solution-providers/share-and-revoke-credit-lines`,
 > `solution-providers/manage-system-users` and
 > `webhooks/reference/account_update` pages as fetched on 2026-09-24.
@@ -92,6 +92,10 @@ business, numbers) and runs before `store_token`. A refusal is
 Check tenants here, not after `onboard`: by then the line is attached.
 Which tenant may have a WABA is your policy; wa-rs decides none
 (`OPEN_QUESTIONS.md` #6).
+
+~~Plain `onboard` shared the line, and `resume` shared for any stored
+token~~ (until 1a7b5bf): on an older pin, gate with `onboard_with_approval`
+yourself.
 
 The approval is recorded in the vault's credit ledger
 (`StoredCredit::approved_at`), and `resume` shares only for an approved

@@ -5,7 +5,7 @@ description: "Keeping merchants' WhatsApp business tokens with wa-rs's TokenVaul
 
 # wa-rs-token-vault
 
-> **Verified against wa-rs e4e98e5259e3552aa293cbb7c0d3ec93d20e7991 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against wa-rs b3d2dcad64bc5f0dd9374dc84a387ec978707ab0 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/vault.rs](examples/vault.rs), compiled and
 tested by wa-rs's own gate (routing, rotation, wrong key, offboarding).
@@ -70,6 +70,8 @@ it with the revocation marker of the business it names), plus every
 business you revoked by business id alone. A record left under a dropped
 key fails with `CryptoError::InvalidKey`; a corrupt credit record does not
 stop `rotate` from re-encrypting the token (the error comes back after).
+~~Iterate your current merchants~~ (until 069fed9): that left offboarded
+WABAs' credit ledgers and markers no WABA names under the old key.
 
 ## Offboard
 
