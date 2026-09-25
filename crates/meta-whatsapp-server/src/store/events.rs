@@ -153,7 +153,10 @@ pub trait EventStore: Send + Sync + 'static {
 }
 
 /// The outbox in memory: one process, emptied on restart
-/// (`WA_SERVER_ENV=development` and tests).
+/// (`WA_SERVER_ENV=development` and tests). Unlike [`PgEventStore`], its
+/// insert does not re-read the binding an event was routed by: a tenant
+/// deleted and created again while one of its events is being recorded
+/// may receive it (Postgres closes that race; see its module docs).
 #[derive(Debug, Default)]
 pub struct MemoryEventStore {
     state: Mutex<MemoryState>,
