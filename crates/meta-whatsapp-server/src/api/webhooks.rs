@@ -94,8 +94,7 @@ async fn deliver(state: &AppState, request: Request) -> (StatusCode, &'static st
             return (rejection.status(), "failed");
         }
     };
-    let handler = state.events().handler();
-    match handler.deliver(Some(&signature), &body).await {
+    match state.events().deliver(Some(&signature), body).await {
         Ok(report) => {
             state.metrics().webhook_duplicates(
                 "dedup",

@@ -652,3 +652,135 @@ async fn deliveries_are_taken_on_the_public_listener_only() {
 async fn a_recreated_tenant_polls_nothing_from_before() {
     common::scenarios::a_recreated_tenant_polls_nothing_from_before(&Harness::new()).await;
 }
+
+/// Meta's error example for `pn` of `waba`: an `error_reported` event, one
+/// the library gives no dedup key.
+fn error(waba: &str, pn: &str) -> Value {
+    with_ids(fixture("messages/errors.json"), waba, pn)
+}
+
+/// Fix #2 of the M1c review (M1.2: the same body twice is one row), for
+/// the events the library gives no dedup key: a batch holding an error,
+/// failing after it, is redelivered; the error is recorded once, and so is
+/// every other event. Decisive: keying keyless events by the body and
+/// their position in it.
+#[tokio::test]
+async fn a_redelivered_batch_records_its_keyless_events_once() {
+    let h = two_tenants().await;
+    let mut body = text(WABA_A, PN_A, "wamid.keyless-1");
+    let entries = body["entry"].as_array_mut().unwrap();
+    entries.push(error(WABA_A, PN_A)["entry"][0].clone());
+    entries.push(text(WABA_A, PN_A, "wamid.keyless-2")["entry"][0].clone());
+    let body = bytes(&body);
+    // The third event's outbox write fails: 500, Meta redelivers.
+    h.outbox.script(&[false, false, true]);
+    assert_eq!(
+        h.webhook(&body).await.status,
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    for _ in 0..2 {
+        assert_eq!(h.webhook(&body).await.status, StatusCode::OK);
+    }
+    let kinds: Vec<String> = polled(&h, A)
+        .await
+        .iter()
+        .map(|e| e["type"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        kinds,
+        ["message_received", "error_reported", "message_received"]
+    );
+    // The error reached the outbox on every delivery; it wrote once.
+    let errors: Vec<Option<i64>> = h
+        .outbox
+        .inserts()
+        .into_iter()
+        .filter(|(row, _)| row.event_type == "error_reported")
+        .map(|(_, sequence)| sequence)
+        .collect();
+    assert_eq!(errors.len(), 3, "{errors:?}");
+    assert!(errors[0].is_some() && errors[1..].iter().all(Option::is_none));
+    assert_eq!(
+        metric(
+            &h,
+            "wa_server_webhook_duplicate_events_total{stage=\"outbox\"}"
+        ),
+        2
+    );
+}
+
+/// Keyless events are one row per body and position: two identical errors
+/// in one body are two rows, the same error in another body a third, and
+/// an unparsed body sent twice one row.
+#[tokio::test]
+async fn keyless_events_are_told_apart_by_body_and_position() {
+    let h = two_tenants().await;
+    let mut twice = error(WABA_A, PN_A);
+    let entry = twice["entry"][0].clone();
+    twice["entry"].as_array_mut().unwrap().push(entry);
+    let mut another = text(WABA_A, PN_A, "wamid.beside-an-error");
+    another["entry"]
+        .as_array_mut()
+        .unwrap()
+        .push(error(WABA_A, PN_A)["entry"][0].clone());
+    for body in [bytes(&twice), bytes(&another)] {
+        for _ in 0..2 {
+            assert_eq!(h.webhook(&body).await.status, StatusCode::OK);
+        }
+    }
+    let errors = polled(&h, A)
+        .await
+        .into_iter()
+        .filter(|e| e["type"] == "error_reported")
+        .count();
+    assert_eq!(errors, 3);
+    let unparsed = br#"{"not": "a webhook envelope"}"#;
+    for _ in 0..2 {
+        assert_eq!(h.webhook(unparsed).await.status, StatusCode::OK);
+    }
+    let unparsed_rows = h
+        .outbox
+        .rows()
+        .into_iter()
+        .filter(|r| r.event_type == "unparsed")
+        .count();
+    assert_eq!(unparsed_rows, 1);
+}
+
+/// The outbox key: the same key for the same event, another for another
+/// number (I3 of the security review), another position, another body or
+/// other data; library and delivery keys never meet.
+#[test]
+fn outbox_keys_are_scoped_by_number_body_and_position() {
+    use meta_whatsapp_server::events::{EventKey, outbox_key};
+    let library = EventKey::Library("wamid.X".to_owned());
+    let delivery = |position| EventKey::Delivery {
+        body_sha256: [7; 32],
+        position,
+    };
+    let key = |k: &EventKey, pn: Option<&str>, data: &str| outbox_key(k, pn, data);
+    assert_eq!(
+        key(&library, Some("1"), "{}"),
+        key(&library, Some("1"), "{\"other\": 1}"),
+        "a library key does not depend on the data"
+    );
+    let all = [
+        key(&library, Some("1"), "{}"),
+        key(&library, Some("2"), "{}"),
+        key(&library, None, "{}"),
+        key(&delivery(0), Some("1"), "{}"),
+        key(&delivery(1), Some("1"), "{}"),
+        key(&delivery(0), Some("1"), "{\"other\": 1}"),
+        key(
+            &EventKey::Delivery {
+                body_sha256: [8; 32],
+                position: 0,
+            },
+            Some("1"),
+            "{}",
+        ),
+    ];
+    let unique: std::collections::BTreeSet<&String> = all.iter().collect();
+    assert_eq!(unique.len(), all.len(), "{all:?}");
+    assert!(all.iter().all(|k| k.len() == 64));
+}

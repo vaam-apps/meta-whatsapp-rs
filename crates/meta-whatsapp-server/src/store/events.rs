@@ -25,9 +25,9 @@ use crate::model::TenantId;
 pub struct NewEvent {
     /// Its public id (`evt_…`).
     pub id: String,
-    /// SHA-256 (hex) of the library's `WebhookEvent::dedup_key`, when the
-    /// event has one: a second insert with the same key is a no-op. Hashed
-    /// because some dedup keys hold a group participant's phone number.
+    /// Its idempotency key (`crate::events::outbox_key`): a second insert
+    /// with the same key is a no-op. The sink gives every event one; a row
+    /// without one is never deduplicated.
     pub dedup_key: Option<String>,
     /// The tenant it is routed to; `None` for an operator-only row.
     pub tenant: Option<TenantId>,

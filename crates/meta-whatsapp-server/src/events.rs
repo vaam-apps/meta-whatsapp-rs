@@ -27,15 +27,19 @@
 //! is released, and Meta redelivers the batch: the events before it are
 //! duplicates, the failed one runs again. Both writes are idempotent: the
 //! inbox stores a message id once and moves statuses forward only, and the
-//! outbox inserts on the event's dedup key at most once. So a failure
-//! between the inbox write and the outbox write (a database error: `500`;
-//! a crash or the request deadline: the claim's lease ends after 60 s)
-//! leaves the message in the inbox and no row, and the redelivery records
-//! the row without a second message. The library's keyless events
-//! (`error_reported`, `unparsed`) are not deduplicated: a redelivered batch
-//! records them again.
+//! outbox inserts on the event's key at most once. So a failure between
+//! the inbox write and the outbox write (a database error: `500`; a crash
+//! or the request deadline: the claim's lease ends after 60 s) leaves the
+//! message in the inbox and no row, and the redelivery records the row
+//! without a second message. The events the library gives no dedup key
+//! (`error_reported`, `unparsed`) are keyed by the signed body they came in
+//! and their position in it ([`EventKey::Delivery`]): Meta redelivers a
+//! body byte for byte, so a redelivered batch records them once too (and an
+//! identical body sent again later is taken for a redelivery: nothing in it
+//! tells the two apart).
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -44,8 +48,10 @@ use meta_whatsapp_rs::core::secret::{AppSecret, VerifyToken};
 use meta_whatsapp_rs::core::sink::EventSink;
 use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
 use meta_whatsapp_rs::inbox::InboxSink;
+use meta_whatsapp_rs::webhooks::axum::body::Bytes;
 use meta_whatsapp_rs::webhooks::{
-    DEFAULT_MAX_BODY_BYTES, DedupGuard, SignatureVerifier, WebhookEvent, WebhookHandler,
+    DEFAULT_MAX_BODY_BYTES, DedupGuard, DeliveryReport, SignatureVerifier, WebhookEvent,
+    WebhookHandler,
 };
 use sha2::{Digest, Sha256};
 
@@ -161,9 +167,12 @@ impl Inbound {
     }
 }
 
-/// The webhook handler and the outbox, as the routes use them.
+/// The webhook pipeline and the outbox, as the routes use them.
 pub(crate) struct Events {
-    handler: WebhookHandler,
+    verifier: SignatureVerifier,
+    verify_token: VerifyToken,
+    dedup: DedupGuard,
+    sink: ServiceSink,
     outbox: Arc<dyn EventStore>,
 }
 
@@ -181,24 +190,106 @@ impl Events {
             outbox: inbound.outbox.clone(),
             metrics,
         };
-        let handler = WebhookHandler::builder(inbound.verifier, verify_token, Arc::new(sink))
-            .dedup(DedupGuard::new(inbound.kv))
-            .max_body_bytes(MAX_WEBHOOK_BODY_BYTES)
-            .build();
         Self {
-            handler,
+            verifier: inbound.verifier,
+            verify_token,
+            dedup: DedupGuard::new(inbound.kv),
+            sink,
             outbox: inbound.outbox,
         }
     }
 
-    /// The library's handler: signature, parsing, dedup, the sink.
-    pub(crate) fn handler(&self) -> &WebhookHandler {
-        &self.handler
+    /// One of Meta's deliveries, through the library's `WebhookHandler`
+    /// (size, signature, parsing, the dedup lease), into the service's
+    /// sink. The handler is the delivery's own: its sink knows the signed
+    /// body, which keys the events that have no dedup key of their own
+    /// ([`DeliverySink`]).
+    ///
+    /// # Errors
+    ///
+    /// The handler's: see `WebhookHandler::deliver`.
+    pub(crate) async fn deliver(
+        &self,
+        signature: Option<&str>,
+        body: Bytes,
+    ) -> meta_whatsapp_rs::Result<DeliveryReport> {
+        let sink = DeliverySink {
+            sink: self.sink.clone(),
+            body: body.clone(),
+            body_sha256: OnceLock::new(),
+            keyless: AtomicUsize::new(0),
+        };
+        let handler = WebhookHandler::builder(
+            self.verifier.clone(),
+            self.verify_token.clone(),
+            Arc::new(sink),
+        )
+        .dedup(self.dedup.clone())
+        .max_body_bytes(MAX_WEBHOOK_BODY_BYTES)
+        .build();
+        handler.deliver(signature, &body).await
     }
 
     /// The outbox.
     pub(crate) fn outbox(&self) -> &dyn EventStore {
         self.outbox.as_ref()
+    }
+}
+
+/// The key an event is recorded under, before the outbox scopes and
+/// hashes it ([`outbox_key`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EventKey {
+    /// The library's `WebhookEvent::dedup_key`.
+    Library(String),
+    /// An event the library gives no key (`error_reported`, `unparsed`):
+    /// the SHA-256 of the signed body it came in and its position among
+    /// that body's keyless events. Meta redelivers a batch byte for byte,
+    /// so a redelivery reproduces the key, and the event is recorded once.
+    Delivery {
+        /// SHA-256 of the signed body.
+        body_sha256: [u8; 32],
+        /// Its position among the body's keyless events, from 0.
+        position: usize,
+    },
+}
+
+/// One delivery's view of [`ServiceSink`]: the library's handler hands it
+/// the body's events in order, and it keys each one ([`EventKey`]). The
+/// library delivers every keyless event of a body (it has no dedup lease
+/// to skip one by), in order, so their positions are the same on every
+/// delivery of the body.
+struct DeliverySink {
+    sink: ServiceSink,
+    body: Bytes,
+    /// Computed at the first keyless event: after the signature checked
+    /// out, and only for bodies that need it.
+    body_sha256: OnceLock<[u8; 32]>,
+    keyless: AtomicUsize,
+}
+
+impl std::fmt::Debug for DeliverySink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The body carries customers' messages and numbers.
+        f.debug_struct("DeliverySink")
+            .field("body_bytes", &self.body.len())
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl EventSink<WebhookEvent> for DeliverySink {
+    async fn deliver(&self, event: WebhookEvent) -> Result<(), SinkError> {
+        let key = match event.dedup_key() {
+            Some(key) => EventKey::Library(key),
+            None => EventKey::Delivery {
+                body_sha256: *self
+                    .body_sha256
+                    .get_or_init(|| Sha256::digest(&self.body).into()),
+                position: self.keyless.fetch_add(1, Ordering::Relaxed),
+            },
+        };
+        self.sink.record(event, &key).await
     }
 }
 
@@ -258,12 +349,33 @@ pub fn event_data(event: &WebhookEvent) -> Result<String, serde_json::Error> {
     serde_json::to_string(event)
 }
 
-/// The outbox's idempotency key of `event`: SHA-256 (hex) of its dedup
-/// key; `None` for the library's keyless events.
-pub fn outbox_key(event: &WebhookEvent) -> Option<String> {
-    event
-        .dedup_key()
-        .map(|key| hex::encode(Sha256::digest(key.as_bytes())))
+/// The outbox's idempotency key of an event keyed `key`, about the
+/// business number `phone_number_id` (when it names one), whose JSON is
+/// `data`: SHA-256 (hex) over the number and the key, so two numbers never
+/// share one (hashed: some dedup keys hold a group participant's phone
+/// number). A keyless event's key also covers its `data`, so a library
+/// that splits a body into other events never takes one for another.
+pub fn outbox_key(key: &EventKey, phone_number_id: Option<&str>, data: &str) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"meta-whatsapp-server/outbox-key/v1\0");
+    hash.update(phone_number_id.unwrap_or_default().as_bytes());
+    hash.update(b"\0");
+    match key {
+        EventKey::Library(key) => {
+            hash.update(b"library\0");
+            hash.update(key.as_bytes());
+        }
+        EventKey::Delivery {
+            body_sha256,
+            position,
+        } => {
+            hash.update(b"delivery\0");
+            hash.update(body_sha256);
+            hash.update(position.to_be_bytes());
+            hash.update(Sha256::digest(data.as_bytes()));
+        }
+    }
+    hex::encode(hash.finalize())
 }
 
 /// A new event id: `evt_` and 32 random hex digits.
@@ -274,9 +386,10 @@ fn new_event_id() -> Result<String, SinkError> {
     Ok(format!("evt_{}", hex::encode(bytes)))
 }
 
-/// The library's sink for the service: route, then the inbox, then the
+/// What the service does with an event: route, then the inbox, then the
 /// outbox, in that order (docs/design/server.md, section 2.3), so whoever
-/// sees an event can already read its history.
+/// sees an event can already read its history. Each delivery reaches it
+/// through its own [`DeliverySink`].
 #[derive(Clone)]
 pub struct ServiceSink {
     store: Arc<dyn Store>,
@@ -305,9 +418,10 @@ fn storage(error: StorageError) -> SinkError {
     SinkError::Delivery(anyhow::Error::new(error))
 }
 
-#[async_trait]
-impl EventSink<WebhookEvent> for ServiceSink {
-    async fn deliver(&self, event: WebhookEvent) -> Result<(), SinkError> {
+impl ServiceSink {
+    /// Record `event`, keyed `key`: route it, then the inbox, then the
+    /// outbox.
+    async fn record(&self, event: WebhookEvent, key: &EventKey) -> Result<(), SinkError> {
         let kind = event.kind();
         let route = route(self.store.as_ref(), &event)
             .await
@@ -317,11 +431,12 @@ impl EventSink<WebhookEvent> for ServiceSink {
             let error = anyhow::anyhow!("an event did not serialize ({:?})", e.classify());
             self.failed("serialization", kind, SinkError::Delivery(error))
         })?;
+        let phone_number_id = event.phone_number_id().map(|pn| pn.as_str().to_owned());
         let row = NewEvent {
             id: new_event_id()?,
-            dedup_key: outbox_key(&event),
+            dedup_key: Some(outbox_key(key, phone_number_id.as_deref(), &data)),
             tenant: route.tenant.clone(),
-            phone_number_id: event.phone_number_id().map(|pn| pn.as_str().to_owned()),
+            phone_number_id,
             waba_id: event.waba_id().map(|waba| waba.as_str().to_owned()),
             event_type: kind.to_owned(),
             data,
