@@ -1,6 +1,6 @@
 # Upgrading a Postgres inbox to lossless content
 
-> **Verified against wa-rs 3e9dd15a9a219efc7ff87c26ce616243833014bd (2026-09-25).** Source: the `wa_adapters::store::postgres` module docs ("Upgrading to lossless content", with the pre-flight query) and `crates/wa-adapters/migrations/0003_lossless_content.sql`.
+> **Verified against wa-rs e4e327d9203d2843c5b493f547c2480b2db60691 (2026-09-25).** Source: the `wa_adapters::store::postgres` module docs ("Upgrading to lossless content", with the pre-flight query) and `crates/wa-adapters/migrations/0003_lossless_content.sql`.
 
 Migration 3 of `postgres::migrate` converts `wa_messages.kind`, `text` and
 `wa_conversations.last_text` to `BYTEA`, and `payload` and `error` to
