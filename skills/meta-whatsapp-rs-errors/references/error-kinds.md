@@ -1,6 +1,6 @@
 # `ErrorKind` reference
 
-> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** Source: `crates/meta-whatsapp-core/src/error/graph.rs`
+> **Verified against meta-whatsapp-rs 5597ced54ccd5e940a4b1bea920ae29037b6665a (2026-09-25).** Source: `crates/meta-whatsapp-core/src/error/graph.rs`
 > (`ErrorKind::from_code`, `is_retryable`, `is_rejected_before_processing`) and
 > `crates/meta-whatsapp-core/src/error/mod.rs` (`Error::kind`: the local-refusal rule below).
 > `ErrorKind` is `#[non_exhaustive]`: always keep a `_ =>` arm.
@@ -14,6 +14,10 @@ field `customer_service_window`; nothing was sent) →
 kind, everything else → `Unknown`.
 ~~`Validation` → `InvalidParameter`, without exception~~: true until fe49aa5
 (2026-09-24).
+
+Each kind's stable name, `ErrorKind::as_str`, is its variant name in
+`snake_case` (`SpamRateLimited` → `spam_rate_limited`); `ErrorKind::ALL`
+lists the kinds below in this order, `Unknown` last.
 
 "Auto-retry" = `ErrorKind::is_retryable()`. "Replay a send" =
 `is_rejected_before_processing()`: the only kinds for which the client replays

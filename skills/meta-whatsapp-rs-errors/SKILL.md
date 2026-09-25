@@ -5,7 +5,7 @@ description: "Handling meta-whatsapp-rs errors correctly - the Error tree (Api, 
 
 # meta-whatsapp-rs-errors
 
-> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 5597ced54ccd5e940a4b1bea920ae29037b6665a (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/handle.rs](examples/handle.rs), compiled and
 tested by meta-whatsapp-rs's own gate. Every code, its `ErrorKind` and what to do:
@@ -34,7 +34,12 @@ Error::Other(anyhow)        your code, Typst's RenderError
 
 `err.graph()` returns the `GraphApiError`, also through `Step`; its `code`
 tells apart codes that share a kind. `ErrorKind` is `#[non_exhaustive]`:
-keep a `_` arm. `err.credit()` returns the `CreditError` of a Solution
+keep a `_` arm. `ErrorKind::as_str` is the kind's stable `snake_case`
+name (`template_not_found`), for your own error codes, logs and metrics
+labels: never parse `Debug` output. `ErrorKind::ALL` lists every kind:
+iterate it in a test of your own mapping, so a kind a new release adds
+fails the test instead of landing in the `_` arm unseen.
+`err.credit()` returns the `CreditError` of a Solution
 Partner credit step the same way: each variant decides `is_retryable()`
 and `may_have_been_sent()` itself (`Busy` is retryable; `Reconcile` and a
 revocation that sent `DELETE`s may have been sent), and

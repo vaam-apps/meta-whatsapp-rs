@@ -123,6 +123,11 @@ impl GraphApiError {
 ///
 /// `#[non_exhaustive]`: Meta adds codes; unknown ones map to
 /// [`ErrorKind::Unknown`] rather than failing to parse.
+///
+/// Each kind has a stable name, [`ErrorKind::as_str`], and
+/// [`ErrorKind::ALL`] lists every kind, for code that must decide something
+/// for each one (an HTTP service mapping kinds to statuses, a metrics
+/// label set).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ErrorKind {
@@ -252,10 +257,123 @@ pub enum ErrorKind {
     ServiceUnavailable,
 
     /// Anything not listed above.
+    ///
+    /// Stays the last variant: [`ErrorKind::ALL`] is checked against its
+    /// position, so a kind added before it and missing from the list fails
+    /// the build.
     Unknown,
 }
 
+// `ALL` lists every kind exactly once, in declaration order: entry `i` has
+// discriminant `i`, and there are as many entries as `Unknown`, the last
+// variant, has predecessors plus one. A kind added before `Unknown` but not
+// to `ALL` fails this at compile time; the unit test checks each position.
+const _: () = assert!(ErrorKind::ALL.len() == ErrorKind::Unknown as usize + 1);
+
 impl ErrorKind {
+    /// Every kind exactly once, [`ErrorKind::Unknown`] last. Iterate it;
+    /// do not rely on a kind's position in it.
+    ///
+    /// `ErrorKind` is `#[non_exhaustive]`, so this list grows when Meta
+    /// documents a code worth its own kind: iterate it, rather than naming
+    /// kinds, wherever each kind needs a decision (a test that every kind
+    /// maps to an HTTP status, say), and a new kind fails that test instead
+    /// of falling silently into a catch-all arm.
+    pub const ALL: &'static [ErrorKind] = &[
+        Self::Authentication,
+        Self::Permission,
+        Self::RateLimited,
+        Self::SpamRateLimited,
+        Self::PairRateLimited,
+        Self::ClassificationLimitReached,
+        Self::AccountRestricted,
+        Self::CountryRestricted,
+        Self::InvalidParameter,
+        Self::UnsupportedMessageType,
+        Self::CustomerServiceWindowClosed,
+        Self::EcosystemEngagementLimit,
+        Self::MarketingOptedOut,
+        Self::MarketingNotAllowed,
+        Self::Undeliverable,
+        Self::BlockedByBusiness,
+        Self::ExperimentHoldout,
+        Self::RecipientNotSupported,
+        Self::MediaDownloadFailed,
+        Self::MediaUploadFailed,
+        Self::TemplateParameterMismatch,
+        Self::TemplateNotFound,
+        Self::TemplateTextTooLong,
+        Self::TemplatePolicyViolation,
+        Self::TemplatePaused,
+        Self::TemplateDisabled,
+        Self::TemplateSyncing,
+        Self::TemplateUnavailable,
+        Self::TemplateLimitReached,
+        Self::TemplateRejected,
+        Self::FlowUnavailable,
+        Self::Registration,
+        Self::TwoStepVerification,
+        Self::SyncNotAllowed,
+        Self::DuplicateOnboarding,
+        Self::NotFound,
+        Self::FeatureNotAvailable,
+        Self::Payment,
+        Self::ServiceUnavailable,
+        Self::Unknown,
+    ];
+
+    /// The kind's stable name: the variant's name in `snake_case`
+    /// (`TemplateParameterMismatch` → `"template_parameter_mismatch"`).
+    ///
+    /// Stable: an error code callers may store, compare or show (an HTTP
+    /// API's `error.code`, a metrics label). A name, once given, never
+    /// changes, even if its variant is renamed; a new kind adds a new
+    /// name. The unit test pins every one.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Authentication => "authentication",
+            Self::Permission => "permission",
+            Self::RateLimited => "rate_limited",
+            Self::SpamRateLimited => "spam_rate_limited",
+            Self::PairRateLimited => "pair_rate_limited",
+            Self::ClassificationLimitReached => "classification_limit_reached",
+            Self::AccountRestricted => "account_restricted",
+            Self::CountryRestricted => "country_restricted",
+            Self::InvalidParameter => "invalid_parameter",
+            Self::UnsupportedMessageType => "unsupported_message_type",
+            Self::CustomerServiceWindowClosed => "customer_service_window_closed",
+            Self::EcosystemEngagementLimit => "ecosystem_engagement_limit",
+            Self::MarketingOptedOut => "marketing_opted_out",
+            Self::MarketingNotAllowed => "marketing_not_allowed",
+            Self::Undeliverable => "undeliverable",
+            Self::BlockedByBusiness => "blocked_by_business",
+            Self::ExperimentHoldout => "experiment_holdout",
+            Self::RecipientNotSupported => "recipient_not_supported",
+            Self::MediaDownloadFailed => "media_download_failed",
+            Self::MediaUploadFailed => "media_upload_failed",
+            Self::TemplateParameterMismatch => "template_parameter_mismatch",
+            Self::TemplateNotFound => "template_not_found",
+            Self::TemplateTextTooLong => "template_text_too_long",
+            Self::TemplatePolicyViolation => "template_policy_violation",
+            Self::TemplatePaused => "template_paused",
+            Self::TemplateDisabled => "template_disabled",
+            Self::TemplateSyncing => "template_syncing",
+            Self::TemplateUnavailable => "template_unavailable",
+            Self::TemplateLimitReached => "template_limit_reached",
+            Self::TemplateRejected => "template_rejected",
+            Self::FlowUnavailable => "flow_unavailable",
+            Self::Registration => "registration",
+            Self::TwoStepVerification => "two_step_verification",
+            Self::SyncNotAllowed => "sync_not_allowed",
+            Self::DuplicateOnboarding => "duplicate_onboarding",
+            Self::NotFound => "not_found",
+            Self::FeatureNotAvailable => "feature_not_available",
+            Self::Payment => "payment",
+            Self::ServiceUnavailable => "service_unavailable",
+            Self::Unknown => "unknown",
+        }
+    }
+
     /// Classify a Graph error code.
     pub fn from_code(code: i64) -> Self {
         match code {
@@ -429,5 +547,103 @@ mod tests {
         assert!(K::PairRateLimited.is_rejected_before_processing());
         assert!(!K::Registration.is_retryable(), "133016 locks for 72h");
         assert!(!K::ServiceUnavailable.is_rejected_before_processing());
+    }
+
+    /// Every kind's name, as callers may have stored it. A row never
+    /// changes; a new kind adds one (the test fails until it does).
+    const PINNED_NAMES: &[(ErrorKind, &str)] = &[
+        (ErrorKind::Authentication, "authentication"),
+        (ErrorKind::Permission, "permission"),
+        (ErrorKind::RateLimited, "rate_limited"),
+        (ErrorKind::SpamRateLimited, "spam_rate_limited"),
+        (ErrorKind::PairRateLimited, "pair_rate_limited"),
+        (
+            ErrorKind::ClassificationLimitReached,
+            "classification_limit_reached",
+        ),
+        (ErrorKind::AccountRestricted, "account_restricted"),
+        (ErrorKind::CountryRestricted, "country_restricted"),
+        (ErrorKind::InvalidParameter, "invalid_parameter"),
+        (
+            ErrorKind::UnsupportedMessageType,
+            "unsupported_message_type",
+        ),
+        (
+            ErrorKind::CustomerServiceWindowClosed,
+            "customer_service_window_closed",
+        ),
+        (
+            ErrorKind::EcosystemEngagementLimit,
+            "ecosystem_engagement_limit",
+        ),
+        (ErrorKind::MarketingOptedOut, "marketing_opted_out"),
+        (ErrorKind::MarketingNotAllowed, "marketing_not_allowed"),
+        (ErrorKind::Undeliverable, "undeliverable"),
+        (ErrorKind::BlockedByBusiness, "blocked_by_business"),
+        (ErrorKind::ExperimentHoldout, "experiment_holdout"),
+        (ErrorKind::RecipientNotSupported, "recipient_not_supported"),
+        (ErrorKind::MediaDownloadFailed, "media_download_failed"),
+        (ErrorKind::MediaUploadFailed, "media_upload_failed"),
+        (
+            ErrorKind::TemplateParameterMismatch,
+            "template_parameter_mismatch",
+        ),
+        (ErrorKind::TemplateNotFound, "template_not_found"),
+        (ErrorKind::TemplateTextTooLong, "template_text_too_long"),
+        (
+            ErrorKind::TemplatePolicyViolation,
+            "template_policy_violation",
+        ),
+        (ErrorKind::TemplatePaused, "template_paused"),
+        (ErrorKind::TemplateDisabled, "template_disabled"),
+        (ErrorKind::TemplateSyncing, "template_syncing"),
+        (ErrorKind::TemplateUnavailable, "template_unavailable"),
+        (ErrorKind::TemplateLimitReached, "template_limit_reached"),
+        (ErrorKind::TemplateRejected, "template_rejected"),
+        (ErrorKind::FlowUnavailable, "flow_unavailable"),
+        (ErrorKind::Registration, "registration"),
+        (ErrorKind::TwoStepVerification, "two_step_verification"),
+        (ErrorKind::SyncNotAllowed, "sync_not_allowed"),
+        (ErrorKind::DuplicateOnboarding, "duplicate_onboarding"),
+        (ErrorKind::NotFound, "not_found"),
+        (ErrorKind::FeatureNotAvailable, "feature_not_available"),
+        (ErrorKind::Payment, "payment"),
+        (ErrorKind::ServiceUnavailable, "service_unavailable"),
+        (ErrorKind::Unknown, "unknown"),
+    ];
+
+    /// `ALL` holds every kind once, in declaration order, and every kind in
+    /// it has its pinned, unique, `snake_case` name.
+    #[test]
+    fn every_kind_is_listed_once_with_its_pinned_name() {
+        for (i, kind) in ErrorKind::ALL.iter().enumerate() {
+            assert_eq!(*kind as usize, i, "ALL[{i}] is {kind:?}: out of order");
+        }
+        assert_eq!(ErrorKind::ALL.last(), Some(&ErrorKind::Unknown));
+        let listed: Vec<(ErrorKind, &str)> =
+            ErrorKind::ALL.iter().map(|k| (*k, k.as_str())).collect();
+        assert_eq!(listed, PINNED_NAMES);
+
+        let mut names = std::collections::HashSet::new();
+        for kind in ErrorKind::ALL {
+            let name = kind.as_str();
+            assert!(names.insert(name), "{name} names two kinds");
+            assert!(
+                !name.is_empty()
+                    && !name.starts_with('_')
+                    && !name.ends_with('_')
+                    && !name.contains("__")
+                    && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'),
+                "{name} is not snake_case"
+            );
+        }
+        // Every kind `from_code` returns is listed (a spot check that the
+        // classification and the list agree).
+        for code in [0, 3, 4, 100, 131047, 132001, 133005, 2494164, 1, 7] {
+            assert!(
+                ErrorKind::ALL.contains(&ErrorKind::from_code(code)),
+                "{code}"
+            );
+        }
     }
 }

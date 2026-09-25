@@ -119,6 +119,16 @@ volumes (Claude config, shell history, cargo caches) start empty
 
 ### Added
 
+- **`ErrorKind::as_str()` and `ErrorKind::ALL`**: every error kind has a
+  stable `snake_case` name (`TemplateParameterMismatch` →
+  `"template_parameter_mismatch"`), for an HTTP API's error code, a log
+  field or a metrics label, and `ErrorKind::ALL` lists every kind once
+  (`Unknown` last; do not rely on positions), so code that must decide something per kind can
+  iterate it in a test (`ErrorKind` is `#[non_exhaustive]`: a new kind then
+  fails that test instead of falling into a catch-all arm). A name never
+  changes once given, even if its variant is renamed; a unit test pins
+  each one, and the build fails if a kind declared before `Unknown` (which
+  stays the last variant) is missing from the list.
 - **Solution Partner onboarding** (per deployment): configure
   `EmbeddedSignup::solution_partner(SolutionPartner::new(system_token,
   system_user_id, credit_line_id))` and every onboarding shares your

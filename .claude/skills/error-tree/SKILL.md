@@ -25,6 +25,15 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
 - **Classify by `code`** (Meta's guidance), in
   `crates/meta-whatsapp-core/src/error/graph.rs` `ErrorKind::from_code`. A new code →
   extend the match *and* the spot-check test; cite the doc row.
+- **A new `ErrorKind` variant** goes before `Unknown` (which stays last),
+  into `ErrorKind::ALL` (the build fails otherwise: a `const` assertion
+  checks the list's length against `Unknown`'s position), and gets a new
+  `snake_case` name in `ErrorKind::as_str` plus a row in `PINNED_NAMES`.
+  **Never change an existing name**, even when renaming a variant: it is
+  a stable error code that callers store and compare (an HTTP API's
+  error code, metrics labels). Code that maps kinds iterates
+  `ErrorKind::ALL` in its tests, so the new kind fails them until it is
+  decided there too.
 - `is_retryable()` = could succeed later. **Safe to replay** is separate:
   `ErrorKind::is_rejected_before_processing()` (throttling only). The client
   never replays a non-idempotent request on a timeout.
