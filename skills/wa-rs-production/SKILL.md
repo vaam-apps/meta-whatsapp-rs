@@ -5,7 +5,7 @@ description: "Running wa-rs in production - the secrets (system user token, app 
 
 # wa-rs-production
 
-> **Verified against wa-rs 62f4418088153df09deb2d4953bf5fc81445fe1d (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against wa-rs 0a53954259d1f592b7b8c6a75c2dcca392ae131f (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/production.rs](examples/production.rs),
 compiled and tested by wa-rs's own gate. Longer walkthrough:
