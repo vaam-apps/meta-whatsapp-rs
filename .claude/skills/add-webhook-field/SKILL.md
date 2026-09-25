@@ -1,6 +1,6 @@
 ---
 name: add-webhook-field
-description: "Recipe for supporting a new WhatsApp webhook field or inbound message type in wa-webhooks — typed value, normalized WebhookEvent, forward-compatible Unknown fallback, fixture tests from Meta's examples. Use when Meta adds a webhook field, a message type, or a property to an existing payload."
+description: "Recipe for supporting a new WhatsApp webhook field or inbound message type in meta-whatsapp-webhooks — typed value, normalized WebhookEvent, forward-compatible Unknown fallback, fixture tests from Meta's examples. Use when Meta adds a webhook field, a message type, or a property to an existing payload."
 metadata:
   internal: true
 ---
@@ -9,7 +9,7 @@ metadata:
 
 1. Read `.meta-docs/webhooks/reference/<field>.md` (or
    `webhooks/reference/messages/<type>.md`). Save its example payload as a
-   fixture under `crates/wa-webhooks/tests/fixtures/` (our own trimmed copy
+   fixture under `crates/meta-whatsapp-webhooks/tests/fixtures/` (our own trimmed copy
    of the JSON shape; placeholders filled with plausible values).
 2. Add the typed value struct/enum variant. Optional everything that the
    docs mark conditional; identities follow the BSUID rules (`user_id`

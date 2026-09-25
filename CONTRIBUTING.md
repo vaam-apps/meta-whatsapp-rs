@@ -26,7 +26,7 @@ just ci        # lint, check, test, skills-check, doc, features, deny, test-live
 CI runs exactly this. A change is verified when `just ci` exits 0 on its
 final head — not when a subset passes, and not when a reconstruction of the
 commands passes. `just test` *skips* the live Postgres/Redis tests; only
-`just test-live` (which sets `WA_RS_REQUIRE_LIVE=1`) proves them.
+`just test-live` (which sets `META_WHATSAPP_RS_REQUIRE_LIVE=1`) proves them.
 
 ## Meta's docs
 
@@ -44,7 +44,7 @@ pages; copy their example payloads into tests.
 - Errors: `.claude/skills/error-tree`. Branch on `ErrorKind`, never on
   message text.
 - Typst templates: `.claude/skills/typst-templates`.
-- Tests use `wa_core::testing::ScriptedTransport` and assert method, path,
+- Tests use `meta_whatsapp_core::testing::ScriptedTransport` and assert method, path,
   query, auth header, exact JSON body and `remaining() == 0`.
 - Secrets never reach `Debug`, logs, errors or logged URLs.
 - No `unwrap`/`expect`/`panic` in library code.

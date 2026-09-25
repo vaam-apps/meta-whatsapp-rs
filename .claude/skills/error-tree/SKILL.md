@@ -1,6 +1,6 @@
 ---
 name: error-tree
-description: "How meta-whatsapp-rs errors are shaped — the wa_core::Error tree (thiserror nodes, anyhow opaque leaves), ErrorKind classification of Graph error codes, retry safety, in_step for multi-step flows. Use when handling, adding or classifying an error, or deciding whether something may be retried."
+description: "How meta-whatsapp-rs errors are shaped — the meta_whatsapp_core::Error tree (thiserror nodes, anyhow opaque leaves), ErrorKind classification of Graph error codes, retry safety, in_step for multi-step flows. Use when handling, adding or classifying an error, or deciding whether something may be retried."
 metadata:
   internal: true
 ---
@@ -23,7 +23,7 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
 ## Rules
 
 - **Classify by `code`** (Meta's guidance), in
-  `crates/wa-core/src/error/graph.rs` `ErrorKind::from_code`. A new code →
+  `crates/meta-whatsapp-core/src/error/graph.rs` `ErrorKind::from_code`. A new code →
   extend the match *and* the spot-check test; cite the doc row.
 - `is_retryable()` = could succeed later. **Safe to replay** is separate:
   `ErrorKind::is_rejected_before_processing()` (throttling only). The client

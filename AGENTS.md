@@ -47,7 +47,7 @@ phone number alone.
 
 ## Conventions
 
-- **Errors**: `wa_core::Error` tree, `thiserror` for typed nodes, `anyhow`
+- **Errors**: `meta_whatsapp_core::Error` tree, `thiserror` for typed nodes, `anyhow`
   only as the opaque leaf for code we don't own. Branch on `ErrorKind`,
   never on messages. Multi-step flows use `Error::in_step`.
 - **Requests** only through `GraphRequest` (auth, retries, error decoding,
@@ -61,7 +61,7 @@ phone number alone.
   omits the query for this reason.
 - **No unwrap/expect/panic in library code** (clippy denies them via
   `-D warnings`); tests may.
-- **Tests** use `wa_core::testing::ScriptedTransport`; assert method, path,
+- **Tests** use `meta_whatsapp_core::testing::ScriptedTransport`; assert method, path,
   query, auth and exact JSON; assert `remaining() == 0`.
 - **Lints**: `unsafe_code = forbid`, `missing_docs`, clippy pedantic.
 - **Commits**: Conventional Commits (`feat(webhooks): …`). PRs are
