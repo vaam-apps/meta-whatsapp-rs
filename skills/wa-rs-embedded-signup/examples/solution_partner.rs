@@ -792,6 +792,50 @@ mod tests {
         assert_eq!(transport.remaining(), 0);
     }
 
+    /// A grant is for the WABA and the tenant it was bound to: after the
+    /// WABA moved to another tenant, neither the old tenant (no longer
+    /// bound) nor the new one (no grant) reconnects it funded.
+    #[tokio::test]
+    async fn a_reconnect_grant_belongs_to_the_waba_and_its_tenant() {
+        let transport = ScriptedTransport::new();
+        let es = onboarding_mode(signup(&transport), Some(settings(Some("USD")))).unwrap();
+        let vault = vault();
+        let reservations = table();
+        reserve(&reservations, &WABA.into(), "m7").await.unwrap();
+        assert!(
+            grant_reconnect(&reservations, &WABA.into(), "reviewed by op_7f3a")
+                .await
+                .unwrap()
+        );
+        // The WABA is bound to m42 now (your CMS moved it).
+        reservations
+            .delete(&StoreKey::new("tenant.waba", WABA))
+            .await
+            .unwrap();
+        reserve(&reservations, &WABA.into(), "m42").await.unwrap();
+        for tenant in ["m7", "m42"] {
+            script_until_approval(&transport);
+            let err = reconnect(&es, &vault, &reservations, reconnect_request(), tenant)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    Error::Step {
+                        step: steps::APPROVE,
+                        ..
+                    }
+                ),
+                "{tenant}: {err}"
+            );
+        }
+        assert!(
+            vault.get(&WABA.into()).await.unwrap().is_none(),
+            "nothing stored"
+        );
+        assert_eq!(transport.remaining(), 0);
+    }
+
     /// A merchant who unshared the WABA (no `disconnection_info`) gets no
     /// reconnect grant: `reconnect` refuses at the approval, before
     /// anything is stored, subscribed or shared.
