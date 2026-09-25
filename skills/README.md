@@ -142,8 +142,8 @@ there. The rules:
   other stamp is well-formed), every skill is short, and listed
   here and in the `wa-rs` hub.
 - `just skills-check`: every stamp's commit is in the checked-out
-  commit's history, as an ancestor or as a branch commit a squash merge
-  lists (`Squashed-commit: <sha>`).
+  commit's history, as an ancestor or as a branch commit that a squash
+  merge lists in its Squashed-commit trailers.
 
 What no check can prove: that the prose's *semantics* are right (a real
 constant with a wrong value, a real method called on the wrong type
