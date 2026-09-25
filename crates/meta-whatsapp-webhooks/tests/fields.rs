@@ -98,6 +98,7 @@ fn account_update_value(
 /// is a business portfolio (in `PARTNER_ADDED`, the first of
 /// `solution_partner_business_ids`): the WABA comes from `waba_info`.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn account_update_waba_id_is_the_customers_waba_not_a_business() {
     const PARTNER_BUSINESS: &str = "2949482758682047";
     let waba_and_entry = |name: &str| match one(name) {
