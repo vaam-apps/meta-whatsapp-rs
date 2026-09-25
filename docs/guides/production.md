@@ -61,6 +61,10 @@ tokio::spawn(async move {
 let kv: Arc<dyn wa_rs::core::store::KvStore> = Arc::new(kv);
 ```
 
+An upgrade across a migration that rewrites tables (migration 3, lossless
+message content) is the exception: run `migrate` once from a one-off job
+first ([section 7](#7-before-going-live)).
+
 Redis over TLS (`rediss://`): wa-rs enables no TLS feature of redis on
 purpose (two rustls crypto providers in one binary make the first TLS
 connection panic). Enable redis's `tokio-rustls-comp` in your own crate,
@@ -254,23 +258,45 @@ notification queue on top must be idempotent itself: tag each message with
     whitespace, control or format characters (`Error::Config`); fixing
     it changes the store keys, so codes in flight answer `NotFound` once
     and limits restart ([otp-login.md](otp-login.md#3-wire-the-service)).
-  - The lossless-content change (`OPEN_QUESTIONS.md` #18, decided by the
-    owner on 2026-09-25): **stop every instance of the older revision
-    that writes to the inbox tables** (webhook receivers, anything calling
-    `Inbox::send`) and drop your own views, rules and GIN indexes on the
-    content columns (they make the migration fail, changing nothing),
-    then start the new one. Its `migrate` (migration 3) converts the
-    content columns of `wa_messages` and `wa_conversations` to `BYTEA`
-    and `json` under new names, in one transaction that locks both
-    tables for one rewrite of each: plan for it on a large history. Existing rows keep their content; a NUL an
-    older revision stored as U+FFFD stays U+FFFD. An older instance left
-    running fails on every content statement (500s Meta redelivers, a
-    reply sent but not recorded) and its `migrate` refuses the upgraded
-    database, so a rollback is a restore. SQL of your own on those
-    columns needs the rules in
-    [cms-inbox.md](cms-inbox.md#1-storage-postgres-and-migrations); a
-    custom store must now keep content, U+0000 included, exactly (the
-    conformance suites say so).
+  - PR #TBD, lossless message content (the owner's decision of
+    2026-09-25): Postgres migration 3 rewrites the inbox tables, and an
+    older revision cannot run against them afterwards. In this order
+    (details and a pre-flight query: the `wa_adapters::store::postgres`
+    docs, "Upgrading to lossless content"):
+    1. **Back up** `wa_messages` and `wa_conversations` of every table
+       prefix. The only way back is a restore, which loses what was
+       recorded after the upgrade: webhooks the new instances acknowledged
+       are not delivered again, and replies sent meanwhile leave the
+       history.
+    2. **Stop every instance of the older revision** that writes to them
+       (webhook receivers, anything calling `Inbox::send`). That pauses
+       every webhook consumer, OTP delivery statuses and `PARTNER_REMOVED`
+       revocations too; Meta's backoff decides how long the backlog takes
+       afterwards. An older instance left running fails on every content
+       statement (500s Meta redelivers, a reply sent but not recorded).
+    3. **Drop the objects of your own** on `kind`, `text`, `payload`,
+       `error` and `last_text` that the pre-flight query lists. Migration
+       3 refuses to run under anything on `payload` or `error` (an
+       expression such as `payload->>'type'` would fail every later
+       insert of a payload holding a NUL); Postgres refuses views, rules,
+       trigram and full-text indexes on the others; triggers and functions
+       that name those columns are not checked and would fail every
+       insert, so rewrite them. Plain b-tree indexes on text are kept.
+    4. **Run `migrate` once, from a one-off job**, per table prefix, with
+       a `lock_timeout` and no `statement_timeout` on its connection, and
+       free disk for a copy of `wa_messages` and its indexes. It locks
+       both tables for the rewrite: 200,006 messages (a 153 MB table)
+       took 1 to 2 seconds on a local Postgres 18.
+    5. **Update SQL of your own**
+       ([cms-inbox.md](cms-inbox.md#1-storage-postgres-and-migrations)).
+    6. **Start the new revision.**
+
+    Existing rows keep their content; a NUL an older revision stored as
+    U+FFFD stays U+FFFD. A custom `ConversationStore` now receives U+0000
+    from the inbox, which no longer replaces it: one on `text` or `jsonb`
+    fails its webhook batches and logs replies as "message sent but not
+    recorded" until it keeps content exactly (the conformance suites say
+    so).
   - Nothing is back-filled: rows and conversation summaries recorded
     before an upgrade stay as they were written (synced history recorded
     before 6d50701 keeps the unread count and window it moved, for

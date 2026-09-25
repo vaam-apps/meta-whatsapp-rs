@@ -580,7 +580,11 @@ Logs carry sizes, digests and field names only — never payload values.
   `error` are `json` (`payload_json`, `error_json`, the text as written);
   migration 3 converted the older `text`/`jsonb` columns in place, in one
   transaction, and existing rows kept their content (a U+FFFD an older
-  revision stored for a NUL stays U+FFFD). The cost is SQL-side: search
+  revision stored for a NUL stays U+FFFD); it refuses to run under an
+  object of the operator's own that depends on the payload or error
+  column (an expression index there would fail every later insert of a
+  payload holding a NUL), and a content column that is not UTF-8 reads as
+  `StorageError::Corrupt`. The cost is SQL-side: search
   on bytes (`position(convert_to(…) IN text_utf8)`), no index or field
   extraction on a payload holding a NUL. Ordering never involves content.
   **Identifiers refuse U+0000**: ids, contacts and phone number ids stay

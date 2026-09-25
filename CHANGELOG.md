@@ -368,29 +368,61 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   `payload` and `error` from `JSONB` to `JSON` (the text as written, which
   keeps a `\u0000` escape), renamed `kind_utf8`, `text_utf8`,
   `last_text_utf8`, `payload_json` and `error_json`. It runs in one
-  transaction under an exclusive lock on both tables (the inbox waits for
-  one rewrite of each). Ids, contacts and phone number ids stay `TEXT` and
-  still refuse U+0000: Meta never assigns one. **Existing rows keep their
-  content byte for byte**: a NUL that fd4667e stored as U+FFFD stays
-  U+FFFD, since nothing tells the two apart. **Upgrading:** stop every
-  instance of the older revision that writes to these tables (webhook
-  receivers, anything calling `Inbox::send`), then start this revision,
-  whose `migrate` converts them; Meta redelivers the webhooks that failed
-  meanwhile. Drop views, rules and `jsonb` (GIN) indexes of your own on
-  the converted columns first: they make the migration fail, changing
-  nothing. An older instance left running corrupts nothing, but every
-  inbox statement of it that touches content fails on a renamed column:
-  its webhooks answer 500 (Meta redelivers them to the upgraded
-  instances), its inbox reads fail, a reply it sends reaches the customer
-  but is not recorded, and its own `migrate` refuses the upgraded database
-  (`VersionMissing(3)`), so rolling back means restoring a backup. SQL of
-  your own on these tables must decode `*_utf8` as UTF-8 and cannot index
-  or extract payload fields (`->`, `->>`, a cast to `jsonb`) of a document
-  holding a NUL: see `wa_adapters::store::postgres`. Custom stores:
+  transaction under an exclusive lock on both tables. Ids, contacts and
+  phone number ids stay `TEXT` and still refuse U+0000: Meta never assigns
+  one. **Existing rows keep their content byte for byte**: a NUL that
+  fd4667e stored as U+FFFD stays U+FFFD, since nothing tells the two
+  apart. A content column that is not UTF-8 (only a hand edit makes one)
+  reads as `StorageError::Corrupt` naming the column. **Upgrading, in
+  this order** (details and a pre-flight query in the
+  `wa_adapters::store::postgres` docs, "Upgrading to lossless content"):
+  1. **Back up** both tables of every table prefix. The only way back is
+     a restore, and it loses what was recorded after the upgrade: webhooks
+     the upgraded instances acknowledged are not delivered again, and
+     replies sent meanwhile reached the customer but leave the history.
+  2. **Stop every instance of the older revision** that writes to these
+     tables (webhook receivers, anything calling `Inbox::send`). That
+     pauses every webhook consumer they serve, OTP delivery statuses and
+     `PARTNER_REMOVED` revocations included; Meta's backoff decides how
+     long the backlog takes to drain afterwards.
+  3. **Drop the objects of your own on the content columns.** Migration 3
+     refuses to run under anything that depends on `payload` or `error`
+     (an expression such as `payload->>'type'` would survive the
+     conversion and then fail every insert of a payload holding a NUL,
+     and its webhook batch with it), naming it and changing nothing;
+     Postgres itself refuses views, rules, trigram, `text_pattern_ops`,
+     full-text or `lower()` indexes on the others. Triggers and functions
+     that name `kind`, `text`, `payload`, `error` or `last_text` are not
+     checked by Postgres and would then fail every insert: rewrite them.
+     A plain b-tree index on text is rebuilt on the bytes.
+  4. **Run `migrate` once, from a one-off job**, per table prefix, with a
+     `lock_timeout` and no `statement_timeout` on its connection, and free
+     disk for a copy of `wa_messages` and its indexes. Both tables are
+     locked for the rewrite (200,006 messages, a 153 MB table: 1 to 2
+     seconds on a local Postgres 18), and the lock waits behind any open
+     transaction on them while every later query queues behind it.
+  5. **Update SQL of your own**: decode the `*_utf8` columns as UTF-8; on
+     the `json` columns `=`, `DISTINCT`, `GROUP BY` and `UNION` fail on
+     every row, and `->`, `->>`, a cast to `jsonb` or a `jsonb` operator
+     fails on a document holding a NUL, failing the whole statement;
+     change-data-capture consumers see the new names and types.
+  6. **Start the new revision.**
+
+  An older instance left running corrupts nothing, but every inbox
+  statement of it that touches content fails on a renamed column: its
+  webhooks answer 500 (Meta redelivers them to the upgraded instances),
+  its inbox reads fail, a reply it sends reaches the customer but is not
+  recorded, and its own `migrate` refuses the upgraded database
+  (`VersionMissing(3)`). **Custom stores:** a `ConversationStore` of your
+  own now receives U+0000 from `InboxSink` and `Inbox::send`, which no
+  longer replace it; one that cannot store it fails the webhook batch
+  (Meta redelivers it until it gives up, with every other event in it)
+  and logs replies as "message sent but not recorded".
   `conversation_conformance::run` now requires content to round-trip
   exactly, U+0000 included, and `conformance::run` requires `KvStore`
   values to be any bytes and a key holding U+0000 to be refused or kept
-  exactly, never stored as another key.
+  exactly, never stored as another key (the one with U+FFFD in its place,
+  or the one without it).
 
 Breaking for anyone pinned to an earlier revision (nothing is released
 yet): `ConversationStore::update_status(phone_number_id, id, status, at,
