@@ -5,7 +5,7 @@ description: "The merchant-to-customer chat inbox of a multi-tenant CMS built on
 
 # wa-rs-cms-inbox
 
-> **Verified against wa-rs 92f9692ed24b96c43bedcca2e7088cf196753064 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against wa-rs c6081a36ed7be2bef8afb2c4d957bb5e44661cdd (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/inbox.rs](examples/inbox.rs), compiled and
 tested by wa-rs's own gate. The full server (webhook endpoint, SSE,
@@ -110,8 +110,8 @@ inbox.send(&key, message).await // any other recipient is refused
 `ConversationKey { phone_number_id, contact }`: the contact is the group id
 for group messages, else the BSUID, else the `wa_id` (digits). A message
 with none is acknowledged and not recorded. A revoke of the same number and
-direction (not conversation: open question 37) marks the original `Deleted`,
-content kept; one that comes first leaves a history-only tombstone
+direction, whatever its conversation, marks the original `Deleted` and keeps
+its content (both decided); one that comes first leaves a history-only tombstone
 (`StoredMessage::REVOKED`) that keeps the content out. Replies to a `wa_id`
 go to `+<digits>`; a contact with a `.` is a BSUID. The rules are public:
 `wa_rs::inbox::conversation_key`, `wa_rs::inbox::preview`.

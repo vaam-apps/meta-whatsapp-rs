@@ -212,8 +212,10 @@ notification queue on top must be idempotent itself: tag each message with
     atomic write, and `resume_with_approval` for tokens stored before the
     deployment became a Solution Partner;
   - `PartnerRemoved` wired to `revoke_credit_line` (to
-    `revoke_business_credit_line` when it names no WABA), with your
-    decided policy for a coexistence disconnection, ignoring one whose
+    `revoke_business_credit_line` when it names no WABA) at once, a
+    coexistence disconnection included (the owner's decision,
+    2026-09-25; a merchant who reconnects onboards again with
+    `reshare_after_revocation`), ignoring one whose
     `waba_info.solution_partner_business_ids` does not list your business
     (a Multi-Partner Solution you are not in);
   - `PartnerAppUninstalled` wired to `offboard`, **only when its
@@ -227,14 +229,19 @@ notification queue on top must be idempotent itself: tag each message with
     person and Meta Business Suite (both are `ErrorKind::Unknown`); a
     retryable one (Meta has not confirmed a `DELETE`, a pending share not
     found yet, a ledger write) is called again later; a share whose
-    answer was lost (`Reconcile`) is never retried at once.
+    answer was lost (`Reconcile`) is never retried at once;
+  - an admin action for a pending share Meta never lists (a revocation
+    that keeps answering `share_pending`): after checking the WABA's
+    funding in Meta Business Suite, `clear_pending_share` with the
+    admin's name, which is sealed in the ledger;
 - Webhook fields subscribed; alerts wired ([webhooks.md](webhooks.md#8-operational-alerts)).
 - Secrets from the secret manager, none in the repository or the database.
 - [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) read: several defaults there
   (OTP issue limit, PIN policy, the provisional NUL replacement, a
-  dead-letter path for webhook batches, token refresh, a revoked message
-  keeping its content in the inbox: #38) are product decisions still
-  open. The OTP namespace is required since d67b3ac.
+  dead-letter path for webhook batches, token refresh) are product
+  decisions still open. The OTP namespace is required since d67b3ac; a
+  revoked message keeps its content in the inbox (decided on
+  2026-09-25).
 - Upgrading from an older wa-rs revision, per commit crossed:
   - e40b86f: outstanding OTP codes become `NotFound` once (their store
     keys now include the sending number), and issue limits restart

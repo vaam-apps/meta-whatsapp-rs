@@ -5,7 +5,7 @@ description: "Running wa-rs in production - the secrets (system user token, app 
 
 # wa-rs-production
 
-> **Verified against wa-rs 0da9390d42a51de4df427476b333062a6f94eacf (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against wa-rs c6081a36ed7be2bef8afb2c4d957bb5e44661cdd (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/production.rs](examples/production.rs),
 compiled and tested by wa-rs's own gate. Longer walkthrough:
@@ -62,12 +62,14 @@ answers by status (a run of 503s: sinks outlast the dedup lease),
 
 A deployment funding merchants with its credit line
 (`wa-rs-embedded-signup`, `references/solution-partner.md` there):
-onboarding only through `onboard_with_approval`; `PartnerRemoved` wired to
-`revoke_credit_line` (unless its `solution_partner_business_ids` omit your
-business), `PartnerAppUninstalled` of **your** app to `offboard`; the key
-rotation above; an alert on `CreditError::Reconcile` and on a
-`RevocationIncomplete` that is not retryable (`ErrorKind::Unknown`: a
-person checks Meta Business Suite), and a retry of one that is.
+onboarding only through `onboard_with_approval`; every `PartnerRemoved`
+wired to `revoke_credit_line` at once, coexistence disconnections included
+(unless its `solution_partner_business_ids` omit your business),
+`PartnerAppUninstalled` of **your** app to `offboard`; the key rotation
+above; an alert on `CreditError::Reconcile` and on a `RevocationIncomplete`
+that is not retryable (`ErrorKind::Unknown`: a person checks Meta Business
+Suite), and a retry of one that is; an admin action for a lost share Meta
+never lists (`clear_pending_share`).
 
 ## Limits and retries
 

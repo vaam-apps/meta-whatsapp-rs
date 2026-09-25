@@ -15,14 +15,43 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   2026-09-24, "support both, per deployment"; Solution Partner mode is
   below.
 - #17 (coexistence echoes and history not recorded by the inbox):
-  resolved in a3582b8; what that needs a port change for is #35.
+  resolved in a3582b8; what that needs a port change for is #35 (below).
 - #34 (should `OtpConfig::namespace` be required?): decided yes by the
   maintainer, done in d67b3ac.
 - #35 (synced coexistence history went through `append` like live
-  messages): resolved by the `ConversationStore` port change below. Not
-  decided by the maintainer: the coordinating agent decided it on
-  2026-09-24, told the maintainer in that session, and the maintainer may
-  still revert it.
+  messages): resolved by the `ConversationStore` port change below. The
+  coordinating agent decided it on 2026-09-24 and told the maintainer in
+  that session; confirmed by the owner on 2026-09-25.
+- #36 (two types for one quality rating): decided by the owner on
+  2026-09-25, keep both. `wa_client::common::QualityRating` and
+  `wa_webhooks::fields::templates::TemplateQualityScore` document the
+  mapping (by wire value; `NA` is `NotApplicable` on the client's side and
+  `Other("NA")` on the webhook's; the client matches case-insensitively,
+  the webhook exactly), and so does the `wa-rs-webhook-events` skill,
+  whose example converts one into the other.
+- #37 (should a revoke also match its conversation?): decided by the
+  owner on 2026-09-25, no: a revoke matches the business number and the
+  direction, whatever conversation key it arrived with. The port and the
+  conformance suite state it, and a new conformance case pins it.
+- #38 (a revoked message keeps its content): decided by the owner on
+  2026-09-25, it keeps its text and payload, for the merchant's records;
+  documented as the port's behaviour.
+- #39 (when to revoke the credit line after `PARTNER_REMOVED`; server
+  D14): decided by the owner on 2026-09-25, at once on every
+  `PARTNER_REMOVED` of your solution, coexistence removals with
+  `disconnection_info` included. The library stays passive (the
+  integrator's handler calls `revoke_credit_line`); the
+  `wa-rs-embedded-signup` example does so, and a merchant who reconnects
+  is funded again only through `OnboardingRequest::reshare_after_revocation`.
+- #40 (`onboard_with_approval` required in Solution Partner mode):
+  decided by the owner on 2026-09-25, it stays required.
+- #41 (clearing a share whose answer was lost): decided by the owner on
+  2026-09-25, an explicit operator call:
+  `EmbeddedSignup::clear_pending_share` (below).
+- #42 (marking a business revoked when nothing was ever shared): decided
+  by the owner on 2026-09-25, `offboard` keeps marking it; onboarding that
+  business later in Solution Partner mode needs
+  `OnboardingRequest::reshare_after_revocation`.
 
 ### Added
 
@@ -101,6 +130,24 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   Tech
   Provider flow is unchanged, request for request. `SolutionPartner`'s
   system token is private and never in `Debug`.
+- **`EmbeddedSignup::clear_pending_share(&waba_id, cleared_by, &vault)`**
+  (Solution Partner mode): an operator's way out of a share whose answer
+  was lost and that Meta never lists, which kept every revocation of the
+  WABA at `RevocationIncomplete { share_pending }` and `offboard` from
+  deleting the token. Called after checking Meta Business Suite, it posts
+  nothing and holds the WABA's credit lease (a share running meanwhile
+  makes it `CreditError::Busy`, and so does a credit record written
+  during its check). It checks Meta first: the line's records for the
+  owner business and the recorded allocation, each with its
+  `request_status`, and the WABA's `primary_funding_id` (with the stored
+  merchant token). An active record, or one of undocumented status,
+  clears nothing (`PendingShareClearance::NotCleared(SharesFound)`; a
+  record funding the WABA is recorded as its allocation, as `resume`
+  records a share it finds). Otherwise the pending share is cleared and a
+  `ClearedShare` (who, when, the pending share's time, the funding Meta
+  showed) is appended to `StoredCredit::cleared_shares`, sealed with the
+  record; revocation and offboarding then behave as if nothing had been
+  posted. Refused before anything is sent when nothing is pending.
 - **`EmbeddedSignup::onboard_with_approval`** (and
   `resume_with_approval`): your check of the verified WABA, owner business
   and numbers (`VerifiedOnboarding`) runs after `verify_assets` and before
@@ -250,7 +297,7 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   stored event with this revision does it), and look again for merchants
   a `PARTNER_REMOVED` failed to find.
 - **Breaking — `ConversationStore` records coexistence history as history**
-  (`OPEN_QUESTIONS.md` #35), and revokes are their own method; three
+  (#35, closed above), and revokes are their own method; three
   required methods. `append_synced` stores a batch of messages, each like
   `append` (same id rule across both, same order, same latest-message
   preview; one answer per message), but never moves `last_inbound_at` nor
@@ -451,7 +498,8 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
     were applied by message id and business number; the customer's could
     delete the business's message and an echoed one the customer's.
     `ConversationStore::revoke` also matches the direction. It does not
-    match the conversation (asked for too): see `OPEN_QUESTIONS.md` #37.
+    match the conversation (asked for too), which the owner decided to
+    keep on 2026-09-25 (#37, closed above).
   - **A revoke that arrived before its message was dropped**, and the
     message, when it came (a later history chunk, a redelivery), was
     stored with the content its sender had deleted. The revoke now leaves

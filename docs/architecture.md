@@ -49,7 +49,7 @@ leaks its library's types through a port.
 | --- | --- | --- |
 | `transport::HttpTransport` | `send`, `send_streaming` | rustdoc; non-2xx is *not* an error at this layer |
 | `store::KvStore` | `get`, `put`, `put_if_absent`, `compare_and_swap`, `delete` | `wa_adapters::store::conformance` (executable) |
-| `store::ConversationStore` | `append`, `append_synced` (a batch of coexistence history: no window, never unread), `fill_media_placeholder`, `revoke` (number and direction scoped; a tombstone, history only, when the message is not stored yet), `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at` | `wa_adapters::store::conversation_conformance` (executable) |
+| `store::ConversationStore` | `append`, `append_synced` (a batch of coexistence history: no window, never unread), `fill_media_placeholder`, `revoke` (number and direction scoped, never the conversation; the content kept; a tombstone, history only, when the message is not stored yet), `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at` | `wa_adapters::store::conversation_conformance` (executable) |
 | `sink::EventSink<E>` | `deliver` | rustdoc |
 | `clock::Clock` | `now` | — |
 
@@ -399,7 +399,8 @@ cannot be taken back, so the design is fail-closed:
   exchanged. A Tech Provider request naming one (or a re-share) is refused
   the same way. The first currency is sealed before the first share is
   posted; another one is refused later.
-- **Approval required before sharing**: plain `onboard` is refused
+- **Approval required before sharing** (the owner confirmed it on
+  2026-09-25): plain `onboard` is refused
   (`CreditError::ApprovalRequired`, before the code is exchanged); tenant
   checks on the verified ids go in `onboard_with_approval`, which runs
   before `store_token` and records the approval in the credit ledger
@@ -457,9 +458,24 @@ cannot be taken back, so the design is fail-closed:
   opt-in funds the business again anyway), so a revocation between that
   re-share's read and its clear, whose lookup missed a third share, goes
   unseen by that third share.
+- **A pending share Meta never lists** (a post that never reached it)
+  would keep every revocation incomplete for good, so an operator clears
+  it (the owner's decision, 2026-09-25):
+  `clear_pending_share(&waba_id, cleared_by, &vault)`, after checking
+  Meta Business Suite. It posts nothing and holds the WABA's credit lease
+  (renewed before the clear, which is compare-and-swapped on the version
+  it read). It checks Meta first, as a share does: the line's records
+  for the owner business and the recorded allocation, with their
+  `request_status`, and the WABA's `primary_funding_id` (merchant token). An active record, or one
+  of undocumented status, clears nothing (`PendingShareClearance::NotCleared`;
+  a record funding the WABA is recorded as its allocation). Otherwise the
+  flag is cleared and a `ClearedShare` (who, when, the pending share's
+  time, the funding Meta showed) is appended to the record's audit trail.
+  Revocation and `offboard` then behave as if nothing had been posted.
 - **The credit ledger** (`TokenVault::credit`, `revoked_business`):
   `credit/<WABA>` holds the owner, the allocation, the currency, the
-  approval and the pending-share flag, written by compare-and-swap;
+  approval, the pending-share flag and the operator clearances
+  (`cleared_shares`), written by compare-and-swap;
   `revoked/<BUSINESS>` marks a revoked business; both sealed with the
   vault keys (AAD bound to the store key), re-sealed on read like tokens,
   and left by `TokenVault::delete`, so revocation works after the token
@@ -479,11 +495,20 @@ cannot be taken back, so the design is fail-closed:
   recorded allocation, confirming each; every record is attempted, and
   what is left undone is `RevocationIncomplete` with the report.
   `revoke_business_credit_line` does the same from a business id alone.
+  Nothing calls either for the integrator: the owner's decision
+  (2026-09-25) is that its `account_update` handler revokes at once on
+  every `PARTNER_REMOVED` of its solution, coexistence ones with
+  `disconnection_info` included; a merchant who reconnects onboards again
+  with `reshare_after_revocation`.
   `offboard` revokes first and deletes the token second; with nothing to
   address and no share in the ledger it just deletes, a recorded share
   revocation cannot find is `Reconcile` with the token kept, and a
   pending share it revoked nothing for is `RevocationIncomplete` with the
-  token kept.
+  token kept. A recorded business is marked revoked even when nothing
+  was ever shared with it (the owner's decision, 2026-09-25): the marker
+  precedes any lookup, which is what stops a racing share from
+  surviving, and funding that business later takes
+  `reshare_after_revocation`.
 
 The calls themselves are `wa_client::credit_lines` (list, share-and-attach,
 share, attach, receiving credential, primary funding, find records,
@@ -631,9 +656,12 @@ exposes the 24-hour `CustomerServiceWindow`, and sends replies.
 - A storage (or serialization) failure *after* a successful send is
   logged without the message's content, never returned — an error would
   invite a retry that sends twice.
-- Revokes mark the original `Deleted` (its content is kept,
-  `OPEN_QUESTIONS.md` #38) if it was stored for the revoke's number and
-  in its direction; the conversation is not matched (#37). A revoke that
+- Revokes mark the original `Deleted` if it was stored for the revoke's
+  number and in its direction, whatever conversation key the revoke
+  arrived with (a history thread keyed by phone number and a live revoke
+  keyed by BSUID are the same customer's), and keep its text and payload
+  for the merchant's records: both the owner's decisions (2026-09-25), the
+  first pinned by the conformance suite. A revoke that
   arrives before its message stores a tombstone (kind `revoked`, no
   content, `Deleted`) under the message's id, so the message, live or
   synced, is never stored with the content its sender deleted. The
