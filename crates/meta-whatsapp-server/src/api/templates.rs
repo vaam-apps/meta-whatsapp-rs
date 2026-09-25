@@ -19,7 +19,12 @@
 //! id is looked for through the WABA's own edge, by the template's name:
 //! a template of another WABA, or none, is `404 not_found`, the same
 //! answer, without Meta's code or text, and nothing of it is answered or
-//! deleted. It costs one management call more (two for `GET …/{id}`).
+//! deleted. The bare id is only asked for its name, never acted on. The
+//! lookup reads at most 5 pages of 100 templates (a template of the WABA
+//! past them is `404` too), through the list's `name` filter, which
+//! Meta's reference for the list does not document; it costs 2 to 6
+//! management calls (`GET …/{id}`: the name, then the pages; a deletion
+//! by id: the pages, then the deletion), never cached.
 //!
 //! Meta allows 200 management calls an hour per WABA: a list is cached
 //! for 60 seconds **per WABA** (and per query and tenant), on each
