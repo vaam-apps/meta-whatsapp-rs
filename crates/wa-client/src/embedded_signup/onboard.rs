@@ -1411,6 +1411,27 @@ mod tests {
         assert_eq!(h.t.remaining(), 0);
     }
 
+    /// The owner lookup answers with the business's name: a body that does
+    /// not decode is reported without quoting it.
+    #[tokio::test]
+    async fn an_undecodable_owner_is_reported_without_its_name() {
+        let h = harness();
+        h.t.push_json(200, token_response(TOKEN));
+        h.t.push_json(200, debug_response(&[WABA]));
+        h.t.push_json(
+            200,
+            json!({"owner_business_info": {"name": "Wind & Wool", "id": {"not": "a string"}}, "id": WABA}),
+        );
+        let err = h.es.onboard(&full_request(), &h.vault).await.unwrap_err();
+        assert_eq!(step(&err), VERIFY_ASSETS);
+        assert!(
+            matches!(&err, Error::Step { source, .. } if matches!(&**source, Error::Decode { .. })),
+            "{err}"
+        );
+        assert!(!format!("{err} {err:?}").contains("Wind"), "{err:?}");
+        assert_eq!(h.t.remaining(), 0);
+    }
+
     #[tokio::test]
     async fn an_endless_number_list_fails_closed() {
         // Pages that never end (every page names a fresh cursor): the read
