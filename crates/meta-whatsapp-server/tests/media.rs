@@ -835,3 +835,75 @@ async fn a_streamed_download_holds_its_slot_until_its_body_ends() {
     );
     assert_eq!(h.graph.remaining(), 0);
 }
+
+/// What an HTTP client sees of a streamed download, on the wire: `200`
+/// and a chunked body that ends with its terminating chunk when the file
+/// is verified. When it is not, the connection closes without that chunk
+/// (curl: "transfer closed with outstanding read data remaining"; a fetch
+/// body rejects), and the chunk held back never arrives: a file of one
+/// chunk closes the connection before even the head went out (curl:
+/// "Empty reply from server"). Decisive: the abort, and the chunk held
+/// back.
+#[tokio::test]
+async fn over_http_a_tampered_stream_ends_without_its_terminating_chunk() {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let (h, key) = connected().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(meta_whatsapp_server::listen::serve(
+        listener,
+        h.internal.clone(),
+        meta_whatsapp_server::listen::INTERNAL_LIMITS,
+        async {
+            let _ = stopped.await;
+        },
+    ));
+    let get = |key: String| async move {
+        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        let request = format!(
+            "GET /v1/numbers/{PN}/media/{MEDIA_ID}?stream=true HTTP/1.1\r\nHost: wa\r\n\
+             Authorization: Bearer {key}\r\nConnection: close\r\n\r\n"
+        );
+        socket.write_all(request.as_bytes()).await.unwrap();
+        let mut raw = Vec::new();
+        let _ = socket.read_to_end(&mut raw).await;
+        String::from_utf8_lossy(&raw).into_owned()
+    };
+    let file = b"THE-VERIFIED-FILE".to_vec();
+    h.graph
+        .push_json(200, media_info(&file, &sha256_hex(&file), None));
+    h.graph.push_bytes(200, "image/jpeg", file.clone());
+    let verified = get(key.clone()).await;
+    assert!(verified.starts_with("HTTP/1.1 200"), "{verified}");
+    assert!(
+        verified
+            .to_ascii_lowercase()
+            .contains("transfer-encoding: chunked"),
+        "{verified}"
+    );
+    assert!(verified.contains("THE-VERIFIED-FILE"), "{verified}");
+    assert!(
+        verified.ends_with("0\r\n\r\n"),
+        "a complete body: {verified:?}"
+    );
+
+    h.graph
+        .push_json(200, media_info(b"x", &sha256_hex(b"the original"), None));
+    h.graph
+        .push_bytes(200, "image/jpeg", b"TAMPERED-BYTES".to_vec());
+    let tampered = get(key).await;
+    assert!(
+        tampered.is_empty() || tampered.starts_with("HTTP/1.1 200"),
+        "{tampered}"
+    );
+    assert!(
+        !tampered.ends_with("0\r\n\r\n"),
+        "the body must not end cleanly: {tampered:?}"
+    );
+    assert!(!tampered.contains("TAMPERED-BYTES"), "{tampered:?}");
+    let _ = stop.send(());
+    server.await.unwrap().unwrap();
+    assert_eq!(h.graph.remaining(), 0);
+}
