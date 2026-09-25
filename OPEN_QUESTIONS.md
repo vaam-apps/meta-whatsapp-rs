@@ -80,6 +80,27 @@ of its own, after an HTML comment; keep that when you add one.
     leaves the tenant check to the integrator after the line is attached
     (an attached line cannot be taken back from the WABA). It does not
     decide #6: what the approval checks stays the integrator's.
+41. **Clearing a share whose answer was lost.** A credit post whose answer
+    never came back leaves the WABA's ledger record with a pending share.
+    Until Meta's records list that share, every revocation of the WABA
+    returns `RevocationIncomplete` with `share_pending` (retryable), and
+    `offboard` keeps the token. If the post never reached Meta, nothing will
+    ever list it, and the record stays pending: no public call clears it
+    today. Options: an explicit operator call that clears the pending share
+    after checking Meta Business Suite (and records who cleared it and
+    when); clearing it automatically after a settle time with no share
+    listed (Meta documents no settle time); or keep it and document the
+    manual store edit.
+42. **Marking a business revoked when nothing was ever shared.** `offboard`
+    in Solution Partner mode writes the revocation marker before it looks
+    anything up, also for a WABA onboarded in Tech Provider mode that was
+    never funded. That order is what stops a share starting after
+    `offboard` read the ledger from surviving the revocation; the cost is
+    that a later partner-mode onboarding of that business needs
+    `reshare_after_revocation`. Options: keep marking (today); skip the
+    marker when the ledger shows no approval and no share, accepting that
+    narrow race; or mark and let the approval step clear markers that no
+    share ever followed.
 
 ## Authentication (OTP)
 
