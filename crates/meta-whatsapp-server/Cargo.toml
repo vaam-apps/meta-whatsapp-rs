@@ -31,6 +31,8 @@ futures.workspace = true
 getrandom.workspace = true
 # Opaque list cursors.
 hex.workspace = true
+# Event ids: a keyed hash of the event's outbox key (src/events.rs).
+hmac.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # API keys are stored as SHA-256 digests and compared in constant time.

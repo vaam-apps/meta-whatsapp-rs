@@ -139,6 +139,7 @@ pub fn tenant_visible(kind: &str) -> bool {
 /// What the webhook pipeline is built from.
 pub struct Inbound {
     verifier: SignatureVerifier,
+    ids: EventIdKey,
     kv: Arc<dyn KvStore>,
     conversations: Arc<dyn ConversationStore>,
     outbox: Arc<dyn EventStore>,
@@ -167,8 +168,17 @@ impl Inbound {
         conversations: Arc<dyn ConversationStore>,
         outbox: Arc<dyn EventStore>,
     ) -> meta_whatsapp_rs::Result<Self> {
+        let ids = app_secrets
+            .first()
+            .and_then(EventIdKey::from_app_secret)
+            .ok_or_else(|| {
+                meta_whatsapp_rs::core::error::ConfigError::new(
+                    "the webhook pipeline needs an app secret",
+                )
+            })?;
         Ok(Self {
             verifier: SignatureVerifier::new(app_secrets)?,
+            ids,
             kv,
             conversations,
             outbox,
@@ -193,16 +203,19 @@ impl Events {
         verify_token: VerifyToken,
         metrics: Metrics,
     ) -> Self {
+        let dedup = DedupGuard::new(inbound.kv);
         let sink = ServiceSink {
             store,
             inbox: InboxSink::new(inbound.conversations),
             outbox: inbound.outbox.clone(),
             metrics,
+            ids: inbound.ids,
+            replay_window: dedup.ttl(),
         };
         Self {
             verifier: inbound.verifier,
             verify_token,
-            dedup: DedupGuard::new(inbound.kv),
+            dedup,
             sink,
             outbox: inbound.outbox,
         }
@@ -314,7 +327,8 @@ pub struct Route {
     pub tenant: Option<TenantId>,
     /// Why the row is operator-only (a fixed set, for the log): `unowned`
     /// (no binding holds its number or WABA, or a stale one), `before_binding`
-    /// (Meta dated it before its binding: a previous holder's), or `type`
+    /// (Meta dated it before its binding: a previous holder's), `stale`
+    /// (Meta dated it before the dedup lease's memory: a replay), or `type`
     /// (a type no tenant receives). `None` for a tenant's row.
     pub operator_only: Option<&'static str>,
 }
@@ -394,7 +408,12 @@ pub fn event_number(event: &WebhookEvent) -> Option<PhoneNumberId> {
 pub async fn owner(
     store: &dyn Store,
     event: &WebhookEvent,
+    not_before: OffsetDateTime,
 ) -> StoreResult<Result<TenantId, &'static str>> {
+    // A replay: dated before what the dedup lease remembers.
+    if meta_time(event).is_some_and(|at| at < not_before) {
+        return Ok(Err("stale"));
+    }
     let binding = if let Some(pn) = event_number(event) {
         let Some(number) = store.number(&pn).await? else {
             return Ok(Err("unowned"));
@@ -420,13 +439,19 @@ pub async fn owner(
     Ok(Ok(binding.tenant_id))
 }
 
-/// Where `event` goes: its owner, and the outbox row's tenant.
+/// Where `event` goes: its owner, and the outbox row's tenant. An event
+/// Meta dated before `not_before` is a replay (security review L3), no
+/// tenant's.
 ///
 /// # Errors
 ///
 /// The store failing.
-pub async fn route(store: &dyn Store, event: &WebhookEvent) -> StoreResult<Route> {
-    Ok(match owner(store, event).await? {
+pub async fn route(
+    store: &dyn Store,
+    event: &WebhookEvent,
+    not_before: OffsetDateTime,
+) -> StoreResult<Route> {
+    Ok(match owner(store, event, not_before).await? {
         Ok(owner) if tenant_visible(event.kind()) => Route {
             tenant: Some(owner.clone()),
             owner: Some(owner),
@@ -484,12 +509,49 @@ pub fn outbox_key(key: &EventKey, phone_number_id: Option<&str>, data: &str) -> 
     hex::encode(hash.finalize())
 }
 
-/// A new event id: `evt_` and 32 random hex digits.
-fn new_event_id() -> Result<String, SinkError> {
-    let mut bytes = [0u8; 16];
-    getrandom::fill(&mut bytes)
-        .map_err(|_| SinkError::Delivery(anyhow::anyhow!("no randomness for an event id")))?;
-    Ok(format!("evt_{}", hex::encode(bytes)))
+/// The key event ids are derived with: HMAC-SHA256 under the (first) app
+/// secret of a fixed label, so every replica derives the same ids, and an
+/// id tells nothing of the event it names.
+#[derive(Clone)]
+pub struct EventIdKey([u8; 32]);
+
+impl std::fmt::Debug for EventIdKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("EventIdKey(<redacted>)")
+    }
+}
+
+type HmacSha256 = hmac::Hmac<Sha256>;
+
+/// HMAC-SHA256 of `message` under `key`. HMAC takes keys of any length, so
+/// this is never `None`; it is handled as a failure rather than with a
+/// fallback key.
+fn hmac_sha256(key: &[u8], message: &[u8]) -> Option<[u8; 32]> {
+    use hmac::Mac as _;
+    let mut mac = <HmacSha256 as hmac::Mac>::new_from_slice(key).ok()?;
+    mac.update(message);
+    Some(mac.finalize().into_bytes().into())
+}
+
+impl EventIdKey {
+    /// The key of the deployment whose Meta app has `app_secret`; `None`
+    /// never happens (see `hmac_sha256`).
+    pub fn from_app_secret(app_secret: &AppSecret) -> Option<Self> {
+        hmac_sha256(
+            app_secret.expose_secret().as_bytes(),
+            b"meta-whatsapp-server/event-id/v1",
+        )
+        .map(Self)
+    }
+
+    /// The id of the event whose outbox key is `outbox_key`: `evt_` and 32
+    /// hex digits. The same event gets the same id every time it is
+    /// recorded, a replay after its row was purged included (security
+    /// review L3): receivers deduplicate on it.
+    pub fn event_id(&self, outbox_key: &str) -> Option<String> {
+        let mac = hmac_sha256(&self.0, outbox_key.as_bytes())?;
+        Some(format!("evt_{}", hex::encode(&mac[..16])))
+    }
 }
 
 /// What the service does with an event: route, then the inbox, then the
@@ -502,6 +564,11 @@ pub struct ServiceSink {
     inbox: InboxSink,
     outbox: Arc<dyn EventStore>,
     metrics: Metrics,
+    ids: EventIdKey,
+    /// Events Meta dated longer ago than this are replays: the dedup
+    /// lease's memory (`DedupGuard::ttl`), past which a captured body would
+    /// otherwise be recorded again.
+    replay_window: Duration,
 }
 
 impl std::fmt::Debug for ServiceSink {
@@ -529,7 +596,8 @@ impl ServiceSink {
     /// outbox.
     async fn record(&self, event: WebhookEvent, key: &EventKey) -> Result<(), SinkError> {
         let kind = event.kind();
-        let route = route(self.store.as_ref(), &event)
+        let not_before = OffsetDateTime::now_utc() - self.replay_window;
+        let route = route(self.store.as_ref(), &event, not_before)
             .await
             .map_err(|e| self.failed("routing", kind, storage(e)))?;
         let data = event_data(&event).map_err(|e| {
@@ -538,9 +606,17 @@ impl ServiceSink {
             self.failed("serialization", kind, SinkError::Delivery(error))
         })?;
         let phone_number_id = event.phone_number_id().map(|pn| pn.as_str().to_owned());
+        let dedup_key = outbox_key(key, phone_number_id.as_deref(), &data);
+        let id = self.ids.event_id(&dedup_key).ok_or_else(|| {
+            self.failed(
+                "serialization",
+                kind,
+                SinkError::Delivery(anyhow::anyhow!("no event id")),
+            )
+        })?;
         let row = NewEvent {
-            id: new_event_id()?,
-            dedup_key: Some(outbox_key(key, phone_number_id.as_deref(), &data)),
+            id,
+            dedup_key: Some(dedup_key),
             tenant: route.tenant.clone(),
             phone_number_id,
             waba_id: event.waba_id().map(|waba| waba.as_str().to_owned()),

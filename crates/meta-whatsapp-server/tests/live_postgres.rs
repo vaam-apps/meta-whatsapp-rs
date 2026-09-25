@@ -637,3 +637,40 @@ async fn live_postgres_an_event_routed_before_its_tenant_was_recreated_is_nobody
     let polled = h.call(Call::get("/v1/events").key(&key)).await;
     assert_eq!(polled.json()["data"], serde_json::json!([]));
 }
+
+/// Security review L3 end to end: with a WABA bound for 30 days, Meta's
+/// delivery of a message dated 8 days ago (past the dedup lease's 7 days:
+/// a replay) goes to nobody, one dated 6 days ago (a late retry) to the
+/// tenant. Decisive: the replay window in the routing.
+#[tokio::test]
+async fn live_postgres_a_replay_older_than_the_dedup_window_is_nobodys() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let h = harness(&db).await;
+    h.tenant("tenant-a").await;
+    h.connect("tenant-a", EXAMPLE_WABA, &[EXAMPLE_PN], "TOKEN-OF-A")
+        .await;
+    let pool = db.pool(1).await;
+    sqlx::query("UPDATE wa_server_wabas SET attached_at = now() - interval '30 days'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let days_ago = |days: i64, wamid: &str| {
+        bytes(&common::meta::dated(
+            text(EXAMPLE_WABA, EXAMPLE_PN, wamid),
+            common::meta::now() - days * 24 * 3600,
+        ))
+    };
+    for body in [days_ago(8, "wamid.replayed"), days_ago(6, "wamid.late")] {
+        assert_eq!(h.webhook(&body).await.status, StatusCode::OK);
+    }
+    let rows = outbox_rows(&pool).await;
+    assert_eq!(
+        rows,
+        [
+            (None, "message_received".to_owned()),
+            (Some("tenant-a".to_owned()), "message_received".to_owned())
+        ]
+    );
+}

@@ -2478,7 +2478,7 @@
           },
           "id": {
             "type": "string",
-            "description": "The event's id (`evt_…`): unique, stable; deduplicate on it."
+            "description": "The event's id (`evt_…`): derived from the event, so the same event\nkeeps it wherever it is recorded again; deduplicate on it."
           },
           "phone_number_id": {
             "type": [

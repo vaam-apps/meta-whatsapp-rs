@@ -880,3 +880,71 @@ async fn an_untyped_history_change_is_routed_by_its_number() {
     assert!(inbox(&h, PN_A, "16505551234").await > 0);
     assert!(h.outbox.rows().iter().all(|r| r.tenant.is_none()));
 }
+
+/// Security review L3: an event's id is derived from the event, so a body
+/// captured and replayed once its dedup marker expired and its outbox row
+/// was purged comes back under the same id, and receivers that
+/// deduplicate on ids see it once. Ids name nothing: not the outbox key.
+#[tokio::test]
+async fn an_event_keeps_its_id_when_recorded_again() {
+    let h = two_tenants().await;
+    let body = example_text();
+    assert_eq!(h.webhook(&body).await.status, StatusCode::OK);
+    let first = h.outbox.rows()[0].clone();
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    meta_whatsapp_server::events::purge_outbox(h.outbox.as_ref(), std::time::Duration::ZERO)
+        .await
+        .unwrap();
+    assert!(h.kv.delete(&dedup::store_key(EXAMPLE_WAMID)).await.unwrap());
+    assert_eq!(h.webhook(&body).await.status, StatusCode::OK);
+    let rows = h.outbox.rows();
+    assert_eq!(rows.len(), 2, "recorded again");
+    assert_eq!(rows[1].id, first.id, "under the same id");
+    assert_eq!(rows[1].dedup_key, first.dedup_key);
+    let key = first.dedup_key.unwrap();
+    assert!(first.id.starts_with("evt_") && first.id.len() == 36);
+    assert_ne!(&first.id[4..], &key[..32], "the id is keyed");
+    // Another event, another id.
+    let other = bytes(&text(WABA_A, PN_A, "wamid.another"));
+    assert_eq!(h.webhook(&other).await.status, StatusCode::OK);
+    assert_ne!(h.outbox.rows()[2].id, first.id);
+}
+
+/// Security review L3: an event Meta dated before what the dedup lease
+/// remembers (7 days) is a replay, routed to nobody whoever holds its
+/// number; within it, it routes as usual.
+#[tokio::test]
+async fn an_event_dated_before_the_replay_window_is_nobodys() {
+    use meta_whatsapp_server::events::route;
+    use time::{Duration, OffsetDateTime};
+    let h = two_tenants().await;
+    let now = OffsetDateTime::now_utc();
+    let not_before = now - Duration::days(7);
+    let event_at = |at: OffsetDateTime| {
+        let body = bytes(&common::meta::dated(
+            text(WABA_A, PN_A, "wamid.dated"),
+            at.unix_timestamp(),
+        ));
+        let [event] = events_of(&body).try_into().unwrap();
+        event
+    };
+    let replay = route(
+        h.store.as_ref(),
+        &event_at(now - Duration::days(8)),
+        not_before,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (replay.owner, replay.tenant, replay.operator_only),
+        (None, None, Some("stale"))
+    );
+    let fresh = route(h.store.as_ref(), &event_at(now), not_before)
+        .await
+        .unwrap();
+    assert_eq!(
+        fresh.tenant.map(|t| t.as_str().to_owned()),
+        Some(A.to_owned())
+    );
+    assert_eq!(fresh.operator_only, None);
+}

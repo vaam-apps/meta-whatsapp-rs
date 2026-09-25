@@ -144,7 +144,8 @@ impl<S: Send + Sync> FromRequestParts<S> for EventsQuery {
 #[derive(Debug, Serialize, ToSchema)]
 #[schema(as = Event)]
 pub struct EventEnvelope {
-    /// The event's id (`evt_…`): unique, stable; deduplicate on it.
+    /// The event's id (`evt_…`): derived from the event, so the same event
+    /// keeps it wherever it is recorded again; deduplicate on it.
     pub id: String,
     /// Its position among the tenant's events (each tenant has its own
     /// sequence): increasing, never reused; order on it.
