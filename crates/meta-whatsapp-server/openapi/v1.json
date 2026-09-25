@@ -906,7 +906,7 @@
         "tags": [
           "admin"
         ],
-        "summary": "Attach one of the platform's own WABAs to a tenant: list its numbers\nfrom Meta with the given token (so no id is bound on the caller's word),\nbind the WABA and those numbers to the tenant (refused when another\ntenant has it, decision D4), then store the token in the vault.",
+        "summary": "Attach one of the platform's own WABAs to a tenant: list its numbers\nfrom Meta with the given token (so no id is bound on the caller's word),\nsubscribe the app to the WABA's webhooks with it, bind the WABA and\nthose numbers to the tenant (refused when another tenant has it,\ndecision D4), then store the token in the vault.",
         "operationId": "attach_waba",
         "parameters": [
           {
@@ -931,7 +931,7 @@
         },
         "responses": {
           "201": {
-            "description": "Attached",
+            "description": "Attached: its numbers bound, the app subscribed to its webhooks, the token stored",
             "content": {
               "application/json": {
                 "schema": {
@@ -951,7 +951,7 @@
             }
           },
           "403": {
-            "description": "Not an admin key, or Meta refused the token",
+            "description": "Not an admin key, or Meta refused the token (nothing bound or stored)",
             "content": {
               "application/json": {
                 "schema": {

@@ -90,6 +90,7 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
             {"id": "1972385232742142", "display_phone_number": PHONE_2, "verified_name": "John's Cake Shop"}
         ]}),
     );
+    h.graph.push_json(200, json!({"success": true}));
     let attached = h
         .call(post(
             "/v1/admin/tenants/merchant-42/wabas",

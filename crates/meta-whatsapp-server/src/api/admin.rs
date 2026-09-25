@@ -818,8 +818,9 @@ fn graph_id(field: &'static str, id: &str) -> Result<String, ApiError> {
 
 /// Attach one of the platform's own WABAs to a tenant: list its numbers
 /// from Meta with the given token (so no id is bound on the caller's word),
-/// bind the WABA and those numbers to the tenant (refused when another
-/// tenant has it, decision D4), then store the token in the vault.
+/// subscribe the app to the WABA's webhooks with it, bind the WABA and
+/// those numbers to the tenant (refused when another tenant has it,
+/// decision D4), then store the token in the vault.
 #[utoipa::path(
     post,
     path = "/v1/admin/tenants/{id}/wabas",
@@ -828,9 +829,9 @@ fn graph_id(field: &'static str, id: &str) -> Result<String, ApiError> {
     params(("id" = String, Path, description = "Tenant id")),
     request_body = AttachWaba,
     responses(
-        (status = 201, description = "Attached", body = AttachedWaba),
+        (status = 201, description = "Attached: its numbers bound, the app subscribed to its webhooks, the token stored", body = AttachedWaba),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "Not an admin key, or Meta refused the token", body = ErrorBody),
+        (status = 403, description = "Not an admin key, or Meta refused the token (nothing bound or stored)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such tenant", body = ErrorBody),
         (status = 409, description = "`waba_owned_by_another_tenant`, or Meta refused the token (`reconnect_required`)", body = ErrorBody),
         (status = 422, description = "`invalid_request` on `waba_id`, `token` or `body`; Meta's `invalid_parameter`", body = ErrorBody),
@@ -862,23 +863,30 @@ pub async fn attach_waba(
     {
         return Err(ApiError::new("waba_owned_by_another_tenant"));
     }
-    // Every number Meta lists on the WABA, with the given token.
-    let listed: Result<Vec<PhoneNumberId>, _> = state
+    let waba = state
         .client()
         .with_token(token.clone())
-        .waba(waba_id.clone())
+        .waba(waba_id.clone());
+    let meta_failed = |error: &meta_whatsapp_rs::Error| {
+        let api = ApiError::from_library(error);
+        state.metrics().graph_error(api.code());
+        api
+    };
+    // Every number Meta lists on the WABA, with the given token.
+    let numbers: Vec<PhoneNumberId> = waba
         .phone_numbers_stream(&PhoneNumbersQuery::new())
         .map_ok(|n| n.id)
         .try_collect()
-        .await;
-    let numbers = match listed {
-        Ok(numbers) => numbers,
-        Err(error) => {
-            let api = ApiError::from_library(&error);
-            state.metrics().graph_error(api.code());
-            return Err(api);
-        }
-    };
+        .await
+        .map_err(|error| meta_failed(&error))?;
+    // Subscribe the app to the WABA's webhooks, as onboarding does: a WABA
+    // the app is not subscribed to delivers no webhook, and disconnecting
+    // unsubscribes it (docs/design/server.md, section 3.4), so attaching it
+    // again after a disconnect must subscribe it again. Safe to repeat;
+    // done before anything is bound or stored, so a refusal leaves nothing.
+    waba.subscribe_app(None)
+        .await
+        .map_err(|error| meta_failed(&error))?;
     // D4 again, atomically with the binding.
     match state.store().bind_waba(&tenant, &waba_id, &numbers).await? {
         BindOutcome::Bound => {}

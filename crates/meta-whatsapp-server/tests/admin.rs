@@ -316,6 +316,8 @@ async fn attaching_a_waba_binds_what_meta_lists_and_stores_the_token() {
     let admin = h.admin_key().await;
     h.tenant("platform-store").await;
     h.graph.push_json(200, phone_numbers_page());
+    // subscribed-apps-api, POST: `{"success": true}`.
+    h.graph.push_json(200, json!({"success": true}));
     let reply = h
         .call(post(
             "/v1/admin/tenants/platform-store/wabas",
@@ -331,13 +333,20 @@ async fn attaching_a_waba_binds_what_meta_lists_and_stores_the_token() {
     );
     assert!(!reply.text.contains(SYSTEM_TOKEN));
 
-    // Meta was asked with the given token, for this WABA's numbers.
+    // Meta was asked with the given token, for this WABA's numbers, then
+    // the app was subscribed to the WABA's webhooks (docs/design/server.md,
+    // section 3.4: disconnecting unsubscribes it), with no callback
+    // override.
     let requests = h.graph.requests();
-    assert_eq!(requests.len(), 1);
+    assert_eq!(requests.len(), 2);
     assert_eq!(requests[0].method, Method::GET);
     assert_eq!(requests[0].path(), format!("/v25.0/{WABA}/phone_numbers"));
     assert_eq!(requests[0].bearer(), Some(SYSTEM_TOKEN));
     assert_eq!(requests[0].query("fields"), None);
+    assert_eq!(requests[1].method, Method::POST);
+    assert_eq!(requests[1].path(), format!("/v25.0/{WABA}/subscribed_apps"));
+    assert_eq!(requests[1].bearer(), Some(SYSTEM_TOKEN));
+    assert_eq!(requests[1].json(), None, "no override_callback_uri");
     assert_eq!(h.graph.remaining(), 0);
 
     // Bound, and the vault routes both numbers to the token.
@@ -432,6 +441,7 @@ async fn a_waba_of_another_tenant_is_refused_until_the_admin_unbinds_it() {
         .await;
     assert_eq!(again.status, StatusCode::NOT_FOUND);
     h.graph.push_json(200, phone_numbers_page());
+    h.graph.push_json(200, json!({"success": true}));
     let attached = h
         .call(post(
             "/v1/admin/tenants/merchant-b/wabas",
@@ -573,4 +583,45 @@ async fn a_waba_without_a_token_blocks_deletion_until_unbound() {
         .await;
     assert_eq!(deleted.status, StatusCode::NO_CONTENT);
     assert!(h.graph.requests().is_empty());
+}
+
+/// Meta refusing to subscribe the app binds nothing and stores nothing:
+/// the WABA would deliver no webhook. Decisive: subscribing before the
+/// binding and the vault write.
+#[tokio::test]
+async fn a_refused_subscription_binds_nothing() {
+    let h = Harness::new();
+    let admin = h.admin_key().await;
+    h.tenant("merchant-a").await;
+    h.graph.push_json(200, phone_numbers_page());
+    // subscribed-apps-api, POST, 403 example shape.
+    h.graph.push_json(
+        403,
+        json!({"error": {"message": "(#200) Permissions error", "type": "OAuthException",
+                         "code": 200, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+    );
+    let reply = h
+        .call(post(
+            "/v1/admin/tenants/merchant-a/wabas",
+            &admin,
+            &json!({"waba_id": WABA, "token": SYSTEM_TOKEN}),
+        ))
+        .await;
+    assert_eq!(
+        (reply.status, reply.code().as_str()),
+        (StatusCode::FORBIDDEN, "permission")
+    );
+    let requests = h.graph.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1].path(), format!("/v25.0/{WABA}/subscribed_apps"));
+    assert!(h.store.waba(&WabaId::new(WABA)).await.unwrap().is_none());
+    assert!(
+        h.store
+            .number(&PhoneNumberId::new("1972385232742141"))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(h.vault.get(&WabaId::new(WABA)).await.unwrap().is_none());
+    assert_eq!(h.graph.remaining(), 0);
 }
