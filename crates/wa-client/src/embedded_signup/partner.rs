@@ -3313,6 +3313,42 @@ mod tests {
         assert_eq!(report.business_id, None);
         assert_eq!(h.t.remaining(), 0);
 
+        // A hint that contradicts Meta's record revokes nothing.
+        let h = harness(CreditSharing::ShareAndAttach);
+        h.vault.put_credit(&credit, None).await.unwrap();
+        h.t.push_json(200, active());
+        let err =
+            h.es.revoke_credit_line(&waba(), Some(&BusinessId::new("OTHER")), &h.vault)
+                .await
+                .unwrap_err();
+        assert!(
+            matches!(&err, Error::Validation(v) if v.field == "owner_business_id"),
+            "{err}"
+        );
+        assert_eq!(h.t.requests().len(), 1);
+
+        // Nothing recorded at all, nothing given: refused, nothing sent.
+        let h = harness(CreditSharing::ShareAndAttach);
+        h.vault
+            .store(&StoredBusinessToken::new("BARE", AccessToken::new(TOKEN)))
+            .await
+            .unwrap();
+        assert!(matches!(
+            h.es.revoke_credit_line(&WabaId::new("BARE"), None, &h.vault).await,
+            Err(Error::Validation(v)) if v.field == "business_id"
+        ));
+        assert!(h.t.requests().is_empty());
+    }
+
+    /// Fix 9, on the only paths that reach the marker without the line's
+    /// own records: a caller-supplied business with an allocation recorded
+    /// (Meta's record of it names no business), and one whose lookup
+    /// fails. Neither marks the business.
+    #[tokio::test]
+    async fn a_hint_the_line_has_no_record_of_is_never_marked() {
+        let mut credit = StoredCredit::new(waba());
+        credit.allocation_config_id = Some(AllocationConfigId::new(ALLOCATION));
+
         // Meta's record names no business, and the caller's hint has no
         // record of the line either: the allocation is revoked, the hint
         // is not marked.
@@ -3362,32 +3398,6 @@ mod tests {
                 .is_none()
         );
         assert_eq!(h.t.remaining(), 0);
-
-        // A hint that contradicts Meta's record revokes nothing.
-        let h = harness(CreditSharing::ShareAndAttach);
-        h.vault.put_credit(&credit, None).await.unwrap();
-        h.t.push_json(200, active());
-        let err =
-            h.es.revoke_credit_line(&waba(), Some(&BusinessId::new("OTHER")), &h.vault)
-                .await
-                .unwrap_err();
-        assert!(
-            matches!(&err, Error::Validation(v) if v.field == "owner_business_id"),
-            "{err}"
-        );
-        assert_eq!(h.t.requests().len(), 1);
-
-        // Nothing recorded at all, nothing given: refused, nothing sent.
-        let h = harness(CreditSharing::ShareAndAttach);
-        h.vault
-            .store(&StoredBusinessToken::new("BARE", AccessToken::new(TOKEN)))
-            .await
-            .unwrap();
-        assert!(matches!(
-            h.es.revoke_credit_line(&WabaId::new("BARE"), None, &h.vault).await,
-            Err(Error::Validation(v)) if v.field == "business_id"
-        ));
-        assert!(h.t.requests().is_empty());
     }
 
     /// Fix 6: a record whose `request_status` Meta does not document is not
