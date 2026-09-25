@@ -157,6 +157,7 @@ async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<ApiKeyRec
     if !presented.matches(&record.secret_sha256) || !record.is_usable(OffsetDateTime::now_utc()) {
         return Err(ApiError::unauthenticated());
     }
+    telemetry::record_key(&record.key_id);
     if let Err(error) = state.store().touch_key(&record.key_id).await {
         tracing::debug!(error = %error, "could not record the key's last use");
     }

@@ -3,8 +3,9 @@
 //!
 //! Each request runs in a `request` span carrying its id, method, route
 //! **template** (never the raw path: paths name numbers and, later,
-//! contacts), tenant and status, and ends with one `request` event with
-//! the status and duration. Nothing here logs a header, a query string or
+//! contacts), tenant, the public id of the key that authenticated it and
+//! status, and ends with one `request` event with the status and duration.
+//! Every change an operator makes is also an `audit` event ([`audit`]). Nothing here logs a header, a query string or
 //! a body: API keys, tokens and phone numbers never reach the logs.
 
 use std::time::Instant;
@@ -139,6 +140,7 @@ pub async fn observe(
         method = %method,
         route = %route,
         tenant = tracing::field::Empty,
+        key_id = tracing::field::Empty,
         status = tracing::field::Empty,
     );
     let mut response = CURRENT_REQUEST_ID
@@ -172,6 +174,38 @@ pub async fn observe(
 /// Record the resolved tenant on the current request span.
 pub fn record_tenant(tenant: &str) {
     tracing::Span::current().record("tenant", tenant);
+}
+
+/// Record the public id of the key that authenticated the request on the
+/// current request span (never the secret).
+pub fn record_key(key_id: &str) {
+    tracing::Span::current().record("key_id", key_id);
+}
+
+/// An operator's change, logged at `info` with the target `audit`:
+/// `action`, the admin key's public id, and the ids it touched (tenant,
+/// key, WABA; never a secret or a phone number).
+pub fn audit(action: &'static str, admin_key_id: &str, subject: &Subject<'_>) {
+    tracing::info!(
+        target: "audit",
+        action,
+        admin_key_id,
+        tenant = subject.tenant,
+        key_id = subject.key_id,
+        waba_id = subject.waba_id,
+        "admin change"
+    );
+}
+
+/// What an [`audit`] event touched.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Subject<'a> {
+    /// A tenant id.
+    pub tenant: Option<&'a str>,
+    /// A key's public id.
+    pub key_id: Option<&'a str>,
+    /// A WABA id.
+    pub waba_id: Option<&'a str>,
 }
 
 #[cfg(test)]

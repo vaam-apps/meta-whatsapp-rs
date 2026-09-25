@@ -294,8 +294,47 @@ fn logged_requests(logs: &str) -> BTreeSet<(String, String)> {
     requests
 }
 
+/// Every change an operator made (a successful non-GET on `/v1/admin`) has
+/// an `audit` event in its request, and every keyed request that passed
+/// step 1 names its key's public id (security review L4).
+fn check_audit(logs: &str) {
+    let events: Vec<serde_json::Value> = logs
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    let audited: BTreeSet<String> = events
+        .iter()
+        .filter(|e| e["target"] == "audit")
+        .filter_map(|e| e["span"]["request_id"].as_str().map(str::to_owned))
+        .collect();
+    let mut changes = 0;
+    for event in &events {
+        let span = &event["span"];
+        if event["fields"]["message"] != "request" || span["name"] != "request" {
+            continue;
+        }
+        let status = event["fields"]["status"].as_u64().unwrap_or_default();
+        let route = span["route"].as_str().unwrap_or_default();
+        let keyed =
+            route.starts_with("/v1/") && !matches!(route, "/v1/openapi.json" | "/v1/version");
+        if keyed && (200..300).contains(&status) {
+            assert!(span["key_id"].is_string(), "no key_id on {span}");
+        }
+        if route.starts_with("/v1/admin/")
+            && span["method"] != "GET"
+            && (200..300).contains(&status)
+        {
+            changes += 1;
+            let id = span["request_id"].as_str().unwrap();
+            assert!(audited.contains(id), "no audit event for {span}");
+        }
+    }
+    assert!(changes >= 10, "{changes} admin changes");
+}
+
 /// What M1.7 asks of the captured logs.
 pub fn check(logs: &str, secrets: &[String]) {
+    check_audit(logs);
     // The capture works, and covers every operation of the committed
     // document: requests are logged with their route templates.
     let logged = logged_requests(logs);

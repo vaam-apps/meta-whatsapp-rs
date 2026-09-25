@@ -27,6 +27,26 @@ use crate::model::{
 };
 use crate::state::AppState;
 use crate::store::Store;
+use crate::telemetry::{self, Subject};
+
+/// Log an operator's change (see [`crate::telemetry::audit`]).
+fn audit(action: &'static str, admin: &AdminCaller, subject: Subject<'_>) {
+    telemetry::audit(action, admin.key_id(), &subject);
+}
+
+fn tenant_subject(tenant: &TenantId) -> Subject<'_> {
+    Subject {
+        tenant: Some(tenant.as_str()),
+        ..Subject::default()
+    }
+}
+
+fn key_subject(key_id: &str) -> Subject<'_> {
+    Subject {
+        key_id: Some(key_id),
+        ..Subject::default()
+    }
+}
 
 // ─── Tenants ─────────────────────────────────────────────────────────────
 
@@ -138,13 +158,16 @@ fn path_tenant(id: &str) -> Result<TenantId, ApiError> {
 )]
 pub async fn create_tenant(
     State(state): State<AppState>,
-    _admin: AdminCaller,
+    admin: AdminCaller,
     ApiJson(body): ApiJson<CreateTenant>,
 ) -> Result<(StatusCode, Json<TenantView>), ApiError> {
     let id = tenant_id("id", &body.id)?;
     let name = name(body.name)?.unwrap_or_default();
     match state.store().create_tenant(&id, &name).await? {
-        Some(tenant) => Ok(json(StatusCode::CREATED, TenantView::from(tenant))),
+        Some(tenant) => {
+            audit("tenant_created", &admin, tenant_subject(&tenant.id));
+            Ok(json(StatusCode::CREATED, TenantView::from(tenant)))
+        }
         // Taken: another tenant's id (the design names no code for it).
         None => Err(ApiError::invalid("id")),
     }
@@ -226,7 +249,7 @@ pub async fn get_tenant(
 )]
 pub async fn update_tenant(
     State(state): State<AppState>,
-    _admin: AdminCaller,
+    admin: AdminCaller,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<UpdateTenant>,
 ) -> Result<Json<TenantView>, ApiError> {
@@ -241,6 +264,12 @@ pub async fn update_tenant(
         .update_tenant(&id, name.as_deref(), status)
         .await?
         .ok_or_else(ApiError::not_found)?;
+    let action = match status {
+        Some(TenantStatus::Suspended) => "tenant_suspended",
+        Some(TenantStatus::Active) => "tenant_activated",
+        None => "tenant_renamed",
+    };
+    audit(action, &admin, tenant_subject(&id));
     Ok(Json(tenant.into()))
 }
 
@@ -295,9 +324,22 @@ pub async fn delete_tenant(
                 return Err(owned.failed(&state, &error).await);
             }
             owned.forget(&state).await?;
+            let waba_id = binding.waba_id.as_str();
+            audit(
+                "waba_disconnected",
+                &admin,
+                Subject {
+                    tenant: Some(id.as_str()),
+                    waba_id: Some(waba_id),
+                    ..Subject::default()
+                },
+            );
         }
         match state.store().delete_tenant(&id).await? {
-            DeleteTenantOutcome::Deleted => return Ok(StatusCode::NO_CONTENT),
+            DeleteTenantOutcome::Deleted => {
+                audit("tenant_deleted", &admin, tenant_subject(&id));
+                return Ok(StatusCode::NO_CONTENT);
+            }
             DeleteTenantOutcome::NotFound => return Err(ApiError::not_found()),
             DeleteTenantOutcome::HasWabas => {}
         }
@@ -570,7 +612,7 @@ fn minted_view(minted: &MintedKey, record: ApiKeyRecord) -> MintedKeyView {
 )]
 pub async fn mint_tenant_key(
     State(state): State<AppState>,
-    _admin: AdminCaller,
+    admin: AdminCaller,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<MintTenantKey>,
 ) -> Result<(StatusCode, Json<MintedKeyView>), ApiError> {
@@ -583,12 +625,21 @@ pub async fn mint_tenant_key(
     }
     let (minted, record) = mint(
         state.store(),
-        KeyOwner::Tenant(id),
+        KeyOwner::Tenant(id.clone()),
         scopes,
         name,
         expires_at,
     )
     .await?;
+    audit(
+        "tenant_key_minted",
+        &admin,
+        Subject {
+            tenant: Some(id.as_str()),
+            key_id: Some(minted.key_id()),
+            ..Subject::default()
+        },
+    );
     Ok(json(StatusCode::CREATED, minted_view(&minted, record)))
 }
 
@@ -656,15 +707,24 @@ async fn key_list(
 )]
 pub async fn revoke_tenant_key(
     State(state): State<AppState>,
-    _admin: AdminCaller,
+    admin: AdminCaller,
     Path((id, key_id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let id = path_tenant(&id)?;
     if state
         .store()
-        .revoke_key(&KeyScope::Tenant(id), &key_id)
+        .revoke_key(&KeyScope::Tenant(id.clone()), &key_id)
         .await?
     {
+        audit(
+            "tenant_key_revoked",
+            &admin,
+            Subject {
+                tenant: Some(id.as_str()),
+                key_id: Some(&key_id),
+                ..Subject::default()
+            },
+        );
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found())
@@ -687,7 +747,7 @@ pub async fn revoke_tenant_key(
 )]
 pub async fn mint_platform_key(
     State(state): State<AppState>,
-    _admin: AdminCaller,
+    admin: AdminCaller,
     ApiJson(body): ApiJson<MintPlatformKey>,
 ) -> Result<(StatusCode, Json<MintedKeyView>), ApiError> {
     let allowed = allowed_tenants(body.tenants)?;
@@ -702,6 +762,7 @@ pub async fn mint_platform_key(
         expires_at,
     )
     .await?;
+    audit("platform_key_minted", &admin, key_subject(minted.key_id()));
     Ok(json(StatusCode::CREATED, minted_view(&minted, record)))
 }
 
@@ -764,7 +825,7 @@ pub async fn list_platform_keys(
 )]
 pub async fn revoke_platform_key(
     State(state): State<AppState>,
-    _admin: AdminCaller,
+    admin: AdminCaller,
     Path(key_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     if state
@@ -772,6 +833,7 @@ pub async fn revoke_platform_key(
         .revoke_key(&KeyScope::Platform, &key_id)
         .await?
     {
+        audit("platform_key_revoked", &admin, key_subject(&key_id));
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found())
@@ -850,7 +912,7 @@ fn graph_id(field: &'static str, id: &str) -> Result<String, ApiError> {
 )]
 pub async fn attach_waba(
     State(state): State<AppState>,
-    _admin: AdminCaller,
+    admin: AdminCaller,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<AttachWaba>,
 ) -> Result<(StatusCode, Json<AttachedWaba>), ApiError> {
@@ -913,6 +975,15 @@ pub async fn attach_waba(
     }
     let record = StoredBusinessToken::new(waba_id.clone(), token).phone_number_ids(numbers.clone());
     state.tokens().store(&record).await?;
+    audit(
+        "waba_attached",
+        &admin,
+        Subject {
+            tenant: Some(tenant.as_str()),
+            waba_id: Some(waba_id.as_str()),
+            ..Subject::default()
+        },
+    );
     // Subscribe the app to the WABA's webhooks, as onboarding does after
     // storing the token: a WABA the app is not subscribed to delivers no
     // webhook, and disconnecting unsubscribes it (docs/design/server.md,
@@ -960,5 +1031,14 @@ pub async fn unbind_waba(
         .await?
         .ok_or_else(ApiError::not_found)?;
     OwnedWaba::unbind_for_admin(&state, &admin, &binding).await?;
+    audit(
+        "waba_unbound",
+        &admin,
+        Subject {
+            tenant: Some(binding.tenant_id.as_str()),
+            waba_id: Some(binding.waba_id.as_str()),
+            ..Subject::default()
+        },
+    );
     Ok(StatusCode::NO_CONTENT)
 }
