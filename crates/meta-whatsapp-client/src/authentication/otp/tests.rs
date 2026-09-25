@@ -689,13 +689,15 @@ async fn the_derivations_and_namespaces_are_pinned() {
             .iter()
             .map(|(k, _)| k.namespace().to_owned())
             .collect();
+    // `\x77` is `w`: spelled so that a search-and-replace of the
+    // namespaces cannot rewrite this pin along with the code.
     assert_eq!(
         written,
-        ["wa.otp".to_owned(), "wa.otp.rate".to_owned()].into()
+        ["\x77a.otp".to_owned(), "\x77a.otp.rate".to_owned()].into()
     );
     assert!(
         f.kv.inner
-            .get(&StoreKey::new("wa.otp", KEY))
+            .get(&StoreKey::new("\x77a.otp", KEY))
             .await
             .unwrap()
             .is_some()

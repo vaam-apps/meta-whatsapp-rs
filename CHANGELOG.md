@@ -55,9 +55,12 @@ If you depend on the git repository:
   and the migration files, the Redis `wa:` prefix). docs/architecture.md
   § "Stable identifiers" lists them; tests fail if one changes.
 
-For contributors: the test variables are renamed (table above), and the
-dev container's Compose project is `meta-whatsapp-rs-dev`, so its volumes
-(Claude config, shell history, cargo caches) start empty
+For contributors: the test variables are renamed (table above). The
+Compose project of `just test-live` is `meta-whatsapp-rs-test`, on the
+same host ports as the old `wa-rs-test`: stop that one first
+(`docker compose -p wa-rs-test down -v`), or starting the new one fails.
+The dev container's Compose project is `meta-whatsapp-rs-dev`, so its
+volumes (Claude config, shell history, cargo caches) start empty
 (docs/dev-environment.md).
 
 ### Open questions closed

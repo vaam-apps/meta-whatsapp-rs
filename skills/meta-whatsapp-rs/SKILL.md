@@ -21,19 +21,24 @@ task skills below. Load the task skill before writing that kind of code.
 
 ## Install
 
-Depend on the facade crate `meta-whatsapp-rs` (lib name `meta_whatsapp_rs`); it re-exports the
-others. It is not on crates.io (no release yet; the workspace is
-`publish = false`), so pin a git revision:
+Depend on the facade crate `meta-whatsapp-rs` (lib name
+`meta_whatsapp_rs`); it re-exports the others. It is not on crates.io (no
+release yet; the workspace is `publish = false`), so pin a git revision:
 
 ```toml
 [dependencies]
-meta-whatsapp-rs = { git = "https://github.com/vaam-apps/meta-whatsapp-rs", rev = "4eb93c9bd63812221e75ad0920b6e2cb98ea0dd6", features = ["axum", "postgres"] }
+meta-whatsapp-rs = { git = "https://github.com/vaam-apps/meta-whatsapp-rs", rev = "<commit>", features = ["axum", "postgres"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 anyhow = "1"
 ```
 
+- `<commit>`: a commit of `main` from the rename on
+  (`git ls-remote https://github.com/vaam-apps/meta-whatsapp-rs main`
+  prints the newest). Before it the crate was `wa-rs`, and
+  `meta-whatsapp-rs` does not resolve at an older revision.
 - ~~The repository is private: Cargo needs credentials that can read
-  it~~: not so at 2026-09-24, `vaam-apps/meta-whatsapp-rs` is public; no credentials.
+  it~~: not so at 2026-09-24, `vaam-apps/meta-whatsapp-rs` is public; no
+  credentials.
 - Rust 1.98.1 or newer, edition 2024. You bring the tokio runtime.
 - axum, sqlx and redis types cross the API: use the re-exports
   `meta_whatsapp_rs::webhooks::axum` (feature `axum`),

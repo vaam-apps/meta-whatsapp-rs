@@ -154,8 +154,8 @@
 //!    - **Anything on `payload` or `error`** (an expression or partial
 //!      index, a check constraint, a view, a policy, a generated column):
 //!      migration 3 refuses to run while one exists, names it, and changes
-//!      nothing (its hint points to "the upgrade steps of
-//!      wa_adapters::store::postgres": these, under this module's path
+//!      nothing (its hint points to the upgrade steps of
+//!      `wa_adapters::store::postgres`: these, under this module's path
 //!      before the rename to meta-whatsapp-rs, which the migration keeps
 //!      because sqlx checksums every migration file). An expression that reads a field would survive the
 //!      conversion (no existing row holds a NUL) and then fail the insert
@@ -390,13 +390,15 @@ mod tests {
     #[test]
     fn the_default_tables_and_migration_checksums_are_pinned() {
         let default = TablePrefix::DEFAULT;
+        // `\x77` is `w`: spelled so that a search-and-replace of the prefix
+        // cannot rewrite this pin along with the code.
         assert_eq!(
             ["kv", "messages", "conversations", "sqlx_migrations"].map(|t| default.table(t)),
             [
-                "wa_kv",
-                "wa_messages",
-                "wa_conversations",
-                "wa_sqlx_migrations"
+                "\x77a_kv",
+                "\x77a_messages",
+                "\x77a_conversations",
+                "\x77a_sqlx_migrations"
             ]
         );
         let recorded: Vec<(i64, String)> = migrations(&default)

@@ -250,8 +250,10 @@ mod tests {
         let guard = DedupGuard::new(kv.clone());
         let claim = guard.claim_key("wamid.X:read:16505551234").await.unwrap();
         assert!(matches!(claim, Claim::Acquired(_)), "{claim:?}");
+        // `\x77` is `w`: spelled so that a search-and-replace of the
+        // namespace cannot rewrite this pin along with the code.
         let marker = StoreKey::new(
-            "wa.webhook.dedup",
+            "\x77a.webhook.dedup",
             "ff3c3588777e9b0f2f254210adf5fd0a4a77c88f21726e89e7d0408716b603b6",
         );
         assert_eq!(store_key("wamid.X:read:16505551234"), marker);

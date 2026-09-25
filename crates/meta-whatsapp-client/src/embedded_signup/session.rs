@@ -203,8 +203,10 @@ mod tests {
             .start("merchant-42", Duration::from_secs(600))
             .await
             .unwrap();
+        // `\x77` is `w`: spelled so that a search-and-replace of the
+        // namespace cannot rewrite this pin along with the code.
         assert!(
-            kv.get(&StoreKey::new("wa.es.session", state.as_str()))
+            kv.get(&StoreKey::new("\x77a.es.session", state.as_str()))
                 .await
                 .unwrap()
                 .is_some()

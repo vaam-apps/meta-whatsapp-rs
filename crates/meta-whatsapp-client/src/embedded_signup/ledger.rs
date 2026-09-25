@@ -872,7 +872,9 @@ mod tests {
             ("revoked/2729063490586005", REVOKED_16B61DB),
         ] {
             kv.put(
-                &StoreKey::new("wa.token", key),
+                // `\x77` is `w`: spelled so that a search-and-replace of
+                // the namespace cannot rewrite this pin along with the code.
+                &StoreKey::new("\x77a.token", key),
                 record.as_bytes().to_vec(),
                 Expiry::Never,
             )

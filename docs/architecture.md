@@ -64,7 +64,9 @@ These predate the rename from wa-rs to meta-whatsapp-rs and never change:
 each is encrypted into, hashed into, or names data already stored, so
 changing one strands that data (or makes `migrate` refuse the database)
 on the next upgrade. A test pins each one's exact bytes; a change that
-fails it is a data migration, not a rename.
+fails it is a data migration, not a rename. The pins spell the `w` of
+their literals `\x77`, or pin opaque bytes (captured records, digests),
+so that a search-and-replace cannot rewrite them along with the code.
 
 | Identifier | Defined in | What it is | Pinned by |
 | --- | --- | --- | --- |

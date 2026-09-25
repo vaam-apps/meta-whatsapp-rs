@@ -445,12 +445,17 @@ mod tests {
     async fn the_default_prefix_and_key_layout_are_pinned() {
         let conn = Recorder::default();
         let kv = RedisKvStore::new(conn.clone());
-        assert_eq!(kv.prefix(), "wa:");
-        let got = kv.get(&StoreKey::new("wa.token", "waba/W1")).await.unwrap();
+        // `\x77` is `w`: spelled so that a search-and-replace of the
+        // prefix or the namespace cannot rewrite this pin along with the code.
+        assert_eq!(kv.prefix(), "\x77a:");
+        let got = kv
+            .get(&StoreKey::new("\x77a.token", "waba/W1"))
+            .await
+            .unwrap();
         assert!(got.is_none());
         assert_eq!(
             *conn.0.lock().unwrap(),
-            [["HMGET", "wa:{8:wa.token}:waba/W1", "v", "ver", "exp"]]
+            [["HMGET", "\x77a:{8:\x77a.token}:waba/W1", "v", "ver", "exp"]]
         );
     }
 
