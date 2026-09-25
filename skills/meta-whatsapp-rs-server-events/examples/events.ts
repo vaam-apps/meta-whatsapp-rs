@@ -44,9 +44,10 @@ export interface Cursor {
 }
 
 // One poll. Handle each event, then save next_after. Handlers must be
-// idempotent (skip an event id already handled): after a crash between
-// the two, the next poll returns the same events. Returns whether more
-// may follow at once (poll again without waiting).
+// idempotent (skip an event id already handled: an event recorded again
+// keeps its id): after a crash between the two, the next poll returns the
+// same events. Returns whether more may follow at once (poll again without
+// waiting).
 export async function pollOnce(
   api: WhatsApp,
   cursor: Cursor,
@@ -57,9 +58,13 @@ export async function pollOnce(
   const query: EventsQuery = after === undefined ? { limit: 100 } : { limit: 100, after };
   const { data, error } = await api.GET("/v1/events", { params: { query } });
   if (error) {
-    if (error.error.code === "cursor_expired") {
-      // Events after the cursor were purged (past retention): rebuild what
-      // you derive from them, then start again from the oldest kept.
+    // Events after the cursor were purged (past retention, or deleted with
+    // a tenant of the same id), or the cursor is past the tenant's newest
+    // event (a restored database): rebuild what you derive from events,
+    // then start again from the oldest kept.
+    const expired = error.error.code === "cursor_expired";
+    const unknown = error.error.code === "invalid_request" && error.error.field === "after";
+    if (expired || unknown) {
       await resync();
       await cursor.clear();
       return true;

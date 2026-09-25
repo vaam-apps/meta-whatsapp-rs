@@ -115,7 +115,7 @@ up -d --wait` starts one on port 55432 (`postgres://wa:wa@127.0.0.1:55432/wa`).
 Postgres holds everything: the library's tables (`wa_kv`, the inbox's
 `wa_messages` and `wa_conversations`) and the service's (`wa_server_tenants`,
 `wa_server_api_keys`, `wa_server_wabas`, `wa_server_numbers`, the event
-outbox `wa_server_events` and `wa_server_event_purges`), each with its own
+outbox `wa_server_events` and its per-tenant `wa_server_event_streams`), each with its own
 migration history. `serve` and `migrate` run both under an
 advisory lock, so replicas starting together never interleave them.
 Service migrations only ever add (expand, then contract in a later
@@ -258,35 +258,52 @@ tenant that owns its number.
 `WA_VERIFY_TOKEN`'s value; Meta's check (`GET /webhooks/meta`) answers
 the challenge. Subscribe the fields you need (`messages` at least).
 Attaching a WABA subscribes the app to it (Embedded Signup will too, M3):
-without that, Meta sends nothing for its numbers. Your ingress must pass
-bodies of 3 MiB untouched (no decompression, no rewriting: the signature
-covers the raw bytes) and wait longer than the slowest delivery.
+without that, Meta sends nothing for its numbers.
+
+Your ingress must pass bodies of 3 MiB untouched (no decompression, no
+rewriting: the signature covers the raw bytes), buffer each request
+before it reaches the service (slow clients stay at the ingress), wait
+longer than the slowest delivery, and **admit to `/webhooks/meta` only
+Meta's webhook IP ranges, or mutual TLS with Meta's client
+certificate**. A signature is only checked once a body is read, and
+anyone can send a well-formed one: without that filter, anyone on the
+internet makes the service read bodies. The app secret signs every
+tenant's deliveries: whoever holds it can forge any tenant's events.
 
 **2. What the service does with a delivery** (`POST /webhooks/meta`):
 
 - `401` without a well-formed `X-Hub-Signature-256` (before reading the
   body), or when no app secret produced it (`WA_APP_SECRET`, or
-  `WA_APP_SECRET_PREVIOUS` while rotating); `413` past 3 MiB.
+  `WA_APP_SECRET_PREVIOUS` while rotating); `413` past 3 MiB; `408` when
+  the body takes over 15 s to arrive.
+- A replica reads at most 64 deliveries at once and records at most 4
+  (its pool of 10 connections keeps room for API calls): past that,
+  `503` and Meta retries. So does a delivery whose tenant's events stay
+  locked over 2 s by others being recorded.
 - Each event is claimed for 60 s in the shared store: a delivery another
   replica is handling right now answers `503` and Meta retries; one
   already recorded is acknowledged without being recorded again.
 - **Routing is an allow-list.** An event naming a business phone number
   goes to the tenant that number is bound to (and only when Meta names the
   WABA the service bound it under); one naming only a WABA (template
-  reviews, account and quality updates) to the WABA's tenant. It is
-  recorded in the inbox first, then in the event outbox.
+  reviews, account and quality updates) to the WABA's tenant; and only
+  if Meta dated it no earlier than that WABA's attaching, so a WABA moved
+  to another tenant does not bring the first one's late events along.
+  It is recorded in the inbox first, then in the event outbox.
 - **Operator-only events** are recorded without a tenant, never shown to
   one, logged with their size and digest and counted
   (`wa_server_webhook_events_total{audience="operator"}`): events of a
   number or WABA no tenant holds, a field the library does not type
   (`unknown`), a signed body that is not a webhook (`unparsed`), partner
-  solution updates, and any event type the service has not reviewed yet.
-  A rising count usually means a WABA is subscribed but not attached.
+  solution updates, any event type the service has not reviewed yet,
+  events Meta dated before the WABA's attaching, and replays (dated more
+  than 7 days ago). A rising count usually means a WABA is subscribed but
+  not attached.
 - `200` once every event is recorded; `500` when recording failed: Meta
   redelivers the batch, the events already recorded are acknowledged as
   duplicates, and neither the inbox nor the outbox records one twice
-  (except the errors Meta reports without an id, `error_reported`, and
-  `unparsed` bodies: a redelivered batch records those again).
+  (errors and bodies that are not webhooks, which carry no id, are told
+  apart by the body they came in and their place in it).
 
 **3. Poll the events** with a key holding the `events` scope:
 
@@ -298,9 +315,10 @@ curl -sS "http://127.0.0.1:8081/v1/events?after=18342&types=message_received,sta
 
 The answer is `{"data": [...], "next_after": 18350}`. Store `next_after`
 and pass it as `after` next time: it is the last event's `sequence` when
-more follow (poll again at once), else the outbox's newest sequence (wait
-a little). Omitting `after` starts at the oldest event kept. Each event
-is an envelope:
+more follow (poll again at once), else the tenant's newest sequence (wait
+a little). Each tenant has its own sequence: 1, 2, 3… for its events
+alone. Omitting `after` starts at the oldest event kept. Each event is an
+envelope:
 
 ```json
 {"id": "evt_3f9c…", "sequence": 18342, "type": "message_received", "api_version": "v1",
@@ -311,16 +329,23 @@ is an envelope:
 
 `data` is meta-whatsapp-rs's `WebhookEvent` JSON (Meta's fields,
 normalized; key customers by `contact.user_id`, the BSUID, since
-`wa_id` may be absent). Deduplicate on `id`, order on `sequence`. Filter
-with `types` (comma-separated) and `phone_number_id`; a page stops early
-past 8 MiB of `data` (history syncs are large). A cursor older than what
-retention purged is `410 cursor_expired`: resynchronise (from the inbox,
-when it lands in M2) and start again without `after`. A cursor this
-service never issued (a restored database) is `422` on `after`.
+`wa_id` may be absent). Deduplicate on `id` (an event recorded again,
+Meta's late retry or a replay, keeps its id) and order on `sequence`;
+what your backend does per message (an order confirmation), make
+idempotent on the message id too (`data.message.id`), as a last guard.
+Filter with `types` (comma-separated, or repeated) and `phone_number_id`;
+a page stops before 8 MiB of `data` (history syncs are large). A cursor
+older than what was purged, by retention or with a deleted tenant of the
+same id, is `410 cursor_expired`: resynchronise (from the inbox, when it
+lands in M2) and start again without `after`. A cursor past the tenant's
+newest sequence (a restored database) is `422` on `after`.
 
-Events are kept `WA_SERVER_OUTBOX_RETENTION` (7 days by default); every
-replica runs housekeeping every 10 minutes, one at a time, which also
-deletes the expired webhook dedup markers.
+Events are kept `WA_SERVER_OUTBOX_RETENTION` (7 days by default, until
+the owner's retention decision D10); every replica runs housekeeping
+every 10 minutes, one at a time, which also deletes the expired webhook
+dedup markers. Deleting a tenant deletes its events, and takes it out of
+every platform key's allowed tenants: a tenant created again with the
+same id starts with neither.
 
 ## Errors
 
@@ -361,24 +386,26 @@ Every error answers one body:
   same moment: keep a preStop delay in Kubernetes if the load balancer
   must see the replica unready first).
 - Limits, per listener: a request head must arrive within 10 s (slow
-  clients are cut off), 1,024 connections on the public listener and
+  clients are cut off), 256 connections on the public listener and
   4,096 on the internal one (more wait), and every request is answered
   within 55 s (past it, `504 timeout` with `may_have_been_sent: true`).
 - `/metrics` (Prometheus) counts requests by listener, method, route
   template, status and error code, their duration, failed Graph calls
   by code, Meta's deliveries by outcome (`delivered`, `unauthenticated`,
-  `payload_too_large`, `in_flight`: a run of them means recording
-  outlasts the 60 s lease, `failed`), recorded events by type and
-  audience (`tenant`, `operator`), duplicates and recording failures by
-  stage; never an id, a number or a key.
+  `payload_too_large`, `slow_body`, `busy`: the replica at capacity,
+  `in_flight`: a run of them means recording outlasts the 60 s lease,
+  `failed`), recorded events by type and audience (`tenant`,
+  `operator`), duplicates and recording failures by stage; never an id,
+  a number or a key.
 - Logs are JSON, one line per request with its id (`X-Request-Id`, echoed
   or generated), route template (never the raw path), tenant, the public
   id of the key that made it, status and duration; every change an
   operator makes is also an `audit` event (action, admin key id, the
   tenant, key or WABA touched). No secret, token, message text or phone
   number is logged, and no webhook body or event content (an
-  operator-only event is logged by type, size and digest); Meta's error
-  texts only at `debug`.
+  operator-only event is logged by type, size and digest); refused
+  deliveries at most once a minute per reason; Meta's error texts only
+  at `debug`.
 - Known limit: key digests are unpeppered SHA-256 of random 256-bit
   secrets. Nobody can reverse one, but whoever can write the database's
   keys table can plant a key: guard write access to it.

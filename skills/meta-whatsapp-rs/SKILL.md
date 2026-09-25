@@ -5,7 +5,7 @@ description: "Start here for meta-whatsapp-rs, the Rust toolkit for Meta's Whats
 
 # meta-whatsapp-rs
 
-> **Verified against meta-whatsapp-rs 67a6684f5fbcc542da3c3a7b69c42a5a3ef53bf0 (2026-09-25).** On another revision, trust the code over this page (see "Versioning" below).
+> **Verified against meta-whatsapp-rs de93dd02caed2a1bea2b6c6138e0d05a1f70a7e5 (2026-09-25).** On another revision, trust the code over this page (see "Versioning" below).
 
 meta-whatsapp-rs is a Cargo workspace for Meta's WhatsApp Business Platform: a typed
 client for the Cloud API and the Business Management API (Graph API

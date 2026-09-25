@@ -828,9 +828,10 @@ decisions and the delivery milestones, is
   characters or line separators.
 - **Webhooks in** go through the library's `WebhookHandler` (signature
   before parsing, 3 MiB, the leased `DedupGuard` in the shared
-  `KvStore`) into `InboxSink`, then the service's event outbox. Routing
-  to a tenant is an allow-list: the tenant bound to the event's number or
-  WABA, for the event types the service reviewed; everything else is an
+  `KvStore`) into `InboxSink`, then the service's event outbox, one
+  stream of sequences per tenant. Routing to a tenant is an allow-list:
+  the tenant bound to the event's number or WABA since before Meta dated
+  it, for the event types the service reviewed; everything else is an
   operator-only row.
 - **Storage** is Postgres (memory only in development). The service's
   tables are `wa_server_*` with their own migration history, run with the

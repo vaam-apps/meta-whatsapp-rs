@@ -121,7 +121,7 @@ service's use `wa_server_` and their own migration history:
 | `wa_server_numbers` | `phone_number_id` (unique) → tenant, WABA, status (`connected`, `reconnect_required`, `disconnected`) |
 | `wa_server_signup_attempts` | resumable attempts: tenant, WABA, failed step, session info (never the code or PIN) |
 | `wa_server_idempotency` | [§5.4](#54-idempotency-keys) |
-| `wa_server_events` | the outbox: sequence, id, tenant (null = operator-only), number, WABA, type, JSON |
+| `wa_server_events`, `wa_server_event_streams` | the outbox: tenant (null = operator-only), the sequence within its tenant's stream, id, number, WABA, type, JSON and its size; each stream's last sequence and how far it was purged |
 | `wa_server_webhook_endpoints`, `…_deliveries` | [§4.4](#44-webhooks-out) |
 
 Vault, OTP challenges, dedup claims and signup sessions stay in the
@@ -137,8 +137,10 @@ library's `KvStore` namespaces (`wa.token`, `wa.otp`, `wa.webhook.dedup`,
   tenant owning the WABA. `unknown`, `unparsed`, `partner_solution_updated`
   and events for unowned numbers or WABAs are operator-only rows (metric,
   log with size and digest), never shown to a tenant.
-- Inserts are idempotent on `WebhookEvent::dedup_key`. A sink error answers
-  Meta 500 and the batch is redelivered (OQ #30 applies unchanged).
+- Inserts are idempotent on the event's key (`WebhookEvent::dedup_key`;
+  for the events the library gives none, the signed body and their place
+  in it). A sink error answers Meta 500 and the batch is redelivered (OQ
+  #30 applies unchanged).
 - The service adds `number_connected`, `number_disconnected` and
   `number_reconnect_required` (after a 190 on a merchant's call) events.
 - `data` is the library's `WebhookEvent` JSON, pinned by snapshot tests
@@ -146,7 +148,8 @@ library's `KvStore` namespaces (`wa.token`, `wa.otp`, `wa.webhook.dedup`,
   the server's tests and forces an API-version decision.
 
 How M1c settled what the list above leaves open (none of it is an owner
-decision; each is a place to look in review):
+decision, except the per-tenant sequences, a coordinator's decision of
+2026-09-25 flagged for the owner; each is a place to look in review):
 
 - **Types are an allow-list too.** A tenant receives only the event types
   the service reviewed and pinned (`TENANT_EVENT_TYPES` in
@@ -154,33 +157,72 @@ decision; each is a place to look in review):
   any type a later library adds are operator-only rows until the service
   lists them (a test reads the library's `WebhookEvent::kind` and fails
   on an unclassified one).
-- **Ownership is by the bindings, number first.** An event naming a number
-  goes to the number's tenant only when the WABA it names is the one the
+- **Ownership is by the bindings, number first, since before the
+  event.** An event naming a number (an untyped change: the number its
+  raw `metadata` names, which the inbox reads a `history` change by) goes
+  to the number's tenant only when the WABA it names is the one the
   number is bound under (stale bindings route to nobody); an event naming
-  only a WABA goes to the WABA's tenant. The inbox records an event only
-  when a tenant owns it, so an unowned number's messages never wait in the
-  inbox for whoever binds it later; the outbox records every event.
-- **Sequences commit in order.** An outbox insert holds a transaction
-  advisory lock from before it draws its sequence to its commit, so a
-  poll that saw sequence `n` saw every event before it and never moves
-  past one still in flight. The cost: outbox inserts do not run in
-  parallel across replicas (one statement and a commit each).
+  only a WABA goes to the WABA's tenant. And only when Meta dated the
+  event (the message's, status's, call's own time, else the entry's) no
+  earlier than the second that WABA's binding began: a WABA moved from
+  one tenant to another does not bring the first one's retried events to
+  the second. History and contact syncs (the past, on purpose) and errors
+  (no date) route by the current binding. The inbox records an event only
+  when a tenant owns it, so an unowned number's messages never wait in
+  the inbox for whoever binds it later; the outbox records every event.
+  The Postgres insert keeps the tenant only while the binding it was
+  routed by still names it, under a `FOR KEY SHARE` lock, so an unbinding
+  racing the insert cannot hand the event to a tenant re-created under
+  the same id.
+- **Replays go to nobody, under the same id.** An event Meta dated before
+  what the dedup lease remembers (7 days and an hour) is operator-only.
+  An event's id is derived from it (HMAC-SHA256 of its outbox key, under
+  a key derived from the app secret): recorded again, it keeps its id,
+  and receivers deduplicate on it. Undated events (errors, syncs) cannot
+  be told from a replay.
+- **Each tenant has its own sequence** (security review L2: global
+  sequences showed every tenant the platform's volume and timing; a
+  coordinator's decision, reversible). `sequence`, `after`,
+  `next_after`, `410` and `422` are the tenant's; operator-only rows have
+  a stream of their own. An insert draws its sequence from its stream's
+  row of `wa_server_event_streams`, locked until it commits, so a
+  stream's events commit in order and a poll that saw sequence `n` saw
+  every event of the tenant before it; other tenants' inserts do not
+  wait. A lock waited for over 2 s answers Meta `503`.
 - **Polling.** `next_after` is the last event's sequence when more follow,
-  else the outbox's newest sequence (other tenants' included, so a quiet
-  tenant's cursor does not age into `410`). `410 cursor_expired` is a
-  cursor below what housekeeping purged; a cursor above the newest
-  sequence (a restored database) is `422` on `after`. A page stops past
-  8 MiB of `data`, with at least one event. Housekeeping purges a prefix
-  of sequences past `WA_SERVER_OUTBOX_RETENTION` (7 days until D10 is
-  decided), on one replica at a time, and the library's expired
-  key/value rows with it.
-- **Keyless events** (`error_reported`, `unparsed`) have no dedup key: a
-  redelivered batch records them again, as the library does.
+  else the tenant's newest sequence. `410 cursor_expired` is a cursor
+  below what was purged; a cursor above the tenant's newest sequence (a
+  restored database) is `422` on `after`. A page stops before the event
+  that would take its `data` past 8 MiB (the first always comes), chosen
+  from stored sizes before any data is read. Housekeeping purges a prefix
+  of each stream past `WA_SERVER_OUTBOX_RETENTION` (7 days until D10 is
+  decided), on one replica at a time, and the library's expired key/value
+  rows with it.
+- **Keyless events** (`error_reported`, `unparsed`: no dedup key in the
+  library) are keyed by the SHA-256 of the signed body and their position
+  among its keyless events: Meta redelivers byte for byte, so a
+  redelivered batch records them once. An identical body sent again
+  later is taken for a redelivery (nothing tells them apart). Keys also
+  cover the business number.
+- **Deleting a tenant** deletes its events and records its stream purged
+  in the same transaction (a tenant created later with the same id polls
+  none of them, its sequences go on after them, an old cursor is `410`),
+  and takes the id out of every platform key's allowed tenants.
 - **The library's handler, the service's route.** `POST /webhooks/meta`
-  calls the library's `WebhookHandler` (signature, 3 MiB, parsing, the
-  dedup lease) rather than mounting its `router`: the router discards the
-  delivery report the service counts duplicates from. It answers as the
-  router does (bare statuses: `401`, `413`, `503`, `500`).
+  calls the library's `WebhookHandler` (3 MiB, parsing, the dedup lease;
+  the service checks the signature first) rather than mounting its
+  `router`: the router discards the delivery report the service counts
+  duplicates from. It answers as the router does, bare statuses: `401`,
+  `413`, `503`, `500`, and `408` for a body slower than 15 s.
+- **Intake is bounded.** A replica reads at most 64 deliveries at once
+  (the next is `503` before its body is read: well-formed signatures cost
+  nothing to forge, and bodies are buffered until checked) and records at
+  most 4 at once, below its pool of 10 connections, so API key lookups
+  always find one (`503` after 10 s without a turn). The public listener
+  takes 256 connections. Refused deliveries write at most one warning a
+  minute per reason; the metric counts every one. Not done: one
+  transaction per delivery instead of per event, which the library's
+  per-event lease does not allow without re-implementing its handler.
 
 ### 2.4 Several replicas
 
@@ -188,6 +230,7 @@ decision; each is a place to look in review):
 | --- | --- |
 | vault, OTP, signup sessions, dedup, inbox, outbox, keys | shared in Postgres; expiry by the database clock (NTP) |
 | dedup lease (60 s) | a retry meeting a live lease on another replica gets 503 and Meta returns; a crashed replica's lease expires; the sink path (two inserts) stays far below 60 s |
+| outbox inserts | each tenant's in turn (its stream's row, locked to the commit); tenants in parallel; at most 4 deliveries recording per replica |
 | SSE | per replica, fed from the outbox by `LISTEN/NOTIFY`; `Last-Event-ID` resumes on any replica |
 | webhooks-out | workers on every replica claim rows with `FOR UPDATE SKIP LOCKED` and a lease; no leader |
 | rate limits | token buckets per replica (limit ÷ replicas); a shared limiter only if needed |
@@ -397,7 +440,7 @@ Review results arrive as `template_status_updated` events.
 
 | Method and path | Does | Request → response |
 | --- | --- | --- |
-| `GET /v1/events` | poll after a sequence, `?after=&types=&phone_number_id=`; `410 cursor_expired` past retention | → `{data: [envelope], next_after}` |
+| `GET /v1/events` | poll the tenant's events after a sequence of its own, `?after=&types=&phone_number_id=&limit=` (`types`: `KnownEventType`s, comma-separated or repeated; `limit` ≤ 100, 50 by default); a page stops before 8 MiB of `data` (the first event always comes); `410 cursor_expired` below what was purged (retention, or a deleted tenant of the same id); `422` on `after` past the tenant's newest sequence, on `types` for a type a tenant never receives | → `{data: [envelope], next_after}` |
 | `GET /v1/events/{id}` | one event in full (for truncated deliveries) | → envelope |
 | `GET /v1/events/stream`, `GET /v1/numbers/{pn}/events/stream` | SSE for the tenant, or one number ([§4.5](#45-live-updates-sse)); `429 too_many_streams` | `text/event-stream` |
 | `POST /v1/webhook-endpoints` | forward events to a URL ([§4.4](#44-webhooks-out)); `422 url` outside the allowed destinations | `{url, types, tenants?}` → `201 {id, secret}` (shown once) |
@@ -473,7 +516,8 @@ For backends such as Medusa that prefer not to hold a stream open.
   1 KiB of the answer read. **At least once**: backoff with jitter from
   10 s, at most 1 h a step, for 72 h, then `failed` (retryable through the
   API); an endpoint failing the whole window is disabled. Unordered:
-  receivers deduplicate on `id` and order on `sequence`.
+  receivers deduplicate on `id` (the same event keeps its id) and order
+  on `sequence`, which is each tenant's own ([§2.3](#23-the-event-pipeline)).
 - **Destinations** only within `WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS`
   (hosts, CIDRs), HTTPS outside development; the address is resolved,
   checked and pinned per attempt (no DNS rebinding). Private ranges pass
@@ -483,7 +527,8 @@ For backends such as Medusa that prefer not to hold a stream open.
 
 ### 4.5 Live updates (SSE)
 
-- Frames `event: whatsapp`, `id: <sequence>`, `data: <envelope>`; a
+- Frames `event: whatsapp`, `id: <sequence>` (the tenant's own,
+  [§2.3](#23-the-event-pipeline)), `data: <envelope>`; a
   keepalive comment every 15 s; `event: lagged` when a slow client lost
   events (reload history, or poll from its last sequence). Reconnecting with
   `Last-Event-ID` replays from the outbox, on any replica, within retention.
@@ -634,11 +679,12 @@ sends twice. The service adds no send retries of its own.
 
 | Threat | Control |
 | --- | --- |
-| Forged Meta deliveries | signature over raw bytes with any of N app secrets; missing or malformed header `401` before the body is read; 3 MiB; the public listener serves nothing else |
-| Replayed Meta bodies | dedup for 7 days; bodies never logged |
+| Forged Meta deliveries | signature over raw bytes with any of N app secrets; missing or malformed header `401` before the body is read; 3 MiB; at most 64 read at once per replica (`503` before the body), 15 s to send one (`408`), refusals logged once a minute; the public listener serves nothing else; Meta's IP ranges or mTLS at the ingress (below) |
+| Replayed Meta bodies | dedup for 7 days; events Meta dated before that go to nobody; an event keeps its id when recorded again; bodies never logged |
+| A WABA or number moving between tenants | events Meta dated before the binding began go to nobody, inbox included; the previous tenant's inbox rows stay under the number (M2's inbox reads must filter by binding epoch, or D10 decides a purge on unbind) |
 | A tenant reading or sending as another | ownership before the vault ([§3.3](#33-authorization-order)); foreign numbers are `404`; extractors are the only path to a token |
 | A stolen platform key | limited to its tenants and scopes; internal network only; revocation effective across replicas at once |
-| A stolen database dump | tokens encrypted (vault key elsewhere), API keys hashed, OTP codes and numbers only as HMACs (pepper elsewhere), webhook secrets encrypted (data key elsewhere); inbox history is readable, so database encryption at rest is the operator's |
+| A stolen database dump | tokens encrypted (vault key elsewhere), API keys hashed, OTP codes and numbers only as HMACs (pepper elsewhere), webhook secrets encrypted (data key elsewhere); the inbox history and the event outbox (`wa_server_events`: message texts, vCards, orders, Flow answers, BSUIDs, phone numbers, coexistence history; operator-only rows keep whole raw bodies and parse error texts) are readable, so database encryption at rest is the operator's, and their retention is D10 |
 | Signup attributed to the wrong merchant | state bound to the tenant, redeemed for the credential's tenant; ids verified with Meta; D4 |
 | OTP brute force, cross-tenant codes | the library's limits, per-tenant rate limits, namespace = tenant |
 | SSRF | no URL fetching (media by id, through the library's host allow-list); webhooks-out allow-list, no redirects, pinned address |
@@ -669,7 +715,13 @@ portfolio limits) still apply; pacing campaigns is the caller's job.
 
 **CORS**: none (D3). **TLS** terminates at the ingress: valid certificate,
 body limit of at least 3 MiB, no body rewriting or decompression, a timeout
-above the slowest sink. The internal listener is reachable only from the
+above the slowest sink, request buffering (so slow clients never reach the
+service), and only Meta's webhook IP ranges, or mutual TLS with Meta's
+client certificate, admitted to `/webhooks/meta`. The app secret signs
+every tenant's deliveries: whoever holds it can forge any tenant's
+events. So from M3, a webhook that would do something destructive (a
+`PARTNER_APP_UNINSTALLED` disconnecting a WABA, a credit line revoked) is
+confirmed with Graph first, not acted on by its signature alone. The internal listener is reachable only from the
 private network (a `NetworkPolicy` admitting the two backends). Egress:
 `graph.facebook.com`, `lookaside.fbsbx.com`, allowed webhook destinations.
 
@@ -739,9 +791,14 @@ crate names, settled when OQ #1 closed (`meta-whatsapp-*`, 2026-09-25).
 
 **Decision for owner (D10): retention and erasure.** The service stores
 customers' messages and identifiers. Choose retention for inbox history
-(keep, or purge after N days), the outbox (7 days proposed) and delivery
-logs (30 days proposed), and whether an erasure endpoint (one contact on one
-number) is required; erasure needs a `ConversationStore` port change (L5).
+(keep, or purge after N days), the outbox (7 days proposed; M1c ships that
+as the default of `WA_SERVER_OUTBOX_RETENTION` until this is decided) and
+delivery logs (30 days proposed), whether an erasure endpoint (one contact
+on one number) is required, and what happens to a number's inbox history
+when the number moves to another tenant (M2 hides it by binding epoch; a
+purge on unbind would be erasure); erasure needs a `ConversationStore`
+port change (L5). A deleted tenant's outbox events are deleted with it
+already (they could otherwise reach a tenant re-created under its id).
 *Recommendation*: configurable, keeping history by default; erasure in M2
 if the platform's privacy obligations require it. A legal and product call.
 
@@ -798,7 +855,7 @@ Tests use `ScriptedTransport` (method, path, token, exact JSON,
 | | Scope | Docs and skills it adds |
 | --- | --- | --- |
 | **M1** skeleton, auth, messages and templates, webhooks in | the crate, fail-closed configuration, both listeners, storage and migrations, tenants, keys, admin API and CLI bootstrap, admin attach, the authorization order, messages, media, templates (list, get, create, delete), `/webhooks/meta` into inbox and outbox, `GET /v1/events`, errors (L1), idempotency, rate limits, health, metrics, tracing, the committed spec | `docs/guides/server.md` (run, configure, tenants, keys, first send); a README section "Not writing Rust? Run the service"; L6; a `docs/coverage.md` row; skills `meta-whatsapp-rs-server` (hub for HTTP callers: deploy, credentials, errors, idempotency, routing) and `meta-whatsapp-rs-server-send` (messages, templates, media); the skills gate below |
-| **M2** inbox, live updates, webhooks out | inbox routes, SSE (`LISTEN/NOTIFY`, `Last-Event-ID`), `GET /v1/events/{id}`, webhook endpoints, dispatcher, retries, destination allow-list, the service's number events | `server.md` inbox and events; skill `meta-whatsapp-rs-server-inbox` (inbox API, relaying live events to the CMS's browsers, receiving and verifying webhooks-out) |
+| **M2** inbox, live updates, webhooks out | inbox routes (their reads filter by the number's binding epoch: a number moved to another tenant shows it nothing from before its binding, the inbox half of security review M3, unless D10 purges on unbind), SSE (`LISTEN/NOTIFY`, `Last-Event-ID`), `GET /v1/events/{id}`, webhook endpoints, dispatcher, retries, destination allow-list, the service's number events | `server.md` inbox and events; skill `meta-whatsapp-rs-server-inbox` (inbox API, relaying live events to the CMS's browsers, receiving and verifying webhooks-out) |
 | **M3** Embedded Signup in both modes, OTP | signup routes, persisted attempts, disconnection, coexistence sync, authentication templates, OTP and its per-tenant settings; needs L2 (and L3 for partner mode). Vault rotation extended to the records partner mode keeps past a binding (credit ledgers that outlive their token, revocation markers: the library's `rotate_business`), without which a rotation's empty `failed` no longer means the old key is unused | `server.md` onboarding and OTP, and its key rotation advice ("drop the old key once `failed` is empty", caveated since M1a) made true again; skills `meta-whatsapp-rs-server-onboarding` (the CMS connect flow through the service: page, relay, PIN, resume, both modes) and `meta-whatsapp-rs-server-otp` |
 | **M4** TypeScript client, Docker image, docs | `clients/typescript`, the image and its CI, a Compose file, the documents route, the deployment guide | `server.md` deployment (Docker, Compose, Kubernetes notes); a `docs/guides/README.md` row; skill `meta-whatsapp-rs-server-typescript` (install, calls, errors, idempotency, SSE, webhook verification in Medusa or any Node backend); `meta-whatsapp-rs-production` points to the service |
 
@@ -872,7 +929,7 @@ D1–D4 and D7 were decided by the owner on 2026-09-24 and D13–D14 on 2026-09-
 | D7 | Coexistence sync (OQ #7) | endpoint / automatic / both, per tenant | **Decided 2026-09-24: automatic** (the service starts the one-time contacts + history sync right after a coexistence onboarding) | M3 |
 | D8 | Who sends a tenant's OTP codes | platform number / merchant's / per tenant | per tenant, platform number by default | M3 |
 | D9 | Image name and registry | public GHCR / private registry; the name | public on GHCR, named `meta-whatsapp-server` (OQ #1, closed, settled the crate names) | M4 |
-| D10 | Retention and erasure of customers' messages | keep / purge after N days; erasure or not | configurable, keep by default; erasure if required (L5) | M2 |
+| D10 | Retention and erasure of customers' messages | keep / purge after N days; erasure or not; a number's inbox history when it moves to another tenant (hidden by M2's binding epoch, or purged on unbind) | configurable, keep by default; erasure if required (L5) | M2 |
 | D11 | Publishing the TypeScript client | npm / GitHub Packages / vendored | public npm | M4 |
 | D12 | A Medusa plugin | none / now / after the first integration | after the first integration | after M4 |
 | D13 | Where the server skills live | this repository / a separate one | **Decided 2026-09-25: this repository** (under `skills/`, same stamp gate and `npx skills add vaam-apps/meta-whatsapp-rs`) | M1 |

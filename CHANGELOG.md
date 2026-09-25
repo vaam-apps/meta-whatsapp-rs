@@ -122,26 +122,33 @@ volumes (Claude config, shell history, cargo caches) start empty
 - **meta-whatsapp-server, milestone M1c**: Meta's webhooks into the inbox
   and an event outbox, and polling it. `POST /webhooks/meta` on the public
   listener refuses a missing or malformed `X-Hub-Signature-256` with `401`
-  before reading the body, a body over 3 MiB with `413`, and a signature
-  no app secret produced (`WA_APP_SECRET`, or `WA_APP_SECRET_PREVIOUS`
-  while rotating) with `401`; then the library's `WebhookHandler` parses
-  it and leases each event in the shared key/value store (another replica
-  delivering it: `503`, Meta retries). Each event goes to the tenant that
-  owns its number (under the WABA Meta names) or, naming no number, its
-  WABA: into the inbox (`InboxSink`), then into the outbox
-  (`wa_server_events`, migration 3), whose inserts commit in sequence
-  order and are idempotent on the event's dedup key, so Meta's
-  redeliveries after a failure (`500`) record nothing twice. Events of
-  numbers or WABAs no tenant owns, `unknown`, `unparsed`,
-  `partner_solution_updated` and any type the service has not reviewed
-  are operator-only rows, never shown to a tenant, logged by size and
-  digest. `GET /v1/events` (scope `events`) answers the caller's
-  tenant's events after `after` (`types`, `phone_number_id`, `limit`),
-  `{data, next_after}`, `410 cursor_expired` past retention
-  (`WA_SERVER_OUTBOX_RETENTION`, 7 days until the owner decides D10),
-  purged by housekeeping on one replica at a time with the expired dedup
-  markers. Event `data` is the library's `WebhookEvent` JSON, pinned by
-  snapshots over Meta's documented examples. Metrics for deliveries,
+  before reading the body, a body over 3 MiB with `413`, one slower than
+  15 s with `408`, and a signature no app secret produced
+  (`WA_APP_SECRET`, or `WA_APP_SECRET_PREVIOUS` while rotating) with
+  `401`; a replica reads at most 64 deliveries and records at most 4 at
+  once (`503`, Meta retries), and refused deliveries write at most one
+  warning a minute per reason. The library's `WebhookHandler` parses the
+  body and leases each event in the shared key/value store (another
+  replica delivering it: `503`). Each event goes to the tenant that owns
+  its number (under the WABA Meta names) or, naming no number, its WABA,
+  and only if Meta dated it no earlier than that binding began: into the
+  inbox (`InboxSink`), then into the outbox (`wa_server_events`,
+  migration 3), idempotent on the event's key, so Meta's redeliveries
+  after a failure (`500`) record nothing twice, errors and bodies that
+  are not webhooks included (keyed by the signed body and their place in
+  it). Events of numbers or WABAs no tenant holds, events dated more than
+  7 days ago (replays), `unknown`, `unparsed`, `partner_solution_updated`
+  and any type the service has not reviewed are operator-only rows, never
+  shown to a tenant, logged by size and digest. `GET /v1/events` (scope
+  `events`) answers the caller's tenant's events after `after` in the
+  tenant's own sequence (`types`, `phone_number_id`, `limit`, pages of at
+  most 8 MiB of data), `{data, next_after}`, `410 cursor_expired` past
+  retention (`WA_SERVER_OUTBOX_RETENTION`, 7 days until the owner decides
+  D10) or after a tenant of the same id was deleted. An event's id is
+  derived from the event, so it keeps it when recorded again. Deleting a
+  tenant deletes its events and takes it out of every platform key's
+  allowed tenants. Event `data` is the library's `WebhookEvent` JSON,
+  pinned by snapshots over Meta's examples. Metrics for deliveries,
   events by type and audience, duplicates and failures. Skill:
   `meta-whatsapp-rs-server-events`.
 - **meta-whatsapp-server, milestone M1a**: the HTTP service of
