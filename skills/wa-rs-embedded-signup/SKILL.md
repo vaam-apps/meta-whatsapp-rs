@@ -8,8 +8,7 @@ description: "Letting each merchant of a multi-tenant CMS connect their own What
 > **Verified against wa-rs 0da9390d42a51de4df427476b333062a6f94eacf (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code, compiled and tested by wa-rs's own gate:
-[examples/onboarding.rs](examples/onboarding.rs), [examples/solution_partner.rs](examples/solution_partner.rs).
-The page side: [references/frontend.md](references/frontend.md). A full
+[examples/onboarding.rs](examples/onboarding.rs), [examples/solution_partner.rs](examples/solution_partner.rs). The page side: [references/frontend.md](references/frontend.md). A full
 **Tech Provider** server: [`embedded_signup.rs`](https://github.com/vaam-apps/wa-rs/blob/main/crates/wa-rs/examples/embedded_signup.rs).
 
 ## When to use
@@ -111,8 +110,10 @@ names are constants in `embedded_signup::steps`:
 The browser's ids are claims: `verify_assets` checks them with Meta. The
 token is stored first: later steps fail for fixable reasons (a wrong PIN,
 `ErrorKind::TwoStepVerification`). Credit steps check before they post,
-refuse a revoked business, and answer a lost share with `Reconcile`: look
-first (`err.credit()`). Refuse others' WABAs in `onboard_with_approval`.
+refuse a revoked business, answer a lost share with `Reconcile` (look
+first: `err.credit()`; one Meta never lists, an admin clears with
+`clear_pending_share`). Refuse others' WABAs in `onboard_with_approval`;
+revoke at once on every `PartnerRemoved`, coexistence ones included.
 
 ```rust
 let request = OnboardingRequest::new(SignupCode::new("unused")?, saved_session)
@@ -149,8 +150,7 @@ a malformed post spent the attempt. Check everything local first.
   number pools or multi-WABA onboarding; no token refresh (an expired
   token means running the flow again), no PIN policy, no code-less
   `OnboardingRequest` for `resume` after a restart (hence the placeholder
-  code above)
-  ([open questions 4–12](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)).
+  code above) ([open questions 4–12](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)).
 - No tenant model: which of your merchants owns a WABA is your table.
 
 ## Related skills
