@@ -3888,6 +3888,106 @@ mod tests {
                 .is_some()
         );
         assert_eq!(h.t.remaining(), 0);
+
+        // A re-share whose answer is lost: its outcome is unknown, so the
+        // marker stays too.
+        h.t.push_json(200, success()); // subscribe
+        h.t.push_json(200, success()); // assigned_users
+        h.t.push_json(200, shared_record(ALLOCATION));
+        h.t.push_json(200, deleted());
+        h.t.push_error(|| TransportError::Timeout);
+        let err =
+            h.es.resume(
+                &waba(),
+                &request()
+                    .currency(WabaCurrency::Usd)
+                    .reshare_after_revocation(),
+                &h.vault,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err.credit(), Some(CreditError::Reconcile(_))),
+            "{err}"
+        );
+        assert!(
+            h.vault
+                .revoked_business(&BusinessId::new(BUSINESS))
+                .await
+                .unwrap()
+                .is_some(),
+            "kept"
+        );
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// A revocation that settled the pending flag while this share's POST
+    /// was in flight (it revoked another record of the business), then the
+    /// POST's answer is lost and nothing new can be revoked: the flag is
+    /// set again, so the next revocation does not report the line done.
+    #[tokio::test]
+    async fn a_lost_share_is_kept_pending_even_if_a_revocation_settled_it() {
+        let (h, hooked, other) = hooked_harness(CreditSharing::ShareAndAttach, Arc::default());
+        script_until_subscribe(&h.t, owner());
+        h.t.push_json(200, success()); // assigned_users
+        h.t.push_json(200, nothing_shared()); // the share's check
+        // The revocation, before the POST: another WABA's record of the
+        // business, revoked now.
+        h.t.push_json(200, shared_record("OTHER_WABA_RECORD"));
+        h.t.push_json(200, active());
+        h.t.push_json(200, success());
+        h.t.push_json(200, deleted());
+        h.t.push_error(|| TransportError::Timeout); // the POST
+        // The share's own revocation: only that record, already revoked.
+        h.t.push_json(200, shared_record("OTHER_WABA_RECORD"));
+        h.t.push_json(200, deleted());
+        hooked.before(
+            Method::POST,
+            "/whatsapp_credit_sharing_and_attach",
+            move || {
+                Box::pin(async move {
+                    let report = other
+                        .es
+                        .revoke_credit_line(&waba(), None, &other.vault)
+                        .await
+                        .unwrap();
+                    assert_eq!(
+                        report.revoked,
+                        [AllocationConfigId::new("OTHER_WABA_RECORD")]
+                    );
+                    assert_eq!(
+                        other
+                            .vault
+                            .credit(&waba())
+                            .await
+                            .unwrap()
+                            .unwrap()
+                            .pending_share,
+                        None,
+                        "vacuous otherwise: the revocation settled the flag"
+                    );
+                })
+            },
+        );
+        let err = h
+            .onboard(&request().currency(WabaCurrency::Usd))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err.credit(), Some(CreditError::Reconcile(_))),
+            "{err}"
+        );
+        assert!(
+            h.vault
+                .credit(&waba())
+                .await
+                .unwrap()
+                .unwrap()
+                .pending_share
+                .is_some(),
+            "pending again"
+        );
+        assert_eq!(h.t.remaining(), 0);
     }
 
     /// Fix 3: in Solution Partner mode a line is attached only to a WABA
@@ -3971,6 +4071,44 @@ mod tests {
         h.t.push_json(200, funding(CREDENTIAL));
         h.t.push_json(200, success()); // register
         h.es.resume(&waba(), &request, &h.vault).await.unwrap();
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// Item 5: the approval onboarding records is for the token record it
+    /// then stores, however long the integrator's check takes.
+    #[tokio::test]
+    async fn the_approval_is_for_the_token_onboarding_stores() {
+        let h = harness(CreditSharing::ShareAndAttach);
+        let clock = Arc::new(ManualClock::new(datetime!(2026-09-24 12:00 UTC)));
+        let vault = TokenVault::new(
+            Arc::new(MemoryKvStore::new()),
+            VaultKeys::new(VaultKey::new("k1", SecretBytes::new([42; 32])).unwrap()),
+        )
+        .unwrap()
+        .with_clock(clock.clone());
+        let request = request().currency(WabaCurrency::Usd);
+        script_until_subscribe(&h.t, owner());
+        h.t.push_json(200, success()); // assigned_users
+        h.t.push_json(200, nothing_shared());
+        h.t.push_json(200, shared_and_attached());
+        h.t.push_json(200, success()); // register
+        h.es.onboard_with_approval(&request, &vault, |_| {
+            clock.advance(std::time::Duration::from_secs(90));
+            async { Ok(()) }
+        })
+        .await
+        .unwrap();
+        let stored = vault.get(&waba()).await.unwrap().unwrap();
+        let credit = vault.credit(&waba()).await.unwrap().unwrap();
+        assert_eq!(credit.approved_token_created_at, stored.created_at);
+        h.t.push_json(200, success()); // subscribe
+        h.t.push_json(200, success()); // assigned_users
+        h.t.push_json(200, shared_record(ALLOCATION));
+        h.t.push_json(200, active());
+        h.t.push_json(200, receiving_credential(ALLOCATION, CREDENTIAL));
+        h.t.push_json(200, funding(CREDENTIAL));
+        h.t.push_json(200, success()); // register
+        h.es.resume(&waba(), &request, &vault).await.unwrap();
         assert_eq!(h.t.remaining(), 0);
     }
 
