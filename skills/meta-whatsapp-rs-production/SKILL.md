@@ -85,7 +85,7 @@ share Meta never lists (`clear_pending_share`, with an operator id).
 Defaults: 30 s timeout, 3 retries (250 ms base, 8 s cap). Set them once:
 
 ```rust
-wa_rs::client_builder()?
+meta_whatsapp_rs::client_builder()?
     .access_token(settings.system_user_token.clone())
     .api_version(ApiVersion::new(25, 0)) // moves only when you change it
     .timeout(Duration::from_secs(15))

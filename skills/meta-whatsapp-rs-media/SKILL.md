@@ -14,7 +14,7 @@ tested by meta-whatsapp-rs's own gate.
 
 Uploading a file to send it, downloading what a customer sent, or getting
 the header handle a template definition needs. Module
-`wa_rs::client::media`, reached with `client.media(phone_number_id)`.
+`meta_whatsapp_rs::client::media`, reached with `client.media(phone_number_id)`.
 
 ## Upload, then send the id
 

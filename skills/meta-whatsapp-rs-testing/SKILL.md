@@ -20,7 +20,7 @@ verifies codes. meta-whatsapp-rs's own tests use exactly these doubles.
 
 `ScriptedTransport` is behind meta-whatsapp-rs's `testing` feature. Enable it for
 test builds only, on the same meta-whatsapp-rs dependency (no second pin to keep in
-step), and `wa_rs::core::testing` exists in your tests:
+step), and `meta_whatsapp_rs::core::testing` exists in your tests:
 
 ```toml
 [dependencies]
@@ -77,7 +77,7 @@ with status 400: the client classifies it as usual.
 ```rust
 let body = text_webhook(NUMBER, CUSTOMER, "Does it come in navy?", 1_749_416_383);
 let body = serde_json::to_vec(&body).unwrap();
-let signature = wa_rs::webhooks::sign(&AppSecret::new(SECRET), &body);
+let signature = meta_whatsapp_rs::webhooks::sign(&AppSecret::new(SECRET), &body);
 
 let first = handler.deliver(Some(&signature), &body).await.unwrap();
 assert_eq!(first.delivered, 1);
@@ -89,8 +89,8 @@ assert_eq!(retry.duplicates, 1); // Meta's retry is recorded once
 bodies from Meta's documented examples (the helper `text_webhook` in the
 example file is one; copy the shapes of the webhook reference pages),
 including BSUID-only customers without `wa_id`. A sink of
-`wa_rs::adapters::sink::channel` lets the test read what was delivered;
-`wa_rs::webhooks::WebhookPayload::from_slice(..)?.into_events()` parses a
+`meta_whatsapp_rs::adapters::sink::channel` lets the test read what was delivered;
+`meta_whatsapp_rs::webhooks::WebhookPayload::from_slice(..)?.into_events()` parses a
 body without a handler. To drive an axum app, see the tests of
 `wa-rs-webhook-endpoint` (`tower::ServiceExt::oneshot`).
 

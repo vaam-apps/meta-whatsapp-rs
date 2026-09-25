@@ -15,7 +15,7 @@ program: [`invoice_document.rs`](https://github.com/vaam-apps/wa-rs/blob/main/cr
 
 An order receipt, an invoice, a voucher image, a packing slip — rendered
 by your backend and sent over WhatsApp. Enable the `typst` feature; the
-module is `wa_rs::typst`.
+module is `meta_whatsapp_rs::typst`.
 
 ## Render, upload, send
 
@@ -100,7 +100,7 @@ falls back.
   template calling `datetime.today()` fails to compile, and the PDF carries
   no creation date. Pass the date in the shop's or customer's time zone.
   Same template, input and date ⇒ byte-identical output everywhere.
-- `RenderError` converts into `wa_rs::Error::Other` with `?`; the typed
+- `RenderError` converts into `meta_whatsapp_rs::Error::Other` with `?`; the typed
   error survives (`downcast_ref::<RenderError>()` on the inner
   `anyhow::Error`).
 - Compile diagnostics can quote input values: log them as carefully as

@@ -9,8 +9,8 @@ description: "What a merchant inbox built on meta-whatsapp-rs needs beyond one-t
 
 Reference code: [examples/groups_calls.rs](examples/groups_calls.rs),
 compiled and tested by meta-whatsapp-rs's own gate (Meta-shaped answers and
-webhooks). Everything else: the rustdoc of `wa_rs::client::block_users`,
-`wa_rs::client::groups` and `wa_rs::client::calling`
+webhooks). Everything else: the rustdoc of `meta_whatsapp_rs::client::block_users`,
+`meta_whatsapp_rs::client::groups` and `meta_whatsapp_rs::client::calling`
 (`cargo doc -p meta-whatsapp-rs --all-features --open`).
 
 ## When to use
@@ -29,7 +29,7 @@ let refused = answer
     .block_users
     .failed_users
     .iter()
-    .flat_map(|user| user.errors.iter().map(wa_rs::GraphApiError::kind))
+    .flat_map(|user| user.errors.iter().map(meta_whatsapp_rs::GraphApiError::kind))
     .collect();
 Ok(refused) // empty: blocked. 131047: they have not written in the last 24 hours
 ```

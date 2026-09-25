@@ -14,8 +14,8 @@ payload type: [references/events.md](references/events.md).
 ## When to use
 
 Anything that consumes the events the endpoint (`wa-rs-webhook-endpoint`)
-hands to your sink. Types: `wa_rs::webhooks::WebhookEvent` and the
-payloads in `wa_rs::webhooks::fields`.
+hands to your sink. Types: `meta_whatsapp_rs::webhooks::WebhookEvent` and the
+payloads in `meta_whatsapp_rs::webhooks::fields`.
 
 ## Route each event
 
@@ -24,7 +24,7 @@ A customer message (`MessageReceived`): key the customer, then match
 with a `_` arm for the types Meta adds):
 
 ```rust
-fn customer(message: &wa_rs::webhooks::fields::InboundMessage) -> Option<String> {
+fn customer(message: &meta_whatsapp_rs::webhooks::fields::InboundMessage) -> Option<String> {
     message
         .from_user_id
         .as_ref()
@@ -46,7 +46,7 @@ WebhookEvent::StatusUpdated { status, .. } => match status.status {
         kinds: status
             .errors
             .iter()
-            .map(wa_rs::GraphApiError::kind)
+            .map(meta_whatsapp_rs::GraphApiError::kind)
             .collect(), // 131049/131050 arrive here
     },
     _ => Action::Ignore, // sent, played, and values Meta adds (Other)

@@ -13,12 +13,12 @@ tested by meta-whatsapp-rs's own gate. Every code, its `ErrorKind` and what to d
 
 ## When to use
 
-Whenever code matches on a `wa_rs::Error`, retries anything, or runs a job
+Whenever code matches on a `meta_whatsapp_rs::Error`, retries anything, or runs a job
 queue that sends messages.
 
 ## The tree
 
-Every fallible call returns `wa_rs::Result<T>` = `Result<T, wa_rs::Error>`:
+Every fallible call returns `meta_whatsapp_rs::Result<T>` = `Result<T, meta_whatsapp_rs::Error>`:
 
 ```text
 Error::Api(GraphApiError)   Meta's error object; .kind() classifies .code
@@ -124,7 +124,7 @@ pub fn after_failed_send(e: &Error) -> Resend {
   failed status, `InboundMessage::errors`, `WebhookEvent::ErrorReported`.
   An opt-out can show up there instead of on the send.
 - Every public `validate()` returns `Result<(), ValidationError>`; `?`
-  lifts it into `wa_rs::Error`. `OtpService::new` reports a bad config as
+  lifts it into `meta_whatsapp_rs::Error`. `OtpService::new` reports a bad config as
   `Error::Config`.
 
 ## What meta-whatsapp-rs does not do

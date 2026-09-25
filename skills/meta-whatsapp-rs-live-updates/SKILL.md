@@ -8,8 +8,8 @@ description: "Where WhatsApp webhook events go after meta-whatsapp-rs verifies t
 > **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/sinks.rs](examples/sinks.rs), compiled and
-tested by meta-whatsapp-rs's own gate. Sinks are in `wa_rs::adapters::sink` (feature
-`sinks`, on by default); `sse` is in `wa_rs::webhooks` (feature `axum`).
+tested by meta-whatsapp-rs's own gate. Sinks are in `meta_whatsapp_rs::adapters::sink` (feature
+`sinks`, on by default); `sse` is in `meta_whatsapp_rs::webhooks` (feature `axum`).
 
 ## When to use
 
@@ -65,7 +65,7 @@ The CMS inbox's `InboxSink` goes in the fan-out too (`wa-rs-cms-inbox`).
 // An allow-list: `Unknown` and `Unparsed` events carry no number and may
 // belong to any merchant, so `is_none_or(…)` would leak them.
 let only_this_number = move |e: &WebhookEvent| e.phone_number_id() == Some(&owned_number);
-wa_rs::webhooks::sse(live.subscribe(), only_this_number) // `event: whatsapp`; `event: lagged` → reload
+meta_whatsapp_rs::webhooks::sse(live.subscribe(), only_this_number) // `event: whatsapp`; `event: lagged` → reload
 ```
 
 `sse` takes a tokio `broadcast::Receiver<WebhookEvent>`: `tx.subscribe()`

@@ -16,7 +16,7 @@ A message the customer answers with a tap: a choice of buttons or list
 rows, a link, "share your location", a Flow (a form), a carousel. All are
 free-form messages: inside the 24-hour window only. Outside it, use a
 template with buttons (`wa-rs-send-templates`). Types live in
-`wa_rs::client::messages`.
+`meta_whatsapp_rs::client::messages`.
 
 ## Buttons and lists
 
@@ -50,7 +50,7 @@ OutboundMessage::new(to, list)
 
 The tap arrives as `WebhookEvent::MessageReceived` whose content is
 `MessageContent::Interactive(InteractiveReply::ButtonReply(b))` or
-`ListReply(r)` (`wa_rs::webhooks::fields`): match on `b.id` / `r.id`,
+`ListReply(r)` (`meta_whatsapp_rs::webhooks::fields`): match on `b.id` / `r.id`,
 never on the title.
 
 ## Link, location request, Flow

@@ -14,7 +14,7 @@ tested by meta-whatsapp-rs's own gate.
 
 Defining what a template **is** and getting it approved. Sending one with
 its values is `wa-rs-send-templates`; authentication (OTP) templates are
-`wa-rs-otp-login`. Module `wa_rs::client::templates`, reached with
+`wa-rs-otp-login`. Module `meta_whatsapp_rs::client::templates`, reached with
 `client.templates(waba_id)` — the WABA, not the phone number.
 
 Two builder families, never mixed: a **definition** (`TemplateDefinition`,
@@ -111,8 +111,8 @@ while let Some(template) = stream.next().await {
   (`ErrorKind::TemplateLimitReached`, 2388019). Content rejections are
   `ErrorKind::TemplateRejected`.
 - Webhook and client enums share names: the webhook's
-  `wa_rs::webhooks::fields::TemplateCategory` is not
-  `wa_rs::client::templates::TemplateCategory`. Alias one on import.
+  `meta_whatsapp_rs::webhooks::fields::TemplateCategory` is not
+  `meta_whatsapp_rs::client::templates::TemplateCategory`. Alias one on import.
 
 ## What meta-whatsapp-rs does not do
 

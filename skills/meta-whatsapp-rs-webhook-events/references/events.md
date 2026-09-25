@@ -3,7 +3,7 @@
 > **Verified against wa-rs b3d2dcad64bc5f0dd9374dc84a387ec978707ab0 (2026-09-25).** Source: `crates/wa-webhooks/src/event.rs`,
 > `crates/wa-webhooks/src/fields/*`. The enum is `#[non_exhaustive]`.
 
-Payload types live in `wa_rs::webhooks::fields` (flat re-exports of every
+Payload types live in `meta_whatsapp_rs::webhooks::fields` (flat re-exports of every
 field module). Payloads are boxed.
 
 ## Variants
@@ -93,4 +93,4 @@ verify it (`wa-rs-media`).
 `OutboundMessage::callback_data`), `conversation`, `pricing`
 (`effective_pricing()`), `errors: Vec<GraphApiError>` (on `failed`).
 Statuses can arrive out of order; `DeliveryStatus::supersedes` in
-`wa_rs::core::store` is the "never move backwards" rule the inbox uses.
+`meta_whatsapp_rs::core::store` is the "never move backwards" rule the inbox uses.

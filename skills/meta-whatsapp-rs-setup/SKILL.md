@@ -1,6 +1,6 @@
 ---
 name: meta-whatsapp-rs-setup
-description: "Setting up meta-whatsapp-rs for WhatsApp - what to create on Meta's side first (app, WABA, phone number id, system user token, app secret, verify token), building the Client with wa_rs::client, wa_rs::client_builder or Client::builder (transport, timeout, retry policy, API version pinning, proxy endpoint), per-merchant clients with with_token, and calling a Graph endpoint meta-whatsapp-rs does not wrap without leaking the token. Load when creating the WhatsApp client, wiring tokens and configuration, upgrading the Graph API version, or calling an unwrapped endpoint."
+description: "Setting up meta-whatsapp-rs for WhatsApp - what to create on Meta's side first (app, WABA, phone number id, system user token, app secret, verify token), building the Client with meta_whatsapp_rs::client, meta_whatsapp_rs::client_builder or Client::builder (transport, timeout, retry policy, API version pinning, proxy endpoint), per-merchant clients with with_token, and calling a Graph endpoint meta-whatsapp-rs does not wrap without leaking the token. Load when creating the WhatsApp client, wiring tokens and configuration, upgrading the Graph API version, or calling an unwrapped endpoint."
 ---
 
 # meta-whatsapp-rs-setup
@@ -37,10 +37,10 @@ instead (`wa-rs-embedded-signup`). Meta's pages are the authority:
 
 ```rust
 // One business, one system user token (feature `reqwest`, on by default):
-let client = wa_rs::client(std::env::var("WA_SYSTEM_USER_TOKEN")?)?;
+let client = meta_whatsapp_rs::client(std::env::var("WA_SYSTEM_USER_TOKEN")?)?;
 
 // Multi-tenant: no default token; every call runs as a merchant (below).
-let platform = wa_rs::client_builder()?.build()?;
+let platform = meta_whatsapp_rs::client_builder()?.build()?;
 ```
 
 Both are `Client::builder()` with the production transport
@@ -81,7 +81,7 @@ merchant.messages(phone_number_id).send(&text).await
 
 `Client` is one `Arc` plus an optional token: clone it freely.
 `with_token` shares the transport, connection pool and retry policy; only
-the token differs. Each `wa_rs::client()` call builds a new pool, so never
+the token differs. Each `meta_whatsapp_rs::client()` call builds a new pool, so never
 build a client per request. Merchant tokens come from the vault
 (`wa-rs-token-vault`).
 
@@ -120,7 +120,7 @@ decoding and the credential host allowlist. Mark a POST
 - An employee system user sees nothing until the WABA is assigned to it:
   Graph error `200`, `ErrorKind::Permission`, not an HTTP 403.
 - `ClientBuilder::build` fails without a transport (`Error::Config`);
-  `wa_rs::client_builder` fails only when TLS cannot initialise.
+  `meta_whatsapp_rs::client_builder` fails only when TLS cannot initialise.
 
 ## What meta-whatsapp-rs does not do
 
@@ -128,7 +128,7 @@ decoding and the credential host allowlist. Mark a POST
   Settings, merchants' tokens from Embedded Signup, and an expired one
   (`ErrorKind::Authentication`, code 190) means a new one
   ([open question 8](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)).
-- Crate names are not settled; `wa_rs::client` is both a module and a
+- Crate names are not settled; `meta_whatsapp_rs::client` is both a module and a
   function ([open questions 1–2](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#naming-and-publishing)).
 
 ## Related skills

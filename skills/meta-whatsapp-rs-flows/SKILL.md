@@ -13,9 +13,9 @@ tested by meta-whatsapp-rs's own gate.
 ## When to use
 
 A Flow is a multi-screen form inside WhatsApp. Managing Flows:
-`wa_rs::client::flows` (`client.flows(waba_id)`, `client.flow(flow_id)`).
+`meta_whatsapp_rs::client::flows` (`client.flows(waba_id)`, `client.flow(flow_id)`).
 A Flow that needs your data at runtime calls your **data endpoint**,
-whose crypto is `wa_rs::client::flows::endpoint` (feature
+whose crypto is `meta_whatsapp_rs::client::flows::endpoint` (feature
 `flows-endpoint`). Sending a Flow message: `wa-rs-interactive-messages`.
 
 ## Create and publish

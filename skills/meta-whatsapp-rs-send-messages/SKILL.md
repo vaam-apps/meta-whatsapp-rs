@@ -15,7 +15,7 @@ by meta-whatsapp-rs's own gate. Every constructor and content type:
 
 Sending anything but a template: answering a customer, sending media, a
 location or a contact card, reacting, marking read. Module
-`wa_rs::client::messages`, reached with `client.messages(phone_number_id)`.
+`meta_whatsapp_rs::client::messages`, reached with `client.messages(phone_number_id)`.
 
 ## Who to send to
 

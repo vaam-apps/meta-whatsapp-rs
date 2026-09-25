@@ -1,6 +1,6 @@
 ---
 name: meta-whatsapp-rs-cms-inbox
-description: "The merchant-to-customer chat inbox of a multi-tenant CMS built on meta-whatsapp-rs (wa_rs::inbox) - InboxSink recording webhook messages, statuses and coexistence echoes and history into a ConversationStore, Inbox listing conversations and history and replying with the merchant's token, the tenant ownership check before the token vault, conversation keys (BSUID, wa_id, group), the 24-hour window with a template fallback, quoted replies, unread counts, NUL handling on Postgres, and what the inbox does not record. Load when building inbox screens, reply endpoints, or the webhook-to-inbox pipeline of a CMS."
+description: "The merchant-to-customer chat inbox of a multi-tenant CMS built on meta-whatsapp-rs (meta_whatsapp_rs::inbox) - InboxSink recording webhook messages, statuses and coexistence echoes and history into a ConversationStore, Inbox listing conversations and history and replying with the merchant's token, the tenant ownership check before the token vault, conversation keys (BSUID, wa_id, group), the 24-hour window with a template fallback, quoted replies, unread counts, NUL handling on Postgres, and what the inbox does not record. Load when building inbox screens, reply endpoints, or the webhook-to-inbox pipeline of a CMS."
 ---
 
 # meta-whatsapp-rs-cms-inbox
@@ -15,7 +15,7 @@ bearer-token tenants), exercised in-process by meta-whatsapp-rs's tests:
 ## When to use
 
 Merchants connected their number (`wa-rs-embedded-signup`) and chat with
-their customers in your CMS. Module `wa_rs::inbox`; storage port
+their customers in your CMS. Module `meta_whatsapp_rs::inbox`; storage port
 `ConversationStore`.
 
 ```text
@@ -114,7 +114,7 @@ direction, whatever its conversation, marks the original `Deleted` and keeps
 its content (both decided); one that comes first leaves a history-only tombstone
 (`StoredMessage::REVOKED`) that keeps the content out. Replies to a `wa_id`
 go to `+<digits>`; a contact with a `.` is a BSUID. The rules are public:
-`wa_rs::inbox::conversation_key`, `wa_rs::inbox::preview`.
+`meta_whatsapp_rs::inbox::conversation_key`, `meta_whatsapp_rs::inbox::preview`.
 
 ## Pitfalls
 

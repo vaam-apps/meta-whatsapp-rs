@@ -15,7 +15,7 @@ tested by meta-whatsapp-rs's own gate (routing, rotation, wrong key, offboarding
 After Embedded Signup put a merchant's token in the vault
 (`wa-rs-embedded-signup`): every time code acts as that merchant — a
 reply from the inbox, a template send, a profile change — and when
-operating the vault key. Type: `wa_rs::client::embedded_signup::TokenVault`.
+operating the vault key. Type: `meta_whatsapp_rs::client::embedded_signup::TokenVault`.
 
 ## Open it
 

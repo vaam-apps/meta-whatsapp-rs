@@ -45,9 +45,9 @@ List the old app secret next to the new one while rotating, then drop it.
 
 ```rust
 // The axum the router is built with, re-exported: no axum pin of your own.
-wa_rs::webhooks::axum::Router::new().nest(
+meta_whatsapp_rs::webhooks::axum::Router::new().nest(
     "/webhooks/whatsapp",
-    wa_rs::webhooks::router(Arc::new(handler)),
+    meta_whatsapp_rs::webhooks::router(Arc::new(handler)),
 )
 ```
 
@@ -58,7 +58,7 @@ same re-exported axum (in the example, `routes` returns the router above):
 
 ```rust
 let listener = tokio::net::TcpListener::bind(addr).await?;
-wa_rs::webhooks::axum::serve(listener, routes(handler)).await
+meta_whatsapp_rs::webhooks::axum::serve(listener, routes(handler)).await
 ```
 
 ## Any other framework
@@ -73,7 +73,7 @@ let Some(body) = read_body(handler.max_body_bytes()).await else {
 status_of(&handler.deliver(Some(signature), &body).await)
 ```
 
-The header is `wa_rs::webhooks::SIGNATURE_HEADER` (`x-hub-signature-256`,
+The header is `meta_whatsapp_rs::webhooks::SIGNATURE_HEADER` (`x-hub-signature-256`,
 available without the `axum` feature). `GET`: deserialize the query into
 `VerificationQuery` (Meta's `hub.*` names), `handler.verify(&query)` →
 echo the challenge as `text/plain` with 200, else 403.

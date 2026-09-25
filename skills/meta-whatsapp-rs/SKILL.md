@@ -36,28 +36,28 @@ anyhow = "1"
   it~~: not so at 2026-09-24, `vaam-apps/wa-rs` is public; no credentials.
 - Rust 1.98.1 or newer, edition 2024. You bring the tokio runtime.
 - axum, sqlx and redis types cross the API: use the re-exports
-  `wa_rs::webhooks::axum` (feature `axum`),
-  `wa_rs::adapters::store::postgres::sqlx` (feature `postgres`) and
-  `wa_rs::adapters::store::redis` (feature `redis`) instead of pinning
+  `meta_whatsapp_rs::webhooks::axum` (feature `axum`),
+  `meta_whatsapp_rs::adapters::store::postgres::sqlx` (feature `postgres`) and
+  `meta_whatsapp_rs::adapters::store::redis` (feature `redis`) instead of pinning
   your own. ~~There is no redis re-export~~: true until 4eb93c9
   (2026-09-24).
 
 | Feature | Default | Adds |
 | --- | --- | --- |
-| `reqwest` | yes | `ReqwestTransport` and the `wa_rs::client(token)` / `wa_rs::client_builder()` shortcuts |
+| `reqwest` | yes | `ReqwestTransport` and the `meta_whatsapp_rs::client(token)` / `meta_whatsapp_rs::client_builder()` shortcuts |
 | `memory` | yes | `MemoryKvStore`, `MemoryConversationStore` (tests, one instance) |
 | `sinks` | yes | channel, broadcast, fan-out, filter, fn and tracing sinks |
 | `postgres` | | `PostgresKvStore`, `PostgresConversationStore`, migrations |
 | `redis` | | `RedisKvStore` |
 | `axum` | | `webhooks::router` (the endpoint) and `webhooks::sse` (live stream) |
-| `typst` | | `wa_rs::typst`: invoices, receipts, vouchers → PDF/PNG |
+| `typst` | | `meta_whatsapp_rs::typst`: invoices, receipts, vouchers → PDF/PNG |
 | `flows-endpoint` | | WhatsApp Flows data-endpoint crypto |
 | `full` | | all of the above |
 | `testing` | | `ScriptedTransport` for your own tests; `[dev-dependencies]` only, not in `full` (`wa-rs-testing`) |
 
-`use wa_rs::prelude::*;` brings the client, ids, `Recipient`, the message
+`use meta_whatsapp_rs::prelude::*;` brings the client, ids, `Recipient`, the message
 and template builders, the webhook pieces, the store and sink traits and
-the inbox. It leaves out `Result`: write `wa_rs::Result`.
+the inbox. It leaves out `Result`: write `meta_whatsapp_rs::Result`.
 
 ## Which skill for which task
 
@@ -88,7 +88,7 @@ the inbox. It leaves out `Result`: write `wa_rs::Result`.
 | Secrets, logs, limits, several instances, going live | `wa-rs-production` |
 
 Anything else the client wraps: its rustdoc
-(`cargo doc -p meta-whatsapp-rs --all-features --open`), starting at `wa_rs::client`.
+(`cargo doc -p meta-whatsapp-rs --all-features --open`), starting at `meta_whatsapp_rs::client`.
 
 ## Rules every integration follows
 
@@ -97,7 +97,7 @@ From the runnable example
 (`env` there is `std::env::var` naming the missing variable):
 
 ```rust
-let client = wa_rs::client(env("WA_TOKEN")?)?;
+let client = meta_whatsapp_rs::client(env("WA_TOKEN")?)?;
 let messages = client.messages(env("WA_PHONE_NUMBER_ID")?);
 let to = Recipient::phone(env("WA_TO")?); // E.164, with `+`
 

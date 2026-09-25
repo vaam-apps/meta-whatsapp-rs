@@ -51,7 +51,7 @@ tokio::spawn(async move {
 });
 ```
 
-`sqlx` is `wa_rs::adapters::store::postgres::sqlx` (0.9): no pin of your
+`sqlx` is `meta_whatsapp_rs::adapters::store::postgres::sqlx` (0.9): no pin of your
 own. Migrations are embedded; their history table is `wa_sqlx_migrations`,
 separate from yours. Another prefix (two deployments, one schema):
 `TablePrefix::new("shop_wa_")?`, `postgres::migrate_with_prefix`,
@@ -82,7 +82,7 @@ on an instance of its own: every key with a TTL enforces a limit (OTP
 issue logs and cooldowns, dedup markers, sessions), and a `volatile-*`
 policy evicts them silently. Size `maxmemory` for 7 days of dedup markers.
 No `ConversationStore` on Redis. `redis` here is meta-whatsapp-rs's re-export
-(`wa_rs::adapters::store::redis`, feature `redis`), so the connection types
+(`meta_whatsapp_rs::adapters::store::redis`, feature `redis`), so the connection types
 always match `RedisKvStore::new` — no redis dependency of your own. For
 `rediss://`, add your own `redis` with `tokio-rustls-comp` at the same
 version, install a rustls crypto provider once at startup, and hand the
@@ -95,7 +95,7 @@ connection to `RedisKvStore::new`.
 
 Implement `KvStore` (`get`, `put`, `put_if_absent`, `compare_and_swap`,
 `delete`) or `ConversationStore`, then prove it with the executable
-contracts in `wa_rs::adapters::store`:
+contracts in `meta_whatsapp_rs::adapters::store`:
 
 ```rust
 let clock = std::sync::Arc::new(ManualClock::new(datetime!(2026-09-24 12:00 UTC)));

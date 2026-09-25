@@ -15,7 +15,7 @@ Reference code, compiled and tested by meta-whatsapp-rs's own gate:
 
 A merchant clicks "Connect WhatsApp", goes through Meta's popup, and your
 backend ends up holding their business token — verified, encrypted, and
-routable by phone number id. Module `wa_rs::client::embedded_signup`.
+routable by phone number id. Module `meta_whatsapp_rs::client::embedded_signup`.
 
 ## On Meta's side first
 
@@ -32,7 +32,7 @@ required). [Guide](https://github.com/vaam-apps/wa-rs/blob/main/docs/guides/embe
 ## Wire once, on a shared store
 
 ```rust
-let client = wa_rs::client_builder()?.build()?; // no default token
+let client = meta_whatsapp_rs::client_builder()?.build()?; // no default token
 let es = client.embedded_signup(AppCredentials::new(app_id, app_secret));
 let vault = TokenVault::new(
     kv.clone(),

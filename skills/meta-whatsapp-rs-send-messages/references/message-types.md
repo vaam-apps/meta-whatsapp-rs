@@ -2,7 +2,7 @@
 
 > **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** Source: `crates/wa-client/src/messages/*`.
 
-All in `wa_rs::client::messages`. `recipient` is `impl Into<Recipient>`
+All in `meta_whatsapp_rs::client::messages`. `recipient` is `impl Into<Recipient>`
 (a `Recipient`, `UserId` or `GroupId` — not a `&str`).
 
 ## `OutboundMessage` shortcuts

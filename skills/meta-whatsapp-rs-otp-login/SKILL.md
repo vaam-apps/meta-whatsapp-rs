@@ -15,7 +15,7 @@ refused numbers). Runnable program:
 ## When to use
 
 Proving a user controls a WhatsApp number: login, sign-up, reset,
-changing a number. Module `wa_rs::client::authentication`.
+changing a number. Module `meta_whatsapp_rs::client::authentication`.
 
 ## 1. The authentication template, once per language
 
