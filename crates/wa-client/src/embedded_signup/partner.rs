@@ -5238,7 +5238,8 @@ mod tests {
         assert_eq!(h.t.remaining(), 0);
     }
 
-    /// Decision on #42 (2026-09-25): offboarding marks a recorded business
+    /// The owner's decision (2026-09-25, closing the open question on
+    /// marking an unfunded business): offboarding marks a recorded business
     /// revoked even when nothing was ever shared with it (the marker comes
     /// before any lookup, so no racing share survives), and onboarding that
     /// business in Solution Partner mode later needs the opt-in.
@@ -5321,7 +5322,8 @@ mod tests {
         json!({"id": WABA})
     }
 
-    /// Decision on #41 (2026-09-25): a lost share Meta never shows keeps
+    /// The owner's decision (2026-09-25, closing the open question on a
+    /// share whose answer was lost): a lost share Meta never shows keeps
     /// every revocation incomplete until an operator clears it. The
     /// clearance checks Meta first (GETs only), clears, and seals who did
     /// it and when in the ledger; revocation and offboarding then finish as
