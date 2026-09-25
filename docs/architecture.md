@@ -565,6 +565,15 @@ revoke, status, and `is_shared`): each authenticates with its client's
 token, the partner's system user token except for `attach` and
 `primary_funding` (the merchant's business token).
 
+Partner-led business verification is `meta_whatsapp_client::business_verification`
+(submit a merchant's business with its documents, list submissions,
+business verification status), outside onboarding: submitting and listing
+take the partner's system user token, the status the merchant's business
+token. Documents are checked before the request (count, type, size,
+content matching the type), and a submission is never replayed (Meta
+allows three per merchant). The decision is the `account_update` webhook
+`PARTNER_CLIENT_CERTIFICATION_STATUS_UPDATE`.
+
 `EsVersion`'s v2, v3 and their public previews are `#[deprecated]`: Meta
 deprecates them on 2026-10-15.
 

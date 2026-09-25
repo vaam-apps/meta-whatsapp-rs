@@ -289,6 +289,40 @@ fn an_account_update_stored_before_entry_id_reads_back_by_its_waba() {
     assert_eq!(back.waba_id(), None, "never a blank WABA");
 }
 
+/// `solution-providers/partner-led-business-verification`, "Example
+/// webhook", with the page's example values (its table lists `FAILED`, and
+/// spells the reason with underscores where `account_update`'s reference
+/// uses spaces). The entry id is the WABA.
+#[test]
+fn account_update_partner_led_verification() {
+    let u = account_update("fields/account_update_partner_led_verification.json");
+    assert_eq!(
+        u.event,
+        AccountUpdateEvent::PartnerClientCertificationStatusUpdate
+    );
+    let cert = u.partner_client_certification_info.unwrap();
+    assert_eq!(cert.status, Some(CertificationStatus::Failed));
+    assert_eq!(
+        cert.rejection_reasons,
+        ["LEGAL_NAME_NOT_FOUND_IN_DOCUMENTS"]
+    );
+    assert_eq!(
+        cert.client_business_id.unwrap().as_str(),
+        "2729063490586005"
+    );
+    let WebhookEvent::AccountUpdated {
+        waba_id, entry_id, ..
+    } = one("fields/account_update_partner_led_verification.json")
+    else {
+        panic!("account_update expected");
+    };
+    assert_eq!(
+        waba_id.map(WabaId::into_inner).as_deref(),
+        Some("486585971195941")
+    );
+    assert_eq!(entry_id, "486585971195941");
+}
+
 /// `embedded-signup/website-optional` and `marketing-messages/onboarding`
 /// document `account_update` shapes the reference page does not show.
 #[test]

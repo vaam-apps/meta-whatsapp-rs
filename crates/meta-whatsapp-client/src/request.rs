@@ -522,6 +522,28 @@ impl GraphRequest {
     }
 }
 
+/// `{"success": false}` from a call that answers `success` next to its
+/// payload is an error, as in [`GraphRequest::send_success`].
+pub(crate) async fn send_checked<T: DeserializeOwned>(
+    request: GraphRequest,
+    context: &'static str,
+) -> Result<T> {
+    #[derive(serde::Deserialize)]
+    struct Success {
+        #[serde(default)]
+        success: Option<bool>,
+    }
+    let resp = request.context(context).send_raw().await?;
+    let flag: Success = decode_json(context, &resp.body)?;
+    if flag.success == Some(false) {
+        return Err(Error::Http {
+            status: resp.status.as_u16(),
+            body_snippet: snippet(&resp.body),
+        });
+    }
+    decode_json(context, &resp.body)
+}
+
 /// The check every `…_stream(&query)` makes first: the stream manages the
 /// cursors itself (re-issuing the request with `after`), so a query that
 /// already carries one is refused with a [`ValidationError`] naming it,
