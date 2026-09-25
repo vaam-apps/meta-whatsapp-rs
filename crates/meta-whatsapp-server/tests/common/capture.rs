@@ -457,7 +457,11 @@ async fn send_media_and_templates(h: &Harness, admin: &str) -> Vec<String> {
     assert_eq!(listed.status.as_u16(), 200, "{}", listed.text);
     h.graph.push_json(
         200,
-        json!({"name": "order_confirmation", "status": "APPROVED", "id": "1407680676729941"}),
+        json!({"name": "order_confirmation", "id": "1407680676729941"}),
+    );
+    h.graph.push_json(
+        200,
+        json!({"data": [{"name": "order_confirmation", "status": "APPROVED", "id": "1407680676729941"}]}),
     );
     let one = h
         .call(Call::get(format!("/v1/wabas/{waba}/templates/1407680676729941")).key(&key))

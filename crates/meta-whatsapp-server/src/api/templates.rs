@@ -3,16 +3,28 @@
 //! | Route | Graph call, with the tenant's WABA token |
 //! | --- | --- |
 //! | `GET /v1/wabas/{waba_id}/templates` | `GET /{waba_id}/message_templates?fields=name,language,status,category,components&limit=…[&status=…][&name=…][&after=…]`, cached 60 s per WABA |
-//! | `GET /v1/wabas/{waba_id}/templates/{id}` | `GET /{id}?fields=name,language,status,category,components` |
+//! | `GET /v1/wabas/{waba_id}/templates/{id}` | `GET /{id}?fields=name`, then `GET /{waba_id}/message_templates?fields=…&name=…` (the id must be among them) |
 //! | `POST /v1/wabas/{waba_id}/templates` | `POST /{waba_id}/message_templates` |
-//! | `DELETE /v1/wabas/{waba_id}/templates?name=[&id=]` | `DELETE /{waba_id}/message_templates?name=…[&hsm_id=…]` |
+//! | `DELETE /v1/wabas/{waba_id}/templates?name=[&id=]` | `DELETE /{waba_id}/message_templates?name=…`; with an id, `GET /{waba_id}/message_templates?fields=name&name=…` first (the id must be among them), then `…&hsm_id=…` |
 //!
 //! Pages: `templates/template-management`, `templates/overview`,
 //! `reference/whatsapp-business-account/message-template-api`.
 //!
+//! **A template id is the WABA's, or it does not exist.** The WABA is the
+//! tenant's (step 4 of the authorization order); a template id is Meta's,
+//! and one token may reach several tenants' WABAs (the platform's system
+//! user token attached to WABAs of different tenants). Meta's template
+//! object does not name its WABA
+//! (`reference/whatsapp-business-account/message-template-api`), so the
+//! id is looked for through the WABA's own edge, by the template's name:
+//! a template of another WABA, or none, is `404 not_found`, the same
+//! answer, without Meta's code or text, and nothing of it is answered or
+//! deleted. It costs one management call more (two for `GET …/{id}`).
+//!
 //! Meta allows 200 management calls an hour per WABA: a list is cached
-//! for 60 seconds **per WABA** (and per query), on each replica, and a
-//! creation or deletion on that replica drops the WABA's entries. A
+//! for 60 seconds **per WABA** (and per query and tenant), on each
+//! replica, and a creation or deletion on that replica drops the WABA's
+//! entries. A
 //! creation is Meta's own JSON (a `TemplateDefinition`), checked locally
 //! against every limit the docs state before any request (`422
 //! invalid_request` with `field`); Meta refusing its content is `422
@@ -41,6 +53,7 @@ use super::common::{ApiJson, PageParams, PageQuery, encode_cursor};
 use crate::auth::{Caller, OwnedWaba};
 use crate::error::{ApiError, ErrorBody};
 use crate::idempotency::{self, Fingerprint, KeyHeader, Success};
+use crate::model::TenantId;
 use crate::state::AppState;
 
 /// The fields asked of Meta for each template.
@@ -53,6 +66,15 @@ pub const TEMPLATE_CACHE_ENTRIES: usize = 512;
 /// Longest template name (`templates/template-management`: 512
 /// characters of `a-z 0-9 _`).
 const MAX_NAME_LEN: usize = 512;
+
+/// Page size of the lookups that find a template id among a WABA's
+/// templates of one name.
+const LOOKUP_PAGE_SIZE: u32 = 100;
+
+/// Most pages such a lookup reads: a name has one template per language
+/// (Meta supports about 70), so one page is the rule; past these, the id
+/// counts as not the WABA's.
+const LOOKUP_PAGES: usize = 5;
 
 /// A template, as Meta describes it.
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -133,9 +155,12 @@ fn view(info: TemplateInfo) -> TemplateView {
 
 // ─── The cache ───────────────────────────────────────────────────────────
 
-/// What a cached page answers: one WABA, one query.
+/// What a cached page answers: one tenant's WABA, one query. The tenant
+/// is in the key although a WABA has one tenant at a time: a page cached
+/// before an unbind is never answered to the next tenant bound to it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct CacheKey {
+    tenant: String,
     waba_id: String,
     status: Option<String>,
     name: Option<String>,
@@ -261,6 +286,7 @@ fn status_filter(status: &str) -> Result<String, ApiError> {
 /// One page of the WABA's templates, from the cache or from Meta.
 pub async fn list(
     state: &AppState,
+    tenant: &TenantId,
     owned: &OwnedWaba,
     filter: TemplateFilter,
     after: Option<String>,
@@ -271,6 +297,7 @@ pub async fn list(
         template_name("name", name)?;
     }
     let key = CacheKey {
+        tenant: tenant.as_str().to_owned(),
         waba_id: owned.waba_id().as_str().to_owned(),
         status,
         name: filter.name,
@@ -335,11 +362,20 @@ pub async fn list(
 )]
 pub async fn list_templates(
     State(state): State<AppState>,
+    caller: Caller,
     owned: OwnedWaba,
     ApiQuery(filter): ApiQuery<TemplateFilter>,
     PageQuery(page): PageQuery,
 ) -> Result<Json<TemplateList>, ApiError> {
-    let listed = list(&state, &owned, filter, page.after, page.limit).await?;
+    let listed = list(
+        &state,
+        caller.tenant(),
+        &owned,
+        filter,
+        page.after,
+        page.limit,
+    )
+    .await?;
     Ok(Json(TemplateList::clone(&listed)))
 }
 
@@ -373,9 +409,9 @@ fn graph_id(field: &'static str, id: &str) -> Result<(), ApiError> {
         (status = 200, description = "The template", body = TemplateView),
         (status = 401, description = "No valid key", body = ErrorBody),
         (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
-        (status = 404, description = "`not_found`: no such WABA for this tenant, or Meta's", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such WABA for this tenant, or no such template in this WABA (another WABA's template id looks like a missing one)", body = ErrorBody),
         (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
-        (status = 422, description = "`invalid_request` on `id`, or Meta's `invalid_parameter`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `id`", body = ErrorBody),
         (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
         (status = 502, description = "Meta failed", body = ErrorBody),
         (status = 504, description = "`timeout`", body = ErrorBody),
@@ -387,15 +423,57 @@ pub async fn get_template(
     Path((_, id)): Path<(String, String)>,
 ) -> Result<Json<TemplateView>, ApiError> {
     graph_id("id", &id)?;
-    let template = owned
+    let id = TemplateId::new(id);
+    // Its name: what the WABA's edge finds templates by. Nothing else of
+    // it is read before it is known to be the WABA's.
+    let named = owned
         .client()
         .templates(owned.waba_id().clone())
-        .get_fields(&TemplateId::new(id), &TEMPLATE_FIELDS)
+        .get_fields(&id, &["name"])
         .await;
-    match template {
-        Ok(info) => Ok(Json(view(info))),
-        Err(error) => Err(owned.failed(&state, &error).await.with_details(&error)),
+    let name = match named {
+        Ok(info) => info.name.ok_or_else(ApiError::not_found)?,
+        Err(error) => return Err(owned.failed_on_object(&state, &error).await),
+    };
+    let template = in_waba(&state, &owned, &name, &id, &TEMPLATE_FIELDS)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+    Ok(Json(view(template)))
+}
+
+/// The template `id` among the WABA's templates named `name`, with
+/// `fields`, looked for through the WABA's own edge (`GET
+/// /{waba_id}/message_templates?name=…`), or `None` when it is not the
+/// WABA's: Meta's template object does not name its WABA, and a token may
+/// reach other tenants' WABAs.
+async fn in_waba(
+    state: &AppState,
+    owned: &OwnedWaba,
+    name: &str,
+    id: &TemplateId,
+    fields: &[&str],
+) -> Result<Option<TemplateInfo>, ApiError> {
+    let templates = owned.client().templates(owned.waba_id().clone());
+    let mut query = TemplateListQuery::new()
+        .fields(fields.iter().copied())
+        .name(name)
+        .limit(LOOKUP_PAGE_SIZE);
+    for _ in 0..LOOKUP_PAGES {
+        let page = match templates.list(&query).await {
+            Ok(page) => page,
+            Err(error) => return Err(owned.failed(state, &error).await.with_details(&error)),
+        };
+        let next = page.next_cursor().map(str::to_owned);
+        if let Some(found) = page.data.into_iter().find(|t| t.id == *id) {
+            return Ok(Some(found));
+        }
+        match next {
+            Some(after) => query.after = Some(after),
+            None => return Ok(None),
+        }
     }
+    tracing::warn!("a template id was not found in the first pages of its name's templates");
+    Ok(None)
 }
 
 // ─── Create ──────────────────────────────────────────────────────────────
@@ -507,9 +585,9 @@ pub struct TemplateDeletion {
         (status = 204, description = "Deleted (an approved template's name cannot be reused for 30 days)"),
         (status = 401, description = "No valid key", body = ErrorBody),
         (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
-        (status = 404, description = "`not_found`: no such WABA for this tenant", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such WABA for this tenant, or (with `id`) no template of that name and id in this WABA", body = ErrorBody),
         (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
-        (status = 422, description = "`invalid_request` on `name` or `id`, or Meta's `invalid_parameter` (no such template)", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `name` or `id`, or Meta's `invalid_parameter` (no template of that name)", body = ErrorBody),
         (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
         (status = 502, description = "Meta failed", body = ErrorBody),
         (status = 504, description = "`timeout`", body = ErrorBody),
@@ -527,9 +605,16 @@ pub async fn delete_templates(
     let templates = owned.client().templates(owned.waba_id().clone());
     let deleted = match &deletion.id {
         Some(id) => {
-            templates
-                .delete_by_id(&deletion.name, &TemplateId::new(id.clone()))
-                .await
+            // One of the WABA's own, or nothing is deleted: Meta's page
+            // does not say it checks an `hsm_id` against the WABA.
+            let id = TemplateId::new(id.clone());
+            if in_waba(&state, &owned, &deletion.name, &id, &["name"])
+                .await?
+                .is_none()
+            {
+                return Err(ApiError::not_found());
+            }
+            templates.delete_by_id(&deletion.name, &id).await
         }
         None => templates.delete_by_name(&deletion.name).await,
     };
@@ -560,6 +645,7 @@ mod tests {
 
     fn key(waba: &str) -> CacheKey {
         CacheKey {
+            tenant: "merchant-42".to_owned(),
             waba_id: waba.to_owned(),
             status: None,
             name: None,
@@ -581,6 +667,11 @@ mod tests {
             ..key("1")
         };
         assert!(cache.get(&other_query).is_none());
+        let other_tenant = CacheKey {
+            tenant: "merchant-43".to_owned(),
+            ..key("1")
+        };
+        assert!(cache.get(&other_tenant).is_none(), "another tenant's page");
         cache.put(key("2"), page("b"));
         cache.invalidate(&WabaId::new("1"));
         assert!(cache.get(&key("1")).is_none());

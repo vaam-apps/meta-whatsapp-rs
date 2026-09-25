@@ -256,41 +256,61 @@ const DETAILS_KEPT: &[&str] = &[
     "GET /v1/wabas/{waba_id}/templates/{id}",
 ];
 
-/// M1.5's sentinel, on every operation of the committed document: Meta's
-/// error texts, a non-Graph answer and an unreadable one reach no
-/// response. Decisive: a Meta text copied into a body, on any route.
-#[tokio::test]
-async fn a_sentinel_in_metas_answer_reaches_no_response() {
-    // `(status, body, the details a route that keeps them answers)`.
+/// Operations on an object named by id (a media id, a template id): Meta
+/// refusing the object (a 4xx such as `100`) is `404 not_found`, without
+/// Meta's code or `details`, like an object that does not exist (another
+/// tenant's must look like a missing one: tests/authz.rs).
+const OBJECT_BY_ID: &[&str] = &[
+    "GET /v1/numbers/{pn}/media/{media_id}",
+    "DELETE /v1/numbers/{pn}/media/{media_id}",
+    "GET /v1/wabas/{waba_id}/templates/{id}",
+];
+
+/// Meta's answers the sentinel test gives every operation: `(status,
+/// body, the details a route that keeps them answers, whether it refuses
+/// an object named by id)`.
+fn sentinel_answers() -> Vec<(u16, String, Option<&'static str>, bool)> {
     let with_data = |code: i64, data: Value| {
         let mut error = graph_error(code);
         error["error"]["error_data"] = data;
         error.to_string()
     };
-    let answers: Vec<(u16, String, Option<&str>)> = vec![
-        (400, graph_error(100).to_string(), None),
+    vec![
+        (400, graph_error(100).to_string(), None, true),
         (
             400,
             with_data(131047, json!({"details": "Meta's own\u{7}\r\n details"})),
             Some("Meta's own details"),
+            false,
         ),
         (
             400,
             with_data(100, json!("a string error_data")),
             Some("a string error_data"),
+            true,
         ),
-        (500, graph_error(131000).to_string(), None),
+        (500, graph_error(131000).to_string(), None, false),
         (
             502,
             format!("<html><body>{SENTINEL} bad gateway</body></html>"),
             None,
+            false,
         ),
         (
             200,
             format!("{{\"id\": \"{SENTINEL}\", \"quality_rating\": 7"),
             None,
+            false,
         ),
-    ];
+    ]
+}
+
+/// M1.5's sentinel, on every operation of the committed document: Meta's
+/// error texts, a non-Graph answer and an unreadable one reach no
+/// response. Decisive: a Meta text copied into a body, on any route.
+#[tokio::test]
+async fn a_sentinel_in_metas_answer_reaches_no_response() {
+    let answers = sentinel_answers();
     let sample = Sample {
         tenant: TENANT.to_owned(),
         waba: WABA.to_owned(),
@@ -300,7 +320,7 @@ async fn a_sentinel_in_metas_answer_reaches_no_response() {
     let mut calling = BTreeSet::new();
     let mut quiet = BTreeSet::new();
     for operation in spec_operations() {
-        for (status, body, details) in &answers {
+        for (status, body, details, refuses_object) in &answers {
             let h = Harness::new();
             let admin = h.admin_key().await;
             h.tenant(TENANT).await;
@@ -333,6 +353,15 @@ async fn a_sentinel_in_metas_answer_reaches_no_response() {
             );
             let code = reply.code();
             assert!(CODES.iter().any(|(c, _, _)| *c == code), "{label}: {code}");
+            if *refuses_object && OBJECT_BY_ID.contains(&operation.label().as_str()) {
+                assert_eq!(
+                    (reply.status, code.as_str()),
+                    (StatusCode::NOT_FOUND, "not_found"),
+                    "{label}"
+                );
+                assert!(reply.json()["error"]["graph"].is_null(), "{label}");
+                continue;
+            }
             let answered = &reply.json()["error"]["graph"]["details"];
             match details {
                 Some(details) if DETAILS_KEPT.contains(&operation.label().as_str()) => {

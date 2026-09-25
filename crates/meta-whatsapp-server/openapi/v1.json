@@ -1890,7 +1890,7 @@
             }
           },
           "404": {
-            "description": "`not_found`: no such number for this tenant",
+            "description": "`not_found`: no such number for this tenant, or no such media on this number (another number's media id looks like a missing one)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2039,7 +2039,7 @@
             }
           },
           "404": {
-            "description": "`not_found`: no such number for this tenant",
+            "description": "`not_found`: no such number for this tenant, or no such media on this number (another number's media id looks like a missing one)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2059,7 +2059,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` on `media_id`, or Meta's `invalid_parameter`",
+            "description": "`invalid_request` on `media_id`",
             "content": {
               "application/json": {
                 "schema": {
@@ -3377,7 +3377,7 @@
             }
           },
           "404": {
-            "description": "`not_found`: no such WABA for this tenant",
+            "description": "`not_found`: no such WABA for this tenant, or (with `id`) no template of that name and id in this WABA",
             "content": {
               "application/json": {
                 "schema": {
@@ -3397,7 +3397,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` on `name` or `id`, or Meta's `invalid_parameter` (no such template)",
+            "description": "`invalid_request` on `name` or `id`, or Meta's `invalid_parameter` (no template of that name)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3525,7 +3525,7 @@
             }
           },
           "404": {
-            "description": "`not_found`: no such WABA for this tenant, or Meta's",
+            "description": "`not_found`: no such WABA for this tenant, or no such template in this WABA (another WABA's template id looks like a missing one)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3545,7 +3545,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` on `id`, or Meta's `invalid_parameter`",
+            "description": "`invalid_request` on `id`",
             "content": {
               "application/json": {
                 "schema": {

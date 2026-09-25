@@ -180,25 +180,71 @@ async fn lists_are_cached_per_waba() {
     assert_eq!(h.graph.remaining(), 0);
 }
 
+/// One template: its name from `GET /{id}`, then the template itself
+/// from the WABA's own list of that name (Meta's template object does not
+/// name its WABA). Decisive: the id looked for in the WABA's list.
 #[tokio::test]
-async fn one_template_is_metas() {
+async fn one_template_is_found_through_its_wabas_list() {
     let (h, key) = connected().await;
-    // templates/overview, "Example response" (status only).
-    h.graph
-        .push_json(200, json!({"status": "APPROVED", "id": "1259544702043867"}));
+    // templates/overview, "Example response", with the name asked for.
+    h.graph.push_json(
+        200,
+        json!({"name": "coupon_expiration_reminder_number_vars", "id": "1304694804498707"}),
+    );
+    h.graph.push_json(200, documented_list());
     let reply = h
-        .call(Call::get(format!("/v1/wabas/{WABA}/templates/1259544702043867")).key(&key))
+        .call(Call::get(format!("/v1/wabas/{WABA}/templates/1304694804498707")).key(&key))
         .await;
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
     assert_eq!(
         reply.json(),
-        json!({"id": "1259544702043867", "name": null, "language": null, "status": "APPROVED",
-               "category": null, "components": []})
+        json!({
+            "id": "1304694804498707",
+            "name": "coupon_expiration_reminder_number_vars",
+            "language": "en",
+            "status": "APPROVED",
+            "category": "MARKETING",
+            "components": documented_list()["data"][0]["components"]
+        })
     );
-    let request = h.graph.last_request().unwrap();
-    assert_eq!(request.path(), "/v25.0/1259544702043867");
-    assert_eq!(request.query("fields").as_deref(), Some(FIELDS));
-    assert_eq!(request.bearer(), Some(TOKEN));
+    let requests = h.graph.requests();
+    let [named, listed] = &requests[..] else {
+        panic!("two requests: {requests:?}")
+    };
+    assert_eq!(named.path(), "/v25.0/1304694804498707");
+    assert_eq!(named.query("fields").as_deref(), Some("name"));
+    assert_eq!(named.bearer(), Some(TOKEN));
+    assert_eq!(listed.path(), format!("/v25.0/{WABA}/message_templates"));
+    assert_eq!(
+        listed.query("name").as_deref(),
+        Some("coupon_expiration_reminder_number_vars")
+    );
+    assert_eq!(listed.query("fields").as_deref(), Some(FIELDS));
+    assert_eq!(listed.bearer(), Some(TOKEN));
+    // The list goes on past a page without it; a name Meta does not give
+    // back is not found.
+    h.graph.push_json(
+        200,
+        json!({"name": "spring_sale", "id": "1627019861106475"}),
+    );
+    h.graph.push_json(
+        200,
+        json!({"data": [{"id": "1627019861106476", "name": "spring_sale"}],
+               "paging": {"cursors": {"after": "QVFIUafter"}, "next": "https://graph.facebook.com/v25.0/x"}}),
+    );
+    h.graph.push_json(
+        200,
+        json!({"data": [{"id": "1627019861106475", "name": "spring_sale", "language": "de"}]}),
+    );
+    let reply = h
+        .call(Call::get(format!("/v1/wabas/{WABA}/templates/1627019861106475")).key(&key))
+        .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+    assert_eq!(reply.json()["language"], "de");
+    assert_eq!(
+        h.graph.last_request().unwrap().query("after").as_deref(),
+        Some("QVFIUafter")
+    );
     let bad = h
         .call(Call::get(format!("/v1/wabas/{WABA}/templates/abc")).key(&key))
         .await;
@@ -308,12 +354,30 @@ async fn deletions_are_metas_requests() {
     assert_eq!(request.query("name").as_deref(), Some("order_confirmation"));
     assert_eq!(request.query("hsm_id"), None);
     assert_eq!(request.bearer(), Some(TOKEN));
+    // By name and id: the id is looked for among the WABA's templates of
+    // that name first.
+    h.graph.push_json(
+        200,
+        json!({"data": [{"id": "1407680676729941", "name": "order_confirmation"}]}),
+    );
     h.graph.push_json(200, json!({"success": true}));
     let reply = h
         .call(delete("?name=order_confirmation&id=1407680676729941"))
         .await;
-    assert_eq!(reply.status, StatusCode::NO_CONTENT);
-    let request = h.graph.last_request().unwrap();
+    assert_eq!(reply.status, StatusCode::NO_CONTENT, "{}", reply.text);
+    let requests = h.graph.requests();
+    let [.., looked_up, request] = &requests[..] else {
+        panic!("{requests:?}")
+    };
+    assert_eq!(
+        (looked_up.method.clone(), looked_up.path().to_owned()),
+        (Method::GET, format!("/v25.0/{WABA}/message_templates"))
+    );
+    assert_eq!(
+        looked_up.query("name").as_deref(),
+        Some("order_confirmation")
+    );
+    assert_eq!(request.method, Method::DELETE);
     assert_eq!(request.query("hsm_id").as_deref(), Some("1407680676729941"));
     assert_eq!(request.query("name").as_deref(), Some("order_confirmation"));
     let before = h.graph.requests().len();

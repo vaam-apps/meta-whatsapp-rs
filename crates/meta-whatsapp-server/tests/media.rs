@@ -314,6 +314,11 @@ async fn a_download_is_verified_before_it_is_answered() {
             (url.method.clone(), url.path()),
             (Method::GET, "/v25.0/1037543291543636")
         );
+        assert_eq!(
+            url.query("phone_number_id").as_deref(),
+            Some(PN),
+            "only this number's media"
+        );
         assert_eq!(url.bearer(), Some(TOKEN));
         assert_eq!(bytes.url.as_str(), URL);
         assert_eq!(bytes.bearer(), Some(TOKEN));
@@ -482,7 +487,7 @@ async fn busy_media_slots_are_429() {
     assert!(h.graph.requests().is_empty());
 }
 
-/// `DELETE /{media-id}` with the merchant's token.
+/// `DELETE /{media-id}?phone_number_id={pn}` with the merchant's token.
 #[tokio::test]
 async fn a_delete_is_metas_request() {
     let (h, key) = connected().await;
@@ -496,6 +501,7 @@ async fn a_delete_is_metas_request() {
         (request.method.clone(), request.path()),
         (Method::DELETE, "/v25.0/1037543291543636")
     );
+    assert_eq!(request.query("phone_number_id").as_deref(), Some(PN));
     assert_eq!(request.bearer(), Some(TOKEN));
     assert_eq!(h.graph.remaining(), 0);
 }

@@ -3,8 +3,8 @@
 //! | Route | Graph calls, with the tenant's WABA token |
 //! | --- | --- |
 //! | `POST /v1/numbers/{pn}/media` | `POST /{pn}/media` (multipart: `messaging_product`, `type`, `file`) |
-//! | `GET /v1/numbers/{pn}/media/{media_id}` | `GET /{media_id}` (URL, MIME type, SHA-256, size), then the URL (`lookaside.fbsbx.com`, the only other host a token may reach) |
-//! | `DELETE /v1/numbers/{pn}/media/{media_id}` | `DELETE /{media_id}` |
+//! | `GET /v1/numbers/{pn}/media/{media_id}` | `GET /{media_id}?phone_number_id={pn}` (URL, MIME type, SHA-256, size), then the URL (`lookaside.fbsbx.com`, the only other host a token may reach) |
+//! | `DELETE /v1/numbers/{pn}/media/{media_id}` | `DELETE /{media_id}?phone_number_id={pn}` |
 //!
 //! Pages: `business-phone-numbers/media`, `reference/media/media-api`,
 //! `reference/media/media-download-api`,
@@ -35,8 +35,18 @@
 //! `WA_SERVER_MEDIA_CONCURRENCY` run at once on a replica, the next is
 //! `429 too_many_requests`.
 //!
-//! Media ids are Meta's: the service checks the number is the tenant's,
-//! not the media id's owner (Meta answers for the token's reach).
+//! **A media id is the number's, or it does not exist.** The number is the
+//! tenant's (step 4 of the authorization order); the media id is Meta's,
+//! and one token may reach the media of several tenants' numbers (the
+//! platform's system user token attached to WABAs of different tenants).
+//! So the lookup and the deletion carry `phone_number_id={pn}`
+//! (`reference/media/media-api`: Meta then acts only on media of that
+//! number), and Meta refusing it is `404 not_found`, the answer for a
+//! media id that does not exist, without Meta's code or text: another
+//! tenant's media id is never read, downloaded or deleted, and never
+//! told apart from a missing one. Meta's pages describe the check for
+//! media "uploaded on" the number; that it holds for media received by
+//! webhook on it is not documented (docs/guides/server.md, "Media").
 
 use base64::Engine as _;
 use futures::StreamExt;
@@ -505,7 +515,7 @@ async fn download_failed(state: &AppState, owned: &OwnedNumber, error: &Error) -
             headers(("X-WA-SHA256" = String, description = "The file's SHA-256, hex"))),
         (status = 401, description = "No valid key", body = ErrorBody),
         (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
-        (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such number for this tenant, or no such media on this number (another number's media id looks like a missing one)", body = ErrorBody),
         (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
         (status = 413, description = "`media_too_large`: larger than `max_bytes`", body = ErrorBody),
         (status = 422, description = "`invalid_request` on `max_bytes` (over 16 MiB without `stream=true`) or `stream`", body = ErrorBody),
@@ -529,10 +539,13 @@ pub async fn download_media(
     } else {
         Some(media_permit(&state)?)
     };
-    let media = owned.client().media(owned.phone_number_id().clone());
+    let media = owned
+        .client()
+        .media(owned.phone_number_id().clone())
+        .restrict_to_phone_number();
     let info = match media.url(&MediaId::new(media_id)).await {
         Ok(info) => info,
-        Err(error) => return Err(owned.failed(&state, &error).await.with_details(&error)),
+        Err(error) => return Err(owned.failed_on_object(&state, &error).await),
     };
     // Meta's reported size, before a byte is downloaded (checked again
     // while reading: the report may be wrong).
@@ -643,9 +656,9 @@ fn bounded(
         (status = 204, description = "Deleted"),
         (status = 401, description = "No valid key", body = ErrorBody),
         (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
-        (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such number for this tenant, or no such media on this number (another number's media id looks like a missing one)", body = ErrorBody),
         (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
-        (status = 422, description = "`invalid_request` on `media_id`, or Meta's `invalid_parameter`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `media_id`", body = ErrorBody),
         (status = 429, description = "`too_many_requests`", body = ErrorBody),
         (status = 502, description = "Meta failed", body = ErrorBody),
         (status = 504, description = "`timeout`", body = ErrorBody),
@@ -662,11 +675,12 @@ pub async fn delete_media(
     let deleted = owned
         .client()
         .media(owned.phone_number_id().clone())
+        .restrict_to_phone_number()
         .delete(&MediaId::new(media_id))
         .await;
     match deleted {
         Ok(()) => Ok(StatusCode::NO_CONTENT),
-        Err(error) => Err(owned.failed(&state, &error).await.with_details(&error)),
+        Err(error) => Err(owned.failed_on_object(&state, &error).await),
     }
 }
 
@@ -679,6 +693,11 @@ mod tests {
         assert_eq!(filename(Some("voucher.png"), "image/png"), "voucher.png");
         assert_eq!(
             filename(Some("a;b\r\nContent-Type: x.png"), "image/png"),
+            "a_b__Content-Type__x.png"
+        );
+        // A quote would end the multipart header's `filename="…"`.
+        assert_eq!(
+            filename(Some("a\"b\r\nContent-Type: x.png"), "image/png"),
             "a_b__Content-Type__x.png"
         );
         assert_eq!(filename(None, "image/png"), "upload.png");
