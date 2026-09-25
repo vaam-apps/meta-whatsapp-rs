@@ -37,29 +37,43 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   and attaches with the merchant's token. **The approval is required**:
   plain `onboard` is refused before the code is exchanged
   (`CreditError::ApprovalRequired`); `onboard_with_approval` records the
-  approval in the ledger, `resume` shares only for an approved WABA, and
+  approval in the ledger for the token record it stores, `resume` shares
+  only for a WABA whose stored token record was approved so, and
   `EmbeddedSignup::resume_with_approval` approves a token stored without
-  one (Tech Provider mode before a switch). The currency
+  one (Tech Provider mode before a switch, or stored again since). The
+  currency
   (`OnboardingRequest::currency`, else `SolutionPartner::default_currency`)
   is required before the code is exchanged, and the first one is sealed:
   another is refused later. `share_credit_line` checks before it posts,
   in `onboard_with_approval` and `resume` alike (the owner's records and
   the recorded allocation, each with its `request_status`, against the
   WABA's `primary_funding_id`), under a per-WABA lease renewed right
-  before each post, so a timed-out share is resumed without posting it
-  twice and two concurrent onboardings cannot both post
-  (`CreditError::Busy`, retryable). A `pending_share` flag is sealed before
-  each post and cleared once its allocation is recorded; a pending share
-  nothing explains, on a WABA something funds, is `CreditError::Reconcile`.
+  before each post, so two concurrent onboardings cannot both post
+  (`CreditError::Busy`, retryable). A share whose answer is lost (a
+  timeout, a 5xx) is `CreditError::Reconcile`, not retryable: `resume`
+  then checks before it posts again, and posts again only when Meta shows
+  nothing funding the WABA (which assumes Meta lists a share as soon as it
+  applied it; undocumented). A `pending_share` flag is sealed before each
+  post and cleared once its allocation is recorded or Meta provably did
+  nothing; a pending share nothing explains, on a WABA something funds, is
+  `CreditError::Reconcile`. A two-call share whose attach Meta refused is
+  `CreditError::AttachFailed` (the share went out; `resume` attaches it).
   Without the owner business nothing is shared
   (`CreditError::OwnerUnknown`). **A revoked business is not funded
   again** (marked by `revoke_credit_line`, or only `DELETED` records on
   Meta's side: `CreditError::Revoked`, `EmbeddedSignup::is_credit_line_revoked`;
   a `request_status` Meta does not document: `CreditError::StatusUnknown`)
-  unless the request says `OnboardingRequest::reshare_after_revocation()`,
-  and a revocation that runs while a share is posted wins (the share
-  re-reads the marker after its post and revokes what it just shared; the
-  opt-in clears the marker only by compare-and-swap). The allocation is
+  unless the request says `OnboardingRequest::reshare_after_revocation()`.
+  A revocation that runs while a share is posted ends with the line
+  revoked or the share reported: the share re-reads the marker after its
+  post, including one whose answer was lost, and revokes by business what
+  it may have made (`CreditError::Revoked` with `posted` once that is
+  revoked, else `CreditError::Reconcile` with the share kept pending); the
+  revocation, meanwhile, reports a WABA whose share is pending and of
+  which it revoked nothing as `RevocationIncomplete` (`share_pending`,
+  retryable), never as done; and a later onboarding of that business
+  answers `Reconcile`, not `Revoked`, while the share is pending. The
+  opt-in clears the marker only by compare-and-swap. The allocation is
   returned (`Onboarded::allocation_config_id`) and kept in a sealed credit
   ledger (`TokenVault::credit` → `StoredCredit`,
   `TokenVault::revoked_business` → `RevokedBusiness`) that
@@ -70,16 +84,21 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   the recorded owner (else the business Meta's record of the recorded
   allocation names, written back into the ledger; else a signed webhook's
   `owner_business_id`, only if the line has records naming it; a
-  contradicting one revokes nothing). An unreadable token record, credit
-  record or revocation marker (replaced), a failed lookup or a failed
-  marker write does not stop what the other sources can revoke; what is
-  left undone is `CreditError::RevocationIncomplete`, with the report.
+  contradicting one revokes nothing; one whose check failed is marked
+  once the revocation's own lookup finds records naming it). An
+  unreadable token record, credit record or revocation marker (replaced),
+  a failed lookup or a failed marker write does not stop what the other
+  sources can revoke; what is left undone is
+  `CreditError::RevocationIncomplete`, with the report (a ledger write
+  that failed is its `ledger`, which a repeat writes again).
   `EmbeddedSignup::revoke_business_credit_line` revokes from a business id
   alone. `EmbeddedSignup::offboard` revokes first and deletes the token
   second (`Offboarded`), so `PARTNER_APP_UNINSTALLED` and
   `PARTNER_REMOVED` end revoked in either order; with nothing to revoke
-  and no share in the ledger it just deletes, and a recorded share it
-  cannot find keeps the token (`CreditError::Reconcile`). The Tech
+  and no share in the ledger it just deletes, a recorded share it cannot
+  find keeps the token (`CreditError::Reconcile`), and so does a pending
+  share it revoked nothing for (`RevocationIncomplete`, retryable). The
+  Tech
   Provider flow is unchanged, request for request. `SolutionPartner`'s
   system token is private and never in `Debug`.
 - **`EmbeddedSignup::onboard_with_approval`** (and
@@ -92,13 +111,16 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
 - **`Error::Credit(CreditError)`**, a node of the error tree for the
   Solution Partner credit steps: each variant decides `is_retryable` and
   `may_have_been_sent` (`Busy` is retryable; a raced share, a share to
-  reconcile and a revocation's `DELETE`s may have been sent), and
-  `RevocationIncomplete` carries the `CreditRevocation` report with the
-  failed, unconfirmed and unattributed records instead of leaving them in a
-  log line. `Error::credit()` looks through `Error::Step`.
-  `CreditRevocation` now lives in `wa_core::error` (re-exported from
-  `wa_client::credit_lines`). This replaces the `refusals` constants and
-  the `ValidationError`s the credit steps returned before this remediation.
+  reconcile, a share whose attach failed and a revocation's `DELETE`s may
+  have been sent), and `RevocationIncomplete` carries the
+  `CreditRevocation` report with the failed, unconfirmed and unattributed
+  records, an unsettled pending share and a ledger failure instead of
+  leaving them in a log line. `kind()` is `Unknown` for the states only a
+  person can settle (`Reconcile`, records naming no business),
+  `ServiceUnavailable` for what a later call can finish.
+  `Error::credit()` looks through `Error::Step`. `CreditRevocation` is
+  defined in `wa_core::error` and re-exported from
+  `wa_client::credit_lines`.
 - **`wa_client::credit_lines`**: `CreditLines` (`Client::credit_lines`)
   with `list`/`list_stream` (`extendedcredits`), `share_and_attach`,
   `share`, `attach`, `receiving_credential`, `primary_funding`,

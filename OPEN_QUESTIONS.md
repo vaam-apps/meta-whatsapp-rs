@@ -30,9 +30,10 @@ of its own, after an HTML comment; keep that when you add one.
    lets an integrator refuse (or apply any other policy) before anything
    is stored; which policy wa-rs itself should default to is open. A
    Solution Partner deployment must approve (plain `onboard` is refused,
-   and `resume` shares only for a WABA whose approval is recorded), but
-   what the approval checks is still the integrator's: wa-rs decides no
-   tenant policy.
+   and `resume` shares only for a WABA whose stored token record has a
+   recorded approval; whether that stays required is #40), but what the
+   approval checks is still the integrator's: wa-rs decides no tenant
+   policy.
 7. **Coexistence sync.** Contacts/history sync (`smb_app_data`) must happen
    once, within 24 h of onboarding. `onboard` only flags it
    (`needs_coexistence_sync()`); should it trigger it?
@@ -50,6 +51,35 @@ of its own, after an HTML comment; keep that when you add one.
     `whatsAppBusinessAccount` both as `{ids: …}` and `{id: [...]}`; the code
     uses the worked example (`{id: [...]}`) and sends `business.id` as a
     string. Confirm in Meta's Integration Helper before relying on pre-fill.
+
+<!-- 39 starts its own list so it renders as 39, not 13 (40 follows it). -->
+
+39. **When to revoke the credit line after `PARTNER_REMOVED`.** The
+    owner's decision, tracked as D14 in `docs/design/server.md` on the
+    `docs/server-design` branch. Meta recommends revoking at once when a
+    customer unshares its WABA; a `PARTNER_REMOVED` with
+    `disconnection_info` concerns a coexistence number (a device change, a
+    re-registration, inactivity) that may reconnect. Options: revoke at
+    once in every case; revoke after a grace period when
+    `disconnection_info` says the number may reconnect; let the operator
+    decide per event. Revocation is per business, so it also stops funding
+    that business's other WABAs, and funding it again needs
+    `OnboardingRequest::reshare_after_revocation`. Today the library
+    decides none (`revoke_credit_line` runs when the integrator calls
+    it); the `wa-rs-embedded-signup` skill's example revokes a removal
+    without `disconnection_info` and hands one with it to the
+    integrator's own policy (`PartnerAction::CoexistenceDisconnected`),
+    choosing neither option.
+40. **`onboard_with_approval` required in Solution Partner mode.** Plain
+    `onboard` is refused there (`CreditError::ApprovalRequired`, before
+    the code is exchanged), and `resume` shares only for a WABA whose
+    stored token record has a recorded approval. Making it required was
+    the coordinating agent's call on a review finding (1a7b5bf), not the
+    maintainer's, and awaits the maintainer's confirmation. Options: keep
+    it required; or let plain `onboard` share, as before 1a7b5bf, which
+    leaves the tenant check to the integrator after the line is attached
+    (an attached line cannot be taken back from the WABA). It does not
+    decide #6: what the approval checks stays the integrator's.
 
 ## Authentication (OTP)
 

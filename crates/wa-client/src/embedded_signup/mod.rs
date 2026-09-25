@@ -154,9 +154,10 @@
 //!   before the code is exchanged): onboard with
 //!   [`EmbeddedSignup::onboard_with_approval`], whose approval runs before
 //!   anything is stored, subscribed or shared and is recorded in the credit
-//!   ledger. [`EmbeddedSignup::resume`] shares only for a WABA whose
-//!   approval is recorded; a token stored without one (in Tech Provider
-//!   mode, before the deployment switched) needs
+//!   ledger for the token record it stores. [`EmbeddedSignup::resume`]
+//!   shares only for a WABA whose stored token record was approved so; a
+//!   token stored without one (in Tech Provider mode, before the deployment
+//!   switched, or stored again since) needs
 //!   [`EmbeddedSignup::resume_with_approval`] once. Which of your tenants
 //!   may onboard a WABA is your policy; wa-rs decides none
 //!   (`OPEN_QUESTIONS.md` #6).
@@ -168,12 +169,15 @@
 //!   (`owning_credit_allocation_configs`) and the allocation recorded in the
 //!   vault, each with its `request_status`; an active one whose receiving
 //!   credential is the WABA's `primary_funding_id` means nothing is posted.
-//!   A share that timed out may have succeeded, and Meta refuses to change a
-//!   line once attached, so a share is never posted again blindly: the
+//!   A share whose answer is lost (a timeout, a 5xx) may have succeeded,
+//!   and Meta refuses to change a line once attached, so it is
+//!   [`CreditError::Reconcile`](wa_core::error::CreditError::Reconcile)
+//!   (not retryable), and a share is never posted again blindly: the
 //!   ledger flags each post until its allocation is recorded
 //!   ([`StoredCredit::pending_share`]), and a flagged share that no record
-//!   explains, on a WABA something funds, is
-//!   [`CreditError::Reconcile`](wa_core::error::CreditError::Reconcile).
+//!   explains, on a WABA something funds, is `Reconcile` too. (When nothing
+//!   funds the WABA, `resume` posts again: that assumes Meta shows an
+//!   applied share at once, which it does not document.)
 //!   Without the owner business (`owner_business_info`) nothing can be
 //!   checked or revoked later, so nothing is shared
 //!   ([`CreditError::OwnerUnknown`](wa_core::error::CreditError::OwnerUnknown)).
@@ -186,9 +190,14 @@
 //!   unless the request says
 //!   [`OnboardingRequest::reshare_after_revocation`]: funding a merchant
 //!   again is a product decision. A revocation that runs while a share is
-//!   posted wins: the revocation writes its marker before it looks anything
-//!   up, the share reads the marker after it posts, and a share that finds
-//!   a new or changed marker revokes what it just shared.
+//!   posted ends with the line revoked or the share reported: the
+//!   revocation writes its marker before it looks anything up, and the
+//!   share reads the marker after it posts (also when the post's answer was
+//!   lost). A share that finds a new or changed marker revokes what it may
+//!   have made (`Revoked` with `posted`), or, when it cannot find it,
+//!   reports it (`Reconcile`) and keeps it pending; the revocation reports
+//!   a pending share it revoked nothing for as incomplete (`share_pending`),
+//!   never as done.
 //! - The allocation is returned in [`Onboarded::allocation_config_id`] and
 //!   recorded in the vault's credit ledger ([`TokenVault::credit`],
 //!   [`StoredCredit`]), which outlives the token.

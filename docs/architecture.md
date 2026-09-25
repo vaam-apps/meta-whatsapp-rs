@@ -91,16 +91,25 @@ implements five methods once and every feature works.
   carries a report the caller must act on. `CreditError` decides
   `is_retryable` and `may_have_been_sent` per variant: `Busy` (retryable;
   `posted` only for the two-call method's recorded share), `Revoked`
-  (`posted` when a share raced a revocation and was revoked at once),
-  `OwnerUnknown`, `StatusUnknown` and `ApprovalRequired` (nothing sent,
-  not retryable), `Reconcile` (sent: a share may be live; a person checks
-  Meta Business Suite) and `RevocationIncomplete`, whose
+  (`posted` when a share raced a revocation and was revoked at once, or
+  is recorded for the next revocation), `OwnerUnknown`, `StatusUnknown`
+  and `ApprovalRequired` (nothing sent, not retryable), `Reconcile` (sent,
+  not retryable: a share may be live, its answer lost or not found by a
+  racing revocation; a person checks Meta Business Suite), `AttachFailed`
+  (the two-call method's share went out, its attach did not; retryable
+  and kind as the attach's error) and `RevocationIncomplete`, whose
   `RevocationIncomplete` struct holds the `CreditRevocation` report, the
-  `failed`, `unconfirmed` and `unattributed` records, `deletes_sent` and the
-  first underlying error as its `source`; it is retryable unless a record
-  names no business or the source is not. `CreditError::kind()` is
-  `ServiceUnavailable` for `Busy`, the source's kind for an incomplete
-  revocation, `InvalidParameter` for the refusals. Helpers:
+  `failed`, `unconfirmed` and `unattributed` records, `share_pending` (a
+  share with no recorded outcome the call revoked nothing for),
+  `deletes_sent`, a ledger failure as `ledger` and the first failure on
+  Meta's side as its `source`; it is retryable unless a record names no
+  business or the source is not (a ledger failure never makes it
+  unretryable: a repeat writes the ledger again). `CreditError::kind()`
+  is `ServiceUnavailable` for `Busy` and for an incomplete revocation
+  that only a later call can finish, `Unknown` for the states only a
+  person can settle (`Reconcile`, records naming no business), the
+  source's kind for an incomplete revocation with one, and
+  `InvalidParameter` for the refusals. Helpers:
   `Error::credit()` (looks through `Step`, like `graph()`),
   `CreditError::revocation()`, and `EmbeddedSignup::is_credit_line_revoked`
   / `is_credit_step_busy`.
@@ -394,10 +403,12 @@ cannot be taken back, so the design is fail-closed:
   (`CreditError::ApprovalRequired`, before the code is exchanged); tenant
   checks on the verified ids go in `onboard_with_approval`, which runs
   before `store_token` and records the approval in the credit ledger
-  (`approved_at`). `resume` shares only for a WABA approved so;
-  `resume_with_approval` approves a token stored without one (Tech
-  Provider mode before a switch). The policy stays the integrator's
-  (`OPEN_QUESTIONS.md` #6).
+  (`approved_at`), bound to the token record it stores
+  (`approved_token_created_at`). `resume` shares only for a WABA whose
+  stored token record was approved so; `resume_with_approval` approves a
+  token stored without one (Tech Provider mode before a switch, or stored
+  again since). The policy stays the integrator's (`OPEN_QUESTIONS.md`
+  #6).
 - `CreditSharing::ShareAndAttach` (default, Meta's current method):
   `assign_system_user` (`POST /{waba}/assigned_users`, system user token,
   the method's documented prerequisite), then
@@ -415,20 +426,37 @@ cannot be taken back, so the design is fail-closed:
   does not say whether a record was revoked; no status is active, an
   undocumented one is `StatusUnknown`); an active one whose receiving
   credential is the WABA's `primary_funding_id` means nothing is posted. A
-  POST that timed out may have succeeded and Meta refuses a second attach,
-  so a share is never posted again without that check: the ledger seals
+  POST whose answer is lost (a timeout, a 5xx) may have succeeded and Meta
+  refuses a second attach, so it is `Reconcile` (not retryable), and a
+  share is never posted again without that check: the ledger seals
   `pending_share` before each POST and clears it once the allocation is
-  recorded (merged by compare-and-swap, never reported busy after a POST),
-  and a pending share nothing explains on a funded WABA is `Reconcile`.
+  recorded (merged by compare-and-swap, never reported busy after a POST)
+  or Meta provably did nothing, and a pending share nothing explains on a
+  funded WABA is `Reconcile`. When nothing funds the WABA the share is
+  posted again, which assumes Meta's lookup and `primary_funding_id` show
+  an applied share at once (undocumented). A refused attach after the
+  two-call method's share is `AttachFailed` and keeps the flag.
   No owner business, no share (`OwnerUnknown`). A business marked
   revoked, or with only `DELETED` records, is refused unless
   `OnboardingRequest::reshare_after_revocation` opts in.
 - **A revocation racing a share**: the revocation writes its marker
-  before it looks anything up; the share reads the marker after its POST.
-  One of them sees the other, so a share that finds a new or changed
-  marker revokes the allocation it just made (`Revoked` with `posted`),
-  and an opted-in re-share clears the marker only by compare-and-swap on
-  the version it read.
+  before it looks anything up; the share reads the marker after its POST,
+  whatever the POST's outcome (a lost answer included). One of them sees
+  the other: a share that finds a new or changed marker revokes by
+  business what it may have made (the allocation it got back or
+  recorded; with a lost answer, every active record naming the business,
+  of which only one revoked now can be that share): `Revoked` with
+  `posted` once that is revoked (the flag settled), else `Reconcile` with
+  the share kept pending. The revocation, meanwhile, re-reads the ledger
+  after marking: a pending share of which it revoked nothing makes it
+  `RevocationIncomplete` with `share_pending` (retryable), never `Ok`, and
+  one it revoked a record for is settled. A marker plus a pending share
+  makes a later onboarding `Reconcile`, not `Revoked`. An opted-in
+  re-share clears the marker only by compare-and-swap on the version it
+  read; a marker another opted-in re-share deleted counts as none (its
+  opt-in funds the business again anyway), so a revocation between that
+  re-share's read and its clear, whose lookup missed a third share, goes
+  unseen by that third share.
 - **The credit ledger** (`TokenVault::credit`, `revoked_business`):
   `credit/<WABA>` holds the owner, the allocation, the currency, the
   approval and the pending-share flag, written by compare-and-swap;
@@ -444,15 +472,18 @@ cannot be taken back, so the design is fail-closed:
   business (recorded at onboarding, else named by Meta's record of the
   recorded allocation and written back, else a signed webhook's
   `owner_business_id` if the line has records naming it; a contradicting
-  one revokes nothing), marks it revoked (replacing an unreadable marker;
-  a failed marker write does not stop the `DELETE`s), then revokes every
-  active record naming it plus the recorded allocation, confirming each;
-  every record is attempted, and what is left undone is
-  `RevocationIncomplete` with the report. `revoke_business_credit_line`
-  does the same from a business id alone. `offboard` revokes first and
-  deletes the token second; with nothing to address and no share in the
-  ledger it just deletes, and a recorded share revocation cannot find is
-  `Reconcile` with the token kept.
+  one revokes nothing; one whose check failed is marked once the
+  revocation's own lookup finds records naming it), marks it revoked
+  (replacing an unreadable marker; a failed marker write does not stop
+  the `DELETE`s), then revokes every active record naming it plus the
+  recorded allocation, confirming each; every record is attempted, and
+  what is left undone is `RevocationIncomplete` with the report.
+  `revoke_business_credit_line` does the same from a business id alone.
+  `offboard` revokes first and deletes the token second; with nothing to
+  address and no share in the ledger it just deletes, a recorded share
+  revocation cannot find is `Reconcile` with the token kept, and a
+  pending share it revoked nothing for is `RevocationIncomplete` with the
+  token kept.
 
 The calls themselves are `wa_client::credit_lines` (list, share-and-attach,
 share, attach, receiving credential, primary funding, find records,

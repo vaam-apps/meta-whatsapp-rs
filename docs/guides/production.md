@@ -213,15 +213,21 @@ notification queue on top must be idempotent itself: tag each message with
     deployment became a Solution Partner;
   - `PartnerRemoved` wired to `revoke_credit_line` (to
     `revoke_business_credit_line` when it names no WABA), with your
-    decided policy for a coexistence disconnection;
+    decided policy for a coexistence disconnection, ignoring one whose
+    `waba_info.solution_partner_business_ids` does not list your business
+    (a Multi-Partner Solution you are not in);
   - `PartnerAppUninstalled` wired to `offboard`, **only when its
     `waba_info.partner_app_id` is your app id**;
   - key rotation walking every WABA ever onboarded, offboarded ones
-    included, and every business revoked by id (`rotate_business`): the
-    credit ledger is sealed with the vault keys;
+    included, and every business revoked by id (`rotate_business`),
+    collecting failures instead of stopping at the first: the credit
+    ledger is sealed with the vault keys;
   - alerts on `CreditError::Reconcile` and on a
     `CreditError::RevocationIncomplete` that is not retryable: both need a
-    person and Meta Business Suite.
+    person and Meta Business Suite (both are `ErrorKind::Unknown`); a
+    retryable one (Meta has not confirmed a `DELETE`, a pending share not
+    found yet, a ledger write) is called again later; a share whose
+    answer was lost (`Reconcile`) is never retried at once.
 - Webhook fields subscribed; alerts wired ([webhooks.md](webhooks.md#8-operational-alerts)).
 - Secrets from the secret manager, none in the repository or the database.
 - [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) read: several defaults there

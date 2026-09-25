@@ -39,7 +39,8 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
   nothing, `true` if a send may have gone out. It is the shared rule:
   integrators branch on it ("fix and resend" vs "reconcile first") and
   the OTP service removes a challenge only when it is `false`. Add a row
-  per new arm to `may_have_been_sent_only_when_meta_could_have_acted`.
+  per new arm to `may_have_been_sent_only_when_meta_could_have_acted`
+  (a `CreditError` arm: `credit_errors_say_whether_meta_could_have_acted`).
 - A refusal that is not a plain input error goes in a typed node that
   decides retry and sent-ness itself, not in a `ValidationError` (never
   retryable, never sent): the precedent is `Error::Credit(CreditError)`,

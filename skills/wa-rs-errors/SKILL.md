@@ -39,7 +39,8 @@ Partner credit step the same way: each variant decides `is_retryable()`
 and `may_have_been_sent()` itself (`Busy` is retryable; `Reconcile` and a
 revocation that sent `DELETE`s may have been sent), and
 `CreditError::revocation()` gives an incomplete revocation's report
-(`wa-rs-embedded-signup`).
+(`wa-rs-embedded-signup`). `Reconcile`, and a revocation left with records
+naming no business, are `ErrorKind::Unknown`: a person has to look.
 
 ## Branch on the kind
 

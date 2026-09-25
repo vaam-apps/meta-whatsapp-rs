@@ -110,9 +110,9 @@ names are constants in `embedded_signup::steps`:
 
 The browser's ids are claims: `verify_assets` checks them with Meta. The
 token is stored first: later steps fail for fixable reasons (a wrong PIN,
-`ErrorKind::TwoStepVerification`). Credit steps check before they post
-and refuse a revoked business (`err.credit()`). Refuse another merchant's
-WABA in `onboard_with_approval` (required for a Solution Partner).
+`ErrorKind::TwoStepVerification`). Credit steps check before they post,
+refuse a revoked business, and answer a lost share with `Reconcile`: look
+first (`err.credit()`). Refuse others' WABAs in `onboard_with_approval`.
 
 ```rust
 let request = OnboardingRequest::new(SignupCode::new("unused")?, saved_session)

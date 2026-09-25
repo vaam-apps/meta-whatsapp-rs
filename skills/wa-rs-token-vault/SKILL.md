@@ -77,6 +77,8 @@ key fails with `CryptoError::InvalidKey`; a corrupt credit record does not
 stop `rotate` from re-encrypting the token, nor a corrupt token its
 ledger (the error comes back after). One failure must not stop the walk:
 collect it and go on, then deal with the list before dropping the key.
+~~`vault.rotate(waba_id).await?` in the loop~~ (until 243dd45): one
+corrupt record left every WABA after it under the old key.
 ~~Iterate your current merchants~~ (until 069fed9): that left offboarded
 WABAs' credit ledgers and markers no WABA names under the old key.
 

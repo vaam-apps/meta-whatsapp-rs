@@ -251,10 +251,12 @@ let done = es.resume(&waba_id, &request, &vault).await?; // the steps after stor
 ```
 
 A Solution Partner's `resume` shares the credit line only for a WABA whose
-approval the ledger records (`onboard_with_approval` records it); for a
-token stored without one it fails at step `approve` before any request:
-call `es.resume_with_approval(&waba_id, &request, &vault, |verified| …)`
-once, with the same tenant check as at onboarding.
+approval the ledger records for the token record now stored
+(`onboard_with_approval` records it for the token it stores); for a token
+stored without one, or stored again since, it fails at step `approve`
+before any request: call
+`es.resume_with_approval(&waba_id, &request, &vault, |verified| …)` once,
+with the same tenant check as at onboarding.
 
 After a restart you no longer have the `OnboardingRequest`; rebuild one with
 a placeholder code (ignored by `resume`) and an empty `SessionInfo`:
@@ -281,8 +283,14 @@ A code-less constructor is an [open question](../../OPEN_QUESTIONS.md#embedded-s
   `vault.rotate_business(&business_id)` for each business you revoked by
   business id alone (`revoke_business_credit_line`). Only then drop the old
   key: a record still under it fails with `CryptoError::InvalidKey`, and a
-  Solution Partner's onboarding, `resume` and revocation of that merchant
-  with it.
+  Solution Partner's onboarding and `resume` of that merchant with it.
+  Revocation goes on with what it can read: an unreadable token or credit
+  record is skipped (the business then comes from the other one, or from
+  the webhook's `owner_business_id`) and an unreadable revocation marker
+  is replaced, but the allocation and any pending share recorded in an
+  unreadable credit record are not seen (only what Meta's lookup lists is
+  revoked), and with nothing readable naming the business the
+  `InvalidKey` error is what comes back.
 - Records are bound to their WABA id: a record copied into another WABA's
   entry fails to decrypt instead of handing out the wrong token.
 - `TokenVault::store` trusts its input: every phone number id in the record
@@ -331,7 +339,10 @@ always go to the app's callback
   ([below](#solution-partner-mode)). `PartnerRemoved` without them means
   the merchant unshared the WABA: a Solution Partner revokes its credit
   line (below; by business with `revoke_business_credit_line` when the
-  event names no WABA). Pass `owner_business_id` only from a delivery
+  event names no WABA), unless the event's
+  `waba_info.solution_partner_business_ids` (sent under a Multi-Partner
+  Solution only) does not list its own business: that removal is from a
+  solution it is not in. Pass `owner_business_id` only from a delivery
   whose signature was checked.
 - **The token stops working:** `ErrorKind::Authentication` (190) on a
   merchant's calls. Nothing refreshes tokens; the merchant runs Embedded
@@ -378,11 +389,13 @@ let done = es.onboard_with_approval(&request, &vault, |verified| async move {
 `onboard` before the code is exchanged (`CreditError::ApprovalRequired`),
 because the approval is the last point where a line can still be kept from
 a WABA. `onboard_with_approval` records the approval in the vault's credit
-ledger (`StoredCredit::approved_at`), and `resume` shares only for a WABA
-approved so: a token stored without one (onboarded in Tech Provider mode
-before the deployment switched, or by an older wa-rs) fails `resume` at
-step `approve` until `resume_with_approval` approves it once. Which merchant
-may have a WABA stays your policy (open decision 6).
+ledger (`StoredCredit::approved_at`), bound to the token record it stores
+(`StoredCredit::approved_token_created_at`), and `resume` shares only for a
+WABA approved so: a token stored without one (onboarded in Tech Provider
+mode before the deployment switched, by an older wa-rs, or stored again
+since, e.g. by a Tech Provider onboarding after an offboard) fails
+`resume` at step `approve` until `resume_with_approval` approves it once.
+Which merchant may have a WABA stays your policy (open decision 6).
 
 `onboard_with_approval` then runs, following Meta's Solution Partner order
 (subscribe, share the credit line, register):
@@ -406,21 +419,31 @@ may have a WABA stays your policy (open decision 6).
   `resume` or a later onboarding of the WABA naming another is refused.
 - **It checks before it posts.** When an active record (no
   `request_status`: Meta documents only `DELETED`) has the WABA's
-  `primary_funding_id` as its receiving credential, nothing is posted. So
-  a timed-out share (which may have gone through:
-  `Error::may_have_been_sent`) is safe to `resume`, and so is onboarding a
-  WABA that is already funded. The ledger flags each post until its
-  allocation is recorded (`StoredCredit::pending_share`); a flagged share
-  that no record explains, on a WABA something funds, is
+  `primary_funding_id` as its receiving credential, nothing is posted, so
+  onboarding a WABA that is already funded posts nothing. A share whose
+  answer is lost (a timeout, a 5xx: it may have gone through) is
+  `CreditError::Reconcile`, not retryable, so no automatic retry posts it
+  again; a later `resume` checks first, and posts again only when no
+  record funds the WABA and its `primary_funding_id` is empty. That
+  assumes Meta shows a share in both as soon as it applied it, which it
+  does not document (and the two-call method's share alone funds
+  nothing, so for it only the lookup tells). The ledger flags each post
+  until its allocation is recorded (`StoredCredit::pending_share`); a
+  flagged share that no record explains, on a WABA something funds, is
   `CreditError::Reconcile`: check in Meta Business Suite before anything
-  else. Without the owner business (`owner_business_info`, which Meta's
-  docs show on every WABA) nothing can be checked or revoked, so nothing
-  is shared (`CreditError::OwnerUnknown`).
+  else. A two-call share whose attach Meta refused is
+  `CreditError::AttachFailed`: the share went out and is recorded, and
+  `resume` attaches it without sharing again. Without the owner business
+  (`owner_business_info`, which Meta's docs show on every WABA) nothing
+  can be checked or revoked, so nothing is shared
+  (`CreditError::OwnerUnknown`).
 - **One onboarding at a time.** The credit step holds a per-WABA lease,
   renewed right before each post; a second onboarding of the WABA, or one
-  whose lease a slow step outlived, posts nothing and is
+  whose lease a slow step outlived, posts nothing more and is
   `CreditError::Busy` (`EmbeddedSignup::is_credit_step_busy`, retryable:
-  resume later).
+  resume later). Its `posted` is `true` when the two-call method had
+  already shared (and recorded) the line before it lost the lease: the
+  attach is what a later `resume` does.
 - **A revoked business stays revoked.** When `revoke_credit_line` marked
   the business revoked, or Meta reports only `DELETED` records for it,
   `onboard_with_approval` and `resume` refuse (`CreditError::Revoked`,
@@ -428,10 +451,17 @@ may have a WABA stays your policy (open decision 6).
   `.reshare_after_revocation()`; a record whose `request_status` Meta does
   not document is refused the same way (`CreditError::StatusUnknown`).
   Funding a merchant again is your decision, taken per onboarding. A
-  revocation that runs while a share is posted wins: it writes its marker
-  before it looks anything up, the share reads the marker after it posts,
-  and a share that finds a new or changed marker revokes what it just
-  shared (`CreditError::Revoked` with `posted`).
+  revocation that runs while a share is posted ends with the line revoked
+  or the share reported: the revocation writes its marker before it looks
+  anything up, and the share reads the marker after its post, also when
+  the post's answer was lost. A share that finds a new or changed marker
+  revokes by business what it may have made: `CreditError::Revoked` with
+  `posted` once that is revoked, else `CreditError::Reconcile`, with the
+  share kept pending in the ledger. The revocation, for its part, reports
+  a WABA whose share is pending and of which it revoked nothing as
+  `RevocationIncomplete` with `share_pending` (retryable), never as done,
+  and while the share is pending a later `onboard_with_approval` or
+  `resume` of that business answers `Reconcile`, not `Revoked`.
 - Every refusal is a `CreditError` (`err.credit()`), with its own
   `is_retryable()` and `may_have_been_sent()`; branch on those, never on
   the text.
@@ -462,16 +492,20 @@ let report = es.revoke_credit_line(waba_id, owner, &vault).await?; // report.rev
   reported rather than revoked blindly. Every record is tried, and a
   marker that cannot be written does not stop the `DELETE`s. What is left
   undone is `CreditError::RevocationIncomplete`, carrying the report and
-  the failed, unconfirmed and unattributed records: repeat the call when
-  it `is_retryable()`, otherwise check those records in Meta Business
-  Suite. Safe to repeat.
+  the failed, unconfirmed and unattributed records, `share_pending` (the
+  WABA's ledger shows a share whose outcome is unknown and this call
+  revoked no record: call again; if it keeps revoking nothing, check the
+  WABA's funding) and `ledger` (a ledger write that failed; a repeat
+  writes it again): repeat the call when it `is_retryable()`, otherwise
+  check those records in Meta Business Suite. Safe to repeat.
 - The owner comes from what onboarding recorded (the token record, else
   the credit ledger, else the business Meta's own record of the recorded
   allocation names, which is then written into the ledger); the
   webhook's `owner_business_id` is used only when none of these exists,
   and only if your line has records naming it (so an id that is not your
-  customer's marks nothing). If it contradicts the record nothing is
-  revoked.
+  customer's marks nothing; when that check fails, it is marked once the
+  revocation's own lookup finds records naming it). If it contradicts the
+  record nothing is revoked.
 - **Revocation is per business**: every WABA of that business shared with
   you loses the line. `es.revoke_business_credit_line(&business_id,
   &vault)` revokes from a business id alone, for a `PartnerRemoved` that
@@ -489,7 +523,9 @@ let report = es.revoke_credit_line(waba_id, owner, &vault).await?; // report.rev
   nothing was ever shared, there is nothing to revoke and the token is
   deleted; when the ledger shows a share that revocation cannot find (or
   cannot be read), the token is kept (`CreditError::Reconcile`): check in
-  Meta Business Suite, then `vault.delete` it yourself.
+  Meta Business Suite, then `vault.delete` it yourself. A pending share
+  the revocation revoked nothing for keeps the token too
+  (`RevocationIncomplete` with `share_pending`: call `offboard` again).
 
 The lower-level calls (`CreditLines::share`, `attach`,
 `receiving_credential`, `primary_funding`, `allocations_for`,
@@ -503,12 +539,16 @@ added]; whether adding the system user again is harmless [repeated on
 `request_status` is read]; whether a business can attach a line shared
 with it to other WABAs itself [not controlled: reconcile your credit line
 invoice against the WABAs you onboarded]; whether the lookup lists a
-record as soon as its share returns [assumed: a revocation that runs while
-a share is posted relies on the share seeing the revocation's marker, or
-on the revocation's lookup (and its re-read of the ledger) seeing the new
-record; were Meta's lookup to lag, a share posted in that window could
-survive a revocation that returned `Ok`, so check the business in Meta
-Business Suite after revoking one that was being onboarded].
+record, and the WABA's `primary_funding_id` shows it, as soon as its share
+returns [assumed: `resume` after a lost answer posts again when neither
+shows anything, and a share that raced a revocation and lost its answer
+is found by the lookup; were either to lag, a share could be posted
+twice, or survive, which is why a lost answer is `Reconcile` and a
+pending share the revocation revoked nothing for keeps it incomplete];
+whether a `PARTNER_REMOVED` about another partner can reach your app [the
+skill's example ignores one whose `solution_partner_business_ids` does not
+list your business; Meta sends that list only under a Multi-Partner
+Solution, and does not say whose business the entry id is].
 
 ## Coexistence (merchants keeping the WhatsApp Business app)
 
