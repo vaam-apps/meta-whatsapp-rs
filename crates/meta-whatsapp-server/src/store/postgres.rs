@@ -20,9 +20,9 @@ use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 
 use super::{Store, StoreResult, listing};
 use crate::model::{
-    AllowedTenants, ApiKeyRecord, BindOutcome, DeleteTenantOutcome, KeyOwner, KeyScope, Listing,
-    NewApiKey, NumberBinding, NumberStatus, PageRequest, Scope, Tenant, TenantId, TenantStatus,
-    WabaBinding,
+    AllowedTenants, ApiKeyRecord, BindOutcome, DeleteTenantOutcome, IdempotencyClaim,
+    IdempotencyKey, IdempotencyRecord, IdempotencyState, KeyOwner, KeyScope, Listing, NewApiKey,
+    NumberBinding, NumberStatus, PageRequest, Scope, Tenant, TenantId, TenantStatus, WabaBinding,
 };
 
 /// The service's migration history table, apart from the library's
@@ -38,11 +38,24 @@ pub const MIGRATION_LOCK: i64 = 0x4609_2c1b_ffac_b625;
 
 /// `(version, description, SQL)` of each service migration, in order.
 /// Stable, byte for byte, once released: sqlx records each file's checksum.
-const MIGRATION_FILES: &[(i64, &str, &str)] = &[(
-    1,
-    "tenants keys bindings",
-    include_str!("../../migrations/0001_tenants_keys_bindings.sql"),
-)];
+const MIGRATION_FILES: &[(i64, &str, &str)] = &[
+    (
+        1,
+        "tenants keys bindings",
+        include_str!("../../migrations/0001_tenants_keys_bindings.sql"),
+    ),
+    (
+        2,
+        "idempotency",
+        include_str!("../../migrations/0002_idempotency.sql"),
+    ),
+];
+
+/// The advisory lock the housekeeping purges run under
+/// (docs/design/server.md, section 2.4: any replica, one at a time; the
+/// others skip that round). The first eight bytes of
+/// SHA-256(`meta-whatsapp-server/housekeeping`), as a big-endian `i64`.
+pub const HOUSEKEEPING_LOCK: i64 = 0x0662_5bd9_6d85_d1cf;
 
 /// The service's migrations, as sqlx runs and records them.
 pub fn migrations() -> Vec<Migration> {
@@ -592,6 +605,129 @@ impl Store for PgStore {
         .map_err(backend)
         .map(|_| ())
     }
+
+    async fn claim_idempotency_key(
+        &self,
+        tenant: &TenantId,
+        key: &IdempotencyKey,
+        fingerprint: &[u8; 32],
+        claim: &str,
+        lease: std::time::Duration,
+        ttl: std::time::Duration,
+    ) -> StoreResult<IdempotencyClaim> {
+        // A released key has no row; an expired one is replaced. Between
+        // the insert that found a live row and the read of it, the row may
+        // be released: then claim again (a few times: each round, another
+        // request made progress).
+        for _ in 0..3 {
+            let claimed = sqlx::query(
+                "INSERT INTO wa_server_idempotency (tenant_id, idempotency_key, request_sha256,                  claim, state, lease_until, expires_at)                  VALUES ($1, $2, $3, $4, 'in_progress', now() + make_interval(secs => $5),                  now() + make_interval(secs => $6))                  ON CONFLICT (tenant_id, idempotency_key) DO UPDATE SET                  request_sha256 = EXCLUDED.request_sha256, claim = EXCLUDED.claim,                  state = 'in_progress', lease_until = EXCLUDED.lease_until,                  response_status = NULL, response_body = NULL, created_at = now(),                  expires_at = EXCLUDED.expires_at                  WHERE wa_server_idempotency.expires_at <= now()                  RETURNING claim",
+            )
+            .bind(tenant.as_str())
+            .bind(key.as_str())
+            .bind(fingerprint.as_slice())
+            .bind(claim)
+            .bind(lease.as_secs_f64())
+            .bind(ttl.as_secs_f64())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(backend)?;
+            if claimed.is_some() {
+                return Ok(IdempotencyClaim::Claimed);
+            }
+            let row = sqlx::query(
+                "SELECT request_sha256, state, lease_until <= now() AS lease_expired,                  response_status, response_body FROM wa_server_idempotency                  WHERE tenant_id = $1 AND idempotency_key = $2 AND expires_at > now()",
+            )
+            .bind(tenant.as_str())
+            .bind(key.as_str())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(backend)?;
+            let Some(row) = row else { continue };
+            let digest: Vec<u8> = get(&row, "request_sha256")?;
+            let fingerprint: [u8; 32] = digest.try_into().map_err(|_| corrupt("request_sha256"))?;
+            let state = match get::<String>(&row, "state")?.as_str() {
+                "completed" => IdempotencyState::Completed {
+                    status: get::<Option<i32>>(&row, "response_status")?
+                        .and_then(|s| u16::try_from(s).ok())
+                        .ok_or_else(|| corrupt("response_status"))?,
+                    body: get::<Option<Vec<u8>>>(&row, "response_body")?
+                        .ok_or_else(|| corrupt("response_body"))?,
+                },
+                "in_progress" => IdempotencyState::InProgress {
+                    lease_expired: get(&row, "lease_expired")?,
+                },
+                _ => return Err(corrupt("state")),
+            };
+            return Ok(IdempotencyClaim::Existing(IdempotencyRecord {
+                fingerprint,
+                state,
+            }));
+        }
+        Err(StorageError::Backend(anyhow::anyhow!(
+            "an idempotency key kept changing under concurrent requests"
+        )))
+    }
+
+    async fn complete_idempotency_key(
+        &self,
+        tenant: &TenantId,
+        key: &IdempotencyKey,
+        claim: &str,
+        status: u16,
+        body: &[u8],
+    ) -> StoreResult<bool> {
+        let done = sqlx::query(
+            "UPDATE wa_server_idempotency SET state = 'completed', response_status = $4,              response_body = $5 WHERE tenant_id = $1 AND idempotency_key = $2 AND claim = $3",
+        )
+        .bind(tenant.as_str())
+        .bind(key.as_str())
+        .bind(claim)
+        .bind(i32::from(status))
+        .bind(body)
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(done.rows_affected() > 0)
+    }
+
+    async fn release_idempotency_key(
+        &self,
+        tenant: &TenantId,
+        key: &IdempotencyKey,
+        claim: &str,
+    ) -> StoreResult<bool> {
+        let done = sqlx::query(
+            "DELETE FROM wa_server_idempotency              WHERE tenant_id = $1 AND idempotency_key = $2 AND claim = $3",
+        )
+        .bind(tenant.as_str())
+        .bind(key.as_str())
+        .bind(claim)
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(done.rows_affected() > 0)
+    }
+
+    async fn purge_idempotency_keys(&self) -> StoreResult<u64> {
+        // One replica at a time (the others skip this round); the delete
+        // itself is safe to repeat.
+        let mut tx = self.pool.begin().await.map_err(backend)?;
+        let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock($1)")
+            .bind(HOUSEKEEPING_LOCK)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(backend)?;
+        if !locked {
+            return Ok(0);
+        }
+        let done = sqlx::query("DELETE FROM wa_server_idempotency WHERE expires_at <= now()")
+            .execute(&mut *tx)
+            .await
+            .map_err(backend)?;
+        tx.commit().await.map_err(backend)?;
+        Ok(done.rows_affected())
+    }
 }
 
 #[cfg(test)]
@@ -605,10 +741,16 @@ mod tests {
     /// `(version, SHA-384 hex)` of every service migration, as sqlx records
     /// it. A new migration adds a line; an existing line never changes (an
     /// edited migration makes `migrate` refuse every database it ran on).
-    const PINNED_CHECKSUMS: [(i64, &str); 1] = [(
-        1,
-        "4d1c5a2555461deec494d1d0f8a6be354e0f092115ee74abdc6e270670a441d3856222ca2ade7598a98e62dc80075a47",
-    )];
+    const PINNED_CHECKSUMS: [(i64, &str); 2] = [
+        (
+            1,
+            "4d1c5a2555461deec494d1d0f8a6be354e0f092115ee74abdc6e270670a441d3856222ca2ade7598a98e62dc80075a47",
+        ),
+        (
+            2,
+            "07f54d21a6d32d8a87420469f6f5e35d3b93f47ce7a5aec34ed526ca13d7b7fb08b9858065b74c1d522b3a88b82f24b2",
+        ),
+    ];
 
     #[test]
     fn the_migrations_and_their_checksums_are_pinned() {
@@ -635,6 +777,9 @@ mod tests {
         let mut first = [0u8; 8];
         first.copy_from_slice(&digest[..8]);
         assert_eq!(MIGRATION_LOCK, i64::from_be_bytes(first));
+        let digest = Sha256::digest(b"meta-whatsapp-server/housekeeping");
+        first.copy_from_slice(&digest[..8]);
+        assert_eq!(HOUSEKEEPING_LOCK, i64::from_be_bytes(first));
     }
 
     /// Why `sql` would contract the schema (what a replica of the previous

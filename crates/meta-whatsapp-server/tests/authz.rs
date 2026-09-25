@@ -40,56 +40,31 @@ async fn two_tenants() -> Harness {
     h
 }
 
-/// `(method, template)` of every operation in the committed document whose
-/// path names a number or a WABA.
-fn owned_routes() -> Vec<(Method, String)> {
-    let spec: Value = serde_json::from_str(include_str!("../openapi/v1.json")).unwrap();
-    let mut routes = Vec::new();
-    for (path, item) in spec["paths"].as_object().unwrap() {
-        if !(path.contains("{pn}") || path.contains("{waba_id}")) {
-            continue;
-        }
-        for method in item.as_object().unwrap().keys() {
-            let method = Method::from_bytes(method.to_uppercase().as_bytes()).unwrap();
-            routes.push((method, path.clone()));
-        }
-    }
-    routes
+/// Every operation in the committed document whose path names a number
+/// or a WABA.
+fn owned_routes() -> Vec<common::Operation> {
+    common::spec_operations()
+        .into_iter()
+        .filter(|o| o.template.contains("{pn}") || o.template.contains("{waba_id}"))
+        .collect()
 }
 
-/// `template` with A's number and WABA, and a placeholder in any other
-/// parameter.
-fn on_a(template: &str) -> String {
-    let path = template.replace("{pn}", PN_A).replace("{waba_id}", WABA_A);
-    let mut out = String::new();
-    let mut rest = path.as_str();
-    while let Some(start) = rest.find('{') {
-        out.push_str(&rest[..start]);
-        let end = rest[start..].find('}').unwrap() + start;
-        out.push_str("placeholder");
-        rest = &rest[end + 1..];
-    }
-    out.push_str(rest);
-    out
-}
-
-/// A body a route with one would accept, so a refusal cannot be the body's
-/// fault.
-fn valid_body(method: &Method, template: &str) -> Option<Value> {
-    match (method.as_str(), template) {
-        ("PATCH", "/v1/numbers/{pn}/profile") => Some(json!({"about": "Open 9 to 5"})),
-        ("POST" | "PATCH" | "PUT", _) => Some(json!({})),
-        _ => None,
+/// The values of A's number and WABA.
+fn on_a() -> common::Sample {
+    common::Sample {
+        tenant: A.to_owned(),
+        waba: WABA_A.to_owned(),
+        pn: PN_A.to_owned(),
+        key_id: "placeholder".to_owned(),
     }
 }
 
-fn call(method: &Method, template: &str, path: &str, key: &str, tenant: Option<&str>) -> Call {
-    let mut call = Call::new(method.clone(), path).key(key);
+/// A call of `operation` on A's number or WABA, with a body and query it
+/// would accept (so a refusal cannot be their fault).
+fn call(operation: &common::Operation, key: &str, tenant: Option<&str>) -> Call {
+    let mut call = common::sample_call(operation, &on_a(), Some(key));
     if let Some(tenant) = tenant {
         call = call.tenant(tenant);
-    }
-    if let Some(body) = valid_body(method, template) {
-        call = call.json(&body);
     }
     call
 }
@@ -112,40 +87,51 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
         (Method::PATCH, "/v1/numbers/{pn}/profile"),
         (Method::DELETE, "/v1/wabas/{waba_id}"),
         (Method::DELETE, "/v1/admin/wabas/{waba_id}/binding"),
+        (Method::POST, "/v1/numbers/{pn}/messages"),
+        (Method::POST, "/v1/numbers/{pn}/messages/{message_id}/read"),
+        (Method::POST, "/v1/numbers/{pn}/media"),
+        (Method::GET, "/v1/numbers/{pn}/media/{media_id}"),
+        (Method::DELETE, "/v1/numbers/{pn}/media/{media_id}"),
+        (Method::GET, "/v1/wabas/{waba_id}/templates"),
+        (Method::POST, "/v1/wabas/{waba_id}/templates"),
+        (Method::DELETE, "/v1/wabas/{waba_id}/templates"),
+        (Method::GET, "/v1/wabas/{waba_id}/templates/{id}"),
     ] {
         assert!(
-            routes.iter().any(|(m, p)| *m == known.0 && p == known.1),
+            routes
+                .iter()
+                .any(|o| o.method == known.0 && o.template == known.1),
             "{known:?} is not in the document"
         );
     }
 
     let mut checked = 0;
-    for (method, template) in &routes {
-        let path = on_a(template);
+    for operation in &routes {
         // Admin routes refuse any non-admin key before anything else.
-        let expected = if template.starts_with("/v1/admin/") {
+        let expected = if operation.admin() {
             (StatusCode::FORBIDDEN, "forbidden")
         } else {
             (StatusCode::NOT_FOUND, "not_found")
         };
         for (key, named) in [(&b_key, None), (&platform, Some(B))] {
             let before = h.kv.vault_reads();
-            let reply = h.call(call(method, template, &path, key, named)).await;
+            let reply = h.call(call(operation, key, named)).await;
+            let label = operation.label();
             assert_eq!(
                 (reply.status, reply.code().as_str()),
                 expected,
-                "{method} {path} with B's key: {}",
+                "{label} with B's key: {}",
                 reply.text
             );
             assert_eq!(
                 h.kv.vault_reads(),
                 before,
-                "{method} {path} read the vault for tenant B"
+                "{label} read the vault for tenant B"
             );
             checked += 1;
         }
     }
-    assert!(checked >= 10, "only {checked} calls");
+    assert!(checked >= 28, "only {checked} calls");
     assert!(h.graph.requests().is_empty(), "no call reached Meta");
     assert_eq!(h.graph.remaining(), 0);
     // Nothing of A's changed.
@@ -167,24 +153,30 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
 async fn the_owner_reads_the_vault_on_every_owned_route() {
     let h = two_tenants().await;
     let a_key = h.tenant_key(A, &ALL_SCOPES).await;
-    for (method, template) in owned_routes() {
-        if template.starts_with("/v1/admin/") {
+    for operation in owned_routes() {
+        if operation.admin() {
             continue;
         }
-        let path = on_a(&template);
+        let label = operation.label();
         let before = h.kv.vault_reads();
+        let asked = h.graph.requests().len();
         // Graph answers with an error: the point is the vault read before it.
         h.graph.push_json(
             500,
             json!({"error": {"message": "x", "type": "OAuthException", "code": 2}}),
         );
-        let _ = h.call(call(&method, &template, &path, &a_key, None)).await;
+        let _ = h.call(call(&operation, &a_key, None)).await;
         assert!(
             h.kv.vault_reads() > before,
-            "{method} {path}: A's own call did not read the vault"
+            "{label}: A's own call did not read the vault"
+        );
+        assert_eq!(
+            h.graph.requests().len(),
+            asked + 1,
+            "{label}: Meta was not asked"
         );
         let request = h.graph.last_request().unwrap();
-        assert_eq!(request.bearer(), Some("TOKEN-OF-A"), "{method} {path}");
+        assert_eq!(request.bearer(), Some("TOKEN-OF-A"), "{label}");
     }
     assert_eq!(h.graph.remaining(), 0);
 }
@@ -643,4 +635,314 @@ async fn a_token_for_another_waba_is_never_used() {
         reply.text
     );
     assert!(h.graph.requests().is_empty(), "B's token reached Meta");
+}
+
+/// One token reaching two tenants' WABAs: the platform's system user
+/// token, attached (`POST /v1/admin/tenants/{id}/wabas`) to a WABA of each.
+async fn one_token_two_tenants() -> Harness {
+    let h = Harness::new();
+    h.tenant(A).await;
+    h.tenant(B).await;
+    h.connect(A, WABA_A, &[PN_A], "PLATFORM-SYSTEM-TOKEN").await;
+    h.connect(B, WABA_B, &[PN_B], "PLATFORM-SYSTEM-TOKEN").await;
+    h
+}
+
+/// `error` without its request id, to compare two answers.
+fn without_request_id(reply: &common::Reply) -> Value {
+    let mut body = reply.json();
+    body["error"]["request_id"] = Value::Null;
+    body
+}
+
+/// B's media id on A's number, with a token that reaches both: the lookup
+/// and the deletion carry A's `phone_number_id`, so Meta refuses B's
+/// media; the refusal is `404 not_found`, the answer for a media id that
+/// does not exist, whatever Meta's code, and nothing is downloaded or
+/// deleted. Decisive: `phone_number_id` on the lookup and the deletion,
+/// and the refusal answered as a missing media id.
+#[tokio::test]
+async fn another_tenants_media_id_is_not_found() {
+    const B_MEDIA: &str = "1037543291543637";
+    let h = one_token_two_tenants().await;
+    let a_key = h.tenant_key(A, &[Scope::Media]).await;
+    // How Meta may refuse a media id that is not the number's: an invalid
+    // parameter (100, subcode 33: "does not exist, cannot be loaded due
+    // to missing permissions"), a permission error, a 404 of its own.
+    let refusals = [
+        (
+            400,
+            json!({"error": {"message": "Unsupported get request. B-MEDIA-SENTINEL", "type": "GraphMethodException",
+                             "code": 100, "error_subcode": 33, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+        ),
+        (
+            403,
+            json!({"error": {"message": "B-MEDIA-SENTINEL", "type": "OAuthException", "code": 200,
+                             "error_data": {"details": "B-MEDIA-SENTINEL belongs to another number"}}}),
+        ),
+        (
+            404,
+            json!({"error": {"message": "B-MEDIA-SENTINEL", "type": "GraphMethodException", "code": 803}}),
+        ),
+    ];
+    let mut answers = Vec::new();
+    for (status, refusal) in &refusals {
+        for method in [Method::GET, Method::DELETE] {
+            let asked = h.graph.requests().len();
+            h.graph.push_json(*status, refusal.clone());
+            let reply = h
+                .call(
+                    Call::new(
+                        method.clone(),
+                        format!("/v1/numbers/{PN_A}/media/{B_MEDIA}"),
+                    )
+                    .key(&a_key),
+                )
+                .await;
+            assert_eq!(
+                (reply.status, reply.code().as_str()),
+                (StatusCode::NOT_FOUND, "not_found"),
+                "{method} <- {status}: {}",
+                reply.text
+            );
+            assert!(!reply.text.contains("B-MEDIA-SENTINEL"), "{}", reply.text);
+            let requests = h.graph.requests();
+            assert_eq!(requests.len(), asked + 1, "{method}: one call, no download");
+            // The lookup, for a deletion too: no DELETE is sent.
+            let request = requests.last().unwrap();
+            assert_eq!(
+                (request.method.clone(), request.path().to_owned()),
+                (Method::GET, format!("/v25.0/{B_MEDIA}"))
+            );
+            assert_eq!(
+                request.query("phone_number_id").as_deref(),
+                Some(PN_A),
+                "{method}: Meta is asked for A's number's media only"
+            );
+            answers.push(without_request_id(&reply));
+        }
+    }
+    // Every refusal reads like a number that does not exist.
+    let missing = h
+        .call(Call::get("/v1/numbers/999999999/media/1").key(&a_key))
+        .await;
+    for answer in answers {
+        assert_eq!(answer, without_request_id(&missing));
+    }
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// B's template id on A's WABA, with a token that reaches both: Meta's
+/// template object does not name its WABA, so the id is looked for among
+/// A's WABA's templates of its name; not there, it is `404 not_found`,
+/// nothing of it is answered, and a deletion by that id deletes nothing.
+/// Decisive: the lookup through the WABA's own edge.
+#[tokio::test]
+async fn another_tenants_template_id_is_not_found() {
+    const B_TEMPLATE: &str = "1407680676729942";
+    let h = one_token_two_tenants().await;
+    let a_key = h.tenant_key(A, &[Scope::Templates]).await;
+    // The token reaches B's template: Meta answers its name.
+    h.graph
+        .push_json(200, json!({"name": "b_private_offer", "id": B_TEMPLATE}));
+    // A's WABA has no template of that name.
+    h.graph.push_json(200, json!({"data": []}));
+    let reply = h
+        .call(Call::get(format!("/v1/wabas/{WABA_A}/templates/{B_TEMPLATE}")).key(&a_key))
+        .await;
+    assert_eq!(
+        (reply.status, reply.code().as_str()),
+        (StatusCode::NOT_FOUND, "not_found"),
+        "{}",
+        reply.text
+    );
+    assert!(!reply.text.contains("b_private_offer"), "{}", reply.text);
+    let requests = h.graph.requests();
+    let [named, listed] = &requests[..] else {
+        panic!("{requests:?}")
+    };
+    assert_eq!(
+        named.query("fields").as_deref(),
+        Some("name"),
+        "its name only"
+    );
+    assert_eq!(
+        listed.path(),
+        format!("/v25.0/{WABA_A}/message_templates"),
+        "then A's own templates"
+    );
+    assert_eq!(listed.query("name").as_deref(), Some("b_private_offer"));
+    // B's template shares a name with one of A's: A's is not B's.
+    h.graph
+        .push_json(200, json!({"name": "order_confirmation", "id": B_TEMPLATE}));
+    h.graph.push_json(
+        200,
+        json!({"data": [{"id": "1407680676729941", "name": "order_confirmation", "language": "en_US"}]}),
+    );
+    let same_name = h
+        .call(Call::get(format!("/v1/wabas/{WABA_A}/templates/{B_TEMPLATE}")).key(&a_key))
+        .await;
+    assert_eq!(without_request_id(&same_name), without_request_id(&reply));
+    // A template id of nobody (Meta: 803) reads the same.
+    h.graph.push_json(
+        404,
+        json!({"error": {"message": "Template not found", "type": "GraphMethodException", "code": 803}}),
+    );
+    let missing = h
+        .call(Call::get(format!("/v1/wabas/{WABA_A}/templates/1407680676729943")).key(&a_key))
+        .await;
+    assert_eq!(without_request_id(&missing), without_request_id(&reply));
+    // A has a template of the same name, with another id: still not B's.
+    let before = h.graph.requests().len();
+    h.graph.push_json(
+        200,
+        json!({"data": [{"id": "1407680676729941", "name": "order_confirmation"}]}),
+    );
+    let deleted = h
+        .call(
+            Call::new(
+                Method::DELETE,
+                format!("/v1/wabas/{WABA_A}/templates?name=order_confirmation&id={B_TEMPLATE}"),
+            )
+            .key(&a_key),
+        )
+        .await;
+    assert_eq!(
+        (deleted.status, deleted.code().as_str()),
+        (StatusCode::NOT_FOUND, "not_found"),
+        "{}",
+        deleted.text
+    );
+    let requests = h.graph.requests();
+    assert_eq!(requests.len(), before + 1, "no DELETE reached Meta");
+    assert_eq!(requests.last().unwrap().method, Method::GET);
+    assert_eq!(
+        requests.last().unwrap().path(),
+        format!("/v25.0/{WABA_A}/message_templates")
+    );
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// The calls on an object named by id (a media id, a template id), with
+/// the Graph request Meta's scripted failure answers: `(label, method,
+/// path, Meta's answers before the one that fails)`.
+fn object_calls() -> Vec<(&'static str, Method, String, Vec<Value>)> {
+    const MEDIA: &str = "1037543291543636";
+    let media_info = json!({"messaging_product": "whatsapp", "id": MEDIA, "mime_type": "image/jpeg",
+        "sha256": "3f9d94d399fa61c191bc1d4ca71375a035cd9b9f5b1128e1f0963a415c16b0cc",
+        "url": "https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1037543291543636"});
+    let media = format!("/v1/numbers/{PN_A}/media/{MEDIA}");
+    vec![
+        ("download: the lookup", Method::GET, media.clone(), vec![]),
+        ("delete: the lookup", Method::DELETE, media.clone(), vec![]),
+        (
+            "delete: the DELETE",
+            Method::DELETE,
+            media,
+            vec![media_info],
+        ),
+        (
+            "template: its name",
+            Method::GET,
+            format!("/v1/wabas/{WABA_A}/templates/1407680676729941"),
+            vec![],
+        ),
+    ]
+}
+
+/// Only Meta refusing the object is `404 not_found` on a route naming an
+/// object by id: the token's own failure (`190`) is `409
+/// reconnect_required` and marks the WABA's numbers (section 5.2: Meta's
+/// `authentication` on a stored token; the design keeps `404` for an
+/// object that is not there, and a dead token says nothing about it),
+/// and Meta failing (a 5xx, whatever
+/// its code, even one the library does not know) is Meta's failure,
+/// `502`, with its code, never taken for a missing object. A plain 4xx
+/// without a Graph error (`404` from a proxy of Meta's, say) refuses the
+/// object: `404`, without its body. Decisive: the token's failure and
+/// the 5xx kept out of the refusals, and the plain 4xx kept in.
+#[tokio::test]
+async fn only_metas_refusal_of_the_object_is_not_found() {
+    // reference/whatsapp-business-phone-number/whatsapp-business-account-phone-number-api, 401 example.
+    let expired = json!({"error": {"message": "Error validating access token: Session has expired",
+        "type": "OAuthException", "code": 190, "error_subcode": 463, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}});
+    // A code the library does not map (`ErrorKind::Unknown`), on a 5xx.
+    let failed = json!({"error": {"message": "An unexpected error SENTINEL-5XX", "type": "OAuthException",
+        "code": 987654, "is_transient": true, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}});
+    for (label, method, path, before) in object_calls() {
+        let call = |key: &str| Call::new(method.clone(), &path).key(key);
+        // 190: reconnect_required, the numbers marked, Meta not asked again.
+        let h = two_tenants().await;
+        let key = h.tenant_key(A, &[Scope::Media, Scope::Templates]).await;
+        for answer in &before {
+            h.graph.push_json(200, answer.clone());
+        }
+        h.graph.push_json(401, expired.clone());
+        let reply = h.call(call(&key)).await;
+        assert_eq!(
+            (reply.status, reply.code().as_str()),
+            (StatusCode::CONFLICT, "reconnect_required"),
+            "{label}: {}",
+            reply.text
+        );
+        assert_eq!(reply.json()["error"]["graph"]["code"], 190, "{label}");
+        let number = h
+            .store
+            .number(&PhoneNumberId::new(PN_A))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(number.status, NumberStatus::ReconnectRequired, "{label}");
+        // A number route checks the status first (a WABA route has
+        // none of its own: step 5 is the number's).
+        if path.starts_with("/v1/numbers/") {
+            let asked = h.graph.requests().len();
+            let again = h.call(call(&key)).await;
+            assert_eq!(again.code(), "reconnect_required", "{label}");
+            assert_eq!(h.graph.requests().len(), asked, "{label}: Meta not asked");
+        }
+        assert_eq!(h.graph.remaining(), 0, "{label}");
+
+        // A 5xx with a code the library does not know: 502 `unknown`.
+        let h = two_tenants().await;
+        let key = h.tenant_key(A, &[Scope::Media, Scope::Templates]).await;
+        for answer in &before {
+            h.graph.push_json(200, answer.clone());
+        }
+        h.graph.push_json(500, failed.clone());
+        let reply = h.call(call(&key)).await;
+        assert_eq!(
+            (reply.status, reply.code().as_str()),
+            (StatusCode::BAD_GATEWAY, "unknown"),
+            "{label}: {}",
+            reply.text
+        );
+        assert_eq!(reply.json()["error"]["graph"]["code"], 987_654, "{label}");
+        assert!(!reply.text.contains("SENTINEL-5XX"), "{label}");
+        assert_eq!(h.graph.remaining(), 0, "{label}");
+
+        // A plain 4xx, no Graph error in it: the object refused, 404.
+        for status in [400, 403, 404] {
+            let h = two_tenants().await;
+            let key = h.tenant_key(A, &[Scope::Media, Scope::Templates]).await;
+            for answer in &before {
+                h.graph.push_json(200, answer.clone());
+            }
+            h.graph.push_bytes(
+                status,
+                "text/html",
+                b"<html><body>SENTINEL-PLAIN Not Found</body></html>".to_vec(),
+            );
+            let reply = h.call(call(&key)).await;
+            assert_eq!(
+                (reply.status, reply.code().as_str()),
+                (StatusCode::NOT_FOUND, "not_found"),
+                "{label} <- plain {status}: {}",
+                reply.text
+            );
+            assert!(reply.json()["error"]["graph"].is_null(), "{label}");
+            assert!(!reply.text.contains("SENTINEL-PLAIN"), "{label}");
+            assert_eq!(h.graph.remaining(), 0, "{label}");
+        }
+    }
 }

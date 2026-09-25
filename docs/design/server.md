@@ -1,11 +1,12 @@
 # Design: a deployable meta-whatsapp-rs service (`meta-whatsapp-server`)
 
-> **Milestone M1a is implemented** in `crates/meta-whatsapp-server` (the
-> crate, configuration, listeners, storage, tenants and keys, the admin
-> API with attach, unbind and vault rotation, the numbers routes, errors,
-> operations, the committed OpenAPI document; [§9](#9-delivery-plan) says
-> which acceptance tests it meets, [coverage.md](../coverage.md) row 33
-> what is missing); the rest is design. Written against `main` =
+> **Milestones M1a and M1b are implemented** in `crates/meta-whatsapp-server`
+> (M1a: the crate, configuration, listeners, storage, tenants and keys, the
+> admin API with attach, unbind and vault rotation, the numbers routes,
+> errors, operations, the committed OpenAPI document; M1b: messages, read
+> receipts, media, templates, idempotency keys and rate limits;
+> [§9](#9-delivery-plan) says which acceptance tests they meet,
+> [coverage.md](../coverage.md) row 33 what is missing); the rest is design. Written against `main` =
 > bbf24a3 (2026-09-24), Graph API v25.0; the library changes it assumed have
 > since landed on `main` (#4: `OtpConfig::namespace` required, the Intent
 > API's result renamed `marketing::OnboardingRequested`; #5: Solution Partner
@@ -328,8 +329,8 @@ Rules the service implements:
 | `POST /v1/numbers/{pn}/messages` | send free-form (Meta enforces the window), template or reaction ([§4.3](#43-message-content)) | `{to, type, <type>: {…}, reply_to?, callback_data?}` → `202 {message_id, contacts}` | 409 `customer_service_window_closed`, `marketing_opted_out`; 422 `template_*`; 429; 502/504 with `may_have_been_sent` |
 | `POST /v1/numbers/{pn}/messages/{message_id}/read` | blue ticks; optional typing indicator (never replayed) | `{typing_indicator?}` → 204 | |
 | `POST /v1/numbers/{pn}/media` | upload, type and size checked first | multipart `file`, `type` → `201 {media_id}` | 422 `type`, 413 |
-| `GET /v1/numbers/{pn}/media/{media_id}` | download, SHA-256 verified before the first byte; `?max_bytes=` (default and cap 16 MiB), larger with `?stream=true` | → bytes, `X-WA-SHA256` | 413 `media_too_large`, 502 `integrity` |
-| `DELETE /v1/numbers/{pn}/media/{media_id}` | delete | → 204 | |
+| `GET /v1/numbers/{pn}/media/{media_id}` | download, SHA-256 verified before the first byte; `?max_bytes=` (default and cap 16 MiB), larger with `?stream=true` | → bytes, `X-WA-SHA256` | 413 `media_too_large`, 502 `integrity`; *as built in M1b*: 422 `media_id` (not digits), 404 for a media id not the number's (asked with `phone_number_id={pn}`; Meta's refusal, 4xx, answered like a missing id) |
+| `DELETE /v1/numbers/{pn}/media/{media_id}` | delete | → 204 | *as built in M1b*: looked up first, with `phone_number_id={pn}` (`DELETE /{id}` deletes whatever node an id names): 422 `media_id`, 404 for a media id not the number's or a node that is not that media, nothing deleted |
 | `POST /v1/numbers/{pn}/documents` (M4) | render `invoice`, `receipt` or `voucher` from its JSON input (`date` required: the renderer has no clock), upload | `{template, input, date, format}` → `201 {media_id, filename, mime_type}` | 422 on the input |
 
 **Templates** (scope `templates`)
@@ -337,10 +338,10 @@ Rules the service implements:
 | Method and path | Does | Request → response | Notable errors |
 | --- | --- | --- | --- |
 | `GET /v1/wabas/{waba_id}/templates` | list, `?status=&name=&cursor=`, cached 60 s per WABA (Meta allows 200 management calls an hour per WABA) | → page of `{id, name, language, status, category, components}` | |
-| `GET /v1/wabas/{waba_id}/templates/{id}` | one | → template | |
-| `POST /v1/wabas/{waba_id}/templates` | create from Meta's JSON shape (`TemplateDefinition` deserializes it), validated locally | → `201 {id, status, category}` | 422 `template_rejected`; 409 `template_limit_reached` |
+| `GET /v1/wabas/{waba_id}/templates/{id}` | one | → template | *as built in M1b*: 422 `id` (not digits); the id's name read, then the id looked for in the WABA's own list of that name (5 pages of 100 at most): 404 for another WABA's template, or one past those pages |
+| `POST /v1/wabas/{waba_id}/templates` | create from Meta's JSON shape (`TemplateDefinition` deserializes it), validated locally | → `201 {id, status, category}` | 422 `template_rejected`; 409 `template_limit_reached`; *as built in M1b*: 422 `invalid_request` on a key `TemplateDefinition` would not send (never dropped; the shapes it cannot carry are listed in the guide's Templates section) |
 | `POST /v1/wabas/{waba_id}/templates/authentication` (M3) | copy-code, one-tap or zero-tap, several languages | → 201 | |
-| `DELETE /v1/wabas/{waba_id}/templates?name=[&id=]` | every language of a name, or one | → 204 | |
+| `DELETE /v1/wabas/{waba_id}/templates?name=[&id=]` | every language of a name, or one | → 204 | *as built in M1b*: with an id, looked for in the WABA's own list of that name first: 404 when it is not there, nothing deleted |
 
 Review results arrive as `template_status_updated` events.
 
@@ -597,9 +598,9 @@ sends twice. The service adds no send retries of its own.
 | --- | --- |
 | Forged Meta deliveries | signature over raw bytes with any of N app secrets; missing or malformed header `401` before the body is read; 3 MiB; the public listener serves nothing else |
 | Replayed Meta bodies | dedup for 7 days; bodies never logged |
-| A tenant reading or sending as another | ownership before the vault ([§3.3](#33-authorization-order)); foreign numbers are `404`; extractors are the only path to a token |
+| A tenant reading or sending as another | ownership before the vault ([§3.3](#33-authorization-order)); foreign numbers are `404`; extractors are the only path to a token. *As built in M1b*: one token may reach several tenants' WABAs (the platform's system user token attached to each), so an id in a path is checked to be the path's number's or WABA's own: media with Meta's `phone_number_id`, templates through the WABA's own list; another's is `404` like a missing one |
 | A stolen platform key | limited to its tenants and scopes; internal network only; revocation effective across replicas at once |
-| A stolen database dump | tokens encrypted (vault key elsewhere), API keys hashed, OTP codes and numbers only as HMACs (pepper elsewhere), webhook secrets encrypted (data key elsewhere); inbox history is readable, so database encryption at rest is the operator's |
+| A stolen database dump | tokens encrypted (vault key elsewhere), API keys hashed, OTP codes and numbers only as HMACs (pepper elsewhere), webhook secrets encrypted (data key elsewhere); inbox history is readable, and so are the answers idempotency records keep for 24 h (a send's recipient: phone number, `wa_id` or BSUID), so database encryption at rest is the operator's |
 | Signup attributed to the wrong merchant | state bound to the tenant, redeemed for the credential's tenant; ids verified with Meta; D4 |
 | OTP brute force, cross-tenant codes | the library's limits, per-tenant rate limits, namespace = tenant |
 | SSRF | no URL fetching (media by id, through the library's host allow-list); webhooks-out allow-list, no redirects, pinned address |
@@ -627,6 +628,12 @@ the route template, not the raw path (contacts identify customers).
 20/s (burst 40), reads 50/s, template management 2/s, OTP issue 5/s, 20
 streams; `429` with `Retry-After`. Meta's limits (80 messages/s per number,
 portfolio limits) still apply; pacing campaigns is the caller's job.
+*As built in M1b*: token buckets keyed by tenant and route class, checked
+after the scope and before ownership; the bursts this paragraph does not
+state (reads, template management) are one second's worth; read
+receipts, media and profile writes count as sends; the operator sets
+them per deployment (`WA_SERVER_RATE_*`, [§7.2](#72-environment)), and
+per-tenant overrides wait for the tenant settings (M3).
 
 **CORS**: none (D3). **TLS** terminates at the ingress: valid certificate,
 body limit of at least 3 MiB, no body rewriting or decompression, a timeout
@@ -666,6 +673,9 @@ crate names, settled when OQ #1 closed (`meta-whatsapp-*`, 2026-09-25).
 | `WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS` | none | hosts and CIDRs for webhooks-out |
 | `WA_SERVER_OUTBOX_RETENTION`, `…_IDEMPOTENCY_TTL`, `…_WEBHOOK_RETRY_WINDOW` | 7 d, 24 h, 72 h | |
 | `WA_SERVER_MEDIA_MAX_BYTES`, `WA_SERVER_SHUTDOWN_GRACE`, `WA_SERVER_MIGRATE` | 100 MiB, 25 s, `auto` | `skip` when a job runs `meta-whatsapp-server migrate` |
+| `WA_SERVER_MEDIA_CONCURRENCY` (M1b) | 4 | uploads and whole-file downloads held in memory at once per replica (section 6's "bounded media concurrency"; the next is `429`); one tenant holds half at most (the service's default, not the design's) |
+| `WA_SERVER_MEDIA_STREAMS` (M1b) | 16 | streamed downloads at once per replica, one tenant holding half at most (the service's defaults, not the design's) |
+| `WA_SERVER_RATE_SEND`, `…_READ`, `…_TEMPLATES`, each with `…_BURST` (M1b) | 20 and 40, 50 and 50, 2 and 2 | section 6's rates, per tenant and replica; the bursts of reads and template management are the service's defaults (section 6 states none) |
 | `RUST_LOG`, `WA_SERVER_LOG_FORMAT`, `OTEL_EXPORTER_OTLP_ENDPOINT` | `info`, `json`, unset | |
 
 ### 7.3 Start, observability, shutdown
@@ -805,7 +815,12 @@ messages, media, templates, idempotency keys and rate limits; **M1c**
 M1.1, M1.3, M1.5 and M1.6, and M1.7's parallel migrations and its log
 capture over every M1a route (the M1a routes stand in for a send and a
 webhook); M1.2, M1.4 and the rest of M1.7 (two instances deduplicating a
-webhook, the capture of a send and a webhook) are M1b's and M1c's.
+webhook, the capture of a send and a webhook) are M1b's and M1c's. **M1b
+meets M1.4** (`tests/messages.rs`, and on Postgres
+`tests/live_postgres.rs`), **M1.3 and M1.5 over its routes** (the tests
+iterate the committed document) **and M1.7's send part** (the capture
+exercises every route, sends with text, a phone number, a BSUID and a
+contact card included); M1.1 on its final head.
 
 Acceptance tests. "Decisive" names the guard whose removal must make the
 test fail.

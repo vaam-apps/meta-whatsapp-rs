@@ -10,8 +10,9 @@ use time::{Duration, OffsetDateTime};
 
 use super::{Store, StoreResult, listing};
 use crate::model::{
-    ApiKeyRecord, BindOutcome, DeleteTenantOutcome, KeyOwner, KeyScope, Listing, NewApiKey,
-    NumberBinding, NumberStatus, PageRequest, Tenant, TenantId, TenantStatus, WabaBinding,
+    ApiKeyRecord, BindOutcome, DeleteTenantOutcome, IdempotencyClaim, IdempotencyKey,
+    IdempotencyRecord, IdempotencyState, KeyOwner, KeyScope, Listing, NewApiKey, NumberBinding,
+    NumberStatus, PageRequest, Tenant, TenantId, TenantStatus, WabaBinding,
 };
 
 /// In-memory [`Store`].
@@ -26,6 +27,27 @@ struct State {
     keys: BTreeMap<String, ApiKeyRecord>,
     wabas: BTreeMap<String, WabaBinding>,
     numbers: BTreeMap<String, NumberBinding>,
+    /// Idempotency records by (tenant, key).
+    idempotency: BTreeMap<(String, String), IdempotencyEntry>,
+}
+
+/// An idempotency record in memory.
+#[derive(Debug, Clone)]
+struct IdempotencyEntry {
+    fingerprint: [u8; 32],
+    claim: String,
+    completed: Option<(u16, Vec<u8>)>,
+    lease_until: OffsetDateTime,
+    expires_at: OffsetDateTime,
+}
+
+/// `now + by`, saturating.
+fn after(now: OffsetDateTime, by: std::time::Duration) -> OffsetDateTime {
+    now.saturating_add(Duration::try_from(by).unwrap_or(Duration::MAX))
+}
+
+fn idempotency_id(tenant: &TenantId, key: &IdempotencyKey) -> (String, String) {
+    (tenant.as_str().to_owned(), key.as_str().to_owned())
 }
 
 impl MemoryStore {
@@ -132,6 +154,10 @@ impl Store for MemoryStore {
         state
             .keys
             .retain(|_, key| !matches!(&key.owner, KeyOwner::Tenant(t) if t == id));
+        // Its idempotency records go too, as on Postgres (ON DELETE CASCADE).
+        state
+            .idempotency
+            .retain(|(tenant, _), _| tenant != id.as_str());
         Ok(DeleteTenantOutcome::Deleted)
     }
 
@@ -319,5 +345,92 @@ impl Store for MemoryStore {
             }
         }
         Ok(())
+    }
+
+    async fn claim_idempotency_key(
+        &self,
+        tenant: &TenantId,
+        key: &IdempotencyKey,
+        fingerprint: &[u8; 32],
+        claim: &str,
+        lease: std::time::Duration,
+        ttl: std::time::Duration,
+    ) -> StoreResult<IdempotencyClaim> {
+        let now = OffsetDateTime::now_utc();
+        let mut state = self.lock();
+        let id = idempotency_id(tenant, key);
+        if let Some(entry) = state.idempotency.get(&id)
+            && entry.expires_at > now
+        {
+            let state = match &entry.completed {
+                Some((status, body)) => IdempotencyState::Completed {
+                    status: *status,
+                    body: body.clone(),
+                },
+                None => IdempotencyState::InProgress {
+                    lease_expired: entry.lease_until <= now,
+                },
+            };
+            return Ok(IdempotencyClaim::Existing(IdempotencyRecord {
+                fingerprint: entry.fingerprint,
+                state,
+            }));
+        }
+        state.idempotency.insert(
+            id,
+            IdempotencyEntry {
+                fingerprint: *fingerprint,
+                claim: claim.to_owned(),
+                completed: None,
+                lease_until: after(now, lease),
+                expires_at: after(now, ttl),
+            },
+        );
+        Ok(IdempotencyClaim::Claimed)
+    }
+
+    async fn complete_idempotency_key(
+        &self,
+        tenant: &TenantId,
+        key: &IdempotencyKey,
+        claim: &str,
+        status: u16,
+        body: &[u8],
+    ) -> StoreResult<bool> {
+        let mut state = self.lock();
+        match state.idempotency.get_mut(&idempotency_id(tenant, key)) {
+            Some(entry) if entry.claim == claim => {
+                entry.completed = Some((status, body.to_vec()));
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    async fn release_idempotency_key(
+        &self,
+        tenant: &TenantId,
+        key: &IdempotencyKey,
+        claim: &str,
+    ) -> StoreResult<bool> {
+        let mut state = self.lock();
+        let id = idempotency_id(tenant, key);
+        if state
+            .idempotency
+            .get(&id)
+            .is_some_and(|entry| entry.claim == claim)
+        {
+            state.idempotency.remove(&id);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    async fn purge_idempotency_keys(&self) -> StoreResult<u64> {
+        let now = OffsetDateTime::now_utc();
+        let mut state = self.lock();
+        let before = state.idempotency.len();
+        state.idempotency.retain(|_, entry| entry.expires_at > now);
+        Ok(u64::try_from(before - state.idempotency.len()).unwrap_or(u64::MAX))
     }
 }

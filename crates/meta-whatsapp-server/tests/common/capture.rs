@@ -139,6 +139,10 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
     assert_eq!(patched.status.as_u16(), 200, "{}", patched.text);
     let listed = h.call(Call::get("/v1/numbers").key(&tenant_key)).await;
     assert_eq!(listed.status.as_u16(), 200, "{}", listed.text);
+
+    // Sends, media and templates (M1b), with what M1.7 keeps out of the
+    // logs: message text, recipients, contacts.
+    secrets.extend(send_media_and_templates(h, &admin).await);
     // Failures log too: a refused key, and Meta refusing a token.
     let refused = h
         .call(Call::get("/v1/numbers").key(&format!("{tenant_key}x")))
@@ -291,6 +295,255 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
     secrets
 }
 
+/// A message's text, a recipient, a contact and the caller's references,
+/// none of which may be logged.
+pub const MESSAGE_TEXT: &str = "Your order 1234 of Echeveria has shipped";
+pub const RECIPIENT: &str = "+16505551234";
+pub const RECIPIENT_DIGITS: &str = "16505551234";
+pub const BSUID: &str = "US.13491208655302741918";
+pub const CONTACT_NAME: &str = "Barbara J. Johnson";
+pub const CONTACT_PHONE: &str = "+1 (940) 555-1234";
+pub const CALLBACK_DATA: &str = "order:1234:shipped";
+pub const IDEMPOTENCY_KEY: &str = "order-1234-shipped-notice";
+
+/// The M1b routes, each exercised, with the tokens, text, recipients and
+/// contacts M1.7 forbids in the logs; returns the key it minted and what
+/// must not be logged.
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
+async fn send_media_and_templates(h: &Harness, admin: &str) -> Vec<String> {
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["send", "media", "templates"]})),
+        )
+        .await
+        .json();
+    let key = minted["key"].as_str().unwrap().to_owned();
+    let pn = "1972385232742141";
+    let sent_response = |input: &str, id_field: &str, id: &str| {
+        let mut contact = json!({"input": input});
+        contact[id_field] = json!(id);
+        json!({"messaging_product": "whatsapp", "contacts": [contact],
+               "messages": [{"id": "wamid.HBgLMTY0NjcwNDM1OTUVAgARGBI1RjQyNUE3NEYxMzAzMzQ5MkEA"}]})
+    };
+    // A text, with an Idempotency-Key, then its replay (no second request).
+    h.graph
+        .push_json(200, sent_response(RECIPIENT, "wa_id", RECIPIENT_DIGITS));
+    let text = || {
+        Call::new(Method::POST, format!("/v1/numbers/{pn}/messages"))
+            .key(&key)
+            .header("idempotency-key", IDEMPOTENCY_KEY)
+            .json(&json!({"to": {"phone": RECIPIENT}, "type": "text",
+                          "text": {"body": MESSAGE_TEXT}, "callback_data": CALLBACK_DATA}))
+    };
+    let sent = h.call(text()).await;
+    assert_eq!(sent.status.as_u16(), 202, "{}", sent.text);
+    let replayed = h.call(text()).await;
+    assert_eq!(replayed.status.as_u16(), 202, "{}", replayed.text);
+    assert_eq!(replayed.headers["idempotent-replayed"], "true");
+    // A contact card to a BSUID.
+    h.graph
+        .push_json(200, sent_response(BSUID, "user_id", BSUID));
+    let card = h
+        .call(
+            Call::new(Method::POST, format!("/v1/numbers/{pn}/messages"))
+                .key(&key)
+                .json(
+                    &json!({"to": {"user_id": BSUID}, "type": "contacts", "contacts": [
+                    {"name": {"formatted_name": CONTACT_NAME},
+                     "phones": [{"phone": CONTACT_PHONE, "type": "Mobile"}]}]}),
+                ),
+        )
+        .await;
+    assert_eq!(card.status.as_u16(), 202, "{}", card.text);
+    // Refusals: a number without its `+` (before any request), and Meta's
+    // closed window.
+    let local = h
+        .call(
+            Call::new(Method::POST, format!("/v1/numbers/{pn}/messages"))
+                .key(&key)
+                .json(&json!({"to": {"phone": RECIPIENT_DIGITS}, "type": "text",
+                              "text": {"body": MESSAGE_TEXT}})),
+        )
+        .await;
+    assert_eq!(local.status.as_u16(), 422, "{}", local.text);
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": "(#131047) Re-engagement message", "type": "OAuthException",
+                         "code": 131047, "error_data": {"details": "Message failed to send because more than 24 hours have passed since the customer last replied to this number."},
+                         "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+    );
+    let twice = h
+        .call(text().header("idempotency-key", "another-key"))
+        .await;
+    assert_eq!(
+        (twice.status.as_u16(), twice.code().as_str()),
+        (422, "invalid_request"),
+        "two keys: {}",
+        twice.text
+    );
+    let closed = h
+        .call(
+            Call::new(Method::POST, format!("/v1/numbers/{pn}/messages"))
+                .key(&key)
+                .json(&json!({"to": {"phone": RECIPIENT}, "type": "text",
+                              "text": {"body": MESSAGE_TEXT}})),
+        )
+        .await;
+    assert_eq!(closed.status.as_u16(), 409, "{}", closed.text);
+    // Read receipt with a typing indicator.
+    h.graph.push_json(200, json!({"success": true}));
+    let read = h
+        .call(
+            Call::new(
+                Method::POST,
+                format!("/v1/numbers/{pn}/messages/wamid.HBgLMTY1MDM4Nzk0MzkVAgARGBJDQjZCMzlEQUE4OTJBMTE4RTUA/read"),
+            )
+            .key(&key)
+            .json(&json!({"typing_indicator": true})),
+        )
+        .await;
+    assert_eq!(read.status.as_u16(), 204, "{}", read.text);
+    // Media: upload, download (whole, verified), delete.
+    let png = b"\x89PNG\r\n\x1a\nvoucher".to_vec();
+    h.graph.push_json(200, json!({"id": "1037543291543636"}));
+    let uploaded = h
+        .call(
+            Call::new(Method::POST, format!("/v1/numbers/{pn}/media"))
+                .key(&key)
+                .multipart(&[
+                    ("type", None, b"image/png"),
+                    ("file", Some("voucher.png"), &png),
+                ]),
+        )
+        .await;
+    assert_eq!(uploaded.status.as_u16(), 201, "{}", uploaded.text);
+    let digest = sha256_hex(&png);
+    h.graph.push_json(
+        200,
+        json!({"messaging_product": "whatsapp",
+               "url": "https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1037543291543636&ext=1&hash=abc",
+               "mime_type": "image/png", "sha256": digest, "file_size": png.len().to_string(),
+               "id": "1037543291543636"}),
+    );
+    h.graph.push_bytes(200, "image/png", png.clone());
+    let downloaded = h
+        .call(Call::get(format!("/v1/numbers/{pn}/media/1037543291543636")).key(&key))
+        .await;
+    assert_eq!(downloaded.status.as_u16(), 200, "{}", downloaded.text);
+    h.graph.push_json(
+        200,
+        json!({"messaging_product": "whatsapp",
+               "url": "https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1037543291543636&ext=1&hash=abc",
+               "mime_type": "image/png", "sha256": digest, "id": "1037543291543636"}),
+    );
+    h.graph.push_json(200, json!({"success": true}));
+    let deleted = h
+        .call(
+            Call::new(
+                Method::DELETE,
+                format!("/v1/numbers/{pn}/media/1037543291543636"),
+            )
+            .key(&key),
+        )
+        .await;
+    assert_eq!(deleted.status.as_u16(), 204, "{}", deleted.text);
+    // Templates: list, one, create, delete.
+    let waba = "102290129340398";
+    h.graph.push_json(
+        200,
+        json!({"data": [{"name": "order_confirmation", "language": "en_US", "status": "APPROVED",
+                         "category": "UTILITY", "id": "1407680676729941",
+                         "components": [{"type": "BODY", "text": "Thank you for your order, {{1}}!"}]}]}),
+    );
+    let listed = h
+        .call(Call::get(format!("/v1/wabas/{waba}/templates")).key(&key))
+        .await;
+    assert_eq!(listed.status.as_u16(), 200, "{}", listed.text);
+    h.graph.push_json(
+        200,
+        json!({"name": "order_confirmation", "id": "1407680676729941"}),
+    );
+    h.graph.push_json(
+        200,
+        json!({"data": [{"name": "order_confirmation", "status": "APPROVED", "id": "1407680676729941"}]}),
+    );
+    let one = h
+        .call(Call::get(format!("/v1/wabas/{waba}/templates/1407680676729941")).key(&key))
+        .await;
+    assert_eq!(one.status.as_u16(), 200, "{}", one.text);
+    h.graph.push_json(
+        200,
+        json!({"id": "1627019861106475", "status": "PENDING", "category": "MARKETING"}),
+    );
+    let created = h
+        .call(
+            Call::new(Method::POST, format!("/v1/wabas/{waba}/templates"))
+                .key(&key)
+                .json(&super::sample_template_definition()),
+        )
+        .await;
+    assert_eq!(created.status.as_u16(), 201, "{}", created.text);
+    h.graph.push_json(200, json!({"success": true}));
+    let removed = h
+        .call(
+            Call::new(
+                Method::DELETE,
+                format!("/v1/wabas/{waba}/templates?name=order_confirmation"),
+            )
+            .key(&key),
+        )
+        .await;
+    assert_eq!(removed.status.as_u16(), 204, "{}", removed.text);
+    // One language by id (looked up among the WABA's templates of that
+    // name), then an id that is not the WABA's: refused, not audited.
+    h.graph.push_json(
+        200,
+        json!({"data": [{"id": "1407680676729941", "name": "order_confirmation"}]}),
+    );
+    h.graph.push_json(200, json!({"success": true}));
+    let removed = h
+        .call(
+            Call::new(
+                Method::DELETE,
+                format!("/v1/wabas/{waba}/templates?name=order_confirmation&id=1407680676729941"),
+            )
+            .key(&key),
+        )
+        .await;
+    assert_eq!(removed.status.as_u16(), 204, "{}", removed.text);
+    h.graph.push_json(200, json!({"data": []}));
+    let refused = h
+        .call(
+            Call::new(
+                Method::DELETE,
+                format!("/v1/wabas/{waba}/templates?name=order_confirmation&id=1407680676729942"),
+            )
+            .key(&key),
+        )
+        .await;
+    assert_eq!(refused.status.as_u16(), 404, "{}", refused.text);
+    vec![
+        key.clone(),
+        key.rsplit('_').next().unwrap().to_owned(),
+        MESSAGE_TEXT.to_owned(),
+        RECIPIENT.to_owned(),
+        RECIPIENT_DIGITS.to_owned(),
+        BSUID.to_owned(),
+        CONTACT_NAME.to_owned(),
+        CONTACT_PHONE.to_owned(),
+        CALLBACK_DATA.to_owned(),
+        IDEMPOTENCY_KEY.to_owned(),
+    ]
+}
+
+/// SHA-256 of `data`, hex.
+pub fn sha256_hex(data: &[u8]) -> String {
+    use sha2::Digest as _;
+    hex::encode(sha2::Sha256::digest(data))
+}
+
 /// A method no client sends, which the logs must not repeat.
 const MADE_UP_METHOD: &str = "MADEUPMETHODFORTHELOGS";
 
@@ -359,6 +612,28 @@ fn check_audit(logs: &str) {
         }
     }
     assert!(changes >= 10, "{changes} admin changes");
+    // A tenant's template deletions are audited too, each under its own
+    // action (every language of a name, then one id; the refused one is
+    // not), with the tenant, the WABA and its key's id.
+    let deletions: Vec<&serde_json::Value> = events
+        .iter()
+        .filter(|e| e["target"] == "audit" && e["fields"]["message"] == "tenant change")
+        .map(|e| &e["fields"])
+        .collect();
+    let actions: Vec<&str> = deletions
+        .iter()
+        .filter_map(|fields| fields["action"].as_str())
+        .collect();
+    assert_eq!(
+        actions,
+        ["templates_deleted", "template_deleted"],
+        "the template deletions' audit events"
+    );
+    for fields in deletions {
+        assert!(fields["key_id"].is_string(), "{fields}");
+        assert_eq!(fields["tenant"], "merchant-42", "{fields}");
+        assert_eq!(fields["waba_id"], "102290129340398", "{fields}");
+    }
 }
 
 /// Every success status an operation answered is one its document lists

@@ -119,6 +119,54 @@ volumes (Claude config, shell history, cargo caches) start empty
 
 ### Added
 
+- **meta-whatsapp-server, milestone M1b**: messages, read receipts,
+  media, templates, idempotency keys and rate limits.
+  `POST /v1/numbers/{pn}/messages` (scope `send`) sends text, media by
+  uploaded id or `https://` link, location, contacts, reactions,
+  templates (Meta's object) and interactive `button`, `list` and
+  `cta_url` messages, each written as Meta's page writes it, to a strict
+  E.164 number (a digits-only one is refused before any request), a
+  BSUID, both, or a group; anything else, Direct Send included, is `422
+  unsupported_message_type`. `POST …/messages/{message_id}/read` marks
+  read, with an optional typing indicator. Media (scope `media`): uploads
+  checked (type, size, `WA_SERVER_MEDIA_MAX_BYTES`) before any request;
+  downloads verified against Meta's SHA-256 before the first byte (`502
+  integrity`), at most `?max_bytes=` (16 MiB), or streamed with
+  `?stream=true`, where a mismatch aborts the connection; `X-WA-SHA256`;
+  deletes; at most `WA_SERVER_MEDIA_CONCURRENCY` transfers in memory and
+  `WA_SERVER_MEDIA_STREAMS` streamed downloads per replica, one tenant
+  holding half of either at most. A media id is digits and must be the
+  number's (Meta's `phone_number_id` on the lookup and the deletion; a
+  deletion looks the id up first); a streamed download is forwarded one
+  chunk behind, so a mismatch never delivers the whole file; downloads
+  carry a sandboxing `Content-Security-Policy`. Templates (scope
+  `templates`): list (cached 60 s per tenant's WABA, least recently used
+  pages evicted first), get (found through the WABA's own list: Meta's
+  template object does not name its WABA), create from Meta's JSON
+  (checked locally; a key the library would drop is `422` on its path,
+  while Meta's flat positional `body_text`, which the library writes as
+  `[[..]]`, is sent; the shapes it cannot carry, payment buttons,
+  `app_deep_link`, `optimization_spec` and the pre-v21 one-tap button
+  fields, are refused; `template_rejected`, `template_limit_reached`),
+  delete by name or name and id (an `audit` event, `templates_deleted`
+  or `template_deleted`). Another tenant's media or template id is
+  `404 not_found`, like a missing one; on those routes a `190` stays
+  `409 reconnect_required` and a Meta 5xx a `502`.
+  `Idempotency-Key` on sends, uploads and template creation, scoped to
+  the tenant, stored in Postgres (`wa_server_idempotency`, service
+  migration 2) or memory: a repeat gets the kept answer with
+  `Idempotent-Replayed: true` and never a second request; an answer
+  proving nothing was sent releases the key; another request under it is
+  `422 idempotency_key_reused`, a running one `409
+  idempotency_in_progress`, one whose lease (twice the Graph timeout)
+  lapsed `409 outcome_unknown`; kept `WA_SERVER_IDEMPOTENCY_TTL` (24 h),
+  purged by one replica at a time. Rate limits per tenant, route class
+  and replica (sends 20/s burst 40, reads 50/s, template management 2/s,
+  `WA_SERVER_RATE_*`), `429 too_many_requests` with `Retry-After`, before
+  ownership and the vault. Metrics for idempotent repeats and refused
+  requests. New dependencies of the service: `multer` (the multipart
+  parser axum's own extractor wraps) and `base64` (Meta's digests).
+  Guide: docs/guides/server.md; skill: `meta-whatsapp-rs-server-send`.
 - **meta-whatsapp-server, milestone M1a**: the HTTP service of
   docs/design/server.md, for apps not written in Rust
   (`crates/meta-whatsapp-server`, binary `meta-whatsapp-server`, not

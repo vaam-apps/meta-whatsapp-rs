@@ -12,6 +12,8 @@
 //! | `wa_server_http_requests_total` | `listener`, `method`, `route`, `status`, `code` (empty on success) |
 //! | `wa_server_http_request_duration_seconds` | `listener`, `method`, `route` |
 //! | `wa_server_graph_errors_total` | `code` (the API error code of a failed Graph call) |
+//! | `wa_server_idempotency_total` | `outcome`: `replayed`, `reused`, `in_progress`, `outcome_unknown` (a repeat that met a key's record) |
+//! | `wa_server_rate_limited_total` | `class` (`send`, `read`, `templates`): requests refused `429` by the service's own limits |
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -46,6 +48,16 @@ struct CodeLabels {
     code: String,
 }
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct OutcomeLabels {
+    outcome: String,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct ClassLabels {
+    class: String,
+}
+
 type DurationFamily = Family<RouteLabels, Histogram, fn() -> Histogram>;
 
 /// An HTTP method as a label or a log field: the methods an API client
@@ -72,6 +84,8 @@ pub struct Metrics {
     requests: Family<RequestLabels, Counter>,
     durations: DurationFamily,
     graph_errors: Family<CodeLabels, Counter>,
+    idempotency: Family<OutcomeLabels, Counter>,
+    rate_limited: Family<ClassLabels, Counter>,
 }
 
 impl std::fmt::Debug for Metrics {
@@ -113,11 +127,25 @@ impl Metrics {
             "Failed Graph API calls, by the API error code they were answered with",
             graph_errors.clone(),
         );
+        let idempotency = Family::<OutcomeLabels, Counter>::default();
+        registry.register(
+            "idempotency",
+            "Requests whose Idempotency-Key met an earlier request's record, by outcome",
+            idempotency.clone(),
+        );
+        let rate_limited = Family::<ClassLabels, Counter>::default();
+        registry.register(
+            "rate_limited",
+            "Requests refused by the service's rate limits, by route class",
+            rate_limited.clone(),
+        );
         Self {
             registry: Arc::new(Mutex::new(registry)),
             requests,
             durations,
             graph_errors,
+            idempotency,
+            rate_limited,
         }
     }
 
@@ -157,6 +185,25 @@ impl Metrics {
         self.graph_errors
             .get_or_create(&CodeLabels {
                 code: code.to_owned(),
+            })
+            .inc();
+    }
+
+    /// Count a repeat that met an idempotency key's record (`outcome`:
+    /// `replayed`, `reused`, `in_progress`, `outcome_unknown`).
+    pub fn idempotency(&self, outcome: &'static str) {
+        self.idempotency
+            .get_or_create(&OutcomeLabels {
+                outcome: outcome.to_owned(),
+            })
+            .inc();
+    }
+
+    /// Count a request refused by the rate limits of `class`.
+    pub fn rate_limited(&self, class: &'static str) {
+        self.rate_limited
+            .get_or_create(&ClassLabels {
+                class: class.to_owned(),
             })
             .inc();
     }
