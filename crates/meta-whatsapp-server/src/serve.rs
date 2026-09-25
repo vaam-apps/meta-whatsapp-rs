@@ -32,6 +32,10 @@ use crate::{api, listen};
 /// Connections per replica.
 const POOL_SIZE: u32 = 10;
 
+// The webhook path takes at most MAX_DELIVERIES_RECORDING connections: API
+// calls always find one.
+const _: () = assert!(crate::events::MAX_DELIVERIES_RECORDING < POOL_SIZE as usize);
+
 /// A pool on `url`, with at least two connections (migrations hold one for
 /// their lock).
 pub async fn connect(url: &DatabaseUrl) -> anyhow::Result<PgPool> {

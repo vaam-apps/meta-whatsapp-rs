@@ -12,10 +12,10 @@
 //! | `wa_server_http_requests_total` | `listener`, `method`, `route`, `status`, `code` (empty on success) |
 //! | `wa_server_http_request_duration_seconds` | `listener`, `method`, `route` |
 //! | `wa_server_graph_errors_total` | `code` (the API error code of a failed Graph call) |
-//! | `wa_server_webhook_deliveries_total` | `outcome`: Meta's `POST /webhooks/meta` answered `delivered` (200), `unauthenticated` (401), `payload_too_large` (413), `in_flight` (503: another request holds an event's dedup lease; a run of them means sinks outlast the lease), `failed` (500) |
+//! | `wa_server_webhook_deliveries_total` | `outcome`: Meta's `POST /webhooks/meta` answered `delivered` (200), `unauthenticated` (401), `payload_too_large` (413), `slow_body` (408: the body took over 15 s), `busy` (503: 64 deliveries already in flight on the replica, no turn to record within 10 s, or the outbox locked for over 2 s), `in_flight` (503: another request holds an event's dedup lease; a run of them means sinks outlast the lease), `failed` (500) |
 //! | `wa_server_webhook_events_total` | `event_type` (the event's type), `audience` (`tenant` or `operator`: an operator-only row) |
 //! | `wa_server_webhook_duplicate_events_total` | `stage`: `dedup` (the dedup lease had seen it), `outbox` (the outbox had it) |
-//! | `wa_server_webhook_sink_failures_total` | `stage`: `routing`, `serialization`, `inbox`, `outbox` |
+//! | `wa_server_webhook_sink_failures_total` | `stage`: `routing`, `serialization`, `inbox`, `outbox`, `outbox_busy` (a lock waited for over 2 s: `busy`) |
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;

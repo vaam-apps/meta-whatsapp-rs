@@ -126,6 +126,14 @@ pub struct EventPage {
     pub high_water: i64,
 }
 
+/// The outbox waited too long for a lock (another insert of the same
+/// tenant, a binding changing): the insert did nothing, and trying again
+/// later may succeed. Carried as the source of a
+/// `StorageError::Backend`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the outbox is busy")]
+pub struct OutboxBusy;
+
 /// The event outbox.
 #[async_trait]
 pub trait EventStore: Send + Sync + 'static {

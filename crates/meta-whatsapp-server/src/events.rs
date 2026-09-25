@@ -62,16 +62,37 @@ use meta_whatsapp_rs::webhooks::{
 };
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::error::ApiError;
 use crate::metrics::Metrics;
 use crate::model::TenantId;
-use crate::store::events::{EventQuery, EventStore, NewEvent, StoredEvent};
+use crate::store::events::{EventQuery, EventStore, NewEvent, OutboxBusy, StoredEvent};
 use crate::store::{Store, StoreResult};
 
 /// Largest webhook body read: 3 MiB, the library's default (Meta documents
 /// payloads of up to 3 MB, `webhooks/overview`). One byte more is `413`.
 pub const MAX_WEBHOOK_BODY_BYTES: usize = DEFAULT_MAX_BODY_BYTES;
+
+/// Meta's deliveries a replica reads and records at once: past it, a
+/// delivery is answered `503` before its body is read (Meta retries). The
+/// bodies read at once stay under 64 × 3 MiB, whoever sends them: the
+/// signature can only be checked once a body is read (security review
+/// M1).
+pub const MAX_DELIVERIES_IN_FLIGHT: usize = 64;
+
+/// How long a delivery's body may take to arrive: past it, `408` (Meta
+/// retries), so slow bodies cannot hold the deliveries' places.
+pub const BODY_READ_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Deliveries a replica records at once: each holds at most one database
+/// connection at a time, so the webhook path never takes more than these
+/// of a replica's pool, and API calls (key lookups first) always find one
+/// (security review M2). Below the pool's size (`crate::serve`).
+pub const MAX_DELIVERIES_RECORDING: usize = 4;
+
+/// How long a delivery waits for its turn to record: past it, `503`.
+pub const RECORDING_WAIT: Duration = Duration::from_secs(10);
 
 /// Default `WA_SERVER_OUTBOX_RETENTION`: 7 days, the design's proposal.
 /// Retention is decision D10 of the design, still open: this default
@@ -193,6 +214,21 @@ pub(crate) struct Events {
     dedup: DedupGuard,
     sink: ServiceSink,
     outbox: Arc<dyn EventStore>,
+    /// Places for deliveries being read and recorded
+    /// ([`MAX_DELIVERIES_IN_FLIGHT`]).
+    in_flight: Arc<Semaphore>,
+    /// Turns to record ([`MAX_DELIVERIES_RECORDING`]).
+    recording: Arc<Semaphore>,
+}
+
+/// Why a delivery was not recorded.
+#[derive(Debug)]
+pub(crate) enum Refused {
+    /// The replica is at capacity, or the outbox too busy: `503`, Meta
+    /// retries.
+    Busy,
+    /// The library's handler refused or failed it.
+    Handler(meta_whatsapp_rs::Error),
 }
 
 impl Events {
@@ -218,7 +254,16 @@ impl Events {
             dedup,
             sink,
             outbox: inbound.outbox,
+            in_flight: Arc::new(Semaphore::new(MAX_DELIVERIES_IN_FLIGHT)),
+            recording: Arc::new(Semaphore::new(MAX_DELIVERIES_RECORDING)),
         }
+    }
+
+    /// A place for one delivery, or `None` when
+    /// [`MAX_DELIVERIES_IN_FLIGHT`] are being read or recorded: hold it
+    /// while reading the body and recording it.
+    pub(crate) fn admit(&self) -> Option<OwnedSemaphorePermit> {
+        self.in_flight.clone().try_acquire_owned().ok()
     }
 
     /// One of Meta's deliveries, through the library's `WebhookHandler`
@@ -234,7 +279,13 @@ impl Events {
         &self,
         signature: Option<&str>,
         body: Bytes,
-    ) -> meta_whatsapp_rs::Result<DeliveryReport> {
+    ) -> Result<DeliveryReport, Refused> {
+        // Its turn to record: at most MAX_DELIVERIES_RECORDING hold the
+        // database at once.
+        let Ok(Ok(_turn)) = tokio::time::timeout(RECORDING_WAIT, self.recording.acquire()).await
+        else {
+            return Err(Refused::Busy);
+        };
         let sink = DeliverySink {
             sink: self.sink.clone(),
             body: body.clone(),
@@ -249,7 +300,12 @@ impl Events {
         .dedup(self.dedup.clone())
         .max_body_bytes(MAX_WEBHOOK_BODY_BYTES)
         .build();
-        handler.deliver(signature, &body).await
+        match handler.deliver(signature, &body).await {
+            Ok(report) => Ok(report),
+            // The outbox waited too long for a lock (`OutboxBusy`).
+            Err(meta_whatsapp_rs::Error::Sink(SinkError::Full)) => Err(Refused::Busy),
+            Err(error) => Err(Refused::Handler(error)),
+        }
     }
 
     /// The outbox.
@@ -629,11 +685,15 @@ impl ServiceSink {
                 .await
                 .map_err(|e| self.failed("inbox", kind, e))?;
         }
-        let inserted = self
-            .outbox
-            .insert(&row)
-            .await
-            .map_err(|e| self.failed("outbox", kind, storage(e)))?;
+        let inserted = self.outbox.insert(&row).await.map_err(|e| {
+            let busy = matches!(&e, StorageError::Backend(e) if e.is::<OutboxBusy>());
+            if busy {
+                self.metrics.webhook_failure("outbox_busy");
+                SinkError::Full
+            } else {
+                self.failed("outbox", kind, storage(e))
+            }
+        })?;
         let Some(sequence) = inserted else {
             self.metrics.webhook_duplicates("outbox", 1);
             tracing::debug!(event_type = kind, "the event was already in the outbox");

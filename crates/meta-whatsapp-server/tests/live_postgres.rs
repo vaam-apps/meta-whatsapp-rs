@@ -674,3 +674,70 @@ async fn live_postgres_a_replay_older_than_the_dedup_window_is_nobodys() {
         ]
     );
 }
+
+/// Security review M2: the webhook path and the API share one pool of 10
+/// connections. A burst of one tenant's deliveries waiting on its locked
+/// outbox stream takes at most `MAX_DELIVERIES_RECORDING` of them, so an
+/// API call (its key lookup first) is answered at once; and a delivery
+/// waits at most 2 s for the lock (`lock_timeout`), then `503` (Meta
+/// retries). Decisive: the recording turns and the lock timeout.
+#[tokio::test]
+async fn live_postgres_a_busy_outbox_never_starves_the_api() {
+    use std::time::Duration;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let h = harness(&db).await;
+    h.tenant("tenant-a").await;
+    h.connect("tenant-a", EXAMPLE_WABA, &[EXAMPLE_PN], "TOKEN-OF-A")
+        .await;
+    let key = h.tenant_key("tenant-a", &[Scope::Numbers]).await;
+    let first = bytes(&text(EXAMPLE_WABA, EXAMPLE_PN, "wamid.first"));
+    assert_eq!(h.webhook(&first).await.status, StatusCode::OK);
+    // Another session holds tenant-a's stream, for longer than the
+    // deliveries may wait.
+    let holder_pool = db.pool(1).await;
+    let mut holder = holder_pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM wa_server_event_streams WHERE stream = 'tenant-a' FOR UPDATE")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    // Held until the burst is answered (at most 30 s: without the lock
+    // timeout, the burst would wait for it and go through).
+    let (release, released_now) = tokio::sync::oneshot::channel::<()>();
+    let released = tokio::spawn(async move {
+        let _ = tokio::time::timeout(Duration::from_secs(30), released_now).await;
+        holder.rollback().await.unwrap();
+    });
+    let bodies: Vec<Vec<u8>> = (0..12)
+        .map(|i| bytes(&text(EXAMPLE_WABA, EXAMPLE_PN, &format!("wamid.burst-{i}"))))
+        .collect();
+    let burst = futures::future::join_all(bodies.iter().map(|body| h.webhook(body)));
+    let api = async {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let started = std::time::Instant::now();
+        let reply = h.call(Call::get("/v1/numbers").key(&key)).await;
+        (reply.status, started.elapsed())
+    };
+    let (replies, (status, took)) = tokio::join!(burst, api);
+    release.send(()).unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert!(took < Duration::from_secs(1), "the API waited {took:?}");
+    let statuses: Vec<StatusCode> = replies.iter().map(|r| r.status).collect();
+    assert!(
+        statuses
+            .iter()
+            .all(|s| *s == StatusCode::SERVICE_UNAVAILABLE),
+        "{statuses:?}"
+    );
+    assert_eq!(
+        metric(&h, "wa_server_webhook_deliveries_total{outcome=\"busy\"}"),
+        12
+    );
+    released.await.unwrap();
+    // Meta's retries go through once the stream is free.
+    for body in &bodies {
+        assert_eq!(h.webhook(body).await.status, StatusCode::OK);
+    }
+    assert_eq!(outbox_rows(&db.pool(1).await).await.len(), 13);
+}

@@ -33,7 +33,7 @@ use meta_whatsapp_rs::core::error::StorageError;
 use time::OffsetDateTime;
 
 use super::StoreResult;
-use super::events::{EventPage, EventQuery, EventStore, NewEvent, StoredEvent};
+use super::events::{EventPage, EventQuery, EventStore, NewEvent, OutboxBusy, StoredEvent};
 use crate::model::TenantId;
 
 /// The advisory lock of housekeeping (the outbox purge): one replica at a
@@ -65,6 +65,19 @@ impl PgEventStore {
 
 fn backend(error: impl std::error::Error + Send + Sync + 'static) -> StorageError {
     StorageError::Backend(anyhow::Error::new(error))
+}
+
+/// A lock wait past `lock_timeout` (SQLSTATE 55P03) is [`OutboxBusy`].
+fn busy_or_backend(error: sqlx::Error) -> StorageError {
+    let lock_timeout = error
+        .as_database_error()
+        .and_then(sqlx::error::DatabaseError::code)
+        .is_some_and(|code| code == "55P03");
+    if lock_timeout {
+        StorageError::Backend(anyhow::Error::new(OutboxBusy))
+    } else {
+        backend(error)
+    }
 }
 
 fn corrupt(column: &'static str) -> StorageError {
@@ -110,6 +123,12 @@ impl EventStore for PgEventStore {
         let data_bytes = i32::try_from(event.data.len())
             .map_err(|_| StorageError::Backend(anyhow::anyhow!("an event over 2 GiB")))?;
         let mut tx = self.pool.begin().await.map_err(backend)?;
+        // A connection of the pool the API shares waits at most this long
+        // for a lock (security review M2).
+        sqlx::query("SET LOCAL lock_timeout = '2s'")
+            .execute(&mut *tx)
+            .await
+            .map_err(backend)?;
         // 1. The tenant, while the binding the event was routed by (its
         //    number, under the WABA it names; else its WABA) still names
         //    it: the same rule as `crate::events::owner`. Locked, so an
@@ -158,7 +177,7 @@ impl EventStore for PgEventStore {
         .bind(data_bytes)
         .fetch_optional(&mut *tx)
         .await
-        .map_err(backend)?;
+        .map_err(busy_or_backend)?;
         tx.commit().await.map_err(backend)?;
         let Some((sequence, tenant)) = inserted else {
             return Ok(None);

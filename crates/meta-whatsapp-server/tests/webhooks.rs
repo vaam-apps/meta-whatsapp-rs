@@ -13,6 +13,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::Poll;
 
+use futures::StreamExt as _;
+
 use common::meta::{
     EXAMPLE_PN, EXAMPLE_TEXT, EXAMPLE_WABA, EXAMPLE_WAMID, bytes, example_text, fixture, status,
     template_approved, text, unknown_field, with_ids,
@@ -947,4 +949,78 @@ async fn an_event_dated_before_the_replay_window_is_nobodys() {
         Some(A.to_owned())
     );
     assert_eq!(fresh.operator_only, None);
+}
+
+/// Security review M1: a replica reads at most 64 deliveries at once, and
+/// a body has 15 s to arrive. With 64 deliveries whose bodies never come
+/// (well-formed signatures cost an attacker nothing), the next delivery is
+/// `503` at once (Meta retries), and each slow one is cut with `408`; then
+/// deliveries go through again. Decisive: the places and the body read
+/// timeout.
+#[tokio::test(start_paused = true)]
+async fn deliveries_past_capacity_are_503_and_slow_bodies_408() {
+    use meta_whatsapp_server::events::{BODY_READ_TIMEOUT, MAX_DELIVERIES_IN_FLIGHT};
+    let h = two_tenants().await;
+    let body = example_text();
+    let signature = sign(&AppSecret::new(common::APP_SECRET), &body);
+    let slow: Vec<_> = (0..MAX_DELIVERIES_IN_FLIGHT)
+        .map(|_| {
+            let router = h.public.clone();
+            let request = Call::new(Method::POST, "/webhooks/meta")
+                .header("x-hub-signature-256", &signature)
+                .body(Body::from_stream(futures::stream::pending::<
+                    Result<Bytes, std::io::Error>,
+                >()))
+                .build();
+            tokio::spawn(async move { send(&router, request).await.status })
+        })
+        .collect();
+    // They all start reading (paused time moves once every task waits).
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    let started = tokio::time::Instant::now();
+    assert_eq!(
+        h.webhook(&body).await.status,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(started.elapsed(), std::time::Duration::ZERO, "at once");
+    for task in slow {
+        assert_eq!(task.await.unwrap(), StatusCode::REQUEST_TIMEOUT);
+    }
+    assert!(started.elapsed() < BODY_READ_TIMEOUT);
+    assert!(h.outbox.inserts().is_empty());
+    assert_eq!(h.webhook(&body).await.status, StatusCode::OK);
+    assert_eq!(
+        metric(&h, "wa_server_webhook_deliveries_total{outcome=\"busy\"}"),
+        1
+    );
+    assert_eq!(
+        metric(
+            &h,
+            "wa_server_webhook_deliveries_total{outcome=\"slow_body\"}"
+        ),
+        64
+    );
+}
+
+/// A body that starts and then stalls is cut too.
+#[tokio::test(start_paused = true)]
+async fn a_stalled_body_is_cut_at_the_read_timeout() {
+    use meta_whatsapp_server::events::BODY_READ_TIMEOUT;
+    let h = two_tenants().await;
+    let body: &'static [u8] = example_text().leak();
+    let signature = sign(&AppSecret::new(common::APP_SECRET), body);
+    let first = futures::stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(&body[..10]))]);
+    let stalled = first.chain(futures::stream::pending());
+    let started = tokio::time::Instant::now();
+    let reply = send(
+        &h.public,
+        Call::new(Method::POST, "/webhooks/meta")
+            .header("x-hub-signature-256", &signature)
+            .body(Body::from_stream(stalled))
+            .build(),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::REQUEST_TIMEOUT);
+    assert_eq!(started.elapsed(), BODY_READ_TIMEOUT);
+    assert!(h.outbox.inserts().is_empty());
 }
