@@ -466,9 +466,10 @@ cannot be taken back, so the design is fail-closed:
   (renewed before the clear, which is compare-and-swapped on the version
   it read). It checks Meta first, as a share does: the line's records
   for the owner business and the recorded allocation, with their
-  `request_status`, and the WABA's `primary_funding_id` (merchant token). An active record, or one
-  of undocumented status, clears nothing (`PendingShareClearance::NotCleared`;
-  a record funding the WABA is recorded as its allocation). Otherwise the
+  `request_status`, and the WABA's `primary_funding_id` (merchant
+  token). An active record, or one of undocumented status, clears
+  nothing (`PendingShareClearance::NotCleared`; a record funding the WABA
+  is recorded as its allocation). Otherwise the
   flag is cleared and a `ClearedShare` (who, when, the pending share's
   time, the funding Meta showed) is appended to the record's audit trail.
   Revocation and `offboard` then behave as if nothing had been posted.
@@ -659,7 +660,7 @@ exposes the 24-hour `CustomerServiceWindow`, and sends replies.
 - Revokes mark the original `Deleted` if it was stored for the revoke's
   number and in its direction, whatever conversation key the revoke
   arrived with (a history thread keyed by phone number and a live revoke
-  keyed by BSUID are the same customer's), and keep its text and payload
+  keyed by BSUID can be the same customer's), and keep its text and payload
   for the merchant's records: both the owner's decisions (2026-09-25), the
   first pinned by the conformance suite. A revoke that
   arrives before its message stores a tombstone (kind `revoked`, no
