@@ -647,7 +647,7 @@ mod tests {
     fn file_names_are_inert_and_have_an_extension() {
         assert_eq!(filename(Some("voucher.png"), "image/png"), "voucher.png");
         assert_eq!(
-            filename(Some("a\"b\r\nContent-Type: x.png"), "image/png"),
+            filename(Some("a;b\r\nContent-Type: x.png"), "image/png"),
             "a_b__Content-Type__x.png"
         );
         assert_eq!(filename(None, "image/png"), "upload.png");
