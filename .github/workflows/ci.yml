@@ -34,7 +34,9 @@ jobs:
           tool: just@1.58.0,cargo-deny@0.20.2
       # `just skills-ts` type-checks the server skills' TypeScript with the
       # Node pinned in tools/skills-ts/.nvmrc (engine-strict in its .npmrc).
-      - uses: actions/setup-node@v4
+      # v5: the action itself runs on Node 24, like checkout@v5 (v4's Node
+      # 20 runtime is deprecated on GitHub's runners).
+      - uses: actions/setup-node@v5
         with:
           node-version-file: tools/skills-ts/.nvmrc
           cache: npm
