@@ -139,7 +139,7 @@ deletes any message of its number; one before its message is lost~~:
 until a9593f3 (all 2026-09-24). ~~A tombstone moves the summary; a
 revoked placeholder is filled~~: until af5b1f8 (2026-09-25). ~~U+0000
 becomes U+FFFD~~: until the pull request that made U+0000 lossless
-(PR #TBD, 2026-09-25). 4b47bf7, 6d50701, a9593f3, af5b1f8 and that pull
+(PR #7, 2026-09-25). 4b47bf7, 6d50701, a9593f3, af5b1f8 and that pull
 request change the `ConversationStore` contract.
 
 ## What wa-rs does not do

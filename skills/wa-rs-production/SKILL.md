@@ -131,7 +131,7 @@ timeouts longer than your slowest sink.
   answer `Invalid` once; 8238853 and 7e4801f refuse a namespace with edge
   whitespace, control or format characters at `OtpService::new`, and
   fixing it restarts codes and limits (`wa-rs-otp-login`). Lossless
-  message content (PR #TBD, 2026-09-25) is Postgres migration 3, one-way:
+  message content (PR #7, 2026-09-25) is Postgres migration 3, one-way:
   back up first (a rollback is a restore, losing what was recorded
   since), stop the older instances that write to the inbox tables, drop
   your own objects on the content columns, run `migrate` once from a job
@@ -151,7 +151,7 @@ revoked message keeps its content in the inbox (decided 2026-09-25;
 `wa-rs-cms-inbox`). ~~Whether the OTP namespace becomes
 required~~: decided in d67b3ac (2026-09-24), it is (`wa-rs-otp-login`).
 ~~The provisional U+0000 replacement~~: until the pull request that
-made U+0000 lossless (PR #TBD, 2026-09-25); message content keeps it
+made U+0000 lossless (PR #7, 2026-09-25); message content keeps it
 (`wa-rs-storage`).
 
 ## Related skills

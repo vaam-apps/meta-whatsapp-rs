@@ -267,7 +267,7 @@ notification queue on top must be idempotent itself: tag each message with
     whitespace, control or format characters (`Error::Config`); fixing
     it changes the store keys, so codes in flight answer `NotFound` once
     and limits restart ([otp-login.md](otp-login.md#3-wire-the-service)).
-  - PR #TBD, lossless message content (the owner's decision of
+  - PR #7, lossless message content (the owner's decision of
     2026-09-25): Postgres migration 3 rewrites the inbox tables, and an
     older revision cannot run against them afterwards. In this order
     (details and a pre-flight query: the `wa_adapters::store::postgres`

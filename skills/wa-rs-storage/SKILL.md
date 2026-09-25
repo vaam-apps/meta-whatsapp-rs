@@ -121,7 +121,7 @@ holding U+0000 may be refused, never stored as another key.
 which added `append_synced`, `fill_media_placeholder` and `revoke`.
 ~~A tombstone is part of the summary; a revoked placeholder may be
 filled~~: until af5b1f8 (2026-09-25). ~~Content may lose U+0000~~:
-until the pull request that made U+0000 lossless (PR #TBD, 2026-09-25).
+until the pull request that made U+0000 lossless (PR #7, 2026-09-25).
 
 ## Pitfalls
 
