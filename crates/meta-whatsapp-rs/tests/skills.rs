@@ -3326,6 +3326,30 @@ fn ts_blocks_are_excerpts_of_type_checked_examples() {
     );
 }
 
+/// Node is pinned once: the major of `tools/skills-ts/.nvmrc` (what CI
+/// installs) is the `engines` of its package.json and the devcontainer's
+/// base image, so `just skills-ts` runs alike everywhere.
+#[test]
+fn node_is_pinned_once() {
+    let nvmrc = read(&repo().join("tools/skills-ts/.nvmrc"));
+    let version = nvmrc.trim();
+    let major = version.split('.').next().unwrap();
+    assert!(
+        version.split('.').count() == 3 && version.split('.').all(|p| p.parse::<u32>().is_ok()),
+        "tools/skills-ts/.nvmrc: an exact version, e.g. 24.20.0, not {version:?}"
+    );
+    let package = read(&repo().join("tools/skills-ts/package.json"));
+    assert!(
+        package.contains(&format!("\"node\": \"{major}.x\"")),
+        "tools/skills-ts/package.json: engines.node is not {major}.x"
+    );
+    let dockerfile = read(&repo().join(".devcontainer/Dockerfile"));
+    assert!(
+        dockerfile.contains(&format!("FROM node:{major}-")),
+        ".devcontainer/Dockerfile: its node base is not Node {major}"
+    );
+}
+
 /// A small document for the checks' own tests.
 const TEST_DOCUMENT: &str = r#"{"openapi": "3.1.0",
       "paths": {

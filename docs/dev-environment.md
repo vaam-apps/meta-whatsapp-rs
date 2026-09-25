@@ -118,11 +118,12 @@ Docker for `just test-live`.
 | Recipe | Does |
 | --- | --- |
 | `just` | list recipes |
-| `just ci` | the gate (what CI runs) |
+| `just ci` | the gate (what CI runs); needs Node for `just skills-ts` |
 | `just lint` | `cargo fmt --check`, clippy pedantic with `-D warnings` |
 | `just check` / `just test` / `just doc` | all targets, all features |
 | `just features` | each adapter/client feature compiled alone |
-| `just test-live` / `just test-live-down` | live adapter tests; stop the services |
+| `just test-live` / `just test-live-down` | live adapter and service tests; stop the services |
+| `just skills-ts` | the server skills' TypeScript examples type-check against the committed OpenAPI document; needs Node of `tools/skills-ts/.nvmrc`'s major (24: the image's base, checked by `crates/meta-whatsapp-rs/tests/skills.rs`) and npm's registry (on the firewall's allowlist) |
 | `just deny` | licenses, advisories, bans, sources |
 | `just skills-check` | every skill stamp's commit is on main (directly or squash-merged) |
 | `just squash-body <pr>` | the squash commit body for a PR (CONTRIBUTING.md § Merging) |

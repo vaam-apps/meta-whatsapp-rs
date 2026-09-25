@@ -1,6 +1,8 @@
 # Based on Anthropic's reference Claude Code devcontainer (node base, zsh,
 # delta, default-deny firewall), extended with the pinned Rust toolchain and
 # the tools `just ci` needs. Versions are pinned; bump deliberately.
+# Node's major is also `just skills-ts`'s: it must equal the major of
+# tools/skills-ts/.nvmrc (crates/meta-whatsapp-rs/tests/skills.rs checks it).
 FROM node:24-bookworm
 
 ARG TZ

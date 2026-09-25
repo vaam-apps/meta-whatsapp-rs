@@ -10,12 +10,16 @@ its reasons and the owner's decisions, is
 
 > **What exists today (milestone M1a).** Tenants, API keys, the admin API,
 > attaching the platform's own WhatsApp Business Accounts (WABAs), the
-> numbers and business profile routes, health, metrics and the OpenAPI
-> document. **Not yet**: sending messages, media and templates (M1b),
-> receiving Meta's webhooks (M1c: `POST /webhooks/meta` answers `405`),
-> the inbox and live events (M2), Embedded Signup and OTP (M3), the
-> Docker image and the TypeScript client (M4). [coverage.md](../coverage.md)
-> tracks it.
+> numbers and business profile routes, vault key rotation, health, metrics
+> and the OpenAPI document. **Not yet**: sending messages, media and
+> templates (M1b), receiving Meta's webhooks (M1c: `POST /webhooks/meta`
+> answers `405`), the inbox and live events (M2), Embedded Signup and OTP
+> (M3), the Docker image and the TypeScript client (M4).
+> [coverage.md](../coverage.md) tracks it.
+>
+> **Do not point a Meta app's callback URL at an M1a deployment**: Meta's
+> subscription check passes, but every delivery is refused (`405`) and
+> Meta retries each for up to seven days.
 
 ## The shape of it
 
@@ -49,9 +53,11 @@ The commands:
 | `meta-whatsapp-server migrate` | creates or upgrades the tables, then exits (for a one-off job) |
 | `meta-whatsapp-server openapi` | prints the OpenAPI 3.1 document |
 | `meta-whatsapp-server healthcheck` | exits 0 when the internal listener's `/livez` answers 200 |
-| `meta-whatsapp-server admin create-admin-key` | mints an admin key and prints it once |
-| `meta-whatsapp-server admin create-platform-key --tenants '*' --scopes numbers` | mints a platform key and prints it once |
+| `meta-whatsapp-server admin create-admin-key [--expires-at …]` | mints an admin key and prints it once |
+| `meta-whatsapp-server admin create-platform-key --tenants '*' --scopes numbers [--expires-at …]` | mints a platform key and prints it once |
+| `meta-whatsapp-server admin list-keys [--tenant <id>]` | lists the admin and platform keys (or a tenant's), never a secret |
 | `meta-whatsapp-server admin revoke-key <key_id>` | revokes a key of any kind |
+| `meta-whatsapp-server vault rotate` | re-encrypts every WABA's token under the active vault key (as `POST /v1/admin/vault/rotate`) |
 
 ## Configure
 
@@ -70,10 +76,10 @@ read yet: set, it stops the start.
 | `WA_APP_ID`, `WA_ES_CONFIG_ID` | — | read now, used from M3 (Embedded Signup) |
 | `WA_VAULT_KEY` | required with Postgres | base64 of 32 random bytes (`openssl rand -base64 32`): encrypts the business tokens |
 | `WA_VAULT_KEY_ID` | `k1` | the key's id, recorded with each token |
-| `WA_VAULT_PREVIOUS_KEYS` | — | older keys still read, `<id>:<base64>` comma-separated |
+| `WA_VAULT_PREVIOUS_KEYS` | — | older keys still read, `<id>:<base64>` comma-separated; every id once, the active one's included |
 | `WA_OTP_PEPPER` | required with Postgres | at least 32 bytes, kept out of the database (OTP arrives in M3) |
 | `WA_ONBOARDING_MODE` | `tech_provider` | `solution_partner` also needs `WA_PARTNER_SYSTEM_TOKEN`, `WA_PARTNER_SYSTEM_USER_ID`, `WA_CREDIT_LINE_ID`, `WA_WABA_CURRENCY` (AUD, EUR, GBP, IDR, INR or USD) |
-| `WA_GRAPH_API_VERSION`, `WA_GRAPH_ENDPOINT` | `v25.0`, Graph | a proxy or a test stub |
+| `WA_GRAPH_API_VERSION`, `WA_GRAPH_ENDPOINT` | `v25.0`, Graph | a proxy or a test stub: every token travels to it, so `https` outside development, and `serve` warns with its host |
 | `WA_SERVER_MIGRATE` | `auto` | `skip` when a job runs `meta-whatsapp-server migrate` |
 | `WA_SERVER_SHUTDOWN_GRACE` | `25s` | how long open requests get after `SIGTERM` |
 | `WA_SERVER_LOG_FORMAT`, `RUST_LOG` | `json`, `info` | `text` for humans |
@@ -82,8 +88,10 @@ read yet: set, it stops the start.
 or blank app secret or verify token, a missing vault key or a pepper
 under 32 bytes with Postgres, memory storage outside
 `WA_SERVER_ENV=development`, identical binds, Solution Partner mode
-without its four settings, a value it cannot parse, or a variable set both
-directly and as a file. The message names the variable, never its value.
+without its four settings, a plain-`http` Graph endpoint outside
+development, a vault key id used twice, a value it cannot parse, or a
+variable set both directly and as a file. The message names the
+variable, never its value.
 
 A minimal production start:
 
@@ -98,9 +106,11 @@ meta-whatsapp-server serve
 ```
 
 For a local try without Postgres, `WA_SERVER_ENV=development` runs on
-memory with a throwaway vault key; everything is lost on restart, and the
-admin CLI (which talks to the database) cannot reach it, so use Postgres
-(`just test-live` starts one on port 55432) as soon as you want keys.
+memory with a throwaway vault key; everything is lost on restart. The
+admin CLI talks to the database and cannot reach it, so `serve` writes a
+one-time admin key for that process to standard error at start (never
+to the logs). For a local Postgres, `docker compose -f compose.test.yaml
+up -d --wait` starts one on port 55432 (`postgres://wa:wa@127.0.0.1:55432/wa`).
 
 ### Storage and migrations
 
@@ -161,20 +171,39 @@ for the CMS is `POST /v1/admin/platform-keys` with
 with Embedded Signup (M3). The platform's own WABA is attached by an
 operator with a system user token that can reach it; the service asks
 Meta for the WABA's numbers with that token, binds exactly those to the
-tenant, and stores the token encrypted:
+tenant, stores the token encrypted and subscribes the app to the WABA's
+webhooks. Keep the token out of your shell history and the process list:
+pass the body from a file.
 
 ```bash
+# attach.json: {"waba_id": "102290129340398", "token": "EAAG…"} (then delete it)
 curl -sS -X POST http://127.0.0.1:8081/v1/admin/tenants/merchant-42/wabas \
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
-  -d '{"waba_id": "102290129340398", "token": "EAAG…"}'
+  -d @attach.json
 ```
 
-A WABA bound to one tenant is refused to another (`409
-waba_owned_by_another_tenant`, decision D4); an operator frees it with
-`DELETE /v1/admin/wabas/{waba_id}/binding`. Suspend a tenant with
-`PATCH /v1/admin/tenants/{id}` and `{"status": "suspended"}`; delete it
-with `DELETE /v1/admin/tenants/{id}`, which first disconnects each of its
-WABAs from Meta and stops at the first that fails.
+A token Meta rejects is `422 invalid_request` on `token`. If Meta refuses
+the subscription, the WABA stays attached and the call answers Meta's
+error: repeat it once fixed. A WABA bound to one tenant is refused to
+another (`409 waba_owned_by_another_tenant`, decision D4, also for one of
+its numbers); `GET /v1/admin/wabas/{waba_id}` says who holds it, and
+`DELETE /v1/admin/wabas/{waba_id}/binding` frees it: the service
+unsubscribes the app with the stored token if it still works (Meta
+refusing does not stop it), then deletes the token and the bindings. That
+is also the way to free a WABA whose token no longer works: its tenant
+cannot disconnect it. Suspend a tenant with `PATCH
+/v1/admin/tenants/{id}` and `{"status": "suspended"}`; delete it with
+`DELETE /v1/admin/tenants/{id}`, which first disconnects each of its
+WABAs from Meta and stops at the first that fails (`409` for one without
+a usable token: unbind it first). A tenant id already taken is `409
+tenant_exists`.
+
+**4. Rotating the vault key.** Put the new key in `WA_VAULT_KEY` (with a
+new `WA_VAULT_KEY_ID`) and the old one in `WA_VAULT_PREVIOUS_KEYS`,
+deploy, then call `POST /v1/admin/vault/rotate` (or run
+`meta-whatsapp-server vault rotate`): it re-encrypts every bound WABA's
+token under the new key and answers `{wabas, rotated, failed}`. Drop the
+old key once `failed` is empty.
 
 ## A first call
 
@@ -220,7 +249,11 @@ Every error answers one body:
   its status class. A failure Meta reported carries Meta's error kind as
   its code (`template_not_found`, `marketing_opted_out`, …; the list is
   the `ErrorCode` schema of the OpenAPI document) and Meta's code under
-  `graph`; Meta's own error message never reaches you.
+  `graph`; Meta's own error message never reaches you. `graph.details` is
+  Meta's text, not the service's (at most 512 characters, without control
+  characters): show it to an operator, never branch on it.
+- A path called with a method it does not take is `405
+  method_not_allowed`, with `Allow`.
 - **Resend only when `may_have_been_sent` is `false`.** A `504 timeout`
   or a `502` may have taken effect at Meta.
 - `invalid_request` names the offending `field`; `401` is always
@@ -232,15 +265,25 @@ Every error answers one body:
 ## Operations
 
 - `/livez` answers while the process runs; `/readyz` fails when Postgres
-  does not answer or after `SIGTERM`, so a load balancer drains the
-  replica before it stops.
+  does not answer or after `SIGTERM` (the listeners stop accepting at the
+  same moment: keep a preStop delay in Kubernetes if the load balancer
+  must see the replica unready first).
+- Limits, per listener: a request head must arrive within 10 s (slow
+  clients are cut off), 1,024 connections on the public listener and
+  4,096 on the internal one (more wait), and every request is answered
+  within 55 s (past it, `504 timeout` with `may_have_been_sent: true`).
 - `/metrics` (Prometheus) counts requests by listener, method, route
   template, status and error code, their duration, and failed Graph calls
   by code; never an id, a number or a key.
 - Logs are JSON, one line per request with its id (`X-Request-Id`, echoed
-  or generated), route template (never the raw path), tenant, status and
-  duration. No key, token, secret, message text or phone number is logged;
-  Meta's error messages only at `debug`.
+  or generated), route template (never the raw path), tenant, the public
+  id of the key that made it, status and duration; every change an
+  operator makes is also an `audit` event (action, admin key id, the
+  tenant, key or WABA touched). No secret, token, message text or phone
+  number is logged; Meta's error texts only at `debug`.
+- Known limit: key digests are unpeppered SHA-256 of random 256-bit
+  secrets. Nobody can reverse one, but whoever can write the database's
+  keys table can plant a key: guard write access to it.
 - `SIGTERM` fails `/readyz`, stops both listeners from accepting and gives
   open requests `WA_SERVER_SHUTDOWN_GRACE`.
 
@@ -250,6 +293,9 @@ Sends, media, templates, idempotency keys and rate limits (M1b);
 `POST /webhooks/meta` into the inbox and the event outbox, `GET /v1/events`
 (M1c); the inbox routes, SSE and webhooks-out (M2); Embedded Signup,
 disconnection by Meta's webhooks, coexistence sync and OTP (M3); the
-Docker image, a Compose file and the TypeScript client (M4). The
-`/v1/version` revision reads `unknown` unless the build sets
-`META_WHATSAPP_RS_REVISION`. OpenTelemetry export is not wired.
+Docker image, a Compose file and the TypeScript client (M4). Tenant
+settings (OTP sender and template, limits) in `PATCH
+/v1/admin/tenants/{id}` come with OTP (M3). The design's TOML file of
+non-secrets (`WA_SERVER_CONFIG`) is not read (set, it stops the start),
+and OpenTelemetry export is not wired. The `/v1/version` revision reads
+`unknown` unless the build sets `META_WHATSAPP_RS_REVISION`.

@@ -822,7 +822,9 @@ decisions and the delivery milestones, is
   service owns, tested over `ErrorKind::ALL` so a new kind cannot fall
   through unmapped; `may_have_been_sent` and `retryable` are
   `Error::may_have_been_sent` and `Error::is_retryable`. Meta's error
-  message never reaches a response.
+  message, title and user texts never reach a response; `graph.details`
+  is Meta's text, not the service's, kept only on the routes that opt in
+  (never OTP or signup), bounded and without control characters.
 - **Storage** is Postgres (memory only in development). The service's
   tables are `wa_server_*` with their own migration history, run with the
   library's migrations under an advisory lock of the service's own;

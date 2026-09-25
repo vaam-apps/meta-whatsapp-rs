@@ -122,26 +122,38 @@ volumes (Claude config, shell history, cargo caches) start empty
 - **meta-whatsapp-server, milestone M1a**: the HTTP service of
   docs/design/server.md, for apps not written in Rust
   (`crates/meta-whatsapp-server`, binary `meta-whatsapp-server`, not
-  published). One deployment per Meta app, many tenants; tenant keys,
-  platform keys acting for a tenant named in `WA-Tenant`, and admin keys,
-  all `wak_<id>_<secret>`, kept as SHA-256 digests and compared in
-  constant time; a configuration that refuses to start on a blank secret,
-  a missing vault key or pepper with Postgres, memory storage in
-  production, identical binds or partial Solution Partner settings; a
-  public listener (`GET /webhooks/meta`, Meta's subscription check, and
-  `/livez`) and an internal one (the `/v1` API, `/readyz`, `/metrics`,
-  `/v1/openapi.json`, `/v1/version`); its own Postgres tables
-  (`wa_server_*`) migrated after the library's under an advisory lock;
-  the admin API (tenants, keys, platform keys, attaching the platform's own
-  WABA after listing its numbers from Meta, the D4 unbind), the numbers
+  published, a workspace member but not a default one). One deployment
+  per Meta app, many tenants; tenant keys, platform keys acting for a
+  tenant named in `WA-Tenant`, and admin keys, all `wak_<id>_<secret>`,
+  kept as SHA-256 digests, compared in constant time, optionally
+  expiring; a configuration that refuses to start on a blank secret, a
+  missing vault key or pepper with Postgres, memory storage in
+  production, identical binds, partial Solution Partner settings, a
+  plain-http Graph endpoint outside development or a vault key id used
+  twice; a public listener (`GET /webhooks/meta`, Meta's subscription
+  check, and `/livez`) and an internal one (the `/v1` API, `/readyz`,
+  `/metrics`, `/v1/openapi.json`, `/v1/version`), both with a header read
+  timeout, a connection cap and a request deadline; its own Postgres
+  tables (`wa_server_*`) migrated after the library's under an advisory
+  lock, expand-only; the admin API (tenants, keys, platform keys,
+  attaching the platform's own WABA after listing its numbers from Meta
+  and subscribing the app to it, reading a binding, the D4 unbind, which
+  deletes the token too, vault key rotation) and CLI (the first admin
+  key, listing and revoking keys, `vault rotate`; on memory storage in
+  development, `serve` prints a one-time admin key instead); the numbers
   and business profile routes and disconnection, each behind the
   authorization order (key, tenant, scope, ownership, then the vault);
-  errors whose codes are `ErrorKind::as_str()`; JSON request logs without
-  keys, tokens or phone numbers; a committed OpenAPI 3.1 document
-  (`crates/meta-whatsapp-server/openapi/v1.json`) that a test compares with
-  the generated one. `just test-live` runs its Postgres tests too. Guide:
-  docs/guides/server.md. Sends, webhooks in, the inbox, Embedded Signup,
-  OTP, the image and the TypeScript client are the next milestones.
+  errors whose codes are `ErrorKind::as_str()`, plus `405
+  method_not_allowed` and `409 tenant_exists`, with Meta's `details` only
+  where the design allows it, bounded; JSON request logs with the key's
+  public id and audit events for operators' changes, without secrets,
+  tokens or phone numbers; a committed OpenAPI 3.1 document
+  (`crates/meta-whatsapp-server/openapi/v1.json`) that a test compares
+  with the generated one. `just test-live` runs its Postgres tests too,
+  and `just ci` now needs Node 24 for `just skills-ts`. Guide:
+  docs/guides/server.md; skill: `meta-whatsapp-rs-server`. Sends, webhooks
+  in, the inbox, Embedded Signup, OTP, the image and the TypeScript client
+  are the next milestones.
 - **`ErrorKind::as_str()` and `ErrorKind::ALL`**: every error kind has a
   stable `snake_case` name (`TemplateParameterMismatch` →
   `"template_parameter_mismatch"`), for an HTTP API's error code, a log

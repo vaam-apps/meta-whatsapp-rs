@@ -7,10 +7,7 @@ description: "Using WhatsApp through meta-whatsapp-server, the meta-whatsapp-rs 
 
 > **Verified against meta-whatsapp-rs 67a6684f5fbcc542da3c3a7b69c42a5a3ef53bf0 (2026-09-25).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
-Reference code: [examples/client.ts](examples/client.ts), type-checked by
-meta-whatsapp-rs's own gate against the service's committed OpenAPI
-document. Operators' guide:
-[docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
+Reference code: [examples/client.ts](examples/client.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
 ## When to use
 
@@ -20,6 +17,9 @@ Rust code uses the library directly (`meta-whatsapp-rs`).
 
 ## What the service does today (milestone M1a)
 
+Sends, media, templates, Meta's webhooks, the inbox, events, Embedded
+Signup and OTP do not exist yet: write no code against them.
+
 | Route | Needs | Does |
 | --- | --- | --- |
 | `GET /v1/wabas`, `GET /v1/numbers` | scope `numbers` | the tenant's WABAs; its numbers with their `status` |
@@ -27,20 +27,17 @@ Rust code uses the library directly (`meta-whatsapp-rs`).
 | `GET /v1/numbers/{pn}/profile`, `PATCH /v1/numbers/{pn}/profile` | scope `numbers` | the business profile (`about`, `address`, `description`, `email`, `websites`, `vertical`) |
 | `DELETE /v1/wabas/{waba_id}` | scope `numbers` | disconnect: the token and bindings go only once Meta unsubscribed the app |
 | `POST /v1/admin/tenants`, `POST /v1/admin/tenants/{id}/keys`, `POST /v1/admin/platform-keys` | admin key | tenants and keys |
-| `POST /v1/admin/tenants/{id}/wabas`, `DELETE /v1/admin/wabas/{waba_id}/binding` | admin key | attach the platform's own WABA; free one for another tenant |
+| `POST /v1/admin/tenants/{id}/wabas`, `GET /v1/admin/wabas/{waba_id}`, `DELETE /v1/admin/wabas/{waba_id}/binding` | admin key | attach the platform's own WABA (numbers listed by Meta, app subscribed); who holds one; unbind it (token deleted too) |
 | `/livez`, `/readyz`, `/metrics`, `/v1/version`, `/v1/openapi.json` | nothing | operations, and the document every client is generated from |
-
-Sending messages, media and templates, Meta's webhooks, the inbox, events,
-Embedded Signup and OTP are not there yet (docs/design/server.md, section
-9): do not write code against them.
 
 ## Deploy
 
 One deployment per Meta app. The public listener (default
 `127.0.0.1:8080`) serves only `GET /webhooks/meta` (Meta's subscription
 check) and `GET /livez`; the internal one (`127.0.0.1:8081`) serves
-everything else and must stay on your private network. There is no image
-yet: build it.
+everything else and must stay on your private network. No image yet:
+build it. Do not point Meta's callback URL at it before webhooks land
+(deliveries answer `405`, and Meta retries for days).
 
 ```bash
 cargo build --release -p meta-whatsapp-server
@@ -51,13 +48,11 @@ meta-whatsapp-server admin create-admin-key --name ops   # the first admin key, 
 meta-whatsapp-server serve
 ```
 
-It **refuses to start** on a missing or blank `WA_APP_SECRET` or
-`WA_VERIFY_TOKEN`, no `WA_VAULT_KEY` (base64 of 32 random bytes) or a
-`WA_OTP_PEPPER` under 32 bytes with Postgres, no `DATABASE_URL` without
-`WA_SERVER_ENV=development`, identical binds, or a Solution Partner
-`WA_ONBOARDING_MODE` without its settings. Every secret may come from a
-file (`WA_APP_SECRET_FILE`). Keep `WA_VAULT_KEY` backed up apart from the
-database: without it no stored token decrypts.
+It **refuses to start** on an unsafe setting (a blank `WA_APP_SECRET` or
+`WA_VERIFY_TOKEN`, no `WA_VAULT_KEY` or a short `WA_OTP_PEPPER` with
+Postgres, no `DATABASE_URL` outside `WA_SERVER_ENV=development`), naming
+the variable. Every secret may come from a file (`WA_APP_SECRET_FILE`).
+Back `WA_VAULT_KEY` up apart from the database.
 
 ## Credentials
 
@@ -70,11 +65,10 @@ database: without it no stored token decrypts.
 Keys are shown once (`key` in the answer); the service keeps a digest.
 Rotate by minting, deploying, then revoking the old key
 (`DELETE /v1/admin/tenants/{id}/keys/{key_id}`); revocation holds on the
-next request. Tenant ids are yours (`[A-Za-z0-9._:-]`, 1 to 64) and immutable.
+next request. Tenant ids are yours (`[A-Za-z0-9._:-]`, 1 to 64),
+immutable; `POST /v1/admin/tenants` with a taken one is `tenant_exists`.
 
 ```bash
-curl -sS -X POST "$WA_SERVER/v1/admin/tenants" -H "Authorization: Bearer $ADMIN_KEY" \
-  -H "Content-Type: application/json" -d '{"id": "merchant-42", "name": "Lucky Shrub"}'
 curl -sS -X POST "$WA_SERVER/v1/admin/tenants/merchant-42/keys" -H "Authorization: Bearer $ADMIN_KEY" \
   -H "Content-Type: application/json" -d '{"scopes": ["numbers"], "name": "medusa"}'
 curl -sS "$WA_SERVER/v1/numbers" -H "Authorization: Bearer $KEY"
@@ -128,29 +122,25 @@ export function nextStep(error: ErrorObject): Next {
   switch (error.code) {
 ```
 
-- Branch on `code` (the `ErrorCode` union), never on `message`. Codes only
-  grow: treat an unknown one by its HTTP status class.
+- Branch on `code` (the `ErrorCode` union), never on `message`: codes only
+  grow, so treat an unknown one by its HTTP status class. A code Meta
+  caused is its error kind (`marketing_opted_out`, …); `details` under
+  `graph` is Meta's own text: show it, never branch on it.
 - **Repeat a request only when `may_have_been_sent` is false**; a
   `timeout` (504) or a Meta failure (502) may have taken effect.
-- `invalid_request` names the culprit in `field`. `401` is always
-  `unauthenticated`.
-- Another tenant's number is 404 `not_found`, exactly like a missing one.
+- `invalid_request` names the culprit in `field`; `401` is always
+  `unauthenticated`; another tenant's number is 404 `not_found`, like a
+  missing one.
 - `reconnect_required`: Meta rejected the WABA's token (`190`); every call
   on its numbers answers it until an operator attaches the WABA again.
-- A code Meta caused is Meta's error kind (`template_not_found`,
-  `marketing_opted_out`, …), with Meta's code under `graph`; Meta's own
-  error message never reaches you.
 
 ## What meta-whatsapp-rs does not do
 
-- No sends, media, templates, webhooks, inbox, events, signup or OTP in
-  the service yet (M1b to M3); no Docker image or published TypeScript
-  client (M4, the package is an open decision).
-- Browsers never call it: no CORS, no browser tokens. Your backend
-  relays.
-- It is no Graph proxy: only the documented routes exist.
+- Browsers never call it (no CORS, no browser tokens): your backend relays.
+- It is no Graph proxy: only the documented routes exist. No Docker image
+  or published TypeScript client yet (M4).
 - The memory mode (`WA_SERVER_ENV=development`, no `DATABASE_URL`) keeps
-  nothing across restarts, and the admin CLI cannot reach it.
+  nothing across restarts; its one admin key is printed at start.
 
 ## Related skills
 

@@ -202,7 +202,7 @@ deployed next to them: one deployment per Meta app, many tenants, keys per
 tenant or per platform, the `/v1` REST API described by a committed OpenAPI
 document ([`crates/meta-whatsapp-server/openapi/v1.json`](crates/meta-whatsapp-server/openapi/v1.json)).
 Milestone M1a is here: tenants, keys, the admin API, the platform's own
-WABAs, numbers and business profiles, health, metrics. Sending messages,
+WABAs, numbers and business profiles, vault key rotation, health, metrics. Sending messages,
 Meta's webhooks, the inbox, Embedded Signup, OTP, the Docker image and the
 TypeScript client come in the next milestones
 ([docs/design/server.md](docs/design/server.md), section 9).
@@ -210,7 +210,7 @@ TypeScript client come in the next milestones
 ```bash
 cargo build --release -p meta-whatsapp-server
 export DATABASE_URL=postgres://… WA_APP_SECRET=… WA_VERIFY_TOKEN=…
-export WA_VAULT_KEY="$(openssl rand -base64 32)" WA_OTP_PEPPER="$(openssl rand -hex 32)"
+export WA_VAULT_KEY="$(openssl rand -base64 32)" WA_OTP_PEPPER="$(openssl rand -hex 32)"  # keep both
 ./target/release/meta-whatsapp-server admin create-admin-key   # printed once
 ./target/release/meta-whatsapp-server serve                    # 127.0.0.1:8080 (Meta), :8081 (API)
 ```
