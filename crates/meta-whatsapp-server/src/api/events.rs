@@ -167,8 +167,8 @@ pub struct EventEnvelope {
     /// Whether `data` was left out for its size (webhook deliveries only;
     /// always `false` here).
     pub truncated: bool,
-    /// The event: meta-whatsapp-rs's `WebhookEvent` JSON (see
-    /// [`event_data_schema`]).
+    /// The event: meta-whatsapp-rs's `WebhookEvent` JSON, an open object
+    /// in the document (`event_data_schema`).
     #[schema(schema_with = event_data_schema)]
     pub data: serde_json::Value,
 }
