@@ -153,7 +153,8 @@ fn path_tenant(id: &str) -> Result<TenantId, ApiError> {
         (status = 201, description = "Created", body = TenantView),
         (status = 401, description = "No valid key", body = ErrorBody),
         (status = 403, description = "Not an admin key", body = ErrorBody),
-        (status = 422, description = "`invalid_request` on `id` (malformed, or taken), `name` or `body`", body = ErrorBody),
+        (status = 409, description = "`tenant_exists`: the id is taken", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `id` (malformed), `name` or `body`", body = ErrorBody),
     )
 )]
 pub async fn create_tenant(
@@ -168,8 +169,8 @@ pub async fn create_tenant(
             audit("tenant_created", &admin, tenant_subject(&tenant.id));
             Ok(json(StatusCode::CREATED, TenantView::from(tenant)))
         }
-        // Taken: another tenant's id (the design names no code for it).
-        None => Err(ApiError::invalid("id")),
+        // Taken (docs/design/server.md, section 5.2).
+        None => Err(ApiError::new("tenant_exists")),
     }
 }
 

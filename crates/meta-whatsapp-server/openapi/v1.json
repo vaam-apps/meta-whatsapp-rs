@@ -402,8 +402,18 @@
               }
             }
           },
+          "409": {
+            "description": "`tenant_exists`: the id is taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "422": {
-            "description": "`invalid_request` on `id` (malformed, or taken), `name` or `body`",
+            "description": "`invalid_request` on `id` (malformed), `name` or `body`",
             "content": {
               "application/json": {
                 "schema": {
@@ -1836,6 +1846,7 @@
         "description": "Stable error code. Codes only grow within v1: handle an unknown one by its HTTP status class.",
         "enum": [
           "unauthenticated",
+          "method_not_allowed",
           "invalid_request",
           "invalid_parameter",
           "unsupported_message_type",
@@ -1864,6 +1875,7 @@
           "number_not_connected",
           "reconnect_required",
           "waba_owned_by_another_tenant",
+          "tenant_exists",
           "idempotency_in_progress",
           "outcome_unknown",
           "permission",

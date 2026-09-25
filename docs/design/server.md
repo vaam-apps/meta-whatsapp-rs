@@ -531,13 +531,14 @@ each new kind into `unknown` silently.
 | HTTP | Codes | Meaning |
 | --- | --- | --- |
 | 422 | `invalid_request` (local validation, with `field`), `invalid_parameter`, `unsupported_message_type`, `recipient_not_supported`, `undeliverable`, `template_parameter_mismatch`, `template_not_found`, `template_text_too_long`, `template_policy_violation`, `template_rejected`, `idempotency_key_reused` | fix the request; nothing was sent |
-| 409 | `customer_service_window_closed`, `marketing_opted_out`, `blocked_by_business`, `experiment_holdout`, `template_paused`, `template_disabled`, `template_syncing`, `template_unavailable`, `template_limit_reached`, `flow_unavailable`, `registration`, `two_step_verification`, `sync_not_allowed`, `duplicate_onboarding`, `number_not_connected`, `reconnect_required` (also Meta's `authentication` on a merchant token), `waba_owned_by_another_tenant`, `idempotency_in_progress`, `outcome_unknown` | a state must change first |
+| 409 | `customer_service_window_closed`, `marketing_opted_out`, `blocked_by_business`, `experiment_holdout`, `template_paused`, `template_disabled`, `template_syncing`, `template_unavailable`, `template_limit_reached`, `flow_unavailable`, `registration`, `two_step_verification`, `sync_not_allowed`, `duplicate_onboarding`, `number_not_connected`, `reconnect_required` (also Meta's `authentication` on a merchant token), `waba_owned_by_another_tenant` (also a phone number another tenant holds), `tenant_exists`, `idempotency_in_progress`, `outcome_unknown` | a state must change first |
 | 403 | `permission`, `account_restricted`, `country_restricted`, `payment`, `feature_not_available`, `marketing_not_allowed`; `forbidden`, `tenant_suspended`, `stale_attempt` | not allowed, by Meta or the service |
 | 429 | `rate_limited`, `pair_rate_limited`, `spam_rate_limited`, `ecosystem_engagement_limit`, `classification_limit_reached`, `too_many_requests`, `too_many_streams` | `Retry-After` when known; `retryable` says whether waiting helps (false for 131048, 131049) |
 | 404, 410, 413 | `not_found`, `nothing_to_resume`; `cursor_expired`; `payload_too_large`, `media_too_large` | |
 | 502 | `service_unavailable`, `unknown`, `upstream` (non-Graph answer), `integrity`, `media_download_failed`, `media_upload_failed`, `onboarding_failed` | Meta or the network failed |
 | 504 | `timeout` | no answer in time: a send may have gone out |
 | 503, 500 | `storage_unavailable`, `shutting_down`; `internal` (configuration, an undecryptable vault record) | |
+| 401, 405 | `unauthenticated`; `method_not_allowed` | no valid key (step 1 of [§3.3](#33-authorization-order), before anything else); the path exists, not with this method |
 
 ### 5.3 Was it sent?
 

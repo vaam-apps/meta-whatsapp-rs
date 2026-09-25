@@ -159,7 +159,11 @@ async fn the_public_listener_serves_metas_check_and_livez_only() {
     }
     // Deliveries arrive with M1c: no POST yet, so Meta retries.
     let post = send(&h.public, Call::new(Method::POST, "/webhooks/meta").build()).await;
-    assert_eq!(post.status, StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(
+        (post.status, post.code().as_str()),
+        (StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed")
+    );
+    assert_eq!(post.headers["allow"], "GET,HEAD");
     assert_eq!(
         send(&h.public, Call::get("/livez").build()).await.status,
         StatusCode::OK
@@ -277,4 +281,25 @@ async fn made_up_methods_are_counted_as_other() {
         metrics.contains("listener=\"public\",method=\"other\""),
         "{metrics}"
     );
+}
+
+/// A method a path does not take is `405 method_not_allowed` with the
+/// error body and `Allow`, on either listener, before any key is checked
+/// (conventions review S2).
+#[tokio::test]
+async fn a_wrong_method_is_405_with_the_error_body() {
+    let h = Harness::new();
+    for (path, allow) in [
+        ("/v1/numbers", "GET,HEAD"),
+        ("/v1/admin/tenants", "POST,GET,HEAD"),
+        ("/readyz", "GET,HEAD"),
+    ] {
+        let reply = h.call(Call::new(Method::PUT, path)).await;
+        assert_eq!(
+            (reply.status, reply.code().as_str()),
+            (StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed"),
+            "{path}"
+        );
+        assert_eq!(reply.headers["allow"], allow, "{path}");
+    }
 }

@@ -170,6 +170,12 @@ async fn not_found() -> ApiError {
     ApiError::not_found()
 }
 
+/// A path that exists, with a method it does not take: `405
+/// method_not_allowed`, with the error body (axum adds `Allow`).
+async fn method_not_allowed() -> ApiError {
+    ApiError::new("method_not_allowed")
+}
+
 /// Answer `504 timeout` for a request not answered within `limit`.
 async fn deadline(State(limit): State<Duration>, request: Request, next: Next) -> Response {
     let Ok(response) = tokio::time::timeout(limit, next.run(request)).await else {
@@ -208,6 +214,7 @@ pub fn internal_router(state: &AppState) -> Router {
     };
     let router = router
         .fallback(not_found)
+        .method_not_allowed_fallback(method_not_allowed)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::from_fn(catch_panic))
         .with_state(state.clone());
@@ -226,6 +233,7 @@ pub fn public_router(state: &AppState) -> Router {
         .route("/webhooks/meta", get(webhooks::verify))
         .route("/livez", get(ops::livez))
         .fallback(not_found)
+        .method_not_allowed_fallback(method_not_allowed)
         .layer(middleware::from_fn(catch_panic))
         .with_state(state.clone());
     with_deadline(router, REQUEST_DEADLINE).layer(middleware::from_fn_with_state(observed, observe))

@@ -36,9 +36,8 @@ async fn tenants_are_created_listed_read_suspended_and_deleted() {
     assert_eq!(body["status"], "active");
     assert!(body["created_at"].as_str().unwrap().ends_with('Z'));
 
-    // Taken, malformed, unknown fields: 422 on the field.
+    // Malformed, unknown fields: 422 on the field.
     for (request, field) in [
-        (json!({"id": "merchant-42"}), "id"),
         (json!({"id": "has space"}), "id"),
         (json!({"id": ""}), "id"),
         (json!({"id": "x".repeat(65)}), "id"),
@@ -121,6 +120,35 @@ async fn tenants_are_created_listed_read_suspended_and_deleted() {
         .await;
     assert_eq!(again.status, StatusCode::NOT_FOUND);
     assert!(h.graph.requests().is_empty());
+}
+
+/// A taken id is `409 tenant_exists` (coordinator's decision S4), and the
+/// tenant keeps its name.
+#[tokio::test]
+async fn a_taken_tenant_id_is_409_tenant_exists() {
+    let h = Harness::new();
+    let admin = h.admin_key().await;
+    let create = |name: &str| {
+        post(
+            "/v1/admin/tenants",
+            &admin,
+            &json!({"id": "merchant-42", "name": name}),
+        )
+    };
+    assert_eq!(
+        h.call(create("Lucky Shrub")).await.status,
+        StatusCode::CREATED
+    );
+    let taken = h.call(create("Another")).await;
+    assert_eq!(
+        (taken.status, taken.code().as_str()),
+        (StatusCode::CONFLICT, "tenant_exists")
+    );
+    let tenant = h
+        .call(Call::get("/v1/admin/tenants/merchant-42").key(&admin))
+        .await
+        .json();
+    assert_eq!(tenant["name"], "Lucky Shrub");
 }
 
 #[tokio::test]

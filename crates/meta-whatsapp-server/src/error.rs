@@ -42,14 +42,19 @@ use utoipa::ToSchema;
 use crate::telemetry;
 
 /// `(code, HTTP status, the service's sentence)` for every error code the
-/// API answers (docs/design/server.md, section 5.2), plus `unauthenticated`
-/// for `401`, which the design's table leaves unnamed.
+/// API answers: the table of docs/design/server.md, section 5.2, which
+/// `tests/errors.rs` reads to compare.
 pub const CODES: &[(&str, u16, &str)] = &[
-    // 401
+    // 401, 405
     (
         "unauthenticated",
         401,
         "A valid API key is required: send Authorization: Bearer wak_….",
+    ),
+    (
+        "method_not_allowed",
+        405,
+        "This path does not take this method: see the Allow header.",
     ),
     // 422: fix the request; nothing was sent.
     (
@@ -183,8 +188,9 @@ pub const CODES: &[(&str, u16, &str)] = &[
     (
         "waba_owned_by_another_tenant",
         409,
-        "This WhatsApp Business Account belongs to another tenant.",
+        "This WhatsApp Business Account, or one of its numbers, belongs to another tenant.",
     ),
+    ("tenant_exists", 409, "A tenant with this id exists."),
     (
         "idempotency_in_progress",
         409,
@@ -734,6 +740,39 @@ mod tests {
             kept.0.graph.unwrap().details.unwrap().chars().count(),
             MAX_DETAILS_CHARS
         );
+    }
+
+    /// Every code the source names (`ApiError::new("…")`, `.code() ==
+    /// "…"`) is in [`CODES`]: a typo would otherwise answer `internal`, or
+    /// never match.
+    #[test]
+    fn every_code_the_source_names_exists() {
+        let sources = [
+            include_str!("auth.rs"),
+            include_str!("error.rs"),
+            include_str!("api/mod.rs"),
+            include_str!("api/admin.rs"),
+            include_str!("api/numbers.rs"),
+            include_str!("api/ops.rs"),
+            include_str!("api/common.rs"),
+            include_str!("api/webhooks.rs"),
+        ];
+        let mut named = 0;
+        for source in sources {
+            let code = source.split("#[cfg(test)]").next().unwrap_or(source);
+            for needle in ["ApiError::new(\"", ".code() == \"", "Self::new(\""] {
+                for (i, _) in code.match_indices(needle) {
+                    let rest = &code[i + needle.len()..];
+                    let name = &rest[..rest.find('"').unwrap()];
+                    named += 1;
+                    assert!(
+                        CODES.iter().any(|(c, _, _)| *c == name),
+                        "`{name}` is not in CODES"
+                    );
+                }
+            }
+        }
+        assert!(named >= 20, "{named}");
     }
 
     #[test]

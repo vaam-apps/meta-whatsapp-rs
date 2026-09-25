@@ -14,108 +14,53 @@ use meta_whatsapp_server::error::{CODES, code_info, kind_code};
 use meta_whatsapp_server::model::Scope;
 use serde_json::{Value, json};
 
-/// docs/design/server.md, section 5.2, as written there: every code and
-/// its status. A code the service answers that is not here, or with
-/// another status, fails. (`unauthenticated`, for `401`, is the one code
-/// the design's table leaves unnamed.)
-const DESIGN: &[(u16, &[&str])] = &[
-    (
-        422,
-        &[
-            "invalid_request",
-            "invalid_parameter",
-            "unsupported_message_type",
-            "recipient_not_supported",
-            "undeliverable",
-            "template_parameter_mismatch",
-            "template_not_found",
-            "template_text_too_long",
-            "template_policy_violation",
-            "template_rejected",
-            "idempotency_key_reused",
-        ],
-    ),
-    (
-        409,
-        &[
-            "customer_service_window_closed",
-            "marketing_opted_out",
-            "blocked_by_business",
-            "experiment_holdout",
-            "template_paused",
-            "template_disabled",
-            "template_syncing",
-            "template_unavailable",
-            "template_limit_reached",
-            "flow_unavailable",
-            "registration",
-            "two_step_verification",
-            "sync_not_allowed",
-            "duplicate_onboarding",
-            "number_not_connected",
-            "reconnect_required",
-            "waba_owned_by_another_tenant",
-            "idempotency_in_progress",
-            "outcome_unknown",
-        ],
-    ),
-    (
-        403,
-        &[
-            "permission",
-            "account_restricted",
-            "country_restricted",
-            "payment",
-            "feature_not_available",
-            "marketing_not_allowed",
-            "forbidden",
-            "tenant_suspended",
-            "stale_attempt",
-        ],
-    ),
-    (
-        429,
-        &[
-            "rate_limited",
-            "pair_rate_limited",
-            "spam_rate_limited",
-            "ecosystem_engagement_limit",
-            "classification_limit_reached",
-            "too_many_requests",
-            "too_many_streams",
-        ],
-    ),
-    (404, &["not_found", "nothing_to_resume"]),
-    (410, &["cursor_expired"]),
-    (413, &["payload_too_large", "media_too_large"]),
-    (
-        502,
-        &[
-            "service_unavailable",
-            "unknown",
-            "upstream",
-            "integrity",
-            "media_download_failed",
-            "media_upload_failed",
-            "onboarding_failed",
-        ],
-    ),
-    (504, &["timeout"]),
-    (503, &["storage_unavailable", "shutting_down"]),
-    (500, &["internal"]),
-    (401, &["unauthenticated"]),
-];
-
-fn design() -> HashMap<&'static str, u16> {
+/// docs/design/server.md, section 5.2, read from the document itself:
+/// every code of its table and the status of its row. Parenthesized
+/// remarks are not codes; a row of several statuses (`404, 410, 413`)
+/// gives each its `;`-separated group of codes.
+fn design() -> HashMap<String, u16> {
+    let doc = include_str!("../../../docs/design/server.md");
+    let section = doc
+        .split("### 5.2 Codes and statuses")
+        .nth(1)
+        .and_then(|rest| rest.split("\n### ").next())
+        .expect("section 5.2 of docs/design/server.md");
     let mut map = HashMap::new();
-    for (status, codes) in DESIGN {
-        for code in *codes {
-            assert!(
-                map.insert(*code, *status).is_none(),
-                "{code} twice in the design table"
-            );
+    let rows = section
+        .lines()
+        .filter(|l| l.starts_with("| ") && !l.starts_with("| HTTP") && !l.starts_with("| ---"));
+    for row in rows {
+        let cells: Vec<&str> = row.split('|').map(str::trim).collect();
+        let statuses: Vec<u16> = cells[1]
+            .split(',')
+            .map(|s| s.trim().parse().unwrap())
+            .collect();
+        let mut codes_cell = String::new();
+        let mut depth = 0;
+        for c in cells[2].chars() {
+            match c {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ if depth == 0 => codes_cell.push(c),
+                _ => {}
+            }
+        }
+        let groups: Vec<&str> = codes_cell.split(';').collect();
+        assert!(
+            statuses.len() == 1 || statuses.len() == groups.len(),
+            "5.2: {row}"
+        );
+        for (i, group) in groups.iter().enumerate() {
+            let status = statuses[if statuses.len() == 1 { 0 } else { i }];
+            for code in group.split('`').skip(1).step_by(2) {
+                assert!(
+                    map.insert(code.to_owned(), status).is_none(),
+                    "{code} twice in 5.2"
+                );
+            }
         }
     }
+    assert!(map.len() >= 60, "{} codes read from 5.2", map.len());
     map
 }
 
@@ -130,7 +75,7 @@ fn the_codes_are_the_designs() {
         "codes the design does not list, or missing ones"
     );
     for (code, status, _) in CODES {
-        assert_eq!(design.get(code), Some(status), "{code}");
+        assert_eq!(design.get(*code), Some(status), "{code}");
     }
 }
 
