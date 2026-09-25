@@ -119,11 +119,11 @@ export function nextStep(error: ErrorObject): Next {
   if (error.may_have_been_sent) {
     return "reconcile"; // it may have taken effect: check before repeating
   }
-  switch (error.code) {
+  switch (error.code as KnownErrorCode) {
 ```
 
-- Branch on `code` (the `ErrorCode` union), never on `message`: codes only
-  grow, so treat an unknown one by its HTTP status class. A code Meta
+- Branch on `code` (`KnownErrorCode` lists today's), never on `message`:
+  codes only grow, so treat an unknown one by its HTTP status class. A code Meta
   caused is its error kind (`marketing_opted_out`, …); `details` under
   `graph` is Meta's own text: show it, never branch on it.
 - **Repeat a request only when `may_have_been_sent` is false**; a

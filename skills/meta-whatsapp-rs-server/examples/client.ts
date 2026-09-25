@@ -9,6 +9,9 @@ import type { components, paths } from "./meta-whatsapp-server";
 
 export type ErrorObject = components["schemas"]["ErrorObject"];
 export type ErrorCode = components["schemas"]["ErrorCode"];
+// The codes this version answers: switch on them, so TypeScript rejects a
+// misspelled one; codes only grow, so any other falls to the default.
+export type KnownErrorCode = components["schemas"]["KnownErrorCode"];
 export type PhoneNumber = components["schemas"]["Number"];
 export type ProfilePatch = components["schemas"]["ProfilePatch"];
 // Annotate request literals with the generated types: TypeScript then
@@ -42,7 +45,7 @@ export function nextStep(error: ErrorObject): Next {
   if (error.may_have_been_sent) {
     return "reconcile"; // it may have taken effect: check before repeating
   }
-  switch (error.code) {
+  switch (error.code as KnownErrorCode) {
     case "invalid_request":
     case "invalid_parameter":
       return "fix_request"; // error.field names the culprit

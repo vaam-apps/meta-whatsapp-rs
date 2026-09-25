@@ -74,9 +74,12 @@ fn the_document_describes_keys_tenants_and_errors_everywhere() {
     // The codes are in the document, for generated clients, as an open
     // set: the known ones, or any string.
     let error_code = &spec["components"]["schemas"]["ErrorCode"]["anyOf"];
-    let codes = error_code[0]["enum"].as_array().unwrap();
-    assert!(codes.iter().any(|c| c == "waba_owned_by_another_tenant"));
+    assert_eq!(error_code[0]["$ref"], "#/components/schemas/KnownErrorCode");
     assert_eq!(error_code[1], serde_json::json!({"type": "string"}));
+    let codes = spec["components"]["schemas"]["KnownErrorCode"]["enum"]
+        .as_array()
+        .unwrap();
+    assert!(codes.iter().any(|c| c == "waba_owned_by_another_tenant"));
     // Paging: 1 to 100, 50 by default.
     let limit = spec["paths"]["/v1/numbers"]["get"]["parameters"]
         .as_array()

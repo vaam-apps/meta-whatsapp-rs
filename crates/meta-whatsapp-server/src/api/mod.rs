@@ -35,7 +35,7 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use crate::auth::{admin_guard, guard, tenant_guard};
-use crate::error::{ApiError, ErrorBody, ErrorCode};
+use crate::error::{ApiError, ErrorBody, ErrorCode, KnownErrorCode};
 use crate::model::Scope;
 use crate::state::AppState;
 use crate::telemetry::{Listener, Observed, observe};
@@ -86,7 +86,7 @@ impl Modify for Security {
                        `error.code` (`ErrorCode`), and resend only when `may_have_been_sent` is false."
     ),
     modifiers(&Security),
-    components(schemas(ErrorBody, ErrorCode)),
+    components(schemas(ErrorBody, ErrorCode, KnownErrorCode)),
     tags(
         (name = "admin", description = "Tenants, keys, WABA bindings and the vault key (admin key)"),
         (name = "numbers", description = "WABAs, numbers and business profiles (scope `numbers`)"),

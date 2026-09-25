@@ -675,23 +675,40 @@ impl From<Error> for ApiError {
     }
 }
 
-/// The `ErrorCode` schema: every code in [`CODES`], and any other string,
+/// The `KnownErrorCode` schema: every code in [`CODES`], the ones this
+/// version answers.
+pub struct KnownErrorCode;
+
+impl utoipa::PartialSchema for KnownErrorCode {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        use utoipa::openapi::schema::{ObjectBuilder, Type};
+        ObjectBuilder::new()
+            .schema_type(Type::String)
+            .enum_values(Some(CODES.iter().map(|(code, _, _)| *code)))
+            .description(Some(
+                "The error codes this version answers (a client can switch on them and let \
+                 any other fall to its default).",
+            ))
+            .into()
+    }
+}
+
+impl ToSchema for KnownErrorCode {}
+
+/// The `ErrorCode` schema: a [`KnownErrorCode`], or any other string,
 /// since codes grow within `v1`.
 pub struct ErrorCode;
 
 impl utoipa::PartialSchema for ErrorCode {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        use utoipa::openapi::Ref;
         use utoipa::openapi::schema::{AnyOfBuilder, ObjectBuilder, Type};
         AnyOfBuilder::new()
-            .item(
-                ObjectBuilder::new()
-                    .schema_type(Type::String)
-                    .enum_values(Some(CODES.iter().map(|(code, _, _)| *code))),
-            )
+            .item(Ref::from_schema_name("KnownErrorCode"))
             .item(ObjectBuilder::new().schema_type(Type::String))
             .description(Some(
-                "Stable error code: one of the listed ones today. Codes only grow within v1: \
-                 handle an unknown one by its HTTP status class.",
+                "Stable error code: a KnownErrorCode today. Codes only grow within v1: handle \
+                 an unknown one by its HTTP status class.",
             ))
             .into()
     }
