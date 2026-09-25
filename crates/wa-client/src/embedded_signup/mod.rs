@@ -26,7 +26,7 @@
 //! | [`EmbeddedSignupEvent`] | parses the `WA_EMBEDDED_SIGNUP` message event the page forwards |
 //! | [`EmbeddedSignup::onboard`] | code → verified, stored, subscribed, (credit line shared,) registered business |
 //! | [`TokenVault`] | business tokens encrypted at rest, by WABA and by phone number |
-//! | [`SolutionPartner`] | per deployment: onboard as a Solution Partner, funding each customer with your credit line; [`EmbeddedSignup::offboard`], [`EmbeddedSignup::revoke_credit_line`] |
+//! | [`SolutionPartner`] | per deployment: onboard as a Solution Partner, funding each customer with your credit line; [`EmbeddedSignup::offboard`], [`EmbeddedSignup::revoke_credit_line`], [`EmbeddedSignup::clear_pending_share`] |
 //!
 //! # End to end
 //!
@@ -162,9 +162,11 @@
 //!   may onboard a WABA is your policy; wa-rs decides none
 //!   (`OPEN_QUESTIONS.md` #6).
 //! - `share_credit_line` **checks before it posts**, in `onboard` and in
-//!   `resume` alike, holding a short per-WABA lease renewed right before
-//!   each post (a concurrent attempt, or a lease lost to a slow step, is
-//!   [`CreditError::Busy`](wa_core::error::CreditError::Busy)): the records
+//!   `resume` alike, holding a short per-WABA lease (300 s) renewed right
+//!   before each post (a concurrent attempt, or a lease lost to a slow
+//!   step, is [`CreditError::Busy`](wa_core::error::CreditError::Busy);
+//!   keep the client's request timeout, [`ClientBuilder::timeout`](crate::ClientBuilder::timeout),
+//!   well below the lease, so no post outlives it): the records
 //!   of your line shared with the customer business
 //!   (`owning_credit_allocation_configs`) and the allocation recorded in the
 //!   vault, each with its `request_status`; an active one whose receiving
@@ -177,7 +179,14 @@
 //!   ([`StoredCredit::pending_share`]), and a flagged share that no record
 //!   explains, on a WABA something funds, is `Reconcile` too. (When nothing
 //!   funds the WABA, `resume` posts again: that assumes Meta shows an
-//!   applied share at once, which it does not document.)
+//!   applied share at once, which it does not document.) A flagged share
+//!   Meta never shows (a post that never reached it) stays flagged until an
+//!   operator who checked Meta Business Suite calls
+//!   [`EmbeddedSignup::clear_pending_share`]: it checks Meta again, clears
+//!   nothing while a record may be live, nor while something funds the WABA
+//!   that no record explains unless the operator acknowledged exactly that
+//!   funding, and seals who cleared it and when in the ledger
+//!   ([`StoredCredit::cleared_shares`]).
 //!   Without the owner business (`owner_business_info`) nothing can be
 //!   checked or revoked later, so nothing is shared
 //!   ([`CreditError::OwnerUnknown`](wa_core::error::CreditError::OwnerUnknown)).
@@ -206,7 +215,10 @@
 //!   recorded allocation names, else a signed webhook's
 //!   `owner_business_id` when your line has records for it), for when the
 //!   customer removes you (`account_update` `PARTNER_REMOVED`) and the WABA
-//!   can no longer be read. It revokes for every WABA of that business.
+//!   can no longer be read: call it at once on every `PARTNER_REMOVED` of
+//!   your solution, coexistence disconnections included (the owner's
+//!   decision, 2026-09-25); nothing calls it for you. It revokes for every
+//!   WABA of that business.
 //!   [`EmbeddedSignup::revoke_business_credit_line`] does the same from a
 //!   business id alone. [`EmbeddedSignup::offboard`] revokes first and
 //!   deletes the token second (a CMS disconnect, the
@@ -277,9 +289,12 @@ pub use launch::{
     LaunchOptions, MAX_BUSINESS_NAME_CHARS, MAX_PHONE_DESCRIPTION_CHARS, PhoneProfilePrefill,
     PreVerifiedPhone, Setup, WabaPrefill,
 };
-pub use ledger::{RevokedBusiness, StoredCredit};
+pub use ledger::{ClearedShare, RevokedBusiness, StoredCredit};
 pub use onboard::{Onboarded, OnboardingRequest, VerifiedOnboarding, steps};
-pub use partner::{CreditSharing, Offboarded, SolutionPartner};
+pub use partner::{
+    CreditSharing, MAX_CLEARED_BY_CHARS, Offboarded, PendingShareClearance, SharesFound,
+    SolutionPartner,
+};
 pub use session::{SESSION_NAMESPACE, SignupSessions, SignupState};
 pub use token::{
     BusinessToken, GranularScope, SignupCode, TokenDebug, TokenType, WHATSAPP_BUSINESS_MANAGEMENT,

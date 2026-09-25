@@ -15,14 +15,48 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   2026-09-24, "support both, per deployment"; Solution Partner mode is
   below.
 - #17 (coexistence echoes and history not recorded by the inbox):
-  resolved in a3582b8; what that needs a port change for is #35.
+  resolved in a3582b8; what that needs a port change for is #35 (below).
+- #18 (Postgres and U+0000): decided by the owner on 2026-09-25, "store
+  raw bytes". This reverts fd4667e's provisional replacement of U+0000
+  with U+FFFD in `InboxSink` and `Inbox::send`: message content keeps it,
+  and the Postgres store holds it (below, Changed).
 - #34 (should `OtpConfig::namespace` be required?): decided yes by the
   maintainer, done in d67b3ac.
 - #35 (synced coexistence history went through `append` like live
-  messages): resolved by the `ConversationStore` port change below. Not
-  decided by the maintainer: the coordinating agent decided it on
-  2026-09-24, told the maintainer in that session, and the maintainer may
-  still revert it.
+  messages): resolved by the `ConversationStore` port change below;
+  decided by the owner on 2026-09-25, confirming the call the
+  coordinating agent made (and told the maintainer of) on 2026-09-24.
+- #36 (two types for one quality rating): decided by the owner on
+  2026-09-25, keep both. `wa_client::common::QualityRating` and
+  `wa_webhooks::fields::templates::TemplateQualityScore` document the
+  mapping (by wire value; `NA` is `NotApplicable` on the client's side and
+  `Other("NA")` on the webhook's; the client matches case-insensitively,
+  the webhook exactly), and so does the `wa-rs-webhook-events` skill,
+  whose example converts one into the other.
+- #37 (should a revoke also match its conversation?): decided by the
+  owner on 2026-09-25, no: a revoke matches the business number and the
+  direction, whatever conversation key it arrived with. The port and the
+  conformance suite state it, and a new conformance case pins it.
+- #38 (a revoked message keeps its content): decided by the owner on
+  2026-09-25, it keeps its text and payload, for the merchant's records;
+  documented as the port's behaviour.
+- #39 (when to revoke the credit line after `PARTNER_REMOVED`; server
+  D14): decided by the owner on 2026-09-25, at once on every
+  `PARTNER_REMOVED` of your solution, coexistence removals with
+  `disconnection_info` included. The library stays passive (the
+  integrator's handler calls `revoke_credit_line`); the
+  `wa-rs-embedded-signup` example does so, and a merchant who reconnects
+  is funded again only through `OnboardingRequest::reshare_after_revocation`,
+  which the example gates behind a one-time reconnect grant (see Changed).
+- #40 (`onboard_with_approval` required in Solution Partner mode):
+  decided by the owner on 2026-09-25, it stays required.
+- #41 (clearing a share whose answer was lost): decided by the owner on
+  2026-09-25, an explicit operator call:
+  `EmbeddedSignup::clear_pending_share` (below).
+- #42 (marking a business revoked when nothing was ever shared): decided
+  by the owner on 2026-09-25, `offboard` keeps marking it; onboarding that
+  business later in Solution Partner mode needs
+  `OnboardingRequest::reshare_after_revocation`.
 
 ### Added
 
@@ -63,7 +97,9 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   again** (marked by `revoke_credit_line`, or only `DELETED` records on
   Meta's side: `CreditError::Revoked`, `EmbeddedSignup::is_credit_line_revoked`;
   a `request_status` Meta does not document: `CreditError::StatusUnknown`)
-  unless the request says `OnboardingRequest::reshare_after_revocation()`.
+  unless the request says `OnboardingRequest::reshare_after_revocation()`,
+  which is business-wide in effect: a successful re-share clears the
+  business's marker, so its other WABAs are no longer refused either.
   A revocation that runs while a share is posted ends with the line
   revoked or the share reported: the share re-reads the marker after its
   post, including one whose answer was lost, and revokes by business what
@@ -101,6 +137,47 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   Tech
   Provider flow is unchanged, request for request. `SolutionPartner`'s
   system token is private and never in `Debug`.
+- **`EmbeddedSignup::clear_pending_share(&waba_id, cleared_by,
+  acknowledged_funding, &vault)`** (Solution Partner mode): an operator's
+  way out of a share whose answer was lost and that Meta never lists,
+  which kept every revocation of the WABA at
+  `RevocationIncomplete { share_pending }` and `offboard` from deleting
+  the token. Called after checking Meta Business Suite, it posts nothing
+  and holds the WABA's credit lease (a share running meanwhile makes it
+  `CreditError::Busy`, and so does a credit record written during its
+  check, a key rotation included). It checks Meta first: the line's
+  records for the owner business and the recorded allocation, each with
+  its `request_status`, and the WABA's `primary_funding_id` (with the
+  stored merchant token). An active record, one of undocumented status,
+  or one the lookup returns naming no business clears nothing
+  (`PendingShareClearance::NotCleared(SharesFound)`; a record funding the
+  WABA is recorded as its allocation, as `resume` records a share it
+  finds). So does a `primary_funding_id` that no record explains
+  (`SharesFound::unexplained_funding`), unless `acknowledged_funding` is
+  exactly that id: it may be the lost share itself, applied before Meta's
+  lookup lists it, and only a person looking at Meta Business Suite can
+  tell it from the merchant's own card. Otherwise the pending share is
+  cleared and a `ClearedShare` (who, when, the pending share's time, the
+  acknowledged funding) is appended to `StoredCredit::cleared_shares`,
+  sealed with the record; revocation and offboarding then behave as if
+  nothing had been posted. Refused before anything is sent when nothing
+  is pending. A share whose post outlived its 300 s lease and whose
+  answer is lost (or not recorded) sets the pending flag again, even when
+  a clearance took the expired lease and cleared it meanwhile; keep the
+  request timeout (`ClientBuilder::timeout`) well below the lease. An
+  operator-only call: `cleared_by` should be the operator id of your
+  authenticated staff session, never taken from a merchant's request; it
+  is refused when blank, longer than `MAX_CLEARED_BY_CHARS` (256)
+  characters, or containing control, format or line separator
+  characters, and `ClearedShare`'s `Debug` redacts it. It needs a
+  merchant token that still works, which after `PARTNER_REMOVED` it may
+  not; a merchant who connects again stores a new one.
+  **Upgrading:** a revision older than this one drops the trail whenever
+  it writes a WABA's credit record, so rolling back (or running an older
+  revision beside this one) loses audit entries; keep your own
+  append-only log of each returned `ClearedShare` as well. From this
+  revision on, fields a later revision adds to a credit record or to an
+  audit entry are kept when this one writes it.
 - **`EmbeddedSignup::onboard_with_approval`** (and
   `resume_with_approval`): your check of the verified WABA, owner business
   and numbers (`VerifiedOnboarding`) runs after `verify_assets` and before
@@ -223,6 +300,23 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
 
 ### Changed
 
+- **The `wa-rs-embedded-signup` skill's Solution Partner example** (for
+  anyone who copied it): `PartnerAction::CoexistenceDisconnected`,
+  `CoexistencePolicy` and `on_coexistence_disconnect` are gone. Every
+  `PARTNER_REMOVED` of your solution now revokes at once (#39, closed
+  above), and a coexistence one returns
+  `PartnerAction::Disconnected { revoked, reconnect_granted }`.
+  `on_account_update` takes the WABA → tenant table, and only a
+  disconnection the merchant made (`disconnection_info.initiated_by:
+  USER`) writes a one-time reconnect grant (`grant_reconnect`) for that
+  WABA and its tenant; `reconnect` consumes it atomically in the approval
+  and refuses without one, because the re-share opt-in clears the
+  business-wide revocation marker. An unshared WABA, an offboarding, a
+  `SYSTEM` disconnection (inactivity, enforcement) or unpaid invoices get
+  no grant: funding them again is the integrator's explicit call. If you
+  kept a grace period from the old `CoexistencePolicy::GracePeriod`,
+  replace it with an immediate `revoke_credit_line`; and never pass
+  `reshare_after_revocation` unconditionally on a reconnect.
 - **Breaking — `WebhookEvent::AccountUpdated` names the right WABA.** Its
   `waba_id` (and `WebhookEvent::waba_id()`) was the entry id, which in
   Meta's examples of every update with a `waba_info` (`PARTNER_ADDED`,
@@ -250,7 +344,7 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   stored event with this revision does it), and look again for merchants
   a `PARTNER_REMOVED` failed to find.
 - **Breaking — `ConversationStore` records coexistence history as history**
-  (`OPEN_QUESTIONS.md` #35), and revokes are their own method; three
+  (#35, closed above), and revokes are their own method; three
   required methods. `append_synced` stores a batch of messages, each like
   `append` (same id rule across both, same order, same latest-message
   preview; one answer per message), but never moves `last_inbound_at` nor
@@ -355,6 +449,70 @@ matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
   instead of a private copy. The only difference a send could reach is
   gone: a 1xx–3xx answer without a Graph error used to drop the challenge
   and now keeps it (unknown, so the code may be on its way).
+- **Breaking for Postgres deployments — message content keeps U+0000**
+  (`OPEN_QUESTIONS.md` #18, decided). `InboxSink` and `Inbox::send` record
+  the kind, text, payload (strings and object keys) and status error
+  exactly as sent, and `PostgresConversationStore` stores them: migration
+  3 of `postgres::migrate` converts `wa_messages.kind` and `text` and
+  `wa_conversations.last_text` to `BYTEA` (their UTF-8 bytes), and
+  `payload` and `error` from `JSONB` to `JSON` (the text as written, which
+  keeps a `\u0000` escape), renamed `kind_utf8`, `text_utf8`,
+  `last_text_utf8`, `payload_json` and `error_json`. It runs in one
+  transaction under an exclusive lock on both tables. Ids, contacts and
+  phone number ids stay `TEXT` and still refuse U+0000: Meta never assigns
+  one. **Existing rows keep their content byte for byte**: a NUL that
+  fd4667e stored as U+FFFD stays U+FFFD, since nothing tells the two
+  apart. A content column that is not UTF-8 (only a hand edit makes one)
+  reads as `StorageError::Corrupt` naming the column. **Upgrading, in
+  this order** (details and a pre-flight query in the
+  `wa_adapters::store::postgres` docs, "Upgrading to lossless content"):
+  1. **Back up** both tables of every table prefix. The only way back is
+     a restore, and it loses what was recorded after the upgrade: webhooks
+     the upgraded instances acknowledged are not delivered again, and
+     replies sent meanwhile reached the customer but leave the history.
+  2. **Stop every instance of the older revision** that writes to these
+     tables (webhook receivers, anything calling `Inbox::send`). That
+     pauses every webhook consumer they serve, OTP delivery statuses and
+     `PARTNER_REMOVED` revocations included; Meta's backoff decides how
+     long the backlog takes to drain afterwards.
+  3. **Drop the objects of your own on the content columns.** Migration 3
+     refuses to run under anything that depends on `payload` or `error`
+     (an expression such as `payload->>'type'` would survive the
+     conversion and then fail every insert of a payload holding a NUL,
+     and its webhook batch with it), naming it and changing nothing;
+     Postgres itself refuses views, rules, trigram, `text_pattern_ops`,
+     full-text or `lower()` indexes on the others. Triggers and functions
+     that name `kind`, `text`, `payload`, `error` or `last_text` are not
+     checked by Postgres and would then fail every insert: rewrite them.
+     A plain b-tree index on text is rebuilt on the bytes.
+  4. **Run `migrate` once, from a one-off job**, per table prefix, with a
+     `lock_timeout` and no `statement_timeout` on its connection, and free
+     disk for a copy of `wa_messages` and its indexes. Both tables are
+     locked for the rewrite (200,006 messages, a 153 MB table: 1 to 2
+     seconds on a local Postgres 18), and the lock waits behind any open
+     transaction on them while every later query queues behind it.
+  5. **Update SQL of your own**: decode the `*_utf8` columns as UTF-8; on
+     the `json` columns `=`, `DISTINCT`, `GROUP BY` and `UNION` fail on
+     every row, and `->`, `->>`, a cast to `jsonb` or a `jsonb` operator
+     fails on a document holding a NUL, failing the whole statement;
+     change-data-capture consumers see the new names and types.
+  6. **Start the new revision.**
+
+  An older instance left running corrupts nothing, but every inbox
+  statement of it that touches content fails on a renamed column: its
+  webhooks answer 500 (Meta redelivers them to the upgraded instances),
+  its inbox reads fail, a reply it sends reaches the customer but is not
+  recorded, and its own `migrate` refuses the upgraded database
+  (`VersionMissing(3)`). **Custom stores:** a `ConversationStore` of your
+  own now receives U+0000 from `InboxSink` and `Inbox::send`, which no
+  longer replace it; one that cannot store it fails the webhook batch
+  (Meta redelivers it until it gives up, with every other event in it)
+  and logs replies as "message sent but not recorded".
+  `conversation_conformance::run` now requires content to round-trip
+  exactly, U+0000 included, and `conformance::run` requires `KvStore`
+  values to be any bytes and a key holding U+0000 to be refused or kept
+  exactly, never stored as another key (the one with U+FFFD in its place,
+  or the one without it).
 
 Breaking for anyone pinned to an earlier revision (nothing is released
 yet): `ConversationStore::update_status(phone_number_id, id, status, at,
@@ -424,9 +582,10 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
 - **M1 — one NUL in a customer's message blocked the whole webhook batch on
   Postgres.** Postgres cannot store U+0000, so `InboxSink` failed every
   delivery of that batch until Meta dropped it after 7 days, with every
-  other event in it. `InboxSink` and `Inbox::send` now store U+0000 in
+  other event in it. `InboxSink` and `Inbox::send` stored U+0000 in
   message content as U+FFFD (lossy, and provisional: the choice was
-  reserved for the maintainer, `OPEN_QUESTIONS.md` #18).
+  reserved for the maintainer, `OPEN_QUESTIONS.md` #18). Superseded: the
+  owner decided #18, and message content now keeps U+0000 (Changed).
 - **L1 — a status or revoke on one number could change another number's
   message.** `ConversationStore::update_status` matched the message id
   alone; it now takes the business `phone_number_id` first and both stores
@@ -451,7 +610,8 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
     were applied by message id and business number; the customer's could
     delete the business's message and an echoed one the customer's.
     `ConversationStore::revoke` also matches the direction. It does not
-    match the conversation (asked for too): see `OPEN_QUESTIONS.md` #37.
+    match the conversation (asked for too), which the owner decided to
+    keep on 2026-09-25 (#37, closed above).
   - **A revoke that arrived before its message was dropped**, and the
     message, when it came (a later history chunk, a redelivery), was
     stored with the content its sender had deleted. The revoke now leaves

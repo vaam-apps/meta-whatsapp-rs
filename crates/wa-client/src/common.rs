@@ -80,6 +80,30 @@ string_enum! {
     /// Quality rating of a template (`quality_score.score`,
     /// `templates/template-quality`) or of a business phone number
     /// (`quality_rating`).
+    ///
+    /// # The webhook's type
+    ///
+    /// The `message_template_quality_update` webhook carries the same score
+    /// as `wa_webhooks::fields::templates::TemplateQualityScore`. The two
+    /// types stay separate (the owner's decision, 2026-09-25: wa-client and
+    /// wa-webhooks do not depend on each other); they correspond by wire
+    /// value ([`Self::as_str`], and `as_str` on the webhook's type):
+    ///
+    /// | Wire | `QualityRating` | `TemplateQualityScore` |
+    /// | --- | --- | --- |
+    /// | `GREEN`, `YELLOW`, `RED` | `Green`, `Yellow`, `Red` | `Green`, `Yellow`, `Red` |
+    /// | `UNKNOWN` (not rated yet) | `Unknown` | `Unknown` |
+    /// | `NA` | `NotApplicable` | `Other("NA")`: the webhook documents no `NA` |
+    /// | anything else | `Other`, verbatim | `Other`, verbatim |
+    ///
+    /// **Case**: this type matches values case-insensitively (`"green"` is
+    /// `Green`; an `Other` keeps the value as sent), the webhook's type
+    /// matches them exactly (`"green"` is `Other("green")`). So convert
+    /// through the wire value, into this type:
+    /// `score.as_str().parse::<QualityRating>()` (infallible) maps each
+    /// webhook value to the variant above, `Other("NA")` and lower-case
+    /// spellings included. The other way, `TemplateQualityScore::from`
+    /// of [`Self::as_str`], turns `NotApplicable` into `Other("NA")`.
     pub enum QualityRating {
         /// High quality.
         Green => "GREEN",

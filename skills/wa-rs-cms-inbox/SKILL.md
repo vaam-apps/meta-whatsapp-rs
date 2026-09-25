@@ -5,7 +5,7 @@ description: "The merchant-to-customer chat inbox of a multi-tenant CMS built on
 
 # wa-rs-cms-inbox
 
-> **Verified against wa-rs 92f9692ed24b96c43bedcca2e7088cf196753064 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against wa-rs 0e63aba8378556b4e34cf4cd5b5392f18f2a5e00 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/inbox.rs](examples/inbox.rs), compiled and
 tested by wa-rs's own gate. The full server (webhook endpoint, SSE,
@@ -110,8 +110,8 @@ inbox.send(&key, message).await // any other recipient is refused
 `ConversationKey { phone_number_id, contact }`: the contact is the group id
 for group messages, else the BSUID, else the `wa_id` (digits). A message
 with none is acknowledged and not recorded. A revoke of the same number and
-direction (not conversation: open question 37) marks the original `Deleted`,
-content kept; one that comes first leaves a history-only tombstone
+direction, whatever its conversation, marks the original `Deleted` and keeps
+its content (both decided); one that comes first leaves a history-only tombstone
 (`StoredMessage::REVOKED`) that keeps the content out. Replies to a `wa_id`
 go to `+<digits>`; a contact with a `.` is a BSUID. The rules are public:
 `wa_rs::inbox::conversation_key`, `wa_rs::inbox::preview`.
@@ -125,11 +125,10 @@ go to `+<digits>`; a contact with a `.` is a BSUID. The rules are public:
   (`WebhookEvent::UserIdChanged`): the new one starts a new conversation.
 - Your own replies are not broadcast: push them to the UI from the reply
   endpoint. Live events: `wa-rs-live-updates` (allow-list filter).
-- **U+0000 on Postgres**: `InboxSink` and `Inbox::send` store it as
-  U+FFFD in recorded content (lossy, provisional,
-  [open question 18](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#storage));
-  Meta-assigned ids are stored as sent. A store of your own must pass
-  `conversation_conformance::run` (`wa-rs-storage`).
+- **U+0000 is content**: `InboxSink` and `Inbox::send` record it
+  exactly and the Postgres store keeps it, so render or strip it in your
+  UI; your own SQL on those columns follows `wa-rs-storage`, as does a
+  store of your own. The Postgres store refuses it in Meta-assigned ids.
 
 ~~`update_status` matched on the message id alone~~: until 4b47bf7.
 ~~A `wa_id` conversation replied without `+`~~: until 2b2679a (on an
@@ -138,8 +137,10 @@ history are not recorded~~: until a3582b8. ~~Synced history opens the
 window, is unread, keeps its placeholders~~: until 6d50701. ~~A revoke
 deletes any message of its number; one before its message is lost~~:
 until a9593f3 (all 2026-09-24). ~~A tombstone moves the summary; a
-revoked placeholder is filled~~: until af5b1f8 (2026-09-25). 4b47bf7,
-6d50701, a9593f3 and af5b1f8 change the `ConversationStore` contract.
+revoked placeholder is filled~~: until af5b1f8 (2026-09-25). ~~U+0000
+becomes U+FFFD~~: until the pull request that made U+0000 lossless
+(PR #7, 2026-09-25). 4b47bf7, 6d50701, a9593f3, af5b1f8 and that pull
+request change the `ConversationStore` contract.
 
 ## What wa-rs does not do
 

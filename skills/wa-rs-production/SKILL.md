@@ -5,7 +5,7 @@ description: "Running wa-rs in production - the secrets (system user token, app 
 
 # wa-rs-production
 
-> **Verified against wa-rs 0da9390d42a51de4df427476b333062a6f94eacf (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against wa-rs 0e63aba8378556b4e34cf4cd5b5392f18f2a5e00 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/production.rs](examples/production.rs),
 compiled and tested by wa-rs's own gate. Longer walkthrough:
@@ -62,12 +62,14 @@ answers by status (a run of 503s: sinks outlast the dedup lease),
 
 A deployment funding merchants with its credit line
 (`wa-rs-embedded-signup`, `references/solution-partner.md` there):
-onboarding only through `onboard_with_approval`; `PartnerRemoved` wired to
-`revoke_credit_line` (unless its `solution_partner_business_ids` omit your
-business), `PartnerAppUninstalled` of **your** app to `offboard`; the key
-rotation above; an alert on `CreditError::Reconcile` and on a
-`RevocationIncomplete` that is not retryable (`ErrorKind::Unknown`: a
-person checks Meta Business Suite), and a retry of one that is.
+onboarding only through `onboard_with_approval`; every `PartnerRemoved`
+wired to `revoke_credit_line` at once, coexistence disconnections included
+(unless its `solution_partner_business_ids` omit your business),
+`PartnerAppUninstalled` of **your** app to `offboard`; the key rotation
+above; an alert on `CreditError::Reconcile` and on a `RevocationIncomplete`
+that is not retryable (`ErrorKind::Unknown`: a person checks Meta Business
+Suite), and a retry of one that is; a staff-only admin action for a lost
+share Meta never lists (`clear_pending_share`, with an operator id).
 
 ## Limits and retries
 
@@ -128,18 +130,29 @@ timeouts longer than your slowest sink.
   suite; 8238853 makes OTP codes in flight
   answer `Invalid` once; 8238853 and 7e4801f refuse a namespace with edge
   whitespace, control or format characters at `OtpService::new`, and
-  fixing it restarts codes and limits (`wa-rs-otp-login`). Upgrades
-  back-fill nothing: rows and summaries recorded before stay as written.
+  fixing it restarts codes and limits (`wa-rs-otp-login`). Lossless
+  message content (PR #7, 2026-09-25) is Postgres migration 3, one-way:
+  back up first (a rollback is a restore, losing what was recorded
+  since), stop the older instances that write to the inbox tables, drop
+  your own objects on the content columns, run `migrate` once from a job
+  with a lock timeout, then start (steps: `wa-rs-storage`). An older
+  instance left running fails on every content statement (500s Meta
+  redelivers, replies sent but not recorded). Upgrades back-fill
+  nothing: rows and summaries recorded before stay as written (a U+FFFD
+  an older revision stored for a NUL stays one).
 
 ## What wa-rs does not do
 
 Read [OPEN_QUESTIONS.md](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md)
-before going live: the OTP issue limit, PIN policy, the provisional
-U+0000 replacement, the missing dead-letter path for webhook batches,
-token refresh, Redis TLS, a revoked message keeping its content in the
-inbox (38). No metrics exporter, no health endpoint, no
-secret manager integration. ~~Whether the OTP namespace becomes
+before going live: the OTP issue limit, PIN policy, the missing
+dead-letter path for webhook batches, token refresh, Redis TLS. No
+metrics exporter, no health endpoint, no secret manager integration. A
+revoked message keeps its content in the inbox (decided 2026-09-25;
+`wa-rs-cms-inbox`). ~~Whether the OTP namespace becomes
 required~~: decided in d67b3ac (2026-09-24), it is (`wa-rs-otp-login`).
+~~The provisional U+0000 replacement~~: until the pull request that
+made U+0000 lossless (PR #7, 2026-09-25); message content keeps it
+(`wa-rs-storage`).
 
 ## Related skills
 

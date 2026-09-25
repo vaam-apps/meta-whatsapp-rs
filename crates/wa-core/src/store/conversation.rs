@@ -111,6 +111,11 @@ impl DeliveryStatus {
 }
 
 /// A persisted message.
+///
+/// Content (`kind`, `text`, `payload`, `error`) is kept exactly as given,
+/// U+0000 included; identifiers (`id` and the `conversation`'s ids) must
+/// not contain U+0000, which a store may refuse there (see
+/// [`ConversationStore`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StoredMessage {
     /// WhatsApp message id; unique. Appending an existing id is a no-op.
@@ -213,6 +218,17 @@ pub struct ConversationSummary {
 /// Ordering is by `(timestamp, id)` descending — newest first — and the
 /// `before` cursor is exclusive, so paging never repeats or skips a row even
 /// when timestamps collide.
+///
+/// Content round-trips exactly through every method: a message's `kind`,
+/// `text`, `payload` (strings and object keys) and `error`, and a summary's
+/// `last_text`, read back as written, U+0000 included — never replaced
+/// (U+FFFD) or dropped, and two object keys differing only by one stay
+/// two keys. Identifiers (message ids, contacts, phone number ids) never
+/// contain U+0000 in what Meta sends; a store may refuse one that does
+/// with an error (the Postgres adapter does), but never store it as
+/// another id. The conformance suite
+/// (`wa_adapters::store::conversation_conformance`) checks the content
+/// rule.
 #[async_trait]
 pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
     /// Insert a message. Returns `false` (and changes nothing) if a message
@@ -266,14 +282,20 @@ pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
     /// if stored for that number **and** in `direction` (a customer revokes
     /// what they sent, the business what it sent), becomes
     /// [`DeliveryStatus::Deleted`] at `at` when that
-    /// [supersedes](DeliveryStatus::supersedes) its status; its content
-    /// stays. A message `id` of another number or of the other direction is
-    /// not touched.
+    /// [supersedes](DeliveryStatus::supersedes) its status. Its content
+    /// stays: `text` and `payload` are never erased, so the merchant keeps
+    /// a record of what was deleted (the owner's decision, 2026-09-25). A
+    /// message `id` of another number or of the other direction is not
+    /// touched.
     ///
-    /// Whether the revoke must also match the message's conversation
-    /// (`key.contact`) is unspecified until `OPEN_QUESTIONS.md` #37 is
-    /// settled: the adapters in this repository do not match it, and the
-    /// conformance suite requires neither answer.
+    /// The revoke does **not** match the message's conversation
+    /// (`key.contact`; the owner's decision, 2026-09-25): a message stored
+    /// under another conversation of the number is deleted all the same.
+    /// The two keys can differ for one customer: a message recorded under
+    /// the phone number (a history thread without a BSUID) and revoked by a
+    /// live webhook keyed by the BSUID, or a customer whose BSUID changed
+    /// with their number. So nothing but the number and the direction ties
+    /// a revoke to its message. The conformance suite checks it.
     ///
     /// A revoke can arrive before its message (a live revoke, then the
     /// history chunk that carries the original; or redeliveries out of

@@ -1,6 +1,6 @@
 # Solution Partner deployments
 
-> **Verified against wa-rs 0da9390d42a51de4df427476b333062a6f94eacf (2026-09-25).** Also checked against Meta's
+> **Verified against wa-rs 0e63aba8378556b4e34cf4cd5b5392f18f2a5e00 (2026-09-25).** Also checked against Meta's
 > `solution-providers/share-and-revoke-credit-lines`,
 > `solution-providers/manage-system-users` and
 > `webhooks/reference/account_update` pages as fetched on 2026-09-24.
@@ -145,7 +145,10 @@ active one already funds the WABA. A lost answer (a timeout, a 5xx) is
 **A revoked business stays revoked.** After `revoke_credit_line`, or when
 Meta reports only `DELETED` records for the business, `onboard_with_approval`
 and `resume` refuse (`EmbeddedSignup::is_credit_line_revoked`). Funding the
-merchant again is your decision, per onboarding:
+merchant again is your decision, made on one onboarding but **business-wide
+in effect**: a successful re-share clears the business's revocation marker,
+so its other WABAs are no longer refused either. Never set it on every
+onboarding; gate it (the example's `reconnect` spends a grant):
 
 ```rust
 request.reshare_after_revocation()
@@ -181,21 +184,25 @@ match (&update.event, waba_id) {
             es.offboard(waba_id, owner, vault).await?,
         ))
     }
-    // A coexistence number disconnected: hand it to your policy.
-    (AccountUpdateEvent::PartnerRemoved, Some(waba_id))
-        if update.disconnection_info.is_some() =>
-    {
-        Ok(PartnerAction::CoexistenceDisconnected {
-            waba_id: waba_id.clone(),
-            owner: owner.cloned(),
+    // Unshared, or a coexistence number disconnected (it may
+    // reconnect): revoke at once either way, as Meta recommends.
+    // Revocation is per business: its other WABAs lose the line too,
+    // and funding it again needs an explicit opt-in (`reconnect`).
+    (AccountUpdateEvent::PartnerRemoved, Some(waba_id)) => {
+        let revoked = es.revoke_credit_line(waba_id, owner, vault).await?;
+        let Some(info) = &update.disconnection_info else {
+            return Ok(PartnerAction::Revoked(revoked)); // no reconnect grant
+        };
+        // Only a disconnection the merchant made earns a reconnect.
+        let by_merchant = info.initiated_by == Some(DisconnectionInitiator::User);
+        let why = "coexistence disconnection initiated by the merchant";
+        let reconnect_granted =
+            by_merchant && grant_reconnect(reservations, waba_id, why).await?;
+        Ok(PartnerAction::Disconnected {
+            revoked,
+            reconnect_granted,
         })
     }
-    // Unshared: messaging on the WABA is blocked and Meta recommends
-    // revoking at once. Revocation is per business: its other WABAs
-    // lose the line too, and funding it again needs an explicit opt-in.
-    (AccountUpdateEvent::PartnerRemoved, Some(waba_id)) => Ok(PartnerAction::Revoked(
-        es.revoke_credit_line(waba_id, owner, vault).await?,
-    )),
     // No WABA named, only its owner: revoke by business.
     (AccountUpdateEvent::PartnerRemoved, None) => match owner {
         Some(owner) => Ok(PartnerAction::Revoked(
@@ -217,20 +224,45 @@ match (&update.event, waba_id) {
 - **`PartnerAppUninstalled` is yours only when `partner_app_id` is your
   app** (`es.app().app_id`): under a Multi-Partner Solution the other
   partners' uninstalls reach you too.
-- **A coexistence `PartnerRemoved`** (with `disconnection_info`: the
-  number changed device or was deleted, and may reconnect) is a policy
-  point: revoke at once, or keep funding for a grace period and revoke
-  later if it does not reconnect. wa-rs does not decide it, and neither
-  does the example: it returns `PartnerAction::CoexistenceDisconnected`,
-  and `on_coexistence_disconnect` shows both options.
+- **Every `PartnerRemoved` of your solution revokes at once**, a
+  coexistence one too (with `disconnection_info`: the number changed
+  device, was re-registered or went inactive, and may reconnect). That is
+  the owner's decision for wa-rs (2026-09-25), and what Meta recommends
+  for any removal. wa-rs itself stays passive: nothing revokes unless
+  your handler calls `revoke_credit_line`. The example returns
+  `PartnerAction::Disconnected` for a coexistence removal, so you can ask
+  the merchant to reconnect.
+- **Copied an earlier version of this example?** Its policy point for a
+  coexistence disconnection (revoke now or after a grace period) is gone:
+  revoke at once on every `PartnerRemoved`, and never pass
+  `reshare_after_revocation` on a reconnect without a grant. wa-rs's
+  CHANGELOG names the removed items.
+- **A merchant who reconnects onboards again**, and the revoked business
+  is not funded again on its own (`EmbeddedSignup::is_credit_line_revoked`).
+  Because the opt-in clears the business-wide marker, the example never
+  hands it out on the merchant's say-so: `grant_reconnect` writes one
+  grant for the WABA and the tenant bound to it, only for a disconnection
+  the merchant made (`initiated_by: USER`: a new device, a new number),
+  and `reconnect`'s approval consumes it atomically before anything is
+  stored. An unshared WABA, an offboarding, a `SYSTEM` disconnection
+  (inactivity, enforcement) or unpaid invoices get none: funding them
+  again is your staff's decision, a `grant_reconnect` by hand. A
+  reconnect that fails after its approval has spent the grant; `resume`
+  it with the same opt-in.
 
 ```rust
-match policy {
-    CoexistencePolicy::RevokeNow => {
-        Ok(Some(es.revoke_credit_line(waba_id, owner, vault).await?))
+let request = fund_again(request);
+es.onboard_with_approval(&request, vault, |verified| async move {
+    reserve(reservations, &verified.waba_id, tenant).await?;
+    if !reservations
+        .delete(&reconnect_key(&verified.waba_id, tenant))
+        .await?
+    {
+        let why = "no reconnect grant: funding this business again is your staff's decision";
+        return Err(ValidationError::new("waba_id", why).into());
     }
-    CoexistencePolicy::GracePeriod => Ok(None), // your scheduler calls revoke_credit_line later
-}
+    Ok(())
+})
 ```
 
 - `revoke_credit_line` marks the business revoked first (a share posted
@@ -244,14 +276,54 @@ match policy {
   outcome and this call revoked no record: it may be live and not listed
   yet) and `ledger` (a ledger write that failed): repeat it when
   `is_retryable()`, otherwise check those records in Meta Business Suite.
+- **A pending share Meta never lists** (a post whose answer was lost and
+  that never reached Meta) keeps every revocation of the WABA at
+  `share_pending`. Once someone has checked the WABA's funding in Meta
+  Business Suite, clear it from your admin tool (`clear_lost_share` in the
+  example). It posts nothing and holds the WABA's credit lease; it checks
+  your line's records for the owner business and the WABA's
+  `primary_funding_id` again, and clears nothing while a record may be
+  live (`PendingShareClearance::NotCleared`, recording a record that
+  funds the WABA as its allocation). A `primary_funding_id` that no
+  record explains stops it too: it may be the lost share itself, applied
+  while Meta's lookup does not list it yet, and wa-rs cannot tell it from
+  the merchant's own card. `SharesFound::unexplained_funding` returns it;
+  pass it back as `acknowledged_funding` only once someone has seen in
+  Meta Business Suite that what pays for the WABA is not your credit
+  line. Otherwise it seals who cleared it, when, and the acknowledged
+  funding in the ledger (`StoredCredit::cleared_shares`); revocation and
+  `offboard` then behave as if nothing had been posted. It refuses when
+  nothing is pending, and needs a merchant token that still works (Meta
+  serves `primary_funding_id` to it; after `PartnerRemoved` it may not,
+  and a merchant who connects again stores a new one). **Operator-only**:
+  never reachable from a merchant's route; `cleared_by` is the operator id
+  of your authenticated staff session, not a name or an email (kept,
+  sealed, as long as the WABA's credit record; `Debug` redacts it; at
+  most `MAX_CLEARED_BY_CHARS` characters, nothing invisible).
+
+```rust
+let outcome = es.clear_pending_share(waba_id, admin, confirmed, vault);
+Ok(match outcome.await? {
+    PendingShareClearance::Cleared(_) => Clearance::Cleared, // vault.credit(waba_id) → cleared_shares
+    PendingShareClearance::NotCleared(found) => match found.unexplained_funding() {
+        Some(funding) => Clearance::ConfirmFunding(funding.clone()),
+        None => Clearance::MayBeLive,
+    },
+    _ => Clearance::MayBeLive, // nothing cleared
+})
+```
+
 - `offboard` revokes first and deletes the token second; if revocation
   fails nothing is deleted. The credit ledger outlives the token, so
   `PartnerAppUninstalled` and `PartnerRemoved` end revoked in either
   order. When the ledger shows a share that revocation cannot find,
   `offboard` keeps the token (`CreditError::Reconcile`), and a pending
   share it revoked nothing for keeps it too (`RevocationIncomplete`,
-  `share_pending`: call again); when nothing was ever shared, it just
-  deletes.
+  `share_pending`: call again, or clear it as above); when nothing was
+  ever shared, it just deletes. It marks a recorded business revoked
+  even then (the owner's decision, 2026-09-25: the marker comes before any
+  lookup, so no racing share survives), so funding that business later
+  takes `reshare_after_revocation`.
 - A merchant who disconnects in your CMS: unsubscribe with their token
   while it works, then `offboard` (`disconnect` in the example).
 
