@@ -393,7 +393,7 @@ a caller's generic error handling can never swallow `invalid`.
 | `…/tenants/{id}/keys[/{key_id}]`, `/v1/admin/platform-keys[/{key_id}]` | mint, list, revoke keys; platform keys with their allowed tenants |
 | `POST /v1/admin/tenants/{id}/wabas`; `GET /v1/admin/wabas/{waba_id}`; `DELETE /v1/admin/wabas/{waba_id}/binding` | attach an own WABA, verified with Meta and subscribed; which tenant holds a WABA, and its numbers; unbind (D4: token deleted too, [§3.4](#34-how-numbers-get-bound)) |
 | `POST /v1/admin/vault/rotate` | re-encrypt every WABA's token under the active key, walking `wa_server_wabas` (the vault cannot list itself), within the request deadline: a walk cut there answers `504 timeout` and is repeated (idempotent), and `meta-whatsapp-server vault rotate` has no deadline. It walks bound WABAs only, which holds every vault record in M1a; M3 keeps records past a binding (credit ledgers of offboarded WABAs, revocation markers), and the walk must cover those too (`TokenVault::rotate` on each such WABA, `rotate_business` on each marker) before an operator may drop an old key |
-| `GET /livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` | internal listener, no key; `version` reports server, meta-whatsapp-rs revision, Graph and API versions |
+| `GET /livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` | internal listener, no key; `version` reports server, meta-whatsapp-rs revision, Graph and API versions; `/v1/openapi.json` until M4, when the `.cstack` schema replaces it ([§8](#8-client-sdks)) |
 
 The public listener serves `GET|POST /webhooks/meta` and `GET /livez`,
 nothing else.
@@ -710,10 +710,13 @@ if the platform's privacy obligations require it. A legal and product call.
 
 Within `/v1`, changes are additive; a breaking change is `/v2`, served
 beside `/v1` for a deprecation period; webhook endpoints keep their
-`api_version`. The spec is committed (`crates/meta-whatsapp-server/openapi/v1.json`):
+`api_version`. Until M4 the spec is committed (`crates/meta-whatsapp-server/openapi/v1.json`):
 CI fails when the generated one differs, and `oasdiff` checks breaking
-changes against the last release. Image, spec `info.version` and the
-TypeScript client share one semver; `/v1/version` adds the meta-whatsapp-rs revision.
+changes against the last release. From M4 ([§8](#8-client-sdks)) the committed
+`.cstack` schema takes its place: CrateStack's check mode fails on a stale
+generated client, and `cratestack diff` checks breaking changes against the
+last release. Image, API contract (spec, then schema) and the TypeScript
+client share one semver; `/v1/version` adds the meta-whatsapp-rs revision.
 
 ## 8. Client SDKs
 
@@ -828,7 +831,7 @@ test fail.
 | M3.5 | OTP: every outcome; tenant A's code verifies at no other tenant on the same number (decisive: the namespace); logs hold neither code nor number; a sentinel in a scripted Graph error on issue reaches no response |
 | M4.1 | The image builds for both architectures, runs non-root on a read-only file system, has no shell; `meta-whatsapp-server healthcheck` works in it |
 | M4.2 | A Compose smoke test in CI (Postgres, the image, a Graph stub via `WA_GRAPH_ENDPOINT`): CLI admin key, tenant, attach, send, a signed Meta webhook, a webhooks-out delivery verified at a stub receiver |
-| M4.3 | The client is generated from the committed `.cstack` schema (CrateStack's check mode fails on drift); `tsc --noEmit` passes on it and on every TypeScript excerpt of the server skills; a Node test verifies a webhook-out signature with `verifyWebhook()` |
+| M4.3 | The client is generated from the committed `.cstack` schema (CrateStack's check mode fails on drift); `tsc --noEmit` passes on it and on every TypeScript excerpt of the server skills; a Node test verifies a real delivery with `verifyWebhook()`; a breaking change within `v1` fails `cratestack diff` against the last release; the invoice fixture renders byte-identically |
 
 **The skills gate for HTTP callers (M1).** `crates/meta-whatsapp-rs/tests/skills.rs`
 assumes Rust (no TypeScript fences; backticked names must exist in
