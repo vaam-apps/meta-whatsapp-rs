@@ -44,7 +44,7 @@
 //! identical body sent again later is taken for a redelivery: nothing in it
 //! tells the two apart).
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -219,6 +219,71 @@ pub(crate) struct Events {
     in_flight: Arc<Semaphore>,
     /// Turns to record ([`MAX_DELIVERIES_RECORDING`]).
     recording: Arc<Semaphore>,
+    rejections: RejectionLog,
+}
+
+/// What a refused delivery is refused for, as the rejection log counts it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Rejection {
+    /// No well-formed signature header: `401` before the body.
+    Unsigned = 0,
+    /// A signature no app secret produced: `401`.
+    Forged = 1,
+    /// Over 3 MiB: `413`.
+    TooLarge = 2,
+    /// The body took too long: `408`.
+    SlowBody = 3,
+    /// No place or turn: `503`.
+    Busy = 4,
+}
+
+/// Warnings about refused deliveries, at most one a minute for each
+/// [`Rejection`], saying how many were not written since: anyone who
+/// reaches the public listener can have requests refused, and each must
+/// not cost a log line (security review L5). The metric
+/// (`wa_server_webhook_deliveries_total`) counts every one.
+#[derive(Debug)]
+pub(crate) struct RejectionLog {
+    started: std::time::Instant,
+    /// Per rejection: the millisecond (since `started`) from which the next
+    /// line may be written, and the refusals not written since the last.
+    slots: [(AtomicU64, AtomicU64); 5],
+}
+
+impl RejectionLog {
+    /// Between two lines about the same rejection.
+    pub(crate) const EVERY: Duration = Duration::from_secs(60);
+
+    fn new() -> Self {
+        Self {
+            started: std::time::Instant::now(),
+            slots: Default::default(),
+        }
+    }
+
+    /// Whether to write a line about `rejection` now: `Some(n)` with the
+    /// `n` refusals not written since the last line, else `None` (this one
+    /// is counted for the next line).
+    pub(crate) fn admit(&self, rejection: Rejection) -> Option<u64> {
+        let (next, suppressed) = &self.slots[rejection as usize];
+        let now = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let every = u64::try_from(Self::EVERY.as_millis()).unwrap_or(u64::MAX);
+        let due = next.load(Ordering::Relaxed);
+        if now >= due
+            && next
+                .compare_exchange(
+                    due,
+                    now.saturating_add(every),
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+        {
+            return Some(suppressed.swap(0, Ordering::Relaxed));
+        }
+        suppressed.fetch_add(1, Ordering::Relaxed);
+        None
+    }
 }
 
 /// Why a delivery was not recorded.
@@ -256,7 +321,13 @@ impl Events {
             outbox: inbound.outbox,
             in_flight: Arc::new(Semaphore::new(MAX_DELIVERIES_IN_FLIGHT)),
             recording: Arc::new(Semaphore::new(MAX_DELIVERIES_RECORDING)),
+            rejections: RejectionLog::new(),
         }
+    }
+
+    /// The log of refused deliveries.
+    pub(crate) fn rejections(&self) -> &RejectionLog {
+        &self.rejections
     }
 
     /// A place for one delivery, or `None` when
@@ -280,6 +351,12 @@ impl Events {
         signature: Option<&str>,
         body: Bytes,
     ) -> Result<DeliveryReport, Refused> {
+        // The signature first, here: the library's handler would log each
+        // forged delivery (the caller logs them at most once a minute), and
+        // a forged one needs no turn to record.
+        if let Err(error) = self.verifier.verify(signature, &body) {
+            return Err(Refused::Handler(error.into()));
+        }
         // Its turn to record: at most MAX_DELIVERIES_RECORDING hold the
         // database at once.
         let Ok(Ok(_turn)) = tokio::time::timeout(RECORDING_WAIT, self.recording.acquire()).await
@@ -783,6 +860,23 @@ pub async fn purge_outbox(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One line a minute per rejection, counting the ones left out.
+    #[test]
+    fn the_rejection_log_writes_a_line_a_minute_per_rejection() {
+        let log = RejectionLog::new();
+        assert_eq!(log.admit(Rejection::Unsigned), Some(0));
+        for _ in 0..5 {
+            assert_eq!(log.admit(Rejection::Unsigned), None);
+        }
+        assert_eq!(log.admit(Rejection::Forged), Some(0), "each its own");
+        // A minute later: the next line says how many were left out.
+        log.slots[Rejection::Unsigned as usize]
+            .0
+            .store(0, Ordering::Relaxed);
+        assert_eq!(log.admit(Rejection::Unsigned), Some(5));
+        assert_eq!(log.admit(Rejection::Unsigned), None);
+    }
 
     /// The two lists split the library's kinds: none is both.
     #[test]

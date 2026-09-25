@@ -26,7 +26,7 @@ use meta_whatsapp_rs::webhooks::axum::http::{HeaderMap, StatusCode, header};
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 use meta_whatsapp_rs::webhooks::{SIGNATURE_HEADER, VerificationQuery, verify_subscription};
 
-use crate::events::{BODY_READ_TIMEOUT, Refused};
+use crate::events::{BODY_READ_TIMEOUT, Refused, Rejection};
 use crate::state::AppState;
 
 /// `GET /webhooks/meta`: Meta's subscription check. `200` with the
@@ -82,13 +82,24 @@ fn signature_shaped(headers: &HeaderMap) -> Option<&str> {
 /// The answer to a delivery and its outcome label.
 async fn deliver(state: &AppState, request: Request) -> (StatusCode, &'static str) {
     // Before the body: an unsigned request is never buffered.
+    let rejections = state.events().rejections();
     let Some(signature) = signature_shaped(request.headers()).map(str::to_owned) else {
-        tracing::warn!("rejected a webhook delivery without a well-formed signature header");
+        if let Some(suppressed) = rejections.admit(Rejection::Unsigned) {
+            tracing::warn!(
+                suppressed,
+                "rejected a webhook delivery without a well-formed signature header"
+            );
+        }
         return (StatusCode::UNAUTHORIZED, "unauthenticated");
     };
     // A place among the deliveries read at once, held to the end.
     let Some(_place) = state.events().admit() else {
-        tracing::warn!("too many webhook deliveries at once: answering 503, Meta retries");
+        if let Some(suppressed) = rejections.admit(Rejection::Busy) {
+            tracing::warn!(
+                suppressed,
+                "too many webhook deliveries at once: answering 503, Meta retries"
+            );
+        }
         return (StatusCode::SERVICE_UNAVAILABLE, "busy");
     };
     // Honours the public router's body limit: 413 past 3 MiB; 408 when the
@@ -97,7 +108,12 @@ async fn deliver(state: &AppState, request: Request) -> (StatusCode, &'static st
     let body = match read.await {
         Ok(Ok(body)) => body,
         Ok(Err(rejection)) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
-            tracing::warn!("rejected a webhook delivery over the body limit");
+            if let Some(suppressed) = rejections.admit(Rejection::TooLarge) {
+                tracing::warn!(
+                    suppressed,
+                    "rejected a webhook delivery over the body limit"
+                );
+            }
             return (StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large");
         }
         Ok(Err(rejection)) => {
@@ -105,7 +121,9 @@ async fn deliver(state: &AppState, request: Request) -> (StatusCode, &'static st
             return (rejection.status(), "failed");
         }
         Err(_) => {
-            tracing::warn!("a webhook body did not arrive in time");
+            if let Some(suppressed) = rejections.admit(Rejection::SlowBody) {
+                tracing::warn!(suppressed, "a webhook body did not arrive in time");
+            }
             return (StatusCode::REQUEST_TIMEOUT, "slow_body");
         }
     };
@@ -117,12 +135,28 @@ async fn deliver(state: &AppState, request: Request) -> (StatusCode, &'static st
             );
             (StatusCode::OK, "delivered")
         }
-        Err(Refused::Busy) => (StatusCode::SERVICE_UNAVAILABLE, "busy"),
+        Err(Refused::Busy) => {
+            if let Some(suppressed) = rejections.admit(Rejection::Busy) {
+                tracing::warn!(
+                    suppressed,
+                    "no turn to record a webhook delivery: answering 503, Meta retries"
+                );
+            }
+            (StatusCode::SERVICE_UNAVAILABLE, "busy")
+        }
         Err(Refused::Handler(meta_whatsapp_rs::Error::Webhook(
             WebhookError::MissingSignature
             | WebhookError::MalformedSignature
             | WebhookError::SignatureMismatch,
-        ))) => (StatusCode::UNAUTHORIZED, "unauthenticated"),
+        ))) => {
+            if let Some(suppressed) = rejections.admit(Rejection::Forged) {
+                tracing::warn!(
+                    suppressed,
+                    "rejected a webhook delivery: no app secret produced its signature"
+                );
+            }
+            (StatusCode::UNAUTHORIZED, "unauthenticated")
+        }
         Err(Refused::Handler(meta_whatsapp_rs::Error::Webhook(
             WebhookError::PayloadTooLarge { .. },
         ))) => (StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large"),
