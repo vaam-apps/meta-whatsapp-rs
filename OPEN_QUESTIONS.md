@@ -20,19 +20,20 @@ of its own, after an HTML comment; keep that when you add one.
 
 ## Embedded Signup (onboarding merchants)
 
-3. **Tech Provider or Solution Partner?** Only the Tech Provider flow is
-   implemented (exchange → verify → store → subscribe → register). A
-   Solution Partner must also share its credit line with each onboarded
-   business (system user token, `receiving_business_id` = the verified owner
-   business id, which is already stored). Merchants of a Tech Provider must
-   add their own payment method before they can message.
 4. **Two-step PIN policy.** The caller supplies the 6-digit PIN on every
    `onboard`/`resume`; nothing generates or stores PINs. Numbers that already
    have a PIN need the merchant's current one.
 5. **Multi-WABA signups.** Only the claimed `waba_id` (else the first of
    `waba_ids`; with no claim, the newest granted WABA) is onboarded.
 6. **One WABA shared by several tenants.** The vault is keyed by WABA and
-   knows no tenants; the last onboarding wins.
+   knows no tenants; the last onboarding wins. `onboard_with_approval`
+   lets an integrator refuse (or apply any other policy) before anything
+   is stored; which policy wa-rs itself should default to is open. A
+   Solution Partner deployment must approve (plain `onboard` is refused,
+   and `resume` shares only for a WABA whose stored token record has a
+   recorded approval; whether that stays required is #40), but what the
+   approval checks is still the integrator's: wa-rs decides no tenant
+   policy.
 7. **Coexistence sync.** Contacts/history sync (`smb_app_data`) must happen
    once, within 24 h of onboarding. `onboard` only flags it
    (`needs_coexistence_sync()`); should it trigger it?
@@ -50,6 +51,56 @@ of its own, after an HTML comment; keep that when you add one.
     `whatsAppBusinessAccount` both as `{ids: …}` and `{id: [...]}`; the code
     uses the worked example (`{id: [...]}`) and sends `business.id` as a
     string. Confirm in Meta's Integration Helper before relying on pre-fill.
+
+<!-- 39 starts its own list so it renders as 39, not 13 (40 follows it). -->
+
+39. **When to revoke the credit line after `PARTNER_REMOVED`.** The
+    owner's decision, tracked as D14 in `docs/design/server.md` on the
+    `docs/server-design` branch. Meta recommends revoking at once when a
+    customer unshares its WABA; a `PARTNER_REMOVED` with
+    `disconnection_info` concerns a coexistence number (a device change, a
+    re-registration, inactivity) that may reconnect. Options: revoke at
+    once in every case; revoke after a grace period when
+    `disconnection_info` says the number may reconnect; let the operator
+    decide per event. Revocation is per business, so it also stops funding
+    that business's other WABAs, and funding it again needs
+    `OnboardingRequest::reshare_after_revocation`. Today the library
+    decides none (`revoke_credit_line` runs when the integrator calls
+    it); the `wa-rs-embedded-signup` skill's example revokes a removal
+    without `disconnection_info` and hands one with it to the
+    integrator's own policy (`PartnerAction::CoexistenceDisconnected`),
+    choosing neither option.
+40. **`onboard_with_approval` required in Solution Partner mode.** Plain
+    `onboard` is refused there (`CreditError::ApprovalRequired`, before
+    the code is exchanged), and `resume` shares only for a WABA whose
+    stored token record has a recorded approval. Making it required was
+    the coordinating agent's call on a review finding (1a7b5bf), not the
+    maintainer's, and awaits the maintainer's confirmation. Options: keep
+    it required; or let plain `onboard` share, as before 1a7b5bf, which
+    leaves the tenant check to the integrator after the line is attached
+    (an attached line cannot be taken back from the WABA). It does not
+    decide #6: what the approval checks stays the integrator's.
+41. **Clearing a share whose answer was lost.** A credit post whose answer
+    never came back leaves the WABA's ledger record with a pending share.
+    Until Meta's records list that share, every revocation of the WABA
+    returns `RevocationIncomplete` with `share_pending` (retryable), and
+    `offboard` keeps the token. If the post never reached Meta, nothing will
+    ever list it, and the record stays pending: no public call clears it
+    today. Options: an explicit operator call that clears the pending share
+    after checking Meta Business Suite (and records who cleared it and
+    when); clearing it automatically after a settle time with no share
+    listed (Meta documents no settle time); or keep it and document the
+    manual store edit.
+42. **Marking a business revoked when nothing was ever shared.** `offboard`
+    in Solution Partner mode writes the revocation marker before it looks
+    anything up, also for a WABA onboarded in Tech Provider mode that was
+    never funded. That order is what stops a share starting after
+    `offboard` read the ledger from surviving the revocation; the cost is
+    that a later partner-mode onboarding of that business needs
+    `reshare_after_revocation`. Options: keep marking (today); skip the
+    marker when the ledger shows no approval and no share, accepting that
+    narrow race; or mark and let the approval step clear markers that no
+    share ever followed.
 
 ## Authentication (OTP)
 

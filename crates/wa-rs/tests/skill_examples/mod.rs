@@ -13,6 +13,8 @@ mod wa_rs_commerce_commerce;
 mod wa_rs_documents_documents;
 #[path = "../../../../skills/wa-rs-embedded-signup/examples/onboarding.rs"]
 mod wa_rs_embedded_signup_onboarding;
+#[path = "../../../../skills/wa-rs-embedded-signup/examples/solution_partner.rs"]
+mod wa_rs_embedded_signup_solution_partner;
 #[path = "../../../../skills/wa-rs-errors/examples/handle.rs"]
 mod wa_rs_errors_handle;
 #[path = "../../../../skills/wa-rs-flows/examples/flows.rs"]

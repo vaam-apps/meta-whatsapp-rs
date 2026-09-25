@@ -5,7 +5,7 @@ description: "Understanding and handling wa-rs WebhookEvent values - inbound cus
 
 # wa-rs-webhook-events
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs b3d2dcad64bc5f0dd9374dc84a387ec978707ab0 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/events.rs](examples/events.rs), compiled and
 tested by wa-rs's own gate with Meta-shaped payloads. Every variant and

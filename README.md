@@ -76,8 +76,12 @@ an invoice PDF with Typst, uploads it and sends it as a document.
 ### CMS: merchants connect their number (Embedded Signup)
 
 From [`embedded_signup.rs`](crates/wa-rs/examples/embedded_signup.rs), a
-server with the Facebook JavaScript SDK page. When a merchant starts, bind
-the attempt to them and give the page the `FB.login` options:
+server with the Facebook JavaScript SDK page. It is a **Tech Provider**
+server (each merchant adds a payment method); a Solution Partner, whose
+credit line pays, onboards with `onboard_with_approval` instead: see
+[Solution Partner mode](docs/guides/embedded-signup.md#solution-partner-mode).
+When a merchant starts, bind the attempt to them and give the page the
+`FB.login` options:
 
 ```rust
 let state = signup.sessions.start(&tenant, ATTEMPT_TTL).await?;

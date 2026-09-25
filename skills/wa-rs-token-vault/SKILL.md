@@ -5,7 +5,7 @@ description: "Keeping merchants' WhatsApp business tokens with wa-rs's TokenVaul
 
 # wa-rs-token-vault
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs 0da9390d42a51de4df427476b333062a6f94eacf (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/vault.rs](examples/vault.rs), compiled and
 tested by wa-rs's own gate (routing, rotation, wrong key, offboarding).
@@ -52,20 +52,45 @@ record lists the number.
 
 ```rust
 let vault = TokenVault::new(kv, VaultKeys::new(new_key).with_previous(old_key))?;
-for waba_id in my_wabas {
-    vault.rotate(waba_id).await?; // re-encrypt under the new key; false if already done
+let mut failed = Vec::new(); // fix or delete these records, then walk again
+for waba_id in every_waba_ever {
+    if let Err(e) = vault.rotate(waba_id).await {
+        failed.push((waba_id.to_string(), e)); // the rest of this WABA was still rotated
+    }
 }
-Ok(vault) // once every WABA is rotated, drop the old key from the config
+for business_id in revoked_by_business {
+    if let Err(e) = vault.rotate_business(business_id).await {
+        failed.push((business_id.to_string(), e)); // a revocation marker no WABA names
+    }
+}
+Ok((vault, failed)) // drop the old key from the config only once `failed` is empty
 ```
 
 Reads also re-encrypt old records under the active key (`rotate_on_read`,
-default `true`; turn it off on read-only replicas). The vault cannot list
-its records: iterate **your** merchant table.
+default `true`; turn it off on read-only replicas), tokens and the
+Solution Partner credit ledger alike. The vault cannot list its records:
+iterate **your** merchant table, **offboarded WABAs included** (a
+Solution Partner's credit ledger outlives the token, and `rotate` re-seals
+it with the revocation marker of the business it names), plus every
+business you revoked by business id alone. A record left under a dropped
+key fails with `CryptoError::InvalidKey`; a corrupt credit record does not
+stop `rotate` from re-encrypting the token, nor a corrupt token its
+ledger (the error comes back after). One failure must not stop the walk:
+collect it and go on, then deal with the list before dropping the key.
+~~`vault.rotate(waba_id).await?` in the loop~~ (until 243dd45): one
+corrupt record left every WABA after it under the old key.
+~~Iterate your current merchants~~ (until 069fed9): that left offboarded
+WABAs' credit ledgers and markers no WABA names under the old key.
 
 ## Offboard
 
 `vault.delete(&waba_id)` removes the token and unlinks its numbers.
-Re-onboarding a WABA replaces its record.
+Re-onboarding a WABA replaces its record. A Solution Partner offboards
+with `EmbeddedSignup::offboard` instead, which revokes the credit line
+before it deletes; `delete` leaves the credit ledger (`vault.credit`,
+`vault.revoked_business`) that revocation needs once the token is gone,
+and `rotate` re-seals it with the token (and without it, once the token
+is gone).
 
 ## Pitfalls
 

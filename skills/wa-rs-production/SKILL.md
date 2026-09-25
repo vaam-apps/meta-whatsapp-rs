@@ -5,7 +5,7 @@ description: "Running wa-rs in production - the secrets (system user token, app 
 
 # wa-rs-production
 
-> **Verified against wa-rs 92f9692ed24b96c43bedcca2e7088cf196753064 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against wa-rs 0da9390d42a51de4df427476b333062a6f94eacf (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/production.rs](examples/production.rs),
 compiled and tested by wa-rs's own gate. Longer walkthrough:
@@ -30,7 +30,7 @@ if let Ok(previous) = required("WA_APP_SECRET_PREVIOUS") {
 | system user token | secret manager | new one in Business Settings, deploy, revoke the old |
 | app secret | secret manager | list old and new in `SignatureVerifier::new` during the rollout |
 | verify token | secret manager | change it in the App Dashboard and your config together |
-| vault key | secret manager, **not** the vault's database | `VaultKeys::with_previous`, then `vault.rotate` per WABA (`wa-rs-token-vault`) |
+| vault key | secret manager, **not** the vault's database | `VaultKeys::with_previous`; `vault.rotate(&waba_id)` for every WABA ever onboarded, offboarded ones too (a Solution Partner's credit ledger outlives the token), and `vault.rotate_business(&business_id)` for each business revoked by id alone; then drop the old key (`wa-rs-token-vault`) |
 | OTP pepper | secret manager, **not** the OTP database | invalidates codes in flight |
 | merchants' tokens | the vault only | the merchant reconnects |
 
@@ -57,6 +57,17 @@ signature header, `WebhookEvent`'s `Debug`, or `expose_secret()`.
 Worth a metric: `DeliveryReport` counts (`unparsed` > 0 → alert), webhook
 answers by status (a run of 503s: sinks outlast the dedup lease),
 `err.kind()` of failed sends, the rate of `Unknown` events.
+
+## Solution Partner checklist
+
+A deployment funding merchants with its credit line
+(`wa-rs-embedded-signup`, `references/solution-partner.md` there):
+onboarding only through `onboard_with_approval`; `PartnerRemoved` wired to
+`revoke_credit_line` (unless its `solution_partner_business_ids` omit your
+business), `PartnerAppUninstalled` of **your** app to `offboard`; the key
+rotation above; an alert on `CreditError::Reconcile` and on a
+`RevocationIncomplete` that is not retryable (`ErrorKind::Unknown`: a
+person checks Meta Business Suite), and a retry of one that is.
 
 ## Limits and retries
 

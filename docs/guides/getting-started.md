@@ -38,7 +38,8 @@ Notes that save a day of debugging:
   as Graph error `200` (`ErrorKind::Permission`), not HTTP 403.
 - The webhook callback must be HTTPS with a valid certificate; self-signed
   ones are not supported. In development, put a tunnel in front.
-- A CMS that onboards **other businesses** is a Tech Provider and needs more
+- A CMS that onboards **other businesses** is a Tech Provider (or a
+  Solution Partner paying for them with its credit line) and needs more
   (business verification, App Review for Advanced access, a Facebook Login
   for Business configuration): see [embedded-signup.md](embedded-signup.md).
 
@@ -120,6 +121,7 @@ the HTTP status. `ErrorKind` is non-exhaustive: keep a `_` arm.
 | `Error::Transport(_)`, `Error::Http { .. }` 5xx | no usable answer | a send *may* have gone out |
 | `Error::Decode { .. }` | a 2xx body of an unexpected shape (for sends, without the body: it names the recipient) | Meta accepted it: treat a send as sent |
 | `Error::Step { step, .. }` | a multi-step flow (onboarding) stopped at `step` | see [embedded-signup.md](embedded-signup.md) |
+| `Error::Credit(_)` | a Solution Partner credit line step stopped (refused, busy, to reconcile, a revocation part-way); `err.credit()` gives it, also through `Step` | its own `is_retryable()` and `may_have_been_sent()`: see [embedded-signup.md](embedded-signup.md#solution-partner-mode) |
 
 ```rust
 use wa_rs::client::messages::Messages;
@@ -219,5 +221,5 @@ any other origin, `*.whatsapp.net` included, is refused with
 - No job queue, outbox or retry scheduler for sends.
 - No opt-in or opt-out registry: recording consent is yours
   ([marketing-and-commerce.md](marketing-and-commerce.md)).
-- Payments, Solution Partner credit lines, conversation routing:
-  [coverage.md](../coverage.md) rows 28–32.
+- Payments, Solution Partner APIs other than credit lines, conversation
+  routing: [coverage.md](../coverage.md) rows 28–32.

@@ -2,7 +2,7 @@
 //!
 //! # Format
 //!
-//! Namespace `wa.token`. Two kinds of keys:
+//! Namespace `wa.token`. Two kinds of keys for the tokens:
 //!
 //! - `waba/<WABA_ID>` → a JSON record
 //!   `{v, kid, nonce, ciphertext, waba_id, business_id?, phone_number_ids,
@@ -13,6 +13,13 @@
 //!   id; this finds the token to answer with). Keyed by Meta's phone number
 //!   *id*, never by a phone number, so there is no E.164 normalisation to get
 //!   wrong.
+//!
+//! And, for Solution Partner onboarding only, the credit ledger
+//! (`credit/<WABA_ID>`, `revoked/<BUSINESS_ID>`, `credit-lease/<WABA_ID>`,
+//! see [`StoredCredit`](super::StoredCredit)): records `{v, kid, nonce,
+//! ciphertext}` sealed with the same keys, whose associated data binds each
+//! to its own store key. [`TokenVault::delete`] leaves them: they are what
+//! revoking a credit line needs once the token is gone.
 //!
 //! # Cryptography, and why each choice
 //!
@@ -39,7 +46,13 @@
 //!   whichever configured key matches; writes always use the active key. By
 //!   default a read of a record under an old key re-encrypts it under the
 //!   active key (compare-and-swap, so a concurrent write wins); [`TokenVault::rotate`]
-//!   does the same on demand. Once every record is rotated, drop the old key.
+//!   does the same on demand, for a WABA's token and its Solution Partner
+//!   credit ledger (which outlives the token: include offboarded WABAs),
+//!   and [`TokenVault::rotate_business`] for a revocation marker no credit
+//!   record names. The vault cannot list its records, so walk every WABA
+//!   you ever onboarded, and every business you revoked by business id,
+//!   before dropping the old key: a record still under it then fails with
+//!   [`CryptoError::InvalidKey`].
 //! - Errors carry no detail that could serve as an oracle
 //!   ([`CryptoError::Decrypt`] for any authentication failure).
 //!
@@ -391,9 +404,10 @@ impl TokenVault {
         self
     }
 
-    /// Whether [`Self::get`] re-encrypts records found under a previous key
-    /// (default `true`). Turn it off for read-only replicas and rotate with
-    /// [`Self::rotate`] instead.
+    /// Whether [`Self::get`] (and the reads of the Solution Partner credit
+    /// ledger) re-encrypts records found under a previous key (default
+    /// `true`). Turn it off for read-only replicas and rotate with
+    /// [`Self::rotate`] and [`Self::rotate_business`] instead.
     #[must_use]
     pub fn rotate_on_read(mut self, enabled: bool) -> Self {
         self.rotate_on_read = enabled;
@@ -403,6 +417,11 @@ impl TokenVault {
     /// Current time on the vault's clock.
     pub(crate) fn now(&self) -> OffsetDateTime {
         self.clock.now()
+    }
+
+    /// Whether reads re-encrypt records found under a previous key.
+    pub(super) fn rotates_on_read(&self) -> bool {
+        self.rotate_on_read
     }
 
     /// Encrypt and store `token` under its WABA (replacing any previous
@@ -497,6 +516,12 @@ impl TokenVault {
 
     /// Delete the token of `waba_id` and the phone index entries that point
     /// to it. Returns whether a record was removed.
+    ///
+    /// The Solution Partner credit ledger of the WABA and its business is
+    /// kept: revoking the credit line needs it after the token is gone. In
+    /// Solution Partner mode, offboard with
+    /// [`EmbeddedSignup::offboard`](super::EmbeddedSignup::offboard), which
+    /// revokes first and deletes second.
     pub async fn delete(&self, waba_id: &WabaId) -> Result<bool> {
         let key = waba_key(waba_id);
         let record = self.read_record(&key).await.ok().flatten();
@@ -510,9 +535,24 @@ impl TokenVault {
     }
 
     /// Re-encrypt the record of `waba_id` under the active key if it is
-    /// under an older one. Returns whether it was rewritten (`false` also
-    /// when a concurrent write got there first, or there is no record).
+    /// under an older one, and likewise its Solution Partner credit record
+    /// and the revocation marker of the business that record names. Returns
+    /// whether anything was rewritten (`false` also when a concurrent write
+    /// got there first, or there is no record).
+    ///
+    /// Works on a WABA whose token was deleted (offboarded): its credit
+    /// ledger outlives the token and needs rotating too. The token and the
+    /// ledger are rotated independently: when one of them cannot be read,
+    /// the other is still rotated and the first error is returned
+    /// afterwards. Markers no credit record names:
+    /// [`Self::rotate_business`].
     pub async fn rotate(&self, waba_id: &WabaId) -> Result<bool> {
+        let token = self.rotate_token(waba_id).await;
+        let ledger = self.rotate_ledger(waba_id).await;
+        Ok(token? | ledger?)
+    }
+
+    async fn rotate_token(&self, waba_id: &WabaId) -> Result<bool> {
         let key = waba_key(waba_id);
         let Some((record, version)) = self.read_record(&key).await? else {
             return Ok(false);
@@ -643,6 +683,106 @@ impl TokenVault {
             expires_at: sealed.expires_at,
         })
     }
+}
+
+/// Domain separation for the ledger records' associated data.
+const LEDGER_AAD_TAG: &[u8] = b"wa-rs/token-vault/ledger/v1";
+
+/// A sealed credit ledger record, as stored.
+#[derive(Serialize, Deserialize)]
+pub(super) struct SealedBlob {
+    v: u8,
+    kid: String,
+    nonce: String,
+    ciphertext: String,
+}
+
+impl TokenVault {
+    /// The store the vault writes to.
+    pub(super) fn kv(&self) -> &dyn KvStore {
+        self.kv.as_ref()
+    }
+
+    /// Seal `plaintext` for `key` under the active key: the associated data
+    /// binds it to that store key, so it cannot be moved to another WABA's
+    /// or business's entry.
+    pub(super) fn seal_blob(&self, key: &StoreKey, plaintext: &[u8]) -> Result<SealedBlob> {
+        let vault_key = &self.keys.active;
+        let mut nonce = [0u8; NONCE_LEN];
+        getrandom::fill(&mut nonce).map_err(|_| CryptoError::Rng)?;
+        let ciphertext = vault_key
+            .cipher()?
+            .encrypt(
+                &Nonce::from(nonce),
+                Payload {
+                    msg: plaintext,
+                    aad: &ledger_aad(key, &vault_key.id),
+                },
+            )
+            .map_err(|_| CryptoError::Encrypt)?;
+        Ok(SealedBlob {
+            v: RECORD_VERSION,
+            kid: vault_key.id.clone(),
+            nonce: B64.encode(nonce),
+            ciphertext: B64.encode(ciphertext),
+        })
+    }
+
+    /// Open a blob read from `key` (any configured key).
+    pub(super) fn open_blob(&self, key: &StoreKey, blob: &SealedBlob) -> Result<Vec<u8>> {
+        if blob.v != RECORD_VERSION {
+            return Err(CryptoError::Malformed("unsupported credit ledger record version").into());
+        }
+        let vault_key = self.keys.find(&blob.kid).ok_or(CryptoError::InvalidKey(
+            "the record was encrypted with a key id that is not configured",
+        ))?;
+        let nonce: [u8; NONCE_LEN] = B64
+            .decode(&blob.nonce)
+            .ok()
+            .and_then(|n| <[u8; NONCE_LEN]>::try_from(n.as_slice()).ok())
+            .ok_or(CryptoError::Malformed("nonce"))?;
+        let ciphertext = B64
+            .decode(&blob.ciphertext)
+            .map_err(|_| CryptoError::Malformed("ciphertext"))?;
+        vault_key
+            .cipher()?
+            .decrypt(
+                &Nonce::from(nonce),
+                Payload {
+                    msg: &ciphertext,
+                    aad: &ledger_aad(key, &blob.kid),
+                },
+            )
+            .map_err(|_| CryptoError::Decrypt.into())
+    }
+
+    /// Whether `blob` is sealed under the active key.
+    pub(super) fn is_current(&self, blob: &SealedBlob) -> bool {
+        blob.kid == self.keys.active.id
+    }
+}
+
+/// `tag || len(ns) ns || len(key) key || len(kid) kid`, lengths as u64 BE.
+fn ledger_aad(key: &StoreKey, kid: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(LEDGER_AAD_TAG.len() + 96);
+    out.extend_from_slice(LEDGER_AAD_TAG);
+    for part in [key.namespace(), key.key(), kid] {
+        let len = u64::try_from(part.len()).unwrap_or(u64::MAX);
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(part.as_bytes());
+    }
+    out
+}
+
+pub(super) fn encode_json<T: Serialize>(key: &StoreKey, value: &T) -> Result<Vec<u8>> {
+    encode(key, value)
+}
+
+pub(super) fn decode_json<T: serde::de::DeserializeOwned>(
+    key: &StoreKey,
+    v: &Versioned,
+) -> Result<T> {
+    decode(key, v)
 }
 
 fn waba_key(waba_id: &WabaId) -> StoreKey {
@@ -865,6 +1005,118 @@ pub(crate) mod tests {
                 .unwrap()
                 .map(|t| t.waba_id),
             None
+        );
+    }
+
+    /// The token record keeps the shape it had before Solution Partner mode
+    /// (the credit ledger lives under its own keys), clear part and sealed
+    /// part alike, and a sealed payload of that shape opens.
+    #[tokio::test]
+    async fn the_token_record_keeps_its_pre_solution_partner_shape() {
+        let kv = kv();
+        let v = vault(&kv, VaultKeys::new(key("k1", 7)));
+        v.store(&sample("W2")).await.unwrap();
+        let rec = raw_json(&kv, "waba/W2").await;
+        let mut fields: Vec<&str> = rec
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        fields.sort_unstable();
+        assert_eq!(
+            fields,
+            [
+                "business_id",
+                "ciphertext",
+                "created_at",
+                "expires_at",
+                "kid",
+                "nonce",
+                "phone_number_ids",
+                "v",
+                "waba_id"
+            ]
+        );
+        let sealed = v
+            .open(&WabaId::new("W2"), &serde_json::from_value(rec).unwrap())
+            .unwrap();
+        assert_eq!(
+            sealed.business_id,
+            Some(BusinessId::new("2729063490586005"))
+        );
+
+        // A sealed payload of the pre-Solution-Partner shape opens.
+        let k = key("k1", 7);
+        let plaintext = serde_json::to_vec(&serde_json::json!({
+            "access_token": TOKEN, "waba_id": "W3", "business_id": null,
+            "phone_number_ids": [], "created_at": 1790251200, "expires_at": null
+        }))
+        .unwrap();
+        let nonce = [6u8; NONCE_LEN];
+        let ciphertext = k
+            .cipher()
+            .unwrap()
+            .encrypt(
+                &Nonce::from(nonce),
+                Payload {
+                    msg: &plaintext,
+                    aad: &aad(&WabaId::new("W3"), "k1"),
+                },
+            )
+            .unwrap();
+        let record = serde_json::json!({
+            "v": 1, "kid": "k1", "nonce": B64.encode(nonce), "ciphertext": B64.encode(ciphertext),
+            "waba_id": "W3", "phone_number_ids": [], "created_at": 1790251200
+        });
+        put_json(&kv, "waba/W3", &record).await;
+        let old = v.get(&WabaId::new("W3")).await.unwrap().unwrap();
+        assert_eq!(old.token.expose_secret(), TOKEN);
+        assert_eq!(old.business_id, None);
+    }
+
+    /// A record exactly as the vault wrote it before Solution Partner mode
+    /// (b805dac: `sample("W1")` under `key("k1", 7)`, bytes captured from
+    /// that build), so a change to the record format, the sealed payload or
+    /// the AAD that would strand stored tokens fails here. The fixture above
+    /// seals with today's code and cannot catch that.
+    #[tokio::test]
+    async fn a_record_written_before_solution_partner_mode_still_opens() {
+        const B805DAC_RECORD: &str = r#"{"v":1,"kid":"k1","nonce":"yjeUqJLkV07hoZVu","ciphertext":"FZCl/j7gKKrv9admo8XlB0Jds7ooceKrFI4SIHOEec3+9m1GTwPglmmmh/UXCWBtVEvbGeBqnXZasSWTTCN+ocJrFXji1Hhhz5owLB5KfRc9+m1P/zxWCkiGVFVPZBorFt4K48bE5X8+vIIZdnEx8Odk6tpsCQFN4sJ8PAA1t5XaUbM9GOBev/Ju557PfGTT4MlNsz7EqA23me/ifd2TFX8YVitV+MGYh7d3iZWYkr1Ty2SK3rjA89KsA7oT56tox3MtbAnJe7OUha2wjGUrOZZIfNR95w0TfMkrUtTk+OUcP/+1QPR8JrFL7oa30y0=","waba_id":"W1","business_id":"2729063490586005","phone_number_ids":["106540352242922"],"created_at":1790251200,"expires_at":1795435200}"#;
+        let kv = kv();
+        kv.put(
+            &StoreKey::new(TOKEN_NAMESPACE, "waba/W1"),
+            B805DAC_RECORD.as_bytes().to_vec(),
+            Expiry::Never,
+        )
+        .await
+        .unwrap();
+        put_json(
+            &kv,
+            "phone/106540352242922",
+            &serde_json::json!({"waba_id": "W1"}),
+        )
+        .await;
+        let v = vault(&kv, VaultKeys::new(key("k1", 7)));
+        let got = v.get(&WabaId::new("W1")).await.unwrap().unwrap();
+        assert_eq!(got.token.expose_secret(), format!("{TOKEN}-W1"));
+        assert_eq!(got.business_id, Some(BusinessId::new("2729063490586005")));
+        assert_eq!(
+            got.phone_number_ids,
+            [PhoneNumberId::new("106540352242922")]
+        );
+        assert_eq!(got.created_at, Some(datetime!(2026-09-24 12:00 UTC)));
+        assert_eq!(got.expires_at, Some(datetime!(2026-11-23 12:00 UTC)));
+        let by_phone = v
+            .get_by_phone_number(&PhoneNumberId::new("106540352242922"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_phone.token.expose_secret(), format!("{TOKEN}-W1"));
+        // Not rewritten on read: the active key is the one it was sealed with.
+        assert_eq!(
+            raw(&kv, "waba/W1").await.unwrap().value,
+            B805DAC_RECORD.as_bytes()
         );
     }
 

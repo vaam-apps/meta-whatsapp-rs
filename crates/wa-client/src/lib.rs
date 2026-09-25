@@ -29,6 +29,7 @@ pub mod business_profile;
 pub mod calling;
 pub mod commerce;
 pub mod common;
+pub mod credit_lines;
 pub mod embedded_signup;
 pub mod flows;
 pub mod groups;

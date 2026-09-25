@@ -1,7 +1,8 @@
 //! Normalized events: one [`WebhookEvent`] per message, status, error and
 //! field change, whatever envelope it arrived in.
 //!
-//! This is what sinks receive. Each event carries the WABA id and, when the
+//! This is what sinks receive. Each event carries the WABA id (unless the
+//! payload does not name one: see [`WebhookEvent::waba_id`]) and, when the
 //! field has one, the business phone number id, plus the WhatsApp user the
 //! item is about ([`Contact`], matched from the change's `contacts` by BSUID
 //! first and phone number second).
@@ -223,9 +224,28 @@ pub enum WebhookEvent {
         update: Box<AccountReviewUpdateValue>,
     },
     /// `account_update`.
+    ///
+    /// Its entry id is not always the WABA. In Meta's examples an update
+    /// with a `waba_info` (`PARTNER_ADDED`, `PARTNER_REMOVED`,
+    /// `PARTNER_APP_INSTALLED`, `PARTNER_APP_UNINSTALLED`,
+    /// `AD_ACCOUNT_LINKED`, `MM_LITE_TERMS_SIGNED`) names the customer's
+    /// WABA in `waba_info.waba_id` and a business portfolio as the entry id
+    /// (for `PARTNER_ADDED`, one of `solution_partner_business_ids`); every
+    /// update without one carries the WABA as the entry id.
+    ///
+    /// An event serialized by a revision before `entry_id` existed (its
+    /// `waba_id` was the entry id) is read back the same way: `waba_id`
+    /// from its `waba_info`, the old value as `entry_id`, so a stored
+    /// `PARTNER_*` event is never keyed by a business portfolio.
+    #[serde(deserialize_with = "account_updated_stored")]
     AccountUpdated {
-        /// WABA.
-        waba_id: WabaId,
+        /// The WABA the update is about: `waba_info.waba_id` when the update
+        /// has a `waba_info`, else the entry id. `None` when a `waba_info`
+        /// names no WABA: the entry id is then not one.
+        waba_id: Option<WabaId>,
+        /// The entry's `id`, verbatim: the WABA for updates without a
+        /// `waba_info`, a business portfolio for those with one.
+        entry_id: String,
         /// When.
         #[serde(default, with = "wa_core::timestamp::unix_option")]
         time: Option<OffsetDateTime>,
@@ -366,8 +386,12 @@ pub enum WebhookEvent {
     /// parse (`parse_error` says why), or a typed list field that produced
     /// no event (a shape Meta added after this crate was written).
     Unknown {
-        /// The entry id: a WABA id for every documented field but
-        /// `partner_solutions`.
+        /// The entry id, except for an `account_update` whose raw value has
+        /// a non-blank `waba_info.waba_id`: that WABA (the entry id of such
+        /// an update is a business portfolio, see [`Self::AccountUpdated`]).
+        /// So a WABA id for every documented field but `partner_solutions`
+        /// and an `account_update` whose `waba_info` names no WABA; for
+        /// those two it is a business portfolio id.
         waba_id: WabaId,
         /// The field.
         field: String,
@@ -429,7 +453,8 @@ impl WebhookEvent {
     }
 
     /// The WABA the event belongs to. `None` for `partner_solutions` (a
-    /// business portfolio, see [`Self::PartnerSolutionUpdated`]) and for
+    /// business portfolio, see [`Self::PartnerSolutionUpdated`]), for an
+    /// [`Self::AccountUpdated`] whose `waba_info` names no WABA, and for
     /// [`Self::Unparsed`].
     pub fn waba_id(&self) -> Option<&WabaId> {
         match self {
@@ -448,7 +473,6 @@ impl WebhookEvent {
             | Self::FlowUpdated { waba_id, .. }
             | Self::AccountAlert { waba_id, .. }
             | Self::AccountReviewUpdated { waba_id, .. }
-            | Self::AccountUpdated { waba_id, .. }
             | Self::AccountSettingsUpdated { waba_id, .. }
             | Self::BusinessCapabilityUpdated { waba_id, .. }
             | Self::BusinessUsernameUpdated { waba_id, .. }
@@ -462,6 +486,7 @@ impl WebhookEvent {
             | Self::TemplateCategoryUpdated { waba_id, .. }
             | Self::TemplateCategoryMisuseDetected { waba_id, .. }
             | Self::Unknown { waba_id, .. } => Some(waba_id),
+            Self::AccountUpdated { waba_id, .. } => waba_id.as_ref(),
             Self::PartnerSolutionUpdated { .. } | Self::Unparsed { .. } => None,
         }
     }
@@ -637,6 +662,89 @@ impl WebhookPayload {
         }
         out
     }
+}
+
+/// The WABA an `account_update` is about (`webhooks/reference/account_update`).
+///
+/// The reference's syntax calls the entry id the WABA id, but its examples
+/// disagree for every update that has a `waba_info`: `PARTNER_ADDED`,
+/// `PARTNER_REMOVED`, `PARTNER_APP_INSTALLED`, `PARTNER_APP_UNINSTALLED`,
+/// `AD_ACCOUNT_LINKED` and `MM_LITE_TERMS_SIGNED` all show entry id
+/// `2949482758682047`, which `PARTNER_ADDED` lists in
+/// `solution_partner_business_ids` (a business portfolio), and the customer's
+/// WABA in `waba_info.waba_id`. Every example without a `waba_info`
+/// (`ACCOUNT_DELETED`, …, and the coexistence `PARTNER_REMOVED` of
+/// `embedded-signup/onboarding-business-app-users`) shows the WABA as the
+/// entry id. So: `waba_info.waba_id` when there is a `waba_info`, `None` if
+/// it names none (the entry id is then a business, never a WABA), and the
+/// entry id only when there is no `waba_info`.
+fn account_update_waba(update: &AccountUpdateValue, entry: WabaId) -> Option<WabaId> {
+    match &update.waba_info {
+        Some(info) => info
+            .waba_id
+            .as_ref()
+            .filter(|id| !id.as_str().trim().is_empty())
+            .cloned(),
+        None => Some(entry),
+    }
+}
+
+/// The WABA of an `account_update` that did not parse into
+/// [`AccountUpdateValue`]: its raw `waba_info.waba_id` when it is a
+/// non-blank string (as [`account_update_waba`] would take it), else the
+/// entry id.
+fn unparsed_account_update_waba(raw: &Value, entry: WabaId) -> WabaId {
+    raw.get("waba_info")
+        .and_then(|info| info.get("waba_id"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .map_or(entry, WabaId::new)
+}
+
+/// The fields of [`WebhookEvent::AccountUpdated`], as a variant
+/// deserializer returns them.
+type AccountUpdatedFields = (
+    Option<WabaId>,
+    String,
+    Option<OffsetDateTime>,
+    Box<AccountUpdateValue>,
+);
+
+/// Read a stored [`WebhookEvent::AccountUpdated`]. One written before
+/// `entry_id` existed has none, and its `waba_id` is the entry id (a
+/// business portfolio for the `PARTNER_*` updates): derive both as
+/// flattening does now.
+fn account_updated_stored<'de, D>(d: D) -> Result<AccountUpdatedFields, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    struct Stored {
+        #[serde(default)]
+        waba_id: Option<WabaId>,
+        #[serde(default)]
+        entry_id: Option<String>,
+        #[serde(default, with = "wa_core::timestamp::unix_option")]
+        time: Option<OffsetDateTime>,
+        update: Box<AccountUpdateValue>,
+    }
+    let stored = Stored::deserialize(d)?;
+    if let Some(entry_id) = stored.entry_id {
+        return Ok((stored.waba_id, entry_id, stored.time, stored.update));
+    }
+    let entry_id = stored.waba_id.map(WabaId::into_inner).unwrap_or_default();
+    let waba_id = if entry_id.trim().is_empty() {
+        // No entry id either: only `waba_info` can name the WABA.
+        stored
+            .update
+            .waba_info
+            .as_ref()
+            .and_then(|i| i.waba_id.clone())
+            .filter(|id| !id.as_str().trim().is_empty())
+    } else {
+        account_update_waba(&stored.update, WabaId::new(entry_id.clone()))
+    };
+    Ok((waba_id, entry_id, stored.time, stored.update))
 }
 
 /// Per-entry context while flattening.
@@ -880,7 +988,8 @@ impl Ctx {
                 });
             }
             ChangeValue::AccountUpdate(update) => out.push(WebhookEvent::AccountUpdated {
-                waba_id,
+                waba_id: account_update_waba(&update, waba_id),
+                entry_id: self.entry_id.clone(),
                 time,
                 update,
             }),
@@ -974,7 +1083,11 @@ impl Ctx {
                 });
             }
             ChangeValue::Unknown(raw) => out.push(WebhookEvent::Unknown {
-                waba_id,
+                waba_id: if field == "account_update" {
+                    unparsed_account_update_waba(&raw, waba_id)
+                } else {
+                    waba_id
+                },
                 field: field.to_owned(),
                 time,
                 raw,

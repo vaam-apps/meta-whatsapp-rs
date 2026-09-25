@@ -5,7 +5,7 @@ description: "Handling wa-rs errors correctly - the Error tree (Api, Http, Trans
 
 # wa-rs-errors
 
-> **Verified against wa-rs 6909be3b54768abc3d5f9b04543a49f32b072669 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against wa-rs 0da9390d42a51de4df427476b333062a6f94eacf (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/handle.rs](examples/handle.rs), compiled and
 tested by wa-rs's own gate. Every code, its `ErrorKind` and what to do:
@@ -27,13 +27,20 @@ Error::Transport(..)        no answer: timeout, connect, integrity (media hash)
 Error::Decode { .. }        a 2xx body of an unexpected shape
 Error::Validation(v)        refused locally, NOTHING was sent; v.field is the JSON path
 Error::Webhook / Storage / Sink / Crypto / Config
+Error::Credit(CreditError)  Solution Partner credit line: refused, busy, reconcile, revocation part-way
 Error::Step { step, source } a multi-step flow (onboarding) stopped at `step`
 Error::Other(anyhow)        your code, Typst's RenderError
 ```
 
 `err.graph()` returns the `GraphApiError`, also through `Step`; its `code`
 tells apart codes that share a kind. `ErrorKind` is `#[non_exhaustive]`:
-keep a `_` arm.
+keep a `_` arm. `err.credit()` returns the `CreditError` of a Solution
+Partner credit step the same way: each variant decides `is_retryable()`
+and `may_have_been_sent()` itself (`Busy` is retryable; `Reconcile` and a
+revocation that sent `DELETE`s may have been sent), and
+`CreditError::revocation()` gives an incomplete revocation's report
+(`wa-rs-embedded-signup`). `Reconcile`, and a revocation left with records
+naming no business, are `ErrorKind::Unknown`: a person has to look.
 
 ## Branch on the kind
 

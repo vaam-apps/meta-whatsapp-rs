@@ -1,16 +1,16 @@
 ---
 name: wa-rs-embedded-signup
-description: "Letting each merchant of a multi-tenant CMS connect their own WhatsApp number with Embedded Signup and wa-rs (Tech Provider flow) - Meta prerequisites, LaunchOptions for FB.login, SignupSessions binding the attempt to the merchant (start, redeem), parsing the WA_EMBEDDED_SIGNUP event, EmbeddedSignup::onboard (code exchange, token checks, encrypted storage, subscribe, register with the merchant's PIN), the Error::Step names, resume after a failed register, coexistence. Load when building the Connect WhatsApp button, its callback endpoint, or recovering a half-finished onboarding."
+description: "Letting each merchant of a multi-tenant CMS connect their own WhatsApp number with Embedded Signup and wa-rs (Tech Provider, or Solution Partner funding merchants with its credit line, chosen per deployment) - Meta prerequisites, LaunchOptions for FB.login, SignupSessions binding the attempt to the merchant (start, redeem), parsing the WA_EMBEDDED_SIGNUP event, EmbeddedSignup::onboard and onboard_with_approval (code exchange, token checks, your approval gate, encrypted storage, subscribe, credit line sharing, register with the merchant's PIN), the Error::Step names, resume after a failed step, offboarding and revoking the credit line when a merchant leaves, coexistence. Load when building the Connect WhatsApp button, its callback endpoint, offboarding, or recovering a half-finished onboarding."
 ---
 
 # wa-rs-embedded-signup
 
-> **Verified against wa-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
+> **Verified against wa-rs 0da9390d42a51de4df427476b333062a6f94eacf (2026-09-25).** On another revision, trust the code over this page.
 
-Reference code: [examples/onboarding.rs](examples/onboarding.rs), compiled
-and tested by wa-rs's own gate. The page side:
-[references/frontend.md](references/frontend.md). A full server with
-authentication: [`embedded_signup.rs`](https://github.com/vaam-apps/wa-rs/blob/main/crates/wa-rs/examples/embedded_signup.rs).
+Reference code, compiled and tested by wa-rs's own gate:
+[examples/onboarding.rs](examples/onboarding.rs), [examples/solution_partner.rs](examples/solution_partner.rs).
+The page side: [references/frontend.md](references/frontend.md). A full
+**Tech Provider** server: [`embedded_signup.rs`](https://github.com/vaam-apps/wa-rs/blob/main/crates/wa-rs/examples/embedded_signup.rs).
 
 ## When to use
 
@@ -25,8 +25,10 @@ A **Tech Provider**: verified business, Advanced access to
 page's HTTPS domains allowed in Facebook Login for Business, a Login
 configuration (its **configuration id**), the app subscribed to
 `messages` and `account_update`. Merchants add a payment method before
-their number can send. Steps:
-[embedded-signup guide](https://github.com/vaam-apps/wa-rs/blob/main/docs/guides/embedded-signup.md).
+their number can send, unless you are a **Solution Partner** sharing your
+credit line ([references/solution-partner.md](references/solution-partner.md):
+one `SolutionPartner` per deployment, a currency per merchant, approval
+required). [Guide](https://github.com/vaam-apps/wa-rs/blob/main/docs/guides/embedded-signup.md).
 
 ## Wire once, on a shared store
 
@@ -79,15 +81,12 @@ if !signup.sessions.redeem(&state, merchant_id).await? {
 // Never retry `onboard`: its first step spends the code.
 match signup.es.onboard(&request, &signup.vault).await {
     Ok(done) => Ok(Completion::Connected(Box::new(done))), // save done.waba_id for merchant_id
-    Err(
-        e @ Error::Step {
-            step: steps::SUBSCRIBE_APP | steps::REGISTER_PHONE,
-            ..
-        },
-    ) => match request.session.primary_waba_id() {
-        Some(waba) => Ok(Completion::Resumable(waba.clone(), Box::new(e))),
-        None => Ok(Completion::StartOver(Box::new(e))),
-    },
+    Err(e @ Error::Step { step, .. }) if AFTER_STORE.contains(&step) => {
+        match request.session.primary_waba_id() {
+            Some(waba) => Ok(Completion::Resumable(waba.clone(), Box::new(e))),
+            None => Ok(Completion::StartOver(Box::new(e))),
+        }
+    }
     Err(e) => Ok(Completion::StartOver(Box::new(e))),
 }
 ```
@@ -105,12 +104,15 @@ names are constants in `embedded_signup::steps`:
 | Step | Then |
 | --- | --- |
 | `exchange_code`, `debug_token`, `verify_assets` | start over: the code is spent |
+| `approve` (`onboard_with_approval`, `resume_with_approval`) | your refusal: nothing stored, subscribed or shared; a Solution Partner's `resume` of an unapproved WABA |
 | `store_token` | fix the store, start over |
-| `subscribe_app`, `register_phone` | the token is stored: fix the cause, then **`resume`** |
+| `subscribe_app`, `assign_system_user`, `share_credit_line`, `register_phone` (`AFTER_STORE`) | the token is stored: fix the cause, then **`resume`** |
 
 The browser's ids are claims: `verify_assets` checks them with Meta. The
-token is stored **before** subscribe and register on purpose: those fail
-for fixable reasons (a wrong PIN, `ErrorKind::TwoStepVerification`).
+token is stored first: later steps fail for fixable reasons (a wrong PIN,
+`ErrorKind::TwoStepVerification`). Credit steps check before they post,
+refuse a revoked business, and answer a lost share with `Reconcile`: look
+first (`err.credit()`). Refuse others' WABAs in `onboard_with_approval`.
 
 ```rust
 let request = OnboardingRequest::new(SignupCode::new("unused")?, saved_session)
@@ -143,13 +145,12 @@ a malformed post spent the attempt. Check everything local first.
 
 ## What wa-rs does not do
 
-- Only the Tech Provider flow: no Solution Partner credit lines,
-  pre-verified number pools or multi-WABA onboarding; no token refresh
-  (an expired token means running the flow again)
-  ([open questions 3–12](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)).
-- No PIN policy (who chooses it, recovery) and no code-less
+- ~~Only the Tech Provider flow~~ (before 581f9b1). No pre-verified
+  number pools or multi-WABA onboarding; no token refresh (an expired
+  token means running the flow again), no PIN policy, no code-less
   `OnboardingRequest` for `resume` after a restart (hence the placeholder
-  code above, open question 10).
+  code above)
+  ([open questions 4–12](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)).
 - No tenant model: which of your merchants owns a WABA is your table.
 
 ## Related skills

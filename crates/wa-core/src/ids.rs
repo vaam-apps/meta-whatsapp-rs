@@ -159,6 +159,30 @@ id_type!(
     /// `header_handle` or a `profile_picture_handle`.
     UploadHandle
 );
+id_type!(
+    /// A Solution Partner's extended credit line id ("credit line ID",
+    /// `GET /{BUSINESS_ID}/extendedcredits`).
+    CreditLineId
+);
+id_type!(
+    /// An extended credit allocation configuration id: the record of one
+    /// credit line shared with one customer business
+    /// (`allocation_config_id`).
+    AllocationConfigId
+);
+id_type!(
+    /// A payment credential that funds a WABA: the WABA's
+    /// `primary_funding_id`, and a credit allocation's
+    /// `receiving_credential.id`. The two are equal once a Solution
+    /// Partner's credit line is attached to the WABA.
+    FundingId
+);
+id_type!(
+    /// A business system user id (`GET /{WABA_ID}/system_users`), e.g. the
+    /// Solution Partner's system user added to each customer's WABA. Not a
+    /// [`UserId`] (a WhatsApp user).
+    SystemUserId
+);
 
 #[cfg(test)]
 mod tests {

@@ -21,6 +21,17 @@
 //! | `POST /signup/complete` | the tenant who started it | `{"state", "code", "event", "pin"?}` from the page: redeem, onboard, store |
 //! | `POST /signup/resume` | the tenant whose attempt it was | `{"pin"?}`: after `subscribe_app` or `register_phone` failed, redo just those |
 //!
+//! # Tech Provider only
+//!
+//! This server onboards as a **Tech Provider**: each merchant adds their own
+//! payment method, and it calls plain `EmbeddedSignup::onboard`, which a
+//! Solution Partner deployment refuses. A Solution Partner (your credit line
+//! pays for your merchants) configures `EmbeddedSignup::solution_partner`,
+//! onboards with `onboard_with_approval` (reserving the WABA for the tenant
+//! in its approval) and handles `account_update` for the line: see the
+//! `wa-rs-embedded-signup` skill's `examples/solution_partner.rs` and the
+//! guide's "Solution Partner mode" (`docs/guides/embedded-signup.md`).
+//!
 //! # Who is calling
 //!
 //! The tenant (a merchant of your CMS) is whoever your authentication says
