@@ -111,11 +111,9 @@ The browser's ids are claims: `verify_assets` checks them with Meta. The
 token is stored first: later steps fail for fixable reasons (a wrong PIN,
 `ErrorKind::TwoStepVerification`). Credit steps check before they post,
 refuse a revoked business, answer a lost share with `Reconcile` (look
-first: `err.credit()`; one Meta never lists, an operator clears with
-`clear_pending_share`, from a staff-only route). Refuse others' WABAs in
-`onboard_with_approval`; revoke at once on every `PartnerRemoved`,
-coexistence ones included; `reshare_after_revocation` clears the
-business-wide marker, so fund again only behind a grant of yours.
+first; one Meta never lists, staff clear: `clear_pending_share`). Refuse
+others' WABAs in `onboard_with_approval`; revoke at once on every
+`PartnerRemoved`; `reshare_after_revocation` is business-wide: gate it.
 
 ```rust
 let request = OnboardingRequest::new(SignupCode::new("unused")?, saved_session)
