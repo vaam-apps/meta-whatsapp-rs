@@ -308,6 +308,31 @@ async fn a_page_stops_past_8_mib_of_data() {
     assert_eq!(next_after(&alone), huge);
 }
 
+/// The budget is inclusive: events whose data adds up to exactly 8 MiB
+/// share a page; one byte more starts the next.
+#[tokio::test]
+async fn a_page_holds_exactly_8_mib_of_data() {
+    let h = harness().await;
+    let key = h.tenant_key(A, &[Scope::Events]).await;
+    let sized = |len: usize| {
+        let head = "{\"event\":\"history_synced\",\"pad\":\"";
+        let tail = "\"}";
+        NewEvent {
+            data: format!("{head}{}{tail}", "x".repeat(len - head.len() - tail.len())),
+            ..row(Some(A), "history_synced", "1", None)
+        }
+    };
+    let half = 4 * 1024 * 1024;
+    let s1 = insert(&h, &sized(half)).await;
+    let s2 = insert(&h, &sized(half)).await;
+    let s3 = insert(&h, &sized(64)).await;
+    let first = poll(&h, &key, "").await;
+    assert_eq!(sequences(&first), [s1, s2], "8 MiB fit");
+    assert_eq!(next_after(&first), s2);
+    let rest = poll(&h, &key, &format!("?after={s2}")).await;
+    assert_eq!(sequences(&rest), [s3]);
+}
+
 /// The envelope (docs/design/server.md, section 4.4) has exactly the
 /// documented fields.
 #[tokio::test]

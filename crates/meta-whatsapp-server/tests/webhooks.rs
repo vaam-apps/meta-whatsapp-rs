@@ -784,3 +784,34 @@ fn outbox_keys_are_scoped_by_number_body_and_position() {
     assert_eq!(unique.len(), all.len(), "{all:?}");
     assert!(all.iter().all(|k| k.len() == 64));
 }
+
+/// A crash between the inbox write and the outbox write: the request dies
+/// there (its future dropped, as a crash or the deadline drops it), so the
+/// claim is neither completed nor released. Meta's retries meet the live
+/// lease (`503`, nothing recorded) until it ends (60 s: here the marker is
+/// removed, as its expiry would); the next one records the row, and the
+/// inbox keeps one message. Decisive: the lease, and both writes' keys.
+#[tokio::test]
+async fn a_crash_between_the_inbox_and_the_outbox_is_redelivered_safely() {
+    let h = two_tenants().await;
+    let body = example_text();
+    h.outbox.fates(&[common::Fate::Hang]);
+    let cut = tokio::time::timeout(std::time::Duration::from_millis(300), h.webhook(&body)).await;
+    assert!(cut.is_err(), "the request was cut");
+    assert_eq!(inbox(&h, PN_A, "16505551234").await, 1, "inbox first");
+    assert!(h.outbox.rows().is_empty());
+    assert_eq!(
+        h.webhook(&body).await.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the crashed request's lease is live"
+    );
+    assert!(h.outbox.rows().is_empty());
+    assert!(
+        h.kv.delete(&dedup::store_key(EXAMPLE_WAMID)).await.unwrap(),
+        "the pending claim"
+    );
+    assert_eq!(h.webhook(&body).await.status, StatusCode::OK);
+    assert_eq!(h.outbox.rows().len(), 1);
+    assert_eq!(polled(&h, A).await.len(), 1);
+    assert_eq!(inbox(&h, PN_A, "16505551234").await, 1, "one message");
+}
