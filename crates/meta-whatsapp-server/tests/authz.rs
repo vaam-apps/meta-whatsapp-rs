@@ -587,3 +587,35 @@ async fn a_190_marks_the_numbers_reconnect_required() {
         .unwrap();
     assert_eq!(b.status, NumberStatus::Connected);
 }
+
+/// Step 5 uses a token only for the WABA the number is bound to: when the
+/// vault's phone index names another WABA (another tenant's onboarding
+/// listed the number: Embedded Signup stores before it binds), the number
+/// is not connected, and that WABA's token never reaches Meta. Decisive:
+/// the vault record's WABA compared with the binding's.
+#[tokio::test]
+async fn a_token_for_another_waba_is_never_used() {
+    let h = two_tenants().await;
+    let a_key = h.tenant_key(A, &[Scope::Numbers]).await;
+    // B's WABA token now indexes A's number too; A's binding is unchanged.
+    h.vault
+        .store(
+            &meta_whatsapp_rs::client::embedded_signup::StoredBusinessToken::new(
+                WABA_B,
+                meta_whatsapp_rs::core::secret::AccessToken::new("TOKEN-OF-B"),
+            )
+            .phone_number_ids([PN_B, PN_A]),
+        )
+        .await
+        .unwrap();
+    let reply = h
+        .call(Call::get(format!("/v1/numbers/{PN_A}")).key(&a_key))
+        .await;
+    assert_eq!(
+        (reply.status, reply.code().as_str()),
+        (StatusCode::CONFLICT, "number_not_connected"),
+        "{}",
+        reply.text
+    );
+    assert!(h.graph.requests().is_empty(), "B's token reached Meta");
+}

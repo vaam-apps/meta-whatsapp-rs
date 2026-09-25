@@ -211,6 +211,23 @@ mod tests {
         }
     }
 
+    /// The whole digest is compared: one differing bit, anywhere, refuses.
+    /// (A changed secret changes every byte of its digest, so only a
+    /// crafted digest catches a comparison of a prefix.)
+    #[test]
+    fn every_byte_of_the_digest_is_compared() {
+        let minted = MintedKey::generate().unwrap();
+        let secret = minted.expose_key().rsplit('_').next().unwrap().to_owned();
+        assert!(matches(&minted.digest(), &secret));
+        for byte in 0..32 {
+            for bit in [0x01, 0x80] {
+                let mut stored = minted.digest();
+                stored[byte] ^= bit;
+                assert!(!matches(&stored, &secret), "byte {byte}, bit {bit:#x}");
+            }
+        }
+    }
+
     #[test]
     fn one_changed_character_does_not_match() {
         let minted = MintedKey::generate().unwrap();
