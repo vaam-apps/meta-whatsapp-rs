@@ -32,9 +32,8 @@ rust-version = "1.98.1"
 license = "MIT"
 repository = "https://github.com/vaam-apps/meta-whatsapp-rs"
 authors = ["Vymalo"]
-# Crate names `meta-whatsapp-rs`, `meta-whatsapp-core`, etc. are reserved on
-# crates.io as of 2026-09-25 but `publish = false` remains until a release
-# is decided by the maintainer.
+# The crate names were free on crates.io on 2026-09-25 (OPEN_QUESTIONS #1,
+# closed), but nothing is published until a release is decided.
 publish = false
 
 [workspace.dependencies]
@@ -48,8 +47,7 @@ meta-whatsapp-adapters = { path = "crates/meta-whatsapp-adapters", default-featu
 meta-whatsapp-typst = { path = "crates/meta-whatsapp-typst" }
 
 # Errors. `thiserror` shapes the typed tree; `anyhow` is the opaque leaf for
-# failures an adapter or integrator raises that have no typed home. See
-# meta_whatsapp_core::Error.
+# failures an adapter or integrator raises that have no typed home.
 anyhow = "1"
 thiserror = "2"
 

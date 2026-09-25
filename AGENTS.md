@@ -71,7 +71,7 @@ phone number alone.
 ## Verification discipline
 
 - A skipped test is not a passing test. `live_*` tests skip without a
-  service URL; only `just test-live` (which sets `WA_RS_REQUIRE_LIVE=1`)
+  service URL; only `just test-live` (which sets `META_WHATSAPP_RS_REQUIRE_LIVE=1`)
   proves them.
 - When local disagrees with CI, CI is the evidence.
 - A sub-agent's "all green" is a claim. Check the branch resolves, the files

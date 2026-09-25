@@ -81,6 +81,9 @@ use crate::Client;
 use crate::messages::OutboundMessage;
 use crate::templates::TemplateMessage;
 
+// The store namespaces and HMAC domains are stable: they predate the rename
+// to meta-whatsapp-rs, never change them (docs/architecture.md § "Stable
+// identifiers"): outstanding codes and issue limits live under them.
 const NAMESPACE: &str = "wa.otp";
 const ISSUE_LOG_NAMESPACE: &str = "wa.otp.rate";
 const KEY_DOMAIN: &[u8] = b"wa.otp.key";

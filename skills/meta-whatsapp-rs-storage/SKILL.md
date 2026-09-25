@@ -5,10 +5,10 @@ description: "Choosing and running meta-whatsapp-rs storage - the KvStore (token
 
 # meta-whatsapp-rs-storage
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 0e63aba8378556b4e34cf4cd5b5392f18f2a5e00 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/stores.rs](examples/stores.rs), compiled by
-wa-rs's own gate; its tests run the conformance suites on the memory
+meta-whatsapp-rs's own gate; its tests run the conformance suites on the memory
 stores.
 
 ## When to use
@@ -139,13 +139,13 @@ until the pull request that made U+0000 lossless (PR #7, 2026-09-25).
 ## What meta-whatsapp-rs does not do
 
 - No built-in Redis TLS
-  ([open question 19](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#storage)),
+  ([open question 19](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#storage)),
   no Redis `ConversationStore`, no backups or retention policy for inbox
   history.
 - Message ids are unique per store, not per business number
-  ([open question 33](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)).
+  ([open question 33](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)).
 
 ## Related skills
 
-`wa-rs-token-vault`, `wa-rs-otp-login`, `wa-rs-webhook-endpoint` (dedup),
-`wa-rs-cms-inbox`, `wa-rs-production`, `wa-rs-testing`.
+`meta-whatsapp-rs-token-vault`, `meta-whatsapp-rs-otp-login`, `meta-whatsapp-rs-webhook-endpoint` (dedup),
+`meta-whatsapp-rs-cms-inbox`, `meta-whatsapp-rs-production`, `meta-whatsapp-rs-testing`.

@@ -5,7 +5,7 @@ description: "Setting up meta-whatsapp-rs for WhatsApp - what to create on Meta'
 
 # meta-whatsapp-rs-setup
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/client.rs](examples/client.rs), compiled and
 tested by meta-whatsapp-rs's own gate.
@@ -24,12 +24,12 @@ version, or reaching an edge meta-whatsapp-rs does not wrap.
 | 2 | The use case's API Setup: connect or create a WhatsApp Business Account | WABA id, phone number **id** |
 | 3 | Business Settings → System users: a system user with your app and WABA assigned; a token with `whatsapp_business_messaging` and `whatsapp_business_management` | a long-lived system user token |
 | 4 | App settings → Basic | the app secret (server only) |
-| 5 | A random verify token; your webhook endpoint deployed; callback URL and fields set in the use case's Configuration | webhooks arriving (`wa-rs-webhook-endpoint`) |
+| 5 | A random verify token; your webhook endpoint deployed; callback URL and fields set in the use case's Configuration | webhooks arriving (`meta-whatsapp-rs-webhook-endpoint`) |
 | 6 | Business verification, a payment method in WhatsApp Manager | production limits |
 
 The token the API Setup page shows is a user token that expires within
 hours: tests only. A merchant's own number goes through Embedded Signup
-instead (`wa-rs-embedded-signup`). Meta's pages are the authority:
+instead (`meta-whatsapp-rs-embedded-signup`). Meta's pages are the authority:
 [get-started](https://developers.facebook.com/documentation/business-messaging/whatsapp/get-started),
 [access-tokens](https://developers.facebook.com/documentation/business-messaging/whatsapp/access-tokens).
 
@@ -83,7 +83,7 @@ merchant.messages(phone_number_id).send(&text).await
 `with_token` shares the transport, connection pool and retry policy; only
 the token differs. Each `meta_whatsapp_rs::client()` call builds a new pool, so never
 build a client per request. Merchant tokens come from the vault
-(`wa-rs-token-vault`).
+(`meta-whatsapp-rs-token-vault`).
 
 Endpoint families hang off the client, scoped by id: `messages(pnid)`,
 `media(pnid)`, `templates(waba)`, `authentication(waba)`,
@@ -127,12 +127,12 @@ decoding and the credential host allowlist. Mark a POST
 - No token acquisition or refresh: system user tokens come from Business
   Settings, merchants' tokens from Embedded Signup, and an expired one
   (`ErrorKind::Authentication`, code 190) means a new one
-  ([open question 8](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)).
-- Crate names are not settled; `meta_whatsapp_rs::client` is both a module and a
-  function ([open questions 1–2](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#naming-and-publishing)).
+  ([open question 8](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)).
+- `meta_whatsapp_rs::client` is both a module and a function
+  ([open question 2](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#naming-and-publishing)).
 
 ## Related skills
 
-`wa-rs` (install, features), `wa-rs-errors`, `wa-rs-testing`
-(`ScriptedTransport` instead of the network), `wa-rs-token-vault`,
-`wa-rs-production` (timeouts, retries and versions in production).
+`meta-whatsapp-rs` (install, features), `meta-whatsapp-rs-errors`, `meta-whatsapp-rs-testing`
+(`ScriptedTransport` instead of the network), `meta-whatsapp-rs-token-vault`,
+`meta-whatsapp-rs-production` (timeouts, retries and versions in production).

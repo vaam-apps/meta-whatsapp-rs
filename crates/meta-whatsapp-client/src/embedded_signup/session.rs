@@ -28,6 +28,9 @@ use meta_whatsapp_core::store::{Expiry, JsonStore, KvStore};
 use serde::{Deserialize, Serialize};
 
 /// `KvStore` namespace of signup sessions.
+///
+/// Stable: predates the rename to meta-whatsapp-rs, never change it
+/// (docs/architecture.md § "Stable identifiers").
 pub const SESSION_NAMESPACE: &str = "wa.es.session";
 
 /// Random bytes per state: 128 bits.
@@ -189,6 +192,24 @@ mod tests {
     use time::macros::datetime;
 
     use super::*;
+
+    /// A session started before the rename to meta-whatsapp-rs is stored
+    /// under `wa.es.session`: another namespace would lose every signup in
+    /// flight, and fails here.
+    #[tokio::test]
+    async fn the_session_namespace_is_pinned() {
+        let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
+        let state = SignupSessions::new(Arc::clone(&kv))
+            .start("merchant-42", Duration::from_secs(600))
+            .await
+            .unwrap();
+        assert!(
+            kv.get(&StoreKey::new("wa.es.session", state.as_str()))
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
 
     #[tokio::test]
     async fn start_then_consume_exactly_once() {

@@ -5,7 +5,7 @@ description: "Sending an approved WhatsApp template with meta-whatsapp-rs - Temp
 
 # meta-whatsapp-rs-send-templates
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/send.rs](examples/send.rs), compiled and tested
 by meta-whatsapp-rs's own gate.
@@ -14,7 +14,7 @@ by meta-whatsapp-rs's own gate.
 
 Sending a template that is already approved: the only messages that reach
 a customer outside the 24-hour window. Defining and approving templates is
-`wa-rs-templates`; OTP codes go through `wa-rs-otp-login`, never through
+`meta-whatsapp-rs-templates`; OTP codes go through `meta-whatsapp-rs-otp-login`, never through
 this builder.
 
 ## Fill the placeholders
@@ -67,7 +67,7 @@ messages
 ```
 
 Or through the Marketing Messages API for marketing templates
-(`wa-rs-marketing`).
+(`meta-whatsapp-rs-marketing`).
 
 ## The parameter kinds
 
@@ -108,17 +108,17 @@ the template.
 - `Parameter`'s `Debug` redacts text and coupon codes; keep it out of logs
   anyway.
 - Marketing templates may be refused per user (131049, 131050): see
-  `wa-rs-marketing` and `wa-rs-errors`.
+  `meta-whatsapp-rs-marketing` and `meta-whatsapp-rs-errors`.
 
 ## What meta-whatsapp-rs does not do
 
 - No lookup of the approved definition, so no local check of parameter
-  counts; cache your approved templates (`wa-rs-templates`) if you want
+  counts; cache your approved templates (`meta-whatsapp-rs-templates`) if you want
   one.
 - No campaign pacing or messaging-limit accounting.
 
 ## Related skills
 
-`wa-rs-templates` (definitions), `wa-rs-send-messages` (recipients, send
-semantics), `wa-rs-marketing`, `wa-rs-commerce` (catalog and multi-product
-templates), `wa-rs-documents` (document headers), `wa-rs-errors`.
+`meta-whatsapp-rs-templates` (definitions), `meta-whatsapp-rs-send-messages` (recipients, send
+semantics), `meta-whatsapp-rs-marketing`, `meta-whatsapp-rs-commerce` (catalog and multi-product
+templates), `meta-whatsapp-rs-documents` (document headers), `meta-whatsapp-rs-errors`.

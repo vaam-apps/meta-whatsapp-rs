@@ -5,7 +5,7 @@ description: "Understanding and handling meta-whatsapp-rs WebhookEvent values - 
 
 # meta-whatsapp-rs-webhook-events
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 0e63aba8378556b4e34cf4cd5b5392f18f2a5e00 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/events.rs](examples/events.rs), compiled and
 tested by meta-whatsapp-rs's own gate with Meta-shaped payloads. Every variant and
@@ -13,7 +13,7 @@ payload type: [references/events.md](references/events.md).
 
 ## When to use
 
-Anything that consumes the events the endpoint (`wa-rs-webhook-endpoint`)
+Anything that consumes the events the endpoint (`meta-whatsapp-rs-webhook-endpoint`)
 hands to your sink. Types: `meta_whatsapp_rs::webhooks::WebhookEvent` and the
 payloads in `meta_whatsapp_rs::webhooks::fields`.
 
@@ -66,9 +66,9 @@ tagged `"event"` with the same snake-case name as `event.kind()`.
 | --- | --- |
 | `MessageReceived` | a customer wrote; opens the 24-hour window; `message.content` is `Text`, `Image`/`Document`/… (`MediaContent`), `Interactive` (button/list/Flow replies), `Button` (template quick reply), `Order`, `Location`, `Reaction`, … |
 | `StatusUpdated` | `sent`/`delivered`/`read`/`failed` of **your** messages, keyed by the wamid `send` returned; `errors` on failures; `pricing` |
-| `UserPreferenceChanged` | marketing stop/resume (`wa-rs-marketing`) |
+| `UserPreferenceChanged` | marketing stop/resume (`meta-whatsapp-rs-marketing`) |
 | `UserIdChanged` | a customer's BSUID changed: re-key what you stored |
-| `TemplateStatusUpdated`, `TemplateQualityUpdated`, `TemplateCategoryUpdated` | template review and health (`wa-rs-templates`) |
+| `TemplateStatusUpdated`, `TemplateQualityUpdated`, `TemplateCategoryUpdated` | template review and health (`meta-whatsapp-rs-templates`) |
 | `AccountUpdated`, `PhoneNumberQualityUpdated`, `PhoneNumberNameUpdated`, `AccountAlert` | account restrictions, limits, names |
 | `MessageEchoed`, `HistorySynced`, `AppStateSynced` | coexistence (WhatsApp Business app) |
 | `ErrorReported` | app- or system-level errors |
@@ -120,7 +120,7 @@ pub fn quality(score: &TemplateQualityScore) -> QualityRating {
 ```
 
 - Media ids in webhooks live 7 days: download what you need
-  (`wa-rs-media`).
+  (`meta-whatsapp-rs-media`).
 - Customer data: never log `WebhookEvent`'s `Debug` (names, numbers, text).
 
 ## What meta-whatsapp-rs does not do
@@ -128,12 +128,12 @@ pub fn quality(score: &TemplateQualityScore) -> QualityRating {
 - Messaging handovers, `message_echoes` and `consumer_profile` have no
   documented payload: they arrive as `Unknown`.
 - It does not merge conversations when a BSUID changes. The inbox records
-  `MessageEchoed` and `HistorySynced` (`wa-rs-cms-inbox`), but not the
+  `MessageEchoed` and `HistorySynced` (`meta-whatsapp-rs-cms-inbox`), but not the
   contacts of `AppStateSynced`. ~~Nor does it record coexistence echoes
   and history in the inbox~~: true until a3582b8 (2026-09-24).
 
 ## Related skills
 
-`wa-rs-webhook-endpoint`, `wa-rs-live-updates` (sinks), `wa-rs-cms-inbox`,
-`wa-rs-marketing` (opt-outs), `wa-rs-errors` (error kinds),
-`wa-rs-interactive-messages` (replies to buttons and lists).
+`meta-whatsapp-rs-webhook-endpoint`, `meta-whatsapp-rs-live-updates` (sinks), `meta-whatsapp-rs-cms-inbox`,
+`meta-whatsapp-rs-marketing` (opt-outs), `meta-whatsapp-rs-errors` (error kinds),
+`meta-whatsapp-rs-interactive-messages` (replies to buttons and lists).

@@ -212,6 +212,8 @@ where
     pub fn new(conn: C) -> Self {
         Self {
             conn,
+            // Stable: predates the rename to meta-whatsapp-rs, never change
+            // it (docs/architecture.md § "Stable identifiers").
             prefix: Arc::from("wa:"),
         }
     }
@@ -394,8 +396,63 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
     use time::macros::datetime;
+
+    /// A connection that records every command it is sent and answers each
+    /// with an empty `HMGET` reply (every field nil), so a `get` finds
+    /// nothing.
+    #[derive(Clone, Default)]
+    struct Recorder(Arc<Mutex<Vec<Vec<String>>>>);
+
+    impl ConnectionLike for Recorder {
+        fn req_packed_command<'a>(
+            &'a mut self,
+            cmd: &'a redis::Cmd,
+        ) -> redis::RedisFuture<'a, redis::Value> {
+            let args = cmd
+                .args_iter()
+                .map(|arg| match arg {
+                    redis::Arg::Simple(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+                    _ => "<cursor>".to_owned(),
+                })
+                .collect();
+            self.0.lock().unwrap().push(args);
+            Box::pin(async { Ok(redis::Value::Array(vec![redis::Value::Nil; 3])) })
+        }
+
+        fn req_packed_commands<'a>(
+            &'a mut self,
+            _: &'a redis::Pipeline,
+            _: usize,
+            _: usize,
+        ) -> redis::RedisFuture<'a, Vec<redis::Value>> {
+            Box::pin(async { Err((redis::ErrorKind::Io, "no pipelines here").into()) })
+        }
+
+        fn get_db(&self) -> i64 {
+            0
+        }
+    }
+
+    /// The Redis key a record written before the rename to meta-whatsapp-rs
+    /// lives under: the default `wa:` prefix, then `{<len>:<namespace>}:`
+    /// and the key. A change to either strands every stored record (tokens,
+    /// OTP codes, dedup markers), and fails here.
+    #[tokio::test]
+    async fn the_default_prefix_and_key_layout_are_pinned() {
+        let conn = Recorder::default();
+        let kv = RedisKvStore::new(conn.clone());
+        assert_eq!(kv.prefix(), "wa:");
+        let got = kv.get(&StoreKey::new("wa.token", "waba/W1")).await.unwrap();
+        assert!(got.is_none());
+        assert_eq!(
+            *conn.0.lock().unwrap(),
+            [["HMGET", "wa:{8:wa.token}:waba/W1", "v", "ver", "exp"]]
+        );
+    }
 
     #[test]
     fn ttl_rounds_up_to_milliseconds() {

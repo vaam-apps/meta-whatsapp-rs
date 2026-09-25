@@ -1,4 +1,4 @@
-// Order confirmation / receipt, A5. Input: `wa_typst::ReceiptInput` as JSON in
+// Order confirmation / receipt, A5. Input: `meta_whatsapp_typst::ReceiptInput` as JSON in
 // `sys.inputs.data`. Amounts and dates arrive formatted; this template never
 // computes either. Fonts: only those bundled by typst-assets.
 #let data = json(bytes(sys.inputs.data))

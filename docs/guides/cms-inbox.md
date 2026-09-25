@@ -74,7 +74,7 @@ let conversations: Arc<dyn ConversationStore> = Arc::new(PostgresConversationSto
   `UNION` on it fail on every row. Meta-assigned ids (the message id, the
   contact, the phone number id) stay `TEXT`: the Postgres store refuses a
   NUL there (Meta never assigns one; a history item with one is skipped).
-  The rest is in the `wa_adapters::store::postgres` docs.
+  The rest is in the `meta_whatsapp_adapters::store::postgres` docs.
 - **Upgrading a database written before lossless content** is a one-way
   schema change (migration 3): back up first (a rollback is a restore,
   which loses what was recorded since), stop the older instances that
@@ -84,7 +84,7 @@ let conversations: Arc<dyn ConversationStore> = Arc::new(PostgresConversationSto
   insert), then run `migrate` once from a one-off job before starting the
   new revision. The ordered steps and timings:
   [production.md](production.md#7-before-going-live); the pre-flight
-  query that lists your objects: the `wa_adapters::store::postgres` docs.
+  query that lists your objects: the `meta_whatsapp_adapters::store::postgres` docs.
   Existing rows keep their content: a NUL an older revision stored as
   U+FFFD stays U+FFFD.
 - A message id is stored once per store: if the same id ever arrives on two

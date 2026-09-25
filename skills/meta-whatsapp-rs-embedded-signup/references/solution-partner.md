@@ -1,8 +1,6 @@
 # Solution Partner deployments
 
-> **Verified against meta-whatsapp-rs cdf6f6e0db7dfa4896a3ca8d79600e7a429660125dfc66259e67d04784d0b2 (2026-09-25).** On another revision, trust the code over this page.
-
-> **Verified against wa-rs 0e63aba8378556b4e34cf4cd5b5392f18f2a5e00 (2026-09-25).** Also checked against Meta's
+> **Verified against meta-whatsapp-rs 0e63aba8378556b4e34cf4cd5b5392f18f2a5e00 (2026-09-25).** Also checked against Meta's
 > `solution-providers/share-and-revoke-credit-lines`,
 > `solution-providers/manage-system-users` and
 > `webhooks/reference/account_update` pages as fetched on 2026-09-24.
@@ -10,7 +8,7 @@
 
 A **Solution Partner** pays Meta for its merchants through its own credit
 line and invoices them; a **Tech Provider**'s merchants add their own
-payment method. wa-rs supports both, **one per deployment**: configure
+payment method. meta-whatsapp-rs supports both, **one per deployment**: configure
 `SolutionPartner` once at startup, or leave it out. You are liable to Meta
 for every message sent on a shared line, and a line cannot be changed once
 attached to a WABA: the rules below exist for that.
@@ -92,7 +90,7 @@ The approval sees what Meta verified (`VerifiedOnboarding`: WABA, owner
 business, numbers) and runs before `store_token`. A refusal is
 `Error::Step` `approve`, and nothing is stored, subscribed or shared.
 Check tenants here, not after `onboard`: by then the line is attached.
-Which tenant may have a WABA is your policy; wa-rs decides none
+Which tenant may have a WABA is your policy; meta-whatsapp-rs decides none
 (`OPEN_QUESTIONS.md` #6).
 
 ~~Plain `onboard` shared the line, and `resume` shared for any stored
@@ -104,7 +102,7 @@ The approval is recorded in the vault's credit ledger
 (`StoredCredit::approved_token_created_at`), and `resume` shares only for
 a WABA whose stored token record was approved: a token stored without
 one (onboarded in Tech Provider mode before the deployment switched, by
-an older wa-rs, or stored again since) fails `resume` at step `approve`
+an older meta-whatsapp-rs, or stored again since) fails `resume` at step `approve`
 until you call `resume_with_approval` once. ~~An approval held for any
 later token of the WABA~~ (until e0f7e58).
 
@@ -216,7 +214,7 @@ match (&update.event, waba_id) {
 }
 ```
 
-- `waba_id` is `event.waba_id()`: for Meta's PARTNER_* events wa-rs takes
+- `waba_id` is `event.waba_id()`: for Meta's PARTNER_* events meta-whatsapp-rs takes
   it from `waba_info.waba_id` (Meta's entry id there is a business
   portfolio).
 - `owner` is `waba_info.owner_business_id`. Pass it only from a
@@ -229,15 +227,15 @@ match (&update.event, waba_id) {
 - **Every `PartnerRemoved` of your solution revokes at once**, a
   coexistence one too (with `disconnection_info`: the number changed
   device, was re-registered or went inactive, and may reconnect). That is
-  the owner's decision for wa-rs (2026-09-25), and what Meta recommends
-  for any removal. wa-rs itself stays passive: nothing revokes unless
+  the owner's decision for meta-whatsapp-rs (2026-09-25), and what Meta recommends
+  for any removal. meta-whatsapp-rs itself stays passive: nothing revokes unless
   your handler calls `revoke_credit_line`. The example returns
   `PartnerAction::Disconnected` for a coexistence removal, so you can ask
   the merchant to reconnect.
 - **Copied an earlier version of this example?** Its policy point for a
   coexistence disconnection (revoke now or after a grace period) is gone:
   revoke at once on every `PartnerRemoved`, and never pass
-  `reshare_after_revocation` on a reconnect without a grant. wa-rs's
+  `reshare_after_revocation` on a reconnect without a grant. meta-whatsapp-rs's
   CHANGELOG names the removed items.
 - **A merchant who reconnects onboards again**, and the revoked business
   is not funded again on its own (`EmbeddedSignup::is_credit_line_revoked`).
@@ -288,7 +286,7 @@ es.onboard_with_approval(&request, vault, |verified| async move {
   live (`PendingShareClearance::NotCleared`, recording a record that
   funds the WABA as its allocation). A `primary_funding_id` that no
   record explains stops it too: it may be the lost share itself, applied
-  while Meta's lookup does not list it yet, and wa-rs cannot tell it from
+  while Meta's lookup does not list it yet, and meta-whatsapp-rs cannot tell it from
   the merchant's own card. `SharesFound::unexplained_funding` returns it;
   pass it back as `acknowledged_funding` only once someone has seen in
   Meta Business Suite that what pays for the WABA is not your credit
@@ -336,7 +334,7 @@ Before dropping an old key, call `vault.rotate(&waba_id)` for **every WABA
 you ever onboarded**, offboarded ones included (their ledger outlives the
 token), and `vault.rotate_business(&business_id)` for each business you
 revoked by business id alone, collecting failures rather than stopping
-at the first (`wa-rs-token-vault`). A record still under a dropped key
+at the first (`meta-whatsapp-rs-token-vault`). A record still under a dropped key
 fails with `CryptoError::InvalidKey`, and onboarding and `resume` of that
 merchant with it. Revocation goes on with what it can read (an
 unreadable token or credit record is skipped, an unreadable marker
@@ -347,10 +345,10 @@ nothing readable names the business.
 ## Not settled by Meta's pages
 
 - Whether the two-call method also needs the system user on the WABA.
-- Whether re-adding the system user is harmless (wa-rs repeats it on
+- Whether re-adding the system user is harmless (meta-whatsapp-rs repeats it on
   `resume`, as `Waba::assign_user` treats it).
 - Whether the lookup of a business's shared records lists revoked ones:
-  wa-rs reads each record's status rather than assume.
+  meta-whatsapp-rs reads each record's status rather than assume.
 - Which `request_status` values exist besides `DELETED`: any other is
   treated as unknown (`StatusUnknown`), never as active.
 - Whether the lookup lists a record, and the WABA's `primary_funding_id`

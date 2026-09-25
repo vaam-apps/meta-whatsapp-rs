@@ -5,11 +5,11 @@ description: "Letting each merchant of a multi-tenant CMS connect their own What
 
 # meta-whatsapp-rs-embedded-signup
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 0e63aba8378556b4e34cf4cd5b5392f18f2a5e00 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code, compiled and tested by meta-whatsapp-rs's own gate:
 [examples/onboarding.rs](examples/onboarding.rs), [examples/solution_partner.rs](examples/solution_partner.rs). The page side: [references/frontend.md](references/frontend.md). A full
-**Tech Provider** server: [`embedded_signup.rs`](https://github.com/vaam-apps/wa-rs/blob/main/crates/wa-rs/examples/embedded_signup.rs).
+**Tech Provider** server: [`embedded_signup.rs`](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/crates/meta-whatsapp-rs/examples/embedded_signup.rs).
 
 ## When to use
 
@@ -27,7 +27,7 @@ configuration (its **configuration id**), the app subscribed to
 their number can send, unless you are a **Solution Partner** sharing your
 credit line ([references/solution-partner.md](references/solution-partner.md):
 one `SolutionPartner` per deployment, a currency per merchant, approval
-required). [Guide](https://github.com/vaam-apps/wa-rs/blob/main/docs/guides/embedded-signup.md).
+required). [Guide](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/embedded-signup.md).
 
 ## Wire once, on a shared store
 
@@ -43,7 +43,7 @@ let sessions = SignupSessions::new(kv);
 
 The callback may land on another instance than the start, and the vault
 holds every merchant's token: Postgres, or Redis with persistence and
-`noeviction` (`wa-rs-storage`); never `MemoryKvStore` in production.
+`noeviction` (`meta-whatsapp-rs-storage`); never `MemoryKvStore` in production.
 
 ## Start: bind the attempt to the merchant
 
@@ -133,13 +133,13 @@ it acts with whatever token is stored for that WABA.
   locks the number for 72 h (`ErrorKind::Registration`, never retried).
 - Never write tokens yourself instead of `onboard`: `TokenVault::store`
   trusts its phone number ids, so browser-supplied ids would route one
-  merchant's customers to another (`wa-rs-token-vault`).
+  merchant's customers to another (`meta-whatsapp-rs-token-vault`).
 - The app secret stays on the server; limit the callback's body size;
   never log the code, the event body, tokens or the PIN.
 - **Coexistence** (merchants keeping the WhatsApp Business app): no
   `register`; if `onboarded.needs_coexistence_sync()`, call
   `sync_smb_app_data` once per `SmbSyncType` within 24 hours
-  (`wa-rs-phone-numbers`).
+  (`meta-whatsapp-rs-phone-numbers`).
 
 ~~`redeem` first, then parse the event, code and PIN~~ (until 2026-09-24):
 a malformed post spent the attempt. Check everything local first.
@@ -150,11 +150,11 @@ a malformed post spent the attempt. Check everything local first.
   number pools or multi-WABA onboarding; no token refresh (an expired
   token means running the flow again), no PIN policy, no code-less
   `OnboardingRequest` for `resume` after a restart (hence the placeholder
-  code above) ([open questions 4–12](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)).
+  code above) ([open questions 4–12](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)).
 - No tenant model: which of your merchants owns a WABA is your table.
 
 ## Related skills
 
-`wa-rs-token-vault` (the tokens afterwards), `wa-rs-phone-numbers`
-(register, PIN, profile), `wa-rs-webhook-endpoint` (one callback for every
-merchant), `wa-rs-cms-inbox`, `wa-rs-storage`.
+`meta-whatsapp-rs-token-vault` (the tokens afterwards), `meta-whatsapp-rs-phone-numbers`
+(register, PIN, profile), `meta-whatsapp-rs-webhook-endpoint` (one callback for every
+merchant), `meta-whatsapp-rs-cms-inbox`, `meta-whatsapp-rs-storage`.

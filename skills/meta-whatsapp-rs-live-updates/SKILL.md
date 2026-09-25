@@ -5,7 +5,7 @@ description: "Where WhatsApp webhook events go after meta-whatsapp-rs verifies t
 
 # meta-whatsapp-rs-live-updates
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/sinks.rs](examples/sinks.rs), compiled and
 tested by meta-whatsapp-rs's own gate. Sinks are in `meta_whatsapp_rs::adapters::sink` (feature
@@ -57,7 +57,7 @@ let sink = FanoutSink::new()
 | `FnSink::new(closure)` | an async closure | — |
 | `TracingSink::new()` | logs the event kind | `.with_payload(true)` logs customer data |
 
-The CMS inbox's `InboxSink` goes in the fan-out too (`wa-rs-cms-inbox`).
+The CMS inbox's `InboxSink` goes in the fan-out too (`meta-whatsapp-rs-cms-inbox`).
 
 ## Live view over SSE
 
@@ -103,11 +103,11 @@ while let Some(event) = jobs.recv().await {
 ## What meta-whatsapp-rs does not do
 
 - No dead-letter store for events a sink cannot take
-  ([open question 30](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#webhooks-and-live-updates)),
+  ([open question 30](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#webhooks-and-live-updates)),
   no cross-instance relay, no per-number channels (open question 31).
 - No durable queue: use your own outbox table inside a sink.
 
 ## Related skills
 
-`wa-rs-webhook-endpoint`, `wa-rs-webhook-events`, `wa-rs-cms-inbox`,
-`wa-rs-production` (several instances), `wa-rs-testing`.
+`meta-whatsapp-rs-webhook-endpoint`, `meta-whatsapp-rs-webhook-events`, `meta-whatsapp-rs-cms-inbox`,
+`meta-whatsapp-rs-production` (several instances), `meta-whatsapp-rs-testing`.

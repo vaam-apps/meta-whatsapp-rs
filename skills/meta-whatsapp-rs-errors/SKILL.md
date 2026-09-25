@@ -5,7 +5,7 @@ description: "Handling meta-whatsapp-rs errors correctly - the Error tree (Api, 
 
 # meta-whatsapp-rs-errors
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 0da9390d42a51de4df427476b333062a6f94eacf (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/handle.rs](examples/handle.rs), compiled and
 tested by meta-whatsapp-rs's own gate. Every code, its `ErrorKind` and what to do:
@@ -39,7 +39,7 @@ Partner credit step the same way: each variant decides `is_retryable()`
 and `may_have_been_sent()` itself (`Busy` is retryable; `Reconcile` and a
 revocation that sent `DELETE`s may have been sent), and
 `CreditError::revocation()` gives an incomplete revocation's report
-(`wa-rs-embedded-signup`). `Reconcile`, and a revocation left with records
+(`meta-whatsapp-rs-embedded-signup`). `Reconcile`, and a revocation left with records
 naming no business, are `ErrorKind::Unknown`: a person has to look.
 
 ## Branch on the kind
@@ -88,7 +88,7 @@ on a 1xx–3xx is `false`~~: until 8238853 (2026-09-24).
   prove both behaviours.
 - From a job queue, resend only what Meta provably refused and may accept
   later; reconcile the rest with status webhooks first (match
-  `biz_opaque_callback_data`, see `wa-rs-webhook-events`):
+  `biz_opaque_callback_data`, see `meta-whatsapp-rs-webhook-events`):
 
 ```rust
 pub fn after_failed_send(e: &Error) -> Resend {
@@ -133,10 +133,10 @@ pub fn after_failed_send(e: &Error) -> Resend {
   on top is yours, and it must be idempotent (tag sends with
   `callback_data`).
 - Webhook sink errors fail the whole batch; a dead-letter design is
-  [open question 30](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#webhooks-and-live-updates).
+  [open question 30](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#webhooks-and-live-updates).
 
 ## Related skills
 
-`wa-rs-send-messages`, `wa-rs-send-templates`, `wa-rs-marketing` (opt-outs),
-`wa-rs-webhook-events` (errors in status webhooks), `wa-rs-embedded-signup`
-(`Error::Step`), `wa-rs-testing` (scripting errors).
+`meta-whatsapp-rs-send-messages`, `meta-whatsapp-rs-send-templates`, `meta-whatsapp-rs-marketing` (opt-outs),
+`meta-whatsapp-rs-webhook-events` (errors in status webhooks), `meta-whatsapp-rs-embedded-signup`
+(`Error::Step`), `meta-whatsapp-rs-testing` (scripting errors).

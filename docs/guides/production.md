@@ -106,15 +106,15 @@ meta-whatsapp-rs logs through `tracing`; install a subscriber and filter with
 
 ```rust
 tracing_subscriber::fmt()
-    .with_env_filter(tracing_subscriber::EnvFilter::from_default_env()) // RUST_LOG=info,wa_client=debug
+    .with_env_filter(tracing_subscriber::EnvFilter::from_default_env()) // RUST_LOG=info,meta_whatsapp_client=debug
     .init();
 ```
 
 | Level | What |
 | --- | --- |
-| `debug` (`wa_client`) | each Graph request (method, path, attempt); each retry (error kind, Graph code, delay); OTP challenges issued and verified (challenge id only) |
-| `warn` (`wa_webhooks`) | rejected deliveries (signature, size) and verification requests; changes kept untyped (field name); sink failures and events in flight elsewhere (the non-`200` answers); dedup leases that expired before the event was marked done |
-| `warn` (`wa_client`) | the token vault failing to re-encrypt a record under the active key (retried on the next read) |
+| `debug` (`meta_whatsapp_client`) | each Graph request (method, path, attempt); each retry (error kind, Graph code, delay); OTP challenges issued and verified (challenge id only) |
+| `warn` (`meta_whatsapp_webhooks`) | rejected deliveries (signature, size) and verification requests; changes kept untyped (field name); sink failures and events in flight elsewhere (the non-`200` answers); dedup leases that expired before the event was marked done |
+| `warn` (`meta_whatsapp_client`) | the token vault failing to re-encrypt a record under the active key (retried on the next read) |
 | `error` | signed bodies that are not webhooks (size and SHA-256 only); dedup markers that could not be written or released; a reply sent but not recorded in the inbox |
 
 **Never logged:** tokens, the app secret, Embedded Signup codes, PINs, OTP
@@ -270,7 +270,7 @@ notification queue on top must be idempotent itself: tag each message with
   - PR #7, lossless message content (the owner's decision of
     2026-09-25): Postgres migration 3 rewrites the inbox tables, and an
     older revision cannot run against them afterwards. In this order
-    (details and a pre-flight query: the `wa_adapters::store::postgres`
+    (details and a pre-flight query: the `meta_whatsapp_adapters::store::postgres`
     docs, "Upgrading to lossless content"):
     1. **Back up** `wa_messages` and `wa_conversations` of every table
        prefix. The only way back is a restore, which loses what was

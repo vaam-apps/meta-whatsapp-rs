@@ -91,11 +91,14 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 /// `KvStore` namespace of the vault.
+///
+/// Stable: predates the rename to meta-whatsapp-rs, never change it
+/// (docs/architecture.md § "Stable identifiers").
 pub const TOKEN_NAMESPACE: &str = "wa.token";
 
 /// Domain separation for the associated data; bump with the record format.
-/// MUST NEVER CHANGE: Stored tokens are encrypted with this tag; renaming it
-/// makes every encrypted token and ledger record undecryptable.
+/// Stable: predates the rename to meta-whatsapp-rs, never change it
+/// (docs/architecture.md § "Stable identifiers").
 const AAD_TAG: &[u8] = b"wa-rs/token-vault/v1";
 const RECORD_VERSION: u8 = 1;
 const NONCE_LEN: usize = 12;
@@ -688,8 +691,8 @@ impl TokenVault {
 }
 
 /// Domain separation for the ledger records' associated data.
-/// MUST NEVER CHANGE: Ledger records are encrypted with this tag; renaming it
-/// makes every encrypted ledger record undecryptable.
+/// Stable: predates the rename to meta-whatsapp-rs, never change it
+/// (docs/architecture.md § "Stable identifiers").
 const LEDGER_AAD_TAG: &[u8] = b"wa-rs/token-vault/ledger/v1";
 
 /// A sealed credit ledger record, as stored.

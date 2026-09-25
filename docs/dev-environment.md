@@ -14,9 +14,16 @@ devcontainer (`github.com/anthropics/claude-code/.devcontainer`), for Rust:
 | `devcontainer.json` | VS Code extensions (Claude Code, rust-analyzer, tinymist for Typst, Even Better TOML, CodeLLDB, just, GitLens) |
 
 Open it with VS Code's "Reopen in Container" or `devcontainer up`. Inside,
-`WA_RS_TEST_POSTGRES_URL` and `WA_RS_TEST_REDIS_URL` point at the sidecars,
-so `just test-live` (and `just ci`) use them instead of starting
-`compose.test.yaml`.
+`META_WHATSAPP_RS_TEST_POSTGRES_URL` and `META_WHATSAPP_RS_TEST_REDIS_URL`
+point at the sidecars, so `just test-live` (and `just ci`) use them instead
+of starting `compose.test.yaml`.
+
+The Compose project is `meta-whatsapp-rs-dev` (it was `wa-rs-dev` before
+the rename), and named volumes are per project: a container built before
+the rename kept its shell history, Claude config and cargo caches in the
+`wa-rs-dev_*` volumes, which the renamed one does not mount. Log in to
+Claude Code again, or copy the old volumes' contents over; remove them
+with `docker volume rm` once you no longer need them.
 
 ### The firewall
 

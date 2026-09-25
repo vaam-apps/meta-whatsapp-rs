@@ -5,16 +5,16 @@ description: "The merchant-to-customer chat inbox of a multi-tenant CMS built on
 
 # meta-whatsapp-rs-cms-inbox
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 0e63aba8378556b4e34cf4cd5b5392f18f2a5e00 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/inbox.rs](examples/inbox.rs), compiled and
 tested by meta-whatsapp-rs's own gate. The full server (webhook endpoint, SSE,
 bearer-token tenants), exercised in-process by meta-whatsapp-rs's tests:
-[`cms_inbox.rs`](https://github.com/vaam-apps/wa-rs/blob/main/crates/wa-rs/examples/cms_inbox.rs).
+[`cms_inbox.rs`](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/crates/meta-whatsapp-rs/examples/cms_inbox.rs).
 
 ## When to use
 
-Merchants connected their number (`wa-rs-embedded-signup`) and chat with
+Merchants connected their number (`meta-whatsapp-rs-embedded-signup`) and chat with
 their customers in your CMS. Module `meta_whatsapp_rs::inbox`; storage port
 `ConversationStore`.
 
@@ -38,7 +38,7 @@ let sink = FanoutSink::new()
 idempotent (a known message id is ignored; a status never moves a message
 backwards). Statuses and revokes only change a message of the business
 number they arrived on. Run `postgres::migrate(&pool)` at startup for
-`PostgresConversationStore` (`wa-rs-storage`).
+`PostgresConversationStore` (`meta-whatsapp-rs-storage`).
 
 Coexistence (the merchant keeps the WhatsApp Business app): `MessageEchoed`
 (sent from the app) is outbound `Sent`, in the customer's BSUID (else phone)
@@ -124,10 +124,10 @@ go to `+<digits>`; a contact with a `.` is a BSUID. The rules are public:
 - BSUIDs change with the customer's phone number
   (`WebhookEvent::UserIdChanged`): the new one starts a new conversation.
 - Your own replies are not broadcast: push them to the UI from the reply
-  endpoint. Live events: `wa-rs-live-updates` (allow-list filter).
+  endpoint. Live events: `meta-whatsapp-rs-live-updates` (allow-list filter).
 - **U+0000 is content**: `InboxSink` and `Inbox::send` record it
   exactly and the Postgres store keeps it, so render or strip it in your
-  UI; your own SQL on those columns follows `wa-rs-storage`, as does a
+  UI; your own SQL on those columns follows `meta-whatsapp-rs-storage`, as does a
   store of your own. The Postgres store refuses it in Meta-assigned ids.
 
 ~~`update_status` matched on the message id alone~~: until 4b47bf7.
@@ -146,7 +146,7 @@ request change the `ConversationStore` contract.
 
 - Not recorded: calls (a call reopens the window on Meta's side but
   `Inbox::window` cannot see it:
-  [open question 32](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)),
+  [open question 32](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)),
   media bytes (rows keep the media id; download within 7 days), BSUID
   merges, the synced contacts (`smb_app_state_sync`).
 - Message ids are unique per store, not per business number (open
@@ -154,7 +154,7 @@ request change the `ConversationStore` contract.
 
 ## Related skills
 
-`wa-rs-embedded-signup`, `wa-rs-token-vault`, `wa-rs-webhook-endpoint`,
-`wa-rs-live-updates`, `wa-rs-send-templates` (the fallback),
-`wa-rs-storage`, `wa-rs-testing` (the window with a `ManualClock`),
-`wa-rs-groups-and-calling` (blocking a customer, groups, calls).
+`meta-whatsapp-rs-embedded-signup`, `meta-whatsapp-rs-token-vault`, `meta-whatsapp-rs-webhook-endpoint`,
+`meta-whatsapp-rs-live-updates`, `meta-whatsapp-rs-send-templates` (the fallback),
+`meta-whatsapp-rs-storage`, `meta-whatsapp-rs-testing` (the window with a `ManualClock`),
+`meta-whatsapp-rs-groups-and-calling` (blocking a customer, groups, calls).

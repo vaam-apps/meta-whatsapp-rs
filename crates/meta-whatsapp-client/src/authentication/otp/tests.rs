@@ -661,6 +661,47 @@ fn the_key_derivation_is_pinned() {
     assert_eq!(f.otp.key(&phone, "login").unwrap(), expected);
 }
 
+/// Known answers, as bytes rather than recomputed from the domain strings:
+/// the store key and code hash the service derived before the rename to
+/// meta-whatsapp-rs, and the namespaces it wrote them to. Renaming a
+/// domain (`wa.otp.key`, `wa.otp.code`) or a namespace (`wa.otp`,
+/// `wa.otp.rate`), even here and in the code alike, would invalidate every
+/// outstanding code and reset every issue limit, and fails here.
+#[tokio::test]
+async fn the_derivations_and_namespaces_are_pinned() {
+    const KEY: &str = "2f5c25b57cfc42d8e881f8631e25963444b2639bff19579b6e999b2bddc3898c";
+    let f = fixture(OtpConfig::new("shop-a"));
+    let phone = Phone::of(&user()).unwrap();
+    assert_eq!(f.otp.key(&phone, "login").unwrap(), KEY);
+    assert_eq!(
+        hex::encode(
+            f.otp
+                .code_mac(KEY, "0123456789abcdef0123456789abcdef", "123456")
+                .unwrap()
+        ),
+        "785f5f208aa3bf482828d8abf7e746a2dfb8ea7fa5e2e1458ae794c0959b1763"
+    );
+    issue(&f).await;
+    let written: std::collections::BTreeSet<String> =
+        f.kv.writes
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(k, _)| k.namespace().to_owned())
+            .collect();
+    assert_eq!(
+        written,
+        ["wa.otp".to_owned(), "wa.otp.rate".to_owned()].into()
+    );
+    assert!(
+        f.kv.inner
+            .get(&StoreKey::new("wa.otp", KEY))
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
 /// The code hash, recomputed from its specification: HMAC-SHA256(pepper,
 /// `wa.otp.code | key | challenge id | code`). The key is in it (security
 /// review L6), so a record is only good under the key it was written to.

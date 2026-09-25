@@ -6,7 +6,7 @@
 
 mod common;
 
-use meta_whatsapp_core::ids::BusinessId;
+use meta_whatsapp_core::ids::{BusinessId, PhoneNumberId, WabaId};
 use meta_whatsapp_webhooks::fields::{
     AccountUpdateEvent, AlertEntityType, AlertSeverity, AlertStatus, AlertType, AutomaticEventName,
     BusinessUsernameStatus, CallDirection, CallEventType, CallStatusValue, CallTerminateStatus,
@@ -98,16 +98,12 @@ fn account_update_value(
 /// is a business portfolio (in `PARTNER_ADDED`, the first of
 /// `solution_partner_business_ids`): the WABA comes from `waba_info`.
 #[test]
-#[allow(clippy::too_many_lines)]
 fn account_update_waba_id_is_the_customers_waba_not_a_business() {
     const PARTNER_BUSINESS: &str = "2949482758682047";
     let waba_and_entry = |name: &str| match one(name) {
         WebhookEvent::AccountUpdated {
             waba_id, entry_id, ..
-        } => (
-            waba_id.map(meta_whatsapp_core::ids::WabaId::into_inner),
-            entry_id,
-        ),
+        } => (waba_id.map(WabaId::into_inner), entry_id),
         other => panic!("{name}: {other:?}"),
     };
     for (fixture, waba) in [
@@ -141,11 +137,7 @@ fn account_update_waba_id_is_the_customers_waba_not_a_business() {
         ),
     ] {
         let event = one(fixture);
-        assert_eq!(
-            event.waba_id().map(meta_whatsapp_core::ids::WabaId::as_str),
-            Some(waba),
-            "{fixture}"
-        );
+        assert_eq!(event.waba_id().map(WabaId::as_str), Some(waba), "{fixture}");
         assert_eq!(
             waba_and_entry(fixture),
             (Some(waba.to_owned()), PARTNER_BUSINESS.to_owned()),
@@ -291,10 +283,7 @@ fn an_account_update_stored_before_entry_id_reads_back_by_its_waba() {
     let old = json!({"event": "account_updated",
         "update": {"event": "PARTNER_REMOVED", "waba_info": {"waba_id": "980198427658004"}}});
     let back: WebhookEvent = serde_json::from_value(old).unwrap();
-    assert_eq!(
-        back.waba_id().map(meta_whatsapp_core::ids::WabaId::as_str),
-        Some("980198427658004")
-    );
+    assert_eq!(back.waba_id().map(WabaId::as_str), Some("980198427658004"));
     let old = json!({"event": "account_updated", "update": {"event": "ACCOUNT_DELETED"}});
     let back: WebhookEvent = serde_json::from_value(old).unwrap();
     assert_eq!(back.waba_id(), None, "never a blank WABA");
@@ -456,9 +445,7 @@ fn account_update_every_example() {
 fn account_settings_update_has_the_phone_number_id() {
     let event = one("fields/account_settings_update.json");
     assert_eq!(
-        event
-            .phone_number_id()
-            .map(meta_whatsapp_core::ids::PhoneNumberId::as_str),
+        event.phone_number_id().map(PhoneNumberId::as_str),
         Some("106540352242922")
     );
     let WebhookEvent::AccountSettingsUpdated { update, .. } = event else {

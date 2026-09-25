@@ -8,7 +8,7 @@
 /.meta-docs/
 # Rendered typst output from examples
 *.pdf
-!crates/wa-typst/tests/fixtures/*.pdf
+!crates/meta-whatsapp-typst/tests/fixtures/*.pdf
 .idea/
 .vscode/*
 !.vscode/extensions.json

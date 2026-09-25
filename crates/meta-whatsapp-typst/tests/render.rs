@@ -575,7 +575,7 @@ fn unserializable_input_is_an_input_error() {
 }
 
 #[test]
-fn render_errors_become_wa_core_errors_and_keep_their_type() {
+fn render_errors_become_meta_whatsapp_core_errors_and_keep_their_type() {
     let err = Renderer::new()
         .render_png(&Template::voucher(), &fixture("voucher"), 0.0)
         .expect_err("must fail");

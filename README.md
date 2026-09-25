@@ -214,11 +214,11 @@ in the second (list the connected number under that tenant's
 | Crate | Role |
 | --- | --- |
 | `meta-whatsapp-rs` | Facade: depend on this. Re-exports the others (`meta_whatsapp_rs::client`, `webhooks`, `adapters`, `core`, `typst`), a `prelude`, the CMS `inbox`, and the `client()` shortcut. Feature flags pick adapters. |
-| `wa-core` | Error tree, ids, secrets, ports (`HttpTransport`, `KvStore`, `ConversationStore`, `EventSink`, `Clock`). |
-| `wa-client` | Graph API client, one module per endpoint family; OTP service, Embedded Signup onboarding and token vault. |
-| `wa-webhooks` | Signature/verify-token checks, typed payloads, normalized events, dedup, axum router + SSE. |
-| `wa-adapters` | reqwest transport; memory, Postgres, Redis stores; channel/broadcast/fan-out sinks. |
-| `wa-typst` | Typst → PDF/PNG (invoices, receipts, vouchers) for document and image messages. |
+| `meta-whatsapp-core` | Error tree, ids, secrets, ports (`HttpTransport`, `KvStore`, `ConversationStore`, `EventSink`, `Clock`). |
+| `meta-whatsapp-client` | Graph API client, one module per endpoint family; OTP service, Embedded Signup onboarding and token vault. |
+| `meta-whatsapp-webhooks` | Signature/verify-token checks, typed payloads, normalized events, dedup, axum router + SSE. |
+| `meta-whatsapp-adapters` | reqwest transport; memory, Postgres, Redis stores; channel/broadcast/fan-out sinks. |
+| `meta-whatsapp-typst` | Typst → PDF/PNG (invoices, receipts, vouchers) for document and image messages. |
 
 ## Development
 
@@ -250,8 +250,11 @@ updates them in the same PR.
 
 ## Naming
 
-`meta-whatsapp-rs` is already taken on crates.io by an unrelated project, so the
-workspace is `publish = false` until crate names are chosen.
+The project was called `wa-rs` until 2026-09-25, a name taken on crates.io
+by an unrelated project; the owner renamed it (the CHANGELOG's "Renamed"
+section maps every old name to its new one). The `meta-whatsapp-*` crate
+names were free on crates.io that day, but nothing is published: the
+workspace stays `publish = false` until a release is decided.
 
 ## Documentation
 

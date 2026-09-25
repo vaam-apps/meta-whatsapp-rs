@@ -26,30 +26,31 @@ concrete products:
 
 ```
 crates/
-  wa-core       error tree, ids, config, ports (traits). No I/O, no runtime.
-  wa-client     Graph API client; one module per endpoint family.
-  wa-webhooks   verify, parse, normalize, dedup, dispatch; axum router (feature).
-  wa-adapters   port implementations: reqwest, memory/Postgres/Redis stores, sinks.
-  wa-typst      Typst → PDF/PNG for document and image messages.
+  meta-whatsapp-core       error tree, ids, config, ports (traits). No I/O, no runtime.
+  meta-whatsapp-client     Graph API client; one module per endpoint family.
+  meta-whatsapp-webhooks   verify, parse, normalize, dedup, dispatch; axum router (feature).
+  meta-whatsapp-adapters   port implementations: reqwest, memory/Postgres/Redis stores, sinks.
+  meta-whatsapp-typst      Typst → PDF/PNG for document and image messages.
   meta-whatsapp-rs         facade: re-exports, prelude, `client(token)`, the CMS inbox,
-                feature flags, runnable examples. What integrators depend on.
-.xtask          repo automation (`cargo xtask meta-docs`): a workspace of its own,
-                with its own Cargo.lock, excluded from the root one, so its ureq
-                (rustls with `ring`) never enters a library or test build.
+                           feature flags, runnable examples. What integrators depend on.
+.xtask                     repo automation (`cargo xtask meta-docs`): a workspace of its own,
+                           with its own Cargo.lock, excluded from the root one, so its ureq
+                           (rustls with `ring`) never enters a library or test build.
 ```
 
-Dependency rule: everything depends on `wa-core`; nothing depends on
-`meta-whatsapp-rs`; `wa-client` and `wa-webhooks` never depend on each other or on
-`wa-adapters` (except as a dev-dependency for tests). An adapter never
-leaks its library's types through a port.
+Dependency rule: everything depends on `meta-whatsapp-core`; nothing
+depends on `meta-whatsapp-rs`; `meta-whatsapp-client` and
+`meta-whatsapp-webhooks` never depend on each other or on
+`meta-whatsapp-adapters` (except as a dev-dependency for tests). An adapter
+never leaks its library's types through a port.
 
-## Ports (`wa-core`)
+## Ports (`meta-whatsapp-core`)
 
 | Port | Methods | Contract lives in |
 | --- | --- | --- |
 | `transport::HttpTransport` | `send`, `send_streaming` | rustdoc; non-2xx is *not* an error at this layer |
-| `store::KvStore` | `get`, `put`, `put_if_absent`, `compare_and_swap`, `delete` | `wa_adapters::store::conformance` (executable) |
-| `store::ConversationStore` | `append`, `append_synced` (a batch of coexistence history: no window, never unread), `fill_media_placeholder`, `revoke` (number and direction scoped, never the conversation; the content kept; a tombstone, history only, when the message is not stored yet), `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at` | `wa_adapters::store::conversation_conformance` (executable) |
+| `store::KvStore` | `get`, `put`, `put_if_absent`, `compare_and_swap`, `delete` | `meta_whatsapp_adapters::store::conformance` (executable) |
+| `store::ConversationStore` | `append`, `append_synced` (a batch of coexistence history: no window, never unread), `fill_media_placeholder`, `revoke` (number and direction scoped, never the conversation; the content kept; a tombstone, history only, when the message is not stored yet), `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at` | `meta_whatsapp_adapters::store::conversation_conformance` (executable) |
 | `sink::EventSink<E>` | `deliver` | rustdoc |
 | `clock::Clock` | `now` | — |
 
@@ -57,34 +58,43 @@ Typed stores are built **on `KvStore`**, never as new ports: token vault,
 OTP challenges, webhook dedup, Embedded Signup sessions. An adapter author
 implements five methods once and every feature works.
 
-## Stable identifiers (predate the rename to meta-whatsapp-rs)
+## Stable identifiers
 
-The following are encrypted, hashed, signed, used as storage keys or dedup
-keys, or are field names owned by Meta. Changing them breaks stored data or
-compatibility with Meta's API. Never change them:
+These predate the rename from wa-rs to meta-whatsapp-rs and never change:
+each is encrypted into, hashed into, or names data already stored, so
+changing one strands that data (or makes `migrate` refuse the database)
+on the next upgrade. A test pins each one's exact bytes; a change that
+fails it is a data migration, not a rename.
 
-| Identifier | Location | Reason |
-| --- | --- | --- |
-| `b"wa-rs/token-vault/v1"` | `crates/meta-whatsapp-adapters/src/store/embedded_signup/vault.rs` | AEAD tag; renaming makes every encrypted token and ledger record undecryptable |
-| `b"wa-rs/token-vault/ledger/v1"` | `crates/meta-whatsapp-adapters/src/store/embedded_signup/vault.rs` | AEAD tag; renaming makes ledger records undecryptable |
-| `b"wa.otp.key"`, `b"wa.otp.code"` | `crates/meta-whatsapp-core/src/authentication/otp.rs` | HMAC domains; changing breaks OTP verification |
-| `"wa.otp"`, `"wa.otp.rate"` | `crates/meta-whatsapp-core/src/authentication/otp.rs` | KV namespaces; changing makes stored challenges and rate-limit counters inaccessible |
-| `"wa.token"`, `"wa.es.session"`, `"wa.webhook.dedup"`, etc. (all `"wa.*"`) | throughout | KV namespaces; breaking existing stored data |
-| `"wa:"` | `crates/meta-whatsapp-adapters/src/store/redis/*.rs` | Redis key prefix; changing makes stored keys inaccessible |
-| `wa_` (Postgres table prefix) | `crates/meta-whatsapp-adapters/src/store/postgres/mod.rs` | `TablePrefix::DEFAULT`; renaming breaks migrations and stored tables |
-| `wa_id`, `wamid`, `waba`, `waba_id`, `wa.me`, `wacid`, `WA_EMBEDDED_SIGNUP`, etc. | throughout | Meta field names and constants; never ours to change |
+| Identifier | Defined in | What it is | Pinned by |
+| --- | --- | --- | --- |
+| `wa-rs/token-vault/v1` | `AAD_TAG`, `meta-whatsapp-client/src/embedded_signup/vault.rs` | associated data of every sealed token | `a_record_written_before_solution_partner_mode_still_opens` (bytes written by b805dac) |
+| `wa-rs/token-vault/ledger/v1` | `LEDGER_AAD_TAG`, same file | associated data of every credit ledger record | `ledger_records_written_before_the_rename_still_open` (bytes written by 16b61db) |
+| `wa.token` | `TOKEN_NAMESPACE`, same file | store namespace of tokens, the phone index and the credit ledger; also in their associated data | both tests above |
+| `wa.otp.key`, `wa.otp.code` | `KEY_DOMAIN`, `CODE_DOMAIN`, `meta-whatsapp-client/src/authentication/otp.rs` | HMAC domains of the challenge's store key and of the code hash | `the_derivations_and_namespaces_are_pinned` (known answers), `the_key_derivation_is_pinned`, `the_code_hash_is_pinned_and_covers_the_key` |
+| `wa.otp`, `wa.otp.rate` | `NAMESPACE`, `ISSUE_LOG_NAMESPACE`, same file | store namespaces of the challenges and of the issue limit | `the_derivations_and_namespaces_are_pinned` |
+| `wa.es.session` | `SESSION_NAMESPACE`, `meta-whatsapp-client/src/embedded_signup/session.rs` | store namespace of signup sessions in flight | `the_session_namespace_is_pinned` |
+| `wa.webhook.dedup` | `DEDUP_NAMESPACE`, `meta-whatsapp-webhooks/src/dedup.rs` | store namespace of the dedup markers (key: SHA-256 hex of the event's dedup key) | `the_marker_key_is_pinned` |
+| `wa_` | `TablePrefix::DEFAULT`, `meta-whatsapp-adapters/src/store/postgres/mod.rs` | default table prefix: `wa_kv`, `wa_messages`, `wa_conversations`, `wa_sqlx_migrations` | `the_default_tables_and_migration_checksums_are_pinned`, `prefix_validation`, the `live_postgres_*` table-name tests |
+| the migration files | `meta-whatsapp-adapters/migrations/*.sql` | sqlx records each file's checksum; an edit, a comment included, makes `migrate` refuse every database migrated before. So they keep naming `wa_adapters`, including in the hint migration 3 raises | `the_default_tables_and_migration_checksums_are_pinned` |
+| `wa:` | `RedisKvStore::new`, `meta-whatsapp-adapters/src/store/redis_kv.rs` | default Redis key prefix, before `{<len>:<namespace>}:<key>` | `the_default_prefix_and_key_layout_are_pinned` |
+
+Not ours to rename either: Meta's names (`wa_id`, `wamid`, `waba_id`,
+`wa.me`, `WA_EMBEDDED_SIGNUP`, …), and the `WA_` environment variables
+of the examples and the dev container (`WA_TENANTS`, `WA_OTP_NAMESPACE`,
+`WA_FIREWALL_*`, …), which are about WhatsApp, not about this project.
 
 ## Error tree
 
-`wa_core::Error` is the root; every public fallible function returns
-`wa_core::Result<T>`. See `crates/wa-core/src/error/mod.rs` for the tree.
+`meta_whatsapp_core::Error` is the root; every public fallible function returns
+`meta_whatsapp_core::Result<T>`. See `crates/meta-whatsapp-core/src/error/mod.rs` for the tree.
 
-- Every public fallible function returns `wa_core::Result<T>`, with one
+- Every public fallible function returns `meta_whatsapp_core::Result<T>`, with one
   exception: pure, I/O-free functions (signature/token verification,
   Flows endpoint crypto, Typst rendering, and every public `validate()`)
   may return their precise error (`CryptoError`, `WebhookError`,
-  `wa_typst::RenderError`, `Result<(), ValidationError>`); `?` lifts them
-  into `wa_core::Error`.
+  `meta_whatsapp_typst::RenderError`, `Result<(), ValidationError>`); `?` lifts them
+  into `meta_whatsapp_core::Error`.
 - `thiserror` for every typed node. `anyhow::Error` only as the opaque leaf
   for failures raised by code we do not own (adapters, integrators):
   `TransportError::{Connect, Backend}`, `StorageError::Backend`,
@@ -134,7 +144,7 @@ compatibility with Meta's API. Never change them:
 - No module adds a variant to the root for its own convenience; a new leaf
   needs a reason in this document.
 
-## Client (`wa-client`)
+## Client (`meta-whatsapp-client`)
 
 `Client` = `Arc<Shared{transport, endpoint, retry, timeout, user_agent}>` +
 optional `AccessToken`. `client.with_token(t)` is the multi-tenant switch.
@@ -184,7 +194,7 @@ Rules for every endpoint module:
    that already holds one (a `ValidationError`, the stream's single item).
    A list whose page documents no pagination (`waba.subscribed_apps`,
    `templates.library`) takes no cursor and says so.
-6. **Tests** use `wa_core::testing::ScriptedTransport`: assert method, path,
+6. **Tests** use `meta_whatsapp_core::testing::ScriptedTransport`: assert method, path,
    query, auth header and exact JSON body; feed responses copied from the
    docs' examples. Every test that scripts N responses asserts
    `remaining() == 0`.
@@ -197,12 +207,12 @@ Rules for every endpoint module:
    instead of the body snippet, and the error category and position instead
    of serde's message (which quotes the offending value).
 9. **One type per concept.** A type two endpoint families share is
-   defined once in `wa_client::common` (`MediaSource`, `FlowAction`,
+   defined once in `meta_whatsapp_client::common` (`MediaSource`, `FlowAction`,
    `QualityRating`) and re-exported by each module that uses it; a type
    of one module never shares its name with a type of another
    (`flows::endpoint::EndpointAction` is the endpoint request's `action`,
    `common::FlowAction` the `flow_action` a Flow starts with). New code
-   types every Graph id with a `wa_core::ids` newtype. Known exceptions,
+   types every Graph id with a `meta_whatsapp_core::ids` newtype. Known exceptions,
    still `String` (typing them is a breaking change each): the groups'
    `request_id` and `join_request_id`; `MessagingCustomerBase::id`,
    `CreatedMessagingCustomerBase::messaging_customer_base_id` and the
@@ -249,7 +259,7 @@ re-issues the original request with `after=` rather than following
 
 ## Feature modules
 
-### Messages (`wa_client::messages`)
+### Messages (`meta_whatsapp_client::messages`)
 
 `OutboundMessage { recipient: Recipient (flattened), context?, biz_opaque_callback_data?, category? (Direct Send), ttl_seconds? (Direct Send), direct_send_config? (Direct Send), content: MessageContent }`
 where `MessageContent` is an internally tagged enum on `type`: text, image,
@@ -266,9 +276,9 @@ could show "typing…" after the reply). `SendResponse { messaging_product,
 contacts: [{input, wa_id?, user_id?, parent_user_id?}], messages: [{id,
 group_id?, message_status?}] }` — shared with the MM API.
 
-Recipient addressing follows the BSUID rules in `wa_core::recipient`.
+Recipient addressing follows the BSUID rules in `meta_whatsapp_core::recipient`.
 
-### Media (`wa_client::media`)
+### Media (`meta_whatsapp_client::media`)
 
 Upload (multipart: `file`, `type`, `messaging_product`; MIME type and size
 checked first), `url(media_id)` → `{url, mime_type, sha256, file_size, id}`,
@@ -278,9 +288,9 @@ retryable), `download_bytes` with a size cap (pre-allocation never trusts
 Meta's reported size beyond 16 MiB), `delete`. Resumable Upload API
 (`/{app_id}/uploads` → `upload:<id>` sessions, `file_offset`, `Authorization:
 OAuth` on every step so the token never sits in a URL) returning a
-`wa_core::ids::UploadHandle` for template `header_handle`s.
+`meta_whatsapp_core::ids::UploadHandle` for template `header_handle`s.
 
-### Templates (`wa_client::templates`)
+### Templates (`meta_whatsapp_client::templates`)
 
 CRUD + library + migrate + compare. Two builder families that must not be
 confused:
@@ -293,7 +303,7 @@ confused:
 
 Named and positional parameters are both supported (`parameter_format`).
 
-### Authentication (`wa_client::authentication`)
+### Authentication (`meta_whatsapp_client::authentication`)
 
 Authentication template definitions (copy code, one-tap with
 `supported_apps` package/signature hash, zero-tap with
@@ -345,7 +355,7 @@ Authentication template definitions (copy code, one-tap with
   consumed (single use).
 - The code never appears in logs, errors, or `Debug` output.
 
-### Embedded Signup (`wa_client::embedded_signup`)
+### Embedded Signup (`meta_whatsapp_client::embedded_signup`)
 
 The most important flow. Frontend (Facebook JS SDK) runs `FB.login` with
 the app's configuration id; the page receives a `WA_EMBEDDED_SIGNUP`
@@ -542,7 +552,7 @@ cannot be taken back, so the design is fail-closed:
   surviving, and funding that business later takes
   `reshare_after_revocation`.
 
-The calls themselves are `wa_client::credit_lines` (list, share-and-attach,
+The calls themselves are `meta_whatsapp_client::credit_lines` (list, share-and-attach,
 share, attach, receiving credential, primary funding, find records,
 revoke, status, and `is_shared`): each authenticates with its client's
 token, the partner's system user token except for `attach` and
@@ -553,7 +563,7 @@ deprecates them on 2026-10-15.
 
 Coexistence: `smb_app_data` sync (contacts, history) within 24h.
 
-### In-App Signup (`wa_client::signups`), WABA (`waba`), phone numbers (`phone_numbers`), business profile, QR codes, block users, commerce, analytics, marketing (MM API), flows, groups, calling
+### In-App Signup (`meta_whatsapp_client::signups`), WABA (`waba`), phone numbers (`phone_numbers`), business profile, QR codes, block users, commerce, analytics, marketing (MM API), flows, groups, calling
 
 Typed endpoint wrappers per the rules above. Flows additionally provides
 the data-endpoint crypto (feature `flows-endpoint`): decrypt
@@ -563,7 +573,7 @@ with the same key and the bit-flipped IV. RSA goes through `aws-lc-rs`
 (constant-time), never the `rsa` crate (RUSTSEC-2023-0071, Marvin timing
 attack, unfixed) — the endpoint decrypts attacker-supplied ciphertext.
 
-## Webhooks (`wa-webhooks`)
+## Webhooks (`meta-whatsapp-webhooks`)
 
 ```
 POST body ─► verify X-Hub-Signature-256 (HMAC-SHA256, constant-time, any of N app secrets)
@@ -611,7 +621,7 @@ Logs carry sizes, digests and field names only — never payload values.
   framework-free integrations. Every SSE subscriber's broadcast receiver
   clones every event before its filter runs (`OPEN_QUESTIONS.md` #31).
 
-## Adapters (`wa-adapters`)
+## Adapters (`meta-whatsapp-adapters`)
 
 - `http::ReqwestTransport` (feature `reqwest`, rustls): streaming download,
   multipart, per-request timeout, error mapping (timeout → `Timeout`,
@@ -660,9 +670,9 @@ Logs carry sizes, digests and field names only — never payload values.
 - reqwest: errors never carry the request URL; redirects send no `Referer`
   (it would carry the query to the redirect target); `HTTP(S)_PROXY` is
   honoured.
-- Live tests are named `live_*`, read `WA_RS_TEST_POSTGRES_URL` /
-  `WA_RS_TEST_REDIS_URL`, skip when unset, and **fail** when unset under
-  `WA_RS_REQUIRE_LIVE=1` (`just test-live` sets it). Every `KvStore`
+- Live tests are named `live_*`, read `META_WHATSAPP_RS_TEST_POSTGRES_URL` /
+  `META_WHATSAPP_RS_TEST_REDIS_URL`, skip when unset, and **fail** when unset under
+  `META_WHATSAPP_RS_REQUIRE_LIVE=1` (`just test-live` sets it). Every `KvStore`
   adapter runs `store::conformance`, every `ConversationStore` adapter runs
   `store::conversation_conformance` (including concurrency, collation and
   real-time expiry under load).
@@ -751,7 +761,7 @@ exposes the 24-hour `CustomerServiceWindow`, and sends replies.
   adapter needs no schema change: the summary is maintained when a row is
   written, so the difference lives in the write.
 
-## Typst (`wa-typst`)
+## Typst (`meta-whatsapp-typst`)
 
 Render a Typst source with JSON inputs (`sys.inputs.data`, read with
 `json(bytes(sys.inputs.data))`) to PDF or PNG, with bundled fonts so output

@@ -5,7 +5,7 @@ description: "Testing code that uses meta-whatsapp-rs without Meta, a network or
 
 # meta-whatsapp-rs-testing
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 6909be3b54768abc3d5f9b04543a49f32b072669 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/integration.rs](examples/integration.rs) — four
 tests meta-whatsapp-rs runs in its own gate. Every other skill's `examples/*.rs` ends
@@ -24,10 +24,10 @@ step), and `meta_whatsapp_rs::core::testing` exists in your tests:
 
 ```toml
 [dependencies]
-wa-rs = { git = "https://github.com/vaam-apps/wa-rs", rev = "<rev>" }
+meta-whatsapp-rs = { git = "https://github.com/vaam-apps/meta-whatsapp-rs", rev = "<rev>" }
 
 [dev-dependencies]
-wa-rs = { git = "https://github.com/vaam-apps/wa-rs", rev = "<rev>", features = ["testing"] }
+meta-whatsapp-rs = { git = "https://github.com/vaam-apps/meta-whatsapp-rs", rev = "<rev>", features = ["testing"] }
 serde_json = "1"
 time = { version = "0.3", features = ["macros"] } # ManualClock takes an OffsetDateTime
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
@@ -92,7 +92,7 @@ including BSUID-only customers without `wa_id`. A sink of
 `meta_whatsapp_rs::adapters::sink::channel` lets the test read what was delivered;
 `meta_whatsapp_rs::webhooks::WebhookPayload::from_slice(..)?.into_events()` parses a
 body without a handler. To drive an axum app, see the tests of
-`wa-rs-webhook-endpoint` (`tower::ServiceExt::oneshot`).
+`meta-whatsapp-rs-webhook-endpoint` (`tower::ServiceExt::oneshot`).
 
 ## Time
 
@@ -119,17 +119,17 @@ let key = inbox.key(CUSTOMER);
   cooldowns between tests.
 - Postgres and Redis expire records by their own clock: a `ManualClock`
   does not move them. Test expiry logic on the memory stores; test the
-  adapters with their conformance suites (`wa-rs-storage`).
+  adapters with their conformance suites (`meta-whatsapp-rs-storage`).
 
 ## What meta-whatsapp-rs does not do
 
 - No mock HTTP server and no recorded fixtures of Meta's API: the scripts
   are yours, from Meta's documented examples.
-- ~~wa-rs does not forward a `testing` feature: a wa-core dev-dependency
+- ~~meta-whatsapp-rs does not forward a `testing` feature: a meta-whatsapp-core dev-dependency
   is needed~~: true until 4eb93c9 (2026-09-24); use the feature above.
 
 ## Related skills
 
-`wa-rs-setup` (the client), `wa-rs-webhook-endpoint` (testing the axum
-route), `wa-rs-storage` (conformance suites for your own adapters),
-`wa-rs-errors` (which errors to script).
+`meta-whatsapp-rs-setup` (the client), `meta-whatsapp-rs-webhook-endpoint` (testing the axum
+route), `meta-whatsapp-rs-storage` (conformance suites for your own adapters),
+`meta-whatsapp-rs-errors` (which errors to script).

@@ -5,7 +5,7 @@ description: "WhatsApp commerce with meta-whatsapp-rs - commerce settings (cart,
 
 # meta-whatsapp-rs-commerce
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/commerce.rs](examples/commerce.rs), compiled and
 tested by meta-whatsapp-rs's own gate.
@@ -76,7 +76,7 @@ A catalog template has a `Button::catalog(text)`, filled at send time by
 template has `TemplateComponent::header_product()` and `Button::spm(text)`;
 at send time its header is
 `Parameter::product(product_retailer_id, catalog_id)`. Creating and
-approving them: `wa-rs-templates`.
+approving them: `meta-whatsapp-rs-templates`.
 
 ## Orders
 
@@ -108,14 +108,14 @@ key the order by the message id.
 
 - No catalog upload or inventory management, no payment collection
   (payments are out of scope, see
-  [coverage](https://github.com/vaam-apps/wa-rs/blob/main/docs/coverage.md)),
+  [coverage](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/coverage.md)),
   no order state machine.
 - Product-card carousel templates accept 2–10 cards where Meta's page says
   "exactly two"
-  ([open question 22](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#product-details)).
+  ([open question 22](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#product-details)).
 
 ## Related skills
 
-`wa-rs-send-messages`, `wa-rs-templates`, `wa-rs-send-templates`,
-`wa-rs-webhook-events`, `wa-rs-documents` (receipts and invoices for the
-order), `wa-rs-marketing`.
+`meta-whatsapp-rs-send-messages`, `meta-whatsapp-rs-templates`, `meta-whatsapp-rs-send-templates`,
+`meta-whatsapp-rs-webhook-events`, `meta-whatsapp-rs-documents` (receipts and invoices for the
+order), `meta-whatsapp-rs-marketing`.

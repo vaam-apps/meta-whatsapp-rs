@@ -854,6 +854,51 @@ mod tests {
         assert!(v.credit(&WabaId::new("W1")).await.unwrap().is_some());
     }
 
+    /// Ledger records exactly as the vault wrote them before the project
+    /// was renamed to meta-whatsapp-rs (16b61db: `credit("W1")` and a
+    /// revocation marker under `key("k1", 7)`, bytes captured from that
+    /// build), stored under the literal namespace they were written to. A
+    /// change to the ledger's associated-data tag (which still says
+    /// `wa-rs`), to the `wa.token` namespace or to the record format would
+    /// strand every stored record, and fails here; the tests above seal
+    /// with today's code and cannot catch that.
+    #[tokio::test]
+    async fn ledger_records_written_before_the_rename_still_open() {
+        const CREDIT_16B61DB: &str = r#"{"v":1,"kid":"k1","nonce":"FSeqiaUt9ZFwkwXZ","ciphertext":"3squQAsqQKUTJC0/khvX6vjBN0GAX6XmZqhyOs8rQqma9iVyKjMkdkoIpOLymU/RfxLKusJDf0UF6OXQHPcR+XdETPh3FgWhnoWap5qswQ5V+52G41pL2ixox4wbqcXfJqsEvsXGgOUkoduUuSMGVrnSWBGthQZgR5uAFgcCBxpFIWCKkeOdHgeJSRh3wcZGCob+8KOdPyHHNhKyNuj1ozB9J/JiX3RJv62T8z20CuXDF+7e/XAm7Pe+s4/jinoapBXPAyzXoWtIB4GvNXu9B8my4DcwwDa6wn8="}"#;
+        const REVOKED_16B61DB: &str = r#"{"v":1,"kid":"k1","nonce":"51OBiNCCXb/j5iYx","ciphertext":"6iqaqsl+x0zdea+hqcn0VNZ856bwpD+THnWAOlLsqvyBvyKQ1UEDhkV+FyFA8z6aC2/8Rdsa2dTuPf8akfOXc91EieBOVIhlyosXTcjdxZceGpuyp9khxrjUPh9zwBLjlhVjs+AhUoj2pOeNY+CmBfdLbOgU"}"#;
+        let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
+        for (key, record) in [
+            ("credit/W1", CREDIT_16B61DB),
+            ("revoked/2729063490586005", REVOKED_16B61DB),
+        ] {
+            kv.put(
+                &StoreKey::new("wa.token", key),
+                record.as_bytes().to_vec(),
+                Expiry::Never,
+            )
+            .await
+            .unwrap();
+        }
+        let v = vault(&kv, VaultKeys::new(key("k1", 7)));
+        assert_eq!(
+            v.credit(&WabaId::new("W1")).await.unwrap(),
+            Some(credit("W1"))
+        );
+        let marker = v
+            .revoked_business(&BusinessId::new("2729063490586005"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(marker.revoked_at, datetime!(2026-09-24 12:00 UTC));
+        assert_eq!(
+            marker.allocation_config_ids,
+            [AllocationConfigId::new("58501441721238")]
+        );
+        // Not rewritten on read: the active key is the one they were
+        // sealed with.
+        assert_eq!(raw(&kv, "credit/W1").await, CREDIT_16B61DB.as_bytes());
+    }
+
     /// The associated data binds a sealed record to its store key: opened
     /// under any other key it fails, whatever its plaintext says.
     #[test]

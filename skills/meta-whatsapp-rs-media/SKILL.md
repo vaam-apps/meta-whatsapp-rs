@@ -5,7 +5,7 @@ description: "WhatsApp media with meta-whatsapp-rs - uploading files (supported 
 
 # meta-whatsapp-rs-media
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/media.rs](examples/media.rs), compiled and
 tested by meta-whatsapp-rs's own gate.
@@ -77,8 +77,8 @@ media
 
 The returned `UploadHandle` goes into
 `TemplateComponent::header_image(handle.as_str())` when **creating** a
-template (`wa-rs-templates`). At **send** time the header takes a normal
-media id: `Parameter::image_id(media_id)` (`wa-rs-send-templates`). The
+template (`meta-whatsapp-rs-templates`). At **send** time the header takes a normal
+media id: `Parameter::image_id(media_id)` (`meta-whatsapp-rs-send-templates`). The
 Resumable Upload API needs the client's token (sent as `OAuth`, never in a
 URL) and the app id; accepted types are PDF, JPEG, PNG and MP4. For big
 files: `start_upload_session`, `upload_chunk`, `upload_session_status`.
@@ -107,6 +107,6 @@ files: `start_upload_session`, `upload_chunk`, `upload_session_status`.
 
 ## Related skills
 
-`wa-rs-send-messages` (media messages), `wa-rs-templates` (header
-handles), `wa-rs-documents` (render a PDF, then upload), `wa-rs-webhook-events`
-(`MediaContent` in inbound messages), `wa-rs-cms-inbox`.
+`meta-whatsapp-rs-send-messages` (media messages), `meta-whatsapp-rs-templates` (header
+handles), `meta-whatsapp-rs-documents` (render a PDF, then upload), `meta-whatsapp-rs-webhook-events`
+(`MediaContent` in inbound messages), `meta-whatsapp-rs-cms-inbox`.

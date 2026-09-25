@@ -5,7 +5,7 @@ description: "Interactive WhatsApp messages with meta-whatsapp-rs - reply button
 
 # meta-whatsapp-rs-interactive-messages
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/interactive.rs](examples/interactive.rs),
 compiled and tested by meta-whatsapp-rs's own gate.
@@ -15,7 +15,7 @@ compiled and tested by meta-whatsapp-rs's own gate.
 A message the customer answers with a tap: a choice of buttons or list
 rows, a link, "share your location", a Flow (a form), a carousel. All are
 free-form messages: inside the 24-hour window only. Outside it, use a
-template with buttons (`wa-rs-send-templates`). Types live in
+template with buttons (`meta-whatsapp-rs-send-templates`). Types live in
 `meta_whatsapp_rs::client::messages`.
 
 ## Buttons and lists
@@ -78,7 +78,7 @@ A shared location comes back as `MessageContent::Location`; a completed
 Flow as `InteractiveReply::NfmReply` (read it with `.response::<T>()`).
 `FlowRef::Id` survives renames, `FlowRef::Name` does not. `.draft()`
 sends the draft; `.data_exchange()` asks your Flow endpoint for the first
-screen instead of `navigate` (`wa-rs-flows`).
+screen instead of `navigate` (`meta-whatsapp-rs-flows`).
 
 ## Carousels
 
@@ -94,7 +94,7 @@ let card = |image: &str, sku: &str| {
 
 Two to ten cards; every card uses the same button kind and count
 (`CardAction::Url` or `QuickReplies`). Product carousels come from a
-catalog instead (`wa-rs-commerce`).
+catalog instead (`meta-whatsapp-rs-commerce`).
 
 ## Limits are checked before sending
 
@@ -130,6 +130,6 @@ cards 2–10, card body 160 with at most 2 line breaks.
 
 ## Related skills
 
-`wa-rs-send-messages` (sending, recipients), `wa-rs-webhook-events` (the
-replies), `wa-rs-flows`, `wa-rs-commerce` (product messages),
-`wa-rs-send-templates` (buttons outside the window).
+`meta-whatsapp-rs-send-messages` (sending, recipients), `meta-whatsapp-rs-webhook-events` (the
+replies), `meta-whatsapp-rs-flows`, `meta-whatsapp-rs-commerce` (product messages),
+`meta-whatsapp-rs-send-templates` (buttons outside the window).

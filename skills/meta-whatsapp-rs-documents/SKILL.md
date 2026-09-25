@@ -5,11 +5,11 @@ description: "Invoices, receipts and vouchers for WhatsApp with meta-whatsapp-rs
 
 # meta-whatsapp-rs-documents
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/documents.rs](examples/documents.rs), compiled
 and tested by meta-whatsapp-rs's own gate (it renders a real receipt PDF). Runnable
-program: [`invoice_document.rs`](https://github.com/vaam-apps/wa-rs/blob/main/crates/wa-rs/examples/invoice_document.rs).
+program: [`invoice_document.rs`](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/crates/meta-whatsapp-rs/examples/invoice_document.rs).
 
 ## When to use
 
@@ -71,7 +71,7 @@ the first page, `render_png_pages` every page. A bad `ppi` is
 `RenderError::InvalidPpi`; a page over `MAX_PNG_PIXELS` is
 `RenderError::ImageTooLarge`, refused before allocating. Send it with
 `Parameter::image_id(media_id)` in a template header; a template's
-**creation** example needs a Resumable Upload handle instead (`wa-rs-media`).
+**creation** example needs a Resumable Upload handle instead (`meta-whatsapp-rs-media`).
 
 ## Your own template
 
@@ -119,6 +119,6 @@ falls back.
 
 ## Related skills
 
-`wa-rs-media`, `wa-rs-send-messages`, `wa-rs-send-templates`,
-`wa-rs-commerce` (the orders), `wa-rs-marketing` (voucher campaigns),
-`wa-rs-otp-login` (codes go there, never here).
+`meta-whatsapp-rs-media`, `meta-whatsapp-rs-send-messages`, `meta-whatsapp-rs-send-templates`,
+`meta-whatsapp-rs-commerce` (the orders), `meta-whatsapp-rs-marketing` (voucher campaigns),
+`meta-whatsapp-rs-otp-login` (codes go there, never here).

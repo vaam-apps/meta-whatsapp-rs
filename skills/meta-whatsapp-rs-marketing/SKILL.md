@@ -5,7 +5,7 @@ description: "WhatsApp marketing with meta-whatsapp-rs - collecting opt-ins with
 
 # meta-whatsapp-rs-marketing
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/marketing.rs](examples/marketing.rs), compiled
 and tested by meta-whatsapp-rs's own gate.
@@ -13,8 +13,8 @@ and tested by meta-whatsapp-rs's own gate.
 ## When to use
 
 Anything promotional: opt-in collection, campaign sends, consent
-tracking, results. Templates themselves: `wa-rs-templates`; their
-parameters: `wa-rs-send-templates`.
+tracking, results. Templates themselves: `meta-whatsapp-rs-templates`; their
+parameters: `meta-whatsapp-rs-send-templates`.
 
 ## Collect opt-ins
 
@@ -133,12 +133,12 @@ let delivered = analytics
   conversion tracking.
 - Accepting the In-App Signup terms accepts Meta's marketing terms for
   the business: a legal decision
-  ([open question 26](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#product-details)).
+  ([open question 26](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#product-details)).
 - MM API max-price agreement, partner allowlist and reach estimates are
   not wrapped.
 
 ## Related skills
 
-`wa-rs-templates`, `wa-rs-send-templates`, `wa-rs-errors`,
-`wa-rs-webhook-events`, `wa-rs-commerce`, `wa-rs-documents` (voucher
+`meta-whatsapp-rs-templates`, `meta-whatsapp-rs-send-templates`, `meta-whatsapp-rs-errors`,
+`meta-whatsapp-rs-webhook-events`, `meta-whatsapp-rs-commerce`, `meta-whatsapp-rs-documents` (voucher
 images).

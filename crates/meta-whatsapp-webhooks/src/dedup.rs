@@ -57,6 +57,9 @@ use sha2::{Digest, Sha256};
 use crate::event::WebhookEvent;
 
 /// Namespace of the dedup markers in the [`KvStore`].
+///
+/// Stable: predates the rename to meta-whatsapp-rs, never change it
+/// (docs/architecture.md § "Stable identifiers").
 pub const DEDUP_NAMESPACE: &str = "wa.webhook.dedup";
 
 /// Default lifetime of a `done` marker: Meta's 7-day retry window plus an
@@ -233,7 +236,27 @@ impl DedupGuard {
 
 #[cfg(test)]
 mod tests {
+    use meta_whatsapp_adapters::store::MemoryKvStore;
+
     use super::*;
+
+    /// A marker written before the rename to meta-whatsapp-rs: namespace
+    /// `wa.webhook.dedup`, key the SHA-256 hex of the dedup key. Another
+    /// layout would redeliver every event of Meta's retry window after an
+    /// upgrade, and fails here.
+    #[tokio::test]
+    async fn the_marker_key_is_pinned() {
+        let kv = Arc::new(MemoryKvStore::new());
+        let guard = DedupGuard::new(kv.clone());
+        let claim = guard.claim_key("wamid.X:read:16505551234").await.unwrap();
+        assert!(matches!(claim, Claim::Acquired(_)), "{claim:?}");
+        let marker = StoreKey::new(
+            "wa.webhook.dedup",
+            "ff3c3588777e9b0f2f254210adf5fd0a4a77c88f21726e89e7d0408716b603b6",
+        );
+        assert_eq!(store_key("wamid.X:read:16505551234"), marker);
+        assert_eq!(kv.get(&marker).await.unwrap().unwrap().value, PENDING);
+    }
 
     #[test]
     fn store_keys_hide_the_dedup_key() {

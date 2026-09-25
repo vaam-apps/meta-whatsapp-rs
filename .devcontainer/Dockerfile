@@ -82,12 +82,12 @@ COPY init-firewall.sh /usr/local/bin/
 #       git: [.git[] | select(contains(":") | not)]}' > .devcontainer/github-meta-snapshot.json
 # Under /etc, root-owned: /usr/local/share belongs to `node` (npm globals), and
 # a snapshot `node` could replace would let it widen the allowlist.
-COPY github-meta-snapshot.json /etc/wa-rs-firewall/github-meta-snapshot.json
+COPY github-meta-snapshot.json /etc/meta-whatsapp-rs-firewall/github-meta-snapshot.json
 USER root
 # Login shells (bash -l) reset PATH from /etc/profile; keep cargo and the npm
 # global bin (claude) reachable there too, not only in ENV-inheriting shells.
 RUN printf 'export PATH="/home/node/.cargo/bin:/usr/local/share/npm-global/bin:$PATH"\n' \
-  > /etc/profile.d/wa-rs-path.sh
+  > /etc/profile.d/meta-whatsapp-rs-path.sh
 RUN chmod +x /usr/local/bin/init-firewall.sh && \
   echo "node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/node-firewall && \
   chmod 0440 /etc/sudoers.d/node-firewall

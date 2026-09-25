@@ -806,7 +806,7 @@ fn example_files_hide_no_uncompiled_code() {
 
 /// What `--all-features` enables for the examples: the keys of
 /// `crates/meta-whatsapp-rs/Cargo.toml`'s `[features]`.
-fn wa_rs_features() -> HashSet<String> {
+fn meta_whatsapp_rs_features() -> HashSet<String> {
     let manifest = read(&repo().join("crates/meta-whatsapp-rs/Cargo.toml"));
     let mut in_features = false;
     let mut features = HashSet::new();
@@ -1339,7 +1339,7 @@ fn is_excerpt(source: &[&str], paragraphs: &[Vec<&str>]) -> bool {
 
 #[test]
 fn rust_blocks_are_excerpts_of_compiled_files() {
-    let features = wa_rs_features();
+    let features = meta_whatsapp_rs_features();
     // A skill's examples are compiled into the `skills` test binary
     // (`cfg(test)` may hold); the crate's are built as examples (it never
     // does).

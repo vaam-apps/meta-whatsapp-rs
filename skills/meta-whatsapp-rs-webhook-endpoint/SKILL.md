@@ -5,7 +5,7 @@ description: "The WhatsApp webhook endpoint with meta-whatsapp-rs - WebhookHandl
 
 # meta-whatsapp-rs-webhook-endpoint
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/endpoint.rs](examples/endpoint.rs), compiled and
 tested by meta-whatsapp-rs's own gate (axum through `tower::ServiceExt::oneshot`,
@@ -15,7 +15,7 @@ and the framework-free functions).
 
 The one public HTTPS endpoint Meta posts every webhook to, for every
 merchant's WABA. What to do with the events it yields is
-`wa-rs-webhook-events` and `wa-rs-live-updates`.
+`meta-whatsapp-rs-webhook-events` and `meta-whatsapp-rs-live-updates`.
 
 ```text
 POST ─► X-Hub-Signature-256 present and well-formed? (else 401, body never read)
@@ -38,7 +38,7 @@ let handler = WebhookHandler::builder(
 Read the app secret and verify token from your secret store at startup and
 let a blank one stop the process: a blank verify token otherwise answers
 403 to every verification, but only when one arrives
-([open question 16](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#webhooks)).
+([open question 16](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#webhooks)).
 List the old app secret next to the new one while rotating, then drop it.
 
 ## axum
@@ -103,7 +103,7 @@ before your sink, marks it done after (kept 7 days + 1 h,
 that finds a live claim gets `ClaimInFlight` → 503 and comes back later; a
 claim left by a crashed request expires and the retry delivers. So:
 **at-least-once, deduplicated**. The `KvStore` must be shared by every
-instance; on Postgres, purge expired rows regularly (`wa-rs-storage`).
+instance; on Postgres, purge expired rows regularly (`meta-whatsapp-rs-storage`).
 Keep sink calls well under the lease (`.with_lease(d)` to change it).
 
 ## Pitfalls
@@ -113,7 +113,7 @@ Keep sink calls well under the lease (`.with_lease(d)` to change it).
   3 MiB in front either (Meta sends up to 3 MB).
 - A sink error that can never succeed holds back every event after it in
   the same batch until Meta gives up. Make permanent failures impossible
-  in the sink path (`wa-rs-live-updates`).
+  in the sink path (`meta-whatsapp-rs-live-updates`).
 - Meta's signature has no timestamp: a captured body can be replayed.
   Dedup absorbs replays within 7 days; not logging bodies keeps them from
   being captured. Never log the body, the signature header or
@@ -126,13 +126,13 @@ Keep sink calls well under the lease (`.with_lease(d)` to change it).
 ## What meta-whatsapp-rs does not do
 
 - No dead-letter queue: one permanently failing event fails its batch
-  ([open question 30](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#webhooks-and-live-updates)).
+  ([open question 30](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#webhooks-and-live-updates)).
 - No API to fetch past webhooks: what your sink did not persist is gone
   after Meta's 7 days.
 - No mutual TLS setup (Meta offers it per app; configure it in front).
 
 ## Related skills
 
-`wa-rs-webhook-events` (the events), `wa-rs-live-updates` (sinks),
-`wa-rs-cms-inbox`, `wa-rs-storage` (the dedup store), `wa-rs-testing`
-(signed fixtures), `wa-rs-phone-numbers` (subscriptions and overrides).
+`meta-whatsapp-rs-webhook-events` (the events), `meta-whatsapp-rs-live-updates` (sinks),
+`meta-whatsapp-rs-cms-inbox`, `meta-whatsapp-rs-storage` (the dedup store), `meta-whatsapp-rs-testing`
+(signed fixtures), `meta-whatsapp-rs-phone-numbers` (subscriptions and overrides).

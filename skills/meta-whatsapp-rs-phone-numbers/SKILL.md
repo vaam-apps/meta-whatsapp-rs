@@ -5,7 +5,7 @@ description: "Managing WhatsApp business phone numbers and their WABA with meta-
 
 # meta-whatsapp-rs-phone-numbers
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/numbers.rs](examples/numbers.rs), compiled and
 tested by meta-whatsapp-rs's own gate.
@@ -15,7 +15,7 @@ tested by meta-whatsapp-rs's own gate.
 Everything about one business number (`client.phone_number(pnid)`), its
 profile (`client.business_profile(pnid)`) and its WABA
 (`client.waba(waba_id)`). For a merchant's number, use their client
-(`with_token`, `wa-rs-token-vault`).
+(`with_token`, `meta-whatsapp-rs-token-vault`).
 
 ## Register a number
 
@@ -69,7 +69,7 @@ let update = ProfileUpdate {
 `business_profile(pnid).update(&update)` sends only the set fields
 (address ≤ 256 characters; `Vertical::Undefined` and `NotABiz` cannot be
 set); `get(&[ProfileField::About, …])` reads it back. A profile picture is
-a Resumable Upload handle (`profile_picture_handle`, `wa-rs-media`).
+a Resumable Upload handle (`profile_picture_handle`, `meta-whatsapp-rs-media`).
 Conversational components:
 
 ```rust
@@ -109,15 +109,15 @@ number.sync_smb_app_data(SmbSyncType::History).await?; // a second call: SyncNot
 ## What meta-whatsapp-rs does not do
 
 - No PIN policy (who chooses it, storage, recovery)
-  ([open question 4](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)).
+  ([open question 4](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)).
 - Not wrapped: payload-encryption settings, WABA creation, system users.
 - Nothing stores the synced contacts (`smb_app_state_sync`); the inbox
-  records the synced history and the app's echoes (`wa-rs-cms-inbox`).
+  records the synced history and the app's echoes (`meta-whatsapp-rs-cms-inbox`).
   ~~The inbox does not record coexistence echoes or synced history~~:
   true until a3582b8 (2026-09-24).
 
 ## Related skills
 
-`wa-rs-embedded-signup` (numbers of merchants), `wa-rs-token-vault`,
-`wa-rs-webhook-endpoint`, `wa-rs-webhook-events` (number and account
-webhooks), `wa-rs-media` (profile picture handle).
+`meta-whatsapp-rs-embedded-signup` (numbers of merchants), `meta-whatsapp-rs-token-vault`,
+`meta-whatsapp-rs-webhook-endpoint`, `meta-whatsapp-rs-webhook-events` (number and account
+webhooks), `meta-whatsapp-rs-media` (profile picture handle).

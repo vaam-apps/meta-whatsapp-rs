@@ -1,5 +1,5 @@
 // Coupon / gift voucher, 400 x 210 pt (about 1.91:1, a WhatsApp image header).
-// Render it to PNG. Input: `wa_typst::VoucherInput` as JSON in
+// Render it to PNG. Input: `meta_whatsapp_typst::VoucherInput` as JSON in
 // `sys.inputs.data`. Fonts: only those bundled by typst-assets.
 // `code` is a shareable promo code, never an OTP or a bearer secret.
 #let data = json(bytes(sys.inputs.data))

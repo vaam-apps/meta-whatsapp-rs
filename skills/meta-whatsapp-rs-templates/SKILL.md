@@ -5,7 +5,7 @@ description: "Managing WhatsApp message templates with meta-whatsapp-rs - Templa
 
 # meta-whatsapp-rs-templates
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/manage.rs](examples/manage.rs), compiled and
 tested by meta-whatsapp-rs's own gate.
@@ -13,8 +13,8 @@ tested by meta-whatsapp-rs's own gate.
 ## When to use
 
 Defining what a template **is** and getting it approved. Sending one with
-its values is `wa-rs-send-templates`; authentication (OTP) templates are
-`wa-rs-otp-login`. Module `meta_whatsapp_rs::client::templates`, reached with
+its values is `meta-whatsapp-rs-send-templates`; authentication (OTP) templates are
+`meta-whatsapp-rs-otp-login`. Module `meta_whatsapp_rs::client::templates`, reached with
 `client.templates(waba_id)` — the WABA, not the phone number.
 
 Two builder families, never mixed: a **definition** (`TemplateDefinition`,
@@ -38,7 +38,7 @@ templates.create(&definition).await // checked locally first; usually PENDING
 ```
 
 Named placeholders need the named format declared, and a media header
-needs a Resumable Upload handle (`wa-rs-media`), not a media id:
+needs a Resumable Upload handle (`meta-whatsapp-rs-media`), not a media id:
 
 ```rust
 TemplateDefinition::new("autumn_sale", "en_US", TemplateCategory::Marketing)
@@ -121,10 +121,10 @@ while let Some(template) = stream.next().await {
   updated from the webhooks.
 - Product-card carousels: the code allows 2–10 cards where Meta's page
   says "exactly two"
-  ([open question 22](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#product-details)).
+  ([open question 22](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#product-details)).
 
 ## Related skills
 
-`wa-rs-send-templates` (sending them), `wa-rs-otp-login` (authentication
-templates), `wa-rs-media` (header handles), `wa-rs-webhook-events`,
-`wa-rs-marketing`, `wa-rs-commerce` (catalog and multi-product templates).
+`meta-whatsapp-rs-send-templates` (sending them), `meta-whatsapp-rs-otp-login` (authentication
+templates), `meta-whatsapp-rs-media` (header handles), `meta-whatsapp-rs-webhook-events`,
+`meta-whatsapp-rs-marketing`, `meta-whatsapp-rs-commerce` (catalog and multi-product templates).

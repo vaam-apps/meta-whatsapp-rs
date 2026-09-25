@@ -5,12 +5,12 @@ description: "WhatsApp OTP login and phone verification with meta-whatsapp-rs - 
 
 # meta-whatsapp-rs-otp-login
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 92f9692ed24b96c43bedcca2e7088cf196753064 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/otp.rs](examples/otp.rs), compiled and tested by
-wa-rs's own gate (issue → verify once, expiry with a `ManualClock`,
+meta-whatsapp-rs's own gate (issue → verify once, expiry with a `ManualClock`,
 refused numbers). Runnable program:
-[`otp_login.rs`](https://github.com/vaam-apps/wa-rs/blob/main/crates/wa-rs/examples/otp_login.rs).
+[`otp_login.rs`](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/crates/meta-whatsapp-rs/examples/otp_login.rs).
 
 ## When to use
 
@@ -151,10 +151,10 @@ the namespace changes its keys (`NotFound`, limits restart).
   per-IP or per-device throttle in front of `issue`.
 - It does not choose the namespace: your tenant model does. The default
   issue limit and pepper custody are open
-  ([open questions 13, 14](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#authentication-otp)).
+  ([open questions 13, 14](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#authentication-otp)).
 
 ## Related skills
 
-`wa-rs-templates`, `wa-rs-storage` (the shared store), `wa-rs-testing`
-(`ManualClock`, capturing the sent code), `wa-rs-errors`, `wa-rs-production`
+`meta-whatsapp-rs-templates`, `meta-whatsapp-rs-storage` (the shared store), `meta-whatsapp-rs-testing`
+(`ManualClock`, capturing the sent code), `meta-whatsapp-rs-errors`, `meta-whatsapp-rs-production`
 (pepper custody).

@@ -48,9 +48,8 @@ in the repository or the database.
 
 ## 2. Add the dependency
 
-meta-whatsapp-rs is not on crates.io yet (the name is taken; see
-[OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md#naming-and-publishing)). Depend
-on it by git revision:
+meta-whatsapp-rs is not on crates.io yet (no release has been decided; the
+workspace is `publish = false`). Depend on it by git revision:
 
 ```toml
 [dependencies]

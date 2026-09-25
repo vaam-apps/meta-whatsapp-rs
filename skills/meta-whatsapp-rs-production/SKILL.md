@@ -5,16 +5,16 @@ description: "Running meta-whatsapp-rs in production - the secrets (system user 
 
 # meta-whatsapp-rs-production
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 0e63aba8378556b4e34cf4cd5b5392f18f2a5e00 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/production.rs](examples/production.rs),
 compiled and tested by meta-whatsapp-rs's own gate. Longer walkthrough:
-[production guide](https://github.com/vaam-apps/wa-rs/blob/main/docs/guides/production.md).
+[production guide](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/production.md).
 
 ## When to use
 
 Before the first deployment, and at every change of instances, keys,
-wa-rs revision or Graph API version.
+meta-whatsapp-rs revision or Graph API version.
 
 ## Secrets: load once, fail at boot
 
@@ -30,7 +30,7 @@ if let Ok(previous) = required("WA_APP_SECRET_PREVIOUS") {
 | system user token | secret manager | new one in Business Settings, deploy, revoke the old |
 | app secret | secret manager | list old and new in `SignatureVerifier::new` during the rollout |
 | verify token | secret manager | change it in the App Dashboard and your config together |
-| vault key | secret manager, **not** the vault's database | `VaultKeys::with_previous`; `vault.rotate(&waba_id)` for every WABA ever onboarded, offboarded ones too (a Solution Partner's credit ledger outlives the token), and `vault.rotate_business(&business_id)` for each business revoked by id alone; then drop the old key (`wa-rs-token-vault`) |
+| vault key | secret manager, **not** the vault's database | `VaultKeys::with_previous`; `vault.rotate(&waba_id)` for every WABA ever onboarded, offboarded ones too (a Solution Partner's credit ledger outlives the token), and `vault.rotate_business(&business_id)` for each business revoked by id alone; then drop the old key (`meta-whatsapp-rs-token-vault`) |
 | OTP pepper | secret manager, **not** the OTP database | invalidates codes in flight |
 | merchants' tokens | the vault only | the merchant reconnects |
 
@@ -47,7 +47,7 @@ tracing_subscriber::fmt()
     .init();
 ```
 
-wa-rs logs through `tracing` (`RUST_LOG=info,wa_client=debug`): requests
+meta-whatsapp-rs logs through `tracing` (`RUST_LOG=info,meta_whatsapp_client=debug`): requests
 and retries at `debug`, rejected webhooks and sink failures at `warn`,
 unparseable signed bodies at `error` — sizes, digests, field names and
 error kinds only. **Never logged**: tokens, secrets, codes, PINs, query
@@ -61,7 +61,7 @@ answers by status (a run of 503s: sinks outlast the dedup lease),
 ## Solution Partner checklist
 
 A deployment funding merchants with its credit line
-(`wa-rs-embedded-signup`, `references/solution-partner.md` there):
+(`meta-whatsapp-rs-embedded-signup`, `references/solution-partner.md` there):
 onboarding only through `onboard_with_approval`; every `PartnerRemoved`
 wired to `revoke_credit_line` at once, coexistence disconnections included
 (unless its `solution_partner_business_ids` omit your business),
@@ -80,7 +80,7 @@ share Meta never lists (`clear_pending_share`, with an operator id).
 | new users per 24 h | the portfolio's messaging tier | not tracked: count in your queue |
 | management endpoints | rate limited per app and WABA | cache template and number lists |
 | number registration | 10 per 72 h | 133016, a 72 h lock, never retried |
-| webhook answers | fast (median ≤ 250 ms) | keep sinks quick (`wa-rs-live-updates`) |
+| webhook answers | fast (median ≤ 250 ms) | keep sinks quick (`meta-whatsapp-rs-live-updates`) |
 
 Defaults: 30 s timeout, 3 retries (250 ms base, 8 s cap). Set them once:
 
@@ -93,7 +93,7 @@ meta_whatsapp_rs::client_builder()?
 
 Sends are never replayed after a timeout or 5xx: a queue on top must be
 idempotent (tag sends with `callback_data`, reconcile with status webhooks;
-`wa-rs-errors`).
+`meta-whatsapp-rs-errors`).
 
 ## Versions
 
@@ -109,7 +109,7 @@ idempotent (tag sends with `callback_data`, reconcile with status webhooks;
 
 ## Several instances
 
-Shared stores for everything (`wa-rs-storage`); hosts on NTP (Postgres and
+Shared stores for everything (`meta-whatsapp-rs-storage`); hosts on NTP (Postgres and
 Redis expire by their own clock); one `Client` per process, `with_token`
 per merchant; the SSE broadcast channel is per process (relay events or
 pin merchants to an instance); a `ChannelSink` queue dies with its
@@ -122,20 +122,20 @@ timeouts longer than your slowest sink.
 - A blank secret read from an unset variable: fail at boot (the example's
   `required`), not on the first webhook.
 - Upgrade crossings (read the skill named before moving the `rev`):
-  e40b86f invalidates OTP codes in flight once (`wa-rs-otp-login`);
+  e40b86f invalidates OTP codes in flight once (`meta-whatsapp-rs-otp-login`);
   4b47bf7 changes a custom `ConversationStore`'s `update_status`
-  signature (`wa-rs-cms-inbox`); 6d50701 and a9593f3 add three required
+  signature (`meta-whatsapp-rs-cms-inbox`); 6d50701 and a9593f3 add three required
   `ConversationStore` methods, `append_synced`, `fill_media_placeholder`
-  and `revoke` (`wa-rs-storage`), and af5b1f8 tightens their conformance
+  and `revoke` (`meta-whatsapp-rs-storage`), and af5b1f8 tightens their conformance
   suite; 8238853 makes OTP codes in flight
   answer `Invalid` once; 8238853 and 7e4801f refuse a namespace with edge
   whitespace, control or format characters at `OtpService::new`, and
-  fixing it restarts codes and limits (`wa-rs-otp-login`). Lossless
+  fixing it restarts codes and limits (`meta-whatsapp-rs-otp-login`). Lossless
   message content (PR #7, 2026-09-25) is Postgres migration 3, one-way:
   back up first (a rollback is a restore, losing what was recorded
   since), stop the older instances that write to the inbox tables, drop
   your own objects on the content columns, run `migrate` once from a job
-  with a lock timeout, then start (steps: `wa-rs-storage`). An older
+  with a lock timeout, then start (steps: `meta-whatsapp-rs-storage`). An older
   instance left running fails on every content statement (500s Meta
   redelivers, replies sent but not recorded). Upgrades back-fill
   nothing: rows and summaries recorded before stay as written (a U+FFFD
@@ -143,18 +143,18 @@ timeouts longer than your slowest sink.
 
 ## What meta-whatsapp-rs does not do
 
-Read [OPEN_QUESTIONS.md](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md)
+Read [OPEN_QUESTIONS.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md)
 before going live: the OTP issue limit, PIN policy, the missing
 dead-letter path for webhook batches, token refresh, Redis TLS. No
 metrics exporter, no health endpoint, no secret manager integration. A
 revoked message keeps its content in the inbox (decided 2026-09-25;
-`wa-rs-cms-inbox`). ~~Whether the OTP namespace becomes
-required~~: decided in d67b3ac (2026-09-24), it is (`wa-rs-otp-login`).
+`meta-whatsapp-rs-cms-inbox`). ~~Whether the OTP namespace becomes
+required~~: decided in d67b3ac (2026-09-24), it is (`meta-whatsapp-rs-otp-login`).
 ~~The provisional U+0000 replacement~~: until the pull request that
 made U+0000 lossless (PR #7, 2026-09-25); message content keeps it
-(`wa-rs-storage`).
+(`meta-whatsapp-rs-storage`).
 
 ## Related skills
 
-`wa-rs-setup`, `wa-rs-errors`, `wa-rs-storage`, `wa-rs-token-vault`,
-`wa-rs-webhook-endpoint`, `wa-rs-live-updates`.
+`meta-whatsapp-rs-setup`, `meta-whatsapp-rs-errors`, `meta-whatsapp-rs-storage`, `meta-whatsapp-rs-token-vault`,
+`meta-whatsapp-rs-webhook-endpoint`, `meta-whatsapp-rs-live-updates`.

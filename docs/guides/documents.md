@@ -73,7 +73,7 @@ async fn send_invoice(client: &Client, pnid: PhoneNumberId, to: Recipient, invoi
 `"24 Sep 2026"`). The templates print, never compute, so a PDF can never
 disagree with your order record through rounding, and locale formatting
 stays with you. `Option` fields and empty lists are left out of the layout.
-Sample inputs live in `crates/wa-typst/tests/fixtures/`.
+Sample inputs live in `crates/meta-whatsapp-typst/tests/fixtures/`.
 
 ## 4. Outside the window: a document header
 

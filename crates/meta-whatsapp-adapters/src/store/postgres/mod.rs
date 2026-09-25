@@ -154,7 +154,10 @@
 //!    - **Anything on `payload` or `error`** (an expression or partial
 //!      index, a check constraint, a view, a policy, a generated column):
 //!      migration 3 refuses to run while one exists, names it, and changes
-//!      nothing. An expression that reads a field would survive the
+//!      nothing (its hint points to "the upgrade steps of
+//!      wa_adapters::store::postgres": these, under this module's path
+//!      before the rename to meta-whatsapp-rs, which the migration keeps
+//!      because sqlx checksums every migration file). An expression that reads a field would survive the
 //!      conversion (no existing row holds a NUL) and then fail the insert
 //!      of every payload holding one. None of them can be recreated on the
 //!      `json` columns.
@@ -227,6 +230,11 @@ pub use kv::PostgresKvStore;
 /// The migrations, embedded at compile time. They are templates: each
 /// statement names its objects with a placeholder that [`migrate_with_prefix`]
 /// replaces with the prefix before running them.
+///
+/// Stable, byte for byte: sqlx records each file's checksum, so an edit to
+/// an applied migration (a comment included) makes `migrate` refuse every
+/// database it ran on. They predate the rename to meta-whatsapp-rs and keep
+/// the names of their time (docs/architecture.md § "Stable identifiers").
 static MIGRATIONS: Migrator = sqlx::migrate!("./migrations");
 
 /// The placeholder the migration files use for the table prefix.
@@ -247,6 +255,9 @@ pub struct TablePrefix(Cow<'static, str>);
 
 impl TablePrefix {
     /// `wa_`.
+    ///
+    /// Stable: predates the rename to meta-whatsapp-rs, never change it
+    /// (docs/architecture.md § "Stable identifiers").
     pub const DEFAULT: Self = Self(Cow::Borrowed("wa_"));
 
     /// Validate a prefix. Lower-case ASCII letters, digits and `_`, not
@@ -308,7 +319,15 @@ pub async fn migrate(pool: &PgPool) -> Result<(), StorageError> {
 /// Create or upgrade the tables for `prefix`. Each prefix keeps its own
 /// migration history in `<prefix>sqlx_migrations`.
 pub async fn migrate_with_prefix(pool: &PgPool, prefix: &TablePrefix) -> Result<(), StorageError> {
-    let migrations = MIGRATIONS
+    let mut migrator = Migrator::with_migrations(migrations(prefix));
+    migrator.dangerous_set_table_name(prefix.table("sqlx_migrations"));
+    migrator.run(pool).await.map_err(backend)
+}
+
+/// The migrations for `prefix`, as [`migrate_with_prefix`] runs them (and
+/// sqlx records their checksums).
+fn migrations(prefix: &TablePrefix) -> Vec<Migration> {
+    MIGRATIONS
         .iter()
         .map(|m| {
             // Safe to splice: the prefix is validated (see `TablePrefix`)
@@ -322,10 +341,7 @@ pub async fn migrate_with_prefix(pool: &PgPool, prefix: &TablePrefix) -> Result<
                 m.no_tx,
             )
         })
-        .collect();
-    let mut migrator = Migrator::with_migrations(migrations);
-    migrator.dangerous_set_table_name(prefix.table("sqlx_migrations"));
-    migrator.run(pool).await.map_err(backend)
+        .collect()
 }
 
 /// Wrap a sqlx (or migration) failure as the opaque storage leaf.
@@ -340,6 +356,8 @@ fn to_i64(n: impl TryInto<i64>) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+
     use super::*;
 
     #[test]
@@ -361,6 +379,55 @@ mod tests {
         }
         assert!(TablePrefix::new("a".repeat(MAX_PREFIX_LEN)).is_ok());
     }
+
+    /// What a database migrated before the rename to meta-whatsapp-rs
+    /// holds: the default prefix's table names, and the checksum sqlx
+    /// recorded for each migration (SHA-384 of its SQL with the default
+    /// prefix, as `migrate` ran it). An edit to a migration file, a comment
+    /// included, or to the default prefix makes `migrate` refuse such a
+    /// database ("previously applied but has been modified") or miss its
+    /// tables, and fails here.
+    #[test]
+    fn the_default_tables_and_migration_checksums_are_pinned() {
+        let default = TablePrefix::DEFAULT;
+        assert_eq!(
+            ["kv", "messages", "conversations", "sqlx_migrations"].map(|t| default.table(t)),
+            [
+                "wa_kv",
+                "wa_messages",
+                "wa_conversations",
+                "wa_sqlx_migrations"
+            ]
+        );
+        let recorded: Vec<(i64, String)> = migrations(&default)
+            .iter()
+            .map(|m| {
+                let hex = m.checksum.iter().fold(String::new(), |mut hex, b| {
+                    write!(hex, "{b:02x}").unwrap();
+                    hex
+                });
+                (m.version, hex)
+            })
+            .collect();
+        assert_eq!(recorded, PINNED_CHECKSUMS.map(|(v, h)| (v, h.to_owned())));
+    }
+
+    /// `(version, SHA-384 hex)` of every migration under the default
+    /// prefix. A new migration adds a line; an existing line never changes.
+    const PINNED_CHECKSUMS: [(i64, &str); 3] = [
+        (
+            1,
+            "67378b1ee4f8340fac500d4cbb845aaf2cd910d6971daf6737ee66d5ca0d3c49cf5eab437ce50e562cb10bd4405795b6",
+        ),
+        (
+            2,
+            "2fac32627e26566cacb52ad38cc6b6fd4785e8df5832e125bf9238d800c58cdcee373683e82f2673d171cf5613c9dd9c",
+        ),
+        (
+            3,
+            "7f7d081efba61c1cfb5e4a4ec1a26fe93439ef0c39d2cb05b2bd843647bac0e83ad67378d570bf26a6344a606fe8d080",
+        ),
+    ];
 
     #[test]
     fn longest_derived_identifier_fits_postgres_limit() {

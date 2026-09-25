@@ -5,7 +5,7 @@ description: "Keeping merchants' WhatsApp business tokens with meta-whatsapp-rs'
 
 # meta-whatsapp-rs-token-vault
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 0da9390d42a51de4df427476b333062a6f94eacf (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/vault.rs](examples/vault.rs), compiled and
 tested by meta-whatsapp-rs's own gate (routing, rotation, wrong key, offboarding).
@@ -13,7 +13,7 @@ tested by meta-whatsapp-rs's own gate (routing, rotation, wrong key, offboarding
 ## When to use
 
 After Embedded Signup put a merchant's token in the vault
-(`wa-rs-embedded-signup`): every time code acts as that merchant — a
+(`meta-whatsapp-rs-embedded-signup`): every time code acts as that merchant — a
 reply from the inbox, a template send, a profile change — and when
 operating the vault key. Type: `meta_whatsapp_rs::client::embedded_signup::TokenVault`.
 
@@ -96,7 +96,7 @@ is gone).
 
 - **Ownership before the vault.** The vault holds every merchant's token
   and knows no tenants: check that the calling tenant owns the phone
-  number (your table) before `get_by_phone_number` (`wa-rs-cms-inbox`
+  number (your table) before `get_by_phone_number` (`meta-whatsapp-rs-cms-inbox`
   shows the order).
 - **`store` trusts its input.** Every phone number id in a
   `StoredBusinessToken` is routed to that WABA. Let `onboard` write
@@ -118,7 +118,7 @@ is gone).
 - No token refresh: `expires_at` records Meta's expiry when there is one;
   an `ErrorKind::Authentication` (190) on a merchant's calls means running
   Embedded Signup again
-  ([open question 8](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)).
+  ([open question 8](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)).
 - No key custody or rotation schedule (open question 9), and no tenant
   mapping: one WABA shared by two of your tenants is your product's call
   (open question 6).
@@ -126,6 +126,6 @@ is gone).
 
 ## Related skills
 
-`wa-rs-embedded-signup` (how records get there), `wa-rs-setup`
-(`with_token`), `wa-rs-cms-inbox`, `wa-rs-storage`, `wa-rs-production`
+`meta-whatsapp-rs-embedded-signup` (how records get there), `meta-whatsapp-rs-setup`
+(`with_token`), `meta-whatsapp-rs-cms-inbox`, `meta-whatsapp-rs-storage`, `meta-whatsapp-rs-production`
 (secrets).

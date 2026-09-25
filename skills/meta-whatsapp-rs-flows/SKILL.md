@@ -5,7 +5,7 @@ description: "WhatsApp Flows with meta-whatsapp-rs - creating a Flow from its JS
 
 # meta-whatsapp-rs-flows
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 92f9692ed24b96c43bedcca2e7088cf196753064 (2026-09-25).** On another revision, trust the code over this page.
 
 Reference code: [examples/flows.rs](examples/flows.rs), compiled and
 tested by meta-whatsapp-rs's own gate.
@@ -16,7 +16,7 @@ A Flow is a multi-screen form inside WhatsApp. Managing Flows:
 `meta_whatsapp_rs::client::flows` (`client.flows(waba_id)`, `client.flow(flow_id)`).
 A Flow that needs your data at runtime calls your **data endpoint**,
 whose crypto is `meta_whatsapp_rs::client::flows::endpoint` (feature
-`flows-endpoint`). Sending a Flow message: `wa-rs-interactive-messages`.
+`flows-endpoint`). Sending a Flow message: `meta-whatsapp-rs-interactive-messages`.
 
 ## Create and publish
 
@@ -117,10 +117,10 @@ Answer 200 with `sealer.seal(&response)?` as `text/plain`
   Builder) and read `validation_errors`.
 - The Flows metrics API is not wrapped (deprecated by Meta 2026-04-30).
 - No HTTP server for the endpoint: wire `flow_endpoint` into your
-  framework, like the webhook endpoint (`wa-rs-webhook-endpoint`).
+  framework, like the webhook endpoint (`meta-whatsapp-rs-webhook-endpoint`).
 
 ## Related skills
 
-`wa-rs-interactive-messages` (sending a Flow), `wa-rs-webhook-events`
-(`NfmReply`, the completed Flow), `wa-rs-webhook-endpoint`,
-`wa-rs-production` (key custody).
+`meta-whatsapp-rs-interactive-messages` (sending a Flow), `meta-whatsapp-rs-webhook-events`
+(`NfmReply`, the completed Flow), `meta-whatsapp-rs-webhook-endpoint`,
+`meta-whatsapp-rs-production` (key custody).

@@ -5,9 +5,9 @@ description: "Start here for meta-whatsapp-rs, the Rust toolkit for Meta's Whats
 
 # meta-whatsapp-rs
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 8bc676747a09a3c9225a53954030ed7d4eb44adf (2026-09-24).** On another revision, trust the code over this page (see "Versioning" below).
 
-wa-rs is a Cargo workspace for Meta's WhatsApp Business Platform: a typed
+meta-whatsapp-rs is a Cargo workspace for Meta's WhatsApp Business Platform: a typed
 client for the Cloud API and the Business Management API (Graph API
 v25.0), webhook verification and parsing, storage/transport/sink adapters,
 and Typst-rendered documents. It serves three products: e-commerce
@@ -21,19 +21,19 @@ task skills below. Load the task skill before writing that kind of code.
 
 ## Install
 
-Depend on the facade crate `wa-rs` (lib name `meta_whatsapp_rs`); it re-exports the
-others. It is not on crates.io (the name is taken there; the workspace is
+Depend on the facade crate `meta-whatsapp-rs` (lib name `meta_whatsapp_rs`); it re-exports the
+others. It is not on crates.io (no release yet; the workspace is
 `publish = false`), so pin a git revision:
 
 ```toml
 [dependencies]
-wa-rs = { git = "https://github.com/vaam-apps/wa-rs", rev = "4eb93c9bd63812221e75ad0920b6e2cb98ea0dd6", features = ["axum", "postgres"] }
+meta-whatsapp-rs = { git = "https://github.com/vaam-apps/meta-whatsapp-rs", rev = "4eb93c9bd63812221e75ad0920b6e2cb98ea0dd6", features = ["axum", "postgres"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 anyhow = "1"
 ```
 
 - ~~The repository is private: Cargo needs credentials that can read
-  it~~: not so at 2026-09-24, `vaam-apps/wa-rs` is public; no credentials.
+  it~~: not so at 2026-09-24, `vaam-apps/meta-whatsapp-rs` is public; no credentials.
 - Rust 1.98.1 or newer, edition 2024. You bring the tokio runtime.
 - axum, sqlx and redis types cross the API: use the re-exports
   `meta_whatsapp_rs::webhooks::axum` (feature `axum`),
@@ -53,7 +53,7 @@ anyhow = "1"
 | `typst` | | `meta_whatsapp_rs::typst`: invoices, receipts, vouchers → PDF/PNG |
 | `flows-endpoint` | | WhatsApp Flows data-endpoint crypto |
 | `full` | | all of the above |
-| `testing` | | `ScriptedTransport` for your own tests; `[dev-dependencies]` only, not in `full` (`wa-rs-testing`) |
+| `testing` | | `ScriptedTransport` for your own tests; `[dev-dependencies]` only, not in `full` (`meta-whatsapp-rs-testing`) |
 
 `use meta_whatsapp_rs::prelude::*;` brings the client, ids, `Recipient`, the message
 and template builders, the webhook pieces, the store and sink traits and
@@ -63,29 +63,29 @@ the inbox. It leaves out `Result`: write `meta_whatsapp_rs::Result`.
 
 | Task | Skill |
 | --- | --- |
-| Meta app setup, building the `Client`, tokens, API version | `wa-rs-setup` |
-| Handling errors, deciding what may be retried | `wa-rs-errors` |
-| Testing your code without Meta or a database | `wa-rs-testing` |
-| Text, media, location, contacts, reactions, read receipts | `wa-rs-send-messages` |
-| Buttons, lists, CTA links, Flows, carousels | `wa-rs-interactive-messages` |
-| Uploading and downloading media, template header handles | `wa-rs-media` |
-| Creating and managing message templates | `wa-rs-templates` |
-| Sending a template with its parameters | `wa-rs-send-templates` |
-| Phone-number login with WhatsApp codes | `wa-rs-otp-login` |
-| Merchants connecting their own number (Tech Provider or Solution Partner) | `wa-rs-embedded-signup` |
-| Storing merchants' tokens, acting as a merchant | `wa-rs-token-vault` |
-| Registering numbers, PINs, business profile, subscriptions | `wa-rs-phone-numbers` |
-| The webhook endpoint Meta calls | `wa-rs-webhook-endpoint` |
-| What each webhook event means and what to do with it | `wa-rs-webhook-events` |
-| Fan-out, live views over SSE, background workers | `wa-rs-live-updates` |
-| The merchant ↔ customer chat inbox of a CMS | `wa-rs-cms-inbox` |
-| Blocking a customer, group chats, WhatsApp calls | `wa-rs-groups-and-calling` |
-| Campaigns, opt-ins and opt-outs, analytics, QR codes | `wa-rs-marketing` |
-| Catalogs, product messages, carts | `wa-rs-commerce` |
-| Invoices, receipts, vouchers as PDF/PNG | `wa-rs-documents` |
-| WhatsApp Flows and their data endpoint | `wa-rs-flows` |
-| Memory, Postgres or Redis stores, your own adapter | `wa-rs-storage` |
-| Secrets, logs, limits, several instances, going live | `wa-rs-production` |
+| Meta app setup, building the `Client`, tokens, API version | `meta-whatsapp-rs-setup` |
+| Handling errors, deciding what may be retried | `meta-whatsapp-rs-errors` |
+| Testing your code without Meta or a database | `meta-whatsapp-rs-testing` |
+| Text, media, location, contacts, reactions, read receipts | `meta-whatsapp-rs-send-messages` |
+| Buttons, lists, CTA links, Flows, carousels | `meta-whatsapp-rs-interactive-messages` |
+| Uploading and downloading media, template header handles | `meta-whatsapp-rs-media` |
+| Creating and managing message templates | `meta-whatsapp-rs-templates` |
+| Sending a template with its parameters | `meta-whatsapp-rs-send-templates` |
+| Phone-number login with WhatsApp codes | `meta-whatsapp-rs-otp-login` |
+| Merchants connecting their own number (Tech Provider or Solution Partner) | `meta-whatsapp-rs-embedded-signup` |
+| Storing merchants' tokens, acting as a merchant | `meta-whatsapp-rs-token-vault` |
+| Registering numbers, PINs, business profile, subscriptions | `meta-whatsapp-rs-phone-numbers` |
+| The webhook endpoint Meta calls | `meta-whatsapp-rs-webhook-endpoint` |
+| What each webhook event means and what to do with it | `meta-whatsapp-rs-webhook-events` |
+| Fan-out, live views over SSE, background workers | `meta-whatsapp-rs-live-updates` |
+| The merchant ↔ customer chat inbox of a CMS | `meta-whatsapp-rs-cms-inbox` |
+| Blocking a customer, group chats, WhatsApp calls | `meta-whatsapp-rs-groups-and-calling` |
+| Campaigns, opt-ins and opt-outs, analytics, QR codes | `meta-whatsapp-rs-marketing` |
+| Catalogs, product messages, carts | `meta-whatsapp-rs-commerce` |
+| Invoices, receipts, vouchers as PDF/PNG | `meta-whatsapp-rs-documents` |
+| WhatsApp Flows and their data endpoint | `meta-whatsapp-rs-flows` |
+| Memory, Postgres or Redis stores, your own adapter | `meta-whatsapp-rs-storage` |
+| Secrets, logs, limits, several instances, going live | `meta-whatsapp-rs-production` |
 
 Anything else the client wraps: its rustdoc
 (`cargo doc -p meta-whatsapp-rs --all-features --open`), starting at `meta_whatsapp_rs::client`.
@@ -93,7 +93,7 @@ Anything else the client wraps: its rustdoc
 ## Rules every integration follows
 
 From the runnable example
-[`send_message.rs`](https://github.com/vaam-apps/wa-rs/blob/main/crates/wa-rs/examples/send_message.rs)
+[`send_message.rs`](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/crates/meta-whatsapp-rs/examples/send_message.rs)
 (`env` there is `std::env::var` naming the missing variable):
 
 ```rust
@@ -118,7 +118,7 @@ match messages.send(&text).await {
 3. **Branch on `err.kind()`** (`ErrorKind`), never on message text.
 4. **Sends are not idempotent.** A timeout or 5xx on a send is returned,
    never replayed; do not wrap sends in your own retry loop.
-5. **wa-rs knows WABAs and phone number ids, not your tenants.** Check
+5. **meta-whatsapp-rs knows WABAs and phone number ids, not your tenants.** Check
    that the caller owns a number before acting on it.
 6. Secrets (`AccessToken`, `AppSecret`, PINs, OTP codes) print
    `[REDACTED]`; never log what `expose_secret()` returns.
@@ -137,12 +137,12 @@ own gate. On another `rev`, trust the rustdoc
 - Not wrapped: Solution Partner APIs beyond credit lines (partner-led
   verification, Multi-Partner Solutions, migration), payments,
   conversation routing
-  ([coverage](https://github.com/vaam-apps/wa-rs/blob/main/docs/coverage.md)).
+  ([coverage](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/coverage.md)).
 - Open product decisions, with what the code does today:
-  [OPEN_QUESTIONS.md](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md).
+  [OPEN_QUESTIONS.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md).
   Read it before production.
 
 ## Related skills
 
-Every `wa-rs-*` skill in the table above. The integrator guides are in
-[docs/guides](https://github.com/vaam-apps/wa-rs/blob/main/docs/guides/README.md).
+Every `meta-whatsapp-rs-*` skill in the table above. The integrator guides are in
+[docs/guides](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/README.md).

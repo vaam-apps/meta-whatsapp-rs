@@ -5,7 +5,7 @@ description: "Sending free-form WhatsApp messages with meta-whatsapp-rs - Outbou
 
 # meta-whatsapp-rs-send-messages
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/send.rs](examples/send.rs), compiled and tested
 by meta-whatsapp-rs's own gate. Every constructor and content type:
@@ -72,7 +72,7 @@ messages
 messages.react(to, inbound, "👍").await?; // "" removes the reaction
 ```
 
-Media ids come from an upload (`wa-rs-media`); a `MediaSource::link` must
+Media ids come from an upload (`meta-whatsapp-rs-media`); a `MediaSource::link` must
 be a public HTTPS URL.
 
 ## Read receipts and "typing…"
@@ -98,10 +98,10 @@ late "typing…" after the answer looks broken).
   `Error::Validation` naming the JSON path, and **nothing was sent**.
 - `Ok(sent)` means Meta **accepted** the message; delivery, reads and
   failures arrive later as status webhooks keyed by `sent.message_id()`
-  (`wa-rs-webhook-events`). For templates, `message_status` of
+  (`meta-whatsapp-rs-webhook-events`). For templates, `message_status` of
   `sent.messages[0]` may be `HeldForQualityAssessment` (Meta's pacing).
 - It is not idempotent: a timeout or 5xx is returned, never replayed
-  (`wa-rs-errors`). An `Error::Decode` means Meta answered 2xx: treat it as
+  (`meta-whatsapp-rs-errors`). An `Error::Decode` means Meta answered 2xx: treat it as
   sent.
 
 ## Pitfalls
@@ -109,7 +109,7 @@ late "typing…" after the answer looks broken).
 - **Outside the 24-hour customer service window** (no message from the
   customer in the last 24 hours) free-form messages fail with
   `ErrorKind::CustomerServiceWindowClosed` (131047): send a template
-  (`wa-rs-send-templates`).
+  (`meta-whatsapp-rs-send-templates`).
 - **Never drop the `+`**: Meta prepends your business number's country
   code to a number without it, so the message reaches someone else.
 - A reaction cannot be a quoted reply (refused locally, field `context`);
@@ -126,11 +126,11 @@ late "typing…" after the answer looks broken).
 - Payment message types are not modelled: `MessageContent::Raw` is the
   escape hatch.
 - The 24-hour window is not tracked here; the CMS inbox tracks it from
-  recorded messages (`wa-rs-cms-inbox`,
-  [open question 32](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)).
+  recorded messages (`meta-whatsapp-rs-cms-inbox`,
+  [open question 32](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)).
 
 ## Related skills
 
-`wa-rs-interactive-messages` (buttons, lists, Flows), `wa-rs-media`,
-`wa-rs-send-templates`, `wa-rs-errors`, `wa-rs-webhook-events` (status
-webhooks), `wa-rs-cms-inbox` (replies from an inbox).
+`meta-whatsapp-rs-interactive-messages` (buttons, lists, Flows), `meta-whatsapp-rs-media`,
+`meta-whatsapp-rs-send-templates`, `meta-whatsapp-rs-errors`, `meta-whatsapp-rs-webhook-events` (status
+webhooks), `meta-whatsapp-rs-cms-inbox` (replies from an inbox).

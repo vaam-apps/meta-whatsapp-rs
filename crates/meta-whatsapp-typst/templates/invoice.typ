@@ -1,4 +1,4 @@
-// Invoice, A4. Input: `wa_typst::InvoiceInput` as JSON in `sys.inputs.data`.
+// Invoice, A4. Input: `meta_whatsapp_typst::InvoiceInput` as JSON in `sys.inputs.data`.
 // Amounts and dates arrive formatted; this template never computes either.
 // Fonts: only those bundled by typst-assets (see the crate docs).
 #let data = json(bytes(sys.inputs.data))

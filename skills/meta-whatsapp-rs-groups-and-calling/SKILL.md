@@ -5,7 +5,7 @@ description: "What a merchant inbox built on meta-whatsapp-rs needs beyond one-t
 
 # meta-whatsapp-rs-groups-and-calling
 
-> **Verified against meta-whatsapp-rs d9f4c05393be9b6b7ce688efe1ad309b026fbd37 (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 1e63b2ba9c94fb9a4f2895f0dc9efc27ee749274 (2026-09-24).** On another revision, trust the code over this page.
 
 Reference code: [examples/groups_calls.rs](examples/groups_calls.rs),
 compiled and tested by meta-whatsapp-rs's own gate (Meta-shaped answers and
@@ -15,10 +15,10 @@ webhooks). Everything else: the rustdoc of `meta_whatsapp_rs::client::block_user
 
 ## When to use
 
-A merchant's inbox (`wa-rs-cms-inbox`) wants a "block" button, group
+A merchant's inbox (`meta-whatsapp-rs-cms-inbox`) wants a "block" button, group
 chats with customers, or to cope with customers calling the number. All
 three act as the merchant: use the client from `with_token`
-(`wa-rs-token-vault`), after your ownership check.
+(`meta-whatsapp-rs-token-vault`), after your ownership check.
 
 ## Block a customer
 
@@ -29,7 +29,11 @@ let refused = answer
     .block_users
     .failed_users
     .iter()
-    .flat_map(|user| user.errors.iter().map(meta_whatsapp_rs::GraphApiError::kind))
+    .flat_map(|user| {
+        user.errors
+            .iter()
+            .map(meta_whatsapp_rs::GraphApiError::kind)
+    })
     .collect();
 Ok(refused) // empty: blocked. 131047: they have not written in the last 24 hours
 ```
@@ -77,7 +81,7 @@ characters, description ≤ 2,048, JPEG picture ≤ 5 MiB.
 
 ## Calls
 
-wa-rs wraps the Calling API's **signalling**: settings, call
+meta-whatsapp-rs wraps the Calling API's **signalling**: settings, call
 permissions, and the actions `connect`, `pre_accept`, `accept`,
 `reject`, `terminate`, with the SDP passed through unparsed. The audio
 (WebRTC or SIP) is yours. Calling is off until
@@ -111,19 +115,19 @@ Calls arrive as `WebhookEvent::CallUpdated` and `CallStatusUpdated`
 - A call, answered or not, opens the 24-hour window on Meta's side, but
   the inbox records no calls: `Inbox::reply` still refuses free-form text
   unless the customer wrote in the last 24 hours
-  ([open question 32](https://github.com/vaam-apps/wa-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)).
+  ([open question 32](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)).
 
 ## What meta-whatsapp-rs does not do
 
 - No audio: no WebRTC or SIP media stack, no storage of call recordings
   or transcripts.
 - The inbox records neither group lifecycle events nor calls: handle
-  `GroupUpdated` and `CallUpdated` in your own sink (`wa-rs-live-updates`).
+  `GroupUpdated` and `CallUpdated` in your own sink (`meta-whatsapp-rs-live-updates`).
 - No block list sync into your tables: `list_stream` is the source.
 
 ## Related skills
 
-`wa-rs-cms-inbox` (conversations, `recipient`), `wa-rs-token-vault`
-(the merchant's client), `wa-rs-webhook-events` (group and call events),
-`wa-rs-live-updates` (sinks), `wa-rs-send-messages` (sending to a group),
-`wa-rs-errors`.
+`meta-whatsapp-rs-cms-inbox` (conversations, `recipient`), `meta-whatsapp-rs-token-vault`
+(the merchant's client), `meta-whatsapp-rs-webhook-events` (group and call events),
+`meta-whatsapp-rs-live-updates` (sinks), `meta-whatsapp-rs-send-messages` (sending to a group),
+`meta-whatsapp-rs-errors`.
