@@ -1,0 +1,46 @@
+[package]
+name = "meta-whatsapp-webhooks"
+description = "WhatsApp webhook verification (hub.challenge, X-Hub-Signature-256), typed payloads, normalized events, dedup and dispatch to sinks."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# axum router (GET verify, POST deliver) and an SSE helper for live inboxes.
+axum = ["dep:axum", "dep:tokio", "tokio/sync"]
+
+[dependencies]
+meta-whatsapp-core.workspace = true
+
+futures.workspace = true
+hex.workspace = true
+hmac.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+time.workspace = true
+tracing.workspace = true
+
+axum = { workspace = true, optional = true, features = ["json", "query", "tokio", "http1"] }
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+meta-whatsapp-core = { workspace = true, features = ["testing"] }
+# Only the in-memory KvStore: the sink adapters are written separately, so the
+# tests here define their own tiny sinks.
+meta-whatsapp-adapters = { workspace = true, features = ["memory"] }
+# Test sinks and the crate-level doc example implement EventSink.
+async-trait.workspace = true
+http-body-util.workspace = true
+pretty_assertions.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

@@ -2126,6 +2126,143 @@ dependencies = [
 ]
 
 [[package]]
+name = "meta-whatsapp-adapters"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "bytes",
+ "futures",
+ "http",
+ "meta-whatsapp-core",
+ "redis",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "time",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "meta-whatsapp-client"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "async-trait",
+ "aws-lc-rs",
+ "base64 0.22.1",
+ "bytes",
+ "futures",
+ "getrandom 0.3.4",
+ "hex",
+ "hmac 0.12.1",
+ "http",
+ "meta-whatsapp-adapters",
+ "meta-whatsapp-core",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "time",
+ "tokio",
+ "tracing",
+ "unicode-properties",
+ "url",
+]
+
+[[package]]
+name = "meta-whatsapp-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "futures",
+ "http",
+ "pretty_assertions",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "time",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "meta-whatsapp-rs"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "http-body-util",
+ "meta-whatsapp-adapters",
+ "meta-whatsapp-client",
+ "meta-whatsapp-core",
+ "meta-whatsapp-typst",
+ "meta-whatsapp-webhooks",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "time",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "meta-whatsapp-typst"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "meta-whatsapp-core",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "time",
+ "typst",
+ "typst-assets",
+ "typst-layout",
+ "typst-pdf",
+ "typst-render",
+]
+
+[[package]]
+name = "meta-whatsapp-webhooks"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "futures",
+ "hex",
+ "hmac 0.12.1",
+ "http-body-util",
+ "meta-whatsapp-adapters",
+ "meta-whatsapp-core",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "time",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4650,143 +4787,6 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-
-[[package]]
-name = "wa-adapters"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "bytes",
- "futures",
- "http",
- "redis",
- "reqwest",
- "serde",
- "serde_json",
- "sqlx",
- "time",
- "tokio",
- "tokio-stream",
- "tracing",
- "url",
- "wa-core",
-]
-
-[[package]]
-name = "wa-client"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "anyhow",
- "async-trait",
- "aws-lc-rs",
- "base64 0.22.1",
- "bytes",
- "futures",
- "getrandom 0.3.4",
- "hex",
- "hmac 0.12.1",
- "http",
- "pretty_assertions",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "subtle",
- "time",
- "tokio",
- "tracing",
- "unicode-properties",
- "url",
- "wa-adapters",
- "wa-core",
-]
-
-[[package]]
-name = "wa-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "bytes",
- "futures",
- "http",
- "pretty_assertions",
- "secrecy",
- "serde",
- "serde_json",
- "thiserror",
- "time",
- "tokio",
- "url",
-]
-
-[[package]]
-name = "wa-rs"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "futures",
- "http-body-util",
- "pretty_assertions",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "subtle",
- "time",
- "tokio",
- "tower",
- "tracing",
- "tracing-subscriber",
- "wa-adapters",
- "wa-client",
- "wa-core",
- "wa-typst",
- "wa-webhooks",
-]
-
-[[package]]
-name = "wa-typst"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "pretty_assertions",
- "serde",
- "serde_json",
- "thiserror",
- "time",
- "typst",
- "typst-assets",
- "typst-layout",
- "typst-pdf",
- "typst-render",
- "wa-core",
-]
-
-[[package]]
-name = "wa-webhooks"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "axum",
- "futures",
- "hex",
- "hmac 0.12.1",
- "http-body-util",
- "pretty_assertions",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "subtle",
- "time",
- "tokio",
- "tower",
- "tracing",
- "wa-adapters",
- "wa-core",
-]
 
 [[package]]
 name = "walkdir"

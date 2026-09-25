@@ -46,7 +46,7 @@ fn main() -> Result<()> {
 fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(45)))
-        .user_agent("wa-rs-xtask (docs mirror)")
+        .user_agent("meta-whatsapp-rs-xtask (docs mirror)")
         .build()
         .into()
 }

@@ -1,0 +1,92 @@
+[package]
+name = "meta-whatsapp-rs"
+description = "WhatsApp Business Platform for Rust: client, webhooks, adapters and Typst rendering behind one dependency."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "meta_whatsapp_rs"
+
+[features]
+default = ["reqwest", "memory", "sinks"]
+reqwest = ["meta-whatsapp-adapters/reqwest"]
+memory = ["meta-whatsapp-adapters/memory"]
+sinks = ["meta-whatsapp-adapters/sinks"]
+postgres = ["meta-whatsapp-adapters/postgres"]
+redis = ["meta-whatsapp-adapters/redis"]
+axum = ["meta-whatsapp-webhooks/axum"]
+typst = ["dep:meta-whatsapp-typst"]
+flows-endpoint = ["meta-whatsapp-client/flows-endpoint"]
+# Test doubles for your own tests (`meta_whatsapp_rs::core::testing::ScriptedTransport`),
+# so you don't need a second dependency pinned to the same revision.
+testing = ["meta-whatsapp-core/testing"]
+full = ["reqwest", "memory", "sinks", "postgres", "redis", "axum", "typst", "flows-endpoint"]
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+serde_json.workspace = true
+time.workspace = true
+tracing.workspace = true
+meta-whatsapp-core.workspace = true
+meta-whatsapp-client.workspace = true
+meta-whatsapp-webhooks.workspace = true
+meta-whatsapp-adapters = { workspace = true, default-features = false }
+meta-whatsapp-typst = { workspace = true, optional = true }
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
+meta-whatsapp-core = { workspace = true, features = ["testing"] }
+meta-whatsapp-adapters = { workspace = true, features = ["memory"] }
+serde_json.workspace = true
+# Examples and the in-process app tests. The examples, the tests and the
+# rustdoc examples reach axum through `meta_whatsapp_rs::webhooks::axum`, sqlx through
+# `meta_whatsapp_rs::adapters::store::postgres::sqlx` and redis through
+# `meta_whatsapp_rs::adapters::store::redis`, as integrators should: none of them is a
+# dependency of this crate, so an example cannot compile only thanks to a
+# pin integrators do not have.
+anyhow.workspace = true
+http-body-util.workspace = true
+pretty_assertions.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "net", "sync", "time"] }
+tower = { workspace = true, features = ["util"] }
+# The examples' bearer-token stand-in for your authentication: tokens are
+# kept as SHA-256 digests and compared in constant time.
+sha2.workspace = true
+subtle.workspace = true
+# The consumer skills' example code (skills/*/examples, compiled by
+# tests/skills.rs) streams media downloads and paginated lists, as an
+# integrator would.
+futures.workspace = true
+
+# Examples. `required-features` keeps `cargo check -p meta-whatsapp-rs --examples` (default
+# features) green; `--all-features` (what `just check` and `just lint` use)
+# builds all of them.
+[[example]]
+name = "send_message"
+required-features = ["reqwest"]
+
+[[example]]
+name = "otp_login"
+required-features = ["reqwest", "memory"]
+
+[[example]]
+name = "cms_inbox"
+required-features = ["reqwest", "memory", "sinks", "axum"]
+
+[[example]]
+name = "embedded_signup"
+required-features = ["reqwest", "memory", "axum"]
+
+[[example]]
+name = "invoice_document"
+required-features = ["reqwest", "typst"]
+
+[lints]
+workspace = true
