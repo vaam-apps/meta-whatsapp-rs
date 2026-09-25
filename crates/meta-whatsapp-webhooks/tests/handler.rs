@@ -12,8 +12,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use pretty_assertions::assert_eq;
-use serde_json::json;
 use meta_whatsapp_adapters::store::MemoryKvStore;
 use meta_whatsapp_core::Error;
 use meta_whatsapp_core::clock::ManualClock;
@@ -26,6 +24,8 @@ use meta_whatsapp_webhooks::{
     Claim, DEFAULT_CLAIM_LEASE, DedupGuard, DeliveryReport, SignatureVerifier, VerificationQuery,
     WebhookEvent, WebhookHandler, WebhookPayload, sign,
 };
+use pretty_assertions::assert_eq;
+use serde_json::json;
 
 use common::RecordingSink;
 

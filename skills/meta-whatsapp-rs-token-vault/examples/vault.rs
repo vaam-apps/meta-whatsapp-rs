@@ -7,10 +7,12 @@
 
 use std::sync::Arc;
 
-use time::OffsetDateTime;
-use meta_whatsapp_rs::client::embedded_signup::{StoredBusinessToken, TokenVault, VaultKey, VaultKeys};
+use meta_whatsapp_rs::client::embedded_signup::{
+    StoredBusinessToken, TokenVault, VaultKey, VaultKeys,
+};
 use meta_whatsapp_rs::core::ids::BusinessId;
 use meta_whatsapp_rs::prelude::*;
+use time::OffsetDateTime;
 
 /// At startup: the key comes from your secret manager, never from the
 /// database that holds the `KvStore`.

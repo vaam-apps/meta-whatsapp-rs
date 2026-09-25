@@ -8,10 +8,10 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use serde::Serialize;
-use serde::ser::{SerializeMap, Serializer};
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{FlowId, MediaId};
+use serde::Serialize;
+use serde::ser::{SerializeMap, Serializer};
 
 use super::commerce::{CatalogMessage, ProductCarousel, ProductList, SingleProduct};
 use super::content::MediaSource;

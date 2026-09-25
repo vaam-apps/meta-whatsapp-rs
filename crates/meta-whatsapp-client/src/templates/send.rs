@@ -28,11 +28,11 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_json::Value;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{CatalogId, MediaId};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value;
 
 use super::macros::string_enum;
 

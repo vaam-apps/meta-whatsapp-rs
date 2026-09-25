@@ -5,9 +5,9 @@
 //! lists only `HOME`/`WORK`, but the page's own example sends `Office`,
 //! `Pop-Up`, `Landline`, `Mobile` and `Company (FB)`. We follow the example.
 
-use serde::Serialize;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::WaId;
+use serde::Serialize;
 
 use super::validate::{self, Check};
 

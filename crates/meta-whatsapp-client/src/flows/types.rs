@@ -7,12 +7,12 @@
 //! Meta validates it server-side, returning [`FlowValidationError`]s, so the
 //! crate carries it as an opaque JSON string.
 
+use meta_whatsapp_core::error::ValidationError;
+use meta_whatsapp_core::ids::FlowId;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use time::format_description::BorrowedFormatItem;
 use time::macros::format_description;
-use meta_whatsapp_core::error::ValidationError;
-use meta_whatsapp_core::ids::FlowId;
 
 /// Largest Flow JSON Meta accepts. The docs say "10 MB" for both the asset
 /// upload and the `flow_json` string without saying which megabyte; the

@@ -1,10 +1,10 @@
 //! The send request envelope: [`OutboundMessage`] and [`MessageContent`].
 
-use serde::Serialize;
-use serde::ser::{SerializeMap, Serializer};
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{CatalogId, GroupId, MediaId, MessageId};
 use meta_whatsapp_core::recipient::Recipient;
+use serde::Serialize;
+use serde::ser::{SerializeMap, Serializer};
 
 use super::commerce::{CatalogMessage, ProductList, ProductSection, SingleProduct};
 use super::contacts::{Contact, MAX_CONTACTS};

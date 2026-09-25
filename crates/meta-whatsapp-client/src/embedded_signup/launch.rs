@@ -46,11 +46,11 @@
 //! Neither can be verified offline; a live Embedded Signup run with
 //! pre-filled data is the test that would settle them.
 
-use serde::Serialize;
-use serde::ser::Serializer;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{BusinessId, PhoneNumberId, WabaId};
+use serde::Serialize;
+use serde::ser::Serializer;
 
 /// Maximum characters of the business portfolio name (`pre-filled-data`).
 pub const MAX_BUSINESS_NAME_CHARS: usize = 100;

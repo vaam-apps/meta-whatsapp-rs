@@ -89,11 +89,11 @@ pub use types::{
 };
 
 use futures::Stream;
-use serde::{Deserialize, Serialize};
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{TemplateId, WabaId};
 use meta_whatsapp_core::paging::Page;
+use serde::{Deserialize, Serialize};
 
 use crate::request::{paginate_or_error, reject_cursors};
 use crate::{Client, GraphRequest};

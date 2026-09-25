@@ -89,10 +89,10 @@ pub use otp::{
     VerifyOutcome,
 };
 
-use serde::{Deserialize, Serialize};
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{TemplateId, WabaId};
+use serde::{Deserialize, Serialize};
 
 use crate::Client;
 use crate::templates::{

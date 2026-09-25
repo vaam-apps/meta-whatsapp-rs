@@ -7,10 +7,10 @@
 //! (`crates/meta-whatsapp-rs/tests/skills.rs`).
 
 use async_trait::async_trait;
-use tokio::sync::{broadcast, mpsc};
 use meta_whatsapp_rs::adapters::sink::{BroadcastSink, ChannelMode, FanoutSink, channel};
 use meta_whatsapp_rs::core::error::SinkError;
 use meta_whatsapp_rs::prelude::*;
+use tokio::sync::{broadcast, mpsc};
 
 /// Your durable sink: whatever it returns decides the webhook's answer
 /// (an error → 500 → Meta redelivers the batch), so make it idempotent.

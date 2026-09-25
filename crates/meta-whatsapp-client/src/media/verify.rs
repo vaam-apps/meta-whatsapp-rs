@@ -7,10 +7,10 @@ use std::task::{Context, Poll};
 use base64::Engine as _;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
-use sha2::{Digest, Sha256};
 use meta_whatsapp_core::error::{TransportError, ValidationError};
 use meta_whatsapp_core::transport::ByteStream;
 use meta_whatsapp_core::{Error, Result};
+use sha2::{Digest, Sha256};
 
 use super::MediaInfo;
 

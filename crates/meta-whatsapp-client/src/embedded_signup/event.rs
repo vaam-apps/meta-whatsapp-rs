@@ -20,12 +20,12 @@
 //! the WABA before storing anything. Limit the size of the request body
 //! that carries it in your HTTP layer.
 
-use serde::de::Deserializer;
-use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{BusinessId, PhoneNumberId, WabaId};
 use meta_whatsapp_core::{Error, Result};
+use serde::de::Deserializer;
+use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 /// The `type` every Embedded Signup message event carries.
 pub const MESSAGE_TYPE: &str = "WA_EMBEDDED_SIGNUP";

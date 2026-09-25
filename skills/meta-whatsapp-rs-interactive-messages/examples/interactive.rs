@@ -43,7 +43,10 @@ pub fn delivery_slot_list(to: Recipient) -> OutboundMessage {
 }
 
 /// A link button, a location request, a Flow.
-pub async fn send_cta_location_flow(messages: &Messages, to: Recipient) -> meta_whatsapp_rs::Result<()> {
+pub async fn send_cta_location_flow(
+    messages: &Messages,
+    to: Recipient,
+) -> meta_whatsapp_rs::Result<()> {
     let track = CtaUrl::new(
         "Track your parcel",
         "Track",
@@ -91,8 +94,8 @@ pub fn why_refused(to: Recipient) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
     use meta_whatsapp_rs::core::testing::ScriptedTransport;
+    use serde_json::json;
 
     use super::*;
 

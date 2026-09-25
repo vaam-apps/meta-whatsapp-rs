@@ -6,8 +6,8 @@
 //! number) and `profile` may be absent once a user adopts a username. Key a
 //! user by [`Contact::user_id`] when there is one; never by phone alone.
 
-use serde::{Deserialize, Serialize};
 use meta_whatsapp_core::ids::{PhoneNumberId, UserId, WaId};
+use serde::{Deserialize, Serialize};
 
 /// `value.metadata`: which business phone number the change is about.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

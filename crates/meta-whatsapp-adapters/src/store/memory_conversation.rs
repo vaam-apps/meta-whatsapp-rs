@@ -10,14 +10,14 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use time::OffsetDateTime;
-use tokio::sync::Mutex;
 use meta_whatsapp_core::error::StorageError;
 use meta_whatsapp_core::ids::{MessageId, PhoneNumberId};
 use meta_whatsapp_core::store::{
     ConversationKey, ConversationStore, ConversationSummary, DeliveryStatus, Direction,
     StoredMessage,
 };
+use time::OffsetDateTime;
+use tokio::sync::Mutex;
 
 /// Inbox row state. `last_message_id` breaks timestamp ties the same way the
 /// history order does, so "latest message" is well defined when two

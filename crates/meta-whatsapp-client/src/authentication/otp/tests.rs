@@ -12,15 +12,15 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use http::Method;
-use pretty_assertions::assert_eq;
-use serde_json::json;
-use time::macros::datetime;
 use meta_whatsapp_adapters::store::MemoryKvStore;
 use meta_whatsapp_core::clock::ManualClock;
 use meta_whatsapp_core::error::TransportError;
 use meta_whatsapp_core::store::{StoreKey, Versioned};
 use meta_whatsapp_core::testing::{RecordedRequest, ScriptedTransport};
 use meta_whatsapp_core::{ErrorKind, GraphApiError};
+use pretty_assertions::assert_eq;
+use serde_json::json;
+use time::macros::datetime;
 
 use super::*;
 use crate::RetryPolicy;

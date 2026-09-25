@@ -4,10 +4,10 @@
 //! they end up in [`crate::Change::parse_error`] and, redacted, in logs,
 //! and a value from a webhook body can be personal data.
 
+use meta_whatsapp_core::GraphApiError;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
-use meta_whatsapp_core::GraphApiError;
 
 /// `"an object"`, `"a string"`, … for error messages.
 fn kind(value: &Value) -> &'static str {
@@ -105,9 +105,9 @@ pub(crate) mod graph_errors {
 
 #[cfg(test)]
 mod tests {
-    use serde::Deserialize;
     use meta_whatsapp_core::GraphApiError;
     use meta_whatsapp_core::ids::TemplateId;
+    use serde::Deserialize;
 
     #[derive(Deserialize)]
     struct T {

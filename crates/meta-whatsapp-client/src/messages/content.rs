@@ -1,8 +1,8 @@
 //! Non-interactive message contents: text, media, location, reaction, pin.
 
+use meta_whatsapp_core::ids::MessageId;
 use serde::Serialize;
 use serde::ser::{SerializeMap, Serializer};
-use meta_whatsapp_core::ids::MessageId;
 
 use super::validate::{self, Check};
 

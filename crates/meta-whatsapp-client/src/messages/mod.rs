@@ -158,10 +158,10 @@ pub use outbound::{
 };
 pub use response::{MessageStatus, SendResponse, SentContact, SentMessage};
 
-use serde::Serialize;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::ids::{MessageId, PhoneNumberId};
 use meta_whatsapp_core::recipient::Recipient;
+use serde::Serialize;
 
 use crate::{Client, GraphRequest};
 

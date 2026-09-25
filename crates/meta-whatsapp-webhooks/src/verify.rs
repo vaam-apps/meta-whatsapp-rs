@@ -8,11 +8,11 @@
 //! Answer `200` with the challenge as the body when the token matches; any
 //! other answer leaves the endpoint unverified.
 
+use meta_whatsapp_core::error::{ConfigError, WebhookError};
+use meta_whatsapp_core::secret::VerifyToken;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
-use meta_whatsapp_core::error::{ConfigError, WebhookError};
-use meta_whatsapp_core::secret::VerifyToken;
 
 /// The query string of a verification request. Every parameter is optional
 /// here so that a malformed request is rejected by

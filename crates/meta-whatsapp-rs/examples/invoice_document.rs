@@ -22,10 +22,10 @@
 //! ```
 
 use anyhow::Context as _;
-use time::OffsetDateTime;
 use meta_whatsapp_rs::client::messages::Document;
 use meta_whatsapp_rs::prelude::*;
 use meta_whatsapp_rs::typst::{InvoiceInput, LineItem, Party, Renderer, SummaryLine, Template};
+use time::OffsetDateTime;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

@@ -75,12 +75,12 @@ pub use verify::{DownloadedMedia, MediaDownload, VerifiedBody, VerifiedDownload}
 
 use bytes::Bytes;
 use http::Method;
-use serde::{Deserialize, Deserializer};
-use url::Url;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{MediaId, PhoneNumberId};
 use meta_whatsapp_core::transport::Multipart;
+use serde::{Deserialize, Deserializer};
+use url::Url;
 
 use crate::Client;
 

@@ -7,9 +7,6 @@
 
 mod common;
 
-use pretty_assertions::assert_eq;
-use serde_json::json;
-use time::OffsetDateTime;
 use meta_whatsapp_core::ErrorKind;
 use meta_whatsapp_webhooks::fields::{
     CallPermissionResponse, CallPermissionSource, ContactShareOrigin, InboundMessage,
@@ -17,9 +14,17 @@ use meta_whatsapp_webhooks::fields::{
     ReferralMediaType, ReferralSourceType, Status, SystemMessageType,
 };
 use meta_whatsapp_webhooks::{WebhookEvent, WebhookPayload};
+use pretty_assertions::assert_eq;
+use serde_json::json;
+use time::OffsetDateTime;
 
 /// The single inbound message of a fixture, with its matched contact.
-fn only_message(name: &str) -> (Option<meta_whatsapp_webhooks::fields::Contact>, InboundMessage) {
+fn only_message(
+    name: &str,
+) -> (
+    Option<meta_whatsapp_webhooks::fields::Contact>,
+    InboundMessage,
+) {
     let mut events = common::events(name);
     assert_eq!(events.len(), 1, "{name}: {events:?}");
     match events.remove(0) {

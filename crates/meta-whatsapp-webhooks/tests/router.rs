@@ -14,13 +14,13 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use futures::StreamExt;
 use http_body_util::BodyExt;
-use tower::ServiceExt;
 use meta_whatsapp_adapters::store::MemoryKvStore;
 use meta_whatsapp_core::secret::{AppSecret, VerifyToken};
 use meta_whatsapp_webhooks::{
     Claim, DedupGuard, SignatureVerifier, WebhookEvent, WebhookHandler, WebhookPayload, router,
     server::SIGNATURE_HEADER, sign, sse,
 };
+use tower::ServiceExt;
 
 use common::RecordingSink;
 

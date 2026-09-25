@@ -5,11 +5,11 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use http::Method;
-use pretty_assertions::assert_eq;
-use serde_json::json;
 use meta_whatsapp_core::error::TransportError;
 use meta_whatsapp_core::testing::{RecordedBody, ScriptedTransport};
 use meta_whatsapp_core::{Error, ErrorKind};
+use pretty_assertions::assert_eq;
+use serde_json::json;
 
 use super::*;
 use crate::{Client, RetryPolicy};

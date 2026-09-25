@@ -2,9 +2,9 @@
 
 use std::collections::BTreeMap;
 
+use meta_whatsapp_core::ids::TemplateId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use meta_whatsapp_core::ids::TemplateId;
 
 use super::definition::{Button, SupportedApp, TemplateComponent};
 use super::macros::string_enum;

@@ -23,11 +23,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use meta_whatsapp_core::error::StorageError;
+use meta_whatsapp_core::store::{Expiry, KvStore, StoreKey, Versioned};
 use sqlx::postgres::PgRow;
 use sqlx::{AssertSqlSafe, PgPool, Row};
 use time::OffsetDateTime;
-use meta_whatsapp_core::error::StorageError;
-use meta_whatsapp_core::store::{Expiry, KvStore, StoreKey, Versioned};
 
 use super::{TablePrefix, backend};
 

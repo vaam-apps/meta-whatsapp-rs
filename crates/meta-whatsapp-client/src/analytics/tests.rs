@@ -2,11 +2,11 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use http::Method;
-use serde_json::json;
-use time::macros::date;
 use meta_whatsapp_core::error::TransportError;
 use meta_whatsapp_core::testing::ScriptedTransport;
 use meta_whatsapp_core::{Error, ErrorKind};
+use serde_json::json;
+use time::macros::date;
 
 use super::*;
 use crate::RetryPolicy;

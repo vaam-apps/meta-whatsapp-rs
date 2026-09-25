@@ -21,7 +21,9 @@ pub fn webhook_handler(
 ) -> meta_whatsapp_rs::Result<WebhookHandler> {
     if verify_token.trim().is_empty() {
         // A blank token would answer 403 to every verification, at runtime only.
-        return Err(meta_whatsapp_rs::core::error::ConfigError::new("WA_VERIFY_TOKEN is blank").into());
+        return Err(
+            meta_whatsapp_rs::core::error::ConfigError::new("WA_VERIFY_TOKEN is blank").into(),
+        );
     }
     let handler = WebhookHandler::builder(
         SignatureVerifier::new(app_secrets)?, // refuses an empty list or a blank secret
@@ -93,12 +95,12 @@ pub fn status_of(result: &meta_whatsapp_rs::Result<DeliveryReport>) -> u16 {
 #[cfg(test)]
 mod tests {
     use http_body_util::BodyExt;
-    use serde_json::json;
-    use tower::ServiceExt;
     use meta_whatsapp_rs::adapters::sink::FnSink;
     use meta_whatsapp_rs::adapters::store::MemoryKvStore;
     use meta_whatsapp_rs::webhooks::axum::body::Body;
     use meta_whatsapp_rs::webhooks::axum::http::{Request, StatusCode};
+    use serde_json::json;
+    use tower::ServiceExt;
 
     use super::*;
 

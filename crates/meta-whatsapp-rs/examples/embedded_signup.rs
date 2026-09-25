@@ -84,10 +84,6 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use anyhow::Context as _;
-use serde::Deserialize;
-use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
-use subtle::ConstantTimeEq;
 use meta_whatsapp_rs::adapters::store::MemoryKvStore;
 use meta_whatsapp_rs::client::embedded_signup::{
     CurrentStep, EmbeddedSignup, EmbeddedSignupEvent, FinishKind, LaunchOptions, OnboardingRequest,
@@ -96,6 +92,10 @@ use meta_whatsapp_rs::client::embedded_signup::{
 use meta_whatsapp_rs::client::phone_numbers::TwoStepPin;
 use meta_whatsapp_rs::core::config::ApiVersion;
 use meta_whatsapp_rs::prelude::*;
+use serde::Deserialize;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 // The axum the webhook router is built with, re-exported: no pin of your own.
 use meta_whatsapp_rs::webhooks::axum::extract::rejection::JsonRejection;
 use meta_whatsapp_rs::webhooks::axum::extract::{DefaultBodyLimit, Request, State};

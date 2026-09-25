@@ -4,12 +4,12 @@
 use std::time::Duration;
 
 use http::Method;
-use pretty_assertions::assert_eq;
-use serde_json::json;
 use meta_whatsapp_core::error::TransportError;
 use meta_whatsapp_core::recipient::Recipient;
 use meta_whatsapp_core::testing::ScriptedTransport;
 use meta_whatsapp_core::{Error, ErrorKind};
+use pretty_assertions::assert_eq;
+use serde_json::json;
 
 use super::*;
 use crate::templates::TemplateMessage;
@@ -87,7 +87,8 @@ async fn sends_the_documented_minimal_body() {
     );
     assert_eq!(sent.contacts[0].user_id, None);
     assert_eq!(
-        sent.message_id().map(meta_whatsapp_core::ids::MessageId::as_str),
+        sent.message_id()
+            .map(meta_whatsapp_core::ids::MessageId::as_str),
         Some("wamid.HBgLMTY0NjcwNDM1OTUVAgARGBI1RjQyNUE3NEYxMzAzMzQ5MkEA")
     );
     assert_eq!(t.remaining(), 0);
@@ -614,7 +615,10 @@ async fn client_wabas_with_status_stream_follows_cursors_with_the_filter() {
             .collect()
             .await;
         assert!(
-            matches!(&refused[..], [Err(meta_whatsapp_core::Error::Validation(_))]),
+            matches!(
+                &refused[..],
+                [Err(meta_whatsapp_core::Error::Validation(_))]
+            ),
             "{refused:?}"
         );
     }

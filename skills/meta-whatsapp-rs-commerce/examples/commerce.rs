@@ -15,7 +15,10 @@ use meta_whatsapp_rs::prelude::*;
 use meta_whatsapp_rs::webhooks::fields::{MessageContent as Inbound, OrderContent};
 
 /// Show the storefront icon and keep the cart on.
-pub async fn open_shop(client: &Client, phone_number_id: PhoneNumberId) -> meta_whatsapp_rs::Result<()> {
+pub async fn open_shop(
+    client: &Client,
+    phone_number_id: PhoneNumberId,
+) -> meta_whatsapp_rs::Result<()> {
     let commerce = client.commerce(phone_number_id);
     commerce.set_catalog_visible(true).await?; // hidden by default
     commerce.set_cart_enabled(true).await // Meta's default
@@ -77,8 +80,8 @@ pub fn cart(event: &WebhookEvent) -> Option<(&MessageId, &OrderContent)> {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
     use meta_whatsapp_rs::core::testing::ScriptedTransport;
+    use serde_json::json;
 
     use super::*;
 
@@ -132,9 +135,10 @@ mod tests {
                     "type": "order", "order": {"catalog_id": "194836987003835", "text": "Love these!",
                     "product_items": [{"product_retailer_id": "SKU-1", "quantity": 2,
                         "item_price": 30, "currency": "USD"}]}}]}}]}]});
-        let events = meta_whatsapp_rs::webhooks::WebhookPayload::from_slice(body.to_string().as_bytes())
-            .unwrap()
-            .into_events();
+        let events =
+            meta_whatsapp_rs::webhooks::WebhookPayload::from_slice(body.to_string().as_bytes())
+                .unwrap()
+                .into_events();
         let (id, order) = cart(&events[0]).unwrap();
         assert_eq!(id.as_str(), "wamid.ORDER");
         assert_eq!(order.product_items[0].quantity, Some(2));

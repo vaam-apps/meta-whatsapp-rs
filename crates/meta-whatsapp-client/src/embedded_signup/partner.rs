@@ -9,11 +9,13 @@
 
 use std::fmt;
 
-use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 use meta_whatsapp_core::error::{CreditError, ValidationError};
-use meta_whatsapp_core::ids::{AllocationConfigId, BusinessId, CreditLineId, FundingId, SystemUserId, WabaId};
+use meta_whatsapp_core::ids::{
+    AllocationConfigId, BusinessId, CreditLineId, FundingId, SystemUserId, WabaId,
+};
 use meta_whatsapp_core::secret::AccessToken;
 use meta_whatsapp_core::{Error, Result};
+use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 
 use super::EmbeddedSignup;
 use super::ledger::{ClearedShare, StoredCredit};
@@ -1759,9 +1761,6 @@ mod tests {
     use std::sync::Arc;
 
     use http::Method;
-    use pretty_assertions::assert_eq;
-    use serde_json::json;
-    use time::macros::datetime;
     use meta_whatsapp_adapters::store::MemoryKvStore;
     use meta_whatsapp_core::clock::ManualClock;
     use meta_whatsapp_core::error::TransportError;
@@ -1769,6 +1768,9 @@ mod tests {
     use meta_whatsapp_core::secret::SecretBytes;
     use meta_whatsapp_core::testing::{RecordedBody, RecordedRequest, ScriptedTransport};
     use meta_whatsapp_core::{Error, ErrorKind};
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use time::macros::datetime;
 
     use super::super::event::EmbeddedSignupEvent;
     use super::super::onboard::steps::{
@@ -1934,9 +1936,9 @@ mod tests {
                         .swap(false, std::sync::atomic::Ordering::SeqCst))
                 || (k.starts_with("credit-lease/") && on(&self.refuse_lease_writes))
             {
-                return Err(meta_whatsapp_core::error::StorageError::Backend(anyhow::anyhow!(
-                    "writes refused"
-                )));
+                return Err(meta_whatsapp_core::error::StorageError::Backend(
+                    anyhow::anyhow!("writes refused"),
+                ));
             }
             Ok(())
         }
@@ -1951,7 +1953,10 @@ mod tests {
         async fn get(
             &self,
             key: &meta_whatsapp_core::store::StoreKey,
-        ) -> Result<Option<meta_whatsapp_core::store::Versioned>, meta_whatsapp_core::error::StorageError> {
+        ) -> Result<
+            Option<meta_whatsapp_core::store::Versioned>,
+            meta_whatsapp_core::error::StorageError,
+        > {
             self.inner.get(key).await
         }
         async fn put(
@@ -5558,9 +5563,13 @@ mod tests {
             "the operator is sealed, not in the clear"
         );
         let copy: Arc<dyn meta_whatsapp_core::store::KvStore> = Arc::new(MemoryKvStore::new());
-        copy.put(&credit_store_key(), sealed, meta_whatsapp_core::store::Expiry::Never)
-            .await
-            .unwrap();
+        copy.put(
+            &credit_store_key(),
+            sealed,
+            meta_whatsapp_core::store::Expiry::Never,
+        )
+        .await
+        .unwrap();
         let reader = TokenVault::new(
             Arc::clone(&copy),
             VaultKeys::new(VaultKey::new("k1", SecretBytes::new([42; 32])).unwrap()),

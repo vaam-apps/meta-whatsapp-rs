@@ -25,12 +25,12 @@
 //! (append `.md` for Markdown; `just meta-docs` mirrors them locally).
 
 use futures::Stream;
-use serde::{Deserialize, Serialize};
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{PhoneNumberId, UserId, WaId};
 use meta_whatsapp_core::paging::Page;
 use meta_whatsapp_core::recipient::Recipient;
 use meta_whatsapp_core::{GraphApiError, Result};
+use serde::{Deserialize, Serialize};
 
 use crate::request::{paginate_or_error, reject_cursors};
 use crate::{Client, GraphRequest};
@@ -318,9 +318,9 @@ pub struct BlockedUser {
 mod tests {
     use futures::StreamExt;
     use http::Method;
-    use serde_json::json;
     use meta_whatsapp_core::testing::ScriptedTransport;
     use meta_whatsapp_core::{Error, ErrorKind};
+    use serde_json::json;
 
     use super::*;
     use crate::RetryPolicy;

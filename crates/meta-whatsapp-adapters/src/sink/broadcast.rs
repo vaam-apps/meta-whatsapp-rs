@@ -7,11 +7,11 @@ use std::task::{Context, Poll};
 
 use async_trait::async_trait;
 use futures::Stream;
+use meta_whatsapp_core::error::SinkError;
+use meta_whatsapp_core::sink::EventSink;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
-use meta_whatsapp_core::error::SinkError;
-use meta_whatsapp_core::sink::EventSink;
 
 /// Publishes every event to all current subscribers through a tokio
 /// `broadcast` channel. Cheap to clone.

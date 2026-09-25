@@ -12,11 +12,11 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use time::{Date, Month, OffsetDateTime};
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::MediaId;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use time::{Date, Month, OffsetDateTime};
 
 /// Most holiday overrides in `call_hours.holiday_schedule`.
 pub const MAX_HOLIDAY_OVERRIDES: usize = 20;

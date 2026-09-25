@@ -6,9 +6,6 @@
 
 mod common;
 
-use pretty_assertions::assert_eq;
-use serde_json::json;
-use time::OffsetDateTime;
 use meta_whatsapp_core::ids::BusinessId;
 use meta_whatsapp_webhooks::fields::{
     AccountUpdateEvent, AlertEntityType, AlertSeverity, AlertStatus, AlertType, AutomaticEventName,
@@ -22,6 +19,9 @@ use meta_whatsapp_webhooks::fields::{
     TemplateRejectionReason, TemplateStatusEvent, WabaBanState,
 };
 use meta_whatsapp_webhooks::{WebhookEvent, WebhookPayload};
+use pretty_assertions::assert_eq;
+use serde_json::json;
+use time::OffsetDateTime;
 
 fn ts(secs: i64) -> OffsetDateTime {
     OffsetDateTime::from_unix_timestamp(secs).unwrap()
@@ -77,7 +77,9 @@ fn account_update(name: &str) -> meta_whatsapp_webhooks::fields::AccountUpdateVa
     }
 }
 
-fn account_update_value(value: &serde_json::Value) -> meta_whatsapp_webhooks::fields::AccountUpdateValue {
+fn account_update_value(
+    value: &serde_json::Value,
+) -> meta_whatsapp_webhooks::fields::AccountUpdateValue {
     let body = json!({"object": "whatsapp_business_account", "entry": [{
         "id": "102290129340398", "time": 1739321024,
         "changes": [{"field": "account_update", "value": value}]
@@ -101,7 +103,10 @@ fn account_update_waba_id_is_the_customers_waba_not_a_business() {
     let waba_and_entry = |name: &str| match one(name) {
         WebhookEvent::AccountUpdated {
             waba_id, entry_id, ..
-        } => (waba_id.map(meta_whatsapp_core::ids::WabaId::into_inner), entry_id),
+        } => (
+            waba_id.map(meta_whatsapp_core::ids::WabaId::into_inner),
+            entry_id,
+        ),
         other => panic!("{name}: {other:?}"),
     };
     for (fixture, waba) in [
@@ -679,7 +684,8 @@ fn template_pause_and_disable_details() {
         "disable_info": {"disable_date": 1751234563},
         "other_info": {"title": "FIRST_PAUSE", "description": "Paused for low quality."}
     });
-    let v: meta_whatsapp_webhooks::fields::TemplateStatusUpdateValue = serde_json::from_value(value).unwrap();
+    let v: meta_whatsapp_webhooks::fields::TemplateStatusUpdateValue =
+        serde_json::from_value(value).unwrap();
     assert_eq!(v.event, TemplateStatusEvent::Paused);
     assert_eq!(v.reason, None);
     assert_eq!(v.disable_info.unwrap().disable_date, Some(ts(1751234563)));

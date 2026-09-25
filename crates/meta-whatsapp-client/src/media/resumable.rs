@@ -30,11 +30,11 @@
 
 use bytes::Bytes;
 use http::Method;
-use serde::Deserialize;
 use meta_whatsapp_core::error::{ConfigError, ValidationError};
 use meta_whatsapp_core::ids::{AppId, UploadHandle, UploadSessionId};
 use meta_whatsapp_core::secret::AccessToken;
 use meta_whatsapp_core::{Error, Result};
+use serde::Deserialize;
 
 use super::Media;
 use crate::GraphRequest;

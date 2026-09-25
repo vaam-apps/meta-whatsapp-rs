@@ -52,11 +52,11 @@
 //! WABA or signup id containing `/` or `..` cannot address another object.
 
 use futures::Stream;
-use serde::{Deserialize, Serialize};
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{SignupId, WabaId};
 use meta_whatsapp_core::paging::Page;
+use serde::{Deserialize, Serialize};
 
 use crate::{Client, GraphRequest};
 
@@ -650,9 +650,9 @@ fn check_display_name(name: &str) -> Result<(), ValidationError> {
 mod tests {
     use futures::StreamExt;
     use http::Method;
+    use meta_whatsapp_core::testing::ScriptedTransport;
     use pretty_assertions::assert_eq;
     use serde_json::json;
-    use meta_whatsapp_core::testing::ScriptedTransport;
 
     use super::*;
     use crate::RetryPolicy;
@@ -856,12 +856,17 @@ mod tests {
         ] {
             let refused: Vec<_> = s.list_stream(&query).collect().await;
             assert!(
-                matches!(&refused[..], [Err(meta_whatsapp_core::Error::Validation(_))]),
+                matches!(
+                    &refused[..],
+                    [Err(meta_whatsapp_core::Error::Validation(_))]
+                ),
                 "{refused:?}"
             );
         }
         let refused: Vec<_> = s.list_stream(&ListSignups::new().limit(0)).collect().await;
-        assert!(matches!(&refused[..], [Err(meta_whatsapp_core::Error::Validation(v))] if v.field == "limit"));
+        assert!(
+            matches!(&refused[..], [Err(meta_whatsapp_core::Error::Validation(v))] if v.field == "limit")
+        );
         assert_eq!(t.requests().len(), 2);
     }
 

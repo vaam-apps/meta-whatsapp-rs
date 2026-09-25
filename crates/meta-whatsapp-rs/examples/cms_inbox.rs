@@ -75,18 +75,20 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
 use anyhow::Context as _;
+use meta_whatsapp_rs::adapters::sink::{BroadcastSink, FanoutSink};
+use meta_whatsapp_rs::adapters::store::{MemoryConversationStore, MemoryKvStore};
+use meta_whatsapp_rs::client::embedded_signup::{
+    StoredBusinessToken, TokenVault, VaultKey, VaultKeys,
+};
+use meta_whatsapp_rs::client::messages::Text;
+use meta_whatsapp_rs::core::store::{ConversationSummary, StoredMessage};
+use meta_whatsapp_rs::prelude::*;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 use tokio::sync::broadcast;
-use meta_whatsapp_rs::adapters::sink::{BroadcastSink, FanoutSink};
-use meta_whatsapp_rs::adapters::store::{MemoryConversationStore, MemoryKvStore};
-use meta_whatsapp_rs::client::embedded_signup::{StoredBusinessToken, TokenVault, VaultKey, VaultKeys};
-use meta_whatsapp_rs::client::messages::Text;
-use meta_whatsapp_rs::core::store::{ConversationSummary, StoredMessage};
-use meta_whatsapp_rs::prelude::*;
 // The axum the webhook router is built with, re-exported: no pin of your own.
 use meta_whatsapp_rs::webhooks::axum::extract::{Path, Request, State};
 use meta_whatsapp_rs::webhooks::axum::http::{HeaderValue, StatusCode, header};

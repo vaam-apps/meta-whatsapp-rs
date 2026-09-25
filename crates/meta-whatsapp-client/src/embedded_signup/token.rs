@@ -3,12 +3,12 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{AppId, WabaId};
 use meta_whatsapp_core::secret::{AccessToken, SecretBytes};
+use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 /// The permission whose `target_ids` are the WABAs a token can manage.
 pub const WHATSAPP_BUSINESS_MANAGEMENT: &str = "whatsapp_business_management";

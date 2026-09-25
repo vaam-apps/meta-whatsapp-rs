@@ -23,11 +23,11 @@
 //! verbatim, so a template Meta extends never fails a `list()` and still
 //! round-trips through `edit()`.
 
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::FlowId;
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 
 use super::macros::string_enum;
 use super::types::{

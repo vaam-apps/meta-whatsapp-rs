@@ -5,14 +5,14 @@
 use bytes::Bytes;
 use futures::StreamExt;
 use http::Method;
-use pretty_assertions::assert_eq;
-use serde_json::json;
-use sha2::{Digest, Sha256};
 use meta_whatsapp_core::Error;
 use meta_whatsapp_core::error::TransportError;
 use meta_whatsapp_core::ids::{AppId, MediaId, UploadHandle, UploadSessionId};
 use meta_whatsapp_core::testing::{RecordedBody, ScriptedTransport};
 use meta_whatsapp_core::transport::ByteStream;
+use pretty_assertions::assert_eq;
+use serde_json::json;
+use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::{Client, RetryPolicy};

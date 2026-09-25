@@ -43,7 +43,9 @@ pub fn configured_client(token: AccessToken) -> meta_whatsapp_rs::Result<Client>
 /// token then goes to the proxy, never to production Graph.
 pub fn behind_a_proxy(base_url: &str) -> meta_whatsapp_rs::Result<Client> {
     let endpoint = GraphEndpoint::custom(base_url, ApiVersion::DEFAULT)?;
-    meta_whatsapp_rs::client_builder()?.endpoint(endpoint).build()
+    meta_whatsapp_rs::client_builder()?
+        .endpoint(endpoint)
+        .build()
 }
 
 /// Act as one merchant: the same transport, pool and retry policy, their
@@ -61,7 +63,10 @@ pub async fn send_as_merchant(
 
 /// An endpoint meta-whatsapp-rs does not wrap: the request builders keep the auth,
 /// retries, error decoding and credential host allowlist.
-pub async fn unwrapped(client: &Client, waba_id: &WabaId) -> meta_whatsapp_rs::Result<serde_json::Value> {
+pub async fn unwrapped(
+    client: &Client,
+    waba_id: &WabaId,
+) -> meta_whatsapp_rs::Result<serde_json::Value> {
     client
         .get_at(&[waba_id.as_str()]) // one verbatim, percent-encoded segment per element
         .query("fields", "id,name,timezone_id")
@@ -71,8 +76,8 @@ pub async fn unwrapped(client: &Client, waba_id: &WabaId) -> meta_whatsapp_rs::R
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
     use meta_whatsapp_rs::core::testing::ScriptedTransport;
+    use serde_json::json;
 
     use super::*;
 

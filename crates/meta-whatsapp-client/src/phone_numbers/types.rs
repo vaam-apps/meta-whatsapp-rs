@@ -7,8 +7,8 @@
 //! value in `Other(String)`, and its `Unknown` is Meta's documented
 //! `UNKNOWN` (`OPEN_QUESTIONS.md` #27).
 
-use serde::{Deserialize, Serialize};
 use meta_whatsapp_core::ids::PhoneNumberId;
+use serde::{Deserialize, Serialize};
 
 /// A WhatsApp Business phone number, as returned by `GET /{PHONE_NUMBER_ID}`
 /// and by the WABA's `phone_numbers` edge.

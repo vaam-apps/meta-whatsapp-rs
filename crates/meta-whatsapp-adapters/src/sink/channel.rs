@@ -3,9 +3,9 @@
 use std::fmt;
 
 use async_trait::async_trait;
-use tokio::sync::{Semaphore, mpsc};
 use meta_whatsapp_core::error::SinkError;
 use meta_whatsapp_core::sink::EventSink;
+use tokio::sync::{Semaphore, mpsc};
 
 /// What [`ChannelSink`] does when the channel is full.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

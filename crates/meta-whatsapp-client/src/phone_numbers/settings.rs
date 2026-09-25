@@ -2,10 +2,10 @@
 //! storage (data-at-rest region) and the identity change check. Calling
 //! settings share the endpoint but are typed in [`crate::calling`].
 
+use meta_whatsapp_core::error::ValidationError;
 use serde::de::Deserializer;
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
-use meta_whatsapp_core::error::ValidationError;
 
 /// Country where message data is stored at rest (local storage).
 ///

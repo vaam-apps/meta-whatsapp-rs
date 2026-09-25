@@ -6,7 +6,6 @@
 //! meta-whatsapp-rs compiles this file and runs its tests in its own gate
 //! (`crates/meta-whatsapp-rs/tests/skills.rs`).
 
-use serde_json::json;
 use meta_whatsapp_rs::client::flows::endpoint::{
     EncryptedFlowRequest, EndpointAction, EndpointStatus, FlowEndpointKey, FlowResponse,
     verify_request_signature,
@@ -14,6 +13,7 @@ use meta_whatsapp_rs::client::flows::endpoint::{
 use meta_whatsapp_rs::client::flows::{CreateFlow, FlowCategory};
 use meta_whatsapp_rs::core::ids::FlowId;
 use meta_whatsapp_rs::prelude::*;
+use serde_json::json;
 
 /// Create a Flow from its JSON; publish only when Meta found no errors.
 pub async fn create_and_publish(

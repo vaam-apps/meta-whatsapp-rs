@@ -19,10 +19,10 @@
 //! `https://developers.facebook.com/documentation/business-messaging/whatsapp/`
 //! (append `.md` for Markdown; `just meta-docs` mirrors them locally).
 
-use serde::{Deserialize, Serialize};
 use meta_whatsapp_core::error::{ValidationError, snippet};
 use meta_whatsapp_core::ids::{BusinessProfileId, PhoneNumberId, UploadHandle};
 use meta_whatsapp_core::{Error, Result};
+use serde::{Deserialize, Serialize};
 
 use crate::Client;
 use crate::request::decode_json;
@@ -452,10 +452,10 @@ mod tests {
     use std::time::Duration;
 
     use http::Method;
-    use serde_json::json;
     use meta_whatsapp_core::ErrorKind;
     use meta_whatsapp_core::error::TransportError;
     use meta_whatsapp_core::testing::ScriptedTransport;
+    use serde_json::json;
 
     use super::*;
     use crate::RetryPolicy;

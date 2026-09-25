@@ -19,9 +19,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use http_body_util::{BodyExt, Limited};
-use pretty_assertions::assert_eq;
-use serde_json::{Value, json};
-use tower::ServiceExt;
 use meta_whatsapp_rs::adapters::store::MemoryKvStore;
 use meta_whatsapp_rs::client::embedded_signup::{TokenVault, VaultKey, VaultKeys};
 use meta_whatsapp_rs::core::testing::ScriptedTransport;
@@ -29,6 +26,9 @@ use meta_whatsapp_rs::prelude::*;
 use meta_whatsapp_rs::webhooks::axum::Router;
 use meta_whatsapp_rs::webhooks::axum::body::Body;
 use meta_whatsapp_rs::webhooks::axum::http::{Method, Request, StatusCode, header};
+use pretty_assertions::assert_eq;
+use serde_json::{Value, json};
+use tower::ServiceExt;
 
 const APP_ID: &str = "236484624622562";
 const APP_SECRET: &str = "614fc2afde15eee07a26b2fe3eaee9b9";

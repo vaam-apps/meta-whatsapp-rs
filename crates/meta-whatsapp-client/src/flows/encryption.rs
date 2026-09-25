@@ -12,10 +12,10 @@
 //! - **Read shape.** The guide shows a flat object, the reference wraps it in
 //!   `{"data": [...]}`. [`BusinessEncryption::get`] accepts both.
 
-use serde::Deserialize;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::PhoneNumberId;
+use serde::Deserialize;
 
 use super::types::wire_enum;
 use crate::Client;
@@ -166,9 +166,9 @@ fn validate_public_key_pem(pem: &str) -> Result<(), ValidationError> {
 #[cfg(test)]
 mod tests {
     use http::Method;
-    use serde_json::json;
     use meta_whatsapp_core::ErrorKind;
     use meta_whatsapp_core::testing::{RecordedBody, ScriptedTransport};
+    use serde_json::json;
 
     use super::*;
     use crate::RetryPolicy;
@@ -292,7 +292,10 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"data": [{"business_public_key": 42}]}));
         let err = client(&t).business_encryption("1").get().await.unwrap_err();
-        assert!(matches!(err, meta_whatsapp_core::Error::Decode { .. }), "{err}");
+        assert!(
+            matches!(err, meta_whatsapp_core::Error::Decode { .. }),
+            "{err}"
+        );
         assert_eq!(t.remaining(), 0);
     }
 

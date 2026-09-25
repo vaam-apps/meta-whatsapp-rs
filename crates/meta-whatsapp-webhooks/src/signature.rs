@@ -19,10 +19,10 @@
 use std::fmt;
 
 use hmac::{Hmac, Mac};
-use sha2::Sha256;
-use subtle::{Choice, ConstantTimeEq};
 use meta_whatsapp_core::error::{ConfigError, WebhookError};
 use meta_whatsapp_core::secret::AppSecret;
+use sha2::Sha256;
+use subtle::{Choice, ConstantTimeEq};
 
 type HmacSha256 = Hmac<Sha256>;
 

@@ -9,8 +9,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::{Value, json};
-use time::OffsetDateTime;
 use meta_whatsapp_rs::adapters::sink::channel;
 use meta_whatsapp_rs::adapters::store::{MemoryConversationStore, MemoryKvStore};
 use meta_whatsapp_rs::client::messages::Text;
@@ -18,6 +16,8 @@ use meta_whatsapp_rs::core::clock::ManualClock;
 use meta_whatsapp_rs::core::error::TransportError;
 use meta_whatsapp_rs::core::testing::ScriptedTransport;
 use meta_whatsapp_rs::prelude::*;
+use serde_json::{Value, json};
+use time::OffsetDateTime;
 
 /// A client whose requests go to `transport` instead of Meta.
 pub fn scripted_client(transport: &ScriptedTransport) -> Client {

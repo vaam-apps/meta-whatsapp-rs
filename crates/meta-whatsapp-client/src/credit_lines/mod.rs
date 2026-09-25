@@ -94,14 +94,14 @@ use std::fmt;
 use std::str::FromStr;
 
 use futures::Stream;
-use serde::de::{DeserializeOwned, Deserializer};
-use serde::{Deserialize, Serialize};
 #[doc(no_inline)]
 pub use meta_whatsapp_core::error::CreditRevocation;
 use meta_whatsapp_core::error::{RevocationIncomplete, ValidationError, snippet};
 use meta_whatsapp_core::ids::{AllocationConfigId, BusinessId, CreditLineId, FundingId, WabaId};
 use meta_whatsapp_core::paging::Page;
 use meta_whatsapp_core::{Error, Result};
+use serde::de::{DeserializeOwned, Deserializer};
+use serde::{Deserialize, Serialize};
 
 use crate::phone_numbers::fields_param;
 use crate::request::{decode_json, decode_json_private};
@@ -860,11 +860,11 @@ pub(crate) fn owned_by(
 mod tests {
     use futures::StreamExt;
     use http::Method;
-    use pretty_assertions::assert_eq;
-    use serde_json::json;
     use meta_whatsapp_core::ErrorKind;
     use meta_whatsapp_core::error::TransportError;
     use meta_whatsapp_core::testing::{RecordedBody, RecordedRequest, ScriptedTransport};
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
 
     use super::*;
     use crate::RetryPolicy;

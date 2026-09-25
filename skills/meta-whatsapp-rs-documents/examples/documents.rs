@@ -96,9 +96,9 @@ pub fn sample_receipt() -> ReceiptInput {
 
 #[cfg(test)]
 mod tests {
+    use meta_whatsapp_rs::core::testing::ScriptedTransport;
     use serde_json::json;
     use time::macros::date;
-    use meta_whatsapp_rs::core::testing::ScriptedTransport;
 
     use super::*;
 

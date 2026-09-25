@@ -67,14 +67,14 @@
 //!   (Identifiers are not covered: Meta never assigns one with U+0000, and
 //!   the Postgres store refuses it there.)
 
-use time::OffsetDateTime;
-use time::macros::datetime;
 use meta_whatsapp_core::error::StorageError;
 use meta_whatsapp_core::ids::{MessageId, PhoneNumberId};
 use meta_whatsapp_core::store::{
     ConversationKey, ConversationStore, ConversationSummary, DeliveryStatus, Direction,
     StoredMessage,
 };
+use time::OffsetDateTime;
+use time::macros::datetime;
 
 /// Run the suite.
 ///

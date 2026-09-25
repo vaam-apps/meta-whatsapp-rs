@@ -79,9 +79,9 @@ pub fn acceptable(mime_type: &str, len: u64) -> bool {
 mod tests {
     use std::fmt::Write as _;
 
+    use meta_whatsapp_rs::core::testing::ScriptedTransport;
     use serde_json::json;
     use sha2::{Digest, Sha256};
-    use meta_whatsapp_rs::core::testing::ScriptedTransport;
 
     use super::*;
 

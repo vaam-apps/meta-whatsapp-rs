@@ -6,13 +6,13 @@
 //! meta-whatsapp-rs compiles this file and runs its tests in its own gate
 //! (`crates/meta-whatsapp-rs/tests/skills.rs`).
 
-use time::OffsetDateTime;
 use meta_whatsapp_rs::client::analytics::{MessagingAnalyticsQuery, MessagingGranularity};
 use meta_whatsapp_rs::client::marketing::{MarketingOptions, OnboardingStatus};
 use meta_whatsapp_rs::client::qr_codes::{CreateQrCode, QrImageFormat};
 use meta_whatsapp_rs::client::signups::{NewSignup, SignupPolicy, deep_link};
 use meta_whatsapp_rs::prelude::*;
 use meta_whatsapp_rs::webhooks::fields::PreferenceValue;
+use time::OffsetDateTime;
 
 /// An opt-in link that subscribes the user and sends a promo code.
 pub async fn opt_in_link(
@@ -126,8 +126,8 @@ pub async fn last_week(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
     use meta_whatsapp_rs::core::testing::ScriptedTransport;
+    use serde_json::json;
 
     use super::*;
 
@@ -193,9 +193,10 @@ mod tests {
                 "statuses": [{"id": "wamid.X", "status": "failed", "timestamp": "1751142888",
                     "recipient_id": "16505551234", "recipient_user_id": "US.1",
                     "errors": [{"code": 131049, "title": "healthy ecosystem engagement"}]}]}}]}]});
-        let events = meta_whatsapp_rs::webhooks::WebhookPayload::from_slice(body.to_string().as_bytes())
-            .unwrap()
-            .into_events();
+        let events =
+            meta_whatsapp_rs::webhooks::WebhookPayload::from_slice(body.to_string().as_bytes())
+                .unwrap()
+                .into_events();
         assert_eq!(
             consent_changes(&events[0]),
             [Consent::HoldFor24Hours(Some("US.1".into()))]

@@ -4,9 +4,9 @@ use std::borrow::Cow;
 use std::fmt;
 
 use async_trait::async_trait;
-use tracing::Level;
 use meta_whatsapp_core::error::SinkError;
 use meta_whatsapp_core::sink::EventSink;
+use tracing::Level;
 
 /// Emits one `tracing` event per delivered event, at a configurable level
 /// (default `INFO`), and never fails.

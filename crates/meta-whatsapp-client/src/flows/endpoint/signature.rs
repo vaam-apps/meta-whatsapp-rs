@@ -7,9 +7,9 @@
 //! anyone can do that with your public key.
 
 use hmac::{Hmac, Mac};
-use sha2::Sha256;
 use meta_whatsapp_core::error::WebhookError;
 use meta_whatsapp_core::secret::AppSecret;
+use sha2::Sha256;
 
 /// Name of the header carrying the signature (`sha256=<hex>`), lowercase as
 /// HTTP/2 transmits it.

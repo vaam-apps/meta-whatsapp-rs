@@ -15,7 +15,9 @@ use meta_whatsapp_rs::prelude::*;
 use meta_whatsapp_rs::webhooks::fields::TemplateStatusEvent;
 
 /// A utility template with positional placeholders and a URL button.
-pub async fn create_order_update(templates: &Templates) -> meta_whatsapp_rs::Result<TemplateCreated> {
+pub async fn create_order_update(
+    templates: &Templates,
+) -> meta_whatsapp_rs::Result<TemplateCreated> {
     let definition = TemplateDefinition::new("order_update", "en_US", TemplateCategory::Utility)
         .component(TemplateComponent::body_positional(
             "Hi {{1}}, order {{2}} has shipped.",
@@ -79,8 +81,8 @@ pub fn on_review(event: &WebhookEvent) -> Option<(TemplateId, bool)> {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
     use meta_whatsapp_rs::core::testing::ScriptedTransport;
+    use serde_json::json;
 
     use super::*;
 
@@ -158,7 +160,8 @@ mod tests {
                 "reason": "NONE", "message_template_category": "UTILITY"
             }}]
         }]});
-        let payload = meta_whatsapp_rs::webhooks::WebhookPayload::from_slice(body.to_string().as_bytes());
+        let payload =
+            meta_whatsapp_rs::webhooks::WebhookPayload::from_slice(body.to_string().as_bytes());
         let events = payload.unwrap().into_events();
         assert_eq!(
             on_review(&events[0]),

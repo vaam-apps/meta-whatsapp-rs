@@ -6,11 +6,11 @@ use std::future::{Future, Ready};
 use std::pin::pin;
 
 use futures::StreamExt;
-use time::OffsetDateTime;
 use meta_whatsapp_core::error::{CreditError, ValidationError};
 use meta_whatsapp_core::ids::{AllocationConfigId, AppId, BusinessId, PhoneNumberId, WabaId};
 use meta_whatsapp_core::secret::AccessToken;
 use meta_whatsapp_core::{Error, Result};
+use time::OffsetDateTime;
 
 use super::EmbeddedSignup;
 use super::event::{EmbeddedSignupEvent, FinishKind, SessionInfo};
@@ -904,15 +904,15 @@ mod tests {
     use std::time::Duration;
 
     use http::Method;
-    use pretty_assertions::assert_eq;
-    use serde_json::json;
-    use time::macros::datetime;
     use meta_whatsapp_adapters::store::MemoryKvStore;
     use meta_whatsapp_core::ErrorKind;
     use meta_whatsapp_core::clock::ManualClock;
     use meta_whatsapp_core::secret::SecretBytes;
     use meta_whatsapp_core::store::{KvStore, StoreKey};
     use meta_whatsapp_core::testing::{RecordedBody, ScriptedTransport};
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use time::macros::datetime;
 
     use super::super::session::SignupSessions;
     use super::super::vault::tests::RecordingKv;
@@ -1480,8 +1480,10 @@ mod tests {
             async fn get(
                 &self,
                 _: &StoreKey,
-            ) -> Result<Option<meta_whatsapp_core::store::Versioned>, meta_whatsapp_core::error::StorageError>
-            {
+            ) -> Result<
+                Option<meta_whatsapp_core::store::Versioned>,
+                meta_whatsapp_core::error::StorageError,
+            > {
                 Ok(None)
             }
             async fn put(
@@ -1490,9 +1492,9 @@ mod tests {
                 _: Vec<u8>,
                 _: meta_whatsapp_core::store::Expiry,
             ) -> Result<u64, meta_whatsapp_core::error::StorageError> {
-                Err(meta_whatsapp_core::error::StorageError::Backend(anyhow::anyhow!(
-                    "disk full"
-                )))
+                Err(meta_whatsapp_core::error::StorageError::Backend(
+                    anyhow::anyhow!("disk full"),
+                ))
             }
             async fn put_if_absent(
                 &self,
@@ -1511,7 +1513,10 @@ mod tests {
             ) -> Result<Option<u64>, meta_whatsapp_core::error::StorageError> {
                 Ok(None)
             }
-            async fn delete(&self, _: &StoreKey) -> Result<bool, meta_whatsapp_core::error::StorageError> {
+            async fn delete(
+                &self,
+                _: &StoreKey,
+            ) -> Result<bool, meta_whatsapp_core::error::StorageError> {
                 Ok(false)
             }
         }

@@ -74,10 +74,10 @@ pub use types::{
     WebhookConfiguration,
 };
 
-use serde::{Deserialize, Serialize};
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::PhoneNumberId;
+use serde::{Deserialize, Serialize};
 
 use crate::Client;
 use crate::waba::CallbackOverride;
@@ -471,10 +471,10 @@ pub(crate) fn fields_param(fields: &[&str]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use http::Method;
-    use pretty_assertions::assert_eq;
-    use serde_json::json;
     use meta_whatsapp_core::ErrorKind;
     use meta_whatsapp_core::testing::{RecordedBody, ScriptedTransport};
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
 
     use super::*;
     use crate::RetryPolicy;
@@ -916,7 +916,10 @@ mod tests {
         // `.` and `..` are refused before anything is sent.
         for id in ["..", ".", ""] {
             let err = c.phone_number(id).register(&pin, None).await.unwrap_err();
-            assert!(matches!(err, meta_whatsapp_core::Error::Validation(_)), "{id:?}");
+            assert!(
+                matches!(err, meta_whatsapp_core::Error::Validation(_)),
+                "{id:?}"
+            );
             assert!(c.phone_number(id).get(&[]).await.is_err());
         }
         assert_eq!(t.requests().len(), 4, "invalid ids never reach the wire");

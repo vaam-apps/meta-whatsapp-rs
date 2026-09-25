@@ -49,7 +49,10 @@ pub fn wire(
 
 /// "Connect WhatsApp", behind your authentication: bind an attempt to the
 /// merchant and give the page what `FB.login` needs.
-pub async fn start(signup: &Signup, merchant_id: &str) -> meta_whatsapp_rs::Result<serde_json::Value> {
+pub async fn start(
+    signup: &Signup,
+    merchant_id: &str,
+) -> meta_whatsapp_rs::Result<serde_json::Value> {
     let state = signup
         .sessions
         .start(merchant_id, Duration::from_mins(15))

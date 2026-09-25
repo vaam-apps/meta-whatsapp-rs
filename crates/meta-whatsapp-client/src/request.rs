@@ -12,9 +12,6 @@ use bytes::Bytes;
 use futures::Stream;
 use http::header::{AUTHORIZATION, HeaderName, HeaderValue, RETRY_AFTER, USER_AGENT};
 use http::{HeaderMap, Method};
-use serde::Serialize;
-use serde::de::DeserializeOwned;
-use url::Url;
 use meta_whatsapp_core::error::{GraphErrorEnvelope, TransportError, ValidationError, snippet};
 use meta_whatsapp_core::paging::Page;
 use meta_whatsapp_core::secret::AccessToken;
@@ -22,6 +19,9 @@ use meta_whatsapp_core::transport::{
     HttpRequest, HttpResponse, Multipart, Part, RequestBody, StreamingResponse,
 };
 use meta_whatsapp_core::{Error, Result};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use url::Url;
 
 use crate::client::Client;
 
@@ -651,8 +651,8 @@ pub(crate) fn decode_json_private<T: DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use futures::StreamExt;
-    use serde_json::json;
     use meta_whatsapp_core::testing::ScriptedTransport;
+    use serde_json::json;
 
     use super::*;
     use crate::retry::RetryPolicy;
@@ -690,7 +690,11 @@ mod tests {
         assert_eq!(req.path(), "/v25.0/123/messages");
         assert_eq!(req.bearer(), Some("TOKEN"));
         assert_eq!(req.json(), Some(json!({"a": 1})));
-        assert!(req.header("user-agent").unwrap().starts_with("meta-whatsapp-rs/"));
+        assert!(
+            req.header("user-agent")
+                .unwrap()
+                .starts_with("meta-whatsapp-rs/")
+        );
     }
 
     #[tokio::test]

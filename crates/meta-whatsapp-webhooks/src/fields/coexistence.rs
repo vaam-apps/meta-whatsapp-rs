@@ -11,10 +11,10 @@
 //! (`messages[]` / `message_echoes[]`), or a `history[].errors` entry when
 //! the business declined to share its history (error `2593109`).
 
-use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
 use meta_whatsapp_core::GraphApiError;
 use meta_whatsapp_core::ids::{MessageId, UserId, WaId};
+use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 use super::common::{Contact, Metadata};
 use super::messages::{InboundMessage, MessageContent};

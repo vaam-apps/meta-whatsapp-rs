@@ -11,13 +11,13 @@ mod common;
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
+use meta_whatsapp_core::secret::{AppSecret, VerifyToken};
+use meta_whatsapp_webhooks::{SignatureVerifier, WebhookEvent, WebhookHandler, sign};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
 use tracing::{Event, Metadata, Subscriber};
-use meta_whatsapp_core::secret::{AppSecret, VerifyToken};
-use meta_whatsapp_webhooks::{SignatureVerifier, WebhookEvent, WebhookHandler, sign};
 
 use common::RecordingSink;
 

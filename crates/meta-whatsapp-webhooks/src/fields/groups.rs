@@ -19,10 +19,10 @@
 //! - Error `code`s are printed as `"ERROR_CODE"` strings there; they are
 //!   integers everywhere else and parse into [`GraphApiError`].
 
-use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
 use meta_whatsapp_core::GraphApiError;
 use meta_whatsapp_core::ids::{GroupId, UserId, WaId};
+use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 use super::common::Metadata;
 use crate::open_enum::open_enum;

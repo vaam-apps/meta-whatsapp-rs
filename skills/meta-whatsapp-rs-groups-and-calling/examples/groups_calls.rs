@@ -22,7 +22,11 @@ pub async fn block_customer(
         .block_users
         .failed_users
         .iter()
-        .flat_map(|user| user.errors.iter().map(meta_whatsapp_rs::GraphApiError::kind))
+        .flat_map(|user| {
+            user.errors
+                .iter()
+                .map(meta_whatsapp_rs::GraphApiError::kind)
+        })
         .collect();
     Ok(refused) // empty: blocked. 131047: they have not written in the last 24 hours
 }
@@ -56,7 +60,10 @@ pub fn group_created(event: &WebhookEvent) -> Option<(&str, &GroupId, Option<&st
 
 /// A customer calls, and nobody can take WhatsApp calls in the CMS (meta-whatsapp-rs
 /// signals calls; it carries no audio): reject it, answer in the chat.
-pub async fn decline_call(merchant: &Client, event: &WebhookEvent) -> meta_whatsapp_rs::Result<bool> {
+pub async fn decline_call(
+    merchant: &Client,
+    event: &WebhookEvent,
+) -> meta_whatsapp_rs::Result<bool> {
     let WebhookEvent::CallUpdated {
         phone_number_id,
         call,
@@ -78,9 +85,9 @@ pub async fn decline_call(merchant: &Client, event: &WebhookEvent) -> meta_whats
 
 #[cfg(test)]
 mod tests {
-    use serde_json::{Value, json};
     use meta_whatsapp_rs::core::testing::ScriptedTransport;
     use meta_whatsapp_rs::webhooks::WebhookPayload;
+    use serde_json::{Value, json};
 
     use super::*;
 

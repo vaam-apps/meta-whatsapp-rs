@@ -22,10 +22,10 @@ use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use serde::{Deserialize, Serialize};
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::{CryptoError, ValidationError};
 use meta_whatsapp_core::store::{Expiry, JsonStore, KvStore};
+use serde::{Deserialize, Serialize};
 
 /// `KvStore` namespace of signup sessions.
 pub const SESSION_NAMESPACE: &str = "wa.es.session";
@@ -183,10 +183,10 @@ impl SignupSessions {
 
 #[cfg(test)]
 mod tests {
-    use time::macros::datetime;
     use meta_whatsapp_adapters::store::MemoryKvStore;
     use meta_whatsapp_core::clock::ManualClock;
     use meta_whatsapp_core::store::StoreKey;
+    use time::macros::datetime;
 
     use super::*;
 
@@ -247,7 +247,10 @@ mod tests {
         async fn get(
             &self,
             key: &StoreKey,
-        ) -> Result<Option<meta_whatsapp_core::store::Versioned>, meta_whatsapp_core::error::StorageError> {
+        ) -> Result<
+            Option<meta_whatsapp_core::store::Versioned>,
+            meta_whatsapp_core::error::StorageError,
+        > {
             self.0.get(key).await
         }
         async fn put(
@@ -277,7 +280,10 @@ mod tests {
             self.0.delete(key).await?;
             self.0.compare_and_swap(key, expected, new, expiry).await
         }
-        async fn delete(&self, key: &StoreKey) -> Result<bool, meta_whatsapp_core::error::StorageError> {
+        async fn delete(
+            &self,
+            key: &StoreKey,
+        ) -> Result<bool, meta_whatsapp_core::error::StorageError> {
             self.0.delete(key).await
         }
     }
@@ -358,7 +364,10 @@ mod tests {
         async fn get(
             &self,
             key: &StoreKey,
-        ) -> Result<Option<meta_whatsapp_core::store::Versioned>, meta_whatsapp_core::error::StorageError> {
+        ) -> Result<
+            Option<meta_whatsapp_core::store::Versioned>,
+            meta_whatsapp_core::error::StorageError,
+        > {
             use std::sync::atomic::Ordering::SeqCst;
             let v = self.inner.get(key).await;
             if self.armed.load(SeqCst) {
@@ -400,7 +409,10 @@ mod tests {
                 .compare_and_swap(key, expected, new, expiry)
                 .await
         }
-        async fn delete(&self, key: &StoreKey) -> Result<bool, meta_whatsapp_core::error::StorageError> {
+        async fn delete(
+            &self,
+            key: &StoreKey,
+        ) -> Result<bool, meta_whatsapp_core::error::StorageError> {
             self.inner.delete(key).await
         }
     }

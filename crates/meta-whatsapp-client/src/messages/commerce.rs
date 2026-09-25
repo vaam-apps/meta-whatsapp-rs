@@ -5,10 +5,10 @@
 //! notifications. A catalog link is just a `wa.me/c/<number>` URL in a text
 //! message (`catalogs/catalog-link-messages`) and needs no type of its own.
 
-use serde::Serialize;
-use serde::ser::{SerializeMap, Serializer};
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::CatalogId;
+use serde::Serialize;
+use serde::ser::{SerializeMap, Serializer};
 
 use super::interactive::{FOOTER_MAX, Header, TextObject, section_title};
 use super::validate::{self, Check};

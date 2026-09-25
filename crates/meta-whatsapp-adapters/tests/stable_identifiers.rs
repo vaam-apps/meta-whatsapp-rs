@@ -9,7 +9,10 @@ fn stable_identifiers_never_change() {
     // AEAD tags used in the token vault. Renaming makes every encrypted token
     // and ledger record undecryptable.
     assert_eq!(b"wa-rs/token-vault/v1", &b"wa-rs/token-vault/v1"[..]);
-    assert_eq!(b"wa-rs/token-vault/ledger/v1", &b"wa-rs/token-vault/ledger/v1"[..]);
+    assert_eq!(
+        b"wa-rs/token-vault/ledger/v1",
+        &b"wa-rs/token-vault/ledger/v1"[..]
+    );
 
     // HMAC domains for OTP. Changing breaks OTP verification.
     assert_eq!(b"wa.otp.key", &b"wa.otp.key"[..]);

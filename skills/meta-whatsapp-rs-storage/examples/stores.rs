@@ -50,11 +50,11 @@ pub async fn redis_kv(url: &str) -> anyhow::Result<Arc<dyn KvStore>> {
 
 #[cfg(test)]
 mod tests {
-    use time::macros::datetime;
     use meta_whatsapp_rs::adapters::store::conformance;
     use meta_whatsapp_rs::adapters::store::conversation_conformance;
     use meta_whatsapp_rs::adapters::store::{MemoryConversationStore, MemoryKvStore};
     use meta_whatsapp_rs::core::clock::ManualClock;
+    use time::macros::datetime;
 
     // The contract every KvStore must keep: run it against yours, moving
     // the store's clock with the closure (a store that expires on a

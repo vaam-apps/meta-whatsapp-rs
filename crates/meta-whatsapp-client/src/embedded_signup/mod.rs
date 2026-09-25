@@ -505,10 +505,10 @@ fn decode_business_token(body: &[u8]) -> Result<BusinessToken> {
 #[cfg(test)]
 mod tests {
     use http::Method;
-    use pretty_assertions::assert_eq;
-    use serde_json::json;
     use meta_whatsapp_core::ErrorKind;
     use meta_whatsapp_core::testing::ScriptedTransport;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
 
     use super::*;
     use crate::RetryPolicy;

@@ -121,8 +121,8 @@ use aws_lc_rs::rsa::{
 use base64::Engine;
 use base64::alphabet;
 use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
-use serde::{Deserialize, Serialize};
 use meta_whatsapp_core::error::CryptoError;
+use serde::{Deserialize, Serialize};
 
 pub use media::{FlowMedia, MediaEncryptionMetadata, decrypt_media};
 pub use signature::{SIGNATURE_HEADER, verify_request_signature};

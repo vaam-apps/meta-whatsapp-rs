@@ -52,7 +52,10 @@ pub async fn inbox_for(
 }
 
 /// A conversation: newest first, then mark it read in your store.
-pub async fn open_conversation(inbox: &Inbox, contact: &str) -> meta_whatsapp_rs::Result<Vec<StoredMessage>> {
+pub async fn open_conversation(
+    inbox: &Inbox,
+    contact: &str,
+) -> meta_whatsapp_rs::Result<Vec<StoredMessage>> {
     let key = inbox.key(contact); // the `contact` of a ConversationSummary: BSUID, wa_id or group id
     let page = inbox.history(&key, None, 50).await?; // next page: the last row's (timestamp, id)
     inbox.mark_read(&key).await?; // your unread counter, not WhatsApp's blue ticks
@@ -92,12 +95,12 @@ pub async fn quote(
 mod tests {
     use std::time::Duration;
 
-    use serde_json::json;
-    use time::OffsetDateTime;
     use meta_whatsapp_rs::adapters::store::{MemoryConversationStore, MemoryKvStore};
     use meta_whatsapp_rs::client::embedded_signup::{StoredBusinessToken, VaultKey, VaultKeys};
     use meta_whatsapp_rs::core::clock::ManualClock;
     use meta_whatsapp_rs::core::testing::ScriptedTransport;
+    use serde_json::json;
+    use time::OffsetDateTime;
 
     use super::*;
 
@@ -110,9 +113,10 @@ mod tests {
                 "metadata": {"display_phone_number": "15550783881", "phone_number_id": NUMBER},
                 "messages": [{"from_user_id": CUSTOMER, "id": format!("wamid.{at}"),
                     "timestamp": at.to_string(), "type": "text", "text": {"body": "Navy?"}}]}}]}]});
-        let events = meta_whatsapp_rs::webhooks::WebhookPayload::from_slice(body.to_string().as_bytes())
-            .unwrap()
-            .into_events();
+        let events =
+            meta_whatsapp_rs::webhooks::WebhookPayload::from_slice(body.to_string().as_bytes())
+                .unwrap()
+                .into_events();
         for event in events {
             InboxSink::new(store.clone()).deliver(event).await.unwrap();
         }

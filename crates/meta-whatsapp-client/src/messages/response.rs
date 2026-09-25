@@ -4,8 +4,8 @@
 //! A 200 only means Meta **accepted** the request; delivery arrives later
 //! as `messages` status webhooks keyed by [`SentMessage::id`].
 
-use serde::Deserialize;
 use meta_whatsapp_core::ids::{GroupId, MessageId, UserId, WaId};
+use serde::Deserialize;
 
 /// Response of `POST /{phone_number_id}/messages`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

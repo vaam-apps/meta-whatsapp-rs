@@ -1349,10 +1349,11 @@ fn rust_blocks_are_excerpts_of_compiled_files() {
             .map(str::to_owned)
             .collect::<Vec<String>>()
     };
-    let crate_examples: Vec<Vec<String>> = rust_files(&repo().join("crates/meta-whatsapp-rs/examples"))
-        .into_iter()
-        .map(|p| quotable(read(&p), CRATE_EXAMPLE_TEST))
-        .collect();
+    let crate_examples: Vec<Vec<String>> =
+        rust_files(&repo().join("crates/meta-whatsapp-rs/examples"))
+            .into_iter()
+            .map(|p| quotable(read(&p), CRATE_EXAMPLE_TEST))
+            .collect();
     let mut checked = 0;
     let mut failures = String::new();
     for (path, markdown) in skill_markdown() {
@@ -2468,8 +2469,9 @@ fn the_stamp_checks_reject_known_bad_input() {
         "> **Verified against meta-whatsapp-rs {sha} (2026-09x24).**"
     )));
     // References: a stamp under the title, and no malformed stamp anywhere.
-    let good =
-        format!("# Error kinds\n\n> **Verified against meta-whatsapp-rs {sha} (2026-09-24).** Source: x.\n");
+    let good = format!(
+        "# Error kinds\n\n> **Verified against meta-whatsapp-rs {sha} (2026-09-24).** Source: x.\n"
+    );
     assert!(stamp_problems(&good, true).is_empty());
     assert!(reference_problems(&good).is_empty());
     assert!(
@@ -2478,7 +2480,8 @@ fn the_stamp_checks_reject_known_bad_input() {
     );
     for bad in [
         "# Error kinds\n\nA table without a stamp.\n".to_owned(),
-        "# Error kinds\n\n> **Verified against meta-whatsapp-rs 41fe5f9 (2026-09-24).**\n".to_owned(),
+        "# Error kinds\n\n> **Verified against meta-whatsapp-rs 41fe5f9 (2026-09-24).**\n"
+            .to_owned(),
         format!("# Error kinds\n\n> **Verified against meta-whatsapp-rs {sha} (24.09.2026).**\n"),
         format!("# Error kinds\n\n> **Verifed against meta-whatsapp-rs {sha} (2026-09-24).**\n"),
         format!("> **Verified against meta-whatsapp-rs {sha} (2026-09-24).**\n\n# Error kinds\n"),

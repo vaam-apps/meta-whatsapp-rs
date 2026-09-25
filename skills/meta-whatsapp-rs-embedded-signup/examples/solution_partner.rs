@@ -325,7 +325,6 @@ pub async fn credit_lines(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
     use meta_whatsapp_rs::adapters::store::MemoryKvStore;
     use meta_whatsapp_rs::client::embedded_signup::{
         EmbeddedSignupEvent, SignupCode, StoredBusinessToken, VaultKey, VaultKeys, steps,
@@ -333,6 +332,7 @@ mod tests {
     use meta_whatsapp_rs::core::error::TransportError;
     use meta_whatsapp_rs::core::testing::ScriptedTransport;
     use meta_whatsapp_rs::webhooks::WebhookPayload;
+    use serde_json::json;
 
     use super::*;
 

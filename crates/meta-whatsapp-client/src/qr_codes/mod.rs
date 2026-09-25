@@ -17,11 +17,11 @@
 //! (append `.md` for Markdown; `just meta-docs` mirrors them locally).
 
 use futures::Stream;
-use serde::{Deserialize, Serialize};
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{PhoneNumberId, QrCodeId};
 use meta_whatsapp_core::paging::Page;
 use meta_whatsapp_core::{Error, Result};
+use serde::{Deserialize, Serialize};
 
 use crate::request::{paginate_or_error, reject_cursors};
 use crate::{Client, GraphRequest};
@@ -358,10 +358,10 @@ mod tests {
 
     use futures::StreamExt;
     use http::Method;
-    use serde_json::json;
     use meta_whatsapp_core::ErrorKind;
     use meta_whatsapp_core::error::TransportError;
     use meta_whatsapp_core::testing::ScriptedTransport;
+    use serde_json::json;
 
     use super::*;
     use crate::RetryPolicy;

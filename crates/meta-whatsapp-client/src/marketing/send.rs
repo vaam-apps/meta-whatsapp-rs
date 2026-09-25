@@ -5,11 +5,11 @@
 //! (schema, `message_status`), `marketing-messages/pricing` (per-message
 //! max-price multiplier).
 
-use serde::Serialize;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::PhoneNumberId;
 use meta_whatsapp_core::recipient::Recipient;
+use serde::Serialize;
 
 use super::wire_enum;
 use crate::Client;

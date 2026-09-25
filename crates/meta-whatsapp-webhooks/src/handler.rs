@@ -12,10 +12,10 @@
 
 use std::sync::Arc;
 
-use serde_json::Value;
 use meta_whatsapp_core::error::WebhookError;
 use meta_whatsapp_core::secret::VerifyToken;
 use meta_whatsapp_core::sink::EventSink;
+use serde_json::Value;
 
 use crate::dedup::{Claim, DedupGuard};
 use crate::event::WebhookEvent;
@@ -199,7 +199,10 @@ impl WebhookHandler {
         })
     }
 
-    async fn dispatch(&self, events: Vec<WebhookEvent>) -> meta_whatsapp_core::Result<DeliveryReport> {
+    async fn dispatch(
+        &self,
+        events: Vec<WebhookEvent>,
+    ) -> meta_whatsapp_core::Result<DeliveryReport> {
         let mut report = DeliveryReport::default();
         for event in events {
             if let WebhookEvent::Unknown {

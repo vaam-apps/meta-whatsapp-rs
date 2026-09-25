@@ -16,8 +16,8 @@
 //! `reference/whatsapp-business-account/phone-number-management-api`
 //! (`WhatsAppPhoneNumberQualityRating`), `business-phone-numbers/phone-numbers`.
 
-use serde::{Deserialize, Serialize};
 use meta_whatsapp_core::ids::MediaId;
+use serde::{Deserialize, Serialize};
 
 use crate::messages::validate::{self, Check};
 use crate::templates::macros::string_enum;

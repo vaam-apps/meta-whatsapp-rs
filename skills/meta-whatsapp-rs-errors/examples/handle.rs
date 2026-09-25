@@ -67,8 +67,8 @@ pub fn after_failed_send(e: &Error) -> Resend {
 mod tests {
     use std::time::Duration;
 
-    use serde_json::{Value, json};
     use meta_whatsapp_rs::core::testing::ScriptedTransport;
+    use serde_json::{Value, json};
 
     use super::*;
 
@@ -146,7 +146,9 @@ mod tests {
         );
         let timeout = Error::from(meta_whatsapp_rs::core::error::TransportError::Timeout);
         assert_eq!(after_failed_send(&timeout), Resend::ReconcileFirst);
-        let local = Error::from(meta_whatsapp_rs::core::error::ValidationError::new("to", "empty"));
+        let local = Error::from(meta_whatsapp_rs::core::error::ValidationError::new(
+            "to", "empty",
+        ));
         assert_eq!(after_failed_send(&local), Resend::Never);
     }
 }

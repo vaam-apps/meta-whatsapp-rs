@@ -8,16 +8,16 @@
 //! needs the uncompressed export, so that test lives next to it in
 //! `src/render.rs`.
 
+use meta_whatsapp_typst::{
+    Diagnostic, InvoiceInput, MAX_PNG_PIXELS, ReceiptInput, RenderError, RenderedDocument,
+    Renderer, Template, VoucherInput,
+};
 use pretty_assertions::assert_eq;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use typst::foundations::Bytes;
 use typst::visualize::{ExchangeFormat, RasterImage};
-use meta_whatsapp_typst::{
-    Diagnostic, InvoiceInput, MAX_PNG_PIXELS, ReceiptInput, RenderError, RenderedDocument,
-    Renderer, Template, VoucherInput,
-};
 
 // ---------------------------------------------------------------- helpers
 

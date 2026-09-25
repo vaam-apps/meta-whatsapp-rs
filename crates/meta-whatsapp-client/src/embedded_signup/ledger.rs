@@ -43,12 +43,12 @@
 use std::fmt;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
 use meta_whatsapp_core::error::{CreditError, CryptoError};
 use meta_whatsapp_core::ids::{AllocationConfigId, BusinessId, FundingId, WabaId};
 use meta_whatsapp_core::store::{Expiry, StoreKey, Versioned};
 use meta_whatsapp_core::{Error, Result};
+use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 use super::vault::{SealedBlob, TOKEN_NAMESPACE, TokenVault, decode_json, encode_json};
 use crate::credit_lines::WabaCurrency;
@@ -764,12 +764,12 @@ impl TokenVault {
 mod tests {
     use std::sync::Arc;
 
-    use pretty_assertions::assert_eq;
-    use time::macros::datetime;
     use meta_whatsapp_adapters::store::MemoryKvStore;
     use meta_whatsapp_core::clock::ManualClock;
     use meta_whatsapp_core::secret::SecretBytes;
     use meta_whatsapp_core::store::KvStore;
+    use pretty_assertions::assert_eq;
+    use time::macros::datetime;
 
     use super::super::vault::{VaultKey, VaultKeys};
     use super::*;

@@ -16,7 +16,9 @@ pub fn service_url(var: &str) -> Option<String> {
             )
         }
         _ => {
-            eprintln!("skipping: {var} is not set (META_WHATSAPP_RS_REQUIRE_LIVE=1 makes this a failure)");
+            eprintln!(
+                "skipping: {var} is not set (META_WHATSAPP_RS_REQUIRE_LIVE=1 makes this a failure)"
+            );
             None
         }
     }

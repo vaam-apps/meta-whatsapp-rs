@@ -13,9 +13,6 @@ mod common;
 use std::str::FromStr;
 use std::time::Duration;
 
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-use sqlx::{AssertSqlSafe, PgPool};
-use time::macros::datetime;
 use meta_whatsapp_adapters::store::postgres::{self, TablePrefix};
 use meta_whatsapp_adapters::store::{
     PostgresConversationStore, PostgresKvStore, conformance, conversation_conformance,
@@ -26,6 +23,9 @@ use meta_whatsapp_core::store::{
     ConversationKey, ConversationStore, DeliveryStatus, Direction, Expiry, KvStore, StoreKey,
     StoredMessage,
 };
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::{AssertSqlSafe, PgPool};
+use time::macros::datetime;
 
 /// A schema of our own on the test database.
 struct TestDb {

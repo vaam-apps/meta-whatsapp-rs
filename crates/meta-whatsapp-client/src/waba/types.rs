@@ -2,12 +2,12 @@
 
 use std::fmt;
 
-use serde::de::Deserializer;
-use serde::ser::Serializer;
-use serde::{Deserialize, Serialize};
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{BusinessId, WabaId};
 use meta_whatsapp_core::secret::VerifyToken;
+use serde::de::Deserializer;
+use serde::ser::Serializer;
+use serde::{Deserialize, Serialize};
 
 /// Maximum length of a callback override URL (`webhooks/override`).
 pub const MAX_CALLBACK_URI_CHARS: usize = 200;

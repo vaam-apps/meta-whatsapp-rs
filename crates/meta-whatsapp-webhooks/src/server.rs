@@ -28,10 +28,10 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use futures::Stream;
-use tokio::sync::broadcast;
-use tokio::sync::broadcast::error::RecvError;
 use meta_whatsapp_core::Error;
 use meta_whatsapp_core::error::WebhookError;
+use tokio::sync::broadcast;
+use tokio::sync::broadcast::error::RecvError;
 
 use crate::event::WebhookEvent;
 use crate::handler::WebhookHandler;

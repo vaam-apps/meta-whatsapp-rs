@@ -60,7 +60,10 @@ pub async fn route_number_elsewhere(
 }
 
 /// The profile customers see, and the chat's first screen.
-pub async fn set_up_profile(client: &Client, phone_number_id: PhoneNumberId) -> meta_whatsapp_rs::Result<()> {
+pub async fn set_up_profile(
+    client: &Client,
+    phone_number_id: PhoneNumberId,
+) -> meta_whatsapp_rs::Result<()> {
     let update = ProfileUpdate {
         about: Some("Linen and leather, made in Berlin".into()),
         email: Some("hello@shop.example".into()),
@@ -95,13 +98,19 @@ pub async fn start_coexistence_sync(
 }
 
 /// A new display name is reviewed; once approved, register again to apply it.
-pub async fn rename(client: &Client, phone_number_id: PhoneNumberId) -> meta_whatsapp_rs::Result<()> {
+pub async fn rename(
+    client: &Client,
+    phone_number_id: PhoneNumberId,
+) -> meta_whatsapp_rs::Result<()> {
     let number = client.phone_number(phone_number_id);
     number.request_display_name_change("Example Boutique").await // watch PhoneNumberNameUpdated
 }
 
 /// What the number looks like to Meta right now.
-pub async fn health(client: &Client, phone_number_id: PhoneNumberId) -> meta_whatsapp_rs::Result<()> {
+pub async fn health(
+    client: &Client,
+    phone_number_id: PhoneNumberId,
+) -> meta_whatsapp_rs::Result<()> {
     let number = client.phone_number(phone_number_id.clone());
     let info = number
         .get(&["quality_rating", "name_status", "status"])
@@ -116,8 +125,8 @@ pub async fn health(client: &Client, phone_number_id: PhoneNumberId) -> meta_wha
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
     use meta_whatsapp_rs::core::testing::ScriptedTransport;
+    use serde_json::json;
 
     use super::*;
 

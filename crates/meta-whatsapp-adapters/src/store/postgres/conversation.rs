@@ -44,15 +44,15 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use sqlx::postgres::PgRow;
-use sqlx::{AssertSqlSafe, PgPool, Row};
-use time::OffsetDateTime;
 use meta_whatsapp_core::error::StorageError;
 use meta_whatsapp_core::ids::{MessageId, PhoneNumberId};
 use meta_whatsapp_core::store::{
     ConversationKey, ConversationStore, ConversationSummary, DeliveryStatus, Direction,
     StoredMessage,
 };
+use sqlx::postgres::PgRow;
+use sqlx::{AssertSqlSafe, PgPool, Row};
+use time::OffsetDateTime;
 
 use super::{TablePrefix, backend, to_i64};
 

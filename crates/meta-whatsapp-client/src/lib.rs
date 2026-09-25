@@ -43,9 +43,9 @@ pub mod templates;
 pub mod waba;
 
 pub use client::{Client, ClientBuilder, DEFAULT_TIMEOUT};
+pub use meta_whatsapp_core::{Error, ErrorKind, GraphApiError, Result};
 pub use request::GraphRequest;
 pub use retry::RetryPolicy;
-pub use meta_whatsapp_core::{Error, ErrorKind, GraphApiError, Result};
 
 use meta_whatsapp_core::ids::AppId;
 use meta_whatsapp_core::secret::AppSecret;

@@ -31,12 +31,12 @@
 //! `https://developers.facebook.com/documentation/business-messaging/whatsapp/`
 //! (append `.md` for Markdown; `just meta-docs` mirrors them locally).
 
-use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{CallId, PhoneNumberId, UserId};
 use meta_whatsapp_core::recipient::Recipient;
+use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 use crate::Client;
 

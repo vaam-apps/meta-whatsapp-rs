@@ -28,13 +28,10 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use http_body_util::{BodyExt, Limited};
-use pretty_assertions::assert_eq;
-use serde_json::{Value, json};
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
-use tower::ServiceExt;
 use meta_whatsapp_rs::adapters::store::{MemoryConversationStore, MemoryKvStore};
-use meta_whatsapp_rs::client::embedded_signup::{StoredBusinessToken, TokenVault, VaultKey, VaultKeys};
+use meta_whatsapp_rs::client::embedded_signup::{
+    StoredBusinessToken, TokenVault, VaultKey, VaultKeys,
+};
 use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::store::{Expiry, StoreKey, Versioned};
 use meta_whatsapp_rs::core::testing::ScriptedTransport;
@@ -44,6 +41,11 @@ use meta_whatsapp_rs::webhooks::axum::body::Body;
 use meta_whatsapp_rs::webhooks::axum::http::{Method, Request, StatusCode, header};
 use meta_whatsapp_rs::webhooks::server::SIGNATURE_HEADER;
 use meta_whatsapp_rs::webhooks::{WebhookPayload, dedup, sign};
+use pretty_assertions::assert_eq;
+use serde_json::{Value, json};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
+use tower::ServiceExt;
 
 /// Ids from `business-scoped-user-ids` (text message, BSUID, no `wa_id`).
 const WABA: &str = "102290129340398";

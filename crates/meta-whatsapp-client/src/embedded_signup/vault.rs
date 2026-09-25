@@ -81,14 +81,14 @@ use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
-use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
 use meta_whatsapp_core::clock::{Clock, SystemClock};
 use meta_whatsapp_core::error::{CryptoError, StorageError, ValidationError};
 use meta_whatsapp_core::ids::{BusinessId, PhoneNumberId, WabaId};
 use meta_whatsapp_core::secret::{AccessToken, SecretBytes};
 use meta_whatsapp_core::store::{Expiry, KvStore, StoreKey, Versioned};
 use meta_whatsapp_core::{Error, Result};
+use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 /// `KvStore` namespace of the vault.
 pub const TOKEN_NAMESPACE: &str = "wa.token";
@@ -827,10 +827,10 @@ fn decode<T: serde::de::DeserializeOwned>(key: &StoreKey, v: &Versioned) -> Resu
 pub(crate) mod tests {
     use std::sync::Mutex;
 
-    use pretty_assertions::assert_eq;
-    use time::macros::datetime;
     use meta_whatsapp_adapters::store::MemoryKvStore;
     use meta_whatsapp_core::clock::ManualClock;
+    use pretty_assertions::assert_eq;
+    use time::macros::datetime;
 
     use super::*;
 

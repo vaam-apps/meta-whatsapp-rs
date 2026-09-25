@@ -10,9 +10,9 @@ mod common;
 
 use std::time::Duration;
 
-use redis::aio::{ConnectionManager, MultiplexedConnection};
 use meta_whatsapp_adapters::store::{RedisKvStore, conformance};
 use meta_whatsapp_core::store::{Expiry, KvStore, StoreKey};
+use redis::aio::{ConnectionManager, MultiplexedConnection};
 
 fn client() -> Option<redis::Client> {
     let url = common::service_url("META_WHATSAPP_RS_TEST_REDIS_URL")?;

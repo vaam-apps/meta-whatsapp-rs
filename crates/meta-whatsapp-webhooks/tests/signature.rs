@@ -17,7 +17,10 @@ use meta_whatsapp_webhooks::{SignatureVerifier, VerificationQuery, sign, verify_
 /// features`), so moving the constant back behind it fails the build.
 #[test]
 fn the_signature_header_is_available_without_axum() {
-    assert_eq!(meta_whatsapp_webhooks::SIGNATURE_HEADER, "x-hub-signature-256");
+    assert_eq!(
+        meta_whatsapp_webhooks::SIGNATURE_HEADER,
+        "x-hub-signature-256"
+    );
     assert_eq!(
         meta_whatsapp_webhooks::SIGNATURE_HEADER,
         "X-Hub-Signature-256".to_ascii_lowercase()

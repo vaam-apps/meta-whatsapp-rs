@@ -11,8 +11,8 @@
 
 use std::collections::HashSet;
 
-use serde::{Deserialize, Serialize};
 use meta_whatsapp_core::error::ValidationError;
+use serde::{Deserialize, Serialize};
 
 /// Maximum number of ice breakers.
 pub const MAX_PROMPTS: usize = 4;

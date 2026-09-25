@@ -8,8 +8,8 @@
 //! rates, latencies and thresholds are `f64`. `availability` appears in the
 //! endpoint availability example but not in the value table; it is modelled.
 
-use serde::{Deserialize, Serialize};
 use meta_whatsapp_core::ids::FlowId;
+use serde::{Deserialize, Serialize};
 
 use crate::open_enum::open_enum;
 

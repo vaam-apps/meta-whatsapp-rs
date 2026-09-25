@@ -2,11 +2,11 @@
 //! a business, and its messaging customer bases.
 
 use futures::Stream;
-use serde::{Deserialize, Serialize};
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::BusinessId;
 use meta_whatsapp_core::paging::Page;
+use serde::{Deserialize, Serialize};
 
 use super::types::{BusinessInfo, Filter, MessagingCustomerBase, WabaInfo, WabaSort};
 use crate::phone_numbers::fields_param;
@@ -255,9 +255,9 @@ struct SortParam {
 mod tests {
     use futures::StreamExt;
     use http::Method;
+    use meta_whatsapp_core::testing::ScriptedTransport;
     use pretty_assertions::assert_eq;
     use serde_json::json;
-    use meta_whatsapp_core::testing::ScriptedTransport;
 
     use super::*;
     use crate::RetryPolicy;
@@ -386,7 +386,10 @@ mod tests {
                 .await;
             for refused in [client_wabas, owned] {
                 assert!(
-                    matches!(&refused[..], [Err(meta_whatsapp_core::Error::Validation(_))]),
+                    matches!(
+                        &refused[..],
+                        [Err(meta_whatsapp_core::Error::Validation(_))]
+                    ),
                     "{refused:?}"
                 );
             }

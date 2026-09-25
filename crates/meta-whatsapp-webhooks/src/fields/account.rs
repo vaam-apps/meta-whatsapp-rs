@@ -17,9 +17,9 @@
 //! as an integer whose values are `TIER_250`…`TIER_UNLIMITED`, and its example
 //! sends `2000`; [`MessagingLimit`] accepts both.
 
+use meta_whatsapp_core::ids::{AppId, BusinessId, PhoneNumberId, WabaId};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
-use meta_whatsapp_core::ids::{AppId, BusinessId, PhoneNumberId, WabaId};
 
 use crate::open_enum::open_enum;
 

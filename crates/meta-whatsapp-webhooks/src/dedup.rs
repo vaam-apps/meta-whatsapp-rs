@@ -51,8 +51,8 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use sha2::{Digest, Sha256};
 use meta_whatsapp_core::store::{Expiry, KvStore, StoreKey};
+use sha2::{Digest, Sha256};
 
 use crate::event::WebhookEvent;
 

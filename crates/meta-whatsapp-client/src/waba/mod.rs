@@ -57,11 +57,11 @@ pub use types::{
 pub(crate) use types::lenient_string;
 
 use futures::Stream;
-use serde::Serialize;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{BusinessId, WabaId};
 use meta_whatsapp_core::paging::Page;
+use serde::Serialize;
 
 use crate::phone_numbers::{CreatedPhoneNumber, PhoneNumberInfo, fields_param};
 use crate::request::{paginate_or_error, reject_cursors};
@@ -456,10 +456,10 @@ impl Waba {
 mod tests {
     use futures::StreamExt;
     use http::Method;
-    use pretty_assertions::assert_eq;
-    use serde_json::json;
     use meta_whatsapp_core::ErrorKind;
     use meta_whatsapp_core::testing::{RecordedBody, ScriptedTransport};
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
 
     use super::*;
     use crate::RetryPolicy;
@@ -584,7 +584,10 @@ mod tests {
             .collect()
             .await;
         assert_eq!(errs.len(), 1);
-        assert!(matches!(errs[0], Err(meta_whatsapp_core::Error::Validation(_))));
+        assert!(matches!(
+            errs[0],
+            Err(meta_whatsapp_core::Error::Validation(_))
+        ));
         assert_eq!(t.requests().len(), 2);
     }
 
@@ -894,7 +897,10 @@ mod tests {
                 .collect()
                 .await;
             assert_eq!(streamed.len(), 1);
-            assert!(matches!(streamed[0], Err(meta_whatsapp_core::Error::Validation(_))));
+            assert!(matches!(
+                streamed[0],
+                Err(meta_whatsapp_core::Error::Validation(_))
+            ));
             assert!(c.business(id).get(&[]).await.is_err());
         }
         assert_eq!(t.requests().len(), 5, "invalid ids never reach the wire");

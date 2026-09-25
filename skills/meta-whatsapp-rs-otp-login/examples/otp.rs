@@ -80,7 +80,11 @@ pub async fn request_code(otp: &OtpService, user_input: &str) -> meta_whatsapp_r
 }
 
 /// Step 2: every call with a live code counts as an attempt.
-pub async fn check_code(otp: &OtpService, user_input: &str, typed: &str) -> meta_whatsapp_rs::Result<Login> {
+pub async fn check_code(
+    otp: &OtpService,
+    user_input: &str,
+    typed: &str,
+) -> meta_whatsapp_rs::Result<Login> {
     let user = Recipient::phone(user_input);
     Ok(match otp.verify(&user, "login", typed.trim()).await? {
         VerifyOutcome::Verified => Login::SignedIn, // consumed: single use
@@ -112,11 +116,11 @@ pub fn with_clock(
 mod tests {
     use std::time::Duration;
 
-    use serde_json::json;
-    use time::macros::datetime;
     use meta_whatsapp_rs::adapters::store::MemoryKvStore;
     use meta_whatsapp_rs::core::clock::ManualClock;
     use meta_whatsapp_rs::core::testing::ScriptedTransport;
+    use serde_json::json;
+    use time::macros::datetime;
 
     use super::*;
 

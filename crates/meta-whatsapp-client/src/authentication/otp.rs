@@ -63,11 +63,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hmac::{Hmac, Mac};
-use serde::{Deserialize, Serialize};
-use sha2::Sha256;
-use subtle::ConstantTimeEq;
-use time::{OffsetDateTime, PrimitiveDateTime};
-use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 use meta_whatsapp_core::clock::Clock;
 use meta_whatsapp_core::error::{ConfigError, CryptoError, StorageError, ValidationError};
 use meta_whatsapp_core::ids::{MessageId, PhoneNumberId};
@@ -75,6 +70,11 @@ use meta_whatsapp_core::recipient::Recipient;
 use meta_whatsapp_core::secret::SecretBytes;
 use meta_whatsapp_core::store::{Expiry, JsonStore, KvStore};
 use meta_whatsapp_core::{Error, Result};
+use serde::{Deserialize, Serialize};
+use sha2::Sha256;
+use subtle::ConstantTimeEq;
+use time::{OffsetDateTime, PrimitiveDateTime};
+use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 
 use super::otp_template_message;
 use crate::Client;

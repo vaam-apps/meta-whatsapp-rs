@@ -216,10 +216,10 @@ pub use sqlx;
 use std::borrow::Cow;
 use std::fmt;
 
+use meta_whatsapp_core::error::{ConfigError, StorageError};
 use sqlx::PgPool;
 use sqlx::migrate::{Migration, Migrator};
 use sqlx::{AssertSqlSafe, SqlSafeStr};
-use meta_whatsapp_core::error::{ConfigError, StorageError};
 
 pub use conversation::PostgresConversationStore;
 pub use kv::PostgresKvStore;

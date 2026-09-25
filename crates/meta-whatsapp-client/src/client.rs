@@ -263,9 +263,9 @@ impl ClientBuilder {
                 endpoint,
                 retry: self.retry.unwrap_or_default(),
                 timeout: self.timeout.unwrap_or(DEFAULT_TIMEOUT),
-                user_agent: self
-                    .user_agent
-                    .unwrap_or_else(|| concat!("meta-whatsapp-rs/", env!("CARGO_PKG_VERSION")).to_owned()),
+                user_agent: self.user_agent.unwrap_or_else(|| {
+                    concat!("meta-whatsapp-rs/", env!("CARGO_PKG_VERSION")).to_owned()
+                }),
             }),
             token: self.token,
         })

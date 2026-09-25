@@ -16,12 +16,14 @@ use axum::routing::{get, post};
 use bytes::Bytes;
 use futures::StreamExt;
 use http::Method;
+use meta_whatsapp_adapters::http::ReqwestTransport;
+use meta_whatsapp_core::error::TransportError;
+use meta_whatsapp_core::transport::{
+    ByteStream, HttpRequest, HttpTransport, Multipart, RequestBody,
+};
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 use url::Url;
-use meta_whatsapp_adapters::http::ReqwestTransport;
-use meta_whatsapp_core::error::TransportError;
-use meta_whatsapp_core::transport::{ByteStream, HttpRequest, HttpTransport, Multipart, RequestBody};
 
 /// Hand-offs between a test and the server, to prove streaming.
 #[derive(Default)]

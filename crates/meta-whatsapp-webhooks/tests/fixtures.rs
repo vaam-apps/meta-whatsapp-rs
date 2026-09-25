@@ -7,10 +7,10 @@
 
 mod common;
 
-use pretty_assertions::assert_eq;
-use serde_json::Value;
 use meta_whatsapp_webhooks::fields::MessageContent;
 use meta_whatsapp_webhooks::{ChangeValue, WebhookEvent, WebhookPayload};
+use pretty_assertions::assert_eq;
+use serde_json::Value;
 
 fn content_is_typed(content: &MessageContent) -> bool {
     match content {

@@ -94,8 +94,6 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::Value;
-use time::OffsetDateTime;
 use meta_whatsapp_client::Client;
 use meta_whatsapp_client::messages::{MessageContent, OutboundMessage, SendResponse};
 use meta_whatsapp_core::Result;
@@ -113,7 +111,11 @@ use meta_whatsapp_webhooks::fields::coexistence::{
     HistoryMessage, HistoryMessageStatus, HistoryValue, MessageEcho, ThreadContext,
 };
 use meta_whatsapp_webhooks::fields::common::{Contact, Metadata};
-use meta_whatsapp_webhooks::fields::messages::{InboundMessage, InteractiveReply, MessageContent as In};
+use meta_whatsapp_webhooks::fields::messages::{
+    InboundMessage, InteractiveReply, MessageContent as In,
+};
+use serde_json::Value;
+use time::OffsetDateTime;
 
 /// The conversation an inbound message belongs to, see the
 /// [module docs](self) for the key rules. `None` when Meta identified the
@@ -1179,8 +1181,6 @@ fn recipient_for(key: &ConversationKey) -> Recipient {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-    use time::macros::datetime;
     use meta_whatsapp_adapters::store::MemoryConversationStore;
     use meta_whatsapp_client::RetryPolicy;
     use meta_whatsapp_client::messages::Text;
@@ -1188,6 +1188,8 @@ mod tests {
     use meta_whatsapp_core::clock::ManualClock;
     use meta_whatsapp_core::testing::ScriptedTransport;
     use meta_whatsapp_webhooks::{WebhookPayload, events};
+    use serde_json::json;
+    use time::macros::datetime;
 
     use super::*;
     use meta_whatsapp_core::Error;
@@ -1847,7 +1849,10 @@ mod tests {
             matches!(&err, Error::Validation(v) if v.is_customer_service_window_closed()),
             "{err}"
         );
-        assert_eq!(err.kind(), meta_whatsapp_core::ErrorKind::CustomerServiceWindowClosed);
+        assert_eq!(
+            err.kind(),
+            meta_whatsapp_core::ErrorKind::CustomerServiceWindowClosed
+        );
         assert!(t.requests().is_empty(), "refused before any request");
 
         t.push_json(200, sent("wamid.tpl"));
@@ -1965,20 +1970,24 @@ mod tests {
     }
 
     // Fixtures copied from Meta's example payloads (meta-whatsapp-webhooks' tests).
-    const ECHO_TEXT: &str =
-        include_str!("../../meta-whatsapp-webhooks/tests/fixtures/fields/smb_message_echoes_text.json");
-    const ECHO_REVOKE: &str =
-        include_str!("../../meta-whatsapp-webhooks/tests/fixtures/fields/smb_message_echoes_revoke.json");
-    const ECHO_BSUID: &str =
-        include_str!("../../meta-whatsapp-webhooks/tests/fixtures/bsuid/smb_message_echoes_bsuid.json");
+    const ECHO_TEXT: &str = include_str!(
+        "../../meta-whatsapp-webhooks/tests/fixtures/fields/smb_message_echoes_text.json"
+    );
+    const ECHO_REVOKE: &str = include_str!(
+        "../../meta-whatsapp-webhooks/tests/fixtures/fields/smb_message_echoes_revoke.json"
+    );
+    const ECHO_BSUID: &str = include_str!(
+        "../../meta-whatsapp-webhooks/tests/fixtures/bsuid/smb_message_echoes_bsuid.json"
+    );
     const HISTORY_THREADS: &str =
         include_str!("../../meta-whatsapp-webhooks/tests/fixtures/fields/history_threads.json");
     const HISTORY_MEDIA: &str =
         include_str!("../../meta-whatsapp-webhooks/tests/fixtures/fields/history_media.json");
     const HISTORY_DECLINED: &str =
         include_str!("../../meta-whatsapp-webhooks/tests/fixtures/fields/history_declined.json");
-    const HISTORY_BSUID: &str =
-        include_str!("../../meta-whatsapp-webhooks/tests/fixtures/bsuid/history_thread_context.json");
+    const HISTORY_BSUID: &str = include_str!(
+        "../../meta-whatsapp-webhooks/tests/fixtures/bsuid/history_thread_context.json"
+    );
 
     /// The summary of one conversation.
     async fn summary_of(

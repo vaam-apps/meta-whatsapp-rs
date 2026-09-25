@@ -9,11 +9,11 @@ use aws_lc_rs::rsa::{
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use hmac::{Hmac, Mac};
+use meta_whatsapp_core::error::{CryptoError, WebhookError};
+use meta_whatsapp_core::secret::AppSecret;
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
 use sha2::Sha256;
-use meta_whatsapp_core::error::{CryptoError, WebhookError};
-use meta_whatsapp_core::secret::AppSecret;
 
 use super::*;
 
@@ -440,7 +440,9 @@ fn endpoint_errors_convert_into_the_root_error() {
     }
     assert!(matches!(
         signature(b"{}"),
-        Err(meta_whatsapp_core::Error::Webhook(WebhookError::MissingSignature))
+        Err(meta_whatsapp_core::Error::Webhook(
+            WebhookError::MissingSignature
+        ))
     ));
     let key = FlowEndpointKey::from_pem(PKCS8).unwrap();
     assert!(matches!(
