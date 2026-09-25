@@ -46,11 +46,17 @@
 //!     .business_verification()
 //!     .submit(&partner, &customer, &[document])
 //!     .await?;
-//! println!("{} of 3 submissions used", receipt.verification_attempts.unwrap_or(0));
+//! if receipt.attempts_left() == Some(0) {
+//!     // The last one: if it is rejected, the customer verifies on their own.
+//! }
 //!
 //! // Later, or on the webhook: the customer's business, with their token.
 //! let business = client.with_token(business_token);
-//! let status = business.business_verification().status(&customer).await?;
+//! let verified = business
+//!     .business_verification()
+//!     .status(&customer)
+//!     .await?
+//!     .is_verified();
 //! # Ok(()) }
 //! ```
 //!
@@ -115,7 +121,11 @@ use meta_whatsapp_core::transport::Multipart;
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 
+#[doc(no_inline)]
+pub use crate::waba::{BusinessInfo, BusinessVerificationStatus};
+
 use crate::request::{paginate_or_error, reject_cursors, send_checked};
+use crate::templates::macros::string_enum;
 use crate::{Client, GraphRequest};
 
 /// At most this many documents per submission.
@@ -358,69 +368,12 @@ impl SubmissionReceipt {
     }
 }
 
-/// An open string enum: the named values, and `Other` keeping any other
-/// value verbatim (so a value Meta adds parses, and serializes back as
-/// Meta sent it).
-macro_rules! open_status {
-    (
-        $(#[$meta:meta])*
-        pub enum $name:ident {
-            $($(#[$vmeta:meta])* $variant:ident => $wire:literal,)+
-        }
-    ) => {
-        $(#[$meta])*
-        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        #[non_exhaustive]
-        pub enum $name {
-            $($(#[$vmeta])* $variant,)+
-            /// Any other value, verbatim.
-            Other(String),
-        }
-
-        impl $name {
-            /// The value as Meta sends it.
-            pub fn as_str(&self) -> &str {
-                match self {
-                    $(Self::$variant => $wire,)+
-                    Self::Other(s) => s,
-                }
-            }
-        }
-
-        impl From<&str> for $name {
-            fn from(s: &str) -> Self {
-                match s {
-                    $($wire => Self::$variant,)+
-                    _ => Self::Other(s.to_owned()),
-                }
-            }
-        }
-
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str(self.as_str())
-            }
-        }
-
-        impl Serialize for $name {
-            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-                s.serialize_str(self.as_str())
-            }
-        }
-
-        impl<'de> Deserialize<'de> for $name {
-            fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-                let s = String::deserialize(d)?;
-                Ok(Self::from(s.as_str()))
-            }
-        }
-    };
-}
-
-open_status! {
+string_enum! {
     /// A submission's `verification_status`. The named values are those
-    /// `account_update` documents for the same submission's `status` (see
-    /// the [module docs](crate::business_verification) for why).
+    /// `account_update` documents for the same submission's `status`
+    /// (`meta_whatsapp_webhooks::fields::CertificationStatus` there; see the
+    /// [module docs](crate::business_verification) for why). Parsed
+    /// case-insensitively; any other value is kept verbatim.
     pub enum SubmissionStatus {
         /// Reviewed and approved.
         Approved => "APPROVED",
@@ -432,33 +385,6 @@ open_status! {
         Pending => "PENDING",
         /// Revoked.
         Revoked => "REVOKED",
-    }
-}
-
-open_status! {
-    /// A business portfolio's `verification_status` (the `Business` node's
-    /// reference lists these ten).
-    pub enum BusinessVerificationStatus {
-        /// Expired.
-        Expired => "expired",
-        /// Failed.
-        Failed => "failed",
-        /// Ineligible.
-        Ineligible => "ineligible",
-        /// Not verified.
-        NotVerified => "not_verified",
-        /// Pending.
-        Pending => "pending",
-        /// Pending, Meta needs more information.
-        PendingNeedMoreInfo => "pending_need_more_info",
-        /// Pending submission.
-        PendingSubmission => "pending_submission",
-        /// Rejected.
-        Rejected => "rejected",
-        /// Revoked.
-        Revoked => "revoked",
-        /// Verified.
-        Verified => "verified",
     }
 }
 
@@ -496,9 +422,16 @@ pub enum RejectionReason {
 impl RejectionReason {
     /// Read one of Meta's `rejection_reasons` values, spelled with spaces
     /// (`LEGAL NAME NOT MATCHING`, `account_update`) or underscores
-    /// (`LEGAL_NAME_NOT_FOUND_IN_DOCUMENTS`, the partner-led page).
+    /// (`LEGAL_NAME_NOT_FOUND_IN_DOCUMENTS`, the partner-led page), in any
+    /// case; any other value is kept verbatim in [`Self::Other`]. The same
+    /// as `reason.parse::<RejectionReason>()`.
     pub fn parse(reason: &str) -> Self {
-        match reason.trim().replace('_', " ").as_str() {
+        match reason
+            .trim()
+            .replace('_', " ")
+            .to_ascii_uppercase()
+            .as_str()
+        {
             "ADDRESS NOT MATCHING" => Self::AddressNotMatching,
             "BUSINESS NOT ELIGIBLE" => Self::BusinessNotEligible,
             "LEGAL NAME NOT MATCHING" => Self::LegalNameNotMatching,
@@ -510,10 +443,53 @@ impl RejectionReason {
         }
     }
 
+    /// The value in `account_update`'s spelling (with spaces), or the
+    /// [`Self::Other`] value verbatim.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::AddressNotMatching => "ADDRESS NOT MATCHING",
+            Self::BusinessNotEligible => "BUSINESS NOT ELIGIBLE",
+            Self::LegalNameNotMatching => "LEGAL NAME NOT MATCHING",
+            Self::LegalNameNotFoundInDocuments => "LEGAL NAME NOT FOUND IN DOCUMENTS",
+            Self::MalformedDocuments => "MALFORMED DOCUMENTS",
+            Self::None => "NONE",
+            Self::WebsiteNotMatching => "WEBSITE NOT MATCHING",
+            Self::Other(s) => s,
+        }
+    }
+
     /// Whether the customer can only verify on their own
     /// ([`Self::BusinessNotEligible`]).
     pub fn is_ineligible(&self) -> bool {
         matches!(self, Self::BusinessNotEligible)
+    }
+}
+
+impl std::str::FromStr for RejectionReason {
+    type Err = std::convert::Infallible;
+
+    /// [`RejectionReason::parse`].
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self::parse(s))
+    }
+}
+
+impl fmt::Display for RejectionReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Serialize for RejectionReason {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for RejectionReason {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Ok(Self::parse(&s))
     }
 }
 
@@ -561,25 +537,6 @@ impl VerificationSubmission {
             .iter()
             .map(|r| RejectionReason::parse(r))
             .collect()
-    }
-}
-
-/// A business portfolio's verification status, from
-/// `GET /{BUSINESS_PORTFOLIO_ID}?fields=verification_status`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[non_exhaustive]
-pub struct BusinessVerificationInfo {
-    /// The business portfolio.
-    pub id: BusinessId,
-    /// Its status.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub verification_status: Option<BusinessVerificationStatus>,
-}
-
-impl BusinessVerificationInfo {
-    /// `verification_status` is `verified`.
-    pub fn is_verified(&self) -> bool {
-        self.verification_status == Some(BusinessVerificationStatus::Verified)
     }
 }
 
@@ -642,8 +599,9 @@ impl BusinessVerification {
     /// `POST /{BUSINESS_PORTFOLIO_ID}/self_certify_whatsapp_business`
     /// (multipart: `end_business_id`, then one `business_documents[]` file
     /// part per document): submit the customer business `end_business_id`
-    /// for verification. `business_id` is **your** business portfolio;
-    /// **the partner's system user token**.
+    /// for verification. `business_id` is **your** business portfolio (both
+    /// are [`BusinessId`]s: mind the order); **the partner's system user
+    /// token**.
     ///
     /// Checks locally first: both ids set, one to [`MAX_DOCUMENTS`]
     /// documents (each already checked by [`VerificationDocument`]). Never
@@ -736,13 +694,15 @@ impl BusinessVerification {
 
     /// `GET /{BUSINESS_PORTFOLIO_ID}?fields=verification_status`: the
     /// verification status of the **customer's** business portfolio, with
-    /// **the customer's business token**.
+    /// **the customer's business token**. Read
+    /// [`BusinessInfo::verification_status`] or [`BusinessInfo::is_verified`]
+    /// (the same as `client.business(id).get(&["verification_status"])`).
     ///
     /// Meta's alternative, `business_verification_status` on the
     /// customer's WABA (same token), is
     /// [`WabaInfo::business_verification_status`](crate::waba::WabaInfo::business_verification_status)
     /// through [`Waba::get`](crate::waba::Waba::get).
-    pub async fn status(&self, business_id: &BusinessId) -> Result<BusinessVerificationInfo> {
+    pub async fn status(&self, business_id: &BusinessId) -> Result<BusinessInfo> {
         required("business_id", business_id)?;
         self.client
             .get_at(&[business_id.as_str()])

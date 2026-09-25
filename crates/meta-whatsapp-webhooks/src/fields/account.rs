@@ -365,7 +365,9 @@ open_enum! {
     /// `partner_client_certification_info.status`: the outcome of a
     /// partner-led business verification submission (the five values of
     /// `webhooks/reference/account_update`; the partner-led page lists
-    /// `APPROVED` and `FAILED`).
+    /// `APPROVED` and `FAILED`). The same values as
+    /// `meta_whatsapp_client::business_verification::SubmissionStatus`,
+    /// a listed submission's `verification_status`.
     pub enum CertificationStatus {
         /// Approved.
         Approved => "APPROVED",

@@ -131,17 +131,24 @@ volumes (Claude config, shell history, cargo caches) start empty
   spent by then, and `attempts_left`), `submissions` /
   `submissions_stream` (`…/self_certified_whatsapp_business_submissions`,
   filtered by `ListVerificationSubmissions::end_business_id`) and
-  `status` (`GET /{BUSINESS_ID}?fields=verification_status`). Submitting
+  `status` (`GET /{BUSINESS_ID}?fields=verification_status`, returning
+  `waba::BusinessInfo`, which gains `verification_status` and
+  `is_verified`, so `Business::get(&["verification_status"])` reads it
+  too). Submitting
   and listing take the partner's system user token, `status` the
   customer's business token (module docs, tests assert each). Checked
   before any request: both ids, one to three documents
   (`VerificationDocument`: PDF, JPEG/JPG or PNG by `DocumentType`, at most
   5 MiB, content matching the declared type, `Debug` without the
-  content). Open enums `SubmissionStatus` and
-  `BusinessVerificationStatus` keep an unknown value in `Other`;
-  `RejectionReason::parse` reads the reasons in both of Meta's spellings
-  (`LEGAL NAME NOT MATCHING`, `LEGAL_NAME_NOT_FOUND_IN_DOCUMENTS`). New id
-  `meta_whatsapp_core::ids::VerificationSubmissionId`. The outcome still
+  content; limits `MAX_DOCUMENTS`, `MAX_DOCUMENT_BYTES`, and
+  `MAX_SUBMISSIONS` per customer). A listed submission is a
+  `VerificationSubmission` (`SubmittedInfo`, `reasons()`).
+  `SubmissionStatus` and `waba::BusinessVerificationStatus` (re-exported
+  here) are `string_enum!`s: case-insensitive, an unknown value kept in
+  `Other`; `RejectionReason` (`parse`, `FromStr`, `as_str`, `Display`,
+  serde) reads the reasons in both of Meta's spellings
+  (`LEGAL NAME NOT MATCHING`, `LEGAL_NAME_NOT_FOUND_IN_DOCUMENTS`), any
+  case. New id `meta_whatsapp_core::ids::VerificationSubmissionId`. The outcome still
   arrives as `account_update` `PARTNER_CLIENT_CERTIFICATION_STATUS_UPDATE`
   (`PartnerClientCertificationInfo`, now linked from both sides and
   tested against the partner-led page's example too).

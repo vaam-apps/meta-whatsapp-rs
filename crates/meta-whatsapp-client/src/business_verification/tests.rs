@@ -716,13 +716,12 @@ async fn status_reads_the_customer_business_with_its_business_token() {
         .status(&customer())
         .await
         .unwrap();
+    assert_eq!(info.id, customer());
     assert_eq!(
-        info,
-        BusinessVerificationInfo {
-            id: customer(),
-            verification_status: Some(BusinessVerificationStatus::Verified),
-        }
+        info.verification_status,
+        Some(BusinessVerificationStatus::Verified)
     );
+    assert_eq!(info.name, None);
     assert!(info.is_verified());
 
     let req = t.last_request().unwrap();
@@ -790,14 +789,22 @@ fn business_statuses_are_the_references_ten_and_open() {
         assert_eq!(serde_json::to_value(&status).unwrap(), json!(wire));
         assert_eq!(status.to_string(), wire);
     }
-    let other: BusinessVerificationStatus = serde_json::from_value(json!("VERIFIED")).unwrap();
-    assert_eq!(other, BusinessVerificationStatus::Other("VERIFIED".into()));
-    assert_eq!(serde_json::to_value(&other).unwrap(), json!("VERIFIED"));
-    let info = BusinessVerificationInfo {
-        id: customer(),
-        verification_status: Some(other),
-    };
-    assert!(!info.is_verified());
+    // Meta writes this concept in both cases (the WABA reference's
+    // `business_verification_status` is upper case, its example lower):
+    // parsed case-insensitively, as every `string_enum!`.
+    let upper: BusinessVerificationStatus = serde_json::from_value(json!("VERIFIED")).unwrap();
+    assert_eq!(upper, BusinessVerificationStatus::Verified);
+    let info: BusinessInfo =
+        serde_json::from_value(json!({"id": CUSTOMER, "verification_status": "VERIFIED"})).unwrap();
+    assert!(info.is_verified());
+    let other: BusinessInfo =
+        serde_json::from_value(json!({"id": CUSTOMER, "verification_status": "verified_soon"}))
+            .unwrap();
+    assert_eq!(
+        other.verification_status,
+        Some(BusinessVerificationStatus::Other("verified_soon".into()))
+    );
+    assert!(!other.is_verified());
 }
 
 #[test]
@@ -859,6 +866,29 @@ fn unknown_values_are_kept_verbatim() {
     assert_eq!(
         RejectionReason::parse(" Document_Expired "),
         RejectionReason::Other(" Document_Expired ".into())
+    );
+    assert_eq!(
+        RejectionReason::parse("legal name not matching"),
+        RejectionReason::LegalNameNotMatching,
+        "any case"
+    );
+    // The other conversions every open enum has.
+    let parsed: RejectionReason = "WEBSITE_NOT_MATCHING".parse().unwrap();
+    assert_eq!(parsed, RejectionReason::WebsiteNotMatching);
+    assert_eq!(parsed.to_string(), "WEBSITE NOT MATCHING");
+    assert_eq!(
+        serde_json::to_value(&parsed).unwrap(),
+        json!("WEBSITE NOT MATCHING")
+    );
+    let back: RejectionReason =
+        serde_json::from_value(json!("LEGAL_NAME_NOT_FOUND_IN_DOCUMENTS")).unwrap();
+    assert_eq!(back, RejectionReason::LegalNameNotFoundInDocuments);
+    assert_eq!(back.as_str(), "LEGAL NAME NOT FOUND IN DOCUMENTS");
+    let unknown = RejectionReason::parse("Document_Expired");
+    assert_eq!(unknown.as_str(), "Document_Expired");
+    assert_eq!(
+        serde_json::to_value(&unknown).unwrap(),
+        json!("Document_Expired")
     );
     let submission: VerificationSubmission = serde_json::from_value(json!({
         "id": "1",
