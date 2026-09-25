@@ -628,3 +628,51 @@ async fn sends_past_the_tenants_limit_are_429_with_retry_after() {
         "{metrics}"
     );
 }
+
+/// Tenant ids are the integrator's (slugs, say): a tenant deleted and
+/// created again under the same id starts without the deleted one's
+/// idempotency records. Its first send under a key the deleted tenant
+/// used goes to Meta, and never replays the old answer (another
+/// merchant's message id). Decisive: deleting a tenant's records with it.
+#[tokio::test]
+async fn a_tenant_created_again_never_replays_the_deleted_ones_answers() {
+    let (h, key) = connected().await;
+    let admin = h.admin_key().await;
+    h.graph.push_json(200, accepted());
+    let first = h
+        .call(with_key(send(&key, &text()), "order:1234:shipped"))
+        .await;
+    assert_eq!(first.status, StatusCode::ACCEPTED, "{}", first.text);
+    // The operator deletes the tenant (its WABA disconnected first) and
+    // an integrator creates one again with the same id.
+    h.graph.push_json(200, json!({"success": true}));
+    let deleted = h
+        .call(Call::new(Method::DELETE, format!("/v1/admin/tenants/{TENANT}")).key(&admin))
+        .await;
+    assert_eq!(deleted.status, StatusCode::NO_CONTENT, "{}", deleted.text);
+    let created = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants")
+                .key(&admin)
+                .json(&json!({"id": TENANT})),
+        )
+        .await;
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.text);
+    h.connect(TENANT, WABA, &[PN], "EAAG-new-merchant-token")
+        .await;
+    let new_key = h.tenant_key(TENANT, &[Scope::Send]).await;
+    // Same key, same body: a send of its own.
+    let mut answer = accepted();
+    answer["messages"][0]["id"] = json!("wamid.OF-THE-NEW-TENANT");
+    h.graph.push_json(200, answer);
+    let again = h
+        .call(with_key(send(&new_key, &text()), "order:1234:shipped"))
+        .await;
+    assert_eq!(again.status, StatusCode::ACCEPTED, "{}", again.text);
+    assert!(again.headers.get("idempotent-replayed").is_none());
+    assert_eq!(again.json()["message_id"], "wamid.OF-THE-NEW-TENANT");
+    let request = h.graph.last_request().unwrap();
+    assert_eq!(request.path(), format!("/v25.0/{PN}/messages"));
+    assert_eq!(request.bearer(), Some("EAAG-new-merchant-token"));
+    assert_eq!(h.graph.remaining(), 0);
+}

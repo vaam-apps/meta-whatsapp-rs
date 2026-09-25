@@ -534,16 +534,37 @@ pub async fn idempotency(store: &dyn Store) {
             },
         })
     );
-    // A deleted tenant's records go with it.
+    // A deleted tenant's records go with it, kept answers included: a
+    // tenant created again under the same id (ids are the integrator's)
+    // never gets the deleted one's answers.
+    assert!(
+        store
+            .complete_idempotency_key(&b, &key, "c5", 202, body)
+            .await
+            .unwrap()
+    );
+    let kept = IdempotencyClaim::Existing(IdempotencyRecord {
+        fingerprint: [9; 32],
+        state: IdempotencyState::Completed {
+            status: 202,
+            body: body.to_vec(),
+        },
+    });
+    assert_eq!(claim(&b, [9; 32], "c15", minute, hour).await, kept);
     assert_eq!(
         store.delete_tenant(&b).await.unwrap(),
         DeleteTenantOutcome::Deleted
     );
     store.create_tenant(&b, "").await.unwrap().unwrap();
     assert_eq!(
-        claim(&b, [7; 32], "c13", minute, hour).await,
+        claim(&b, [9; 32], "c13", minute, hour).await,
         IdempotencyClaim::Claimed
     );
+    // The other tenant's records are untouched.
+    assert!(matches!(
+        claim(&a, [1; 32], "c14", minute, hour).await,
+        IdempotencyClaim::Existing(_)
+    ));
 }
 
 pub async fn run(store: &dyn Store) {
