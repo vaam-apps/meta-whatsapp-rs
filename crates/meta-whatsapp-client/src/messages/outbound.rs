@@ -9,7 +9,8 @@ use serde::ser::{SerializeMap, Serializer};
 use super::commerce::{CatalogMessage, ProductList, ProductSection, SingleProduct};
 use super::contacts::{Contact, MAX_CONTACTS};
 use super::content::{
-    Audio, Document, Image, Location, MediaSource, Pin, Reaction, Sticker, Text, Video,
+    Audio, Document, Image, Location, MediaSource, Pin, Reaction, Sticker, TEXT_BODY_MAX_CHARS,
+    Text, Video,
 };
 use super::interactive::{
     CtaUrl, FlowMessage, FlowParameters, Interactive, ListMessage, ListSection, LocationRequest,
@@ -180,7 +181,11 @@ impl MessageContent {
             // Direct Send aligns text bodies with template limits: 1024
             // (direct-send/supported-features-and-limits); otherwise 4096
             // (messages/text-messages).
-            Self::Text(t) => t.validate(if direct_send { 1024 } else { 4096 }),
+            Self::Text(t) => t.validate(if direct_send {
+                1024
+            } else {
+                TEXT_BODY_MAX_CHARS
+            }),
             Self::Image(m) => m.validate(),
             Self::Video(m) => m.validate(),
             Self::Audio(m) => m.validate(),
