@@ -222,3 +222,36 @@ async fn a_menu_the_client_would_refuse_fails_before_any_request() {
 
     assert!(t.requests().is_empty());
 }
+
+/// A menu tap sends `/name`: a bot whose parser does not read that as the
+/// command would publish a menu whose every tap is plain text, so the
+/// menu is refused before any request.
+#[tokio::test]
+async fn a_menu_the_parser_cannot_read_fails() {
+    let bang_only = Bot::builder()
+        .outbound(Recording::default())
+        .prefixes(["!"])
+        .command(Command::new("ping", noop()).description("Pong"))
+        .build()
+        .await
+        .unwrap();
+    assert_eq!(
+        bang_only.command_menu().unwrap_err().field,
+        "commands.ping.command_name"
+    );
+    let t = ScriptedTransport::new();
+    assert!(matches!(
+        bang_only.sync_command_menu(&client(&t), NUMBER).await,
+        Err(Error::Validation(_))
+    ));
+    assert!(t.requests().is_empty());
+
+    let with_slash = Bot::builder()
+        .outbound(Recording::default())
+        .prefixes(["!", "/"])
+        .command(Command::new("ping", noop()).description("Pong"))
+        .build()
+        .await
+        .unwrap();
+    assert_eq!(with_slash.command_menu().unwrap().len(), 1);
+}

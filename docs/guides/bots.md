@@ -176,7 +176,8 @@ list each time, as this does. The client's limits are checked
 first: at most 30 commands, names of at most 32 characters, descriptions
 of 1 to 256. A listed command without a description is an error, not a
 silent omission; take a command out with `Command::menu(false)`. A tap in
-the menu sends `/name`, so keep `/` among the prefixes.
+the menu sends `/name`, so keep `/` among the prefixes: a menu the
+bot's parser cannot read that way is an error too.
 
 ## 7. Markdown replies
 

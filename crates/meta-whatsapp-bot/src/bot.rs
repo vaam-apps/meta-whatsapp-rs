@@ -325,12 +325,14 @@ impl Bot {
     ///
     /// Fails with the client's own checks
     /// (`ConversationalAutomationConfig::validate`: at most 30 commands,
-    /// names of 1–32 characters, unique, descriptions of 1–256) and when a
-    /// listed command has no description: hide such commands from the menu
-    /// rather than have them cut silently.
+    /// names of 1–32 characters, unique, descriptions of 1–256), when a
+    /// listed command has no description (hide such commands from the menu
+    /// rather than have them cut silently), and when the bot's parser does
+    /// not read `/name` as the command (a tap would be plain text).
     pub fn command_menu(&self) -> std::result::Result<Vec<BotCommand>, ValidationError> {
+        let router = &self.inner.router;
         let mut commands = Vec::new();
-        for entry in &self.inner.router.entries {
+        for (index, entry) in router.entries.iter().enumerate() {
             let info = &entry.info;
             if info.hidden || !info.in_menu {
                 continue;
@@ -341,6 +343,17 @@ impl Bot {
                     "a command in Meta's menu needs a description (or `Command::menu(false)`)",
                 ));
             };
+            let tapped = router
+                .parser
+                .parse(&format!("/{}", info.name))
+                .and_then(|parsed| router.by_name.get(&parsed.name.to_lowercase()).copied());
+            if tapped != Some(index) {
+                return Err(ValidationError::new(
+                    format!("commands.{}.command_name", info.name),
+                    "a tap in Meta's menu sends `/name`, which the bot's parser does not \
+                     read as this command (keep `/` among the prefixes)",
+                ));
+            }
             commands.push(BotCommand::new(info.name.clone(), description.clone()));
         }
         ConversationalAutomationConfig::new()

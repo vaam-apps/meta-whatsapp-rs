@@ -139,7 +139,7 @@ codes and `/commands` work, but a literal `*`, `_` or `~` may format.
 - **Plugins are compiled in.** No hot reload or dynamic loading; ship a
   plugin as a crate and redeploy. `Bot::unload` runs every `on_unload`
   at shutdown, then the bot refuses events so Meta redelivers them.
-- A menu tap sends `/name`: keep `/` among the prefixes if you sync it.
+- A menu tap sends `/name`: keep `/` among the prefixes (else `Bot::command_menu` fails).
 - `MarkRead::with_typing_indicator` shows "typing…" for every message,
   commands or not; use `MarkRead::new` when most messages get no reply.
 - Replies are free-form: outside the 24-hour window Meta refuses them.
