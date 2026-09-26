@@ -37,9 +37,9 @@ test-live-down:
 
 # Drop what live tests left on the test services: `wa_test_*` databases and
 # `wa_test_*` / `wa_server_test_*` schemas on Postgres, `wa-test:*` keys on
-# Redis. The adapter tests delete their own, when they panic too
-# (tests/common's PgCleanup and RedisCleanup); this clears older runs and
-# killed ones (SIGKILL and abort skip Drop). Uses META_WHATSAPP_RS_TEST_POSTGRES_URL
+# Redis. The live tests delete their own, when they panic too (the
+# adapters' tests/common PgCleanup and RedisCleanup, the server's TestDb);
+# this clears older runs and killed ones (SIGKILL and abort skip Drop). Uses META_WHATSAPP_RS_TEST_POSTGRES_URL
 # and META_WHATSAPP_RS_TEST_REDIS_URL when set (the devcontainer's sidecars),
 # otherwise the compose.test.yaml servers. Not during a live run: it would
 # delete that run's objects too.

@@ -1,7 +1,8 @@
 //! The service on a real Postgres. Skipped unless
 //! `META_WHATSAPP_RS_TEST_POSTGRES_URL` is set; `just test-live` sets
 //! `META_WHATSAPP_RS_REQUIRE_LIVE=1`, which turns the skip into a failure.
-//! Every test runs in a fresh schema.
+//! Every test runs in a fresh schema, which `common::TestDb` drops when
+//! the test ends, a panicking one included.
 //!
 //! Acceptance test M1.7, the M1a and M1b parts: parallel migrations of two
 //! instances succeed, and the log capture of `logs.rs` (every route, sends
