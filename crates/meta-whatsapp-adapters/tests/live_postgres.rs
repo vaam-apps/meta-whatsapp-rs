@@ -1827,47 +1827,71 @@ async fn assert_summary_matches_history(store: &PostgresConversationStore, key: 
     }
 }
 
-/// Risk (a), append first: an append has inserted its message and waits
-/// on the conversation's summary row when the erasure starts. The erasure
-/// must take it along (it committed before the erasure deleted anything),
-/// never leave the message behind without its summary.
+/// Risk (a), append first: an append (or a history chunk) has inserted
+/// its message and waits on the conversation's summary row when the
+/// erasure starts. The erasure must take it along (it committed before the
+/// erasure deleted anything), never leave the message behind without its
+/// summary.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn live_postgres_erase_takes_an_append_in_flight_along() {
     let Some(db) = TestDb::new().await else {
         return;
     };
     postgres::migrate(&db.pool).await.unwrap();
-    let app = format!("race_{}", common::unique());
-    let store = PostgresConversationStore::new(racing_pool(&db, &app, &[]).await);
-    let key = ConversationKey::new("106540352242922", "US.13491208655302741918");
-    assert!(store.append(race_message(&key, "first", 0)).await.unwrap());
+    for synced in [false, true] {
+        let app = format!("race_{}", common::unique());
+        let store = PostgresConversationStore::new(racing_pool(&db, &app, &[]).await);
+        let key = ConversationKey::new("106540352242922", format!("US.synced-{synced}"));
+        assert!(
+            store
+                .append(race_message(&key, &format!("{synced}-first"), 0))
+                .await
+                .unwrap()
+        );
 
-    let lock = blocker(
-        &db,
-        "SELECT 1 FROM wa_conversations WHERE phone_number_id = $1 AND contact = $2",
-        &[key.phone_number_id.as_str(), &key.contact],
-    )
-    .await;
-    let append = tokio::spawn({
-        let (store, m) = (store.clone(), race_message(&key, "second", 1));
-        async move { store.append(m).await }
-    });
-    until_waiting(&db, &app, 1, || false).await;
-    let erase = tokio::spawn({
-        let (store, key) = (store.clone(), key.clone());
-        async move { store.erase(&key).await }
-    });
-    until_waiting(&db, &app, 2, || erase.is_finished()).await;
-    lock.commit().await.unwrap();
+        let lock = blocker(
+            &db,
+            "SELECT 1 FROM wa_conversations WHERE phone_number_id = $1 AND contact = $2",
+            &[key.phone_number_id.as_str(), &key.contact],
+        )
+        .await;
+        let append = tokio::spawn({
+            let (store, m) = (
+                store.clone(),
+                race_message(&key, &format!("{synced}-second"), 1),
+            );
+            async move {
+                if synced {
+                    store
+                        .append_synced(vec![m])
+                        .await
+                        .map(|stored| stored == [true])
+                } else {
+                    store.append(m).await
+                }
+            }
+        });
+        until_waiting(&db, &app, 1, || false).await;
+        let erase = tokio::spawn({
+            let (store, key) = (store.clone(), key.clone());
+            async move { store.erase(&key).await }
+        });
+        until_waiting(&db, &app, 2, || erase.is_finished()).await;
+        lock.commit().await.unwrap();
 
-    assert!(append.await.unwrap().unwrap());
-    let erased = erase.await.unwrap().unwrap();
-    assert_summary_matches_history(&store, &key).await;
-    assert!(
-        store.messages(&key, None, 10).await.unwrap().is_empty(),
-        "the append committed before the erasure deleted: erased with the rest"
-    );
-    assert_eq!((erased.messages, erased.conversations), (2, 1));
+        assert!(append.await.unwrap().unwrap(), "synced: {synced}");
+        let erased = erase.await.unwrap().unwrap();
+        assert_summary_matches_history(&store, &key).await;
+        assert!(
+            store.messages(&key, None, 10).await.unwrap().is_empty(),
+            "synced: {synced}: the append committed before the erasure deleted: erased with the rest"
+        );
+        assert_eq!(
+            (erased.messages, erased.conversations),
+            (2, 1),
+            "synced: {synced}"
+        );
+    }
 }
 
 /// Risk (a), erasure first: an append that starts while the erasure is

@@ -2657,6 +2657,14 @@ async fn purge_deletes_exactly_what_is_older<S: ConversationStore + ?Sized>(stor
     let m4 = r.msg("mixed", "m4", Direction::Outbound, 5, "after");
     store.append(m3.clone()).await.unwrap();
     store.append(m4.clone()).await.unwrap();
+    // "edge": its latest message is exactly at the cutoff.
+    let edge = r.key("edge");
+    store
+        .append(r.msg("edge", "e1", Direction::Inbound, -3, "before"))
+        .await
+        .unwrap();
+    let e2 = r.msg("edge", "e2", Direction::Inbound, 0, "at the cutoff");
+    store.append(e2.clone()).await.unwrap();
     store
         .revoke(&mixed, &r.id("t-3"), Direction::Inbound, at(-3))
         .await
@@ -2707,19 +2715,30 @@ async fn purge_deletes_exactly_what_is_older<S: ConversationStore + ?Sized>(stor
         .await
         .unwrap();
     let mixed_summary = summary(store, &mixed).await.unwrap();
+    let edge_summary = summary(store, &edge).await.unwrap();
     let other_before = recorded(store, &other_key).await;
 
     assert_eq!(
         store.purge_before(Some(&r.pn), at(0)).await.unwrap(),
         Purged {
-            messages: 5,
+            messages: 6,
             conversations: 1,
             window_events: 2,
             thread_owners: 1,
             contact_removals: 1,
         },
-        "o1, o2, m1, m2 and a tombstone; the summary of \"old\"; two window events; one owner; \
-         one contact removal"
+        "o1, o2, m1, m2, e1 and a tombstone; the summary of \"old\"; two window events; one \
+         owner; one contact removal"
+    );
+    assert_eq!(
+        store.messages(&edge, None, 10).await.unwrap(),
+        std::slice::from_ref(&e2),
+        "a message at the cutoff stays"
+    );
+    assert_eq!(
+        summary(store, &edge).await,
+        Some(edge_summary),
+        "and so does the summary of a conversation whose latest message is at the cutoff"
     );
     let texts: Vec<Option<String>> = store
         .messages(&mixed, None, 10)
