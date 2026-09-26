@@ -282,9 +282,7 @@ impl Error {
     /// reconciled with the status webhooks), never replayed blindly.
     pub fn may_resend(&self) -> bool {
         let refused = match self {
-            Self::Api(e) => {
-                e.kind().is_rejected_before_processing() || e.code == MAINTENANCE_MODE
-            }
+            Self::Api(e) => e.kind().is_rejected_before_processing() || e.code == MAINTENANCE_MODE,
             Self::Http { status: 429, .. } => true,
             _ => false,
         };
@@ -483,7 +481,10 @@ mod tests {
             (http(400), false),
             (ValidationError::new("to", "bad").into(), false),
             (ConfigError::new("no transport").into(), false),
-            (StorageError::Backend(anyhow::anyhow!("db down")).into(), false),
+            (
+                StorageError::Backend(anyhow::anyhow!("db down")).into(),
+                false,
+            ),
         ];
         for (err, resend) in &rows {
             assert_eq!(err.may_resend(), *resend, "{err}");
