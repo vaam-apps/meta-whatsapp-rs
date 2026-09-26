@@ -123,7 +123,7 @@ Docker for `just test-live`.
 | `just check` / `just test` / `just doc` | all targets, all features |
 | `just features` | each adapter/client feature compiled alone |
 | `just test-live` / `just test-live-down` | live adapter and service tests; stop the services |
-| `just test-live-clean` | drop leftover live-test databases (`wa_test_*`) and schemas (`wa_test_*`, `wa_server_test_*`) on the test Postgres (the sidecar, or compose.test.yaml's), keeping it up; not during a live run |
+| `just test-live-clean` | drop leftover live-test databases (`wa_test_*`) and schemas (`wa_test_*`, `wa_server_test_*`) on the test Postgres, and keys (`wa-test:*`) on the test Redis (the sidecars, or compose.test.yaml's), keeping them up; not during a live run |
 | `just skills-ts` | the server skills' TypeScript examples type-check against the committed OpenAPI document; needs Node of `tools/skills-ts/.nvmrc`'s major (24: the image's base, checked by `crates/meta-whatsapp-rs/tests/skills.rs`) and npm's registry (on the firewall's allowlist) |
 | `just deny` | licenses, advisories, bans, sources |
 | `just skills-check` | every skill stamp's commit is on main (directly or squash-merged) |

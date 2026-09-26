@@ -111,3 +111,70 @@ impl Drop for PgCleanup {
         }
     }
 }
+
+/// Deletes every Redis key under a test's prefix when it goes out of scope,
+/// a panicking test's unwinding included (see `PgCleanup` for why the
+/// work runs on a thread and runtime of its own).
+///
+/// Create it before the first write. The prefix must hold no glob
+/// characters: `unique`'s tokens do not.
+#[cfg(feature = "redis")]
+pub struct RedisCleanup {
+    client: redis::Client,
+    prefix: String,
+}
+
+#[cfg(feature = "redis")]
+impl RedisCleanup {
+    /// Deletes `prefix*` through a connection of its own from `client`.
+    pub fn new(client: &redis::Client, prefix: &str) -> Self {
+        Self {
+            client: client.clone(),
+            prefix: prefix.to_owned(),
+        }
+    }
+
+    fn run(client: &redis::Client, prefix: &str) -> Result<(), String> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?;
+        runtime.block_on(async {
+            let mut conn = client
+                .get_multiplexed_async_connection()
+                .await
+                .map_err(|e| e.to_string())?;
+            let keys: Vec<Vec<u8>> = redis::cmd("KEYS")
+                .arg(format!("{prefix}*"))
+                .query_async(&mut conn)
+                .await
+                .map_err(|e| e.to_string())?;
+            if !keys.is_empty() {
+                let () = redis::cmd("DEL")
+                    .arg(keys)
+                    .query_async(&mut conn)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        })
+    }
+}
+
+#[cfg(feature = "redis")]
+impl Drop for RedisCleanup {
+    fn drop(&mut self) {
+        let (client, prefix) = (self.client.clone(), self.prefix.clone());
+        let what = format!("DEL {prefix}*");
+        let result = std::thread::spawn(move || Self::run(&client, &prefix))
+            .join()
+            .unwrap_or_else(|_| Err("the cleanup thread panicked".to_owned()));
+        if let Err(e) = result {
+            if std::thread::panicking() {
+                eprintln!("cleanup `{what}` failed: {e}");
+            } else {
+                panic!("cleanup `{what}` failed: {e}");
+            }
+        }
+    }
+}
