@@ -1,0 +1,58 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "timestamp": "1671644824",
+            "type": "phone_number_settings",
+            "phone_number_settings": {
+              "phone_number_id": "106540352242922",
+              "calling": {
+                "status": "ENABLED",
+                "call_icon_visibility": "DEFAULT",
+                "callback_permission_status": "ENABLED",
+                "call_hours": {
+                  "status": "ENABLED",
+                  "timezone_id": "[REDACTED]",
+                  "weekly_operating_hours": [
+                    {
+                      "day_of_week": "MONDAY",
+                      "open_time": "0400",
+                      "close_time": "1020"
+                    },
+                    {
+                      "day_of_week": "TUESDAY",
+                      "open_time": "0108",
+                      "close_time": "1020"
+                    }
+                  ],
+                  "holiday_schedule": [
+                    {
+                      "date": "2026-01-01",
+                      "start_time": "0000",
+                      "end_time": "2359"
+                    }
+                  ]
+                },
+                "sip": {
+                  "status": "ENABLED",
+                  "servers": [
+                    {
+                      "hostname": "[REDACTED]",
+                      "port": 5061
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "field": "account_settings_update"
+        }
+      ]
+    }
+  ]
+}

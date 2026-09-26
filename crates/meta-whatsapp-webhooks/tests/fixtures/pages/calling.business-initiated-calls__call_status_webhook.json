@@ -1,0 +1,32 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "366634483210360",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "16315553601",
+              "phone_number_id": "436666719526789"
+            },
+            "statuses": [
+              {
+                "id": "wacid.ABGGFjFVU2AfAgo6V",
+                "timestamp": "1671644824",
+                "type": "call",
+                "status": "RINGING",
+                "recipient_id": "163155536021",
+                "recipient_user_id": "US.13491208655302741918",
+                "recipient_parent_user_id": "US.ENT.11815799212886844830",
+                "biz_opaque_callback_data": "random_string"
+              }
+            ]
+          },
+          "field": "calls"
+        }
+      ]
+    }
+  ]
+}

@@ -35,7 +35,7 @@ pub fn events(name: &str) -> Vec<WebhookEvent> {
 /// Every fixture file, relative to the fixture directory, sorted.
 pub fn all_fixtures() -> Vec<String> {
     let mut out = Vec::new();
-    for dir in ["messages", "fields", "bsuid"] {
+    for dir in ["messages", "fields", "bsuid", "pages"] {
         for entry in std::fs::read_dir(fixture_dir().join(dir)).unwrap() {
             let name = entry.unwrap().file_name().into_string().unwrap();
             if Path::new(&name)

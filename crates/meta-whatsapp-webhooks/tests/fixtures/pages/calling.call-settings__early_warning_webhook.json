@@ -1,0 +1,21 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "0",
+      "time": 1623862418,
+      "changes": [
+        {
+          "field": "account_update",
+          "value": {
+            "phone_number": "16505552771",
+            "event": "ACCOUNT_VIOLATION",
+            "violation_info": {
+              "violation_type": "LOW_BUSINESS_INITIATED_CALLING_QUALITY"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

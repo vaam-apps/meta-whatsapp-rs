@@ -1,0 +1,36 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550783881",
+              "phone_number_id": "106540352242922"
+            },
+            "groups": [
+              {
+                "timestamp": 1750030073,
+                "group_id": "Y2FwaV9ncm91cDoxOTUwNTU1MDA3OToxMjAzNjMzOTQzMjAdOTY0MTUZD",
+                "type": "group_participants_add",
+                "reason": "invite_link",
+                "added_participants": [
+                  {
+                    "wa_id": "16505551234",
+                    "user_id": "US.13491208655302741918",
+                    "parent_user_id": "US.ENT.11815799212886844830",
+                    "username": "pablomorales"
+                  }
+                ]
+              }
+            ]
+          },
+          "field": "group_participants_update"
+        }
+      ]
+    }
+  ]
+}

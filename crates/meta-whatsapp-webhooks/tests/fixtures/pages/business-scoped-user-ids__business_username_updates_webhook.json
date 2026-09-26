@@ -1,0 +1,19 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "time": 1750030073,
+      "changes": [
+        {
+          "field": "business_username_updates",
+          "value": {
+            "display_phone_number": "15550783881",
+            "username": "lucky_shrub",
+            "status": "approved"
+          }
+        }
+      ]
+    }
+  ]
+}

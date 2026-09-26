@@ -10,7 +10,7 @@ field module). Payloads are boxed.
 
 | Variant (`kind()`) | Webhook field | Fields besides `waba_id` |
 | --- | --- | --- |
-| `MessageReceived` (`message_received`) | `messages` | `phone_number_id`, `display_phone_number`, `contact: Option<Contact>`, `message: Box<InboundMessage>` |
+| `MessageReceived` (`message_received`) | `messages` | `phone_number_id`, `display_phone_number`, `contact: Option<Contact>`, `message: Box<InboundMessage>`, `conversation_context: Option<Box<ConversationContext>>` (Conversation Routing's summary, when the change carried one) |
 | `StatusUpdated` (`status_updated`) | `messages` | `phone_number_id`, `display_phone_number`, `contact`, `status: Box<Status>` |
 | `ErrorReported` (`error_reported`) | `messages`, `calls` | `field`, `phone_number_id`, `display_phone_number`, `error: Box<GraphApiError>` |
 | `MessageEchoed` (`message_echoed`) | `smb_message_echoes` | `phone_number_id`, `display_phone_number`, `contact`, `echo: Box<MessageEcho>` |
@@ -20,6 +20,8 @@ field module). Payloads are boxed.
 | `CallStatusUpdated` (`call_status_updated`) | `calls` | `phone_number_id`, `display_phone_number`, `contact`, `status: Box<CallStatus>` |
 | `UserPreferenceChanged` (`user_preference_changed`) | `user_preferences` | `phone_number_id`, `display_phone_number`, `contact`, `preference: Box<UserPreference>` |
 | `UserIdChanged` (`user_id_changed`) | `user_id_update` | `phone_number_id`, `display_phone_number`, `contact`, `update: Box<UserIdUpdate>` |
+| `ThreadControlChanged` (`thread_control_changed`) | `messaging_handovers` | `phone_number_id` (the handover's `recipient`), `display_phone_number`, `handover: Box<MessagingHandoversValue>` (`kind`: `ControlPassed`/`ControlTaken`, `sender`, `timestamp`, `handover()` for the matching `Handover`: `previous_owner_role`/`new_owner_role` as `ThreadRole`, `metadata`, `conversation_context`) |
+| `StandbyObserved` (`standby_observed`) | `standby` | `phone_number_id`, `display_phone_number`, `contact`, `item: Box<StandbyItem>` (`Message(InboundMessage)`, `Echo(StandbyEcho)`: the Send API body as JSON, with `to()` and `message_type()`, `Status(Status)`). Never reply to it |
 | `AutomaticEventDetected` (`automatic_event_detected`) | `automatic_events` | `phone_number_id`, `display_phone_number`, `detected: Box<AutomaticEvent>` |
 | `GroupUpdated` (`group_updated`) | `group_lifecycle_update`, `group_participants_update`, `group_settings_update`, `group_status_update` | `phone_number_id`, `display_phone_number`, `field`, `update: Box<GroupUpdate>` |
 | `FlowUpdated` | `flows` | `time`, `update: Box<FlowsValue>` |
@@ -42,8 +44,8 @@ field module). Payloads are boxed.
 | `Unknown` | any other, or a known field whose value did not parse | `waba_id` (the entry id; for an `account_update` that did not parse, its raw `waba_info.waba_id` when that is a non-blank string, since the entry id of such updates is a business portfolio), `field`, `time`, `raw: Value`, `parse_error: Option<String>` |
 | `Unparsed` | a signed body that is not a webhook envelope | `raw: Value`, `error: String` (no `waba_id`) |
 
-Undocumented or unavailable at 2026-09-24, so they arrive as `Unknown`:
-messaging handovers / standby, `message_echoes`, `consumer_profile`.
+Undocumented or unavailable at 2026-09-26, so they arrive as `Unknown`:
+`message_echoes`, `consumer_profile`.
 
 ## Helpers on `WebhookEvent`
 
@@ -53,7 +55,7 @@ messaging handovers / standby, `message_echoes`, `consumer_profile`.
 | `waba_id()` | `Option<&WabaId>`; `None` for `PartnerSolutionUpdated`, `Unparsed`, and an `AccountUpdated` whose `waba_info` names no WABA |
 | `phone_number_id()` | `Option<&PhoneNumberId>` when the field has one (not for fields that only carry a display number) |
 | `contact()` | `Option<&Contact>` |
-| `dedup_key()` | what `DedupGuard` keys on; `None` for `ErrorReported` and `Unparsed` |
+| `dedup_key()` | what `DedupGuard` keys on; `None` for `ErrorReported` and `Unparsed`; a standby copy's key is `standby:` plus the key of the same item outside standby |
 
 ## `Contact` (the WhatsApp user)
 

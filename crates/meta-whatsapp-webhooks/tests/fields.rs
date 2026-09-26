@@ -370,10 +370,9 @@ fn account_update_every_example() {
     assert!(u.restriction_info[0].remediation.is_none());
 
     let u = account_update("fields/account_update_violation.json");
-    assert_eq!(
-        u.violation_info.unwrap().violation_type.as_deref(),
-        Some("ADULT")
-    );
+    let violation = u.violation_info.unwrap();
+    assert_eq!(violation.violation_type.as_deref(), Some("ADULT"));
+    assert_eq!(violation.remediation, None);
 
     let u = account_update("fields/account_update_ad_account_linked.json");
     assert_eq!(u.event, AccountUpdateEvent::AdAccountLinked);
@@ -1217,4 +1216,27 @@ fn management_dedup_keys_include_entry_time() {
     assert_eq!(at(1), at(1), "a retry is the same event");
     assert_ne!(at(1), at(2), "a re-issued notification is a new event");
     assert!(at(1).starts_with("account_review_updated:"));
+}
+
+/// `calling/call-settings`: calling warnings and enforcement come as
+/// `account_update` with a remediation next to the violation type.
+#[test]
+fn account_update_calling_warnings_carry_remediation() {
+    let u = account_update("pages/calling.call-settings__warning_webhook.json");
+    assert_eq!(u.event, AccountUpdateEvent::AccountViolation);
+    let violation = u.violation_info.unwrap();
+    assert_eq!(
+        violation.violation_type.as_deref(),
+        Some("USER_INITIATED_CALLS_LOW_PICKUP_RATE")
+    );
+    assert!(
+        violation
+            .remediation
+            .as_deref()
+            .is_some_and(|r| r.starts_with("Please identify and address"))
+    );
+
+    let u = account_update("pages/calling.call-settings__enforcement_webhook.json");
+    assert_eq!(u.event, AccountUpdateEvent::AccountRestriction);
+    assert!(u.restriction_info[0].remediation.is_some());
 }

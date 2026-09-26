@@ -119,6 +119,34 @@ volumes (Claude config, shell history, cargo caches) start empty
 
 ### Added
 
+- **Webhook conformance sweep**: every example payload on every page that
+  documents a webhook (the `webhooks/reference/*` pages, `calling/*`,
+  `groups/*`, `flows/guides/flowswebhooks`, `business-scoped-user-ids`,
+  `conversation-routing/*`, `direct-send/integrity-and-content-guidelines`,
+  `embedded-signup/*`) is a fixture of `meta-whatsapp-webhooks`, 96 of
+  them new, placeholders filled with the pages' own example values.
+  `tests/conformance.rs` walks a manifest of every page and fixture and
+  checks, for each: the exact events with their WABA, business number and
+  user (BSUID and phone number), that every value the example shows
+  survives the typed parse, that none falls into an `Other`/`Unknown`
+  catch-all, and signed delivery through `WebhookHandler` with dedup. A
+  fixture missing from the manifest, or a page example without a fixture,
+  fails it.
+- **Conversation Routing webhooks** (`webhooks/reference/messaging-handovers`,
+  `webhooks/reference/standby`, `conversation-routing/*`), formerly
+  `Unknown`: `messaging_handovers` → `WebhookEvent::ThreadControlChanged`
+  (`fields::MessagingHandoversValue`: `HandoverType`, the `Handover`
+  object with `ThreadRole`s, `metadata` and `conversation_context`), and
+  `standby` → `WebhookEvent::StandbyObserved` (`fields::StandbyItem`: an
+  inbound message, the owner's echo (`StandbyEcho`, whose Send API body,
+  template and Flow definitions stay JSON) or a status). A standby copy is
+  never a `MessageReceived` (a standby partner must not reply) and its
+  dedup key is `standby:` plus the key of the same item outside standby.
+  The `messages` field's `conversation_context` (an AI summary of the
+  conversation) is `MessagesValue::conversation_context` and
+  `MessageReceived::conversation_context`.
+- **`fields::ViolationInfo::remediation`**: the calling warnings of
+  `calling/call-settings` carry it; it was dropped.
 - **`meta_whatsapp_client::business_verification`**, partner-led business
   verification for approved Select and Premier Solution Partners
   (`solution-providers/partner-led-business-verification`; the rest of
@@ -488,6 +516,15 @@ volumes (Claude config, shell history, cargo caches) start empty
   Use v4, which needs no `version`.
 
 ### Changed
+
+- **`WebhookEvent::MessageReceived` has a `conversation_context` field**
+  (`Option<Box<ConversationContext>>`, serialized only when set), and
+  `MessagesValue` and `ViolationInfo` one more public field each: code
+  that builds these with a struct literal adds `conversation_context:
+  None` (`remediation: None`); a pattern without `..` names it.
+  `WebhookEvent` has two more variants (`ThreadControlChanged`,
+  `StandbyObserved`), which a `_` arm already covers: until now these
+  fields arrived as `Unknown`.
 
 - **The `wa-rs-embedded-signup` skill's Solution Partner example** (for
   anyone who copied it): `PartnerAction::CoexistenceDisconnected`,

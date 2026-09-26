@@ -12,7 +12,8 @@
 //! object), `groups/webhooks` (group statuses), `flows/guides/flowswebhooks`
 //! and `messages/address-messages` (`nfm_reply`),
 //! `calling/user-call-permissions` (`call_permission_reply`),
-//! `webhooks/reference/history` (`media_placeholder`).
+//! `webhooks/reference/history` (`media_placeholder`),
+//! `conversation-routing/conversation-context` (`conversation_context`).
 //!
 //! # Where the pages disagree with each other
 //!
@@ -38,6 +39,7 @@ use serde_json::{Map, Value};
 use time::OffsetDateTime;
 
 use super::common::{Contact, Metadata};
+use super::routing::ConversationContext;
 use crate::open_enum::open_enum;
 
 /// `value` of a `messages` change.
@@ -65,6 +67,12 @@ pub struct MessagesValue {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub errors: Vec<GraphApiError>,
+    /// Conversation Routing: a summary of the conversation so far, when
+    /// the thread was routed to you without standby history
+    /// (`conversation-routing/conversation-context`). Applies to the
+    /// `messages` of this change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_context: Option<ConversationContext>,
 }
 
 /// One `messages[]` entry: a message a WhatsApp user sent to the business.

@@ -25,11 +25,12 @@ use time::OffsetDateTime;
 use crate::fields::{
     AccountAlertsValue, AccountReviewUpdateValue, AccountSettingsUpdateValue, AccountUpdateValue,
     AutomaticEventsValue, BusinessCapabilityUpdateValue, BusinessUsernameUpdateValue, CallsValue,
-    FlowsValue, GroupsValue, HistoryValue, MessagesValue, PartnerSolutionsValue,
-    PaymentConfigurationUpdateValue, PhoneNumberNameUpdateValue, PhoneNumberQualityUpdateValue,
-    SecurityValue, SmbAppStateSyncValue, SmbMessageEchoesValue, TemplateCategoryUpdateValue,
-    TemplateComponentsUpdateValue, TemplateCorrectCategoryDetectionValue,
-    TemplateQualityUpdateValue, TemplateStatusUpdateValue, UserIdUpdateValue, UserPreferencesValue,
+    FlowsValue, GroupsValue, HistoryValue, MessagesValue, MessagingHandoversValue,
+    PartnerSolutionsValue, PaymentConfigurationUpdateValue, PhoneNumberNameUpdateValue,
+    PhoneNumberQualityUpdateValue, SecurityValue, SmbAppStateSyncValue, SmbMessageEchoesValue,
+    StandbyValue, TemplateCategoryUpdateValue, TemplateComponentsUpdateValue,
+    TemplateCorrectCategoryDetectionValue, TemplateQualityUpdateValue, TemplateStatusUpdateValue,
+    UserIdUpdateValue, UserPreferencesValue,
 };
 
 /// A whole webhook POST body.
@@ -164,6 +165,8 @@ pub enum ChangeValue {
     MessageTemplateQualityUpdate(Box<TemplateQualityUpdateValue>),
     /// `message_template_status_update`.
     MessageTemplateStatusUpdate(Box<TemplateStatusUpdateValue>),
+    /// `messaging_handovers` (Conversation Routing).
+    MessagingHandovers(Box<MessagingHandoversValue>),
     /// `partner_solutions`.
     PartnerSolutions(Box<PartnerSolutionsValue>),
     /// `payment_configuration_update`.
@@ -178,6 +181,8 @@ pub enum ChangeValue {
     SmbAppStateSync(Box<SmbAppStateSyncValue>),
     /// `smb_message_echoes`.
     SmbMessageEchoes(Box<SmbMessageEchoesValue>),
+    /// `standby` (Conversation Routing).
+    Standby(Box<StandbyValue>),
     /// `template_category_update`.
     TemplateCategoryUpdate(Box<TemplateCategoryUpdateValue>),
     /// `template_correct_category_detection`.
@@ -267,6 +272,7 @@ impl ChangeValue {
             "message_template_status_update" => {
                 typed(value, Self::MessageTemplateStatusUpdate, never)
             }
+            "messaging_handovers" => typed(value, Self::MessagingHandovers, never),
             "partner_solutions" => typed(value, Self::PartnerSolutions, never),
             "payment_configuration_update" => typed(value, Self::PaymentConfigurationUpdate, never),
             "phone_number_name_update" => typed(value, Self::PhoneNumberNameUpdate, never),
@@ -282,6 +288,9 @@ impl ChangeValue {
                 Self::SmbMessageEchoes,
                 |v: &SmbMessageEchoesValue| v.message_echoes.is_empty(),
             ),
+            "standby" => typed(value, Self::Standby, |v: &StandbyValue| {
+                v.standby.is_empty()
+            }),
             "template_category_update" => typed(value, Self::TemplateCategoryUpdate, never),
             "template_correct_category_detection" => {
                 typed(value, Self::TemplateCorrectCategoryDetection, never)
@@ -325,6 +334,7 @@ impl Serialize for ChangeValue {
             Self::MessageTemplateComponentsUpdate(v) => v.serialize(serializer),
             Self::MessageTemplateQualityUpdate(v) => v.serialize(serializer),
             Self::MessageTemplateStatusUpdate(v) => v.serialize(serializer),
+            Self::MessagingHandovers(v) => v.serialize(serializer),
             Self::PartnerSolutions(v) => v.serialize(serializer),
             Self::PaymentConfigurationUpdate(v) => v.serialize(serializer),
             Self::PhoneNumberNameUpdate(v) => v.serialize(serializer),
@@ -332,6 +342,7 @@ impl Serialize for ChangeValue {
             Self::Security(v) => v.serialize(serializer),
             Self::SmbAppStateSync(v) => v.serialize(serializer),
             Self::SmbMessageEchoes(v) => v.serialize(serializer),
+            Self::Standby(v) => v.serialize(serializer),
             Self::TemplateCategoryUpdate(v) => v.serialize(serializer),
             Self::TemplateCorrectCategoryDetection(v) => v.serialize(serializer),
             Self::UserIdUpdate(v) => v.serialize(serializer),

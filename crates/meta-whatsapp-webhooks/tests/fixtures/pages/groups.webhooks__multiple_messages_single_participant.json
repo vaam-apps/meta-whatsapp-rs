@@ -1,0 +1,60 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550783881",
+              "phone_number_id": "106540352242922"
+            },
+            "statuses": [
+              {
+                "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQUFERjg0NDEzNDdFODU3MUMxMAA=",
+                "status": "delivered",
+                "timestamp": "1750101000",
+                "recipient_id": "Y2FwaV9ncm91cDoxOTUwNTU1MDA3OToxMjAzNjMzOTQzMjAdOTY0MTUZD",
+                "recipient_type": "group",
+                "recipient_participant_id": "16505551234",
+                "conversation": {
+                  "id": "72b14d6bd5407799e66f64d1b338e567",
+                  "origin": {
+                    "type": "group_marketing"
+                  },
+                  "pricing": {
+                    "billable": true,
+                    "pricing_model": "PMP",
+                    "category": "group_marketing"
+                  }
+                }
+              },
+              {
+                "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgARGBI0QUQ2MjA4NEYyRkExNjMyREUA",
+                "status": "delivered",
+                "timestamp": "1750101000",
+                "recipient_id": "Y2FwaV9ncm91cDoxOTUwNTU1MDA3OToxMjAzNjMzOTQzMjAdOTY0MTUZD",
+                "recipient_type": "group",
+                "recipient_participant_id": "16505551234",
+                "conversation": {
+                  "id": "72b14d6bd5407799e66f64d1b338e567",
+                  "origin": {
+                    "type": "group_marketing"
+                  },
+                  "pricing": {
+                    "billable": true,
+                    "pricing_model": "PMP",
+                    "category": "group_marketing"
+                  }
+                }
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}

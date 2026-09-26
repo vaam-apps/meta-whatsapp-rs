@@ -34,7 +34,10 @@ fn only_message(
             display_phone_number,
             contact,
             message,
+            conversation_context,
         } => {
+            // No reference example carries Conversation Routing's summary.
+            assert_eq!(conversation_context, None, "{name}");
             // The "Message business" example uses another WABA id.
             assert!(
                 ["102290129340398", "419561257915477"].contains(&waba_id.as_str()),

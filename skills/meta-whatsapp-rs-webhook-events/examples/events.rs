@@ -9,7 +9,7 @@ use meta_whatsapp_rs::client::common::QualityRating;
 use meta_whatsapp_rs::core::ids::MessageId;
 use meta_whatsapp_rs::prelude::*;
 use meta_whatsapp_rs::webhooks::fields::{
-    InteractiveReply, MessageContent as Inbound, MessageStatus, TemplateQualityScore,
+    HandoverType, InteractiveReply, MessageContent as Inbound, MessageStatus, TemplateQualityScore,
 };
 
 /// What the application does with one event.
@@ -40,6 +40,12 @@ pub enum Action {
     TemplateStatus {
         name: String,
         status: String,
+    },
+    /// Conversation Routing: whether you own the thread with this user now.
+    Ownership {
+        number: PhoneNumberId,
+        user: Option<String>,
+        owner: bool,
     },
     /// A field or shape this meta-whatsapp-rs version does not type: log the name.
     Untyped(String),
@@ -110,6 +116,22 @@ pub fn action(event: &WebhookEvent) -> Action {
             name: update.message_template_name.clone(),
             status: update.event.as_str().to_owned(),
         },
+        WebhookEvent::ThreadControlChanged {
+            phone_number_id,
+            handover,
+            ..
+        } => Action::Ownership {
+            number: phone_number_id.clone(),
+            user: handover
+                .sender
+                .as_ref()
+                .and_then(|s| s.phone_number.as_ref())
+                .map(ToString::to_string),
+            // control_passed: reply to the user; control_taken: stop.
+            owner: handover.kind == HandoverType::ControlPassed,
+        },
+        // A copy of a thread another responder owns: record it, never reply.
+        WebhookEvent::StandbyObserved { .. } => Action::Ignore,
         WebhookEvent::Unknown { field, .. } => Action::Untyped(field.clone()),
         WebhookEvent::Unparsed { .. } => Action::Untyped("(unparsed body)".into()), // alert on it
         _ => Action::Ignore,
@@ -233,6 +255,36 @@ mod tests {
             TemplateQualityScore::from(QualityRating::NotApplicable.as_str()),
             TemplateQualityScore::Other("NA".into())
         );
+    }
+
+    #[test]
+    fn handovers_set_thread_ownership_and_standby_is_never_answered() {
+        let handover = |kind: &str| {
+            json!({"object": "whatsapp_business_account", "entry": [{"id": "102290129340398",
+                "changes": [{"field": "messaging_handovers", "value": {
+                    "messaging_product": "whatsapp",
+                    "sender": {"phone_number": "16505551234"},
+                    "recipient": {"phone_number_id": "106540352242922",
+                                  "display_phone_number": "15550783881"},
+                    "type": kind, "timestamp": "1750101000",
+                    kind: {"previous_owner_role": "ai_agent", "new_owner_role": "escalation"}}}]}]})
+        };
+        for (kind, owner) in [("control_passed", true), ("control_taken", false)] {
+            assert_eq!(
+                action(&events(&handover(kind))[0]),
+                Action::Ownership {
+                    number: "106540352242922".into(),
+                    user: Some("16505551234".into()),
+                    owner
+                }
+            );
+        }
+        let standby = json!({"object": "whatsapp_business_account", "entry": [{"id": "102290129340398",
+            "changes": [{"field": "standby", "value": {"messaging_product": "whatsapp",
+                "metadata": {"display_phone_number": "15550783881", "phone_number_id": "106540352242922"},
+                "standby": {"messages": [{"from": "16505551234", "id": "wamid.S",
+                    "timestamp": "1750101000", "type": "text", "text": {"body": "Hi"}}]}}}]}]});
+        assert_eq!(action(&events(&standby)[0]), Action::Ignore);
     }
 
     #[test]

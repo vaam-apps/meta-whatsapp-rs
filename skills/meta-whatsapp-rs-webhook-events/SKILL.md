@@ -57,6 +57,27 @@ WebhookEvent::UserIdChanged { update, .. } => Action::CustomerRenamed {
 },
 ```
 
+Conversation Routing: track thread ownership, never answer a standby copy:
+
+```rust
+WebhookEvent::ThreadControlChanged {
+    phone_number_id,
+    handover,
+    ..
+} => Action::Ownership {
+    number: phone_number_id.clone(),
+    user: handover
+        .sender
+        .as_ref()
+        .and_then(|s| s.phone_number.as_ref())
+        .map(ToString::to_string),
+    // control_passed: reply to the user; control_taken: stop.
+    owner: handover.kind == HandoverType::ControlPassed,
+},
+// A copy of a thread another responder owns: record it, never reply.
+WebhookEvent::StandbyObserved { .. } => Action::Ignore,
+```
+
 `WebhookEvent` is `#[non_exhaustive]`: keep a `_` arm. Serialized, it is
 tagged `"event"` with the same snake-case name as `event.kind()`.
 
@@ -71,6 +92,7 @@ tagged `"event"` with the same snake-case name as `event.kind()`.
 | `TemplateStatusUpdated`, `TemplateQualityUpdated`, `TemplateCategoryUpdated` | template review and health (`meta-whatsapp-rs-templates`) |
 | `AccountUpdated`, `PhoneNumberQualityUpdated`, `PhoneNumberNameUpdated`, `AccountAlert` | account restrictions, limits, names |
 | `MessageEchoed`, `HistorySynced`, `AppStateSynced` | coexistence (WhatsApp Business app) |
+| `ThreadControlChanged`, `StandbyObserved` | Conversation Routing: thread ownership (`messaging_handovers`), copies of threads you only observe (`standby`); `MessageReceived` may carry a `conversation_context` summary |
 | `ErrorReported` | app- or system-level errors |
 | `Unknown` | a field or shape this meta-whatsapp-rs version does not type: log `field` |
 | `Unparsed` | a signed body that is not a webhook envelope: alert |
@@ -125,12 +147,11 @@ pub fn quality(score: &TemplateQualityScore) -> QualityRating {
 
 ## What meta-whatsapp-rs does not do
 
-- Messaging handovers, `message_echoes` and `consumer_profile` have no
-  documented payload: they arrive as `Unknown`.
+- `message_echoes` and `consumer_profile` (undocumented) arrive as
+  `Unknown`. The Thread control API (`pass`, `take`) is not wrapped.
 - It does not merge conversations when a BSUID changes. The inbox records
-  `MessageEchoed` and `HistorySynced` (`meta-whatsapp-rs-cms-inbox`), but not the
-  contacts of `AppStateSynced`. ~~Nor does it record coexistence echoes
-  and history in the inbox~~: true until a3582b8 (2026-09-24).
+  `MessageEchoed` and `HistorySynced` (`meta-whatsapp-rs-cms-inbox`, since
+  a3582b8), but not the contacts of `AppStateSynced`.
 
 ## Related skills
 

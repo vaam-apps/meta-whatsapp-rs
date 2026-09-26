@@ -21,12 +21,12 @@ use crate::fields::common::find_contact;
 use crate::fields::{
     AccountAlertsValue, AccountReviewUpdateValue, AccountSettingsUpdateValue, AccountUpdateValue,
     AutomaticEvent, BusinessCapabilityUpdateValue, BusinessUsernameUpdateValue, Call, CallStatus,
-    Contact, FlowsValue, GroupUpdate, HistoryValue, InboundMessage, MessageEcho, Metadata,
-    PartnerSolutionsValue, PaymentConfigurationUpdateValue, PhoneNumberNameUpdateValue,
-    PhoneNumberQualityUpdateValue, SecurityValue, StateSyncItem, Status,
-    TemplateCategoryUpdateValue, TemplateComponentsUpdateValue,
-    TemplateCorrectCategoryDetectionValue, TemplateQualityUpdateValue, TemplateStatusUpdateValue,
-    UserIdUpdate, UserPreference,
+    Contact, ConversationContext, FlowsValue, GroupUpdate, HistoryValue, InboundMessage,
+    MessageEcho, MessagingHandoversValue, Metadata, PartnerSolutionsValue,
+    PaymentConfigurationUpdateValue, PhoneNumberNameUpdateValue, PhoneNumberQualityUpdateValue,
+    SecurityValue, StandbyItem, StateSyncItem, Status, TemplateCategoryUpdateValue,
+    TemplateComponentsUpdateValue, TemplateCorrectCategoryDetectionValue,
+    TemplateQualityUpdateValue, TemplateStatusUpdateValue, UserIdUpdate, UserPreference,
 };
 use crate::payload::{Change, ChangeValue, WebhookPayload};
 
@@ -50,6 +50,10 @@ pub enum WebhookEvent {
         contact: Option<Contact>,
         /// The message.
         message: Box<InboundMessage>,
+        /// Conversation Routing's summary of the conversation so far, when
+        /// the change carried one (the same on every message of the change).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        conversation_context: Option<Box<ConversationContext>>,
     },
     /// A message the business sent changed status (`messages`).
     StatusUpdated {
@@ -167,6 +171,36 @@ pub enum WebhookEvent {
         contact: Option<Contact>,
         /// The change.
         update: Box<UserIdUpdate>,
+    },
+    /// A thread changed owner under Conversation Routing
+    /// (`messaging_handovers`): you gained it (`control_passed`, reply to
+    /// the user) or lost it (`control_taken`, stop replying). The only
+    /// ownership signal there is: keep your own state from these.
+    ThreadControlChanged {
+        /// WABA.
+        waba_id: WabaId,
+        /// The business phone number the thread belongs to.
+        phone_number_id: PhoneNumberId,
+        /// Business number, as displayed.
+        display_phone_number: String,
+        /// The notification.
+        handover: Box<MessagingHandoversValue>,
+    },
+    /// A copy of a thread you observe without owning it (`standby`): an
+    /// inbound message, the owner's send, or its status. Kept apart from
+    /// [`Self::MessageReceived`] and [`Self::StatusUpdated`] on purpose: a
+    /// standby partner must not reply.
+    StandbyObserved {
+        /// WABA.
+        waba_id: WabaId,
+        /// Business phone number.
+        phone_number_id: PhoneNumberId,
+        /// Business number, as displayed.
+        display_phone_number: String,
+        /// The WhatsApp user, when the change listed them (messages only).
+        contact: Option<Contact>,
+        /// The copy.
+        item: Box<StandbyItem>,
     },
     /// A purchase or lead was detected in a CTWA chat (`automatic_events`).
     AutomaticEventDetected {
@@ -428,6 +462,8 @@ impl WebhookEvent {
             Self::CallStatusUpdated { .. } => "call_status_updated",
             Self::UserPreferenceChanged { .. } => "user_preference_changed",
             Self::UserIdChanged { .. } => "user_id_changed",
+            Self::ThreadControlChanged { .. } => "thread_control_changed",
+            Self::StandbyObserved { .. } => "standby_observed",
             Self::AutomaticEventDetected { .. } => "automatic_event_detected",
             Self::GroupUpdated { .. } => "group_updated",
             Self::FlowUpdated { .. } => "flow_updated",
@@ -468,6 +504,8 @@ impl WebhookEvent {
             | Self::CallStatusUpdated { waba_id, .. }
             | Self::UserPreferenceChanged { waba_id, .. }
             | Self::UserIdChanged { waba_id, .. }
+            | Self::ThreadControlChanged { waba_id, .. }
+            | Self::StandbyObserved { waba_id, .. }
             | Self::AutomaticEventDetected { waba_id, .. }
             | Self::GroupUpdated { waba_id, .. }
             | Self::FlowUpdated { waba_id, .. }
@@ -526,6 +564,12 @@ impl WebhookEvent {
             | Self::UserIdChanged {
                 phone_number_id, ..
             }
+            | Self::ThreadControlChanged {
+                phone_number_id, ..
+            }
+            | Self::StandbyObserved {
+                phone_number_id, ..
+            }
             | Self::AutomaticEventDetected {
                 phone_number_id, ..
             }
@@ -549,7 +593,8 @@ impl WebhookEvent {
             | Self::CallUpdated { contact, .. }
             | Self::CallStatusUpdated { contact, .. }
             | Self::UserPreferenceChanged { contact, .. }
-            | Self::UserIdChanged { contact, .. } => contact.as_ref(),
+            | Self::UserIdChanged { contact, .. }
+            | Self::StandbyObserved { contact, .. } => contact.as_ref(),
             _ => None,
         }
     }
@@ -563,6 +608,10 @@ impl WebhookEvent {
     ///   same message id into a single webhook (`groups/webhooks`).
     /// - Echoes: `echo:{id}`; calls: `call:{id}:{event}`; call statuses:
     ///   `call:{id}:{status}`; automatic events: `auto:{id}:{event_name}`.
+    /// - Standby copies: `standby:` followed by the key the same item has
+    ///   outside standby (`standby:{id}`, `standby:echo:{id}`,
+    ///   `standby:{id}:{status}[:{participant}]`), so a copy never collides
+    ///   with the owner-side event of the same message.
     /// - Every other event: `{kind}:{sha256 of its canonical JSON}`. The
     ///   hash covers the entry `time` where Meta sends one, so an identical
     ///   notification re-issued later is a new event, while a retry of the
@@ -574,19 +623,12 @@ impl WebhookEvent {
     pub fn dedup_key(&self) -> Option<String> {
         match self {
             Self::MessageReceived { message, .. } => Some(message.id.to_string()),
-            Self::StatusUpdated { status, .. } => {
-                let mut key = format!("{}:{}", status.id, status.status);
-                let participant = status
-                    .recipient_participant_user_id
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .or_else(|| status.recipient_participant_id.clone());
-                if let Some(participant) = participant {
-                    key.push(':');
-                    key.push_str(&participant);
-                }
-                Some(key)
-            }
+            Self::StatusUpdated { status, .. } => Some(status_key(status)),
+            Self::StandbyObserved { item, .. } => Some(match item.as_ref() {
+                StandbyItem::Message(message) => format!("standby:{}", message.id),
+                StandbyItem::Echo(echo) => format!("standby:echo:{}", echo.id),
+                StandbyItem::Status(status) => format!("standby:{}", status_key(status)),
+            }),
             Self::MessageEchoed { echo, .. } => Some(format!("echo:{}", echo.id)),
             Self::CallUpdated { call, .. } => Some(format!("call:{}:{}", call.id, call.event)),
             Self::CallStatusUpdated { status, .. } => {
@@ -605,6 +647,21 @@ impl WebhookEvent {
             }
         }
     }
+}
+
+/// `{message id}:{status}[:{participant}]`: see [`WebhookEvent::dedup_key`].
+fn status_key(status: &Status) -> String {
+    let mut key = format!("{}:{}", status.id, status.status);
+    let participant = status
+        .recipient_participant_user_id
+        .as_ref()
+        .map(ToString::to_string)
+        .or_else(|| status.recipient_participant_id.clone());
+    if let Some(participant) = participant {
+        key.push(':');
+        key.push_str(&participant);
+    }
+    key
 }
 
 /// JSON with object keys sorted, so the hash does not depend on whether
@@ -778,6 +835,7 @@ impl Ctx {
                     display_phone_number,
                     phone_number_id,
                 } = v.metadata;
+                let conversation_context = v.conversation_context.map(Box::new);
                 for message in v.messages {
                     let contact = find_contact(
                         &v.contacts,
@@ -791,6 +849,7 @@ impl Ctx {
                         display_phone_number: display_phone_number.clone(),
                         contact,
                         message: Box::new(message),
+                        conversation_context: conversation_context.clone(),
                     });
                 }
                 for status in v.statuses {
@@ -942,6 +1001,58 @@ impl Ctx {
                         contact,
                         update: Box::new(update),
                     });
+                }
+            }
+            ChangeValue::MessagingHandovers(handover) => {
+                out.push(WebhookEvent::ThreadControlChanged {
+                    waba_id,
+                    phone_number_id: handover.recipient.phone_number_id.clone(),
+                    display_phone_number: handover.recipient.display_phone_number.clone(),
+                    handover,
+                });
+            }
+            ChangeValue::Standby(v) => {
+                let v = *v;
+                let Metadata {
+                    display_phone_number,
+                    phone_number_id,
+                } = v.metadata;
+                let standby = v.standby;
+                let mut push = |contact: Option<Contact>, item: StandbyItem| {
+                    out.push(WebhookEvent::StandbyObserved {
+                        waba_id: waba_id.clone(),
+                        phone_number_id: phone_number_id.clone(),
+                        display_phone_number: display_phone_number.clone(),
+                        contact,
+                        item: Box::new(item),
+                    });
+                };
+                for message in standby.messages {
+                    let contact = find_contact(
+                        &standby.contacts,
+                        &[message.from_user_id.as_ref()],
+                        &[message.from.as_ref().map(WaId::as_str)],
+                    )
+                    .cloned();
+                    push(contact, StandbyItem::Message(message));
+                }
+                for echo in standby.message_echoes {
+                    push(None, StandbyItem::Echo(echo));
+                }
+                for status in standby.statuses {
+                    let contact = find_contact(
+                        &standby.contacts,
+                        &[
+                            status.recipient_user_id.as_ref(),
+                            status.recipient_participant_user_id.as_ref(),
+                        ],
+                        &[
+                            status.recipient_id.as_deref(),
+                            status.recipient_participant_id.as_deref(),
+                        ],
+                    )
+                    .cloned();
+                    push(contact, StandbyItem::Status(status));
                 }
             }
             ChangeValue::AutomaticEvents(v) => {
