@@ -96,8 +96,9 @@ body without a handler. To drive an axum app, see the tests of
 
 ## Time
 
-`ManualClock::new(at)` only moves on `advance(d)` or `set(at)`. Pass the
-same clock to everything that reads time: `MemoryKvStore::with_clock`,
+`ManualClock::new(at)` only moves on `advance(d)`, `advance_to(at)`
+(forward only) or `set(at)`. Pass the same clock to everything that reads
+time: `MemoryKvStore::with_clock`,
 `OtpService::new`, `Inbox::with_clock`, `InboxSink::with_clock` (it bounds
 synced history timestamps), `TokenVault::with_clock`:
 
