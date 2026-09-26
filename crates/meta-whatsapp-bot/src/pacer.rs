@@ -481,6 +481,11 @@ impl Pacer {
 /// budget with its broadcasts.
 ///
 /// A limiter that fails fails the call, before anything is sent.
+///
+/// One slot per call: over a [`crate::ClientOutbound`], the client's own
+/// replays of a throttled request (its `RetryPolicy`) happen inside the
+/// call, without a slot of their own. A client with `RetryPolicy::NONE`
+/// (`Client::with_retry`) makes every request wait for one.
 #[derive(Debug, Clone)]
 pub struct PacedOutbound {
     inner: Arc<dyn Outbound>,

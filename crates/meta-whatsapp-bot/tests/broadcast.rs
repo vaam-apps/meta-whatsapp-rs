@@ -340,6 +340,44 @@ async fn a_throttled_send_is_resent_under_the_same_policy() {
     assert!(matches!(report.recipients[0].outcome, Outcome::Sent(_)));
 }
 
+/// Through `BroadcastBuilder::client`, a client with its default
+/// `RetryPolicy` (which replays a throttled send at once, outside the
+/// pacer) does not replay: the broadcast retries, 1 s later on the pacer's
+/// clock, and the attempts say so.
+#[tokio::test]
+async fn a_broadcast_retries_through_its_pacer_not_the_clients_replays() {
+    let t = ScriptedTransport::new();
+    t.push_json(
+        400,
+        meta_error(130429, "Cloud API message throughput has been reached."),
+    );
+    t.push_json(200, send_response());
+    let default_retries = meta_whatsapp_client::Client::builder()
+        .transport(t.clone())
+        .access_token("TOKEN")
+        .build()
+        .unwrap();
+    assert_ne!(
+        default_retries.retry_policy(),
+        meta_whatsapp_client::RetryPolicy::NONE
+    );
+    let clock = ManualClock::new(T0);
+    let report = Broadcast::builder(NUMBER)
+        .to([phone(1)])
+        .content(Text::new("Hello"))
+        .client(default_retries)
+        .pacer(pacer(&clock, 20))
+        .build()
+        .unwrap()
+        .run()
+        .await;
+    assert_eq!(t.requests().len(), 2);
+    assert_eq!(t.remaining(), 0);
+    assert_eq!(report.recipients[0].attempts, 2);
+    assert!(matches!(report.recipients[0].outcome, Outcome::Sent(_)));
+    assert_eq!(ms(at(&clock)), 1000, "the retry waited for the backoff");
+}
+
 /// `131056`: that recipient waits (Meta's 4^0 = 1 s first) while the others
 /// go on, then is sent; exact requests through the client.
 #[tokio::test]

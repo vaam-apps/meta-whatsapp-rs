@@ -30,10 +30,11 @@
 //! recipient is retried only when the error is retryable and
 //! `Error::may_have_been_sent` is false: a timed-out send, or a 5xx after
 //! the request reached Meta, is reported as it is, never replayed (the
-//! library's rule; the client's `RetryPolicy` is stricter still, replaying
-//! a send on throttling only). Reconcile those with
-//! the status webhooks: give each message a `biz_opaque_callback_data`
-//! (`OutboundMessage::callback_data`) in [`BroadcastBuilder::compose`].
+//! library's rule). Reconcile those with the status webhooks: give each
+//! message a `biz_opaque_callback_data` (`OutboundMessage::callback_data`)
+//! in [`BroadcastBuilder::compose`]. [`BroadcastBuilder::client`] turns
+//! the client's own replays off, so a throttled send is retried here,
+//! through the pacer, and nowhere else.
 //!
 //! A [`Outcome::Sent`] means Meta accepted the message, not that it was
 //! delivered: most `131049` refusals arrive later, as a `failed` status
@@ -54,8 +55,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use futures::future::{Either, join_all, select};
-use meta_whatsapp_client::Client;
 use meta_whatsapp_client::messages::{MessageContent, OutboundMessage, SendResponse};
+use meta_whatsapp_client::{Client, RetryPolicy};
 use meta_whatsapp_core::error::{ConfigError, ValidationError};
 use meta_whatsapp_core::ids::PhoneNumberId;
 use meta_whatsapp_core::recipient::Recipient;
@@ -779,7 +780,10 @@ impl BroadcastBuilder {
     }
 
     /// Send through `outbound` (not a [`crate::PacedOutbound`]: the
-    /// broadcast paces its sends itself, and would count each twice).
+    /// broadcast paces its sends itself, and would count each twice). An
+    /// outbound over a client should give it `RetryPolicy::NONE`, as
+    /// [`Self::client`] does: the client's own replays of a throttled send
+    /// do not wait for the pacer.
     pub fn outbound(mut self, outbound: impl Outbound) -> Self {
         self.outbound = Some(Arc::new(outbound));
         self
@@ -791,9 +795,12 @@ impl BroadcastBuilder {
         self
     }
 
-    /// Send with `client` ([`ClientOutbound`]).
+    /// Send with `client` ([`ClientOutbound`]), its own replays turned off
+    /// (`Client::with_retry(RetryPolicy::NONE)`): a throttled send is
+    /// retried by the broadcast, through the pacer and its slow-down,
+    /// rather than replayed at once by the client, outside the pacer.
     pub fn client(self, client: Client) -> Self {
-        self.outbound(ClientOutbound::new(client))
+        self.outbound(ClientOutbound::new(client.with_retry(RetryPolicy::NONE)))
     }
 
     /// Pace with `pacer`: share one per process across the broadcasts and
