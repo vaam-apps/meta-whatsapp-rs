@@ -8,6 +8,7 @@ pub mod capability_suite;
 pub mod capture;
 pub mod events_suite;
 pub mod meta;
+pub mod race_suite;
 pub mod scenarios;
 pub mod store_suite;
 

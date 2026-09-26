@@ -1455,3 +1455,116 @@ async fn live_postgres_housekeeping_sweeps_expired_key_value_rows() {
         .expect("stopped with the service")
         .unwrap();
 }
+
+/// Roadmap S2's atomic contracts on Postgres, raced on a multi-threaded
+/// runtime over one pool (`common::race_suite`,
+/// `common::capability_suite::racing_a_reattach`): an insert against its
+/// binding moving, a binding against its tenant's deletion, and each
+/// conditioned write against a re-attach.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_racing_the_atomic_contracts_breaks_none() {
+    use common::capability_suite::{Act, racing_a_reattach};
+    use common::race_suite::{
+        a_binding_racing_a_deletion_serializes,
+        an_insert_racing_a_move_never_reaches_the_new_holder,
+    };
+    use meta_whatsapp_rs::adapters::store::PostgresKvStore;
+    use std::sync::Arc;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(10).await;
+    migrate(&pool).await.unwrap();
+    let store = Arc::new(PgStore::new(pool.clone()));
+    let outbox = Arc::new(PgEventStore::new(pool.clone()));
+    let moves =
+        an_insert_racing_a_move_never_reaches_the_new_holder(store.clone(), outbox, 200).await;
+    eprintln!("postgres, insert against a move: {moves:?}");
+    let binds = a_binding_racing_a_deletion_serializes(store.clone(), 200).await;
+    eprintln!("postgres, bind against delete: {binds:?}");
+    let kv = Arc::new(PostgresKvStore::new(pool));
+    for act in [Act::Forget, Act::NumberFailed, Act::WabaFailed] {
+        racing_a_reattach(store.clone(), kv.clone(), act, 60).await;
+    }
+}
+
+/// Two outbox purges at once (a round that outlived its lease, and the
+/// next replica's): a row both chose is deleted once and counted once, and
+/// the stream's `purged_through` never moves back, though the purge with
+/// the older cutoff commits last. The first purge deletes all ten rows,
+/// then waits to mark the stream (another session holds its row); the
+/// second chooses the older five, which the first holds, and waits for it.
+/// Decisive: `GREATEST` in the purge's mark (without it the later commit
+/// sets the older cut), and the count of the rows deleted, not chosen.
+#[tokio::test]
+async fn live_postgres_two_purges_at_once_count_each_row_once() {
+    use std::time::Duration;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(6).await;
+    migrate(&pool).await.unwrap();
+    let store = std::sync::Arc::new(PgEventStore::new(pool.clone()));
+    common::events_suite::bind(&PgStore::new(pool.clone()), "overlap", "41").await;
+    let insert = || async {
+        store
+            .insert(&common::events_suite::row(
+                Some("overlap"),
+                "message_received",
+                "41",
+                None,
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+    };
+    for _ in 0..5 {
+        insert().await;
+    }
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    for _ in 0..5 {
+        insert().await;
+    }
+    let holder_pool = db.pool(1).await;
+    let mut holder = holder_pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM wa_server_event_streams WHERE stream = 'overlap' FOR UPDATE")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let purge = |older_than: Duration| {
+        let store = store.clone();
+        tokio::spawn(async move { store.purge(older_than).await })
+    };
+    let first = purge(Duration::ZERO);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!first.is_finished(), "the first purge did not wait to mark");
+    // Between the two batches: the older five.
+    let second = purge(Duration::from_secs(1));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!second.is_finished(), "the second purge did not wait");
+    holder.rollback().await.unwrap();
+    let first = first.await.unwrap().unwrap();
+    let second = second.await.unwrap().unwrap();
+    assert_eq!(
+        (first, second),
+        (10, 0),
+        "each row deleted and counted once"
+    );
+    let page = store
+        .page(&meta_whatsapp_server::store::events::EventQuery {
+            tenant: TenantId::parse("overlap").unwrap(),
+            after: None,
+            types: None,
+            phone_number_id: None,
+            limit: 100,
+            max_bytes: 1024 * 1024,
+        })
+        .await
+        .unwrap();
+    assert!(page.events.is_empty());
+    assert_eq!(
+        (page.purged_through, page.high_water),
+        (10, 10),
+        "the older cut, committed last, moved purged_through back"
+    );
+}
