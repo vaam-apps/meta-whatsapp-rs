@@ -14,7 +14,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use common::{NUMBER, client};
 use meta_whatsapp_bot::{
-    ClientOutbound, Outbound, PacedGroups, PacedOutbound, Pacer, Rate, RateLimiter, TokenBucket,
+    ClientOutbound, Outbound, PacedGroups, PacedOutbound, Pacer, Rate, RateLimiter, Reservation,
+    SlotRequest, TokenBucket,
 };
 use meta_whatsapp_client::groups::{
     CreateGroup, GroupField, GroupSettingsUpdate, ListGroups, ListJoinRequests,
@@ -128,11 +129,7 @@ struct Unreachable;
 
 #[async_trait]
 impl RateLimiter for Unreachable {
-    async fn reserve(
-        &self,
-        _: &PhoneNumberId,
-        _: OffsetDateTime,
-    ) -> meta_whatsapp_core::Result<Duration> {
+    async fn reserve(&self, _: &SlotRequest) -> meta_whatsapp_core::Result<Reservation> {
         Err(StorageError::Backend(anyhow::anyhow!("limiter unreachable")).into())
     }
 

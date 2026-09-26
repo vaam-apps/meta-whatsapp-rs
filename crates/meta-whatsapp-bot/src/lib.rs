@@ -35,6 +35,7 @@
 //! | how Markdown text is escaped | [`markdown::Escape`] | [`markdown::NoEscape`] (text as written; [`markdown::WordJoinerEscape`] opt-in) |
 //! | how the help reads | [`HelpFormatter`] | [`CategoryHelp`] (name, description and category configurable) |
 //! | how fast each business number sends (broadcasts; replies, read receipts and typing indicators with [`BotBuilder::pacer`]; group operations through [`PacedGroups`]) | [`RateLimiter`] | [`TokenBucket`] (80 a second per number, in this process) |
+//! | which errors slow a number's pacer down (a broadcast's sends, a paced bot's replies) | [`SlowDownRule`] | [`ThrottlingErrors`] |
 //! | what "now" is for the pacer, and how it waits | [`Timer`] | `SystemClock` (Tokio's sleep) |
 //! | what a failed broadcast send becomes | [`BroadcastPolicy`] | [`Backoff`] |
 //! | where a broadcast's lines go when not kept in its report | [`ReportSink`] | none: kept in the [`BroadcastReport`] |
@@ -110,8 +111,9 @@ pub mod plugin;
 pub use async_trait::async_trait;
 pub use bot::{Bot, BotBuilder, PluginInfo};
 pub use broadcast::{
-    Backoff, Broadcast, BroadcastBuilder, BroadcastHandle, BroadcastPolicy, BroadcastReport, Ended,
-    Outcome, Progress, RecipientReport, ReportSink, Verdict,
+    Backoff, Broadcast, BroadcastBuilder, BroadcastEnd, BroadcastHandle, BroadcastPolicy,
+    BroadcastProgress, BroadcastReport, FailureVerdict, RecipientReport, ReportSink, SendFailure,
+    SendOutcome,
 };
 pub use command::{Args, Command, CommandHandler, CommandInfo, Invocation, Scope, Trigger};
 pub use ctx::{BotSender, Chat, Ctx};
@@ -125,6 +127,9 @@ pub use help::{CategoryHelp, HelpFormatter, HelpSection};
 pub use markdown::MarkdownRenderer;
 pub use middleware::{Logging, MarkRead, Middleware, Next};
 pub use outbound::{ClientOutbound, Outbound};
-pub use pacer::{PacedOutbound, Pacer, Rate, RateLimiter, Timer, TokenBucket};
+pub use pacer::{
+    PacedOutbound, Pacer, Rate, RateLimiter, Reservation, SlotRequest, SlowDownRule,
+    ThrottlingErrors, Timer, TokenBucket,
+};
 pub use parse::{CommandParser, ParsedCommand, PrefixParser};
 pub use plugin::{DEFAULT_CATEGORY, Listen, Plugin, Registrar};

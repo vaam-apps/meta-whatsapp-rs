@@ -16,8 +16,9 @@ use async_trait::async_trait;
 use common::{NUMBER, Recording, client, send_response, text_event};
 use futures::future::{Either, select};
 use meta_whatsapp_bot::{
-    Backoff, Bot, Broadcast, BroadcastHandle, BroadcastPolicy, Command, Ctx, Ended, MarkRead,
-    Outbound, Outcome, PacedOutbound, Pacer, Rate, RateLimiter, Timer, TokenBucket, Verdict,
+    Backoff, Bot, Broadcast, BroadcastEnd, BroadcastHandle, BroadcastPolicy, Command, Ctx,
+    FailureVerdict, MarkRead, Outbound, PacedOutbound, Pacer, Rate, RateLimiter, Reservation,
+    SendFailure, SendOutcome, SlotRequest, Timer, TokenBucket,
 };
 use meta_whatsapp_client::messages::{OutboundMessage, SendResponse, Text};
 use meta_whatsapp_client::templates::TemplateMessage;
@@ -45,6 +46,12 @@ fn ms(d: Duration) -> u128 {
 
 fn pacer(clock: &ManualClock, per_second: u32) -> Pacer {
     Pacer::new(TokenBucket::new(Rate::per_second(per_second).unwrap())).with_timer(clock.clone())
+}
+
+/// A pacer that never slows down, so the times are its spacing only.
+fn steady_pacer(clock: &ManualClock, per_second: u32) -> Pacer {
+    Pacer::new(TokenBucket::new(Rate::per_second(per_second).unwrap()).adaptive(false))
+        .with_timer(clock.clone())
 }
 
 fn phone(i: usize) -> Recipient {
@@ -217,7 +224,7 @@ async fn two_hundred_sends_at_twenty_a_second_never_exceed_twenty_in_any_second(
     let expected: Vec<String> = (0..200).map(|i| format!("+1650555{i:04}")).collect();
     assert_eq!(order, expected);
 
-    assert_eq!(report.ended, Ended::Completed);
+    assert_eq!(report.ended, BroadcastEnd::Completed);
     let progress = report.progress();
     assert_eq!(
         (progress.sent, progress.failed, progress.skipped),
@@ -229,7 +236,7 @@ async fn two_hundred_sends_at_twenty_a_second_never_exceed_twenty_in_any_second(
         report
             .recipients
             .iter()
-            .all(|r| matches!(r.outcome, Outcome::Sent(_)))
+            .all(|r| matches!(r.outcome, SendOutcome::Sent(_)))
     );
     // A cancel after the end changes nothing.
     handle.cancel();
@@ -242,12 +249,8 @@ async fn two_hundred_sends_at_twenty_a_second_never_exceed_twenty_in_any_second(
 struct RetryEverything;
 
 impl BroadcastPolicy for RetryEverything {
-    fn on_failure(&self, _: &Error, _: u32) -> Verdict {
-        Verdict::RetryAfter(Duration::from_secs(1))
-    }
-
-    fn slows_down(&self, _: &Error) -> bool {
-        false
+    fn on_failure(&self, _: &SendFailure<'_>) -> FailureVerdict {
+        FailureVerdict::RetryAfter(Duration::from_secs(1))
     }
 }
 
@@ -281,14 +284,14 @@ async fn a_timed_out_send_is_never_resent_whatever_the_policy() {
     assert_eq!(t.remaining(), 0);
     let timed_out = &report.recipients[1];
     assert_eq!(timed_out.attempts, 1);
-    let Outcome::Failed(error) = &timed_out.outcome else {
+    let SendOutcome::Failed(error) = &timed_out.outcome else {
         panic!("{:?}", timed_out.outcome)
     };
     assert!(error.may_have_been_sent());
     assert!(matches!(error, Error::Transport(TransportError::Timeout)));
-    assert!(matches!(report.recipients[0].outcome, Outcome::Sent(_)));
-    assert!(matches!(report.recipients[2].outcome, Outcome::Sent(_)));
-    assert_eq!(report.ended, Ended::Completed);
+    assert!(matches!(report.recipients[0].outcome, SendOutcome::Sent(_)));
+    assert!(matches!(report.recipients[2].outcome, SendOutcome::Sent(_)));
+    assert_eq!(report.ended, BroadcastEnd::Completed);
 }
 
 /// Nor is a refusal that cannot succeed later (`131049`: Meta says a
@@ -310,7 +313,10 @@ async fn a_refusal_that_is_not_retryable_is_not_resent_whatever_the_policy() {
         .await;
     assert_eq!(outbound.sends().len(), 1);
     assert_eq!(report.recipients[0].attempts, 1);
-    assert!(matches!(report.recipients[0].outcome, Outcome::Failed(_)));
+    assert!(matches!(
+        report.recipients[0].outcome,
+        SendOutcome::Failed(_)
+    ));
 }
 
 /// The same policy does resend what provably did not go out: the rule is
@@ -337,7 +343,7 @@ async fn a_throttled_send_is_resent_under_the_same_policy() {
     assert_eq!(t.requests().len(), 2);
     assert_eq!(t.remaining(), 0);
     assert_eq!(report.recipients[0].attempts, 2);
-    assert!(matches!(report.recipients[0].outcome, Outcome::Sent(_)));
+    assert!(matches!(report.recipients[0].outcome, SendOutcome::Sent(_)));
 }
 
 /// Through `BroadcastBuilder::client`, a client with its default
@@ -374,7 +380,7 @@ async fn a_broadcast_retries_through_its_pacer_not_the_clients_replays() {
     assert_eq!(t.requests().len(), 2);
     assert_eq!(t.remaining(), 0);
     assert_eq!(report.recipients[0].attempts, 2);
-    assert!(matches!(report.recipients[0].outcome, Outcome::Sent(_)));
+    assert!(matches!(report.recipients[0].outcome, SendOutcome::Sent(_)));
     assert_eq!(ms(at(&clock)), 1000, "the retry waited for the backoff");
 }
 
@@ -448,13 +454,13 @@ async fn a_pair_rate_limit_defers_only_that_recipient() {
         .collect();
     assert_eq!(starts, [0, 50, 100, 1000]);
 
-    assert_eq!(report.ended, Ended::Completed);
+    assert_eq!(report.ended, BroadcastEnd::Completed);
     assert_eq!(report.recipients[0].attempts, 2);
     assert!(
         report
             .recipients
             .iter()
-            .all(|r| matches!(r.outcome, Outcome::Sent(_)))
+            .all(|r| matches!(r.outcome, SendOutcome::Sent(_)))
     );
     assert_eq!(report.recipients[1].attempts, 1);
 }
@@ -504,7 +510,7 @@ async fn a_pair_limit_that_persists_gives_up_after_the_attempts() {
         .content(Text::new("Hi"))
         .outbound(outbound.clone())
         .pacer(pacer(&clock, 20))
-        .policy(Backoff::new().max_attempts(3))
+        .policy(Backoff::new().max_attempts(3).unwrap())
         .build()
         .unwrap()
         .run()
@@ -512,7 +518,7 @@ async fn a_pair_limit_that_persists_gives_up_after_the_attempts() {
     let starts: Vec<u128> = outbound.sends().iter().map(|(t, _)| ms(*t)).collect();
     assert_eq!(starts, [0, 1000, 5000]);
     assert_eq!(report.recipients[0].attempts, 3);
-    let Outcome::Failed(error) = &report.recipients[0].outcome else {
+    let SendOutcome::Failed(error) = &report.recipients[0].outcome else {
         panic!("{:?}", report.recipients[0].outcome)
     };
     assert_eq!(error.kind(), ErrorKind::PairRateLimited);
@@ -546,7 +552,7 @@ async fn the_per_user_marketing_limit_is_reported_and_not_retried() {
     assert_eq!(t.remaining(), 0);
     let limited = &report.recipients[1];
     assert_eq!(limited.attempts, 1);
-    let Outcome::Failed(error) = &limited.outcome else {
+    let SendOutcome::Failed(error) = &limited.outcome else {
         panic!("{:?}", limited.outcome)
     };
     assert_eq!(error.kind(), ErrorKind::EcosystemEngagementLimit);
@@ -557,7 +563,7 @@ async fn the_per_user_marketing_limit_is_reported_and_not_retried() {
         (progress.sent, progress.failed, progress.remaining()),
         (2, 1, 0)
     );
-    assert_eq!(report.ended, Ended::Completed);
+    assert_eq!(report.ended, BroadcastEnd::Completed);
 }
 
 /// `130429`: the number's rate halves (50 ms → 100 ms apart) and the
@@ -597,26 +603,44 @@ async fn a_throughput_error_slows_the_pacer_down_and_is_retried() {
     assert_eq!(report.progress().sent, 5);
 }
 
-/// `131048` (spam): reported, not retried, and the pacer slows down.
+/// `131048` (spam) restricts the number, not the recipient: the run stops
+/// (every recipient left would get it), and the shared pacer slows down
+/// for whatever sends next on the number.
 #[tokio::test]
-async fn a_spam_limit_slows_the_pacer_and_is_not_retried() {
+async fn a_spam_limit_stops_the_run_and_slows_the_pacer() {
     let clock = ManualClock::new(T0);
     let outbound = Timed::new(&clock);
-    outbound.fail(&phone(1), || graph(131048));
+    outbound.fail(&phone(2), || graph(131048));
+    let shared = pacer(&clock, 20);
     let report = Broadcast::builder(NUMBER)
-        .to((1..=3).map(phone))
+        .to((1..=4).map(phone))
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
-        .pacer(pacer(&clock, 20))
+        .pacer(shared.clone())
         .concurrency(1)
         .build()
         .unwrap()
         .run()
         .await;
     let starts: Vec<u128> = outbound.sends().iter().map(|(t, _)| ms(*t)).collect();
-    assert_eq!(starts, [0, 50, 150]);
-    assert_eq!(report.recipients[0].attempts, 1);
-    assert!(matches!(report.recipients[0].outcome, Outcome::Failed(_)));
+    assert_eq!(starts, [0, 50]);
+    assert!(
+        matches!(report.ended, BroadcastEnd::Stopped { recipient: 1, .. }),
+        "{:?}",
+        report.ended
+    );
+    assert_eq!(report.recipients[1].attempts, 1);
+    let SendOutcome::Failed(error) = &report.recipients[1].outcome else {
+        panic!("{:?}", report.recipients[1].outcome)
+    };
+    assert_eq!(error.kind(), ErrorKind::SpamRateLimited);
+    assert_eq!(report.progress().skipped, 2);
+    // The number's next sends go at half the rate: 100 ms apart.
+    let from = PhoneNumberId::new(NUMBER);
+    shared.acquire(&from).await.unwrap();
+    let before = at(&clock);
+    shared.acquire(&from).await.unwrap();
+    assert_eq!(at(&clock).checked_sub(before).map(ms), Some(100));
 }
 
 /// An expired token holds for every recipient: the run stops, the rest is
@@ -637,11 +661,18 @@ async fn an_account_wide_error_stops_the_run() {
     let handle = broadcast.handle();
     let report = broadcast.run().await;
     assert_eq!(outbound.sends().len(), 2);
-    assert_eq!(report.ended, Ended::Stopped { recipient: 1 });
-    assert!(matches!(report.recipients[0].outcome, Outcome::Sent(_)));
-    assert!(matches!(report.recipients[1].outcome, Outcome::Failed(_)));
+    assert!(
+        matches!(report.ended, BroadcastEnd::Stopped { recipient: 1, .. }),
+        "{:?}",
+        report.ended
+    );
+    assert!(matches!(report.recipients[0].outcome, SendOutcome::Sent(_)));
+    assert!(matches!(
+        report.recipients[1].outcome,
+        SendOutcome::Failed(_)
+    ));
     for line in &report.recipients[2..] {
-        assert!(matches!(line.outcome, Outcome::Skipped));
+        assert!(matches!(line.outcome, SendOutcome::Skipped));
         assert_eq!(line.attempts, 0);
     }
     let progress = handle.progress();
@@ -675,7 +706,7 @@ async fn cancelling_stops_further_sends() {
     let report = broadcast.run().await;
 
     assert_eq!(outbound.sends().len(), 3);
-    assert_eq!(report.ended, Ended::Cancelled);
+    assert_eq!(report.ended, BroadcastEnd::Cancelled);
     assert!(handle.is_cancelled());
     let progress = report.progress();
     assert_eq!((progress.sent, progress.skipped), (3, 7));
@@ -683,7 +714,7 @@ async fn cancelling_stops_further_sends() {
     assert!(
         report.recipients[3..]
             .iter()
-            .all(|r| matches!(r.outcome, Outcome::Skipped) && r.attempts == 0)
+            .all(|r| matches!(r.outcome, SendOutcome::Skipped) && r.attempts == 0)
     );
 }
 
@@ -700,7 +731,7 @@ impl Clock for Frozen {
 
 #[async_trait]
 impl Timer for Frozen {
-    async fn sleep(&self, _: Duration) {
+    async fn sleep_until(&self, _: OffsetDateTime) {
         futures::future::pending::<()>().await;
     }
 }
@@ -734,7 +765,7 @@ async fn cancelling_ends_a_wait_for_the_next_slot() {
         Either::Right(((), _)) => panic!("the cancelled run kept waiting for its slot"),
     };
     assert_eq!(outbound.sends().len(), 1);
-    assert_eq!(report.ended, Ended::Cancelled);
+    assert_eq!(report.ended, BroadcastEnd::Cancelled);
     assert_eq!(report.progress().skipped, 2);
 }
 
@@ -754,11 +785,11 @@ impl Clock for CancelWhileWaiting {
 
 #[async_trait]
 impl Timer for CancelWhileWaiting {
-    async fn sleep(&self, duration: Duration) {
+    async fn sleep_until(&self, deadline: OffsetDateTime) {
         if let Some(handle) = self.handle.get() {
             handle.cancel();
         }
-        self.clock.advance(duration);
+        self.clock.advance_to(deadline);
     }
 }
 
@@ -789,7 +820,7 @@ async fn a_slot_reached_after_a_cancel_sends_nothing() {
     // The first send needs no wait; the second waited, and was cancelled
     // meanwhile.
     assert_eq!(outbound.sends().len(), 1);
-    assert_eq!(report.ended, Ended::Cancelled);
+    assert_eq!(report.ended, BroadcastEnd::Cancelled);
     assert_eq!(report.progress().skipped, 2);
 }
 
@@ -870,7 +901,7 @@ async fn a_message_composed_for_someone_else_is_not_sent() {
     assert_eq!(sent, ["+16505550003"]);
     for line in &report.recipients[..2] {
         assert_eq!(line.attempts, 0);
-        let Outcome::Failed(error) = &line.outcome else {
+        let SendOutcome::Failed(error) = &line.outcome else {
             panic!("{:?}", line.outcome)
         };
         assert_eq!(error.kind(), ErrorKind::InvalidParameter);
@@ -913,7 +944,7 @@ async fn build_refuses_missing_settings_and_an_empty_list_completes() {
         .run()
         .await;
     assert!(report.recipients.is_empty());
-    assert_eq!(report.ended, Ended::Completed);
+    assert_eq!(report.ended, BroadcastEnd::Completed);
     assert!(outbound.sends().is_empty());
 }
 
@@ -931,22 +962,18 @@ fn the_run_is_send() {
     send(&run);
 }
 
-/// A policy by code: the pair limit after 1 s, throughput after 10 s,
-/// never a slow-down (so the times below are the pacer's 50 ms only).
+/// A policy by code: the pair limit after 1 s, throughput after 10 s (on
+/// a `steady_pacer`, so the times below are the pacer's 50 ms only).
 #[derive(Debug)]
 struct ByCode;
 
 impl BroadcastPolicy for ByCode {
-    fn on_failure(&self, error: &Error, _: u32) -> Verdict {
-        match error.graph().map(|g| g.code) {
-            Some(131056) => Verdict::RetryAfter(Duration::from_secs(1)),
-            Some(130429) => Verdict::RetryAfter(Duration::from_secs(10)),
-            _ => Verdict::Fail,
+    fn on_failure(&self, failure: &SendFailure<'_>) -> FailureVerdict {
+        match failure.error.graph().map(|g| g.code) {
+            Some(131056) => FailureVerdict::RetryAfter(Duration::from_secs(1)),
+            Some(130429) => FailureVerdict::RetryAfter(Duration::from_secs(10)),
+            _ => FailureVerdict::Fail,
         }
-    }
-
-    fn slows_down(&self, _: &Error) -> bool {
-        false
     }
 }
 
@@ -962,7 +989,7 @@ async fn retries_go_in_the_order_they_fall_due() {
         .to([phone(1), phone(2)])
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
-        .pacer(pacer(&clock, 20))
+        .pacer(steady_pacer(&clock, 20))
         .policy(ByCode)
         .concurrency(1)
         .build()
@@ -997,7 +1024,7 @@ async fn a_due_retry_goes_before_the_recipients_not_sent_yet() {
         .to((0..100).map(phone))
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
-        .pacer(pacer(&clock, 20))
+        .pacer(steady_pacer(&clock, 20))
         .policy(ByCode)
         .concurrency(1)
         .build()
@@ -1021,11 +1048,7 @@ struct Unreachable;
 
 #[async_trait]
 impl RateLimiter for Unreachable {
-    async fn reserve(
-        &self,
-        _: &PhoneNumberId,
-        _: OffsetDateTime,
-    ) -> meta_whatsapp_core::Result<Duration> {
+    async fn reserve(&self, _: &SlotRequest) -> meta_whatsapp_core::Result<Reservation> {
         Err(StorageError::Backend(anyhow::anyhow!("limiter unreachable")).into())
     }
 
@@ -1055,8 +1078,15 @@ async fn a_failing_rate_limiter_stops_the_run_before_any_send() {
         .run()
         .await;
     assert!(outbound.sends().is_empty());
-    assert_eq!(report.ended, Ended::Stopped { recipient: 0 });
-    let Outcome::Failed(error) = &report.recipients[0].outcome else {
+    assert!(
+        matches!(
+            report.ended,
+            BroadcastEnd::LimiterFailed { recipient: 0, .. }
+        ),
+        "{:?}",
+        report.ended
+    );
+    let SendOutcome::Failed(error) = &report.recipients[0].outcome else {
         panic!("{:?}", report.recipients[0].outcome)
     };
     assert!(matches!(error, Error::Storage(_)));
@@ -1064,7 +1094,7 @@ async fn a_failing_rate_limiter_stops_the_run_before_any_send() {
     assert!(
         report.recipients[1..]
             .iter()
-            .all(|r| matches!(r.outcome, Outcome::Skipped))
+            .all(|r| matches!(r.outcome, SendOutcome::Skipped))
     );
 }
 
@@ -1138,8 +1168,8 @@ async fn each_person_is_sent_once_by_default() {
         .iter()
         .map(|line| {
             let of = match line.outcome {
-                Outcome::Duplicate { of } => Some(of),
-                Outcome::Sent(_) => None,
+                SendOutcome::Duplicate { of } => Some(of),
+                SendOutcome::Sent(_) => None,
                 ref other => panic!("{other:?}"),
             };
             (line.index, of)
@@ -1162,7 +1192,7 @@ async fn each_person_is_sent_once_by_default() {
         report
             .recipients
             .iter()
-            .filter(|l| matches!(l.outcome, Outcome::Duplicate { .. }))
+            .filter(|l| matches!(l.outcome, SendOutcome::Duplicate { .. }))
             .all(|l| l.attempts == 0)
     );
     let progress = report.progress();
@@ -1235,10 +1265,10 @@ async fn lines_stream_to_a_channel_as_they_settle() {
         .iter()
         .map(|line| {
             let what = match &line.outcome {
-                Outcome::Sent(_) => "sent".to_owned(),
-                Outcome::Failed(e) => format!("failed {:?}", e.graph().map(|g| g.code)),
-                Outcome::Duplicate { of } => format!("duplicate of {of}"),
-                Outcome::Skipped => "skipped".to_owned(),
+                SendOutcome::Sent(_) => "sent".to_owned(),
+                SendOutcome::Failed(e) => format!("failed {:?}", e.graph().map(|g| g.code)),
+                SendOutcome::Duplicate { of } => format!("duplicate of {of}"),
+                SendOutcome::Skipped => "skipped".to_owned(),
                 other => panic!("{other:?}"),
             };
             (line.index, what, line.attempts)
@@ -1278,7 +1308,11 @@ async fn a_sink_that_fails_stops_the_run() {
         .run()
         .await;
     assert_eq!(outbound.sends().len(), 1);
-    assert_eq!(report.ended, Ended::Stopped { recipient: 0 });
+    assert!(
+        matches!(report.ended, BroadcastEnd::SinkFailed { recipient: 0, .. }),
+        "{:?}",
+        report.ended
+    );
     let progress = report.progress();
     assert_eq!((progress.sent, progress.skipped), (1, 2));
 }
@@ -1302,9 +1336,9 @@ async fn a_cancelled_run_streams_the_skipped_lines_last() {
     let report = broadcast.run().await;
     let mut got = Vec::new();
     while let Some(line) = read.recv().await {
-        got.push((line.index, matches!(line.outcome, Outcome::Skipped)));
+        got.push((line.index, matches!(line.outcome, SendOutcome::Skipped)));
     }
-    assert_eq!(report.ended, Ended::Cancelled);
+    assert_eq!(report.ended, BroadcastEnd::Cancelled);
     assert_eq!(
         got,
         [(0, false), (1, false), (2, true), (3, true), (4, true)]
@@ -1344,4 +1378,343 @@ async fn a_bots_read_receipts_and_replies_go_through_the_pacer() {
     assert_eq!(reads, [(0, true)]);
     let replies: Vec<u128> = outbound.sends().iter().map(|(t, _)| ms(*t)).collect();
     assert_eq!(replies, [1000], "the reply waited one slot at 1 a second");
+}
+
+/// A `Timer` on a `ManualClock` that records, at each wait, its deadline
+/// (from `T0`) and how many requests had reached the transport.
+#[derive(Debug, Clone)]
+struct Watching {
+    clock: ManualClock,
+    transport: ScriptedTransport,
+    waits: Arc<Mutex<Vec<(u128, usize)>>>,
+}
+
+impl Watching {
+    fn new(clock: &ManualClock, transport: &ScriptedTransport) -> Self {
+        Self {
+            clock: clock.clone(),
+            transport: transport.clone(),
+            waits: Arc::default(),
+        }
+    }
+
+    fn waits(&self) -> Vec<(u128, usize)> {
+        self.waits.lock().unwrap().clone()
+    }
+}
+
+impl Clock for Watching {
+    fn now(&self) -> OffsetDateTime {
+        self.clock.now()
+    }
+}
+
+#[async_trait]
+impl Timer for Watching {
+    async fn sleep_until(&self, deadline: OffsetDateTime) {
+        let at = Duration::try_from(deadline - T0).unwrap_or_default();
+        self.waits
+            .lock()
+            .unwrap()
+            .push((ms(at), self.transport.requests().len()));
+        self.clock.advance_to(deadline);
+    }
+}
+
+/// A client with the default `RetryPolicy`, which replays a throttled
+/// send at once, outside any pacer.
+fn default_client(t: &ScriptedTransport) -> meta_whatsapp_client::Client {
+    let client = meta_whatsapp_client::Client::builder()
+        .transport(t.clone())
+        .access_token("TOKEN")
+        .build()
+        .unwrap();
+    assert_eq!(
+        client.retry_policy(),
+        meta_whatsapp_client::RetryPolicy::default()
+    );
+    client
+}
+
+/// The decisive test of the client's retries under a broadcast: on a
+/// default `Client`, a pair-limited send (`131056`) is not replayed by the
+/// client. Exactly one request has gone out when the broadcast waits its
+/// 1 s (Meta's `4^0`), and the second goes after it. Letting the client
+/// keep its policy (`BroadcastBuilder::client` without
+/// `with_retry(RetryPolicy::NONE)`) fails this: the client replays at
+/// once and the broadcast never waits.
+#[tokio::test]
+async fn a_default_clients_replays_never_run_under_a_broadcast() {
+    let t = ScriptedTransport::new();
+    t.push_json(
+        400,
+        meta_error(
+            131056,
+            "Too many messages sent from the sender phone number to the same recipient phone \
+             number in a short period of time.",
+        ),
+    );
+    t.push_json(200, send_response());
+    let clock = ManualClock::new(T0);
+    let timer = Watching::new(&clock, &t);
+    let report = Broadcast::builder(NUMBER)
+        .to([phone(1)])
+        .content(Text::new("Hello"))
+        .client(default_client(&t))
+        .pacer(
+            Pacer::new(TokenBucket::new(Rate::per_second(20).unwrap())).with_timer(timer.clone()),
+        )
+        .build()
+        .unwrap()
+        .run()
+        .await;
+    assert_eq!(timer.waits(), [(1000, 1)], "one request, then the 1 s wait");
+    assert_eq!(t.requests().len(), 2);
+    assert_eq!(t.remaining(), 0);
+    assert_eq!(report.recipients[0].attempts, 2);
+    assert!(matches!(report.recipients[0].outcome, SendOutcome::Sent(_)));
+}
+
+/// The resend rule is `Error::may_resend`, the client's: a `131000`
+/// ("unknown error") on a 400 is retryable and `may_have_been_sent` is
+/// false, yet it is not resent, whatever the policy. (Until the rule moved
+/// to core, the broadcast resent it.)
+#[tokio::test]
+async fn an_unknown_error_is_not_resent_whatever_the_policy() {
+    let t = ScriptedTransport::new();
+    t.push_json(
+        400,
+        meta_error(131000, "Message failed to send due to an unknown error."),
+    );
+    let clock = ManualClock::new(T0);
+    let report = Broadcast::builder(NUMBER)
+        .to([phone(1)])
+        .content(Text::new("Hello"))
+        .client(client(&t))
+        .pacer(pacer(&clock, 20))
+        .policy(RetryEverything)
+        .build()
+        .unwrap()
+        .run()
+        .await;
+    assert_eq!(t.requests().len(), 1);
+    assert_eq!(t.remaining(), 0);
+    let line = &report.recipients[0];
+    assert_eq!(line.attempts, 1);
+    let SendOutcome::Failed(error) = &line.outcome else {
+        panic!("{:?}", line.outcome)
+    };
+    assert!(error.is_retryable() && !error.may_have_been_sent() && !error.may_resend());
+}
+
+/// A paused template (`132015`) refuses everyone a broadcast sends the
+/// same message: the run stops at the first refusal. Composed per
+/// recipient, the same refusal fails that recipient only.
+#[tokio::test]
+async fn a_paused_template_stops_a_broadcast_of_one_message_only() {
+    let template = || TemplateMessage::new("spring_sale", "en_US");
+    let clock = ManualClock::new(T0);
+    let outbound = Timed::new(&clock);
+    outbound.fail(&phone(2), || graph(132015));
+    let report = Broadcast::builder(NUMBER)
+        .to((1..=4).map(phone))
+        .content(template())
+        .outbound(outbound.clone())
+        .pacer(pacer(&clock, 20))
+        .concurrency(1)
+        .build()
+        .unwrap()
+        .run()
+        .await;
+    assert_eq!(outbound.sends().len(), 2);
+    assert!(
+        matches!(report.ended, BroadcastEnd::Stopped { recipient: 1, .. }),
+        "{:?}",
+        report.ended
+    );
+    assert_eq!(report.progress().skipped, 2);
+
+    let clock = ManualClock::new(T0);
+    let outbound = Timed::new(&clock);
+    outbound.fail(&phone(2), || graph(132015));
+    let report = Broadcast::builder(NUMBER)
+        .to((1..=4).map(phone))
+        .compose(move |to: &Recipient| Ok(OutboundMessage::template(to.clone(), template())))
+        .outbound(outbound.clone())
+        .pacer(pacer(&clock, 20))
+        .concurrency(1)
+        .build()
+        .unwrap()
+        .run()
+        .await;
+    assert_eq!(outbound.sends().len(), 4);
+    assert_eq!(report.ended, BroadcastEnd::Completed);
+    let progress = report.progress();
+    assert_eq!((progress.sent, progress.failed), (3, 1));
+}
+
+/// A recipient waiting for its retry when the run is cancelled is skipped
+/// with the error that deferred it, in the report and in a sink's line.
+#[tokio::test]
+async fn a_recipient_skipped_while_waiting_to_retry_keeps_its_last_error() {
+    for streamed in [false, true] {
+        let clock = ManualClock::new(T0);
+        let outbound = Timed::new(&clock);
+        outbound.fail(&phone(1), || graph(131056));
+        let (lines, mut read) = tokio::sync::mpsc::channel(8);
+        let mut builder = Broadcast::builder(NUMBER)
+            .to([phone(1), phone(2)])
+            .content(Text::new("Spring sale"))
+            .outbound(outbound.clone())
+            .pacer(pacer(&clock, 20))
+            .concurrency(1);
+        if streamed {
+            builder = builder.report_to(lines);
+        } else {
+            drop(lines);
+        }
+        let broadcast = builder.build().unwrap();
+        // Cancelled at the second send, while the first waits its 1 s.
+        outbound.cancel_after.set((2, broadcast.handle())).unwrap();
+        let report = broadcast.run().await;
+        assert_eq!(report.ended, BroadcastEnd::Cancelled, "{streamed}");
+        let first = if streamed {
+            let mut got = Vec::new();
+            while let Some(line) = read.recv().await {
+                got.push(line);
+            }
+            got.into_iter().find(|l| l.index == 0).unwrap()
+        } else {
+            report.recipients.into_iter().next().unwrap()
+        };
+        assert!(
+            matches!(first.outcome, SendOutcome::Skipped),
+            "{streamed}: {:?}",
+            first.outcome
+        );
+        assert_eq!(first.attempts, 1);
+        let error = first.last_error.expect("the error that deferred it");
+        assert_eq!(error.kind(), ErrorKind::PairRateLimited, "{streamed}");
+    }
+}
+
+/// A cancel hands back the slots its waiting senders booked: the next
+/// send on the number is not put behind them. Removing the release fails
+/// this (the next slot would be 900 ms away, not 100).
+#[tokio::test]
+async fn a_cancel_gives_the_waiting_slots_back() {
+    let clock = ManualClock::new(T0);
+    let outbound = Timed::new(&clock);
+    let bucket = Arc::new(TokenBucket::new(Rate::per_second(10).unwrap()));
+    let broadcast = Broadcast::builder(NUMBER)
+        .to((0..10).map(phone))
+        .content(Text::new("Spring sale"))
+        .outbound(outbound.clone())
+        .pacer(Pacer::shared(bucket.clone()).with_timer(Frozen(clock.clone())))
+        .concurrency(8)
+        .build()
+        .unwrap();
+    let handle = broadcast.handle();
+    let canceller = async move {
+        tokio::task::yield_now().await;
+        handle.cancel();
+        for _ in 0..100 {
+            tokio::task::yield_now().await;
+        }
+    };
+    let report = match select(pin!(broadcast.run()), pin!(canceller)).await {
+        Either::Left((report, _)) => report,
+        Either::Right(((), _)) => panic!("the cancelled run kept waiting"),
+    };
+    assert_eq!(report.ended, BroadcastEnd::Cancelled);
+    assert_eq!(outbound.sends().len(), 1, "only the first slot was due");
+    // Only that slot stays booked: the next one is 100 ms after it.
+    let next = bucket.reserve(&SlotRequest::new(NUMBER, T0)).await.unwrap();
+    assert_eq!(next.wait, Duration::from_millis(100));
+}
+
+/// A paced bot built on a default client: a reply Meta throttles
+/// (`130429`) is not replayed by the client, outside the pacer. The number
+/// slows down (the pacer's `SlowDownRule`, for a reply too), and the reply
+/// is retried by the `PacedOutbound`, after its delay and a slot, with
+/// exactly one request out before.
+#[tokio::test]
+async fn a_paced_bots_throttled_reply_slows_the_number_and_retries_through_the_pacer() {
+    let t = ScriptedTransport::new();
+    t.push_json(
+        400,
+        meta_error(130429, "Cloud API message throughput has been reached."),
+    );
+    t.push_json(200, send_response());
+    let clock = ManualClock::new(T0);
+    let timer = Watching::new(&clock, &t);
+    let bucket = Arc::new(TokenBucket::new(Rate::per_second(10).unwrap()));
+    let bot = Bot::builder()
+        .client(default_client(&t))
+        .pacer(Pacer::shared(bucket.clone()).with_timer(timer.clone()))
+        .command(Command::new("ping", |ctx: Ctx| async move {
+            ctx.reply("pong").await?;
+            Ok(())
+        }))
+        .build()
+        .await
+        .unwrap();
+
+    bot.deliver(text_event("messages/text.json", "/ping"))
+        .await
+        .unwrap();
+
+    assert_eq!(t.requests().len(), 2);
+    assert_eq!(t.remaining(), 0);
+    let waits = timer.waits();
+    assert!(!waits.is_empty(), "the retry waited on the pacer");
+    assert!(
+        waits.iter().all(|(_, requests)| *requests == 1),
+        "{waits:?}"
+    );
+    // The number now sends at half its rate: 200 ms apart.
+    let later = clock.now() + time::Duration::seconds(5);
+    bucket
+        .reserve(&SlotRequest::new(NUMBER, later))
+        .await
+        .unwrap();
+    let second = bucket
+        .reserve(&SlotRequest::new(NUMBER, later))
+        .await
+        .unwrap();
+    assert_eq!(second.wait, Duration::from_millis(200));
+}
+
+/// A handler reaches the bot's pacer (`Ctx::pacer`), to take a slot
+/// before a call the bot does not pace; none without `BotBuilder::pacer`.
+#[tokio::test]
+async fn a_handler_reaches_the_bots_pacer() {
+    for paced in [true, false] {
+        let clock = ManualClock::new(T0);
+        let outbound = Timed::new(&clock);
+        let seen: Arc<Mutex<Option<bool>>> = Arc::default();
+        let mut builder = Bot::builder()
+            .outbound(outbound.clone())
+            .command(Command::new("sync", {
+                let seen = Arc::clone(&seen);
+                move |ctx: Ctx| {
+                    let seen = Arc::clone(&seen);
+                    async move {
+                        if let Some(pacer) = ctx.pacer() {
+                            pacer.acquire(&PhoneNumberId::new(NUMBER)).await?;
+                        }
+                        *seen.lock().unwrap() = Some(ctx.pacer().is_some());
+                        Ok(())
+                    }
+                }
+            }));
+        if paced {
+            builder = builder.pacer(pacer(&clock, 1));
+        }
+        let bot = builder.build().await.unwrap();
+        bot.deliver(text_event("messages/text.json", "/sync"))
+            .await
+            .unwrap();
+        assert_eq!(*seen.lock().unwrap(), Some(paced));
+    }
 }

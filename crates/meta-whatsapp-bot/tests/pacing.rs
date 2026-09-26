@@ -1,7 +1,8 @@
 //! The paced broadcast under real concurrency, over long runs: Tokio's
 //! paused clock drives the pacer, so the concurrent senders sleep at once
 //! and time moves only when every one of them waits, as it does for real
-//! (a `ManualClock` moves forward on each sleep, so its sleeps add up).
+//! (a send takes no time on a `ManualClock`, so slow sends cannot overlap
+//! on it).
 //! Every one-second window of 10,000 sends is checked, with slow sends, a
 //! burst, a slow-down and its recovery, and a wall clock stepping back.
 
@@ -16,7 +17,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use common::{NUMBER, send_response};
-use meta_whatsapp_bot::{Broadcast, Ended, Outbound, Outcome, Pacer, Rate, Timer, TokenBucket};
+use meta_whatsapp_bot::{
+    Broadcast, BroadcastEnd, Outbound, Pacer, Rate, SendOutcome, Timer, TokenBucket,
+};
 use meta_whatsapp_client::messages::{OutboundMessage, SendResponse, Text};
 use meta_whatsapp_core::clock::Clock;
 use meta_whatsapp_core::ids::{MessageId, PhoneNumberId};
@@ -65,6 +68,11 @@ impl Clock for TokioClock {
 
 #[async_trait]
 impl Timer for TokioClock {
+    async fn sleep_until(&self, deadline: OffsetDateTime) {
+        let wait = Duration::try_from(deadline - self.now()).unwrap_or_default();
+        tokio::time::sleep(wait).await;
+    }
+
     async fn sleep(&self, duration: Duration) {
         tokio::time::sleep(duration).await;
     }
@@ -224,8 +232,12 @@ async fn ten_thousand_sends_never_exceed_the_rate_in_any_second() {
     for (rate, burst, concurrency, latency) in cases {
         let clock = TokioClock::new();
         let outbound = Slow::new(&clock, Duration::from_millis(latency));
-        let pacer = Pacer::new(TokenBucket::new(Rate::per_second(rate).unwrap()).burst(burst))
-            .with_timer(clock.clone());
+        let pacer = Pacer::new(
+            TokenBucket::new(Rate::per_second(rate).unwrap())
+                .burst(burst)
+                .unwrap(),
+        )
+        .with_timer(clock.clone());
         let report = Broadcast::builder(NUMBER)
             .to((0..N).map(phone))
             .content(Text::new("Spring sale"))
@@ -238,7 +250,7 @@ async fn ten_thousand_sends_never_exceed_the_rate_in_any_second() {
             .await;
 
         let case = format!("{rate}/s, burst {burst}, {concurrency} at once, {latency} ms");
-        assert_eq!(report.ended, Ended::Completed, "{case}");
+        assert_eq!(report.ended, BroadcastEnd::Completed, "{case}");
         assert_eq!(report.progress().sent, N, "{case}");
         let starts = outbound.starts();
         assert_eq!(starts.len(), N, "{case}");
@@ -333,7 +345,7 @@ async fn a_wall_clock_stepping_back_neither_pauses_nor_bursts() {
     let last = starts[N - 1].as_secs_f64();
     assert!(last < 21.0, "the last send at {last} s: the run paused");
     assert!(
-        matches!(report.recipients[N - 1].outcome, Outcome::Sent(_)),
+        matches!(report.recipients[N - 1].outcome, SendOutcome::Sent(_)),
         "{:?}",
         report.recipients[N - 1].outcome
     );

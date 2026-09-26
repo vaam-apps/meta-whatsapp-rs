@@ -259,7 +259,7 @@ pub async fn bot_in_the_inbox(
 #[cfg(test)]
 mod tests {
     use meta_whatsapp_rs::adapters::store::{MemoryConversationStore, MemoryKvStore};
-    use meta_whatsapp_rs::bot::{Ended, Outcome};
+    use meta_whatsapp_rs::bot::{BroadcastEnd, SendOutcome};
     use meta_whatsapp_rs::core::clock::{Clock, ManualClock};
     use meta_whatsapp_rs::core::testing::ScriptedTransport;
     use meta_whatsapp_rs::webhooks::WebhookPayload;
@@ -425,12 +425,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(report.ended, Ended::Completed);
+        assert_eq!(report.ended, BroadcastEnd::Completed);
         assert!(
             report
                 .recipients
                 .iter()
-                .all(|r| matches!(r.outcome, Outcome::Sent(_)))
+                .all(|r| matches!(r.outcome, SendOutcome::Sent(_)))
         );
         let requests = t.requests();
         assert_eq!(requests[1].path(), format!("/v25.0/{NUMBER}/messages"));
