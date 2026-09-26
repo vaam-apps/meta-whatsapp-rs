@@ -1091,6 +1091,108 @@ async fn a_paced_outbound_sends_nothing_when_its_limiter_fails() {
     assert!(outbound.reads.lock().unwrap().is_empty());
 }
 
+const USER: &str = "US.13491208655302741918";
+const GROUP: &str = "Y2FwaV9ncm91cDoxNzA1NTU1MDEzOToxMjAzNjM0MDQ2OTQyMzM4MjAZD";
+
+/// The list of `each_person_is_sent_once_by_default`: eight listings,
+/// four people.
+fn listed_twice() -> Vec<Recipient> {
+    vec![
+        Recipient::phone("+16505550001"),     // 0
+        Recipient::phone("1 (650) 555-0001"), // 1: 0 again, by its digits
+        Recipient::user(USER),                // 2
+        Recipient::PhoneAndUser {
+            phone: "+16505550002".into(),
+            user: USER.into(),
+        }, // 3: 2 again, by the user id
+        Recipient::phone("16505550002"),      // 4: 2 again, the number 3 gave them
+        Recipient::group(GROUP),              // 5
+        Recipient::group(GROUP),              // 6: 5 again
+        Recipient::phone("+16505550003"),     // 7
+    ]
+}
+
+/// A person listed twice gets one message: a duplicate marketing message
+/// is billed and harms the merchant. The repeats' lines name the first.
+#[tokio::test]
+async fn each_person_is_sent_once_by_default() {
+    let clock = ManualClock::new(T0);
+    let outbound = Timed::new(&clock);
+    let broadcast = Broadcast::builder(NUMBER)
+        .to(listed_twice())
+        .content(Text::new("Spring sale"))
+        .outbound(outbound.clone())
+        .pacer(pacer(&clock, 20))
+        .build()
+        .unwrap();
+    let handle = broadcast.handle();
+    assert_eq!(handle.progress().duplicates, 4, "known from the start");
+    assert_eq!(handle.progress().remaining(), 4);
+
+    let report = broadcast.run().await;
+
+    let sent: Vec<String> = outbound.sends().into_iter().map(|(_, to)| to).collect();
+    assert_eq!(sent, ["+16505550001", USER, GROUP, "+16505550003"]);
+    let firsts: Vec<(usize, Option<usize>)> = report
+        .recipients
+        .iter()
+        .map(|line| {
+            let of = match line.outcome {
+                Outcome::Duplicate { of } => Some(of),
+                Outcome::Sent(_) => None,
+                ref other => panic!("{other:?}"),
+            };
+            (line.index, of)
+        })
+        .collect();
+    assert_eq!(
+        firsts,
+        [
+            (0, None),
+            (1, Some(0)),
+            (2, None),
+            (3, Some(2)),
+            (4, Some(2)),
+            (5, None),
+            (6, Some(5)),
+            (7, None)
+        ]
+    );
+    assert!(
+        report
+            .recipients
+            .iter()
+            .filter(|l| matches!(l.outcome, Outcome::Duplicate { .. }))
+            .all(|l| l.attempts == 0)
+    );
+    let progress = report.progress();
+    assert_eq!(
+        (progress.sent, progress.duplicates, progress.remaining()),
+        (4, 4, 0)
+    );
+    assert_eq!(handle.progress(), progress);
+}
+
+/// `dedupe(false)`: the list as given, one message per listing.
+#[tokio::test]
+async fn dedupe_off_sends_every_listing() {
+    let clock = ManualClock::new(T0);
+    let outbound = Timed::new(&clock);
+    let report = Broadcast::builder(NUMBER)
+        .to(listed_twice())
+        .content(Text::new("Spring sale"))
+        .outbound(outbound.clone())
+        .pacer(pacer(&clock, 20))
+        .dedupe(false)
+        .build()
+        .unwrap()
+        .run()
+        .await;
+    assert_eq!(outbound.sends().len(), 8);
+    assert_eq!(report.progress().sent, 8);
+    assert_eq!(report.progress().duplicates, 0);
+}
+
 /// `BotBuilder::pacer`: the typing indicator (`MarkRead`) and the reply
 /// both wait for a slot of the number, in one budget.
 #[tokio::test]

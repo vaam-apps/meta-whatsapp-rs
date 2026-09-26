@@ -14,6 +14,11 @@
 //! `run` drives it all in the caller's task: spawn it (`tokio::spawn`) to
 //! do something else meanwhile, and keep the handle.
 //!
+//! **Each person once.** A recipient listed again (the same phone number,
+//! compared by its digits; the same business-scoped user id; the same
+//! group) is not sent to again: its line is [`Outcome::Duplicate`], naming
+//! the first. [`BroadcastBuilder::dedupe`] turns this off.
+//!
 //! What a failed send becomes is a [`BroadcastPolicy`] (default
 //! [`Backoff`]), read from the error's kind or code, never its text:
 //!
@@ -48,7 +53,7 @@
 //! B3 (a typed store on `KvStore`).
 
 use std::cmp::Ordering;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashMap};
 use std::fmt;
 use std::pin::pin;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
@@ -242,7 +247,7 @@ fn may_resend(error: &Error) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct Progress {
-    /// Recipients in the broadcast.
+    /// Recipients in the broadcast, as listed (duplicates included).
     pub total: usize,
     /// Accepted by Meta ([`Outcome::Sent`]).
     pub sent: usize,
@@ -251,6 +256,9 @@ pub struct Progress {
     /// Never sent because the run was cancelled or stopped
     /// ([`Outcome::Skipped`]).
     pub skipped: usize,
+    /// Listed again, not sent to again ([`Outcome::Duplicate`]); counted
+    /// from the start.
+    pub duplicates: usize,
 }
 
 impl Progress {
@@ -261,6 +269,7 @@ impl Progress {
             .saturating_sub(self.sent)
             .saturating_sub(self.failed)
             .saturating_sub(self.skipped)
+            .saturating_sub(self.duplicates)
     }
 }
 
@@ -273,7 +282,7 @@ pub enum Ended {
     /// [`BroadcastHandle::cancel`] stopped it.
     Cancelled,
     /// A [`Verdict::Stop`] stopped it, on the failure of the recipient at
-    /// this index.
+    /// this index; or the rate limiter failed on that recipient.
     Stopped {
         /// Index (in the order given) of the recipient whose failure
         /// stopped the run.
@@ -295,17 +304,27 @@ pub enum Outcome {
     /// Never sent: the run was cancelled or stopped before (or while
     /// waiting to retry after a failure that proved nothing was sent).
     Skipped,
+    /// Never sent: the same person as the recipient listed at index `of`,
+    /// whose line says what happened ([`BroadcastBuilder::dedupe`]).
+    Duplicate {
+        /// Index (in the order given) of the first listing.
+        of: usize,
+    },
 }
 
 /// One recipient's line of the report.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct RecipientReport {
+    /// Where the recipient is in the list given (the line's place in
+    /// [`BroadcastReport::recipients`]).
+    pub index: usize,
     /// The recipient, as given.
     pub recipient: Recipient,
     /// Sends handed to the outbound for them, retries included (a send the
     /// client refused before any request counts too); zero when none was:
-    /// the message could not be composed, or the run ended first.
+    /// the message could not be composed, the run ended first, or a
+    /// duplicate.
     pub attempts: u32,
     /// What happened.
     pub outcome: Outcome,
@@ -333,6 +352,7 @@ impl BroadcastReport {
                 Outcome::Sent(_) => progress.sent += 1,
                 Outcome::Failed(_) => progress.failed += 1,
                 Outcome::Skipped => progress.skipped += 1,
+                Outcome::Duplicate { .. } => progress.duplicates += 1,
             }
         }
         progress
@@ -356,6 +376,7 @@ struct Shared {
     sent: AtomicUsize,
     failed: AtomicUsize,
     skipped: AtomicUsize,
+    duplicates: AtomicUsize,
     halt: watch::Sender<Halt>,
 }
 
@@ -366,6 +387,7 @@ impl Shared {
             sent: self.sent.load(AtomicOrdering::Acquire),
             failed: self.failed.load(AtomicOrdering::Acquire),
             skipped: self.skipped.load(AtomicOrdering::Acquire),
+            duplicates: self.duplicates.load(AtomicOrdering::Acquire),
         }
     }
 
@@ -424,6 +446,61 @@ enum Compose {
     With(Composer),
 }
 
+/// Who a recipient is, for [`BroadcastBuilder::dedupe`].
+#[derive(Debug, PartialEq, Eq, Hash)]
+enum Identity {
+    /// A phone number's digits (`+1 650-555-1234` is `16505551234`).
+    Phone(String),
+    User(String),
+    Group(String),
+}
+
+/// The identities a recipient is known by: one, or two when it carries a
+/// phone number and a user id (the same person).
+fn identities(recipient: &Recipient) -> Vec<Identity> {
+    fn phone(number: &str) -> Identity {
+        let digits: String = number.chars().filter(char::is_ascii_digit).collect();
+        Identity::Phone(if digits.is_empty() {
+            number.to_owned()
+        } else {
+            digits
+        })
+    }
+    match recipient {
+        Recipient::Phone(number) => vec![phone(number)],
+        Recipient::User(user) => vec![Identity::User(user.as_str().to_owned())],
+        Recipient::PhoneAndUser {
+            phone: number,
+            user,
+        } => {
+            vec![phone(number), Identity::User(user.as_str().to_owned())]
+        }
+        Recipient::Group(group) => vec![Identity::Group(group.as_str().to_owned())],
+        // A kind of recipient added later: never taken for another.
+        _ => Vec::new(),
+    }
+}
+
+/// Each listing of a person after their first, with the index of the
+/// first: `(index, of)`, in list order.
+fn duplicates(recipients: &[Recipient]) -> Vec<(usize, usize)> {
+    let mut first: HashMap<Identity, usize> = HashMap::new();
+    let mut out = Vec::new();
+    for (index, recipient) in recipients.iter().enumerate() {
+        let keys = identities(recipient);
+        let seen = keys.iter().find_map(|key| first.get(key).copied());
+        // A duplicate's other identities are the first listing's too.
+        let owner = seen.unwrap_or(index);
+        for key in keys {
+            first.entry(key).or_insert(owner);
+        }
+        if let Some(of) = seen {
+            out.push((index, of));
+        }
+    }
+    out
+}
+
 /// A send waiting for its retry time.
 struct Deferred {
     at: OffsetDateTime,
@@ -458,6 +535,9 @@ struct Book {
     next: usize,
     deferred: BinaryHeap<Deferred>,
     attempts: Vec<u32>,
+    /// Whether each recipient is settled (a duplicate, from the start).
+    settled: Vec<bool>,
+    /// Each settled recipient's outcome, for the report.
     outcomes: Vec<Option<Outcome>>,
     stopped_by: Option<usize>,
     /// The run's latest time, and how far the pacer's clock stepped back
@@ -494,14 +574,17 @@ impl Book {
         }
     }
 
-    fn next(&mut self, wall: OffsetDateTime, total: usize) -> Next {
+    fn next(&mut self, wall: OffsetDateTime) -> Next {
         let now = self.now(wall);
         if self.deferred.peek().is_some_and(|d| d.at <= now)
             && let Some(due) = self.deferred.pop()
         {
             return Next::Send(due.index, Some(due.message));
         }
-        if self.next < total {
+        while self.settled.get(self.next).copied().unwrap_or(false) {
+            self.next += 1;
+        }
+        if self.next < self.settled.len() {
             self.next += 1;
             return Next::Send(self.next - 1, None);
         }
@@ -583,7 +666,7 @@ impl Broadcast {
         };
         // Never sent: not reached, or waiting for a retry, when the run
         // halted.
-        let unsettled = book.outcomes.iter().filter(|o| o.is_none()).count();
+        let unsettled = book.settled.iter().filter(|settled| !**settled).count();
         self.shared
             .skipped
             .fetch_add(unsettled, AtomicOrdering::AcqRel);
@@ -592,11 +675,15 @@ impl Broadcast {
             .into_iter()
             .zip(book.outcomes)
             .zip(book.attempts)
-            .map(|((recipient, outcome), attempts)| RecipientReport {
-                recipient,
-                attempts,
-                outcome: outcome.unwrap_or(Outcome::Skipped),
-            })
+            .enumerate()
+            .map(
+                |(index, ((recipient, outcome), attempts))| RecipientReport {
+                    index,
+                    recipient,
+                    attempts,
+                    outcome: outcome.unwrap_or(Outcome::Skipped),
+                },
+            )
             .collect();
         let report = BroadcastReport { recipients, ended };
         let progress = report.progress();
@@ -604,6 +691,7 @@ impl Broadcast {
             sent = progress.sent,
             failed = progress.failed,
             skipped = progress.skipped,
+            duplicates = progress.duplicates,
             ended = ?report.ended,
             "broadcast ended"
         );
@@ -621,7 +709,7 @@ impl Broadcast {
             if self.shared.halted() {
                 return;
             }
-            let next = self.book().next(self.pacer.now(), self.recipients.len());
+            let next = self.book().next(self.pacer.now());
             match next {
                 Next::Send(index, message) => self.attempt(index, message).await,
                 Next::Wait(duration) => {
@@ -751,8 +839,13 @@ impl Broadcast {
             Outcome::Sent(_) => &self.shared.sent,
             Outcome::Failed(_) => &self.shared.failed,
             Outcome::Skipped => &self.shared.skipped,
+            Outcome::Duplicate { .. } => &self.shared.duplicates,
         };
-        self.book().outcomes[index] = Some(outcome);
+        {
+            let mut book = self.book();
+            book.settled[index] = true;
+            book.outcomes[index] = Some(outcome);
+        }
         counter.fetch_add(1, AtomicOrdering::AcqRel);
     }
 
@@ -775,6 +868,7 @@ pub struct BroadcastBuilder {
     pacer: Option<Pacer>,
     policy: Arc<dyn BroadcastPolicy>,
     concurrency: usize,
+    dedupe: bool,
 }
 
 impl fmt::Debug for BroadcastBuilder {
@@ -796,11 +890,12 @@ impl BroadcastBuilder {
             pacer: None,
             policy: Arc::new(Backoff::default()),
             concurrency: 32,
+            dedupe: true,
         }
     }
 
-    /// Add recipients, in the order they are sent (and reported). The list
-    /// is sent as given: a recipient listed twice gets two messages.
+    /// Add recipients, in the order they are sent (and reported). A person
+    /// listed twice gets one message ([`Self::dedupe`]).
     pub fn to<I, R>(mut self, recipients: I) -> Self
     where
         I: IntoIterator<Item = R>,
@@ -808,6 +903,19 @@ impl BroadcastBuilder {
     {
         self.recipients
             .extend(recipients.into_iter().map(Into::into));
+        self
+    }
+
+    /// Send each person once (default `true`): a recipient listed again is
+    /// not sent to again, and its line is [`Outcome::Duplicate`]. The same
+    /// person is the same phone number, compared by its digits
+    /// (`+1 650-555-1234` and `16505551234` match), the same
+    /// business-scoped user id, or the same group; a phone number and a
+    /// user id are one person only when a recipient carried both
+    /// (`Recipient::PhoneAndUser`). `false` sends the list as given, each
+    /// listing its own message.
+    pub fn dedupe(mut self, on: bool) -> Self {
+        self.dedupe = on;
         self
     }
 
@@ -898,6 +1006,17 @@ impl BroadcastBuilder {
             return Err(ConfigError::new("a broadcast concurrency of zero").into());
         }
         let total = self.recipients.len();
+        let duplicates = if self.dedupe {
+            duplicates(&self.recipients)
+        } else {
+            Vec::new()
+        };
+        let mut settled = vec![false; total];
+        let mut outcomes: Vec<Option<Outcome>> = (0..total).map(|_| None).collect();
+        for &(index, of) in &duplicates {
+            settled[index] = true;
+            outcomes[index] = Some(Outcome::Duplicate { of });
+        }
         let (halt, _) = watch::channel(Halt::Running);
         Ok(Broadcast {
             from: self.from,
@@ -911,13 +1030,15 @@ impl BroadcastBuilder {
                 sent: AtomicUsize::new(0),
                 failed: AtomicUsize::new(0),
                 skipped: AtomicUsize::new(0),
+                duplicates: AtomicUsize::new(duplicates.len()),
                 halt,
             }),
             book: Mutex::new(Book {
                 next: 0,
                 deferred: BinaryHeap::new(),
                 attempts: vec![0; total],
-                outcomes: (0..total).map(|_| None).collect(),
+                settled,
+                outcomes,
                 stopped_by: None,
                 seen: None,
                 skew: Duration::ZERO,
@@ -1026,8 +1147,31 @@ mod tests {
             sent: 3,
             failed: 2,
             skipped: 1,
+            duplicates: 2,
         };
-        assert_eq!(p.remaining(), 4);
+        assert_eq!(p.remaining(), 2);
+    }
+
+    /// The same person by digits, by user id, or through a recipient that
+    /// carried both; never a phone number taken for another.
+    #[test]
+    fn duplicates_are_found_by_identity() {
+        let list = [
+            Recipient::phone("+16505550001"),     // 0
+            Recipient::phone("1 (650) 555-0001"), // 1: 0 again
+            Recipient::user("US.1"),              // 2
+            Recipient::PhoneAndUser {
+                phone: "+16505550002".into(),
+                user: "US.1".into(),
+            }, // 3: 2 again, and +16505550002 is 2's too
+            Recipient::phone("16505550002"),      // 4: 2 again
+            Recipient::group("G1"),               // 5
+            Recipient::group("G1"),               // 6: 5 again
+            Recipient::phone("+16505550003"),     // 7
+            Recipient::phone("+165055500031"),    // 8: another number
+            Recipient::user("US.2"),              // 9
+        ];
+        assert_eq!(duplicates(&list), [(1, 0), (3, 2), (4, 2), (6, 5)]);
     }
 
     /// The run's time never steps back: a retry due in 1 s stays 1 s away
@@ -1036,10 +1180,11 @@ mod tests {
     fn the_runs_time_holds_when_the_clock_steps_back() {
         let t0 = time::macros::datetime!(2026-09-26 12:00 UTC);
         let mut book = Book {
-            next: 1,
+            next: 0,
             deferred: BinaryHeap::new(),
             attempts: vec![0],
-            outcomes: vec![None],
+            settled: vec![true],
+            outcomes: Vec::new(),
             stopped_by: None,
             seen: None,
             skew: Duration::ZERO,
@@ -1051,11 +1196,11 @@ mod tests {
             Box::new(OutboundMessage::text(Recipient::phone("+1"), "x")),
         );
         let back = t0 - time::Duration::hours(1);
-        assert!(matches!(book.next(back, 1), Next::Wait(d) if d == Duration::from_secs(1)));
+        assert!(matches!(book.next(back), Next::Wait(d) if d == Duration::from_secs(1)));
         let later = back + time::Duration::milliseconds(400);
-        assert!(matches!(book.next(later, 1), Next::Wait(d) if d == Duration::from_millis(600)));
+        assert!(matches!(book.next(later), Next::Wait(d) if d == Duration::from_millis(600)));
         assert!(matches!(
-            book.next(later + time::Duration::milliseconds(600), 1),
+            book.next(later + time::Duration::milliseconds(600)),
             Next::Send(0, Some(_))
         ));
     }
