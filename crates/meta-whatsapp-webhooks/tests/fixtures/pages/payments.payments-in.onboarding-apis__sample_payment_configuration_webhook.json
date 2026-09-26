@@ -1,0 +1,22 @@
+{
+  "entry": [
+    {
+      "id": "0",
+      "time": 1725499886,
+      "changes": [
+        {
+          "field": "payment_configuration_update",
+          "value": {
+            "configuration_name": "test-payment-configuration",
+            "provider_name": "razorpay",
+            "provider_mid": "test-provider-mid",
+            "status": "Needs Testing",
+            "created_timestamp": 123457678,
+            "updated_timestamp": 123457678
+          }
+        }
+      ]
+    }
+  ],
+  "object": "whatsapp_business_account"
+}

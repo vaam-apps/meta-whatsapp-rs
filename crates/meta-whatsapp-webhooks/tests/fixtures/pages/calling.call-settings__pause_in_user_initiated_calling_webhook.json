@@ -1,0 +1,24 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "0",
+      "time": 1641848059,
+      "changes": [
+        {
+          "field": "account_update",
+          "value": {
+            "phone_number": "16505552771",
+            "event": "ACCOUNT_RESTRICTION",
+            "restriction_info": [
+              {
+                "restriction_type": "RESTRICTED_USER_INITIATED_CALLING",
+                "expiration": 1641848057
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

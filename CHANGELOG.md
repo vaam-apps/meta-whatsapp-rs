@@ -167,6 +167,56 @@ volumes (Claude config, shell history, cargo caches) start empty
   OpenAPI document now declares the `429` of every rate-limited route
   (M1b's numbers, profile and WABA routes lacked it: additive), and a
   test holds every tenant route to it.
+- **Webhook conformance sweep**: every example payload on every page of
+  Meta's WhatsApp docs that prints a webhook body (88 pages: the
+  `webhooks/reference/*` pages, and the calling, groups, flows,
+  business-scoped user id, conversation routing, Direct Send, Embedded
+  Signup, solution partner, pricing, marketing messages, templates and
+  messages guides that show one) is a fixture of `meta-whatsapp-webhooks`,
+  132 of them new, placeholders filled with the pages' own example values.
+  The manifest records the two payments pages as out of scope (coverage
+  row 32), two examples printed malformed (`embedded-signup/app-only-install`,
+  `direct-send/supported-message-types`) with what is wrong, and two pages
+  Meta lists but serves as "Page Not Found" (`webhooks/reference/pricing`,
+  `webhooks/message_echoes`).
+  `tests/conformance.rs` walks a manifest of every page and fixture and
+  checks, for each: the exact events with their WABA, business number and
+  user (BSUID and phone number), that every value the example shows
+  survives the typed parse, that none falls into an `Other`/`Unknown`
+  catch-all, and signed delivery through `WebhookHandler` with dedup. A
+  fixture missing from the manifest, or a page example without a fixture,
+  fails it. Only an id or a unix time may come back as a string where Meta
+  printed a number, a `Failed`/`Completed` second spelling is accepted for
+  a `status` only, and the typed form may not invent a value; each check
+  has a test that feeds it what it must refuse.
+- **Conversation Routing webhooks** (`webhooks/reference/messaging-handovers`,
+  `webhooks/reference/standby`, `conversation-routing/*`), formerly
+  `Unknown`: `messaging_handovers` → `WebhookEvent::ThreadControlChanged`
+  (`fields::MessagingHandoversValue`: `HandoverType`, the `Handover`
+  object with `ThreadRole`s, `metadata` and `conversation_context`), and
+  `standby` → `WebhookEvent::StandbyObserved` (`fields::StandbyItem`: an
+  inbound message, the owner's echo (`StandbyEcho`, whose Send API body,
+  template and Flow definitions stay JSON) or a status). A standby copy is
+  never a `MessageReceived` (a standby partner must not reply) and its
+  dedup key is `standby:` plus the key of the same item outside standby.
+  The `messages` field's `conversation_context` (an AI summary of the
+  conversation) is `MessagesValue::conversation_context` and
+  `MessageReceived::conversation_context`.
+- **`fields::ViolationInfo::remediation`**: the calling warnings of
+  `calling/call-settings` carry it; it was dropped.
+- **`WebhookEvent::UserActionReported`** (`fields::UserAction`,
+  `LinkClickData`): the Marketing Messages API's click events, a
+  `user_actions` list on the `messages` field
+  (`marketing-messages/track-click-events`), made the whole change
+  `Unknown`.
+- **`PhoneNumberQualityEvent::Flagged`, `AccountUpdateEvent::VerifiedAccount`**
+  (shown on `solution-providers/manage-webhooks`, landed in `Other`),
+  **`fields::Referral::reference`** (`referral.ref` of
+  `ctwa/welcome-message-sequences`, dropped) and
+  **`StandbyEcho::recipient`** (the BSUID of an echo sent by BSUID).
+- **`fields::Status::template_id`**: Direct Send's status webhook names
+  the template the message was sent with
+  (`direct-send/supported-message-types`); it was dropped.
 - **`meta_whatsapp_client::business_verification`**, partner-led business
   verification for approved Select and Premier Solution Partners
   (`solution-providers/partner-led-business-verification`; the rest of
@@ -536,6 +586,28 @@ volumes (Claude config, shell history, cargo caches) start empty
   Use v4, which needs no `version`.
 
 ### Changed
+
+- **`WebhookEvent::MessageReceived` has a `conversation_context` field**
+  (`Option<Box<ConversationContext>>`, serialized only when set), and
+  `MessagesValue` and `ViolationInfo` one more public field each: code
+  that builds these with a struct literal adds `conversation_context:
+  None` (`remediation: None`); a pattern without `..` names it.
+  `WebhookEvent` has three more variants (`ThreadControlChanged`,
+  `StandbyObserved`, `UserActionReported`) and `ChangeValue` two more
+  (`MessagingHandovers`, `Standby`), which a `_` arm already covers: until
+  now these arrived as `Unknown`. Their dedup keys change with them, from
+  `unknown:{sha256}` to `thread_control_changed:{sha256}` and
+  `standby:…`: a delivery stored before this change and retried after it
+  is delivered again, once. `fields::Status`, `MessagesValue`
+  (`user_actions`) and `Referral` (`reference`) have one more public field
+  too (`template_id: None`, `user_actions: Vec::new()`, `reference: None`
+  in a struct literal).
+- **`WebhookEvent::AccountUpdated::waba_id` is `None` for a
+  `PARTNER_APP_INSTALLED` / `PARTNER_APP_UNINSTALLED` without a
+  `waba_info`**: it was the entry id, which
+  `embedded-signup/app-only-install` shows is the partner's business, not
+  a WABA (`entry_id` still carries it). Such an event's dedup key changes
+  with it.
 
 - **The `wa-rs-embedded-signup` skill's Solution Partner example** (for
   anyone who copied it): `PartnerAction::CoexistenceDisconnected`,

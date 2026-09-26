@@ -1,0 +1,39 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "215589313241560883",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15551797781",
+              "phone_number_id": "7794189252778687"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "Jessica Laverdetman"
+                },
+                "wa_id": "13557825698"
+              }
+            ],
+            "messages": [
+              {
+                "from": "17863559966",
+                "id": "wamid.HBgLMTc4NjM1NTk5NjYVAGHAYWYET688aASGNTI1QzZFQjhEMDk2QQA=",
+                "timestamp": "1758254144",
+                "text": {
+                  "body": "Hi!"
+                },
+                "type": "text"
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}

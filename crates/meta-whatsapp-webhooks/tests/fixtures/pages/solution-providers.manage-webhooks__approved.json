@@ -1,0 +1,21 @@
+{
+  "entry": [
+    {
+      "id": "495709166956424",
+      "time": 1731617831,
+      "changes": [
+        {
+          "value": {
+            "event": "APPROVED",
+            "message_template_id": 64244916695,
+            "message_template_name": "Summer 20 Template",
+            "message_template_language": "en_US",
+            "reason": "NONE"
+          },
+          "field": "message_template_status_update"
+        }
+      ]
+    }
+  ],
+  "object": "whatsapp_business_account"
+}

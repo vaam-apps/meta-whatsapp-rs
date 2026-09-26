@@ -34,7 +34,10 @@ fn only_message(
             display_phone_number,
             contact,
             message,
+            conversation_context,
         } => {
+            // No reference example carries Conversation Routing's summary.
+            assert_eq!(conversation_context, None, "{name}");
             // The "Message business" example uses another WABA id.
             assert!(
                 ["102290129340398", "419561257915477"].contains(&waba_id.as_str()),
@@ -674,4 +677,85 @@ fn unknown_status_value_is_kept() {
     }))
     .unwrap();
     assert_eq!(s.status, MessageStatus::Other("deleted".into()));
+}
+
+/// `direct-send/supported-message-types`: Direct Send adds `template_id` to
+/// the status webhook (the page's example, with the `metadata` every
+/// `messages` change carries).
+#[test]
+fn direct_send_status_keeps_its_template_id() {
+    let body = json!({"object": "whatsapp_business_account", "entry": [{"id": "102290129340398", "changes": [{
+        "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {"display_phone_number": "15550783881", "phone_number_id": "106540352242922"},
+            "statuses": [{
+                "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQUFERjg0NDEzNDdFODU3MUMxMAA=",
+                "status": "read", "timestamp": "1750030073", "recipient_id": "16505551234",
+                "template_id": "64244916695", "conversation": {}, "pricing": {}
+            }]
+        },
+        "field": "messages"
+    }]}]});
+    let payload = WebhookPayload::from_slice(body.to_string().as_bytes()).unwrap();
+    assert_eq!(
+        serde_json::to_value(&payload).unwrap()["entry"][0]["changes"][0]["value"]["statuses"][0]["template_id"],
+        "64244916695"
+    );
+    let events = payload.into_events();
+    let [WebhookEvent::StatusUpdated { status, .. }] = events.as_slice() else {
+        panic!("{events:?}")
+    };
+    assert_eq!(
+        status
+            .template_id
+            .as_ref()
+            .map(meta_whatsapp_core::ids::TemplateId::as_str),
+        Some("64244916695")
+    );
+    // Meta prints some ids as numbers.
+    let s: Status = serde_json::from_value(json!({
+        "id": "wamid.X", "status": "sent", "timestamp": "1", "template_id": 64_244_916_695_u64
+    }))
+    .unwrap();
+    assert_eq!(s.template_id.unwrap().as_str(), "64244916695");
+}
+
+/// `ctwa/welcome-message-sequences`: `referral.ref`, undescribed, kept.
+#[test]
+fn welcome_sequence_referral_keeps_its_ref() {
+    let events = common::events("pages/ctwa.welcome-message-sequences__webhook.json");
+    let [WebhookEvent::MessageReceived { message, .. }] = events.as_slice() else {
+        panic!("{events:?}")
+    };
+    let referral = message.referral.as_ref().unwrap();
+    assert_eq!(referral.reference.as_deref(), Some("ref_12345"));
+}
+
+/// `marketing-messages/track-click-events`: `user_actions` on `messages`.
+#[test]
+fn marketing_link_clicks_are_user_actions() {
+    use meta_whatsapp_webhooks::fields::{ClickComponent, UserActionType};
+
+    let events = common::events("pages/marketing-messages.track-click-events__webhooks.json");
+    let [
+        WebhookEvent::UserActionReported {
+            phone_number_id,
+            action,
+            ..
+        },
+    ] = events.as_slice()
+    else {
+        panic!("{events:?}")
+    };
+    assert_eq!(phone_number_id.as_str(), "106540352242922");
+    assert_eq!(
+        action.action_type,
+        UserActionType::MarketingMessagesLinkClick
+    );
+    assert_eq!(action.timestamp.unix_timestamp(), 1_750_030_073);
+    let click = action.marketing_messages_link_click_data.as_ref().unwrap();
+    assert_eq!(click.click_component, Some(ClickComponent::Cta));
+    assert_eq!(click.product_id.as_deref(), Some("sku_id"));
+    assert_eq!(click.click_id.as_deref(), Some("click_id"));
+    assert_eq!(click.tracking_token.as_deref(), Some("example_token"));
 }

@@ -1,6 +1,6 @@
 # `WebhookEvent` reference
 
-> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** Source: `crates/meta-whatsapp-webhooks/src/event.rs`,
+> **Verified against meta-whatsapp-rs 76be5e050afce413e4614c9559b109c7ba7cd986 (2026-09-26).** Source: `crates/meta-whatsapp-webhooks/src/event.rs`,
 > `crates/meta-whatsapp-webhooks/src/fields/*`. The enum is `#[non_exhaustive]`.
 
 Payload types live in `meta_whatsapp_rs::webhooks::fields` (flat re-exports of every
@@ -10,7 +10,7 @@ field module). Payloads are boxed.
 
 | Variant (`kind()`) | Webhook field | Fields besides `waba_id` |
 | --- | --- | --- |
-| `MessageReceived` (`message_received`) | `messages` | `phone_number_id`, `display_phone_number`, `contact: Option<Contact>`, `message: Box<InboundMessage>` |
+| `MessageReceived` (`message_received`) | `messages` | `phone_number_id`, `display_phone_number`, `contact: Option<Contact>`, `message: Box<InboundMessage>`, `conversation_context: Option<Box<ConversationContext>>` (Conversation Routing's summary, when the change carried one) |
 | `StatusUpdated` (`status_updated`) | `messages` | `phone_number_id`, `display_phone_number`, `contact`, `status: Box<Status>` |
 | `ErrorReported` (`error_reported`) | `messages`, `calls` | `field`, `phone_number_id`, `display_phone_number`, `error: Box<GraphApiError>` |
 | `MessageEchoed` (`message_echoed`) | `smb_message_echoes` | `phone_number_id`, `display_phone_number`, `contact`, `echo: Box<MessageEcho>` |
@@ -20,6 +20,9 @@ field module). Payloads are boxed.
 | `CallStatusUpdated` (`call_status_updated`) | `calls` | `phone_number_id`, `display_phone_number`, `contact`, `status: Box<CallStatus>` |
 | `UserPreferenceChanged` (`user_preference_changed`) | `user_preferences` | `phone_number_id`, `display_phone_number`, `contact`, `preference: Box<UserPreference>` |
 | `UserIdChanged` (`user_id_changed`) | `user_id_update` | `phone_number_id`, `display_phone_number`, `contact`, `update: Box<UserIdUpdate>` |
+| `UserActionReported` (`user_action_reported`) | `messages` (`user_actions`) | `phone_number_id`, `display_phone_number`, `action: Box<UserAction>` (`action_type`, `timestamp`, `marketing_messages_link_click_data`: `click_component`, `product_id`, `click_id`, `tracking_token`). Meta names no user and no message: correlate by `click_id`, which is appended to the URL the user visits |
+| `ThreadControlChanged` (`thread_control_changed`) | `messaging_handovers` | `phone_number_id` (the handover's `recipient`), `display_phone_number`, `update: Box<MessagingHandoversValue>` (`handover_type`: `ControlPassed`/`ControlTaken`, `sender`, `timestamp`, `handover()` for the matching `Handover`: `previous_owner_role`/`new_owner_role` as `ThreadRole`, `metadata`, `conversation_context`). The user is `sender.phone_number` only, which Meta may omit, and never a BSUID: join it to your BSUID-keyed conversations yourself |
+| `StandbyObserved` (`standby_observed`) | `standby` | `phone_number_id`, `display_phone_number`, `contact`, `item: Box<StandbyItem>` (`Message(InboundMessage)`, `Echo(StandbyEcho)`: the Send API body as JSON, with `to()`, `recipient()` (the BSUID, when the owner sent by BSUID) and `message_type()`, `Status(Status)`). Never reply to it |
 | `AutomaticEventDetected` (`automatic_event_detected`) | `automatic_events` | `phone_number_id`, `display_phone_number`, `detected: Box<AutomaticEvent>` |
 | `GroupUpdated` (`group_updated`) | `group_lifecycle_update`, `group_participants_update`, `group_settings_update`, `group_status_update` | `phone_number_id`, `display_phone_number`, `field`, `update: Box<GroupUpdate>` |
 | `FlowUpdated` | `flows` | `time`, `update: Box<FlowsValue>` |
@@ -42,8 +45,8 @@ field module). Payloads are boxed.
 | `Unknown` | any other, or a known field whose value did not parse | `waba_id` (the entry id; for an `account_update` that did not parse, its raw `waba_info.waba_id` when that is a non-blank string, since the entry id of such updates is a business portfolio), `field`, `time`, `raw: Value`, `parse_error: Option<String>` |
 | `Unparsed` | a signed body that is not a webhook envelope | `raw: Value`, `error: String` (no `waba_id`) |
 
-Undocumented or unavailable at 2026-09-24, so they arrive as `Unknown`:
-messaging handovers / standby, `message_echoes`, `consumer_profile`.
+Undocumented or unavailable at 2026-09-26, so they arrive as `Unknown`:
+`message_echoes`, `consumer_profile`.
 
 ## Helpers on `WebhookEvent`
 
@@ -53,7 +56,7 @@ messaging handovers / standby, `message_echoes`, `consumer_profile`.
 | `waba_id()` | `Option<&WabaId>`; `None` for `PartnerSolutionUpdated`, `Unparsed`, and an `AccountUpdated` whose `waba_info` names no WABA |
 | `phone_number_id()` | `Option<&PhoneNumberId>` when the field has one (not for fields that only carry a display number) |
 | `contact()` | `Option<&Contact>` |
-| `dedup_key()` | what `DedupGuard` keys on; `None` for `ErrorReported` and `Unparsed` |
+| `dedup_key()` | what `DedupGuard` keys on; `None` for `ErrorReported` and `Unparsed`; a standby copy's key is `standby:` plus the key of the same item outside standby |
 
 ## `Contact` (the WhatsApp user)
 

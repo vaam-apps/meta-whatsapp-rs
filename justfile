@@ -35,14 +35,16 @@ test-live:
 test-live-down:
     docker compose -f compose.test.yaml down -v
 
-# Drop what live tests left on the test Postgres: `wa_test_*` databases and
-# `wa_test_*` / `wa_server_test_*` schemas. The adapter tests drop their own,
-# when they panic too (tests/common's PgCleanup); this clears older runs and
+# Drop what live tests left on the test services: `wa_test_*` databases and
+# `wa_test_*` / `wa_server_test_*` schemas on Postgres, `wa-test:*` keys on
+# Redis. The adapter tests delete their own, when they panic too
+# (tests/common's PgCleanup and RedisCleanup); this clears older runs and
 # killed ones (SIGKILL and abort skip Drop). Uses META_WHATSAPP_RS_TEST_POSTGRES_URL
-# when set (the devcontainer's sidecar), otherwise the compose.test.yaml server.
-# Not during a live run: it would drop that run's objects too.
+# and META_WHATSAPP_RS_TEST_REDIS_URL when set (the devcontainer's sidecars),
+# otherwise the compose.test.yaml servers. Not during a live run: it would
+# delete that run's objects too.
 #
-# Drop leftover live-test databases and schemas, keeping the server up
+# Drop leftover live-test databases, schemas and keys, keeping the servers up
 test-live-clean:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -69,6 +71,21 @@ test-live-clean:
     SELECT count(*) AS left FROM leftover \gset
     \echo test-live-clean: :left left
     SQL
+    if [ -n "${META_WHATSAPP_RS_TEST_REDIS_URL:-}" ]; then
+        redis=(redis-cli -u "$META_WHATSAPP_RS_TEST_REDIS_URL")
+    else
+        redis=(docker compose -f compose.test.yaml exec -T redis redis-cli)
+    fi
+    # One script, so no key name goes through a shell or xargs.
+    deleted=$("${redis[@]}" --no-raw EVAL "
+      local n, cursor = 0, '0'
+      repeat
+        local page = redis.call('SCAN', cursor, 'MATCH', ARGV[1], 'COUNT', 1000)
+        cursor = page[1]
+        for _, key in ipairs(page[2]) do n = n + redis.call('DEL', key) end
+      until cursor == '0'
+      return n" 0 'wa-test:*')
+    echo "test-live-clean: deleted ${deleted#(integer) } Redis keys"
 
 # Formatting and clippy, warnings are errors. `.xtask` is a workspace of its
 # own (see .xtask/Cargo.toml), so it is checked by manifest path.

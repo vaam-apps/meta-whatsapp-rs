@@ -1,0 +1,24 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "time": 1743451903,
+      "changes": [
+        {
+          "value": {
+            "volume_tier_info": {
+              "tier_update_time": 1743451903,
+              "pricing_category": "UTILITY",
+              "tier": "25000001:50000000",
+              "effective_month": "2025-11",
+              "region": "India"
+            },
+            "event": "VOLUME_BASED_PRICING_TIER_UPDATE"
+          },
+          "field": "account_update"
+        }
+      ]
+    }
+  ]
+}

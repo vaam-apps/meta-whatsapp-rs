@@ -1,0 +1,17 @@
+{
+ "entry": [
+   {
+     "id": "862475293675413",
+     "time": 1768477204,
+     "changes": [
+       {
+         "value": {
+           "event": "ACCOUNT_OFFBOARDED"
+         },
+         "field": "account_update"
+       }
+     ]
+   }
+ ],
+ "object": "whatsapp_business_account"
+}

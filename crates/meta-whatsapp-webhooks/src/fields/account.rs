@@ -163,6 +163,10 @@ open_enum! {
         AccountOffboarded => "ACCOUNT_OFFBOARDED",
         /// WABA reconnected after offboarding.
         AccountReconnected => "ACCOUNT_RECONNECTED",
+        /// A sandbox number was upgraded to a verified account. Shown on
+        /// `solution-providers/manage-webhooks`; the `account_update`
+        /// reference does not list it.
+        VerifiedAccount => "VERIFIED_ACCOUNT",
     }
 }
 
@@ -243,6 +247,11 @@ pub struct ViolationInfo {
     /// Violation type (`policy-enforcement-violations` lists them), e.g. `ADULT`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub violation_type: Option<String>,
+    /// What the business can do about it. Shown on the calling warnings of
+    /// `calling/call-settings` (e.g. `USER_INITIATED_CALLS_LOW_PICKUP_RATE`);
+    /// the `account_update` reference's own example has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remediation: Option<String>,
 }
 
 /// `account_update.auth_international_rate_eligibility`.
@@ -651,6 +660,11 @@ open_enum! {
         Onboarding => "ONBOARDING",
         /// Throughput increased.
         ThroughputUpgrade => "THROUGHPUT_UPGRADE",
+        /// The number's quality was flagged. Shown on
+        /// `solution-providers/manage-webhooks` (with the deprecated
+        /// `current_limit`); the `phone_number_quality_update` reference
+        /// does not list it.
+        Flagged => "FLAGGED",
     }
 }
 

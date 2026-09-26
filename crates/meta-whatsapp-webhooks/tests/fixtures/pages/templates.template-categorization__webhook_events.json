@@ -1,0 +1,25 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "changes": [
+        {
+          "field": "account_update",
+          "value": {
+            "event": "ACCOUNT_RESTRICTION",
+            "violation_info": {
+              "violation_type": "UTILITY_TEMPLATE_ABUSE"
+            },
+            "restriction_info": [
+              {
+                "restriction_type": "RESTRICTED_UTILITY_TEMPLATES",
+                "expiration": "1750634873"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

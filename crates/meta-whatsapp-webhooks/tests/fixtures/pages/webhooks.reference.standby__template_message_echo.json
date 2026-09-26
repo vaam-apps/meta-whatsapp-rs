@@ -1,0 +1,78 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550783881",
+              "phone_number_id": "106540352242922"
+            },
+            "standby": {
+              "message_echoes": [
+                {
+                  "id": "wamid.HBgLMTY1MDU1NTEyMzQVAgASGBQzRUIwQTk4NkNGMUZCMDZERTREMAA=",
+                  "timestamp": "1750101000",
+                  "message": {
+                    "messaging_product": "whatsapp",
+                    "to": "16505551234",
+                    "recipient_type": "individual",
+                    "type": "template",
+                    "template": {
+                      "name": "summer_sale_2026",
+                      "language": { "code": "en_US" },
+                      "components": [
+                        {
+                          "type": "header",
+                          "parameters": [
+                            { "type": "image", "image": { "id": "1013859600285441" } }
+                          ]
+                        },
+                        {
+                          "type": "body",
+                          "parameters": [
+                            { "type": "text", "text": "Maria" },
+                            { "type": "text", "text": "25%" }
+                          ]
+                        },
+                        {
+                          "type": "button",
+                          "sub_type": "url",
+                          "index": 0,
+                          "parameters": [
+                            { "type": "text", "text": "summer2026" }
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "template": {
+                    "name": "summer_sale_2026",
+                    "language": "en_US",
+                    "category": "MARKETING",
+                    "components": [
+                      { "type": "HEADER", "format": "IMAGE" },
+                      { "type": "BODY", "text": "Hi {{1}}, enjoy {{2}} off!" },
+                      { "type": "FOOTER", "text": "Limited time" },
+                      {
+                        "type": "BUTTONS",
+                        "buttons": [
+                          { "type": "URL", "text": "Shop Now", "url": "https://example.com/{{1}}" }
+                        ]
+                      }
+                    ],
+                    "status": "APPROVED"
+                  }
+                }
+              ]
+            }
+          },
+          "field": "standby"
+        }
+      ]
+    }
+  ]
+}

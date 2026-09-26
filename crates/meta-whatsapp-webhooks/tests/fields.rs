@@ -201,6 +201,32 @@ fn account_update_waba_id_is_the_customers_waba_not_a_business() {
     }
 }
 
+/// `embedded-signup/app-only-install` shows `PARTNER_APP_UNINSTALLED`
+/// with no `waba_info` and `<PARTNER_BUSINESS_ID>` as the entry id: the
+/// partner app events go to the partner's business, never a WABA.
+#[test]
+fn partner_app_events_without_waba_info_name_no_waba() {
+    const PARTNER_BUSINESS: &str = "2949482758682047";
+    for event in ["PARTNER_APP_UNINSTALLED", "PARTNER_APP_INSTALLED"] {
+        let body = json!({"entry": [{
+            "id": PARTNER_BUSINESS, "time": "1748477359",
+            "changes": [{"value": {"event": event}, "field": "account_update"}]
+        }], "object": "whatsapp_business_account"});
+        let parsed = WebhookPayload::from_slice(body.to_string().as_bytes())
+            .unwrap()
+            .into_events()
+            .remove(0);
+        assert_eq!(parsed.waba_id(), None, "{event}");
+        let WebhookEvent::AccountUpdated { entry_id, .. } = &parsed else {
+            panic!("{parsed:?}")
+        };
+        assert_eq!(entry_id, PARTNER_BUSINESS, "{event}");
+        let back: WebhookEvent =
+            serde_json::from_value(serde_json::to_value(&parsed).unwrap()).unwrap();
+        assert_eq!(back, parsed, "{event}");
+    }
+}
+
 /// An `account_update` that does not parse into the typed value keeps the
 /// WABA its raw `waba_info` names, not the entry's business id.
 #[test]
@@ -370,10 +396,9 @@ fn account_update_every_example() {
     assert!(u.restriction_info[0].remediation.is_none());
 
     let u = account_update("fields/account_update_violation.json");
-    assert_eq!(
-        u.violation_info.unwrap().violation_type.as_deref(),
-        Some("ADULT")
-    );
+    let violation = u.violation_info.unwrap();
+    assert_eq!(violation.violation_type.as_deref(), Some("ADULT"));
+    assert_eq!(violation.remediation, None);
 
     let u = account_update("fields/account_update_ad_account_linked.json");
     assert_eq!(u.event, AccountUpdateEvent::AdAccountLinked);
@@ -1217,4 +1242,46 @@ fn management_dedup_keys_include_entry_time() {
     assert_eq!(at(1), at(1), "a retry is the same event");
     assert_ne!(at(1), at(2), "a re-issued notification is a new event");
     assert!(at(1).starts_with("account_review_updated:"));
+}
+
+/// `calling/call-settings`: calling warnings and enforcement come as
+/// `account_update` with a remediation next to the violation type.
+#[test]
+fn account_update_calling_warnings_carry_remediation() {
+    let u = account_update("pages/calling.call-settings__warning_webhook.json");
+    assert_eq!(u.event, AccountUpdateEvent::AccountViolation);
+    let violation = u.violation_info.unwrap();
+    assert_eq!(
+        violation.violation_type.as_deref(),
+        Some("USER_INITIATED_CALLS_LOW_PICKUP_RATE")
+    );
+    assert!(
+        violation
+            .remediation
+            .as_deref()
+            .is_some_and(|r| r.starts_with("Please identify and address"))
+    );
+
+    let u = account_update("pages/calling.call-settings__enforcement_webhook.json");
+    assert_eq!(u.event, AccountUpdateEvent::AccountRestriction);
+    assert!(u.restriction_info[0].remediation.is_some());
+}
+
+/// `solution-providers/manage-webhooks` shows two event values the
+/// reference pages do not list.
+#[test]
+fn manage_webhooks_event_values_are_known() {
+    let WebhookEvent::PhoneNumberQualityUpdated { update, .. } =
+        one("pages/solution-providers.manage-webhooks__quality_update_received.json")
+    else {
+        panic!()
+    };
+    assert_eq!(update.event, PhoneNumberQualityEvent::Flagged);
+    assert_eq!(update.display_phone_number, "124545784358810");
+
+    let u = account_update(
+        "pages/solution-providers.manage-webhooks__sandbox_number_upgraded_to_verified_account.json",
+    );
+    assert_eq!(u.event, AccountUpdateEvent::VerifiedAccount);
+    assert_eq!(u.phone_number.as_deref(), Some("124545784358810"));
 }

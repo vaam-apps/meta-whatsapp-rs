@@ -1,0 +1,47 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "366634483210360",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "phone_number_id": "436666719526789",
+              "display_phone_number": "13175551399"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "Pablo Morales",
+                  "username": "pablomorales"
+                },
+                "wa_id": "16315553602",
+                "user_id": "US.13491208655302741918",
+                "parent_user_id": "US.ENT.11815799212886844830"
+              }
+            ],
+            "calls": [
+              {
+                "id": "wacid.ABGGFjFVU2AfAgo6V-Hc5eCgK5Gh",
+                "to": "16315553601",
+                "from": "13175551399",
+                "from_user_id": "US.13491208655302741918",
+                "from_parent_user_id": "US.ENT.11815799212886844830",
+                "event": "terminate",
+                "direction": "USER_INITIATED",
+                "timestamp": "1749197480",
+                "status": "Failed",
+                "start_time": "1671644824",
+                "end_time": "1671644944",
+                "duration": 480
+              }
+            ]
+          },
+          "field": "calls"
+        }
+      ]
+    }
+  ]
+}

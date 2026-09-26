@@ -1,0 +1,20 @@
+{
+  "entry": [
+    {
+      "id": "102290129340398",
+      "time": 1750030073,
+      "changes": [
+        {
+          "value": {
+            "event": "PARTNER_CLIENT_CERTIFICATION_NEEDED",
+            "partner_client_certification_needed_info": {
+              "client_business_id": "2329417887457253"
+            }
+          },
+          "field": "account_update"
+        }
+      ]
+    }
+  ],
+  "object": "whatsapp_business_account"
+}

@@ -1,0 +1,17 @@
+{
+  "entry": [
+    {
+      "id": "2949482758682047",
+      "time": "1750030073",
+      "changes": [
+        {
+          "value": {
+            "event": "PARTNER_APP_UNINSTALLED"
+          },
+          "field": "account_update"
+        }
+      ]
+    }
+  ],
+  "object": "whatsapp_business_account"
+}

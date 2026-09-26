@@ -1,0 +1,17 @@
+{
+  "entry": [
+    {
+      "id": "102290129340398",
+      "time": 1750030073,
+      "changes": [
+        {
+          "value": {
+            "event": "ACCOUNT_RECONNECTED"
+          },
+          "field": "account_update"
+        }
+      ]
+    }
+  ],
+  "object": "whatsapp_business_account"
+}

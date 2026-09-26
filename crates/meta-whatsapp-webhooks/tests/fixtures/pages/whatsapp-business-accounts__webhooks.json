@@ -1,0 +1,21 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "time": 1604703058,
+      "changes": [
+        {
+          "field": "account_update",
+          "value": {
+            "phone_number": "16505551111",
+            "event": "ACCOUNT_VIOLATION",
+            "violation_info": {
+              "violation_type": "ALCOHOL"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
