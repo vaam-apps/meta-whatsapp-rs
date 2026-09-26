@@ -438,9 +438,11 @@ impl ErrorKind {
 
     /// Whether an automatic retry (with backoff) is reasonable.
     ///
-    /// Deliberately `false` for [`Self::EcosystemEngagementLimit`] and
-    /// [`Self::SpamRateLimited`]: Meta documents that retrying those makes
-    /// things worse.
+    /// Deliberately `false` for [`Self::EcosystemEngagementLimit`] (Meta:
+    /// resending within 24 hours only gets another error) and
+    /// [`Self::SpamRateLimited`] (a restriction on the number that time
+    /// alone does not lift: Meta's guidance is to check its quality
+    /// status in WhatsApp Manager).
     pub fn is_retryable(self) -> bool {
         matches!(
             self,
@@ -453,6 +455,7 @@ impl ErrorKind {
 
     /// Whether the error proves the request was rejected *before* any side
     /// effect, so replaying even a non-idempotent send cannot duplicate it.
+    /// The automatic resend rule built on it is `Error::may_resend`.
     pub fn is_rejected_before_processing(self) -> bool {
         matches!(self, Self::RateLimited | Self::PairRateLimited)
     }

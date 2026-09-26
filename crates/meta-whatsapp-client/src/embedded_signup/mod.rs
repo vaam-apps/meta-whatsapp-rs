@@ -454,11 +454,7 @@ impl EmbeddedSignup {
 
 /// Errors `GraphRequest` already replays for non-idempotent requests.
 fn retried_by_request(e: &Error) -> bool {
-    match e {
-        Error::Api(g) => g.kind().is_rejected_before_processing(),
-        Error::Http { status: 429, .. } => true,
-        _ => false,
-    }
+    e.may_resend()
 }
 
 /// Keep the error's class (and so its retryability) but drop any text that
