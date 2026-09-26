@@ -227,7 +227,9 @@ fn deep_nesting_is_flattened_not_a_stack_overflow() {
     assert_eq!(quotes.len(), 1);
     assert!(quotes[0].ends_with('x'));
     let long = render_on_a_worker_stack(">".repeat(50_000) + "x\n\n" + &"- ".repeat(25_000) + "y");
-    assert!(long.concat().contains('x') && long.concat().ends_with('y'));
+    assert!(long.concat().contains('x'));
+    // The quotes closed before the lists opened: the lists nest again.
+    assert!(long.concat().ends_with("• y"), "{:?}", long.last());
     // Shallow nesting keeps its structure.
     assert_eq!(
         markdown::render("> a\n>> b\n\n- one\n  - two\n    - three"),
