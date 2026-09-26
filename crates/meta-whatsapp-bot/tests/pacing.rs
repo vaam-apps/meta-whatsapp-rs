@@ -451,6 +451,11 @@ async fn a_retry_pending_when_the_wall_clock_steps_back_goes_when_due() {
     assert!(sends[N].0 < Duration::from_secs(21));
 }
 
+/// How long after `earlier` a start at `later` came (they are sorted).
+fn gap(earlier: Duration, later: Duration) -> Duration {
+    later.checked_sub(earlier).unwrap()
+}
+
 /// A `TokenBucket` that counts the slots handed back to it.
 #[derive(Debug)]
 struct Counting {
@@ -493,7 +498,7 @@ async fn a_cancel_racing_the_senders_never_puts_two_sends_in_one_slot() {
     const N: usize = 300;
     const INTERVAL: Duration = Duration::from_millis(20);
     let mut releases = 0;
-    let mut cancelled = 0;
+    let mut runs_cancelled = 0;
     for seed in 0..64_u64 {
         let clock = TokioClock::new();
         let limiter = Arc::new(Counting {
@@ -542,7 +547,7 @@ async fn a_cancel_racing_the_senders_never_puts_two_sends_in_one_slot() {
         assert_eq!(progress.sent, sent.len(), "seed {seed}");
         assert_eq!(progress.sent + progress.skipped, N, "seed {seed}");
         if report.ended == BroadcastEnd::Cancelled {
-            cancelled += 1;
+            runs_cancelled += 1;
         }
         let mut all = sent;
         all.extend(bot_starts.lock().unwrap().iter().copied());
@@ -550,9 +555,9 @@ async fn a_cancel_racing_the_senders_never_puts_two_sends_in_one_slot() {
         assert_eq!(all.len(), progress.sent + 60, "seed {seed}");
         for pair in all.windows(2) {
             assert!(
-                pair[1] - pair[0] >= INTERVAL,
+                gap(pair[0], pair[1]) >= INTERVAL,
                 "seed {seed}: two starts {:?} apart, at {:?} and {:?}",
-                pair[1] - pair[0],
+                gap(pair[0], pair[1]),
                 pair[0],
                 pair[1]
             );
@@ -561,7 +566,7 @@ async fn a_cancel_racing_the_senders_never_puts_two_sends_in_one_slot() {
     }
     // Not vacuous: the runs were cancelled with senders waiting, whose
     // slots went back.
-    assert_eq!(cancelled, 64);
+    assert_eq!(runs_cancelled, 64);
     assert!(releases > 64, "{releases} slots given back");
 }
 
@@ -600,7 +605,7 @@ async fn a_rate_set_while_thirty_two_senders_wait_takes_effect() {
         starts
             .windows(2)
             .filter(|w| w[0] >= from && w[1] < to)
-            .map(|w| w[1] - w[0])
+            .map(|w| gap(w[0], w[1]))
             .collect()
     };
     // 20 a second until the change: 50 ms apart.
@@ -628,6 +633,6 @@ async fn a_rate_set_while_thirty_two_senders_wait_takes_effect() {
     assert!(
         starts
             .windows(2)
-            .all(|w| w[1] - w[0] >= Duration::from_millis(10))
+            .all(|w| gap(w[0], w[1]) >= Duration::from_millis(10))
     );
 }
