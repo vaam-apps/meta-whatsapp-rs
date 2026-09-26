@@ -445,6 +445,16 @@ Found while writing the integrator guides and checking them against
     Swappable by the override. Roadmap L5 (the port) and L7 (the
     inbox).
 
+    **Implemented in roadmap L7** (the port in L5): `InboxSink` records
+    a `USER_INITIATED` call (`connect`, `call_created`, `terminate`), a
+    call status `ACCEPTED` and a picked-up `BUSINESS_INITIATED` call's
+    `terminate` as window events, and `Inbox::window` opens from the
+    latest of them and the last inbound message; the override is
+    `ReplyChecks::window(false)` (`Inbox::with_reply_checks`). A call
+    event without a `direction` is not recorded (the pages disagree on
+    the SDP type that would tell). The entry stays until nothing cites
+    it (see the header).
+
 33. **Message ids are unique per store, not per business number.** The
     Postgres `messages.id` is the table's primary key on its own (and the
     memory store keys by id alone). If the same message id is ever
@@ -492,6 +502,17 @@ Found while writing the integrator guides and checking them against
     makes the two event types tenant-visible in M2d (design D25).
     Swappable by the override: ownership is advisory, Meta enforces it.
     Roadmap L5 (the port), L7 (the inbox) and M2d.
+
+    **Implemented in the library by roadmap L7**: standby inbound
+    messages are window events (never history, never unread) and set
+    another app as the owner; handovers set the owner under the
+    conversation their phone number leads to (the identity links, else a
+    synced contact's BSUID, else the phone number); `Inbox::thread_owner`
+    derives this app from a later message on `messages` and idle from 24
+    hours without the customer; `Inbox::record_release` records this
+    app's own `release`; `Inbox::send` refuses a service message locally
+    while another app owns the thread, and `ReplyChecks::thread_owner(false)`
+    is the override. The service's part stays M2d.
 
 ## Service (meta-whatsapp-server)
 

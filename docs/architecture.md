@@ -787,9 +787,12 @@ Logs carry sizes, digests and field names only — never payload values.
 
 `InboxSink` (an `EventSink<WebhookEvent>`) records inbound messages,
 status updates, and coexistence echoes and history into a
-`ConversationStore`; `Inbox` (one per merchant phone
-number, built with that merchant's token) lists conversations and history,
-exposes the 24-hour `CustomerServiceWindow`, and sends replies.
+`ConversationStore`, and beside them (roadmap L7) the calls and standby
+messages that reopen the window, thread ownership under Conversation
+Routing, and the links between a customer's identities; `Inbox` (one per
+merchant phone number, built with that merchant's token) lists
+conversations and history, exposes the 24-hour `CustomerServiceWindow`
+and the thread's owner, and sends replies.
 
 - The library knows WABAs and phone numbers, not the integrator's tenants.
   Whoever builds an `Inbox` for a request first checks that the
@@ -806,8 +809,31 @@ exposes the 24-hour `CustomerServiceWindow`, and sends replies.
 - Free-form replies outside the window are refused locally
   (`ValidationError::customer_service_window_closed()`, kind
   `CustomerServiceWindowClosed`); templates and Direct Send are exempt. The
-  window is computed from recorded inbound *messages*: a customer's call,
-  which reopens it on Meta's side, is not seen (`OPEN_QUESTIONS.md` #32).
+  window opens from the latest of the recorded inbound messages and the
+  conversation's window events: the calls that reopen it on Meta's side
+  (`calling/pricing`: the customer's call, answered or not, and the
+  customer accepting the business's call) and the customer's messages
+  seen in standby, which are never history nor unread
+  (`OPEN_QUESTIONS.md` #32, #44).
+- Conversation Routing: `InboxSink` records ownership from the handovers
+  (`control_passed`: this app; `control_taken`: another app) and from
+  standby copies (another app); a handover names the customer by phone
+  number only and is recorded under the key that number leads to (the
+  identity links, else a synced contact's BSUID, else the phone number).
+  `Inbox::thread_owner` derives the rest at read time: a later message on
+  `messages` means this app owns the thread, 24 hours without the
+  customer mean it is idle; `Inbox::record_release` records this app's
+  own `release`, which no webhook reports. `Inbox::send` refuses a
+  service message locally while another app owns the thread (field
+  `thread_owner`); templates and Direct Send `utility` and
+  `authentication` need no ownership. Both local checks are advisory
+  (Meta enforces them) and `ReplyChecks` turns either off per inbox.
+- Identity links: `InboxSink` links a phone number to the BSUID an
+  inbound message carries with it, a previous BSUID to the current one
+  (`user_id_update`), and a number change's old identity to the new one
+  (a `system` message), so that `identities` and an erasure reach every
+  key of a customer; never an empty value, one with U+0000, or a value
+  to itself.
 - Statuses and revokes change only a message of the business number they
   arrived on (`update_status` takes the `phone_number_id`); a revoke also
   only a message of its direction (`ConversationStore::revoke`: a customer

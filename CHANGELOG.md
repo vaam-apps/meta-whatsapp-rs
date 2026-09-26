@@ -185,6 +185,39 @@ stored data, the owner's).
 
 ### Added
 
+- **Window events, thread ownership and identity links in the CMS inbox**
+  (roadmap L7; `OPEN_QUESTIONS.md` #32, #44), on L5's port:
+  - `InboxSink` records the calls that reopen the 24-hour window
+    (`calling/pricing`: a `USER_INITIATED` `connect`, `call_created` or
+    `terminate`; a call status `ACCEPTED`; a picked-up
+    `BUSINESS_INITIATED` call's `terminate`) and the customer's messages
+    seen in standby as window events, never as messages;
+    `Inbox::window` opens from the latest of them and the last inbound
+    message.
+  - Conversation Routing: `InboxSink` records ownership from the
+    handovers (`control_passed`, `control_taken`), under the
+    conversation the handover's phone number leads to (the identity
+    links, else a synced contact's BSUID, else the phone number), and
+    from standby copies; `Inbox::thread_owner` derives this app (a
+    later message on `messages`) and idle (24 hours without the
+    customer, `Inbox::THREAD_IDLE_AFTER`); `Inbox::record_release`
+    records this app's own `release`. `Inbox::send` refuses a service
+    message locally while another app owns the thread (a
+    `ValidationError` on field `inbox::THREAD_OWNER`,
+    `inbox::is_thread_owned_elsewhere`); templates and Direct Send
+    `utility` and `authentication` need no ownership.
+  - `inbox::ReplyChecks` and `Inbox::with_reply_checks`: the caller's
+    explicit override of either local check (the window, the owner),
+    per inbox.
+  - Identity links (`ConversationStore::link_identity`): a phone number
+    to the BSUID an inbound message carries with it, a previous BSUID to
+    the current one (`user_id_update`), a number change's old identity
+    to the new one (`system` messages); never an empty value, one with
+    U+0000, or a value to itself. `Inbox::identities`, and so an
+    erasure, now reach a customer's thread keyed by their phone number
+    from before BSUIDs.
+  - `just test-live` also runs the facade's live tests
+    (`crates/meta-whatsapp-rs/tests/inbox_events.rs` on Postgres).
 - **meta-whatsapp-bot**, a bot framework over Cloud API webhooks
   (roadmap B1), re-exported as `meta_whatsapp_rs::bot` behind the
   facade's new `bot` feature (off by default, in `full`). A `Bot` is an
@@ -722,6 +755,15 @@ stored data, the owner's).
   Use v4, which needs no `version`.
 
 ### Changed
+
+- **The CMS inbox after roadmap L7**: after a customer's call,
+  `Inbox::reply` sends free text it refused before; under Conversation
+  Routing it refuses a service message while another app owns the thread
+  (turn the check off with `ReplyChecks` in the escalation partner's
+  inbox); `InboxSink` writes an identity link for every inbound message
+  that carries both `from` and `from_user_id` (one more store write,
+  none when the link is stored), and records `calls`, `standby`,
+  `messaging_handovers` and `user_id_update` events it ignored before.
 
 - **Breaking — the `ConversationStore` port change of roadmap L5**: the
   port gains fourteen required methods and four provided ones, so a

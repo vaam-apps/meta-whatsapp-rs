@@ -503,7 +503,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     control API (L15). OPEN_QUESTIONS #33 stays open. The erasure's
     defaults and stored names wait for the owner before the first
     release ([§ Owner touchpoints](#owner-touchpoints)).
-- [ ] **L7. Window events and thread ownership in the inbox**
+- [x] **L7. Window events and thread ownership in the inbox**
   (`meta_whatsapp_rs::inbox`; OPEN_QUESTIONS #32, #44; rows 119, 139):
   `InboxSink` records the calls that reopen the 24-hour window and
   standby messages as window events (never unread), and ownership from
@@ -522,6 +522,18 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     refused locally with zero requests; after a `user_id_update`,
     `Inbox::identities` of the new BSUID holds the previous one; each
     fails when its recording is removed.
+  - **Landed:** the decisive tests and the rules they rest on run on the
+    memory store and live on Postgres
+    (`crates/meta-whatsapp-rs/tests/inbox_events.rs`; `just test-live`
+    now runs the facade's `live_` tests). The override is per inbox,
+    `ReplyChecks` (the window check and the ownership check, each on or
+    off; per call through a clone of the inbox). A handover is recorded
+    under the conversation its phone number leads to (the identity
+    links, else a synced contact's BSUID, else the phone number). The
+    ownership refusal is a `ValidationError` on field `thread_owner`,
+    kind `InvalidParameter`: an `ErrorKind` of its own would be a change
+    in `meta-whatsapp-core`, not made here. Row 139 stays partial (the
+    thread control API, L15); `conversation_context` is not stored.
 - [ ] **L8. Message and contact stores** (`meta-whatsapp-adapters`,
   features `redis` and a new `sqlite`; `meta_whatsapp_rs::inbox`; rows
   69, 111): a Redis `ConversationStore`, SQLite adapters for both ports,

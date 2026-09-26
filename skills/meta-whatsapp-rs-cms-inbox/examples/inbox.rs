@@ -1,6 +1,7 @@
 //! Reference code for the `meta-whatsapp-rs-cms-inbox` skill: the merchant's inbox —
 //! ownership check, the merchant's token, history, the 24-hour window,
-//! replies that fall back to a template, and erasing a customer.
+//! replies that fall back to a template, Conversation Routing (another
+//! app owning the thread), and erasing a customer.
 //!
 //! The full server (webhook endpoint, SSE, bearer-token tenants) is
 //! `crates/meta-whatsapp-rs/examples/cms_inbox.rs`. meta-whatsapp-rs compiles this file and runs
@@ -12,6 +13,7 @@ use std::sync::Arc;
 use meta_whatsapp_rs::client::embedded_signup::TokenVault;
 use meta_whatsapp_rs::client::messages::{MessageContent, OutboundMessage, Text};
 use meta_whatsapp_rs::core::store::{Erased, StoredMessage};
+use meta_whatsapp_rs::inbox::{ReplyChecks, is_thread_owned_elsewhere};
 use meta_whatsapp_rs::prelude::*;
 
 /// Why a request to the inbox was refused.
@@ -91,6 +93,28 @@ pub async fn quote(
     inbox.send(&key, message).await // any other recipient is refused
 }
 
+/// Free text, unless another app owns the thread under Conversation
+/// Routing (an escalation partner took it): then nothing is sent.
+pub async fn reply_unless_handled_elsewhere(
+    inbox: &Inbox,
+    contact: &str,
+    body: &str,
+) -> meta_whatsapp_rs::Result<Option<SendResponse>> {
+    let key = inbox.key(contact);
+    match inbox.reply(&key, Text::new(body).into()).await {
+        Ok(sent) => Ok(Some(sent)),
+        // Refused before any request: show "handled by another app".
+        Err(e) if is_thread_owned_elsewhere(&e) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// The designated escalation partner's inbox: its service message takes
+/// the thread (an implicit `take`), so the local ownership check is off.
+pub fn escalation_partner_inbox(inbox: Inbox) -> Inbox {
+    inbox.with_reply_checks(ReplyChecks::all().thread_owner(false))
+}
+
 /// Erase a customer on the inbox's number: every key the store connects to
 /// one of theirs (their BSUID, phone number, an earlier BSUID), in one step.
 /// Run it on each of the merchant's numbers, behind `inbox_for`'s check.
@@ -118,6 +142,17 @@ mod tests {
 
     const NUMBER: &str = "106540352242922";
     const CUSTOMER: &str = "US.13491208655302741918";
+
+    /// Deliver a webhook body to `InboxSink`, as the handler would.
+    async fn deliver(store: &Arc<dyn ConversationStore>, body: &serde_json::Value) {
+        let events =
+            meta_whatsapp_rs::webhooks::WebhookPayload::from_slice(body.to_string().as_bytes())
+                .unwrap()
+                .into_events();
+        for event in events {
+            InboxSink::new(store.clone()).deliver(event).await.unwrap();
+        }
+    }
 
     async fn record_inbound(store: Arc<dyn ConversationStore>, at: i64) {
         let body = json!({"object": "whatsapp_business_account", "entry": [{"id": "102290129340398",
@@ -204,6 +239,75 @@ mod tests {
         assert_eq!(sent["type"], "template");
         assert_eq!(sent["template"]["name"], "reopen_conversation");
         assert_eq!(transport.remaining(), 0);
+    }
+
+    /// A customer's call reopens the window (`calling/pricing`); after
+    /// `control_taken` another app owns the thread, and only the escalation
+    /// partner's inbox sends.
+    #[tokio::test]
+    async fn calls_reopen_the_window_and_another_app_can_own_the_thread() {
+        let store: Arc<dyn ConversationStore> = Arc::new(MemoryConversationStore::new());
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let metadata = json!({"display_phone_number": "15550783881", "phone_number_id": NUMBER});
+        // The customer called an hour ago (a user-initiated call's connect).
+        deliver(&store, &json!({"object": "whatsapp_business_account", "entry": [{"id": "102290129340398",
+            "changes": [{"field": "calls", "value": {"messaging_product": "whatsapp", "metadata": metadata,
+                "calls": [{"id": "wacid.1", "from": "16505551234", "from_user_id": CUSTOMER,
+                    "to": "15550783881", "event": "connect", "direction": "USER_INITIATED",
+                    "timestamp": (now - 3600).to_string()}]}}]}]}))
+        .await;
+        let transport = ScriptedTransport::new();
+        transport.push_json(200, json!({"messages": [{"id": "wamid.R1"}]}));
+        transport.push_json(200, json!({"messages": [{"id": "wamid.R2"}]}));
+        let client = Client::builder()
+            .transport(transport.clone())
+            .access_token("MERCHANT")
+            .build()
+            .unwrap();
+        let inbox = Inbox::new(client, NUMBER, store.clone());
+        let sent = reply_unless_handled_elsewhere(&inbox, CUSTOMER, "We missed your call")
+            .await
+            .unwrap();
+        assert!(sent.is_some(), "the call opened the window");
+
+        // The customer wrote; then the escalation partner took the thread.
+        // The handover names the phone number only, which the message
+        // linked to the customer's BSUID.
+        record_inbound_with_phone(&store, now - 60).await;
+        deliver(
+            &store,
+            &json!({"object": "whatsapp_business_account", "entry": [{"id": "102290129340398",
+            "changes": [{"field": "messaging_handovers", "value": {"messaging_product": "whatsapp",
+                "sender": {"phone_number": "16505551234"},
+                "recipient": {"phone_number_id": NUMBER, "display_phone_number": "15550783881"},
+                "type": "control_taken", "timestamp": (now - 30).to_string(),
+                "control_taken": {"new_owner_role": "escalation"}}}]}]}),
+        )
+        .await;
+        let refused = reply_unless_handled_elsewhere(&inbox, CUSTOMER, "Still there?")
+            .await
+            .unwrap();
+        assert!(refused.is_none());
+        assert_eq!(transport.remaining(), 1, "nothing sent for the refusal");
+        escalation_partner_inbox(inbox)
+            .reply(
+                &ConversationKey::new(NUMBER, CUSTOMER),
+                Text::new("Taking over").into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(transport.remaining(), 0);
+    }
+
+    /// An inbound message carrying the phone number and the BSUID: it
+    /// links the two (for handovers and erasures).
+    async fn record_inbound_with_phone(store: &Arc<dyn ConversationStore>, at: i64) {
+        deliver(store, &json!({"object": "whatsapp_business_account", "entry": [{"id": "102290129340398",
+            "changes": [{"field": "messages", "value": {"messaging_product": "whatsapp",
+                "metadata": {"display_phone_number": "15550783881", "phone_number_id": NUMBER},
+                "messages": [{"from": "16505551234", "from_user_id": CUSTOMER, "id": format!("wamid.p{at}"),
+                    "timestamp": at.to_string(), "type": "text", "text": {"body": "Hello?"}}]}}]}]}))
+        .await;
     }
 
     /// A message of `contact`'s conversation, sent by `from` (a BSUID).

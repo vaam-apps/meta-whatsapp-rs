@@ -31,9 +31,14 @@ merchant's browser ─ POST /inbox/{number}/reply ─► Inbox::reply ─► Met
 - Merchants connected with Embedded Signup, tokens in the `TokenVault`
   ([embedded-signup.md](embedded-signup.md)).
 - The webhook endpoint deployed and subscribed to `messages`
-  ([webhooks.md](webhooks.md)). On Meta's side nothing else is needed: the
-  inbox uses `whatsapp_business_messaging`, which merchants grant in the
-  Embedded Signup popup.
+  ([webhooks.md](webhooks.md)); also to `calls` (a customer's call reopens
+  the reply window, [section 5](#5-the-24-hour-window-in-the-ui)) and
+  `user_id_update` (BSUID changes, [section 8](#8-erasing-a-customer-and-retention)),
+  and, where the merchant's account uses Conversation Routing, to
+  `messaging_handovers` and `standby`
+  ([below](#conversation-routing-who-owns-the-thread)). On Meta's side
+  nothing else is needed: the inbox uses `whatsapp_business_messaging`,
+  which merchants grant in the Embedded Signup popup.
 - Postgres, feature `postgres` (and `axum` for the router and SSE).
 
 ## 1. Storage: Postgres and migrations
@@ -118,10 +123,15 @@ let webhook = meta_whatsapp_rs::webhooks::router(Arc::new(handler)); // public: 
 ```
 
 `InboxSink` records inbound messages, status updates, and the coexistence
-echoes and history ([below](#coexistence-the-merchant-also-uses-the-whatsapp-business-app)),
-and ignores every other event. It is idempotent on its own (known message ids and statuses
-that do not move a message forward are ignored); the dedup guard saves it
-the work. A status or a revoke only changes a message of the business
+echoes and history ([below](#coexistence-the-merchant-also-uses-the-whatsapp-business-app));
+the calls and standby messages that reopen the reply window
+([section 5](#5-the-24-hour-window-in-the-ui)); thread ownership under
+Conversation Routing ([below](#conversation-routing-who-owns-the-thread));
+and the links between a customer's identities
+([section 8](#8-erasing-a-customer-and-retention)). It ignores every other
+event. It is idempotent on its own (known message ids, window events and
+links, and statuses that do not move a message forward are ignored); the
+dedup guard saves it the work. A status or a revoke only changes a message of the business
 number it arrived on: `ConversationStore::update_status` takes the
 `phone_number_id` first, and a store of your own must match on it too
 (`meta_whatsapp_rs::adapters::store::conversation_conformance::run` checks it).
@@ -217,12 +227,25 @@ match inbox.reply(&key, content).await {
   (`Error::Validation` on field `customer_service_window`, whose `kind()` is
   `CustomerServiceWindowClosed`, like Meta's own 131047): one branch covers
   both.
-- Meta also opens the window when the customer **calls** you; the inbox only
-  sees messages, so after a call it still shows "closed" and `reply` refuses
-  free text (recording calls is [decided](../../OPEN_QUESTIONS.md#cms-inbox) 32,
-  roadmap L7, not built yet). And Meta
-  notes that, rarely, a reply inside the window is refused anyway. Keep the
-  template fallback reachable in both cases.
+- Meta also opens the window when the customer **calls** you, answered or
+  not, and when they accept your call (`calling/pricing`). `InboxSink`
+  records these as *window events*, never as messages (no history row, no
+  unread count), and `inbox.window(&key)` opens from the latest of the
+  customer's last message and the latest window event
+  ([open question](../../OPEN_QUESTIONS.md#cms-inbox) 32). Which call
+  webhooks count: a `USER_INITIATED` `connect`, `call_created` (SIP) or
+  `terminate`; a call status `ACCEPTED`; a `BUSINESS_INITIATED`
+  `terminate` with a `start_time` (the call was picked up). Not a
+  `RINGING` or `REJECTED` status, not your own call's `connect` (sent
+  before the customer answers), and not an event without a `direction`.
+  A `terminate` that arrives before its `connect` dates the call at its
+  `start_time`, or at the end of an unanswered call: the local window can
+  then close up to the ringing time later than Meta's.
+- A customer's message that reached another responder under Conversation
+  Routing (a standby copy) is a window event too
+  ([below](#conversation-routing-who-owns-the-thread)).
+- Meta notes that, rarely, a reply inside the window is refused anyway.
+  Keep the template fallback reachable.
 - Templates must be approved in the merchant's WABA, in that language;
   list them with `client.with_token(t).templates(waba_id).list(…)`.
 - `reply` addresses the contact itself (a BSUID as `recipient`, a `wa_id` as
@@ -233,6 +256,72 @@ match inbox.reply(&key, content).await {
   webhooks move it to `Sent`, `Delivered`, `Read` (never backwards). If that
   store write fails it is logged, not returned: never retry a `reply` that
   returned `Ok`, and treat a timeout as "may have been sent".
+- Both local checks only save a request Meta would refuse: Meta enforces
+  the window (131047) and thread ownership itself. `ReplyChecks` turns
+  either off, per inbox: `inbox.with_reply_checks(ReplyChecks::all().window(false))`
+  lets Meta decide on the window; for one call, use a clone (an `Inbox` is
+  cheap to clone).
+
+### Conversation Routing: who owns the thread
+
+Under Conversation Routing (`conversation-routing/*`) one responder owns
+a thread; the others may receive *standby* copies and must not answer.
+No endpoint reports the owner, so `InboxSink` keeps it from Meta's
+signals (`conversation-routing/thread-control`, "Tracking ownership"),
+and `inbox.thread_owner(&key)` says who owns the thread now (`None`
+when nothing was ever recorded: no routing):
+
+| Signal | Recorded as |
+| --- | --- |
+| a handover `control_passed` (`ThreadControlChanged`) | `ThreadOwner::ThisApp`, with the new owner's role |
+| a handover `control_taken` | `ThreadOwner::AnotherApp` (the escalation partner took it) |
+| a standby copy of the customer's message (`StandbyObserved`) | `AnotherApp`, unless a handover of that second or later is stored; and a window event, never a message |
+| a message on `messages` after the record | `ThisApp` (derived when read; nothing is written per message) |
+| your own `release` (no webhook) | call `inbox.record_release(&key)` once your `release` request succeeded: `Idle` |
+| 24 hours without the customer (`Inbox::THREAD_IDLE_AFTER`) | `Idle` (derived when read) |
+
+```rust
+use meta_whatsapp_rs::inbox::{ReplyChecks, is_thread_owned_elsewhere};
+
+match inbox.reply(&key, Text::new(body).into()).await {
+    Ok(sent) => push_to_ui(sent.message_id()),
+    // Nothing was sent: another app (the escalation partner, a Business
+    // AI) answers this customer now. A template needs no ownership.
+    Err(e) if is_thread_owned_elsewhere(&e) => show_handled_elsewhere(),
+    Err(e) => return Err(e),
+}
+// The designated escalation partner's service message takes the thread:
+// its inbox turns the ownership check off.
+let escalation = inbox.with_reply_checks(ReplyChecks::all().thread_owner(false));
+```
+
+- A handover names the customer by `sender.phone_number` only (Meta may
+  omit it: then nothing is recorded). `InboxSink` records it under the
+  conversation that number leads to: along the identity links (a number
+  whose messages carried a BSUID leads to that BSUID, and a BSUID change
+  on to the new one), else to the BSUID of a synced address book contact
+  with that number, else under the phone number itself. A phone number
+  recycled by the operator can lead to its earlier owner's conversation:
+  the check is advisory, and `ReplyChecks` turns it off. To map
+  handovers your own way, filter `ThreadControlChanged` out before
+  `InboxSink` (`FilterSink`) and call `ConversationStore::set_thread_owner`.
+- The refusal is `Error::Validation` on field `thread_owner`
+  (`meta_whatsapp_rs::inbox::THREAD_OWNER`); its `kind()` is
+  `InvalidParameter`, since Meta documents no error code of its own for
+  it: match with `is_thread_owned_elsewhere`. Templates and Direct Send
+  `utility` and `authentication` messages need no ownership
+  (`conversation-routing/thread-lifecycle`, "Sending without ownership").
+- An idle thread is not refused: the customer's next message claims it.
+  Meta refuses a service message on an idle thread too (except from the
+  escalation partner), and outside the window the window check refuses
+  it first.
+- A pass by your own app is not reported to you (the new owner gets
+  `control_passed`): until the thread control API is wrapped (roadmap
+  L15), record it with `ConversationStore::set_thread_owner`
+  (`ThreadOwner::AnotherApp`, the target role).
+- Standby echoes and receipts record nothing, and a group's standby copy
+  records no owner (the routing pages describe threads with one
+  customer).
 
 ## 6. Read receipts and typing
 
@@ -299,10 +388,13 @@ let erased = inbox.erase_all(&ids).await?; // `Erased`: counts only; log those, 
 
 `identities` follows the synced address book contacts (a contact's key,
 BSUID, parent BSUID and phone number are one person) and the identity
-links (`ConversationStore::link_identity`: a BSUID change or a number
-change; `InboxSink` records them from roadmap L7, until then your
-own sink does). Add the identities you hold yourself (the phone number
-the customer gave you). `erase_all` deletes, not hides, in one step:
+links (`ConversationStore::link_identity`), which `InboxSink` records:
+a phone number to the BSUID an inbound message carries with it (so a
+thread keyed by the phone number from before BSUIDs is found), a
+previous BSUID to the current one (`user_id_update`), and a number
+change's old identity to the new one (a `system` message), never an
+empty value. Add the identities you hold yourself (the phone number the
+customer gave you). `erase_all` deletes, not hides, in one step:
 every record under those keys (messages of every origin and revoke
 tombstones, summaries, window events, thread ownership), the synced
 contacts and identity links naming them, and the contact removals kept
@@ -377,9 +469,9 @@ yourself.
   is read, not with what the vault returns.
 - Keying customers by phone number: the `wa_id` may be absent, and a
   customer's BSUID changes when they change number (`UserIdChanged`); the
-  inbox starts a new conversation then and does not merge. Record the
-  change as an identity link (`ConversationStore::link_identity`) so an
-  erasure finds both.
+  inbox starts a new conversation then and does not merge. `InboxSink`
+  records the change as an identity link, so an erasure finds both:
+  subscribe to `user_id_update`.
 - Sending a reply with the platform's own token instead of the merchant's:
   it comes from the wrong business, or fails.
 
@@ -446,12 +538,10 @@ very large sync can take several of Meta's redeliveries to finish.
 
 ## Not recorded
 
-BSUID changes (keep them with `link_identity`, section 8); media bytes;
-calls; the contacts sync
-(`smb_app_state_sync`); every event other than messages, statuses, echoes
-and history. Handle those in your own sink if you need them. The
-`ConversationStore` can keep calls and standby messages as window events
-(`record_window_event`), thread ownership (`set_thread_owner`) and the
-synced contacts (`put_contact`) since roadmap L5; `InboxSink` records
-them from L7 and L8, and until then the window ignores calls
-([open question](../../OPEN_QUESTIONS.md#cms-inbox) 32).
+Media bytes; the contacts sync (`smb_app_state_sync`: the store keeps
+synced contacts, `put_contact`, and `InboxSink` records them from roadmap
+L8); a call's details (only the window event it opens); the standby
+owner's echoes and receipts; `conversation_context` summaries; every
+event other than messages, statuses, echoes, history, calls, standby
+copies, handovers and BSUID changes. Handle those in your own sink if
+you need them.
