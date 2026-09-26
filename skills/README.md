@@ -75,6 +75,7 @@ those names any more. Remove them (`npx skills list` shows them;
 | [`meta-whatsapp-rs-webhook-events`](meta-whatsapp-rs-webhook-events/) | what each event means and what to do with it |
 | [`meta-whatsapp-rs-live-updates`](meta-whatsapp-rs-live-updates/) | sinks, fan-out, SSE, background workers |
 | [`meta-whatsapp-rs-cms-inbox`](meta-whatsapp-rs-cms-inbox/) | the merchant ↔ customer inbox of a CMS |
+| [`meta-whatsapp-rs-bot`](meta-whatsapp-rs-bot/) | a chatbot: commands, guards, cooldowns, middleware, plugins, Markdown replies |
 | [`meta-whatsapp-rs-groups-and-calling`](meta-whatsapp-rs-groups-and-calling/) | blocking a customer, group chats, WhatsApp calls |
 
 **Business features**

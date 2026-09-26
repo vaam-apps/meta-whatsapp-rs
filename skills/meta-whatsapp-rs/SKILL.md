@@ -5,7 +5,7 @@ description: "Start here for meta-whatsapp-rs, the Rust toolkit for Meta's Whats
 
 # meta-whatsapp-rs
 
-> **Verified against meta-whatsapp-rs b7211bc1f282f873b605e7a3a1126ce4e45e5677 (2026-09-26).** On another revision, trust the code over this page (see "Versioning" below).
+> **Verified against meta-whatsapp-rs 34beecb2720bac099d769ba1b5e91072d2d5eb36 (2026-09-26).** On another revision, trust the code over this page (see "Versioning" below).
 
 meta-whatsapp-rs is a Cargo workspace for Meta's WhatsApp Business Platform: a typed
 client for the Cloud API and the Business Management API (Graph API
@@ -57,6 +57,7 @@ anyhow = "1"
 | `axum` | | `webhooks::router` (the endpoint) and `webhooks::sse` (live stream) |
 | `typst` | | `meta_whatsapp_rs::typst`: invoices, receipts, vouchers → PDF/PNG |
 | `flows-endpoint` | | WhatsApp Flows data-endpoint crypto |
+| `bot` | | `meta_whatsapp_rs::bot`: commands, guards, cooldowns, middleware, plugins, Markdown replies |
 | `full` | | all of the above |
 | `testing` | | `ScriptedTransport` for your own tests; `[dev-dependencies]` only, not in `full` (`meta-whatsapp-rs-testing`) |
 
@@ -84,6 +85,7 @@ the inbox. It leaves out `Result`: write `meta_whatsapp_rs::Result`.
 | What each webhook event means and what to do with it | `meta-whatsapp-rs-webhook-events` |
 | Fan-out, live views over SSE, background workers | `meta-whatsapp-rs-live-updates` |
 | The merchant ↔ customer chat inbox of a CMS | `meta-whatsapp-rs-cms-inbox` |
+| A bot: commands, guards, cooldowns, middleware, plugins, Markdown replies | `meta-whatsapp-rs-bot` |
 | Blocking a customer, group chats, WhatsApp calls | `meta-whatsapp-rs-groups-and-calling` |
 | Campaigns, opt-ins and opt-outs, analytics, QR codes | `meta-whatsapp-rs-marketing` |
 | Catalogs, product messages, carts | `meta-whatsapp-rs-commerce` |
@@ -142,9 +144,8 @@ own gate. On another `rev`, trust the rustdoc
 ## What meta-whatsapp-rs does not do
 
 - No tenant model, no job queue or outbox, no consent registry.
-- Not wrapped: Multi-Partner Solutions and migration intents (credit
-  lines and partner-led business verification are), payments, the
-  thread control API (its webhooks are typed)
+- Not wrapped: Multi-Partner Solutions and migration intents (credit lines and
+  partner-led business verification are), payments, the thread control API (its webhooks are typed)
   ([coverage](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/coverage.md),
   [parity](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/parity.md),
   [roadmap](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/roadmap.md)).

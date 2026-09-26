@@ -80,7 +80,8 @@ flowchart LR
   unknown fields/types parse into `Unknown { raw }`. Dedup is a lease
   (pending → done/released), not a pre-delivery marker.
 - **Typed stores are built on `KvStore`**, never as new ports: token vault,
-  OTP challenges, webhook dedup, Embedded Signup sessions. Conformance
+  OTP challenges, webhook dedup, Embedded Signup sessions, bot cooldowns
+  (`wa.bot.cooldown`, ephemeral). Conformance
   suites for adapters live in `meta_whatsapp_adapters::store::conformance`
   and `::conversation_conformance`.
 - **Facade** `crates/meta-whatsapp-rs`: re-exports, `prelude`, the CMS

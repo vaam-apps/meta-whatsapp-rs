@@ -8,6 +8,7 @@ members = [
   "crates/meta-whatsapp-webhooks",
   "crates/meta-whatsapp-adapters",
   "crates/meta-whatsapp-typst",
+  "crates/meta-whatsapp-bot",
   "crates/meta-whatsapp-rs",
   "crates/meta-whatsapp-server",
 ]
@@ -24,6 +25,7 @@ default-members = [
   "crates/meta-whatsapp-webhooks",
   "crates/meta-whatsapp-adapters",
   "crates/meta-whatsapp-typst",
+  "crates/meta-whatsapp-bot",
   "crates/meta-whatsapp-rs",
 ]
 
@@ -49,6 +51,7 @@ meta-whatsapp-webhooks = { path = "crates/meta-whatsapp-webhooks" }
 # defaults name the features they use.
 meta-whatsapp-adapters = { path = "crates/meta-whatsapp-adapters", default-features = false }
 meta-whatsapp-typst = { path = "crates/meta-whatsapp-typst" }
+meta-whatsapp-bot = { path = "crates/meta-whatsapp-bot" }
 # The facade, for binaries only: no library crate depends on it
 # (docs/architecture.md, dependency rule).
 meta-whatsapp-rs = { path = "crates/meta-whatsapp-rs", default-features = false }
@@ -93,6 +96,12 @@ base64 = "0.22"
 
 # Observability.
 tracing = "0.1"
+
+# The bot framework's Markdown → WhatsApp renderer (meta-whatsapp-bot). No
+# default features: `html` and `getopts` serve its HTML output and binary,
+# neither of which is used; what remains (bitflags, memchr, unicase) is
+# already in the tree.
+pulldown-cmark = { version = "0.13", default-features = false }
 
 # Unicode general categories (the OTP namespace refuses format characters).
 unicode-properties = { version = "0.1", default-features = false, features = ["general-category"] }

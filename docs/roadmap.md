@@ -45,7 +45,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | --- | --- |
 | 0 | this plan (parity, categories, roadmap, decisions) |
 | 1 | S1 (server core), B1 (bot framework), U4 (upstream issues) |
-| 2 | S2, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L25, which may start here and run alongside every later wave |
+| 2 | S2, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L25, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
 | 3 | S5a–S5e, S6, S7, S9 |
 | 4 | S10 (waits on the owner's answer to D20 (a)), S11, S12; M2a–M2e |
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3f; B2–B4 |
@@ -346,7 +346,7 @@ A new library crate on core, client and webhooks (never adapters or the
 facade), re-exported by the facade behind a feature. A `Bot` is an
 `EventSink`, so it plugs into `WebhookHandler` like any sink.
 
-- [ ] **B1. Commands, middleware, compile-time plugins, markdown
+- [x] **B1. Commands, middleware, compile-time plugins, markdown
   replies** (`meta-whatsapp-bot`; rows 17, 85–88): a command parser
   (prefixes, aliases, quoted arguments, button and list payloads),
   guards (private or group only, owner and banned lists behind a trait),
@@ -366,6 +366,35 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     `next` stops the handler; a 5000-character text splits into exactly
     two messages at a paragraph boundary; a sender with no `wa_id`
     (BSUID only) is served.
+  - **Landed:** rows 86–88 done in the library; row 85 partial
+    (subcommands and flags: B1b) and row 17 partial (rich replies
+    beyond text: B1c). Folder loading and hot reload stay out (D28).
+- [ ] **B1b. Subcommands and flags** (`meta-whatsapp-bot`; row 85): a
+  command's subcommands (`/order status 42` runs `status` under
+  `order`, each with its own guards, usage and help line) and flags in
+  its arguments (`--dry-run`, `--limit=5`), read from `Args` next to
+  the positional arguments. Companions: the guide's and the skill's
+  "not here yet".
+  - **After:** B1.
+  - **Decisive:** `/order status 42` runs the subcommand with `42` as
+    its only argument, and `/order` alone runs the parent; a
+    subcommand's own cooldown refuses a second run (removing its guard
+    check fails the test); a quoted `"--limit=5"` stays a positional
+    argument (removing the quote check fails the test).
+- [ ] **B1c. Rich replies beyond text** (`meta-whatsapp-bot`; row 17):
+  a reply built from Markdown and a few typed parts, sent as the
+  messages Meta documents for them: an image as an image message (by
+  link, under the renderer's URL rule), suggestions as reply buttons
+  (up to 3, `messages/interactive-reply-buttons-messages`) or a list
+  (up to 10 rows, `messages/interactive-list-messages`), product cards
+  as a product carousel; the text parts through the Markdown renderer
+  as today.
+  - **After:** B1.
+  - **Decisive:** a reply of a paragraph and an image sends a text
+    message and then an image message, in order, with the exact
+    requests asserted; three suggestions become buttons and four a list
+    (removing the count check fails the test); a `javascript:` image
+    URL is never sent.
 - [ ] **B2. Paced broadcast** (`meta-whatsapp-bot`; rows 89, 92; D29): a
   per-number rate under Meta's throughput (80 messages a second by
   default), progress, retries only when `Error::may_have_been_sent` is

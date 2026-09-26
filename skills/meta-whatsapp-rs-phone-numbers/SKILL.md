@@ -5,7 +5,7 @@ description: "Managing WhatsApp business phone numbers and their WABA with meta-
 
 # meta-whatsapp-rs-phone-numbers
 
-> **Verified against meta-whatsapp-rs ef0fe364e3a21a535238007db5276fe5ef6ce970 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 34beecb2720bac099d769ba1b5e91072d2d5eb36 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/numbers.rs](examples/numbers.rs), compiled and
 tested by meta-whatsapp-rs's own gate.
@@ -77,6 +77,9 @@ let components = ConversationalAutomationConfig::new()
     .prompts(["Where is my order?", "Opening hours"]) // at most 4 ice breakers
     .commands([BotCommand::new("track", "Track an order")]);
 ```
+
+A bot built with `meta-whatsapp-rs-bot` publishes its own commands as this
+menu: `Bot::sync_command_menu` (only `commands`, checked the same way).
 
 ## Display name, health, coexistence
 

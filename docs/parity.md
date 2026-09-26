@@ -1,8 +1,9 @@
 # Parity: Zaileys, Meta's Cloud API and meta-whatsapp-rs
 
-Verified against `main` at b6fc893 (PR #20) on 2026-09-26. Every cell
-about us was checked against the code: a cell that says a thing is done
-names the symbol that does it, and what the service
+Verified against `main` at b6fc893 (PR #20) on 2026-09-26; rows 17,
+19 and 84–88 again when the bot framework (roadmap B1) landed, against
+its code. Every cell about us was checked against the code: a cell that
+says a thing is done names the symbol that does it, and what the service
 (`meta-whatsapp-server`) does is read from its routes, not from its
 design. The plan to close the gaps is [roadmap.md](roadmap.md); the Meta
 platform categories are in [categories.md](categories.md); the
@@ -15,7 +16,7 @@ reached.
 
 | 131 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
-| Library | 86 | 23 | 21 | 1 |
+| Library | 89 | 23 | 18 | 1 |
 | Service | 39 | 24 | 67 | 1 |
 
 - The table has 155 rows. 24 of them are not counted: they work only
@@ -23,16 +24,17 @@ reached.
   n/a column is a side that does not carry the capability at all: the
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
-- Each of the library's 44 partial or gap rows is cited by a
+- Each of the library's 41 partial or gap rows is cited by a
   [roadmap](roadmap.md) item. Each of the service's 91 names, in its
   status, the roadmap items that bring it; by family (a row can name
   two): M2 8, M3 11, M4 2, M5 70, S 1 (the modular split), L 1 (L22a,
   tooling), P 2 (payments).
-- The largest gaps: the bot framework (section G: only the typed
-  message events of row 84 and the command registration with Meta of
-  row 85 exist), the service routes for the modules the design once left
-  "on demand" (M5), and the inbox, live events and onboarding over HTTP
-  (M2, M3).
+- The largest gaps: the service routes for the modules the design once
+  left "on demand" (M5), the inbox, live events and onboarding over HTTP
+  (M2, M3), and the rest of the bot framework (section G: its commands,
+  middleware, plugins, access lists and Markdown replies exist, B1;
+  subcommands and flags, rich replies beyond text, paced broadcast,
+  scheduling and auto-delete do not, B1b, B1c, B2–B4).
 
 ## What parity means
 
@@ -85,8 +87,11 @@ The owner's definition (2026-09-26):
   `adapters::` is `meta_whatsapp_adapters::`, `typst::` is
   `meta_whatsapp_typst::` (the facade `meta_whatsapp_rs` re-exports each
   under the same name), `inbox::` is `meta_whatsapp_rs::inbox::`, and
-  `server::` is `meta_whatsapp_server::`, the service's crate. A type
-  already qualified in a row is not qualified again in it. Routes are
+  `server::` is `meta_whatsapp_server::`, the service's crate. The bot
+  framework's items (`meta_whatsapp_bot::`, re-exported as
+  `meta_whatsapp_rs::bot`) are cited by type (`Command::alias`) in a
+  cell that names `meta-whatsapp-bot`. A type already qualified in a
+  row is not qualified again in it. Routes are
   the service's `/v1` API; "the send union" is its message types
   (`server::api::messages::MessageType`: text, the five media types,
   location, contacts, reaction, template, and interactive `button`,
@@ -112,7 +117,8 @@ The owner's definition (2026-09-26):
   were checked again against those pages that day: their key facts
   (limits, fields, endpoints) and every claim that something is absent,
   not each sentence.
-- **Us**: the code at b6fc893.
+- **Us**: the code at b6fc893; for rows 17, 19 and 84–88, the bot
+  framework's (B1).
 
 ## The table
 
@@ -141,9 +147,9 @@ The owner's definition (2026-09-26):
 | 14 | Messaging | @-mentions | Yes | No (dropped) | no mention object in `reference/whatsapp-business-phone-number/message-api.md` or in the groups guides (`groups/groups-messaging`) | — | — | n/a — unofficial protocol |
 | 15 | Messaging | Disappearing messages | Yes | No | not supported: `groups` lists them among the types groups do not support, `embedded-signup/onboarding-business-app-users` says coexistence turns them off in one-to-one chats, and `reference/whatsapp-business-phone-number/message-api.md` has no such option | — | — | n/a — unofficial protocol |
 | 16 | Messaging | Rich responses in Meta AI's block format | Yes (sent as a forwarded bot message) | No | undocumented format | — | — | n/a — unofficial protocol |
-| 17 | Messaging | Rich markdown responses rendered as Cloud messages: formatting, long text split, images as media, suggestions as buttons or lists, product cards as carousels | Yes (through row 16) | No | building blocks only: text (at most 4096 characters, `messages/text-messages`), media, interactive (`reference/whatsapp-business-phone-number/message-api.md`) | gap: no renderer (`meta-whatsapp-bot`, B1) | gap (the bot API, M5k) | gap / gap (M5k) |
+| 17 | Messaging | Rich markdown responses rendered as Cloud messages: formatting, long text split, images as media, suggestions as buttons or lists, product cards as carousels | Yes (through row 16) | No | building blocks only: text (at most 4096 characters, `messages/text-messages`), media, interactive (`reference/whatsapp-business-phone-number/message-api.md`) | formatting and the split, in `meta-whatsapp-bot`: `Ctx::reply_markdown` renders with a `MarkdownRenderer` (the default `Renderer`: bold, italic, strike, code, quotes, lists, links, tables as padded columns or `header: value` lines within `Renderer::table_max_width` and `Renderer::table_max_growth`) and sends messages of at most 4096 UTF-16 code units, cut between blocks. Not yet: images go out as their alt text and URL, not as media, and no suggestions become buttons or lists, nor product cards carousels (B1c) | gap (the bot API, M5k) | partial / gap (M5k) |
 | 18 | Messaging | HTML apps in the chat bubble | Partial (Android only, undocumented) | No | undocumented; the official in-chat UI is Flows (rows 60–63) | — | — | n/a — unofficial protocol |
-| 19 | Messaging | Emoji reactions | Yes | Yes | `messages/reaction-messages` | `client::messages::Messages::react`; `OutboundMessage::reaction` | type `reaction` | done / done |
+| 19 | Messaging | Emoji reactions | Yes | Yes | `messages/reaction-messages` | `client::messages::Messages::react`; `OutboundMessage::reaction`; in a bot, `Ctx::react` (the received message) | type `reaction` | done / done |
 | 20 | Messaging | Edit a sent message | Yes | No | no business-side edit in `reference/whatsapp-business-phone-number/message-api.md`; a user's edit arrives as an unsupported type (`webhooks/reference/messages/edit.md`) | inbound only: `webhooks::fields::MessageContent::Edit` | inbound only, in `message_received` events | n/a — unofficial protocol (sending an edit) |
 | 21 | Messaging | Delete (revoke) a sent message | Yes | No | no business-side delete in `reference/whatsapp-business-phone-number/message-api.md`; an inbound revoke for coexistence (`webhooks/reference/messages/revoke.md`) | inbound only: `webhooks::fields::MessageContent::Revoke`; the inbox leaves a tombstone (`core::store::ConversationStore::revoke`) | inbound only, recorded by the service's inbox | n/a — unofficial protocol (sending a revoke) |
 | 22 | Messaging | Pin a message | Yes | No | in groups only (`groups/groups-messaging`); an inbound `pin` is an unsupported type (`webhooks/reference/messages/unsupported.md`) | `OutboundMessage::pin`, `unpin`; `client::groups::Groups::pin_message` | not in the send union (`server::api::messages::MessageType`) | done / gap (M5a) |
@@ -235,11 +241,11 @@ The owner's definition (2026-09-26):
 
 | # | Area | Capability | Zaileys (Web) | Zaileys (Cloud) | Meta Cloud API | Library | Service | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 84 | Bots | Typed message events | Yes | Partial (text, media, location, contacts, reactions, button and list taps) | `webhooks/reference/messages.md` and its pages, one per type | `webhooks::WebhookEvent` (34 variants, `Unknown` and `Unparsed` included); `webhooks::fields::MessageContent` | every reviewed type on `GET /v1/events` (`server::events::TENANT_EVENT_TYPES`, 28 types); the standby, handover and click types in M2d (design D25) | done / partial (M2d) |
-| 85 | Bots | Commands: prefixes, arguments and flags, aliases, subcommands, guards (group, private, admin), cooldowns, generated help, error events | Yes | No (parse by hand) | Meta shows a command menu, but dispatch is ours: `business-phone-numbers/conversational-components`; `reference/whatsapp-business-account/conversational-automation-api.md` | registration only: `client::phone_numbers::PhoneNumber::configure_conversational_automation`, `client::phone_numbers::BotCommand`; no parser or dispatcher (`meta-whatsapp-bot`, B1) | gap (the bot API, M5k) | partial / gap (M5k) |
-| 86 | Bots | Middleware: ordered, `next()`, short-circuit, wraps the handler | Yes | No | none (ours to build) | building blocks only: `adapters::sink::FilterSink`, `FnSink`, `FanoutSink`; no chain around a handler (`meta-whatsapp-bot`, B1) | gap (M5k) | partial / gap (M5k) |
-| 87 | Bots | Plugins: setup and unload hooks; loaded from a folder with hot reload | Yes | No | none | gap: compile-time plugins with setup and unload hooks come in `meta-whatsapp-bot` (B1). Loading from a folder and hot reload are not offered: dynamic loading of Rust code is neither idiomatic nor safe, so a plugin is a crate (design D28) | gap (M5k) | gap / gap (M5k) |
-| 88 | Bots | Sender allow and deny lists (owners, banned users) | Yes | Yes | none (ours; row 71 is Meta's block list) | gap (`meta-whatsapp-bot`, B1) | gap (M5k) | gap / gap (M5k) |
+| 84 | Bots | Typed message events | Yes | Partial (text, media, location, contacts, reactions, button and list taps) | `webhooks/reference/messages.md` and its pages, one per type | `webhooks::WebhookEvent` (34 variants, `Unknown` and `Unparsed` included); `webhooks::fields::MessageContent`; in a bot, listeners by message type or event kind: `Listen::MessageType`, `Listen::Event` (a kind not in `WebhookEvent::KINDS` fails the build) | every reviewed type on `GET /v1/events` (`server::events::TENANT_EVENT_TYPES`, 28 types); the standby, handover and click types in M2d (design D25) | done / partial (M2d) |
+| 85 | Bots | Commands: prefixes, arguments and flags, aliases, subcommands, guards (group, private, admin), cooldowns, generated help, error events | Yes | No (parse by hand) | Meta shows a command menu, but dispatch is ours: `business-phone-numbers/conversational-components`; `reference/whatsapp-business-account/conversational-automation-api.md` | in `meta-whatsapp-bot`: prefixes (`PrefixParser`, `BotBuilder::prefixes`; names case-insensitive by default), aliases (`Command::alias`), arguments split on whitespace with quoted strings kept whole (`Args::parse`), image and video captions (`BotBuilder::commands_from_captions`), reply buttons, list rows and quick-reply buttons by payload (`Command::payload`), usage hints and metadata (`Command::usage`, `Command::metadata`), guards (`Command::private_only`, `Command::group_only`, `Command::owner_only`: Meta's group info lists participants by `wa_id` alone, with no role, so the bot's owners stand in for Zaileys' group admins), per-user cooldowns (`Command::cooldown`, `KvCooldowns` on `KvStore`), a generated help (`BotBuilder::help_command`, `CategoryHelp`), an unknown-command hook (`BotBuilder::unknown_command`), error events (`ErrorHandler`, `BotBuilder::errors`), and Meta's command menu (`Bot::sync_command_menu`, over `client::phone_numbers::PhoneNumber::configure_conversational_automation`). Not yet: subcommands and `--flag` arguments (B1b) | gap (the bot API, M5k) | partial / gap (M5k) |
+| 86 | Bots | Middleware: ordered, `next()`, short-circuit, wraps the handler | Yes | No | none (ours to build) | `Middleware` in `meta-whatsapp-bot`, run in registration order (`BotBuilder::middleware`, `Registrar::middleware`) with `Next::run`: one that does not call it stops the event, and what follows the call runs after the handler (`Logging` times it); built in: `Logging`, `MarkRead`. Unlike Zaileys', it runs for every event, after the ban and the command match and before the command's guards | gap (M5k) | done / gap (M5k) |
+| 87 | Bots | Plugins: setup and unload hooks; loaded from a folder with hot reload | Yes | No | none | compile-time plugins in `meta-whatsapp-bot`: `Plugin::setup` registers commands, middleware and listeners through a `Registrar`, `Plugin::on_unload` runs at `Bot::unload`, `Plugin::category` names the help section; added with `BotBuilder::plugin`. Loading from a folder and hot reload are not offered, by design (D28): dynamic loading of Rust code is neither idiomatic nor safe, so a plugin is a crate | gap (M5k) | done / gap (M5k) |
+| 88 | Bots | Sender allow and deny lists (owners, banned users) | Yes | Yes | none (ours; row 71 is Meta's block list) | in `meta-whatsapp-bot`: an `AccessPolicy` (the default `AccessList`: owners and bans by BSUID, `AccessList::owner`, `AccessList::ban`, or by phone number, `AccessList::owner_phone`, `AccessList::ban_phone`), set with `BotBuilder::access`; a banned sender's message stops before the command match and the middleware (`Refusal::Banned`), and owners pass `Command::owner_only` | gap (M5k) | done / gap (M5k) |
 | 89 | Bots | Broadcast with pacing (progress, retries) | Yes (5 a second by default) | No (throws) | limits to respect: `throughput.md` (80 messages a second per number by default), the pair limit (131056, `support/error-codes.md`), `templates/marketing-templates/per-user-limits.md`, `messaging-limits` | gap: `RetryPolicy` handles a throttle, nothing paces a batch (`meta-whatsapp-bot`, B2; design D29) | gap (M5k) | gap / gap (M5k) |
 | 90 | Bots | Scheduled messages: send at a time, cancel, survive restarts, retry | Yes | No (fails when due) | Meta's WABA campaign schedules, reference only (`reference/whatsapp-business-account/schedules-api.md`; its `audience_id` is explained nowhere in the mirror) | gap: durable jobs, a typed store on `KvStore` (`meta-whatsapp-bot`, B3; design D29); Meta's schedules API not wrapped (L10b) | gap (M5k) | gap / gap (M5k) |
 | 91 | Bots | Auto-delete stored messages (by age, a cap per chat) | Yes | No ("not yet" on the Cloud API) | none (local data) | gap: `core::store::ConversationStore` has no retention or erasure (L5 and design D10; `meta-whatsapp-bot`, B4) | gap: the outbox purges after 7 days (`server::events::DEFAULT_OUTBOX_RETENTION`); the inbox keeps everything (retention per store: M2a; the bot's auto-delete over HTTP: M5k) | gap / gap (M2a, M5k) |
@@ -332,10 +338,12 @@ item, each naming its crate, what it comes after and its decisive test:
   target) and the sqlx store kept, MongoDB later. Row 112, and the
   ground every service milestone below builds on.
 - **The bot framework**, a new library crate `meta-whatsapp-bot`:
-  commands, middleware, compile-time plugins and markdown replies (B1;
-  rows 17, 85–88), then paced broadcast and durable scheduling (B2, B3;
-  rows 89, 90, 92; D29), then retention and auto-delete after the
-  `ConversationStore` port change (B4, after L5; row 91).
+  commands, middleware, compile-time plugins and markdown replies (B1,
+  done; rows 17, 85–88), subcommands and flags (B1b; row 85), rich
+  replies beyond text (B1c; row 17), then paced broadcast and durable
+  scheduling (B2, B3; rows 89, 90, 92; D29), then retention and
+  auto-delete after the `ConversationStore` port change (B4, after L5;
+  row 91).
 - **Library gap batches** (L4–L25), by crate and topic: every library
   partial or gap row not in the bot framework or payments.
 - **Service milestones**: M2a–M2e (inbox, SSE, webhooks-out, D25),

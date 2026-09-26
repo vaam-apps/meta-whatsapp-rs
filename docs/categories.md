@@ -4,7 +4,8 @@ The areas of Meta's WhatsApp Business Platform, grouped as Meta groups
 its docs (the directory tree of its documentation), and what
 meta-whatsapp-rs implements in each: in the library, and in the service
 (`meta-whatsapp-server`).
-Verified against `main` at b6fc893 (PR #20) on 2026-09-26. The
+Verified against `main` at b6fc893 (PR #20) on 2026-09-26, category 40
+again when the bot framework (roadmap B1) landed. The
 per-feature detail is in [coverage.md](coverage.md) (the linked rows);
 the capability-level comparison with Zaileys is in [parity.md](parity.md)
 (the rows named); the plan is [roadmap.md](roadmap.md).
@@ -34,7 +35,7 @@ by reference only (36, 37), and 3 are our own (38–40).
   **(nm)** marks a page the mirror cannot fetch, as in
   [parity.md](parity.md#how-to-read-the-table).
 - **Coverage rows** link to the rows of [coverage.md](coverage.md); every
-  one of its rows 1–33 appears at least once.
+  one of its rows 1–34 appears at least once.
 
 ## The table
 
@@ -79,7 +80,7 @@ by reference only (36, 37), and 3 are our own (38–40).
 | 37 | Scheduled campaigns (Meta's side) | `reference/whatsapp-business-account/schedules-api.md` | none | none | — | 90 | gap / gap (M5k) | reference only; the audience id is explained nowhere in the mirror |
 | 38 | Documents (ours, not Meta's) | none | `meta-whatsapp-typst`: invoices, receipts, vouchers to PDF or PNG | the documents route in M4 | [23](coverage.md#row-23) | 118 | done / gap (M4) | — |
 | 39 | CMS inbox, adapters, the HTTP service (ours) | none | the inbox with a 24-hour window check; memory, Postgres and Redis key/value stores; memory and Postgres conversation stores; sinks; the reqwest transport | M1 (M1a–M1c) shipped; inbox routes in M2a, SSE and webhooks-out in M2b and M2c; the swappable backends and their conformance in S1, S3 and S4 (D26) | [26](coverage.md#row-26), [27](coverage.md#row-27), [33](coverage.md#row-33) | 10, 110–112, 119 | partial / partial (M2a, M2b, M2c, S1, S3, S4) | no Redis or SQLite conversation store, no MongoDB adapters yet |
-| 40 | Bot framework (ours; Zaileys parity) | none | building blocks only: command registration with Meta (parity row 85) and composable sinks (row 86); commands, middleware, compile-time plugins, markdown replies, paced broadcast and scheduling are `meta-whatsapp-bot` (B1–B4) | the bot and broadcast APIs in M5k; retention per store in M2a | — | 17, 85–92 | partial / gap (M2a, M5k) | hot reload is not offered (design D28) |
+| 40 | Bot framework (ours; Zaileys parity) | none | `meta-whatsapp-bot` (B1): commands with prefixes, aliases, quoted arguments, captions, payloads, usage hints and metadata; guards (private or group only, owners, banned senders, cooldowns on `KvStore`); a generated help and Meta's command menu (`Bot::sync_command_menu`); middleware (`Middleware`, `Next`); compile-time plugins (`Plugin`); listeners by message type or event kind (`Listen`); reactions (`Ctx::react`); Markdown replies (`Ctx::reply_markdown`). To come: subcommands and flags (B1b), rich replies beyond text (B1c), paced broadcast and scheduling (B2, B3), auto-delete (B4) | the bot and broadcast APIs in M5k; retention per store in M2a | [34](coverage.md#row-34) | 17, 85–92 | partial / gap (M2a, M5k) | hot reload is not offered (design D28); Meta's group info gives participants no role, so owners stand in for Zaileys' group admins |
 
 ## How to keep this true
 

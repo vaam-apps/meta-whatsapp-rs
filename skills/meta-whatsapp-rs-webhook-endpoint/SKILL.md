@@ -5,7 +5,7 @@ description: "The WhatsApp webhook endpoint with meta-whatsapp-rs - WebhookHandl
 
 # meta-whatsapp-rs-webhook-endpoint
 
-> **Verified against meta-whatsapp-rs b7211bc1f282f873b605e7a3a1126ce4e45e5677 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 34beecb2720bac099d769ba1b5e91072d2d5eb36 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/endpoint.rs](examples/endpoint.rs), compiled and
 tested by meta-whatsapp-rs's own gate (axum through `tower::ServiceExt::oneshot`,
@@ -137,4 +137,5 @@ Keep sink calls well under the lease (`.with_lease(d)` to change it).
 
 `meta-whatsapp-rs-webhook-events` (the events), `meta-whatsapp-rs-live-updates` (sinks),
 `meta-whatsapp-rs-cms-inbox`, `meta-whatsapp-rs-storage` (the dedup store), `meta-whatsapp-rs-testing`
-(signed fixtures), `meta-whatsapp-rs-phone-numbers` (subscriptions and overrides).
+(signed fixtures), `meta-whatsapp-rs-phone-numbers` (subscriptions and overrides),
+`meta-whatsapp-rs-bot` (a `Bot` is a sink: commands, middleware, plugins).

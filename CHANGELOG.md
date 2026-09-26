@@ -185,6 +185,60 @@ stored data, the owner's).
 
 ### Added
 
+- **meta-whatsapp-bot**, a bot framework over Cloud API webhooks
+  (roadmap B1), re-exported as `meta_whatsapp_rs::bot` behind the
+  facade's new `bot` feature (off by default, in `full`). A `Bot` is an
+  `EventSink<WebhookEvent>` behind `WebhookHandler` that takes each event
+  through, in order: the ban check (a banned sender's message stops
+  there: no middleware, read receipt or typing indicator); the command
+  match (configurable prefixes, names and aliases compared as the
+  parser normalizes them, case-insensitive by default, whitespace-split
+  arguments with quoted strings; image and video captions, unless
+  `BotBuilder::commands_from_captions(false)`; reply buttons, list rows
+  and template quick-reply buttons whose id is a registered payload; a
+  name no command has is kept for an unknown-command handler); the
+  middleware, which see the match (`Logging`, which logs kinds and
+  durations but never content, senders or error text, and `MarkRead`, a
+  read receipt with an optional typing indicator); then the command's
+  guards (private-only and group-only, owner-only, and per-user
+  cooldowns kept in the `KvStore` under `wa.bot.cooldown`, checked last
+  and told once per period) and its handler, else the listeners
+  (received messages, one message type, an event kind checked against
+  `WebhookEvent::KINDS`, or everything). Senders are keyed by BSUID
+  first; replies quote the message and go to the group, the BSUID or
+  `+<wa_id>`; `Ctx::react` reacts. Plugins are compiled in
+  (`Plugin::setup`, `Plugin::on_unload` at `Bot::unload`; no hot
+  reload), each with a category for the generated help (`/help`, with
+  usage hints; its name, description, format and default category
+  configurable); `Bot::sync_command_menu` publishes the visible commands
+  as Meta's command menu within the client's limits.
+  `Ctx::reply_markdown` converts Markdown to WhatsApp formatting and
+  splits it into messages of at most 4096 UTF-16 code units between
+  blocks, never inside a code block that fits. A table is padded
+  columns while a padded row fits 60 characters, else one
+  `header: value` line per cell, and either only while it is at most
+  twice the table's unpadded rows or one message, else those rows
+  (`Renderer::table_max_width`, `Renderer::table_max_growth`): one wide
+  cell cannot multiply the messages a reply sends. The parser, access
+  list, cooldown store, refusals, error handling, outbound, Markdown
+  rules and help format are traits with defaults (`CommandParser`,
+  `AccessPolicy`, `Cooldowns`, `Refusals`, `ErrorHandler`, `Outbound`,
+  `MarkdownRenderer`, `HelpFormatter`), each also accepted as an `Arc`;
+  the `async_trait` attribute is re-exported. A handler's error is
+  logged and acknowledged by default (`LogErrors`; `PropagateErrors`
+  lets Meta redeliver); after `Bot::unload`, events fail with
+  `SinkError::Closed`. The cooldown namespaces are stable identifiers
+  (docs/architecture.md § Stable identifiers). New dependency:
+  `pulldown-cmark` 0.13 (MIT, no default features). Guide:
+  [docs/guides/bots.md](docs/guides/bots.md); skill:
+  `meta-whatsapp-rs-bot`. Not yet: subcommands and flags, rich replies
+  beyond text, paced broadcasts, scheduling and auto-delete (roadmap
+  B1b, B1c, B2–B4).
+- `meta_whatsapp_client::messages::TEXT_BODY_MAX_CHARS` (4096, the text
+  limit the client already checked) and `WebhookEvent::KINDS` (every
+  value `WebhookEvent::kind` returns), for the bot framework. Both are
+  additions: the bot framework changes nothing that the crates already
+  on `main` offered, so it brings no breaking change.
 - **Planning docs** (no code): [docs/parity.md](docs/parity.md), the
   capability table against Zaileys and Meta's Cloud API (155 rows);
   [docs/categories.md](docs/categories.md), Meta's platform categories

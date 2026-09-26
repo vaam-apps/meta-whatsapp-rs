@@ -471,6 +471,46 @@ pub enum WebhookEvent {
 }
 
 impl WebhookEvent {
+    /// Every value [`Self::kind`] returns, in the order of its variants: to
+    /// check a kind named in configuration (a listener's, a filter's) when
+    /// it is read rather than never matching.
+    pub const KINDS: &'static [&'static str] = &[
+        "message_received",
+        "status_updated",
+        "error_reported",
+        "message_echoed",
+        "history_synced",
+        "app_state_synced",
+        "call_updated",
+        "call_status_updated",
+        "user_preference_changed",
+        "user_id_changed",
+        "user_action_reported",
+        "thread_control_changed",
+        "standby_observed",
+        "automatic_event_detected",
+        "group_updated",
+        "flow_updated",
+        "account_alert",
+        "account_review_updated",
+        "account_updated",
+        "account_settings_updated",
+        "business_capability_updated",
+        "business_username_updated",
+        "partner_solution_updated",
+        "payment_configuration_updated",
+        "phone_number_name_updated",
+        "phone_number_quality_updated",
+        "security_updated",
+        "template_components_updated",
+        "template_quality_updated",
+        "template_status_updated",
+        "template_category_updated",
+        "template_category_misuse_detected",
+        "unknown",
+        "unparsed",
+    ];
+
     /// Stable snake-case name of the variant; equals the serialized `event` tag.
     pub fn kind(&self) -> &'static str {
         match self {
@@ -1306,6 +1346,46 @@ mod tests {
             parse_error: None,
         };
         assert_eq!(serde_json::to_value(&e).unwrap()["event"], e.kind());
+    }
+
+    /// `KINDS` is `kind()`'s arms, in order: read from this file's source
+    /// the way `meta-whatsapp-server`'s `every_library_event_type_is_classified`
+    /// reads it (`kind()` has no catch-all arm, so its arms are every
+    /// variant). The fixtures sweep (`tests/fixtures.rs`) checks the kinds
+    /// real events report.
+    #[test]
+    fn kinds_lists_every_arm_of_kind_in_order() {
+        let source = include_str!("event.rs");
+        let body = source
+            .split("pub fn kind(&self) -> &'static str {")
+            .nth(1)
+            .and_then(|rest| rest.split("\n    }\n").next())
+            .expect("WebhookEvent::kind");
+        let arms: Vec<&str> = body
+            .split("=> \"")
+            .skip(1)
+            .map(|rest| &rest[..rest.find('"').unwrap()])
+            .collect();
+        assert!(arms.len() >= 34, "{arms:?}");
+        assert_eq!(WebhookEvent::KINDS, arms.as_slice());
+        let unique: std::collections::BTreeSet<_> = WebhookEvent::KINDS.iter().collect();
+        assert_eq!(unique.len(), WebhookEvent::KINDS.len());
+        // And for the two variants built here, the kind is listed.
+        for e in [
+            WebhookEvent::Unparsed {
+                raw: json!("x"),
+                error: "e".into(),
+            },
+            WebhookEvent::Unknown {
+                waba_id: "1".into(),
+                field: "f".into(),
+                time: None,
+                raw: json!({}),
+                parse_error: None,
+            },
+        ] {
+            assert!(WebhookEvent::KINDS.contains(&e.kind()), "{}", e.kind());
+        }
     }
 
     #[test]
