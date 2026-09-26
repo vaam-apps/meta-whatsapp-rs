@@ -932,6 +932,24 @@ mod tests {
         assert_eq!(log.admit(Rejection::Unsigned), None);
     }
 
+    /// The numbers docs/design/server.md (sections 2.3 and 6) and the guide
+    /// state. The behaviour tests time themselves by these constants (a
+    /// test stepping `KEYLESS_DEDUP_WINDOW` passes whatever the window
+    /// is), so only this pins their values. Decisive: each value.
+    #[test]
+    fn the_pipelines_numbers_are_the_designs() {
+        assert_eq!(MAX_WEBHOOK_BODY_BYTES, 3 * 1024 * 1024, "3 MiB");
+        assert_eq!(MAX_DELIVERIES_IN_FLIGHT, 64);
+        assert_eq!(BODY_READ_TIMEOUT, Duration::from_secs(15));
+        assert_eq!(MAX_DELIVERIES_RECORDING, 4);
+        assert_eq!(RECORDING_WAIT, Duration::from_secs(10));
+        assert_eq!(KEYLESS_DEDUP_WINDOW, Duration::from_hours(1), "an hour");
+        assert_eq!(RejectionLog::EVERY, Duration::from_mins(1), "a minute");
+        assert_eq!(DEFAULT_OUTBOX_RETENTION, Duration::from_hours(7 * 24));
+        assert_eq!(HOUSEKEEPING_INTERVAL, Duration::from_mins(10));
+        assert_eq!(MAX_PAGE_DATA_BYTES, 8 * 1024 * 1024, "8 MiB");
+    }
+
     /// The two lists split the library's kinds: none is both.
     #[test]
     fn tenant_and_operator_types_are_disjoint() {
