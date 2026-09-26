@@ -1,6 +1,6 @@
 # Paced broadcasts
 
-> **Verified against meta-whatsapp-rs 35b6739412169ab3ab43bfcacea133295362cb9a (2026-09-26).** Also checked against Meta's
+> **Verified against meta-whatsapp-rs fabab0ba46316335b638f505eb3f6ee20a5e1451 (2026-09-26).** Also checked against Meta's
 > `throughput`, `about-the-platform` (pair rate limits), `support/error-codes`,
 > `templates/marketing-templates/per-user-limits` and `messaging-limits` pages
 > as mirrored on 2026-09-24.
