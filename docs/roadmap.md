@@ -30,9 +30,9 @@ an item below. Written against `main` at b6fc893 (PR #20).
 | --- | --- |
 | 0 | this plan (parity, categories, roadmap, decisions) |
 | 1 | S1 (server core), B1 (bot framework) |
-| 2 | S2, S3, S4; U1–U3 in the cratestack repository; library batches L7–L23 may start here and run alongside every later wave |
+| 2 | S2, S3, S4; U1–U3 in the cratestack repository; L5 (M2 needs its retention and L7 lands beside it); library batches L4 and L7–L23 may start here and run alongside every later wave |
 | 3 | S5–S9 (CrateStack adoption, the default flip last, gated on U1); M2 |
-| 4 | M3; B2, B3; L5, then B4 |
+| 4 | M3; B2, B3; B4 (after L5) |
 | 5 | M4; M5 route families |
 | 6 | S10–S12 (MongoDB) |
 | last | P1, P2 (payments) |
@@ -241,9 +241,11 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   an app's solutions and connected client businesses) and migration
   intents. *Decisive:* exact JSON per endpoint; the solution token never
   reaches `Debug` (a sentinel test).
-- [ ] **L13. Marketing** (rows 137, 138; `client::marketing`): max price
+- [ ] **L13. Marketing** (rows 137, 138, 154; `client::marketing`): max price
   (its agreement, the partner allow list, duplicating a template at
-  another price), reach estimates and CTWA welcome message sequences. Calling the
+  another price), reach estimates and CTWA welcome message sequences,
+  and a typed send-time parameter for a GIF header (read Meta's send
+  syntax first: no mirrored page shows it). Calling the
   agreement endpoint signs Meta's beta agreement: the library exposes
   it, and whether a deployment calls it is the integrator's (legal)
   decision, like OPEN_QUESTIONS #26. *Decisive:* exact JSON per
@@ -298,10 +300,13 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   `doctor` check (configuration, webhook subscription fields, token
   reach) in the service's CLI. *Decisive:* `doctor` reports each
   scripted misconfiguration by name and exits non-zero.
-- [ ] **L23. Template groups** (row 153; `client::templates`): create,
-  read, update and delete, after reading the reference Meta's changelog
-  links (its guide is not in Meta's page list). *Decisive:* exact JSON;
-  a group id is checked as digits before any request.
+- [ ] **L23. Template groups and archiving** (rows 101, 153;
+  `client::templates`): template groups' create, read, update and
+  delete, after reading the reference Meta's changelog links (its guide
+  is not in Meta's page list); archiving and unarchiving in bulk, after
+  reading the endpoints `templates/template-management` points to (the
+  mirrored `templates/template-archival` shows none). *Decisive:* exact
+  JSON; a group id is checked as digits before any request.
 
 ## 4. Service milestones
 
@@ -310,8 +315,8 @@ routes call core services and run against every backend the
 conformance suite covers. The acceptance tests M2.1–M4.3 are the
 design's (§9).
 
-- [ ] **M2. Inbox, live updates, webhooks out** (rows 10, 45, 91, 111,
-  119, 137 and 139's events): inbox routes filtered by the number's
+- [ ] **M2. Inbox, live updates, webhooks out** (rows 10, 45, 84, 91,
+  111, 119, 137 and 139's events): inbox routes filtered by the number's
   binding epoch; SSE through an `EventNotifier` port (Postgres
   `LISTEN/NOTIFY`, memory broadcast; resume by `Last-Event-ID`);
   `GET /v1/events/{id}`; webhook endpoints, dispatcher and retries
@@ -343,19 +348,20 @@ design's (§9).
     56, 57, 59, 60, 104): pin, request contact info, Direct Send,
     interactive carousels, voice call, location request, address, call
     permission request, Flow, product messages.
-  - [ ] M5b. Templates (rows 95, 96, 99, 100, 153): edit, library,
-    migrate, compare, unpause, template groups, the shapes refused
-    today.
+  - [ ] M5b. Templates (rows 95, 96, 99, 100, 101, 153): edit, library,
+    migrate, compare, unpause, archive and unarchive, template groups,
+    the shapes refused today.
   - [ ] M5c. Numbers, profile, WABAs, accounts (rows 47, 48, 64–66,
-    126–133, 140, 148, 151, 152): resumable upload, conversion on upload (L19),
-    the profile picture, display name, settings, username, and the
-    endpoints L9, L10 and L16 add.
+    109, 126–133, 140, 148, 151, 152): resumable upload, conversion on upload (L19),
+    the profile picture, display name, settings, username, the messaging
+    limit tier on `GET /v1/numbers/{pn}`, and the endpoints L9, L10 and
+    L16 add.
   - [ ] M5d. Flows (rows 61, 62): management and the data endpoint.
   - [ ] M5e. Calling (rows 74, 75, 134, 135).
   - [ ] M5f. Groups (rows 76–79, 81).
   - [ ] M5g. Commerce, QR codes, analytics, block users (rows 71, 102,
     103, 106, 107).
-  - [ ] M5h. Marketing Messages API and CTWA (rows 136–138).
+  - [ ] M5h. Marketing Messages API and CTWA (rows 136–138, 154).
   - [ ] M5i. In-App Signup (row 125): built, and enabled per deployment
     only once the owner has answered OPEN_QUESTIONS #26 (accepting
     Meta's terms).
