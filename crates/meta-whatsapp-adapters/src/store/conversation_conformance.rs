@@ -2796,8 +2796,12 @@ async fn an_erasure_redacts_or_deletes_the_persons_group_messages<S: Conversatio
             ..run.msg(&key.contact, local, Direction::Inbound, secs, &text)
         }
     };
-    // Before BSUIDs: `from` alone.
-    let x0 = from(&r, &group, "x0", 0, None);
+    // Before BSUIDs: `from` alone; an error recorded on it too, which a
+    // redaction drops.
+    let x0 = StoredMessage {
+        error: Some(serde_json::json!({"code": 131_051, "title": "their error"})),
+        ..from(&r, &group, "x0", 0, None)
+    };
     let p1 = StoredMessage {
         payload: serde_json::json!({"from": "16505550002", "from_user_id": "US.2",
             "group_id": group.contact, "type": "text", "text": {"body": "hello all"}}),
@@ -2809,6 +2813,13 @@ async fn an_erasure_redacts_or_deletes_the_persons_group_messages<S: Conversatio
             "type": "text", "text": {"body": "welcome"}}),
         ..r.msg(&group.contact, "b2", Direction::Outbound, 2, "welcome")
     };
+    // Another participant, at the reply's second: the latest message left
+    // once theirs go, by `(timestamp, id)` (`p2` sorts after `b2`).
+    let p2 = StoredMessage {
+        payload: serde_json::json!({"from": "16505550002", "from_user_id": "US.2",
+            "group_id": group.contact, "type": "text", "text": {"body": "me too"}}),
+        ..r.msg(&group.contact, "p2", Direction::Inbound, 2, "me too")
+    };
     let x4 = from(&r, &group, "x4", 4, Some("US.9"));
     let placeholder = StoredMessage {
         kind: StoredMessage::MEDIA_PLACEHOLDER.to_owned(),
@@ -2817,7 +2828,7 @@ async fn an_erasure_redacts_or_deletes_the_persons_group_messages<S: Conversatio
     };
     let x5 = from(&r, &quiet, "x5", 5, Some("US.9"));
     let own = from(&r, &r.key("US.9"), "own", 6, Some("US.9"));
-    for m in [&x0, &p1, &b2, &x4, &placeholder, &own] {
+    for m in [&x0, &p1, &b2, &p2, &x4, &placeholder, &own] {
         assert!(store.append(m.clone()).await.unwrap(), "{}", m.id);
     }
     // Synced history keeps its sender too.
@@ -2832,6 +2843,9 @@ async fn an_erasure_redacts_or_deletes_the_persons_group_messages<S: Conversatio
     );
     let theirs = from(&other, &other.key("HBgGROUP1"), "x", 4, Some("US.9"));
     assert!(store.append(theirs.clone()).await.unwrap());
+    // Another number's conversation of the same group id.
+    let theirs_summary = summary(store, &other.key("HBgGROUP1")).await;
+    assert!(theirs_summary.is_some());
     let history = store.messages(&group, None, 10).await.unwrap();
     let group_summary = summary(store, &group).await.unwrap();
     let quiet_summary = summary(store, &quiet).await.unwrap();
@@ -2871,12 +2885,12 @@ async fn an_erasure_redacts_or_deletes_the_persons_group_messages<S: Conversatio
         assert_eq!(
             summary(store, &group).await,
             Some(ConversationSummary {
-                last_message_at: b2.timestamp,
-                last_text: b2.text.clone(),
+                last_message_at: p2.timestamp,
+                last_text: p2.text.clone(),
                 ..group_summary
             }),
-            "the summary follows the latest remaining message, never the tombstone; the \
-             window and the unread count stay"
+            "the summary follows the latest remaining message by (timestamp, id), never the \
+             tombstone; the window and the unread count stay"
         );
         assert_eq!(
             summary(store, &quiet).await,
@@ -2937,6 +2951,11 @@ async fn an_erasure_redacts_or_deletes_the_persons_group_messages<S: Conversatio
         store.message(&other.pn, &theirs.id).await.unwrap(),
         Some(theirs),
         "the same person in another number's group stays"
+    );
+    assert_eq!(
+        summary(store, &other.key("HBgGROUP1")).await,
+        theirs_summary,
+        "and so does that group's summary"
     );
     assert!(
         store
