@@ -69,14 +69,17 @@
 //!     the erasure took its snapshot left the message behind, its summary
 //!     deleted (the erasure waited for the summary row and deleted the
 //!     appended version). An append that waits on the lock is recorded
-//!     after the erasure, with a summary of its own.
+//!     after the erasure, with a summary of its own. The cost: while an
+//!     erasure deletes, appends to its business number wait (every
+//!     contact's: the lock is per number, so that a history chunk takes one
+//!     lock per number rather than one per contact).
 //!   - the **purge lock**, `('wa_conversations'::regclass::oid::int4, 0)`:
 //!     `purge_before` takes it exclusive, `erase` shared, before the number
 //!     lock. Two purges, or a purge and an erasure, would otherwise take
 //!     the same rows' locks in the orders of their plans (the `ts` index
 //!     oldest first, the conversation's index newest first, a sequential
-//!     scan by position), and deadlock. Purges run one at a time; erasures
-//!     beside each other.
+//!     scan by position), and deadlock. Purges run one at a time;
+//!     erasures of different numbers beside each other.
 //!
 //!   The deletion itself is one statement: five `DELETE`s in
 //!   data-modifying CTEs over one snapshot, the messages first. The other
