@@ -122,30 +122,42 @@ volumes (Claude config, shell history, cargo caches) start empty
 - **meta-whatsapp-bot**, a bot framework over Cloud API webhooks,
   re-exported as `meta_whatsapp_rs::bot` behind the facade's new `bot`
   feature (off by default, in `full`). A `Bot` is an
-  `EventSink<WebhookEvent>`: a banned sender's message stops first (no
-  middleware, read receipt or typing indicator), then middleware in
-  registration order (any may
-  stop the event; `Logging`, which logs kinds and durations but never
-  content, senders or error text, and `MarkRead`, a read receipt with an
-  optional typing indicator), then commands (configurable prefixes,
-  case-insensitive names and aliases, whitespace-split arguments with
-  quoted strings; reply buttons, list rows and template quick-reply
-  buttons whose id is a registered payload) behind guards (banned
-  senders, private-only and group-only, owner-only, and per-user
-  cooldowns kept in the `KvStore` under `bot.cooldown`, checked last),
-  else listeners. Senders are keyed by BSUID first; replies quote the
-  message and go to the group, the BSUID or `+<wa_id>`. Plugins are
+  `EventSink<WebhookEvent>` that takes each event through, in order: the
+  ban check (a banned sender's message stops there, so no middleware,
+  read receipt or typing indicator runs either); the command match
+  (configurable prefixes, names and aliases compared as the parser
+  normalizes them, case-insensitive by default, whitespace-split
+  arguments with quoted strings; image and video captions; reply
+  buttons, list rows and template quick-reply buttons whose id is a
+  registered payload; a name no command has is kept for an
+  unknown-command handler); the middleware, which see the match
+  (`Logging`, which logs kinds and durations but never content, senders
+  or error text, and `MarkRead`, a read receipt with an optional typing
+  indicator); then the command's guards (private-only and group-only,
+  owner-only, and per-user cooldowns kept in the `KvStore` under
+  `wa.bot.cooldown`, checked last and told once per period) and its
+  handler, else the listeners (received messages, one message type, an
+  event kind checked against `WebhookEvent::KINDS`, or everything).
+  Senders are keyed by BSUID first; replies quote the message and go to
+  the group, the BSUID or `+<wa_id>`; `Ctx::react` reacts. Plugins are
   compiled in (no hot reload), each with a category for the generated
-  help (`/help`); `Bot::sync_command_menu` publishes the visible commands
-  as Meta's slash-command menu within the client's limits.
+  help (`/help`, with usage hints; name, description, format and default
+  category configurable); `Bot::sync_command_menu` publishes the visible
+  commands as Meta's slash-command menu within the client's limits.
   `Ctx::reply_markdown` converts Markdown to WhatsApp formatting and
-  splits it into messages of at most 4096 characters between blocks,
-  never inside a code block that fits (new dependency: `pulldown-cmark`
-  0.13, MIT, no default features). Every decision is a trait with a
-  default: `Outbound`, `CommandParser`, `AccessPolicy`, `Cooldowns`,
-  `Refusals`, `ErrorHandler` and the renderer's `Escape`. Guide:
+  splits it into messages of at most 4096 UTF-16 code units between
+  blocks, never inside a code block that fits (new dependency:
+  `pulldown-cmark` 0.13, MIT, no default features). The parser, access
+  list, cooldown store, refusals, error handling, outbound, Markdown
+  rules and help format are traits with defaults (`CommandParser`,
+  `AccessPolicy`, `Cooldowns`, `Refusals`, `ErrorHandler`, `Outbound`,
+  `MarkdownRenderer`, `HelpFormatter`), each also accepted as an `Arc`;
+  the `async_trait` attribute is re-exported. Guide:
   [docs/guides/bots.md](docs/guides/bots.md); skill:
   `meta-whatsapp-rs-bot`. Paced broadcasts and scheduling come later.
+- `meta_whatsapp_client::messages::TEXT_BODY_MAX_CHARS` (4096, the text
+  limit the client already checked) and `WebhookEvent::KINDS` (every
+  value `WebhookEvent::kind` returns).
 
 - **meta-whatsapp-server, milestone M1c**: Meta's webhooks into the inbox
   and an event outbox, and polling it. `POST /webhooks/meta` on the public

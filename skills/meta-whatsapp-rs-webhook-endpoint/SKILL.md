@@ -135,4 +135,5 @@ Keep sink calls well under the lease (`.with_lease(d)` to change it).
 
 `meta-whatsapp-rs-webhook-events` (the events), `meta-whatsapp-rs-live-updates` (sinks),
 `meta-whatsapp-rs-cms-inbox`, `meta-whatsapp-rs-storage` (the dedup store), `meta-whatsapp-rs-testing`
-(signed fixtures), `meta-whatsapp-rs-phone-numbers` (subscriptions and overrides).
+(signed fixtures), `meta-whatsapp-rs-phone-numbers` (subscriptions and overrides),
+`meta-whatsapp-rs-bot` (a `Bot` is a sink: commands, middleware, plugins).

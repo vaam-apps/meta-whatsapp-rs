@@ -100,6 +100,12 @@ rewrite them along with the code.
 | `meta-whatsapp-server/migrate`, `meta-whatsapp-server/housekeeping` | `MIGRATION_LOCK`, `HOUSEKEEPING_LOCK`, `meta-whatsapp-server/src/store/postgres.rs` | Postgres advisory lock keys (the first 8 bytes of their SHA-256): replicas of two releases take the same ones | `the_lock_key_is_derived_as_documented` |
 | the service's migration files, `wa_server_sqlx_migrations` | `meta-whatsapp-server/migrations/*.sql`, `MIGRATIONS_TABLE` | the service's `wa_server_*` tables (the operator-only event stream `''` included) and its migration history; an edited file makes `migrate` refuse every database migrated before | `the_migrations_and_their_checksums_are_pinned` |
 | `wak_` | `PREFIX`, `KEY_ID_CHARS`, `SECRET_CHARS`, `meta-whatsapp-server/src/keys.rs` | API keys' prefix and layout (`wak_` + 17 + `_` + 43 base62 characters), held by every integrator | `the_key_layout_is_pinned` (literals); `a_minted_key_parses_and_matches_its_digest_only`, `malformed_keys_do_not_parse`, `base62_is_fixed_width_big_endian` |
+| `wa.bot.cooldown`, `wa.bot.cooldown.notice` | `COOLDOWN_NAMESPACE`, `COOLDOWN_NOTICE_NAMESPACE`, `meta-whatsapp-bot/src/guard.rs` | store namespaces of the bot's command cooldowns and of their "please wait" markers (key: SHA-256 hex of the length-prefixed business number, command and user key). **Ephemeral**: changing it forgets running cooldowns (they last one period at most) and may repeat one notice each; no data is stranded | `the_cooldown_key_is_pinned_and_hashed` |
+
+Library store namespaces are `wa.<module>[.<purpose>]` (`wa.token`,
+`wa.otp.rate`, `wa.webhook.dedup`, `wa.bot.cooldown`): a new typed store
+takes one under its module, and an integrator who keeps their own
+records in the same `KvStore` stays clear of `wa.`.
 
 Not ours to rename either: Meta's names (`wa_id`, `wamid`, `waba_id`,
 `wa.me`, `WA_EMBEDDED_SIGNUP`, …), and the `WA_` environment variables
@@ -804,48 +810,78 @@ exposes the 24-hour `CustomerServiceWindow`, and sends replies.
 ## Bot framework (`meta-whatsapp-bot`)
 
 A `Bot` is an `EventSink<WebhookEvent>`, so it sits behind
-`WebhookHandler` and its `DedupGuard` like any sink. Per event: a
-received message from a banned sender stops first (no middleware, so no
-read receipt or typing indicator either); then the middleware chain in
-registration order (each gets the context and `Next`; not calling it
-stops the event), then for a received message the command match (typed
-text the `CommandParser` accepts, or a reply button, list row or
-template quick-reply button whose id is a registered payload), the
-guards in order (scope, owner, cooldown last so a refusal starts none)
-and the handler; every other event, and a message no command matched,
-goes to the listeners. Standby copies, echoes and synchronized history
-are other events: they never run a command.
+`WebhookHandler` and its `DedupGuard` like any sink. Per event, in this
+order:
 
-- **Every decision is a trait with a default**: `Outbound`
-  (`ClientOutbound`, the client's `messages(pn).send` and read receipts),
-  `CommandParser` (`PrefixParser`), `AccessPolicy` (`AccessList`),
-  `Cooldowns` (`KvCooldowns`), `Refusals` (`ReplyRefusals`),
-  `ErrorHandler` (`LogErrors`), the renderer's `Escape` (`NoEscape`;
-  `WordJoinerEscape` opt-in).
-- **Identity** is the BSUID first (`Sender::key`), else `wa_id`. A reply
-  quotes the message and goes to the group, else the BSUID, else
-  `+<wa_id>`. Bans and owners listed by phone number cannot match a
-  sender without one.
-- **Cooldowns** are a typed store on `KvStore` (namespace `bot.cooldown`,
-  key: SHA-256 of the length-prefixed business number, command and user
-  key, so no phone number is stored), started with `put_if_absent` and
-  left to expire: atomic across instances sharing the store.
+1. **Ban.** A received message from a banned sender stops here: no match,
+   no middleware (so no read receipt or typing indicator), no command, no
+   listener. `Refusals` hears of it as `Refusal::Banned`.
+2. **Match.** For a received message: typed text or an image or video
+   caption the `CommandParser` accepts, or a reply button, list row or
+   template quick-reply button whose id is a registered payload. A match
+   sets `Ctx::invocation`; a parsed name no command has sets
+   `Ctx::unknown_command`.
+3. **Middleware**, in registration order; each gets the context (the
+   match included) and `Next`, and not calling it stops the event.
+4. **The command's guards**, in order (scope, owner, cooldown last so a
+   refusal starts none), then its handler; else the unknown-command
+   handler, if one is registered; else the listeners, which get every
+   other event too.
+
+Standby copies, echoes and synchronized history are other events: they
+never run a command. Zaileys, whose framework features this mirrors,
+runs middleware for commands only and after their guards; here it runs
+for every event, after the ban and the match.
+
+- **Traits with defaults**: `Outbound` (`ClientOutbound`, the client's
+  `messages(pn).send` and read receipts), `CommandParser` (`PrefixParser`;
+  it also normalizes names, so case folding is its option), `AccessPolicy`
+  (`AccessList`), `Cooldowns` (`KvCooldowns`), `Refusals`
+  (`ReplyRefusals`), `ErrorHandler` (`LogErrors`), `MarkdownRenderer`
+  (`markdown::Renderer`) and its `Escape` (`NoEscape`; `WordJoinerEscape`
+  opt-in), `HelpFormatter` (`CategoryHelp`; the help command's name,
+  description and default category are builder options). Each has an
+  `Arc<T>` implementation, so one instance serves several bots. Not
+  traits: the order above, and the reply helpers' target (the group, else
+  the BSUID, else `+<wa_id>`, quoting), which `Ctx::send` bypasses.
+- **Identity** is the BSUID first (`BotSender::key`), else `wa_id`. Bans
+  and owners listed by phone number cannot match a sender without one.
+- **Cooldowns** are a typed store on `KvStore` (namespace
+  `wa.bot.cooldown`, key: SHA-256 of the length-prefixed business
+  number, command and user key, so no phone number is stored), started
+  with `put_if_absent`: atomic across instances sharing the store. A
+  refusal writes a marker in `wa.bot.cooldown.notice` expiring with the
+  cooldown, and only the refusal that creates it tells the user, so
+  repeated attempts get one notice per period. Records expire in place:
+  invisible at once, deleted by Redis itself or by `purge_expired` on the
+  memory and Postgres stores.
 - **Errors**: a handler's error is logged (kinds only) and acknowledged
   by default, because an error answers `500` and Meta redelivers the
-  whole batch, repeating replies already sent; `PropagateErrors` opts in.
+  whole batch, repeating replies already sent; a transient failure is
+  then lost but for the log, until the dead-letter store of
+  `OPEN_QUESTIONS.md` #30 exists. `PropagateErrors` opts into
+  redelivery. The `ErrorHandler` gets the context from before the
+  middleware (the match set, a middleware's values not). After
+  `Bot::unload`, delivery fails with `SinkError::Closed`.
 - **Plugins** are compiled in (`Plugin::setup` registers commands,
   middleware and listeners; `on_unload` at `Bot::unload`). No dynamic
   loading or hot reload: Rust has no stable ABI.
 - **Command menu**: `Bot::sync_command_menu` sends the visible commands
   through the client's conversational automation call, under its limits
   (30 commands, names up to 32 characters, descriptions 1 to 256).
-- **Markdown**: `markdown::render` (pulldown-cmark) converts CommonMark to
-  WhatsApp formatting and packs blocks into messages of at most 4096
-  characters (the client's text limit, counted the same way), never
-  cutting a code block that fits. Meta documents no escape syntax: the
-  default leaves text as written, so copied addresses, codes and commands
-  work; `WordJoinerEscape` (U+2060 around literal markup characters,
-  copied along with the text) is the opt-in.
+- **Markdown**: `markdown::Renderer` (pulldown-cmark) converts CommonMark
+  to WhatsApp formatting and packs blocks into messages of at most 4096
+  (the client's `TEXT_BODY_MAX_CHARS`), measured in UTF-16 code units
+  since Meta does not say which unit it counts (never fewer than the
+  client's count of characters), never cutting a code block that fits.
+  Code a fence cannot hold and emphasis inside a word go out as plain
+  text. Meta documents no escape syntax: the default leaves text as
+  written, so copied addresses, codes and commands work;
+  `WordJoinerEscape` (U+2060 around literal markup characters, copied
+  along with the text) is the opt-in.
+- **Listeners** name what they get: received messages, one message
+  `type`, an event kind (checked against `WebhookEvent::KINDS` at build),
+  or everything.
 
 ## Typst (`meta-whatsapp-typst`)
 

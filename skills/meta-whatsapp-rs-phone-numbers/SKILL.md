@@ -78,6 +78,9 @@ let components = ConversationalAutomationConfig::new()
     .commands([BotCommand::new("track", "Track an order")]);
 ```
 
+A bot built with `meta-whatsapp-rs-bot` publishes its own commands as this
+menu: `Bot::sync_command_menu` (only `commands`, checked the same way).
+
 ## Display name, health, coexistence
 
 - `request_display_name_change(name)`: reviewed by Meta

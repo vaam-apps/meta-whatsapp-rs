@@ -132,4 +132,5 @@ cards 2–10, card body 160 with at most 2 line breaks.
 
 `meta-whatsapp-rs-send-messages` (sending, recipients), `meta-whatsapp-rs-webhook-events` (the
 replies), `meta-whatsapp-rs-flows`, `meta-whatsapp-rs-commerce` (product messages),
-`meta-whatsapp-rs-send-templates` (buttons outside the window).
+`meta-whatsapp-rs-send-templates` (buttons outside the window), `meta-whatsapp-rs-bot`
+(a tap whose id is a `Command::payload` runs that bot command).

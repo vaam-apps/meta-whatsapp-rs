@@ -1,6 +1,6 @@
 [package]
 name = "meta-whatsapp-rs"
-description = "WhatsApp Business Platform for Rust: client, webhooks, adapters and Typst rendering behind one dependency."
+description = "WhatsApp Business Platform for Rust: client, webhooks, adapters, Typst rendering and a bot framework behind one dependency."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
