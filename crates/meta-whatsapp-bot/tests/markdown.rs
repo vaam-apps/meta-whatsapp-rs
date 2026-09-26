@@ -198,6 +198,42 @@ fn only_web_mail_and_phone_urls_are_written() {
     }
 }
 
+/// Render `markdown` on a thread with tokio's default worker stack (2 MiB).
+fn render_on_a_worker_stack(markdown: String) -> Vec<String> {
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(move || markdown::render(&markdown))
+        .unwrap()
+        .join()
+        .unwrap()
+}
+
+/// Decisive: one WhatsApp message's worth of nesting (4096 characters of
+/// `- ` or `>`, echoed or quoted by an LLM) renders on a worker's stack
+/// instead of overflowing it, which aborts the whole process. Quotes and
+/// lists deeper than the renderer keeps are flattened into the deepest
+/// kept one, their text intact.
+#[test]
+fn deep_nesting_is_flattened_not_a_stack_overflow() {
+    let lists = render_on_a_worker_stack("- ".repeat(2047) + "x");
+    assert_eq!(lists.len(), 1);
+    assert!(
+        lists[0].ends_with("• x"),
+        "{:?}",
+        &lists[0][lists[0].len() - 40..]
+    );
+    let quotes = render_on_a_worker_stack(">".repeat(4095) + "x");
+    assert_eq!(quotes.len(), 1);
+    assert!(quotes[0].ends_with('x'));
+    let long = render_on_a_worker_stack(">".repeat(50_000) + "x\n\n" + &"- ".repeat(25_000) + "y");
+    assert!(long.concat().contains('x') && long.concat().ends_with('y'));
+    // Shallow nesting keeps its structure.
+    assert_eq!(
+        markdown::render("> a\n>> b\n\n- one\n  - two\n    - three"),
+        ["> a\n> > b\n\n• one\n  • two\n    • three"]
+    );
+}
+
 #[test]
 fn tables_become_a_padded_monospace_block() {
     let markdown = "| Item | Qty |\n| --- | ---: |\n| Aloe *vera* | 3 |\n| Pot_S | 12 |";

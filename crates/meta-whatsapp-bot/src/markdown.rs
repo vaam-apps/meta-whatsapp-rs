@@ -12,7 +12,7 @@
 //! | `` `code` `` | `` `code` `` |
 //! | fenced or indented code | ```` ```code``` ```` (language dropped) |
 //! | `> quote` | `> quote`, on every line |
-//! | `- item`, `1. item` | `• item`, `1. item` (nested: indented) |
+//! | `- item`, `1. item` | `• item`, `1. item` (nested: indented; quotes and lists deeper than 16 levels are flattened into the 16th) |
 //! | `[text](url)` | `text (url)`; a link whose text is its URL, or an autolink: `url` (only `http`, `https`, `mailto`, `tel` or relative URLs: any other scheme, such as `javascript:` or `data:`, keeps just the text) |
 //! | tables | a monospace block, columns padded |
 //! | `![alt](url)` | `alt (url)`, or `url` without alt text (the same URL rule) |
@@ -411,9 +411,21 @@ struct Table {
     header: bool,
 }
 
+/// Deepest nesting of quotes and lists kept. Deeper ones are flattened
+/// into the deepest kept one (their text stays): WhatsApp shows no such
+/// structure, and rendering recurses once per level, so 4096 characters
+/// of `>` or `- ` would otherwise overflow a worker thread's stack and
+/// abort the process.
+const MAX_NESTING: usize = 16;
+
 struct Builder<'e> {
     escape: &'e dyn Escape,
     frames: Vec<Frame>,
+    /// For each open quote or list, whether it got its own frame (at most
+    /// [`MAX_NESTING`] do).
+    containers: Vec<bool>,
+    /// How many of `containers` got a frame.
+    kept: usize,
     inline: Option<Inline>,
     code: Option<String>,
     table: Option<Table>,
@@ -425,6 +437,8 @@ impl<'e> Builder<'e> {
         Self {
             escape,
             frames: vec![Frame::Root(Vec::new())],
+            containers: Vec::new(),
+            kept: 0,
             inline: None,
             code: None,
             table: None,
@@ -440,6 +454,22 @@ impl<'e> Builder<'e> {
             return cell;
         }
         self.inline.get_or_insert_with(|| Inline::new(false, false))
+    }
+
+    /// A quote or list opens: whether it gets its own frame (not beyond
+    /// [`MAX_NESTING`]; deeper ones add their content to the open frame).
+    fn open_container(&mut self) -> bool {
+        let keep = self.kept < MAX_NESTING;
+        self.containers.push(keep);
+        self.kept += usize::from(keep);
+        keep
+    }
+
+    /// A quote or list closes: whether it had its own frame to close.
+    fn close_container(&mut self) -> bool {
+        let kept = self.containers.pop().unwrap_or(false);
+        self.kept -= usize::from(kept);
+        kept
     }
 
     fn push(&mut self, node: Node) {
@@ -523,7 +553,9 @@ impl<'e> Builder<'e> {
             }
             Tag::BlockQuote(_) => {
                 self.flush();
-                self.frames.push(Frame::Quote(Vec::new()));
+                if self.open_container() {
+                    self.frames.push(Frame::Quote(Vec::new()));
+                }
             }
             Tag::CodeBlock(_) => {
                 self.flush();
@@ -531,10 +563,12 @@ impl<'e> Builder<'e> {
             }
             Tag::List(start) => {
                 self.flush();
-                self.frames.push(Frame::List {
-                    start,
-                    items: Vec::new(),
-                });
+                if self.open_container() {
+                    self.frames.push(Frame::List {
+                        start,
+                        items: Vec::new(),
+                    });
+                }
             }
             Tag::Item => {
                 self.flush();
@@ -571,13 +605,17 @@ impl<'e> Builder<'e> {
             TagEnd::Paragraph | TagEnd::Heading(_) | TagEnd::HtmlBlock => self.flush(),
             TagEnd::BlockQuote(_) => {
                 self.flush();
-                if let Some(Frame::Quote(nodes)) = self.frames.pop() {
+                if self.close_container()
+                    && let Some(Frame::Quote(nodes)) = self.frames.pop()
+                {
                     self.push(Node::Quote(nodes));
                 }
             }
             TagEnd::List(_) => {
                 self.flush();
-                if let Some(Frame::List { start, items }) = self.frames.pop() {
+                if self.close_container()
+                    && let Some(Frame::List { start, items }) = self.frames.pop()
+                {
                     self.push(Node::List { start, items });
                 }
             }
