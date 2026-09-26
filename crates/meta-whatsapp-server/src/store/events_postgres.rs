@@ -233,6 +233,18 @@ impl EventStore for PgEventStore {
         // One statement, so the rows and the stream's bounds come from one
         // snapshot. The rows are chosen from their sizes; only theirs are
         // read in full.
+        //
+        // Cost: the window's frame ends at the current row and needs no
+        // partition size, so it streams over the primary key's order and
+        // the `LIMIT` stops the scan. A page reads its own rows, with or
+        // without `after` (EXPLAIN ANALYZE on Postgres 18: 52 index rows of
+        // a 300 000-event stream, a first poll included). A filter reads
+        // on until it has filled the page, the whole stream past `after` at
+        // worst (a first poll whose filter matches nothing), once:
+        // `next_after` then moves to the stream's high water. Keep both
+        // properties if this query changes: no `PARTITION BY`, no window
+        // function that needs the partition's end (`ntile`,
+        // `percent_rank`, …).
         let rows = sqlx::query(
             "WITH bounds AS ( \
                SELECT COALESCE(max(purged_through), 0) AS purged_through, \
