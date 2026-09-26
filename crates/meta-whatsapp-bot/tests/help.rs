@@ -260,8 +260,24 @@ async fn a_menu_the_parser_cannot_read_fails() {
     assert_eq!(with_slash.command_menu().unwrap().len(), 1);
 }
 
+/// A plugin without a category of its own.
+#[derive(Debug)]
+struct Dice;
+
+#[async_trait]
+impl Plugin for Dice {
+    fn name(&self) -> &'static str {
+        "dice"
+    }
+    async fn setup(&self, r: &mut Registrar) -> meta_whatsapp_core::Result<()> {
+        r.command(Command::new("roll", noop()).description("Roll a die"));
+        Ok(())
+    }
+}
+
 /// A help format of its own, under another name and description, in a
-/// default category of the bot's choosing; `Bot::help` is what it sends.
+/// default category of the bot's choosing (a plugin without a category
+/// lands there too); `Bot::help` is what it sends.
 #[tokio::test]
 async fn the_help_command_is_configurable() {
     /// One line per command, no categories.
@@ -283,6 +299,7 @@ async fn the_help_command_is_configurable() {
         .default_category("Umum")
         .help_command_with("bantuan", "Tampilkan perintah", Compact)
         .plugin(Travel)
+        .plugin(Dice)
         .command(Command::new("ping", noop()).description("Pong"))
         .build()
         .await
@@ -290,7 +307,10 @@ async fn the_help_command_is_configurable() {
     bot.handle(text_event("messages/text.json", "/bantuan"))
         .await
         .unwrap();
-    assert_eq!(out.bodies(), ["/bantuan · /ping · /tickets · /hotel"]);
+    assert_eq!(
+        out.bodies(),
+        ["/bantuan · /roll · /ping · /tickets · /hotel"]
+    );
     assert_eq!(bot.help(), out.bodies()[0]);
     let categories: Vec<_> = bot
         .help_sections()
@@ -299,8 +319,9 @@ async fn the_help_command_is_configurable() {
         .collect();
     assert_eq!(
         categories,
-        [("Umum".to_owned(), 2), ("Travel".to_owned(), 2)]
+        [("Umum".to_owned(), 3), ("Travel".to_owned(), 2)]
     );
+    assert_eq!(bot.plugins()[1].category, "Umum");
     let menu = bot.command_menu().unwrap();
     assert_eq!(menu[0].command_description, "Tampilkan perintah");
     // The default format is `CategoryHelp`.

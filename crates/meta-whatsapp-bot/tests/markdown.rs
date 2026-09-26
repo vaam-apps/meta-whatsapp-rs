@@ -400,6 +400,10 @@ fn emphasis_inside_a_word_drops_its_markers() {
         ("**Bold**ly", "Boldly"),
         ("pre**fix**", "prefix"),
         ("a***b***c", "abc"),
+        // Both markers of a nested span go, whichever side the word is on
+        // (the outer span's markers are skipped when looking for it).
+        ("a***b*** c", "ab c"),
+        ("a ***b***c", "a bc"),
         ("déjà**vu**", "déjàvu"),
         // At a word's edge, the markers stay.
         (
