@@ -42,6 +42,9 @@ CREATE TABLE {prefix}thread_owners (
     PRIMARY KEY (phone_number_id, contact)
 );
 
+-- A removed contact leaves a row with `removed` set, every other column
+-- NULL and `synced_at` the removal's time, so a sync older than the removal
+-- that arrives after it cannot bring the contact back.
 CREATE TABLE {prefix}synced_contacts (
     phone_number_id TEXT COLLATE "C" NOT NULL,
     contact         TEXT COLLATE "C" NOT NULL,
@@ -52,8 +55,13 @@ CREATE TABLE {prefix}synced_contacts (
     parent_user_id  TEXT COLLATE "C",
     username_utf8   BYTEA,
     synced_at       TIMESTAMPTZ NOT NULL,
+    removed         BOOLEAN NOT NULL DEFAULT false,
     PRIMARY KEY (phone_number_id, contact)
 );
+
+-- Purge by age of the removals.
+CREATE INDEX {prefix}contact_removals_idx
+    ON {prefix}synced_contacts (synced_at) WHERE removed;
 
 -- Purge by age, across every business number.
 CREATE INDEX {prefix}messages_ts_idx

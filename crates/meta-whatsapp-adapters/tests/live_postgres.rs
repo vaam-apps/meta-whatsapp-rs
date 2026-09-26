@@ -1387,8 +1387,9 @@ async fn rows_mentioning(db: &TestDb, needles: &[&str]) -> Vec<(String, i64)> {
 }
 
 /// Everything of one contact: a message of every origin and a tombstone,
-/// the summary, window events, the ownership record and synced contacts
-/// naming them, content marked with `marker`.
+/// the summary, window events, the ownership record, a contact removal
+/// kept under the key and a synced contact naming it, content marked
+/// with `marker`.
 #[allow(clippy::too_many_lines)] // one record of every kind
 async fn record_a_contact(store: &PostgresConversationStore, key: &ConversationKey, marker: &str) {
     let id = |local: &str| MessageId::new(format!("wamid.{}.{local}", key.contact));
@@ -1507,6 +1508,13 @@ async fn record_a_contact(store: &PostgresConversationStore, key: &ConversationK
         synced_at: datetime!(2026-09-24 12:07 UTC),
     };
     assert!(store.put_contact(contact.clone()).await.unwrap());
+    // Removed: the removal kept under the key is the key's record too.
+    assert!(
+        store
+            .remove_contact(key, datetime!(2026-09-24 12:08 UTC))
+            .await
+            .unwrap()
+    );
     // Keyed by phone number, naming the contact's BSUID.
     assert!(
         store

@@ -78,20 +78,22 @@
 //!   overwrites it, one of the same second does, and a record replaces
 //!   every field;
 //! - synced contacts keep the latest sync by the same rule, a removal
-//!   applies unless the contact was synced after it and leaves nothing
-//!   behind, and the list pages by contact in byte order, scoped to one
-//!   business number; contacts create no conversation;
+//!   applies unless the contact was synced after it, and is kept (its key
+//!   and time, nothing of the contact) so that an older sync arriving
+//!   after it is refused, even when it arrived first; the list pages by
+//!   contact in byte order, scoped to one business number, and never
+//!   lists a removal; contacts create no conversation;
 //! - an erasure deletes every record of one key on one number (messages
 //!   of every origin and tombstones, the summary, window events, the
 //!   ownership record, the synced contacts naming the key as key, BSUID,
-//!   parent BSUID or phone number), reports each count, leaves the ids
-//!   free to be recorded again, and touches no other key and no other
-//!   number;
+//!   parent BSUID or phone number, a contact removal kept under the key),
+//!   reports each count, leaves the ids free to be recorded again, and
+//!   touches no other key and no other number;
 //! - purge by age deletes exactly what is older than the cutoff (a record
 //!   at the cutoff stays): messages and tombstones, window events,
-//!   ownership records, and the summary of a conversation whose latest
-//!   message went, keeping every other summary as it was; scoped to one
-//!   number, or to every number;
+//!   ownership records, contact removals, and the summary of a
+//!   conversation whose latest message went, keeping every other summary
+//!   as it was; scoped to one number, or to every number;
 //! - `apply_retention` purges by the store's `retention()`, and nothing
 //!   under `Retention::Keep`.
 //!
@@ -2233,24 +2235,54 @@ async fn synced_contacts_keep_the_latest_sync<S: ConversationStore + ?Sized>(sto
         "a removal in the same second applies"
     );
     assert_eq!(store.contact(&key).await.unwrap(), None);
-    assert!(!store.remove_contact(&key, at(11)).await.unwrap());
     assert!(
-        !store
-            .remove_contact(&r.key("unknown"), at(50))
-            .await
-            .unwrap()
+        !store.remove_contact(&key, at(11)).await.unwrap(),
+        "no contact left to remove: the removal moves to 11"
     );
     assert!(
-        store
+        !store
             .put_contact(StoredContact {
-                synced_at: at(8),
+                synced_at: at(10),
                 ..edited.clone()
             })
             .await
             .unwrap(),
-        "nothing of a removed contact is kept: an older add stores it again"
+        "the removal is kept: an add older than it, arriving after it, is refused"
     );
-    assert!(store.remove_contact(&key, at(8)).await.unwrap());
+    assert!(
+        !store.remove_contact(&key, at(5)).await.unwrap(),
+        "an older removal changes nothing"
+    );
+    assert!(
+        !store
+            .put_contact(StoredContact {
+                synced_at: at(10),
+                ..edited.clone()
+            })
+            .await
+            .unwrap(),
+        "and leaves the later one in place"
+    );
+    assert_eq!(store.contact(&key).await.unwrap(), None);
+    let back = StoredContact {
+        synced_at: at(11),
+        ..edited.clone()
+    };
+    assert!(
+        store.put_contact(back.clone()).await.unwrap(),
+        "an add in the same second as the removal stores the contact again"
+    );
+    assert_eq!(store.contact(&key).await.unwrap(), Some(back));
+    assert!(store.remove_contact(&key, at(11)).await.unwrap());
+    assert_eq!(store.contact(&key).await.unwrap(), None);
+    // A removal that arrives before its contact's add: kept all the same.
+    let unknown = r.key("unknown");
+    assert!(!store.remove_contact(&unknown, at(50)).await.unwrap());
+    assert!(
+        !store.put_contact(r.contact("unknown", 49)).await.unwrap(),
+        "an add older than a removal that arrived first is refused"
+    );
+    assert_eq!(store.contact(&unknown).await.unwrap(), None);
 
     // Listing: byte order of the contact, exclusive cursor, one number.
     let names = ["b", "B", "a", "A", "a-1", "a_1", "é", "10", "9", "US.2"];
@@ -2565,6 +2597,30 @@ async fn erase_deletes_every_record_of_one_contact_on_one_number<S: Conversation
         store.contacts(&r.pn, None, 100).await.unwrap(),
         [kept[0].clone()]
     );
+
+    // A removal kept under the key (to refuse a late sync) goes with it;
+    // another key's stays.
+    let (removed, other_removed) = (r.key("US.4"), r.key("US.3"));
+    assert!(store.put_contact(r.contact("US.4", 1)).await.unwrap());
+    assert!(store.remove_contact(&removed, at(5)).await.unwrap());
+    assert!(!store.remove_contact(&other_removed, at(5)).await.unwrap());
+    assert!(!store.put_contact(r.contact("US.4", 4)).await.unwrap());
+    assert_eq!(
+        store.erase(&removed).await.unwrap(),
+        Erased {
+            contacts: 1,
+            ..Erased::default()
+        },
+        "the kept removal is the key's record"
+    );
+    assert!(
+        store.put_contact(r.contact("US.4", 4)).await.unwrap(),
+        "nothing of the key is left to refuse a sync"
+    );
+    assert!(
+        !store.put_contact(r.contact("US.3", 4)).await.unwrap(),
+        "another key's removal stays"
+    );
 }
 
 /// The first instant a purge case keeps: records before it are the purge
@@ -2628,6 +2684,10 @@ async fn purge_deletes_exactly_what_is_older<S: ConversationStore + ?Sized>(stor
         .unwrap();
     let address_book = r.contact("US.1", -100);
     store.put_contact(address_book.clone()).await.unwrap();
+    // Removals kept to refuse a late sync: one before the cutoff, one at it.
+    let (removed_before, removed_at) = (r.key("US.2"), r.key("US.3"));
+    assert!(!store.remove_contact(&removed_before, at(-1)).await.unwrap());
+    assert!(!store.remove_contact(&removed_at, at(0)).await.unwrap());
     // The same shape on another number, older still.
     let other_key = other.key("old");
     store
@@ -2642,6 +2702,10 @@ async fn purge_deletes_exactly_what_is_older<S: ConversationStore + ?Sized>(stor
         .set_thread_owner(&other_key, ownership(ThreadOwner::ThisApp, None, at(-20)))
         .await
         .unwrap();
+    store
+        .remove_contact(&other.key("US.9"), at(-20))
+        .await
+        .unwrap();
     let mixed_summary = summary(store, &mixed).await.unwrap();
     let other_before = recorded(store, &other_key).await;
 
@@ -2652,8 +2716,10 @@ async fn purge_deletes_exactly_what_is_older<S: ConversationStore + ?Sized>(stor
             conversations: 1,
             window_events: 2,
             thread_owners: 1,
+            contact_removals: 1,
         },
-        "o1, o2, m1, m2 and a tombstone; the summary of \"old\"; two window events; one owner"
+        "o1, o2, m1, m2 and a tombstone; the summary of \"old\"; two window events; one owner; \
+         one contact removal"
     );
     let texts: Vec<Option<String>> = store
         .messages(&mixed, None, 10)
@@ -2699,6 +2765,14 @@ async fn purge_deletes_exactly_what_is_older<S: ConversationStore + ?Sized>(stor
         store.contact(&address_book.key).await.unwrap().as_ref(),
         Some(&address_book),
         "synced contacts are not history"
+    );
+    assert!(
+        !store.put_contact(r.contact("US.3", -1)).await.unwrap(),
+        "a removal at the cutoff is kept, and refuses an older sync"
+    );
+    assert!(
+        store.put_contact(r.contact("US.2", -2)).await.unwrap(),
+        "a removal before the cutoff is purged: nothing refuses the sync"
     );
     recorded(store, &other_key)
         .await
@@ -2769,6 +2843,7 @@ async fn purge_deletes_exactly_what_is_older<S: ConversationStore + ?Sized>(stor
             conversations: 1,
             window_events: 1,
             thread_owners: 1,
+            contact_removals: 1,
         }
     );
     let gone = recorded(store, &other_key).await;

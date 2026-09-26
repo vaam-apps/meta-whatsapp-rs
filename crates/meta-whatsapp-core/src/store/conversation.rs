@@ -402,7 +402,8 @@ pub struct Erased {
     pub window_events: u64,
     /// Thread ownership records (0 or 1).
     pub thread_owners: u64,
-    /// Synced address book contacts.
+    /// Synced address book contacts, and removals of them kept under the
+    /// key ([`ConversationStore::remove_contact`]).
     pub contacts: u64,
 }
 
@@ -424,6 +425,9 @@ pub struct Purged {
     pub window_events: u64,
     /// Thread ownership records.
     pub thread_owners: u64,
+    /// Removals of synced contacts kept to refuse a late sync
+    /// ([`ConversationStore::remove_contact`]).
+    pub contact_removals: u64,
 }
 
 impl Purged {
@@ -689,15 +693,27 @@ pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
     /// `smb_app_state_sync`, which is also how an edit arrives), replacing
     /// the one stored under its key unless that one is later
     /// (`contact.synced_at` before the stored `synced_at`), by the same
-    /// rule as [`set_thread_owner`](Self::set_thread_owner). Returns
-    /// whether it was stored. Contacts are not conversations: this creates
-    /// no summary.
+    /// rule as [`set_thread_owner`](Self::set_thread_owner). A removal
+    /// counts as stored: an `add` older than a removal of its key is
+    /// refused, one of the same second or later stores the contact again.
+    /// Returns whether it was stored. Contacts are not conversations: this
+    /// creates no summary.
     async fn put_contact(&self, contact: StoredContact) -> Result<bool, StorageError>;
 
     /// Remove the synced contact stored under `key` (a `remove` of
     /// `smb_app_state_sync`), unless it was synced after `at`. Returns
-    /// whether one was removed. Nothing of it is kept: an `add` older than
-    /// the removal that arrives after it stores the contact again.
+    /// whether a contact was removed.
+    ///
+    /// Webhooks arrive out of order (a failed delivery is retried later),
+    /// so the removal is kept: its key and `at`, nothing else of the
+    /// contact (no name, username, phone number or BSUID), so that an
+    /// older `add` arriving after it is refused. It is kept too when no
+    /// contact is stored yet (the removal arrived first), or moves to `at`
+    /// when a removal is stored already. [`contact`](Self::contact) and
+    /// [`contacts`](Self::contacts) never return one;
+    /// [`erase`](Self::erase) deletes it with the key's records, and
+    /// [`purge_before`](Self::purge_before) once it is older than the
+    /// cutoff.
     async fn remove_contact(
         &self,
         key: &ConversationKey,
@@ -729,7 +745,8 @@ pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
     /// - its thread ownership record;
     /// - the synced address book contacts of the number that name
     ///   `key.contact` as their key, `user_id`, `parent_user_id` or
-    ///   `phone_number`.
+    ///   `phone_number`, and the removal kept under the key
+    ///   ([`remove_contact`](Self::remove_contact)).
     ///
     /// A person can be stored under several keys on one number (a history
     /// thread keyed by their phone number, live messages by their BSUID,
@@ -753,12 +770,14 @@ pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
 
     /// Purge by age: delete the messages (tombstones included) timestamped
     /// strictly before `cutoff`, the window events before it, the thread
-    /// ownership records set before it, and the summary of every
-    /// conversation whose latest message was purged (it holds that
-    /// message's preview). Of business number `phone_number_id` only, or
-    /// of every number with `None`. Synced address book contacts are not
-    /// history: [`remove_contact`](Self::remove_contact) and
-    /// [`erase`](Self::erase) delete them.
+    /// ownership records set before it, the removals of synced contacts
+    /// made before it ([`remove_contact`](Self::remove_contact)), and the
+    /// summary of every conversation whose latest message was purged (it
+    /// holds that message's preview). Of business number
+    /// `phone_number_id` only, or of every number with `None`. Synced
+    /// address book contacts are not history:
+    /// [`remove_contact`](Self::remove_contact) and [`erase`](Self::erase)
+    /// delete them.
     ///
     /// A conversation keeping newer messages keeps its summary as it was:
     /// its latest message, preview and window, and an unread count that

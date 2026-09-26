@@ -47,7 +47,32 @@ struct State {
     window_index: HashMap<ConversationKey, BTreeSet<(OffsetDateTime, String)>>,
     owners: HashMap<ConversationKey, ThreadOwnership>,
     /// By `(business number, contact)`: listing walks one number's range.
-    contacts: BTreeMap<(PhoneNumberId, String), StoredContact>,
+    contacts: BTreeMap<(PhoneNumberId, String), Synced>,
+}
+
+/// What the address book keeps under a key: the contact, or its removal
+/// (when, and nothing else), kept so that an older sync arriving after it
+/// is refused.
+#[derive(Debug, Clone)]
+enum Synced {
+    Contact(StoredContact),
+    Removed(OffsetDateTime),
+}
+
+impl Synced {
+    fn at(&self) -> OffsetDateTime {
+        match self {
+            Self::Contact(c) => c.synced_at,
+            Self::Removed(at) => *at,
+        }
+    }
+
+    fn contact(&self) -> Option<&StoredContact> {
+        match self {
+            Self::Contact(c) => Some(c),
+            Self::Removed(_) => None,
+        }
+    }
 }
 
 /// In-memory conversation history.
@@ -433,11 +458,11 @@ impl ConversationStore for MemoryConversationStore {
         if st
             .contacts
             .get(&key)
-            .is_some_and(|stored| contact.synced_at < stored.synced_at)
+            .is_some_and(|stored| contact.synced_at < stored.at())
         {
             return Ok(false);
         }
-        st.contacts.insert(key, contact);
+        st.contacts.insert(key, Synced::Contact(contact));
         Ok(true)
     }
 
@@ -448,15 +473,13 @@ impl ConversationStore for MemoryConversationStore {
     ) -> Result<bool, StorageError> {
         let mut st = self.state.lock().await;
         let key = (key.phone_number_id.clone(), key.contact.clone());
-        if st
-            .contacts
-            .get(&key)
-            .is_none_or(|stored| stored.synced_at > at)
-        {
-            return Ok(false);
-        }
-        st.contacts.remove(&key);
-        Ok(true)
+        let removed = match st.contacts.get(&key) {
+            Some(stored) if stored.at() > at => return Ok(false),
+            Some(Synced::Contact(_)) => true,
+            Some(Synced::Removed(_)) | None => false,
+        };
+        st.contacts.insert(key, Synced::Removed(at));
+        Ok(removed)
     }
 
     async fn contact(&self, key: &ConversationKey) -> Result<Option<StoredContact>, StorageError> {
@@ -464,6 +487,7 @@ impl ConversationStore for MemoryConversationStore {
         Ok(st
             .contacts
             .get(&(key.phone_number_id.clone(), key.contact.clone()))
+            .and_then(Synced::contact)
             .cloned())
     }
 
@@ -482,8 +506,9 @@ impl ConversationStore for MemoryConversationStore {
             .contacts
             .range((start, Bound::Unbounded))
             .take_while(|((number, _), _)| number == phone_number_id)
+            .filter_map(|(_, synced)| synced.contact())
             .take(limit)
-            .map(|(_, contact)| contact.clone())
+            .cloned()
             .collect())
     }
 
@@ -510,14 +535,16 @@ impl ConversationStore for MemoryConversationStore {
         }
         erased.thread_owners = u64::from(st.owners.remove(key).is_some());
         let before = st.contacts.len();
-        st.contacts.retain(|(number, contact), stored| {
+        st.contacts.retain(|(number, contact), synced| {
             number != &key.phone_number_id
                 || !(contact == &key.contact
-                    || [&stored.user_id, &stored.parent_user_id]
-                        .into_iter()
-                        .flatten()
-                        .any(|id| id.as_str() == key.contact)
-                    || stored.phone_number.as_deref() == Some(key.contact.as_str()))
+                    || synced.contact().is_some_and(|stored| {
+                        [&stored.user_id, &stored.parent_user_id]
+                            .into_iter()
+                            .flatten()
+                            .any(|id| id.as_str() == key.contact)
+                            || stored.phone_number.as_deref() == Some(key.contact.as_str())
+                    }))
         });
         erased.contacts = (before - st.contacts.len()) as u64;
         Ok(erased)
@@ -565,6 +592,12 @@ impl ConversationStore for MemoryConversationStore {
         st.owners
             .retain(|key, o| !(in_scope(key) && o.since < cutoff));
         purged.thread_owners = (before - st.owners.len()) as u64;
+        let before = st.contacts.len();
+        st.contacts.retain(|(number, _), synced| {
+            !(phone_number_id.is_none_or(|n| n == number)
+                && matches!(synced, Synced::Removed(at) if *at < cutoff))
+        });
+        purged.contact_removals = (before - st.contacts.len()) as u64;
         Ok(purged)
     }
 

@@ -48,7 +48,11 @@
 //!   (a window event by business number and id). `set_thread_owner` and
 //!   `put_contact` are one upsert each whose update only applies when the
 //!   stored record is not later (`ON CONFLICT … DO UPDATE … WHERE`), so
-//!   the rule holds under concurrency without a read.
+//!   the rule holds under concurrency without a read. `remove_contact` is
+//!   the same upsert, of a row with `removed` set and nothing but the key
+//!   and the removal's time (it replaces the contact, or takes its place
+//!   when none is stored), so a late `add` older than it is refused;
+//!   reads skip those rows.
 //! - `erase` and `purge_before` order themselves against the writers with
 //!   two transaction-level advisory locks, in the two-key form (whose key
 //!   space never meets the one-key locks of sqlx's `migrate` or of the
@@ -249,6 +253,7 @@ fn purge_sql(prefix: &TablePrefix, scope: &str) -> String {
     let conversations = prefix.table("conversations");
     let window_events = prefix.table("window_events");
     let owners = prefix.table("thread_owners");
+    let contacts = prefix.table("synced_contacts");
     format!(
         "WITH m AS (DELETE FROM {messages} WHERE ts < $1{scope} RETURNING 1), \
          c AS (DELETE FROM {conversations} WHERE (phone_number_id, contact) IN ( \
@@ -257,9 +262,10 @@ fn purge_sql(prefix: &TablePrefix, scope: &str) -> String {
            ORDER BY phone_number_id, contact FOR UPDATE \
          ) RETURNING 1), \
          w AS (DELETE FROM {window_events} WHERE ts < $1{scope} RETURNING 1), \
-         o AS (DELETE FROM {owners} WHERE since < $1{scope} RETURNING 1) \
+         o AS (DELETE FROM {owners} WHERE since < $1{scope} RETURNING 1), \
+         r AS (DELETE FROM {contacts} WHERE removed AND synced_at < $1{scope} RETURNING 1) \
          SELECT (SELECT count(*) FROM m), (SELECT count(*) FROM c), \
-           (SELECT count(*) FROM w), (SELECT count(*) FROM o)"
+           (SELECT count(*) FROM w), (SELECT count(*) FROM o), (SELECT count(*) FROM r)"
     )
 }
 
@@ -424,25 +430,44 @@ impl Sql {
                    first_name_utf8 = EXCLUDED.first_name_utf8, \
                    phone_number = EXCLUDED.phone_number, user_id = EXCLUDED.user_id, \
                    parent_user_id = EXCLUDED.parent_user_id, \
-                   username_utf8 = EXCLUDED.username_utf8, synced_at = EXCLUDED.synced_at \
+                   username_utf8 = EXCLUDED.username_utf8, synced_at = EXCLUDED.synced_at, \
+                   removed = false \
                  WHERE EXCLUDED.synced_at >= p.synced_at \
                  RETURNING 1 AS stored"
             )),
+            // The removal replaces the row (or takes the key's place) with
+            // its time alone, unless the stored row is later. `prior`, read
+            // (and locked) first, says whether a contact was there.
             remove_contact: arc(format!(
-                "DELETE FROM {contacts} \
-                 WHERE phone_number_id = $1 AND contact = $2 AND synced_at <= $3"
+                "WITH prior AS ( \
+                   SELECT removed FROM {contacts} \
+                   WHERE phone_number_id = $1 AND contact = $2 AND synced_at <= $3 \
+                   FOR UPDATE \
+                 ), removal AS ( \
+                   INSERT INTO {contacts} AS p (phone_number_id, contact, synced_at, removed) \
+                   VALUES ($1, $2, $3, true) \
+                   ON CONFLICT (phone_number_id, contact) DO UPDATE SET \
+                     full_name_utf8 = NULL, first_name_utf8 = NULL, phone_number = NULL, \
+                     user_id = NULL, parent_user_id = NULL, username_utf8 = NULL, \
+                     synced_at = EXCLUDED.synced_at, removed = true \
+                   WHERE p.synced_at <= EXCLUDED.synced_at \
+                   RETURNING 1 \
+                 ) \
+                 SELECT EXISTS (SELECT 1 FROM prior WHERE NOT removed) \
+                   AND EXISTS (SELECT 1 FROM removal)"
             )),
             contact: arc(format!(
                 "SELECT {CONTACT_COLUMNS} FROM {contacts} \
-                 WHERE phone_number_id = $1 AND contact = $2"
+                 WHERE phone_number_id = $1 AND contact = $2 AND NOT removed"
             )),
             contacts: arc(format!(
                 "SELECT {CONTACT_COLUMNS} FROM {contacts} \
-                 WHERE phone_number_id = $1 ORDER BY contact LIMIT $2"
+                 WHERE phone_number_id = $1 AND NOT removed ORDER BY contact LIMIT $2"
             )),
             contacts_after: arc(format!(
                 "SELECT {CONTACT_COLUMNS} FROM {contacts} \
-                 WHERE phone_number_id = $1 AND contact > $3 ORDER BY contact LIMIT $2"
+                 WHERE phone_number_id = $1 AND contact > $3 AND NOT removed \
+                 ORDER BY contact LIMIT $2"
             )),
             // The purge lock shared, then the number lock exclusive: see the
             // module docs. Each its own statement, so the deletion's
@@ -1076,14 +1101,13 @@ impl ConversationStore for PostgresConversationStore {
         key: &ConversationKey,
         at: OffsetDateTime,
     ) -> Result<bool, StorageError> {
-        let done = sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.remove_contact)))
+        sqlx::query_scalar(AssertSqlSafe(Arc::clone(&self.sql.remove_contact)))
             .bind(key.phone_number_id.as_str())
             .bind(key.contact.as_str())
             .bind(at)
-            .execute(&self.pool)
+            .fetch_one(&self.pool)
             .await
-            .map_err(backend)?;
-        Ok(done.rows_affected() > 0)
+            .map_err(backend)
     }
 
     async fn contact(&self, key: &ConversationKey) -> Result<Option<StoredContact>, StorageError> {
@@ -1170,6 +1194,7 @@ impl ConversationStore for PostgresConversationStore {
             conversations: count(&row, 1)?,
             window_events: count(&row, 2)?,
             thread_owners: count(&row, 3)?,
+            contact_removals: count(&row, 4)?,
         })
     }
 
