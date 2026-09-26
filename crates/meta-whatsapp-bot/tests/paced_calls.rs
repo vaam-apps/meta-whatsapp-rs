@@ -3,7 +3,8 @@
 //! through a pacer. Each waits for a slot of its business number, here 1 a
 //! second on a fake clock so the slots are 1 s apart; the requests are the
 //! client's, unchanged; a limiter that fails fails the call before any
-//! request.
+//! request; a `PacedOutbound` retries by the client's rule, each retry
+//! after a slot.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -17,9 +18,11 @@ use meta_whatsapp_bot::{
     ClientOutbound, Outbound, PacedGroups, PacedOutbound, Pacer, Rate, RateLimiter, Reservation,
     SlotRequest, TokenBucket,
 };
+use meta_whatsapp_client::RetryPolicy;
 use meta_whatsapp_client::groups::{
     CreateGroup, GroupField, GroupSettingsUpdate, ListGroups, ListJoinRequests,
 };
+use meta_whatsapp_client::messages::OutboundMessage;
 use meta_whatsapp_core::Error;
 use meta_whatsapp_core::clock::{Clock, ManualClock};
 use meta_whatsapp_core::error::StorageError;
@@ -213,4 +216,57 @@ async fn typing_indicators_wait_for_the_numbers_slots() {
             "typing_indicator": {"type": "text"}
         }))
     );
+}
+
+fn server_error() -> serde_json::Value {
+    json!({"error": {"message": "(#131000) Something went wrong", "type": "OAuthException", "code": 131000}})
+}
+
+/// `PacedOutbound` over a client that does not retry, retrying with a
+/// policy of its own (what `BotBuilder::pacer` builds from a client):
+/// the client's rule, call by call. A send answered with a 5xx may have
+/// gone out, so it is not retried (`Error::may_resend`); a plain read
+/// receipt is idempotent and is; one with a typing indicator is not. Each
+/// retry waits its delay and a slot of its own.
+#[tokio::test]
+async fn a_paced_outbound_retries_what_the_client_would_and_nothing_else() {
+    let t = ScriptedTransport::new();
+    let clock = ManualClock::new(T0);
+    let retry = RetryPolicy {
+        max_retries: 3,
+        base_delay: Duration::ZERO,
+        max_delay: Duration::ZERO,
+    };
+    let outbound =
+        PacedOutbound::new(ClientOutbound::new(client(&t)), one_a_second(&clock)).retry(retry);
+    let from = PhoneNumberId::new(NUMBER);
+
+    t.push_json(500, server_error());
+    let message = OutboundMessage::text(Recipient::phone("+16505551234"), "Your order shipped");
+    let error = outbound.send(&from, &message).await.unwrap_err();
+    assert!(error.may_have_been_sent());
+    assert_eq!(
+        t.requests().len(),
+        1,
+        "a send that may be out is not resent"
+    );
+
+    t.push_json(500, server_error());
+    t.push_json(200, json!({"success": true}));
+    outbound
+        .mark_read(&from, &MessageId::new("wamid.A"), false)
+        .await
+        .unwrap();
+    assert_eq!(t.requests().len(), 3, "a read receipt is retried");
+
+    t.push_json(500, server_error());
+    outbound
+        .mark_read(&from, &MessageId::new("wamid.B"), true)
+        .await
+        .unwrap_err();
+    assert_eq!(t.requests().len(), 4, "a typing indicator is not");
+
+    // Each call and retry took a slot, one a second.
+    assert_eq!(elapsed(&clock), Duration::from_secs(3));
+    assert_eq!(t.remaining(), 0);
 }

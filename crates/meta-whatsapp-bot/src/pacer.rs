@@ -1337,6 +1337,30 @@ mod tests {
         assert_eq!(clock.now(), ms(1600));
     }
 
+    /// `SystemClock` waits until the deadline, on Tokio's clock: five
+    /// seconds for a deadline five seconds away, nothing for one past.
+    #[tokio::test(start_paused = true)]
+    async fn the_system_clock_sleeps_until_the_deadline() {
+        let start = tokio::time::Instant::now();
+        Timer::sleep_until(
+            &SystemClock,
+            later(SystemClock.now(), Duration::from_secs(5)),
+        )
+        .await;
+        let waited = start.elapsed();
+        assert!(
+            (Duration::from_millis(4_990)..=Duration::from_secs(5)).contains(&waited),
+            "{waited:?}"
+        );
+        let start = tokio::time::Instant::now();
+        Timer::sleep_until(
+            &SystemClock,
+            earlier(SystemClock.now(), Duration::from_secs(1)),
+        )
+        .await;
+        assert_eq!(start.elapsed(), Duration::ZERO);
+    }
+
     #[test]
     fn throttling_errors_slow_down_and_others_do_not() {
         let api = |code: i64| {

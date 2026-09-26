@@ -1718,3 +1718,75 @@ async fn a_handler_reaches_the_bots_pacer() {
         assert_eq!(*seen.lock().unwrap(), Some(paced));
     }
 }
+
+/// A clock that cancels the broadcast when a sender starts waiting until
+/// `at` or later, and whose wait then never ends: the cancel is what ends
+/// it.
+#[derive(Debug)]
+struct CancelWhenWaitingFor {
+    clock: ManualClock,
+    at: OffsetDateTime,
+    handle: Arc<OnceLock<BroadcastHandle>>,
+}
+
+impl Clock for CancelWhenWaitingFor {
+    fn now(&self) -> OffsetDateTime {
+        self.clock.now()
+    }
+}
+
+#[async_trait]
+impl Timer for CancelWhenWaitingFor {
+    async fn sleep_until(&self, deadline: OffsetDateTime) {
+        if deadline >= self.at {
+            self.handle.get().unwrap().cancel();
+            futures::future::pending::<()>().await;
+        }
+        self.clock.advance_to(deadline);
+    }
+}
+
+/// A retry cancelled while it waits for its slot (not for its delay):
+/// the slot goes back, the recipient is skipped, and its line keeps the
+/// error that deferred it. At 1 a second: the first recipient is
+/// pair-limited at 0 s (due again at 1 s), the second sent at 1 s, and
+/// the retry's slot, at 2 s, is never reached.
+#[tokio::test]
+async fn a_retry_cancelled_while_waiting_for_its_slot_keeps_its_last_error() {
+    let clock = ManualClock::new(T0);
+    let outbound = Timed::new(&clock);
+    outbound.fail(&phone(1), || graph(131056));
+    let handle = Arc::new(OnceLock::new());
+    let timer = CancelWhenWaitingFor {
+        clock: clock.clone(),
+        at: T0 + time::Duration::seconds(2),
+        handle: Arc::clone(&handle),
+    };
+    let broadcast = Broadcast::builder(NUMBER)
+        .to([phone(1), phone(2)])
+        .content(Text::new("Spring sale"))
+        .outbound(outbound.clone())
+        .pacer(Pacer::new(TokenBucket::new(Rate::per_second(1).unwrap())).with_timer(timer))
+        .concurrency(1)
+        .build()
+        .unwrap();
+    handle.set(broadcast.handle()).unwrap();
+    let report = broadcast.run().await;
+
+    let starts: Vec<u128> = outbound.sends().iter().map(|(t, _)| ms(*t)).collect();
+    assert_eq!(starts, [0, 1000]);
+    assert_eq!(report.ended, BroadcastEnd::Cancelled);
+    let first = &report.recipients[0];
+    assert!(
+        matches!(first.outcome, SendOutcome::Skipped),
+        "{:?}",
+        first.outcome
+    );
+    assert_eq!(first.attempts, 1);
+    let error = first
+        .last_error
+        .as_ref()
+        .expect("the error that deferred it");
+    assert_eq!(error.kind(), ErrorKind::PairRateLimited);
+    assert!(matches!(report.recipients[1].outcome, SendOutcome::Sent(_)));
+}

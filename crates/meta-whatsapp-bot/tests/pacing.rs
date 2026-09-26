@@ -11,14 +11,15 @@
 mod common;
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use common::{NUMBER, send_response};
 use meta_whatsapp_bot::{
-    Broadcast, BroadcastEnd, Outbound, Pacer, Rate, SendOutcome, Timer, TokenBucket,
+    Broadcast, BroadcastEnd, Outbound, Pacer, Rate, RateLimiter, Reservation, SendOutcome,
+    SlotRequest, Timer, TokenBucket,
 };
 use meta_whatsapp_client::messages::{OutboundMessage, SendResponse, Text};
 use meta_whatsapp_core::clock::Clock;
@@ -448,4 +449,182 @@ async fn a_retry_pending_when_the_wall_clock_steps_back_goes_when_due() {
         "the retry went at {again} s, not when due"
     );
     assert!(sends[N].0 < Duration::from_secs(21));
+}
+
+/// A `TokenBucket` that counts the slots handed back to it.
+#[derive(Debug)]
+struct Counting {
+    bucket: TokenBucket,
+    releases: AtomicUsize,
+}
+
+#[async_trait]
+impl RateLimiter for Counting {
+    async fn reserve(&self, request: &SlotRequest) -> meta_whatsapp_core::Result<Reservation> {
+        self.bucket.reserve(request).await
+    }
+
+    async fn release(
+        &self,
+        request: &SlotRequest,
+        reservation: &Reservation,
+    ) -> meta_whatsapp_core::Result<()> {
+        self.releases.fetch_add(1, Ordering::SeqCst);
+        self.bucket.release(request, reservation).await
+    }
+
+    async fn slow_down(
+        &self,
+        from: &PhoneNumberId,
+        now: OffsetDateTime,
+    ) -> meta_whatsapp_core::Result<()> {
+        self.bucket.slow_down(from, now).await
+    }
+}
+
+/// The slots a cancel hands back never put two sends in one slot: a
+/// cancel racing 32 senders (at a slot's very time for half the seeds),
+/// while a bot takes slots of the same number before, during and after
+/// it, over 64 seeds. Every start, the broadcast's and the bot's, is at
+/// least one interval (20 ms at 50 a second) after the one before.
+/// Giving back a slot with a live one after it fails this.
+#[tokio::test(start_paused = true)]
+async fn a_cancel_racing_the_senders_never_puts_two_sends_in_one_slot() {
+    const N: usize = 300;
+    const INTERVAL: Duration = Duration::from_millis(20);
+    let mut releases = 0;
+    let mut cancelled = 0;
+    for seed in 0..64_u64 {
+        let clock = TokioClock::new();
+        let limiter = Arc::new(Counting {
+            bucket: TokenBucket::new(Rate::per_second(50).unwrap()).adaptive(false),
+            releases: AtomicUsize::new(0),
+        });
+        let pacer = Pacer::shared(limiter.clone()).with_timer(clock.clone());
+        let outbound = Slow::new(&clock, Duration::from_millis(5 + seed * 7 % 60));
+        let broadcast = Broadcast::builder(NUMBER)
+            .to((0..N).map(phone))
+            .content(Text::new("Spring sale"))
+            .outbound(outbound.clone())
+            .pacer(pacer.clone())
+            .concurrency(32)
+            .build()
+            .unwrap();
+        let handle = broadcast.handle();
+        let cancel_at = if seed % 2 == 0 {
+            INTERVAL * u32::try_from(seed * 13 % 150).unwrap()
+        } else {
+            Duration::from_millis(1 + seed * 37 % 3000)
+        };
+        let canceller = async move {
+            tokio::time::sleep(cancel_at).await;
+            handle.cancel();
+        };
+        let bot_starts: Arc<Mutex<Vec<Duration>>> = Arc::default();
+        let bot = {
+            let (pacer, clock, starts) = (pacer.clone(), clock.clone(), Arc::clone(&bot_starts));
+            async move {
+                let from = PhoneNumberId::new(NUMBER);
+                for i in 0..60_u64 {
+                    pacer.acquire(&from).await.unwrap();
+                    starts.lock().unwrap().push(clock.elapsed());
+                    tokio::time::sleep(Duration::from_millis((i * seed) % 7 * 30)).await;
+                }
+            }
+        };
+        let (report, (), ()) = tokio::join!(broadcast.run(), canceller, bot);
+
+        let sent = outbound.starts();
+        let progress = report.progress();
+        assert_eq!(progress.sent, sent.len(), "seed {seed}");
+        assert_eq!(progress.sent + progress.skipped, N, "seed {seed}");
+        if report.ended == BroadcastEnd::Cancelled {
+            cancelled += 1;
+        }
+        let mut all = sent;
+        all.extend(bot_starts.lock().unwrap().iter().copied());
+        all.sort();
+        assert_eq!(all.len(), progress.sent + 60, "seed {seed}");
+        for pair in all.windows(2) {
+            assert!(
+                pair[1] - pair[0] >= INTERVAL,
+                "seed {seed}: two starts {:?} apart, at {:?} and {:?}",
+                pair[1] - pair[0],
+                pair[0],
+                pair[1]
+            );
+        }
+        releases += limiter.releases.load(Ordering::SeqCst);
+    }
+    // Not vacuous: the runs were cancelled with senders waiting, whose
+    // slots went back.
+    assert_eq!(cancelled, 64);
+    assert!(releases > 64, "{releases} slots given back");
+}
+
+/// `TokenBucket::set_rate` while 32 senders wait for their slots: the
+/// slots booked before keep the old spacing, the ones booked after take
+/// the new rate, and no two starts are closer than the new interval.
+/// Removing the change fails this.
+#[tokio::test(start_paused = true)]
+async fn a_rate_set_while_thirty_two_senders_wait_takes_effect() {
+    const N: usize = 1_000;
+    let clock = TokioClock::new();
+    let outbound = Slow::new(&clock, Duration::from_millis(200));
+    let bucket = Arc::new(TokenBucket::new(Rate::per_second(20).unwrap()).adaptive(false));
+    let pacer = Pacer::shared(bucket.clone()).with_timer(clock.clone());
+    let upgrade = {
+        let bucket = Arc::clone(&bucket);
+        async move {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            bucket.set_rate(NUMBER, Rate::per_second(100).unwrap());
+        }
+    };
+    let run = Broadcast::builder(NUMBER)
+        .to((0..N).map(phone))
+        .content(Text::new("Spring sale"))
+        .outbound(outbound.clone())
+        .pacer(pacer)
+        .concurrency(32)
+        .build()
+        .unwrap()
+        .run();
+    let (report, ()) = tokio::join!(run, upgrade);
+
+    assert_eq!(report.progress().sent, N);
+    let starts = outbound.starts();
+    let gaps = |from: Duration, to: Duration| -> Vec<Duration> {
+        starts
+            .windows(2)
+            .filter(|w| w[0] >= from && w[1] < to)
+            .map(|w| w[1] - w[0])
+            .collect()
+    };
+    // 20 a second until the change: 50 ms apart.
+    assert!(
+        gaps(Duration::ZERO, Duration::from_secs(5))
+            .iter()
+            .all(|g| *g == Duration::from_millis(50))
+    );
+    assert_eq!(
+        busiest_second(&starts, Duration::ZERO, Duration::from_secs(4)),
+        20
+    );
+    // The slots booked before it (one per sender, 1.6 s) are kept; then
+    // 100 a second, 10 ms apart, never closer.
+    let after = gaps(Duration::from_millis(6_700), Duration::MAX);
+    assert!(!after.is_empty());
+    assert!(
+        after.iter().all(|g| *g == Duration::from_millis(10)),
+        "{after:?}"
+    );
+    assert_eq!(
+        busiest_second(&starts, Duration::from_millis(6_700), Duration::MAX),
+        100
+    );
+    assert!(
+        starts
+            .windows(2)
+            .all(|w| w[1] - w[0] >= Duration::from_millis(10))
+    );
 }
