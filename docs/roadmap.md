@@ -407,12 +407,15 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     (removing the `may_have_been_sent` check fails the test).
   - **Landed:** rows 89 and 92 done in the library (`Broadcast`,
     `Pacer`, `TokenBucket`, `BroadcastPolicy`, `BotBuilder::pacer`,
-    `Pacer::acquire` for group operations). Swappable: the rate limiter
-    (`RateLimiter`), the clock (`Timer`) and the failure policy
-    (`BroadcastPolicy`) are traits with defaults. Not in it: a limiter
-    shared by replicas (the trait allows one; none ships), Meta's daily
-    messaging limit (Meta's to enforce), and runs that survive a
-    restart (B3).
+    `PacedGroups` and `PacedGroup` for group operations). Each person
+    once by default (`BroadcastBuilder::dedupe`); lines streamed to a
+    `ReportSink` for long lists; every retry paced
+    (`Client::with_retry`). Swappable: the rate limiter (`RateLimiter`),
+    the clock (`Timer`), the failure policy (`BroadcastPolicy`) and the
+    report sink (`ReportSink`) are traits with defaults. Not in it: a
+    limiter shared by replicas (the trait allows one; none ships),
+    Meta's daily messaging limit (Meta's to enforce), and runs that
+    survive a restart (B3).
 - [ ] **B3. Durable scheduling** (`meta-whatsapp-bot`; row 90; D29): jobs
   as a typed store on `KvStore` (a bucketed due-time index, claims by
   compare-and-swap with a lease; no new port), send at a time, cancel,

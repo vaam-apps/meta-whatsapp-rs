@@ -905,15 +905,22 @@ for every event, after the ban and the match.
   go to a `BroadcastPolicy` (default `Backoff`, on `ErrorKind`: the pair
   limit defers one recipient on Meta's `4^X` schedule, throughput retries
   and slows the pacer, spam and the per-user marketing limit are
-  reported, account-wide kinds stop the run), but a send is repeated only
-  when the error is retryable and `Error::may_have_been_sent` is false,
-  whatever the policy (enforced outside it; the client's `RetryPolicy`
-  is stricter still, replaying a send on throttling only).
+  reported, a number in maintenance (`131057`) is retried every 20 s,
+  account-wide kinds stop the run), but a send is repeated only when the
+  error is retryable and `Error::may_have_been_sent` is false, whatever
+  the policy (enforced outside it). `BroadcastBuilder::client` turns the
+  client's own replays off (`Client::with_retry`), so every retry is
+  paced. A person listed twice is sent once (`BroadcastBuilder::dedupe`);
+  each line can go to a `ReportSink` as it settles instead of the report
+  (`BroadcastBuilder::report_to`), so memory does not grow with the
+  lines; the run keeps its own time, so a wall clock stepping back
+  neither pauses the pacer nor puts off a retry.
   `BotBuilder::pacer` wraps a bot's outbound in a `PacedOutbound`, so its
   replies, read receipts and typing indicators share the budget;
-  `Pacer::acquire` is the hook for other calls (group operations). No
-  new port and no persistence: a run lives in memory (durable jobs are
-  B3's typed store on `KvStore`).
+  `PacedGroups` and `PacedGroup` wrap the client's group operations the
+  same way, and `Pacer::acquire` is the hook for any other call. No new
+  port and no persistence: a run lives in memory (durable jobs are B3's
+  typed store on `KvStore`).
 
 ## Typst (`meta-whatsapp-typst`)
 

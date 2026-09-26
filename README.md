@@ -184,8 +184,8 @@ prefixes and aliases, private/group/owner-only guards, a banned list,
 per-user cooldowns, middleware, one compiled-in plugin per feature, a
 generated `/help`, Meta's command menu, and Markdown replies converted to
 WhatsApp formatting. Its `Broadcast` sends one message to many
-recipients, paced per number under Meta's throughput, with progress, a
-cancel and a report per recipient. Guide: [docs/guides/bots.md](docs/guides/bots.md).
+recipients, each person once, paced per number under Meta's throughput,
+with progress, a cancel and a report per recipient. Guide: [docs/guides/bots.md](docs/guides/bots.md).
 
 ### Run the examples
 

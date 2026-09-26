@@ -414,8 +414,15 @@ let report = broadcast.run().await; // spawn it to do something else meanwhile
 `BroadcastBuilder::compose` builds each one's message (their name in the
 template, a `biz_opaque_callback_data` to match the status webhooks). A
 message composed for someone else, or a compose error, fails that
-recipient without a send. The list is sent as given: a recipient listed
-twice gets two messages.
+recipient without a send.
+
+**Each person once.** A person listed twice gets one message: every send
+is billed, and a duplicate marketing message harms the merchant. The same
+person is the same phone number compared by its digits (`+1 650-555-1234`
+and `16505551234`), the same business-scoped user id, the same group, or
+a phone number and a user id that one `Recipient::PhoneAndUser` carried
+together. The repeat's line is `Outcome::Duplicate`, naming the first
+listing; `BroadcastBuilder::dedupe(false)` sends the list as given.
 
 **The pace.** Meta's throughput (`throughput`) is per registered
 business number: 80 messages a second by default (`Rate::DEFAULT`),
@@ -442,10 +449,12 @@ pub fn shared_pacer(upgraded: PhoneNumberId) -> Pacer {
   receipts and typing indicators wait for a slot too). Two pacers give
   one number two budgets. A reply waits behind at most a broadcast's
   concurrency in slots.
-- **Group operations** go through the same budget when you call
-  `Pacer::acquire(&number)` before them. Meta documents no rate for
-  group operations; this is a choice, and the client's calls are not
-  paced by themselves.
+- **Group operations** go through the same budget through
+  `PacedGroups::new(client.groups(number), pacer)` and its `group(id)`
+  (a `PacedGroup`): each of the client's group calls, after a slot of the
+  number. Meta documents no rate for group operations; this is a choice,
+  and the client's own calls are not paced by themselves.
+  `Pacer::acquire(&number)` paces any other call.
 - **Several replicas** each count their own sends: two replicas at 80 a
   second send 160. Give each its share of the rate
   (`Rate::per_second`), or implement `RateLimiter` over a store they
@@ -464,6 +473,7 @@ pub fn shared_pacer(upgraded: PhoneNumberId) -> Pacer {
 | --- | --- |
 | `131056`, the pair rate limit (one user messaged too often) | that recipient waits 1, 4, 16, 64 s (the `4^X` schedule of `about-the-platform`); the others go on |
 | `130429` throughput, or another `RateLimited` code | retried after 1, 2, 4, 8 s; the number's pacer halves its rate, back to full after 30 quiet seconds (`TokenBucket::recovery`) |
+| `131057`, the number in maintenance (Meta's throughput upgrade takes it off for up to a minute, `throughput`) | retried every 20 s (`Backoff::MAINTENANCE_RETRY`), so its five sends outlast the minute; the pacer slows down |
 | `131048`, sending restricted for spam | reported, not retried (Meta: retrying makes it worse); the pacer slows down |
 | `131049`, the per-user marketing limit | reported for that recipient, not retried (Meta: wait at least 24 hours) |
 | an error in `Backoff::STOPS` (the token, a permission, the account, the classification limit, payment) | the run stops: every recipient not sent yet is skipped |
@@ -474,14 +484,22 @@ is retryable and `Error::may_have_been_sent` is false. A timeout, or a
 5xx after the request reached Meta, is reported as `Outcome::Failed`
 with `may_have_been_sent()` true and never resent, since a duplicate
 campaign message is worse than a missing one: match it with the status
-webhooks (the callback data) before sending again. Through a client
-with its default `RetryPolicy`, a throttled send was already replayed
-(up to three times, under the same rule) before the broadcast sees it.
+webhooks (the callback data) before sending again.
+`BroadcastBuilder::client` turns the client's own replays off
+(`Client::with_retry(RetryPolicy::NONE)`), so a throttled send is
+retried by the broadcast, through the pacer; give an outbound of your
+own over a client the same policy.
 
 **The report.** `run` returns a `BroadcastReport`: one
-`RecipientReport` per recipient, in order (`attempts`, and an `Outcome`:
-`Sent` with Meta's response, `Failed` with the last error, or `Skipped`),
-and how the run `Ended`. `Sent` means Meta accepted the message: most
+`RecipientReport` per recipient, in order (its `index`, `attempts`, and
+an `Outcome`: `Sent` with Meta's response, `Failed` with the last error,
+`Skipped`, or `Duplicate`), its counts (`BroadcastReport::progress`) and
+how the run `Ended`. For a list too long to keep every line in memory,
+`BroadcastBuilder::report_to(sink)` hands each line to a `ReportSink` as
+it settles (a `tokio::sync::mpsc::Sender` is one), and the report keeps
+the counts only; the run waits for the sink, and a sink that fails stops
+it, so nothing is sent whose line would be lost. `Sent` means Meta
+accepted the message: most
 `131049` refusals arrive later, as a `failed` status webhook
 (`templates/marketing-templates/per-user-limits`). Meta's daily
 messaging limit (unique users per 24 hours per business portfolio,
@@ -491,7 +509,7 @@ messaging limit (unique users per 24 hours per business portfolio,
 for a slot or a retry ends at once, sends in flight finish and are
 reported (abandoning one would leave unknown whether it went out), and
 the rest are `Skipped`. `BroadcastHandle::progress` counts sent, failed,
-skipped and `Progress::remaining` meanwhile.
+skipped, duplicates and `Progress::remaining` meanwhile.
 
 **Not durable.** A run lives in memory: a restart loses it, and the
 report is its only record. Broadcasts that survive a restart, and
@@ -501,7 +519,11 @@ scheduled sends, are [roadmap](../roadmap.md) item B3 (a typed store on
 **Time** comes from the pacer's `Timer`, a `Clock` that can wait:
 `SystemClock` sleeps on Tokio; a `ManualClock` moves forward at once
 when waited on, so a test runs a whole paced broadcast instantly and
-reads when each send started (`Pacer::with_timer`).
+reads when each send started (`Pacer::with_timer`). A `ManualClock`'s
+sleeps add up, so concurrent senders do not overlap on it: to test the
+rate under concurrency, implement `Timer` over Tokio's paused clock
+(`tokio::time::sleep` under `#[tokio::test(start_paused = true)]`). A
+wall clock stepping back neither pauses the pacer nor puts off a retry.
 
 ## 10. Testing
 

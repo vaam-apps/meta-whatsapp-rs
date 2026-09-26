@@ -239,9 +239,16 @@ stored data, the owner's).
   recipient (`BroadcastBuilder::compose`) from one business number
   through an `Outbound`, each send, retries included, after a slot of
   the number's `Pacer`, up to 32 in flight (`BroadcastBuilder::concurrency`).
-  `run` returns a `BroadcastReport` (per recipient: `Outcome::Sent`,
-  `Outcome::Failed` or `Outcome::Skipped`, the attempts, and how the run
-  `Ended`); a `BroadcastHandle` gives `progress` and `cancel` (no send
+  Each person once by default: a recipient listed again (the same phone
+  number by its digits, BSUID or group) is `Outcome::Duplicate`, not
+  sent to again (`BroadcastBuilder::dedupe(false)` sends the list as
+  given). `run` returns a `BroadcastReport` (per recipient, with its
+  `index`: `Outcome::Sent`, `Outcome::Failed`, `Outcome::Skipped` or
+  `Outcome::Duplicate`, the attempts; the counts; how the run `Ended`),
+  or hands each line to a `ReportSink` as it settles
+  (`BroadcastBuilder::report_to`, a `tokio::sync::mpsc::Sender` among
+  them; a sink that fails stops the run) so memory does not grow with
+  the lines; a `BroadcastHandle` gives `progress` and `cancel` (no send
   starts after it, sends in flight finish). The pacer is two traits with
   defaults: `RateLimiter` (`TokenBucket`: per number, in this process,
   evenly spaced so no one-second window holds more than the rate;
@@ -252,20 +259,31 @@ stored data, the owner's).
   Tokio, `ManualClock` moving at once in tests). Failed sends go to a
   `BroadcastPolicy` (default `Backoff`, on `ErrorKind`): the pair rate
   limit (`131056`) defers only that recipient, on Meta's `4^X`
-  schedule; throughput (`130429`) is retried and slows the pacer; spam
-  (`131048`) slows it and is reported; the per-user marketing limit
-  (`131049`) is reported, never retried; the kinds of `Backoff::STOPS`
-  (token, permission, account, classification limit, payment) stop the
-  run. Whatever the policy, a send is repeated only when the error is
-  retryable and `Error::may_have_been_sent` is false: a timed-out send is
-  never replayed. `BotBuilder::pacer` puts a bot's outbound in a
-  `PacedOutbound`, so its replies, read receipts and typing indicators
-  share the number's budget; `Pacer::acquire` paces any other call
-  (group operations). One budget per process: a shared `RateLimiter`
+  schedule; throughput (`130429`) is retried and slows the pacer; a
+  number in maintenance (`131057`, Meta's throughput upgrade, up to a
+  minute) is retried every 20 s (`Backoff::MAINTENANCE_RETRY`) and slows
+  it; spam (`131048`) slows it and is reported; the per-user marketing
+  limit (`131049`) is reported, never retried; the kinds of
+  `Backoff::STOPS` (token, permission, account, classification limit,
+  payment) stop the run. Whatever the policy, a send is repeated only
+  when the error is retryable and `Error::may_have_been_sent` is false: a
+  timed-out send is never replayed; `BroadcastBuilder::client` turns the
+  client's own replays off (`Client::with_retry`), so every retry is
+  paced. The run keeps its own time: a wall clock stepping back neither
+  pauses the pacer nor puts off a pending retry. `BotBuilder::pacer`
+  puts a bot's outbound in a `PacedOutbound`, so its replies, read
+  receipts and typing indicators share the number's budget; `PacedGroups`
+  and `PacedGroup` wrap the client's group operations the same way, and
+  `Pacer::acquire` paces any other call. One budget per process: a shared `RateLimiter`
   across replicas is the integrator's to plug in (none ships). No new
   port and no persistence: a run lives in memory (durable, resumable
   jobs are B3). New dependencies of the bot crate, all already in the
-  workspace: `futures`, `time`, and `tokio` (`sync`, `time`).
+  workspace: `bytes`, `futures`, `time`, and `tokio` (`sync`, `time`;
+  `test-util` for its tests).
+- `Client::with_retry` (this client, with another `RetryPolicy`) and
+  `Client::retry_policy`: the policy moved from the client's shared
+  state to each `Client`, so a caller can turn replays off for its own
+  calls (the paced broadcast does). `with_token` keeps the policy.
 - `meta_whatsapp_client::messages::TEXT_BODY_MAX_CHARS` (4096, the text
   limit the client already checked) and `WebhookEvent::KINDS` (every
   value `WebhookEvent::kind` returns), for the bot framework. Both are
