@@ -422,8 +422,9 @@ impl EmbeddedSignup {
     /// return a scrubbed error.
     ///
     /// The requests passed in are marked non-idempotent, so `GraphRequest`
-    /// itself only replays throttling rejections (whose logged text is a
-    /// Graph error, not a URL). Those are not retried again here.
+    /// itself only replays what [`Error::may_resend`] allows (throttling,
+    /// an HTTP 429, the account in maintenance: errors whose text is not a
+    /// URL). Those are not retried again here.
     async fn quiet_retries<F, Fut, T>(
         &self,
         eligible: impl Fn(&Error) -> bool,
@@ -704,6 +705,28 @@ mod tests {
             .unwrap_err();
         assert_eq!(e.kind(), ErrorKind::RateLimited);
         assert_eq!(t.requests().len(), 4, "1 + 3 throttled attempts");
+        assert_eq!(t.remaining(), 0);
+    }
+
+    /// `131057` (the account in maintenance) is replayed by `GraphRequest`
+    /// itself, as `Error::may_resend` allows: the quiet loop must not
+    /// multiply that budget either (1 + 2 requests, not 3 × 3).
+    #[tokio::test]
+    async fn debug_token_leaves_maintenance_to_the_request() {
+        let t = ScriptedTransport::new();
+        for _ in 0..3 {
+            t.push_json(
+                400,
+                json!({"error": {"message": "(#131057) Business Account is in maintenance mode", "code": 131057}}),
+            );
+        }
+        let e = client(&t, retrying())
+            .embedded_signup(AppCredentials::new("1", APP_SECRET))
+            .debug_token(&AccessToken::new(BUSINESS_TOKEN))
+            .await
+            .unwrap_err();
+        assert_eq!(e.graph().map(|g| g.code), Some(131_057));
+        assert_eq!(t.requests().len(), 3, "1 + 2 replays by the request");
         assert_eq!(t.remaining(), 0);
     }
 
