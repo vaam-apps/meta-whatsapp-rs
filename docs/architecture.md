@@ -808,8 +808,10 @@ and the thread's owner, and sends replies.
   message not addressed to the conversation's contact.
 - Free-form replies outside the window are refused locally
   (`ValidationError::customer_service_window_closed()`, kind
-  `CustomerServiceWindowClosed`); templates and Direct Send are exempt. The
-  window opens from the latest of the recorded inbound messages and the
+  `CustomerServiceWindowClosed`); templates and Direct Send `utility` and
+  `authentication` are exempt (a Direct Send `service` message is not:
+  Meta drops it outside the window). The window opens from the latest
+  of the recorded inbound messages and the
   conversation's window events: the calls that reopen it on Meta's side
   (`calling/pricing`: the customer's call, answered or not, and the
   customer accepting the business's call) and the customer's messages
@@ -821,13 +823,19 @@ and the thread's owner, and sends replies.
   number only and is recorded under the key that number leads to (the
   identity links, else a synced contact's BSUID, else the phone number).
   `Inbox::thread_owner` derives the rest at read time: a later message on
-  `messages` means this app owns the thread, 24 hours without the
-  customer mean it is idle; `Inbox::record_release` records this app's
-  own `release`, which no webhook reports. `Inbox::send` refuses a
+  `messages` means this app owns the thread (not a call permission
+  reply, which Meta also sends to the Incoming Call primary and the
+  standby partners), 24 hours without the customer mean it is idle;
+  `Inbox::record_release` records this app's own `release`, which no
+  webhook reports. `Inbox::send` refuses a
   service message locally while another app owns the thread (field
   `thread_owner`); templates and Direct Send `utility` and
   `authentication` need no ownership. Both local checks are advisory
-  (Meta enforces them) and `ReplyChecks` turns either off per inbox.
+  (Meta enforces them) and `ReplyChecks` turns either off per inbox: the
+  escalation partner's, an app that receives handovers without standby
+  visibility (it never saw the customer's messages to the previous
+  owner, so its window can read closed while Meta's is open), and an app
+  sharing the number with a Meta Business Agent without routing.
 - Identity links: `InboxSink` links a phone number to the BSUID an
   inbound message carries with it, a previous BSUID to the current one
   (`user_id_update`), and a number change's old identity to the new one

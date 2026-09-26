@@ -226,7 +226,10 @@ match inbox.reply(&key, content).await {
 - `reply` refuses free text outside the window **before** any request
   (`Error::Validation` on field `customer_service_window`, whose `kind()` is
   `CustomerServiceWindowClosed`, like Meta's own 131047): one branch covers
-  both.
+  both. Templates are exempt, and so are Direct Send `utility` and
+  `authentication` messages (Meta sends them as templates); a Direct Send
+  `service` message is not: Meta drops it outside the window
+  (`direct-send/send-utility-and-authentication-messages`).
 - Meta also opens the window when the customer **calls** you, answered or
   not, and when they accept your call (`calling/pricing`). `InboxSink`
   records these as *window events*, never as messages (no history row, no
@@ -275,8 +278,8 @@ when nothing was ever recorded: no routing):
 | --- | --- |
 | a handover `control_passed` (`ThreadControlChanged`) | `ThreadOwner::ThisApp`, with the new owner's role |
 | a handover `control_taken` | `ThreadOwner::AnotherApp` (the escalation partner took it) |
-| a standby copy of the customer's message (`StandbyObserved`) | `AnotherApp`, unless a handover of that second or later is stored; and a window event, never a message |
-| a message on `messages` after the record | `ThisApp` (derived when read; nothing is written per message) |
+| a standby copy of the customer's message (`StandbyObserved`) | `AnotherApp`, dated 1 ms before the copy so that it never overrides a handover of its second (in either order, and when two replicas race); and a window event, never a message |
+| a message on `messages` after the record (one of a standby copy's second included) | `ThisApp` (derived when read; nothing is written per message). Not a customer's answer to a call permission request: it reaches the Incoming Call primary and the standby partners on `messages` and "does not change thread ownership" (`conversation-routing/calling-webhooks`) |
 | your own `release` (no webhook) | call `inbox.record_release(&key)` once your `release` request succeeded: `Idle` |
 | 24 hours without the customer (`Inbox::THREAD_IDLE_AFTER`) | `Idle` (derived when read) |
 
@@ -316,6 +319,22 @@ let escalation = inbox.with_reply_checks(ReplyChecks::all().thread_owner(false))
   escalation partner); a thread idle after 24 hours without the
   customer is usually outside the window too, which the window check
   refuses.
+- The checks read what your app received, and two setups need one off:
+  - An app that receives handovers **without standby visibility** (Meta
+    then puts a `conversation_context` summary on the `control_passed`,
+    `conversation-routing/conversation-context`) never saw the
+    customer's messages to the previous owner. After the handover, its
+    `inbox.window(&key)` can read closed while Meta's is open (a thread
+    is passed only while it is active), so `reply` would refuse the
+    answer the customer is waiting for. Turn the window check off in
+    that inbox (`ReplyChecks::all().window(false)`; `ReplyChecks::none()`
+    for an escalation partner) and let Meta answer 131047 when its
+    window is closed.
+  - An app that shares the number with a **Meta Business Agent and no
+    routing configuration** receives standby copies, but its service
+    message makes it the active handler
+    (`conversation-routing/standby-partners`): turn the ownership check
+    off in its inbox.
 - A pass by your own app is not reported to you (the new owner gets
   `control_passed`): until the thread control API is wrapped (roadmap
   L15), record it with `ConversationStore::set_thread_owner`

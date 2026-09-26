@@ -5,7 +5,7 @@ description: "The merchant-to-customer chat inbox of a multi-tenant CMS built on
 
 # meta-whatsapp-rs-cms-inbox
 
-> **Verified against meta-whatsapp-rs a0361269ea95d7c4a6101622364f3c3ff160ddb4 (2026-09-27).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 97f0606fe4932c75fb6b2ba3c5d3668de6da7e5c (2026-09-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/inbox.rs](examples/inbox.rs), compiled and tested by meta-whatsapp-rs's own gate.
 The full server (webhook endpoint, SSE, bearer-token tenants), exercised in-process by meta-whatsapp-rs's tests:
@@ -90,8 +90,8 @@ inbox.reply(&key, content).await
 
 `reply`/`send` refuse free-form content outside the window **before any request**, with
 `Error::Validation` whose `kind()` is `ErrorKind::CustomerServiceWindowClosed` — the same kind as
-Meta's 131047: branch on the kind. Templates and Direct Send categories are exempt. The window counts
-the customer's calls and standby messages (window events: never history, never unread). Quoted replies:
+Meta's 131047: branch on the kind. Templates and Direct Send `utility`/`authentication` are exempt (not `service`).
+The window counts the customer's calls and standby messages (window events: never history, never unread). Quoted replies:
 
 ```rust
 let message = OutboundMessage::new(inbox.recipient(&key), Text::new(body)).reply_to(quoted);

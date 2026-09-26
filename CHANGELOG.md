@@ -205,7 +205,13 @@ stored data, the owner's).
     message locally while another app owns the thread (a
     `ValidationError` on field `inbox::THREAD_OWNER`,
     `inbox::is_thread_owned_elsewhere`); templates and Direct Send
-    `utility` and `authentication` need no ownership.
+    `utility` and `authentication` need no ownership. A standby copy's
+    record is dated 1 ms before the copy, so it never overrides a
+    handover of its second, even when two replicas race; a customer's
+    answer to a call permission request does not make this app the
+    owner (`conversation-routing/calling-webhooks`: Meta sends it to the
+    Incoming Call primary and the standby partners, and it "does not
+    change thread ownership").
   - `inbox::ReplyChecks` and `Inbox::with_reply_checks`: the caller's
     explicit override of either local check (the window, the owner),
     per inbox.
@@ -764,6 +770,14 @@ stored data, the owner's).
   that carries both `from` and `from_user_id` (one more store write,
   none when the link is stored), and records `calls`, `standby`,
   `messaging_handovers` and `user_id_update` events it ignored before.
+  `Inbox::send` now refuses a Direct Send `service` message outside the
+  window, as a message without a category (Meta drops it:
+  `direct-send/send-utility-and-authentication-messages`); only
+  `utility` and `authentication` skip the window check, and a category
+  the crate does not know is left to Meta by both checks. An app that
+  receives handovers without standby visibility turns the window check
+  off (`ReplyChecks`): it never saw the customer's messages to the
+  previous owner.
 
 - **Breaking — the `ConversationStore` port change of roadmap L5**: the
   port gains fourteen required methods and four provided ones, so a

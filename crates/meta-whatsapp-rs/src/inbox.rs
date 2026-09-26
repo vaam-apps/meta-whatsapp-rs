@@ -117,6 +117,26 @@
 //! partner; a thread idle after 24 hours without the customer is usually
 //! outside the window too, which the window check refuses.
 //!
+//! **What the inbox cannot see.** The checks read what this app received.
+//! In two setups that is not enough, and a check refuses a reply Meta
+//! would take; turn it off there:
+//!
+//! - an app that receives a handover without standby visibility (Meta
+//!   then sends the `control_passed` a `conversation_context` summary
+//!   instead: `conversation-routing/conversation-context`) never saw the
+//!   customer's messages to the previous owner. Its window reads from the
+//!   messages it received, and can be closed while Meta's is open: a
+//!   thread is passed only while it is active
+//!   (`conversation-routing/thread-control`). Turn the window check off
+//!   in that app's inbox (`ReplyChecks::all().window(false)`, and
+//!   [`ReplyChecks::none`] for an escalation partner): Meta answers
+//!   `131047` when its window is closed;
+//! - an app that shares the number with a Meta Business Agent and no
+//!   routing configuration receives standby copies, yet its service
+//!   message makes it the active handler
+//!   (`conversation-routing/standby-partners`): turn the ownership check
+//!   off in its inbox.
+//!
 //! **Identity links.** A customer is stored under several keys (a thread
 //! under their phone number from before BSUIDs, live messages under their
 //! BSUID, a new BSUID after a number change). [`InboxSink`] records the
@@ -1632,11 +1652,15 @@ fn thread_owned_elsewhere() -> Error {
 ///
 /// - **window**: free-form content outside the customer service window
 ///   ([`Inbox::window`]) is refused. Turn it off to let Meta decide (its
-///   answer is `131047`).
+///   answer is `131047`), and in an app that receives handovers without
+///   standby visibility: it never saw the customer's messages to the
+///   previous owner (the [module docs](self), "What the inbox cannot
+///   see").
 /// - **thread owner**: a service message is refused while another app owns
 ///   the thread ([`Inbox::thread_owner`]). Turn it off in the designated
-///   escalation partner's inbox (its service message takes the thread), or
-///   when you track ownership yourself.
+///   escalation partner's inbox (its service message takes the thread), in
+///   an app sharing the number with a Meta Business Agent and no routing
+///   configuration (the same), or when you track ownership yourself.
 ///
 /// Set per inbox with [`Inbox::with_reply_checks`]; for one call, use a
 /// clone (`inbox.clone().with_reply_checks(..)`: an `Inbox` is cheap to

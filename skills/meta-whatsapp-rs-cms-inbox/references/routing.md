@@ -1,6 +1,6 @@
 # Calls, standby and thread ownership in the inbox
 
-> **Verified against meta-whatsapp-rs a0361269ea95d7c4a6101622364f3c3ff160ddb4 (2026-09-27).** Source: the rustdoc of `meta_whatsapp_rs::inbox` (the module, `InboxSink`, `Inbox::thread_owner`, `ReplyChecks`) and `docs/guides/cms-inbox.md` section 5.
+> **Verified against meta-whatsapp-rs 97f0606fe4932c75fb6b2ba3c5d3668de6da7e5c (2026-09-27).** Source: the rustdoc of `meta_whatsapp_rs::inbox` (the module, `InboxSink`, `Inbox::thread_owner`, `ReplyChecks`) and `docs/guides/cms-inbox.md` section 5.
 
 What `InboxSink` records besides messages, and what `Inbox` does with it.
 Subscribe the webhook to `calls` and `user_id_update`, and, where the
@@ -32,8 +32,8 @@ latest of the last inbound message and the latest window event.
 | --- | --- |
 | `control_passed` | `ThreadOwner::ThisApp`, with the new owner's role |
 | `control_taken` | `ThreadOwner::AnotherApp` |
-| a standby copy of the customer's message | `AnotherApp` (never over a handover of its second), and a window event |
-| a message on `messages` after the record | `ThisApp`, when read |
+| a standby copy of the customer's message | `AnotherApp`, dated 1 ms before it (never over a handover of its second, even when replicas race), and a window event |
+| a message on `messages` after the record | `ThisApp`, when read; not a call permission reply (Meta sends it to the Incoming Call primary and the standby partners too) |
 | your own `release` | `inbox.record_release(&key)`: `Idle` |
 | 24 hours without the customer | `Idle`, when read (`Inbox::THREAD_IDLE_AFTER`) |
 
@@ -52,9 +52,10 @@ While another app owns the thread, `reply` and `send` refuse a service
 message before any request: `Error::Validation` on field `THREAD_OWNER`
 (`inbox::THREAD_OWNER`, kind `InvalidParameter`: Meta has no code of its
 own for it); match with `is_thread_owned_elsewhere`. Templates and
-Direct Send `utility` and `authentication` need no ownership. An idle
-thread is not refused. The designated escalation partner, whose service
-message takes the thread, turns the check off for its inbox:
+Direct Send `utility` and `authentication` need no ownership (a Direct
+Send `service` message does, and the window). An idle thread is not
+refused. The designated escalation partner, whose service message takes
+the thread, turns the check off for its inbox:
 
 ```rust
 inbox.with_reply_checks(ReplyChecks::all().thread_owner(false))
@@ -62,6 +63,19 @@ inbox.with_reply_checks(ReplyChecks::all().thread_owner(false))
 
 `ReplyChecks::all().window(false)` turns the window check off the same
 way; `ReplyChecks::none()` both. For one call, use a clone of the inbox.
+
+The checks read what your app received. Turn one off where that is not
+enough:
+
+- an app that receives handovers **without standby visibility** (its
+  `control_passed` carries a `conversation_context` summary instead)
+  never saw the customer's messages to the previous owner: its window can
+  read closed while Meta's is open. Turn the window check off there
+  (`ReplyChecks::none()` for an escalation partner); Meta answers 131047
+  when its window is closed;
+- an app sharing the number with a Meta Business Agent and **no routing
+  configuration** receives standby copies, yet its service message makes
+  it the active handler: turn the ownership check off.
 
 ## Identity links
 
