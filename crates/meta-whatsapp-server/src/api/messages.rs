@@ -965,7 +965,7 @@ fn request_field(library: &str) -> String {
 
 /// Send `message` with the number's token: `202` with its id, or the
 /// error, with Meta's `details`.
-pub async fn send(
+pub(crate) async fn send(
     state: &AppState,
     owned: &OwnedNumber,
     message: &OutboundMessage,
@@ -1027,7 +1027,7 @@ fn accepted(response: SendResponse) -> Result<MessageAccepted, ApiError> {
         (status = 504, description = "`timeout`: the message may have been sent (`may_have_been_sent: true`)", body = ErrorBody),
     )
 )]
-pub async fn send_message(
+pub(crate) async fn send_message(
     State(state): State<AppState>,
     caller: Caller,
     owned: OwnedNumber,
@@ -1106,7 +1106,7 @@ where
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
 )]
-pub async fn mark_read(
+pub(crate) async fn mark_read(
     State(state): State<AppState>,
     owned: OwnedNumber,
     Path((_, message_id)): Path<(String, String)>,

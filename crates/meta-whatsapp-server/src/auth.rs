@@ -17,6 +17,17 @@
 //! makes the owned number or WABA a client with a token comes from. Admin
 //! handlers reach a WABA's token through [`AdminCaller`], which only
 //! [`admin_guard`] (through [`Authorizer::admin_caller`]) creates.
+//!
+//! A capability is only its maker's word, and the core's
+//! [`Authorizer::new`] is public: anyone can build one and have it make a
+//! [`Caller`] naming any tenant. So the [`Caller`] and [`AdminCaller`]
+//! extractors admit what they take from the request's extensions
+//! ([`Authorizer::admit`], [`Authorizer::admit_admin`]): one this
+//! service's [`Authorizer`] did not make is `403 forbidden`. And the
+//! handlers, which act on [`Caller::tenant`] without asking the
+//! [`Authorizer`] again, are crate-private (`api::*`), as is
+//! `idempotency::run`, which takes a tenant as given: another crate
+//! reaches them only through the routers, behind these guards.
 
 use std::collections::HashMap;
 
@@ -84,39 +95,54 @@ pub async fn rotate_vault(
         .map(VaultRotation::from)
 }
 
+/// The tenant route's [`Caller`], which [`tenant_guard`] put in the
+/// request's extensions, once `state`'s [`Authorizer`] admits it
+/// ([`Authorizer::admit`]): one another [`Authorizer`] made (put there by
+/// anything but this service's guard) is `403 forbidden`, as handlers act
+/// on [`Caller::tenant`] without asking again.
 impl FromRequestParts<AppState> for Caller {
     type Rejection = ApiError;
 
     fn from_request_parts(
         parts: &mut Parts,
-        _: &AppState,
+        state: &AppState,
     ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
         // A tenant route mounted without `tenant_guard` is a bug: refuse.
-        std::future::ready(
-            parts
-                .extensions
-                .get::<Caller>()
-                .cloned()
-                .ok_or_else(ApiError::internal),
-        )
+        let caller = parts
+            .extensions
+            .get::<Caller>()
+            .cloned()
+            .ok_or_else(ApiError::internal)
+            .and_then(|caller| {
+                state.authz().admit(&caller)?;
+                Ok(caller)
+            });
+        std::future::ready(caller)
     }
 }
 
+/// The admin route's [`AdminCaller`], which [`admin_guard`] put in the
+/// request's extensions, once `state`'s [`Authorizer`] admits it
+/// ([`Authorizer::admit_admin`]): one another [`Authorizer`] made is `403
+/// forbidden`.
 impl FromRequestParts<AppState> for AdminCaller {
     type Rejection = ApiError;
 
     fn from_request_parts(
         parts: &mut Parts,
-        _: &AppState,
+        state: &AppState,
     ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
         // An admin route mounted without `admin_guard` is a bug: refuse.
-        std::future::ready(
-            parts
-                .extensions
-                .get::<AdminCaller>()
-                .cloned()
-                .ok_or_else(ApiError::internal),
-        )
+        let admin = parts
+            .extensions
+            .get::<AdminCaller>()
+            .cloned()
+            .ok_or_else(ApiError::internal)
+            .and_then(|admin| {
+                state.authz().admit_admin(&admin)?;
+                Ok(admin)
+            });
+        std::future::ready(admin)
     }
 }
 
@@ -317,15 +343,18 @@ impl OwnedWaba {
             Err(error) if error.code() == "storage_unavailable" => Err(error),
             // No token, an expired one, or one that no longer decrypts.
             Err(unusable) => {
-                tracing::info!(
-                    code = unusable.code(),
-                    "unbinding a WABA without a usable token: the app stays subscribed"
-                );
                 state
                     .authz()
                     .forget_for_admin(admin, &binding.waba_id)
                     .await
-                    .map_err(ApiError::from)
+                    .map_err(ApiError::from)?;
+                // Only once the admin was accepted and the WABA unbound:
+                // a refused admin unbinds nothing.
+                tracing::info!(
+                    code = unusable.code(),
+                    "unbound a WABA without a usable token: the app stays subscribed"
+                );
+                Ok(())
             }
         }
     }

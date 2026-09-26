@@ -258,7 +258,7 @@ fn details(owned: &OwnedNumber, info: PhoneNumberInfo) -> NumberDetails {
         (status = 429, description = "`too_many_requests`: the tenant's `read` budget (`Retry-After`)", body = ErrorBody),
     )
 )]
-pub async fn list_wabas(
+pub(crate) async fn list_wabas(
     State(state): State<AppState>,
     caller: Caller,
     PageQuery(page): PageQuery,
@@ -289,7 +289,7 @@ pub async fn list_wabas(
         (status = 429, description = "`too_many_requests`: the tenant's `read` budget (`Retry-After`)", body = ErrorBody),
     )
 )]
-pub async fn list_numbers(
+pub(crate) async fn list_numbers(
     State(state): State<AppState>,
     caller: Caller,
     PageQuery(page): PageQuery,
@@ -323,7 +323,7 @@ pub async fn list_numbers(
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
 )]
-pub async fn get_number(
+pub(crate) async fn get_number(
     State(state): State<AppState>,
     owned: OwnedNumber,
 ) -> Result<Json<NumberDetails>, ApiError> {
@@ -371,7 +371,7 @@ async fn read_profile(state: &AppState, owned: &OwnedNumber) -> Result<ProfileVi
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
 )]
-pub async fn get_profile(
+pub(crate) async fn get_profile(
     State(state): State<AppState>,
     owned: OwnedNumber,
 ) -> Result<Json<ProfileView>, ApiError> {
@@ -402,7 +402,7 @@ pub async fn get_profile(
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
 )]
-pub async fn update_profile(
+pub(crate) async fn update_profile(
     State(state): State<AppState>,
     owned: OwnedNumber,
     ApiJson(patch): ApiJson<ProfilePatch>,
@@ -458,7 +458,7 @@ pub async fn update_profile(
         (status = 504, description = "`timeout`: nothing deleted", body = ErrorBody),
     )
 )]
-pub async fn disconnect_waba(
+pub(crate) async fn disconnect_waba(
     State(state): State<AppState>,
     owned: OwnedWaba,
 ) -> Result<StatusCode, ApiError> {

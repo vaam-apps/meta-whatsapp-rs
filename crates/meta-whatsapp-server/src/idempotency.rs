@@ -68,11 +68,22 @@ impl<S: Send + Sync> FromRequestParts<S> for KeyHeader {
 }
 
 /// A successful answer of an idempotent route, as it is sent and kept: a
-/// status and a JSON body.
-#[derive(Debug, Clone)]
+/// status and a JSON body. Its `Debug` prints the body's length
+/// (`body_len`), never its bytes: a kept answer names the tenant's
+/// customers.
+#[derive(Clone)]
 pub struct Success {
     status: StatusCode,
     body: Vec<u8>,
+}
+
+impl std::fmt::Debug for Success {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Success")
+            .field("status", &self.status)
+            .field("body_len", &self.body.len())
+            .finish()
+    }
 }
 
 impl Success {
@@ -105,7 +116,12 @@ fn json_response(status: StatusCode, body: Vec<u8>) -> Response {
 /// Run `operation` for `tenant` under `key` (see the module docs), or
 /// plainly without one. `operation` must do nothing before it is polled:
 /// a repeat of a kept or running request never polls it.
-pub async fn run(
+///
+/// Crate-private: `tenant` is taken as given, so only this crate's
+/// handlers, which have it from an admitted [`crate::auth::Caller`], call
+/// it. Another crate could otherwise claim a tenant's keys, or replay its
+/// kept answers, by naming it.
+pub(crate) async fn run(
     state: &AppState,
     tenant: &TenantId,
     key: Option<IdempotencyKey>,
@@ -247,5 +263,80 @@ mod tests {
             Fingerprint::json(&post, path, &json!("1")),
             Fingerprint::json(&post, path, &json!(1))
         );
+    }
+
+    /// A request dropped before it settled its key (the deadline cut it)
+    /// leaves a kept `504 timeout` that may have been sent, not a free key.
+    /// (In `tests/messages.rs` until `run` became crate-private: it is
+    /// that test, on the unit tests' state.)
+    #[tokio::test]
+    async fn a_request_cut_before_settling_keeps_a_timeout() {
+        use std::time::Duration;
+
+        use crate::model::{IdempotencyClaim, IdempotencyState};
+
+        let state = AppState::for_tests();
+        let tenant = TenantId::parse("merchant-42").unwrap();
+        let key = IdempotencyKey::parse("k-cut").unwrap();
+        let fingerprint = Fingerprint::json(&Method::POST, "/v1/numbers/1/messages", &json!({}));
+        let never = std::future::pending::<Result<Success, ApiError>>();
+        let cut = tokio::time::timeout(
+            Duration::from_millis(20),
+            run(&state, &tenant, Some(key.clone()), fingerprint, never),
+        )
+        .await;
+        assert!(cut.is_err(), "the request was cut");
+        // The settlement runs on a task of its own.
+        let mut kept = None;
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let claim = state
+                .idempotency_records()
+                .claim_idempotency_key(
+                    &tenant,
+                    &key,
+                    fingerprint.as_bytes(),
+                    "probe",
+                    Duration::from_secs(60),
+                    Duration::from_secs(3600),
+                )
+                .await
+                .unwrap();
+            if let IdempotencyClaim::Existing(record) = claim
+                && let IdempotencyState::Completed { status, body } = record.state
+            {
+                kept = Some((status, body));
+                break;
+            }
+        }
+        let (status, body) = kept.expect("the cut request's key was settled");
+        assert_eq!(status, 504);
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error"]["code"], "timeout");
+        assert_eq!(body["error"]["may_have_been_sent"], true);
+    }
+
+    /// `Debug` of a successful answer shows its status and its length,
+    /// never its bytes: the body is the caller's data (a recipient, a
+    /// message id), and a `{:?}` in a log line or a panic would otherwise
+    /// print it. Decisive: `Success`'s hand-written `Debug`.
+    #[test]
+    fn debug_shows_a_successs_length_never_its_bytes() {
+        let value = json!({"messages": [{"id": "wamid.SECRET-BODY-7Q"}], "to": "+15551234567"});
+        let success = Success::json(StatusCode::CREATED, &value).unwrap();
+        let body = serde_json::to_vec(&value).unwrap();
+        let text = String::from_utf8(body.clone()).unwrap();
+        let bytes = format!("{body:?}");
+        let bytes = &bytes[1..bytes.len() - 1];
+        let debug = format!("{success:?}");
+        assert!(debug.contains("201"), "{debug}");
+        assert!(
+            debug.contains(&format!("body_len: {}", body.len())),
+            "{debug}"
+        );
+        assert!(!debug.contains("SECRET-BODY"), "the text: {debug}");
+        assert!(!debug.contains("+15551234567"), "the text: {debug}");
+        assert!(!debug.contains(&text), "the text: {debug}");
+        assert!(!debug.contains(bytes), "the bytes: {debug}");
     }
 }
