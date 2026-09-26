@@ -34,9 +34,10 @@
 //! | how Markdown becomes messages | [`MarkdownRenderer`] | [`markdown::Renderer`] |
 //! | how Markdown text is escaped | [`markdown::Escape`] | [`markdown::NoEscape`] (text as written; [`markdown::WordJoinerEscape`] opt-in) |
 //! | how the help reads | [`HelpFormatter`] | [`CategoryHelp`] (name, description and category configurable) |
-//! | how fast each business number sends (broadcasts; replies and read receipts with [`BotBuilder::pacer`]) | [`RateLimiter`] | [`TokenBucket`] (80 a second per number, in this process) |
+//! | how fast each business number sends (broadcasts; replies, read receipts and typing indicators with [`BotBuilder::pacer`]; group operations through [`PacedGroups`]) | [`RateLimiter`] | [`TokenBucket`] (80 a second per number, in this process) |
 //! | what "now" is for the pacer, and how it waits | [`Timer`] | `SystemClock` (Tokio's sleep) |
 //! | what a failed broadcast send becomes | [`BroadcastPolicy`] | [`Backoff`] |
+//! | where a broadcast's lines go when not kept in its report | [`ReportSink`] | none: kept in the [`BroadcastReport`] |
 //!
 //! Each of these traits also has an `Arc<T>` implementation, so one
 //! instance serves several bots (handlers and plugins are registered by
@@ -93,6 +94,7 @@ pub mod broadcast;
 pub mod command;
 pub mod ctx;
 pub mod errors;
+pub mod groups;
 pub mod guard;
 pub mod help;
 pub mod markdown;
@@ -114,6 +116,7 @@ pub use broadcast::{
 pub use command::{Args, Command, CommandHandler, CommandInfo, Invocation, Scope, Trigger};
 pub use ctx::{BotSender, Chat, Ctx};
 pub use errors::{ErrorHandler, LogErrors, PropagateErrors};
+pub use groups::{PacedGroup, PacedGroups};
 pub use guard::{
     AccessList, AccessPolicy, COOLDOWN_NAMESPACE, COOLDOWN_NOTICE_NAMESPACE, CooldownKey,
     CooldownOutcome, Cooldowns, KvCooldowns, Refusal, Refusals, ReplyRefusals, SilentRefusals,

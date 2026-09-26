@@ -18,6 +18,8 @@ meta-whatsapp-webhooks.workspace = true
 
 anyhow.workspace = true
 async-trait.workspace = true
+# `PacedGroup::set_picture` takes what `Group::set_picture` takes.
+bytes.workspace = true
 # The paced broadcast (`broadcast`): its workers run concurrently in the
 # caller's task (`join_all`), and a cancelled one stops waiting (`select`).
 futures.workspace = true

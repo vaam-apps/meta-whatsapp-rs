@@ -29,12 +29,15 @@
 //! What goes through the pacer is what calls it: a [`Broadcast`] reserves
 //! a slot before each send (retries included); [`PacedOutbound`] (set on a
 //! bot with `BotBuilder::pacer`) before each reply, refusal, read receipt
-//! and typing indicator; and any other call, a group operation for one,
-//! after [`Pacer::acquire`]. Meta documents no rate for group operations:
-//! pacing them through the same budget is a choice, not a rule of Meta's.
-//! The client's own calls are not paced by themselves.
+//! and typing indicator; [`PacedGroups`] and [`PacedGroup`] before each of
+//! the client's group operations; and any other call after
+//! [`Pacer::acquire`]. Meta documents no rate for group operations: pacing
+//! them through the same budget is a choice, not a rule of Meta's. The
+//! client's own calls are not paced by themselves.
 //!
 //! [`Broadcast`]: crate::Broadcast
+//! [`PacedGroups`]: crate::PacedGroups
+//! [`PacedGroup`]: crate::PacedGroup
 
 use std::collections::HashMap;
 use std::fmt;
@@ -443,8 +446,9 @@ impl Pacer {
     }
 
     /// Wait for a slot of `from`: before a call you want counted in its
-    /// budget, such as a group operation. Fails only when the limiter does
-    /// (a shared one unreachable), before any wait.
+    /// budget (the group operations have [`crate::PacedGroups`]). Fails
+    /// only when the limiter does (a shared one unreachable), before any
+    /// wait.
     pub async fn acquire(&self, from: &PhoneNumberId) -> Result<()> {
         let wait = self.reserve(from).await?;
         self.sleep(wait).await;
