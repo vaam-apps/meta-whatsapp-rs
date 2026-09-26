@@ -13,8 +13,8 @@
 > since landed on `main` (#4: `OtpConfig::namespace` required, the Intent
 > API's result renamed `marketing::OnboardingRequested`; #5: Solution Partner
 > onboarding with `onboard_with_approval`, `offboard` and the credit ledger).
-> Owner choices are marked **Decision for owner (Dn)** and listed in
-> [§10](#10-decisions-for-the-owner). From 2026-09-26 the owner delegates
+> Choices are marked **Decision (Dn)** and listed in
+> [§10](#10-decisions). From 2026-09-26 the owner delegates
 > them to the coordinator, on condition that each stays swappable
 > (§10 says which remain the owner's); the same day, parity with Zaileys
 > on Meta's Cloud API ([parity.md](../parity.md)) lifted most of
@@ -33,7 +33,8 @@ signed webhooks; `/v1` REST/JSON, a committed OpenAPI 3.1 spec, a generated
 TypeScript client; five milestones (M5, added on 2026-09-26, brings the
 modules parity requires). M1 is built as that one crate; §8 splits it
 into a framework-free core, API adapters and swappable backends, with
-CrateStack for the API and the models as the default.
+CrateStack for the API and the models as the default once the owner
+accepts its licence (D20 (a)); axum and sqlx stay built beside it.
 
 ## 1. Goals and non-goals
 
@@ -73,7 +74,7 @@ They live in library crates behind ports (`meta-whatsapp-bot`, D28;
 jobs as a typed store on `KvStore`, D29), and the service exposes them
 as thin routes over those modules (M5, [roadmap.md](../roadmap.md)).
 
-**Decision for owner (D1): tenancy per deployment.** (a) One deployment per
+**Decision (D1): tenancy per deployment.** (a) One deployment per
 tenant; (b) one multi-tenant deployment per Meta app; (c) one per product.
 Every merchant onboarded by Embedded Signup delivers to the **app's single
 callback URL**, and template and account webhooks ignore per-WABA overrides,
@@ -178,7 +179,7 @@ look in review:
 the per-tenant sequences (D21), a deleted tenant's events deleted with
 it (D22), the hour keyless events are deduplicated for (D23), and a
 deleted tenant taken out of platform keys (D24); their rows in
-[§10](#10-decisions-for-the-owner) say how far each is reversible. The
+[§10](#10-decisions) say how far each is reversible. The
 rest follows from the list above and decides nothing for the owner:
 
 - **Types are an allow-list too.** A tenant receives only the event types
@@ -228,7 +229,7 @@ rest follows from the list above and decides nothing for the owner:
   event recorded again after its hour (below) is a new occurrence with an
   id of its own. Undated events (errors, syncs) cannot be told from a
   replay.
-- **Each tenant has its own sequence** (security review L2: global
+- **Each tenant has its own sequence** (security review SR-L2: global
   sequences showed every tenant the platform's volume and timing; D21, a
   coordinator's decision). Sequences increase, with gaps (a
   duplicate that lost a race draws one), and a tenant created again
@@ -353,7 +354,7 @@ several active per tenant; rotate by create, deploy, revoke. The first admin
 key comes from the CLI (`meta-whatsapp-server admin create-admin-key`), not the
 environment.
 
-**Decision for owner (D2): credential model.** (a) Tenant keys only: the
+**Decision (D2): credential model.** (a) Tenant keys only: the
 CMS keeps one key per merchant, minted at onboarding; (b) platform key plus
 header only; (c) both. A platform key is as powerful as every tenant it may
 name, but the per-tenant checks still stop a CMS bug from crossing tenants.
@@ -406,7 +407,7 @@ Every tenant route, as middleware plus typed extractors (`OwnedNumber`,
   token no tenant can reach serves nothing and widens what a database and
   vault key compromise exposes.
 
-**Decision for owner (D3): browser access.** (a) Never browser-facing: the
+**Decision (D3): browser access.** (a) Never browser-facing: the
 CMS relays signup calls and live events (an SSE relay per open inbox, or
 webhooks-out into its own realtime channel); (b) short-lived number-scoped
 stream tokens plus a CORS allow-list, so browsers open SSE directly: one
@@ -414,7 +415,7 @@ hop fewer, but the service is exposed beyond `/webhooks/meta`.
 *Recommendation: (a) in v1*; (b) can be added later without breaking
 anything.
 
-**Decision for owner (D4): one WABA, several tenants (OQ #6).** (a) Refuse
+**Decision (D4): one WABA, several tenants (OQ #6).** (a) Refuse
 (`409 waba_owned_by_another_tenant`), checked on the claimed id before
 `redeem` and on the verified id after `onboard` (by then the vault holds the
 second merchant's token, also valid for that WABA; the binding stays);
@@ -664,23 +665,24 @@ including their public previews, on 2026-10-15
 
 The mode is per deployment (per Meta app), not per tenant.
 
-**Decision for owner (D5): onboarding mode in production (OQ #3).** (a) Tech
+**Decision (D5): onboarding mode in production (OQ #3).** (a) Tech
 Provider: merchants pay Meta; (b) Solution Partner: the platform pays
 through its credit line and bills merchants (needs partner status and a
 default currency). Both are supported from M3. *Recommendation: (a) first*,
 switching by configuration once partner status and billing exist.
 
-**Decision for owner (D6): two-step PIN (OQ #4).** (a) Typed by the merchant
+**Decision (D6): two-step PIN (OQ #4).** (a) Typed by the merchant
 per attempt, never stored (today's behaviour); (b) generated and stored
 encrypted by the service. *Recommendation: (a)*: one leak must not expose
-every number's PIN. *Decided on 2026-09-26 under the owner's
-delegation: (a) ([§10](#10-decisions-for-the-owner)).*
+every number's PIN. *Decided 2026-09-26 (coordinator, owner's
+delegation), swappable: (a) ([§10](#10-decisions)).*
 
-**Decision for owner (D7): coexistence sync (OQ #7)**, due within 24 h of
+**Decision (D7): coexistence sync (OQ #7)**, due within 24 h of
 onboarding a WhatsApp Business app number. (a) An explicit endpoint; (b)
 automatic after onboarding; (c) the endpoint plus a per-tenant setting for
 (b). *Recommendation: (c)*, automatic by default: 24 h is easy to miss. The
-inbox still records neither echoes nor history (OQ #17).
+inbox records the echoes and the synced history since OQ #17 closed (M1c
+records them for tenants too).
 
 ### 4.7 OTP
 
@@ -694,12 +696,12 @@ inbox still records neither echoes nor history (OQ #17).
   and `details` (a template error could quote a parameter: the code).
   Per-IP throttling stays the caller's (the service sees only the backend).
 
-**Decision for owner (D8): which number sends a tenant's codes.** (a) One
+**Decision (D8): which number sends a tenant's codes.** (a) One
 platform number for all (the user sees the platform's name); (b) each
 merchant's own number (the user sees the merchant; each needs an approved
 authentication template); (c) per tenant, defaulting to (a).
-*Recommendation: (c).* *Decided on 2026-09-26 under the owner's
-delegation: (c) ([§10](#10-decisions-for-the-owner)).*
+*Recommendation: (c).* *Decided 2026-09-26 (coordinator, owner's
+delegation), swappable: (c) ([§10](#10-decisions)).*
 
 ## 5. Error model
 
@@ -839,12 +841,14 @@ private network (a `NetworkPolicy` admitting the two backends). Egress:
 - `HEALTHCHECK` runs `meta-whatsapp-server healthcheck` (no curl). Read-only root file
   system (fonts bundled). amd64 and arm64, SBOM and provenance attestations.
 
-**Decision for owner (D9): image name and registry.** (a) Public on GHCR
+**Decision (D9): image name and registry.** (a) Public on GHCR
 next to the public repository; (b) a private registry. The name follows the
 crate names, settled when OQ #1 closed (`meta-whatsapp-*`, 2026-09-25).
 *Recommendation: (a)*, named after the binary, `meta-whatsapp-server`.
-*Decided on 2026-09-26 under the owner's delegation: (a)
-([§10](#10-decisions-for-the-owner)).*
+*Decided 2026-09-26 (coordinator, owner's delegation), swappable: (a)
+([§10](#10-decisions)).* The image lists its contents and carries the
+third-party licences of what it contains (M4); it contains no `ffmpeg`
+(roadmap L19).
 
 ### 7.2 Environment
 
@@ -895,7 +899,7 @@ crate names, settled when OQ #1 closed (`meta-whatsapp-*`, 2026-09-25).
 | dedup claims (7 d) | Meta's retries delivered twice (sinks are idempotent) | PITR, not critical |
 | OTP challenges, signup sessions | codes and attempts in flight fail | not needed |
 
-**Decision for owner (D10): retention and erasure.** The service stores
+**Decision (D10): retention and erasure.** The service stores
 customers' messages and identifiers. Choose retention for inbox history
 (keep, or purge after N days), the outbox (7 days proposed; M1c ships that
 as the default of `WA_SERVER_OUTBOX_RETENTION` until this is decided) and
@@ -909,29 +913,34 @@ coordinator's decision of 2026-09-25, reversible, which this decision
 may revisit (keeping them for an erasure request or an audit would need
 another way to keep them from the new tenant).
 *Recommendation*: configurable, keeping history by default; erasure in M2
-if the platform's privacy obligations require it. A legal and product call.
-*Decided on 2026-09-26 under the owner's delegation, swappable:
+if the platform's privacy obligations require it.
+*Decided 2026-09-26 (coordinator, owner's delegation), swappable:
 retention is configurable per store (the outbox 7 days by default, the
 inbox kept by default), erasure comes through L5 (a `ConversationStore`
 erase with conformance cases), and a moved number is hidden by M2's
-binding epoch ([§10](#10-decisions-for-the-owner)). The legal half stays
-with whoever deploys: which retention and which erasure requests a
-deployment's privacy obligations require.*
+binding epoch, not purged ([§10](#10-decisions)).* Which retention and
+which erasure requests a deployment's privacy obligations require is a
+legal call, the deployer's (§10, legal acts).
 
 ### 7.5 Versioning
 
 Within `/v1`, changes are additive; a breaking change is `/v2`, served
 beside `/v1` for a deprecation period; webhook endpoints keep their
-`api_version`. The OpenAPI document is committed (`crates/meta-whatsapp-server/openapi/v1.json`)
-and stays with the axum API adapter while that adapter is built (D18):
-CI fails when the generated one differs. From the first release on,
-`oasdiff` checks breaking changes against the last release's document;
-nothing runs it yet, since there is no release to compare with. From the
-default flip ([§8](#8-modular-architecture-and-client-sdks)) the committed
-`api.cstack` schema is the primary contract: CrateStack's check mode fails on a stale
-generated client, and `cratestack diff` checks breaking changes against the
-last release. Image, API contract (spec, then schema) and the TypeScript
-client share one semver; `/v1/version` adds the meta-whatsapp-rs revision.
+`api_version`. The OpenAPI document is committed
+(`crates/meta-whatsapp-server/openapi/v1.json`) and stays with the axum
+API adapter, which is permanent (D18, D26): CI fails when the generated
+one differs. From the first release on, `oasdiff` checks breaking
+changes against the last release's document; nothing runs it yet, since
+there is no release to compare with. From the default flip
+([§8](#8-modular-architecture-and-client-sdks)) the committed
+`api.cstack` schema is the primary contract: CrateStack's check mode
+fails on a stale generated client, and `cratestack diff` checks breaking
+changes against the last release. Each adapter's contract is versioned
+on its own: a deployment that swaps the API adapter swaps the contract
+its callers use (procedures or resource URLs) and their client
+(CrateStack's generated one, or one from openapi-typescript). Image, API
+contract (spec, then schema) and the TypeScript client share one semver;
+`/v1/version` adds the meta-whatsapp-rs revision.
 
 ## 8. Modular architecture and client SDKs
 
@@ -943,7 +952,8 @@ client share one semver; `/v1/version` adds the meta-whatsapp-rs revision.
 
 The owner's direction (2026-09-26): CrateStack (the owner's schema-first
 framework, [cratestack/cratestack](https://github.com/cratestack/cratestack))
-for the API **and the models** is the default, and every choice,
+for the API **and the models** is the default (D26, once the owner
+accepts D20 (a)), and every choice,
 CrateStack included, must be swappable by an integrator: another API
 layer, another database such as MongoDB. CrateStack cannot be what swaps
 databases: its own decisions rule out a shared backend trait (its ADR
@@ -954,23 +964,24 @@ ports, and CrateStack is one adapter on each side of them.
 ### 8.1 A framework-free core with ports
 
 `meta-whatsapp-server-core` holds the service's logic and no framework:
-no axum, http, utoipa, sqlx or CrateStack type. It depends on the facade
-(`default-features = false`). It holds the model (tenants, keys,
-bindings), the key format and digests, event routing and the event type
-lists, outbox keys and event ids, polling (cursors, `410`, `422`), the
-idempotency engine (§5.4), the rate limiter, the §5 error model as data
-(a code and a status as a number), authorization as services (a
-credential to a caller, a tenant and a scope; ownership to
-`OwnedNumber` or `OwnedWaba`, which stay the only path to a vault
-token), and the operations (messages, media as a byte stream,
-templates, numbers, admin, events).
+no axum, hyper, tower, utoipa, sqlx or CrateStack type. It depends on
+the facade (`default-features = false`), so `http`'s types enter only
+through the library's `HttpTransport` port. It holds the model (tenants,
+keys, bindings), the key format and digests, event routing and the event
+type lists, outbox keys and event ids, polling (cursors, `410`, `422`),
+the idempotency engine (§5.4), the rate limiter, the §5 error model as
+data (a code and a status as a number), authorization as services (a
+credential to a caller, a tenant and a scope; ownership to `OwnedNumber`
+or `OwnedWaba`, which stay the only path to a vault token), and the
+operations (messages, media as a byte stream, templates, numbers, admin,
+events).
 
 | Port | Does | Replaces (as built in M1) |
 | --- | --- | --- |
 | `RecordStore` | tenants, keys, WABA and number bindings | the `Store` trait, idempotency aside |
 | `IdempotencyRecords` | claim, complete, release, purge (§5.4) | the idempotency half of `Store` |
 | `Outbox` | insert with the routing checked again, page, purge (§2.3) | the `EventStore` trait |
-| `LeaderLock` | `try_exclusive(name)`: one replica at a time | advisory locks in housekeeping |
+| `LeaderLock` | a lease, `try_exclusive(name, lease)`: one replica at a time, ending at release, drop or expiry | advisory locks in housekeeping |
 | `Janitor` | expired key/value rows and the other purges | the direct `PostgresKvStore::purge_expired` call |
 | `SchemaMigrator` | the store's migrations, under its own lock | the Postgres migrations |
 | `EventNotifier` (M2) | wake SSE and webhooks-out on a new event | Postgres `NOTIFY`; a memory broadcast; MongoDB change streams |
@@ -983,6 +994,17 @@ cross ports, which a new backend cannot skip: deleting a tenant purges
 its stream; a binding changed during an insert leaves the event
 operator-only; each tenant's events commit in order.
 
+What Postgres guarantees by accident is a requirement of the ports, so a
+MongoDB or CrateStack-models backend cannot meet the traits' text
+without it ([roadmap.md](../roadmap.md) S2): the outbox re-checks the
+routing atomically with the insert (a typed route guard on each new
+event); binding a WABA to a missing tenant has its own outcome, and
+binding and deleting one tenant serialize; purges take no lock of their
+own, and `LeaderLock` is a lease; all replicas read one clock (the
+database's where it has one, else the service's `Clock`); contention is
+a typed error; a bundle's accessors return the same data on every call;
+listings are in byte order.
+
 ### 8.2 The backend bundle is the unit of swapping
 
 `RecordStore` and `Outbox` are not independent: the Postgres outbox
@@ -994,10 +1016,10 @@ the service uses today as its "memory?" flag.
 
 | Backend | Database | Status |
 | --- | --- | --- |
-| `…-store-cratestack` (the default) | Postgres: CrateStack models for the records tables (tenants, API keys, WABAs, numbers); the outbox, idempotency, locks, janitor and migrations reuse store-postgres's SQL on the same pool, and the library's stores are `PostgresKvStore` and `PostgresConversationStore` on it | planned |
+| `…-store-cratestack` (the default once the owner accepts D20 (a); until then `…-store-postgres`) | Postgres: CrateStack models for the records tables (tenants, API keys, WABAs, numbers); the outbox, idempotency, locks, janitor and migrations reuse store-postgres's SQL on the same pool, and the library's stores are `PostgresKvStore` and `PostgresConversationStore` on it | planned |
 | `…-store-postgres` | Postgres through sqlx: today's code and migrations | built; kept and conformance-tested |
 | `…-store-memory` | memory, development only | built; kept |
-| `…-store-mongodb` | MongoDB, a replica set | later: the library's MongoDB adapters first, then an `Outbox` spike against the conformance suite before the port shapes freeze |
+| `…-store-mongodb` | MongoDB, a replica set | later: first an `Outbox` spike against the conformance suite, before the port shapes freeze (roadmap S9), then the library's MongoDB adapters (S17) and the whole bundle (S18) |
 
 ### 8.3 API adapters
 
@@ -1010,15 +1032,20 @@ merge.
 
 | Adapter | Contract | Status |
 | --- | --- | --- |
-| `…-api-cratestack` (the default) | `api.cstack`: procedures, types and enums, REST (D19) | planned |
-| `…-api-axum` | today's `/v1` resource routes and `openapi/v1.json` | built; kept and conformance-tested |
+| `…-api-cratestack` (the default once the owner accepts D20 (a); until then `…-api-axum`) | `api.cstack`: procedures, types and enums, REST (D19) | planned |
+| `…-api-axum` | today's `/v1` resource routes and `openapi/v1.json` | built; permanent, the swap target: every new route lands in it too, and it stays conformance-tested |
 
 The binary composes one adapter and one backend: Cargo features choose
 which are compiled in (`api-cratestack` and `store-cratestack` by
-default; `api-axum`, `store-postgres` and `store-memory` optional), and
-configuration picks among them. The authorization (M1.3), error (M1.5)
-and idempotency (M1.4) suites run against every adapter, enumerated
-from its contract so a new route cannot skip them.
+default once the owner accepts D20 (a) and S16 flips them; `api-axum`,
+`store-postgres` and `store-memory` otherwise), and configuration picks
+among them. Every route is a core service, so both adapters stay thin,
+and every new route lands in both (D26). Swapping the API adapter swaps
+the wire contract and the client with it: procedures and CrateStack's
+generated client, or resource URLs and a client from openapi-typescript.
+The authorization (M1.3), error (M1.5) and idempotency (M1.4) suites run
+against every adapter, enumerated from its contract so a new route
+cannot skip them.
 
 ### 8.4 Two CrateStack schemas
 
@@ -1039,7 +1066,8 @@ CrateStack allows one database-owning schema per crate, and a
 - sqlx types (pools, rows, transactions).
 - CrateStack types: its error, context and transaction types, generated
   models, its `Json<T>`, chrono times.
-- axum and http types, and utoipa derives, in the core.
+- axum, hyper and tower types, and utoipa derives, in the core; `http`
+  types only as the library's `HttpTransport` port carries them.
 - A Meta token, anywhere but behind `OwnedNumber` or `OwnedWaba`.
 
 ### 8.6 Where CrateStack forces a compromise
@@ -1050,7 +1078,7 @@ CrateStack allows one database-owning schema per crate, and a
   custom routes answer §5, the generated routes CrateStack's own (a flat
   `{code, message, details}` with its fixed codes and statuses, no 410,
   413, 502 or 504). So the CrateStack adapter is not the default before
-  D16 (roadmap S9).
+  D16 (roadmap S16).
 - Authentication sits in an outer layer: CrateStack's auth hook receives
   a body it has already buffered, and §3.3 answers `401` before the body.
 - Ownership `404`s move inside the procedures.
@@ -1060,7 +1088,8 @@ CrateStack allows one database-owning schema per crate, and a
 - The models cover the records tables only: the outbox insert, the
   idempotency claim, the purges and the migrations need what models
   cannot express (`FOR KEY SHARE`, conditional upserts, advisory locks,
-  the database's clock, `json` rather than `jsonb`, which keeps U+0000).
+  the database's clock, `json` rather than `jsonb`, which keeps U+0000);
+  each gap is an issue upstream (roadmap U4).
 - chrono and a system principal enter the service's dependency graph,
   and `ring` is linked beside aws-lc-rs: sqlx picks it for Postgres TLS
   in those builds until upstream U2 (D20).
@@ -1070,8 +1099,9 @@ CrateStack allows one database-owning schema per crate, and a
 - **The primary contract is the CrateStack schema** and the clients
   generated from it (D18): TypeScript for Medusa and the CMS, speaking
   JSON on the wire rather than CBOR (D19), Dart and Rust as needed.
-  `openapi/v1.json` stays committed and tested with `api-axum` while
-  that adapter is built.
+  `openapi/v1.json` stays committed and tested with `api-axum`, which is
+  permanent (D26): a deployment that swaps to it swaps the contract too,
+  and its callers use a client generated by openapi-typescript.
 - A thin hand-written layer over the generated TypeScript client adds
   the credential and `WA-Tenant` headers, `Idempotency-Key`, a typed
   error from the §5 body, an SSE reader that resumes, media, and
@@ -1088,21 +1118,21 @@ by which its generated clients ignored `@api_version` is fixed in 0.13.0.
 Each gap is an upstream change in CrateStack, or stays a custom route
 in the service.
 
-**Decision for owner (D11): publishing the client.** (a) Public npm under
+**Decision (D11): publishing the client.** (a) Public npm under
 the organization's scope; (b) GitHub Packages (consumers need a token even
 for a public repository); (c) vendored by consumers. *Recommendation: (a)*,
-matching the public, MIT-licensed repository. *Decided on 2026-09-26
-under the owner's delegation: (a); the publish workflow is prepared,
-and publishing needs the owner's token ([§10](#10-decisions-for-the-owner)).*
+matching the public, MIT-licensed repository. *Decided 2026-09-26
+(coordinator, owner's delegation), swappable: (a); the publish workflow
+is prepared, and publishing is the owner's ([§10](#10-decisions)).*
 
-**Decision for owner (D12): a Medusa module or plugin.** (a) None: Medusa's
+**Decision (D12): a Medusa module or plugin.** (a) None: Medusa's
 developers call the client from their own module; (b) a Medusa v2 plugin in
 its own repository: a notification provider (order templates), an auth
 provider (WhatsApp OTP), a route turning webhooks-out into Medusa events;
 (c) (a) now, (b) as a fifth milestone after the first integration.
 *Recommendation: (c)*: before one integration exists, a plugin guesses at
-Medusa's workflows. *Decided on 2026-09-26 under the owner's delegation:
-(c), after the first integration ([§10](#10-decisions-for-the-owner)).*
+Medusa's workflows. *Decided 2026-09-26 (coordinator, owner's delegation),
+swappable: (c), after the first integration ([§10](#10-decisions)).*
 
 ## 9. Delivery plan
 
@@ -1111,7 +1141,10 @@ review with distinct lenses, remediate, re-run the original failure, `just
 ci` on the final head) and names its companion docs and skills in the PR.
 Tests use `ScriptedTransport` (method, path, token, exact JSON,
 `remaining() == 0`); live tests are `live_*`, and `just test-live` gains
-`-p meta-whatsapp-server` under `META_WHATSAPP_RS_REQUIRE_LIVE=1`.
+`-p meta-whatsapp-server` under `META_WHATSAPP_RS_REQUIRE_LIVE=1`. M1
+shipped as three pull requests (below); M2, M3 and M5 ship as the
+[roadmap](../roadmap.md)'s items M2a–M2e, M3a–M3f and M5a–M5l, and the
+library changes from L7 on are the roadmap's too.
 
 | # | Library change (own PR, own parity) | When | Kind |
 | --- | --- | --- | --- |
@@ -1119,16 +1152,16 @@ Tests use `ScriptedTransport` (method, path, token, exact JSON,
 | L2 | `OtpConfig::namespace` required | done (#4) | breaking |
 | L3 | Solution Partner credit-line step in onboarding | done (#5: `onboard_with_approval`, `offboard`, credit ledger) | additive |
 | L4 | a code-less `OnboardingRequest` for `resume` (OQ #10) | decided (OQ #10, 2026-09-26): [roadmap.md](../roadmap.md) L4 | additive |
-| L5 | `ConversationStore` erasure, and retention per store | decided (D10, 2026-09-26): [roadmap.md](../roadmap.md) L5, before M2's retention settings | port change |
+| L5 | the `ConversationStore` port change: erasure and retention per store (D10), window events and thread ownership (OQ #32, #44), a lookup by message id, the coexistence contacts; one change so adapters change once | decided (2026-09-26): [roadmap.md](../roadmap.md) L5, before M2 | port change |
 | L6 | [architecture.md](../architecture.md): dependency rule for binaries, a "Service" section | done (M1a) | docs |
 
 | | Scope | Docs and skills it adds |
 | --- | --- | --- |
 | **M1** skeleton, auth, messages and templates, webhooks in | the crate, fail-closed configuration, both listeners, storage and migrations, tenants, keys, admin API and CLI bootstrap, admin attach, the authorization order, messages, media, templates (list, get, create, delete), `/webhooks/meta` into inbox and outbox, `GET /v1/events`, errors (L1), idempotency, rate limits, health, metrics, tracing, the committed spec | `docs/guides/server.md` (run, configure, tenants, keys, first send); a README section "Not writing Rust? Run the service"; L6; a `docs/coverage.md` row; skills `meta-whatsapp-rs-server` (hub for HTTP callers: deploy, credentials, errors, idempotency, routing) and `meta-whatsapp-rs-server-send` (messages, templates, media); the skills gate below |
-| **M2** inbox, live updates, webhooks out | inbox routes (their reads filter by the number's binding epoch: a number moved to another tenant shows it nothing from before its binding, the inbox half of security review M3, unless D10 purges on unbind), SSE (`LISTEN/NOTIFY`, `Last-Event-ID`), `GET /v1/events/{id}`, webhook endpoints, dispatcher, retries, destination allow-list, the service's number events, and the three types PR #17 typed made tenant-visible (D25: `standby_observed`, `thread_control_changed`, `user_action_reported` into `TENANT_EVENT_TYPES`, `KnownEventType` growing, additive) with the inbox's answer to `OPEN_QUESTIONS.md` #44, retention per store (D10), the received-media exemption (`OPEN_QUESTIONS.md` #43) | `server.md` inbox and events; skill `meta-whatsapp-rs-server-inbox` (inbox API, relaying live events to the CMS's browsers, receiving and verifying webhooks-out) |
-| **M3** Embedded Signup in both modes, OTP | signup routes, persisted attempts, disconnection, coexistence sync, authentication templates, OTP and its per-tenant settings; needs L2 (and L3 for partner mode). Vault rotation extended to the records partner mode keeps past a binding (credit ledgers that outlive their token, revocation markers: the library's `rotate_business`), without which a rotation's empty `failed` no longer means the old key is unused | `server.md` onboarding and OTP, and its key rotation advice ("drop the old key once `failed` is empty", caveated since M1a) made true again; skills `meta-whatsapp-rs-server-onboarding` (the CMS connect flow through the service: page, relay, PIN, resume, both modes) and `meta-whatsapp-rs-server-otp` |
-| **M4** packaging: Docker image, TypeScript client, docs | the image and its CI (D9), a Compose file, `clients/typescript` generated by CrateStack and published (D11), the documents route, the deployment guide. Re-scoped on 2026-09-26: the move onto CrateStack is the modular split's ([§8](#8-modular-architecture-and-client-sdks), [roadmap.md](../roadmap.md) S1–S9; the default flips once D16 lands upstream), no longer this milestone's | `server.md` deployment (Docker, Compose, Kubernetes notes); a `docs/guides/README.md` row; skill `meta-whatsapp-rs-server-typescript` (install, calls, errors, idempotency, SSE, webhook verification in Medusa or any Node backend); `meta-whatsapp-rs-production` points to the service |
-| **M5** the modules parity requires (added 2026-09-26) | routes over the library modules §1 once left "on demand", one PR per family ([roadmap.md](../roadmap.md) M5a–M5l): the send union's other types (pin, request contact info, Direct Send, interactive carousels, voice call, location request, address, call permission request, Flow, product messages), template edit, library, migration, comparison and unpausing, numbers and profile settings, WABA management, Flows, calling, groups, commerce, QR codes, analytics, block users, the Marketing Messages API and CTWA, In-App Signup (enabled once the owner answers `OPEN_QUESTIONS.md` #26), partner APIs, conversation routing, and the bot and broadcast APIs over `meta-whatsapp-bot`. Each route checks the object an id names against the path's number or WABA ([architecture.md § Service](../architecture.md#service-meta-whatsapp-server)); M1.3's table covers it by construction | a `server.md` section and a server skill (or a section of one) per family |
+| **M2** inbox, live updates, webhooks out | inbox routes (their reads filter by the number's binding epoch: a number moved to another tenant shows it nothing from before its binding, the inbox half of security review SR-M3; D10 hides, never purges), SSE (an `EventNotifier` port: `LISTEN/NOTIFY` on Postgres; `Last-Event-ID`), `GET /v1/events/{id}`, webhook endpoints, dispatcher, retries, destination allow-list, the service's number events, and the three types PR #17 typed made tenant-visible (D25: `standby_observed`, `thread_control_changed`, `user_action_reported` into `TENANT_EVENT_TYPES`, `KnownEventType` growing, additive) with the inbox's answer to `OPEN_QUESTIONS.md` #44, retention per store (D10), the received-media exemption (`OPEN_QUESTIONS.md` #43) | `server.md` inbox and events; skill `meta-whatsapp-rs-server-inbox` (inbox API, relaying live events to the CMS's browsers, receiving and verifying webhooks-out) |
+| **M3** Embedded Signup in both modes, OTP | signup routes, persisted attempts, disconnection, coexistence sync, authentication templates, OTP and its per-tenant settings; needs L2 (and L3 for partner mode). Vault rotation extended to the records partner mode keeps past a binding (credit ledgers that outlive their token, revocation markers: the library's `rotate_business`), without which a rotation's empty `failed` no longer means the old key is unused | `server.md` onboarding and OTP, and its key rotation advice ("drop the old key once `failed` is empty", caveated since M1a) made true again; `docs/guides/production.md` gains the vault key cadence of `OPEN_QUESTIONS.md` #9; skills `meta-whatsapp-rs-server-onboarding` (the CMS connect flow through the service: page, relay, PIN, resume, both modes) and `meta-whatsapp-rs-server-otp` |
+| **M4** packaging: Docker image, TypeScript client, docs | the image and its CI (D9), its contents listed and the image's third-party licences listed in the image (no `ffmpeg`: conversion is an optional feature or a sidecar the deployer adds, roadmap L19), a Compose file, `clients/typescript` generated by CrateStack and published (D11), the documents route, the deployment guide. Re-scoped on 2026-09-26: the move onto CrateStack is the modular split's ([§8](#8-modular-architecture-and-client-sdks), [roadmap.md](../roadmap.md) S1–S16; the default flips once D16 lands upstream), no longer this milestone's | `server.md` deployment (Docker, Compose, Kubernetes notes); a `docs/guides/README.md` row; skill `meta-whatsapp-rs-server-typescript` (install, calls, errors, idempotency, SSE, webhook verification in Medusa or any Node backend); `meta-whatsapp-rs-production` points to the service |
+| **M5** the modules parity requires (added 2026-09-26) | routes over the library modules §1 once left "on demand", one PR per family ([roadmap.md](../roadmap.md) M5a–M5l): the send union's other types (pin, request contact info, Direct Send, interactive carousels, voice call, location request, address, call permission request, Flow, product messages), template edit, library, migration, comparison and unpausing, numbers and profile settings, WABA management, Flows, calling, groups, commerce, QR codes, analytics, block users, the Marketing Messages API and CTWA (the max-price agreement an explicit, audited operator action, off by default: `OPEN_QUESTIONS.md` #45), In-App Signup (accepting Meta's terms an explicit, audited operator action, off by default: `OPEN_QUESTIONS.md` #26), partner APIs, conversation routing, and the bot and broadcast APIs over `meta-whatsapp-bot`. Each route checks the object an id names against the path's number or WABA ([architecture.md § Service](../architecture.md#service-meta-whatsapp-server)); M1.3's table covers it by construction | a `server.md` section and a server skill (or a section of one) per family |
 
 **M1 ships in three parts**, each its own pull request: **M1a** the
 crate, configuration, listeners, storage and migrations, tenants, keys,
@@ -1174,6 +1207,9 @@ test fail.
 | M4.1 | The image builds for both architectures, runs non-root on a read-only file system, has no shell; `meta-whatsapp-server healthcheck` works in it |
 | M4.2 | A Compose smoke test in CI (Postgres, the image, a Graph stub via `WA_GRAPH_ENDPOINT`): CLI admin key, tenant, attach, send, a signed Meta webhook, a webhooks-out delivery verified at a stub receiver |
 | M4.3 | The client is generated from the committed `.cstack` schema (CrateStack's check mode fails on drift); `tsc --noEmit` passes on it and on every TypeScript excerpt of the server skills; a Node test verifies a real delivery with `verifyWebhook()`; a breaking change within `v1` fails `cratestack diff` against the last release; the invoice fixture renders byte-identically |
+| M5.1 | M1.3's table covers every M5 route by construction: tenant B's key on A's number or WABA is `404`, with zero vault reads |
+| M5.2 | Each family checks the object an id names against the path's number or WABA (a group, a Flow, a QR code, a call): a route that skips it fails the family's cross-tenant test |
+| M5.3 | The legal acts (the max-price agreement, M5h; the In-App Signup terms, M5i) are explicit operator actions: with the deployment's setting off, the route makes no request to Meta; with it on, one request and one audit event naming the admin key; no other route performs them |
 
 **The skills gate for HTTP callers (M1).** `crates/meta-whatsapp-rs/tests/skills.rs`
 assumes Rust (no TypeScript fences; backticked names must exist in
@@ -1184,36 +1220,49 @@ skills-ts` (tsc against the generated client, Node pinned) inside `just
 ci`; backticked routes, schemas and codes are checked against the committed
 spec. Stamps, the 160-line limit and hub listing apply unchanged.
 
-**Decision for owner (D13): where the server skills live.** (a) This
+**Decision (D13): where the server skills live.** (a) This
 repository's `skills/` (`npx skills add vaam-apps/meta-whatsapp-rs -s meta-whatsapp-rs-server …`),
 changed in the same PR as the API; (b) a separate skills repository with
 its own coverage gate. *Recommendation: (a)*: API, spec and skills change
 atomically and are checked against the same commit.
 
-## 10. Decisions for the owner
+## 10. Decisions
 
 **From 2026-09-26 the owner delegates these decisions to the
 coordinator**, on one condition: the code stays composable, with traits
 and interfaces hiding the hard logic, so that an integrator can change
 each decision (the owner's examples: MongoDB for the database;
 CrateStack for the API and the models, as the default, and CrateStack
-itself swappable altogether). So a decision below is taken when it can
-be made swappable, and its row says how to swap it. **Legal and
-terms-of-service choices, licences among them, and irreversible data
-migrations still go to the owner.**
+itself swappable altogether). The rule is AGENTS.md's § Decisions: a
+decision is taken when it ships swappable, or names the roadmap item
+that adds the swap, and its row says how to swap it. **The owner keeps
+legal and terms-of-service choices (licences among them) and what
+cannot be undone: irreversible deletion or data migrations, released
+contracts and the stable identifiers.**
+
+**Legal acts.** The code decides nothing legal. Where Meta ties a legal
+act to an API call (accepting the In-App Signup terms, signing the
+max-price beta agreement), the library exposes it as an explicit call
+that no other call makes, and the service as an explicit, audited
+operator action, off until the deployment enables it and never taken
+automatically. Performing it is the deployer's decision, for their own
+deployment (`OPEN_QUESTIONS.md` #26, #45); the same holds for the legal
+half of D10.
 
 Who decided what: the owner decided D1–D4 and D7 on 2026-09-24, D13–D14
 and D15–D18 on 2026-09-25 (the recommended option each time, except D17,
 against the recommendation to move before M1b), and D25 on 2026-09-26.
 D21–D24 are the coordinator's decisions of 2026-09-25, which M1c ships
-and which stand under the delegation. D6, D8–D12, D19, D20's (b) and
-(c), and D26–D29 are the coordinator's decisions of 2026-09-26 under the
+and which stand under the delegation; the owner confirms D21, D22 and
+D24 before the first release (roadmap § Owner touchpoints), since each
+cannot be undone after it. D6, D8–D12, D19, D20's (b) and (c), and
+D26–D29 are the coordinator's decisions of 2026-09-26 under the
 delegation, as are the changes to D15 (widened), D16 (the gate) and D18
-(revised) that day. D20's (a), a licence, is the owner's: roadmap S5
+(revised) that day. D20's (a), a licence, is the owner's: roadmap S10
 asks for it. D5 is settled as "support both modes, chosen per
-deployment"; which mode a production deployment runs follows the platform's
-agreements with Meta (partner status, who pays), so that choice stays
-the owner's.
+deployment"; which mode a production deployment runs follows the
+platform's agreements with Meta (partner status, who pays), so that
+choice stays the owner's.
 
 | # | Question | Options | Recommendation | Needed by |
 | --- | --- | --- | --- | --- |
@@ -1226,35 +1275,39 @@ the owner's.
 | D7 | Coexistence sync (OQ #7) | endpoint / automatic / both, per tenant | **Decided 2026-09-24: automatic** (the service starts the one-time contacts + history sync right after a coexistence onboarding) | M3 |
 | D8 | Who sends a tenant's OTP codes | platform number / merchant's / per tenant | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: per tenant, the platform's number by default**; to swap, a tenant's OTP settings name another sending number and its approved template | M3 |
 | D9 | Image name and registry | public GHCR / private registry; the name | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: public on GHCR, named `meta-whatsapp-server`** (OQ #1, closed, settled the crate names); to swap, the image workflow's registry and name are its inputs | M4 |
-| D10 | Retention and erasure of customers' messages | keep / purge after N days; erasure or not; a number's inbox history when it moves to another tenant (hidden by M2's binding epoch, or purged on unbind) | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: retention is configurable per store.** The outbox keeps 7 days by default (`WA_SERVER_OUTBOX_RETENTION`), the inbox keeps everything by default, erasure (one contact on one number) comes through L5, a `ConversationStore` erase with conformance cases, and a number moved to another tenant is hidden from it by M2's binding epoch, not purged. To swap, each store's retention is a setting and erasure a call. Which retention a deployment sets, and which erasure requests it must honour, follow its privacy obligations: the operator's legal call | M2 |
+| D10 | Retention and erasure of customers' messages | keep / purge after N days; erasure or not; a number's inbox history when it moves to another tenant (hidden by M2's binding epoch, or purged on unbind) | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: retention is configurable per store.** The outbox keeps 7 days by default (`WA_SERVER_OUTBOX_RETENTION`), the inbox keeps everything by default, erasure (one contact on one number) comes through L5, a `ConversationStore` erase with conformance cases, and a number moved to another tenant is hidden from it by M2's binding epoch, not purged. To swap, each store's retention is a setting and erasure a call. Which retention a deployment sets, and which erasure requests it must honour, follow its privacy obligations: the deployer's legal call (legal acts, above) | M2 |
 | D11 | Publishing the TypeScript client | npm / GitHub Packages / vendored | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: public npm** under the organization's scope. The publish workflow is prepared; publishing needs the owner's token. To swap, the workflow's registry is its input | M4 |
 | D12 | A Medusa plugin | none / now / after the first integration | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: after the first integration**, in its own repository; nothing here depends on it | after M4 |
 | D13 | Where the server skills live | this repository / a separate one | **Decided 2026-09-25: this repository** (under `skills/`, same stamp gate and `npx skills add vaam-apps/meta-whatsapp-rs`) | M1 |
 | D14 | Credit line after a merchant unshares (`PARTNER_REMOVED`) | revoke at once (Meta's recommendation) / revoke after a grace period when `disconnection_info` says the coexistence number may reconnect / operator decides | **Decided 2026-09-25: revoke at once** on every `PARTNER_REMOVED` for our solution, coexistence included; a merchant who reconnects re-onboards and is funded again only through the explicit re-share (`reshare_after_revocation`) | M3 |
-| D15 | API layer framework | OpenAPI (axum + utoipa) / CrateStack `cratestack-api` (procedures) / `cratestack-pg` (models + policies) / schema for clients only | **Decided 2026-09-25: CrateStack, `cratestack-api`, procedures only. Widened by the coordinator on 2026-09-26 under the owner's delegation, swappable: CrateStack for the API and the models, by default**: `api.cstack` (`db = None`) for the API, and in `store-cratestack` models from `store.cstack` (`db = Postgres`) for the records tables, a hybrid whose outbox, idempotency, locks, janitor and migrations reuse store-postgres's SQL ([§8.4](#84-two-cratestack-schemas)). To swap, the binary's features select `api-axum` and `store-postgres` (or `store-memory`, later `store-mongodb`), and CrateStack is then absent from the build | the flip ([roadmap.md](../roadmap.md) S9) |
+| D15 | API layer framework | OpenAPI (axum + utoipa) / CrateStack `cratestack-api` (procedures) / `cratestack-pg` (models + policies) / schema for clients only | **Decided 2026-09-25: CrateStack, `cratestack-api`, procedures only. Widened by the coordinator on 2026-09-26 under the owner's delegation, swappable: CrateStack for the API and the models, by default**: `api.cstack` (`db = None`) for the API, and in `store-cratestack` models from `store.cstack` (`db = Postgres`) for the records tables, a hybrid whose outbox, idempotency, locks, janitor and migrations reuse store-postgres's SQL ([§8.4](#84-two-cratestack-schemas)). To swap, the binary's features select `api-axum` and `store-postgres` (or `store-memory`, later `store-mongodb`), and CrateStack is then absent from the build | the flip ([roadmap.md](../roadmap.md) S16) |
 | D16 | The §5 error body under CrateStack | add domain errors to CrateStack upstream / rewrite layer in the service / two shapes / results instead of errors | **Decided 2026-09-25: upstream in CrateStack. The coordinator, 2026-09-26: the default API flip is gated on it**; until it lands, the CrateStack adapter answers two shapes (§5 from our outer layer and custom routes, CrateStack's own from its generated routes), which is why it is not the default before then | before the flip |
-| D17 | When to move to CrateStack | before M1b / finish M1 first, migrate at M4 | **Decided 2026-09-25: finish M1 on axum + OpenAPI, migrate at M4.** Since 2026-09-26 the move is the modular split's ([§8](#8-modular-architecture-and-client-sdks), [roadmap.md](../roadmap.md) S1–S9) rather than M4's | M1 |
-| D18 | Callers that do not use a generated client | generated clients only / an OpenAPI emitter upstream / a hand-kept OpenAPI document | **Decided 2026-09-25: generated clients only. Revised by the coordinator on 2026-09-26 under the owner's delegation, swappable: CrateStack's generated clients are the primary contract, and `openapi/v1.json` stays, committed and tested, with `api-axum` while that adapter is built**; to swap, build `api-axum` and serve its document | the flip |
-| D19 | CrateStack transport | REST (JSON, `@status`, `POST /$procs/<name>`) / RPC (batching, subscriptions; CBOR by default in the TS client) | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: REST** (a status per request, `Retry-After`, `Idempotency-Key`), **and the TypeScript client pinned to the JSON wire format, not CBOR**; to swap, the schema's transport and the generator's format option | S6 |
-| D20 | CrateStack's dependencies | allow BlueOak-1.0.0 (`minicbor`) in `deny.toml`; accept `ring` beside `aws-lc-rs` (explicit TLS provider at start); accept its `sqlx =0.9.0` pin / change them upstream first | **(a) The owner's: a licence.** Recommended: a `deny.toml` licence exception for BlueOak-1.0.0 scoped to `minicbor` and `minicbor-serde`, which are non-optional dependencies of CrateStack's axum crate (CrateStack's own `deny.toml` allows that licence). Roadmap S5 asks the owner and does not merge without the answer. A separate workspace for the CrateStack crates would keep the exception out of the main `deny.toml`, but the licence would still enter the service's binary; a refusal means no CrateStack in the build, and the defaults stay `api-axum` and `store-postgres`. **(b) and (c): coordinator's decisions 2026-09-26 under the owner's delegation, swappable.** (b) aws-lc-rs installed as rustls's process default at start, for the crates that use the process default; sqlx picks its provider itself, so Postgres TLS runs on `ring` in a build with CrateStack until upstream U2. (c) CrateStack's `sqlx =0.9.0` pin accepted, with an upstream PR relaxing it (U3) | S5 |
-| D21 | Event sequences ([§2.3](#23-the-event-pipeline)) | one sequence for the whole outbox / one per tenant | **Coordinator's decision 2026-09-25, standing under the owner's delegation of 2026-09-26: one per tenant** (security review L2: a global sequence shows every tenant the platform's volume and timing); `sequence`, `after`, `next_after`, `410` and `422` are the tenant's. Reversible until the first release, or the first deployment with polling consumers: the per-tenant sequence is in the v1 contract (the descriptions of `sequence` and `next_after` in `openapi/v1.json`), consumers store cursors in it, and within `/v1` changes are additive ([§7.5](#75-versioning)), so going back to one sequence then breaks every stored cursor | M1 |
-| D22 | A deleted tenant's outbox events (related to D10) | delete them with the tenant / keep them, hidden from a tenant created again under the id | **Coordinator's decision 2026-09-25, standing under the owner's delegation of 2026-09-26: delete them** (the outbox's foreign key cascades; the tenant's stream records them purged, so an old cursor is `410`). Reversing it keeps the events of tenants deleted afterwards only: events the cascade already deleted are not recoverable | M1 |
+| D17 | When to move to CrateStack | before M1b / finish M1 first, migrate at M4 | **Decided 2026-09-25: finish M1 on axum + OpenAPI, migrate at M4.** Since 2026-09-26 the move is the modular split's ([§8](#8-modular-architecture-and-client-sdks), [roadmap.md](../roadmap.md) S1–S16) rather than M4's | M1 |
+| D18 | Callers that do not use a generated client | generated clients only / an OpenAPI emitter upstream / a hand-kept OpenAPI document | **Decided 2026-09-25: generated clients only. Revised by the coordinator on 2026-09-26 under the owner's delegation, swappable: CrateStack's generated clients are the primary contract, and `openapi/v1.json` stays, committed and tested, with `api-axum`, the permanent swap target (D26)**; to swap, build `api-axum`: its callers then use resource URLs and a client from openapi-typescript | the flip |
+| D19 | CrateStack transport | REST (JSON, `@status`, `POST /$procs/<name>`) / RPC (batching, subscriptions; CBOR by default in the TS client) | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: REST** (a status per request, `Retry-After`, `Idempotency-Key`), **and the TypeScript client pinned to the JSON wire format, not CBOR**; to swap, the schema's transport and the generator's format option | S13 |
+| D20 | CrateStack's dependencies | allow BlueOak-1.0.0 (`minicbor`) in `deny.toml`; accept `ring` beside `aws-lc-rs` (explicit TLS provider at start); accept its `sqlx =0.9.0` pin / change them upstream first | **(a) The owner's: a licence.** Recommended: a `deny.toml` licence exception for BlueOak-1.0.0 scoped to `minicbor` and `minicbor-serde`, which are non-optional dependencies of CrateStack's axum crate (CrateStack's own `deny.toml` allows that licence). Roadmap S10 asks the owner and does not merge without the answer. A separate workspace for the CrateStack crates would keep the exception out of the main `deny.toml`, but the licence would still enter the service's binary; a refusal means no CrateStack in the build, and the defaults stay `api-axum` and `store-postgres`. **(b) and (c): coordinator's decisions 2026-09-26 under the owner's delegation, swappable.** (b) aws-lc-rs installed as rustls's process default at start, for the crates that use the process default; sqlx picks its provider itself, so Postgres TLS runs on `ring` in a build with CrateStack until upstream U2; to swap, the binary's start-up installs another provider, and U2's feature chooses sqlx's. (c) CrateStack's `sqlx =0.9.0` pin accepted, with an upstream PR relaxing it (U3); to swap, a build without CrateStack's crates has no pin, and U3 lifts it for the rest | S10 |
+| D21 | Event sequences ([§2.3](#23-the-event-pipeline)) | one sequence for the whole outbox / one per tenant | **Coordinator's decision 2026-09-25, standing under the owner's delegation of 2026-09-26: one per tenant** (security review SR-L2: a global sequence shows every tenant the platform's volume and timing); `sequence`, `after`, `next_after`, `410` and `422` are the tenant's. Reversible until the first release, or the first deployment with polling consumers: the per-tenant sequence is in the v1 contract (the descriptions of `sequence` and `next_after` in `openapi/v1.json`), consumers store cursors in it, and within `/v1` changes are additive ([§7.5](#75-versioning)), so going back to one sequence then breaks every stored cursor: irreversible after the first release, so the owner confirms it before then | M1 |
+| D22 | A deleted tenant's outbox events (related to D10) | delete them with the tenant / keep them, hidden from a tenant created again under the id | **Coordinator's decision 2026-09-25, standing under the owner's delegation of 2026-09-26: delete them** (the outbox's foreign key cascades; the tenant's stream records them purged, so an old cursor is `410`). Reversing it keeps the events of tenants deleted afterwards only: events the cascade already deleted are not recoverable, an irreversible deletion, so the owner confirms it before the first release | M1 |
 | D23 | Dedup window of keyless events (`error_reported`, `unparsed`, [§2.3](#23-the-event-pipeline)) | 1 h / Meta's whole 7-day retry period / none | **Coordinator's decision 2026-09-25, standing under the owner's delegation of 2026-09-26: 1 h** (`KEYLESS_DEDUP_WINDOW`). Failure mode: Meta documents a retry at once, then with decreasing frequency over 7 days, and that receivers must deduplicate; it does not say a redelivery carries the same bytes, which the key assumes. An outage longer than an hour (the database answering `500`, say) records the batch's keyless events twice, as new ids. 7 days would record a recurring identical error once for that long; none would record every redelivery | M1 |
-| D24 | A deleted tenant on platform keys | scrubbed from every key's allowed tenants, a tenant created again needing a new key / kept | **Coordinator's decision 2026-09-25, standing under the owner's delegation of 2026-09-26: scrubbed** (a tenant created again under a recycled id must not inherit access). No route or command edits a key's allowed tenants, so a tenant created again under the id needs a new platform key; a `*` key allows it at once. Reversing it keeps the allowances of tenants deleted afterwards only: the lists already scrubbed are not restored | M1 |
+| D24 | A deleted tenant on platform keys | scrubbed from every key's allowed tenants, a tenant created again needing a new key / kept | **Coordinator's decision 2026-09-25, standing under the owner's delegation of 2026-09-26: scrubbed** (a tenant created again under a recycled id must not inherit access). No route or command edits a key's allowed tenants, so a tenant created again under the id needs a new platform key; a `*` key allows it at once. Reversing it keeps the allowances of tenants deleted afterwards only: the lists already scrubbed are not restored. The owner confirms it before the first release | M1 |
 | D25 | The event types the webhook conformance sweep typed (PR #17: `standby_observed`, `thread_control_changed`, `user_action_reported`, formerly `unknown`) | operator-only / tenant-visible | **Decided 2026-09-26: tenant-visible, in M2** (with the inbox's answer to `OPEN_QUESTIONS.md` #44); M1c ships them operator-only, the rule for a type not yet reviewed | M2 |
-| D26 | The service's architecture | one crate / a framework-free core with ports, API adapters and backend bundles | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: the modular service ([§8](#8-modular-architecture-and-client-sdks)).** Defaults: `api-cratestack` and `store-cratestack` (the hybrid), once the owner accepts D20's licence (a). Kept built and conformance-tested: `api-axum` (today's v1 and its OpenAPI document) and `store-postgres` (sqlx); `store-memory` for development; later `store-mongodb`, after the library's MongoDB adapters, with an `Outbox` spike first. To swap, Cargo features choose which adapters are compiled in and configuration picks one of each; a new backend implements the core ports and passes `meta_whatsapp_server_core::conformance` | [roadmap.md](../roadmap.md) S1–S12 |
-| D27 | The idempotency fingerprint ([§5.4](#54-idempotency-keys)) | method, route and body (as built) / operation id and canonical input | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: the operation id plus the canonical input**, so one key means the same through every API adapter. The change is pre-release, so no stored key breaks; to swap, the fingerprint is one function in the core | S4 |
+| D26 | The service's architecture | one crate / a framework-free core with ports, API adapters and backend bundles | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: the modular service ([§8](#8-modular-architecture-and-client-sdks)).** Defaults: `api-cratestack` and `store-cratestack` (the hybrid), once the owner accepts D20's licence (a). Kept built and conformance-tested: `api-axum` (today's v1 and its OpenAPI document), permanent: the swap target, where every new route lands too, through core services that keep both adapters thin; and `store-postgres` (sqlx); `store-memory` for development; later `store-mongodb`, after the library's MongoDB adapters, with an `Outbox` spike first. Swapping the API adapter swaps the wire contract and the client: procedures with CrateStack's generated client, resource URLs with openapi-typescript. To swap, Cargo features choose which adapters are compiled in and configuration picks one of each; a new backend implements the core ports and passes `meta_whatsapp_server_core::conformance` | [roadmap.md](../roadmap.md) S1–S18 |
+| D27 | The idempotency fingerprint ([§5.4](#54-idempotency-keys)) | method, route and body (as built) / operation id and canonical input | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: the operation id plus the canonical input**, so one key means the same through every API adapter. The change is pre-release, so no stored key breaks; to swap, the fingerprint is one function in the core | S6 |
 | D28 | The bot framework and its plugins | in the facade / a new library crate / in the service; plugins loaded at run time / registered at compile time | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: a new library crate, `meta-whatsapp-bot`, with plugins registered at compile time.** No hot reload: loading Rust code at run time is neither idiomatic nor safe (no stable ABI, and `unsafe` loading, which the workspace forbids), and parity row 87 says so. To swap, a `Bot` is an `EventSink`, so an integrator can put their own dispatcher in its place; the service exposes the bot over HTTP in M5 | B1 |
 | D29 | Paced broadcast and scheduled messages | a job-queue port / a typed store on `KvStore` / the caller's | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: in `meta-whatsapp-bot`, with jobs as a typed store on `KvStore`** (a bucketed due-time index, claims by compare-and-swap under a lease), not a new port, per architecture.md's rule that typed stores are built on `KvStore`; broadcasts are paced per number under Meta's throughput. To swap, the pacer and the job store are traits with these as their defaults | B2, B3 |
 
 **Inherited from [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md).** The
 questions the service inherits were decided on 2026-09-26 under the same
-delegation, each with its roadmap item: #5 (multi-WABA signups: opt-in),
-#8 (no token refresh: the service reports `reconnect_required`, and the
-expiry is surfaced before it lapses), #9 (vault key custody and cadence:
-rotation is one call), #10 (a code-less resume, L4), #13 (the OTP issue
-limit, kept), #30 (dead-lettering a permanently failing event, L21),
-#32 (calls reopen the inbox's window, L7). Until an item lands, the
-service keeps the library's behaviour and makes it visible to callers.
-#33 (message ids unique per store) stays open: its alternative is a
-primary-key migration of stored messages, which is the owner's.
+delegation, each with its roadmap item: #5 (multi-WABA signups: opt-in,
+L11b and M3f), #8 (no token refresh: the service reports
+`reconnect_required`, and the expiry is surfaced before it lapses, L11e
+and M3e), #9 (vault key custody and cadence: rotation is one call, the
+cadence documented with M3a), #10 (a code-less resume, L4), #13 (the OTP
+issue limit, kept), #26 (the In-App Signup terms: an explicit, audited
+operator action, M5i), #30 (dead-lettering a permanently failing event,
+L21a), #32 (calls reopen the inbox's window, L5 and L7), #45 (the
+max-price agreement: an explicit, audited operator action, M5h). Until
+an item lands, the service keeps the library's behaviour and makes it
+visible to callers. #33 (message ids unique per store) stays open: its
+alternative is a primary-key migration of stored messages, which is the
+owner's; L5 and L8 are shaped to work with either answer.

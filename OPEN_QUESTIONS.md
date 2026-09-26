@@ -3,18 +3,32 @@
 Decisions the implementation did **not** make when it was written. Each
 entry says what the code does today, so nothing here is a hidden default.
 
-**From 2026-09-26 the owner delegates these decisions**
-([design §10](docs/design/server.md#10-decisions-for-the-owner)): an
-entry is decided when its choice can be made swappable, and the decision
-is recorded in the entry, with how to swap it and, when it needs code,
-its item in [docs/roadmap.md](docs/roadmap.md). Legal and
-terms-of-service questions, and those whose answer would be an
-irreversible data migration, stay open for the owner. A decided entry
-stays here, marked, until its roadmap item lands and nothing cites it;
-then it is deleted.
+**From 2026-09-26 the owner delegates these decisions**, under the rule
+in [AGENTS.md § Decisions](AGENTS.md#decisions) (and
+[design §10](docs/design/server.md#10-decisions) for the service): an
+entry is decided when its choice ships swappable, or names the roadmap
+item that adds the swap. Legal and terms-of-service choices, and what
+cannot be undone (irreversible deletion or data migrations, released
+contracts, stable identifiers), stay the owner's. A legal act Meta ties
+to an API call is exposed as an explicit, audited operator action and
+never taken automatically; performing it is the deployer's decision.
 
-On 2026-09-26, 29 entries are decided and 2 stay open: #26 (a legal
-decision) and #33 (a data migration).
+**Recording format.** A decided entry keeps its text and gains one
+paragraph: `**Decided <date> (<who>, owner's delegation):** <the
+choice>. <why>. Swappable by <how>. Roadmap <item>.`, or `No code.` in
+place of the roadmap item. An entry left for the owner gains
+`**Left open on <date>:** <why it is the owner's>.` Design §10's rows
+carry the same parts.
+
+**Deleting an entry.** A decided entry stays here, marked, until its
+roadmap item lands (at once for `No code.`), the CHANGELOG lists it
+under "Open questions decided", and nothing cites it (guides, skills,
+the design, the code); then it is deleted. A section heading stays when
+its last entry goes, with a line saying so: guides and skills link to
+its anchor.
+
+On 2026-09-26, 31 entries are decided and 1 stays open: #33 (a data
+migration).
 
 Numbers are permanent (the code, docs and skills cite them) and not in
 order within a section. Markdown renders a list with its first item's
@@ -52,7 +66,7 @@ of its own, after an HTML comment; keep that when you add one.
    signup stays the default (the claimed one, which the merchant chose);
    onboarding every WABA the token grants becomes an opt-in option of the
    onboarding request, each WABA onboarded, bound and resumable on its
-   own. Swappable by that option. Roadmap L11.
+   own. Swappable by that option. Roadmap L11b.
 
 6. **One WABA shared by several tenants.** The vault is keyed by WABA and
    knows no tenants; the last onboarding wins. `onboard_with_approval`
@@ -80,7 +94,7 @@ of its own, after an HTML comment; keep that when you add one.
    service does the same, design D7). The safest choice: Meta allows the
    sync once, within 24 hours, and only offboarding and a new signup
    recover a missed one. Swappable by that option; until it lands,
-   `needs_coexistence_sync()` stays the signal. Roadmap L11.
+   `needs_coexistence_sync()` stays the signal. Roadmap L11d.
 
 8. **Token expiry and refresh.** The expiry is recorded; nothing refreshes.
    Today the merchant redoes Embedded Signup.
@@ -92,8 +106,8 @@ of its own, after an HTML comment; keep that when you add one.
    metric in the service. `access-tokens` describes business tokens as
    needing no re-authentication and documents no refresh call, so what can
    still lapse is a grant the merchant removes or lets expire; should Meta
-   add a refresh, a refresher behind a trait slots in. Roadmap L11 (the
-   library's signal) and M3 (the service's event).
+   add a refresh, a refresher behind a trait slots in. Roadmap L11e (the
+   library's signal) and M3e (the service's event).
 
 9. **Vault key custody and rotation cadence.** The integrator supplies the
    AES-256 key(s); rotation is supported but not scheduled.
@@ -105,7 +119,7 @@ of its own, after an HTML comment; keep that when you add one.
    yearly, and at once on a suspected exposure, dropping the old key only
    when the rotation reports no failure. Swappable: the schedule is the
    operator's. The cadence goes into `docs/guides/production.md` with M3's
-   rotation work (roadmap M3).
+   rotation work. Roadmap M3a.
 
 10. **Resuming after a restart.** `resume` takes an `OnboardingRequest`
     whose `code` it ignores; after a process restart you can't rebuild one
@@ -127,7 +141,7 @@ of its own, after an HTML comment; keep that when you add one.
     it, the business token comes from `system_user_access_tokens` with an
     `appsecret_proof` instead of a code exchange, and the steps after it
     are the existing ones (verify, store, subscribe, register). Swappable:
-    both are opt-in, and the code-exchange flow is unchanged. Roadmap L11.
+    both are opt-in, and the code-exchange flow is unchanged. Roadmap L11a.
 
 12. **Launch option shape.** `pre-filled-data` shows
     `whatsAppBusinessAccount` both as `{ids: …}` and `{id: [...]}`; the code
@@ -138,7 +152,8 @@ of its own, after an HTML comment; keep that when you add one.
     worked example's shape (`whatsAppBusinessAccount: {id: [...]}`,
     `business.id` as a string), pinned by its test. A check in Meta's
     Integration Helper stays a verification task before production relies
-    on pre-fill. Swappable: the shape is one serializer. No code.
+    on pre-fill. Swappable: the shape is one serializer. Roadmap L25 (the
+    check; code only if the helper shows another shape).
 
 ## Authentication (OTP)
 
@@ -179,7 +194,7 @@ of its own, after an HTML comment; keep that when you add one.
     builder infallible, and add a check that reports a blank verify token
     when the handler is built, next to it (additive; the service already
     refuses to start on one). Swappable: the check is the caller's to run.
-    Roadmap L20.
+    Roadmap L20d.
 
 ## Storage
 
@@ -193,7 +208,7 @@ of its own, after an HTML comment; keep that when you add one.
     choice (the service installs aws-lc-rs as its default, design D20). If
     redis-rs cannot take an explicit provider, integrator-built
     connections stay the way, documented. Swappable: an integrator can
-    still pass its own connection. Roadmap L21.
+    still pass its own connection. Roadmap L21c.
 
 ## Security posture
 
@@ -209,7 +224,7 @@ of its own, after an HTML comment; keep that when you add one.
     phone number, WABA, media and template ids, as the service already
     does for media and template ids), and keep whole-segment
     percent-encoding for opaque ids (BSUIDs, group ids), so no legitimate
-    id is refused. Swappable: one validator per kind of id. Roadmap L20.
+    id is refused. Swappable: one validator per kind of id. Roadmap L20c.
 
 21. **quick-xml advisories (RUSTSEC-2026-0194/0195)** are ignored in
     `deny.toml`, scoped and justified: reached only via typst's CSL parsing,
@@ -217,7 +232,7 @@ of its own, after an HTML comment; keep that when you add one.
 
     **Decided 2026-09-26 (coordinator, owner's delegation):** keep the
     scoped ignore, and remove it in the PR that upgrades typst past the
-    advisories (`just deny` then shows the entry unused). Reversible: one
+    advisories (`just deny` then shows the entry unused). Swappable by one
     `deny.toml` entry. No other code.
 
 ## Product details
@@ -230,7 +245,7 @@ of its own, after an HTML comment; keep that when you add one.
     with exactly two cards, and an approved one sends up to 10. So
     creation checks two cards when the cards carry a product header,
     media-card carousels keep 2–10, and sends keep at most 10. Swappable:
-    one constant each. Roadmap L20.
+    one constant each. Roadmap L20e.
 
 23. **Groups `add_participants`.** In Meta's reference, but the groups guide
     says participants can't be added manually. Kept, with a warning.
@@ -259,10 +274,29 @@ of its own, after an HTML comment; keep that when you add one.
     Meta's marketing messages terms on the business's behalf — a legal
     decision, not a technical one.
 
-    **Left open on 2026-09-26:** accepting Meta's terms on a business's
-    behalf is a legal decision, which the owner's delegation leaves to the
-    owner. The service will carry the In-App Signup routes and enable them
-    only once this is answered (roadmap M5i).
+    **Decided 2026-09-26 (coordinator, owner's delegation):** the code
+    decides nothing legal, so the acceptance is exposed as an explicit
+    operator action, and accepting is the deployer's act. The library
+    already keeps it explicit (`SignupPolicy::accept_terms()`, which no
+    other call sets); the service exposes it as an audited operator
+    action, off until the deployment enables it, never taken
+    automatically. Swappable: nothing accepts unless a deployment asks.
+    Roadmap M5i.
+
+<!-- 45 follows 26 in this section: a list of its own. -->
+
+45. **The Marketing Messages API's max-price agreement.** Max price
+    (`marketing-messages/pricing/enroll-max-price`) is a beta a WABA
+    joins by signing Meta's beta agreement through the API: a legal act
+    on the business's behalf. Nothing wraps it today (parity row 137).
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** the code
+    decides nothing legal. The library exposes the agreement as its own
+    explicit call, which no other call makes (a max-price send never
+    signs it); the service exposes it as an audited operator action, off
+    until the deployment enables it. Signing is the deployer's act, for
+    their own deployment. Swappable: nothing signs unless a deployment
+    calls it. Roadmap L13 and M5h.
 
 ## API conventions
 
@@ -294,7 +328,7 @@ commit).
     meta-whatsapp-core for every open enum; no unit `Unknown` catch-all (a
     documented `UNKNOWN` value, as in `QualityRating`, stays a real
     variant). A breaking change, made before the first release. Swappable:
-    the macro is the one place to change it. Roadmap L20.
+    the macro is the one place to change it. Roadmap L20a.
 
 28. **`#[non_exhaustive]` policy.** 25 of the 144 `Deserialize` structs in
     meta-whatsapp-client have it (all in the onboarding modules), none of the 104 in
@@ -313,7 +347,7 @@ commit).
     from JSON fixtures. The rule goes into `docs/architecture.md`. A
     breaking change for integrators (struct literals and exhaustive
     matches of those types stop compiling), made before the first
-    release. Swappable per kind. Roadmap L20.
+    release. Swappable per kind. Roadmap L20b.
 
 29. **axum and sqlx: re-exports or your own pins?** Both are re-exported
     (`meta_whatsapp_rs::webhooks::axum`, `meta_whatsapp_rs::adapters::store::postgres::sqlx`)
@@ -356,7 +390,7 @@ Found by the security review of 8ee6fab.
     in keeps today's behaviour. The raw events are personal data: the
     dead-letter store is bounded by count and age, and L5's erasure
     reaches it. Swappable: the sink classifies its own errors, and the
-    store is a typed store like the others. Roadmap L21.
+    store is a typed store like the others. Roadmap L21a.
 
 31. **SSE fan-out cost.** `webhooks::sse` reads a
     `broadcast::Receiver<WebhookEvent>`, and a broadcast receiver clones
@@ -375,7 +409,7 @@ Found by the security review of 8ee6fab.
     `Arc<WebhookEvent>`, which changes the types of `sse` and
     `BroadcastSink` before the first release; the service's per-number
     channels (design §4.5) stay its own. Swappable: the sink is one of
-    several. Roadmap L21.
+    several. Roadmap L21b.
 
 ## CMS inbox
 
@@ -399,10 +433,11 @@ Found while writing the integrator guides and checking them against
     calls that reopen the window (`calling/pricing`: a customer's call,
     answered or not, and the customer accepting the business's call;
     `CallUpdated`, `CallStatusUpdated`) as window events in
-    `ConversationStore`, a port change that lands with L5, and let the
+    `ConversationStore`, a port change that is part of L5, and let the
     caller override the local check explicitly. Meta enforces the window
     either way; the local check only saves a request Meta would refuse.
-    Swappable by the override. Roadmap L7.
+    Swappable by the override. Roadmap L5 (the port) and L7 (the
+    inbox).
 
 33. **Message ids are unique per store, not per business number.** The
     Postgres `messages.id` is the table's primary key on its own (and the
@@ -420,7 +455,9 @@ Found while writing the integrator guides and checking them against
     **Left open on 2026-09-26:** the alternative to today's behaviour is
     keying stored messages by `(phone_number_id, id)`, a primary-key
     migration of stored data, which the owner's delegation leaves to the
-    owner. Today's behaviour stays, documented as above.
+    owner. Today's behaviour stays, documented as above. The roadmap's
+    items that touch message ids (L5's lookup, L8's adapters) work with
+    either answer.
 
 <!-- 44 follows 33 in this section: a list of its own. -->
 
@@ -446,9 +483,9 @@ Found while writing the integrator guides and checking them against
     `release` and the 24-hour idle timeout; the inbox refuses a reply
     locally when another app owns the thread, and the caller can override.
     It lands with L5 and #32, so adapters change once, and the service
-    makes the two event types tenant-visible in M2 (design D25). Swappable
-    by the override: ownership is advisory, Meta enforces it. Roadmap L7
-    and M2.
+    makes the two event types tenant-visible in M2d (design D25).
+    Swappable by the override: ownership is advisory, Meta enforces it.
+    Roadmap L5 (the port), L7 (the inbox) and M2d.
 
 ## Service (meta-whatsapp-server)
 
@@ -479,4 +516,4 @@ Found in the review of milestone M1b (43).
     whichever way Meta behaves, since it widens the route only to ids the
     tenant's own events carried; the live check with a real received media
     id still says which behaviour Meta has. Swappable: the exemption is
-    one lookup. Roadmap M2.
+    one lookup. Roadmap M2e.
