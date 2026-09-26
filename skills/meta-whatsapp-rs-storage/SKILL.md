@@ -5,7 +5,7 @@ description: "Choosing and running meta-whatsapp-rs storage - the KvStore (token
 
 # meta-whatsapp-rs-storage
 
-> **Verified against meta-whatsapp-rs 28f96ef018e733b0d04b9278b2653c26e34e18b8 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 952b20f619a2585e32774deda62c51b2597347aa (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/stores.rs](examples/stores.rs), compiled by
 meta-whatsapp-rs's own gate; its tests run the conformance suites on the memory
