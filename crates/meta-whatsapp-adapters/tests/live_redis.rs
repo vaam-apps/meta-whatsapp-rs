@@ -2,7 +2,8 @@
 //! `META_WHATSAPP_RS_TEST_REDIS_URL` is set; `META_WHATSAPP_RS_REQUIRE_LIVE=1` (as in
 //! `just test-live`) turns the skip into a failure.
 //!
-//! Every test uses its own key prefix and deletes what it wrote.
+//! Every test uses its own key prefix, and a `common::RedisCleanup` guard
+//! deletes what it wrote, when the test panics too.
 #![cfg(feature = "redis")]
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test crate: a panic is the report
 
@@ -12,54 +13,44 @@ use std::time::Duration;
 
 use meta_whatsapp_adapters::store::{RedisKvStore, conformance};
 use meta_whatsapp_core::store::{Expiry, KvStore, StoreKey};
-use redis::aio::{ConnectionManager, MultiplexedConnection};
+use redis::aio::ConnectionManager;
+
+use common::RedisCleanup;
 
 fn client() -> Option<redis::Client> {
     let url = common::service_url("META_WHATSAPP_RS_TEST_REDIS_URL")?;
     Some(redis::Client::open(url).expect("valid META_WHATSAPP_RS_TEST_REDIS_URL"))
 }
 
-fn prefix() -> String {
-    format!("wa-test:{}:", common::unique())
-}
-
-/// Delete every key under `prefix`.
-async fn cleanup(conn: &mut MultiplexedConnection, prefix: &str) {
-    let keys: Vec<String> = redis::cmd("KEYS")
-        .arg(format!("{prefix}*"))
-        .query_async(conn)
-        .await
-        .unwrap();
-    if !keys.is_empty() {
-        let _: () = redis::cmd("DEL").arg(keys).query_async(conn).await.unwrap();
-    }
+/// A key prefix of this test's own, and the guard that deletes its keys.
+fn prefix(client: &redis::Client) -> (String, RedisCleanup) {
+    let prefix = format!("wa-test:{}:", common::unique());
+    let cleanup = RedisCleanup::new(client, &prefix);
+    (prefix, cleanup)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn live_redis_kv_conformance_connection_manager() {
     let Some(client) = client() else { return };
-    let prefix = prefix();
+    let (prefix, _cleanup) = prefix(&client);
     let manager = ConnectionManager::new(client.clone()).await.unwrap();
     let store = RedisKvStore::new(manager).with_prefix(prefix.clone());
     conformance::run_with_real_time(&store, Duration::from_millis(500)).await;
-    let mut conn = client.get_multiplexed_async_connection().await.unwrap();
-    cleanup(&mut conn, &prefix).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn live_redis_kv_conformance_multiplexed() {
     let Some(client) = client() else { return };
-    let prefix = prefix();
+    let (prefix, _cleanup) = prefix(&client);
     let conn = client.get_multiplexed_async_connection().await.unwrap();
     let store = RedisKvStore::new(conn.clone()).with_prefix(prefix.clone());
     conformance::run_with_real_time(&store, Duration::from_millis(500)).await;
-    cleanup(&mut conn.clone(), &prefix).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn live_redis_layout_counters_and_ttls() {
     let Some(client) = client() else { return };
-    let prefix = prefix();
+    let (prefix, _cleanup) = prefix(&client);
     let mut conn = client.get_multiplexed_async_connection().await.unwrap();
     let store = RedisKvStore::new(conn.clone()).with_prefix(prefix.clone());
 
@@ -141,8 +132,6 @@ async fn live_redis_layout_counters_and_ttls() {
         .await
         .unwrap();
     assert_eq!(far_ttl, -1, "no TTL on a record that never expires");
-
-    cleanup(&mut conn, &prefix).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
