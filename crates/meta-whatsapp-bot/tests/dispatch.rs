@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use meta_whatsapp_adapters::store::MemoryKvStore;
 use meta_whatsapp_bot::{
     AccessList, Bot, Command, Ctx, ErrorHandler, Listen, MarkRead, Middleware, Next, Plugin,
-    PropagateErrors, Registrar, SilentRefusals, Trigger,
+    PropagateErrors, Refusal, Refusals, Registrar, ReplyRefusals, SilentRefusals, Trigger,
 };
 use meta_whatsapp_core::clock::ManualClock;
 use meta_whatsapp_core::error::{SinkError, StorageError};
@@ -577,7 +577,10 @@ async fn the_quoted_wait_is_rounded_up() {
     bot.handle(text_event(TEXT, "/roll")).await.unwrap();
     clock.advance(Duration::from_millis(10_500));
     bot.handle(text_event(TEXT, "/roll")).await.unwrap();
-    clock.advance(Duration::from_millis(19_400));
+    // A new cooldown (one notice per cooldown), refused 0.6 s before its end.
+    clock.advance(Duration::from_millis(19_600));
+    bot.handle(text_event(TEXT, "/roll")).await.unwrap();
+    clock.advance(Duration::from_millis(29_400));
     bot.handle(text_event(TEXT, "/roll")).await.unwrap();
     assert_eq!(
         out.bodies(),
@@ -864,10 +867,8 @@ async fn a_middleware_hands_values_on() {
     #[async_trait]
     impl Middleware for Load {
         async fn handle(&self, mut ctx: Ctx, next: Next<'_>) -> meta_whatsapp_core::Result<()> {
-            assert!(
-                ctx.invocation().is_none(),
-                "middleware runs before the match"
-            );
+            // The match comes before the middleware.
+            assert_eq!(ctx.invocation().map(|i| i.command.as_str()), Some("tier"));
             ctx.insert(Tier("gold"));
             next.run(ctx).await
         }
@@ -1192,6 +1193,7 @@ async fn the_error_handler_sees_the_failed_command() {
 
 // ─── Plugins and building ────────────────────────────────────────────────
 
+#[derive(Debug)]
 struct Games {
     unloads: Arc<Mutex<Vec<&'static str>>>,
     name: &'static str,
@@ -1202,8 +1204,8 @@ impl Plugin for Games {
     fn name(&self) -> &str {
         self.name
     }
-    fn category(&self) -> &'static str {
-        "Games"
+    fn category(&self) -> Option<&str> {
+        Some("Games")
     }
     async fn setup(&self, registrar: &mut Registrar) -> meta_whatsapp_core::Result<()> {
         assert_eq!(registrar.plugin(), Some(self.name));
@@ -1251,14 +1253,23 @@ async fn plugins_register_in_order_and_unload_in_reverse_once() {
     bot.unload().await.unwrap();
     bot.unload().await.unwrap();
     assert_eq!(*unloads.lock().unwrap(), ["coin", "dice"]);
-    // An unloaded bot refuses events, so Meta redelivers them elsewhere.
-    assert!(bot.deliver(text_event(TEXT, "/dice-roll")).await.is_err());
+    // An unloaded bot refuses events as a closed sink, so Meta redelivers
+    // them elsewhere.
+    assert!(matches!(
+        bot.deliver(text_event(TEXT, "/dice-roll")).await,
+        Err(SinkError::Closed)
+    ));
+    assert!(matches!(
+        bot.handle(text_event(TEXT, "/dice-roll")).await,
+        Err(Error::Sink(SinkError::Closed))
+    ));
 }
 
 /// A plugin whose `on_unload` fails does not keep the others from
 /// unloading; its error is returned after they all ran.
 #[tokio::test]
 async fn unload_runs_every_plugin_and_returns_the_first_error() {
+    #[derive(Debug)]
     struct Flaky(Arc<Mutex<Vec<&'static str>>>);
     #[async_trait]
     impl Plugin for Flaky {
@@ -1298,6 +1309,7 @@ async fn unload_runs_every_plugin_and_returns_the_first_error() {
 
 #[tokio::test]
 async fn a_failed_plugin_setup_fails_the_build_in_its_step() {
+    #[derive(Debug)]
     struct Broken;
     #[async_trait]
     impl Plugin for Broken {
@@ -1399,4 +1411,402 @@ async fn the_build_refuses_ambiguous_or_incomplete_registrations() {
         .await
         .contains("two plugins")
     );
+    // A listener that could never run: a misspelt event kind, a blank
+    // message type.
+    assert!(
+        config(base().listen(Listen::event("status_update"), noop()))
+            .await
+            .contains("`status_update`")
+    );
+    assert!(
+        config(base().listen(Listen::message_type(" "), noop()))
+            .await
+            .contains("blank message type")
+    );
+    // Every kind the library reports is accepted.
+    let mut every = base();
+    for kind in meta_whatsapp_webhooks::WebhookEvent::KINDS {
+        every = every.listen(Listen::event(*kind), noop());
+    }
+    every.build().await.unwrap();
+}
+
+// ─── Order: ban → match → middleware → guards (review P1-1) ─────────────
+
+/// Decisive: a banned sender, with `MarkRead::with_typing_indicator` and a
+/// replying listener registered, makes no request at all: no read receipt,
+/// no "typing…", no reply. (Move the ban check after the middleware and
+/// the receipt goes out.)
+#[tokio::test]
+async fn a_banned_sender_makes_no_request_at_all() {
+    let t = ScriptedTransport::new();
+    let bot = Bot::builder()
+        .client(client(&t))
+        .access(AccessList::new().ban(BSUID))
+        .middleware(MarkRead::with_typing_indicator())
+        .command(Command::new("ping", |ctx: Ctx| async move {
+            ctx.reply("pong").await?;
+            Ok(())
+        }))
+        .listen(Listen::All, |ctx: Ctx| async move {
+            ctx.reply("heard you").await?;
+            Ok(())
+        })
+        .build()
+        .await
+        .unwrap();
+
+    bot.deliver(text_event(BSUID_ONLY, "/ping")).await.unwrap();
+    bot.deliver(text_event(BSUID_ONLY, "hello")).await.unwrap();
+    assert!(t.requests().is_empty(), "{:?}", t.requests());
+    assert_eq!(t.remaining(), 0);
+
+    // Control: anyone else gets the receipt with its typing indicator, then
+    // the reply.
+    t.push_json(200, json!({"success": true}));
+    t.push_json(200, send_response());
+    bot.deliver(text_event(TEXT, "/ping")).await.unwrap();
+    let requests = t.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[0]
+            .json()
+            .unwrap()
+            .get("typing_indicator")
+            .is_some()
+    );
+    assert_eq!(requests[1].json().unwrap()["text"]["body"], "pong");
+    assert_eq!(t.remaining(), 0);
+}
+
+/// The match comes before the middleware, so a middleware can act for some
+/// commands only; the command's guards still come after it.
+#[tokio::test]
+async fn a_middleware_sees_the_matched_command_before_its_guards() {
+    /// Stops `/admin` for everyone (a middleware for one command).
+    #[derive(Debug)]
+    struct NoAdmin(Arc<Mutex<Vec<Option<String>>>>);
+    #[async_trait]
+    impl Middleware for NoAdmin {
+        async fn handle(&self, ctx: Ctx, next: Next<'_>) -> meta_whatsapp_core::Result<()> {
+            let command = ctx.invocation().map(|i| i.command.clone());
+            self.0.lock().unwrap().push(command.clone());
+            if command.as_deref() == Some("admin") {
+                return Ok(());
+            }
+            next.run(ctx).await
+        }
+    }
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let admin = Arc::new(AtomicUsize::new(0));
+    let roll = Arc::new(AtomicUsize::new(0));
+    let clock = ManualClock::new(datetime!(2026-09-26 12:00 UTC));
+    let kv = Arc::new(MemoryKvStore::with_clock(Arc::new(clock.clone())));
+    let out = Recording::default();
+    let bot = Bot::builder()
+        .outbound(out.clone())
+        .cooldown_store(kv, Arc::new(clock))
+        .middleware(NoAdmin(Arc::clone(&seen)))
+        .command(counting("admin", &admin).alias("a"))
+        .command(counting("roll", &roll).cooldown(Duration::from_secs(60)))
+        .build()
+        .await
+        .unwrap();
+
+    bot.handle(text_event(TEXT, "/A")).await.unwrap();
+    bot.handle(text_event(TEXT, "/roll")).await.unwrap();
+    bot.handle(text_event(TEXT, "/roll")).await.unwrap();
+    bot.handle(text_event(TEXT, "hello")).await.unwrap();
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [
+            Some("admin".to_owned()),
+            Some("roll".to_owned()),
+            Some("roll".to_owned()),
+            None
+        ]
+    );
+    assert_eq!((count(&admin), count(&roll)), (0, 1));
+    // The second `/roll` passed the middleware and met its cooldown after.
+    assert_eq!(out.bodies().len(), 1);
+}
+
+/// Decisive: five attempts inside one running cooldown get one "please
+/// wait", not five; a new cooldown gets its own. The `Refusals` still sees
+/// every refusal, with `notify` set on the first only.
+#[tokio::test]
+async fn a_running_cooldown_is_told_once() {
+    #[derive(Debug, Clone, Default)]
+    struct Seen(Arc<Mutex<Vec<Refusal>>>, ReplyRefusals);
+    #[async_trait]
+    impl Refusals for Seen {
+        async fn refused(&self, ctx: &Ctx, refusal: &Refusal) -> meta_whatsapp_core::Result<()> {
+            self.0.lock().unwrap().push(*refusal);
+            self.1.refused(ctx, refusal).await
+        }
+    }
+    let clock = ManualClock::new(datetime!(2026-09-26 12:00 UTC));
+    let kv = Arc::new(MemoryKvStore::with_clock(Arc::new(clock.clone())));
+    let runs = Arc::new(AtomicUsize::new(0));
+    let out = Recording::default();
+    let seen = Seen::default();
+    let bot = Bot::builder()
+        .outbound(out.clone())
+        .refusals(seen.clone())
+        .cooldown_store(kv, Arc::new(clock.clone()))
+        .command(counting("roll", &runs).cooldown(Duration::from_secs(30)))
+        .build()
+        .await
+        .unwrap();
+
+    bot.handle(text_event(TEXT, "/roll")).await.unwrap();
+    for _ in 0..5 {
+        clock.advance(Duration::from_secs(1));
+        bot.handle(text_event(TEXT, "/roll")).await.unwrap();
+    }
+    assert_eq!(count(&runs), 1);
+    assert_eq!(
+        out.bodies(),
+        ["Please wait 29 s before using this command again."]
+    );
+    let notified: Vec<bool> = seen
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|r| matches!(r, Refusal::CoolingDown { notify: true, .. }))
+        .collect();
+    assert_eq!(notified, [true, false, false, false, false]);
+
+    // Another user is told on their own.
+    bot.handle(text_event(BSUID_ONLY, "/roll")).await.unwrap();
+    bot.handle(text_event(BSUID_ONLY, "/roll")).await.unwrap();
+    assert_eq!(out.bodies().len(), 2);
+
+    // Expired: it runs again, and its own cooldown is told once more.
+    clock.advance(Duration::from_secs(30));
+    bot.handle(text_event(TEXT, "/roll")).await.unwrap();
+    clock.advance(Duration::from_secs(1));
+    bot.handle(text_event(TEXT, "/roll")).await.unwrap();
+    bot.handle(text_event(TEXT, "/roll")).await.unwrap();
+    assert_eq!(count(&runs), 3);
+    assert_eq!(
+        out.bodies().last().map(String::as_str),
+        Some("Please wait 29 s before using this command again.")
+    );
+    assert_eq!(out.bodies().len(), 3);
+}
+
+// ─── Unknown commands, captions, reactions, message types ──────────────
+
+/// An unknown `/name` goes to the unknown-command handler, which gets the
+/// name as the parser read it; without one, the listeners get it.
+#[tokio::test]
+async fn an_unknown_command_reaches_its_handler_with_the_name() {
+    let names = Arc::new(Mutex::new(Vec::new()));
+    let names_in = Arc::clone(&names);
+    let listened = Arc::new(Mutex::new(Vec::new()));
+    let listened_in = Arc::clone(&listened);
+    let out = Recording::default();
+    let bot = Bot::builder()
+        .outbound(out.clone())
+        .command(counting("ping", &Arc::default()))
+        .unknown_command(move |ctx: Ctx| {
+            let names = Arc::clone(&names_in);
+            async move {
+                let unknown = ctx.unknown_command().unwrap();
+                names.lock().unwrap().push(unknown.name.clone());
+                ctx.reply(format!(
+                    "There is no /{}. Send /help to see what I can do.",
+                    unknown.name
+                ))
+                .await?;
+                Ok(())
+            }
+        })
+        .listen(Listen::Messages, move |ctx: Ctx| {
+            let listened = Arc::clone(&listened_in);
+            async move {
+                listened
+                    .lock()
+                    .unwrap()
+                    .push(ctx.text().unwrap_or_default().to_owned());
+                Ok(())
+            }
+        })
+        .build()
+        .await
+        .unwrap();
+
+    bot.handle(text_event(TEXT, "/Pnig now")).await.unwrap();
+    bot.handle(text_event(TEXT, "/ping")).await.unwrap();
+    bot.handle(text_event(TEXT, "hello")).await.unwrap();
+    bot.handle(text_event(TEXT, "/")).await.unwrap();
+    assert_eq!(*names.lock().unwrap(), ["pnig"]);
+    assert_eq!(
+        out.bodies(),
+        ["There is no /pnig. Send /help to see what I can do."]
+    );
+    assert_eq!(*listened.lock().unwrap(), ["hello", "/"]);
+
+    // Without an unknown-command handler, a listener gets it and the name.
+    let unknown = Arc::new(Mutex::new(Vec::new()));
+    let unknown_in = Arc::clone(&unknown);
+    let plain = Bot::builder()
+        .outbound(Recording::default())
+        .listen(Listen::Messages, move |ctx: Ctx| {
+            let unknown = Arc::clone(&unknown_in);
+            async move {
+                unknown
+                    .lock()
+                    .unwrap()
+                    .push(ctx.unknown_command().map(|c| c.name.clone()));
+                Ok(())
+            }
+        })
+        .build()
+        .await
+        .unwrap();
+    plain.handle(text_event(TEXT, "/nope")).await.unwrap();
+    plain.handle(text_event(TEXT, "nope")).await.unwrap();
+    assert_eq!(*unknown.lock().unwrap(), [Some("nope".to_owned()), None]);
+}
+
+/// A media fixture with its caption replaced.
+fn captioned(path: &str, media: &str, caption: &str) -> meta_whatsapp_webhooks::WebhookEvent {
+    let mut json = common::fixture_json(path);
+    let slot = &mut json["entry"][0]["changes"][0]["value"]["messages"][0][media]["caption"];
+    assert!(slot.is_string(), "{path} has no {media} caption");
+    *slot = json!(caption);
+    common::events_of(&json).remove(0)
+}
+
+/// Meta's image and video examples, captioned `/sticker big`: the caption
+/// is the command, the media stays in the message.
+#[tokio::test]
+async fn an_image_or_video_caption_runs_its_command() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let seen_in = Arc::clone(&seen);
+    let listened = Arc::new(AtomicUsize::new(0));
+    let listened_in = Arc::clone(&listened);
+    let bot = Bot::builder()
+        .outbound(Recording::default())
+        .command(Command::new("sticker", move |ctx: Ctx| {
+            let seen = Arc::clone(&seen_in);
+            async move {
+                let invocation = ctx.invocation().unwrap();
+                seen.lock().unwrap().push((
+                    invocation.trigger.clone(),
+                    invocation.args.as_slice().to_vec(),
+                    ctx.message()
+                        .and_then(|m| m.message_type())
+                        .map(str::to_owned),
+                ));
+                Ok(())
+            }
+        }))
+        .listen(Listen::Messages, move |_ctx: Ctx| {
+            let listened = Arc::clone(&listened_in);
+            async move {
+                listened.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .build()
+        .await
+        .unwrap();
+
+    bot.handle(captioned("messages/image.json", "image", "/sticker big"))
+        .await
+        .unwrap();
+    bot.handle(captioned("messages/video.json", "video", "/STICKER"))
+        .await
+        .unwrap();
+    let caption = |name: &str| Trigger::Caption {
+        prefix: "/".into(),
+        name: name.into(),
+    };
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [
+            (
+                caption("sticker"),
+                vec!["big".to_owned()],
+                Some("image".to_owned())
+            ),
+            (caption("sticker"), vec![], Some("video".to_owned())),
+        ]
+    );
+    // Meta's own captions are plain messages.
+    bot.handle(event("messages/image.json")).await.unwrap();
+    bot.handle(event("messages/video.json")).await.unwrap();
+    assert_eq!(count(&listened), 2);
+    assert_eq!(seen.lock().unwrap().len(), 2);
+}
+
+/// `ctx.react` sends the documented reaction (`messages/reaction-messages`)
+/// to the message, from the number it arrived on.
+#[tokio::test]
+async fn react_sends_the_documented_reaction() {
+    let t = ScriptedTransport::new();
+    t.push_json(200, send_response());
+    let bot = Bot::builder()
+        .client(client(&t))
+        .command(Command::new("report", |ctx: Ctx| async move {
+            ctx.react("\u{23F3}").await?;
+            Ok(())
+        }))
+        .build()
+        .await
+        .unwrap();
+    bot.deliver(text_event(TEXT, "/report")).await.unwrap();
+    let request = t.last_request().unwrap();
+    assert_eq!(request.method.as_str(), "POST");
+    assert_eq!(request.path(), format!("/v25.0/{NUMBER}/messages"));
+    assert_eq!(
+        request.json(),
+        Some(json!({
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": "+16505551234",
+            "type": "reaction",
+            "reaction": {"message_id": message_id(TEXT), "emoji": "\u{23F3}"}
+        }))
+    );
+    assert_eq!(t.remaining(), 0);
+}
+
+/// `Listen::MessageType` gets the messages of Meta's `type` no command took.
+#[tokio::test]
+async fn message_type_listeners_get_their_type_only() {
+    let kinds = Arc::new(Mutex::new(Vec::new()));
+    let listener = |label: &'static str| {
+        let kinds = Arc::clone(&kinds);
+        move |_ctx: Ctx| {
+            let kinds = Arc::clone(&kinds);
+            async move {
+                kinds.lock().unwrap().push(label);
+                Ok(())
+            }
+        }
+    };
+    let bot = Bot::builder()
+        .outbound(Recording::default())
+        .command(counting("ping", &Arc::default()))
+        .listen(Listen::message_type("reaction"), listener("reaction"))
+        .listen(Listen::message_type("image"), listener("image"))
+        .build()
+        .await
+        .unwrap();
+    bot.handle(event("messages/reaction.json")).await.unwrap();
+    bot.handle(event("messages/image.json")).await.unwrap();
+    bot.handle(text_event(TEXT, "hello")).await.unwrap();
+    bot.handle(event("messages/status_sent.json"))
+        .await
+        .unwrap();
+    // A caption that is a command is the command's, not the listener's.
+    bot.handle(captioned("messages/image.json", "image", "/ping"))
+        .await
+        .unwrap();
+    assert_eq!(*kinds.lock().unwrap(), ["reaction", "image"]);
 }

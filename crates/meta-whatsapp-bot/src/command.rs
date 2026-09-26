@@ -1,7 +1,8 @@
 //! Commands: [`Command`] (name, aliases, guards, cooldown, interactive
-//! payloads), the [`Handler`] that runs it, and what a handler learns about
-//! the invocation ([`Invocation`], [`Args`]).
+//! payloads), the [`CommandHandler`] that runs it, and what a handler
+//! learns about the invocation ([`Invocation`], [`Args`]).
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
 use std::sync::Arc;
@@ -12,17 +13,21 @@ use meta_whatsapp_core::Result;
 
 use crate::ctx::Ctx;
 
-/// Runs a command or a listener. Implemented for every
-/// `Fn(Ctx) -> impl Future<Output = Result<()>>`, so a closure or an
-/// `async fn(Ctx) -> Result<()>` is a handler.
+/// Runs a command, a listener or the unknown-command handler. Implemented
+/// for every `Fn(Ctx) -> impl Future<Output = Result<()>>`, so a closure or
+/// an `async fn(Ctx) -> Result<()>` is a handler.
+///
+/// A handler is a function of its [`Ctx`], so it can be unit-tested
+/// without a bot: build the context with [`Ctx::new`] and, for a command,
+/// [`Ctx::with_invocation`], then call it.
 #[async_trait]
-pub trait Handler: Send + Sync + 'static {
+pub trait CommandHandler: Send + Sync + 'static {
     /// Handle one event.
     async fn call(&self, ctx: Ctx) -> Result<()>;
 }
 
 #[async_trait]
-impl<F, Fut> Handler for F
+impl<F, Fut> CommandHandler for F
 where
     F: Fn(Ctx) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<()>> + Send + 'static,
@@ -32,9 +37,9 @@ where
     }
 }
 
-impl fmt::Debug for dyn Handler {
+impl fmt::Debug for dyn CommandHandler {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("Handler")
+        f.write_str("CommandHandler")
     }
 }
 
@@ -55,14 +60,19 @@ pub enum Scope {
 /// runs. Build with [`Command::new`] and the chained setters; register with
 /// `BotBuilder::command` or `Registrar::command`.
 ///
-/// Names and aliases are matched case-insensitively (they are lowercased
-/// when the bot is built); interactive payloads exactly.
+/// Names and aliases are matched as the bot's [`CommandParser`] normalizes
+/// them (the default [`PrefixParser`] ignores case); interactive payloads
+/// exactly.
+///
+/// [`CommandParser`]: crate::CommandParser
+/// [`PrefixParser`]: crate::PrefixParser
 #[derive(Clone)]
 #[must_use]
 pub struct Command {
     pub(crate) name: String,
     pub(crate) aliases: Vec<String>,
     pub(crate) description: Option<String>,
+    pub(crate) usage: Option<String>,
     pub(crate) category: Option<String>,
     pub(crate) hidden: bool,
     pub(crate) in_menu: bool,
@@ -70,7 +80,8 @@ pub struct Command {
     pub(crate) owner_only: bool,
     pub(crate) cooldown: Option<Duration>,
     pub(crate) payloads: Vec<String>,
-    pub(crate) handler: Arc<dyn Handler>,
+    pub(crate) metadata: BTreeMap<String, String>,
+    pub(crate) handler: Arc<dyn CommandHandler>,
 }
 
 impl fmt::Debug for Command {
@@ -88,11 +99,12 @@ impl fmt::Debug for Command {
 
 impl Command {
     /// A command `name` (without prefix) run by `handler`.
-    pub fn new(name: impl Into<String>, handler: impl Handler) -> Self {
+    pub fn new(name: impl Into<String>, handler: impl CommandHandler) -> Self {
         Self {
             name: name.into(),
             aliases: Vec::new(),
             description: None,
+            usage: None,
             category: None,
             hidden: false,
             in_menu: true,
@@ -100,6 +112,7 @@ impl Command {
             owner_only: false,
             cooldown: None,
             payloads: Vec::new(),
+            metadata: BTreeMap::new(),
             handler: Arc::new(handler),
         }
     }
@@ -113,6 +126,20 @@ impl Command {
     /// Shown in the help text and in Meta's command menu.
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
+        self
+    }
+
+    /// An argument hint the help text shows after the name, e.g.
+    /// `<order number>` (never sent to Meta's command menu).
+    pub fn usage(mut self, usage: impl Into<String>) -> Self {
+        self.usage = Some(usage.into());
+        self
+    }
+
+    /// Keep `value` under `key` with the command, for your own help or
+    /// menus ([`CommandInfo::metadata`]); the bot never reads it.
+    pub fn metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.metadata.insert(key.into(), value.into());
         self
     }
 
@@ -270,11 +297,20 @@ impl Args {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Trigger {
-    /// Typed: `prefix` then `name` (the name or alias used, lowercased).
+    /// Typed: `prefix` then `name` (the name or alias used, as the parser
+    /// gave it).
     Text {
         /// The prefix matched.
         prefix: String,
-        /// The name or alias used, lowercased.
+        /// The name or alias used, as the parser gave it.
+        name: String,
+    },
+    /// The caption of an image or a video: `prefix` then `name`. The media
+    /// is in `ctx.message()`'s content.
+    Caption {
+        /// The prefix matched.
+        prefix: String,
+        /// The name or alias used, as the parser gave it.
         name: String,
     },
     /// A tapped reply button, list row or template quick-reply button with
@@ -286,7 +322,8 @@ pub enum Trigger {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Invocation {
-    /// The command's name (lowercased), whatever alias or payload was used.
+    /// The command's name as registered (normalized by the parser),
+    /// whatever alias or payload was used.
     pub command: String,
     /// How it was invoked.
     pub trigger: Trigger,
@@ -294,16 +331,30 @@ pub struct Invocation {
     pub args: Args,
 }
 
+impl Invocation {
+    /// An invocation of `command`, e.g. to unit-test a handler with
+    /// [`Ctx::with_invocation`].
+    pub fn new(command: impl Into<String>, trigger: Trigger, args: Args) -> Self {
+        Self {
+            command: command.into(),
+            trigger,
+            args,
+        }
+    }
+}
+
 /// What the bot knows about a registered command, for help texts and menus.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct CommandInfo {
-    /// Name, lowercased.
+    /// Name, as the parser normalizes it (lowercased by default).
     pub name: String,
-    /// Aliases, lowercased.
+    /// Aliases, normalized the same way.
     pub aliases: Vec<String>,
     /// Description.
     pub description: Option<String>,
+    /// Argument hint ([`Command::usage`]).
+    pub usage: Option<String>,
     /// Help section.
     pub category: String,
     /// The plugin that registered it (`None`: the builder).
@@ -320,6 +371,8 @@ pub struct CommandInfo {
     pub cooldown: Option<Duration>,
     /// Interactive payload ids that run it.
     pub payloads: Vec<String>,
+    /// What [`Command::metadata`] kept; the bot never reads it.
+    pub metadata: BTreeMap<String, String>,
 }
 
 #[cfg(test)]

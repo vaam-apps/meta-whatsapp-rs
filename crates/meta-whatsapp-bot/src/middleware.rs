@@ -1,7 +1,10 @@
-//! [`Middleware`]: code that runs around every event, before the command
-//! match, in registration order. Each gets the context and [`Next`]; not
-//! calling `next.run(ctx)` stops the event there (no command, no listener).
-//! A banned sender's message never reaches them: the bot drops it first.
+//! [`Middleware`]: code that runs around every event, in registration
+//! order, after the ban check and the command match, before the command's
+//! guards and handler (or the listeners). Each gets the context and
+//! [`Next`]; not calling `next.run(ctx)` stops the event there (no
+//! command, no listener). A banned sender's message never reaches them:
+//! the bot drops it first. The match is known, so a middleware can act for
+//! some commands only (`ctx.invocation()`).
 //!
 //! Shipped: [`Logging`] (event kind, message type, outcome and duration,
 //! never content or identities) and [`MarkRead`] (read receipt, optionally
@@ -20,8 +23,7 @@ use crate::ctx::Ctx;
 /// Runs around every event. See the [module docs](self).
 ///
 /// ```
-/// use async_trait::async_trait;
-/// use meta_whatsapp_bot::{Ctx, Middleware, Next};
+/// use meta_whatsapp_bot::{Ctx, Middleware, Next, async_trait};
 ///
 /// /// Ignores everything outside business hours.
 /// #[derive(Debug)]
@@ -42,8 +44,15 @@ pub trait Middleware: Send + Sync + fmt::Debug + 'static {
     async fn handle(&self, ctx: Ctx, next: Next<'_>) -> Result<()>;
 }
 
-/// The rest of the chain: the middleware after this one, then the command
-/// match and the handler or listeners.
+#[async_trait]
+impl<T: Middleware + ?Sized> Middleware for Arc<T> {
+    async fn handle(&self, ctx: Ctx, next: Next<'_>) -> Result<()> {
+        (**self).handle(ctx, next).await
+    }
+}
+
+/// The rest of the chain: the middleware after this one, then the matched
+/// command's guards and handler, or the listeners.
 pub struct Next<'a> {
     rest: &'a [Arc<dyn Middleware>],
     router: &'a Router,
@@ -105,13 +114,15 @@ impl Middleware for Logging {
 }
 
 /// Marks every received message read before the rest of the chain runs,
-/// through the bot's `Outbound` (the client's `mark_read`).
+/// through the bot's `Outbound` (the client's `mark_read`,
+/// `messages/mark-message-as-read`).
 ///
 /// [`MarkRead::with_typing_indicator`] also shows "typing…" until the
-/// reply or 25 seconds (Meta: only when you are about to reply; it shows
-/// for every message, commands or not). When that call fails, a plain read
-/// receipt is tried instead. A failed receipt is logged (kind only) and
-/// never stops the event.
+/// reply or 25 seconds (`typing-indicators`: only when you are about to
+/// reply; it shows for every message, commands or not). When that call
+/// fails, a plain read receipt is tried instead. A failed receipt is
+/// logged (kind only) and never stops the event. A banned sender's message
+/// never gets either: the bot drops it before the middleware.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MarkRead {
     typing_indicator: bool,

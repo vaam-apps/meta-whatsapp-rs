@@ -2,6 +2,7 @@
 //! goes through it, so a test or a multi-tenant integration swaps it.
 
 use std::fmt;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use meta_whatsapp_client::Client;
@@ -13,8 +14,9 @@ use meta_whatsapp_core::ids::{MessageId, PhoneNumberId};
 ///
 /// The default, [`ClientOutbound`], calls the Cloud API with one
 /// [`Client`]. Implement it yourself to pick a merchant's token per business
-/// number (look it up in the token vault by `from`), to queue sends, or to
-/// record them in a test.
+/// number (look it up in the token vault by `from`), to record replies in
+/// the CMS inbox (`docs/guides/bots.md`), to queue sends, or to record them
+/// in a test. One shared by several bots: `BotBuilder::shared_outbound`.
 #[async_trait]
 pub trait Outbound: Send + Sync + fmt::Debug + 'static {
     /// Send `message` from the business phone number `from`.
@@ -28,6 +30,22 @@ pub trait Outbound: Send + Sync + fmt::Debug + 'static {
         message_id: &MessageId,
         typing_indicator: bool,
     ) -> Result<()>;
+}
+
+#[async_trait]
+impl<T: Outbound + ?Sized> Outbound for Arc<T> {
+    async fn send(&self, from: &PhoneNumberId, message: &OutboundMessage) -> Result<SendResponse> {
+        (**self).send(from, message).await
+    }
+
+    async fn mark_read(
+        &self,
+        from: &PhoneNumberId,
+        message_id: &MessageId,
+        typing_indicator: bool,
+    ) -> Result<()> {
+        (**self).mark_read(from, message_id, typing_indicator).await
+    }
 }
 
 /// [`Outbound`] over the Cloud API: `client.messages(from).send(message)`,

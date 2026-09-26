@@ -275,11 +275,21 @@ fn escaping_is_swappable() {
 }
 
 /// `TEXT_MAX_CHARS` is the client's own limit: a text body of exactly
-/// that many characters passes `OutboundMessage::validate`, one more fails.
+/// that many characters passes `OutboundMessage::validate`, one more fails;
+/// and no renderer makes longer parts.
 #[test]
 fn the_limit_is_the_clients_text_limit() {
     let to = || Recipient::phone("+16505551234");
+    assert_eq!(
+        TEXT_MAX_CHARS,
+        meta_whatsapp_client::messages::TEXT_BODY_MAX_CHARS
+    );
     assert_eq!(TEXT_MAX_CHARS, 4096);
+    // `max_chars` above the limit is clamped to it.
+    let text = [paragraph(3000, 'a'), paragraph(3000, 'b')].join("\n\n");
+    let parts = Renderer::new().max_chars(10_000).render(&text);
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts, markdown::render(&text));
     assert!(
         OutboundMessage::text(to(), "é".repeat(TEXT_MAX_CHARS))
             .validate()
@@ -344,14 +354,87 @@ fn blocks_that_fill_a_message_exactly_share_it() {
     assert_eq!(markdown::render(&one_more).len(), 2);
 }
 
-/// Characters, as the client counts them (Unicode scalar values), not
-/// bytes: 4096 two-byte letters are one message.
+/// Parts are measured in UTF-16 code units, never bytes: 4096 two-byte
+/// letters (one unit each) are one message, but emoji outside the Basic
+/// Multilingual Plane count twice, so emoji-dense text makes parts that
+/// fit whether Meta counts characters or UTF-16 units.
 #[test]
-fn the_limit_counts_characters_not_bytes() {
+fn the_limit_counts_utf16_units_not_bytes() {
     let text = "é".repeat(TEXT_MAX_CHARS);
     assert_eq!(markdown::render(&text), std::slice::from_ref(&text));
+
     let emoji = "😀".repeat(TEXT_MAX_CHARS);
-    assert_eq!(markdown::render(&emoji), std::slice::from_ref(&emoji));
+    let parts = markdown::render(&emoji);
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts.concat(), emoji);
+    // Emoji-dense prose, with words: every part within the limit either way.
+    let prose = "Great 🎉🎉 news 😀😀😀 for 👍 you ".repeat(400);
+    let parts = markdown::render(&prose);
+    assert!(parts.len() > 1);
+    for part in &parts {
+        assert!(
+            part.encode_utf16().count() <= TEXT_MAX_CHARS,
+            "{}",
+            part.len()
+        );
+        assert!(part.chars().count() <= TEXT_MAX_CHARS);
+        OutboundMessage::text(Recipient::phone("+16505551234"), part.clone())
+            .validate()
+            .unwrap();
+    }
+    // A limit of 1 still makes progress over a two-unit emoji.
+    assert_eq!(
+        Renderer::new().max_chars(1).render("a😀b"),
+        ["a", "😀", "b"]
+    );
+}
+
+/// WhatsApp formats no part of a word: emphasis inside one loses its
+/// markers instead of showing them.
+#[test]
+fn emphasis_inside_a_word_drops_its_markers() {
+    let table: &[(&str, &str)] = &[
+        ("foo**bar**baz", "foobarbaz"),
+        ("foo*bar*baz", "foobarbaz"),
+        ("un~~real~~ly", "unreally"),
+        ("**Bold**ly", "Boldly"),
+        ("pre**fix**", "prefix"),
+        ("a***b***c", "abc"),
+        ("déjà**vu**", "déjàvu"),
+        // At a word's edge, the markers stay.
+        (
+            "**bold**, (*it*) and ~~gone~~.",
+            "*bold*, (_it_) and ~gone~.",
+        ),
+        ("**a** b **c**", "*a* b *c*"),
+        ("***both***", "_*both*_"),
+        ("# Title **x**y", "*Title xy*"),
+        ("[**in** link](https://x.io)", "*in* link (https://x.io)"),
+    ];
+    for (markdown, expected) in table {
+        assert_eq!(&one(markdown), expected, "input: {markdown:?}");
+    }
+}
+
+/// Code holding a backtick cannot be fenced without breaking the fence:
+/// its text goes out plain, never a broken span.
+#[test]
+fn code_holding_backticks_goes_out_plain() {
+    let table: &[(&str, &str)] = &[
+        ("``a ` b``", "a ` b"),
+        ("say `` `hi` `` now", "say `hi` now"),
+        ("```\nlet s = \"```\";\n```", "let s = \"```\";"),
+        ("```\n`tick\n```", "`tick"),
+        ("```\ntock`\n```", "tock`"),
+        // Without a backtick: fenced as usual.
+        ("```\nplain\n```", "```plain```"),
+        ("`plain`", "`plain`"),
+    ];
+    for (markdown, expected) in table {
+        assert_eq!(&one(markdown), expected, "input: {markdown:?}");
+    }
+    // In a list item too.
+    assert_eq!(one("- item\n\n  ```\n  a```b\n  ```"), "• item\n  a```b");
 }
 
 /// The escape's word joiners are characters Meta counts too: a text

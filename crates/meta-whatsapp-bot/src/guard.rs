@@ -1,10 +1,14 @@
-//! The guards a command passes before its handler runs, each behind a trait:
+//! The guards, each behind a trait:
 //!
-//! 1. banned senders ([`AccessPolicy::is_banned`]): nothing runs for their
-//!    messages, checked before the middleware (no read receipt or typing
-//!    indicator either), no command and no listener;
-//! 2. the command's [`Scope`](crate::Scope) (private or group only);
-//! 3. owner-only commands ([`AccessPolicy::is_owner`]);
+//! 1. banned senders ([`AccessPolicy::is_banned`]): checked first, before
+//!    the command match and the middleware, so nothing runs for their
+//!    messages (no read receipt or typing indicator either, no command and
+//!    no listener);
+//!
+//! then, after the middleware, the matched command's own:
+//!
+//! 2. its [`Scope`](crate::Scope) (private or group only);
+//! 3. owner-only ([`AccessPolicy::is_owner`]);
 //! 4. the per-user cooldown ([`Cooldowns`]), checked last so a refused
 //!    attempt does not start one.
 //!
@@ -23,7 +27,7 @@ use meta_whatsapp_core::ids::{PhoneNumberId, UserId};
 use meta_whatsapp_core::store::{Expiry, KvStore, StoreKey};
 use sha2::{Digest, Sha256};
 
-use crate::ctx::{Ctx, Sender};
+use crate::ctx::{BotSender, Ctx};
 
 /// Who owns the bot and who is banned from it.
 ///
@@ -32,9 +36,19 @@ use crate::ctx::{Ctx, Sender};
 #[async_trait]
 pub trait AccessPolicy: Send + Sync + fmt::Debug + 'static {
     /// Whether `sender` may run owner-only commands.
-    async fn is_owner(&self, sender: &Sender) -> Result<bool>;
+    async fn is_owner(&self, sender: &BotSender) -> Result<bool>;
     /// Whether the bot ignores `sender` altogether.
-    async fn is_banned(&self, sender: &Sender) -> Result<bool>;
+    async fn is_banned(&self, sender: &BotSender) -> Result<bool>;
+}
+
+#[async_trait]
+impl<T: AccessPolicy + ?Sized> AccessPolicy for Arc<T> {
+    async fn is_owner(&self, sender: &BotSender) -> Result<bool> {
+        (**self).is_owner(sender).await
+    }
+    async fn is_banned(&self, sender: &BotSender) -> Result<bool> {
+        (**self).is_banned(sender).await
+    }
 }
 
 /// A set of users, by BSUID or by phone number.
@@ -46,7 +60,7 @@ struct Identities {
 }
 
 impl Identities {
-    fn contains(&self, sender: &Sender) -> bool {
+    fn contains(&self, sender: &BotSender) -> bool {
         let user = |id: &Option<UserId>| id.as_ref().is_some_and(|u| self.users.contains(u));
         user(&sender.user_id)
             || user(&sender.parent_user_id)
@@ -113,18 +127,25 @@ impl AccessList {
 
 #[async_trait]
 impl AccessPolicy for AccessList {
-    async fn is_owner(&self, sender: &Sender) -> Result<bool> {
+    async fn is_owner(&self, sender: &BotSender) -> Result<bool> {
         Ok(self.owners.contains(sender))
     }
 
-    async fn is_banned(&self, sender: &Sender) -> Result<bool> {
+    async fn is_banned(&self, sender: &BotSender) -> Result<bool> {
         Ok(self.banned.contains(sender))
     }
 }
 
-/// Store namespace of [`KvCooldowns`]. Changing it forgets the running
-/// cooldowns (they last one period at most), nothing else.
-pub const COOLDOWN_NAMESPACE: &str = "bot.cooldown";
+/// Store namespace of [`KvCooldowns`]'s cooldowns (`wa.<module>.<purpose>`,
+/// like every namespace of the library: `docs/architecture.md` § Stable
+/// identifiers). Changing it forgets the running cooldowns (they last one
+/// period at most), nothing else.
+pub const COOLDOWN_NAMESPACE: &str = "wa.bot.cooldown";
+
+/// Store namespace of [`KvCooldowns`]'s notice markers: one per running
+/// cooldown whose refusal the user was told about, so they are told once
+/// per period. Changing it may repeat one notice per running cooldown.
+pub const COOLDOWN_NOTICE_NAMESPACE: &str = "wa.bot.cooldown.notice";
 
 /// Whose cooldown, for which command, on which business number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,7 +155,7 @@ pub struct CooldownKey<'a> {
     pub phone_number_id: &'a PhoneNumberId,
     /// The command's name.
     pub command: &'a str,
-    /// The user's key ([`Sender::key`]: BSUID first).
+    /// The user's key ([`BotSender::key`]: BSUID first).
     pub user: &'a str,
 }
 
@@ -149,16 +170,27 @@ impl<'a> CooldownKey<'a> {
     }
 
     /// The store key: SHA-256 (hex) of the three parts, each
-    /// length-prefixed so none can be shifted into another. Hashed so no
-    /// phone number is written to the store.
+    /// length-prefixed so none can be shifted into another, in
+    /// [`COOLDOWN_NAMESPACE`]. Hashed so no phone number is written to the
+    /// store.
     pub fn store_key(&self) -> StoreKey {
+        StoreKey::new(COOLDOWN_NAMESPACE, self.digest())
+    }
+
+    /// The key of the notice marker: the same digest in
+    /// [`COOLDOWN_NOTICE_NAMESPACE`].
+    pub fn notice_store_key(&self) -> StoreKey {
+        StoreKey::new(COOLDOWN_NOTICE_NAMESPACE, self.digest())
+    }
+
+    fn digest(&self) -> String {
         let mut hasher = Sha256::new();
         for part in [self.phone_number_id.as_str(), self.command, self.user] {
             hasher.update(format!("{}:", part.len()));
             hasher.update(part);
             hasher.update(",");
         }
-        StoreKey::new(COOLDOWN_NAMESPACE, hex::encode(hasher.finalize()))
+        hex::encode(hasher.finalize())
     }
 }
 
@@ -172,6 +204,10 @@ pub enum CooldownOutcome {
     CoolingDown {
         /// Time left.
         retry_after: Duration,
+        /// Whether to tell the user: `true` for the first refusal of this
+        /// running cooldown only, so repeated attempts get one notice per
+        /// period, not one each.
+        notify: bool,
     },
 }
 
@@ -181,13 +217,28 @@ pub enum CooldownOutcome {
 #[async_trait]
 pub trait Cooldowns: Send + Sync + fmt::Debug + 'static {
     /// Start a cooldown of `period` for `key` unless one is running,
-    /// atomically (two concurrent calls never both start one).
+    /// atomically (two concurrent calls never both start one). A refusal
+    /// says whether to tell the user (`notify`): at most once per running
+    /// cooldown.
     async fn try_start(&self, key: &CooldownKey<'_>, period: Duration) -> Result<CooldownOutcome>;
 }
 
+#[async_trait]
+impl<T: Cooldowns + ?Sized> Cooldowns for Arc<T> {
+    async fn try_start(&self, key: &CooldownKey<'_>, period: Duration) -> Result<CooldownOutcome> {
+        (**self).try_start(key, period).await
+    }
+}
+
 /// [`Cooldowns`] on a [`KvStore`]: one record per key in
-/// [`COOLDOWN_NAMESPACE`], created with `put_if_absent` and left to expire
-/// after the period. Shared by every instance using the same store.
+/// [`COOLDOWN_NAMESPACE`], created with `put_if_absent` and expiring after
+/// the period; a refusal writes a marker in [`COOLDOWN_NOTICE_NAMESPACE`]
+/// expiring with it, and only the refusal that creates the marker
+/// notifies. Shared by every instance using the same store.
+///
+/// Expired records are invisible at once but stay stored until removed:
+/// Redis drops them itself; with the memory or Postgres store, call its
+/// `purge_expired` now and then (as for the other typed stores).
 #[derive(Debug, Clone)]
 pub struct KvCooldowns {
     kv: Arc<dyn KvStore>,
@@ -222,11 +273,25 @@ impl Cooldowns for KvCooldowns {
                         .unwrap_or(Duration::ZERO)
                         .min(period)
                 });
-                return Ok(CooldownOutcome::CoolingDown { retry_after });
+                // The marker ends with the cooldown it is about, by the
+                // store's own clock.
+                let expiry = record.expires_at.map_or(Expiry::After(period), Expiry::At);
+                let notify = self
+                    .kv
+                    .put_if_absent(&key.notice_store_key(), b"1".to_vec(), expiry)
+                    .await?
+                    .is_some();
+                return Ok(CooldownOutcome::CoolingDown {
+                    retry_after,
+                    notify,
+                });
             }
         }
+        // A record that keeps expiring between the create and the read: no
+        // marker to rely on, so the user is told.
         Ok(CooldownOutcome::CoolingDown {
             retry_after: period,
+            notify: true,
         })
     }
 }
@@ -247,6 +312,9 @@ pub enum Refusal {
     CoolingDown {
         /// Time left.
         retry_after: Duration,
+        /// Whether this is the refusal to tell the user about (the first
+        /// of this cooldown; see [`CooldownOutcome::CoolingDown`]).
+        notify: bool,
     },
 }
 
@@ -254,14 +322,22 @@ pub enum Refusal {
 #[async_trait]
 pub trait Refusals: Send + Sync + fmt::Debug + 'static {
     /// `refusal` happened for `ctx` (its invocation is set, except for
-    /// [`Refusal::Banned`], which is checked before the middleware and any
-    /// match).
+    /// [`Refusal::Banned`], which is checked before the match and the
+    /// middleware).
     async fn refused(&self, ctx: &Ctx, refusal: &Refusal) -> Result<()>;
 }
 
-/// The default [`Refusals`]: a short English reply for a wrong chat or a
-/// running cooldown; nothing for banned users or non-owners (the reply
-/// would tell them the bot noticed, or that an owner command exists).
+#[async_trait]
+impl<T: Refusals + ?Sized> Refusals for Arc<T> {
+    async fn refused(&self, ctx: &Ctx, refusal: &Refusal) -> Result<()> {
+        (**self).refused(ctx, refusal).await
+    }
+}
+
+/// The default [`Refusals`]: a short English reply for a wrong chat, and
+/// for a running cooldown once per period (`notify`); nothing for banned
+/// users or non-owners (the reply would tell them the bot noticed, or that
+/// an owner command exists).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ReplyRefusals;
 
@@ -271,7 +347,10 @@ impl Refusals for ReplyRefusals {
         let text = match refusal {
             Refusal::GroupOnly => "This command only works in a group.".to_owned(),
             Refusal::PrivateOnly => "This command only works in a private chat.".to_owned(),
-            Refusal::CoolingDown { retry_after } => {
+            Refusal::CoolingDown { notify: false, .. } | Refusal::Banned | Refusal::NotOwner => {
+                return Ok(());
+            }
+            Refusal::CoolingDown { retry_after, .. } => {
                 // Whole seconds, rounded up: "0 s" would read as "now".
                 let secs = retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0);
                 format!(
@@ -279,7 +358,6 @@ impl Refusals for ReplyRefusals {
                     secs.max(1)
                 )
             }
-            Refusal::Banned | Refusal::NotOwner => return Ok(()),
         };
         ctx.reply(text).await.map(drop)
     }
@@ -300,12 +378,12 @@ impl Refusals for SilentRefusals {
 mod tests {
     use super::*;
 
-    fn sender(user: Option<&str>, parent: Option<&str>, wa: Option<&str>) -> Sender {
-        Sender {
+    fn sender(user: Option<&str>, parent: Option<&str>, wa: Option<&str>) -> BotSender {
+        BotSender {
             user_id: user.map(UserId::new),
             parent_user_id: parent.map(UserId::new),
             wa_id: wa.map(Into::into),
-            ..Sender::default()
+            ..BotSender::default()
         }
     }
 
@@ -362,7 +440,12 @@ mod tests {
     fn the_cooldown_key_is_pinned_and_hashed() {
         let pn = PhoneNumberId::new("106540352242922");
         let key = CooldownKey::new(&pn, "imagine", "16505551234").store_key();
-        assert_eq!(key.namespace(), "bot.cooldown");
+        // `\x77` is `w`: a search-and-replace of the library's name cannot
+        // rewrite this pin along with the constant.
+        assert_eq!(key.namespace(), "\x77a.bot.cooldown");
+        let notice = CooldownKey::new(&pn, "imagine", "16505551234").notice_store_key();
+        assert_eq!(notice.namespace(), "\x77a.bot.cooldown.notice");
+        assert_eq!(notice.key(), key.key());
         assert_eq!(key.key().len(), 64);
         assert!(!key.key().contains("16505551234"));
         // Length prefixes: moving a character between parts changes the key.

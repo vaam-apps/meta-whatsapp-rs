@@ -16,32 +16,38 @@
 //! call `.plugin(MyPlugin::new(..))`), and redeploy to change it.
 //! [`Plugin::on_unload`] runs at shutdown (`Bot::unload`), not per reload.
 
+use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use meta_whatsapp_core::Result;
 
-use crate::command::{Command, Handler};
+use crate::command::{Command, CommandHandler};
 use crate::middleware::Middleware;
 
-/// The help section of commands no plugin (or a plugin without its own)
-/// registered.
+/// The help section of commands registered without a category, by the
+/// builder or by a plugin without its own, unless the bot names another
+/// (`BotBuilder::default_category`).
 pub const DEFAULT_CATEGORY: &str = "General";
 
 /// One feature of the bot. See the [module docs](self).
 #[async_trait]
-pub trait Plugin: Send + Sync + 'static {
+pub trait Plugin: Send + Sync + fmt::Debug + 'static {
     /// Unique name.
     fn name(&self) -> &str;
 
-    /// Help section of its commands (a command may override it).
-    fn category(&self) -> &str {
-        DEFAULT_CATEGORY
+    /// Help section of its commands (a command may override it); `None`,
+    /// the default: the bot's default category ([`DEFAULT_CATEGORY`]
+    /// unless `BotBuilder::default_category` names another).
+    fn category(&self) -> Option<&str> {
+        None
     }
 
     /// What it does.
-    // `&str`, not `&'static str`: an implementor may return its own field.
-    #[allow(clippy::unnecessary_literal_bound)]
+    #[expect(
+        clippy::unnecessary_literal_bound,
+        reason = "`&str` tied to `&self`, not `&'static str`: an implementor may return its own field"
+    )]
     fn description(&self) -> &str {
         ""
     }
@@ -66,23 +72,36 @@ pub trait Plugin: Send + Sync + 'static {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Listen {
-    /// Received messages that are not a (known) command, from senders who
-    /// are not banned. Every kind of message: reactions, edits, deletions,
-    /// system notices (a number change) and unsupported ones too, so an
+    /// Received messages that no command took, from senders who are not
+    /// banned: plain text, an unknown `/name` when the bot has no
+    /// unknown-command handler (`ctx.unknown_command()` names it), and
+    /// every other kind of message: reactions, edits, deletions, system
+    /// notices (a number change) and unsupported ones too, so an
     /// auto-responder checks `ctx.message()`'s content before it answers
     /// (else a user's reaction to its reply gets a reply of its own).
     Messages,
+    /// The [`Self::Messages`] whose `type` is this one, as Meta sends it
+    /// (`"image"`, `"reaction"`, `"interactive"`, …: `message_type()`).
+    /// Not checked against a list: Meta adds message types, and a new one
+    /// arrives with its own `type`.
+    MessageType(String),
     /// Events of this kind (`WebhookEvent::kind`, e.g. `"status_updated"`)
-    /// that no command handled.
+    /// that no command handled. A kind not in `WebhookEvent::KINDS` fails
+    /// `BotBuilder::build`.
     Event(String),
     /// Every event no command handled.
     All,
 }
 
 impl Listen {
-    /// Events of `kind`.
+    /// Events of `kind` (one of `WebhookEvent::KINDS`).
     pub fn event(kind: impl Into<String>) -> Self {
         Self::Event(kind.into())
+    }
+
+    /// Received messages of `message_type` (Meta's `type`).
+    pub fn message_type(message_type: impl Into<String>) -> Self {
+        Self::MessageType(message_type.into())
     }
 }
 
@@ -100,7 +119,7 @@ pub(crate) struct Registered {
 pub struct Registrar {
     pub(crate) commands: Vec<Registered>,
     pub(crate) middleware: Vec<Arc<dyn Middleware>>,
-    pub(crate) listeners: Vec<(Listen, Arc<dyn Handler>)>,
+    pub(crate) listeners: Vec<(Listen, Arc<dyn CommandHandler>)>,
     category: String,
     plugin: Option<String>,
     hidden: bool,
@@ -140,7 +159,7 @@ impl Registrar {
     }
 
     /// Register a listener.
-    pub fn listen(&mut self, on: Listen, handler: impl Handler) -> &mut Self {
+    pub fn listen(&mut self, on: Listen, handler: impl CommandHandler) -> &mut Self {
         self.listeners.push((on, Arc::new(handler)));
         self
     }

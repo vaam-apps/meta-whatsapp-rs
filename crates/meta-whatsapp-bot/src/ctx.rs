@@ -1,10 +1,11 @@
 //! [`Ctx`]: what a middleware, a command or a listener gets for one event —
-//! the event, who sent it, where to answer, and the reply helpers.
+//! the event, who sent it, where to answer, the matched command, and the
+//! reply helpers.
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use meta_whatsapp_client::messages::{MessageContent, OutboundMessage, SendResponse, Text};
 use meta_whatsapp_core::Result;
@@ -14,19 +15,22 @@ use meta_whatsapp_core::recipient::Recipient;
 use meta_whatsapp_webhooks::WebhookEvent;
 use meta_whatsapp_webhooks::fields::InboundMessage;
 
-use crate::command::{Args, Invocation};
-use crate::markdown::Renderer;
+use crate::command::{Args, CommandInfo, Invocation};
+use crate::help::{Catalog, HelpSection};
+use crate::markdown::MarkdownRenderer;
 use crate::outbound::Outbound;
+use crate::parse::ParsedCommand;
 
 /// Who sent a message (or who an event is about).
 ///
-/// Identity follows the business-scoped user id rules: [`Sender::user_id`]
-/// (the BSUID) is the key whenever Meta sent one, and [`Sender::wa_id`] (the
-/// phone number) only when it did not. Never key a user by phone number
-/// alone: a user who adopted a username may have none.
+/// Identity follows Meta's business-scoped user ids
+/// (`business-scoped-user-ids`): [`BotSender::user_id`] (the BSUID) is the
+/// key whenever Meta sent one, and [`BotSender::wa_id`] (the phone number)
+/// only when it did not. Never key a user by phone number alone: a user
+/// who adopted a username may have none.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct Sender {
+pub struct BotSender {
     /// Business-scoped user id (BSUID), e.g. `US.13491208655302741918`.
     pub user_id: Option<UserId>,
     /// Parent BSUID (`US.ENT.…`), for portfolios enrolled in parent BSUIDs.
@@ -39,7 +43,7 @@ pub struct Sender {
     pub username: Option<String>,
 }
 
-impl Sender {
+impl BotSender {
     /// The stable key of this user: the BSUID when there is one, else the
     /// phone number. `None` when the event named neither.
     pub fn key(&self) -> Option<&str> {
@@ -106,7 +110,8 @@ impl Sender {
 pub enum Chat {
     /// A one-to-one chat with the business.
     Private,
-    /// A group created with the Groups API (the message's `group_id`).
+    /// A group created with the Groups API: the message's `group_id`
+    /// (`groups/groups-messaging`).
     Group(GroupId),
 }
 
@@ -120,7 +125,7 @@ impl Chat {
 /// Values a middleware hands on to later middleware and handlers, one per
 /// type (for example the integrator's user record, loaded once).
 #[derive(Clone, Default)]
-pub struct Extensions(HashMap<TypeId, Arc<dyn Any + Send + Sync>>);
+pub(crate) struct Extensions(HashMap<TypeId, Arc<dyn Any + Send + Sync>>);
 
 impl fmt::Debug for Extensions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -138,13 +143,13 @@ impl fmt::Debug for Extensions {
 #[derive(Clone)]
 pub struct Ctx {
     event: Arc<WebhookEvent>,
-    sender: Option<Sender>,
+    sender: Option<BotSender>,
     chat: Option<Chat>,
-    /// Shared by every clone, so the error handler sees the command a
-    /// handler failed in.
-    pub(crate) invocation: Arc<OnceLock<Invocation>>,
+    invocation: Option<Arc<Invocation>>,
+    unknown: Option<Arc<ParsedCommand>>,
     outbound: Arc<dyn Outbound>,
-    renderer: Arc<Renderer>,
+    renderer: Arc<dyn MarkdownRenderer>,
+    pub(crate) catalog: Arc<Catalog>,
     extensions: Extensions,
 }
 
@@ -152,10 +157,7 @@ impl fmt::Debug for Ctx {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Ctx")
             .field("event", &self.event.kind())
-            .field(
-                "command",
-                &self.invocation.get().map(|i| i.command.as_str()),
-            )
+            .field("command", &self.invocation().map(|i| i.command.as_str()))
             .finish_non_exhaustive()
     }
 }
@@ -164,27 +166,55 @@ impl fmt::Debug for Ctx {
 static NO_ARGS: std::sync::LazyLock<Args> = std::sync::LazyLock::new(Args::default);
 
 impl Ctx {
-    /// A context for `event`. The bot builds one per event; build your own
-    /// to unit-test a handler.
-    pub fn new(event: WebhookEvent, outbound: Arc<dyn Outbound>, renderer: Arc<Renderer>) -> Self {
+    /// A context for `event`, sending through `outbound` and rendering
+    /// Markdown with `renderer`. The bot builds one per event; build your
+    /// own (with [`Self::with_invocation`] for a command) to unit-test a
+    /// handler. A context built here knows no commands
+    /// ([`Self::commands`] is empty).
+    pub fn new(
+        event: WebhookEvent,
+        outbound: Arc<dyn Outbound>,
+        renderer: Arc<dyn MarkdownRenderer>,
+    ) -> Self {
         let (sender, chat) = match &event {
             WebhookEvent::MessageReceived {
                 message, contact, ..
             } => (
-                Sender::of_message(message, contact.as_ref()),
+                BotSender::of_message(message, contact.as_ref()),
                 Some(message.group_id.clone().map_or(Chat::Private, Chat::Group)),
             ),
-            other => (other.contact().and_then(Sender::of_contact), None),
+            other => (other.contact().and_then(BotSender::of_contact), None),
         };
         Self {
             event: Arc::new(event),
             sender,
             chat,
-            invocation: Arc::default(),
+            invocation: None,
+            unknown: None,
             outbound,
             renderer,
+            catalog: Arc::default(),
             extensions: Extensions::default(),
         }
+    }
+
+    /// This context, invoking `invocation`: what the bot sets when a
+    /// command matched, for a handler under test.
+    #[must_use]
+    pub fn with_invocation(mut self, invocation: Invocation) -> Self {
+        self.invocation = Some(Arc::new(invocation));
+        self
+    }
+
+    /// The bot's command registry, for a context the bot builds.
+    pub(crate) fn with_catalog(mut self, catalog: Arc<Catalog>) -> Self {
+        self.catalog = catalog;
+        self
+    }
+
+    /// The text the parser read as a command whose name no command has.
+    pub(crate) fn set_unknown(&mut self, parsed: ParsedCommand) {
+        self.unknown = Some(Arc::new(parsed));
     }
 
     /// The event.
@@ -202,7 +232,8 @@ impl Ctx {
         }
     }
 
-    /// The body of a received text message.
+    /// The body of a received text message (a caption is in the media's
+    /// content: `ctx.message()`).
     pub fn text(&self) -> Option<&str> {
         match &self.message()?.content {
             meta_whatsapp_webhooks::fields::MessageContent::Text(t) => Some(&t.body),
@@ -212,7 +243,7 @@ impl Ctx {
 
     /// Who sent the message (or who the event is about), when the event
     /// names anyone.
-    pub fn sender(&self) -> Option<&Sender> {
+    pub fn sender(&self) -> Option<&BotSender> {
         self.sender.as_ref()
     }
 
@@ -227,17 +258,39 @@ impl Ctx {
         self.event.phone_number_id()
     }
 
-    /// The command this event invoked, once the bot matched one: `None`
-    /// in middleware before `next.run` (the match comes after them), in
-    /// listeners, and for events no command matched. Every clone of the
-    /// context sees it once it is set.
+    /// The command this event invokes. The bot matches it before the
+    /// middleware run, so a middleware sees it too (and can act for some
+    /// commands only); the command's own guards run after the middleware.
+    /// `None` for events no command matched, and in listeners.
     pub fn invocation(&self) -> Option<&Invocation> {
-        self.invocation.get()
+        self.invocation.as_deref()
+    }
+
+    /// A text (or caption) the parser read as a command, whose name no
+    /// registered command has: `ctx.unknown_command().map(|c| &c.name)`
+    /// is the name typed. Set from the match on, like
+    /// [`Self::invocation`].
+    pub fn unknown_command(&self) -> Option<&ParsedCommand> {
+        self.unknown.as_deref()
     }
 
     /// The command's arguments; empty outside a command.
     pub fn args(&self) -> &Args {
-        self.invocation.get().map_or(&NO_ARGS, |i| &i.args)
+        self.invocation().map_or(&NO_ARGS, |i| &i.args)
+    }
+
+    /// Every command of the bot, hidden ones included, in registration
+    /// order (as `Bot::commands`): to build your own help or menu in a
+    /// handler.
+    pub fn commands(&self) -> &[CommandInfo] {
+        &self.catalog.commands
+    }
+
+    /// The bot's commands that are not hidden, grouped by category (as
+    /// `Bot::help_sections`); format them with a [`crate::HelpFormatter`]
+    /// or your own code.
+    pub fn help_sections(&self) -> Vec<HelpSection> {
+        crate::help::sections(&self.catalog.commands)
     }
 
     /// The outbound this context sends through.
@@ -246,7 +299,7 @@ impl Ctx {
     }
 
     /// The Markdown renderer [`Self::reply_markdown`] uses.
-    pub fn renderer(&self) -> &Renderer {
+    pub fn renderer(&self) -> &Arc<dyn MarkdownRenderer> {
         &self.renderer
     }
 
@@ -264,20 +317,24 @@ impl Ctx {
             .and_then(|v| v.downcast_ref())
     }
 
-    /// Who a reply goes to: the group for a group message, else the sender
-    /// ([`Sender::recipient`]: BSUID first, else `+<wa_id>`).
+    /// Who the reply helpers answer: the group for a group message, else
+    /// the sender ([`BotSender::recipient`]: BSUID first, else
+    /// `+<wa_id>`). To answer someone else, build the message yourself and
+    /// use [`Self::send`].
     pub fn reply_recipient(&self) -> Result<Recipient> {
         match self.chat() {
             Some(Chat::Group(group)) => Ok(Recipient::group(group.clone())),
             Some(Chat::Private) => self
                 .sender()
-                .and_then(Sender::recipient)
+                .and_then(BotSender::recipient)
                 .ok_or_else(|| not_replyable("the message names no sender").into()),
             None => Err(not_replyable("the event is not a received message").into()),
         }
     }
 
-    /// Send `message` from the business number the event arrived on.
+    /// Send `message` from the business number the event arrived on, as
+    /// built: no recipient or quote is chosen for you. The reply helpers
+    /// below go through it.
     pub async fn send(&self, message: &OutboundMessage) -> Result<SendResponse> {
         let from = self
             .phone_number_id()
@@ -285,7 +342,9 @@ impl Ctx {
         self.outbound.send(from, message).await
     }
 
-    /// Reply with `text`, quoting the received message.
+    /// Reply with `text`, quoting the received message (`context.message_id`,
+    /// `messages/contextual-replies`), to [`Self::reply_recipient`]. For
+    /// another recipient or no quote, use [`Self::send`].
     ///
     /// A reply is a free-form message: Meta accepts it only within 24
     /// hours of the user's last message (the customer service window),
@@ -298,7 +357,8 @@ impl Ctx {
         self.reply_with(Text::new(text)).await
     }
 
-    /// Reply with any content, quoting the received message.
+    /// Reply with any content, quoting the received message (see
+    /// [`Self::reply`]).
     pub async fn reply_with(&self, content: impl Into<MessageContent>) -> Result<SendResponse> {
         let quoted = self
             .message()
@@ -308,9 +368,23 @@ impl Ctx {
         self.send(&message).await
     }
 
-    /// Render `markdown` to WhatsApp formatting ([`crate::markdown`]) and
-    /// send it as text messages, in order: the first quotes the received
-    /// message, the rest follow it. Empty Markdown sends nothing.
+    /// React to the received message with `emoji`
+    /// (`messages/reaction-messages`), sent to [`Self::reply_recipient`].
+    /// Meta's group messaging page (`groups/groups-messaging`) lists text,
+    /// media and template messages only, so a reaction in a group may be
+    /// refused.
+    pub async fn react(&self, emoji: impl Into<String>) -> Result<SendResponse> {
+        let reacted = self
+            .message()
+            .ok_or_else(|| not_replyable("the event is not a received message"))?;
+        let message = OutboundMessage::reaction(self.reply_recipient()?, reacted.id.clone(), emoji);
+        self.send(&message).await
+    }
+
+    /// Render `markdown` with the bot's [`MarkdownRenderer`] (by default
+    /// [`crate::markdown::Renderer`]) and send it as text messages, in
+    /// order: the first quotes the received message, the rest follow it.
+    /// Empty Markdown sends nothing.
     ///
     /// The parts go out one by one: on an error the earlier ones were sent
     /// (never resent here: see `Error::may_have_been_sent`).

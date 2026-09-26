@@ -1,6 +1,6 @@
 ---
 name: meta-whatsapp-rs-bot
-description: "A WhatsApp bot on Cloud API webhooks with meta-whatsapp-rs (feature bot) - commands with prefixes, case-insensitive aliases and quoted arguments, reply buttons and list rows as commands, private-only, group-only and owner-only guards, a banned list, per-user cooldowns on the KvStore, middleware such as logging and read receipts with a typing indicator, one plugin per feature compiled in (no hot reload), a generated help grouped by category, Meta's slash-command menu, and Markdown replies converted to WhatsApp formatting and split at 4096 characters. Load when building a chatbot, command handlers, an auto-responder or a help menu on WhatsApp in Rust, or when replying with Markdown or LLM output."
+description: "A WhatsApp bot on Cloud API webhooks with meta-whatsapp-rs (feature bot) - commands with prefixes, aliases, usage hints and quoted arguments, image and video captions, reply buttons and list rows as commands, an unknown-command hook, private-only, group-only and owner-only guards, a banned list, per-user cooldowns on the KvStore, middleware such as logging and read receipts with a typing indicator, one plugin per feature compiled in (no hot reload), a generated help grouped by category, Meta's slash-command menu, reactions, Markdown replies converted to WhatsApp formatting and split at 4096 characters, and replies recorded in the CMS inbox. Load when building a chatbot, command handlers, an auto-responder or a help menu on WhatsApp in Rust, or when replying with Markdown or LLM output."
 ---
 
 # meta-whatsapp-rs-bot
@@ -9,48 +9,51 @@ description: "A WhatsApp bot on Cloud API webhooks with meta-whatsapp-rs (featur
 
 Reference code: [examples/bot.rs](examples/bot.rs), compiled and tested
 by meta-whatsapp-rs's own gate. Everything is in `meta_whatsapp_rs::bot`
-(feature `bot`, off by default; `full` includes it).
+(feature `bot`, off by default; `full` includes it), `async_trait` too.
 
 ## When to use
 
-A number that answers commands (`/status 1234`), button taps or free
-text (listeners) with formatted replies. The bot is an `EventSink`
-behind the usual `WebhookHandler`.
+For a number that answers commands, taps and free text. Per event: (1) a
+banned sender's message stops, nothing below runs; (2) the match, a
+`/name args` (or image or video caption) or a tapped button or list row
+whose id is a payload, sets `Ctx::invocation` (unknown: `Ctx::unknown_command`);
+(3) middleware, which see the match; (4) the command's guards (scope,
+owner, cooldown) and handler, else `BotBuilder::unknown_command`'s
+handler, else the listeners. (Zaileys: middleware after guards, commands only.)
 
 ## A plugin per feature
 
-A `Plugin` has a `name` and a `category` (its help section), and
-registers commands, middleware and listeners in `setup`:
-
 ```rust
-    async fn setup(&self, registrar: &mut Registrar) -> meta_whatsapp_rs::Result<()> {
-        registrar.command(
-            Command::new("status", |ctx: Ctx| async move {
-                let Some(order) = ctx.args().get(0) else {
-                    ctx.reply("Usage: /status <order number>").await?;
-                    return Ok(());
-                };
-                // Markdown in, WhatsApp formatting out, split at 4096 characters.
-                ctx.reply_markdown(&format!("**Order {order}** has shipped."))
-                    .await?;
-                Ok(())
-            })
-            .alias("s")
-            .description("Where is my order?")
-            .cooldown(Duration::from_secs(10)) // per user, per business number
-            .payload("order_status"), // a reply button or list row with this id runs it too
-        );
-        Ok(())
-    }
+async fn setup(&self, registrar: &mut Registrar) -> meta_whatsapp_rs::Result<()> {
+    registrar.command(
+        Command::new("status", |ctx: Ctx| async move {
+            let Some(order) = ctx.args().get(0) else {
+                ctx.reply("Usage: /status <order number>").await?;
+                return Ok(());
+            };
+            // Markdown in, WhatsApp formatting out, split at 4096 characters.
+            ctx.reply_markdown(&format!("**Order {order}** has shipped."))
+                .await?;
+            Ok(())
+        })
+        .alias("s")
+        .usage("<order number>") // shown after the name in the help
+        .description("Where is my order?")
+        .cooldown(Duration::from_secs(10)) // per user, per business number
+        .payload("order_status"), // a reply button or list row with this id runs it too
+    );
+    Ok(())
+}
 ```
 
-- Names and aliases match case-insensitively; `Args` keeps
-  `"quoted strings"` whole. An unknown `/name` goes to the listeners.
-- `ctx.reply` quotes the message and goes to the group for a group
-  message, else to the sender's BSUID, else to `+<wa_id>`.
-- `Sender::key` is the BSUID first: a user may arrive without a phone
-  number. List owners and bans by BSUID (`AccessList::owner`,
-  `AccessList::ban`); a ban by phone number misses those users.
+- `Plugin` needs `Debug`; `Plugin::category` returns `Some("Orders")`
+  (`None`: `BotBuilder::default_category`).
+- Names match as the parser gives them: `PrefixParser` ignores case
+  (`PrefixParser::ignore_case` with `false` keeps it). `Args` keeps
+  `"quoted strings"` whole. `Command::metadata` is yours alone.
+- `BotSender::key` is the BSUID first: list owners and bans by BSUID
+  (`AccessList::owner`, `AccessList::ban`); a phone-only ban misses users
+  without a number.
 
 ## Build it
 
@@ -64,19 +67,21 @@ Bot::builder()
     .middleware(MarkRead::with_typing_indicator())
     .middleware(OnlyOurNumber(number))
     .plugin(Orders)
+    .plugin(Admin)
+    .help_command() // `/help`, from the commands not hidden
+    .build() // async: the plugins' `setup` run here
+    .await
 ```
 
-Guards, in order: banned (before the middleware: nothing runs, not even
-a read receipt), scope (`Command::private_only`, `Command::group_only`),
-`Command::owner_only`, then the cooldown, so a refused attempt starts
-none. A cooldown without a store or a name taken twice fails `build`.
+A cooldown without a store, a name taken twice or a `Listen::Event` kind
+not in `WebhookEvent::KINDS` fails `build`. A running cooldown is told
+once per period (store namespace `wa.bot.cooldown`, keys hashed).
 
-Every decision is a trait with a default: `Outbound` (`ClientOutbound`),
-`CommandParser` (`PrefixParser`), `AccessPolicy` (`AccessList`),
-`Cooldowns` (`KvCooldowns`, namespace `bot.cooldown`, keys hashed),
-`Refusals` (`ReplyRefusals`: a short reply for a wrong chat or a running
-cooldown, nothing for bans and non-owners; `SilentRefusals`),
-`ErrorHandler` (`LogErrors`), and the renderer's `Escape`.
+Traits with defaults: `Outbound` (`ClientOutbound`), `CommandParser`,
+`AccessPolicy`, `Cooldowns`, `Refusals` (`ReplyRefusals`: silent for bans
+and non-owners), `ErrorHandler` (`LogErrors`), `MarkdownRenderer`,
+`HelpFormatter`. `Ctx::reply` answers the group, else the BSUID, else
+`+<wa_id>`, quoting; to do otherwise, `Ctx::send` a message you build.
 
 ## Middleware
 
@@ -93,9 +98,8 @@ impl Middleware for OnlyOurNumber {
 }
 ```
 
-They run in registration order, before the command match
-(`Ctx::invocation` is `None` there), never for a banned sender's message;
-`ctx.insert(value)` hands a value on (`ctx.get::<T>()`).
+`ctx.insert(value)` hands a value on (`ctx.get::<T>()`); the
+`ErrorHandler` gets the context from before the middleware, without it.
 
 ## Behind the webhook
 
@@ -106,55 +110,51 @@ let handler = WebhookHandler::builder(verifier, verify_token, Arc::new(bot))
     .build();
 ```
 
-Keep the `DedupGuard`, or Meta's retries run commands again. `LogErrors`
-logs a failure (kinds only) and acknowledges it, since an error makes
-Meta redeliver the batch and repeat its replies (`PropagateErrors`).
+`LogErrors` logs a failure (kinds only) and acknowledges it, since an
+error makes Meta redeliver the batch and repeat its replies; a transient
+failure is lost with it (`PropagateErrors` redelivers). CMS:
+`InboxOutbound` and `InboxThenBot` (example) put replies in the inbox's
+history: record first, then the bot (a `FanoutSink` runs both at once).
 
 ## Help and Meta's command menu
 
-`BotBuilder::help_command` adds `/help`: the commands not hidden, by
-category (`Bot::help`; `Bot::help_sections` to format your own).
+`BotBuilder::help_command_with` sets the name, description and
+`HelpFormatter`; in a handler, `Ctx::commands` and `Ctx::help_sections`.
+The menu is the visible commands (`Command::menu` with `false` keeps one
+out), under the client's limits; one without a description fails:
 
 ```rust
 bot.sync_command_menu(client, number).await // at most 30 commands, each with a description
 ```
 
-It lists the visible commands (`Command::menu` with `false` keeps one
-out), checked first against the client's limits (30 commands, names of
-32 characters, descriptions of 1 to 256); a listed command without a
-description fails `Bot::command_menu` rather than being dropped.
-
 ## Markdown replies
 
-`ctx.reply_markdown(md)` uses `meta_whatsapp_rs::bot::markdown::render`:
-bold and headings `*b*`, italics `_i_`, `~s~`, code, quotes, `•` lists,
-`text (url)` links (web, mail, phone), monospace tables; a message per 4096
-characters, cut between blocks, never inside a code block that fits.
-Text is left as written (`NoEscape`, the default): copied addresses,
-codes and `/commands` work, but a literal `*`, `_` or `~` may format.
-`WordJoinerEscape` (opt-in) wraps them in U+2060, which is copied too.
+`ctx.reply_markdown(md)` renders with the bot's `MarkdownRenderer`
+(`Renderer` unless `BotBuilder::markdown` sets another): `*b*`, `_i_`,
+`~s~`, code, quotes, `•` lists, `text (url)` (web, mail, phone), tables
+monospaced; emphasis inside a word loses its markers. Parts fit 4096
+UTF-16 units, cut between blocks. Text is left as written (`NoEscape`);
+`WordJoinerEscape` is opt-in.
 
 ## Pitfalls
 
-- **Plugins are compiled in.** No hot reload or dynamic loading; ship a
-  plugin as a crate and redeploy. `Bot::unload` runs every `on_unload`
-  at shutdown, then the bot refuses events so Meta redelivers them.
-- A menu tap sends `/name`: keep `/` among the prefixes (else `Bot::command_menu` fails).
-- `MarkRead::with_typing_indicator` shows "typing…" for every message,
-  commands or not; use `MarkRead::new` when most messages get no reply.
-- Replies are free-form: outside the 24-hour window Meta refuses them.
+- **Plugins are compiled in**: ship one as a crate; `Bot::unload` runs
+  every `on_unload`, then events fail with `SinkError::Closed`.
+- A menu tap sends `/name`: keep `/` among the prefixes.
+- `MarkRead::with_typing_indicator` shows "typing…" for every message;
+  replies are free-form, refused outside the 24-hour window.
+- Test a handler alone: `Ctx::new` plus `Ctx::with_invocation`
+  (`Invocation::new`), with an `Outbound` that records.
 
 ## What meta-whatsapp-rs does not do
 
-- No paced broadcast or scheduling (planned), no conversation state or
-  multi-step forms: keep those in your store, keyed by `Sender::key`.
-- No per-tenant token lookup: implement `Outbound` to pick a merchant's
-  token by business number (`meta-whatsapp-rs-token-vault`).
+- No paced broadcast or scheduling (planned), no subcommands or `--flags`,
+  no conversation state: keep it in your store, keyed by `BotSender::key`.
+- Per-tenant tokens: implement `Outbound` (`meta-whatsapp-rs-token-vault`).
 - Guide: [docs/guides/bots.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/bots.md).
 
 ## Related skills
 
-`meta-whatsapp-rs-webhook-endpoint`, `meta-whatsapp-rs-interactive-messages`
-(reply buttons and lists), `meta-whatsapp-rs-send-messages`,
-`meta-whatsapp-rs-phone-numbers` (conversational components),
+`meta-whatsapp-rs-webhook-endpoint`, `meta-whatsapp-rs-interactive-messages`,
+`meta-whatsapp-rs-cms-inbox`, `meta-whatsapp-rs-phone-numbers` (command menu),
 `meta-whatsapp-rs-token-vault`, `meta-whatsapp-rs-testing`.

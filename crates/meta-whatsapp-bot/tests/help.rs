@@ -6,7 +6,9 @@
 mod common;
 
 use async_trait::async_trait;
-use meta_whatsapp_bot::{Bot, Command, Ctx, Plugin, Registrar};
+use meta_whatsapp_bot::{
+    Bot, CategoryHelp, Command, Ctx, HelpFormatter, HelpSection, Plugin, Registrar,
+};
 use meta_whatsapp_core::Error;
 use meta_whatsapp_core::testing::ScriptedTransport;
 use pretty_assertions::assert_eq;
@@ -19,6 +21,7 @@ fn noop() -> impl Fn(Ctx) -> std::future::Ready<meta_whatsapp_core::Result<()>> 
 }
 
 /// Travel commands, as in the page's examples.
+#[derive(Debug)]
 struct Travel;
 
 #[async_trait]
@@ -26,8 +29,8 @@ impl Plugin for Travel {
     fn name(&self) -> &'static str {
         "travel"
     }
-    fn category(&self) -> &'static str {
-        "Travel"
+    fn category(&self) -> Option<&str> {
+        Some("Travel")
     }
     async fn setup(&self, r: &mut Registrar) -> meta_whatsapp_core::Result<()> {
         r.command(
@@ -46,6 +49,7 @@ impl Plugin for Travel {
 }
 
 /// Commands no one should see.
+#[derive(Debug)]
 struct Admin;
 
 #[async_trait]
@@ -254,4 +258,124 @@ async fn a_menu_the_parser_cannot_read_fails() {
         .await
         .unwrap();
     assert_eq!(with_slash.command_menu().unwrap().len(), 1);
+}
+
+/// A help format of its own, under another name and description, in a
+/// default category of the bot's choosing; `Bot::help` is what it sends.
+#[tokio::test]
+async fn the_help_command_is_configurable() {
+    /// One line per command, no categories.
+    #[derive(Debug)]
+    struct Compact;
+    impl HelpFormatter for Compact {
+        fn format(&self, sections: &[HelpSection], prefix: &str) -> String {
+            sections
+                .iter()
+                .flat_map(|s| &s.commands)
+                .map(|c| format!("{prefix}{}", c.name))
+                .collect::<Vec<_>>()
+                .join(" · ")
+        }
+    }
+    let out = Recording::default();
+    let bot = Bot::builder()
+        .outbound(out.clone())
+        .default_category("Umum")
+        .help_command_with("bantuan", "Tampilkan perintah", Compact)
+        .plugin(Travel)
+        .command(Command::new("ping", noop()).description("Pong"))
+        .build()
+        .await
+        .unwrap();
+    bot.handle(text_event("messages/text.json", "/bantuan"))
+        .await
+        .unwrap();
+    assert_eq!(out.bodies(), ["/bantuan · /ping · /tickets · /hotel"]);
+    assert_eq!(bot.help(), out.bodies()[0]);
+    let categories: Vec<_> = bot
+        .help_sections()
+        .into_iter()
+        .map(|s| (s.category, s.commands.len()))
+        .collect();
+    assert_eq!(
+        categories,
+        [("Umum".to_owned(), 2), ("Travel".to_owned(), 2)]
+    );
+    let menu = bot.command_menu().unwrap();
+    assert_eq!(menu[0].command_description, "Tampilkan perintah");
+    // The default format is `CategoryHelp`.
+    let plain = Bot::builder()
+        .outbound(Recording::default())
+        .command(Command::new("ping", noop()).description("Pong"))
+        .build()
+        .await
+        .unwrap();
+    assert_eq!(
+        plain.help(),
+        CategoryHelp.format(&plain.help_sections(), "/")
+    );
+}
+
+/// A usage hint follows the name in the help; metadata is kept for the
+/// integrator and never shown.
+#[tokio::test]
+async fn usage_shows_in_the_help_and_metadata_is_kept() {
+    let bot = Bot::builder()
+        .outbound(Recording::default())
+        .command(
+            Command::new("status", noop())
+                .alias("s")
+                .usage("<order number>")
+                .description("Where is my order?")
+                .metadata("docs", "https://shop.example/help/status"),
+        )
+        .build()
+        .await
+        .unwrap();
+    assert_eq!(
+        bot.help(),
+        "*General*\n/status, /s <order number> — Where is my order?"
+    );
+    let info = &bot.commands()[0];
+    assert_eq!(info.usage.as_deref(), Some("<order number>"));
+    assert_eq!(
+        info.metadata.get("docs").map(String::as_str),
+        Some("https://shop.example/help/status")
+    );
+    assert_eq!(
+        bot.command_menu().unwrap()[0].command_description,
+        "Where is my order?"
+    );
+}
+
+/// A handler builds its own help from `Ctx::commands` and
+/// `Ctx::help_sections`, the same lists the bot has.
+#[tokio::test]
+async fn a_handler_sees_the_commands() {
+    let out = Recording::default();
+    let bot = Bot::builder()
+        .outbound(out.clone())
+        .plugin(Travel)
+        .command(
+            Command::new("menu", |ctx: Ctx| async move {
+                let hidden = ctx.commands().iter().filter(|c| c.hidden).count();
+                let lines: Vec<String> = ctx
+                    .help_sections()
+                    .iter()
+                    .map(|s| format!("{}: {}", s.category, s.commands.len()))
+                    .collect();
+                ctx.reply(format!("{} ({hidden} hidden)", lines.join(", ")))
+                    .await?;
+                Ok(())
+            })
+            .category("Other"),
+        )
+        .build()
+        .await
+        .unwrap();
+    bot.handle(text_event("messages/text.json", "/menu"))
+        .await
+        .unwrap();
+    assert_eq!(out.bodies(), ["Travel: 2, Other: 1 (1 hidden)"]);
+    assert_eq!(bot.commands().len(), 4);
 }

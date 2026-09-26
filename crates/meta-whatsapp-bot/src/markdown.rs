@@ -2,15 +2,18 @@
 //!
 //! [`render`] turns Markdown (a bot's help page, an LLM's answer) into the
 //! markup the WhatsApp clients display, then splits it into messages of at
-//! most [`TEXT_MAX_CHARS`] characters on block boundaries.
+//! most [`TEXT_MAX_CHARS`] characters on block boundaries. [`Renderer`]
+//! does it with options; [`MarkdownRenderer`] is the trait a bot renders
+//! replies with, for rules of your own.
 //!
 //! | Markdown | WhatsApp |
 //! | --- | --- |
 //! | `**bold**`, `__bold__`, headings | `*bold*` (a heading is a bold line) |
 //! | `*italic*`, `_italic_` | `_italic_` |
 //! | `~~strike~~` | `~strike~` |
-//! | `` `code` `` | `` `code` `` |
-//! | fenced or indented code | ```` ```code``` ```` (language dropped) |
+//! | emphasis inside a word (`foo**bar**baz`) | the text alone (WhatsApp formats no part of a word) |
+//! | `` `code` `` | `` `code` ``; its text alone when it holds a backtick |
+//! | fenced or indented code | ```` ```code``` ```` (language dropped); its text alone when it holds ```` ``` ```` or starts or ends with a backtick (a fence could not close) |
 //! | `> quote` | `> quote`, on every line |
 //! | `- item`, `1. item` | `• item`, `1. item` (nested: indented; quotes and lists deeper than 16 levels are flattened into the 16th) |
 //! | `[text](url)` | `text (url)`; a link whose text is its URL, or an autolink: `url` (only `http`, `https`, `mailto`, `tel` or relative URLs: any other scheme, such as `javascript:` or `data:`, keeps just the text) |
@@ -39,8 +42,12 @@
 //!
 //! # Splitting
 //!
-//! Meta's text body limit is 4096 characters (`messages/text-messages`),
-//! counted here as the client counts it (Unicode scalar values). Blocks
+//! Meta's text body limit is 4096 characters (`messages/text-messages`,
+//! the client's `TEXT_BODY_MAX_CHARS`). Meta does not say which unit it
+//! counts, so parts are measured in UTF-16 code units: never fewer than
+//! the Unicode scalar values the client counts, so a part fits under
+//! either reading (an emoji outside the Basic Multilingual Plane counts
+//! twice, and dense emoji make more, shorter parts). Blocks
 //! (paragraphs, headings, list items, quotes, code blocks, tables) are
 //! packed into messages whole, separated as in one message; a block goes
 //! to the next message when it does not fit, so a code block that fits in
@@ -48,15 +55,18 @@
 //! breaks, then at spaces, then anywhere (a code block keeps its fences on
 //! every piece); formatting spanning such a cut is not repaired.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 
 use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd, TextMergeStream};
 
-/// Longest text body Meta accepts, in characters (`messages/text-messages`:
-/// "Maximum 4096 characters"; the same number the client checks before a
-/// send).
-pub const TEXT_MAX_CHARS: usize = 4096;
+/// Longest text body Meta accepts, in characters: the client's
+/// `meta_whatsapp_client::messages::TEXT_BODY_MAX_CHARS`
+/// (`messages/text-messages`: "Maximum 4096 characters"). The renderer
+/// measures parts in UTF-16 code units against it (see
+/// [Splitting](self#splitting)).
+pub const TEXT_MAX_CHARS: usize = meta_whatsapp_client::messages::TEXT_BODY_MAX_CHARS;
 
 /// What a thematic break (`---`) renders to.
 const RULE: &str = "———";
@@ -71,9 +81,10 @@ pub fn render(markdown: &str) -> Vec<String> {
 }
 
 /// Split already formatted `text` into messages of at most `max_chars`
-/// characters, at blank lines (paragraph boundaries) when possible, then
-/// as [`render`] cuts an oversized block. Fences in `text` are not
-/// recognised: render Markdown with [`render`] instead.
+/// UTF-16 code units (so at most as many characters), at blank lines
+/// (paragraph boundaries) when possible, then as [`render`] cuts an
+/// oversized block. Fences in `text` are not recognised: render Markdown
+/// with [`render`] instead.
 pub fn split(text: &str, max_chars: usize) -> Vec<String> {
     let blocks = text
         .split("\n\n")
@@ -89,6 +100,29 @@ pub trait Escape: Send + Sync + fmt::Debug + 'static {
     /// Append `text`, escaped, to `out`. Called once per run of literal
     /// text (never for code, URLs of links, or table cells).
     fn escape(&self, text: &str, out: &mut String);
+}
+
+impl<T: Escape + ?Sized> Escape for Arc<T> {
+    fn escape(&self, text: &str, out: &mut String) {
+        (**self).escape(text, out);
+    }
+}
+
+/// Markdown → the text messages a reply sends (`Ctx::reply_markdown`).
+/// The default is [`Renderer`]; implement it for rules of your own
+/// (another heading style, another table layout, no splitting of your
+/// own content) and set it with `BotBuilder::markdown`.
+pub trait MarkdownRenderer: Send + Sync + fmt::Debug + 'static {
+    /// `markdown` as messages, in order; none for empty Markdown. Each
+    /// part must pass the client's text check (at most
+    /// [`TEXT_MAX_CHARS`] characters, not blank), or its send fails.
+    fn render(&self, markdown: &str) -> Vec<String>;
+}
+
+impl<T: MarkdownRenderer + ?Sized> MarkdownRenderer for Arc<T> {
+    fn render(&self, markdown: &str) -> Vec<String> {
+        (**self).render(markdown)
+    }
 }
 
 /// An opt-in [`Escape`]: U+2060 WORD JOINER around `*`, `_`, `~` and
@@ -153,7 +187,8 @@ impl Escape for NoEscape {
     }
 }
 
-/// Markdown → WhatsApp text messages. See the [module docs](self).
+/// Markdown → WhatsApp text messages: the default [`MarkdownRenderer`].
+/// See the [module docs](self).
 #[derive(Debug, Clone)]
 pub struct Renderer {
     max_chars: usize,
@@ -175,10 +210,12 @@ impl Renderer {
         Self::default()
     }
 
-    /// At most `max_chars` characters per message (at least 1).
+    /// At most `max_chars` per message, in UTF-16 code units: at least 1,
+    /// at most [`TEXT_MAX_CHARS`] (a longer part would fail the client's
+    /// check before it is sent).
     #[must_use]
     pub fn max_chars(mut self, max_chars: usize) -> Self {
-        self.max_chars = max_chars.max(1);
+        self.max_chars = max_chars.clamp(1, TEXT_MAX_CHARS);
         self
     }
 
@@ -208,6 +245,8 @@ impl Renderer {
     }
 
     fn blocks(&self, markdown: &str) -> Vec<Block> {
+        // (Tables and strikethrough only: footnotes, math and the rest are
+        // read as text.)
         let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
         let events = TextMergeStream::new(Parser::new_ext(markdown, options));
         let mut builder = Builder::new(self.escape.as_ref());
@@ -215,6 +254,12 @@ impl Renderer {
             builder.event(event);
         }
         to_blocks(builder.finish())
+    }
+}
+
+impl MarkdownRenderer for Renderer {
+    fn render(&self, markdown: &str) -> Vec<String> {
+        Renderer::render(self, markdown)
     }
 }
 
@@ -279,6 +324,11 @@ struct Inline {
     /// A table cell: no markers, no escaping (the table is monospace).
     plain: bool,
     depth: [usize; 3],
+    /// Where each style's opening marker is in `out`, while it is open.
+    opened: [Option<usize>; 3],
+    /// The markers written, as byte positions of the opening and the
+    /// closing one in `out`.
+    spans: Vec<(usize, usize)>,
     links: Vec<Link>,
 }
 
@@ -290,6 +340,8 @@ impl Inline {
             plain,
             // A heading is bold already: bold inside it adds no markers.
             depth: [usize::from(heading), 0, 0],
+            opened: [None; 3],
+            spans: Vec::new(),
             links: Vec::new(),
         }
     }
@@ -298,6 +350,7 @@ impl Inline {
         let depth = &mut self.depth[style as usize];
         *depth += 1;
         if *depth == 1 && !self.plain {
+            self.opened[style as usize] = Some(self.out.len());
             self.out.push(style.marker());
         }
     }
@@ -305,7 +358,10 @@ impl Inline {
     fn close(&mut self, style: Style) {
         let depth = &mut self.depth[style as usize];
         *depth = depth.saturating_sub(1);
-        if *depth == 0 && !self.plain {
+        if *depth == 0
+            && let Some(open) = self.opened[style as usize].take()
+        {
+            self.spans.push((open, self.out.len()));
             self.out.push(style.marker());
         }
     }
@@ -349,7 +405,7 @@ impl Inline {
         };
         if !url_allowed(&link.url) {
             if link.auto || link.raw == link.url {
-                self.out.truncate(link.start);
+                self.truncate(link.start);
             }
             return;
         }
@@ -359,7 +415,7 @@ impl Inline {
             .strip_prefix("mailto:")
             .is_some_and(|address| address == link.raw);
         if link.auto || text.is_empty() || link.raw == url {
-            self.out.truncate(link.start);
+            self.truncate(link.start);
             self.out.push_str(url);
         } else if !url.is_empty() && !mailto {
             self.out.push_str(" (");
@@ -368,14 +424,52 @@ impl Inline {
         }
     }
 
+    /// Drop what was written from `at` on, markers included.
+    fn truncate(&mut self, at: usize) {
+        self.out.truncate(at);
+        self.spans.retain(|&(open, _)| open < at);
+    }
+
     fn finish(self) -> String {
-        let text = self.out.trim();
+        let out = without_intraword_markers(&self.out, &self.spans);
+        let text = out.trim();
         if self.heading && !text.is_empty() {
             format!("*{text}*")
         } else {
             text.to_owned()
         }
     }
+}
+
+/// `out` without the markers of the `spans` that sit inside a word: a
+/// letter or digit right before the opening marker or right after the
+/// closing one (other markers skipped). WhatsApp formats no part of a
+/// word, so `foo*bar*baz` would show its asterisks.
+fn without_intraword_markers(out: &str, spans: &[(usize, usize)]) -> String {
+    let markers: HashSet<usize> = spans.iter().flat_map(|&(o, c)| [o, c]).collect();
+    let word = |c: Option<char>| c.is_some_and(char::is_alphanumeric);
+    let mut dropped = HashSet::new();
+    for &(open, close) in spans {
+        let before = out[..open]
+            .char_indices()
+            .rev()
+            .find(|(i, _)| !markers.contains(i))
+            .map(|(_, c)| c);
+        let after = out[close + 1..]
+            .char_indices()
+            .find(|(i, _)| !markers.contains(&(close + 1 + i)))
+            .map(|(_, c)| c);
+        if word(before) || word(after) {
+            dropped.extend([open, close]);
+        }
+    }
+    if dropped.is_empty() {
+        return out.to_owned();
+    }
+    out.char_indices()
+        .filter(|(i, _)| !dropped.contains(i))
+        .map(|(_, c)| c)
+        .collect()
 }
 
 /// Schemes a link or image URL may have to be written into a message.
@@ -517,7 +611,9 @@ impl<'e> Builder<'e> {
             }
             Event::Code(code) => {
                 let inline = self.inline();
-                if inline.plain {
+                // A backtick inside would close the span early: the code's
+                // text alone.
+                if inline.plain || code.contains('`') {
                     inline.raw(&code);
                 } else {
                     inline.raw("`");
@@ -679,8 +775,15 @@ impl<'e> Builder<'e> {
     }
 }
 
+/// Characters as displayed (table columns, indentation).
 fn chars(text: &str) -> usize {
     text.chars().count()
+}
+
+/// Length as the split measures it: UTF-16 code units, never fewer than
+/// the characters the client counts.
+fn units(text: &str) -> usize {
+    text.encode_utf16().count()
 }
 
 /// Columns padded to their widest cell, ` | ` between them, a `-|-` rule
@@ -759,6 +862,12 @@ fn fence(code: &str) -> String {
     format!("```{code}```")
 }
 
+/// Whether `code` cannot sit in a fence: it holds one, or a backtick at an
+/// end would run into it.
+fn unfenceable(code: &str) -> bool {
+    code.contains("```") || code.starts_with('`') || code.ends_with('`')
+}
+
 fn quote(text: &str) -> String {
     text.lines()
         .map(|l| format!("> {l}").trim_end().to_owned())
@@ -801,6 +910,7 @@ fn nested(nodes: Vec<Node>) -> String {
     for node in nodes {
         match node {
             Node::Text(text) => lines.push(text),
+            Node::Code(code) if unfenceable(&code) => lines.push(code),
             Node::Code(code) => lines.push(fence(&code)),
             Node::Rule => lines.push(RULE.to_owned()),
             Node::Quote(children) => lines.push(quote(&nested(children))),
@@ -819,6 +929,9 @@ fn to_blocks(nodes: Vec<Node>) -> Vec<Block> {
     for node in nodes {
         match node {
             Node::Text(text) => blocks.push(Block::text(text, Sep::Paragraph)),
+            Node::Code(code) if unfenceable(&code) => {
+                blocks.push(Block::text(code, Sep::Paragraph));
+            }
             Node::Code(code) => blocks.push(Block {
                 text: fence(&code),
                 sep: Sep::Paragraph,
@@ -840,20 +953,20 @@ fn to_blocks(nodes: Vec<Node>) -> Vec<Block> {
     blocks
 }
 
-/// Blocks into messages of at most `max` characters: whole blocks while
-/// they fit, oversized ones cut ([`cut`]).
+/// Blocks into messages of at most `max` UTF-16 code units: whole blocks
+/// while they fit, oversized ones cut ([`cut`]).
 fn pack(blocks: Vec<Block>, max: usize) -> Vec<String> {
     let mut parts = Vec::new();
     let mut current = String::new();
     let mut length = 0;
     for block in blocks {
-        let pieces = if chars(&block.text) <= max {
+        let pieces = if units(&block.text) <= max {
             vec![block.text]
         } else {
             cut(&block, max)
         };
         for (i, piece) in pieces.into_iter().enumerate() {
-            let piece_length = chars(&piece);
+            let piece_length = units(&piece);
             let sep = block.sep.as_str();
             if current.is_empty() {
                 current = piece;
@@ -875,11 +988,11 @@ fn pack(blocks: Vec<Block>, max: usize) -> Vec<String> {
     parts
 }
 
-/// An oversized block in pieces of at most `max` characters: a code block
+/// An oversized block in pieces of at most `max` code units: a code block
 /// by lines, fenced again (when a fence fits at all); anything else by
 /// lines, then words, then characters.
 fn cut(block: &Block, max: usize) -> Vec<String> {
-    let fences = chars(&fence(""));
+    let fences = units(&fence(""));
     match &block.code {
         Some(code) if max > fences => lines(code, max - fences)
             .iter()
@@ -889,19 +1002,19 @@ fn cut(block: &Block, max: usize) -> Vec<String> {
     }
 }
 
-/// `text` in pieces of at most `max` characters, cut at line breaks where
+/// `text` in pieces of at most `max` code units, cut at line breaks where
 /// possible; blank pieces are dropped.
 fn lines(text: &str, max: usize) -> Vec<String> {
     let mut pieces: Vec<String> = Vec::new();
     let mut current: Option<(String, usize)> = None;
     for line in text.split('\n') {
-        let parts = if chars(line) > max {
+        let parts = if units(line) > max {
             words(line, max)
         } else {
             vec![line.to_owned()]
         };
         for part in parts {
-            let n = chars(&part);
+            let n = units(&part);
             match current.as_mut() {
                 Some((text, length)) if *length + 1 + n <= max => {
                     text.push('\n');
@@ -924,22 +1037,33 @@ fn lines(text: &str, max: usize) -> Vec<String> {
     pieces
 }
 
-/// One line in pieces of at most `max` characters, cut at spaces where
-/// possible, else anywhere.
+/// One line in pieces of at most `max` code units, cut at spaces where
+/// possible, else between characters (a character wider than `max`, an
+/// emoji under a limit of 1, is a piece of its own).
 fn words(line: &str, max: usize) -> Vec<String> {
     let mut pieces = Vec::new();
     let mut current = String::new();
     let mut length = 0;
     for word in line.split(' ') {
-        let n = chars(word);
+        let n = units(word);
         if n > max {
             if length > 0 {
                 pieces.push(std::mem::take(&mut current));
                 length = 0;
             }
-            let letters: Vec<char> = word.chars().collect();
-            for chunk in letters.chunks(max) {
-                pieces.push(chunk.iter().collect());
+            let mut chunk = String::new();
+            let mut chunk_length = 0;
+            for c in word.chars() {
+                let width = c.len_utf16();
+                if chunk_length > 0 && chunk_length + width > max {
+                    pieces.push(std::mem::take(&mut chunk));
+                    chunk_length = 0;
+                }
+                chunk.push(c);
+                chunk_length += width;
+            }
+            if chunk_length > 0 {
+                pieces.push(chunk);
             }
             continue;
         }
@@ -971,7 +1095,7 @@ mod tests {
             let parts = split(&text, max);
             assert!(!parts.is_empty(), "{max}");
             for part in &parts {
-                assert!(chars(part) <= max, "{max}: {part:?}");
+                assert!(units(part) <= max, "{max}: {part:?}");
                 assert!(!part.trim().is_empty(), "{max}");
             }
         }
@@ -1001,7 +1125,7 @@ mod tests {
         assert!(parts.len() > 1);
         let mut seen = Vec::new();
         for part in &parts {
-            assert!(chars(part) <= 40, "{part:?}");
+            assert!(units(part) <= 40, "{part:?}");
             let inner = part
                 .strip_prefix("```")
                 .and_then(|p| p.strip_suffix("```"))
@@ -1014,7 +1138,7 @@ mod tests {
     #[test]
     fn a_limit_below_the_fences_still_cuts() {
         let parts = Renderer::new().max_chars(5).render("```\nabcdefghij\n```");
-        assert!(parts.iter().all(|p| chars(p) <= 5), "{parts:?}");
+        assert!(parts.iter().all(|p| units(p) <= 5), "{parts:?}");
         assert_eq!(parts.concat(), "```abcdefghij```");
     }
 }
