@@ -389,9 +389,14 @@ Found by the security review of 8ee6fab.
     dead-letter write succeeds, so nothing is dropped silently. An error
     a sink does not classify stays transient, so a sink that never opts
     in keeps today's behaviour. The raw events are personal data: the
-    dead-letter store is bounded by count and age, and L5's erasure
-    reaches it. Swappable: the sink classifies its own errors, and the
-    store is a typed store like the others. Roadmap L21a.
+    dead-letter store is bounded by count and age, and keeps its own
+    per-contact index and an `erase`, which a facade-level eraser calls
+    beside the conversation store's (`KvStore` has no scan, so L5's
+    `ConversationStore::erase_all` cannot reach it by itself; reworded on
+    2026-09-26 after L5's privacy review, which found that "L5's erasure
+    reaches it" could not hold). Swappable: the sink classifies its own
+    errors, and the store is a typed store like the others. Roadmap
+    L21a.
 
 31. **SSE fan-out cost.** `webhooks::sse` reads a
     `broadcast::Receiver<WebhookEvent>`, and a broadcast receiver clones

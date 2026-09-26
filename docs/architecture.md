@@ -55,7 +55,7 @@ never leaks its library's types through a port.
 | --- | --- | --- |
 | `transport::HttpTransport` | `send`, `send_streaming` | rustdoc; non-2xx is *not* an error at this layer |
 | `store::KvStore` | `get`, `put`, `put_if_absent`, `compare_and_swap`, `delete` | `meta_whatsapp_adapters::store::conformance` (executable) |
-| `store::ConversationStore` | `append`, `append_synced` (a batch of coexistence history: no window, never unread), `fill_media_placeholder`, `revoke` (number and direction scoped, never the conversation; the content kept; a tombstone, history only, when the message is not stored yet), `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at`; `message` (the lookup, scoped: `phone_number_id, id`, never another number's); `record_window_event`, `window_events` (a call or a standby message that reopens the window: never history, never the summary); `set_thread_owner`, `thread_owner` (Conversation Routing: the latest record wins); `put_contact`, `remove_contact`, `contact`, `contacts` (the coexistence address book; a removal is kept, key and time only, so an older sync arriving after it is refused); `erase` (every record of one key on one number, deleted); `purge_before` (by age, one number or all); `retention`, `apply_retention` (provided: keep unless the adapter is configured) | `meta_whatsapp_adapters::store::conversation_conformance` (executable) |
+| `store::ConversationStore` | `append`, `append_synced` (a batch of coexistence history: no window, never unread), `fill_media_placeholder`, `revoke` (number and direction scoped, never the conversation; the content kept; a tombstone, history only, when the message is not stored yet), `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at`; `message` (the lookup, scoped: `phone_number_id, id`, never another number's); `record_window_event`, `window_events` (a call or a standby message that reopens the window: never history, never the summary); `set_thread_owner`, `thread_owner` (Conversation Routing: the latest record wins); `put_contact`, `remove_contact`, `contact`, `contacts` (the coexistence address book; a removal is kept, key and time only, so an older sync arriving after it is refused); `link_identity`, `identity_links` (two identities of one person on one number, as Meta reports a BSUID or number change); `identities` (a person's keys on one number: the closure over the synced contacts and the links, read only); `erase_all` (a person on one number, deleted: every record under their keys, the contacts and links naming them, and their messages in groups redacted or deleted per the store's `ErasureMode`); `purge_before` (by age, one number or all); `erase` (one key), `erasure_mode`, `retention`, `apply_retention` (provided: redact group messages and keep everything unless the adapter is configured) | `meta_whatsapp_adapters::store::conversation_conformance` (executable) |
 | `sink::EventSink<E>` | `deliver` | rustdoc |
 | `clock::Clock` | `now` | — |
 
@@ -64,18 +64,36 @@ OTP challenges, webhook dedup, Embedded Signup sessions. An adapter author
 implements five methods once and every feature works.
 
 What the inbox keeps about a conversation beside its messages (window
-events, thread ownership, the coexistence address book) is on
-`ConversationStore` itself, not on `KvStore`: it is keyed like the
-history, and `erase` must reach it in the same step. Its personal data
-is every record keyed by a contact: `erase(key)` deletes the messages
-(tombstones included), the summary, the window events, the ownership
-record and the synced contacts naming the key, and nothing of another
-key or number; what lies outside the store (dedup markers and OTP
-challenges on `KvStore`, the service's event outbox, logs, backups) it
-does not reach. Retention is set per store (design D10): the adapters
-take a `Retention` (`with_retention`, keep by default) that
-`apply_retention(now)` applies; nothing purges on its own, and a caller
-with another policy calls `purge_before` with its own cutoff.
+events, thread ownership, the coexistence address book, the links
+between a person's identities) is on `ConversationStore` itself, not on
+`KvStore`: it is keyed like the history, and an erasure must reach it in
+the same step. Its personal data is the records keyed by a contact; a
+person also appears in group conversations (a message's `sender`: the
+BSUID, else the phone number, of an inbound message, a column on
+Postgres) and in other conversations' payloads (a quoted message, a
+shared contact card), which no erasure reaches. A person has several
+keys on one number (a history thread under their phone number, live
+messages under their BSUID, an earlier BSUID), so erasure is by person
+(design D30): `identities(key)` collects the keys the store connects,
+and `erase_all(phone_number_id, keys)` deletes, in one step, every
+record under them, the synced contacts and identity links naming them,
+and their group messages, redacted in place (the default) or deleted
+(`ErasureMode`, a setting per store, design D31); `erase(key)` is its
+one-key case. There is no erasure across numbers: a `wa_id` is the same
+on every number, so one would delete other businesses' customers. What
+it does not reach, and what an integrator does about it, is in
+[cms-inbox.md § 8](guides/cms-inbox.md#8-erasing-a-customer-and-retention)
+and [production.md § 8](guides/production.md#8-retention-and-erasure-on-postgres):
+quotes and contact cards in other people's messages, the ids of redacted
+group messages, identities nothing connects, the webhook dedup markers
+(kept on purpose: they stop Meta's redeliveries from recording the data
+again), the service's outbox and idempotency answers, integrators'
+copies, dead Postgres rows, WAL, replicas and backups, logs, and Meta's
+side; and records created again after the erasure. Retention is set per
+store (design D10): the adapters take a `Retention` (`with_retention`,
+keep by default) that `apply_retention(now)` applies; nothing purges on
+its own, and a caller with another policy calls `purge_before` with its
+own cutoff.
 
 ## Stable identifiers
 
@@ -101,8 +119,8 @@ rewrite them along with the code.
 | `wa.otp`, `wa.otp.rate` | `NAMESPACE`, `ISSUE_LOG_NAMESPACE`, same file | store namespaces of the challenges and of the issue limit | `the_derivations_and_namespaces_are_pinned` |
 | `wa.es.session` | `SESSION_NAMESPACE`, `meta-whatsapp-client/src/embedded_signup/session.rs` | store namespace of signup sessions in flight | `the_session_namespace_is_pinned` |
 | `wa.webhook.dedup` | `DEDUP_NAMESPACE`, `meta-whatsapp-webhooks/src/dedup.rs` | store namespace of the dedup markers (key: SHA-256 hex of the event's dedup key) | `the_marker_key_is_pinned` |
-| `wa_` | `TablePrefix::DEFAULT`, `meta-whatsapp-adapters/src/store/postgres/mod.rs` | default table prefix: `wa_kv`, `wa_messages`, `wa_conversations`, `wa_window_events`, `wa_thread_owners`, `wa_synced_contacts`, `wa_sqlx_migrations` | `the_default_tables_and_migration_checksums_are_pinned`, `prefix_validation`, the `live_postgres_*` table-name tests |
-| `customer_call`, `call_accepted`, `standby_message`; `this_app`, `another_app`, `idle` | `WindowEventKind::as_str`, `ThreadOwner` (its serde names), `meta-whatsapp-core/src/store/conversation.rs` | the names a conversation store keeps for a window event's kind and a thread's owner (`wa_window_events.kind`, `wa_thread_owners.owner`) | `stored_names_are_pinned` |
+| `wa_` | `TablePrefix::DEFAULT`, `meta-whatsapp-adapters/src/store/postgres/mod.rs` | default table prefix: `wa_kv`, `wa_messages`, `wa_conversations`, `wa_window_events`, `wa_thread_owners`, `wa_synced_contacts`, `wa_identity_links`, `wa_sqlx_migrations` | `the_default_tables_and_migration_checksums_are_pinned`, `prefix_validation`, the `live_postgres_*` table-name tests |
+| `customer_call`, `call_accepted`, `standby_message`; `this_app`, `another_app`, `idle`; `revoked`, `erased` | `WindowEventKind::as_str`, `ThreadOwner` (its serde names), `StoredMessage::REVOKED`, `StoredMessage::ERASED`, `meta-whatsapp-core/src/store/conversation.rs` | the names a conversation store keeps for a window event's kind, a thread's owner and this crate's own message kinds (`wa_window_events.kind`, `wa_thread_owners.owner`, `wa_messages.kind_utf8`) | `stored_names_are_pinned` |
 | the number lock `('wa_messages'::regclass::oid::int4, hashtext(<phone_number_id>))`, the purge lock `('wa_conversations'::regclass::oid::int4, 0)` | `number_lock`, `purge_lock`, `meta-whatsapp-adapters/src/store/postgres/conversation.rs` | Postgres advisory locks (the two-key form, the table's object id as class) that order `erase` and `purge_before` against appends and each other: replicas of two releases must take the same ones | `the_locks_are_pinned`, `live_postgres_the_locks_are_the_documented_ones` |
 | the migration files | `meta-whatsapp-adapters/migrations/*.sql` | sqlx records each file's checksum; an edit, a comment included, makes `migrate` refuse every database migrated before. So they keep naming `wa_adapters`, including in the hint migration 3 raises | `the_default_tables_and_migration_checksums_are_pinned` |
 | `wa:` | `RedisKvStore::new`, `meta-whatsapp-adapters/src/store/redis_kv.rs` | default Redis key prefix, before `{<len>:<namespace>}:<key>` | `the_default_prefix_and_key_layout_are_pinned` |
@@ -681,18 +699,22 @@ Logs carry sizes, digests and field names only — never payload values.
 - `store::{MemoryKvStore, MemoryConversationStore}` (feature `memory`).
 - `store::{PostgresKvStore, PostgresConversationStore}` (feature
   `postgres`, sqlx, embedded migrations, `wa_` table prefix configurable).
-  Migration 4 adds `wa_window_events`, `wa_thread_owners` and
+  Migration 4 adds `wa_window_events`, `wa_thread_owners`,
   `wa_synced_contacts` (keyed by business number and contact; a window
-  event by business number and id) and the indexes purge by age reads;
-  it changes no column, so the previous revision keeps working beside it,
-  but its `migrate` refuses the database. `erase` and `purge_before`
-  delete in one statement each, under two transaction-level advisory
-  locks: the **number lock** (`append` and `append_synced` take it
-  shared, `erase` exclusive, so an append in flight is either erased
-  with the rest or recorded after the erasure with a summary of its own,
-  never left without one) and the **purge lock** (`purge_before`
-  exclusive, `erase` shared: purges take turns, and an erasure and a
-  purge never deadlock on rows their plans visit in opposite orders);
+  event by business number and id) and `wa_identity_links`, a nullable
+  `wa_messages.sender` (back-filled from the payloads already stored,
+  indexed with the business number) and the indexes purge by age reads;
+  it changes no existing column, so the previous revision keeps working
+  beside it (writing no sender), but its `migrate` refuses the database.
+  `erase_all` and `purge_before` delete in one statement each, under two
+  transaction-level advisory locks (design D33): the **number lock**
+  (`append` and `append_synced` take it shared, `erase_all` exclusive, so
+  an append in flight is either erased with the rest or recorded after
+  the erasure with a summary of its own, never left without one) and the
+  **purge lock** (`purge_before` exclusive, `erase_all` shared: purges
+  take turns, and an erasure and a purge never deadlock on rows their
+  plans visit in opposite orders); the group messages an erasure
+  redacts or deletes are the number's, so the number lock covers them;
   `set_thread_owner` and `put_contact` one upsert
   whose update applies only when the stored record is not later.
 - `store::RedisKvStore` (feature `redis`; CAS via Lua). Requires the

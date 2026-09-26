@@ -245,9 +245,14 @@ notification queue on top must be idempotent itself: tag each message with
 - Webhook fields subscribed; alerts wired ([webhooks.md](webhooks.md#8-operational-alerts)).
 - Secrets from the secret manager, none in the repository or the database.
 - Inbox history's retention chosen (kept by default; `with_retention` on
-  the conversation store and a scheduled `apply_retention`), and erasure
-  requests wired to `ConversationStore::erase` if your privacy
-  obligations require it ([cms-inbox.md](cms-inbox.md#8-erasing-a-customer-and-retention)).
+  the conversation store and a scheduled `apply_retention`), and, if
+  your privacy obligations require erasure, the whole procedure of
+  [section 8](#8-retention-and-erasure-on-postgres) wired, not
+  `ConversationStore::erase` alone: every identity (`Inbox::identities`),
+  `Inbox::erase_all` on each of the merchant's numbers, your own copies,
+  outbox rows and dead letters, Meta's contact book (roadmap L9), an
+  erasure journal, and a second erasure after 7 days
+  ([cms-inbox.md](cms-inbox.md#8-erasing-a-customer-and-retention)).
 - [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) read: its defaults (OTP
   issue limit, PIN policy, no token refresh) were decided on 2026-09-26,
   and some decisions are not built yet (a dead-letter path for webhook
@@ -320,21 +325,88 @@ notification queue on top must be idempotent itself: tag each message with
     adds to a credit record or an audit entry are kept. Keep your own
     append-only log of each returned `ClearedShare` too.
   - The pull request of roadmap L5 (the `ConversationStore` port
-    change): a custom `ConversationStore` must implement eleven new
+    change): a custom `ConversationStore` must implement fourteen new
     methods (`message`, window events, thread ownership, synced contacts,
-    `erase`, `purge_before`) and pass `conversation_conformance::run`.
-    Postgres migration 4 adds three tables and two indexes and changes no
-    column: the previous revision keeps working beside it, but its
-    `migrate` then refuses the database, so upgrade every instance that
-    migrates at startup; on a large inbox, run it from a one-off job
-    (writes to the inbox tables wait while the indexes are built). An
-    instance of the previous revision takes none of the advisory locks
-    that keep an erasure and the appends in flight consistent: finish
-    the upgrade before you erase.
-  - Nothing is back-filled: rows and conversation summaries recorded
-    before an upgrade stay as they were written (synced history recorded
-    before 6d50701 keeps the unread count and window it moved, for
-    instance).
+    identity links, `identities`, `erase_all`, `purge_before`; `erase`
+    is provided) and pass `conversation_conformance::run`, under each
+    `ErasureMode` it offers. Postgres migration 4 adds four tables, a
+    `sender` column on `wa_messages` and three indexes on the existing
+    tables, and changes no existing column: the previous revision keeps
+    working beside it, but its `migrate` then refuses the database, so
+    upgrade every instance that migrates at startup. It back-fills the
+    sender of every inbound message already stored (one `UPDATE` of
+    those rows): on a large inbox, run it from a one-off job (writes to
+    the inbox tables wait meanwhile). An instance of the previous
+    revision takes none of the advisory locks that keep an erasure and
+    the appends in flight consistent, and writes no sender (an erasure
+    then misses that instance's group messages): finish the upgrade
+    before you erase.
+  - Nothing else is back-filled: rows and conversation summaries
+    recorded before an upgrade stay as they were written (synced history
+    recorded before 6d50701 keeps the unread count and window it moved,
+    for instance).
+
+## 8. Retention and erasure on Postgres
+
+The Postgres store deletes for real: `purge_before`, `apply_retention`
+and `erase_all` run `DELETE`s (and, for a group message under
+`ErasureMode::Redact`, an `UPDATE` that overwrites its content). What a
+deletion leaves behind is Postgres's, and yours to handle
+([cms-inbox.md § 8](cms-inbox.md#8-erasing-a-customer-and-retention)
+says what the store itself does not reach):
+
+- **Dead rows.** A deleted or overwritten row stays on disk, with its
+  index entries (BSUIDs, phone numbers, message ids), until (auto)vacuum
+  reclaims it, and freed space keeps its bytes until it is reused. Run
+  `VACUUM` on `wa_messages`, `wa_conversations`, `wa_window_events`,
+  `wa_thread_owners`, `wa_synced_contacts` and `wa_identity_links` after
+  erasures; when you need a guarantee that the bytes are gone, rewrite
+  them with `VACUUM FULL` (an `ACCESS EXCLUSIVE` lock: the inbox waits)
+  or `pg_repack` (online).
+- **Copies.** Backups, WAL archives (point-in-time recovery), streaming
+  and logical replicas, and change-data-capture or ETL consumers of
+  these tables keep what was deleted until their own retention drops it:
+  that retention bounds how long an erased customer survives. A CDC
+  consumer must apply the deletes, and a redaction's updates, downstream.
+- **Restores bring erased customers back.** Keep an erasure journal
+  outside the database you restore: per erasure, the time and an HMAC,
+  under a key of your own from your secret manager, of
+  `phone_number_id|contact` for each identity erased: it names nobody
+  in clear. After any restore, and before the inbox serves again, replay
+  it: compute the same HMAC over every identity the restored tables hold
+  (the business number with each conversation's and synced contact's
+  `contact`, each link's two identities, each message's `sender`) and
+  `erase_all` the ones the journal lists.
+- **Server logs.** With `log_min_duration_statement`, `log_statement` or
+  `auto_explain` on, Postgres logs a statement's bound parameters in
+  full (message text, names, BSUIDs; a large history chunk is the
+  likeliest slow statement). Set `log_parameter_max_length = 0` for the
+  application's role (a superuser runs
+  `ALTER ROLE <role> SET log_parameter_max_length = 0`), and keep
+  `log_parameter_max_length_on_error` at its default, 0.
+- **Keep the dedup markers.** `DedupGuard` keeps a hashed marker per
+  webhook event (`wa.webhook.dedup`) for 7 days and an hour; while it
+  exists, Meta's redelivery of an event already delivered is dropped
+  instead of recording the erased customer's message again. Never purge
+  them as part of an erasure. What arrives after the erasure is recorded
+  as any new event is (a late revoke's tombstone, an echo, a history
+  chunk, an address book sync), so **erase again once Meta's 7-day
+  redelivery window has passed.**
+
+The procedure, per erasure request:
+
+1. Collect every identity: `Inbox::identities(&key)` on each of the
+   merchant's numbers, and the ones you hold yourself (the phone number
+   the customer gave you, a BSUID in your CRM).
+2. `Inbox::erase_all(&identities)` on each of the merchant's numbers,
+   behind your ownership check of the number (an `Inbox` is bound to
+   one number and refuses another's keys).
+3. Delete your own copies (downloaded media, exports, SSE clients'
+   caches), the service's outbox rows (roadmap M2f) and your dead
+   letters (L21a) for that customer.
+4. Delete the customer from Meta's contact book (roadmap L9).
+5. Journal the erasure (above).
+6. Erase again after 7 days (steps 1 and 2).
 
 ## The dev container
 

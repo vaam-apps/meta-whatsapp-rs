@@ -242,7 +242,7 @@ The owner's definition (2026-09-26):
 | 88 | Bots | Sender allow and deny lists (owners, banned users) | Yes | Yes | none (ours; row 71 is Meta's block list) | gap (`meta-whatsapp-bot`, B1) | gap (M5k) | gap / gap (M5k) |
 | 89 | Bots | Broadcast with pacing (progress, retries) | Yes (5 a second by default) | No (throws) | limits to respect: `throughput.md` (80 messages a second per number by default), the pair limit (131056, `support/error-codes.md`), `templates/marketing-templates/per-user-limits.md`, `messaging-limits` | gap: `RetryPolicy` handles a throttle, nothing paces a batch (`meta-whatsapp-bot`, B2; design D29) | gap (M5k) | gap / gap (M5k) |
 | 90 | Bots | Scheduled messages: send at a time, cancel, survive restarts, retry | Yes | No (fails when due) | Meta's WABA campaign schedules, reference only (`reference/whatsapp-business-account/schedules-api.md`; its `audience_id` is explained nowhere in the mirror) | gap: durable jobs, a typed store on `KvStore` (`meta-whatsapp-bot`, B3; design D29); Meta's schedules API not wrapped (L10b) | gap (M5k) | gap / gap (M5k) |
-| 91 | Bots | Auto-delete stored messages (by age, a cap per chat) | Yes | No ("not yet" on the Cloud API) | none (local data) | partial: by age, `core::store::ConversationStore::purge_before` (one number or all) and `apply_retention` with a `core::store::Retention` set per store (`adapters::store::MemoryConversationStore::with_retention`, `PostgresConversationStore::with_retention`; design D10), and erasure of one contact, `erase` (L5); no cap per chat and no bot that deletes on its own (`meta-whatsapp-bot`, B4) | gap: the outbox purges after 7 days (`server::events::DEFAULT_OUTBOX_RETENTION`); the inbox keeps everything (retention per store: M2a; the bot's auto-delete over HTTP: M5k) | partial / gap (M2a, M5k) |
+| 91 | Bots | Auto-delete stored messages (by age, a cap per chat) | Yes | No ("not yet" on the Cloud API) | none (local data) | partial: by age, `core::store::ConversationStore::purge_before` (one number or all) and `apply_retention` with a `core::store::Retention` set per store (`adapters::store::MemoryConversationStore::with_retention`, `PostgresConversationStore::with_retention`; design D10), and erasure of a person on one number, `core::store::ConversationStore::erase_all` over `core::store::ConversationStore::identities`, their group messages redacted or deleted (`core::store::ErasureMode`; L5); no cap per chat and no bot that deletes on its own (`meta-whatsapp-bot`, B4) | gap: the outbox purges after 7 days (`server::events::DEFAULT_OUTBOX_RETENTION`); the inbox keeps everything (retention per store: M2a; erasure of a customer: M2f; the bot's auto-delete over HTTP: M5k) | partial / gap (M2a, M2f, M5k) |
 | 92 | Bots | Throttling our own typing indicators and group operations | Yes | Yes, per the summary of its configuration page (doubtful for group operations, which Zaileys does not offer on the Cloud API; unverified) | none (ours) | gap (`meta-whatsapp-bot`, B2, with pacing) | gap (M5k) | gap / gap (M5k) |
 
 ### H. Templates, commerce, numbers
@@ -338,7 +338,8 @@ item, each naming its crate, what it comes after and its decisive test:
   `ConversationStore` port change (B4, after L5; row 91).
 - **Library gap batches** (L4–L25), by crate and topic: every library
   partial or gap row not in the bot framework or payments.
-- **Service milestones**: M2a–M2e (inbox, SSE, webhooks-out, D25),
+- **Service milestones**: M2a–M2f (inbox, SSE, webhooks-out, D25,
+  erasure),
   M3a–M3f (Embedded Signup, OTP, coexistence), M4 (packaging), M5a–M5l
   (routes for the modules parity requires, the bot and broadcast APIs
   included).

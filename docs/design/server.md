@@ -916,11 +916,14 @@ another way to keep them from the new tenant).
 if the platform's privacy obligations require it.
 *Decided 2026-09-26 (coordinator, owner's delegation), swappable:
 retention is configurable per store (the outbox 7 days by default, the
-inbox kept by default), erasure comes through L5 (a `ConversationStore`
-erase with conformance cases), and a moved number is hidden by M2's
-binding epoch, not purged ([§10](#10-decisions)).* Which retention and
-which erasure requests a deployment's privacy obligations require is a
-legal call, the deployer's (§10, legal acts).
+inbox kept by default), erasure comes through L5 (a person on one
+number: `identities` and `erase_all`, D30; their group messages
+redacted by default, D31; with conformance cases) and reaches the
+service in M2f (a route, the outbox's rows, an erasure journal), and a
+moved number is hidden by M2's binding epoch, not purged
+([§10](#10-decisions)).* Which retention and which erasure requests a
+deployment's privacy obligations require is a legal call, the
+deployer's (§10, legal acts).
 
 ### 7.5 Versioning
 
@@ -1143,7 +1146,7 @@ Tests use `ScriptedTransport` (method, path, token, exact JSON,
 `remaining() == 0`); live tests are `live_*`, and `just test-live` gains
 `-p meta-whatsapp-server` under `META_WHATSAPP_RS_REQUIRE_LIVE=1`. M1
 shipped as three pull requests (below); M2, M3 and M5 ship as the
-[roadmap](../roadmap.md)'s items M2a–M2e, M3a–M3f and M5a–M5l, and the
+[roadmap](../roadmap.md)'s items M2a–M2f, M3a–M3f and M5a–M5l, and the
 library changes from L7 on are the roadmap's too.
 
 | # | Library change (own PR, own parity) | When | Kind |
@@ -1257,9 +1260,10 @@ D21–D24 are the coordinator's decisions of 2026-09-25, which M1c ships
 and which stand under the delegation; the owner confirms D21, D22 and
 D24 before the first release (roadmap § Owner touchpoints), since each
 cannot be undone after it. D6, D8–D12, D19, D20's (b) and (c), and
-D26–D29 are the coordinator's decisions of 2026-09-26 under the
-delegation, as are the changes to D15 (widened), D16 (the gate) and D18
-(revised) that day. D20's (a), a licence, is the owner's: roadmap S10
+D26–D34 are the coordinator's decisions of 2026-09-26 under the
+delegation (D30–D34, with the changes to D10 that day, came out of the
+reviews of roadmap L5), as are the changes to D15 (widened), D16 (the
+gate) and D18 (revised) that day. D20's (a), a licence, is the owner's: roadmap S10
 asks for it. D5 is settled as "support both modes, chosen per
 deployment"; which mode a production deployment runs follows the
 platform's agreements with Meta (partner status, who pays), so that
@@ -1276,7 +1280,7 @@ choice stays the owner's.
 | D7 | Coexistence sync (OQ #7) | endpoint / automatic / both, per tenant | **Decided 2026-09-24: automatic** (the service starts the one-time contacts + history sync right after a coexistence onboarding) | M3 |
 | D8 | Who sends a tenant's OTP codes | platform number / merchant's / per tenant | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: per tenant, the platform's number by default**; to swap, a tenant's OTP settings name another sending number and its approved template | M3 |
 | D9 | Image name and registry | public GHCR / private registry; the name | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: public on GHCR, named `meta-whatsapp-server`** (OQ #1, closed, settled the crate names); to swap, the image workflow's registry and name are its inputs | M4 |
-| D10 | Retention and erasure of customers' messages | keep / purge after N days; erasure or not; a number's inbox history when it moves to another tenant (hidden by M2's binding epoch, or purged on unbind) | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: retention is configurable per store.** The outbox keeps 7 days by default (`WA_SERVER_OUTBOX_RETENTION`), the inbox keeps everything by default, erasure (one contact on one number) comes through L5, a `ConversationStore` erase with conformance cases, and a number moved to another tenant is hidden from it by M2's binding epoch, not purged. To swap, each store's retention is a setting and erasure a call. Which retention a deployment sets, and which erasure requests it must honour, follow its privacy obligations: the deployer's legal call (legal acts, above) | M2 |
+| D10 | Retention and erasure of customers' messages | keep / purge after N days; erasure or not; a number's inbox history when it moves to another tenant (hidden by M2's binding epoch, or purged on unbind) | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: retention is configurable per store.** The outbox keeps 7 days by default (`WA_SERVER_OUTBOX_RETENTION`), the inbox keeps everything by default, erasure (a person on one number: every key `identities` connects, D30; their group messages redacted by default, D31) comes through L5, `ConversationStore::erase_all` with conformance cases, and reaches the service in M2f (a route, the outbox's rows, an erasure journal), and a number moved to another tenant is hidden from it by M2's binding epoch, not purged. To swap, each store's retention is a setting and erasure a call. Which retention a deployment sets, and which erasure requests it must honour, follow its privacy obligations: the deployer's legal call (legal acts, above) | M2 |
 | D11 | Publishing the TypeScript client | npm / GitHub Packages / vendored | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: public npm** under the organization's scope. The publish workflow is prepared; publishing needs the owner's token. To swap, the workflow's registry is its input | M4 |
 | D12 | A Medusa plugin | none / now / after the first integration | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: after the first integration**, in its own repository; nothing here depends on it | after M4 |
 | D13 | Where the server skills live | this repository / a separate one | **Decided 2026-09-25: this repository** (under `skills/`, same stamp gate and `npx skills add vaam-apps/meta-whatsapp-rs`) | M1 |
@@ -1296,6 +1300,11 @@ choice stays the owner's.
 | D27 | The idempotency fingerprint ([§5.4](#54-idempotency-keys)) | method, route and body (as built) / operation id and canonical input | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: the operation id plus the canonical input**, so one key means the same through every API adapter. The change is pre-release, so no stored key breaks; to swap, the fingerprint is one function in the core | S6 |
 | D28 | The bot framework and its plugins | in the facade / a new library crate / in the service; plugins loaded at run time / registered at compile time | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: a new library crate, `meta-whatsapp-bot`, with plugins registered at compile time.** No hot reload: loading Rust code at run time is neither idiomatic nor safe (no stable ABI, and `unsafe` loading, which the workspace forbids), and parity row 87 says so. To swap, a `Bot` is an `EventSink`, so an integrator can put their own dispatcher in its place; the service exposes the bot over HTTP in M5 | B1 |
 | D29 | Paced broadcast and scheduled messages | a job-queue port / a typed store on `KvStore` / the caller's | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: in `meta-whatsapp-bot`, with jobs as a typed store on `KvStore`** (a bucketed due-time index, claims by compare-and-swap under a lease), not a new port, per architecture.md's rule that typed stores are built on `KvStore`; broadcasts are paced per number under Meta's throughput. To swap, the pacer and the job store are traits with these as their defaults | B2, B3 |
+| D30 | Erasing a person who has several keys on a number (a history thread under their phone number, live messages under their BSUID, an earlier BSUID; the privacy review of L5, M3) | one key per call, the caller finding the others / the store finds a person's keys and erases them in one step, on one number / across numbers | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: the port widens in L5** (so adapters change once): `ConversationStore::identities` (the closure over the synced contacts and the identity links, read only), `IdentityLink` (`link_identity`, `identity_links`; the inbox records them in L7, L8), and `erase_all(phone_number_id, ids)`, one step, whose one-key case is `erase`. Never across numbers: a `wa_id` is the same on every number, so an erasure across them would delete other businesses' customers. To swap, a caller passes its own ids to `erase_all` (the closure is a separate read), or an adapter of its own implements the port | L5 |
+| D31 | An erased person's messages in someone else's conversation (a group's; review M2) | delete them / redact them in place | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: redact by default, delete as an option**: `ErasureMode::Redact` keeps the message's place and time and replaces its content, payload and sender with the `erased` marker, so the other participants' history keeps its shape; `ErasureMode::Delete` removes it. Either way the group's summary never keeps the erased text. The message id stays under `Redact` (a `wamid` encodes the sender's phone number), which the docs say. To swap, `with_erasure_mode` on the store (a setting, like retention) | L5 |
+| D32 | A synced contact's removal (`smb_app_state_sync` `remove`), whose webhooks arrive out of order (the sabotage review of L5) | delete the row, so a late older `add` stores the contact again / keep the removal, its key and time only, so an older `add` is refused | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: keep the removal**, nothing of the contact but its key and time; `erase_all` deletes it with the key's records and `purge_before` once it is older than the cutoff. To swap, a store's retention bounds how long removals are kept, and an adapter of its own may keep them elsewhere (the conformance suite checks the refusal) | L5 |
+| D33 | Ordering an erasure and a purge against appends on Postgres (the sabotage review of L5: an append in flight left without its summary; purges and erasures deadlocking) | row locks alone / serializable transactions / two transaction-level advisory locks | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: two advisory locks**, the number lock (`append`, `append_synced` shared; `erase_all` exclusive) and the purge lock (`purge_before` exclusive; `erase_all` shared), in the two-key form with the table's object id as class. Their SQL is a stable identifier ([architecture.md](../architecture.md#stable-identifiers)), pinned by `the_locks_are_pinned`: replicas of two releases must take the same ones. The cost, documented: an erasure makes the appends of its business number wait. To swap, the locks live in the Postgres adapter only; another adapter orders itself its own way, behind the same port and conformance suite | L5 |
+| D34 | Two thread-ownership records of the same second (Meta's timestamps are seconds; the sabotage review of L5) | the last one stored wins / a tie-break on content | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: the last one stored wins, documented** on `set_thread_owner`: a tie-break on content would be deterministic but would pick the wrong record as often as the right one, and the dedup markers keep redeliveries of a delivered event out. To swap, a caller orders the records it stores, or an adapter of its own applies another rule | L5 |
 
 **Inherited from [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md).** The
 questions the service inherits were decided on 2026-09-26 under the same

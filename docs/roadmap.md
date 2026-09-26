@@ -27,7 +27,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
   comments) are cited in the docs as SR-H1, SR-M3, SR-L2, so they never
   read as items.
 - The choices behind the items are recorded in
-  [design §10](design/server.md#10-decisions) (D26–D29 and the rows
+  [design §10](design/server.md#10-decisions) (D26–D34 and the rows
   updated on 2026-09-26) and in
   [OPEN_QUESTIONS.md](../OPEN_QUESTIONS.md), under the rule in AGENTS.md
   § Decisions. What stays the owner's is listed in
@@ -47,7 +47,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | 1 | S1 (server core), B1 (bot framework), U4 (upstream issues) |
 | 2 | S2, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L25, which may start here and run alongside every later wave |
 | 3 | S5a–S5e, S6, S7, S9 |
-| 4 | S10 (waits on the owner's answer to D20 (a)), S11, S12; M2a–M2e |
+| 4 | S10 (waits on the owner's answer to D20 (a)), S11, S12; M2a–M2f |
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3f; B2–B4 |
 | 6 | M4; M5a–M5l |
 | 7 | S17, S18 (MongoDB) |
@@ -336,7 +336,7 @@ and `store-postgres`.
     replica set; removing the version check from compare-and-swap fails
     them.
 - [ ] **S18. `meta-whatsapp-server-store-mongodb`**, the whole bundle.
-  - **After:** S9, S17, M2a–M2e.
+  - **After:** S9, S17, M2a–M2f.
   - **Decisive:** the core conformance suite passes live; the service's
     M1–M2 acceptance tests pass on it.
 
@@ -411,8 +411,10 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
 - [x] **L5. The `ConversationStore` port change** (`meta-whatsapp-core`,
   `meta-whatsapp-adapters`; D10; OPEN_QUESTIONS #32, #44; rows 69, 111):
   one change for everything the port gains before M2, so adapters change
-  once. Erasure of one contact on one number, purge by age, retention
-  set per store (D10); window events (the calls that reopen the window,
+  once. Erasure of a person on one number (their keys through
+  `identities`, identity links, their group messages redacted or
+  deleted: D30, D31), purge by age, retention set per store (D10);
+  window events (the calls that reopen the window,
   standby inbound messages) and thread-ownership records, for L7; a
   lookup by message id, scoped to the business number, for L8 and M2; the
   coexistence sync's contacts, for M3b. The lookup works with either
@@ -424,7 +426,10 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** new conformance cases for each part; memory and
     Postgres pass; a Postgres erase that leaves the message bodies fails
     live; the lookup case fails an adapter that finds a message of
-    another number.
+    another number; an erasure through `identities` of a BSUID leaves
+    nothing of the person's thread under their phone number, and the
+    live sweep of every table fails when the erasure's sender clause
+    (their group message) is removed.
 - [ ] **L7. Window events and thread ownership in the inbox**
   (`meta_whatsapp_rs::inbox`; OPEN_QUESTIONS #32, #44; rows 119, 139):
   `InboxSink` records the calls that reopen the 24-hour window and
@@ -640,16 +645,21 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   (`meta-whatsapp-webhooks`, `meta-whatsapp-adapters`; OPEN_QUESTIONS
   #30): sink errors classified transient or permanent (unclassified
   stays transient, today's behaviour); a permanent one written to a
-  dead-letter typed store on `KvStore` (bounded by count and age, reached
-  by L5's erasure, alerted, replayable) before the delivery is
-  acknowledged. Companion: architecture.md § Stable identifiers for the
-  dead-letter namespace.
+  dead-letter typed store on `KvStore` (bounded by count and age,
+  alerted, replayable) before the delivery is acknowledged. `KvStore`
+  has no scan, so L5's `ConversationStore::erase_all` cannot reach it:
+  the store keeps its own per-contact index and an `erase`, and a
+  facade-level eraser calls it beside the conversation store's.
+  Companion: architecture.md § Stable identifiers for the dead-letter
+  namespace.
   - **Kind:** additive.
   - **After:** L5.
   - **Decisive:** a batch with one permanently failing event delivers
     the others and dead-letters that one (removing the dead-letter write
-    makes the handler answer 500 again, and the test fails); an erasure
-    of the contact removes their dead-lettered events.
+    makes the handler answer 500 again, and the test fails); the
+    facade-level erasure of the contact removes their dead-lettered
+    events (removing the dead-letter store's `erase` from it fails the
+    test).
 - [ ] **L21b. Live events shared, not cloned** (`meta-whatsapp-webhooks`
   `sse`, `meta-whatsapp-adapters` `BroadcastSink`; OPEN_QUESTIONS #31):
   both over `Arc<WebhookEvent>`.
@@ -730,10 +740,14 @@ design's (§9).
 
 - [ ] **M2a. Inbox routes** (rows 91, 111, 119): conversation list,
   history, a reply checked against the window, all filtered by the
-  number's binding epoch; retention per store (D10).
+  number's binding epoch; retention per store (D10): the inbox store
+  built `with_retention` from a setting, and `apply_retention` run by
+  the service's housekeeping.
   - **After:** S7, L5, L7.
   - **Decisive:** M2.1; removing the binding-epoch filter shows a moved
-    number's history to its new tenant, and a test fails.
+    number's history to its new tenant, and a test fails; with a
+    retention set, housekeeping purges an inbox message older than it
+    (removing the `apply_retention` call fails the test).
 - [ ] **M2b. Live updates** (row 10): SSE through an `EventNotifier`
   port (Postgres `LISTEN/NOTIFY`, memory broadcast; resume by
   `Last-Event-ID`); `GET /v1/events/{id}`.
@@ -758,6 +772,22 @@ design's (§9).
   - **Decisive:** another tenant's received media id is `404` with zero
     requests (removing the "recorded on this tenant's number" lookup
     fails it); the live check's result is recorded in OPEN_QUESTIONS #43.
+- [ ] **M2f. Erasure in the service** (row 91; D10, D30, D31): an
+  admin- or tenant-scoped route that erases a customer on a number
+  through the library's `identities` and `erase_all`; deletes the
+  tenant's outbox rows for them, through an expand-only `contacts
+  TEXT[]` column on `wa_server_events` with a GIN index, filled at
+  insert; and writes an erasure-journal entry (an HMAC of
+  `phone_number_id|contact` and the time) and an audit event, neither
+  naming the customer in clear. Which requests to honour stays the
+  deployer's (D10, legal acts).
+  - **Kind:** additive (a new route; an expand-only column).
+  - **After:** M2a.
+  - **Decisive:** after the route, no row of the inbox tables nor of
+    `wa_server_events` mentions the customer (a sweep of every table,
+    as the library's live test does), and removing the outbox clause
+    fails it; the journal and the audit event hold no identity in
+    clear; a tenant's key cannot erase on another tenant's number.
 
 ### M3. Embedded Signup, OTP, coexistence
 
