@@ -753,6 +753,12 @@ stored data, the owner's).
   IdempotencyRecords>, Option<Sweep>, retention, every, stop)` instead of
   `(Arc<dyn EventStore>, Arc<dyn Store>, Option<PostgresKvStore>, …)`
   (`Sweep` pairs the backend's `LeaderLock` and `Janitor`);
+  `state::AppState::new`, `with_settings` and `from_backend` return a
+  `Result`, as the core's `Authorizer::new` refuses a Graph client built
+  with a token (see "Security", the server core's review, L4); the
+  handlers of `api::{admin, numbers, events, messages, media,
+  templates}`, with `messages::send`, `templates::list` and `create`,
+  and `idempotency::run` are crate-private (see "Security", H1 there);
   `telemetry::record_tenant` and `record_key` are gone (the core's
   `Authorizer` records `tenant` and `key_id` on the request's span); and
   `keys::MintedKey::generate` fails with the library's `CryptoError::Rng`
@@ -1166,10 +1172,25 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
     tenant, and hand it to the service's `Authorizer`, which then read,
     stored, rotated and deleted vault tokens. Each `Authorizer` now has an
     identity of its own that `Caller`, `AdminCaller`, `OwnedNumber` and
-    `OwnedWaba` carry, and every method taking one refuses another's with
-    `403 forbidden`, logged at `warn`, before it reads or writes anything.
-    `Authorizer::store_token` and `rotate_vault` now fail with a
+    `OwnedWaba` carry, and every core method taking one refuses another's
+    with `403 forbidden`, logged at `warn`, before it reads or writes
+    anything. `Authorizer::store_token` and `rotate_vault` now fail with a
     `ServiceError` (the same code as before for the vault's own failures).
+    A second review found the server re-opening it: its handlers were
+    public, took a `Caller` or an `AdminCaller` by value and acted on the
+    records for `Caller::tenant()` without asking the `Authorizer`. A
+    crate holding an `AppState` handed `api::numbers::list_wabas` a
+    forged `Caller` (any tenant's WABAs) and `api::admin::mint_platform_key`
+    a forged `AdminCaller` (a real platform key for every tenant), and
+    that key read a tenant's vault token through the service's own guard
+    and extractor. The handlers, and `idempotency::run` (it takes a tenant
+    as given), are crate-private now; `Authorizer::admit` and
+    `admit_admin` ask the core's check of a capability an adapter took
+    from outside its own code, and the server's `Caller` and `AdminCaller`
+    extractors call them on what they find in a request's extensions
+    (`403 forbidden` otherwise). So the brand holds for the core's
+    methods, the server's extractors and every handler, which only the
+    routers reach, behind their guards.
   - **L4 — the tokenless Graph client was only tokenless by convention.**
     `Authorizer::new` refuses a client built with a token (a
     configuration error) rather than stripping it: the library's `Client`
@@ -1177,21 +1198,34 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
     So `Authorizer::new`, and `meta_whatsapp_server::state::AppState::new`,
     `with_settings` and `from_backend`, return a `Result`.
   - **M1 — `AppState::store` was public**, a way around the handlers to
-    the records that decide who owns what; it is crate-private.
+    the records that decide who owns what; it is crate-private. The
+    handlers were a way around too, public themselves and writing the
+    records for whatever capability they were handed (see H1): they are
+    crate-private now, so another crate reaches the records only through
+    the routers.
   - **L3 — `Debug` printed kept answers.** `Repeat::Replay`,
     `IdempotencyState::Completed`, `IdempotencyRecord`,
-    `idempotency::Outcome::Answered` and the server's `MemoryStore` print a
-    body's length (`body_len`), never its bytes (`MemoryStore` prints
-    counts only: no idempotency key either).
+    `idempotency::Outcome::Answered`, the server's `MemoryStore` and its
+    `idempotency::Success` print a body's length (`body_len`), never its
+    bytes (`MemoryStore` prints counts only: no idempotency key either).
   - **L1 — the visibility pins could pass for the wrong reason.** The
     `compile_fail` doctests on `Tokens` accepted any compile error (a
     typo'd path passed). They are `trybuild` UI tests now
     (`tests/visibility.rs` in both service crates), each checked against
     the compiler's error code and text, with a control case that names
     every path they use and compiles; `AppState::store` and
-    `AppState::authz` are pinned too.
+    `AppState::authz` are pinned too, and so are the handlers
+    (`api::admin::mint_platform_key`, `api::numbers::list_wabas`) and
+    `idempotency::run`.
+  - An admin unbind logged "unbinding a WABA without a usable token"
+    before its admin was checked, so a refused one logged an unbinding it
+    did not do. The line now follows the unbind.
   - Not fixed here: **L2**, a race in `OwnedWaba::forget`. It deletes the
     WABA's token and binding whatever they became since the WABA was
     opened: attached again in between (a new token, another tenant), the
     new ones go. Conditioning both on what the capability was made from
-    is a port change, recorded in docs/roadmap.md, item S2.
+    is a port change, recorded in docs/roadmap.md, item S2. The same
+    race in `OwnedNumber::failed` and `OwnedWaba::failed`: a `190`
+    answered to a capability made before the WABA was attached again
+    marks the new binding's numbers `reconnect_required`. S2 conditions
+    that update on the binding too (its tenant and `attached_at`).

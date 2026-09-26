@@ -1080,16 +1080,29 @@ it holds today, where it differs from the target above:
   `Caller` or an `AdminCaller`. Each `Authorizer` therefore has an
   identity of its own (an allocation made in `new`, compared by
   address), which every `Caller`, `AdminCaller`, `OwnedNumber` and
-  `OwnedWaba` it makes carries, and every method taking one (ownership,
-  opening a WABA for an admin, storing, rotating or deleting vault
-  tokens, marking numbers after a `190`) refuses one another
+  `OwnedWaba` it makes carries, and every core method taking one
+  (ownership, opening a WABA for an admin, storing, rotating or deleting
+  vault tokens, marking numbers after a `190`) refuses one another
   `Authorizer` made: `403 forbidden`, logged at `warn`, before it reads
-  or writes anything (the core's security review, SR-H1). The
-  `Authorizer` also refuses a Graph client built with a token (SR-L4),
-  and what must not compile outside the core (the vault's methods, a
-  capability of one's own) is pinned by UI tests with the compiler's
-  errors. Deleting an opened WABA's token and binding is not yet
-  conditioned on what the `OwnedWaba` was made from (SR-L2, S2).
+  or writes anything (the core's security review, SR-H1). What an
+  adapter does with a capability on its own asks the `Authorizer`
+  nothing, and a forged `Caller` names any tenant: so an adapter admits
+  a capability it took from outside its own code (`Authorizer::admit`,
+  `admit_admin`) before it acts on it, and keeps what acts on one
+  private to its crate. The axum adapter's `Caller` and `AdminCaller`
+  extractors admit what they find in a request's extensions, and its
+  handlers and `idempotency::run` are crate-private (a second review
+  handed two public handlers forged capabilities and minted a real
+  platform key). The brand therefore holds for the core's methods, the
+  server's extractors and every handler, which only the routers reach,
+  behind their guards. The `Authorizer` also refuses a Graph client
+  built with a token (SR-L4), and what must not compile outside the
+  service's crates (the vault's methods, a capability of one's own; in
+  the server `AppState::store` and `authz`, the handlers and
+  `idempotency::run`) is pinned by UI tests with the compiler's errors.
+  Deleting an opened WABA's token and binding, and marking its numbers
+  `reconnect_required` after a `190`, are not yet conditioned on what
+  the capability was made from (SR-L2, S2).
 - **Conformance** is still the server's tests' (S3).
 
 ### 8.2 The backend bundle is the unit of swapping
