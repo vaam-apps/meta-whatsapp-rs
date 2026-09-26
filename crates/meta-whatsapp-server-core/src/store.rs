@@ -38,6 +38,10 @@
 //! - **Purges take no lock of their own**, return how many rows went, and
 //!   are safe on two replicas at once; housekeeping runs them under one
 //!   [`LeaderLock`] turn per round.
+//! - **A capability's writes are conditioned** on the binding it was made
+//!   from ([`RecordStore::unbind_waba_if`],
+//!   [`RecordStore::set_waba_status_if`]: a [`BindingEpoch`]), checked
+//!   atomically with the write.
 
 use std::time::Duration;
 
