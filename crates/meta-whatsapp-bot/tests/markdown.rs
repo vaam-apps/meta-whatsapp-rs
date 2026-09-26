@@ -459,6 +459,41 @@ fn code_holding_backticks_goes_out_plain() {
     assert_eq!(one("- item\n\n  ```\n  a```b\n  ```"), "• item\n  a```b");
 }
 
+/// A code block too long for one message is cut between lines and each
+/// piece fenced again; a piece that starts or ends with a backtick (a line
+/// of the code does) could not close its fence either, so it goes out
+/// plain, like such a block that fits.
+#[test]
+fn a_cut_piece_with_a_backtick_at_an_end_goes_out_plain() {
+    let markdown = "```\naaaaaaaaaa`\n`bbbbbbbbbb\ncccccccccc\n```";
+    assert_eq!(
+        Renderer::new().max_chars(20).render(markdown),
+        ["aaaaaaaaaa`", "`bbbbbbbbbb", "```cccccccccc```"]
+    );
+
+    // At the real limit: shell lines quoting a command, in a block longer
+    // than a message. Every part is a whole fence or holds no fence.
+    let lines: Vec<String> = (0..400).map(|i| format!("`step {i:03}` done")).collect();
+    let markdown = format!("```sh\nstart\n{}\nend\n```", lines.join("\n"));
+    let parts = markdown::render(&markdown);
+    assert!(parts.len() > 1);
+    for part in &parts {
+        match part.strip_prefix("```").and_then(|p| p.strip_suffix("```")) {
+            Some(inner) => assert!(
+                !inner.starts_with('`') && !inner.ends_with('`') && !inner.contains("```"),
+                "a broken fence: {part:?}"
+            ),
+            None => assert!(!part.contains("```"), "{part:?}"),
+        }
+    }
+    let seen: Vec<&str> = parts
+        .iter()
+        .flat_map(|p| p.trim_start_matches("```").trim_end_matches("```").lines())
+        .collect();
+    assert_eq!(seen.len(), 402);
+    assert_eq!((seen[0], seen[401]), ("start", "end"));
+}
+
 /// The escape's word joiners are characters Meta counts too: a text
 /// dense with escaped markup still splits into parts the client accepts.
 #[test]

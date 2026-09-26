@@ -53,7 +53,8 @@
 //! to the next message when it does not fit, so a code block that fits in
 //! a message is never cut. A block longer than a message is cut at line
 //! breaks, then at spaces, then anywhere (a code block keeps its fences on
-//! every piece); formatting spanning such a cut is not repaired.
+//! every piece, but for a piece that starts or ends with a backtick, which
+//! goes out plain); formatting spanning such a cut is not repaired.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -993,14 +994,23 @@ fn pack(blocks: Vec<Block>, max: usize) -> Vec<String> {
 }
 
 /// An oversized block in pieces of at most `max` code units: a code block
-/// by lines, fenced again (when a fence fits at all); anything else by
-/// lines, then words, then characters.
+/// by lines, fenced again (when a fence fits at all; a piece that starts
+/// or ends with a backtick could not close its fence, so it goes out
+/// plain, like a whole block would); anything else by lines, then words,
+/// then characters.
 fn cut(block: &Block, max: usize) -> Vec<String> {
     let fences = units(&fence(""));
     match &block.code {
-        Some(code) if max > fences => lines(code, max - fences)
-            .iter()
-            .map(|piece| fence(piece))
+        // Room for a character of two units inside the fences.
+        Some(code) if max >= fences + 2 => lines(code, max - fences)
+            .into_iter()
+            .map(|piece| {
+                if unfenceable(&piece) {
+                    piece
+                } else {
+                    fence(&piece)
+                }
+            })
             .collect(),
         _ => lines(&block.text, max),
     }
@@ -1144,5 +1154,10 @@ mod tests {
         let parts = Renderer::new().max_chars(5).render("```\nabcdefghij\n```");
         assert!(parts.iter().all(|p| units(p) <= 5), "{parts:?}");
         assert_eq!(parts.concat(), "```abcdefghij```");
+        // One unit of room inside the fences cannot hold an emoji: cut as
+        // text rather than a fenced piece over the limit.
+        let parts = Renderer::new().max_chars(7).render("```\n😀😀\n```");
+        assert!(parts.iter().all(|p| units(p) <= 7), "{parts:?}");
+        assert_eq!(parts.concat(), "```😀😀```");
     }
 }
