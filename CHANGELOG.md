@@ -523,8 +523,12 @@ volumes (Claude config, shell history, cargo caches) start empty
   that builds these with a struct literal adds `conversation_context:
   None` (`remediation: None`); a pattern without `..` names it.
   `WebhookEvent` has two more variants (`ThreadControlChanged`,
-  `StandbyObserved`), which a `_` arm already covers: until now these
-  fields arrived as `Unknown`.
+  `StandbyObserved`) and `ChangeValue` two more (`MessagingHandovers`,
+  `Standby`), which a `_` arm already covers: until now these fields
+  arrived as `Unknown`. Their dedup keys change with them, from
+  `unknown:{sha256}` to `thread_control_changed:{sha256}` and
+  `standby:…`: a delivery stored before this change and retried after it
+  is delivered again, once.
 
 - **The `wa-rs-embedded-signup` skill's Solution Partner example** (for
   anyone who copied it): `PartnerAction::CoexistenceDisconnected`,
