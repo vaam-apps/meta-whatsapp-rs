@@ -110,7 +110,9 @@ doc:
 # feature-gated item must be gated with it; `just doc` covers --all-features.
 # It leaves meta-whatsapp-server out: the service turns on the facade's
 # reqwest, memory, postgres and axum, and in one --workspace build those
-# features would be on for every crate, hiding an ungated link.
+# features would be on for every crate, hiding an ungated link. For the
+# same reason the meta-whatsapp-server-core line checks that crate alone,
+# all targets: it must build on the facade without those features.
 #
 # Each feature on its own, so a missing cfg gate cannot hide behind --all-features
 features:
@@ -134,6 +136,7 @@ features:
     cargo check -p meta-whatsapp-rs --no-default-features --features typst
     cargo check -p meta-whatsapp-rs --no-default-features --features flows-endpoint
     cargo check -p meta-whatsapp-rs
+    cargo check -p meta-whatsapp-server-core --all-targets
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude meta-whatsapp-server --no-default-features --no-deps
 
 # Licenses, advisories, duplicate versions, sources
