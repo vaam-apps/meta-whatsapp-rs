@@ -5,7 +5,7 @@ description: "Running meta-whatsapp-rs in production - the secrets (system user 
 
 # meta-whatsapp-rs-production
 
-> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs ef0fe364e3a21a535238007db5276fe5ef6ce970 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/production.rs](examples/production.rs),
 compiled and tested by meta-whatsapp-rs's own gate. Longer walkthrough:
@@ -144,8 +144,8 @@ timeouts longer than your slowest sink.
 ## What meta-whatsapp-rs does not do
 
 Read [OPEN_QUESTIONS.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md)
-before going live: the OTP issue limit, PIN policy, the missing
-dead-letter path for webhook batches, token refresh, Redis TLS. No
+before going live: the defaults decided (OTP issue limit, PIN policy, no
+token refresh) and what is decided but not built (dead-lettering, Redis TLS). No
 metrics exporter, no health endpoint, no secret manager integration. A
 revoked message keeps its content in the inbox (decided 2026-09-25;
 `meta-whatsapp-rs-cms-inbox`). ~~Whether the OTP namespace becomes

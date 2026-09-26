@@ -4,6 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 @AGENTS.md
 
+Planning docs, read before choosing work: `docs/roadmap.md` (the waves to
+parity, each item with its crate and decisive test), `docs/parity.md` (the
+capability table) and `docs/categories.md` (Meta's platform categories).
+
 ## Claude Code specifics
 
 - Project skills: `.claude/skills/` — `meta-docs` (look up the real spec),

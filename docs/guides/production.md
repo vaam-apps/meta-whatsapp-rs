@@ -70,7 +70,8 @@ purpose (two rustls crypto providers in one binary make the first TLS
 connection panic). Enable redis's `tokio-rustls-comp` in your own crate,
 install a provider at startup, and hand the connection to
 `RedisKvStore::new(conn)`; the type's rustdoc shows how
-([open question](../../OPEN_QUESTIONS.md#storage) 19).
+([decided](../../OPEN_QUESTIONS.md#storage) 19: `rediss://` with an explicit
+provider, roadmap L21c, not built yet).
 
 Every store adapter runs an executable conformance suite; `just test-live`
 runs it against real Postgres and Redis.
@@ -85,7 +86,7 @@ runs it against real Postgres and Redis.
 | vault key(s) | encrypting merchants' tokens, and a Solution Partner's credit ledger | secret manager, **not** the vault's database | `VaultKeys::new(new).with_previous(old)`, `vault.rotate(&waba_id)` for every WABA ever onboarded (offboarded ones too: the credit ledger outlives the token), `vault.rotate_business(&business_id)` for each business revoked by business id alone, then drop the old key |
 | OTP pepper | keyed hashes of codes and numbers | secret manager, not the OTP database | invalidates outstanding codes and resets limits |
 | merchants' business tokens | acting as a merchant | the vault only | merchant reconnects (no refresh) |
-| two-step PINs | registering numbers | not stored by meta-whatsapp-rs; the examples ask the merchant per attempt | your policy ([open question](../../OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants) 4) |
+| two-step PINs | registering numbers | not stored by meta-whatsapp-rs; the examples ask the merchant per attempt | asked per attempt, never stored ([decided](../../OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants) 4) |
 
 `AccessToken`, `AppSecret`, `VerifyToken`, `SecretBytes`, `SignupCode`,
 `TwoStepPin`, `OtpPepper` and `VaultKey` print `[REDACTED]` (or only an id)
@@ -243,9 +244,10 @@ notification queue on top must be idempotent itself: tag each message with
     only once Business Suite shows it is not your line;
 - Webhook fields subscribed; alerts wired ([webhooks.md](webhooks.md#8-operational-alerts)).
 - Secrets from the secret manager, none in the repository or the database.
-- [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) read: several defaults there
-  (OTP issue limit, PIN policy, a dead-letter path for webhook batches,
-  token refresh) are product decisions still open. The OTP namespace is
+- [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) read: its defaults (OTP
+  issue limit, PIN policy, no token refresh) were decided on 2026-09-26,
+  and some decisions are not built yet (a dead-letter path for webhook
+  batches, Redis TLS). The OTP namespace is
   required since d67b3ac; a revoked message keeps its content in the inbox
   (decided on 2026-09-25).
 - Upgrading from an older meta-whatsapp-rs revision, per commit crossed:

@@ -5,7 +5,7 @@ description: "WhatsApp OTP login and phone verification with meta-whatsapp-rs - 
 
 # meta-whatsapp-rs-otp-login
 
-> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs ef0fe364e3a21a535238007db5276fe5ef6ce970 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/otp.rs](examples/otp.rs), compiled and tested by
 meta-whatsapp-rs's own gate (issue → verify once, expiry with a `ManualClock`,
@@ -149,9 +149,9 @@ the namespace changes its keys (`NotFound`, limits restart).
 - No session or JWT after `Verified`, no account linking, no SMS fallback
   when WhatsApp is undeliverable (`ErrorKind::Undeliverable`, 131026), no
   per-IP or per-device throttle in front of `issue`.
-- It does not choose the namespace: your tenant model does. The default
-  issue limit and pepper custody are open
-  ([open questions 13, 14](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#authentication-otp)).
+- It does not choose the namespace: your tenant model does. The issue
+  limit default stays and the pepper is yours to hold, both decided on
+  2026-09-26 ([OPEN_QUESTIONS.md #13, #14](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#authentication-otp)).
 
 ## Related skills
 

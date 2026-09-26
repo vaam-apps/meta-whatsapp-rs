@@ -5,7 +5,7 @@ description: "The merchant-to-customer chat inbox of a multi-tenant CMS built on
 
 # meta-whatsapp-rs-cms-inbox
 
-> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs ef0fe364e3a21a535238007db5276fe5ef6ce970 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/inbox.rs](examples/inbox.rs), compiled and
 tested by meta-whatsapp-rs's own gate. The full server (webhook endpoint, SSE,
@@ -145,8 +145,8 @@ request change the `ConversationStore` contract.
 ## What meta-whatsapp-rs does not do
 
 - Not recorded: calls (a call reopens the window on Meta's side but
-  `Inbox::window` cannot see it:
-  [open question 32](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)),
+  `Inbox::window` cannot see it; recording calls is decided, roadmap L7:
+  [OPEN_QUESTIONS.md #32](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)),
   media bytes (rows keep the media id; download within 7 days), BSUID
   merges, the synced contacts (`smb_app_state_sync`).
 - Message ids are unique per store, not per business number (open

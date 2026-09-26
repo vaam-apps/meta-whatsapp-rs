@@ -5,7 +5,7 @@ description: "Managing WhatsApp business phone numbers and their WABA with meta-
 
 # meta-whatsapp-rs-phone-numbers
 
-> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs ef0fe364e3a21a535238007db5276fe5ef6ce970 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/numbers.rs](examples/numbers.rs), compiled and
 tested by meta-whatsapp-rs's own gate.
@@ -108,8 +108,10 @@ number.sync_smb_app_data(SmbSyncType::History).await?; // a second call: SyncNot
 
 ## What meta-whatsapp-rs does not do
 
-- No PIN policy (who chooses it, storage, recovery)
-  ([open question 4](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)).
+- No PIN storage or recovery: the caller supplies the PIN on every
+  attempt
+  ([OPEN_QUESTIONS.md #4](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants),
+  decided on 2026-09-26).
 - Not wrapped: payload-encryption settings, WABA creation, system users.
 - Nothing stores the synced contacts (`smb_app_state_sync`); the inbox
   records the synced history and the app's echoes (`meta-whatsapp-rs-cms-inbox`).

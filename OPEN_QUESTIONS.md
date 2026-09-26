@@ -1,8 +1,35 @@
 # Open questions
 
-Decisions the implementation deliberately did **not** make. Each entry says
-what the code does today, so nothing here is a hidden default. Close an
-entry by deciding it in an issue/PR and deleting it here.
+Decisions the implementation did **not** make when it was written. Each
+entry says what the code does today, so nothing here is a hidden default.
+
+**From 2026-09-26 the owner delegates these decisions**, under the rule
+in [AGENTS.md § Decisions](AGENTS.md#decisions) (and
+[design §10](docs/design/server.md#10-decisions) for the service): an
+entry is decided when its choice ships swappable, or names the roadmap
+item that adds the swap. Legal and terms-of-service choices, and what
+cannot be undone (irreversible deletion or data migrations, released
+contracts, stable identifiers), stay the owner's, even when swappable.
+A legal act Meta ties to an API call is exposed as an explicit, audited
+operator action and never taken automatically; performing it is the
+deployer's decision.
+
+**Recording format.** A decided entry keeps its text and gains one
+paragraph: `**Decided <date> (<who>, owner's delegation):** <the
+choice>. <why>. Swappable by <how>. Roadmap <item>.`, or `No code.` in
+place of the roadmap item. An entry left for the owner gains
+`**Left open on <date>:** <why it is the owner's>.` Design §10's rows
+carry the same parts.
+
+**Deleting an entry.** A decided entry stays here, marked, until its
+roadmap item lands (at once for `No code.`), the CHANGELOG lists it
+under "Open questions decided", and nothing cites it (guides, skills,
+the design, the code); then it is deleted. A section heading stays when
+its last entry goes, with a line saying so: guides and skills link to
+its anchor.
+
+On 2026-09-26, 31 entries are decided and 1 stays open: #33 (a data
+migration).
 
 Numbers are permanent (the code, docs and skills cite them) and not in
 order within a section. Markdown renders a list with its first item's
@@ -15,13 +42,33 @@ of its own, after an HTML comment; keep that when you add one.
    production client shortcut). Rustdoc links need `mod@`/`fn@`.
    Alternative: `meta_whatsapp_rs::connect(token)`.
 
+   **Decided 2026-09-26 (coordinator, owner's delegation):** keep
+   `meta_whatsapp_rs::client` as both the module and the shortcut; rustdoc
+   links keep `mod@` and `fn@`. The safest choice: nothing breaks.
+   Swappable by adding `connect(token)` later as an alias, which is
+   additive. No code.
+
 ## Embedded Signup (onboarding merchants)
 
 4. **Two-step PIN policy.** The caller supplies the 6-digit PIN on every
    `onboard`/`resume`; nothing generates or stores PINs. Numbers that already
    have a PIN need the merchant's current one.
+
+   **Decided 2026-09-26 (coordinator, owner's delegation):** the caller
+   supplies the PIN on every attempt; neither the library nor the service
+   generates or stores one (design D6): one leak must not expose every
+   number's PIN. Swappable by the integrator, who may keep PINs in its own
+   secret store and pass them in. No code.
+
 5. **Multi-WABA signups.** Only the claimed `waba_id` (else the first of
    `waba_ids`; with no claim, the newest granted WABA) is onboarded.
+
+   **Decided 2026-09-26 (coordinator, owner's delegation):** one WABA per
+   signup stays the default (the claimed one, which the merchant chose);
+   onboarding every WABA the token grants becomes an opt-in option of the
+   onboarding request, each WABA onboarded, bound and resumable on its
+   own. Swappable by that option. Roadmap L11b.
+
 6. **One WABA shared by several tenants.** The vault is keyed by WABA and
    knows no tenants; the last onboarding wins. `onboard_with_approval`
    lets an integrator refuse (or apply any other policy) before anything
@@ -31,23 +78,83 @@ of its own, after an HTML comment; keep that when you add one.
    recorded approval; the owner decided on 2026-09-25 that it stays
    required), but what the approval checks is still the integrator's:
    meta-whatsapp-rs decides no tenant policy.
+
+   **Decided 2026-09-26 (coordinator, owner's delegation):**
+   meta-whatsapp-rs keeps no tenant policy of its own.
+   `onboard_with_approval` stays the hook, and the reference policy is the
+   service's (design D4: refuse a WABA another tenant holds, with an admin
+   unbind). Swappable by the approval the integrator passes. No code.
+
 7. **Coexistence sync.** Contacts/history sync (`smb_app_data`) must happen
    once, within 24 h of onboarding. `onboard` only flags it
    (`needs_coexistence_sync()`); should it trigger it?
+
+   **Decided 2026-09-26 (coordinator, owner's delegation):** the sync runs
+   automatically by default: onboarding gains a coexistence-sync step,
+   right after a coexistence onboarding, that an option turns off (the
+   service does the same, design D7). The safest choice: Meta allows the
+   sync once, within 24 hours, and only offboarding and a new signup
+   recover a missed one. Swappable by that option; until it lands,
+   `needs_coexistence_sync()` stays the signal. Roadmap L11d.
+
 8. **Token expiry and refresh.** The expiry is recorded; nothing refreshes.
    Today the merchant redoes Embedded Signup.
+
+   **Decided 2026-09-26 (coordinator, owner's delegation):** no refresh.
+   Running Embedded Signup again stays the way back (the service answers
+   `409 reconnect_required`), and the expiry is surfaced before it lapses:
+   a signal a configurable time ahead in the library, an event and a
+   metric in the service. `access-tokens` describes business tokens as
+   needing no re-authentication and documents no refresh call, so what can
+   still lapse is a grant the merchant removes or lets expire; should Meta
+   add a refresh, a refresher behind a trait slots in. Roadmap L11e (the
+   library's signal) and M3e (the service's event).
+
 9. **Vault key custody and rotation cadence.** The integrator supplies the
    AES-256 key(s); rotation is supported but not scheduled.
+
+   **Decided 2026-09-26 (coordinator, owner's delegation):** custody stays
+   the integrator's (a secret manager; the service reads `WA_VAULT_KEY` or
+   its `_FILE`), and rotation stays on demand (`TokenVault::rotate`,
+   `meta-whatsapp-server vault rotate`). The documented cadence: at least
+   yearly, and at once on a suspected exposure, dropping the old key only
+   when the rotation reports no failure. Swappable: the schedule is the
+   operator's. The cadence goes into `docs/guides/production.md` with M3's
+   rotation work. Roadmap M3a.
+
 10. **Resuming after a restart.** `resume` takes an `OnboardingRequest`
     whose `code` it ignores; after a process restart you can't rebuild one
     without a placeholder code. Option: a code-less
     `OnboardingRequest::for_resume(session)`.
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** add a
+    code-less `OnboardingRequest::for_resume(session)`; the existing
+    constructor stays, so the change is additive. Roadmap L4.
+
 11. **App-only install / Hosted Embedded Signup.** Not integrated; the
     launch options cover the default and coexistence flows.
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** integrate
+    both. App-only install is already a launch feature
+    (`FeatureName::AppOnlyInstall`, refused with coexistence). Hosted
+    Embedded Signup (`embedded-signup/hosted-es`) is a second way into the
+    same onboarding: the `PARTNER_ADDED` `account_update` webhook starts
+    it, the business token comes from `system_user_access_tokens` with an
+    `appsecret_proof` instead of a code exchange, and the steps after it
+    are the existing ones (verify, store, subscribe, register). Swappable:
+    both are opt-in, and the code-exchange flow is unchanged. Roadmap L11a.
+
 12. **Launch option shape.** `pre-filled-data` shows
     `whatsAppBusinessAccount` both as `{ids: …}` and `{id: [...]}`; the code
     uses the worked example (`{id: [...]}`) and sends `business.id` as a
     string. Confirm in Meta's Integration Helper before relying on pre-fill.
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** keep the
+    worked example's shape (`whatsAppBusinessAccount: {id: [...]}`,
+    `business.id` as a string), pinned by its test. A check in Meta's
+    Integration Helper stays a verification task before production relies
+    on pre-fill. Swappable: the shape is one serializer. Roadmap L25 (the
+    check; code only if the helper shows another shape).
 
 ## Authentication (OTP)
 
@@ -56,21 +163,53 @@ of its own, after an HTML comment; keep that when you add one.
     plus `OtpConfig::namespace`, since e40b86f), plus a 30 s cooldown and 5
     attempts per code: ~0.06 %/day brute-force success on 6 digits against
     one scope. Confirm or tune; opting out is explicit.
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** keep the
+    defaults (5 codes per sliding hour per recipient and purpose within
+    one scope, a 30 s cooldown, 5 attempts per code): conservative, and
+    the brute-force odds above are small. Swappable by `OtpConfig`, where
+    opting out stays explicit. No code.
+
 14. **Pepper custody.** The HMAC pepper (`SecretBytes`) is supplied by the
     integrator; changing it invalidates outstanding codes.
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** the pepper
+    stays the integrator's to hold (a secret manager; the service reads
+    `WA_OTP_PEPPER` or its `_FILE`), with no rotation mechanism: codes
+    live for minutes, so a rotation only invalidates the codes in flight.
+    Swappable: the pepper is an input. No code.
 
 ## Webhooks
 
 15. **Dedup lease length.** 60 s by default (`with_lease`): a delivery that
     finds another request mid-delivery gets 503 and Meta retries.
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** keep 60 s:
+    the sink path takes far less, and Meta's retry answers the `503`.
+    Swappable by `with_lease`. No code.
+
 16. **Blank verify token** fails when a verification request arrives, not at
     startup — failing early would change the handler builder's API.
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** keep the
+    builder infallible, and add a check that reports a blank verify token
+    when the handler is built, next to it (additive; the service already
+    refuses to start on one). Swappable: the check is the caller's to run.
+    Roadmap L20d.
 
 ## Storage
 
 19. **Redis TLS.** `rediss://` is not wired (redis-rs + rustls + two crypto
     providers panics); integrators pass their own connection. Wire it in
     once the crypto provider question is settled workspace-wide.
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** wire
+    `rediss://` with an explicit aws-lc-rs provider handed to the
+    connection, never the process default, which is the application's
+    choice (the service installs aws-lc-rs as its default, design D20). If
+    redis-rs cannot take an explicit provider, integrator-built
+    connections stay the way, documented. Swappable: an integrator can
+    still pass its own connection. Roadmap L21c.
 
 ## Security posture
 
@@ -80,24 +219,85 @@ of its own, after an HTML comment; keep that when you add one.
     controls an id could still reach another edge of an object the token can
     access. Option: reject `/` in ids outright (risk: a legitimate id with
     `/`, e.g. standard-base64 group ids, if Meta issues any).
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** check each
+    id against the shape Meta documents where it documents one (digits for
+    phone number, WABA, media and template ids, as the service already
+    does for media and template ids), and keep whole-segment
+    percent-encoding for opaque ids (BSUIDs, group ids), so no legitimate
+    id is refused. Swappable: one validator per kind of id. Roadmap L20c.
+
 21. **quick-xml advisories (RUSTSEC-2026-0194/0195)** are ignored in
     `deny.toml`, scoped and justified: reached only via typst's CSL parsing,
     which trusted templates alone can trigger. Remove when typst upgrades.
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** keep the
+    scoped ignore, and remove it in the PR that upgrades typst past the
+    advisories (`just deny` then shows the entry unused). Swappable by one
+    `deny.toml` entry. No other code.
 
 ## Product details
 
 22. **Product-card carousel templates.** The page says "define exactly two
     cards"; the code allows 2–10 (the wording reads as guidance). Enforce 2?
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** the page,
+    now mirrored, settles it: a product-card carousel template is created
+    with exactly two cards, and an approved one sends up to 10. So
+    creation checks two cards when the cards carry a product header,
+    media-card carousels keep 2–10, and sends keep at most 10. Swappable:
+    one constant each. Roadmap L20e.
+
 23. **Groups `add_participants`.** In Meta's reference, but the groups guide
     says participants can't be added manually. Kept, with a warning.
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** keep
+    `add_participants`, with its warning: Meta's reference documents it,
+    and Meta's refusal reaches the caller as an error. Swappable: callers
+    need not call it. No code.
+
 24. **`Analytics::set_button_click_tracking`** acts on a template but lives
     in analytics (where Meta documents it); move to templates later?
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** keep it in
+    analytics, where Meta documents it. Swappable by an additive alias in
+    templates, should one be wanted. No code.
+
 25. **Typst default date.** `Renderer::new()` has none, so templates calling
     `datetime.today()` fail until `with_today` is set, rather than printing a
     wrong date on an invoice.
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** keep failing
+    until `with_today` is set: an invoice never carries a wrong date.
+    Swappable: `with_today` sets the date. No code.
+
 26. **In-App Signup Terms of Service.** Creating the first signup accepts
     Meta's marketing messages terms on the business's behalf — a legal
     decision, not a technical one.
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** the code
+    decides nothing legal, so the acceptance is exposed as an explicit
+    operator action, and accepting is the deployer's act. The library
+    already keeps it explicit (`SignupPolicy::accept_terms()`, which no
+    other call sets); the service exposes it as an audited operator
+    action, off until the deployment enables it, never taken
+    automatically. Swappable: nothing accepts unless a deployment asks.
+    Roadmap M5i.
+
+<!-- 45 follows 26 in this section: a list of its own. -->
+
+45. **The Marketing Messages API's max-price agreement.** Max price
+    (`marketing-messages/pricing/enroll-max-price`) is a beta a WABA
+    joins by signing Meta's beta agreement through the API: a legal act
+    on the business's behalf. Nothing wraps it today (parity row 137).
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** the code
+    decides nothing legal. The library exposes the agreement as its own
+    explicit call, which no other call makes (a max-price send never
+    signs it); the service exposes it as an audited operator action, off
+    until the deployment enables it. Signing is the deployer's act, for
+    their own deployment. Swappable: nothing signs unless a deployment
+    calls it. Roadmap L13 and M5h.
 
 ## API conventions
 
@@ -123,6 +323,14 @@ commit).
     is Meta's documented `UNKNOWN` (its catch-all is `Other(String)`),
     while every other enum of the struct uses a unit `Unknown` as its
     catch-all.
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** one shape,
+    `Other(String)`, keeping Meta's value, generated by one macro in
+    meta-whatsapp-core for every open enum; no unit `Unknown` catch-all (a
+    documented `UNKNOWN` value, as in `QualityRating`, stays a real
+    variant). A breaking change, made before the first release. Swappable:
+    the macro is the one place to change it. Roadmap L20a.
+
 28. **`#[non_exhaustive]` policy.** 25 of the 144 `Deserialize` structs in
     meta-whatsapp-client have it (all in the onboarding modules), none of the 104 in
     meta-whatsapp-webhooks; every macro-generated enum has it, the hand-written
@@ -132,6 +340,16 @@ commit).
     types with struct literals (for example in their own tests). Decide per
     kind (response structs, webhook payloads, enums) and write the rule in
     `docs/architecture.md`.
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):**
+    `#[non_exhaustive]` on every response struct, webhook payload struct
+    and open enum (Meta adds fields and values), never on request or
+    builder types; integrators build test values through constructors or
+    from JSON fixtures. The rule goes into `docs/architecture.md`. A
+    breaking change for integrators (struct literals and exhaustive
+    matches of those types stop compiling), made before the first
+    release. Swappable per kind. Roadmap L20b.
+
 29. **axum and sqlx: re-exports or your own pins?** Both are re-exported
     (`meta_whatsapp_rs::webhooks::axum`, `meta_whatsapp_rs::adapters::store::postgres::sqlx`)
     and their rustdoc says to use the re-export; the README and examples
@@ -139,6 +357,10 @@ commit).
     `axum = "0.8"` still unifies with it. The alternative, telling
     integrators to pin their own versions and dropping the re-exports, was
     not taken; confirm the direction.
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** keep the
+    re-exports (today's direction); an integrator's own compatible pin
+    still unifies with them. Swappable: a re-export is one line. No code.
 
 ## Webhooks and live updates
 
@@ -157,6 +379,20 @@ Found by the security review of 8ee6fab.
     acknowledge a permanent one after writing the event (raw, size-bounded)
     to a dead-letter store with an alert and a replay path, and deliver the
     rest of the batch. Today the whole batch fails and Meta retries it.
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** dead-letter.
+    A sink error is classified transient or permanent; a permanent one
+    writes the event (raw, size-bounded) to a dead-letter typed store on
+    `KvStore`, raises an alert metric and keeps a replay path, and the
+    rest of the batch is delivered and acknowledged; a transient one
+    answers `500` as today. The delivery is acknowledged only after the
+    dead-letter write succeeds, so nothing is dropped silently. An error
+    a sink does not classify stays transient, so a sink that never opts
+    in keeps today's behaviour. The raw events are personal data: the
+    dead-letter store is bounded by count and age, and L5's erasure
+    reaches it. Swappable: the sink classifies its own errors, and the
+    store is a typed store like the others. Roadmap L21a.
+
 31. **SSE fan-out cost.** `webhooks::sse` reads a
     `broadcast::Receiver<WebhookEvent>`, and a broadcast receiver clones
     every event it receives: each open inbox copies every merchant's
@@ -169,6 +405,12 @@ Found by the security review of 8ee6fab.
     subscriber.
     Today: a clone per event per subscriber, fine for a handful of open
     inboxes.
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** broadcast
+    `Arc<WebhookEvent>`, which changes the types of `sse` and
+    `BroadcastSink` before the first release; the service's per-number
+    channels (design §4.5) stay its own. Swappable: the sink is one of
+    several. Roadmap L21b.
 
 ## CMS inbox
 
@@ -187,6 +429,17 @@ Found while writing the integrator guides and checking them against
     events in the `ConversationStore` (a port change), let the caller
     override the check, or keep it and document the template fallback (what
     the guides and skills do today).
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** record the
+    calls that reopen the window (`calling/pricing`: a customer's call,
+    answered or not, and the customer accepting the business's call;
+    `CallUpdated`, `CallStatusUpdated`) as window events in
+    `ConversationStore`, a port change that is part of L5, and let the
+    caller override the local check explicitly. Meta enforces the window
+    either way; the local check only saves a request Meta would refuse.
+    Swappable by the override. Roadmap L5 (the port) and L7 (the
+    inbox).
+
 33. **Message ids are unique per store, not per business number.** The
     Postgres `messages.id` is the table's primary key on its own (and the
     memory store keys by id alone). If the same message id is ever
@@ -199,6 +452,13 @@ Found while writing the integrator guides and checking them against
     Options: key messages by `(phone_number_id, id)` (a migration of the
     primary key; history cursors are already per conversation), or keep it
     and document it (what the guides and skills do today).
+
+    **Left open on 2026-09-26:** the alternative to today's behaviour is
+    keying stored messages by `(phone_number_id, id)`, a primary-key
+    migration of stored data, which the owner's delegation leaves to the
+    owner. Today's behaviour stays, documented as above. The roadmap's
+    items that touch message ids (L5's lookup, L8's adapters) work with
+    either answer.
 
 <!-- 44 follows 33 in this section: a list of its own. -->
 
@@ -217,6 +477,16 @@ Found while writing the integrator guides and checking them against
     idle timeout (`conversation-routing/thread-control` § Tracking
     ownership), or keep it and document it (what the guides and skills do
     today).
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** record
+    standby inbound messages as window events (never as unread messages),
+    and track thread ownership in `ConversationStore` from the handovers,
+    `release` and the 24-hour idle timeout; the inbox refuses a reply
+    locally when another app owns the thread, and the caller can override.
+    It lands with L5 and #32, so adapters change once, and the service
+    makes the two event types tenant-visible in M2d (design D25).
+    Swappable by the override: ownership is advisory, Meta enforces it.
+    Roadmap L5 (the port), L7 (the inbox) and M2d.
 
 ## Service (meta-whatsapp-server)
 
@@ -239,3 +509,12 @@ Found in the review of milestone M1b (43).
     remedy is a follow-up still to do before M2. Before M2 relies on
     either behaviour, a live check with a real received media id must say
     which one Meta has.
+
+    **Decided 2026-09-26 (coordinator, owner's delegation):** adopt the
+    planned remedy in M2: a media id the service itself recorded as
+    received on the tenant's number is asked from Meta without
+    `phone_number_id`, and every other id keeps the check. It is safe
+    whichever way Meta behaves, since it widens the route only to ids the
+    tenant's own events carried; the live check with a real received media
+    id still says which behaviour Meta has. Swappable: the exemption is
+    one lookup. Roadmap M2e.

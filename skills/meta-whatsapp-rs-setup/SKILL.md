@@ -5,7 +5,7 @@ description: "Setting up meta-whatsapp-rs for WhatsApp - what to create on Meta'
 
 # meta-whatsapp-rs-setup
 
-> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs ef0fe364e3a21a535238007db5276fe5ef6ce970 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/client.rs](examples/client.rs), compiled and
 tested by meta-whatsapp-rs's own gate.
@@ -127,9 +127,11 @@ decoding and the credential host allowlist. Mark a POST
 - No token acquisition or refresh: system user tokens come from Business
   Settings, merchants' tokens from Embedded Signup, and an expired one
   (`ErrorKind::Authentication`, code 190) means a new one
-  ([open question 8](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)).
+  ([OPEN_QUESTIONS.md #8](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants),
+  decided on 2026-09-26: no refresh).
 - `meta_whatsapp_rs::client` is both a module and a function
-  ([open question 2](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#naming-and-publishing)).
+  ([OPEN_QUESTIONS.md #2](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#naming-and-publishing),
+  decided on 2026-09-26: it stays both).
 
 ## Related skills
 

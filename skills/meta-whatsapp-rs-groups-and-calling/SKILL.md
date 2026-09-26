@@ -5,7 +5,7 @@ description: "What a merchant inbox built on meta-whatsapp-rs needs beyond one-t
 
 # meta-whatsapp-rs-groups-and-calling
 
-> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs ef0fe364e3a21a535238007db5276fe5ef6ce970 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/groups_calls.rs](examples/groups_calls.rs),
 compiled and tested by meta-whatsapp-rs's own gate (Meta-shaped answers and
@@ -115,7 +115,9 @@ Calls arrive as `WebhookEvent::CallUpdated` and `CallStatusUpdated`
 - A call, answered or not, opens the 24-hour window on Meta's side, but
   the inbox records no calls: `Inbox::reply` still refuses free-form text
   unless the customer wrote in the last 24 hours
-  ([open question 32](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)).
+  ([OPEN_QUESTIONS.md #32](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox),
+  decided on 2026-09-26: calls to be recorded as window events, roadmap
+  L7).
 
 ## What meta-whatsapp-rs does not do
 

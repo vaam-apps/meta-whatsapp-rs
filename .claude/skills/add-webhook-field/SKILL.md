@@ -43,6 +43,8 @@ metadata:
      Make `meta_time` in the same file return the date Meta gives the
      event (routing refuses an event dated before its binding), unless it
      carries none (`every_dated_event_type_has_its_meta_time` says which).
-7. Update `docs/coverage.md`, and the consumer skill in `skills/` if the
-   event is part of the public surface.
+7. Update `docs/coverage.md`, the capability's row in `docs/parity.md`
+   (and its category in `docs/categories.md` when that moves) in the same
+   PR, and the consumer skill in `skills/` if the event is part of the
+   public surface.
 8. `just ci`.

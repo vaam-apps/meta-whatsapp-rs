@@ -5,7 +5,7 @@ description: "Start here for meta-whatsapp-rs, the Rust toolkit for Meta's Whats
 
 # meta-whatsapp-rs
 
-> **Verified against meta-whatsapp-rs 68c8321127ea3dfa2691b2edbc1be7c3e347b970 (2026-09-26).** On another revision, trust the code over this page (see "Versioning" below).
+> **Verified against meta-whatsapp-rs b7211bc1f282f873b605e7a3a1126ce4e45e5677 (2026-09-26).** On another revision, trust the code over this page (see "Versioning" below).
 
 meta-whatsapp-rs is a Cargo workspace for Meta's WhatsApp Business Platform: a typed
 client for the Cloud API and the Business Management API (Graph API
@@ -142,11 +142,14 @@ own gate. On another `rev`, trust the rustdoc
 ## What meta-whatsapp-rs does not do
 
 - No tenant model, no job queue or outbox, no consent registry.
-- Not wrapped: Solution Partner APIs beyond credit lines (partner-led
-  verification, Multi-Partner Solutions, migration), payments,
-  conversation routing
-  ([coverage](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/coverage.md)).
-- Open product decisions, with what the code does today:
+- Not wrapped: Multi-Partner Solutions and migration intents (credit
+  lines and partner-led business verification are), payments, the
+  thread control API (its webhooks are typed)
+  ([coverage](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/coverage.md),
+  [parity](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/parity.md),
+  [roadmap](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/roadmap.md)).
+- Product decisions, all but one decided on 2026-09-26 (each with the
+  roadmap item that builds it), and what the code does today:
   [OPEN_QUESTIONS.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md).
   Read it before production.
 

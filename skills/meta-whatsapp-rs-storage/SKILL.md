@@ -5,7 +5,7 @@ description: "Choosing and running meta-whatsapp-rs storage - the KvStore (token
 
 # meta-whatsapp-rs-storage
 
-> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs b7211bc1f282f873b605e7a3a1126ce4e45e5677 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/stores.rs](examples/stores.rs), compiled by
 meta-whatsapp-rs's own gate; its tests run the conformance suites on the memory
@@ -138,8 +138,10 @@ until the pull request that made U+0000 lossless (PR #7, 2026-09-25).
 
 ## What meta-whatsapp-rs does not do
 
-- No built-in Redis TLS
-  ([open question 19](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#storage)),
+- No built-in Redis TLS yet
+  ([OPEN_QUESTIONS.md #19](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#storage),
+  decided on 2026-09-26: `rediss://` with an explicit provider, roadmap
+  L21c),
   no Redis `ConversationStore`, no backups or retention policy for inbox
   history.
 - Message ids are unique per store, not per business number
