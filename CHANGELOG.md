@@ -614,7 +614,17 @@ volumes (Claude config, shell history, cargo caches) start empty
   `events`, `ratelimit`, `idempotency` and `error` keep their paths. One
   change in housekeeping: the library's expired key/value rows are now
   purged under the housekeeping lock too (a `LeaderLock` turn), so two
-  replicas never purge them at once.
+  replicas never purge them at once. That turn is a transaction of its
+  own, so while the sweep runs it holds a second pooled connection besides
+  the one `purge_expired` uses. Other signatures that changed:
+  `serve::housekeeping` takes `(Arc<dyn Outbox>, Arc<dyn
+  IdempotencyRecords>, Option<Sweep>, retention, every, stop)` instead of
+  `(Arc<dyn EventStore>, Arc<dyn Store>, Option<PostgresKvStore>, …)`
+  (`Sweep` pairs the backend's `LeaderLock` and `Janitor`);
+  `telemetry::record_tenant` and `record_key` are gone (the core's
+  `Authorizer` records `tenant` and `key_id` on the request's span); and
+  `keys::MintedKey::generate` fails with the library's `CryptoError::Rng`
+  instead of a `getrandom::Error`.
 - **`WebhookEvent::MessageReceived` has a `conversation_context` field**
   (`Option<Box<ConversationContext>>`, serialized only when set), and
   `MessagesValue` and `ViolationInfo` one more public field each: code

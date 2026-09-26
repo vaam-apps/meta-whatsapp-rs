@@ -51,8 +51,9 @@ A filtered run is feedback, not verification — `just ci` still has to pass.
 Hexagonal workspace. `meta-whatsapp-core` owns the error tree, ids,
 secrets and the **ports** (`HttpTransport`, `KvStore`, `ConversationStore`,
 `EventSink`, `Clock`); it does no I/O. Dependency rule: everything depends
-on core; no library crate depends on the `meta-whatsapp-rs` facade (binaries
-may: the service's crates do); `client` and
+on core; no crate of the library depends on the `meta-whatsapp-rs` facade
+(binaries may, and the service's crates do: the `meta-whatsapp-server`
+binary and its core library, `meta-whatsapp-server-core`); `client` and
 `webhooks` never depend on each other or on `adapters` (dev-deps aside);
 adapter library types (sqlx, reqwest, redis) never leak through a port.
 

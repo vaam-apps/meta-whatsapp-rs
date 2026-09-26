@@ -51,8 +51,9 @@ meta-whatsapp-webhooks = { path = "crates/meta-whatsapp-webhooks" }
 # defaults name the features they use.
 meta-whatsapp-adapters = { path = "crates/meta-whatsapp-adapters", default-features = false }
 meta-whatsapp-typst = { path = "crates/meta-whatsapp-typst" }
-# The facade, for binaries only: no library crate depends on it
-# (docs/architecture.md, dependency rule).
+# The facade, for binaries and the service's crates (the service's core is
+# a library crate, but not one of the library's): no crate of the library
+# depends on it (docs/architecture.md, dependency rule).
 meta-whatsapp-rs = { path = "crates/meta-whatsapp-rs", default-features = false }
 # The service's framework-free core: the service's crates only, never the
 # library's.
