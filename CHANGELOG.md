@@ -119,12 +119,18 @@ volumes (Claude config, shell history, cargo caches) start empty
 
 ### Added
 
-- **Webhook conformance sweep**: every example payload on every page that
-  documents a webhook (the `webhooks/reference/*` pages, `calling/*`,
-  `groups/*`, `flows/guides/flowswebhooks`, `business-scoped-user-ids`,
-  `conversation-routing/*`, `direct-send/integrity-and-content-guidelines`,
-  `embedded-signup/*`) is a fixture of `meta-whatsapp-webhooks`, 96 of
-  them new, placeholders filled with the pages' own example values.
+- **Webhook conformance sweep**: every example payload on every page of
+  Meta's WhatsApp docs that prints a webhook body (88 pages: the
+  `webhooks/reference/*` pages, and the calling, groups, flows,
+  business-scoped user id, conversation routing, Direct Send, Embedded
+  Signup, solution partner, pricing, marketing messages, templates and
+  messages guides that show one) is a fixture of `meta-whatsapp-webhooks`,
+  132 of them new, placeholders filled with the pages' own example values.
+  The manifest records the two payments pages as out of scope (coverage
+  row 32), two examples printed malformed (`embedded-signup/app-only-install`,
+  `direct-send/supported-message-types`) with what is wrong, and two pages
+  Meta lists but serves as "Page Not Found" (`webhooks/reference/pricing`,
+  `webhooks/message_echoes`).
   `tests/conformance.rs` walks a manifest of every page and fixture and
   checks, for each: the exact events with their WABA, business number and
   user (BSUID and phone number), that every value the example shows
@@ -150,6 +156,16 @@ volumes (Claude config, shell history, cargo caches) start empty
   `MessageReceived::conversation_context`.
 - **`fields::ViolationInfo::remediation`**: the calling warnings of
   `calling/call-settings` carry it; it was dropped.
+- **`WebhookEvent::UserActionReported`** (`fields::UserAction`,
+  `LinkClickData`): the Marketing Messages API's click events, a
+  `user_actions` list on the `messages` field
+  (`marketing-messages/track-click-events`), made the whole change
+  `Unknown`.
+- **`PhoneNumberQualityEvent::Flagged`, `AccountUpdateEvent::VerifiedAccount`**
+  (shown on `solution-providers/manage-webhooks`, landed in `Other`),
+  **`fields::Referral::reference`** (`referral.ref` of
+  `ctwa/welcome-message-sequences`, dropped) and
+  **`StandbyEcho::recipient`** (the BSUID of an echo sent by BSUID).
 - **`fields::Status::template_id`**: Direct Send's status webhook names
   the template the message was sent with
   (`direct-send/supported-message-types`); it was dropped.
@@ -528,14 +544,16 @@ volumes (Claude config, shell history, cargo caches) start empty
   `MessagesValue` and `ViolationInfo` one more public field each: code
   that builds these with a struct literal adds `conversation_context:
   None` (`remediation: None`); a pattern without `..` names it.
-  `WebhookEvent` has two more variants (`ThreadControlChanged`,
-  `StandbyObserved`) and `ChangeValue` two more (`MessagingHandovers`,
-  `Standby`), which a `_` arm already covers: until now these fields
-  arrived as `Unknown`. Their dedup keys change with them, from
+  `WebhookEvent` has three more variants (`ThreadControlChanged`,
+  `StandbyObserved`, `UserActionReported`) and `ChangeValue` two more
+  (`MessagingHandovers`, `Standby`), which a `_` arm already covers: until
+  now these arrived as `Unknown`. Their dedup keys change with them, from
   `unknown:{sha256}` to `thread_control_changed:{sha256}` and
   `standby:…`: a delivery stored before this change and retried after it
-  is delivered again, once. `fields::Status` has one more public field
-  too (`template_id: None` in a struct literal).
+  is delivered again, once. `fields::Status`, `MessagesValue`
+  (`user_actions`) and `Referral` (`reference`) have one more public field
+  too (`template_id: None`, `user_actions: Vec::new()`, `reference: None`
+  in a struct literal).
 - **`WebhookEvent::AccountUpdated::waba_id` is `None` for a
   `PARTNER_APP_INSTALLED` / `PARTNER_APP_UNINSTALLED` without a
   `waba_info`**: it was the entry id, which

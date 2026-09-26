@@ -34,7 +34,7 @@ fn handover(name: &str) -> MessagingHandoversValue {
         waba_id,
         phone_number_id,
         display_phone_number,
-        handover,
+        update: handover,
     } = events.remove(0)
     else {
         panic!("{name}")
@@ -58,7 +58,7 @@ fn handover(name: &str) -> MessagingHandoversValue {
 #[test]
 fn control_passed_from_the_reference() {
     let v = handover("pages/webhooks.reference.messaging-handovers__control_passed.json");
-    assert_eq!(v.kind, HandoverType::ControlPassed);
+    assert_eq!(v.handover_type, HandoverType::ControlPassed);
     assert!(v.control_taken.is_none());
     let h = v.handover().unwrap();
     assert_eq!(v.control_passed.as_ref(), Some(h));
@@ -80,7 +80,7 @@ fn control_passed_from_the_reference() {
         Some("WhatsApp user requested human agent")
     );
     let context = h.conversation_context.as_ref().unwrap();
-    assert_eq!(context.kind, ConversationContextType::Summary);
+    assert_eq!(context.context_type, ConversationContextType::Summary);
     assert_eq!(
         context.summary.as_ref().unwrap().text,
         "AI-generated summary string"
@@ -90,7 +90,7 @@ fn control_passed_from_the_reference() {
 #[test]
 fn control_taken_from_the_reference_and_thread_control() {
     let v = handover("pages/webhooks.reference.messaging-handovers__control_taken.json");
-    assert_eq!(v.kind, HandoverType::ControlTaken);
+    assert_eq!(v.handover_type, HandoverType::ControlTaken);
     assert!(v.control_passed.is_none());
     let h = v.handover().unwrap();
     assert_eq!(
@@ -120,7 +120,7 @@ fn control_passed_without_app_ids() {
         "pages/conversation-routing.conversation-context__control_passed.json",
     ] {
         let v = handover(name);
-        assert_eq!(v.kind, HandoverType::ControlPassed, "{name}");
+        assert_eq!(v.handover_type, HandoverType::ControlPassed, "{name}");
         let h = v.handover().unwrap();
         assert_eq!(h.previous_owner_app_id, None, "{name}");
         assert_eq!(h.previous_owner_app_role, None, "{name}");
@@ -162,10 +162,18 @@ fn a_bare_or_unknown_handover_still_parses() {
     let events = WebhookPayload::from_slice(body.to_string().as_bytes())
         .unwrap()
         .into_events();
-    let [WebhookEvent::ThreadControlChanged { handover, .. }] = events.as_slice() else {
+    let [
+        WebhookEvent::ThreadControlChanged {
+            update: handover, ..
+        },
+    ] = events.as_slice()
+    else {
         panic!()
     };
-    assert_eq!(handover.kind, HandoverType::Other("control_shared".into()));
+    assert_eq!(
+        handover.handover_type,
+        HandoverType::Other("control_shared".into())
+    );
     assert!(handover.sender.is_none() && handover.handover().is_none());
 }
 
@@ -317,7 +325,7 @@ fn conversation_context_rides_on_every_message_of_the_change() {
     else {
         panic!("{events:?}")
     };
-    assert_eq!(context.kind, ConversationContextType::Summary);
+    assert_eq!(context.context_type, ConversationContextType::Summary);
     assert_eq!(
         context.summary.as_ref().unwrap().text,
         "AI-generated summary string"

@@ -1,0 +1,39 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "changes": [
+        {
+          "field": "messages",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550783881",
+              "phone_number_id": "106540352242922"
+            },
+            "statuses": [
+              {
+                "id": "wamid.HBgM...",
+                "status": "failed",
+                "timestamp": "1755600000",
+                "recipient_id": "919xxxxxxxxx",
+                "errors": [
+                  {
+                    "code": 131042,
+                    "title": "Business eligibility payment issue",
+                    "message": "Business eligibility payment issue",
+                    "error_data": {
+                      "details": "Message failed to send because there were one or more errors related to your payment method."
+                    },
+                    "href": "https://developers.facebook.com/docs/whatsapp/cloud-api/support/error-codes/"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

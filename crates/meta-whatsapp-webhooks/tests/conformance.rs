@@ -54,8 +54,13 @@ pub enum Origin {
     /// The example's JSON, unchanged.
     Verbatim,
     /// The example with its placeholders filled in (the page's own example
-    /// values first) and its syntax repaired (comments, trailing commas);
-    /// no property added or removed.
+    /// values first) and its syntax repaired: comments, trailing and
+    /// missing commas, a top-level `[ … ]` around the envelope, a key
+    /// printed between array items moved into its object, one value kept
+    /// from a `A | B` alternative, an elided `{ … }` dropped, commented
+    /// alternatives split into one fixture each. No property added or
+    /// removed, except a placeholder that stands for several (filled from
+    /// the example the page links for it).
     Filled,
     /// Built from a page's syntax block or several of its examples; the
     /// label says which. Never counts as covering a page's example.
@@ -73,6 +78,9 @@ pub enum Status {
     /// Shows only part of a payload (one message object), which a composed
     /// fixture wraps; the text says what the page shows. Lists no example.
     Fragments(&'static str),
+    /// Documents a feature `docs/coverage.md` puts out of scope; the text
+    /// says which. Lists no example, and no case may cite it.
+    OutOfScope(&'static str),
     /// Listed by Meta but not readable when the mirror was taken; the text
     /// says what was tried. No case may cite it.
     Unreadable(&'static str),
@@ -88,6 +96,10 @@ pub struct Page {
     pub status: Status,
     /// Every example payload on the page, by heading.
     pub examples: &'static [&'static str],
+    /// Examples the page prints that are not a webhook body as printed
+    /// (a misplaced envelope key, a required object left out), by heading,
+    /// with what is wrong. Never repaired by guessing, never cited.
+    pub unusable: &'static [(&'static str, &'static str)],
 }
 
 /// One fixture and what it must produce.
@@ -222,8 +234,14 @@ fn coverage_problems<'a>(pages: &[Page], cases: impl IntoIterator<Item = &'a Cas
                 ));
                 continue;
             };
-            if matches!(listed.status, Status::Unreadable(_)) {
-                out.push(format!("{}: cites unreadable {page}", c.fixture));
+            if matches!(listed.status, Status::Unreadable(_) | Status::OutOfScope(_)) {
+                out.push(format!(
+                    "{}: cites unreadable or out-of-scope {page}",
+                    c.fixture
+                ));
+            }
+            if listed.unusable.iter().any(|(e, _)| *e == example) {
+                out.push(format!("{}: cites unusable {page} {example:?}", c.fixture));
             }
             if origin != Origin::Composed {
                 if !listed.examples.contains(&example) {
@@ -235,8 +253,16 @@ fn coverage_problems<'a>(pages: &[Page], cases: impl IntoIterator<Item = &'a Cas
     }
     for page in pages {
         let have = covered.remove(page.path).unwrap_or_default();
+        for (example, why) in page.unusable {
+            if why.is_empty() || page.examples.contains(example) {
+                out.push(format!(
+                    "{}: unusable {example:?} says why and is not also an example",
+                    page.path
+                ));
+            }
+        }
         match page.status {
-            Status::Unreadable(why) | Status::Fragments(why) => {
+            Status::Unreadable(why) | Status::Fragments(why) | Status::OutOfScope(why) => {
                 if why.is_empty() || !page.examples.is_empty() {
                     out.push(format!(
                         "{}: a page without examples says why, and lists none",
@@ -248,7 +274,7 @@ fn coverage_problems<'a>(pages: &[Page], cases: impl IntoIterator<Item = &'a Cas
                 }
             }
             Status::Typed | Status::Partial(_) => {
-                if page.examples.is_empty() {
+                if page.examples.is_empty() && page.unusable.is_empty() {
                     out.push(format!("{}: no example listed", page.path));
                 }
                 let want: BTreeSet<&str> = page.examples.iter().copied().collect();
@@ -721,11 +747,13 @@ fn the_coverage_check_catches_uncovered_and_wrongly_cited_examples() {
             path: "p",
             status: Status::Typed,
             examples: &["A", "B"],
+            unusable: &[("U", "no metadata")],
         },
         Page {
             path: "gone",
             status: Status::Unreadable("404"),
             examples: &[],
+            unusable: &[],
         },
     ];
     const ONLY_A: Case = Case {
@@ -744,6 +772,7 @@ fn the_coverage_check_catches_uncovered_and_wrongly_cited_examples() {
             (Origin::Filled, "p", "C"),
             (Origin::Composed, "gone", "x"),
             (Origin::Filled, "nowhere", "x"),
+            (Origin::Composed, "p", "U"),
         ],
         events: &[],
     };
@@ -756,8 +785,9 @@ fn the_coverage_check_catches_uncovered_and_wrongly_cited_examples() {
         coverage_problems(PAGES_, [&ONLY_A, &B, &WRONG]),
         [
             "w.json: p has no example \"C\"",
-            "w.json: cites unreadable gone",
+            "w.json: cites unreadable or out-of-scope gone",
             "w.json: cites nowhere, which PAGES does not list",
+            "w.json: cites unusable p \"U\"",
         ]
     );
 }

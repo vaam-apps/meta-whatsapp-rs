@@ -1,0 +1,45 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "320580347795883",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "12345678",
+              "phone_number_id": "1234567890"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "John"
+                },
+                "wa_id": "12345678"
+              }
+            ],
+            "messages": [
+              {
+                "context": {
+                  "from": "12345678",
+                  "id": "wamid.HBgLMTIxMTU1NTE0NTYVAgARGBJDMDEyMTFDNTE5NkFCOUU3QTEA"
+                },
+                "from": "12345678",
+                "id": "wamid.HBgLMTIxMTU1NTE0NTYVAgASGCBBQ0I3MjdCNUUzMTE0QjhFQkM4RkQ4MEU3QkE0MUNEMgA=",
+                "timestamp": "1753919111",
+                "from_logical_id": "131063108133020",
+                "type": "button",
+                "button": {
+                  "payload": "DID_NOT_REQUEST_CODE",
+                  "text": "I didn't request a code"
+                }
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}

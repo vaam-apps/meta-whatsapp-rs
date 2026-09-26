@@ -14,7 +14,8 @@
 //! `calling/user-call-permissions` (`call_permission_reply`),
 //! `webhooks/reference/history` (`media_placeholder`),
 //! `conversation-routing/conversation-context` (`conversation_context`),
-//! `direct-send/supported-message-types` (a status's `template_id`).
+//! `direct-send/supported-message-types` (a status's `template_id`),
+//! `marketing-messages/track-click-events` (`user_actions`).
 //!
 //! # Where the pages disagree with each other
 //!
@@ -74,6 +75,63 @@ pub struct MessagesValue {
     /// `messages` of this change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation_context: Option<ConversationContext>,
+    /// Marketing Messages API clicks on a message's body or call-to-action
+    /// (`marketing-messages/track-click-events`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub user_actions: Vec<UserAction>,
+}
+
+open_enum! {
+    /// `user_actions[].action_type`.
+    pub enum UserActionType {
+        /// A click on a marketing message's body or call-to-action.
+        MarketingMessagesLinkClick => "marketing_messages_link_click",
+    }
+}
+
+open_enum! {
+    /// `marketing_messages_link_click_data.click_component`.
+    pub enum ClickComponent {
+        /// The call-to-action button.
+        Cta => "cta",
+        /// The message body.
+        Body => "body",
+    }
+}
+
+/// `user_actions[]`: something a user did with a message the business
+/// sent. Meta names no user and no message on it: correlate by
+/// [`LinkClickData::click_id`] (appended to the URL the user visits) or
+/// [`LinkClickData::tracking_token`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserAction {
+    /// What happened.
+    pub action_type: UserActionType,
+    /// When.
+    #[serde(with = "meta_whatsapp_core::timestamp::unix")]
+    pub timestamp: OffsetDateTime,
+    /// Set for [`UserActionType::MarketingMessagesLinkClick`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marketing_messages_link_click_data: Option<LinkClickData>,
+}
+
+/// `user_actions[].marketing_messages_link_click_data`; every property is
+/// optional per the page. Clicks are reported for messages sent in the
+/// last 7 days.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkClickData {
+    /// Which part of the message was clicked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub click_component: Option<ClickComponent>,
+    /// The product, when one was assigned in Ads Manager or the Marketing API.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product_id: Option<String>,
+    /// The click's id, also appended to the URL the user visits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub click_id: Option<String>,
+    /// Meta's internal tracking token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracking_token: Option<String>,
 }
 
 /// One `messages[]` entry: a message a WhatsApp user sent to the business.
@@ -218,6 +276,11 @@ pub struct Referral {
     /// Ad greeting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub welcome_message: Option<WelcomeMessage>,
+    /// Shown as a "new field in referral" on `ctwa/welcome-message-sequences`
+    /// (value `REF_ID`, wire name `ref`); Meta does not describe it. Kept
+    /// verbatim.
+    #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
 }
 
 /// `referral.welcome_message`.

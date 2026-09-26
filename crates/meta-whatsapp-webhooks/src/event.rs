@@ -26,7 +26,8 @@ use crate::fields::{
     PaymentConfigurationUpdateValue, PhoneNumberNameUpdateValue, PhoneNumberQualityUpdateValue,
     SecurityValue, StandbyItem, StateSyncItem, Status, TemplateCategoryUpdateValue,
     TemplateComponentsUpdateValue, TemplateCorrectCategoryDetectionValue,
-    TemplateQualityUpdateValue, TemplateStatusUpdateValue, UserIdUpdate, UserPreference,
+    TemplateQualityUpdateValue, TemplateStatusUpdateValue, UserAction, UserIdUpdate,
+    UserPreference,
 };
 use crate::payload::{Change, ChangeValue, WebhookPayload};
 
@@ -172,10 +173,27 @@ pub enum WebhookEvent {
         /// The change.
         update: Box<UserIdUpdate>,
     },
+    /// A user clicked a marketing message's body or call-to-action
+    /// (`messages`, `user_actions`; `marketing-messages/track-click-events`).
+    /// Meta names neither the user nor the message: see
+    /// [`crate::fields::UserAction`].
+    UserActionReported {
+        /// WABA.
+        waba_id: WabaId,
+        /// Business phone number.
+        phone_number_id: PhoneNumberId,
+        /// Business number, as displayed.
+        display_phone_number: String,
+        /// The action.
+        action: Box<UserAction>,
+    },
     /// A thread changed owner under Conversation Routing
     /// (`messaging_handovers`): you gained it (`control_passed`, reply to
-    /// the user) or lost it (`control_taken`, stop replying). The only
-    /// ownership signal there is: keep your own state from these.
+    /// the user) or lost it (`control_taken`, stop replying). No endpoint
+    /// reports the owner: keep it yourself from these, from which field a
+    /// user's messages arrive on (`messages` or `standby`), from your own
+    /// `release` (no event) and from the 24-hour idle timeout (see
+    /// [`crate::fields::routing`]).
     ThreadControlChanged {
         /// WABA.
         waba_id: WabaId,
@@ -184,7 +202,7 @@ pub enum WebhookEvent {
         /// Business number, as displayed.
         display_phone_number: String,
         /// The notification.
-        handover: Box<MessagingHandoversValue>,
+        update: Box<MessagingHandoversValue>,
     },
     /// A copy of a thread you observe without owning it (`standby`): an
     /// inbound message, the owner's send, or its status. Kept apart from
@@ -466,6 +484,7 @@ impl WebhookEvent {
             Self::CallStatusUpdated { .. } => "call_status_updated",
             Self::UserPreferenceChanged { .. } => "user_preference_changed",
             Self::UserIdChanged { .. } => "user_id_changed",
+            Self::UserActionReported { .. } => "user_action_reported",
             Self::ThreadControlChanged { .. } => "thread_control_changed",
             Self::StandbyObserved { .. } => "standby_observed",
             Self::AutomaticEventDetected { .. } => "automatic_event_detected",
@@ -508,6 +527,7 @@ impl WebhookEvent {
             | Self::CallStatusUpdated { waba_id, .. }
             | Self::UserPreferenceChanged { waba_id, .. }
             | Self::UserIdChanged { waba_id, .. }
+            | Self::UserActionReported { waba_id, .. }
             | Self::ThreadControlChanged { waba_id, .. }
             | Self::StandbyObserved { waba_id, .. }
             | Self::AutomaticEventDetected { waba_id, .. }
@@ -566,6 +586,9 @@ impl WebhookEvent {
                 phone_number_id, ..
             }
             | Self::UserIdChanged {
+                phone_number_id, ..
+            }
+            | Self::UserActionReported {
                 phone_number_id, ..
             }
             | Self::ThreadControlChanged {
@@ -896,6 +919,14 @@ impl Ctx {
                         error: Box::new(error),
                     });
                 }
+                for action in v.user_actions {
+                    out.push(WebhookEvent::UserActionReported {
+                        waba_id: waba_id.clone(),
+                        phone_number_id: phone_number_id.clone(),
+                        display_phone_number: display_phone_number.clone(),
+                        action: Box::new(action),
+                    });
+                }
             }
             ChangeValue::Calls(v) => {
                 let v = *v;
@@ -1017,12 +1048,12 @@ impl Ctx {
                     });
                 }
             }
-            ChangeValue::MessagingHandovers(handover) => {
+            ChangeValue::MessagingHandovers(update) => {
                 out.push(WebhookEvent::ThreadControlChanged {
                     waba_id,
-                    phone_number_id: handover.recipient.phone_number_id.clone(),
-                    display_phone_number: handover.recipient.display_phone_number.clone(),
-                    handover,
+                    phone_number_id: update.recipient.phone_number_id.clone(),
+                    display_phone_number: update.recipient.display_phone_number.clone(),
+                    update,
                 });
             }
             ChangeValue::Standby(v) => {

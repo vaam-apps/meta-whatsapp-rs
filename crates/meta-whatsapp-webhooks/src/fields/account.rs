@@ -163,6 +163,10 @@ open_enum! {
         AccountOffboarded => "ACCOUNT_OFFBOARDED",
         /// WABA reconnected after offboarding.
         AccountReconnected => "ACCOUNT_RECONNECTED",
+        /// A sandbox number was upgraded to a verified account. Shown on
+        /// `solution-providers/manage-webhooks`; the `account_update`
+        /// reference does not list it.
+        VerifiedAccount => "VERIFIED_ACCOUNT",
     }
 }
 
@@ -656,6 +660,11 @@ open_enum! {
         Onboarding => "ONBOARDING",
         /// Throughput increased.
         ThroughputUpgrade => "THROUGHPUT_UPGRADE",
+        /// The number's quality was flagged. Shown on
+        /// `solution-providers/manage-webhooks` (with the deprecated
+        /// `current_limit`); the `phone_number_quality_update` reference
+        /// does not list it.
+        Flagged => "FLAGGED",
     }
 }
 

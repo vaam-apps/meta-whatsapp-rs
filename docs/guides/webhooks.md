@@ -212,6 +212,7 @@ every time.
 | `AccountUpdated` (`account_update`) | restrictions, violations | also onboarding and offboarding; for `Partner*` events `waba_id` comes from `waba_info` (the entry id is a business portfolio, kept as `entry_id`), and a partner app event without one has none |
 | `PhoneNumberQualityUpdated`, `BusinessCapabilityUpdated`, `AccountAlert` | limits and quality | per merchant |
 | `UserIdChanged` (`user_id_update`) | a customer's BSUID changed | merge conversations yourself |
+| `UserActionReported` (`messages`, `user_actions`) | Marketing Messages API link clicks (body or call-to-action); no user or message named, correlate by `click_id` | — |
 | `ThreadControlChanged` (`messaging_handovers`), `StandbyObserved` (`standby`) | Conversation Routing: you gained (`control_passed`) or lost (`control_taken`) a thread; a copy of a thread you only observe | no API reports the owner: keep it yourself from the handovers, the messages you receive (owner) and the standby copies (not owner), your own `release` (no event) and 24 hours of user inactivity (the thread goes idle), per `conversation-routing/thread-control`; never answer a standby copy; the inbox tracks none of it (`OPEN_QUESTIONS.md` #44) |
 | `Unknown`, `Unparsed` | a field or shape this version does not type (an `account_update` that did not parse keeps its `waba_info.waba_id` as `waba_id`) | same |
 

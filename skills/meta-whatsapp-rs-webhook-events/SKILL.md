@@ -57,23 +57,23 @@ WebhookEvent::UserIdChanged { update, .. } => Action::CustomerRenamed {
 },
 ```
 
-Conversation Routing: track thread ownership from the handovers, and record
-a `StandbyObserved` copy without ever answering it (`Action::Observed`):
+Conversation Routing: track who owns each thread (a `StandbyObserved` copy is never answered):
 
 ```rust
 WebhookEvent::ThreadControlChanged {
     phone_number_id,
-    handover,
+    update,
     ..
 } => Action::Ownership {
     number: phone_number_id.clone(),
-    user: handover
+    // Meta may omit it: then key by the user you track for the thread.
+    user: update
         .sender
         .as_ref()
         .and_then(|s| s.phone_number.as_ref())
         .map(ToString::to_string),
     // control_passed: reply to the user; control_taken: stop.
-    owner: handover.kind == HandoverType::ControlPassed,
+    owner: update.handover_type == HandoverType::ControlPassed,
 },
 ```
 
@@ -96,8 +96,7 @@ tagged `"event"` with the same snake-case name as `event.kind()`.
 | `Unknown` | a field or shape this meta-whatsapp-rs version does not type: log `field` |
 | `Unparsed` | a signed body that is not a webhook envelope: alert |
 
-Helpers: `event.phone_number_id()` (route to the merchant),
-`event.waba_id()`, `event.contact()`, `event.kind()` (metrics).
+Helpers: `event.phone_number_id()`, `waba_id()`, `contact()`, `kind()` (metrics).
 
 ## Identity: key customers by BSUID
 
@@ -146,11 +145,13 @@ pub fn quality(score: &TemplateQualityScore) -> QualityRating {
 
 ## What meta-whatsapp-rs does not do
 
-- `message_echoes` and `consumer_profile` (undocumented) arrive as
-  `Unknown`. The Thread control API (`pass`, `take`) is not wrapped.
+- `message_echoes`, `consumer_profile` (undocumented) arrive as `Unknown`
+  (~~and handovers / standby~~: until PR #17). No Thread control API
+  (`pass`, `release`, `take`).
 - It does not merge conversations when a BSUID changes. The inbox records
-  `MessageEchoed` and `HistorySynced` (`meta-whatsapp-rs-cms-inbox`, since
-  a3582b8), but not the contacts of `AppStateSynced`.
+  `MessageEchoed` and `HistorySynced` (`meta-whatsapp-rs-cms-inbox`), but not the
+  contacts of `AppStateSynced`. ~~Nor does it record coexistence echoes
+  and history in the inbox~~: true until a3582b8 (2026-09-24).
 
 ## Related skills
 

@@ -1,0 +1,46 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550783881",
+              "phone_number_id": "106540352242922"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "Pablo Morales"
+                },
+                "wa_id": "16505551234"
+              }
+            ],
+            "messages": [
+              {
+                "context": {
+                  "from": "15550783881",
+                  "id": "wamid.HBgLMTY0NjcwNDM1OTUVAgARGBI1QjJGRjI1RDY0RkE4Nzg4QzcA"
+                },
+                "from": "16505551234",
+                "id": "wamid.HBgLMTY0NjcwNDM1OTUVAgASGBQzQTRCRDcwNzgzMTRDNTAwRTgwRQA=",
+                "timestamp": "1702920965",
+                "location": {
+                  "address": "1071 5th Ave, New York, NY 10128",
+                  "latitude": 40.782910059774,
+                  "longitude": -73.959075808525,
+                  "name": "Solomon R. Guggenheim Museum"
+                },
+                "type": "location"
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}

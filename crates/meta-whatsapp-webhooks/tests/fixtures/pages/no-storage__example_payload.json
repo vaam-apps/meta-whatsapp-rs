@@ -1,0 +1,38 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "changes": [
+        {
+          "field": "messages",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550783881",
+              "phone_number_id": "106540352242922"
+            },
+            "statuses": [
+              {
+                "id": "wamid.HBgMNDQ3ODI1MDYzOTQxFQIAERgSN0MzMTg0Nzk2RkMwOEQ5NTQ2AA==",
+                "status": "failed",
+                "timestamp": "1712597457",
+                "recipient_id": "16505551234",
+                "errors": [
+                  {
+                    "code": 131036,
+                    "title": "Message failed to be delivered on at least one of the user's device",
+                    "message": "Message failed to be delivered on at least one of the user's device",
+                    "error_data": {
+                      "details": "Message payload not found"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

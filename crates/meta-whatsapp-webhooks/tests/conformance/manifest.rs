@@ -8,6 +8,12 @@ use super::{Case, Origin, Page, Status, ev};
 
 pub const PAGES: &[Page] = &[
     Page {
+        path: "business-phone-numbers/conversational-components",
+        status: Status::Typed,
+        examples: &["Webhook payload (1 of 2)", "Webhook payload (2 of 2)"],
+        unusable: &[],
+    },
+    Page {
         path: "business-scoped-user-ids",
         status: Status::Typed,
         examples: &[
@@ -39,6 +45,7 @@ pub const PAGES: &[Page] = &[
             "Edit messages webhooks (1 of 2)",
             "Edit messages webhooks (2 of 2)",
         ],
+        unusable: &[],
     },
     Page {
         path: "calling/business-initiated-calls",
@@ -51,11 +58,13 @@ pub const PAGES: &[Page] = &[
             "Call status webhook",
             "Call terminate webhook",
         ],
+        unusable: &[],
     },
     Page {
         path: "calling/call-recording",
         status: Status::Typed,
         examples: &["Recording-available webhook"],
+        unusable: &[],
     },
     Page {
         path: "calling/call-settings",
@@ -69,11 +78,13 @@ pub const PAGES: &[Page] = &[
             "Warning webhook",
             "Enforcement webhook",
         ],
+        unusable: &[],
     },
     Page {
         path: "calling/call-transcription",
         status: Status::Typed,
         examples: &["Transcription-available webhook"],
+        unusable: &[],
     },
     Page {
         path: "calling/reference",
@@ -85,6 +96,7 @@ pub const PAGES: &[Page] = &[
             "Call terminate webhook",
             "Call connect webhook",
         ],
+        unusable: &[],
     },
     Page {
         path: "calling/user-call-permissions",
@@ -92,6 +104,7 @@ pub const PAGES: &[Page] = &[
             "shows the `call_permission_reply` message object, not a whole payload; the fixture wraps it",
         ),
         examples: &[],
+        unusable: &[],
     },
     Page {
         path: "calling/user-initiated-calls",
@@ -102,6 +115,13 @@ pub const PAGES: &[Page] = &[
             "Call Connect webhook",
             "Call Terminate webhook",
         ],
+        unusable: &[],
+    },
+    Page {
+        path: "catalogs/mpm-template-messages",
+        status: Status::Typed,
+        examples: &["Sample webhook"],
+        unusable: &[],
     },
     Page {
         path: "conversation-routing/conversation-context",
@@ -110,11 +130,19 @@ pub const PAGES: &[Page] = &[
             "Incoming message webhook",
             "control_passed handover webhook",
         ],
+        unusable: &[],
     },
     Page {
         path: "conversation-routing/thread-control",
         status: Status::Typed,
         examples: &["control_passed", "control_taken"],
+        unusable: &[],
+    },
+    Page {
+        path: "ctwa/welcome-message-sequences",
+        status: Status::Typed,
+        examples: &["Webhook"],
+        unusable: &[],
     },
     Page {
         path: "direct-send/integrity-and-content-guidelines",
@@ -126,11 +154,31 @@ pub const PAGES: &[Page] = &[
             "Active restriction (rate-limiting, 7-day, 30-day, or permanent)",
             "Restriction lifted",
         ],
+        unusable: &[],
+    },
+    Page {
+        path: "direct-send/supported-message-types",
+        status: Status::Typed,
+        examples: &[],
+        unusable: &[(
+            "Message success and pricing",
+            "the `messages` value has no `metadata` (the business number), which every `messages` webhook carries",
+        )],
+    },
+    Page {
+        path: "embedded-signup/app-only-install",
+        status: Status::Typed,
+        examples: &["Enabling the feature in Embedded Signup v3 (2 of 2)"],
+        unusable: &[(
+            "Enabling the feature in Embedded Signup v3 (1 of 2)",
+            "`field` and `object` are printed inside `entry[0]`, not in the change and the envelope",
+        )],
     },
     Page {
         path: "embedded-signup/automatic-events-api",
         status: Status::Typed,
         examples: &["Lead gen event example", "Purchase event example"],
+        unusable: &[],
     },
     Page {
         path: "embedded-signup/onboarding-business-app-users",
@@ -145,6 +193,22 @@ pub const PAGES: &[Page] = &[
             "Example payload for media message asset {#example-media-asset}",
             "Example payload (4 of 4)",
         ],
+        unusable: &[],
+    },
+    Page {
+        path: "embedded-signup/reconnect-offboarded-coexistence-clients",
+        status: Status::Typed,
+        examples: &[
+            "`ACCOUNT_OFFBOARDED` webhook payload",
+            "`ACCOUNT_RECONNECTED` webhook payload",
+        ],
+        unusable: &[],
+    },
+    Page {
+        path: "embedded-signup/website-optional",
+        status: Status::Typed,
+        examples: &["Webhook"],
+        unusable: &[],
     },
     Page {
         path: "flows/guides/flowswebhooks",
@@ -156,6 +220,13 @@ pub const PAGES: &[Page] = &[
             "Possible resolutions (3 of 4)",
             "Possible resolutions (4 of 4)",
         ],
+        unusable: &[],
+    },
+    Page {
+        path: "get-started",
+        status: Status::Typed,
+        examples: &["Step 4. Set up the test webhook app"],
+        unusable: &[],
     },
     Page {
         path: "groups/groups-messaging",
@@ -166,6 +237,7 @@ pub const PAGES: &[Page] = &[
             "Receive group message webhook sample",
             "Receive unsupported group message webhook sample",
         ],
+        unusable: &[],
     },
     Page {
         path: "groups/webhooks",
@@ -193,6 +265,22 @@ pub const PAGES: &[Page] = &[
             "Group message read (_With pricing_)",
             "Group message read (_Without pricing_)",
         ],
+        unusable: &[],
+    },
+    Page {
+        path: "marketing-messages/onboarding",
+        status: Status::Typed,
+        examples: &[
+            "Receive MM API for WhatsApp Terms of Service signed webhook (preferred)",
+            "Receive onboarding completion webhook (Legacy)",
+        ],
+        unusable: &[],
+    },
+    Page {
+        path: "marketing-messages/track-click-events",
+        status: Status::Typed,
+        examples: &["Webhooks"],
+        unusable: &[],
     },
     Page {
         path: "messages/address-messages",
@@ -200,11 +288,127 @@ pub const PAGES: &[Page] = &[
             "shows the `nfm_reply` message object, not a whole payload; the fixture wraps it",
         ),
         examples: &[],
+        unusable: &[],
+    },
+    Page {
+        path: "messages/interactive-list-messages",
+        status: Status::Typed,
+        examples: &["Webhooks"],
+        unusable: &[],
+    },
+    Page {
+        path: "messages/interactive-reply-buttons-messages",
+        status: Status::Typed,
+        examples: &["Example webhook"],
+        unusable: &[],
+    },
+    Page {
+        path: "messages/location-request-messages",
+        status: Status::Typed,
+        examples: &["Example webhook"],
+        unusable: &[],
+    },
+    Page {
+        path: "no-storage",
+        status: Status::Typed,
+        examples: &["Example payload", "Failure to deliver webhooks"],
+        unusable: &[],
+    },
+    Page {
+        path: "payments/payments-br/one-click-payments",
+        status: Status::OutOfScope(
+            "Payments API Brazil (coverage row 32): an interactive `payment_method` reply",
+        ),
+        examples: &[],
+        unusable: &[],
+    },
+    Page {
+        path: "payments/payments-in/onboarding-apis",
+        status: Status::Typed,
+        examples: &["Sample payment configuration webhook"],
+        unusable: &[],
+    },
+    Page {
+        path: "payments/payments-in/pg",
+        status: Status::OutOfScope(
+            "Payments API India (coverage row 32): a status of `type` `payment` with a `payment` object and transaction statuses such as `captured`",
+        ),
+        examples: &[],
+        unusable: &[],
+    },
+    Page {
+        path: "pricing",
+        status: Status::Typed,
+        examples: &["Tiering webhooks"],
+        unusable: &[],
+    },
+    Page {
+        path: "pricing/authentication-international-rates",
+        status: Status::Typed,
+        examples: &[
+            "Eligibility webhook",
+            "Primary business location update webhook",
+        ],
+        unusable: &[],
+    },
+    Page {
+        path: "pricing/prepaid-billing",
+        status: Status::Typed,
+        examples: &["Insufficient-funds webhook"],
+        unusable: &[],
+    },
+    Page {
+        path: "solution-providers/get-started-for-solution-partners",
+        status: Status::Typed,
+        examples: &["Step 6: Receive a message from consumer app"],
+        unusable: &[],
+    },
+    Page {
+        path: "solution-providers/manage-webhooks",
+        status: Status::Typed,
+        examples: &[
+            "Example",
+            "Name update received",
+            "Quality update received",
+            "Sandbox number upgraded to verified account",
+            "WhatsApp Business account banned",
+            "WhatsApp Business account review completed",
+            "Approved",
+        ],
+        unusable: &[],
+    },
+    Page {
+        path: "solution-providers/multi-partner-solutions",
+        status: Status::Typed,
+        examples: &[
+            "account_update {#account-update-webhook}",
+            "partner_solutions {#partner-solutions-webhook}",
+        ],
+        unusable: &[],
     },
     Page {
         path: "solution-providers/partner-led-business-verification",
         status: Status::Typed,
         examples: &["Example webhook"],
+        unusable: &[],
+    },
+    Page {
+        path: "templates/authentication-templates/autofill-button-authentication-templates",
+        status: Status::Typed,
+        examples: &["Example webhook"],
+        unusable: &[],
+    },
+    Page {
+        path: "templates/authentication-templates/copy-code-button-authentication-templates",
+        status: Status::Typed,
+        examples: &["Example webhook"],
+        unusable: &[],
+    },
+    Page {
+        path: "templates/template-categorization",
+        status: Status::Typed,
+        examples: &["Webhook events"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/message_echoes",
@@ -212,21 +416,25 @@ pub const PAGES: &[Page] = &[
             "listed in llms.txt; `.md` and HTML both answer \"Page Not Found\" (2026-09-26)",
         ),
         examples: &[],
+        unusable: &[],
     },
     Page {
         path: "webhooks/overview",
         status: Status::Typed,
         examples: &["Webhooks (payload example)"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/account_alerts",
         status: Status::Typed,
         examples: &["Example"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/account_review_update",
         status: Status::Typed,
         examples: &["Example payload"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/account_update",
@@ -250,106 +458,127 @@ pub const PAGES: &[Page] = &[
             "Account offboarded {#account-offboarded}",
             "Account reconnected {#account-reconnected}",
         ],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/automatic_events",
         status: Status::Typed,
         examples: &["Lead gen event", "Purchase event"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/business_capability_update",
         status: Status::Typed,
         examples: &["Payload example"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/history",
         status: Status::Typed,
         examples: &["Examples (1 of 2)", "Examples (2 of 2)"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/message_template_components_update",
         status: Status::Typed,
         examples: &["Example"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/message_template_quality_update",
         status: Status::Typed,
         examples: &["Example"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/message_template_status_update",
         status: Status::Typed,
         examples: &["Example (1 of 2)", "Example (2 of 2)"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/messages",
         status: Status::Typed,
         examples: &["Incoming messages", "Outgoing messages"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/messages/audio",
         status: Status::Typed,
         examples: &["Example"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/messages/button",
         status: Status::Typed,
         examples: &["Example"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/messages/contacts",
         status: Status::Typed,
         examples: &["Example"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/messages/document",
         status: Status::Typed,
         examples: &["Example"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/messages/edit",
         status: Status::Typed,
         examples: &["Sample webhooks"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/messages/errors",
         status: Status::Typed,
         examples: &["Example"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/messages/group",
         status: Status::Typed,
         examples: &["Example"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/messages/image",
         status: Status::Typed,
         examples: &["Example"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/messages/interactive",
         status: Status::Typed,
         examples: &["Examples (1 of 2)", "Examples (2 of 2)"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/messages/location",
         status: Status::Typed,
         examples: &["Example"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/messages/order",
         status: Status::Typed,
         examples: &["Example"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/messages/reaction",
         status: Status::Typed,
         examples: &["Sample Webhooks (1 of 2)", "Sample Webhooks (2 of 2)"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/messages/revoke",
         status: Status::Typed,
         examples: &["Example"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/messages/status",
@@ -359,16 +588,19 @@ pub const PAGES: &[Page] = &[
             "Examples (2 of 3)",
             "Examples (3 of 3)",
         ],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/messages/sticker",
         status: Status::Typed,
         examples: &["Example"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/messages/system",
         status: Status::Typed,
         examples: &["Example"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/messages/text",
@@ -378,41 +610,49 @@ pub const PAGES: &[Page] = &[
             "Message business button",
             "Click to WhatsApp ad",
         ],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/messages/unsupported",
         status: Status::Typed,
         examples: &["Example"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/messages/video",
         status: Status::Typed,
         examples: &["Example video message webhook"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/messaging-handovers",
         status: Status::Typed,
         examples: &["Example payload (1 of 2)", "Example payload (2 of 2)"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/partner_solutions",
         status: Status::Typed,
         examples: &["Example"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/payment_configuration_update",
         status: Status::Typed,
         examples: &["Example payload"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/phone_number_name_update",
         status: Status::Typed,
         examples: &["Example"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/phone_number_quality_update",
         status: Status::Typed,
         examples: &["Example"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/pricing",
@@ -420,21 +660,25 @@ pub const PAGES: &[Page] = &[
             "listed in llms.txt; `.md` and HTML both answer \"Page Not Found\" (2026-09-26)",
         ),
         examples: &[],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/security",
         status: Status::Typed,
         examples: &["Example"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/smb_app_state_sync",
         status: Status::Typed,
         examples: &["Example"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/smb_message_echoes",
         status: Status::Typed,
         examples: &["Text message", "Revoke message", "Edit message"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/standby",
@@ -448,16 +692,25 @@ pub const PAGES: &[Page] = &[
             "Interactive flow message echo",
             "Example payload (2 of 2)",
         ],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/template_category_update",
         status: Status::Typed,
         examples: &["Examples (1 of 2)", "Examples (2 of 2)"],
+        unusable: &[],
     },
     Page {
         path: "webhooks/reference/user_preferences",
         status: Status::Typed,
         examples: &["Example"],
+        unusable: &[],
+    },
+    Page {
+        path: "whatsapp-business-accounts",
+        status: Status::Typed,
+        examples: &["Webhooks"],
+        unusable: &[],
     },
 ];
 
@@ -938,11 +1191,14 @@ pub const CASES: &[Case] = &[
     },
     Case {
         fixture: "fields/account_update_volume_tier.json",
-        sources: &[(
-            Origin::Verbatim,
-            "webhooks/reference/account_update",
-            "Pricing tiering update",
-        )],
+        sources: &[
+            (
+                Origin::Verbatim,
+                "webhooks/reference/account_update",
+                "Pricing tiering update",
+            ),
+            (Origin::Verbatim, "pricing", "Tiering webhooks"),
+        ],
         events: &[ev(
             "account_updated",
             Some("102290129340398"),
@@ -2185,6 +2441,36 @@ pub const CASES: &[Case] = &[
         )],
     },
     Case {
+        fixture: "pages/business-phone-numbers.conversational-components__webhook_payload.json",
+        sources: &[(
+            Origin::Filled,
+            "business-phone-numbers/conversational-components",
+            "Webhook payload (1 of 2)",
+        )],
+        events: &[ev(
+            "message_received",
+            Some("102290129340398"),
+            Some("106540352242922"),
+            None,
+            Some("16505551234"),
+        )],
+    },
+    Case {
+        fixture: "pages/business-phone-numbers.conversational-components__webhook_payload_2.json",
+        sources: &[(
+            Origin::Filled,
+            "business-phone-numbers/conversational-components",
+            "Webhook payload (2 of 2)",
+        )],
+        events: &[ev(
+            "message_received",
+            Some("102290129340398"),
+            Some("106540352242922"),
+            None,
+            Some("16505551234"),
+        )],
+    },
+    Case {
         fixture: "pages/business-scoped-user-ids__business_initiated_calls_status_webhooks.json",
         sources: &[(
             Origin::Filled,
@@ -2930,6 +3216,21 @@ pub const CASES: &[Case] = &[
         )],
     },
     Case {
+        fixture: "pages/catalogs.mpm-template-messages__sample_webhook.json",
+        sources: &[(
+            Origin::Verbatim,
+            "catalogs/mpm-template-messages",
+            "Sample webhook",
+        )],
+        events: &[ev(
+            "message_received",
+            Some("102290129340398"),
+            Some("106540352242922"),
+            None,
+            Some("16505551234"),
+        )],
+    },
+    Case {
         fixture: "pages/conversation-routing.conversation-context__control_passed.json",
         sources: &[(
             Origin::Filled,
@@ -2987,6 +3288,17 @@ pub const CASES: &[Case] = &[
             Some("106540352242922"),
             None,
             None,
+        )],
+    },
+    Case {
+        fixture: "pages/ctwa.welcome-message-sequences__webhook.json",
+        sources: &[(Origin::Filled, "ctwa/welcome-message-sequences", "Webhook")],
+        events: &[ev(
+            "message_received",
+            Some("102290129340398"),
+            Some("106540352242922"),
+            None,
+            Some("16505551234"),
         )],
     },
     Case {
@@ -3065,6 +3377,15 @@ pub const CASES: &[Case] = &[
         )],
     },
     Case {
+        fixture: "pages/embedded-signup.app-only-install__embedded_signup_v3_2.json",
+        sources: &[(
+            Origin::Filled,
+            "embedded-signup/app-only-install",
+            "Enabling the feature in Embedded Signup v3 (2 of 2)",
+        )],
+        events: &[ev("account_updated", None, None, None, None)],
+    },
+    Case {
         fixture: "pages/embedded-signup.onboarding-business-app-users__account_offboarded.json",
         sources: &[(
             Origin::Verbatim,
@@ -3105,6 +3426,66 @@ pub const CASES: &[Case] = &[
             "message_echoed",
             Some("102290129340398"),
             Some("106540352242922"),
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/embedded-signup.reconnect-offboarded-coexistence-clients__account_offboarded_webhook_payload.json",
+        sources: &[(
+            Origin::Filled,
+            "embedded-signup/reconnect-offboarded-coexistence-clients",
+            "`ACCOUNT_OFFBOARDED` webhook payload",
+        )],
+        events: &[ev(
+            "account_updated",
+            Some("102290129340398"),
+            None,
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/embedded-signup.reconnect-offboarded-coexistence-clients__account_reconnected_webhook_payload.json",
+        sources: &[(
+            Origin::Filled,
+            "embedded-signup/reconnect-offboarded-coexistence-clients",
+            "`ACCOUNT_RECONNECTED` webhook payload",
+        )],
+        events: &[ev(
+            "account_updated",
+            Some("102290129340398"),
+            None,
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/embedded-signup.website-optional__webhook.json",
+        sources: &[(
+            Origin::Filled,
+            "embedded-signup/website-optional",
+            "Webhook",
+        )],
+        events: &[ev(
+            "account_updated",
+            Some("102290129340398"),
+            None,
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/get-started__step_4_set_up_the_test_webhook_app.json",
+        sources: &[(
+            Origin::Verbatim,
+            "get-started",
+            "Step 4. Set up the test webhook app",
+        )],
+        events: &[ev(
+            "message_received",
+            Some("215589313241560883"),
+            Some("7794189252778687"),
             None,
             None,
         )],
@@ -3475,6 +3856,403 @@ pub const CASES: &[Case] = &[
         )],
     },
     Case {
+        fixture: "pages/marketing-messages.onboarding__onboarding_completion_webhook_legacy.json",
+        sources: &[(
+            Origin::Filled,
+            "marketing-messages/onboarding",
+            "Receive onboarding completion webhook (Legacy)",
+        )],
+        events: &[ev(
+            "account_updated",
+            Some("102290129340398"),
+            None,
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/marketing-messages.onboarding__terms_of_service_signed_webhook.json",
+        sources: &[(
+            Origin::Filled,
+            "marketing-messages/onboarding",
+            "Receive MM API for WhatsApp Terms of Service signed webhook (preferred)",
+        )],
+        events: &[ev(
+            "account_updated",
+            Some("102290129340398"),
+            None,
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/marketing-messages.track-click-events__webhooks.json",
+        sources: &[(
+            Origin::Filled,
+            "marketing-messages/track-click-events",
+            "Webhooks",
+        )],
+        events: &[ev(
+            "user_action_reported",
+            Some("102290129340398"),
+            Some("106540352242922"),
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/messages.interactive-list-messages__webhooks.json",
+        sources: &[(
+            Origin::Verbatim,
+            "messages/interactive-list-messages",
+            "Webhooks",
+        )],
+        events: &[ev(
+            "message_received",
+            Some("102290129340398"),
+            Some("106540352242922"),
+            None,
+            Some("16505551234"),
+        )],
+    },
+    Case {
+        fixture: "pages/messages.interactive-reply-buttons-messages__example_webhook.json",
+        sources: &[(
+            Origin::Verbatim,
+            "messages/interactive-reply-buttons-messages",
+            "Example webhook",
+        )],
+        events: &[ev(
+            "message_received",
+            Some("102290129340398"),
+            Some("106540352242922"),
+            None,
+            Some("16505551234"),
+        )],
+    },
+    Case {
+        fixture: "pages/messages.location-request-messages__example_webhook.json",
+        sources: &[(
+            Origin::Verbatim,
+            "messages/location-request-messages",
+            "Example webhook",
+        )],
+        events: &[ev(
+            "message_received",
+            Some("102290129340398"),
+            Some("106540352242922"),
+            None,
+            Some("16505551234"),
+        )],
+    },
+    Case {
+        fixture: "pages/no-storage__example_payload.json",
+        sources: &[(Origin::Verbatim, "no-storage", "Example payload")],
+        events: &[ev(
+            "status_updated",
+            Some("102290129340398"),
+            Some("106540352242922"),
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/no-storage__failure_to_deliver_webhooks.json",
+        sources: &[(
+            Origin::Verbatim,
+            "no-storage",
+            "Failure to deliver webhooks",
+        )],
+        events: &[ev(
+            "error_reported",
+            Some("102290129340398"),
+            Some("106540352242922"),
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/payments.payments-in.onboarding-apis__sample_payment_configuration_webhook.json",
+        sources: &[(
+            Origin::Verbatim,
+            "payments/payments-in/onboarding-apis",
+            "Sample payment configuration webhook",
+        )],
+        events: &[ev(
+            "payment_configuration_updated",
+            Some("0"),
+            None,
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/pricing.authentication-international-rates__eligibility_webhook.json",
+        sources: &[(
+            Origin::Filled,
+            "pricing/authentication-international-rates",
+            "Eligibility webhook",
+        )],
+        events: &[ev(
+            "account_updated",
+            Some("102290129340398"),
+            None,
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/pricing.authentication-international-rates__primary_business_location_update_webhook.json",
+        sources: &[(
+            Origin::Filled,
+            "pricing/authentication-international-rates",
+            "Primary business location update webhook",
+        )],
+        events: &[ev(
+            "account_updated",
+            Some("102290129340398"),
+            None,
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/pricing.prepaid-billing__insufficient_funds_webhook.json",
+        sources: &[(
+            Origin::Filled,
+            "pricing/prepaid-billing",
+            "Insufficient-funds webhook",
+        )],
+        events: &[ev(
+            "status_updated",
+            Some("102290129340398"),
+            Some("106540352242922"),
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/pricing__tiering_webhooks.json",
+        sources: &[
+            (
+                Origin::Verbatim,
+                "webhooks/reference/account_update",
+                "Pricing tiering update",
+            ),
+            (Origin::Verbatim, "pricing", "Tiering webhooks"),
+        ],
+        events: &[ev(
+            "account_updated",
+            Some("102290129340398"),
+            None,
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/solution-providers.get-started-for-solution-partners__step_6_receive_a_message_from_consumer_app.json",
+        sources: &[(
+            Origin::Filled,
+            "solution-providers/get-started-for-solution-partners",
+            "Step 6: Receive a message from consumer app",
+        )],
+        events: &[ev(
+            "message_received",
+            Some("102290129340398"),
+            Some("106540352242922"),
+            None,
+            Some("16315555555"),
+        )],
+    },
+    Case {
+        fixture: "pages/solution-providers.manage-webhooks__approved.json",
+        sources: &[(
+            Origin::Verbatim,
+            "solution-providers/manage-webhooks",
+            "Approved",
+        )],
+        events: &[ev(
+            "template_status_updated",
+            Some("495709166956424"),
+            None,
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/solution-providers.manage-webhooks__example.json",
+        sources: &[(
+            Origin::Verbatim,
+            "solution-providers/manage-webhooks",
+            "Example",
+        )],
+        events: &[ev(
+            "account_updated",
+            Some("495709166956424"),
+            None,
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/solution-providers.manage-webhooks__name_update_received.json",
+        sources: &[(
+            Origin::Verbatim,
+            "solution-providers/manage-webhooks",
+            "Name update received",
+        )],
+        events: &[ev(
+            "phone_number_name_updated",
+            Some("495709166956424"),
+            None,
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/solution-providers.manage-webhooks__quality_update_received.json",
+        sources: &[(
+            Origin::Verbatim,
+            "solution-providers/manage-webhooks",
+            "Quality update received",
+        )],
+        events: &[ev(
+            "phone_number_quality_updated",
+            Some("495709166956424"),
+            None,
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/solution-providers.manage-webhooks__sandbox_number_upgraded_to_verified_account.json",
+        sources: &[(
+            Origin::Verbatim,
+            "solution-providers/manage-webhooks",
+            "Sandbox number upgraded to verified account",
+        )],
+        events: &[ev(
+            "account_updated",
+            Some("495709166956424"),
+            None,
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/solution-providers.manage-webhooks__whatsapp_business_account_banned.json",
+        sources: &[(
+            Origin::Filled,
+            "solution-providers/manage-webhooks",
+            "WhatsApp Business account banned",
+        )],
+        events: &[ev(
+            "account_updated",
+            Some("495709166956424"),
+            None,
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/solution-providers.manage-webhooks__whatsapp_business_account_review_completed.json",
+        sources: &[(
+            Origin::Verbatim,
+            "solution-providers/manage-webhooks",
+            "WhatsApp Business account review completed",
+        )],
+        events: &[ev(
+            "account_review_updated",
+            Some("495709166956424"),
+            None,
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/solution-providers.multi-partner-solutions__account_update.json",
+        sources: &[(
+            Origin::Filled,
+            "solution-providers/multi-partner-solutions",
+            "account_update {#account-update-webhook}",
+        )],
+        events: &[ev(
+            "account_updated",
+            Some("102290129340398"),
+            None,
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/solution-providers.multi-partner-solutions__partner_solutions.json",
+        sources: &[(
+            Origin::Filled,
+            "solution-providers/multi-partner-solutions",
+            "partner_solutions {#partner-solutions-webhook}",
+        )],
+        events: &[ev("partner_solution_updated", None, None, None, None)],
+    },
+    Case {
+        fixture: "pages/templates.authentication-templates.autofill-button-authentication-templates__example_webhook.json",
+        sources: &[
+            (
+                Origin::Verbatim,
+                "templates/authentication-templates/autofill-button-authentication-templates",
+                "Example webhook",
+            ),
+            (
+                Origin::Verbatim,
+                "templates/authentication-templates/copy-code-button-authentication-templates",
+                "Example webhook",
+            ),
+        ],
+        events: &[ev(
+            "message_received",
+            Some("320580347795883"),
+            Some("1234567890"),
+            None,
+            Some("12345678"),
+        )],
+    },
+    Case {
+        fixture: "pages/templates.authentication-templates.copy-code-button-authentication-templates__example_webhook.json",
+        sources: &[
+            (
+                Origin::Verbatim,
+                "templates/authentication-templates/autofill-button-authentication-templates",
+                "Example webhook",
+            ),
+            (
+                Origin::Verbatim,
+                "templates/authentication-templates/copy-code-button-authentication-templates",
+                "Example webhook",
+            ),
+        ],
+        events: &[ev(
+            "message_received",
+            Some("320580347795883"),
+            Some("1234567890"),
+            None,
+            Some("12345678"),
+        )],
+    },
+    Case {
+        fixture: "pages/templates.template-categorization__webhook_events.json",
+        sources: &[(
+            Origin::Filled,
+            "templates/template-categorization",
+            "Webhook events",
+        )],
+        events: &[ev(
+            "account_updated",
+            Some("102290129340398"),
+            None,
+            None,
+            None,
+        )],
+    },
+    Case {
         fixture: "pages/webhooks.reference.messaging-handovers__control_passed.json",
         sources: &[(
             Origin::Filled,
@@ -3575,6 +4353,17 @@ pub const CASES: &[Case] = &[
             "standby_observed",
             Some("102290129340398"),
             Some("106540352242922"),
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/whatsapp-business-accounts__webhooks.json",
+        sources: &[(Origin::Filled, "whatsapp-business-accounts", "Webhooks")],
+        events: &[ev(
+            "account_updated",
+            Some("102290129340398"),
+            None,
             None,
             None,
         )],

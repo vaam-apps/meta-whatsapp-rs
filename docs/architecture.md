@@ -618,7 +618,8 @@ Logs carry sizes, digests and field names only — never payload values.
   solutions; payment configuration; calls; flows; groups;
   business_username_updates, user_id_update; Conversation Routing's
   messaging_handovers and standby, and the `conversation_context` summary
-  on messages). Every example payload on Meta's webhook pages is a fixture,
+  on messages; the Marketing Messages API's `user_actions` click events).
+  Every example payload on a page that prints a webhook body is a fixture,
   listed with its page in `tests/conformance/manifest.rs`, whose test
   checks the exact events, that every value survives the typed parse, that
   no value falls into a catch-all, and signed delivery through the handler

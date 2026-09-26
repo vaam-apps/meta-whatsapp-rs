@@ -7,8 +7,11 @@
 //!
 //! Under Conversation Routing one responder owns a thread at a time.
 //! `messaging_handovers` tells a responder that it gained (`control_passed`)
-//! or lost (`control_taken`) a thread; there is no endpoint that reports the
-//! current owner, so these notifications are the ownership state. `standby`
+//! or lost (`control_taken`) a thread. No endpoint reports the owner: derive
+//! it from these, from which field (`messages` or `standby`) a user's
+//! messages arrive on, from your own `release` (which fires no handover) and
+//! from the 24-hour idle timeout (`conversation-routing/thread-control`
+//! § Tracking ownership). `standby`
 //! delivers copies of a thread's inbound messages, the owner's sends
 //! (echoes) and their statuses to partners that observe it without owning
 //! it: a standby partner must not reply.
@@ -24,13 +27,15 @@
 //! - A standby echo's `message` is "the exact request body" of the Send API,
 //!   and its sibling `template` / `flow` are the full template and Flow
 //!   definitions. This crate does not depend on the client's send types, so
-//!   the three stay JSON ([`StandbyEcho::message`]); [`StandbyEcho::to`] and
-//!   [`StandbyEcho::message_type`] read the two properties every send has.
+//!   the three stay JSON ([`StandbyEcho::message`]); [`StandbyEcho::to`],
+//!   [`StandbyEcho::recipient`] and [`StandbyEcho::message_type`] read the
+//!   addressing (`to` or the BSUID `recipient`, one of which every send has)
+//!   and the type.
 //! - Neither page shows a business-scoped user id: `sender.phone_number` is
 //!   the only user identity on a handover and "may be omitted", and standby
 //!   items carry the identities of the `messages` webhook they copy.
 
-use meta_whatsapp_core::ids::{AppId, MessageId, PhoneNumberId, WaId};
+use meta_whatsapp_core::ids::{AppId, MessageId, PhoneNumberId, UserId, WaId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -54,25 +59,25 @@ pub struct MessagingHandoversValue {
     /// Which notification this is; names the object that is present
     /// ([`Self::control_passed`] or [`Self::control_taken`]).
     #[serde(rename = "type")]
-    pub kind: HandoverType,
+    pub handover_type: HandoverType,
     /// When ownership changed (whole seconds).
     #[serde(with = "meta_whatsapp_core::timestamp::unix")]
     pub timestamp: OffsetDateTime,
-    /// Set when [`Self::kind`] is [`HandoverType::ControlPassed`]: you are
+    /// Set when [`Self::handover_type`] is [`HandoverType::ControlPassed`]: you are
     /// now the owner and are expected to reply.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control_passed: Option<Handover>,
-    /// Set when [`Self::kind`] is [`HandoverType::ControlTaken`]: you lost
+    /// Set when [`Self::handover_type`] is [`HandoverType::ControlTaken`]: you lost
     /// the thread and must stop replying.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control_taken: Option<Handover>,
 }
 
 impl MessagingHandoversValue {
-    /// The notification object matching [`Self::kind`], or whichever one is
+    /// The notification object matching [`Self::handover_type`], or whichever one is
     /// present when the type is one this crate does not know.
     pub fn handover(&self) -> Option<&Handover> {
-        match self.kind {
+        match self.handover_type {
             HandoverType::ControlPassed => self.control_passed.as_ref(),
             HandoverType::ControlTaken => self.control_taken.as_ref(),
             HandoverType::Other(_) => self.control_passed.as_ref().or(self.control_taken.as_ref()),
@@ -142,7 +147,11 @@ open_enum! {
 pub struct Handover {
     /// App that held the thread. Deprecated by Meta: read
     /// [`Self::previous_owner_role`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_ext::id_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub previous_owner_app_id: Option<AppId>,
     /// App role of the previous owner (`control_passed` only). Deprecated
     /// by Meta.
@@ -152,7 +161,11 @@ pub struct Handover {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_owner_role: Option<ThreadRole>,
     /// App that holds the thread now, when it is identified by app.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_ext::id_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub new_owner_app_id: Option<AppId>,
     /// Role of the responder that holds the thread now (always
     /// `escalation` for `control_taken`).
@@ -185,7 +198,7 @@ open_enum! {
 pub struct ConversationContext {
     /// Kind of context.
     #[serde(rename = "type")]
-    pub kind: ConversationContextType,
+    pub context_type: ConversationContextType,
     /// The summary, for [`ConversationContextType::Summary`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<ContextSummary>,
@@ -255,9 +268,20 @@ pub struct StandbyEcho {
 }
 
 impl StandbyEcho {
-    /// `message.to`: the recipient as the owner addressed it.
+    /// `message.to`: the recipient's phone number (or a group id), when
+    /// the owner addressed it that way.
     pub fn to(&self) -> Option<&str> {
         self.message.get("to").and_then(Value::as_str)
+    }
+
+    /// `message.recipient`: the recipient's BSUID, when the owner addressed
+    /// it that way (`business-scoped-user-ids`). Key the user by this when
+    /// it is set.
+    pub fn recipient(&self) -> Option<UserId> {
+        self.message
+            .get("recipient")
+            .and_then(Value::as_str)
+            .map(UserId::new)
     }
 
     /// `message.type` (`text`, `template`, `interactive`, …).
@@ -294,9 +318,9 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(v.handover().unwrap().metadata.as_deref(), Some("t"));
-        v.kind = HandoverType::ControlPassed;
+        v.handover_type = HandoverType::ControlPassed;
         assert_eq!(v.handover().unwrap().metadata.as_deref(), Some("p"));
-        v.kind = HandoverType::from("control_shared");
+        v.handover_type = HandoverType::from("control_shared");
         v.control_passed = None;
         assert_eq!(v.handover().unwrap().metadata.as_deref(), Some("t"));
     }
@@ -322,6 +346,32 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(e.to(), Some("16505551234"));
+        assert_eq!(e.recipient(), None);
         assert_eq!(e.message_type(), Some("text"));
+
+        let e: StandbyEcho = serde_json::from_value(json!({
+            "id": "wamid.1", "timestamp": "1750101000",
+            "message": {"recipient": "US.13491208655302741918", "type": "text"}
+        }))
+        .unwrap();
+        assert_eq!(e.to(), None);
+        assert_eq!(
+            e.recipient().as_ref().map(UserId::as_str),
+            Some("US.13491208655302741918")
+        );
+    }
+
+    #[test]
+    fn numeric_app_ids_do_not_untype_the_handover() {
+        let h: Handover = serde_json::from_value(json!({
+            "previous_owner_app_id": 1_066_355_071_287_456_u64,
+            "new_owner_app_id": "42"
+        }))
+        .unwrap();
+        assert_eq!(
+            h.previous_owner_app_id.as_ref().map(AppId::as_str),
+            Some("1066355071287456")
+        );
+        assert_eq!(h.new_owner_app_id.as_ref().map(AppId::as_str), Some("42"));
     }
 }

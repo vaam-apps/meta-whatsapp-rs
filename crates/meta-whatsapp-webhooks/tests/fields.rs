@@ -1266,3 +1266,22 @@ fn account_update_calling_warnings_carry_remediation() {
     assert_eq!(u.event, AccountUpdateEvent::AccountRestriction);
     assert!(u.restriction_info[0].remediation.is_some());
 }
+
+/// `solution-providers/manage-webhooks` shows two event values the
+/// reference pages do not list.
+#[test]
+fn manage_webhooks_event_values_are_known() {
+    let WebhookEvent::PhoneNumberQualityUpdated { update, .. } =
+        one("pages/solution-providers.manage-webhooks__quality_update_received.json")
+    else {
+        panic!()
+    };
+    assert_eq!(update.event, PhoneNumberQualityEvent::Flagged);
+    assert_eq!(update.display_phone_number, "124545784358810");
+
+    let u = account_update(
+        "pages/solution-providers.manage-webhooks__sandbox_number_upgraded_to_verified_account.json",
+    );
+    assert_eq!(u.event, AccountUpdateEvent::VerifiedAccount);
+    assert_eq!(u.phone_number.as_deref(), Some("124545784358810"));
+}

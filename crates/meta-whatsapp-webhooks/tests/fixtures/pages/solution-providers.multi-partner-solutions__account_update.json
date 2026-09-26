@@ -1,0 +1,26 @@
+{
+  "entry": [
+    {
+      "id": "506914307656634",
+      "time": 1690592557,
+      "changes": [
+        {
+          "value": {
+            "event": "PARTNER_ADDED",
+            "waba_info": {
+              "waba_id": "102290129340398",
+              "owner_business_id": "6143763655652543",
+              "solution_id": "303610109049230",
+              "solution_partner_business_ids": [
+                "506914307656634",
+                "116133292427920"
+              ]
+            }
+          },
+          "field": "account_update"
+        }
+      ]
+    }
+  ],
+  "object": "whatsapp_business_account"
+}

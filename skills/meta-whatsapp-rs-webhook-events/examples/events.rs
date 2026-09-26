@@ -123,17 +123,18 @@ pub fn action(event: &WebhookEvent) -> Action {
         },
         WebhookEvent::ThreadControlChanged {
             phone_number_id,
-            handover,
+            update,
             ..
         } => Action::Ownership {
             number: phone_number_id.clone(),
-            user: handover
+            // Meta may omit it: then key by the user you track for the thread.
+            user: update
                 .sender
                 .as_ref()
                 .and_then(|s| s.phone_number.as_ref())
                 .map(ToString::to_string),
             // control_passed: reply to the user; control_taken: stop.
-            owner: handover.kind == HandoverType::ControlPassed,
+            owner: update.handover_type == HandoverType::ControlPassed,
         },
         // A copy of a thread another responder owns: record it, never reply.
         WebhookEvent::StandbyObserved {

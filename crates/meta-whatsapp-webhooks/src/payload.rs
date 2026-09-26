@@ -235,7 +235,10 @@ impl ChangeValue {
     pub fn parse(field: &str, value: Value) -> (Self, Option<String>) {
         match field {
             "messages" => typed(value, Self::Messages, |v: &MessagesValue| {
-                v.messages.is_empty() && v.statuses.is_empty() && v.errors.is_empty()
+                v.messages.is_empty()
+                    && v.statuses.is_empty()
+                    && v.errors.is_empty()
+                    && v.user_actions.is_empty()
             }),
             "account_alerts" => typed(value, Self::AccountAlerts, never),
             "account_review_update" => typed(value, Self::AccountReviewUpdate, never),
