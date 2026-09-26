@@ -1,0 +1,10 @@
+error[E0624]: method `store` is private
+ --> tests/visibility/fail/app_state_store.rs:5:19
+  |
+5 |     let _ = state.store();
+  |                   ^^^^^ private method
+  |
+ ::: src/state.rs
+  |
+  |     pub(crate) fn store(&self) -> &dyn RecordStore {
+  |     ---------------------------------------------- private method defined here

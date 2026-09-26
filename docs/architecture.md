@@ -35,24 +35,28 @@ crates/
                            compile-time plugins, Markdown → WhatsApp formatting, paced broadcasts.
   meta-whatsapp-rs         facade: re-exports, prelude, `client(token)`, the CMS inbox,
                            feature flags, runnable examples. What integrators depend on.
-  meta-whatsapp-server     the HTTP service (a binary on the facade): tenants, keys, the /v1
-                           API for apps not written in Rust. See "Service" below.
+  meta-whatsapp-server-core  the service's framework-free core: its domain, authorization,
+                           error model as data, and the ports its backends implement.
+  meta-whatsapp-server     the HTTP service (a binary on the facade and the core): tenants,
+                           keys, the /v1 API for apps not written in Rust, its backends.
+                           See "Service" below.
 .xtask                     repo automation (`cargo xtask meta-docs`): a workspace of its own,
                            with its own Cargo.lock, excluded from the root one, so its ureq
                            (rustls with `ring`) never enters a library or test build.
 ```
 
 Dependency rule: every library crate depends on `meta-whatsapp-core`; no
-library crate depends on `meta-whatsapp-rs`; binaries may, and a binary
-of this workspace (the [service](#service-meta-whatsapp-server)) depends
-on `meta-whatsapp-rs` alone among them, reaching axum and sqlx through its
-re-exports, as an outside integrator would; `meta-whatsapp-client` and
-`meta-whatsapp-webhooks` never depend on each other or on
-`meta-whatsapp-adapters` (except as a dev-dependency for tests);
-`meta-whatsapp-bot` sits above both and depends on core, client and
-webhooks only, never on the adapters (dev-dependency aside) or the
-facade, which re-exports it behind its `bot` feature. An adapter
-never leaks its library's types through a port.
+library crate depends on `meta-whatsapp-rs`; binaries may, and the
+[service](#service-meta-whatsapp-server)'s crates do: they depend on
+`meta-whatsapp-rs` and on each other, never on another crate of the
+library, reaching axum and sqlx through the facade's re-exports, as an
+outside integrator would; no library crate depends on a service crate;
+`meta-whatsapp-client` and `meta-whatsapp-webhooks` never depend on each
+other or on `meta-whatsapp-adapters` (except as a dev-dependency for
+tests); `meta-whatsapp-bot` sits above both and depends on core, client
+and webhooks only, never on the adapters (dev-dependency aside) or the
+facade, which re-exports it behind its `bot` feature. An adapter never
+leaks its library's types through a port.
 
 ## Ports (`meta-whatsapp-core`)
 
@@ -60,13 +64,45 @@ never leaks its library's types through a port.
 | --- | --- | --- |
 | `transport::HttpTransport` | `send`, `send_streaming` | rustdoc; non-2xx is *not* an error at this layer |
 | `store::KvStore` | `get`, `put`, `put_if_absent`, `compare_and_swap`, `delete` | `meta_whatsapp_adapters::store::conformance` (executable) |
-| `store::ConversationStore` | `append`, `append_synced` (a batch of coexistence history: no window, never unread), `fill_media_placeholder`, `revoke` (number and direction scoped, never the conversation; the content kept; a tombstone, history only, when the message is not stored yet), `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at` | `meta_whatsapp_adapters::store::conversation_conformance` (executable) |
+| `store::ConversationStore` | `append`, `append_synced` (a batch of coexistence history: no window, never unread), `fill_media_placeholder`, `revoke` (number and direction scoped, never the conversation; the content kept; a tombstone, history only, when the message is not stored yet), `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at`; `message` (the lookup, scoped: `phone_number_id, id`, never another number's); `record_window_event`, `window_events` (a call or a standby message that reopens the window: never history, never the summary); `set_thread_owner`, `thread_owner` (Conversation Routing: the latest record wins); `put_contact`, `remove_contact`, `contact`, `contacts` (the coexistence address book; a removal is kept, key and time only, so an older sync arriving after it is refused); `link_identity`, `identity_links` (two identities of one person on one number, as Meta reports a BSUID or number change); `identities` (a person's keys on one number: the closure over the synced contacts and the links, read only); `erase_all` (a person on one number, deleted: every record under their keys, the contacts and links naming them, and their messages in groups redacted or deleted per the store's `ErasureMode`); `purge_before` (by age, one number or all); `erase` (one key), `erasure_mode`, `retention`, `apply_retention` (provided: redact group messages and keep everything unless the adapter is configured) | `meta_whatsapp_adapters::store::conversation_conformance` (executable) |
 | `sink::EventSink<E>` | `deliver` | rustdoc |
 | `clock::Clock` | `now` | — |
 
 Typed stores are built **on `KvStore`**, never as new ports: token vault,
 OTP challenges, webhook dedup, Embedded Signup sessions, bot cooldowns. An
 adapter author implements five methods once and every feature works.
+
+What the inbox keeps about a conversation beside its messages (window
+events, thread ownership, the coexistence address book, the links
+between a person's identities) is on `ConversationStore` itself, not on
+`KvStore`: it is keyed like the history, and an erasure must reach it in
+the same step. Its personal data is the records keyed by a contact; a
+person also appears in group conversations (a message's `sender`: the
+BSUID, else the phone number, of an inbound message, a column on
+Postgres) and in other conversations' payloads (a quoted message, a
+shared contact card), which no erasure reaches. A person has several
+keys on one number (a history thread under their phone number, live
+messages under their BSUID, an earlier BSUID), so erasure is by person
+(design D30): `identities(key)` collects the keys the store connects,
+and `erase_all(phone_number_id, keys)` deletes, in one step, every
+record under them, the synced contacts and identity links naming them,
+and their group messages, redacted in place (the default) or deleted
+(`ErasureMode`, a setting per store, design D31); `erase(key)` is its
+one-key case. There is no erasure across numbers: a `wa_id` is the same
+on every number, so one would delete other businesses' customers. What
+it does not reach, and what an integrator does about it, is in
+[cms-inbox.md § 8](guides/cms-inbox.md#8-erasing-a-customer-and-retention)
+and [production.md § 8](guides/production.md#8-retention-and-erasure-on-postgres):
+quotes and contact cards in other people's messages, the ids of redacted
+group messages, identities nothing connects, the webhook dedup markers
+(kept on purpose: they stop Meta's redeliveries from recording the data
+again), the service's outbox and idempotency answers, integrators'
+copies, dead Postgres rows, WAL, replicas and backups, logs, and Meta's
+side; and records created again after the erasure. Retention is set per
+store (design D10): the adapters take a `Retention` (`with_retention`,
+keep by default) that `apply_retention(now)` applies; nothing purges on
+its own, and a caller with another policy calls `purge_before` with its
+own cutoff.
 
 ## Stable identifiers
 
@@ -92,14 +128,17 @@ rewrite them along with the code.
 | `wa.otp`, `wa.otp.rate` | `NAMESPACE`, `ISSUE_LOG_NAMESPACE`, same file | store namespaces of the challenges and of the issue limit | `the_derivations_and_namespaces_are_pinned` |
 | `wa.es.session` | `SESSION_NAMESPACE`, `meta-whatsapp-client/src/embedded_signup/session.rs` | store namespace of signup sessions in flight | `the_session_namespace_is_pinned` |
 | `wa.webhook.dedup` | `DEDUP_NAMESPACE`, `meta-whatsapp-webhooks/src/dedup.rs` | store namespace of the dedup markers (key: SHA-256 hex of the event's dedup key) | `the_marker_key_is_pinned` |
-| `wa_` | `TablePrefix::DEFAULT`, `meta-whatsapp-adapters/src/store/postgres/mod.rs` | default table prefix: `wa_kv`, `wa_messages`, `wa_conversations`, `wa_sqlx_migrations` | `the_default_tables_and_migration_checksums_are_pinned`, `prefix_validation`, the `live_postgres_*` table-name tests |
-| the migration files | `meta-whatsapp-adapters/migrations/*.sql` | sqlx records each file's checksum; an edit, a comment included, makes `migrate` refuse every database migrated before. So they keep naming `wa_adapters`, including in the hint migration 3 raises | `the_default_tables_and_migration_checksums_are_pinned` |
+| `wa_` | `TablePrefix::DEFAULT`, `meta-whatsapp-adapters/src/store/postgres/mod.rs` | default table prefix: `wa_kv`, `wa_messages`, `wa_conversations`, `wa_window_events`, `wa_thread_owners`, `wa_synced_contacts`, `wa_identity_links`, `wa_sqlx_migrations` | `the_default_tables_and_migration_checksums_are_pinned`, `prefix_validation`, the `live_postgres_*` table-name tests |
+| `customer_call`, `call_accepted`, `standby_message`; `this_app`, `another_app`, `idle`; `revoked`, `erased` | `WindowEventKind::as_str`, `ThreadOwner` (its serde names), `StoredMessage::REVOKED`, `StoredMessage::ERASED`, `meta-whatsapp-core/src/store/conversation.rs` | the names a conversation store keeps for a window event's kind, a thread's owner and this crate's own message kinds (`wa_window_events.kind`, `wa_thread_owners.owner`, `wa_messages.kind_utf8`) | `stored_names_are_pinned` |
+| the number lock `('wa_messages'::regclass::oid::int4, hashtext(<phone_number_id>))`, the purge lock `('wa_conversations'::regclass::oid::int4, 0)` | `number_lock`, `purge_lock`, `meta-whatsapp-adapters/src/store/postgres/conversation.rs` | Postgres advisory locks (the two-key form, the table's object id as class) that order `erase` and `purge_before` against appends and each other: replicas of two releases must take the same ones | `the_locks_are_pinned`, `live_postgres_the_locks_are_the_documented_ones` |
+| the migration files | `meta-whatsapp-adapters/migrations/*.sql` | sqlx records each file's checksum; an edit, a comment included, makes `migrate` refuse every database migrated before. So they keep naming `wa_adapters`, including in the hint migration 3 raises, and the columns and indexes they create keep their names (migration 4's `wa_messages.sender`, `wa_messages_sender_idx`, `wa_messages_unsent_idx`, `wa_identity_links_idx`, among others) | `the_default_tables_and_migration_checksums_are_pinned` |
+| a message's sender: the payload's `from_user_id`, else its `from`, of an inbound message (an empty value, or one holding U+0000, is none) | `StoredMessage::sender`, `meta-whatsapp-core/src/store/conversation.rs`; migration 4's back-fill | what a store keeps beside each message (`wa_messages.sender`) and an erasure matches a person's group messages on: a changed rule leaves the rows written before out of every erasure | `the_sender_is_the_bsuid_else_the_phone_number_of_an_inbound_message`, `live_postgres_migration_4_backfills_senders_by_the_rust_rule` |
 | `wa:` | `RedisKvStore::new`, `meta-whatsapp-adapters/src/store/redis_kv.rs` | default Redis key prefix, before `{<len>:<namespace>}:<key>` | `the_default_prefix_and_key_layout_are_pinned` |
-| `meta-whatsapp-server/outbox-key/v1` | `outbox_key`, `meta-whatsapp-server/src/events.rs` | domain of the SHA-256 stored as `wa_server_events.dedup_key` (with the tags `library` and `delivery`, the NUL separators and a keyless event's position as 8 big-endian bytes): derived otherwise, a redelivery across the upgrade is recorded twice | `the_outbox_key_is_pinned` (known answers) |
+| `meta-whatsapp-server/outbox-key/v1` | `outbox_key`, `meta-whatsapp-server-core/src/events.rs` | domain of the SHA-256 stored as `wa_server_events.dedup_key` (with the tags `library` and `delivery`, the NUL separators and a keyless event's position as 8 big-endian bytes): derived otherwise, a redelivery across the upgrade is recorded twice | `the_outbox_key_is_pinned` (known answers) |
 | `meta-whatsapp-server/event-id/v1`, `evt_` + 32 hex digits | `EventIdKey`, same file | HMAC label of the key event ids are derived with under the app secret, and the id's shape: stored as `wa_server_events.id` and what receivers deduplicate on | `event_ids_are_pinned` (known answers) |
-| `meta-whatsapp-server/migrate`, `meta-whatsapp-server/housekeeping` | `MIGRATION_LOCK`, `HOUSEKEEPING_LOCK`, `meta-whatsapp-server/src/store/postgres.rs` | Postgres advisory lock keys (the first 8 bytes of their SHA-256): replicas of two releases take the same ones | `the_lock_key_is_derived_as_documented` |
+| `meta-whatsapp-server/migrate`, `meta-whatsapp-server/housekeeping` | `MIGRATION_LOCK`, `HOUSEKEEPING_LOCK`, `lock_key`, `meta-whatsapp-server/src/store/postgres.rs` | Postgres advisory lock keys (the first 8 bytes of their SHA-256; `lock_key` derives the leader lock's the same way, so its `housekeeping` turn is `HOUSEKEEPING_LOCK`): replicas of two releases take the same ones | `the_lock_key_is_derived_as_documented`, `the_leader_locks_keys_are_the_services_locks` |
 | the service's migration files, `wa_server_sqlx_migrations` | `meta-whatsapp-server/migrations/*.sql`, `MIGRATIONS_TABLE` | the service's `wa_server_*` tables (the operator-only event stream `''` included) and its migration history; an edited file makes `migrate` refuse every database migrated before | `the_migrations_and_their_checksums_are_pinned` |
-| `wak_` | `PREFIX`, `KEY_ID_CHARS`, `SECRET_CHARS`, `meta-whatsapp-server/src/keys.rs` | API keys' prefix and layout (`wak_` + 17 + `_` + 43 base62 characters), held by every integrator | `the_key_layout_is_pinned` (literals); `a_minted_key_parses_and_matches_its_digest_only`, `malformed_keys_do_not_parse`, `base62_is_fixed_width_big_endian` |
+| `wak_` | `PREFIX`, `KEY_ID_CHARS`, `SECRET_CHARS`, `meta-whatsapp-server-core/src/keys.rs` | API keys' prefix and layout (`wak_` + 17 + `_` + 43 base62 characters), held by every integrator | `the_key_layout_is_pinned` (literals); `a_minted_key_parses_and_matches_its_digest_only`, `malformed_keys_do_not_parse`, `base62_is_fixed_width_big_endian` |
 | `wa.bot.cooldown`, `wa.bot.cooldown.notice` | `COOLDOWN_NAMESPACE`, `COOLDOWN_NOTICE_NAMESPACE`, `meta-whatsapp-bot/src/guard.rs` | store namespaces of the bot's command cooldowns and of their "please wait" markers (key: SHA-256 hex of the length-prefixed business number, command and user key). **Ephemeral**: changing it forgets running cooldowns (they last one period at most) and may repeat one notice each; no data is stranded | `the_cooldown_key_is_pinned_and_hashed` |
 
 Library store namespaces are `wa.<module>[.<purpose>]` (`wa.token`,
@@ -687,6 +726,26 @@ Logs carry sizes, digests and field names only — never payload values.
 - `store::{MemoryKvStore, MemoryConversationStore}` (feature `memory`).
 - `store::{PostgresKvStore, PostgresConversationStore}` (feature
   `postgres`, sqlx, embedded migrations, `wa_` table prefix configurable).
+  Migration 4 adds `wa_window_events`, `wa_thread_owners`,
+  `wa_synced_contacts` (keyed by business number and contact; a window
+  event by business number and id) and `wa_identity_links`, a nullable
+  `wa_messages.sender` (back-filled from the payloads already stored,
+  indexed with the business number; a row the back-fill could not read,
+  or that the previous revision wrote, gets it from the next erasure on
+  its number, in Rust) and the indexes purge by age reads; it changes no
+  existing column, so the previous revision keeps working beside it
+  (writing no sender), but its `migrate` refuses the database.
+  `erase_all` and `purge_before` delete in one statement each, under two
+  transaction-level advisory locks (design D33): the **number lock**
+  (`append` and `append_synced` take it shared, `erase_all` exclusive, so
+  an append in flight is either erased with the rest or recorded after
+  the erasure with a summary of its own, never left without one) and the
+  **purge lock** (`purge_before` exclusive, `erase_all` shared: purges
+  take turns, and an erasure and a purge never deadlock on rows their
+  plans visit in opposite orders); the group messages an erasure
+  redacts or deletes are the number's, so the number lock covers them;
+  `set_thread_owner` and `put_contact` one upsert
+  whose update applies only when the stored record is not later.
 - `store::RedisKvStore` (feature `redis`; CAS via Lua). Requires the
   `noeviction` policy: every key with a TTL here enforces a limit (OTP
   issue logs, dedup markers), and Redis evicts silently.
@@ -964,14 +1023,45 @@ decisions and the delivery milestones, is
 [docs/design/server.md](design/server.md); what is built so far is in
 [docs/coverage.md](coverage.md). The rules that bind it to the library:
 
-- **A binary on the facade.** `crates/meta-whatsapp-server` (binary
-  `meta-whatsapp-server`, `publish = false`, a workspace member so `just
-  ci` covers it) depends on `meta-whatsapp-rs` and on no other crate of
-  this workspace; axum and sqlx come through the facade's re-exports
-  (`meta_whatsapp_rs::webhooks::axum`,
-  `meta_whatsapp_rs::adapters::store::postgres::sqlx`). What the service
-  cannot build from the facade, an integrator could not either: the gap is
-  a library change of its own, not a private shortcut.
+- **A family of crates on the facade.** The service's crates depend on
+  `meta-whatsapp-rs` and on each other, never on another crate of the
+  library, and no library crate depends on them. Each is `publish =
+  false`, a workspace member (so `just ci` covers it) but not a default
+  one. What the service cannot build from the facade, an integrator could
+  not either: the gap is a library change of its own, not a private
+  shortcut.
+  - `crates/meta-whatsapp-server-core`: the framework-free core. The
+    domain (tenants, keys, bindings, idempotency records), the
+    authorization order (credential to `Caller`; ownership to
+    `OwnedNumber`/`OwnedWaba`, the only way to a vault token; each
+    capability works only with the `Authorizer` that made it, which
+    refuses another's with `403`; an adapter that takes a capability
+    from outside its own code calls `Authorizer::admit` or
+    `admit_admin` before acting on it, as the service's extractors do:
+    design §8.1), event
+    routing and polling, the idempotency engine, the rate limiter, and
+    the error model as data (`ServiceError`: a code of `CODES`, its status
+    as a number, `retryable`, `may_have_been_sent`). It depends on the
+    facade without its adapters' features: no axum, no sqlx, no utoipa
+    (the `http` crate is in its graph only through the library, whose
+    `HttpTransport` port and client speak it; no `http` type crosses the
+    core's API).
+  - `crates/meta-whatsapp-server` (binary `meta-whatsapp-server`): the
+    HTTP API (axum and the OpenAPI document, through the facade's
+    re-exports `meta_whatsapp_rs::webhooks::axum` and
+    `meta_whatsapp_rs::adapters::store::postgres::sqlx`), which renders
+    the core's errors, the webhook pipeline, configuration, and the
+    backends.
+- **Ports, and a backend as the unit of swapping.** The core stores
+  through ports: `RecordStore` (tenants, keys, bindings),
+  `IdempotencyRecords`, `Outbox`, `LeaderLock` (`try_exclusive(name)`),
+  `Janitor` (expired rows nothing else deletes) and `SchemaMigrator`. A
+  `Backend` gives all of them, and the library's `KvStore` and
+  `ConversationStore`, over one database, because they share its
+  guarantees (deleting a tenant reaches its idempotency records and its
+  event stream; the Postgres outbox re-reads the bindings under a lock).
+  The service has two, memory and Postgres. No port names a database
+  driver's, an HTTP framework's or an API toolkit's type.
 - **One multi-tenant deployment per Meta app** (the owner's decision D1):
   every merchant onboarded through the app delivers to its one callback
   URL. Tenants are the integrator's ids; a tenant owns WABAs, a WABA owns

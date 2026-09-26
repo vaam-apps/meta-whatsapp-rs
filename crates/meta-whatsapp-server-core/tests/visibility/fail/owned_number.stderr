@@ -1,0 +1,13 @@
+error: cannot construct `OwnedNumber` with struct literal syntax due to private fields
+  --> tests/visibility/fail/owned_number.rs:7:5
+   |
+ 7 |     OwnedNumber {
+   |     ^^^^^^^^^^^
+ 8 |         phone_number_id,
+   |         --------------- private field
+ 9 |         waba_id,
+   |         ------- private field
+10 |         client,
+   |         ------ private field
+   |
+   = note: ...and other private field `issuer` that was not provided

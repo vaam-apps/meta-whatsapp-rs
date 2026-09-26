@@ -11,6 +11,7 @@
 
 mod common;
 
+use std::fmt::Write as _;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -19,10 +20,11 @@ use meta_whatsapp_adapters::store::{
     PostgresConversationStore, PostgresKvStore, conformance, conversation_conformance,
 };
 use meta_whatsapp_core::error::StorageError;
-use meta_whatsapp_core::ids::MessageId;
+use meta_whatsapp_core::ids::{AppId, MessageId, UserId};
 use meta_whatsapp_core::store::{
-    ConversationKey, ConversationStore, DeliveryStatus, Direction, Expiry, KvStore, StoreKey,
-    StoredMessage,
+    ConversationKey, ConversationStore, DeliveryStatus, Direction, Erased, ErasureMode, Expiry,
+    IdentityLink, KvStore, Purged, Retention, StoreKey, StoredContact, StoredMessage, ThreadOwner,
+    ThreadOwnership, WindowEvent, WindowEventKind,
 };
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{AssertSqlSafe, PgPool};
@@ -92,7 +94,7 @@ impl TestDb {
              WHERE table_schema = $1 AND table_name IN ('wa_messages', 'wa_conversations') \
                AND column_name NOT IN ('id', 'phone_number_id', 'contact', 'direction', \
                  'status', 'ts', 'status_at', 'last_message_at', 'last_message_id', \
-                 'last_inbound_at', 'unread') \
+                 'last_inbound_at', 'unread', 'sender') \
              ORDER BY 1, 2",
         )
         .bind(&self.schema)
@@ -134,6 +136,21 @@ async fn live_postgres_conversation_conformance() {
     };
     postgres::migrate(&db.pool).await.unwrap();
     let store = PostgresConversationStore::new(db.pool.clone());
+    assert_eq!(store.erasure_mode(), ErasureMode::Redact);
+    conversation_conformance::run(&store).await;
+}
+
+/// The suite's group erasure case takes the other branch on a store that
+/// deletes an erased person's group messages.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_conversation_conformance_deleting_group_messages() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let store =
+        PostgresConversationStore::new(db.pool.clone()).with_erasure_mode(ErasureMode::Delete);
+    assert_eq!(store.erasure_mode(), ErasureMode::Delete);
     conversation_conformance::run(&store).await;
 }
 
@@ -369,18 +386,22 @@ async fn live_postgres_migrate_is_idempotent_under_concurrency() {
         pool.close().await;
     }
     postgres::migrate(&db.pool).await.unwrap();
-    assert_eq!(
-        db.table_names().await,
-        [
-            "wa_conversations",
-            "wa_kv",
-            "wa_messages",
-            "wa_sqlx_migrations"
-        ]
-    );
-    assert_eq!(db.applied_migrations().await, [1, 2, 3]);
+    assert_eq!(db.table_names().await, DEFAULT_TABLES);
+    assert_eq!(db.applied_migrations().await, [1, 2, 3, 4]);
     assert_eq!(db.content_columns().await, LOSSLESS_CONTENT_COLUMNS);
 }
+
+/// Every table of the default prefix, by name.
+const DEFAULT_TABLES: [&str; 8] = [
+    "wa_conversations",
+    "wa_identity_links",
+    "wa_kv",
+    "wa_messages",
+    "wa_sqlx_migrations",
+    "wa_synced_contacts",
+    "wa_thread_owners",
+    "wa_window_events",
+];
 
 /// The content columns after migration 3: bytes and `json`, no `text` or
 /// `jsonb` left.
@@ -423,6 +444,366 @@ async fn migrate_like_09db4aa(pool: &PgPool) -> Result<(), sqlx::migrate::Migrat
     let mut migrator = Migrator::with_migrations(old);
     migrator.dangerous_set_table_name("wa_sqlx_migrations");
     migrator.run(pool).await
+}
+
+/// The three migrations of the revision before migration 4 (b66972c, PR
+/// #21), as its `migrate` ran them.
+async fn migrate_like_b66972c(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
+    use sqlx::SqlSafeStr;
+    use sqlx::migrate::{Migration, MigrationType, Migrator};
+    let old = [
+        (1, "kv", include_str!("../migrations/0001_kv.sql")),
+        (
+            2,
+            "conversations",
+            include_str!("../migrations/0002_conversations.sql"),
+        ),
+        (
+            3,
+            "lossless content",
+            include_str!("../migrations/0003_lossless_content.sql"),
+        ),
+    ]
+    .into_iter()
+    .map(|(version, description, sql)| {
+        Migration::new(
+            version,
+            description.into(),
+            MigrationType::Simple,
+            AssertSqlSafe(sql.replace("{prefix}", "wa_")).into_sql_str(),
+            false,
+        )
+    })
+    .collect();
+    let mut migrator = Migrator::with_migrations(old);
+    migrator.dangerous_set_table_name("wa_sqlx_migrations");
+    migrator.run(pool).await
+}
+
+/// Migration 4 adds tables, indexes and a column: a database the previous
+/// revision (b66972c) wrote keeps its rows, which get their sender (but
+/// one whose payload holds U+0000), that revision's `append` (which takes
+/// no lock and writes no sender) keeps working beside the new one, and
+/// only its `migrate` refuses the database. An erasure reaches every group
+/// message of the person all the same: the one written before, the one
+/// the back-fill skipped and the one the previous revision wrote after
+/// the migration.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)] // one upgrade, read top to bottom
+async fn live_postgres_migration_4_keeps_the_previous_revision_working() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    migrate_like_b66972c(&db.pool).await.unwrap();
+    assert_eq!(db.applied_migrations().await, [1, 2, 3]);
+    let store = PostgresConversationStore::new(db.pool.clone());
+    let [inbound, outbound, other] = written_by_09db4aa();
+    let group = ConversationKey::new("pn-upgrade", "HBgGROUP");
+    let in_group = StoredMessage {
+        id: MessageId::new("wamid.before-group"),
+        conversation: group.clone(),
+        payload: serde_json::json!({"from": "16505551234", "from_user_id": "US.1",
+            "group_id": "HBgGROUP", "type": "text", "text": {"body": "hi"}}),
+        ..inbound.clone()
+    };
+    let with_nul = StoredMessage {
+        id: MessageId::new("wamid.before-nul"),
+        conversation: group.clone(),
+        payload: serde_json::json!({"from": "16505551234", "from_user_id": "US.1",
+            "type": "text", "text": {"body": "a\u{0}b"}}),
+        timestamp: datetime!(2026-09-24 12:01 UTC),
+        ..inbound.clone()
+    };
+    for m in [&inbound, &outbound, &other, &in_group, &with_nul] {
+        append_like_b66972c(&db.pool, m).await.unwrap();
+    }
+    let key = inbound.conversation.clone();
+    let before = store.messages(&key, None, 10).await.unwrap();
+    let summaries = store
+        .conversations(&key.phone_number_id, None, 10)
+        .await
+        .unwrap();
+
+    let runs = (0..3).map(|_| postgres::migrate(&db.pool));
+    for result in futures::future::join_all(runs).await {
+        result.unwrap();
+    }
+    assert_eq!(db.applied_migrations().await, [1, 2, 3, 4]);
+    assert_eq!(db.table_names().await, DEFAULT_TABLES);
+    let senders: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT id, sender FROM wa_messages ORDER BY id")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        senders,
+        [
+            ("wamid.before-1".to_owned(), None),
+            ("wamid.before-2".to_owned(), None),
+            ("wamid.before-3".to_owned(), None),
+            ("wamid.before-group".to_owned(), Some("US.1".to_owned())),
+            ("wamid.before-nul".to_owned(), None),
+        ],
+        "back-filled by `StoredMessage::sender`'s rule, but for a payload holding U+0000"
+    );
+    assert_eq!(store.messages(&key, None, 10).await.unwrap(), before);
+    assert_eq!(
+        store
+            .conversations(&key.phone_number_id, None, 10)
+            .await
+            .unwrap(),
+        summaries,
+        "rows written before keep their content, window and count"
+    );
+    let late = StoredMessage {
+        id: MessageId::new("wamid.after-4"),
+        timestamp: datetime!(2026-09-24 16:00 UTC),
+        ..inbound.clone()
+    };
+    append_like_b66972c(&db.pool, &late)
+        .await
+        .expect("the previous revision's append still works");
+    // A group message the previous revision records after the migration
+    // ran (a rolling upgrade): it writes no sender.
+    let late_in_group = StoredMessage {
+        id: MessageId::new("wamid.after-4-group"),
+        timestamp: datetime!(2026-09-24 16:02 UTC),
+        ..in_group.clone()
+    };
+    append_like_b66972c(&db.pool, &late_in_group).await.unwrap();
+    let later = StoredMessage {
+        id: MessageId::new("wamid.after-4-new"),
+        timestamp: datetime!(2026-09-24 16:01 UTC),
+        ..inbound.clone()
+    };
+    assert!(
+        store.append(later.clone()).await.unwrap(),
+        "and the new one"
+    );
+    assert!(
+        matches!(
+            migrate_like_b66972c(&db.pool).await,
+            Err(sqlx::migrate::MigrateError::VersionMissing(4))
+        ),
+        "the previous revision's migrate refuses the upgraded database"
+    );
+    assert_eq!(
+        store.message(&key.phone_number_id, &late.id).await.unwrap(),
+        Some(late)
+    );
+    assert_eq!(
+        store
+            .message(&key.phone_number_id, &later.id)
+            .await
+            .unwrap(),
+        Some(later.clone())
+    );
+    let summary = store
+        .conversations(&key.phone_number_id, None, 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|s| s.key == key)
+        .unwrap();
+    assert_eq!(
+        (summary.last_message_at, summary.unread),
+        (later.timestamp, 3),
+        "both revisions' appends kept the summary"
+    );
+    let erased = store
+        .erase_all(&group.phone_number_id, &["US.1".to_owned()])
+        .await
+        .unwrap();
+    assert_eq!(
+        erased.group_messages, 3,
+        "the group messages written before migration 4, the one whose payload holds U+0000 \
+         (not back-filled) and the one the previous revision wrote after the migration (no \
+         sender): the erasure reads the payloads of the rows without a sender"
+    );
+    for m in [&in_group, &with_nul, &late_in_group] {
+        let mut redacted = m.clone();
+        redacted.redact();
+        assert_eq!(
+            store.message(&group.phone_number_id, &m.id).await.unwrap(),
+            Some(redacted),
+            "{}",
+            m.id
+        );
+    }
+    let left: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT id, sender FROM wa_messages WHERE contact = $1 ORDER BY id")
+            .bind(&group.contact)
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+    assert!(
+        left.iter().all(|(_, sender)| sender.is_none()),
+        "no sender left on a redacted row: {left:?}"
+    );
+}
+
+/// Migration 4's back-fill follows `StoredMessage::sender`'s rule, row for
+/// row (the BSUID, else the phone number, of an inbound message; an empty
+/// or non-string value is none; an outbound message has none), except for
+/// a payload whose JSON text holds the escape `\u0000` (the `json`
+/// operators fail on a NUL; a text holding a backslash then `u0000` is
+/// skipped too). Those rows get their sender from the first erasure on
+/// their number, which reads the payload in Rust: the erasure reaches
+/// every one of them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_migration_4_backfills_senders_by_the_rust_rule() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    migrate_like_b66972c(&db.pool).await.unwrap();
+    let group = ConversationKey::new("pn-backfill", "HBgBACKFILL");
+    let variants = [
+        serde_json::json!({"from": "16505550001", "from_user_id": "US.1", "type": "text"}),
+        serde_json::json!({"from": "16505550002"}),
+        serde_json::json!({"from": "16505550003", "from_user_id": ""}),
+        serde_json::json!({"from": "16505550004", "from_user_id": 4}),
+        serde_json::json!({"from": "16505550005", "from_user_id": null}),
+        serde_json::json!({"from": ""}),
+        serde_json::json!({"text": {"from": "16505550006"}}),
+        serde_json::json!({}),
+        serde_json::json!([{"from": "16505550007"}]),
+        serde_json::json!("16505550008"),
+        serde_json::json!({"from": "16505550009", "from_user_id": "US.9",
+            "text": {"body": "a\u{0}b"}}),
+        serde_json::json!({"from": "16505550010", "from_user_id": "US.10",
+            "text": {"body": "typed \\u0000"}}),
+        serde_json::json!({"from": "16505550011", "from_user_id": "US.\u{e9}11"}),
+    ];
+    let mut messages: Vec<StoredMessage> = variants
+        .iter()
+        .enumerate()
+        .map(|(i, payload)| StoredMessage {
+            id: MessageId::new(format!("wamid.backfill-{i:02}")),
+            conversation: group.clone(),
+            direction: Direction::Inbound,
+            kind: "text".to_owned(),
+            text: Some(format!("variant {i}")),
+            payload: payload.clone(),
+            status: DeliveryStatus::Received,
+            timestamp: datetime!(2026-09-24 12:00 UTC)
+                + time::Duration::minutes(i64::try_from(i).unwrap()),
+            status_at: None,
+            error: None,
+        })
+        .collect();
+    messages.push(StoredMessage {
+        id: MessageId::new("wamid.backfill-outbound"),
+        direction: Direction::Outbound,
+        status: DeliveryStatus::Accepted,
+        ..messages[0].clone()
+    });
+    for m in &messages {
+        append_like_b66972c(&db.pool, m).await.unwrap();
+    }
+    postgres::migrate(&db.pool).await.unwrap();
+
+    let stored: std::collections::BTreeMap<String, Option<String>> =
+        sqlx::query_as::<_, (String, Option<String>)>("SELECT id, sender FROM wa_messages")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .collect();
+    for m in &messages {
+        let text = serde_json::to_string(&m.payload).unwrap();
+        let expected = if text.contains("\\u0000") {
+            None
+        } else {
+            m.sender().map(str::to_owned)
+        };
+        assert_eq!(stored[m.id.as_str()], expected, "{}: {}", m.id, m.payload);
+    }
+    assert_eq!(
+        messages[10].sender(),
+        Some("US.9"),
+        "the Rust rule reads past a NUL elsewhere in the payload"
+    );
+    assert_eq!(stored["wamid.backfill-10"], None, "not back-filled");
+    assert_eq!(stored["wamid.backfill-11"], None, "not back-filled");
+
+    let store = PostgresConversationStore::new(db.pool.clone());
+    let senders: Vec<String> = messages
+        .iter()
+        .filter_map(|m| m.sender().map(str::to_owned))
+        .collect();
+    assert_eq!(senders.len(), 8);
+    let erased = store
+        .erase_all(&group.phone_number_id, &senders)
+        .await
+        .unwrap();
+    assert_eq!(
+        erased.group_messages, 8,
+        "every message with a sender, back-filled or not"
+    );
+    for m in &messages {
+        let left = store
+            .message(&group.phone_number_id, &m.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            left.kind == StoredMessage::ERASED,
+            m.sender().is_some(),
+            "{}",
+            m.id
+        );
+    }
+}
+
+/// b66972c's `append` statement, verbatim (default prefix): lossless
+/// content, and no lock (the number lock came with the review of L5).
+const APPEND_B66972C: &str = "WITH inserted AS ( \
+       INSERT INTO wa_messages (id, phone_number_id, contact, direction, kind_utf8, text_utf8, \
+         payload_json, status, ts, status_at, error_json) \
+       VALUES ($1, $2, $3, $4, $5, $6, $7::json, $8, $9, $10, $11::json) \
+       ON CONFLICT (id) DO NOTHING \
+       RETURNING id, phone_number_id, contact, direction, text_utf8, ts \
+     ) \
+     INSERT INTO wa_conversations AS c \
+       (phone_number_id, contact, last_message_at, last_message_id, last_text_utf8, \
+        last_inbound_at, unread) \
+     SELECT phone_number_id, contact, ts, id, text_utf8, \
+       CASE WHEN direction = 'inbound' THEN ts END, \
+       CASE WHEN direction = 'inbound' THEN 1 ELSE 0 END \
+     FROM inserted \
+     ON CONFLICT (phone_number_id, contact) DO UPDATE SET \
+       last_message_at = CASE WHEN (EXCLUDED.last_message_at, EXCLUDED.last_message_id) \
+         > (c.last_message_at, c.last_message_id) THEN EXCLUDED.last_message_at ELSE c.last_message_at END, \
+       last_message_id = CASE WHEN (EXCLUDED.last_message_at, EXCLUDED.last_message_id) \
+         > (c.last_message_at, c.last_message_id) THEN EXCLUDED.last_message_id ELSE c.last_message_id END, \
+       last_text_utf8 = CASE WHEN (EXCLUDED.last_message_at, EXCLUDED.last_message_id) \
+         > (c.last_message_at, c.last_message_id) THEN EXCLUDED.last_text_utf8 ELSE c.last_text_utf8 END, \
+       last_inbound_at = GREATEST(c.last_inbound_at, EXCLUDED.last_inbound_at), \
+       unread = c.unread + EXCLUDED.unread \
+     RETURNING 1 AS appended";
+
+/// Append `m` the way b66972c did.
+async fn append_like_b66972c(pool: &PgPool, m: &StoredMessage) -> Result<(), sqlx::Error> {
+    let status = serde_json::to_value(m.status).unwrap();
+    let appended = sqlx::query(APPEND_B66972C)
+        .bind(m.id.as_str())
+        .bind(m.conversation.phone_number_id.as_str())
+        .bind(m.conversation.contact.as_str())
+        .bind(match m.direction {
+            Direction::Inbound => "inbound",
+            Direction::Outbound => "outbound",
+        })
+        .bind(m.kind.as_bytes())
+        .bind(m.text.as_deref().map(str::as_bytes))
+        .bind(serde_json::to_string(&m.payload).unwrap())
+        .bind(status.as_str().unwrap())
+        .bind(m.timestamp)
+        .bind(m.status_at)
+        .bind(m.error.as_ref().map(|e| serde_json::to_string(e).unwrap()))
+        .execute(pool)
+        .await?;
+    assert_eq!(appended.rows_affected(), 1, "{} appended", m.id);
+    Ok(())
 }
 
 /// 09db4aa's `append` statement, verbatim (default prefix): what an
@@ -599,7 +980,7 @@ async fn live_postgres_upgrade_keeps_existing_content_and_stops_old_writers() {
     for result in futures::future::join_all(runs).await {
         result.unwrap();
     }
-    assert_eq!(db.applied_migrations().await, [1, 2, 3]);
+    assert_eq!(db.applied_migrations().await, [1, 2, 3, 4]);
     assert_eq!(db.content_columns().await, LOSSLESS_CONTENT_COLUMNS);
 
     let store = PostgresConversationStore::new(db.pool.clone());
@@ -754,7 +1135,7 @@ async fn content_columns_of(pool: &PgPool) -> Vec<String> {
            AND table_name IN ('wa_messages', 'wa_conversations') \
            AND column_name NOT IN ('id', 'phone_number_id', 'contact', 'direction', \
              'status', 'ts', 'status_at', 'last_message_at', 'last_message_id', \
-             'last_inbound_at', 'unread') \
+             'last_inbound_at', 'unread', 'sender') \
          ORDER BY 1, 2",
     )
     .fetch_all(pool)
@@ -1050,19 +1431,13 @@ async fn live_postgres_custom_prefix_is_isolated() {
     postgres::migrate_with_prefix(&db.pool, &tenant)
         .await
         .unwrap();
-    assert_eq!(
-        db.table_names().await,
-        [
-            "tenant_x_conversations",
-            "tenant_x_kv",
-            "tenant_x_messages",
-            "tenant_x_sqlx_migrations",
-            "wa_conversations",
-            "wa_kv",
-            "wa_messages",
-            "wa_sqlx_migrations",
-        ]
-    );
+    let mut tables: Vec<String> = DEFAULT_TABLES
+        .iter()
+        .map(|t| t.replacen("wa_", "tenant_x_", 1))
+        .chain(DEFAULT_TABLES.iter().map(|t| (*t).to_owned()))
+        .collect();
+    tables.sort_unstable();
+    assert_eq!(db.table_names().await, tables);
 
     let default = PostgresKvStore::new(db.pool.clone());
     let custom = PostgresKvStore::with_prefix(db.pool.clone(), tenant.clone());
@@ -1079,10 +1454,11 @@ async fn live_postgres_custom_prefix_is_isolated() {
     assert_eq!(custom.get(&k).await.unwrap().unwrap().value, b"custom");
 
     conformance::run_with_real_time(&custom, Duration::from_millis(500)).await;
-    conversation_conformance::run(&PostgresConversationStore::with_prefix(
-        db.pool.clone(),
-        tenant,
-    ))
+    // With a retention, the suite's retention case takes its other branch.
+    conversation_conformance::run(
+        &PostgresConversationStore::with_prefix(db.pool.clone(), tenant)
+            .with_retention(Retention::days(30)),
+    )
     .await;
 }
 
@@ -1181,4 +1557,1265 @@ async fn live_postgres_debug_is_redacted_and_missing_tables_are_errors() {
             .is_err(),
         "no tables yet: queries fail with a backend error, not a panic"
     );
+}
+
+/// Rows of every table of the schema whose JSON rendering holds one of
+/// `needles`, as text or (for a `BYTEA` column, which renders as hex) as
+/// the hex of its UTF-8 bytes, by table. Every table: one added later is
+/// swept too.
+async fn rows_mentioning(db: &TestDb, needles: &[&str]) -> Vec<(String, i64)> {
+    let mut found = Vec::new();
+    for table in db.table_names().await {
+        let mut total = 0;
+        for needle in needles {
+            let hex = needle.bytes().fold(String::new(), |mut hex, b| {
+                write!(hex, "{b:02x}").unwrap();
+                hex
+            });
+            let n: i64 = sqlx::query_scalar(AssertSqlSafe(format!(
+                "SELECT count(*) FROM {schema}.{table} t \
+                 WHERE position($1 IN row_to_json(t)::text) > 0 \
+                    OR position($2 IN row_to_json(t)::text) > 0",
+                schema = db.schema
+            )))
+            .bind(*needle)
+            .bind(hex)
+            .fetch_one(&db.admin)
+            .await
+            .unwrap();
+            total += n;
+        }
+        found.push((table, total));
+    }
+    found
+}
+
+/// The group both contacts of the erasure sweep write in.
+const SWEEP_GROUP: &str = "HBgLMTY1MDM4Nzk0MzkVAgASGBQ";
+
+/// Everything of one contact: a message of every origin and a tombstone,
+/// the summary, window events, the ownership record, a contact removal
+/// kept under the key, a synced contact naming it, an identity link, and
+/// a message in [`SWEEP_GROUP`] at `group_minute` (sent by their BSUID and
+/// their phone number, `1650555` and the length of the key's contact),
+/// content marked with `marker`.
+#[allow(clippy::too_many_lines)] // one record of every kind
+async fn record_a_contact(
+    store: &PostgresConversationStore,
+    key: &ConversationKey,
+    marker: &str,
+    group_minute: i64,
+) {
+    let phone = format!("1650555{}", key.contact.len());
+    let id = |local: &str| MessageId::new(format!("wamid.{}.{local}", key.contact));
+    let message = |local: &str, direction, minute: i64| StoredMessage {
+        id: id(local),
+        conversation: key.clone(),
+        direction,
+        kind: "text".to_owned(),
+        text: Some(format!("{marker} said {local}")),
+        payload: serde_json::json!({"from": phone, "from_user_id": key.contact,
+            "text": {"body": format!("{marker} \0 {local}")}}),
+        status: match direction {
+            Direction::Inbound => DeliveryStatus::Received,
+            Direction::Outbound => DeliveryStatus::Accepted,
+        },
+        timestamp: datetime!(2026-09-24 12:00 UTC) + time::Duration::minutes(minute),
+        status_at: None,
+        error: None,
+    };
+    assert!(
+        store
+            .append(message("in", Direction::Inbound, 1))
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .append(message("out", Direction::Outbound, 2))
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .update_status(
+                &key.phone_number_id,
+                &id("out"),
+                DeliveryStatus::Failed,
+                datetime!(2026-09-24 12:03 UTC),
+                Some(serde_json::json!({"title": format!("{marker} failed")})),
+            )
+            .await
+            .unwrap()
+    );
+    let placeholder = StoredMessage {
+        kind: StoredMessage::MEDIA_PLACEHOLDER.to_owned(),
+        text: None,
+        ..message("media", Direction::Inbound, -2)
+    };
+    assert_eq!(
+        store
+            .append_synced(vec![message("synced", Direction::Inbound, -1), placeholder])
+            .await
+            .unwrap(),
+        [true, true]
+    );
+    assert!(
+        store
+            .fill_media_placeholder(
+                &key.phone_number_id,
+                &id("media"),
+                "image".to_owned(),
+                Some(format!("{marker} caption")),
+                serde_json::json!({"image": {"caption": format!("{marker} caption")}}),
+            )
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .revoke(
+                key,
+                &id("gone"),
+                Direction::Inbound,
+                datetime!(2026-09-24 12:04 UTC)
+            )
+            .await
+            .unwrap()
+    );
+    for (local, kind) in [
+        ("call", WindowEventKind::CustomerCall),
+        ("standby", WindowEventKind::StandbyMessage),
+    ] {
+        assert!(
+            store
+                .record_window_event(WindowEvent {
+                    conversation: key.clone(),
+                    kind,
+                    id: format!("wacid.{}.{local}", key.contact),
+                    at: datetime!(2026-09-24 12:05 UTC),
+                })
+                .await
+                .unwrap()
+        );
+    }
+    assert!(
+        store
+            .set_thread_owner(
+                key,
+                ThreadOwnership {
+                    owner: ThreadOwner::AnotherApp,
+                    role: Some("escalation".to_owned()),
+                    app_id: Some(AppId::new("1234")),
+                    since: datetime!(2026-09-24 12:06 UTC),
+                },
+            )
+            .await
+            .unwrap()
+    );
+    let contact = StoredContact {
+        key: key.clone(),
+        full_name: Some(format!("{marker} Full")),
+        first_name: Some(format!("{marker} First")),
+        phone_number: None,
+        user_id: Some(UserId::new(key.contact.clone())),
+        parent_user_id: None,
+        username: Some(format!("{marker}_user")),
+        synced_at: datetime!(2026-09-24 12:07 UTC),
+    };
+    assert!(store.put_contact(contact.clone()).await.unwrap());
+    // Removed: the removal kept under the key is the key's record too.
+    assert!(
+        store
+            .remove_contact(key, datetime!(2026-09-24 12:08 UTC))
+            .await
+            .unwrap()
+    );
+    // Keyed by phone number, naming the contact's BSUID.
+    assert!(
+        store
+            .put_contact(StoredContact {
+                key: ConversationKey::new(key.phone_number_id.clone(), phone.clone()),
+                phone_number: Some(phone.clone()),
+                ..contact
+            })
+            .await
+            .unwrap()
+    );
+    // Their earlier BSUID.
+    assert!(
+        store
+            .link_identity(IdentityLink::new(
+                key.phone_number_id.clone(),
+                format!("{}.EARLIER", key.contact),
+                key.contact.clone(),
+                datetime!(2026-09-24 11:00 UTC),
+            ))
+            .await
+            .unwrap()
+    );
+    // What they wrote in a group, which is keyed by the group.
+    let text = format!("{marker} in the group");
+    assert!(
+        store
+            .append(StoredMessage {
+                id: id("group"),
+                conversation: ConversationKey::new(key.phone_number_id.clone(), SWEEP_GROUP),
+                kind: "text".to_owned(),
+                text: Some(text.clone()),
+                payload: serde_json::json!({"from": phone, "from_user_id": key.contact,
+                    "group_id": SWEEP_GROUP, "type": "text", "text": {"body": text}}),
+                ..message("group", Direction::Inbound, group_minute)
+            })
+            .await
+            .unwrap()
+    );
+}
+
+/// Decisive for erasure on Postgres: after `erase_all` over the contact's
+/// `identities`, no row of any table of the schema mentions the erased
+/// contact, their phone number or their earlier BSUID, or holds their
+/// content (text, payloads, errors, the preview, window events, the
+/// owner, synced contacts' names, the identity link, their group message
+/// and the group's preview), while another contact of the number keeps
+/// every one of its records. An erase that leaves any table out, or the
+/// group message, fails here. Under `ErasureMode::Redact` one thing is
+/// kept on purpose: the group message's id (a real `wamid` encodes the
+/// sender's phone number; the sweep's ids spell the contact out), in its
+/// row and as the group's latest message.
+#[allow(clippy::too_many_lines)] // one sweep, read top to bottom
+async fn sweep_after_erasure(mode: ErasureMode) {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let store = PostgresConversationStore::new(db.pool.clone()).with_erasure_mode(mode);
+    let erased = ConversationKey::new("106540352242922", "US.ERASED.13491208655302741918");
+    let kept = ConversationKey::new("106540352242922", "US.KEPT.13491208655302741918");
+    let (erased_marker, kept_marker) = ("erase-me-7f3a", "keep-me-c21d");
+    // The erased contact's group message is the group's latest.
+    record_a_contact(&store, &kept, kept_marker, 9).await;
+    record_a_contact(&store, &erased, erased_marker, 10).await;
+
+    let holding = |found: &[(String, i64)]| -> Vec<String> {
+        found
+            .iter()
+            .filter(|(_, n)| *n > 0)
+            .map(|(t, _)| t.clone())
+            .collect()
+    };
+    let every_record_table = [
+        "wa_conversations",
+        "wa_identity_links",
+        "wa_messages",
+        "wa_synced_contacts",
+        "wa_thread_owners",
+        "wa_window_events",
+    ];
+    let phone = format!("1650555{}", erased.contact.len());
+    let earlier = format!("{}.EARLIER", erased.contact);
+    let content = [erased_marker, phone.as_str(), earlier.as_str()];
+    let needles = [erased.contact.as_str(), erased_marker];
+    assert_eq!(
+        holding(&rows_mentioning(&db, &needles).await),
+        every_record_table,
+        "the sweep sees the contact in every table before the erasure"
+    );
+
+    let ids: Vec<String> = store
+        .identities(&erased)
+        .await
+        .unwrap()
+        .into_iter()
+        .collect();
+    assert_eq!(
+        ids,
+        [phone.clone(), erased.contact.clone(), earlier.clone()]
+    );
+    assert_eq!(
+        store
+            .erase_all(&erased.phone_number_id, &ids)
+            .await
+            .unwrap(),
+        Erased {
+            messages: 5,
+            conversations: 1,
+            window_events: 2,
+            thread_owners: 1,
+            contacts: 2,
+            identity_links: 1,
+            group_messages: 1,
+        }
+    );
+    let left = rows_mentioning(&db, &content).await;
+    assert!(
+        holding(&left).is_empty(),
+        "rows holding the erased contact's content or identities remain: {left:?}"
+    );
+    let group = ConversationKey::new(erased.phone_number_id.clone(), SWEEP_GROUP);
+    let group_id = MessageId::new(format!("wamid.{}.group", erased.contact));
+    let summary = store
+        .conversations(&group.phone_number_id, None, 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|s| s.key == group)
+        .unwrap();
+    let left = rows_mentioning(&db, &[erased.contact.as_str()]).await;
+    if mode == ErasureMode::Delete {
+        assert!(
+            holding(&left).is_empty(),
+            "rows mentioning the erased contact remain: {left:?}"
+        );
+        assert_eq!(
+            store
+                .message(&group.phone_number_id, &group_id)
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            summary.last_text.as_deref(),
+            Some(format!("{kept_marker} in the group").as_str()),
+            "the group's summary follows the other contact's message"
+        );
+    } else {
+        assert_eq!(
+            left.iter()
+                .filter(|(_, n)| *n > 0)
+                .cloned()
+                .collect::<Vec<_>>(),
+            [
+                ("wa_conversations".to_owned(), 1),
+                ("wa_messages".to_owned(), 1)
+            ],
+            "only the redacted group message's id, in its row and as the group's latest"
+        );
+        let redacted = store
+            .message(&group.phone_number_id, &group_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (
+                redacted.kind.as_str(),
+                redacted.text,
+                redacted.payload,
+                redacted.error
+            ),
+            (StoredMessage::ERASED, None, serde_json::json!({}), None)
+        );
+        let sender: Option<String> =
+            sqlx::query_scalar("SELECT sender FROM wa_messages WHERE id = $1")
+                .bind(group_id.as_str())
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(sender, None, "no sender either");
+        assert_eq!(
+            (summary.last_message_at, summary.last_text),
+            (redacted.timestamp, None),
+            "the group's latest message is still theirs, without its preview"
+        );
+    }
+    assert_eq!(
+        holding(&rows_mentioning(&db, &[kept.contact.as_str(), kept_marker]).await),
+        every_record_table,
+        "the other contact keeps every record"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_erase_leaves_nothing_of_the_contact_in_any_table() {
+    sweep_after_erasure(ErasureMode::Redact).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_erase_leaves_nothing_of_the_contact_in_any_table_deleting_group_messages() {
+    sweep_after_erasure(ErasureMode::Delete).await;
+}
+
+/// `with_retention` is what `apply_retention` applies; the default keeps.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_apply_retention_purges_by_the_configured_retention() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let keep = PostgresConversationStore::new(db.pool.clone());
+    let thirty_days =
+        PostgresConversationStore::new(db.pool.clone()).with_retention(Retention::days(30));
+    assert_eq!(keep.retention(), Retention::Keep);
+    assert!(format!("{thirty_days:?}").contains("retention: For("));
+    let now = datetime!(2026-09-24 12:00 UTC);
+    let key = ConversationKey::new("pn-retention", "US.1");
+    for (id, days) in [("old", 31), ("new", 29)] {
+        keep.append(StoredMessage {
+            id: MessageId::new(id),
+            conversation: key.clone(),
+            direction: Direction::Inbound,
+            kind: "text".to_owned(),
+            text: Some(id.to_owned()),
+            payload: serde_json::json!({}),
+            status: DeliveryStatus::Received,
+            timestamp: now - time::Duration::days(days),
+            status_at: None,
+            error: None,
+        })
+        .await
+        .unwrap();
+    }
+    assert!(keep.apply_retention(now).await.unwrap().is_empty());
+    assert_eq!(keep.messages(&key, None, 10).await.unwrap().len(), 2);
+    assert_eq!(
+        thirty_days.apply_retention(now).await.unwrap(),
+        Purged {
+            messages: 1,
+            ..Purged::default()
+        }
+    );
+    let left: Vec<String> = keep
+        .messages(&key, None, 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|m| m.id.into_inner())
+        .collect();
+    assert_eq!(left, ["new"]);
+}
+
+/// The new records refuse U+0000 in their identifiers, as messages do,
+/// and store nothing then.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_records_refuse_nul_in_ids() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let store = PostgresConversationStore::new(db.pool.clone());
+    let at = datetime!(2026-09-24 12:00 UTC);
+    for key in [
+        ConversationKey::new("pn-\0", "US.1"),
+        ConversationKey::new("pn-nul", "US.\0"),
+    ] {
+        let event = WindowEvent {
+            conversation: key.clone(),
+            kind: WindowEventKind::CustomerCall,
+            id: "wacid.1".to_owned(),
+            at,
+        };
+        assert!(store.record_window_event(event).await.is_err(), "{key:?}");
+        let owner = ThreadOwnership {
+            owner: ThreadOwner::ThisApp,
+            role: None,
+            app_id: None,
+            since: at,
+        };
+        assert!(store.set_thread_owner(&key, owner).await.is_err());
+        let contact = StoredContact {
+            key: key.clone(),
+            full_name: None,
+            first_name: None,
+            phone_number: None,
+            user_id: None,
+            parent_user_id: None,
+            username: None,
+            synced_at: at,
+        };
+        assert!(store.put_contact(contact).await.is_err());
+        assert!(store.erase(&key).await.is_err());
+        let link = IdentityLink::new(key.phone_number_id.clone(), "US.0", key.contact.clone(), at);
+        assert!(store.link_identity(link).await.is_err());
+        assert!(store.identities(&key).await.is_err());
+        assert!(store.identity_links(&key).await.is_err());
+        assert!(
+            store
+                .erase_all(
+                    &key.phone_number_id,
+                    &["US.2".to_owned(), key.contact.clone()]
+                )
+                .await
+                .is_err()
+        );
+    }
+    // A sender with a NUL is none (Meta assigns none): the message, whose
+    // payload is content, is stored all the same.
+    assert!(
+        store
+            .append(StoredMessage {
+                id: MessageId::new("wamid.group"),
+                conversation: ConversationKey::new("pn-nul", "HBgGROUP"),
+                direction: Direction::Inbound,
+                kind: "text".to_owned(),
+                text: None,
+                payload: serde_json::json!({"from": "1650\u{0}", "from_user_id": "US.\u{0}"}),
+                status: DeliveryStatus::Received,
+                timestamp: at,
+                status_at: None,
+                error: None,
+            })
+            .await
+            .unwrap()
+    );
+    let event = WindowEvent {
+        conversation: ConversationKey::new("pn-nul", "US.1"),
+        kind: WindowEventKind::CustomerCall,
+        id: "wacid.\0".to_owned(),
+        at,
+    };
+    assert!(store.record_window_event(event).await.is_err());
+    let counts: Vec<i64> = futures::future::join_all(
+        [
+            "wa_window_events",
+            "wa_thread_owners",
+            "wa_synced_contacts",
+            "wa_identity_links",
+        ]
+        .map(|t| {
+            let pool = db.pool.clone();
+            async move {
+                sqlx::query_scalar(AssertSqlSafe(format!("SELECT count(*) FROM {t}")))
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+            }
+        }),
+    )
+    .await;
+    assert_eq!(counts, [0, 0, 0, 0], "nothing stored");
+}
+
+// Races between erase, purge, append and fill (review of roadmap L5).
+//
+// Each case parks one operation on a row lock a plain transaction holds
+// (the "blocker"), starts the other, waits until both sessions wait on a
+// lock (`pg_stat_activity`, by the pool's `application_name`), then lets
+// the blocker go. That makes an interleaving that is a matter of
+// milliseconds in production happen every run.
+
+/// A pool on `db`'s schema whose sessions are named `app` (so the case can
+/// see its own sessions wait) and carry the planner `settings`.
+async fn racing_pool(db: &TestDb, app: &str, settings: &[(&str, &str)]) -> PgPool {
+    let mut options = vec![("search_path", db.schema.as_str())];
+    options.extend_from_slice(settings);
+    let connect = PgConnectOptions::from_str(&db.url)
+        .unwrap()
+        .application_name(app)
+        .options(options);
+    PgPoolOptions::new()
+        .max_connections(4)
+        .connect_with(connect)
+        .await
+        .unwrap()
+}
+
+/// Wait until `n` sessions named `app` wait on a lock, or `done` says the
+/// racing operation finished without waiting.
+async fn until_waiting(db: &TestDb, app: &str, n: i64, done: impl Fn() -> bool) {
+    for _ in 0..1000 {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity \
+             WHERE application_name = $1 AND wait_event_type = 'Lock'",
+        )
+        .bind(app)
+        .fetch_one(&db.admin)
+        .await
+        .unwrap();
+        if waiting >= n || done() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("{n} sessions of {app} never waited on a lock");
+}
+
+/// A transaction holding `FOR UPDATE` on the rows `select` returns.
+async fn blocker(
+    db: &TestDb,
+    select: &str,
+    binds: &[&str],
+) -> sqlx::Transaction<'static, sqlx::Postgres> {
+    let mut tx = db.pool.begin().await.unwrap();
+    let mut query = sqlx::query(AssertSqlSafe(format!("{select} FOR UPDATE")));
+    for b in binds {
+        query = query.bind(b.to_string());
+    }
+    let locked = query.execute(&mut *tx).await.unwrap().rows_affected();
+    assert!(locked > 0, "the blocker locks something: {select}");
+    tx
+}
+
+fn race_message(key: &ConversationKey, local: &str, minute: i64) -> StoredMessage {
+    StoredMessage {
+        id: MessageId::new(format!("wamid.race.{local}")),
+        conversation: key.clone(),
+        direction: Direction::Inbound,
+        kind: "text".to_owned(),
+        text: Some(format!("text of {local}")),
+        payload: serde_json::json!({"text": {"body": local}}),
+        status: DeliveryStatus::Received,
+        timestamp: datetime!(2026-09-24 12:00 UTC) + time::Duration::minutes(minute),
+        status_at: None,
+        error: None,
+    }
+}
+
+fn placeholder(key: &ConversationKey, local: &str, minute: i64) -> StoredMessage {
+    StoredMessage {
+        kind: StoredMessage::MEDIA_PLACEHOLDER.to_owned(),
+        text: None,
+        payload: serde_json::json!({"type": "media_placeholder"}),
+        ..race_message(key, local, minute)
+    }
+}
+
+/// The history and the summary of `key` agree: a conversation with
+/// messages (tombstones aside) has a summary, of its latest one, and one
+/// without has none.
+async fn assert_summary_matches_history(store: &PostgresConversationStore, key: &ConversationKey) {
+    let messages: Vec<StoredMessage> = store
+        .messages(key, None, 1000)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|m| m.kind != StoredMessage::REVOKED)
+        .collect();
+    let summary = store
+        .conversations(&key.phone_number_id, None, 1000)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|s| &s.key == key);
+    match (messages.first(), &summary) {
+        (None, None) => {}
+        (Some(latest), Some(s)) => {
+            assert_eq!(s.last_message_at, latest.timestamp, "{key}: latest message");
+            assert_eq!(s.last_text, latest.text, "{key}: preview");
+            let inbound = messages
+                .iter()
+                .filter(|m| m.direction == Direction::Inbound)
+                .count();
+            assert!(
+                s.unread <= inbound as u64,
+                "{key}: unread {} of {inbound}",
+                s.unread
+            );
+        }
+        (latest, _) => panic!(
+            "{key}: history and summary disagree: latest message {:?}, summary {summary:?}",
+            latest.map(|m| m.id.as_str())
+        ),
+    }
+}
+
+/// Risk (a), append first: an append (or a history chunk) has inserted
+/// its message and waits on the conversation's summary row when the
+/// erasure starts. The erasure must take it along (it committed before the
+/// erasure deleted anything), never leave the message behind without its
+/// summary.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_erase_takes_an_append_in_flight_along() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    for synced in [false, true] {
+        let app = format!("race_{}", common::unique());
+        let store = PostgresConversationStore::new(racing_pool(&db, &app, &[]).await);
+        let key = ConversationKey::new("106540352242922", format!("US.synced-{synced}"));
+        assert!(
+            store
+                .append(race_message(&key, &format!("{synced}-first"), 0))
+                .await
+                .unwrap()
+        );
+
+        let lock = blocker(
+            &db,
+            "SELECT 1 FROM wa_conversations WHERE phone_number_id = $1 AND contact = $2",
+            &[key.phone_number_id.as_str(), &key.contact],
+        )
+        .await;
+        let append = tokio::spawn({
+            let (store, m) = (
+                store.clone(),
+                race_message(&key, &format!("{synced}-second"), 1),
+            );
+            async move {
+                if synced {
+                    store
+                        .append_synced(vec![m])
+                        .await
+                        .map(|stored| stored == [true])
+                } else {
+                    store.append(m).await
+                }
+            }
+        });
+        until_waiting(&db, &app, 1, || false).await;
+        let erase = tokio::spawn({
+            let (store, key) = (store.clone(), key.clone());
+            async move { store.erase(&key).await }
+        });
+        until_waiting(&db, &app, 2, || erase.is_finished()).await;
+        lock.commit().await.unwrap();
+
+        assert!(append.await.unwrap().unwrap(), "synced: {synced}");
+        let erased = erase.await.unwrap().unwrap();
+        assert_summary_matches_history(&store, &key).await;
+        assert!(
+            store.messages(&key, None, 10).await.unwrap().is_empty(),
+            "synced: {synced}: the append committed before the erasure deleted: erased with the rest"
+        );
+        assert_eq!(
+            (erased.messages, erased.conversations),
+            (2, 1),
+            "synced: {synced}"
+        );
+    }
+}
+
+/// Risk (a), erasure first: an append that starts while the erasure is
+/// deleting is recorded after it, with a summary of its own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_an_append_during_an_erasure_is_recorded_after_it() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let app = format!("race_{}", common::unique());
+    let store = PostgresConversationStore::new(racing_pool(&db, &app, &[]).await);
+    let key = ConversationKey::new("106540352242922", "US.13491208655302741918");
+    let first = race_message(&key, "first", 0);
+    assert!(store.append(first.clone()).await.unwrap());
+
+    let lock = blocker(
+        &db,
+        "SELECT 1 FROM wa_messages WHERE id = $1",
+        &[first.id.as_str()],
+    )
+    .await;
+    let erase = tokio::spawn({
+        let (store, key) = (store.clone(), key.clone());
+        async move { store.erase(&key).await }
+    });
+    until_waiting(&db, &app, 1, || false).await;
+    let second = race_message(&key, "second", 1);
+    let append = tokio::spawn({
+        let (store, m) = (store.clone(), second.clone());
+        async move { store.append(m).await }
+    });
+    until_waiting(&db, &app, 2, || append.is_finished()).await;
+    lock.commit().await.unwrap();
+
+    let erased = erase.await.unwrap().unwrap();
+    assert!(append.await.unwrap().unwrap());
+    assert_eq!(erased.messages, 1);
+    assert_summary_matches_history(&store, &key).await;
+    assert_eq!(
+        store.messages(&key, None, 10).await.unwrap(),
+        std::slice::from_ref(&second)
+    );
+    let summary = store
+        .conversations(&key.phone_number_id, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        summary.len(),
+        1,
+        "the append after the erasure has its summary"
+    );
+    assert_eq!(summary[0].unread, 1);
+    assert_eq!(summary[0].last_inbound_at, Some(second.timestamp));
+}
+
+/// Risk (a), unorchestrated: appends and erasures of one conversation at
+/// once, from two pools, never leave a message without its summary or a
+/// summary without messages.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_erasures_racing_appends_keep_history_and_summary_together() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let a = PostgresConversationStore::new(db.pool.clone());
+    let b = PostgresConversationStore::new(TestDb::pool_on(&db.url, &db.schema, 10).await);
+    for round in 0..40 {
+        let key = ConversationKey::new("106540352242922", format!("US.{round}"));
+        assert!(
+            a.append(race_message(&key, &format!("{round}-0"), 0))
+                .await
+                .unwrap()
+        );
+        let appends = (1..6).map(|i| {
+            let store = if i % 2 == 0 { &a } else { &b };
+            store.append(race_message(&key, &format!("{round}-{i}"), i))
+        });
+        let (appended, erased) = tokio::join!(futures::future::join_all(appends), async {
+            tokio::task::yield_now().await;
+            b.erase(&key).await
+        });
+        for r in appended {
+            r.unwrap();
+        }
+        erased.unwrap();
+        assert_summary_matches_history(&a, &key).await;
+    }
+}
+
+/// Risk (a) in a group: erasures of one participant (their messages
+/// redacted, or deleted and the group's summary rebuilt from what stays)
+/// racing another participant's appends to the same group, from two
+/// pools, under both modes, never leave the group's summary on anything
+/// but its latest message.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_group_erasures_racing_appends_keep_the_group_summary() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let other_pool = TestDb::pool_on(&db.url, &db.schema, 10).await;
+    for mode in [ErasureMode::Redact, ErasureMode::Delete] {
+        let a = PostgresConversationStore::new(db.pool.clone()).with_erasure_mode(mode);
+        let b = PostgresConversationStore::new(other_pool.clone()).with_erasure_mode(mode);
+        for round in 0..20 {
+            let group = ConversationKey::new("106540352242922", format!("HBg{mode:?}{round}"));
+            let from = |who: &str, local: &str, minute: i64| StoredMessage {
+                payload: serde_json::json!({"from_user_id": who, "group_id": group.contact,
+                    "type": "text", "text": {"body": local}}),
+                ..race_message(&group, &format!("{mode:?}-{round}-{local}"), minute)
+            };
+            // The erased participant's messages, the group's latest among
+            // them.
+            for i in 0..3 {
+                assert!(
+                    a.append(from("US.X", &format!("x{i}"), 2 * i + 1))
+                        .await
+                        .unwrap()
+                );
+            }
+            let appends = (0..6).map(|i| {
+                let store = if i % 2 == 0 { &a } else { &b };
+                store.append(from("US.Y", &format!("y{i}"), i))
+            });
+            let (appended, erased) = tokio::join!(futures::future::join_all(appends), async {
+                tokio::task::yield_now().await;
+                b.erase_all(&group.phone_number_id, &["US.X".to_owned()])
+                    .await
+            });
+            for r in appended {
+                assert!(r.unwrap());
+            }
+            assert_eq!(erased.unwrap().group_messages, 3, "{mode:?} {round}");
+            // The latest message and its preview; the unread count keeps
+            // the deleted messages (documented on `erase_all`).
+            let latest = a.messages(&group, None, 1).await.unwrap().remove(0);
+            let summary = a
+                .conversations(&group.phone_number_id, None, 1000)
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|s| s.key == group)
+                .unwrap();
+            assert_eq!(
+                (summary.last_message_at, summary.last_text),
+                (latest.timestamp, latest.text),
+                "{mode:?} {round}"
+            );
+        }
+    }
+}
+
+/// Risk (b): two purges whose plans visit the old rows in opposite
+/// orders (two replicas' `apply_retention`, their cutoffs picking
+/// different plans) never deadlock.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_two_purges_at_once_never_deadlock() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let app = format!("race_{}", common::unique());
+    // Oldest first by the `ts` index; physical (insertion) order by a
+    // sequential scan: newest first below.
+    let by_index = PostgresConversationStore::new(
+        racing_pool(
+            &db,
+            &app,
+            &[("enable_seqscan", "off"), ("enable_bitmapscan", "off")],
+        )
+        .await,
+    );
+    let by_scan = PostgresConversationStore::new(
+        racing_pool(
+            &db,
+            &app,
+            &[("enable_indexscan", "off"), ("enable_bitmapscan", "off")],
+        )
+        .await,
+    );
+    let key = ConversationKey::new("106540352242922", "US.13491208655302741918");
+    let rows: Vec<StoredMessage> = (1..=3)
+        .rev()
+        .map(|m| race_message(&key, &format!("t{m}"), m))
+        .collect();
+    for m in &rows {
+        assert!(by_index.append(m.clone()).await.unwrap());
+    }
+    let cutoff = datetime!(2026-09-25 0:00 UTC);
+
+    let lock = blocker(
+        &db,
+        "SELECT 1 FROM wa_messages WHERE id = $1",
+        &["wamid.race.t2"],
+    )
+    .await;
+    let first = tokio::spawn({
+        let store = by_scan.clone();
+        async move { store.purge_before(None, cutoff).await }
+    });
+    until_waiting(&db, &app, 1, || false).await;
+    let second = tokio::spawn({
+        let store = by_index.clone();
+        async move { store.purge_before(None, cutoff).await }
+    });
+    until_waiting(&db, &app, 2, || second.is_finished()).await;
+    lock.commit().await.unwrap();
+    let (first, second) = (first.await.unwrap(), second.await.unwrap());
+    assert!(
+        first.is_ok() && second.is_ok(),
+        "both purges succeed: {first:?}, {second:?}"
+    );
+    let purged = first.unwrap().messages + second.unwrap().messages;
+    assert_eq!(purged, 3, "the three rows, once");
+    assert_summary_matches_history(&by_index, &key).await;
+}
+
+/// Risk (b) again: an erasure (newest first, by the conversation's index)
+/// and a purge (oldest first, by the `ts` index) over the same old rows
+/// never deadlock.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_an_erasure_and_a_purge_at_once_never_deadlock() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let app = format!("race_{}", common::unique());
+    let store = PostgresConversationStore::new(
+        racing_pool(
+            &db,
+            &app,
+            &[("enable_seqscan", "off"), ("enable_bitmapscan", "off")],
+        )
+        .await,
+    );
+    let key = ConversationKey::new("106540352242922", "US.13491208655302741918");
+    for m in 1..=3 {
+        assert!(
+            store
+                .append(race_message(&key, &format!("t{m}"), m))
+                .await
+                .unwrap()
+        );
+    }
+    let cutoff = datetime!(2026-09-25 0:00 UTC);
+
+    let lock = blocker(
+        &db,
+        "SELECT 1 FROM wa_messages WHERE id = $1",
+        &["wamid.race.t2"],
+    )
+    .await;
+    let erase = tokio::spawn({
+        let (store, key) = (store.clone(), key.clone());
+        async move { store.erase(&key).await }
+    });
+    until_waiting(&db, &app, 1, || false).await;
+    let purge = tokio::spawn({
+        let store = store.clone();
+        async move { store.purge_before(None, cutoff).await }
+    });
+    until_waiting(&db, &app, 2, || purge.is_finished()).await;
+    lock.commit().await.unwrap();
+    let (erase, purge) = (erase.await.unwrap(), purge.await.unwrap());
+    assert!(
+        erase.is_ok() && purge.is_ok(),
+        "both succeed: {erase:?}, {purge:?}"
+    );
+    assert_eq!(erase.unwrap().messages + purge.unwrap().messages, 3);
+    assert_summary_matches_history(&store, &key).await;
+}
+
+/// Risk (c): `fill_media_placeholder` racing an erasure or a purge, in
+/// either order, never deadlocks, never stores the content after the
+/// deletion, and leaves history and summary together.
+#[allow(clippy::too_many_lines)] // four orders of one race, read top to bottom
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_fills_racing_erasures_and_purges() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let cutoff = datetime!(2026-09-25 0:00 UTC);
+    for (case, delete_first, erase) in [
+        ("fill-then-erase", false, true),
+        ("erase-then-fill", true, true),
+        ("fill-then-purge", false, false),
+        ("purge-then-fill", true, false),
+    ] {
+        let app = format!("race_{}", common::unique());
+        let store = PostgresConversationStore::new(racing_pool(&db, &app, &[]).await);
+        let key = ConversationKey::new("106540352242922", format!("US.{case}"));
+        assert!(
+            store
+                .append(race_message(&key, &format!("{case}-text"), 0))
+                .await
+                .unwrap()
+        );
+        let media = placeholder(&key, &format!("{case}-media"), 1);
+        assert_eq!(
+            store.append_synced(vec![media.clone()]).await.unwrap(),
+            [true]
+        );
+
+        // Fill first: the placeholder's row is held, the fill queues on it,
+        // then the deletion. Deletion first: the summary's row is held,
+        // the deletion (which takes the messages first) queues on it, then
+        // the fill queues on the placeholder the deletion took.
+        let lock = if delete_first {
+            blocker(
+                &db,
+                "SELECT 1 FROM wa_conversations WHERE phone_number_id = $1 AND contact = $2",
+                &[key.phone_number_id.as_str(), &key.contact],
+            )
+            .await
+        } else {
+            blocker(
+                &db,
+                "SELECT 1 FROM wa_messages WHERE id = $1",
+                &[media.id.as_str()],
+            )
+            .await
+        };
+        let fill = {
+            let (store, pn, id) = (store.clone(), key.phone_number_id.clone(), media.id.clone());
+            async move {
+                store
+                    .fill_media_placeholder(
+                        &pn,
+                        &id,
+                        "image".to_owned(),
+                        Some("caption".to_owned()),
+                        serde_json::json!({"image": {"caption": "caption"}}),
+                    )
+                    .await
+            }
+        };
+        let delete = {
+            let (store, key) = (store.clone(), key.clone());
+            async move {
+                if erase {
+                    store.erase(&key).await.map(|e| e.messages)
+                } else {
+                    store
+                        .purge_before(Some(&key.phone_number_id), cutoff)
+                        .await
+                        .map(|p| p.messages)
+                }
+            }
+        };
+        let (fill, delete) = if delete_first {
+            let delete = tokio::spawn(delete);
+            until_waiting(&db, &app, 1, || false).await;
+            let fill = tokio::spawn(fill);
+            until_waiting(&db, &app, 2, || fill.is_finished()).await;
+            lock.commit().await.unwrap();
+            (fill.await.unwrap(), delete.await.unwrap())
+        } else {
+            let fill = tokio::spawn(fill);
+            until_waiting(&db, &app, 1, || false).await;
+            let delete = tokio::spawn(delete);
+            until_waiting(&db, &app, 2, || delete.is_finished()).await;
+            lock.commit().await.unwrap();
+            (fill.await.unwrap(), delete.await.unwrap())
+        };
+        assert!(
+            fill.is_ok() && delete.is_ok(),
+            "{case}: {fill:?}, {delete:?}"
+        );
+        assert_eq!(
+            fill.unwrap(),
+            !delete_first,
+            "{case}: filled only before the deletion"
+        );
+        assert_eq!(delete.unwrap(), 2, "{case}: both messages deleted");
+        assert!(
+            store.messages(&key, None, 10).await.unwrap().is_empty(),
+            "{case}"
+        );
+        assert_eq!(
+            store
+                .message(&key.phone_number_id, &media.id)
+                .await
+                .unwrap(),
+            None,
+            "{case}"
+        );
+        assert_summary_matches_history(&store, &key).await;
+    }
+}
+
+/// The locks are the ones `store::postgres::conversation` documents (a
+/// stable identifier: replicas of two revisions must take the same ones),
+/// written out here apart from the code: held from outside, the number
+/// lock holds back an append and an erasure of that number only, and the
+/// purge lock a purge and an erasure.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_the_locks_are_the_documented_ones() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let app = format!("race_{}", common::unique());
+    let store = PostgresConversationStore::new(racing_pool(&db, &app, &[]).await);
+    let key = ConversationKey::new("106540352242922", "US.13491208655302741918");
+    let elsewhere = ConversationKey::new("106540352242923", "US.13491208655302741918");
+    let cutoff = datetime!(2026-09-25 0:00 UTC);
+
+    for (lock, held, number_lock) in [
+        (
+            "SELECT pg_advisory_xact_lock('wa_messages'::regclass::oid::int4, hashtext('106540352242922'))",
+            ["append", "append_synced", "erase"],
+            true,
+        ),
+        (
+            "SELECT pg_advisory_xact_lock('wa_conversations'::regclass::oid::int4, 0)",
+            ["purge", "purge_number", "erase"],
+            false,
+        ),
+    ] {
+        let mut outside = db.pool.begin().await.unwrap();
+        sqlx::query(AssertSqlSafe(lock))
+            .execute(&mut *outside)
+            .await
+            .unwrap();
+        let n = common::unique();
+        // Not held back: under the number lock, another number's append
+        // and erasure; under the purge lock, appends.
+        if number_lock {
+            assert!(
+                store
+                    .append(race_message(&elsewhere, &format!("{n}-free"), 0))
+                    .await
+                    .unwrap()
+            );
+            store.erase(&elsewhere).await.unwrap();
+        } else {
+            assert!(
+                store
+                    .append(race_message(&key, &format!("{n}-free"), 0))
+                    .await
+                    .unwrap()
+            );
+            assert_eq!(
+                store
+                    .append_synced(vec![race_message(&key, &format!("{n}-free-synced"), 0)])
+                    .await
+                    .unwrap(),
+                [true]
+            );
+        }
+        let mut waiting = Vec::new();
+        for (i, op) in held.into_iter().enumerate() {
+            let (store, key) = (store.clone(), key.clone());
+            let m = race_message(&key, &format!("{n}-{i}"), 0);
+            waiting.push(tokio::spawn(async move {
+                match op {
+                    "append" => store.append(m).await.map(drop),
+                    "append_synced" => store.append_synced(vec![m]).await.map(drop),
+                    "erase" => store.erase(&key).await.map(drop),
+                    "purge" => store.purge_before(None, cutoff).await.map(drop),
+                    _ => store
+                        .purge_before(Some(&key.phone_number_id), cutoff)
+                        .await
+                        .map(drop),
+                }
+            }));
+            until_waiting(&db, &app, i64::try_from(i).unwrap() + 1, || false).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            waiting.iter().all(|w| !w.is_finished()),
+            "{lock}: every operation waits"
+        );
+        outside.commit().await.unwrap();
+        for w in waiting {
+            w.await.unwrap().unwrap();
+        }
+    }
+}
+
+/// A purge deletes the summaries of old conversations; a history chunk
+/// (`append_synced`) updates several summaries, in key order. The purge
+/// must take them in the same order, or the two deadlock when the chunk
+/// holds one summary the purge wants and waits on one the purge holds
+/// (here the purge's plan visits them oldest first: the second key
+/// first).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_a_purge_and_a_history_chunk_never_deadlock() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let app = format!("race_{}", common::unique());
+    let store = PostgresConversationStore::new(
+        racing_pool(
+            &db,
+            &app,
+            &[("enable_seqscan", "off"), ("enable_bitmapscan", "off")],
+        )
+        .await,
+    );
+    let (first, second) = (
+        ConversationKey::new("106540352242922", "US.1"),
+        ConversationKey::new("106540352242922", "US.2"),
+    );
+    // US.2's conversation is the older: the purge's index visits it first.
+    assert!(store.append(race_message(&first, "one", 2)).await.unwrap());
+    assert!(store.append(race_message(&second, "two", 1)).await.unwrap());
+    let cutoff = datetime!(2026-09-25 0:00 UTC);
+
+    let lock = blocker(
+        &db,
+        "SELECT 1 FROM wa_conversations WHERE phone_number_id = $1 AND contact = $2",
+        &[first.phone_number_id.as_str(), &first.contact],
+    )
+    .await;
+    let chunk = tokio::spawn({
+        let store = store.clone();
+        let batch = vec![
+            race_message(&first, "one-synced", 3),
+            race_message(&second, "two-synced", 3),
+        ];
+        async move { store.append_synced(batch).await }
+    });
+    until_waiting(&db, &app, 1, || false).await;
+    let purge = tokio::spawn({
+        let store = store.clone();
+        async move { store.purge_before(None, cutoff).await }
+    });
+    until_waiting(&db, &app, 2, || purge.is_finished()).await;
+    lock.commit().await.unwrap();
+    let (chunk, purge) = (chunk.await.unwrap(), purge.await.unwrap());
+    assert!(
+        chunk.is_ok() && purge.is_ok(),
+        "both succeed: {chunk:?}, {purge:?}"
+    );
+    // What the chunk stored while the purge ran is older than the cutoff:
+    // the next purge deletes it.
+    store.purge_before(None, cutoff).await.unwrap();
+    for key in [&first, &second] {
+        assert!(store.messages(key, None, 10).await.unwrap().is_empty());
+        assert_summary_matches_history(&store, key).await;
+    }
 }

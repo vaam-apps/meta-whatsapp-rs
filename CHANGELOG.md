@@ -798,6 +798,147 @@ stored data, the owner's).
 
 ### Changed
 
+- **Breaking — the `ConversationStore` port change of roadmap L5**: the
+  port gains fourteen required methods and four provided ones, so a
+  store of your own must implement them and pass
+  `conversation_conformance::run`, which checks each part (under each
+  `ErasureMode` it offers). The memory and Postgres stores implement all
+  of it.
+  - `message(phone_number_id, id)`: the lookup by message id, scoped to
+    the business number, never another number's (whichever way
+    `OPEN_QUESTIONS.md` #33, still open, is answered).
+  - `record_window_event` / `window_events`: a `WindowEvent`
+    (`WindowEventKind`: a customer's call, a call they accepted, a
+    standby message) reopens the customer service window without being a
+    message: never history, never the summary, recorded once per number
+    and id (#32, #44; the inbox records them in L7).
+  - `set_thread_owner` / `thread_owner`: `ThreadOwnership` under
+    Conversation Routing (`ThreadOwner`, the role, the app, since when);
+    the latest record wins, one of the same second too (#44; L7).
+  - `put_contact` / `remove_contact` / `contact` / `contacts`: the
+    coexistence address book (`smb_app_state_sync`) as `StoredContact`,
+    per number, the latest sync winning (the inbox records it in L8). A
+    removal is kept (its key and time, nothing else of the contact), so
+    an older `add` arriving after it, a retried delivery, cannot undo it;
+    `erase` and `purge_before` delete kept removals.
+  - `link_identity` / `identity_links`: an `IdentityLink`
+    (`phone_number_id`, `previous`, `current`, `at`: a BSUID or number
+    change, as Meta's `user_id_update` names it), stored once per number
+    and pair (the inbox records them in L7).
+  - `identities(key)`: a person's keys on one number, the closure over
+    the synced contacts (key, BSUID, parent BSUID, phone number) and the
+    links, never through an empty value (contacts that share an empty
+    field are not one person); read only (design D30).
+  - `erase_all(phone_number_id, ids)`: erases a person on one number,
+    in one step: deletes, not hides, every record keyed by the ids
+    (messages of every origin and tombstones, summaries, window events,
+    ownership records), the synced contacts and identity links naming
+    them and the removals kept under them, and redacts in place
+    (`ErasureMode::Redact`, the default: kind `StoredMessage::ERASED`, no
+    content, no sender) or deletes (`ErasureMode::Delete`) their
+    messages in conversations keyed by someone else, a group's, matched
+    by `StoredMessage::sender` (design D31); a group's preview never
+    keeps the erased text. Returns what it did (`Erased`). No erasure
+    across numbers: a `wa_id` is the same on every number. `erase(key)`,
+    provided, is its one-key case; `erasure_mode`, provided, is the
+    store's setting (`with_erasure_mode` on both adapters). The rustdoc
+    lists what an erasure does not reach (quotes and contact cards in
+    other people's messages, the ids of redacted group messages,
+    identities nothing connects, the dedup markers, the service's
+    outbox, copies, Postgres's remnants, logs, Meta's side) and what
+    creates records again after it; an erased tombstone frees its
+    message id. `Inbox::identities`, `Inbox::erase` (both refuse a key
+    of another number before the store is called) and `Inbox::erase_all`
+    (bound to the inbox's number) wrap them (security and privacy
+    review of L5: M2, M3, L3, L4).
+  - `StoredContact`, `WindowEvent` and `IdentityLink` print no personal
+    data in `Debug`: the business number, the times and which fields are
+    present (review L1).
+  - `purge_before(number or all, cutoff)`: deletes messages, window
+    events, ownership records and kept contact removals older than the
+    cutoff, and the summary of a conversation whose latest message went
+    (`Purged`). Synced contacts and identity links stay: a link outlives
+    a retention on purpose, so that an erasure still finds a thread
+    under the other identity that is newer than the link (design D35).
+  - `retention` / `apply_retention`, provided: a `Retention` set per
+    store (design D10: kept by default), taken by
+    `MemoryConversationStore::with_retention` and
+    `PostgresConversationStore::with_retention`; nothing purges on its
+    own, so schedule `apply_retention`.
+
+  **Postgres**: migration 4 adds `wa_window_events`, `wa_thread_owners`,
+  `wa_synced_contacts` (names and usernames as UTF-8 bytes, U+0000
+  kept; identifiers `TEXT COLLATE "C"`, U+0000 refused) and
+  `wa_identity_links`, a nullable `wa_messages.sender` (indexed with the
+  business number, written by every insert, back-filled for the inbound
+  messages already stored but those whose payload holds U+0000; those,
+  and the rows the previous revision writes, get it from the next
+  erasure on their number, which reads their payloads in Rust through a
+  partial index, `wa_messages_unsent_idx`) and indexes for purge by age.
+  It changes no existing column, so the
+  previous revision keeps working beside it (writing no sender), but
+  its `migrate` then refuses the database (`VersionMissing(4)`): upgrade
+  every instance that migrates at startup. The back-fill and the indexes
+  make writes to the inbox tables wait, and reads of `wa_messages` too
+  (adding the column): on a large inbox, run `migrate`
+  from a one-off job. `erase_all` and `purge_before` delete in one
+  statement each, under two advisory locks (stable identifiers, design
+  D33): `append` and `append_synced` take the business number's lock
+  shared and `erase_all` exclusive, so an erasure never leaves a message
+  appended concurrently without its summary; purges take a purge lock
+  exclusive and erasures shared, so `apply_retention` may run from
+  several replicas at once and never deadlocks with another purge or an
+  erasure. An instance of the previous revision takes no lock: finish
+  the upgrade before erasing. The new table names, the stored names of
+  `WindowEventKind` and `ThreadOwner` and the message kinds `revoked`
+  and `erased` are stable identifiers (docs/architecture.md). `InboxSink`
+  is unchanged: calls, standby messages, ownership and identity links
+  are not recorded yet (L7), nor synced contacts (L8).
+- **meta-whatsapp-server's domain is a crate of its own,
+  `meta-whatsapp-server-core`** (`publish = false`, not a default member;
+  no axum, sqlx or utoipa), so the service's API and storage can each be
+  swapped. It holds the records and keys (`model`, `keys`), the
+  authorization order as services (`authz`: a credential to a `Caller`,
+  ownership to an `OwnedNumber` or `OwnedWaba`, still the only way to a
+  vault token), event routing, outbox keys, event ids and polling
+  (`events`), the idempotency engine, the rate limiter, and the error
+  model as data (`ServiceError`, `ErrorCode`, statuses as `u16`), which
+  `meta_whatsapp_server::error::ApiError` answers over HTTP. Storage goes
+  through its ports: `RecordStore` and `IdempotencyRecords` (the former
+  `store::Store`, split; `Store` is now both at once), `Outbox` (the
+  former `EventStore`), `LeaderLock`, `Janitor` and `SchemaMigrator`,
+  bundled per database as a `Backend`. The memory and Postgres
+  implementations stay in `meta-whatsapp-server` (`MemoryBackend`,
+  `PgBackend`), and `serve::backends` returns a `Backend` instead of
+  `Backends` and its `pool`. No change to the HTTP API: `openapi/v1.json`
+  is byte-identical. In code: import `RecordStore` and
+  `IdempotencyRecords` to call a concrete store's methods, and `Outbox`
+  for `EventStore`; `meta_whatsapp_server::{model, keys}` and the items of
+  `events`, `ratelimit`, `idempotency` and `error` keep their paths. One
+  change in housekeeping: the library's expired key/value rows are now
+  purged under the housekeeping lock too (a `LeaderLock` turn), so two
+  replicas never purge them at once. That turn is a transaction of its
+  own, so while the sweep runs it holds a second pooled connection besides
+  the one `purge_expired` uses. Other signatures that changed:
+  `serve::housekeeping` takes `(Arc<dyn Outbox>, Arc<dyn
+  IdempotencyRecords>, Option<Sweep>, retention, every, stop)` instead of
+  `(Arc<dyn EventStore>, Arc<dyn Store>, Option<PostgresKvStore>, …)`
+  (`Sweep` pairs the backend's `LeaderLock` and `Janitor`);
+  `state::AppState::new`, `with_settings` and `from_backend` return a
+  `Result`, as the core's `Authorizer::new` refuses a Graph client built
+  with a token (see "Security", the server core's review, L4); the
+  handlers of `api::{admin, numbers, events, messages, media,
+  templates}`, with `messages::send`, `templates::list` and `create`,
+  and `idempotency::run` are crate-private (see "Security", H1 there),
+  as are the helpers of those modules and of `api::common` that nothing
+  outside the crate used (`admin::allowed_tenants`,
+  `messages::parse_message` and `recipient`, `common::meta_object`,
+  `graph_id`, `encode_cursor`, `next_cursor`, `rfc3339`,
+  `parse_rfc3339` and `json`; `api::admin::mint` stays public);
+  `telemetry::record_tenant` and `record_key` are gone (the core's
+  `Authorizer` records `tenant` and `key_id` on the request's span); and
+  `keys::MintedKey::generate` fails with the library's `CryptoError::Rng`
+  instead of a `getrandom::Error`.
 - **The client replays a send refused with `131057`** (the account in
   maintenance, Meta's throughput upgrade) within its retry budget, as
   it does a throttled one: `RetryPolicy::should_retry` for a request
@@ -1205,3 +1346,68 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   response of `Messages::send` or `Marketing::send` (which echo the
   recipient's number) is reported without the body snippet and without
   serde's message.
+- The security review of `meta-whatsapp-server-core` (on the branch that
+  extracted it) found, and fixed before it merged:
+  - **H1 — a capability one `Authorizer` made was accepted by another.**
+    `Authorizer::new` is public, so any crate could build one over records
+    of its own, have it make an `AdminCaller` or a `Caller` for any
+    tenant, and hand it to the service's `Authorizer`, which then read,
+    stored, rotated and deleted vault tokens. Each `Authorizer` now has an
+    identity of its own that `Caller`, `AdminCaller`, `OwnedNumber` and
+    `OwnedWaba` carry, and every core method taking one refuses another's
+    with `403 forbidden`, logged at `warn`, before it reads or writes
+    anything. `Authorizer::store_token` and `rotate_vault` now fail with a
+    `ServiceError` (the same code as before for the vault's own failures).
+    A second review found the server re-opening it: its handlers were
+    public, took a `Caller` or an `AdminCaller` by value and acted on the
+    records for `Caller::tenant()` without asking the `Authorizer`. A
+    crate holding an `AppState` handed `api::numbers::list_wabas` a
+    forged `Caller` (any tenant's WABAs) and `api::admin::mint_platform_key`
+    a forged `AdminCaller` (a real platform key for every tenant), and
+    that key read a tenant's vault token through the service's own guard
+    and extractor. The handlers, and `idempotency::run` (it takes a tenant
+    as given), are crate-private now; `Authorizer::admit` and
+    `admit_admin` ask the core's check of a capability an adapter took
+    from outside its own code, and the server's `Caller` and `AdminCaller`
+    extractors call them on what they find in a request's extensions
+    (`403 forbidden` otherwise). So the brand holds for the core's
+    methods, the server's extractors and every handler, which only the
+    routers reach, behind their guards.
+  - **L4 — the tokenless Graph client was only tokenless by convention.**
+    `Authorizer::new` refuses a client built with a token (a
+    configuration error) rather than stripping it: the library's `Client`
+    cannot drop one, and a silent strip would hide the misconfiguration.
+    So `Authorizer::new`, and `meta_whatsapp_server::state::AppState::new`,
+    `with_settings` and `from_backend`, return a `Result`.
+  - **M1 — `AppState::store` was public**, a way around the handlers to
+    the records that decide who owns what; it is crate-private. The
+    handlers were a way around too, public themselves and writing the
+    records for whatever capability they were handed (see H1): they are
+    crate-private now, so another crate reaches the records only through
+    the routers.
+  - **L3 — `Debug` printed kept answers.** `Repeat::Replay`,
+    `IdempotencyState::Completed`, `IdempotencyRecord`,
+    `idempotency::Outcome::Answered`, the server's `MemoryStore` and its
+    `idempotency::Success` print a body's length (`body_len`), never its
+    bytes (`MemoryStore` prints counts only: no idempotency key either).
+  - **L1 — the visibility pins could pass for the wrong reason.** The
+    `compile_fail` doctests on `Tokens` accepted any compile error (a
+    typo'd path passed). They are `trybuild` UI tests now
+    (`tests/visibility.rs` in both service crates), each checked against
+    the compiler's error code and text, with a control case that names
+    every path they use and compiles; `AppState::store` and
+    `AppState::authz` are pinned too, and so are the handlers
+    (`api::admin::mint_platform_key`, `api::numbers::list_wabas`) and
+    `idempotency::run`.
+  - An admin unbind logged "unbinding a WABA without a usable token"
+    before its admin was checked, so a refused one logged an unbinding it
+    did not do. The line now follows the unbind.
+  - Not fixed here: **L2**, a race in `OwnedWaba::forget`. It deletes the
+    WABA's token and binding whatever they became since the WABA was
+    opened: attached again in between (a new token, another tenant), the
+    new ones go. Conditioning both on what the capability was made from
+    is a port change, recorded in docs/roadmap.md, item S2. The same
+    race in `OwnedNumber::failed` and `OwnedWaba::failed`: a `190`
+    answered to a capability made before the WABA was attached again
+    marks the new binding's numbers `reconnect_required`. S2 conditions
+    that update on the binding too (its tenant and `attached_at`).

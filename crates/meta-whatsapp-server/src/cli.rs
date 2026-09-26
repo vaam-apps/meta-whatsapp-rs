@@ -33,7 +33,7 @@ use crate::model::{
     AllowedTenants, ApiKeyRecord, KeyOwner, KeyScope, MAX_NAME_CHARS, MAX_PAGE_SIZE, PageRequest,
     Scope, TenantId,
 };
-use crate::store::{PgStore, Store, migrate};
+use crate::store::{PgStore, RecordStore, migrate};
 use crate::{api, serve, telemetry};
 
 /// The meta-whatsapp-rs HTTP service.
@@ -154,9 +154,9 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                 "refusing to rotate: memory storage is per process, and this command cannot reach \
                  the running service's (use POST /v1/admin/vault/rotate, or set DATABASE_URL)"
             );
-            let backends = serve::backends(&config).await?;
-            let vault = serve::vault(backends.kv, config.vault_keys)?;
-            let report = crate::auth::rotate_vault(backends.store.as_ref(), &vault).await?;
+            let backend = serve::backends(&config).await?;
+            let vault = serve::vault(backend.kv(), config.vault_keys)?;
+            let report = crate::auth::rotate_vault(backend.records().as_ref(), &vault).await?;
             println!(
                 "{} WABAs walked, {} records re-encrypted, {} failed{}",
                 report.wabas,

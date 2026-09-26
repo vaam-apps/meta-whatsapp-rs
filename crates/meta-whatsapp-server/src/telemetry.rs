@@ -134,6 +134,8 @@ pub async fn observe(
     // A bounded label, never the request's own token (see `method_label`).
     let method = method_label(request.method());
     let route = route_template(&observed.routes, request.uri().path()).to_owned();
+    // `tenant` and `key_id` are recorded by the authorization order (the
+    // core's `Authorizer`, on the current span), once it knows them.
     let span = tracing::info_span!(
         "request",
         request_id = %id,
@@ -169,17 +171,6 @@ pub async fn observe(
         response.headers_mut().insert(REQUEST_ID.clone(), value);
     }
     response
-}
-
-/// Record the resolved tenant on the current request span.
-pub fn record_tenant(tenant: &str) {
-    tracing::Span::current().record("tenant", tenant);
-}
-
-/// Record the public id of the key that authenticated the request on the
-/// current request span (never the secret).
-pub fn record_key(key_id: &str) {
-    tracing::Span::current().record("key_id", key_id);
 }
 
 /// An operator's change, logged at `info` with the target `audit`:

@@ -1,0 +1,10 @@
+error[E0624]: method `graph_failed` is private
+ --> tests/visibility/fail/graph_failed.rs:7:19
+  |
+7 |     let _ = authz.graph_failed(waba_id, error).await;
+  |                   ^^^^^^^^^^^^ private method
+  |
+ ::: src/authz.rs
+  |
+  |     async fn graph_failed(&self, waba_id: &WabaId, error: &Error) -> ServiceError {
+  |     ----------------------------------------------------------------------------- private method defined here

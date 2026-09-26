@@ -1,0 +1,10 @@
+error[E0624]: method `authz` is private
+ --> tests/visibility/fail/app_state_authz.rs:5:19
+  |
+5 |     let _ = state.authz();
+  |                   ^^^^^ private method
+  |
+ ::: src/state.rs
+  |
+  |     pub(crate) fn authz(&self) -> &Authorizer {
+  |     ----------------------------------------- private method defined here

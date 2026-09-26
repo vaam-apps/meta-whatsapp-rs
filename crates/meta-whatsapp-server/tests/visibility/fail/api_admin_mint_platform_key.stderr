@@ -1,0 +1,15 @@
+error[E0603]: function `mint_platform_key` is private
+ --> tests/visibility/fail/api_admin_mint_platform_key.rs:5:39
+  |
+5 | use meta_whatsapp_server::api::admin::mint_platform_key;
+  |                                       ^^^^^^^^^^^^^^^^^ private function
+  |
+note: the function `mint_platform_key` is defined here
+ --> src/api/admin.rs
+  |
+  | / pub(crate) async fn mint_platform_key(
+  | |     State(state): State<AppState>,
+  | |     admin: AdminCaller,
+  | |     ApiJson(body): ApiJson<MintPlatformKey>,
+  | | ) -> Result<(StatusCode, Json<MintedKeyView>), ApiError> {
+  | |________________________________________________________^

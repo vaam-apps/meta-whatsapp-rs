@@ -37,6 +37,7 @@ login               # FB.login of Meta's JavaScript SDK
 stringify           # JSON.stringify (JavaScript, embedded-signup page)
 Cargo               # the tool, in prose
 HTTPS_PROXY         # environment variable honoured by ReqwestTransport
+log_parameter_max_length # the Postgres setting that keeps bound parameters out of its logs
 
 # Meta's names that meta-whatsapp-rs deliberately does not type.
 consumer_profile    # a webhook field without a documented payload (arrives as Unknown)

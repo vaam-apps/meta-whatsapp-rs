@@ -5,16 +5,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crate::api::templates::TemplateCache;
-use crate::auth::Tokens;
+use crate::auth::Authorizer;
 use crate::events::{Events, Inbound};
 use crate::metrics::Metrics;
 use crate::ratelimit::{RateLimiter, RateLimits, Slots};
-use crate::store::Store;
-use meta_whatsapp_rs::Client;
+use crate::store::{Backend, IdempotencyRecords, RecordStore, Store};
 use meta_whatsapp_rs::client::DEFAULT_TIMEOUT;
 use meta_whatsapp_rs::client::embedded_signup::TokenVault;
 use meta_whatsapp_rs::core::config::ApiVersion;
 use meta_whatsapp_rs::core::secret::VerifyToken;
+use meta_whatsapp_rs::{Client, Error};
 
 /// Default `WA_SERVER_IDEMPOTENCY_TTL`: how long an idempotency key's
 /// record is kept (docs/design/server.md, section 5.4).
@@ -85,9 +85,9 @@ pub struct AppState {
 }
 
 struct Inner {
-    store: Arc<dyn Store>,
-    tokens: Tokens,
-    client: Client,
+    store: Arc<dyn RecordStore>,
+    idempotency: Arc<dyn IdempotencyRecords>,
+    authz: Authorizer,
     verify_token: VerifyToken,
     metrics: Metrics,
     events: Events,
@@ -110,6 +110,10 @@ impl AppState {
     /// without a default token: each call runs with the tenant's token),
     /// receiving Meta's webhooks into `inbound`'s stores, with the default
     /// [`Settings`].
+    ///
+    /// # Errors
+    ///
+    /// `client` carries a token (the core's `Authorizer::new` refuses it).
     pub fn new(
         store: Arc<dyn Store>,
         vault: TokenVault,
@@ -117,7 +121,7 @@ impl AppState {
         verify_token: VerifyToken,
         metrics: Metrics,
         inbound: Inbound,
-    ) -> Self {
+    ) -> Result<Self, Error> {
         Self::with_settings(
             store,
             vault,
@@ -130,6 +134,10 @@ impl AppState {
     }
 
     /// [`Self::new`] with `settings`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`].
     pub fn with_settings(
         store: Arc<dyn Store>,
         vault: TokenVault,
@@ -138,18 +146,67 @@ impl AppState {
         metrics: Metrics,
         inbound: Inbound,
         settings: Settings,
-    ) -> Self {
+    ) -> Result<Self, Error> {
+        let records: Arc<dyn RecordStore> = store.clone();
+        let idempotency: Arc<dyn IdempotencyRecords> = store;
+        Self::build(
+            (records, idempotency),
+            vault,
+            client,
+            verify_token,
+            metrics,
+            inbound,
+            settings,
+        )
+    }
+
+    /// [`Self::with_settings`] on `backend`'s records and idempotency
+    /// records (`inbound` built on its other stores).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`].
+    pub fn from_backend(
+        backend: &dyn Backend,
+        vault: TokenVault,
+        client: Client,
+        verify_token: VerifyToken,
+        metrics: Metrics,
+        inbound: Inbound,
+        settings: Settings,
+    ) -> Result<Self, Error> {
+        Self::build(
+            (backend.records(), backend.idempotency()),
+            vault,
+            client,
+            verify_token,
+            metrics,
+            inbound,
+            settings,
+        )
+    }
+
+    fn build(
+        (store, idempotency): (Arc<dyn RecordStore>, Arc<dyn IdempotencyRecords>),
+        vault: TokenVault,
+        client: Client,
+        verify_token: VerifyToken,
+        metrics: Metrics,
+        inbound: Inbound,
+        settings: Settings,
+    ) -> Result<Self, Error> {
+        let authz = Authorizer::new(store.clone(), vault, client)?;
         let events = Events::new(
             inbound,
             store.clone(),
             verify_token.clone(),
             metrics.clone(),
         );
-        Self {
+        Ok(Self {
             inner: Arc::new(Inner {
+                authz,
                 store,
-                tokens: Tokens::new(vault),
-                client,
+                idempotency,
                 verify_token,
                 metrics,
                 events,
@@ -160,23 +217,31 @@ impl AppState {
                 templates: TemplateCache::new(settings.template_cache_ttl),
                 settings,
             }),
-        }
+        })
     }
 
-    /// The service's records.
-    pub fn store(&self) -> &dyn Store {
+    /// The service's records. Crate-private: the records decide who owns
+    /// what, and only the service's own handlers write them.
+    pub(crate) fn store(&self) -> &dyn RecordStore {
         self.inner.store.as_ref()
     }
 
-    /// The token vault, behind the authorization order (see
-    /// [`crate::auth`]).
-    pub(crate) fn tokens(&self) -> &Tokens {
-        &self.inner.tokens
+    /// The idempotency keys' records.
+    pub(crate) fn idempotency_records(&self) -> &Arc<dyn IdempotencyRecords> {
+        &self.inner.idempotency
+    }
+
+    /// The authorization order (see [`crate::auth`]): the only way to a
+    /// stored token, and to write the vault (with an admin's
+    /// [`crate::auth::AdminCaller`], or an owned WABA). Crate-private, as
+    /// the vault and the tokenless client were before it.
+    pub(crate) fn authz(&self) -> &Authorizer {
+        &self.inner.authz
     }
 
     /// The tokenless Graph client.
     pub(crate) fn client(&self) -> &Client {
-        &self.inner.client
+        self.inner.authz.client()
     }
 
     /// Meta's webhook verify token.
@@ -224,7 +289,7 @@ impl AppState {
 
     /// The Graph API version calls use.
     pub fn graph_api_version(&self) -> ApiVersion {
-        self.inner.client.endpoint().version()
+        self.client().endpoint().version()
     }
 
     /// Mark the service as shutting down: `/readyz` fails from now on.
@@ -276,5 +341,6 @@ impl AppState {
             Metrics::new(),
             inbound,
         )
+        .unwrap()
     }
 }

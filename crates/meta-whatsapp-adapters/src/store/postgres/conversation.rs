@@ -39,16 +39,103 @@
 //!   bounded by the number of ranks. Both statements match `id` *and*
 //!   `phone_number_id`, so an event of one business number never changes a
 //!   row of another.
+//! - `message` (the lookup) matches `id` *and* `phone_number_id` too, so it
+//!   finds a message whether ids are unique per store (the primary key
+//!   today) or per number (`OPEN_QUESTIONS.md` #33), and never another
+//!   number's.
+//! - Window events, thread owners and synced contacts live in tables of
+//!   their own (migration `0004`), keyed by business number and contact
+//!   (a window event by business number and id). `set_thread_owner` and
+//!   `put_contact` are one upsert each whose update only applies when the
+//!   stored record is not later (`ON CONFLICT … DO UPDATE … WHERE`), so
+//!   the rule holds under concurrency without a read. `remove_contact` is
+//!   the same upsert, of a row with `removed` set and nothing but the key
+//!   and the removal's time (it replaces the contact, or takes its place
+//!   when none is stored), so a late `add` older than it is refused;
+//!   reads skip those rows. Identity links live in `wa_identity_links`,
+//!   keyed by business number and their two identities (`link_identity`
+//!   is an insert that ignores a conflict), and `identities` is one
+//!   recursive query over the synced contacts and the links of one number.
+//! - Every message insert also writes its sender
+//!   ([`StoredMessage::sender`], computed in Rust: the payload is never
+//!   read field by field in SQL, see the [module docs](super#content-keeps-u0000))
+//!   to `wa_messages.sender`, indexed with the business number, which no
+//!   read returns: it is what an erasure matches a person's group
+//!   messages on. A row without one (migration `0004` could not read its
+//!   payload, which holds U+0000, or an instance of the previous revision
+//!   wrote it) gets it from the first erasure on its number: `erase_all`
+//!   reads the payloads of its number's inbound rows without a sender
+//!   (`wa_messages_unsent_idx`; tombstones and redacted rows aside),
+//!   computes their sender in Rust and writes it, before it deletes.
+//! - `erase_all` (and `erase`, its one-key case) and `purge_before` order
+//!   themselves against the writers with
+//!   two transaction-level advisory locks, in the two-key form (whose key
+//!   space never meets the one-key locks of sqlx's `migrate` or of the
+//!   service):
+//!   - the **number lock**, `('wa_messages'::regclass::oid::int4,
+//!     hashtext(<phone_number_id>))` under the default prefix (the class
+//!     is the table's object id: each schema and prefix has its own): `append`
+//!     and `append_synced` take it shared, first thing in their one
+//!     statement (a batch takes each of its numbers', in order); `erase_all`
+//!     takes it exclusive, then deletes in a second statement, whose
+//!     snapshot so holds every append that took the lock before it, and
+//!     no append can start meanwhile. Without it, an append that had
+//!     written its message but not yet its conversation's summary when
+//!     the erasure took its snapshot left the message behind, its summary
+//!     deleted (the erasure waited for the summary row and deleted the
+//!     appended version). An append that waits on the lock is recorded
+//!     after the erasure, with a summary of its own. The cost: while an
+//!     erasure deletes, appends to its business number wait (every
+//!     contact's: the lock is per number, so that a history chunk takes one
+//!     lock per number rather than one per contact).
+//!   - the **purge lock**, `('wa_conversations'::regclass::oid::int4, 0)`:
+//!     `purge_before` takes it exclusive, `erase_all` shared, before the number
+//!     lock. Two purges, or a purge and an erasure, would otherwise take
+//!     the same rows' locks in the orders of their plans (the `ts` index
+//!     oldest first, the conversation's index newest first, a sequential
+//!     scan by position), and deadlock. Purges run one at a time;
+//!     erasures of different numbers beside each other.
+//!
+//!   Under both locks, `erase_all` first fills in the sender of the
+//!   number's rows that have none (above), then deletes. The deletion
+//!   itself is one statement over one snapshot: six `DELETE`s
+//!   in data-modifying CTEs, the messages first (`contact = ANY($2)`; a
+//!   synced contact on any of its four ids, a link on either side), then
+//!   the person's messages in other conversations (`sender = ANY($2)` and
+//!   a conversation not among the ids, so never a row the first `DELETE`
+//!   takes), updated in place under [`ErasureMode::Redact`] or deleted
+//!   under [`ErasureMode::Delete`], and last the summaries whose latest
+//!   message that was: its preview cleared, or the summary rebuilt from
+//!   the latest remaining row (never a tombstone), or deleted. Those
+//!   messages are the number's, so its lock covers them too. The other
+//!   writers take no advisory lock: `fill_media_placeholder` locks a
+//!   message then its summary, the order the deletion's statements take
+//!   them in, and the rest write one row. An instance of the revision
+//!   before these locks does not take them: while one still appends, an
+//!   erasure can leave a message without its summary, or miss a group
+//!   message it records during the erasure (it writes no sender; one
+//!   recorded before the erasure is filled in and reached): upgrade every
+//!   instance. A message recorded while a
+//!   purge runs is not waited for:
+//!   one older than the cutoff (a late history chunk) may be kept, its
+//!   summary purged, until the next purge.
+//! - `purge_before`'s statement is built the same way, and locks the
+//!   summaries it deletes in key order first: the order `append_synced`
+//!   updates a chunk's summaries in, so the two never deadlock.
+//!   `wa_messages(ts)` and `wa_conversations(last_message_at)` are indexed
+//!   for it (migration `0004`).
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use meta_whatsapp_core::error::StorageError;
-use meta_whatsapp_core::ids::{MessageId, PhoneNumberId};
+use meta_whatsapp_core::ids::{AppId, MessageId, PhoneNumberId, UserId};
 use meta_whatsapp_core::store::{
-    ConversationKey, ConversationStore, ConversationSummary, DeliveryStatus, Direction,
-    StoredMessage,
+    ConversationKey, ConversationStore, ConversationSummary, DeliveryStatus, Direction, Erased,
+    ErasureMode, IdentityLink, Purged, Retention, StoredContact, StoredMessage, ThreadOwner,
+    ThreadOwnership, WindowEvent, WindowEventKind,
 };
 use sqlx::postgres::PgRow;
 use sqlx::{AssertSqlSafe, PgPool, Row};
@@ -65,17 +152,29 @@ const MAX_STATUS_ROUNDS: usize = 16;
 /// Unread counts are by **arrival** (inbound messages appended since the
 /// last `mark_read`; synced history never counts), like the in-memory
 /// store. Timestamps are stored with microsecond precision.
+///
+/// Retention is kept by default; [`with_retention`](Self::with_retention)
+/// sets what [`ConversationStore::apply_retention`] purges. Nothing purges
+/// on its own: schedule `apply_retention`. Runs from several replicas at
+/// once are safe: purges take turns (see the module docs), and an erasure
+/// waits for a purge in progress. An erasure redacts an erased person's
+/// messages in other conversations (a group's) by default;
+/// [`with_erasure_mode`](Self::with_erasure_mode) deletes them instead.
 #[derive(Clone)]
 pub struct PostgresConversationStore {
     pool: PgPool,
     prefix: TablePrefix,
     sql: Arc<Sql>,
+    retention: Retention,
+    erasure_mode: ErasureMode,
 }
 
 impl fmt::Debug for PostgresConversationStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PostgresConversationStore")
             .field("prefix", &self.prefix)
+            .field("retention", &self.retention)
+            .field("erasure_mode", &self.erasure_mode)
             .finish_non_exhaustive()
     }
 }
@@ -93,35 +192,95 @@ struct Sql {
     conversations_before: Arc<str>,
     mark_read: Arc<str>,
     last_inbound_at: Arc<str>,
+    message: Arc<str>,
+    window_event: Arc<str>,
+    window_events: Arc<str>,
+    window_events_before: Arc<str>,
+    set_owner: Arc<str>,
+    owner: Arc<str>,
+    put_contact: Arc<str>,
+    remove_contact: Arc<str>,
+    contact: Arc<str>,
+    contacts: Arc<str>,
+    contacts_after: Arc<str>,
+    link_identity: Arc<str>,
+    identity_links: Arc<str>,
+    identities: Arc<str>,
+    erase_locks: [Arc<str>; 2],
+    unsent: Arc<str>,
+    fill_senders: Arc<str>,
+    erase_redacting: Arc<str>,
+    erase_deleting: Arc<str>,
+    purge_lock: Arc<str>,
+    purge_all: Arc<str>,
+    purge_number: Arc<str>,
 }
 
 const MESSAGE_COLUMNS: &str = "id, phone_number_id, contact, direction, kind_utf8, text_utf8, \
      payload_json, status, ts, status_at, error_json";
 
+/// What a message insert writes: [`MESSAGE_COLUMNS`] and the sender
+/// ([`StoredMessage::sender`]), which no read returns.
+const INSERT_COLUMNS: &str = "id, phone_number_id, contact, direction, kind_utf8, text_utf8, \
+     payload_json, status, ts, status_at, error_json, sender";
+
 const SUMMARY_COLUMNS: &str =
     "phone_number_id, contact, last_message_at, last_inbound_at, last_text_utf8, unread";
 
-/// The eleven values of a message row, in [`MESSAGE_COLUMNS`] order. The
+const WINDOW_EVENT_COLUMNS: &str = "phone_number_id, id, contact, kind, ts";
+
+const OWNER_COLUMNS: &str = "owner, role, app_id, since";
+
+const CONTACT_COLUMNS: &str = "phone_number_id, contact, full_name_utf8, first_name_utf8, \
+     phone_number, user_id, parent_user_id, username_utf8, synced_at";
+
+/// The twelve values of a message row, in [`INSERT_COLUMNS`] order. The
 /// content travels as bytes (`kind_utf8`, `text_utf8`: `BYTEA`) and as
 /// JSON text cast to `json` (`payload_json`, `error_json`): neither Postgres
 /// `text` nor `jsonb` can hold U+0000, and content keeps it (see the
 /// [module docs](super#content-keeps-u0000)).
-const MESSAGE_VALUES: &str = "$1, $2, $3, $4, $5, $6, $7::json, $8, $9, $10, $11::json";
+const MESSAGE_VALUES: &str = "$1, $2, $3, $4, $5, $6, $7::json, $8, $9, $10, $11::json, $12";
+
+/// The inbound rows without a sender that an erasure reads the payload of
+/// (`StoredMessage::sender`, in Rust), tombstones and redacted rows aside:
+/// the predicate of migration 4's `messages_unsent_idx`, word for word
+/// (`revoked` and `erased` are `StoredMessage::REVOKED` and
+/// `StoredMessage::ERASED`; a test checks both).
+const UNSENT: &str = "sender IS NULL AND direction = 'inbound' \
+     AND kind_utf8 <> 'revoked'::bytea AND kind_utf8 <> 'erased'::bytea";
 
 /// The summary's "newest message" is the max by `(ts, id)`, the same order
 /// the history pages in.
 const NEWER: &str = "(EXCLUDED.last_message_at, EXCLUDED.last_message_id) \
                      > (c.last_message_at, c.last_message_id)";
 
+/// The arguments of the number lock on business number `number` (an SQL
+/// expression): the class is the messages table's object id, so the
+/// tables of each prefix, and of each schema, have locks of their own. A
+/// stable identifier: every replica, of every revision, must take the
+/// same lock (`docs/architecture.md`).
+fn number_lock(messages: &str, number: &str) -> String {
+    format!("'{messages}'::regclass::oid::int4, hashtext({number})")
+}
+
+/// The arguments of the purge lock: the conversations table's object id
+/// (see [`number_lock`]).
+fn purge_lock(conversations: &str) -> String {
+    format!("'{conversations}'::regclass::oid::int4, 0")
+}
+
 /// The `append` statement. `inbound_at` and `unread` are the SQL
 /// expressions an inserted row contributes to its conversation's
-/// `last_inbound_at` and `unread`.
+/// `last_inbound_at` and `unread`. The message is inserted from the row of
+/// `lock`, so the number lock is held before anything is written.
 fn append_sql(messages: &str, conversations: &str, inbound_at: &str, unread: &str) -> String {
     let newer = NEWER;
+    let lock = number_lock(messages, "$2");
     format!(
-        "WITH inserted AS ( \
-           INSERT INTO {messages} ({MESSAGE_COLUMNS}) \
-           VALUES ({MESSAGE_VALUES}) \
+        "WITH lock AS MATERIALIZED (SELECT pg_advisory_xact_lock_shared({lock})), \
+         inserted AS ( \
+           INSERT INTO {messages} ({INSERT_COLUMNS}) \
+           SELECT {MESSAGE_VALUES} FROM lock \
            ON CONFLICT (id) DO NOTHING \
            RETURNING id, phone_number_id, contact, direction, text_utf8, ts \
          ) \
@@ -140,20 +299,121 @@ fn append_sql(messages: &str, conversations: &str, inbound_at: &str, unread: &st
     )
 }
 
-/// The `append_synced` statement: one row per element of the eleven
-/// column arrays, the first of each id kept, no inbound effects.
+/// The `purge_before` statement. `scope` restricts every `DELETE` to one
+/// business number (`$2`), or is empty. The summaries are locked in key
+/// order before they are deleted: the order `append_synced` updates them
+/// in, so a purge and a history chunk never deadlock.
+fn purge_sql(prefix: &TablePrefix, scope: &str) -> String {
+    let messages = prefix.table("messages");
+    let conversations = prefix.table("conversations");
+    let window_events = prefix.table("window_events");
+    let owners = prefix.table("thread_owners");
+    let contacts = prefix.table("synced_contacts");
+    format!(
+        "WITH m AS (DELETE FROM {messages} WHERE ts < $1{scope} RETURNING 1), \
+         c AS (DELETE FROM {conversations} WHERE (phone_number_id, contact) IN ( \
+           SELECT phone_number_id, contact FROM {conversations} \
+           WHERE last_message_at < $1{scope} \
+           ORDER BY phone_number_id, contact FOR UPDATE \
+         ) RETURNING 1), \
+         w AS (DELETE FROM {window_events} WHERE ts < $1{scope} RETURNING 1), \
+         o AS (DELETE FROM {owners} WHERE since < $1{scope} RETURNING 1), \
+         r AS (DELETE FROM {contacts} WHERE removed AND synced_at < $1{scope} RETURNING 1) \
+         SELECT (SELECT count(*) FROM m), (SELECT count(*) FROM c), \
+           (SELECT count(*) FROM w), (SELECT count(*) FROM o), (SELECT count(*) FROM r)"
+    )
+}
+
+/// The deletion of `erase_all`, in one statement over one snapshot: `$1`
+/// the business number, `$2` the erased ids (`text[]`), `$3` the kind an
+/// erased person's group message gets (`redact`) or the tombstone's kind,
+/// which the recomputed summaries skip (not `redact`), `$4` the erased ids
+/// that are not empty, which a synced contact's other ids and a link's
+/// sides are matched on (an empty one names no one). The messages go
+/// first (the order `fill_media_placeholder` takes a message and its
+/// summary in). `g` is the person's messages in conversations keyed by
+/// someone else: disjoint from `m`'s rows (their conversation is not one
+/// of the ids), and so are the summaries it rewrites from `c`'s.
+fn erase_sql(prefix: &TablePrefix, redact: bool) -> String {
+    let messages = prefix.table("messages");
+    let conversations = prefix.table("conversations");
+    let window_events = prefix.table("window_events");
+    let owners = prefix.table("thread_owners");
+    let contacts = prefix.table("synced_contacts");
+    let links = prefix.table("identity_links");
+    let theirs = "phone_number_id = $1 AND sender = ANY($2) AND NOT (contact = ANY($2))";
+    let group = if redact {
+        // Each message keeps its place; the preview of a conversation whose
+        // latest message it is goes with its text.
+        format!(
+            "g AS (UPDATE {messages} SET kind_utf8 = $3, text_utf8 = NULL, \
+               payload_json = '{{}}'::json, error_json = NULL, sender = NULL \
+               WHERE {theirs} RETURNING id, contact), \
+             gs AS (UPDATE {conversations} AS s SET last_text_utf8 = NULL FROM g \
+               WHERE s.phone_number_id = $1 AND s.contact = g.contact \
+                 AND s.last_message_id = g.id)"
+        )
+    } else {
+        // A conversation whose latest message went follows its latest
+        // remaining one (never a tombstone), or loses its summary.
+        format!(
+            "g AS (DELETE FROM {messages} WHERE {theirs} RETURNING id, contact), \
+             gc AS (SELECT DISTINCT s.contact FROM {conversations} AS s JOIN g \
+               ON s.phone_number_id = $1 AND s.contact = g.contact AND s.last_message_id = g.id), \
+             gl AS (SELECT DISTINCT ON (r.contact) r.contact, r.ts, r.id, r.text_utf8 \
+               FROM {messages} AS r JOIN gc ON r.phone_number_id = $1 AND r.contact = gc.contact \
+               WHERE r.kind_utf8 <> $3 AND NOT EXISTS (SELECT 1 FROM g WHERE g.id = r.id) \
+               ORDER BY r.contact, r.ts DESC, r.id COLLATE \"C\" DESC), \
+             su AS (UPDATE {conversations} AS s SET last_message_at = gl.ts, \
+               last_message_id = gl.id, last_text_utf8 = gl.text_utf8 FROM gl \
+               WHERE s.phone_number_id = $1 AND s.contact = gl.contact), \
+             sd AS (DELETE FROM {conversations} AS s USING gc \
+               WHERE s.phone_number_id = $1 AND s.contact = gc.contact \
+                 AND NOT EXISTS (SELECT 1 FROM gl WHERE gl.contact = gc.contact))"
+        )
+    };
+    format!(
+        "WITH m AS (DELETE FROM {messages} \
+           WHERE phone_number_id = $1 AND contact = ANY($2) RETURNING 1), \
+         c AS (DELETE FROM {conversations} \
+           WHERE phone_number_id = $1 AND contact = ANY($2) RETURNING 1), \
+         w AS (DELETE FROM {window_events} \
+           WHERE phone_number_id = $1 AND contact = ANY($2) RETURNING 1), \
+         o AS (DELETE FROM {owners} \
+           WHERE phone_number_id = $1 AND contact = ANY($2) RETURNING 1), \
+         p AS (DELETE FROM {contacts} WHERE phone_number_id = $1 \
+           AND (contact = ANY($2) OR user_id = ANY($4) OR parent_user_id = ANY($4) \
+             OR phone_number = ANY($4)) RETURNING 1), \
+         l AS (DELETE FROM {links} WHERE phone_number_id = $1 \
+           AND (previous = ANY($4) OR current = ANY($4)) RETURNING 1), \
+         {group} \
+         SELECT (SELECT count(*) FROM m), (SELECT count(*) FROM c), \
+           (SELECT count(*) FROM w), (SELECT count(*) FROM o), (SELECT count(*) FROM p), \
+           (SELECT count(*) FROM l), (SELECT count(*) FROM g)"
+    )
+}
+
+/// The `append_synced` statement: one row per element of the twelve
+/// column arrays, the first of each id kept, no inbound effects. Its rows
+/// are read under the number lock of each of the batch's numbers, taken
+/// shared, in order, before the first is inserted.
 fn append_synced_sql(messages: &str, conversations: &str) -> String {
     let newer = NEWER;
+    let lock = number_lock(messages, "number");
     format!(
-        "WITH input AS ( \
+        "WITH lock AS MATERIALIZED ( \
+           SELECT pg_advisory_xact_lock_shared({lock}) \
+           FROM unnest($2::text[]) AS number GROUP BY number ORDER BY number \
+         ), input AS ( \
            SELECT DISTINCT ON (id) * FROM UNNEST($1::text[], $2::text[], $3::text[], \
              $4::text[], $5::bytea[], $6::bytea[], $7::json[], $8::text[], \
-             $9::timestamptz[], $10::timestamptz[], $11::json[]) \
-             WITH ORDINALITY AS t({MESSAGE_COLUMNS}, n) \
+             $9::timestamptz[], $10::timestamptz[], $11::json[], $12::text[]) \
+             WITH ORDINALITY AS t({INSERT_COLUMNS}, n) \
+           WHERE (SELECT count(*) FROM lock) >= 0 \
            ORDER BY id, n \
          ), inserted AS ( \
-           INSERT INTO {messages} ({MESSAGE_COLUMNS}) \
-           SELECT {MESSAGE_COLUMNS} FROM input \
+           INSERT INTO {messages} ({INSERT_COLUMNS}) \
+           SELECT {INSERT_COLUMNS} FROM input \
            ON CONFLICT (id) DO NOTHING \
            RETURNING id, phone_number_id, contact, text_utf8, ts \
          ), latest AS ( \
@@ -175,9 +435,14 @@ fn append_synced_sql(messages: &str, conversations: &str) -> String {
 }
 
 impl Sql {
+    #[allow(clippy::too_many_lines)] // one statement per field
     fn new(prefix: &TablePrefix) -> Self {
         let messages = prefix.table("messages");
         let conversations = prefix.table("conversations");
+        let window_events = prefix.table("window_events");
+        let owners = prefix.table("thread_owners");
+        let contacts = prefix.table("synced_contacts");
+        let links = prefix.table("identity_links");
         let arc = |s: String| -> Arc<str> { Arc::from(s) };
         Self {
             append: arc(append_sql(
@@ -190,7 +455,7 @@ impl Sql {
             // The history row alone: a tombstone never touches (nor creates)
             // its conversation's summary.
             tombstone: arc(format!(
-                "INSERT INTO {messages} ({MESSAGE_COLUMNS}) \
+                "INSERT INTO {messages} ({INSERT_COLUMNS}) \
                  VALUES ({MESSAGE_VALUES}) \
                  ON CONFLICT (id) DO NOTHING \
                  RETURNING 1 AS appended"
@@ -251,6 +516,153 @@ impl Sql {
                 "SELECT last_inbound_at FROM {conversations} \
                  WHERE phone_number_id = $1 AND contact = $2"
             )),
+            message: arc(format!(
+                "SELECT {MESSAGE_COLUMNS} FROM {messages} WHERE id = $1 AND phone_number_id = $2"
+            )),
+            window_event: arc(format!(
+                "INSERT INTO {window_events} ({WINDOW_EVENT_COLUMNS}) VALUES ($1, $2, $3, $4, $5) \
+                 ON CONFLICT (phone_number_id, id) DO NOTHING \
+                 RETURNING 1 AS recorded"
+            )),
+            window_events: arc(format!(
+                "SELECT {WINDOW_EVENT_COLUMNS} FROM {window_events} \
+                 WHERE phone_number_id = $1 AND contact = $2 \
+                 ORDER BY ts DESC, id DESC LIMIT $3"
+            )),
+            window_events_before: arc(format!(
+                "SELECT {WINDOW_EVENT_COLUMNS} FROM {window_events} \
+                 WHERE phone_number_id = $1 AND contact = $2 AND (ts, id) < ($4, $5) \
+                 ORDER BY ts DESC, id DESC LIMIT $3"
+            )),
+            // The update applies only when the stored record is not later.
+            set_owner: arc(format!(
+                "INSERT INTO {owners} AS o (phone_number_id, contact, {OWNER_COLUMNS}) \
+                 VALUES ($1, $2, $3, $4, $5, $6) \
+                 ON CONFLICT (phone_number_id, contact) DO UPDATE SET \
+                   owner = EXCLUDED.owner, role = EXCLUDED.role, app_id = EXCLUDED.app_id, \
+                   since = EXCLUDED.since \
+                 WHERE EXCLUDED.since >= o.since \
+                 RETURNING 1 AS stored"
+            )),
+            owner: arc(format!(
+                "SELECT {OWNER_COLUMNS} FROM {owners} WHERE phone_number_id = $1 AND contact = $2"
+            )),
+            put_contact: arc(format!(
+                "INSERT INTO {contacts} AS p ({CONTACT_COLUMNS}) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+                 ON CONFLICT (phone_number_id, contact) DO UPDATE SET \
+                   full_name_utf8 = EXCLUDED.full_name_utf8, \
+                   first_name_utf8 = EXCLUDED.first_name_utf8, \
+                   phone_number = EXCLUDED.phone_number, user_id = EXCLUDED.user_id, \
+                   parent_user_id = EXCLUDED.parent_user_id, \
+                   username_utf8 = EXCLUDED.username_utf8, synced_at = EXCLUDED.synced_at, \
+                   removed = false \
+                 WHERE EXCLUDED.synced_at >= p.synced_at \
+                 RETURNING 1 AS stored"
+            )),
+            // The removal replaces the row (or takes the key's place) with
+            // its time alone, unless the stored row is later. `prior`, read
+            // (and locked) first, says whether a contact was there.
+            remove_contact: arc(format!(
+                "WITH prior AS ( \
+                   SELECT removed FROM {contacts} \
+                   WHERE phone_number_id = $1 AND contact = $2 AND synced_at <= $3 \
+                   FOR UPDATE \
+                 ), removal AS ( \
+                   INSERT INTO {contacts} AS p (phone_number_id, contact, synced_at, removed) \
+                   VALUES ($1, $2, $3, true) \
+                   ON CONFLICT (phone_number_id, contact) DO UPDATE SET \
+                     full_name_utf8 = NULL, first_name_utf8 = NULL, phone_number = NULL, \
+                     user_id = NULL, parent_user_id = NULL, username_utf8 = NULL, \
+                     synced_at = EXCLUDED.synced_at, removed = true \
+                   WHERE p.synced_at <= EXCLUDED.synced_at \
+                   RETURNING 1 \
+                 ) \
+                 SELECT EXISTS (SELECT 1 FROM prior WHERE NOT removed) \
+                   AND EXISTS (SELECT 1 FROM removal)"
+            )),
+            contact: arc(format!(
+                "SELECT {CONTACT_COLUMNS} FROM {contacts} \
+                 WHERE phone_number_id = $1 AND contact = $2 AND NOT removed"
+            )),
+            contacts: arc(format!(
+                "SELECT {CONTACT_COLUMNS} FROM {contacts} \
+                 WHERE phone_number_id = $1 AND NOT removed ORDER BY contact LIMIT $2"
+            )),
+            contacts_after: arc(format!(
+                "SELECT {CONTACT_COLUMNS} FROM {contacts} \
+                 WHERE phone_number_id = $1 AND contact > $3 AND NOT removed \
+                 ORDER BY contact LIMIT $2"
+            )),
+            link_identity: arc(format!(
+                "INSERT INTO {links} (phone_number_id, previous, current, ts) \
+                 VALUES ($1, $2, $3, $4) \
+                 ON CONFLICT (phone_number_id, previous, current) DO NOTHING \
+                 RETURNING 1 AS linked"
+            )),
+            identity_links: arc(format!(
+                "SELECT phone_number_id, previous, current, ts FROM {links} \
+                 WHERE phone_number_id = $1 AND (previous = $2 OR current = $2) \
+                 ORDER BY ts, previous, current"
+            )),
+            // The closure from `$2`: a synced contact (not a kept removal)
+            // naming an identity found adds its four, a link its other
+            // side. An empty identity names no one: it is never followed
+            // nor found. `UNION` drops what was found already, so it ends.
+            identities: arc(format!(
+                "WITH RECURSIVE ids(id) AS ( \
+                   SELECT $2::text COLLATE \"C\" \
+                   UNION \
+                   SELECT n.id FROM ids CROSS JOIN LATERAL ( \
+                     SELECT v.id FROM {contacts} AS p, LATERAL (VALUES (p.contact), \
+                       (p.user_id), (p.parent_user_id), (p.phone_number)) AS v(id) \
+                     WHERE p.phone_number_id = $1 AND NOT p.removed \
+                       AND ids.id IN (p.contact, p.user_id, p.parent_user_id, p.phone_number) \
+                     UNION ALL \
+                     SELECT l.previous FROM {links} AS l \
+                     WHERE l.phone_number_id = $1 AND l.current = ids.id \
+                     UNION ALL \
+                     SELECT l.current FROM {links} AS l \
+                     WHERE l.phone_number_id = $1 AND l.previous = ids.id \
+                   ) AS n(id) WHERE ids.id <> '' AND n.id <> '' \
+                 ) \
+                 SELECT id FROM ids"
+            )),
+            // The purge lock shared, then the number lock exclusive: see the
+            // module docs. Each its own statement, so the deletion's
+            // snapshot is taken after both are held.
+            erase_locks: [
+                arc(format!(
+                    "SELECT pg_advisory_xact_lock_shared({})",
+                    purge_lock(&conversations)
+                )),
+                arc(format!(
+                    "SELECT pg_advisory_xact_lock({})",
+                    number_lock(&messages, "$1")
+                )),
+            ],
+            // The inbound rows of a number that have no sender (written by
+            // an instance of the previous revision, or whose payload
+            // migration 4 could not read), tombstones and redacted rows
+            // aside: the predicate of `messages_unsent_idx`, written the
+            // same way so the planner uses that index.
+            unsent: arc(format!(
+                "SELECT id, payload_json FROM {messages} \
+                 WHERE phone_number_id = $1 AND {UNSENT}"
+            )),
+            fill_senders: arc(format!(
+                "UPDATE {messages} AS m SET sender = t.found \
+                 FROM UNNEST($2::text[], $3::text[]) AS t(row_id, found) \
+                 WHERE m.phone_number_id = $1 AND m.id = t.row_id AND {UNSENT}"
+            )),
+            erase_redacting: arc(erase_sql(prefix, true)),
+            erase_deleting: arc(erase_sql(prefix, false)),
+            purge_lock: arc(format!(
+                "SELECT pg_advisory_xact_lock({})",
+                purge_lock(&conversations)
+            )),
+            purge_all: arc(purge_sql(prefix, "")),
+            purge_number: arc(purge_sql(prefix, " AND phone_number_id = $2")),
         }
     }
 }
@@ -267,7 +679,32 @@ impl PostgresConversationStore {
     /// prefix first.
     pub fn with_prefix(pool: PgPool, prefix: TablePrefix) -> Self {
         let sql = Arc::new(Sql::new(&prefix));
-        Self { pool, prefix, sql }
+        Self {
+            pool,
+            prefix,
+            sql,
+            retention: Retention::Keep,
+            erasure_mode: ErasureMode::Redact,
+        }
+    }
+
+    /// This store applying `retention` in
+    /// [`ConversationStore::apply_retention`] (the default keeps
+    /// everything).
+    #[must_use]
+    pub fn with_retention(mut self, retention: Retention) -> Self {
+        self.retention = retention;
+        self
+    }
+
+    /// This store redacting or deleting an erased person's messages in
+    /// other conversations (a group's) as `mode` says, in
+    /// [`ConversationStore::erase_all`] (the default redacts:
+    /// [`ErasureMode::Redact`]).
+    #[must_use]
+    pub fn with_erasure_mode(mut self, mode: ErasureMode) -> Self {
+        self.erasure_mode = mode;
+        self
     }
 
     /// The table prefix in use.
@@ -312,6 +749,28 @@ fn status_str(status: DeliveryStatus) -> Result<String, StorageError> {
 fn parse_status(s: String) -> Result<DeliveryStatus, StorageError> {
     serde_json::from_value(serde_json::Value::String(s)).map_err(|source| StorageError::Corrupt {
         key: "message status".to_owned(),
+        source,
+    })
+}
+
+/// `ThreadOwner` ↔ its serde name, as for [`status_str`].
+fn owner_str(owner: ThreadOwner) -> Result<String, StorageError> {
+    match serde_json::to_value(owner) {
+        Ok(serde_json::Value::String(s)) => Ok(s),
+        Ok(other) => Err(StorageError::Backend(anyhow::anyhow!(
+            "ThreadOwner serialized to {other}, expected a string"
+        ))),
+        Err(source) => Err(StorageError::Corrupt {
+            key: "thread owner".to_owned(),
+            source,
+        }),
+    }
+}
+
+/// A stored thread owner. The error names no conversation.
+fn parse_owner(s: String) -> Result<ThreadOwner, StorageError> {
+    serde_json::from_value(serde_json::Value::String(s)).map_err(|source| StorageError::Corrupt {
+        key: "thread owner".to_owned(),
         source,
     })
 }
@@ -363,6 +822,86 @@ fn message_from_row(row: &PgRow) -> Result<StoredMessage, StorageError> {
     })
 }
 
+fn window_event_from_row(row: &PgRow) -> Result<WindowEvent, StorageError> {
+    let phone_number_id: String = row.try_get("phone_number_id").map_err(backend)?;
+    let contact: String = row.try_get("contact").map_err(backend)?;
+    let kind: String = row.try_get("kind").map_err(backend)?;
+    Ok(WindowEvent {
+        conversation: ConversationKey::new(phone_number_id, contact),
+        kind: WindowEventKind::from_name(&kind),
+        id: row.try_get("id").map_err(backend)?,
+        at: row.try_get("ts").map_err(backend)?,
+    })
+}
+
+fn owner_from_row(row: &PgRow) -> Result<ThreadOwnership, StorageError> {
+    let owner: String = row.try_get("owner").map_err(backend)?;
+    let app_id: Option<String> = row.try_get("app_id").map_err(backend)?;
+    Ok(ThreadOwnership {
+        owner: parse_owner(owner)?,
+        role: row.try_get("role").map_err(backend)?,
+        app_id: app_id.map(AppId::new),
+        since: row.try_get("since").map_err(backend)?,
+    })
+}
+
+/// An optional content column (`*_utf8`) back to its text.
+fn optional_utf8(row: &PgRow, column: &str) -> Result<Option<String>, StorageError> {
+    let bytes: Option<Vec<u8>> = row.try_get(column).map_err(backend)?;
+    bytes.map(|b| utf8(column, b)).transpose()
+}
+
+fn contact_from_row(row: &PgRow) -> Result<StoredContact, StorageError> {
+    let phone_number_id: String = row.try_get("phone_number_id").map_err(backend)?;
+    let contact: String = row.try_get("contact").map_err(backend)?;
+    let user_id: Option<String> = row.try_get("user_id").map_err(backend)?;
+    let parent_user_id: Option<String> = row.try_get("parent_user_id").map_err(backend)?;
+    Ok(StoredContact {
+        key: ConversationKey::new(phone_number_id, contact),
+        full_name: optional_utf8(row, "full_name_utf8")?,
+        first_name: optional_utf8(row, "first_name_utf8")?,
+        phone_number: row.try_get("phone_number").map_err(backend)?,
+        user_id: user_id.map(UserId::new),
+        parent_user_id: parent_user_id.map(UserId::new),
+        username: optional_utf8(row, "username_utf8")?,
+        synced_at: row.try_get("synced_at").map_err(backend)?,
+    })
+}
+
+fn link_from_row(row: &PgRow) -> Result<IdentityLink, StorageError> {
+    let phone_number_id: String = row.try_get("phone_number_id").map_err(backend)?;
+    Ok(IdentityLink {
+        phone_number_id: PhoneNumberId::new(phone_number_id),
+        previous: row.try_get("previous").map_err(backend)?,
+        current: row.try_get("current").map_err(backend)?,
+        at: row.try_get("ts").map_err(backend)?,
+    })
+}
+
+/// [`StoredMessage::sender`] of an inbound message whose payload is
+/// `payload`, for a row read without its other columns.
+fn inbound_sender(payload: serde_json::Value) -> Option<String> {
+    let message = StoredMessage {
+        id: MessageId::new(String::new()),
+        conversation: ConversationKey::new(String::new(), String::new()),
+        direction: Direction::Inbound,
+        kind: String::new(),
+        text: None,
+        payload,
+        status: DeliveryStatus::Received,
+        timestamp: OffsetDateTime::UNIX_EPOCH,
+        status_at: None,
+        error: None,
+    };
+    message.sender().map(str::to_owned)
+}
+
+/// A `count(*)` column as a `u64`: never negative.
+fn count(row: &PgRow, index: usize) -> Result<u64, StorageError> {
+    let n: i64 = row.try_get(index).map_err(backend)?;
+    Ok(u64::try_from(n).unwrap_or(0))
+}
+
 fn summary_from_row(row: &PgRow) -> Result<ConversationSummary, StorageError> {
     let phone_number_id: String = row.try_get("phone_number_id").map_err(backend)?;
     let contact: String = row.try_get("contact").map_err(backend)?;
@@ -400,6 +939,7 @@ impl PostgresConversationStore {
             .bind(message.timestamp)
             .bind(message.status_at)
             .bind(error)
+            .bind(message.sender())
             .fetch_optional(&self.pool)
             .await
             .map_err(backend)?;
@@ -486,6 +1026,7 @@ impl ConversationStore for PostgresConversationStore {
         let mut timestamps = Vec::with_capacity(n);
         let mut status_ats = Vec::with_capacity(n);
         let mut errors = Vec::with_capacity(n);
+        let mut senders = Vec::with_capacity(n);
         for m in &messages {
             ids.push(m.id.as_str());
             numbers.push(m.conversation.phone_number_id.as_str());
@@ -503,6 +1044,7 @@ impl ConversationStore for PostgresConversationStore {
                     .map(|e| json_text(e, "message error"))
                     .transpose()?,
             );
+            senders.push(m.sender());
         }
         let inserted: Vec<String> =
             sqlx::query_scalar(AssertSqlSafe(Arc::clone(&self.sql.append_synced)))
@@ -517,6 +1059,7 @@ impl ConversationStore for PostgresConversationStore {
                 .bind(&timestamps)
                 .bind(&status_ats)
                 .bind(&errors)
+                .bind(&senders)
                 .fetch_all(&self.pool)
                 .await
                 .map_err(backend)?;
@@ -654,6 +1197,295 @@ impl ConversationStore for PostgresConversationStore {
                 .map_err(backend)?;
         Ok(at.flatten())
     }
+
+    async fn message(
+        &self,
+        phone_number_id: &PhoneNumberId,
+        id: &MessageId,
+    ) -> Result<Option<StoredMessage>, StorageError> {
+        let row = sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.message)))
+            .bind(id.as_str())
+            .bind(phone_number_id.as_str())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(backend)?;
+        row.as_ref().map(message_from_row).transpose()
+    }
+
+    async fn record_window_event(&self, event: WindowEvent) -> Result<bool, StorageError> {
+        let row = sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.window_event)))
+            .bind(event.conversation.phone_number_id.as_str())
+            .bind(event.id.as_str())
+            .bind(event.conversation.contact.as_str())
+            .bind(event.kind.as_str())
+            .bind(event.at)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(row.is_some())
+    }
+
+    async fn window_events(
+        &self,
+        key: &ConversationKey,
+        before: Option<(OffsetDateTime, String)>,
+        limit: usize,
+    ) -> Result<Vec<WindowEvent>, StorageError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let query = match &before {
+            None => sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.window_events))),
+            Some(_) => sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.window_events_before))),
+        }
+        .bind(key.phone_number_id.as_str())
+        .bind(key.contact.as_str())
+        .bind(to_i64(limit));
+        let query = match &before {
+            None => query,
+            Some((at, id)) => query.bind(*at).bind(id.as_str()),
+        };
+        let rows = query.fetch_all(&self.pool).await.map_err(backend)?;
+        rows.iter().map(window_event_from_row).collect()
+    }
+
+    async fn set_thread_owner(
+        &self,
+        key: &ConversationKey,
+        ownership: ThreadOwnership,
+    ) -> Result<bool, StorageError> {
+        let row = sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.set_owner)))
+            .bind(key.phone_number_id.as_str())
+            .bind(key.contact.as_str())
+            .bind(owner_str(ownership.owner)?)
+            .bind(ownership.role.as_deref())
+            .bind(ownership.app_id.as_ref().map(AppId::as_str))
+            .bind(ownership.since)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(row.is_some())
+    }
+
+    async fn thread_owner(
+        &self,
+        key: &ConversationKey,
+    ) -> Result<Option<ThreadOwnership>, StorageError> {
+        let row = sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.owner)))
+            .bind(key.phone_number_id.as_str())
+            .bind(key.contact.as_str())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(backend)?;
+        row.as_ref().map(owner_from_row).transpose()
+    }
+
+    async fn put_contact(&self, contact: StoredContact) -> Result<bool, StorageError> {
+        let row = sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.put_contact)))
+            .bind(contact.key.phone_number_id.as_str())
+            .bind(contact.key.contact.as_str())
+            .bind(contact.full_name.as_deref().map(str::as_bytes))
+            .bind(contact.first_name.as_deref().map(str::as_bytes))
+            .bind(contact.phone_number.as_deref())
+            .bind(contact.user_id.as_ref().map(UserId::as_str))
+            .bind(contact.parent_user_id.as_ref().map(UserId::as_str))
+            .bind(contact.username.as_deref().map(str::as_bytes))
+            .bind(contact.synced_at)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(row.is_some())
+    }
+
+    async fn remove_contact(
+        &self,
+        key: &ConversationKey,
+        at: OffsetDateTime,
+    ) -> Result<bool, StorageError> {
+        sqlx::query_scalar(AssertSqlSafe(Arc::clone(&self.sql.remove_contact)))
+            .bind(key.phone_number_id.as_str())
+            .bind(key.contact.as_str())
+            .bind(at)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(backend)
+    }
+
+    async fn contact(&self, key: &ConversationKey) -> Result<Option<StoredContact>, StorageError> {
+        let row = sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.contact)))
+            .bind(key.phone_number_id.as_str())
+            .bind(key.contact.as_str())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(backend)?;
+        row.as_ref().map(contact_from_row).transpose()
+    }
+
+    async fn contacts(
+        &self,
+        phone_number_id: &PhoneNumberId,
+        after: Option<String>,
+        limit: usize,
+    ) -> Result<Vec<StoredContact>, StorageError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let query = match &after {
+            None => sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.contacts))),
+            Some(_) => sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.contacts_after))),
+        }
+        .bind(phone_number_id.as_str())
+        .bind(to_i64(limit));
+        let query = match &after {
+            None => query,
+            Some(contact) => query.bind(contact.as_str()),
+        };
+        let rows = query.fetch_all(&self.pool).await.map_err(backend)?;
+        rows.iter().map(contact_from_row).collect()
+    }
+
+    async fn link_identity(&self, link: IdentityLink) -> Result<bool, StorageError> {
+        let row = sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.link_identity)))
+            .bind(link.phone_number_id.as_str())
+            .bind(link.previous.as_str())
+            .bind(link.current.as_str())
+            .bind(link.at)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(row.is_some())
+    }
+
+    async fn identity_links(
+        &self,
+        key: &ConversationKey,
+    ) -> Result<Vec<IdentityLink>, StorageError> {
+        let rows = sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.identity_links)))
+            .bind(key.phone_number_id.as_str())
+            .bind(key.contact.as_str())
+            .fetch_all(&self.pool)
+            .await
+            .map_err(backend)?;
+        rows.iter().map(link_from_row).collect()
+    }
+
+    async fn identities(&self, key: &ConversationKey) -> Result<BTreeSet<String>, StorageError> {
+        let ids: Vec<String> = sqlx::query_scalar(AssertSqlSafe(Arc::clone(&self.sql.identities)))
+            .bind(key.phone_number_id.as_str())
+            .bind(key.contact.as_str())
+            .fetch_all(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(ids.into_iter().collect())
+    }
+
+    async fn erase_all(
+        &self,
+        phone_number_id: &PhoneNumberId,
+        contacts: &[String],
+    ) -> Result<Erased, StorageError> {
+        if contacts.is_empty() {
+            return Ok(Erased::default());
+        }
+        let (sql, kind) = if self.erasure_mode == ErasureMode::Delete {
+            (&self.sql.erase_deleting, StoredMessage::REVOKED)
+        } else {
+            // `Redact`, and any mode added later: never keep the content.
+            (&self.sql.erase_redacting, StoredMessage::ERASED)
+        };
+        let mut tx = self.pool.begin().await.map_err(backend)?;
+        let [purge, number] = &self.sql.erase_locks;
+        sqlx::query(AssertSqlSafe(Arc::clone(purge)))
+            .execute(&mut *tx)
+            .await
+            .map_err(backend)?;
+        sqlx::query(AssertSqlSafe(Arc::clone(number)))
+            .bind(phone_number_id.as_str())
+            .execute(&mut *tx)
+            .await
+            .map_err(backend)?;
+        // Rows without a sender get it from their payload first, so that
+        // the deletion matches them too.
+        let unsent: Vec<(String, serde_json::Value)> =
+            sqlx::query_as(AssertSqlSafe(Arc::clone(&self.sql.unsent)))
+                .bind(phone_number_id.as_str())
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(backend)?;
+        let (ids, senders): (Vec<String>, Vec<String>) = unsent
+            .into_iter()
+            .filter_map(|(id, payload)| inbound_sender(payload).map(|sender| (id, sender)))
+            .unzip();
+        if !ids.is_empty() {
+            sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.fill_senders)))
+                .bind(phone_number_id.as_str())
+                .bind(&ids)
+                .bind(&senders)
+                .execute(&mut *tx)
+                .await
+                .map_err(backend)?;
+        }
+        // An empty id names no one: it matches what is keyed by it, never a
+        // contact's other ids nor a link's sides.
+        let named: Vec<&str> = contacts
+            .iter()
+            .map(String::as_str)
+            .filter(|id| !id.is_empty())
+            .collect();
+        let row = sqlx::query(AssertSqlSafe(Arc::clone(sql)))
+            .bind(phone_number_id.as_str())
+            .bind(contacts)
+            .bind(kind.as_bytes())
+            .bind(&named)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(backend)?;
+        tx.commit().await.map_err(backend)?;
+        Ok(Erased {
+            messages: count(&row, 0)?,
+            conversations: count(&row, 1)?,
+            window_events: count(&row, 2)?,
+            thread_owners: count(&row, 3)?,
+            contacts: count(&row, 4)?,
+            identity_links: count(&row, 5)?,
+            group_messages: count(&row, 6)?,
+        })
+    }
+
+    fn erasure_mode(&self) -> ErasureMode {
+        self.erasure_mode
+    }
+
+    async fn purge_before(
+        &self,
+        phone_number_id: Option<&PhoneNumberId>,
+        cutoff: OffsetDateTime,
+    ) -> Result<Purged, StorageError> {
+        let mut tx = self.pool.begin().await.map_err(backend)?;
+        sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.purge_lock)))
+            .execute(&mut *tx)
+            .await
+            .map_err(backend)?;
+        let query = match phone_number_id {
+            None => sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.purge_all))).bind(cutoff),
+            Some(number) => sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.purge_number)))
+                .bind(cutoff)
+                .bind(number.as_str()),
+        };
+        let row = query.fetch_one(&mut *tx).await.map_err(backend)?;
+        tx.commit().await.map_err(backend)?;
+        Ok(Purged {
+            messages: count(&row, 0)?,
+            conversations: count(&row, 1)?,
+            window_events: count(&row, 2)?,
+            thread_owners: count(&row, 3)?,
+            contact_removals: count(&row, 4)?,
+        })
+    }
+
+    fn retention(&self) -> Retention {
+        self.retention
+    }
 }
 
 #[cfg(test)]
@@ -681,6 +1513,87 @@ mod tests {
             parse_status("warning".to_owned()),
             Err(StorageError::Corrupt { .. })
         ));
+    }
+
+    #[test]
+    fn owner_names_round_trip_through_serde() {
+        for owner in [
+            ThreadOwner::ThisApp,
+            ThreadOwner::AnotherApp,
+            ThreadOwner::Idle,
+        ] {
+            assert_eq!(parse_owner(owner_str(owner).unwrap()).unwrap(), owner);
+        }
+        assert!(matches!(
+            parse_owner("somebody".to_owned()),
+            Err(StorageError::Corrupt { .. })
+        ));
+    }
+
+    /// The advisory locks are stable identifiers: replicas of two
+    /// revisions must take the same ones (`docs/architecture.md`). `\x77`
+    /// is `w`, so a search-and-replace of the prefix cannot rewrite this
+    /// pin along with the code.
+    #[test]
+    fn the_locks_are_pinned() {
+        let sql = Sql::new(&TablePrefix::DEFAULT);
+        let number = "'\x77a_messages'::regclass::oid::int4, hashtext(";
+        assert_eq!(
+            sql.purge_lock.as_ref(),
+            "SELECT pg_advisory_xact_lock('\x77a_conversations'::regclass::oid::int4, 0)"
+        );
+        assert_eq!(
+            sql.erase_locks[0].as_ref(),
+            "SELECT pg_advisory_xact_lock_shared('\x77a_conversations'::regclass::oid::int4, 0)"
+        );
+        assert_eq!(
+            sql.erase_locks[1].as_ref(),
+            format!("SELECT pg_advisory_xact_lock({number}$1))")
+        );
+        assert!(
+            sql.append.starts_with(&format!(
+                "WITH lock AS MATERIALIZED (SELECT pg_advisory_xact_lock_shared({number}$2))), "
+            )),
+            "{}",
+            sql.append
+        );
+        assert!(
+            sql.append_synced.contains(&format!(
+                "SELECT pg_advisory_xact_lock_shared({number}number)) \
+                 FROM unnest($2::text[]) AS number GROUP BY number ORDER BY number"
+            )),
+            "{}",
+            sql.append_synced
+        );
+    }
+
+    /// The rows an erasure fills the sender of are migration 4's
+    /// `messages_unsent_idx`, word for word (or the planner would not use
+    /// the index), and skip this crate's own kinds, whose payload is `{}`.
+    #[test]
+    fn the_unsent_rows_are_the_indexed_ones() {
+        let words = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        let migration = words(include_str!(
+            "../../../migrations/0004_conversation_records.sql"
+        ));
+        assert!(
+            migration.contains(&format!(
+                "ON {{prefix}}messages (phone_number_id) WHERE {};",
+                words(UNSENT)
+            )),
+            "{UNSENT}"
+        );
+        for kind in [StoredMessage::REVOKED, StoredMessage::ERASED] {
+            assert!(UNSENT.contains(&format!("kind_utf8 <> '{kind}'::bytea")));
+        }
+        let sql = Sql::new(&TablePrefix::DEFAULT);
+        assert!(sql.unsent.ends_with(UNSENT) && sql.fill_senders.ends_with(UNSENT));
+        let payload = serde_json::json!({"from": "16505551234", "from_user_id": "US.\u{0}"});
+        assert_eq!(
+            inbound_sender(payload).as_deref(),
+            Some("16505551234"),
+            "the rule of `StoredMessage::sender`"
+        );
     }
 
     #[test]
