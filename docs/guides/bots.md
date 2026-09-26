@@ -79,7 +79,10 @@ Checked in this order before the handler; a refusal goes to the bot's
 | cooldown running | `Command::cooldown` | "Please wait N s …" |
 
 List owners and bans **by BSUID**: a username adopter arrives without a
-phone number, so a ban by phone number alone can be walked around. The
+phone number, so a ban by phone number alone can be walked around. A
+BSUID belongs to one business portfolio (list the parent BSUID for
+several) and changes when the user changes phone number, so a ban is a
+filter, not a guarantee. The
 cooldown is checked last, so a refused attempt starts none. It lives in
 the `KvStore` you pass (`.cooldown_store(kv, clock)`, namespace
 `bot.cooldown`, keys hashed so no phone number is stored): with Postgres
@@ -151,7 +154,17 @@ Keep the `DedupGuard`: Meta retries for 7 days, and without it a retry
 runs the command again. A failing handler is logged and acknowledged by
 the default `LogErrors`, because an error answers `500` and Meta
 redelivers the whole batch, repeating every reply already sent in it;
-`PropagateErrors` opts into redelivery for idempotent handlers.
+`PropagateErrors` opts into redelivery for idempotent handlers (a
+command with a cooldown is refused on its redelivery: the cooldown
+started before the failure).
+
+Replies are free-form messages: Meta accepts them only within 24 hours
+of the user's last message (`ErrorKind::CustomerServiceWindowClosed`,
+`131047`, logged by `LogErrors`). The message being answered opens that
+window, but a redelivery after an outage can arrive days later and still
+runs its command: when a stale command must not act, compare the
+message's `timestamp` with the clock in the handler (or a middleware),
+and reach the user later with a template.
 
 Several merchants' numbers: the default `ClientOutbound` sends with one
 token. Implement `Outbound` to look the merchant's token up by business

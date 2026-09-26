@@ -67,7 +67,11 @@ fn digits(phone: &str) -> String {
 ///
 /// **List BSUIDs.** A user who adopted a username may arrive without a
 /// phone number, and then a phone-only entry does not match them: a ban by
-/// phone number alone can be walked around.
+/// phone number alone can be walked around. A BSUID is scoped to one
+/// business portfolio (list the parent BSUID for several) and Meta issues
+/// a new one when the user changes phone number, so a ban survives a
+/// number change only if both were listed and neither changed; no list
+/// keeps a determined user out.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[must_use]
 pub struct AccessList {

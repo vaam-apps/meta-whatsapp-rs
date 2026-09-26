@@ -286,6 +286,14 @@ impl Ctx {
     }
 
     /// Reply with `text`, quoting the received message.
+    ///
+    /// A reply is a free-form message: Meta accepts it only within 24
+    /// hours of the user's last message (the customer service window),
+    /// else it fails with `ErrorKind::CustomerServiceWindowClosed`
+    /// (`131047`). The message being answered opens that window, but Meta
+    /// redelivers a webhook for up to 7 days after an outage: when a late
+    /// command must not act, compare `ctx.message()`'s `timestamp` with
+    /// the clock first, and reach the user later with a template.
     pub async fn reply(&self, text: impl Into<String>) -> Result<SendResponse> {
         self.reply_with(Text::new(text)).await
     }

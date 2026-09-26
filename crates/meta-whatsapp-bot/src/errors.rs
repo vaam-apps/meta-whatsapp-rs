@@ -47,7 +47,9 @@ impl ErrorHandler for LogErrors {
 
 /// An [`ErrorHandler`] that returns every error, so the webhook answers
 /// `500` and Meta redelivers the batch. Only for handlers that are
-/// idempotent.
+/// idempotent. A command with a cooldown started it before it failed: its
+/// redelivery inside the period is refused as `CoolingDown` (the user
+/// gets the refusal, the handler does not run again).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PropagateErrors;
 
