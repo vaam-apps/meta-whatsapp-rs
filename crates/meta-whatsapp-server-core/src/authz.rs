@@ -45,6 +45,18 @@
 //! every method taking a capability refuses one another [`Authorizer`]
 //! made: `403 forbidden`, logged at `warn`, before it reads or writes
 //! anything.
+//!
+//! **An adapter admits a capability before it acts on it.** The methods
+//! above check the capability themselves; what an adapter does with one
+//! on its own does not ask the [`Authorizer`]: a [`Caller::tenant`] is its
+//! maker's word, and a forger's [`Caller`] names any tenant. So an API
+//! adapter that takes a capability from outside its own code (a request's
+//! extensions, a function another crate may call) must
+//! [`Authorizer::admit`] it ([`Authorizer::admit_admin`] for an
+//! [`AdminCaller`]) before it acts on [`Caller::tenant`] or reads a record
+//! for it, and keep the functions that act on one private to its crate.
+//! The axum adapter (`meta-whatsapp-server`) admits both in its
+//! extractors, and its handlers are crate-private.
 
 use std::sync::Arc;
 
@@ -230,7 +242,8 @@ impl std::fmt::Debug for Caller {
 }
 
 impl Caller {
-    /// The tenant it acts as.
+    /// The tenant it acts as, as its maker says: act on it only once
+    /// [`Authorizer::admit`] accepted the [`Caller`].
     pub fn tenant(&self) -> &TenantId {
         &self.tenant
     }
@@ -323,6 +336,29 @@ impl Authorizer {
         }
         tracing::warn!(operation, "refused a capability another authorizer made");
         Err(ServiceError::forbidden())
+    }
+
+    /// Whether this [`Authorizer`] made `caller`: what an API adapter
+    /// asks before it acts on a [`Caller`] it took from outside its own
+    /// code (see the [module](self)). The methods taking one ask it
+    /// themselves.
+    ///
+    /// # Errors
+    ///
+    /// `caller` another [`Authorizer`] made: `403 forbidden`, logged at
+    /// `warn`.
+    pub fn admit(&self, caller: &Caller) -> Result<(), ServiceError> {
+        self.check(&caller.issuer, "admit")
+    }
+
+    /// [`Self::admit`] for an [`AdminCaller`].
+    ///
+    /// # Errors
+    ///
+    /// `admin` another [`Authorizer`] made: `403 forbidden`, logged at
+    /// `warn`.
+    pub fn admit_admin(&self, admin: &AdminCaller) -> Result<(), ServiceError> {
+        self.check(&admin.issuer, "admit_admin")
     }
 
     /// The tokenless Graph client.

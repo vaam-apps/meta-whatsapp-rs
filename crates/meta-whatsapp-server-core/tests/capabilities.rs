@@ -10,7 +10,10 @@
 //! `Authorizer` (A) makes is refused by every method of the service's (B)
 //! with `403 forbidden`, and B's vault and records are neither read nor
 //! written. Decisive: `Issuer::is` (the `Arc::ptr_eq` of `authz.rs`), and
-//! each method's own check.
+//! each method's own check. `Authorizer::admit` and `admit_admin` ask the
+//! same of a capability an adapter took from outside its own code; the
+//! server's side of it (a forged capability in a request's extensions,
+//! and its crate-private handlers) is `crates/meta-whatsapp-server/tests/forged.rs`.
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test crate: a panic is the report
 
 use std::collections::BTreeMap;
@@ -489,6 +492,24 @@ async fn each_authorizer_accepts_its_own_capabilities() {
         let marked = number.failed(&side.authz, &refused_token()).await;
         assert_eq!(marked.code(), "reconnect_required");
         assert_eq!(side.records.take_calls(), ["set_waba_status"]);
+        // An owned WABA, from `owned_waba` or an admin's opening (both
+        // made by `open`), is accepted too: it marks, then it forgets.
+        for owned in [&waba, &opened] {
+            let marked = owned.failed(&side.authz, &refused_token()).await;
+            assert_eq!(marked.code(), "reconnect_required");
+            assert_eq!(side.records.take_calls(), ["set_waba_status"]);
+        }
+        for owned in [waba, opened] {
+            owned.forget(&side.authz).await.unwrap();
+            assert_eq!(side.records.take_calls(), ["unbind_waba"]);
+        }
+        // Forgotten: the vault holds no token for the WABA any more.
+        let gone = side
+            .authz
+            .waba_for_admin(&admin, &side.records.waba)
+            .await
+            .unwrap_err();
+        assert_eq!(gone.code(), "number_not_connected");
     }
     assert_eq!(
         service
@@ -640,6 +661,33 @@ async fn owned_waba_forget_refuses_another_authorizer_and_deletes_nothing() {
             .unwrap()
             .expose_secret(),
         FORGED_TOKEN
+    );
+}
+
+/// `admit` and `admit_admin`, what an API adapter asks before it acts on
+/// a capability it took from outside its own code (a request's
+/// extensions): each `Authorizer` admits what it made and refuses what the
+/// other made, reading and writing nothing. Decisive: the check in each.
+#[tokio::test]
+async fn admit_accepts_only_the_authorizers_own_capabilities() {
+    let (service, forger) = service_and_forger().await;
+    let (own, own_admin) = (service.caller().await, service.admin().await);
+    let (foreign, foreign_admin) = (forger.caller().await, forger.admin().await);
+    let before = Before::of(&service);
+    assert_forbidden(&service.authz.admit(&foreign).unwrap_err(), "admit");
+    assert_forbidden(
+        &service.authz.admit_admin(&foreign_admin).unwrap_err(),
+        "admit_admin",
+    );
+    before.unchanged(&service, "admit").await;
+    service.authz.admit(&own).unwrap();
+    service.authz.admit_admin(&own_admin).unwrap();
+    forger.authz.admit(&foreign).unwrap();
+    forger.authz.admit_admin(&foreign_admin).unwrap();
+    assert_forbidden(&forger.authz.admit(&own).unwrap_err(), "admit, reversed");
+    assert_forbidden(
+        &forger.authz.admit_admin(&own_admin).unwrap_err(),
+        "admit_admin, reversed",
     );
 }
 
