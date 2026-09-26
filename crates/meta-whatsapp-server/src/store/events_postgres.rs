@@ -47,10 +47,10 @@ use meta_whatsapp_rs::core::error::StorageError;
 use time::OffsetDateTime;
 
 use super::StoreResult;
+use super::events::{EventPage, EventQuery, EventStore, NewEvent, OutboxBusy, StoredEvent};
 // The housekeeping purges' advisory lock, the idempotency purge's too: one
 // replica at a time purges. Advisory locks are the database's, not a
 // schema's: deployments sharing one database purge in turn.
-use super::events::{EventPage, EventQuery, EventStore, NewEvent, OutboxBusy, StoredEvent};
 use super::postgres::HOUSEKEEPING_LOCK;
 use crate::model::TenantId;
 
