@@ -415,3 +415,55 @@ async fn the_envelope_has_the_documented_fields() {
     let received = envelope["received_at"].as_str().unwrap();
     assert!(received.ends_with('Z'), "{received}");
 }
+
+/// Polling is a read for the rate limits (docs/design/server.md, section
+/// 6; the merge of M1b and M1c puts `/v1/events` behind M1b's guard): past
+/// the tenant's `read` burst, `429 too_many_requests` with `Retry-After`,
+/// counted as `class="read"`; the tenant's other reads share that budget
+/// (`GET /v1/numbers` is refused too), and another tenant's budget is
+/// untouched. Decisive: the events routes behind the rate-limited guard,
+/// and a poll's class (a `read`, not template management).
+#[tokio::test]
+async fn polling_is_a_read_for_the_rate_limits() {
+    use meta_whatsapp_server::ratelimit::{Rate, RateLimits};
+    use meta_whatsapp_server::state::Settings;
+    let h = Harness::with_settings(Settings {
+        rate_limits: RateLimits {
+            read: Rate {
+                per_second: 1,
+                burst: 2,
+            },
+            ..common::unlimited()
+        },
+        ..common::test_settings()
+    });
+    h.tenant(A).await;
+    h.tenant(B).await;
+    insert(&h, &row(Some(A), "message_received", "1", None)).await;
+    let key = h.tenant_key(A, &[Scope::Events, Scope::Numbers]).await;
+    let other = h.tenant_key(B, &[Scope::Events]).await;
+    for _ in 0..2 {
+        let reply = poll(&h, &key, "").await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+    }
+    let refused = poll(&h, &key, "").await;
+    assert_eq!(
+        (refused.status, refused.code().as_str()),
+        (StatusCode::TOO_MANY_REQUESTS, "too_many_requests")
+    );
+    assert_eq!(refused.json()["error"]["retryable"], true);
+    assert_eq!(refused.headers["retry-after"], "1");
+    let listed = h.call(Call::get("/v1/numbers").key(&key)).await;
+    assert_eq!(
+        (listed.status, listed.code().as_str()),
+        (StatusCode::TOO_MANY_REQUESTS, "too_many_requests"),
+        "a poll spends the tenant's read budget"
+    );
+    let theirs = poll(&h, &other, "").await;
+    assert_eq!(theirs.status, StatusCode::OK, "{}", theirs.text);
+    let metrics = h.state.metrics().render();
+    assert!(
+        metrics.contains("wa_server_rate_limited_total{class=\"read\"} 2"),
+        "{metrics}"
+    );
+}

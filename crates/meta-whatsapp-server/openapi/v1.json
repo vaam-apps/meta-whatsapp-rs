@@ -1513,6 +1513,16 @@
               }
             }
           },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Any other error: branch on `error.code`",
             "content": {

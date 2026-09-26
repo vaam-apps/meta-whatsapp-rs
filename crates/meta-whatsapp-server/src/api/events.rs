@@ -242,6 +242,7 @@ fn envelope(tenant: &TenantId, event: StoredEvent) -> Result<EventEnvelope, ApiE
         (status = 403, description = "`forbidden` (no `events` scope), `tenant_suspended`", body = ErrorBody),
         (status = 410, description = "`cursor_expired`: events after `after` were purged (past retention, or deleted with a tenant of the same id); start again without `after`", body = ErrorBody),
         (status = 422, description = "`invalid_request` on `after` (malformed, or past the tenant's newest sequence), `types` (not a `KnownEventType`), `phone_number_id` or `limit`", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`: the tenant's `read` budget (`Retry-After`)", body = ErrorBody),
     )
 )]
 pub async fn list_events(
