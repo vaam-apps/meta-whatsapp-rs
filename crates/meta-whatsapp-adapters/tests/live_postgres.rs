@@ -22,9 +22,9 @@ use meta_whatsapp_adapters::store::{
 use meta_whatsapp_core::error::StorageError;
 use meta_whatsapp_core::ids::{AppId, MessageId, UserId};
 use meta_whatsapp_core::store::{
-    ConversationKey, ConversationStore, DeliveryStatus, Direction, Erased, Expiry, KvStore, Purged,
-    Retention, StoreKey, StoredContact, StoredMessage, ThreadOwner, ThreadOwnership, WindowEvent,
-    WindowEventKind,
+    ConversationKey, ConversationStore, DeliveryStatus, Direction, Erased, ErasureMode, Expiry,
+    IdentityLink, KvStore, Purged, Retention, StoreKey, StoredContact, StoredMessage, ThreadOwner,
+    ThreadOwnership, WindowEvent, WindowEventKind,
 };
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{AssertSqlSafe, PgPool};
@@ -94,7 +94,7 @@ impl TestDb {
              WHERE table_schema = $1 AND table_name IN ('wa_messages', 'wa_conversations') \
                AND column_name NOT IN ('id', 'phone_number_id', 'contact', 'direction', \
                  'status', 'ts', 'status_at', 'last_message_at', 'last_message_id', \
-                 'last_inbound_at', 'unread') \
+                 'last_inbound_at', 'unread', 'sender') \
              ORDER BY 1, 2",
         )
         .bind(&self.schema)
@@ -136,6 +136,21 @@ async fn live_postgres_conversation_conformance() {
     };
     postgres::migrate(&db.pool).await.unwrap();
     let store = PostgresConversationStore::new(db.pool.clone());
+    assert_eq!(store.erasure_mode(), ErasureMode::Redact);
+    conversation_conformance::run(&store).await;
+}
+
+/// The suite's group erasure case takes the other branch on a store that
+/// deletes an erased person's group messages.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_conversation_conformance_deleting_group_messages() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let store =
+        PostgresConversationStore::new(db.pool.clone()).with_erasure_mode(ErasureMode::Delete);
+    assert_eq!(store.erasure_mode(), ErasureMode::Delete);
     conversation_conformance::run(&store).await;
 }
 
@@ -377,8 +392,9 @@ async fn live_postgres_migrate_is_idempotent_under_concurrency() {
 }
 
 /// Every table of the default prefix, by name.
-const DEFAULT_TABLES: [&str; 7] = [
+const DEFAULT_TABLES: [&str; 8] = [
     "wa_conversations",
+    "wa_identity_links",
     "wa_kv",
     "wa_messages",
     "wa_sqlx_migrations",
@@ -464,11 +480,14 @@ async fn migrate_like_b66972c(pool: &PgPool) -> Result<(), sqlx::migrate::Migrat
     migrator.run(pool).await
 }
 
-/// Migration 4 adds tables and indexes and changes no column: a database
-/// the previous revision (b66972c) wrote keeps its rows, that revision's
-/// `append` (which takes no lock) keeps working beside the new one, and
-/// only its `migrate` refuses the database.
+/// Migration 4 adds tables, indexes and a column: a database the previous
+/// revision (b66972c) wrote keeps its rows, which get their sender (so an
+/// erasure reaches a group message written before, but not one whose
+/// payload holds U+0000), that revision's `append` (which takes no lock
+/// and writes no sender) keeps working beside the new one, and only its
+/// `migrate` refuses the database.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)] // one upgrade, read top to bottom
 async fn live_postgres_migration_4_keeps_the_previous_revision_working() {
     let Some(db) = TestDb::new().await else {
         return;
@@ -477,7 +496,23 @@ async fn live_postgres_migration_4_keeps_the_previous_revision_working() {
     assert_eq!(db.applied_migrations().await, [1, 2, 3]);
     let store = PostgresConversationStore::new(db.pool.clone());
     let [inbound, outbound, other] = written_by_09db4aa();
-    for m in [&inbound, &outbound, &other] {
+    let group = ConversationKey::new("pn-upgrade", "HBgGROUP");
+    let in_group = StoredMessage {
+        id: MessageId::new("wamid.before-group"),
+        conversation: group.clone(),
+        payload: serde_json::json!({"from": "16505551234", "from_user_id": "US.1",
+            "group_id": "HBgGROUP", "type": "text", "text": {"body": "hi"}}),
+        ..inbound.clone()
+    };
+    let with_nul = StoredMessage {
+        id: MessageId::new("wamid.before-nul"),
+        conversation: group.clone(),
+        payload: serde_json::json!({"from": "16505551234", "from_user_id": "US.1",
+            "type": "text", "text": {"body": "a\u{0}b"}}),
+        timestamp: datetime!(2026-09-24 12:01 UTC),
+        ..inbound.clone()
+    };
+    for m in [&inbound, &outbound, &other, &in_group, &with_nul] {
         append_like_b66972c(&db.pool, m).await.unwrap();
     }
     let key = inbound.conversation.clone();
@@ -493,6 +528,22 @@ async fn live_postgres_migration_4_keeps_the_previous_revision_working() {
     }
     assert_eq!(db.applied_migrations().await, [1, 2, 3, 4]);
     assert_eq!(db.table_names().await, DEFAULT_TABLES);
+    let senders: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT id, sender FROM wa_messages ORDER BY id")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        senders,
+        [
+            ("wamid.before-1".to_owned(), None),
+            ("wamid.before-2".to_owned(), None),
+            ("wamid.before-3".to_owned(), None),
+            ("wamid.before-group".to_owned(), Some("US.1".to_owned())),
+            ("wamid.before-nul".to_owned(), None),
+        ],
+        "back-filled by `StoredMessage::sender`'s rule, but for a payload holding U+0000"
+    );
     assert_eq!(store.messages(&key, None, 10).await.unwrap(), before);
     assert_eq!(
         store
@@ -548,6 +599,31 @@ async fn live_postgres_migration_4_keeps_the_previous_revision_working() {
         (summary.last_message_at, summary.unread),
         (later.timestamp, 3),
         "both revisions' appends kept the summary"
+    );
+    let erased = store
+        .erase_all(&group.phone_number_id, &["US.1".to_owned()])
+        .await
+        .unwrap();
+    assert_eq!(
+        erased.group_messages, 1,
+        "the group message written before migration 4 is reached"
+    );
+    let mut redacted = in_group.clone();
+    redacted.redact();
+    assert_eq!(
+        store
+            .message(&group.phone_number_id, &in_group.id)
+            .await
+            .unwrap(),
+        Some(redacted)
+    );
+    assert_eq!(
+        store
+            .message(&group.phone_number_id, &with_nul.id)
+            .await
+            .unwrap(),
+        Some(with_nul),
+        "one whose payload holds U+0000 was not back-filled"
     );
 }
 
@@ -931,7 +1007,7 @@ async fn content_columns_of(pool: &PgPool) -> Vec<String> {
            AND table_name IN ('wa_messages', 'wa_conversations') \
            AND column_name NOT IN ('id', 'phone_number_id', 'contact', 'direction', \
              'status', 'ts', 'status_at', 'last_message_at', 'last_message_id', \
-             'last_inbound_at', 'unread') \
+             'last_inbound_at', 'unread', 'sender') \
          ORDER BY 1, 2",
     )
     .fetch_all(pool)
@@ -1386,12 +1462,23 @@ async fn rows_mentioning(db: &TestDb, needles: &[&str]) -> Vec<(String, i64)> {
     found
 }
 
+/// The group both contacts of the erasure sweep write in.
+const SWEEP_GROUP: &str = "HBgLMTY1MDM4Nzk0MzkVAgASGBQ";
+
 /// Everything of one contact: a message of every origin and a tombstone,
 /// the summary, window events, the ownership record, a contact removal
-/// kept under the key and a synced contact naming it, content marked
-/// with `marker`.
+/// kept under the key, a synced contact naming it, an identity link, and
+/// a message in [`SWEEP_GROUP`] at `group_minute` (sent by their BSUID and
+/// their phone number, `1650555` and the length of the key's contact),
+/// content marked with `marker`.
 #[allow(clippy::too_many_lines)] // one record of every kind
-async fn record_a_contact(store: &PostgresConversationStore, key: &ConversationKey, marker: &str) {
+async fn record_a_contact(
+    store: &PostgresConversationStore,
+    key: &ConversationKey,
+    marker: &str,
+    group_minute: i64,
+) {
+    let phone = format!("1650555{}", key.contact.len());
     let id = |local: &str| MessageId::new(format!("wamid.{}.{local}", key.contact));
     let message = |local: &str, direction, minute: i64| StoredMessage {
         id: id(local),
@@ -1399,7 +1486,8 @@ async fn record_a_contact(store: &PostgresConversationStore, key: &ConversationK
         direction,
         kind: "text".to_owned(),
         text: Some(format!("{marker} said {local}")),
-        payload: serde_json::json!({"text": {"body": format!("{marker} \0 {local}")}}),
+        payload: serde_json::json!({"from": phone, "from_user_id": key.contact,
+            "text": {"body": format!("{marker} \0 {local}")}}),
         status: match direction {
             Direction::Inbound => DeliveryStatus::Received,
             Direction::Outbound => DeliveryStatus::Accepted,
@@ -1519,35 +1607,67 @@ async fn record_a_contact(store: &PostgresConversationStore, key: &ConversationK
     assert!(
         store
             .put_contact(StoredContact {
-                key: ConversationKey::new(
-                    key.phone_number_id.clone(),
-                    format!("1650555{}", key.contact.len())
-                ),
-                phone_number: Some(format!("1650555{}", key.contact.len())),
+                key: ConversationKey::new(key.phone_number_id.clone(), phone.clone()),
+                phone_number: Some(phone.clone()),
                 ..contact
+            })
+            .await
+            .unwrap()
+    );
+    // Their earlier BSUID.
+    assert!(
+        store
+            .link_identity(IdentityLink::new(
+                key.phone_number_id.clone(),
+                format!("{}.EARLIER", key.contact),
+                key.contact.clone(),
+                datetime!(2026-09-24 11:00 UTC),
+            ))
+            .await
+            .unwrap()
+    );
+    // What they wrote in a group, which is keyed by the group.
+    let text = format!("{marker} in the group");
+    assert!(
+        store
+            .append(StoredMessage {
+                id: id("group"),
+                conversation: ConversationKey::new(key.phone_number_id.clone(), SWEEP_GROUP),
+                kind: "text".to_owned(),
+                text: Some(text.clone()),
+                payload: serde_json::json!({"from": phone, "from_user_id": key.contact,
+                    "group_id": SWEEP_GROUP, "type": "text", "text": {"body": text}}),
+                ..message("group", Direction::Inbound, group_minute)
             })
             .await
             .unwrap()
     );
 }
 
-/// Decisive for erasure on Postgres: after `erase`, no row of any table
-/// of the schema mentions the erased contact or holds its content (text,
-/// payloads, errors, the preview, window events, the owner, synced
-/// contacts' names), while another contact of the number keeps every one
-/// of its records. An erase that leaves any table out fails here.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn live_postgres_erase_leaves_nothing_of_the_contact_in_any_table() {
+/// Decisive for erasure on Postgres: after `erase_all` over the contact's
+/// `identities`, no row of any table of the schema mentions the erased
+/// contact, their phone number or their earlier BSUID, or holds their
+/// content (text, payloads, errors, the preview, window events, the
+/// owner, synced contacts' names, the identity link, their group message
+/// and the group's preview), while another contact of the number keeps
+/// every one of its records. An erase that leaves any table out, or the
+/// group message, fails here. Under `ErasureMode::Redact` one thing is
+/// kept on purpose: the group message's id (a real `wamid` encodes the
+/// sender's phone number; the sweep's ids spell the contact out), in its
+/// row and as the group's latest message.
+#[allow(clippy::too_many_lines)] // one sweep, read top to bottom
+async fn sweep_after_erasure(mode: ErasureMode) {
     let Some(db) = TestDb::new().await else {
         return;
     };
     postgres::migrate(&db.pool).await.unwrap();
-    let store = PostgresConversationStore::new(db.pool.clone());
+    let store = PostgresConversationStore::new(db.pool.clone()).with_erasure_mode(mode);
     let erased = ConversationKey::new("106540352242922", "US.ERASED.13491208655302741918");
     let kept = ConversationKey::new("106540352242922", "US.KEPT.13491208655302741918");
     let (erased_marker, kept_marker) = ("erase-me-7f3a", "keep-me-c21d");
-    record_a_contact(&store, &erased, erased_marker).await;
-    record_a_contact(&store, &kept, kept_marker).await;
+    // The erased contact's group message is the group's latest.
+    record_a_contact(&store, &kept, kept_marker, 9).await;
+    record_a_contact(&store, &erased, erased_marker, 10).await;
 
     let holding = |found: &[(String, i64)]| -> Vec<String> {
         found
@@ -1558,11 +1678,15 @@ async fn live_postgres_erase_leaves_nothing_of_the_contact_in_any_table() {
     };
     let every_record_table = [
         "wa_conversations",
+        "wa_identity_links",
         "wa_messages",
         "wa_synced_contacts",
         "wa_thread_owners",
         "wa_window_events",
     ];
+    let phone = format!("1650555{}", erased.contact.len());
+    let earlier = format!("{}.EARLIER", erased.contact);
+    let content = [erased_marker, phone.as_str(), earlier.as_str()];
     let needles = [erased.contact.as_str(), erased_marker];
     assert_eq!(
         holding(&rows_mentioning(&db, &needles).await),
@@ -1570,26 +1694,117 @@ async fn live_postgres_erase_leaves_nothing_of_the_contact_in_any_table() {
         "the sweep sees the contact in every table before the erasure"
     );
 
+    let ids: Vec<String> = store
+        .identities(&erased)
+        .await
+        .unwrap()
+        .into_iter()
+        .collect();
     assert_eq!(
-        store.erase(&erased).await.unwrap(),
+        ids,
+        [phone.clone(), erased.contact.clone(), earlier.clone()]
+    );
+    assert_eq!(
+        store
+            .erase_all(&erased.phone_number_id, &ids)
+            .await
+            .unwrap(),
         Erased {
             messages: 5,
             conversations: 1,
             window_events: 2,
             thread_owners: 1,
             contacts: 2,
+            identity_links: 1,
+            group_messages: 1,
         }
     );
-    let left = rows_mentioning(&db, &needles).await;
+    let left = rows_mentioning(&db, &content).await;
     assert!(
         holding(&left).is_empty(),
-        "rows mentioning the erased contact remain: {left:?}"
+        "rows holding the erased contact's content or identities remain: {left:?}"
     );
+    let group = ConversationKey::new(erased.phone_number_id.clone(), SWEEP_GROUP);
+    let group_id = MessageId::new(format!("wamid.{}.group", erased.contact));
+    let summary = store
+        .conversations(&group.phone_number_id, None, 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|s| s.key == group)
+        .unwrap();
+    let left = rows_mentioning(&db, &[erased.contact.as_str()]).await;
+    if mode == ErasureMode::Delete {
+        assert!(
+            holding(&left).is_empty(),
+            "rows mentioning the erased contact remain: {left:?}"
+        );
+        assert_eq!(
+            store
+                .message(&group.phone_number_id, &group_id)
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            summary.last_text.as_deref(),
+            Some(format!("{kept_marker} in the group").as_str()),
+            "the group's summary follows the other contact's message"
+        );
+    } else {
+        assert_eq!(
+            left.iter()
+                .filter(|(_, n)| *n > 0)
+                .cloned()
+                .collect::<Vec<_>>(),
+            [
+                ("wa_conversations".to_owned(), 1),
+                ("wa_messages".to_owned(), 1)
+            ],
+            "only the redacted group message's id, in its row and as the group's latest"
+        );
+        let redacted = store
+            .message(&group.phone_number_id, &group_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (
+                redacted.kind.as_str(),
+                redacted.text,
+                redacted.payload,
+                redacted.error
+            ),
+            (StoredMessage::ERASED, None, serde_json::json!({}), None)
+        );
+        let sender: Option<String> =
+            sqlx::query_scalar("SELECT sender FROM wa_messages WHERE id = $1")
+                .bind(group_id.as_str())
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(sender, None, "no sender either");
+        assert_eq!(
+            (summary.last_message_at, summary.last_text),
+            (redacted.timestamp, None),
+            "the group's latest message is still theirs, without its preview"
+        );
+    }
     assert_eq!(
         holding(&rows_mentioning(&db, &[kept.contact.as_str(), kept_marker]).await),
         every_record_table,
         "the other contact keeps every record"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_erase_leaves_nothing_of_the_contact_in_any_table() {
+    sweep_after_erasure(ErasureMode::Redact).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_erase_leaves_nothing_of_the_contact_in_any_table_deleting_group_messages() {
+    sweep_after_erasure(ErasureMode::Delete).await;
 }
 
 /// `with_retention` is what `apply_retention` applies; the default keeps.
@@ -1681,7 +1896,39 @@ async fn live_postgres_records_refuse_nul_in_ids() {
         };
         assert!(store.put_contact(contact).await.is_err());
         assert!(store.erase(&key).await.is_err());
+        let link = IdentityLink::new(key.phone_number_id.clone(), "US.0", key.contact.clone(), at);
+        assert!(store.link_identity(link).await.is_err());
+        assert!(store.identities(&key).await.is_err());
+        assert!(store.identity_links(&key).await.is_err());
+        assert!(
+            store
+                .erase_all(
+                    &key.phone_number_id,
+                    &["US.2".to_owned(), key.contact.clone()]
+                )
+                .await
+                .is_err()
+        );
     }
+    // A sender with a NUL is none (Meta assigns none): the message, whose
+    // payload is content, is stored all the same.
+    assert!(
+        store
+            .append(StoredMessage {
+                id: MessageId::new("wamid.group"),
+                conversation: ConversationKey::new("pn-nul", "HBgGROUP"),
+                direction: Direction::Inbound,
+                kind: "text".to_owned(),
+                text: None,
+                payload: serde_json::json!({"from": "1650\u{0}", "from_user_id": "US.\u{0}"}),
+                status: DeliveryStatus::Received,
+                timestamp: at,
+                status_at: None,
+                error: None,
+            })
+            .await
+            .unwrap()
+    );
     let event = WindowEvent {
         conversation: ConversationKey::new("pn-nul", "US.1"),
         kind: WindowEventKind::CustomerCall,
@@ -1690,7 +1937,13 @@ async fn live_postgres_records_refuse_nul_in_ids() {
     };
     assert!(store.record_window_event(event).await.is_err());
     let counts: Vec<i64> = futures::future::join_all(
-        ["wa_window_events", "wa_thread_owners", "wa_synced_contacts"].map(|t| {
+        [
+            "wa_window_events",
+            "wa_thread_owners",
+            "wa_synced_contacts",
+            "wa_identity_links",
+        ]
+        .map(|t| {
             let pool = db.pool.clone();
             async move {
                 sqlx::query_scalar(AssertSqlSafe(format!("SELECT count(*) FROM {t}")))
@@ -1701,7 +1954,7 @@ async fn live_postgres_records_refuse_nul_in_ids() {
         }),
     )
     .await;
-    assert_eq!(counts, [0, 0, 0], "nothing stored");
+    assert_eq!(counts, [0, 0, 0, 0], "nothing stored");
 }
 
 // Races between erase, purge, append and fill (review of roadmap L5).

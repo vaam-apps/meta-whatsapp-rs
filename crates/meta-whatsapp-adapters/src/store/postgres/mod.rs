@@ -97,26 +97,38 @@
 //!
 //! # The records beside the history (migration `0004`)
 //!
-//! Migration 4 adds `wa_window_events`, `wa_thread_owners` and
-//! `wa_synced_contacts` (window events, thread ownership and the
-//! coexistence address book: see [`PostgresConversationStore`]) and two
-//! indexes for purge by age, `wa_messages_ts_idx` and
-//! `wa_conversations_last_idx`. It changes no existing column, so an
-//! instance of the previous revision keeps working beside it (it only
-//! lacks the new methods), but its `migrate` then refuses the database
+//! Migration 4 adds `wa_window_events`, `wa_thread_owners`,
+//! `wa_synced_contacts` and `wa_identity_links` (window events, thread
+//! ownership, the coexistence address book and the links between a
+//! person's identities: see [`PostgresConversationStore`]), a nullable
+//! `sender` column on `wa_messages` with its index,
+//! `wa_messages_sender_idx` (who sent an inbound message, which an
+//! erasure matches a person's group messages on), and two indexes for
+//! purge by age, `wa_messages_ts_idx` and `wa_conversations_last_idx`. It
+//! changes no existing column, so an instance of the previous revision
+//! keeps working beside it (it only lacks the new methods, and writes no
+//! sender), but its `migrate` then refuses the database
 //! (`VersionMissing(4)`): upgrade every instance before running one that
 //! migrates at startup again, or migrate from the new revision only.
-//! Building the two indexes reads the messages and conversations tables
-//! once, and writes to them wait until it is done (a plain `CREATE
-//! INDEX`, inside the migration's transaction): on a large inbox, run
+//!
+//! It back-fills the sender of every inbound message already stored, by
+//! [`StoredMessage::sender`]'s rule, except where the payload holds
+//! U+0000 (the `json` operators fail on such a document; that message
+//! keeps no sender, and an erasure does not reach it in a group). That
+//! `UPDATE` writes every inbound row, and building the indexes reads the
+//! messages and conversations tables once; writes to them wait until it
+//! is done (inside the migration's transaction): on a large inbox, run
 //! [`migrate`] from a one-off job, as for migration 3 below.
 //!
 //! Every table the adapter keeps about a contact is keyed by business
-//! number and contact: [`ConversationStore::erase`] deletes from
+//! number and contact (a link by business number and its two
+//! identities): [`ConversationStore::erase_all`] deletes from
 //! `wa_messages`, `wa_conversations`, `wa_window_events`,
-//! `wa_thread_owners` and `wa_synced_contacts`, in one statement.
+//! `wa_thread_owners`, `wa_synced_contacts` and `wa_identity_links`, and
+//! redacts or deletes the person's group messages, in one statement.
 //!
-//! [`ConversationStore::erase`]: meta_whatsapp_core::store::ConversationStore::erase
+//! [`ConversationStore::erase_all`]: meta_whatsapp_core::store::ConversationStore::erase_all
+//! [`StoredMessage::sender`]: meta_whatsapp_core::store::StoredMessage::sender
 //!
 //! # Upgrading to lossless content (migration `0003`)
 //!
@@ -424,6 +436,7 @@ mod tests {
                 "window_events",
                 "thread_owners",
                 "synced_contacts",
+                "identity_links",
                 "sqlx_migrations"
             ]
             .map(|t| default.table(t)),
@@ -434,6 +447,7 @@ mod tests {
                 "\x77a_window_events",
                 "\x77a_thread_owners",
                 "\x77a_synced_contacts",
+                "\x77a_identity_links",
                 "\x77a_sqlx_migrations"
             ]
         );
@@ -467,7 +481,7 @@ mod tests {
         ),
         (
             4,
-            "47df96e32b0a4cb19f5067f6d5a61ffb05de4f76a8db7d0d8d17c75100883082330b4f35d50467ff75cd49a540e60974",
+            "3943a564f9ef2c2aaea48f15843f73ba76ad15f6696923a5a09a3ede5d068889ee9053366c3d3577cea1aa537c8dee50",
         ),
     ];
 

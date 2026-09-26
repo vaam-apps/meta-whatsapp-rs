@@ -52,8 +52,18 @@
 //!   the same upsert, of a row with `removed` set and nothing but the key
 //!   and the removal's time (it replaces the contact, or takes its place
 //!   when none is stored), so a late `add` older than it is refused;
-//!   reads skip those rows.
-//! - `erase` and `purge_before` order themselves against the writers with
+//!   reads skip those rows. Identity links live in `wa_identity_links`,
+//!   keyed by business number and their two identities (`link_identity`
+//!   is an insert that ignores a conflict), and `identities` is one
+//!   recursive query over the synced contacts and the links of one number.
+//! - Every message insert also writes its sender
+//!   ([`StoredMessage::sender`], computed in Rust: the payload is never
+//!   read field by field in SQL, see the [module docs](super#content-keeps-u0000))
+//!   to `wa_messages.sender`, indexed with the business number, which no
+//!   read returns: it is what an erasure matches a person's group
+//!   messages on.
+//! - `erase_all` (and `erase`, its one-key case) and `purge_before` order
+//!   themselves against the writers with
 //!   two transaction-level advisory locks, in the two-key form (whose key
 //!   space never meets the one-key locks of sqlx's `migrate` or of the
 //!   service):
@@ -61,7 +71,7 @@
 //!     hashtext(<phone_number_id>))` under the default prefix (the class
 //!     is the table's object id: each schema and prefix has its own): `append`
 //!     and `append_synced` take it shared, first thing in their one
-//!     statement (a batch takes each of its numbers', in order); `erase`
+//!     statement (a batch takes each of its numbers', in order); `erase_all`
 //!     takes it exclusive, then deletes in a second statement, whose
 //!     snapshot so holds every append that took the lock before it, and
 //!     no append can start meanwhile. Without it, an append that had
@@ -74,21 +84,30 @@
 //!     contact's: the lock is per number, so that a history chunk takes one
 //!     lock per number rather than one per contact).
 //!   - the **purge lock**, `('wa_conversations'::regclass::oid::int4, 0)`:
-//!     `purge_before` takes it exclusive, `erase` shared, before the number
+//!     `purge_before` takes it exclusive, `erase_all` shared, before the number
 //!     lock. Two purges, or a purge and an erasure, would otherwise take
 //!     the same rows' locks in the orders of their plans (the `ts` index
 //!     oldest first, the conversation's index newest first, a sequential
 //!     scan by position), and deadlock. Purges run one at a time;
 //!     erasures of different numbers beside each other.
 //!
-//!   The deletion itself is one statement: five `DELETE`s in
-//!   data-modifying CTEs over one snapshot, the messages first. The other
+//!   The deletion itself is one statement over one snapshot: six `DELETE`s
+//!   in data-modifying CTEs, the messages first (`contact = ANY($2)`; a
+//!   synced contact on any of its four ids, a link on either side), then
+//!   the person's messages in other conversations (`sender = ANY($2)` and
+//!   a conversation not among the ids, so never a row the first `DELETE`
+//!   takes), updated in place under [`ErasureMode::Redact`] or deleted
+//!   under [`ErasureMode::Delete`], and last the summaries whose latest
+//!   message that was: its preview cleared, or the summary rebuilt from
+//!   the latest remaining row (never a tombstone), or deleted. Those
+//!   messages are the number's, so its lock covers them too. The other
 //!   writers take no advisory lock: `fill_media_placeholder` locks a
 //!   message then its summary, the order the deletion's statements take
 //!   them in, and the rest write one row. An instance of the revision
 //!   before these locks does not take them: while one still appends, an
-//!   erasure can leave a message without its summary (upgrade every
-//!   instance). A message recorded while a purge runs is not waited for:
+//!   erasure can leave a message without its summary, and its messages
+//!   carry no sender (upgrade every instance). A message recorded while a
+//!   purge runs is not waited for:
 //!   one older than the cutoff (a late history chunk) may be kept, its
 //!   summary purged, until the next purge.
 //! - `purge_before`'s statement is built the same way, and locks the
@@ -97,6 +116,7 @@
 //!   `wa_messages(ts)` and `wa_conversations(last_message_at)` are indexed
 //!   for it (migration `0004`).
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 
@@ -105,8 +125,8 @@ use meta_whatsapp_core::error::StorageError;
 use meta_whatsapp_core::ids::{AppId, MessageId, PhoneNumberId, UserId};
 use meta_whatsapp_core::store::{
     ConversationKey, ConversationStore, ConversationSummary, DeliveryStatus, Direction, Erased,
-    Purged, Retention, StoredContact, StoredMessage, ThreadOwner, ThreadOwnership, WindowEvent,
-    WindowEventKind,
+    ErasureMode, IdentityLink, Purged, Retention, StoredContact, StoredMessage, ThreadOwner,
+    ThreadOwnership, WindowEvent, WindowEventKind,
 };
 use sqlx::postgres::PgRow;
 use sqlx::{AssertSqlSafe, PgPool, Row};
@@ -128,13 +148,16 @@ const MAX_STATUS_ROUNDS: usize = 16;
 /// sets what [`ConversationStore::apply_retention`] purges. Nothing purges
 /// on its own: schedule `apply_retention`. Runs from several replicas at
 /// once are safe: purges take turns (see the module docs), and an erasure
-/// waits for a purge in progress.
+/// waits for a purge in progress. An erasure redacts an erased person's
+/// messages in other conversations (a group's) by default;
+/// [`with_erasure_mode`](Self::with_erasure_mode) deletes them instead.
 #[derive(Clone)]
 pub struct PostgresConversationStore {
     pool: PgPool,
     prefix: TablePrefix,
     sql: Arc<Sql>,
     retention: Retention,
+    erasure_mode: ErasureMode,
 }
 
 impl fmt::Debug for PostgresConversationStore {
@@ -142,6 +165,7 @@ impl fmt::Debug for PostgresConversationStore {
         f.debug_struct("PostgresConversationStore")
             .field("prefix", &self.prefix)
             .field("retention", &self.retention)
+            .field("erasure_mode", &self.erasure_mode)
             .finish_non_exhaustive()
     }
 }
@@ -170,8 +194,12 @@ struct Sql {
     contact: Arc<str>,
     contacts: Arc<str>,
     contacts_after: Arc<str>,
+    link_identity: Arc<str>,
+    identity_links: Arc<str>,
+    identities: Arc<str>,
     erase_locks: [Arc<str>; 2],
-    erase: Arc<str>,
+    erase_redacting: Arc<str>,
+    erase_deleting: Arc<str>,
     purge_lock: Arc<str>,
     purge_all: Arc<str>,
     purge_number: Arc<str>,
@@ -179,6 +207,11 @@ struct Sql {
 
 const MESSAGE_COLUMNS: &str = "id, phone_number_id, contact, direction, kind_utf8, text_utf8, \
      payload_json, status, ts, status_at, error_json";
+
+/// What a message insert writes: [`MESSAGE_COLUMNS`] and the sender
+/// ([`StoredMessage::sender`]), which no read returns.
+const INSERT_COLUMNS: &str = "id, phone_number_id, contact, direction, kind_utf8, text_utf8, \
+     payload_json, status, ts, status_at, error_json, sender";
 
 const SUMMARY_COLUMNS: &str =
     "phone_number_id, contact, last_message_at, last_inbound_at, last_text_utf8, unread";
@@ -190,12 +223,12 @@ const OWNER_COLUMNS: &str = "owner, role, app_id, since";
 const CONTACT_COLUMNS: &str = "phone_number_id, contact, full_name_utf8, first_name_utf8, \
      phone_number, user_id, parent_user_id, username_utf8, synced_at";
 
-/// The eleven values of a message row, in [`MESSAGE_COLUMNS`] order. The
+/// The twelve values of a message row, in [`INSERT_COLUMNS`] order. The
 /// content travels as bytes (`kind_utf8`, `text_utf8`: `BYTEA`) and as
 /// JSON text cast to `json` (`payload_json`, `error_json`): neither Postgres
 /// `text` nor `jsonb` can hold U+0000, and content keeps it (see the
 /// [module docs](super#content-keeps-u0000)).
-const MESSAGE_VALUES: &str = "$1, $2, $3, $4, $5, $6, $7::json, $8, $9, $10, $11::json";
+const MESSAGE_VALUES: &str = "$1, $2, $3, $4, $5, $6, $7::json, $8, $9, $10, $11::json, $12";
 
 /// The summary's "newest message" is the max by `(ts, id)`, the same order
 /// the history pages in.
@@ -227,7 +260,7 @@ fn append_sql(messages: &str, conversations: &str, inbound_at: &str, unread: &st
     format!(
         "WITH lock AS MATERIALIZED (SELECT pg_advisory_xact_lock_shared({lock})), \
          inserted AS ( \
-           INSERT INTO {messages} ({MESSAGE_COLUMNS}) \
+           INSERT INTO {messages} ({INSERT_COLUMNS}) \
            SELECT {MESSAGE_VALUES} FROM lock \
            ON CONFLICT (id) DO NOTHING \
            RETURNING id, phone_number_id, contact, direction, text_utf8, ts \
@@ -272,7 +305,74 @@ fn purge_sql(prefix: &TablePrefix, scope: &str) -> String {
     )
 }
 
-/// The `append_synced` statement: one row per element of the eleven
+/// The deletion of `erase_all`, in one statement over one snapshot: `$1`
+/// the business number, `$2` the erased ids (`text[]`), `$3` the kind an
+/// erased person's group message gets (`redact`) or the tombstone's kind,
+/// which the recomputed summaries skip (not `redact`). The messages go
+/// first (the order `fill_media_placeholder` takes a message and its
+/// summary in). `g` is the person's messages in conversations keyed by
+/// someone else: disjoint from `m`'s rows (their conversation is not one
+/// of the ids), and so are the summaries it rewrites from `c`'s.
+fn erase_sql(prefix: &TablePrefix, redact: bool) -> String {
+    let messages = prefix.table("messages");
+    let conversations = prefix.table("conversations");
+    let window_events = prefix.table("window_events");
+    let owners = prefix.table("thread_owners");
+    let contacts = prefix.table("synced_contacts");
+    let links = prefix.table("identity_links");
+    let theirs = "phone_number_id = $1 AND sender = ANY($2) AND NOT (contact = ANY($2))";
+    let group = if redact {
+        // Each message keeps its place; the preview of a conversation whose
+        // latest message it is goes with its text.
+        format!(
+            "g AS (UPDATE {messages} SET kind_utf8 = $3, text_utf8 = NULL, \
+               payload_json = '{{}}'::json, error_json = NULL, sender = NULL \
+               WHERE {theirs} RETURNING id, contact), \
+             gs AS (UPDATE {conversations} AS s SET last_text_utf8 = NULL FROM g \
+               WHERE s.phone_number_id = $1 AND s.contact = g.contact \
+                 AND s.last_message_id = g.id)"
+        )
+    } else {
+        // A conversation whose latest message went follows its latest
+        // remaining one (never a tombstone), or loses its summary.
+        format!(
+            "g AS (DELETE FROM {messages} WHERE {theirs} RETURNING id, contact), \
+             gc AS (SELECT DISTINCT s.contact FROM {conversations} AS s JOIN g \
+               ON s.phone_number_id = $1 AND s.contact = g.contact AND s.last_message_id = g.id), \
+             gl AS (SELECT DISTINCT ON (r.contact) r.contact, r.ts, r.id, r.text_utf8 \
+               FROM {messages} AS r JOIN gc ON r.phone_number_id = $1 AND r.contact = gc.contact \
+               WHERE r.kind_utf8 <> $3 AND NOT EXISTS (SELECT 1 FROM g WHERE g.id = r.id) \
+               ORDER BY r.contact, r.ts DESC, r.id COLLATE \"C\" DESC), \
+             su AS (UPDATE {conversations} AS s SET last_message_at = gl.ts, \
+               last_message_id = gl.id, last_text_utf8 = gl.text_utf8 FROM gl \
+               WHERE s.phone_number_id = $1 AND s.contact = gl.contact), \
+             sd AS (DELETE FROM {conversations} AS s USING gc \
+               WHERE s.phone_number_id = $1 AND s.contact = gc.contact \
+                 AND NOT EXISTS (SELECT 1 FROM gl WHERE gl.contact = gc.contact))"
+        )
+    };
+    format!(
+        "WITH m AS (DELETE FROM {messages} \
+           WHERE phone_number_id = $1 AND contact = ANY($2) RETURNING 1), \
+         c AS (DELETE FROM {conversations} \
+           WHERE phone_number_id = $1 AND contact = ANY($2) RETURNING 1), \
+         w AS (DELETE FROM {window_events} \
+           WHERE phone_number_id = $1 AND contact = ANY($2) RETURNING 1), \
+         o AS (DELETE FROM {owners} \
+           WHERE phone_number_id = $1 AND contact = ANY($2) RETURNING 1), \
+         p AS (DELETE FROM {contacts} WHERE phone_number_id = $1 \
+           AND (contact = ANY($2) OR user_id = ANY($2) OR parent_user_id = ANY($2) \
+             OR phone_number = ANY($2)) RETURNING 1), \
+         l AS (DELETE FROM {links} WHERE phone_number_id = $1 \
+           AND (previous = ANY($2) OR current = ANY($2)) RETURNING 1), \
+         {group} \
+         SELECT (SELECT count(*) FROM m), (SELECT count(*) FROM c), \
+           (SELECT count(*) FROM w), (SELECT count(*) FROM o), (SELECT count(*) FROM p), \
+           (SELECT count(*) FROM l), (SELECT count(*) FROM g)"
+    )
+}
+
+/// The `append_synced` statement: one row per element of the twelve
 /// column arrays, the first of each id kept, no inbound effects. Its rows
 /// are read under the number lock of each of the batch's numbers, taken
 /// shared, in order, before the first is inserted.
@@ -286,13 +386,13 @@ fn append_synced_sql(messages: &str, conversations: &str) -> String {
          ), input AS ( \
            SELECT DISTINCT ON (id) * FROM UNNEST($1::text[], $2::text[], $3::text[], \
              $4::text[], $5::bytea[], $6::bytea[], $7::json[], $8::text[], \
-             $9::timestamptz[], $10::timestamptz[], $11::json[]) \
-             WITH ORDINALITY AS t({MESSAGE_COLUMNS}, n) \
+             $9::timestamptz[], $10::timestamptz[], $11::json[], $12::text[]) \
+             WITH ORDINALITY AS t({INSERT_COLUMNS}, n) \
            WHERE (SELECT count(*) FROM lock) >= 0 \
            ORDER BY id, n \
          ), inserted AS ( \
-           INSERT INTO {messages} ({MESSAGE_COLUMNS}) \
-           SELECT {MESSAGE_COLUMNS} FROM input \
+           INSERT INTO {messages} ({INSERT_COLUMNS}) \
+           SELECT {INSERT_COLUMNS} FROM input \
            ON CONFLICT (id) DO NOTHING \
            RETURNING id, phone_number_id, contact, text_utf8, ts \
          ), latest AS ( \
@@ -321,6 +421,7 @@ impl Sql {
         let window_events = prefix.table("window_events");
         let owners = prefix.table("thread_owners");
         let contacts = prefix.table("synced_contacts");
+        let links = prefix.table("identity_links");
         let arc = |s: String| -> Arc<str> { Arc::from(s) };
         Self {
             append: arc(append_sql(
@@ -333,7 +434,7 @@ impl Sql {
             // The history row alone: a tombstone never touches (nor creates)
             // its conversation's summary.
             tombstone: arc(format!(
-                "INSERT INTO {messages} ({MESSAGE_COLUMNS}) \
+                "INSERT INTO {messages} ({INSERT_COLUMNS}) \
                  VALUES ({MESSAGE_VALUES}) \
                  ON CONFLICT (id) DO NOTHING \
                  RETURNING 1 AS appended"
@@ -472,6 +573,39 @@ impl Sql {
                  WHERE phone_number_id = $1 AND contact > $3 AND NOT removed \
                  ORDER BY contact LIMIT $2"
             )),
+            link_identity: arc(format!(
+                "INSERT INTO {links} (phone_number_id, previous, current, ts) \
+                 VALUES ($1, $2, $3, $4) \
+                 ON CONFLICT (phone_number_id, previous, current) DO NOTHING \
+                 RETURNING 1 AS linked"
+            )),
+            identity_links: arc(format!(
+                "SELECT phone_number_id, previous, current, ts FROM {links} \
+                 WHERE phone_number_id = $1 AND (previous = $2 OR current = $2) \
+                 ORDER BY ts, previous, current"
+            )),
+            // The closure from `$2`: a synced contact (not a kept removal)
+            // naming an identity found adds its four, a link its other
+            // side. `UNION` drops what was found already, so it ends.
+            identities: arc(format!(
+                "WITH RECURSIVE ids(id) AS ( \
+                   SELECT $2::text COLLATE \"C\" \
+                   UNION \
+                   SELECT n.id FROM ids CROSS JOIN LATERAL ( \
+                     SELECT v.id FROM {contacts} AS p, LATERAL (VALUES (p.contact), \
+                       (p.user_id), (p.parent_user_id), (p.phone_number)) AS v(id) \
+                     WHERE p.phone_number_id = $1 AND NOT p.removed \
+                       AND ids.id IN (p.contact, p.user_id, p.parent_user_id, p.phone_number) \
+                     UNION ALL \
+                     SELECT l.previous FROM {links} AS l \
+                     WHERE l.phone_number_id = $1 AND l.current = ids.id \
+                     UNION ALL \
+                     SELECT l.current FROM {links} AS l \
+                     WHERE l.phone_number_id = $1 AND l.previous = ids.id \
+                   ) AS n(id) WHERE n.id IS NOT NULL \
+                 ) \
+                 SELECT id FROM ids"
+            )),
             // The purge lock shared, then the number lock exclusive: see the
             // module docs. Each its own statement, so the deletion's
             // snapshot is taken after both are held.
@@ -485,23 +619,8 @@ impl Sql {
                     number_lock(&messages, "$1")
                 )),
             ],
-            // One snapshot for the five tables, the messages first (the
-            // order `fill_media_placeholder` takes them in).
-            erase: arc(format!(
-                "WITH m AS (DELETE FROM {messages} \
-                   WHERE phone_number_id = $1 AND contact = $2 RETURNING 1), \
-                 c AS (DELETE FROM {conversations} \
-                   WHERE phone_number_id = $1 AND contact = $2 RETURNING 1), \
-                 w AS (DELETE FROM {window_events} \
-                   WHERE phone_number_id = $1 AND contact = $2 RETURNING 1), \
-                 o AS (DELETE FROM {owners} \
-                   WHERE phone_number_id = $1 AND contact = $2 RETURNING 1), \
-                 p AS (DELETE FROM {contacts} \
-                   WHERE phone_number_id = $1 \
-                     AND $2 IN (contact, user_id, parent_user_id, phone_number) RETURNING 1) \
-                 SELECT (SELECT count(*) FROM m), (SELECT count(*) FROM c), \
-                   (SELECT count(*) FROM w), (SELECT count(*) FROM o), (SELECT count(*) FROM p)"
-            )),
+            erase_redacting: arc(erase_sql(prefix, true)),
+            erase_deleting: arc(erase_sql(prefix, false)),
             purge_lock: arc(format!(
                 "SELECT pg_advisory_xact_lock({})",
                 purge_lock(&conversations)
@@ -529,6 +648,7 @@ impl PostgresConversationStore {
             prefix,
             sql,
             retention: Retention::Keep,
+            erasure_mode: ErasureMode::Redact,
         }
     }
 
@@ -538,6 +658,16 @@ impl PostgresConversationStore {
     #[must_use]
     pub fn with_retention(mut self, retention: Retention) -> Self {
         self.retention = retention;
+        self
+    }
+
+    /// This store redacting or deleting an erased person's messages in
+    /// other conversations (a group's) as `mode` says, in
+    /// [`ConversationStore::erase_all`] (the default redacts:
+    /// [`ErasureMode::Redact`]).
+    #[must_use]
+    pub fn with_erasure_mode(mut self, mode: ErasureMode) -> Self {
+        self.erasure_mode = mode;
         self
     }
 
@@ -702,6 +832,16 @@ fn contact_from_row(row: &PgRow) -> Result<StoredContact, StorageError> {
     })
 }
 
+fn link_from_row(row: &PgRow) -> Result<IdentityLink, StorageError> {
+    let phone_number_id: String = row.try_get("phone_number_id").map_err(backend)?;
+    Ok(IdentityLink {
+        phone_number_id: PhoneNumberId::new(phone_number_id),
+        previous: row.try_get("previous").map_err(backend)?,
+        current: row.try_get("current").map_err(backend)?,
+        at: row.try_get("ts").map_err(backend)?,
+    })
+}
+
 /// A `count(*)` column as a `u64`: never negative.
 fn count(row: &PgRow, index: usize) -> Result<u64, StorageError> {
     let n: i64 = row.try_get(index).map_err(backend)?;
@@ -745,6 +885,7 @@ impl PostgresConversationStore {
             .bind(message.timestamp)
             .bind(message.status_at)
             .bind(error)
+            .bind(message.sender())
             .fetch_optional(&self.pool)
             .await
             .map_err(backend)?;
@@ -831,6 +972,7 @@ impl ConversationStore for PostgresConversationStore {
         let mut timestamps = Vec::with_capacity(n);
         let mut status_ats = Vec::with_capacity(n);
         let mut errors = Vec::with_capacity(n);
+        let mut senders = Vec::with_capacity(n);
         for m in &messages {
             ids.push(m.id.as_str());
             numbers.push(m.conversation.phone_number_id.as_str());
@@ -848,6 +990,7 @@ impl ConversationStore for PostgresConversationStore {
                     .map(|e| json_text(e, "message error"))
                     .transpose()?,
             );
+            senders.push(m.sender());
         }
         let inserted: Vec<String> =
             sqlx::query_scalar(AssertSqlSafe(Arc::clone(&self.sql.append_synced)))
@@ -862,6 +1005,7 @@ impl ConversationStore for PostgresConversationStore {
                 .bind(&timestamps)
                 .bind(&status_ats)
                 .bind(&errors)
+                .bind(&senders)
                 .fetch_all(&self.pool)
                 .await
                 .map_err(backend)?;
@@ -1146,7 +1290,55 @@ impl ConversationStore for PostgresConversationStore {
         rows.iter().map(contact_from_row).collect()
     }
 
-    async fn erase(&self, key: &ConversationKey) -> Result<Erased, StorageError> {
+    async fn link_identity(&self, link: IdentityLink) -> Result<bool, StorageError> {
+        let row = sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.link_identity)))
+            .bind(link.phone_number_id.as_str())
+            .bind(link.previous.as_str())
+            .bind(link.current.as_str())
+            .bind(link.at)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(row.is_some())
+    }
+
+    async fn identity_links(
+        &self,
+        key: &ConversationKey,
+    ) -> Result<Vec<IdentityLink>, StorageError> {
+        let rows = sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.identity_links)))
+            .bind(key.phone_number_id.as_str())
+            .bind(key.contact.as_str())
+            .fetch_all(&self.pool)
+            .await
+            .map_err(backend)?;
+        rows.iter().map(link_from_row).collect()
+    }
+
+    async fn identities(&self, key: &ConversationKey) -> Result<BTreeSet<String>, StorageError> {
+        let ids: Vec<String> = sqlx::query_scalar(AssertSqlSafe(Arc::clone(&self.sql.identities)))
+            .bind(key.phone_number_id.as_str())
+            .bind(key.contact.as_str())
+            .fetch_all(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(ids.into_iter().collect())
+    }
+
+    async fn erase_all(
+        &self,
+        phone_number_id: &PhoneNumberId,
+        contacts: &[String],
+    ) -> Result<Erased, StorageError> {
+        if contacts.is_empty() {
+            return Ok(Erased::default());
+        }
+        let (sql, kind) = if self.erasure_mode == ErasureMode::Delete {
+            (&self.sql.erase_deleting, StoredMessage::REVOKED)
+        } else {
+            // `Redact`, and any mode added later: never keep the content.
+            (&self.sql.erase_redacting, StoredMessage::ERASED)
+        };
         let mut tx = self.pool.begin().await.map_err(backend)?;
         let [purge, number] = &self.sql.erase_locks;
         sqlx::query(AssertSqlSafe(Arc::clone(purge)))
@@ -1154,13 +1346,14 @@ impl ConversationStore for PostgresConversationStore {
             .await
             .map_err(backend)?;
         sqlx::query(AssertSqlSafe(Arc::clone(number)))
-            .bind(key.phone_number_id.as_str())
+            .bind(phone_number_id.as_str())
             .execute(&mut *tx)
             .await
             .map_err(backend)?;
-        let row = sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.erase)))
-            .bind(key.phone_number_id.as_str())
-            .bind(key.contact.as_str())
+        let row = sqlx::query(AssertSqlSafe(Arc::clone(sql)))
+            .bind(phone_number_id.as_str())
+            .bind(contacts)
+            .bind(kind.as_bytes())
             .fetch_one(&mut *tx)
             .await
             .map_err(backend)?;
@@ -1171,7 +1364,13 @@ impl ConversationStore for PostgresConversationStore {
             window_events: count(&row, 2)?,
             thread_owners: count(&row, 3)?,
             contacts: count(&row, 4)?,
+            identity_links: count(&row, 5)?,
+            group_messages: count(&row, 6)?,
         })
+    }
+
+    fn erasure_mode(&self) -> ErasureMode {
+        self.erasure_mode
     }
 
     async fn purge_before(

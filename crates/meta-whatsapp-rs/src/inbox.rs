@@ -89,7 +89,7 @@
 //! capturing large history bodies first and processing them
 //! asynchronously.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::sync::Arc;
 
@@ -104,7 +104,7 @@ use meta_whatsapp_core::recipient::Recipient;
 use meta_whatsapp_core::sink::EventSink;
 use meta_whatsapp_core::store::{
     ConversationKey, ConversationStore, ConversationSummary, CustomerServiceWindow, DeliveryStatus,
-    Direction, StoredMessage,
+    Direction, Erased, StoredMessage,
 };
 use meta_whatsapp_webhooks::WebhookEvent;
 use meta_whatsapp_webhooks::fields::coexistence::{
@@ -1058,6 +1058,38 @@ impl Inbox {
         Ok(self.store.mark_read(key).await?)
     }
 
+    /// Every identity the store connects to `key`'s contact on this
+    /// number ([`ConversationStore::identities`]): what
+    /// [`Inbox::erase_all`] takes to erase a person rather than one key.
+    /// A key of another number is refused, reading nothing.
+    pub async fn identities(&self, key: &ConversationKey) -> Result<BTreeSet<String>> {
+        self.check_key(key)?;
+        Ok(self.store.identities(key).await?)
+    }
+
+    /// Erase one key of this number ([`ConversationStore::erase`]). A key
+    /// of another number is refused before the store is called, so a
+    /// route cannot erase another merchant's customers by forgetting its
+    /// own check (it still needs §3's ownership check of the number:
+    /// `docs/guides/cms-inbox.md`). A person has several keys: erase them
+    /// with [`Inbox::identities`] and [`Inbox::erase_all`].
+    pub async fn erase(&self, key: &ConversationKey) -> Result<Erased> {
+        self.check_key(key)?;
+        Ok(self.store.erase(key).await?)
+    }
+
+    /// Erase one person on this number, known by `contacts` (their
+    /// BSUIDs and phone numbers: [`Inbox::identities`] collects them),
+    /// with [`ConversationStore::erase_all`], which says what it reaches
+    /// and what it does not. Always this inbox's number: erase a person on
+    /// each of the merchant's numbers through each one's inbox.
+    pub async fn erase_all(&self, contacts: &[String]) -> Result<Erased> {
+        Ok(self
+            .store
+            .erase_all(&self.phone_number_id, contacts)
+            .await?)
+    }
+
     /// Send `content` to the conversation's contact and record it.
     ///
     /// Free-form content outside the 24-hour window is refused locally
@@ -1552,11 +1584,31 @@ mod tests {
         {
             self.inner.contacts(phone_number_id, after, limit).await
         }
-        async fn erase(
+        async fn link_identity(
+            &self,
+            link: meta_whatsapp_core::store::IdentityLink,
+        ) -> std::result::Result<bool, StorageError> {
+            self.inner.link_identity(link).await
+        }
+        async fn identity_links(
             &self,
             key: &ConversationKey,
-        ) -> std::result::Result<meta_whatsapp_core::store::Erased, StorageError> {
-            self.inner.erase(key).await
+        ) -> std::result::Result<Vec<meta_whatsapp_core::store::IdentityLink>, StorageError>
+        {
+            self.inner.identity_links(key).await
+        }
+        async fn identities(
+            &self,
+            key: &ConversationKey,
+        ) -> std::result::Result<BTreeSet<String>, StorageError> {
+            self.inner.identities(key).await
+        }
+        async fn erase_all(
+            &self,
+            phone_number_id: &PhoneNumberId,
+            contacts: &[String],
+        ) -> std::result::Result<Erased, StorageError> {
+            self.inner.erase_all(phone_number_id, contacts).await
         }
         async fn purge_before(
             &self,
@@ -2027,6 +2079,104 @@ mod tests {
                 .is_err()
         );
         assert!(t.requests().is_empty());
+    }
+
+    /// Review of roadmap L5 (L4): `Inbox::erase` refuses a key of another
+    /// number before the store is called, so a route that took the number
+    /// from its path cannot erase another merchant's customers; the
+    /// identities are read on the inbox's number alone, and `erase_all`
+    /// never leaves it.
+    #[tokio::test]
+    async fn erasing_checks_the_number_first() {
+        let store = Arc::new(CountingStore::default());
+        let client = Client::builder()
+            .transport(ScriptedTransport::new())
+            .access_token("MERCHANT_TOKEN")
+            .retry(RetryPolicy::NONE)
+            .build()
+            .unwrap();
+        let inbox = Inbox::new(client, PNID, store.clone());
+        let at = datetime!(2026-09-24 12:00 UTC);
+        let message = |number: &str, id: &str| StoredMessage {
+            id: MessageId::new(id),
+            conversation: ConversationKey::new(number, "16505551234"),
+            direction: Direction::Inbound,
+            kind: "text".to_owned(),
+            text: Some("my address".to_owned()),
+            payload: json!({"from": "16505551234"}),
+            status: DeliveryStatus::Received,
+            timestamp: at,
+            status_at: None,
+            error: None,
+        };
+        // The same customer on another merchant's number.
+        store
+            .inner
+            .append(message("999", "wamid.theirs"))
+            .await
+            .unwrap();
+        store
+            .inner
+            .append(message(PNID, "wamid.ours"))
+            .await
+            .unwrap();
+        let foreign = ConversationKey::new("999", "16505551234");
+        for refused in [
+            inbox.erase(&foreign).await.map(drop),
+            inbox.identities(&foreign).await.map(drop),
+        ] {
+            assert!(matches!(refused, Err(Error::Validation(_))), "{refused:?}");
+        }
+        let calls =
+            |n: &std::sync::atomic::AtomicUsize| n.load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(
+            (calls(&store.erasures), calls(&store.reads)),
+            (0, 0),
+            "refused before the store is called"
+        );
+        assert_eq!(
+            store
+                .inner
+                .messages(&foreign, None, 10)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let ours = inbox.key("16505551234");
+        assert_eq!(
+            inbox.identities(&ours).await.unwrap(),
+            BTreeSet::from(["16505551234".to_owned()])
+        );
+        assert_eq!(
+            inbox
+                .erase_all(&["16505551234".to_owned()])
+                .await
+                .unwrap()
+                .messages,
+            1
+        );
+        assert!(
+            store
+                .inner
+                .messages(&ours, None, 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            store
+                .inner
+                .messages(&foreign, None, 10)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "erase_all is bound to the inbox's number"
+        );
+        assert!(inbox.erase(&ours).await.unwrap().is_empty());
+        assert_eq!(calls(&store.erasures), 2);
     }
 
     // ─── Coexistence: echoes and history ────────────────────────────────
@@ -3084,6 +3234,10 @@ mod tests {
         inner: MemoryConversationStore,
         appends: std::sync::atomic::AtomicUsize,
         synced_calls: std::sync::atomic::AtomicUsize,
+        /// `erase_all` calls (`erase` is its one-key case).
+        erasures: std::sync::atomic::AtomicUsize,
+        /// `identities` calls.
+        reads: std::sync::atomic::AtomicUsize,
         /// Answer `append_synced` with one answer too few (a broken store).
         short: bool,
     }
@@ -3232,11 +3386,35 @@ mod tests {
         {
             self.inner.contacts(phone_number_id, after, limit).await
         }
-        async fn erase(
+        async fn link_identity(
+            &self,
+            link: meta_whatsapp_core::store::IdentityLink,
+        ) -> std::result::Result<bool, StorageError> {
+            self.inner.link_identity(link).await
+        }
+        async fn identity_links(
             &self,
             key: &ConversationKey,
-        ) -> std::result::Result<meta_whatsapp_core::store::Erased, StorageError> {
-            self.inner.erase(key).await
+        ) -> std::result::Result<Vec<meta_whatsapp_core::store::IdentityLink>, StorageError>
+        {
+            self.inner.identity_links(key).await
+        }
+        async fn identities(
+            &self,
+            key: &ConversationKey,
+        ) -> std::result::Result<BTreeSet<String>, StorageError> {
+            self.reads
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.inner.identities(key).await
+        }
+        async fn erase_all(
+            &self,
+            phone_number_id: &PhoneNumberId,
+            contacts: &[String],
+        ) -> std::result::Result<Erased, StorageError> {
+            self.erasures
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.inner.erase_all(phone_number_id, contacts).await
         }
         async fn purge_before(
             &self,

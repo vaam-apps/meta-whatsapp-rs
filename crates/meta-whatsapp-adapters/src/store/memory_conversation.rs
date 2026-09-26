@@ -2,10 +2,11 @@
 //! the [`DeliveryStatus::supersedes`] rule, `(timestamp, id)` ordering with
 //! exclusive cursors, unread counting, synced history that opens no window,
 //! media placeholders filled once and never after a revoke, tombstones kept
-//! out of the summary, window events, thread ownership and synced contacts,
-//! erasure and purge by age, each in one step under the store's lock)
-//! within one process; everything is lost on restart. Use it for tests,
-//! development and demos.
+//! out of the summary, window events, thread ownership, synced contacts and
+//! identity links, a person's identities, erasure (their group messages
+//! redacted or deleted, per its [`ErasureMode`]) and purge by age, each in
+//! one step under the store's lock) within one process; everything is lost
+//! on restart. Use it for tests, development and demos.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
@@ -14,10 +15,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use meta_whatsapp_core::error::StorageError;
-use meta_whatsapp_core::ids::{MessageId, PhoneNumberId};
+use meta_whatsapp_core::ids::{MessageId, PhoneNumberId, UserId};
 use meta_whatsapp_core::store::{
     ConversationKey, ConversationStore, ConversationSummary, DeliveryStatus, Direction, Erased,
-    Purged, Retention, StoredContact, StoredMessage, ThreadOwnership, WindowEvent,
+    ErasureMode, IdentityLink, Purged, Retention, StoredContact, StoredMessage, ThreadOwnership,
+    WindowEvent,
 };
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
@@ -48,6 +50,14 @@ struct State {
     owners: HashMap<ConversationKey, ThreadOwnership>,
     /// By `(business number, contact)`: listing walks one number's range.
     contacts: BTreeMap<(PhoneNumberId, String), Synced>,
+    /// The ids of the messages whose [`StoredMessage::sender`] is `sender`,
+    /// by `(business number, sender)`: what an erasure reaches in other
+    /// conversations (the Postgres adapter's `(phone_number_id, sender)`
+    /// index).
+    senders: HashMap<(PhoneNumberId, String), BTreeSet<MessageId>>,
+    /// Identity links by `(business number, previous, current)`, their
+    /// identity, with their time.
+    links: BTreeMap<(PhoneNumberId, String, String), OffsetDateTime>,
 }
 
 /// What the address book keeps under a key: the contact, or its removal
@@ -86,6 +96,7 @@ impl Synced {
 pub struct MemoryConversationStore {
     state: Arc<Mutex<State>>,
     retention: Retention,
+    erasure_mode: ErasureMode,
 }
 
 impl fmt::Debug for MemoryConversationStore {
@@ -99,10 +110,13 @@ impl fmt::Debug for MemoryConversationStore {
                 .field("conversations", &st.conversations.len())
                 .field("window_events", &st.window_events.len())
                 .field("thread_owners", &st.owners.len())
-                .field("contacts", &st.contacts.len()),
+                .field("contacts", &st.contacts.len())
+                .field("identity_links", &st.links.len()),
             Err(_) => d.field("state", &format_args!("<locked>")),
         };
-        d.field("retention", &self.retention).finish()
+        d.field("retention", &self.retention)
+            .field("erasure_mode", &self.erasure_mode)
+            .finish()
     }
 }
 
@@ -117,6 +131,16 @@ impl MemoryConversationStore {
     #[must_use]
     pub fn with_retention(mut self, retention: Retention) -> Self {
         self.retention = retention;
+        self
+    }
+
+    /// The same store (clones share their state) redacting or deleting an
+    /// erased person's messages in other conversations (a group's) as
+    /// `mode` says, in [`ConversationStore::erase_all`]
+    /// ([`ErasureMode::Redact`] by default).
+    #[must_use]
+    pub fn with_erasure_mode(mut self, mode: ErasureMode) -> Self {
+        self.erasure_mode = mode;
         self
     }
 
@@ -139,16 +163,43 @@ impl State {
             .entry(message.conversation.clone())
             .or_default()
             .insert((message.timestamp, message.id.clone()));
+        if let Some(sender) = message.sender() {
+            self.senders
+                .entry((
+                    message.conversation.phone_number_id.clone(),
+                    sender.to_owned(),
+                ))
+                .or_default()
+                .insert(message.id.clone());
+        }
         self.messages.insert(message.id.clone(), message);
         true
     }
 
-    /// Delete message `id` and its history index entry. Returns whether it
-    /// was stored.
+    /// Drop message `message`'s entry from the sender index.
+    fn unindex_sender(&mut self, message: &StoredMessage) {
+        let Some(sender) = message.sender() else {
+            return;
+        };
+        let key = (
+            message.conversation.phone_number_id.clone(),
+            sender.to_owned(),
+        );
+        if let Some(ids) = self.senders.get_mut(&key) {
+            ids.remove(&message.id);
+            if ids.is_empty() {
+                self.senders.remove(&key);
+            }
+        }
+    }
+
+    /// Delete message `id`, its history index entry and its sender index
+    /// entry. Returns whether it was stored.
     fn remove_message(&mut self, id: &MessageId) -> bool {
         let Some(message) = self.messages.remove(id) else {
             return false;
         };
+        self.unindex_sender(&message);
         if let Some(index) = self.history.get_mut(&message.conversation) {
             index.remove(&(message.timestamp, message.id));
             if index.is_empty() {
@@ -156,6 +207,47 @@ impl State {
             }
         }
         true
+    }
+
+    /// Make conversation `key`'s summary follow its latest remaining
+    /// message (never a tombstone), or drop it when none is left, after
+    /// its latest message was deleted. Its window and unread count stay.
+    fn resummarize(&mut self, key: &ConversationKey) {
+        let latest = self.history.get(key).and_then(|index| {
+            index.iter().rev().find_map(|(_, id)| {
+                self.messages
+                    .get(id)
+                    .filter(|m| m.kind != StoredMessage::REVOKED)
+            })
+        });
+        match latest {
+            Some(m) => {
+                let (at, id, text) = (m.timestamp, m.id.clone(), m.text.clone());
+                if let Some(s) = self.conversations.get_mut(key) {
+                    s.last_message_at = at;
+                    s.last_message_id = id;
+                    s.last_text = text;
+                }
+            }
+            None => {
+                self.conversations.remove(key);
+            }
+        }
+    }
+
+    /// Whether synced contact `synced` names one of `ids` as its BSUID,
+    /// parent BSUID or phone number.
+    fn names(synced: &Synced, ids: &BTreeSet<&str>) -> bool {
+        synced.contact().is_some_and(|stored| {
+            [&stored.user_id, &stored.parent_user_id]
+                .into_iter()
+                .flatten()
+                .any(|id| ids.contains(id.as_str()))
+                || stored
+                    .phone_number
+                    .as_deref()
+                    .is_some_and(|phone| ids.contains(phone))
+        })
     }
 
     /// Delete the window event of `number` and `id`, and its index entry.
@@ -512,42 +604,165 @@ impl ConversationStore for MemoryConversationStore {
             .collect())
     }
 
-    async fn erase(&self, key: &ConversationKey) -> Result<Erased, StorageError> {
+    async fn link_identity(&self, link: IdentityLink) -> Result<bool, StorageError> {
+        let mut st = self.state.lock().await;
+        let identity = (link.phone_number_id, link.previous, link.current);
+        if st.links.contains_key(&identity) {
+            return Ok(false);
+        }
+        st.links.insert(identity, link.at);
+        Ok(true)
+    }
+
+    async fn identity_links(
+        &self,
+        key: &ConversationKey,
+    ) -> Result<Vec<IdentityLink>, StorageError> {
+        let st = self.state.lock().await;
+        let mut links: Vec<IdentityLink> = st
+            .links
+            .iter()
+            .filter(|((number, previous, current), _)| {
+                number == &key.phone_number_id
+                    && (previous == &key.contact || current == &key.contact)
+            })
+            .map(|((number, previous, current), at)| {
+                IdentityLink::new(number.clone(), previous.clone(), current.clone(), *at)
+            })
+            .collect();
+        links.sort_by(|a, b| (a.at, &a.previous, &a.current).cmp(&(b.at, &b.previous, &b.current)));
+        Ok(links)
+    }
+
+    async fn identities(&self, key: &ConversationKey) -> Result<BTreeSet<String>, StorageError> {
+        let st = self.state.lock().await;
+        let number = &key.phone_number_id;
+        let mut found = BTreeSet::from([key.contact.clone()]);
+        let mut todo = vec![key.contact.clone()];
+        while let Some(id) = todo.pop() {
+            let mut next: Vec<String> = Vec::new();
+            for ((n, contact), synced) in &st.contacts {
+                let Some(stored) = synced.contact().filter(|_| n == number) else {
+                    continue;
+                };
+                let all = [
+                    Some(contact.as_str()),
+                    stored.user_id.as_ref().map(UserId::as_str),
+                    stored.parent_user_id.as_ref().map(UserId::as_str),
+                    stored.phone_number.as_deref(),
+                ];
+                if all.contains(&Some(id.as_str())) {
+                    next.extend(all.into_iter().flatten().map(str::to_owned));
+                }
+            }
+            for (n, previous, current) in st.links.keys() {
+                if n == number && (previous == &id || current == &id) {
+                    next.push(previous.clone());
+                    next.push(current.clone());
+                }
+            }
+            for other in next {
+                if found.insert(other.clone()) {
+                    todo.push(other);
+                }
+            }
+        }
+        Ok(found)
+    }
+
+    #[allow(clippy::too_many_lines)] // one step, every record kind in turn
+    async fn erase_all(
+        &self,
+        phone_number_id: &PhoneNumberId,
+        contacts: &[String],
+    ) -> Result<Erased, StorageError> {
         let mut guard = self.state.lock().await;
         let st = &mut *guard;
+        let ids: BTreeSet<&str> = contacts.iter().map(String::as_str).collect();
         let mut erased = Erased::default();
-        // Every row stored under the key, tombstones included, is in its
-        // history index.
-        for (_, id) in st.history.remove(key).unwrap_or_default() {
-            if st.messages.remove(&id).is_some() {
-                erased.messages += 1;
+        for contact in &ids {
+            let key = ConversationKey::new(phone_number_id.clone(), *contact);
+            // Every row stored under the key, tombstones included, is in its
+            // history index.
+            let rows: Vec<MessageId> = st
+                .history
+                .get(&key)
+                .map(|index| index.iter().map(|(_, id)| id.clone()).collect())
+                .unwrap_or_default();
+            for id in rows {
+                if st.remove_message(&id) {
+                    erased.messages += 1;
+                }
             }
-        }
-        erased.conversations = u64::from(st.conversations.remove(key).is_some());
-        for (_, id) in st.window_index.remove(key).unwrap_or_default() {
-            if st
-                .window_events
-                .remove(&(key.phone_number_id.clone(), id))
-                .is_some()
-            {
-                erased.window_events += 1;
+            erased.conversations += u64::from(st.conversations.remove(&key).is_some());
+            for (_, id) in st.window_index.remove(&key).unwrap_or_default() {
+                if st
+                    .window_events
+                    .remove(&(phone_number_id.clone(), id))
+                    .is_some()
+                {
+                    erased.window_events += 1;
+                }
             }
+            erased.thread_owners += u64::from(st.owners.remove(&key).is_some());
         }
-        erased.thread_owners = u64::from(st.owners.remove(key).is_some());
         let before = st.contacts.len();
         st.contacts.retain(|(number, contact), synced| {
-            number != &key.phone_number_id
-                || !(contact == &key.contact
-                    || synced.contact().is_some_and(|stored| {
-                        [&stored.user_id, &stored.parent_user_id]
-                            .into_iter()
-                            .flatten()
-                            .any(|id| id.as_str() == key.contact)
-                            || stored.phone_number.as_deref() == Some(key.contact.as_str())
-                    }))
+            number != phone_number_id
+                || !(ids.contains(contact.as_str()) || State::names(synced, &ids))
         });
         erased.contacts = (before - st.contacts.len()) as u64;
+        let before = st.links.len();
+        st.links.retain(|(number, previous, current), _| {
+            number != phone_number_id
+                || !(ids.contains(previous.as_str()) || ids.contains(current.as_str()))
+        });
+        erased.identity_links = (before - st.links.len()) as u64;
+        // Their messages in conversations keyed by someone else (a
+        // group's): theirs were deleted above, with their index entries.
+        let theirs: Vec<MessageId> = ids
+            .iter()
+            .filter_map(|sender| {
+                st.senders
+                    .get(&(phone_number_id.clone(), (*sender).to_owned()))
+            })
+            .flatten()
+            .cloned()
+            .collect();
+        let mut touched: Vec<ConversationKey> = Vec::new();
+        for id in theirs {
+            let Some(message) = st.messages.get(&id).cloned() else {
+                continue;
+            };
+            let latest = st
+                .conversations
+                .get(&message.conversation)
+                .is_some_and(|s| s.last_message_id == id);
+            if self.erasure_mode == ErasureMode::Delete {
+                st.remove_message(&id);
+                if latest {
+                    touched.push(message.conversation.clone());
+                }
+            } else {
+                // `Redact`, and any mode added later: never keep the content.
+                st.unindex_sender(&message);
+                if let Some(row) = st.messages.get_mut(&id) {
+                    row.redact();
+                }
+                if latest && let Some(s) = st.conversations.get_mut(&message.conversation) {
+                    s.last_text = None;
+                }
+            }
+            erased.group_messages += 1;
+        }
+        for key in &touched {
+            st.resummarize(key);
+        }
         Ok(erased)
+    }
+
+    fn erasure_mode(&self) -> ErasureMode {
+        self.erasure_mode
     }
 
     async fn purge_before(
@@ -626,6 +841,15 @@ mod tests {
         .await;
     }
 
+    /// The suite's group erasure case takes the other branch on a store
+    /// that deletes an erased person's group messages.
+    #[tokio::test]
+    async fn passes_conversation_conformance_suite_deleting_group_messages() {
+        let store = MemoryConversationStore::new().with_erasure_mode(ErasureMode::Delete);
+        assert_eq!(store.erasure_mode(), ErasureMode::Delete);
+        conversation_conformance::run(&store).await;
+    }
+
     #[tokio::test]
     async fn debug_shows_counts_not_messages() {
         let store = MemoryConversationStore::new();
@@ -647,7 +871,8 @@ mod tests {
         assert_eq!(
             format!("{store:?}"),
             "MemoryConversationStore { messages: 1, conversations: 1, window_events: 0, \
-             thread_owners: 0, contacts: 0, retention: Keep }"
+             thread_owners: 0, contacts: 0, identity_links: 0, retention: Keep, \
+             erasure_mode: Redact }"
         );
     }
 

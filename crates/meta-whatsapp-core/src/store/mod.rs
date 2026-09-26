@@ -10,7 +10,8 @@
 //! - [`ConversationStore`] — ordered message history per conversation, for
 //!   in-app chat between merchants and their customers, with what the
 //!   inbox keeps beside it (window events, thread ownership, the
-//!   coexistence address book), erasure of one contact and purge by age.
+//!   coexistence address book, the links between a person's
+//!   identities), erasure of a person and purge by age.
 //!
 //! Adapters: `meta_whatsapp_adapters::store::{MemoryKvStore, PostgresKvStore, RedisKvStore,
 //! MemoryConversationStore, PostgresConversationStore}`.
@@ -30,8 +31,8 @@ use time::OffsetDateTime;
 
 pub use conversation::{
     ConversationKey, ConversationStore, ConversationSummary, CustomerServiceWindow, DeliveryStatus,
-    Direction, Erased, Purged, Retention, StoredContact, StoredMessage, ThreadOwner,
-    ThreadOwnership, WindowEvent, WindowEventKind,
+    Direction, Erased, ErasureMode, IdentityLink, Purged, Retention, StoredContact, StoredMessage,
+    ThreadOwner, ThreadOwnership, WindowEvent, WindowEventKind,
 };
 
 use crate::error::StorageError;

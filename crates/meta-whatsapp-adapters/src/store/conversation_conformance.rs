@@ -83,17 +83,35 @@
 //!   after it is refused, even when it arrived first; the list pages by
 //!   contact in byte order, scoped to one business number, and never
 //!   lists a removal; contacts create no conversation;
+//! - an identity link is stored once per business number and its two
+//!   identities, whatever its time, and read from either side, oldest
+//!   first; `identities` closes over the synced contacts (key, BSUID,
+//!   parent BSUID, phone number; a kept removal connects nothing) and the
+//!   links, on one number only;
 //! - an erasure deletes every record of one key on one number (messages
 //!   of every origin and tombstones, the summary, window events, the
 //!   ownership record, the synced contacts naming the key as key, BSUID,
-//!   parent BSUID or phone number, a contact removal kept under the key),
-//!   reports each count, leaves the ids free to be recorded again, and
-//!   touches no other key and no other number;
+//!   parent BSUID or phone number, a contact removal kept under the key,
+//!   the identity links naming it), reports each count, leaves the ids
+//!   free to be recorded again, and touches no other key and no other
+//!   number; `erase_all` over `identities` reaches a person's thread under
+//!   their phone number and under an earlier BSUID (security review of
+//!   roadmap L5, M3), while the same `wa_id` and BSUID on another number
+//!   stay;
+//! - the erased person's messages in someone else's conversation (a
+//!   group's, by `StoredMessage::sender`: the BSUID, else the phone
+//!   number, of an inbound message) are redacted in place under
+//!   `ErasureMode::Redact` or deleted under `ErasureMode::Delete`, per the
+//!   store's `erasure_mode()`; the summary never keeps their text (under
+//!   `Delete` it follows the latest remaining message, never a tombstone,
+//!   or goes), the other participants' and the business's messages stay,
+//!   and a redacted placeholder is never filled;
 //! - purge by age deletes exactly what is older than the cutoff (a record
 //!   at the cutoff stays): messages and tombstones, window events,
 //!   ownership records, contact removals, and the summary of a
 //!   conversation whose latest message went, keeping every other summary
-//!   as it was; scoped to one number, or to every number;
+//!   as it was; scoped to one number, or to every number; synced contacts
+//!   and identity links stay;
 //! - `apply_retention` purges by the store's `retention()`, and nothing
 //!   under `Retention::Keep`.
 //!
@@ -105,8 +123,8 @@ use meta_whatsapp_core::error::StorageError;
 use meta_whatsapp_core::ids::{AppId, MessageId, PhoneNumberId, UserId};
 use meta_whatsapp_core::store::{
     ConversationKey, ConversationStore, ConversationSummary, DeliveryStatus, Direction, Erased,
-    Purged, StoredContact, StoredMessage, ThreadOwner, ThreadOwnership, WindowEvent,
-    WindowEventKind,
+    ErasureMode, IdentityLink, Purged, StoredContact, StoredMessage, ThreadOwner, ThreadOwnership,
+    WindowEvent, WindowEventKind,
 };
 use time::OffsetDateTime;
 use time::macros::datetime;
@@ -146,7 +164,11 @@ pub async fn run<S: ConversationStore + ?Sized>(store: &S) {
     window_events_are_recorded_once_and_leave_the_summary_alone(store).await;
     thread_ownership_keeps_the_latest_record(store).await;
     synced_contacts_keep_the_latest_sync(store).await;
+    identity_links_are_stored_once_per_number(store).await;
+    identities_close_over_contacts_and_links(store).await;
     erase_deletes_every_record_of_one_contact_on_one_number(store).await;
+    erase_all_reaches_a_person_under_every_identity(store).await;
+    an_erasure_redacts_or_deletes_the_persons_group_messages(store).await;
     purge_deletes_exactly_what_is_older(store).await;
     apply_retention_follows_the_retention(store).await;
 }
@@ -2446,6 +2468,462 @@ async fn record_everything<S: ConversationStore + ?Sized>(
     );
 }
 
+/// A link between two identities of one person.
+fn link(run: &Run, previous: &str, current: &str, secs: i64) -> IdentityLink {
+    IdentityLink::new(run.pn.clone(), previous, current, at(secs))
+}
+
+/// Identity links are stored once per number and read from either side.
+async fn identity_links_are_stored_once_per_number<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("links");
+    let other = Run::new("links-other");
+    assert!(
+        store
+            .link_identity(link(&r, "US.1", "US.2", 5))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .link_identity(link(&r, "US.1", "US.2", 9))
+            .await
+            .unwrap(),
+        "the same link again, at another time, changes nothing"
+    );
+    assert!(
+        store
+            .link_identity(link(&r, "US.2", "US.3", 3))
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .link_identity(link(&r, "US.0", "US.2", 3))
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .link_identity(link(&other, "US.1", "US.2", 1))
+            .await
+            .unwrap(),
+        "the same identities on another number are another link"
+    );
+    assert_eq!(
+        store.identity_links(&r.key("US.2")).await.unwrap(),
+        [
+            link(&r, "US.0", "US.2", 3),
+            link(&r, "US.2", "US.3", 3),
+            link(&r, "US.1", "US.2", 5)
+        ],
+        "either side, oldest first, then by identity"
+    );
+    assert_eq!(
+        store.identity_links(&r.key("US.1")).await.unwrap(),
+        [link(&r, "US.1", "US.2", 5)],
+        "the first time stored is kept"
+    );
+    assert!(
+        store
+            .identity_links(&r.key("US.9"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store.identity_links(&other.key("US.1")).await.unwrap(),
+        [link(&other, "US.1", "US.2", 1)],
+        "never another number's"
+    );
+    assert!(
+        store
+            .conversations(&r.pn, None, 10)
+            .await
+            .unwrap()
+            .is_empty(),
+        "links are not conversations"
+    );
+}
+
+fn set(ids: &[&str]) -> std::collections::BTreeSet<String> {
+    ids.iter().map(|id| (*id).to_owned()).collect()
+}
+
+/// `identities` is the closure over one number's synced contacts and
+/// links.
+async fn identities_close_over_contacts_and_links<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("identities");
+    let other = Run::new("identities-other");
+    // One person: a contact keyed by their phone number naming their BSUID
+    // and parent BSUID, another portfolio's BSUID under the same parent, an
+    // earlier BSUID and an earlier phone number linked to them.
+    for contact in [
+        StoredContact {
+            phone_number: Some("16505550009".to_owned()),
+            user_id: Some(UserId::new("US.9")),
+            parent_user_id: Some(UserId::new("PA.9")),
+            ..r.contact("16505550009", 1)
+        },
+        StoredContact {
+            parent_user_id: Some(UserId::new("PA.9")),
+            ..r.contact("US.7", 1)
+        },
+        StoredContact {
+            phone_number: Some("16505550001".to_owned()),
+            user_id: Some(UserId::new("US.1")),
+            ..r.contact("US.1", 1)
+        },
+        // Removed: its removal keeps the key alone, which connects nothing.
+        StoredContact {
+            user_id: Some(UserId::new("US.9")),
+            ..r.contact("US.6", 1)
+        },
+        // Another number's contacts are another business's.
+        StoredContact {
+            user_id: Some(UserId::new("US.X")),
+            ..other.contact("16505550009", 1)
+        },
+    ] {
+        assert!(store.put_contact(contact).await.unwrap());
+    }
+    assert!(store.remove_contact(&r.key("US.6"), at(2)).await.unwrap());
+    for l in [
+        link(&r, "US.8", "US.9", 1),
+        link(&r, "16505550008", "US.8", 0),
+        link(&other, "US.9", "US.Y", 1),
+    ] {
+        assert!(store.link_identity(l).await.unwrap());
+    }
+    let person = set(&["16505550008", "16505550009", "PA.9", "US.7", "US.8", "US.9"]);
+    for from in ["US.9", "16505550008", "US.7", "PA.9"] {
+        assert_eq!(
+            store.identities(&r.key(from)).await.unwrap(),
+            person,
+            "from {from}"
+        );
+    }
+    assert_eq!(
+        store.identities(&r.key("US.1")).await.unwrap(),
+        set(&["16505550001", "US.1"]),
+        "someone else"
+    );
+    assert_eq!(
+        store.identities(&r.key("US.6")).await.unwrap(),
+        set(&["US.6"]),
+        "a kept removal connects nothing"
+    );
+    assert_eq!(
+        store.identities(&r.key("nobody")).await.unwrap(),
+        set(&["nobody"]),
+        "an unknown key is its own identity"
+    );
+    assert_eq!(
+        store.identities(&other.key("US.9")).await.unwrap(),
+        set(&["US.9", "US.Y"]),
+        "never another number's"
+    );
+}
+
+/// The security review of roadmap L5 (M3): a person's history thread
+/// keyed by their phone number, their live messages keyed by their BSUID
+/// and those under an earlier BSUID are erased together through
+/// `identities`, and the same `wa_id` and BSUID on another number (another
+/// business's customer) stay.
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
+async fn erase_all_reaches_a_person_under_every_identity<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("erase-all");
+    let other = Run::new("erase-all-other");
+    let (phone, bsuid, earlier) = (r.key("16505550009"), r.key("US.9"), r.key("US.8"));
+    let neighbour = r.key("US.1");
+    for (key, local) in [
+        (&phone, "phone"),
+        (&bsuid, "bsuid"),
+        (&earlier, "earlier"),
+        (&neighbour, "neighbour"),
+    ] {
+        record_everything(store, &r, key, local).await;
+    }
+    let (their_phone, their_bsuid) = (other.key("16505550009"), other.key("US.9"));
+    for (key, local) in [(&their_phone, "phone"), (&their_bsuid, "bsuid")] {
+        record_everything(store, &other, key, local).await;
+    }
+    for run in [&r, &other] {
+        assert!(
+            store
+                .put_contact(StoredContact {
+                    phone_number: Some("16505550009".to_owned()),
+                    user_id: Some(UserId::new("US.9")),
+                    ..run.contact("16505550009", 1)
+                })
+                .await
+                .unwrap()
+        );
+        assert!(
+            store
+                .link_identity(link(run, "US.8", "US.9", 1))
+                .await
+                .unwrap()
+        );
+    }
+    // In the other number's group, a message from the same phone number.
+    let their_group = StoredMessage {
+        payload: serde_json::json!({"from": "16505550009", "from_user_id": "US.9",
+            "group_id": "HBgOTHER", "type": "text", "text": {"body": "hi"}}),
+        ..other.msg("HBgOTHER", "group", Direction::Inbound, 1, "hi")
+    };
+    assert!(store.append(their_group.clone()).await.unwrap());
+    let neighbour_before = recorded(store, &neighbour).await;
+    let others_before = [
+        recorded(store, &their_phone).await,
+        recorded(store, &their_bsuid).await,
+    ];
+
+    let ids = store.identities(&bsuid).await.unwrap();
+    assert_eq!(ids, set(&["16505550009", "US.8", "US.9"]));
+    let ids: Vec<String> = ids.into_iter().collect();
+    assert_eq!(
+        store.erase_all(&r.pn, &ids).await.unwrap(),
+        Erased {
+            messages: 15,
+            conversations: 3,
+            window_events: 6,
+            thread_owners: 3,
+            contacts: 1,
+            identity_links: 1,
+            group_messages: 0,
+        },
+        "the three threads, the contact that tied them and the link"
+    );
+    for key in [&phone, &bsuid, &earlier] {
+        let left = recorded(store, key).await;
+        assert!(left.messages.is_empty(), "{key}: messages");
+        assert_eq!(left.summary, None, "{key}: summary");
+        assert!(left.window_events.is_empty(), "{key}: window events");
+        assert_eq!(left.owner, None, "{key}: owner");
+    }
+    assert_eq!(store.contact(&phone).await.unwrap(), None);
+    assert!(store.identity_links(&bsuid).await.unwrap().is_empty());
+    assert_eq!(store.identities(&bsuid).await.unwrap(), set(&["US.9"]));
+    recorded(store, &neighbour)
+        .await
+        .assert_same(&neighbour_before, "another contact of the number");
+    for (key, before) in [&their_phone, &their_bsuid].into_iter().zip(&others_before) {
+        recorded(store, key)
+            .await
+            .assert_same(before, "the same wa_id and BSUID on another number");
+    }
+    assert!(store.contact(&their_phone).await.unwrap().is_some());
+    assert_eq!(store.identity_links(&their_bsuid).await.unwrap().len(), 1);
+    assert_eq!(
+        store.message(&other.pn, &their_group.id).await.unwrap(),
+        Some(their_group),
+        "another number's group message from the same phone number"
+    );
+    assert!(
+        store.erase_all(&r.pn, &ids).await.unwrap().is_empty(),
+        "erasing again deletes nothing"
+    );
+    assert!(store.erase_all(&r.pn, &[]).await.unwrap().is_empty());
+
+    // One key alone leaves the others, and loses what tied them: collect
+    // the identities first.
+    let (phone5, bsuid5) = (r.key("16505550005"), r.key("US.5"));
+    record_everything(store, &r, &phone5, "phone5").await;
+    assert!(
+        store
+            .put_contact(StoredContact {
+                user_id: Some(UserId::new("US.5")),
+                ..r.contact("16505550005", 1)
+            })
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        store.erase(&bsuid5).await.unwrap(),
+        Erased {
+            contacts: 1,
+            ..Erased::default()
+        }
+    );
+    assert_eq!(
+        recorded(store, &phone5).await.messages.len(),
+        5,
+        "the thread under the phone number stays"
+    );
+    assert_eq!(store.identities(&bsuid5).await.unwrap(), set(&["US.5"]));
+}
+
+/// The erased person's messages in a group (a conversation keyed by
+/// someone else) are redacted or deleted, per the store's `erasure_mode`.
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
+async fn an_erasure_redacts_or_deletes_the_persons_group_messages<S: ConversationStore + ?Sized>(
+    store: &S,
+) {
+    let r = Run::new("group");
+    let other = Run::new("group-other");
+    let (group, quiet) = (r.key("HBgGROUP1"), r.key("HBgGROUP2"));
+    let from = |run: &Run, key: &ConversationKey, local: &str, secs, bsuid: Option<&str>| {
+        let text = format!("{local}: my address is 1 Main St");
+        let mut payload = serde_json::json!({"from": "16505550009", "group_id": key.contact,
+            "type": "text", "text": {"body": text}});
+        if let Some(bsuid) = bsuid {
+            payload["from_user_id"] = serde_json::json!(bsuid);
+        }
+        StoredMessage {
+            payload,
+            ..run.msg(&key.contact, local, Direction::Inbound, secs, &text)
+        }
+    };
+    // Before BSUIDs: `from` alone.
+    let x0 = from(&r, &group, "x0", 0, None);
+    let p1 = StoredMessage {
+        payload: serde_json::json!({"from": "16505550002", "from_user_id": "US.2",
+            "group_id": group.contact, "type": "text", "text": {"body": "hello all"}}),
+        ..r.msg(&group.contact, "p1", Direction::Inbound, 1, "hello all")
+    };
+    // The business's reply: never the person's, even naming their number.
+    let b2 = StoredMessage {
+        payload: serde_json::json!({"from": "16505550009", "to": group.contact,
+            "type": "text", "text": {"body": "welcome"}}),
+        ..r.msg(&group.contact, "b2", Direction::Outbound, 2, "welcome")
+    };
+    let x4 = from(&r, &group, "x4", 4, Some("US.9"));
+    let placeholder = StoredMessage {
+        kind: StoredMessage::MEDIA_PLACEHOLDER.to_owned(),
+        text: None,
+        ..from(&r, &group, "x-1", -1, Some("US.9"))
+    };
+    let x5 = from(&r, &quiet, "x5", 5, Some("US.9"));
+    let own = from(&r, &r.key("US.9"), "own", 6, Some("US.9"));
+    for m in [&x0, &p1, &b2, &x4, &placeholder, &x5, &own] {
+        assert!(store.append(m.clone()).await.unwrap(), "{}", m.id);
+    }
+    // Another participant's revoke of a message not stored: a tombstone,
+    // after everything but x4.
+    assert!(
+        store
+            .revoke(&group, &r.id("t3"), Direction::Inbound, at(3))
+            .await
+            .unwrap()
+    );
+    let theirs = from(&other, &other.key("HBgGROUP1"), "x", 4, Some("US.9"));
+    assert!(store.append(theirs.clone()).await.unwrap());
+    let history = store.messages(&group, None, 10).await.unwrap();
+    let group_summary = summary(store, &group).await.unwrap();
+    let quiet_summary = summary(store, &quiet).await.unwrap();
+    assert_eq!(
+        (
+            group_summary.last_message_at,
+            group_summary.last_text.as_deref()
+        ),
+        (x4.timestamp, x4.text.as_deref()),
+        "the person's message is the group's latest"
+    );
+
+    let mode = store.erasure_mode();
+    assert_eq!(
+        store
+            .erase_all(&r.pn, &["US.9".to_owned(), "16505550009".to_owned()])
+            .await
+            .unwrap(),
+        Erased {
+            messages: 1,
+            conversations: 1,
+            group_messages: 4,
+            ..Erased::default()
+        },
+        "their own conversation; x0 (by phone number), x4 and the placeholder in one group, x5 \
+         in the other ({mode:?})"
+    );
+    let erased_ids = [&x0.id, &x4.id, &placeholder.id, &x5.id];
+    let after = store.messages(&group, None, 10).await.unwrap();
+    if mode == ErasureMode::Delete {
+        let expected: Vec<StoredMessage> = history
+            .iter()
+            .filter(|m| !erased_ids.contains(&&m.id))
+            .cloned()
+            .collect();
+        assert_eq!(after, expected, "their messages go, the rest stays");
+        assert_eq!(
+            summary(store, &group).await,
+            Some(ConversationSummary {
+                last_message_at: b2.timestamp,
+                last_text: b2.text.clone(),
+                ..group_summary
+            }),
+            "the summary follows the latest remaining message, never the tombstone; the \
+             window and the unread count stay"
+        );
+        assert_eq!(
+            summary(store, &quiet).await,
+            None,
+            "a group left with nothing has no summary"
+        );
+        for id in erased_ids {
+            assert_eq!(store.message(&r.pn, id).await.unwrap(), None, "{id}");
+        }
+    } else {
+        let expected: Vec<StoredMessage> = history
+            .iter()
+            .map(|m| {
+                let mut m = m.clone();
+                if erased_ids.contains(&&m.id) {
+                    m.redact();
+                }
+                m
+            })
+            .collect();
+        assert_eq!(
+            after, expected,
+            "their messages keep their place, without content; the rest stays"
+        );
+        assert_eq!(
+            summary(store, &group).await,
+            Some(ConversationSummary {
+                last_text: None,
+                ..group_summary
+            }),
+            "the preview goes with the latest message's text"
+        );
+        assert_eq!(
+            summary(store, &quiet).await,
+            Some(ConversationSummary {
+                last_text: None,
+                ..quiet_summary
+            })
+        );
+        let mut redacted = x5.clone();
+        redacted.redact();
+        assert_eq!(store.message(&r.pn, &x5.id).await.unwrap(), Some(redacted));
+    }
+    assert!(
+        !store
+            .fill_media_placeholder(
+                &r.pn,
+                &placeholder.id,
+                "image".to_owned(),
+                Some("their photo".to_owned()),
+                serde_json::json!({"image": {"caption": "their photo"}}),
+            )
+            .await
+            .unwrap(),
+        "their placeholder never gets its content"
+    );
+    assert_eq!(
+        store.message(&other.pn, &theirs.id).await.unwrap(),
+        Some(theirs),
+        "the same person in another number's group stays"
+    );
+    assert!(
+        store
+            .erase_all(&r.pn, &["US.9".to_owned(), "16505550009".to_owned()])
+            .await
+            .unwrap()
+            .is_empty(),
+        "erasing again changes nothing"
+    );
+}
+
 /// An erasure deletes every record of one key on one number, and nothing
 /// else.
 #[allow(clippy::too_many_lines)] // one scenario, read top to bottom
@@ -2511,6 +2989,8 @@ async fn erase_deletes_every_record_of_one_contact_on_one_number<S: Conversation
             window_events: 2,
             thread_owners: 1,
             contacts: 3,
+            identity_links: 0,
+            group_messages: 0,
         },
         "every record of the key: live, synced, placeholder, failed and tombstone messages, \
          the summary, two window events, the owner, three contacts"
@@ -2692,6 +3172,8 @@ async fn purge_deletes_exactly_what_is_older<S: ConversationStore + ?Sized>(stor
         .unwrap();
     let address_book = r.contact("US.1", -100);
     store.put_contact(address_book.clone()).await.unwrap();
+    let link = IdentityLink::new(r.pn.clone(), "US.0", "US.1", at(-100));
+    assert!(store.link_identity(link.clone()).await.unwrap());
     // Removals kept to refuse a late sync: one before the cutoff, one at it.
     let (removed_before, removed_at) = (r.key("US.2"), r.key("US.3"));
     assert!(!store.remove_contact(&removed_before, at(-1)).await.unwrap());
@@ -2784,6 +3266,11 @@ async fn purge_deletes_exactly_what_is_older<S: ConversationStore + ?Sized>(stor
         store.contact(&address_book.key).await.unwrap().as_ref(),
         Some(&address_book),
         "synced contacts are not history"
+    );
+    assert_eq!(
+        store.identity_links(&r.key("US.1")).await.unwrap(),
+        [link],
+        "nor are identity links"
     );
     assert!(
         !store.put_contact(r.contact("US.3", -1)).await.unwrap(),

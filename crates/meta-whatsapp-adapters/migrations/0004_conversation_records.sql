@@ -1,6 +1,7 @@
 -- What `PostgresConversationStore` keeps beside the message history
--- (roadmap L5): window events, thread owners and the coexistence address
--- book, and the indexes purge by age reads.
+-- (roadmap L5): window events, thread owners, the coexistence address
+-- book and the links between a person's identities, a message's sender,
+-- and the indexes purge by age and erasure read.
 --
 -- A template like 0001 to 0003: the brace-wrapped placeholder becomes the
 -- table prefix before the migration runs.
@@ -12,7 +13,8 @@
 -- NUL in it is stored exactly. Nothing orders or matches on content.
 --
 -- Every table is keyed by business number and contact (a window event by
--- business number and its own id), so an erasure deletes by that key.
+-- business number and its own id, a link by business number and its two
+-- identities), so an erasure deletes by that key.
 
 CREATE TABLE {prefix}window_events (
     phone_number_id TEXT COLLATE "C" NOT NULL,
@@ -69,3 +71,36 @@ CREATE INDEX {prefix}messages_ts_idx
 
 CREATE INDEX {prefix}conversations_last_idx
     ON {prefix}conversations (last_message_at);
+
+-- Two identities of one person on one business number, as Meta reported
+-- them (`user_id_update`, a number change): `previous` became `current`.
+CREATE TABLE {prefix}identity_links (
+    phone_number_id TEXT COLLATE "C" NOT NULL,
+    previous        TEXT COLLATE "C" NOT NULL,
+    current         TEXT COLLATE "C" NOT NULL,
+    ts              TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (phone_number_id, previous, current)
+);
+
+-- Following a link from its `current` side.
+CREATE INDEX {prefix}identity_links_idx
+    ON {prefix}identity_links (phone_number_id, current);
+
+-- Who sent an inbound message (`StoredMessage::sender`: the payload's
+-- `from_user_id`, else its `from`), which the adapter writes with the
+-- message, so that an erasure finds a person's messages in a group
+-- conversation. NULL for an outbound message.
+ALTER TABLE {prefix}messages ADD COLUMN sender TEXT COLLATE "C";
+
+-- The messages recorded before this migration, by the same rule. A payload
+-- holding U+0000 anywhere cannot be read field by field (the `json`
+-- operators fail on it): such a row keeps no sender.
+UPDATE {prefix}messages SET sender = COALESCE(
+        CASE WHEN json_typeof(payload_json -> 'from_user_id') = 'string'
+             THEN NULLIF(payload_json ->> 'from_user_id', '') END,
+        CASE WHEN json_typeof(payload_json -> 'from') = 'string'
+             THEN NULLIF(payload_json ->> 'from', '') END)
+    WHERE direction = 'inbound' AND strpos(payload_json::text, E'\\u0000') = 0;
+
+CREATE INDEX {prefix}messages_sender_idx
+    ON {prefix}messages (phone_number_id, sender) WHERE sender IS NOT NULL;
