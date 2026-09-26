@@ -403,6 +403,8 @@ and call it.
 
 ## Not here yet
 
-Paced broadcasts and scheduling (a later release), subcommands and
-`--flag` arguments, conversation state and multi-step forms (keep them
-in your store, keyed by `BotSender::key`).
+Paced broadcasts and scheduling ([roadmap](../roadmap.md) B2, B3),
+subcommands and `--flag` arguments (B1b), images, suggestions and
+product cards in replies as media, buttons, lists and carousels (B1c),
+and auto-delete (B4). Conversation state and multi-step forms are
+yours: keep them in your store, keyed by `BotSender::key`.
