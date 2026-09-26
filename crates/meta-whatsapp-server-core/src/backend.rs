@@ -52,6 +52,13 @@ impl BackendKind {
 /// ([`RecordStore`], [`IdempotencyRecords`], [`Outbox`], [`LeaderLock`],
 /// [`Janitor`], [`SchemaMigrator`]) and the library's ([`KvStore`]: the
 /// token vault and webhook dedup; [`ConversationStore`]: the inbox).
+///
+/// **Every accessor returns a handle to the same data on every call**:
+/// what one call's handle writes, the next call's handle reads. The
+/// service asks more than once (the vault and webhook dedup each take a
+/// [`Self::kv`], say). A database-backed store meets this by construction;
+/// an in-process one must be built once and shared (an `Arc` the backend
+/// keeps), never made anew per call, which would lose every write.
 #[async_trait]
 pub trait Backend: Send + Sync + 'static {
     /// What it is.

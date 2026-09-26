@@ -56,6 +56,17 @@ async fn live_postgres_event_store_passes_the_suite() {
     common::events_suite::run(&PgEventStore::new(pool.clone()), &PgStore::new(pool)).await;
 }
 
+#[tokio::test]
+async fn live_postgres_backend_hands_out_the_same_data_on_every_call() {
+    use meta_whatsapp_server::store::PgBackend;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(5).await;
+    migrate(&pool).await.unwrap();
+    common::backend_suite::run(&PgBackend::new(pool)).await;
+}
+
 /// Two instances starting at once on an empty database both migrate, and
 /// each migration is applied once.
 #[tokio::test]
