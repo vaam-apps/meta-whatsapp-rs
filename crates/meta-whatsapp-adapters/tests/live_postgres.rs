@@ -2278,3 +2278,68 @@ async fn live_postgres_the_locks_are_the_documented_ones() {
         }
     }
 }
+
+/// A purge deletes the summaries of old conversations; a history chunk
+/// (`append_synced`) updates several summaries, in key order. The purge
+/// must take them in the same order, or the two deadlock when the chunk
+/// holds one summary the purge wants and waits on one the purge holds
+/// (here the purge's plan visits them oldest first: the second key
+/// first).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_a_purge_and_a_history_chunk_never_deadlock() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let app = format!("race_{}", common::unique());
+    let store = PostgresConversationStore::new(
+        racing_pool(
+            &db,
+            &app,
+            &[("enable_seqscan", "off"), ("enable_bitmapscan", "off")],
+        )
+        .await,
+    );
+    let (first, second) = (
+        ConversationKey::new("106540352242922", "US.1"),
+        ConversationKey::new("106540352242922", "US.2"),
+    );
+    // US.2's conversation is the older: the purge's index visits it first.
+    assert!(store.append(race_message(&first, "one", 2)).await.unwrap());
+    assert!(store.append(race_message(&second, "two", 1)).await.unwrap());
+    let cutoff = datetime!(2026-09-25 0:00 UTC);
+
+    let lock = blocker(
+        &db,
+        "SELECT 1 FROM wa_conversations WHERE phone_number_id = $1 AND contact = $2",
+        &[first.phone_number_id.as_str(), &first.contact],
+    )
+    .await;
+    let chunk = tokio::spawn({
+        let store = store.clone();
+        let batch = vec![
+            race_message(&first, "one-synced", 3),
+            race_message(&second, "two-synced", 3),
+        ];
+        async move { store.append_synced(batch).await }
+    });
+    until_waiting(&db, &app, 1, || false).await;
+    let purge = tokio::spawn({
+        let store = store.clone();
+        async move { store.purge_before(None, cutoff).await }
+    });
+    until_waiting(&db, &app, 2, || purge.is_finished()).await;
+    lock.commit().await.unwrap();
+    let (chunk, purge) = (chunk.await.unwrap(), purge.await.unwrap());
+    assert!(
+        chunk.is_ok() && purge.is_ok(),
+        "both succeed: {chunk:?}, {purge:?}"
+    );
+    // What the chunk stored while the purge ran is older than the cutoff:
+    // the next purge deletes it.
+    store.purge_before(None, cutoff).await.unwrap();
+    for key in [&first, &second] {
+        assert!(store.messages(key, None, 10).await.unwrap().is_empty());
+        assert_summary_matches_history(&store, key).await;
+    }
+}

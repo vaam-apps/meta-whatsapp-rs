@@ -84,7 +84,9 @@
 //!   instance). A message recorded while a purge runs is not waited for:
 //!   one older than the cutoff (a late history chunk) may be kept, its
 //!   summary purged, until the next purge.
-//! - `purge_before`'s statement is built the same way;
+//! - `purge_before`'s statement is built the same way, and locks the
+//!   summaries it deletes in key order first: the order `append_synced`
+//!   updates a chunk's summaries in, so the two never deadlock.
 //!   `wa_messages(ts)` and `wa_conversations(last_message_at)` are indexed
 //!   for it (migration `0004`).
 
@@ -239,7 +241,9 @@ fn append_sql(messages: &str, conversations: &str, inbound_at: &str, unread: &st
 }
 
 /// The `purge_before` statement. `scope` restricts every `DELETE` to one
-/// business number (`$2`), or is empty.
+/// business number (`$2`), or is empty. The summaries are locked in key
+/// order before they are deleted: the order `append_synced` updates them
+/// in, so a purge and a history chunk never deadlock.
 fn purge_sql(prefix: &TablePrefix, scope: &str) -> String {
     let messages = prefix.table("messages");
     let conversations = prefix.table("conversations");
@@ -247,7 +251,11 @@ fn purge_sql(prefix: &TablePrefix, scope: &str) -> String {
     let owners = prefix.table("thread_owners");
     format!(
         "WITH m AS (DELETE FROM {messages} WHERE ts < $1{scope} RETURNING 1), \
-         c AS (DELETE FROM {conversations} WHERE last_message_at < $1{scope} RETURNING 1), \
+         c AS (DELETE FROM {conversations} WHERE (phone_number_id, contact) IN ( \
+           SELECT phone_number_id, contact FROM {conversations} \
+           WHERE last_message_at < $1{scope} \
+           ORDER BY phone_number_id, contact FOR UPDATE \
+         ) RETURNING 1), \
          w AS (DELETE FROM {window_events} WHERE ts < $1{scope} RETURNING 1), \
          o AS (DELETE FROM {owners} WHERE since < $1{scope} RETURNING 1) \
          SELECT (SELECT count(*) FROM m), (SELECT count(*) FROM c), \
