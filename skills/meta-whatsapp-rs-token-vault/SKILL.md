@@ -5,7 +5,7 @@ description: "Keeping merchants' WhatsApp business tokens with meta-whatsapp-rs'
 
 # meta-whatsapp-rs-token-vault
 
-> **Verified against meta-whatsapp-rs ef0fe364e3a21a535238007db5276fe5ef6ce970 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs b7211bc1f282f873b605e7a3a1126ce4e45e5677 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/vault.rs](examples/vault.rs), compiled and
 tested by meta-whatsapp-rs's own gate (routing, rotation, wrong key, offboarding).
