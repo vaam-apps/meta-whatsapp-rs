@@ -484,8 +484,8 @@ impl RateLimiter for Counting {
 
 /// The slots a cancel hands back never put two sends in one slot: a
 /// cancel racing 32 senders (at a slot's very time for half the seeds),
-/// while a bot takes slots of the same number before, during and after
-/// it, over 64 seeds. Every start, the broadcast's and the bot's, is at
+/// while three handlers of a bot take slots of the same number before,
+/// during and after it, over 64 seeds. Every start, the broadcast's and the bot's, is at
 /// least one interval (20 ms at 50 a second) after the one before.
 /// Giving back a slot with a live one after it fails this.
 #[tokio::test(start_paused = true)]
@@ -520,19 +520,22 @@ async fn a_cancel_racing_the_senders_never_puts_two_sends_in_one_slot() {
             tokio::time::sleep(cancel_at).await;
             handle.cancel();
         };
+        // Three handlers of a bot on the number, each taking 20 slots: one
+        // may book while another's slot is still ahead.
         let bot_starts: Arc<Mutex<Vec<Duration>>> = Arc::default();
-        let bot = {
+        let bot = futures::future::join_all((0..3_u64).map(|task| {
             let (pacer, clock, starts) = (pacer.clone(), clock.clone(), Arc::clone(&bot_starts));
             async move {
                 let from = PhoneNumberId::new(NUMBER);
-                for i in 0..60_u64 {
+                for i in 0..20_u64 {
                     pacer.acquire(&from).await.unwrap();
                     starts.lock().unwrap().push(clock.elapsed());
-                    tokio::time::sleep(Duration::from_millis((i * seed) % 7 * 30)).await;
+                    let pause = (i * seed + task) % 7 * 30;
+                    tokio::time::sleep(Duration::from_millis(pause)).await;
                 }
             }
-        };
-        let (report, (), ()) = tokio::join!(broadcast.run(), canceller, bot);
+        }));
+        let (report, (), _) = tokio::join!(broadcast.run(), canceller, bot);
 
         let sent = outbound.starts();
         let progress = report.progress();
