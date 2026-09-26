@@ -433,7 +433,7 @@ impl EmbeddedSignup {
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<T>>,
     {
-        let policy = self.client.shared.retry;
+        let policy = self.client.retry;
         let mut n = 0u32;
         loop {
             match attempt().await {

@@ -21,7 +21,6 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) struct Shared {
     pub(crate) transport: Arc<dyn HttpTransport>,
     pub(crate) endpoint: GraphEndpoint,
-    pub(crate) retry: RetryPolicy,
     pub(crate) timeout: Duration,
     pub(crate) user_agent: String,
 }
@@ -61,6 +60,7 @@ pub(crate) struct Shared {
 pub struct Client {
     pub(crate) shared: Arc<Shared>,
     pub(crate) token: Option<AccessToken>,
+    pub(crate) retry: RetryPolicy,
 }
 
 impl fmt::Debug for Client {
@@ -85,7 +85,26 @@ impl Client {
         Self {
             shared: Arc::clone(&self.shared),
             token: Some(token),
+            retry: self.retry,
         }
+    }
+
+    /// A copy of this client that retries with `retry` (same transport,
+    /// endpoint and token). [`RetryPolicy::NONE`] suits a caller that
+    /// retries on its own schedule: a paced broadcast retries a throttled
+    /// send through its pacer, which the client's own replays would bypass.
+    #[must_use]
+    pub fn with_retry(&self, retry: RetryPolicy) -> Self {
+        Self {
+            shared: Arc::clone(&self.shared),
+            token: self.token.clone(),
+            retry,
+        }
+    }
+
+    /// The retry policy this client's requests follow.
+    pub fn retry_policy(&self) -> RetryPolicy {
+        self.retry
     }
 
     /// The token this client sends, if any.
@@ -261,13 +280,13 @@ impl ClientBuilder {
             shared: Arc::new(Shared {
                 transport,
                 endpoint,
-                retry: self.retry.unwrap_or_default(),
                 timeout: self.timeout.unwrap_or(DEFAULT_TIMEOUT),
                 user_agent: self.user_agent.unwrap_or_else(|| {
                     concat!("meta-whatsapp-rs/", env!("CARGO_PKG_VERSION")).to_owned()
                 }),
             }),
             token: self.token,
+            retry: self.retry.unwrap_or_default(),
         })
     }
 }
