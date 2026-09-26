@@ -94,10 +94,10 @@ export function whatsapp(baseUrl: string, key: string, tenant?: string) {
 }
 ```
 
-Lists take `limit` (1 to 100) and `cursor`, and answer `data` and
-`next_cursor`; annotate request literals with the generated types (the
-numbers query, `ProfilePatch` in the example), or a misspelled field
-goes unnoticed:
+Lists take `limit` (1 to 100) and `cursor` and answer `data` and
+`next_cursor` (`GET /v1/events`: `after` and `next_after` instead);
+annotate request literals with the generated types (`ProfilePatch`, the
+numbers query), or a misspelled field goes unnoticed:
 
 ```ts
 const query: NumbersQuery = cursor === undefined ? { limit: 100 } : { limit: 100, cursor };

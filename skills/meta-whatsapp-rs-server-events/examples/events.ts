@@ -45,8 +45,9 @@ export interface Cursor {
 
 // One poll. Handle each event, then save next_after. Handlers must be
 // idempotent (skip an event id already handled): after a crash between
-// the two, the next poll returns the same events, under the same ids. Returns whether more may follow at once (poll again without
-// waiting).
+// the two, the next poll returns the same events, under the same ids.
+// Returns whether to poll again at once (more may follow, or the service
+// asked to wait and the wait is over).
 export async function pollOnce(
   api: WhatsApp,
   cursor: Cursor,
@@ -55,8 +56,15 @@ export async function pollOnce(
 ): Promise<boolean> {
   const after = await cursor.load();
   const query: EventsQuery = after === undefined ? { limit: 100 } : { limit: 100, after };
-  const { data, error } = await api.GET("/v1/events", { params: { query } });
+  const { data, error, response } = await api.GET("/v1/events", { params: { query } });
   if (error) {
+    // Past the tenant's read budget (429): wait the Retry-After seconds,
+    // then poll again. Any other error but the cursor's (below) throws.
+    if (error.error.code === "too_many_requests") {
+      const seconds = Number(response.headers.get("Retry-After"));
+      await new Promise((resolve) => setTimeout(resolve, (seconds > 0 ? seconds : 1) * 1000));
+      return true;
+    }
     // Events after the cursor were purged (past retention, or deleted with
     // a tenant of the same id), or the cursor is past the tenant's newest
     // event (a restored database): rebuild what you derive from events,
@@ -100,6 +108,11 @@ type Received = {
   message?: { id?: string; type?: string; text?: { body?: string } };
   contact?: { user_id?: string | null; wa_id?: string | null } | null;
 };
+// A status of a message you sent. Meta names your callback_data
+// biz_opaque_callback_data; id is the message_id the send answered.
+type Delivery = {
+  status?: { id?: string; status?: string; biz_opaque_callback_data?: string | null };
+};
 
 export async function handle(event: Event): Promise<void> {
   switch (event.type as KnownEventType) {
@@ -110,7 +123,13 @@ export async function handle(event: Event): Promise<void> {
       console.log(event.phone_number_id, customer, data.message?.type);
       return;
     }
-    case "status_updated":
+    case "status_updated": {
+      const data = event.data as Delivery;
+      // After a 504 (no message_id), find the send by its callback_data.
+      const reference = data.status?.biz_opaque_callback_data ?? undefined;
+      console.log(reference, data.status?.id, data.status?.status);
+      return;
+    }
     case "template_status_updated":
       return;
     default:

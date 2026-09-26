@@ -25,9 +25,9 @@ notifications, replies, files or templates (scopes `send`, `media`, `templates`)
 
 ## Send a message
 
-The body is `to`, `type` and the object `type` names, written as Meta's
-page for that type writes it (`SendMessage`); `reply_to` quotes a
-received message, `callback_data` comes back in its status events:
+The body (`SendMessage`) is `to`, `type` and the object `type` names, as
+Meta's page for it writes it; `reply_to` quotes a received message, and
+`callback_data` returns in status events as `data.status.biz_opaque_callback_data`:
 
 ```ts
 export async function send(api: WhatsApp, pn: string, message: SendMessage, reference: string): Promise<Outcome> {
@@ -87,7 +87,7 @@ export function outcome(error: ErrorObject, retryAfter: string | null): Outcome 
 
 - `may_have_been_sent` true (a `timeout`, a Meta failure): never send it
   again under a **new** key. Repeat with the same key (you get the kept
-  answer) or wait for the status event.
+  answer) or wait for the status event carrying your `callback_data`.
 - false (`invalid_request`, a Meta refusal such as
   `customer_service_window_closed`, throttling): nothing went out and the
   key is released: fix the cause, then repeat with the same key.
