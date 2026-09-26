@@ -1,6 +1,6 @@
 # Erasing a customer from the inbox
 
-> **Verified against meta-whatsapp-rs 62eff88817c73465bb3aad8527779eb64de5850b (2026-09-26).** Source: the rustdoc of `ConversationStore::erase_all` and `ConversationStore::identities`, `docs/guides/cms-inbox.md` section 8 and `docs/guides/production.md` section 8.
+> **Verified against meta-whatsapp-rs 28f96ef018e733b0d04b9278b2653c26e34e18b8 (2026-09-26).** Source: the rustdoc of `ConversationStore::erase_all` and `ConversationStore::identities`, `docs/guides/cms-inbox.md` section 8 and `docs/guides/production.md` section 8.
 
 A customer is stored under several keys on one number: a history thread
 under their phone number, live messages under their BSUID, an earlier
@@ -53,7 +53,9 @@ the same on every number.
 - Identities nothing connects, and a recycled phone number connecting
   two people: check what `identities` returns.
 - Under `ErasureMode::Redact`, the ids of their group messages (a
-  `wamid` encodes the sender's phone number).
+  `wamid` encodes the sender's phone number); in either mode, the
+  tombstone of a revoke of theirs that reached a group before its
+  message (its id alone).
 - On Postgres: dead rows until VACUUM, the WAL, replicas, CDC consumers,
   backups, statement logs (`log_parameter_max_length = 0` for the role).
 - The webhook dedup markers and OTP challenges (hashed, expiring), the

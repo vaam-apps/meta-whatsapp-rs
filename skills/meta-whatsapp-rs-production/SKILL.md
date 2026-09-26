@@ -5,7 +5,7 @@ description: "Running meta-whatsapp-rs in production - the secrets (system user 
 
 # meta-whatsapp-rs-production
 
-> **Verified against meta-whatsapp-rs 62eff88817c73465bb3aad8527779eb64de5850b (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 28f96ef018e733b0d04b9278b2653c26e34e18b8 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/production.rs](examples/production.rs),
 compiled and tested by meta-whatsapp-rs's own gate. Longer walkthrough:
@@ -109,12 +109,12 @@ process. A load balancer in front of the webhook: HTTPS with a valid certificate
 
 ## Erasing a customer
 
-A procedure, not one call (`meta-whatsapp-rs-cms-inbox`; the production guide's section 8). On
-Postgres, deleted rows live on until VACUUM, in the WAL, replicas and backups, and in statement
-logs unless the application's role has `log_parameter_max_length = 0`:
+A procedure, not one call (`meta-whatsapp-rs-cms-inbox`; production guide § 8). On Postgres, deleted
+rows live on until VACUUM, in the WAL, replicas, backups and, unless the application's role has
+`log_parameter_max_length = 0`, statement logs:
 
 1. collect every identity: `Inbox::identities` on each of the merchant's numbers, and yours;
-2. `Inbox::erase_all` on each of those numbers, behind your ownership check of the number;
+2. `Inbox::erase_all` on each, behind your ownership check (group messages keep their ids unless `ErasureMode::Delete`);
 3. delete your media copies, the service's outbox rows and your dead letters for them;
 4. delete the customer from Meta's contact book (roadmap L9);
 5. journal it (an HMAC of `phone_number_id|contact`, and the time), replayed after any restore;

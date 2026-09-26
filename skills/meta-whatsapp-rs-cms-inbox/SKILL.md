@@ -5,7 +5,7 @@ description: "The merchant-to-customer chat inbox of a multi-tenant CMS built on
 
 # meta-whatsapp-rs-cms-inbox
 
-> **Verified against meta-whatsapp-rs 62eff88817c73465bb3aad8527779eb64de5850b (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 28f96ef018e733b0d04b9278b2653c26e34e18b8 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/inbox.rs](examples/inbox.rs), compiled and tested by meta-whatsapp-rs's own gate.
 The full server (webhook endpoint, SSE, bearer-token tenants), exercised in-process by meta-whatsapp-rs's tests:
@@ -146,7 +146,7 @@ lossless (PR #7, 2026-09-25). 4b47bf7, 6d50701, a9593f3, af5b1f8 and that pull r
 
 - Not recorded by `InboxSink`: calls (Meta reopens the window for one; `Inbox::window` cannot see it,
   L7: [OPEN_QUESTIONS.md #32](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)),
-  thread ownership, synced contacts (`smb_app_state_sync`, L8), identity links (L7, L8), media bytes
+  thread ownership, synced contacts (`smb_app_state_sync`, L8), identity links (L7), media bytes
   (rows keep the media id; download within 7 days), BSUID merges. The store keeps calls, ownership,
   contacts and links already (`record_window_event`, `set_thread_owner`, `put_contact`, `link_identity`).
 - Message ids are unique per store, not per business number (open question 33). No Redis

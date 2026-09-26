@@ -5,7 +5,7 @@ description: "Choosing and running meta-whatsapp-rs storage - the KvStore (token
 
 # meta-whatsapp-rs-storage
 
-> **Verified against meta-whatsapp-rs 62eff88817c73465bb3aad8527779eb64de5850b (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 28f96ef018e733b0d04b9278b2653c26e34e18b8 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/stores.rs](examples/stores.rs), compiled by
 meta-whatsapp-rs's own gate; its tests run the conformance suites on the memory
@@ -67,18 +67,20 @@ your own objects on those columns, run `migrate` once from a job, in that order
 
 Inbox history is kept unless you set a retention (`with_retention(Retention::days(90))` on the
 conversation store) and schedule `apply_retention(now)` (from any replica: purges take turns).
-Migration 4 adds four tables, a `wa_messages.sender` column it back-fills, and indexes (writes wait
-meanwhile: migrate a large inbox from a one-off job).
+Migration 4 adds four tables, a `wa_messages.sender` column it back-fills, and indexes (reads and
+writes of `wa_messages` wait meanwhile: migrate a large inbox from a one-off job with a `lock_timeout`).
+A row it cannot back-fill, or that an older instance writes, gets its sender from the next erasure.
 
 Erasing a customer is a procedure (`meta-whatsapp-rs-cms-inbox`): (1) collect every identity
 (`identities` on each of the merchant's numbers, and yours); (2) `erase_all(number, &ids)` on each,
 behind your ownership check (it deletes their records, contacts and links, the appends in flight
-included, and redacts their group messages, or deletes them with `with_erasure_mode`); (3) delete
-your media copies, outbox rows and dead letters; (4) delete Meta's contact-book entry (roadmap L9);
-(5) journal it (an HMAC of `phone_number_id|contact`, and the time) and replay the journal after any
-restore; (6) erase again after Meta's 7-day redelivery window, keeping the dedup markers meanwhile.
-Deleted rows live on until VACUUM, in the WAL, replicas and backups; set `log_parameter_max_length`
-to 0 for the application's role, or Postgres statement logs keep message text.
+included, and redacts their group messages, which keep their ids, a `wamid` encoding the phone
+number, or deletes them with `with_erasure_mode`); (3) delete your media copies, outbox rows and
+dead letters; (4) delete Meta's contact-book entry (roadmap L9); (5) journal it (an HMAC of
+`phone_number_id|contact`, and the time) and replay the journal after any restore; (6) erase again
+after Meta's 7-day redelivery window, keeping the dedup markers meanwhile. Deleted rows live on
+until VACUUM, in the WAL, replicas and backups; set `log_parameter_max_length` to 0 for the
+application's role, or Postgres statement logs keep message text.
 
 ## Redis
 
