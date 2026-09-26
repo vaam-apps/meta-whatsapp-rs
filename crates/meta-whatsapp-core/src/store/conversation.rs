@@ -743,6 +743,12 @@ pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
     /// dead-letter store), logs and backups. A message recorded while the
     /// erasure runs, or redelivered by Meta after it, is recorded again,
     /// as any new message is.
+    ///
+    /// Against concurrent writes, an erasure is one step: a message whose
+    /// [`append`](Self::append) or [`append_synced`](Self::append_synced)
+    /// runs at the same time is either erased with the rest or recorded
+    /// after the erasure, with a summary of its own; never kept without
+    /// its summary, nor a summary without its messages.
     async fn erase(&self, key: &ConversationKey) -> Result<Erased, StorageError>;
 
     /// Purge by age: delete the messages (tombstones included) timestamped
@@ -757,7 +763,9 @@ pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
     /// A conversation keeping newer messages keeps its summary as it was:
     /// its latest message, preview and window, and an unread count that
     /// may include purged messages until the next
-    /// [`mark_read`](Self::mark_read). Returns what was deleted.
+    /// [`mark_read`](Self::mark_read). Returns what was deleted. A message
+    /// recorded while the purge runs may be kept even when older than the
+    /// cutoff (a late history chunk): the next purge deletes it.
     async fn purge_before(
         &self,
         phone_number_id: Option<&PhoneNumberId>,

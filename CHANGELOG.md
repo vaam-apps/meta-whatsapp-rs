@@ -708,8 +708,15 @@ stored data, the owner's).
   working beside it, but its `migrate` then refuses the database
   (`VersionMissing(4)`): upgrade every instance that migrates at startup.
   Building the indexes makes writes to the inbox tables wait: on a large
-  inbox, run `migrate` from a one-off job. `erase` and `purge_before` are
-  one statement each. The new table names and the stored names of
+  inbox, run `migrate` from a one-off job. `erase` and `purge_before`
+  delete in one statement each, under two advisory locks (stable
+  identifiers): `append` and `append_synced` take the business number's
+  lock shared and `erase` exclusive, so an erasure never leaves a
+  message appended concurrently without its summary; purges take a purge
+  lock exclusive and erasures shared, so `apply_retention` may run from
+  several replicas at once and never deadlocks with another purge or an
+  erasure. An instance of the previous revision takes no lock: finish
+  the upgrade before erasing. The new table names and the stored names of
   `WindowEventKind` and `ThreadOwner` are stable identifiers
   (docs/architecture.md). `InboxSink` and `Inbox` are unchanged: calls,
   standby messages, ownership and synced contacts are not recorded yet

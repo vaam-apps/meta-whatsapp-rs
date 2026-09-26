@@ -103,6 +103,7 @@ rewrite them along with the code.
 | `wa.webhook.dedup` | `DEDUP_NAMESPACE`, `meta-whatsapp-webhooks/src/dedup.rs` | store namespace of the dedup markers (key: SHA-256 hex of the event's dedup key) | `the_marker_key_is_pinned` |
 | `wa_` | `TablePrefix::DEFAULT`, `meta-whatsapp-adapters/src/store/postgres/mod.rs` | default table prefix: `wa_kv`, `wa_messages`, `wa_conversations`, `wa_window_events`, `wa_thread_owners`, `wa_synced_contacts`, `wa_sqlx_migrations` | `the_default_tables_and_migration_checksums_are_pinned`, `prefix_validation`, the `live_postgres_*` table-name tests |
 | `customer_call`, `call_accepted`, `standby_message`; `this_app`, `another_app`, `idle` | `WindowEventKind::as_str`, `ThreadOwner` (its serde names), `meta-whatsapp-core/src/store/conversation.rs` | the names a conversation store keeps for a window event's kind and a thread's owner (`wa_window_events.kind`, `wa_thread_owners.owner`) | `stored_names_are_pinned` |
+| the number lock `('wa_messages'::regclass::oid::int4, hashtext(<phone_number_id>))`, the purge lock `('wa_conversations'::regclass::oid::int4, 0)` | `number_lock`, `purge_lock`, `meta-whatsapp-adapters/src/store/postgres/conversation.rs` | Postgres advisory locks (the two-key form, the table's object id as class) that order `erase` and `purge_before` against appends and each other: replicas of two releases must take the same ones | `the_locks_are_pinned`, `live_postgres_the_locks_are_the_documented_ones` |
 | the migration files | `meta-whatsapp-adapters/migrations/*.sql` | sqlx records each file's checksum; an edit, a comment included, makes `migrate` refuse every database migrated before. So they keep naming `wa_adapters`, including in the hint migration 3 raises | `the_default_tables_and_migration_checksums_are_pinned` |
 | `wa:` | `RedisKvStore::new`, `meta-whatsapp-adapters/src/store/redis_kv.rs` | default Redis key prefix, before `{<len>:<namespace>}:<key>` | `the_default_prefix_and_key_layout_are_pinned` |
 | `meta-whatsapp-server/outbox-key/v1` | `outbox_key`, `meta-whatsapp-server/src/events.rs` | domain of the SHA-256 stored as `wa_server_events.dedup_key` (with the tags `library` and `delivery`, the NUL separators and a keyless event's position as 8 big-endian bytes): derived otherwise, a redelivery across the upgrade is recorded twice | `the_outbox_key_is_pinned` (known answers) |
@@ -684,8 +685,15 @@ Logs carry sizes, digests and field names only — never payload values.
   `wa_synced_contacts` (keyed by business number and contact; a window
   event by business number and id) and the indexes purge by age reads;
   it changes no column, so the previous revision keeps working beside it,
-  but its `migrate` refuses the database. `erase` and `purge_before` are
-  one statement each; `set_thread_owner` and `put_contact` one upsert
+  but its `migrate` refuses the database. `erase` and `purge_before`
+  delete in one statement each, under two transaction-level advisory
+  locks: the **number lock** (`append` and `append_synced` take it
+  shared, `erase` exclusive, so an append in flight is either erased
+  with the rest or recorded after the erasure with a summary of its own,
+  never left without one) and the **purge lock** (`purge_before`
+  exclusive, `erase` shared: purges take turns, and an erasure and a
+  purge never deadlock on rows their plans visit in opposite orders);
+  `set_thread_owner` and `put_contact` one upsert
   whose update applies only when the stored record is not later.
 - `store::RedisKvStore` (feature `redis`; CAS via Lua). Requires the
   `noeviction` policy: every key with a TTL here enforces a limit (OTP

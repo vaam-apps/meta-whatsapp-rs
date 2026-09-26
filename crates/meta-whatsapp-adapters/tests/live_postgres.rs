@@ -466,8 +466,8 @@ async fn migrate_like_b66972c(pool: &PgPool) -> Result<(), sqlx::migrate::Migrat
 
 /// Migration 4 adds tables and indexes and changes no column: a database
 /// the previous revision (b66972c) wrote keeps its rows, that revision's
-/// statements keep working beside the new one (its `append` is today's,
-/// unchanged), and only its `migrate` refuses the database.
+/// `append` (which takes no lock) keeps working beside the new one, and
+/// only its `migrate` refuses the database.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn live_postgres_migration_4_keeps_the_previous_revision_working() {
     let Some(db) = TestDb::new().await else {
@@ -478,7 +478,7 @@ async fn live_postgres_migration_4_keeps_the_previous_revision_working() {
     let store = PostgresConversationStore::new(db.pool.clone());
     let [inbound, outbound, other] = written_by_09db4aa();
     for m in [&inbound, &outbound, &other] {
-        assert!(store.append(m.clone()).await.unwrap());
+        append_like_b66972c(&db.pool, m).await.unwrap();
     }
     let key = inbound.conversation.clone();
     let before = store.messages(&key, None, 10).await.unwrap();
@@ -507,9 +507,17 @@ async fn live_postgres_migration_4_keeps_the_previous_revision_working() {
         timestamp: datetime!(2026-09-24 16:00 UTC),
         ..inbound.clone()
     };
+    append_like_b66972c(&db.pool, &late)
+        .await
+        .expect("the previous revision's append still works");
+    let later = StoredMessage {
+        id: MessageId::new("wamid.after-4-new"),
+        timestamp: datetime!(2026-09-24 16:01 UTC),
+        ..inbound.clone()
+    };
     assert!(
-        store.append(late.clone()).await.unwrap(),
-        "the append both revisions send still works"
+        store.append(later.clone()).await.unwrap(),
+        "and the new one"
     );
     assert!(
         matches!(
@@ -522,6 +530,76 @@ async fn live_postgres_migration_4_keeps_the_previous_revision_working() {
         store.message(&key.phone_number_id, &late.id).await.unwrap(),
         Some(late)
     );
+    assert_eq!(
+        store
+            .message(&key.phone_number_id, &later.id)
+            .await
+            .unwrap(),
+        Some(later.clone())
+    );
+    let summary = store
+        .conversations(&key.phone_number_id, None, 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|s| s.key == key)
+        .unwrap();
+    assert_eq!(
+        (summary.last_message_at, summary.unread),
+        (later.timestamp, 3),
+        "both revisions' appends kept the summary"
+    );
+}
+
+/// b66972c's `append` statement, verbatim (default prefix): lossless
+/// content, and no lock (the number lock came with the review of L5).
+const APPEND_B66972C: &str = "WITH inserted AS ( \
+       INSERT INTO wa_messages (id, phone_number_id, contact, direction, kind_utf8, text_utf8, \
+         payload_json, status, ts, status_at, error_json) \
+       VALUES ($1, $2, $3, $4, $5, $6, $7::json, $8, $9, $10, $11::json) \
+       ON CONFLICT (id) DO NOTHING \
+       RETURNING id, phone_number_id, contact, direction, text_utf8, ts \
+     ) \
+     INSERT INTO wa_conversations AS c \
+       (phone_number_id, contact, last_message_at, last_message_id, last_text_utf8, \
+        last_inbound_at, unread) \
+     SELECT phone_number_id, contact, ts, id, text_utf8, \
+       CASE WHEN direction = 'inbound' THEN ts END, \
+       CASE WHEN direction = 'inbound' THEN 1 ELSE 0 END \
+     FROM inserted \
+     ON CONFLICT (phone_number_id, contact) DO UPDATE SET \
+       last_message_at = CASE WHEN (EXCLUDED.last_message_at, EXCLUDED.last_message_id) \
+         > (c.last_message_at, c.last_message_id) THEN EXCLUDED.last_message_at ELSE c.last_message_at END, \
+       last_message_id = CASE WHEN (EXCLUDED.last_message_at, EXCLUDED.last_message_id) \
+         > (c.last_message_at, c.last_message_id) THEN EXCLUDED.last_message_id ELSE c.last_message_id END, \
+       last_text_utf8 = CASE WHEN (EXCLUDED.last_message_at, EXCLUDED.last_message_id) \
+         > (c.last_message_at, c.last_message_id) THEN EXCLUDED.last_text_utf8 ELSE c.last_text_utf8 END, \
+       last_inbound_at = GREATEST(c.last_inbound_at, EXCLUDED.last_inbound_at), \
+       unread = c.unread + EXCLUDED.unread \
+     RETURNING 1 AS appended";
+
+/// Append `m` the way b66972c did.
+async fn append_like_b66972c(pool: &PgPool, m: &StoredMessage) -> Result<(), sqlx::Error> {
+    let status = serde_json::to_value(m.status).unwrap();
+    let appended = sqlx::query(APPEND_B66972C)
+        .bind(m.id.as_str())
+        .bind(m.conversation.phone_number_id.as_str())
+        .bind(m.conversation.contact.as_str())
+        .bind(match m.direction {
+            Direction::Inbound => "inbound",
+            Direction::Outbound => "outbound",
+        })
+        .bind(m.kind.as_bytes())
+        .bind(m.text.as_deref().map(str::as_bytes))
+        .bind(serde_json::to_string(&m.payload).unwrap())
+        .bind(status.as_str().unwrap())
+        .bind(m.timestamp)
+        .bind(m.status_at)
+        .bind(m.error.as_ref().map(|e| serde_json::to_string(e).unwrap()))
+        .execute(pool)
+        .await?;
+    assert_eq!(appended.rows_affected(), 1, "{} appended", m.id);
+    Ok(())
 }
 
 /// 09db4aa's `append` statement, verbatim (default prefix): what an
@@ -1616,4 +1694,587 @@ async fn live_postgres_records_refuse_nul_in_ids() {
     )
     .await;
     assert_eq!(counts, [0, 0, 0], "nothing stored");
+}
+
+// Races between erase, purge, append and fill (review of roadmap L5).
+//
+// Each case parks one operation on a row lock a plain transaction holds
+// (the "blocker"), starts the other, waits until both sessions wait on a
+// lock (`pg_stat_activity`, by the pool's `application_name`), then lets
+// the blocker go. That makes an interleaving that is a matter of
+// milliseconds in production happen every run.
+
+/// A pool on `db`'s schema whose sessions are named `app` (so the case can
+/// see its own sessions wait) and carry the planner `settings`.
+async fn racing_pool(db: &TestDb, app: &str, settings: &[(&str, &str)]) -> PgPool {
+    let mut options = vec![("search_path", db.schema.as_str())];
+    options.extend_from_slice(settings);
+    let connect = PgConnectOptions::from_str(&db.url)
+        .unwrap()
+        .application_name(app)
+        .options(options);
+    PgPoolOptions::new()
+        .max_connections(4)
+        .connect_with(connect)
+        .await
+        .unwrap()
+}
+
+/// Wait until `n` sessions named `app` wait on a lock, or `done` says the
+/// racing operation finished without waiting.
+async fn until_waiting(db: &TestDb, app: &str, n: i64, done: impl Fn() -> bool) {
+    for _ in 0..1000 {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity \
+             WHERE application_name = $1 AND wait_event_type = 'Lock'",
+        )
+        .bind(app)
+        .fetch_one(&db.admin)
+        .await
+        .unwrap();
+        if waiting >= n || done() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("{n} sessions of {app} never waited on a lock");
+}
+
+/// A transaction holding `FOR UPDATE` on the rows `select` returns.
+async fn blocker(
+    db: &TestDb,
+    select: &str,
+    binds: &[&str],
+) -> sqlx::Transaction<'static, sqlx::Postgres> {
+    let mut tx = db.pool.begin().await.unwrap();
+    let mut query = sqlx::query(AssertSqlSafe(format!("{select} FOR UPDATE")));
+    for b in binds {
+        query = query.bind(b.to_string());
+    }
+    let locked = query.execute(&mut *tx).await.unwrap().rows_affected();
+    assert!(locked > 0, "the blocker locks something: {select}");
+    tx
+}
+
+fn race_message(key: &ConversationKey, local: &str, minute: i64) -> StoredMessage {
+    StoredMessage {
+        id: MessageId::new(format!("wamid.race.{local}")),
+        conversation: key.clone(),
+        direction: Direction::Inbound,
+        kind: "text".to_owned(),
+        text: Some(format!("text of {local}")),
+        payload: serde_json::json!({"text": {"body": local}}),
+        status: DeliveryStatus::Received,
+        timestamp: datetime!(2026-09-24 12:00 UTC) + time::Duration::minutes(minute),
+        status_at: None,
+        error: None,
+    }
+}
+
+fn placeholder(key: &ConversationKey, local: &str, minute: i64) -> StoredMessage {
+    StoredMessage {
+        kind: StoredMessage::MEDIA_PLACEHOLDER.to_owned(),
+        text: None,
+        payload: serde_json::json!({"type": "media_placeholder"}),
+        ..race_message(key, local, minute)
+    }
+}
+
+/// The history and the summary of `key` agree: a conversation with
+/// messages (tombstones aside) has a summary, of its latest one, and one
+/// without has none.
+async fn assert_summary_matches_history(store: &PostgresConversationStore, key: &ConversationKey) {
+    let messages: Vec<StoredMessage> = store
+        .messages(key, None, 1000)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|m| m.kind != StoredMessage::REVOKED)
+        .collect();
+    let summary = store
+        .conversations(&key.phone_number_id, None, 1000)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|s| &s.key == key);
+    match (messages.first(), &summary) {
+        (None, None) => {}
+        (Some(latest), Some(s)) => {
+            assert_eq!(s.last_message_at, latest.timestamp, "{key}: latest message");
+            assert_eq!(s.last_text, latest.text, "{key}: preview");
+            let inbound = messages
+                .iter()
+                .filter(|m| m.direction == Direction::Inbound)
+                .count();
+            assert!(
+                s.unread <= inbound as u64,
+                "{key}: unread {} of {inbound}",
+                s.unread
+            );
+        }
+        (latest, _) => panic!(
+            "{key}: history and summary disagree: latest message {:?}, summary {summary:?}",
+            latest.map(|m| m.id.as_str())
+        ),
+    }
+}
+
+/// Risk (a), append first: an append has inserted its message and waits
+/// on the conversation's summary row when the erasure starts. The erasure
+/// must take it along (it committed before the erasure deleted anything),
+/// never leave the message behind without its summary.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_erase_takes_an_append_in_flight_along() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let app = format!("race_{}", common::unique());
+    let store = PostgresConversationStore::new(racing_pool(&db, &app, &[]).await);
+    let key = ConversationKey::new("106540352242922", "US.13491208655302741918");
+    assert!(store.append(race_message(&key, "first", 0)).await.unwrap());
+
+    let lock = blocker(
+        &db,
+        "SELECT 1 FROM wa_conversations WHERE phone_number_id = $1 AND contact = $2",
+        &[key.phone_number_id.as_str(), &key.contact],
+    )
+    .await;
+    let append = tokio::spawn({
+        let (store, m) = (store.clone(), race_message(&key, "second", 1));
+        async move { store.append(m).await }
+    });
+    until_waiting(&db, &app, 1, || false).await;
+    let erase = tokio::spawn({
+        let (store, key) = (store.clone(), key.clone());
+        async move { store.erase(&key).await }
+    });
+    until_waiting(&db, &app, 2, || erase.is_finished()).await;
+    lock.commit().await.unwrap();
+
+    assert!(append.await.unwrap().unwrap());
+    let erased = erase.await.unwrap().unwrap();
+    assert_summary_matches_history(&store, &key).await;
+    assert!(
+        store.messages(&key, None, 10).await.unwrap().is_empty(),
+        "the append committed before the erasure deleted: erased with the rest"
+    );
+    assert_eq!((erased.messages, erased.conversations), (2, 1));
+}
+
+/// Risk (a), erasure first: an append that starts while the erasure is
+/// deleting is recorded after it, with a summary of its own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_an_append_during_an_erasure_is_recorded_after_it() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let app = format!("race_{}", common::unique());
+    let store = PostgresConversationStore::new(racing_pool(&db, &app, &[]).await);
+    let key = ConversationKey::new("106540352242922", "US.13491208655302741918");
+    let first = race_message(&key, "first", 0);
+    assert!(store.append(first.clone()).await.unwrap());
+
+    let lock = blocker(
+        &db,
+        "SELECT 1 FROM wa_messages WHERE id = $1",
+        &[first.id.as_str()],
+    )
+    .await;
+    let erase = tokio::spawn({
+        let (store, key) = (store.clone(), key.clone());
+        async move { store.erase(&key).await }
+    });
+    until_waiting(&db, &app, 1, || false).await;
+    let second = race_message(&key, "second", 1);
+    let append = tokio::spawn({
+        let (store, m) = (store.clone(), second.clone());
+        async move { store.append(m).await }
+    });
+    until_waiting(&db, &app, 2, || append.is_finished()).await;
+    lock.commit().await.unwrap();
+
+    let erased = erase.await.unwrap().unwrap();
+    assert!(append.await.unwrap().unwrap());
+    assert_eq!(erased.messages, 1);
+    assert_summary_matches_history(&store, &key).await;
+    assert_eq!(
+        store.messages(&key, None, 10).await.unwrap(),
+        std::slice::from_ref(&second)
+    );
+    let summary = store
+        .conversations(&key.phone_number_id, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        summary.len(),
+        1,
+        "the append after the erasure has its summary"
+    );
+    assert_eq!(summary[0].unread, 1);
+    assert_eq!(summary[0].last_inbound_at, Some(second.timestamp));
+}
+
+/// Risk (a), unorchestrated: appends and erasures of one conversation at
+/// once, from two pools, never leave a message without its summary or a
+/// summary without messages.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_erasures_racing_appends_keep_history_and_summary_together() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let a = PostgresConversationStore::new(db.pool.clone());
+    let b = PostgresConversationStore::new(TestDb::pool_on(&db.url, &db.schema, 10).await);
+    for round in 0..40 {
+        let key = ConversationKey::new("106540352242922", format!("US.{round}"));
+        assert!(
+            a.append(race_message(&key, &format!("{round}-0"), 0))
+                .await
+                .unwrap()
+        );
+        let appends = (1..6).map(|i| {
+            let store = if i % 2 == 0 { &a } else { &b };
+            store.append(race_message(&key, &format!("{round}-{i}"), i))
+        });
+        let (appended, erased) = tokio::join!(futures::future::join_all(appends), async {
+            tokio::task::yield_now().await;
+            b.erase(&key).await
+        });
+        for r in appended {
+            r.unwrap();
+        }
+        erased.unwrap();
+        assert_summary_matches_history(&a, &key).await;
+    }
+}
+
+/// Risk (b): two purges whose plans visit the old rows in opposite
+/// orders (two replicas' `apply_retention`, their cutoffs picking
+/// different plans) never deadlock.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_two_purges_at_once_never_deadlock() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let app = format!("race_{}", common::unique());
+    // Oldest first by the `ts` index; physical (insertion) order by a
+    // sequential scan: newest first below.
+    let by_index = PostgresConversationStore::new(
+        racing_pool(
+            &db,
+            &app,
+            &[("enable_seqscan", "off"), ("enable_bitmapscan", "off")],
+        )
+        .await,
+    );
+    let by_scan = PostgresConversationStore::new(
+        racing_pool(
+            &db,
+            &app,
+            &[("enable_indexscan", "off"), ("enable_bitmapscan", "off")],
+        )
+        .await,
+    );
+    let key = ConversationKey::new("106540352242922", "US.13491208655302741918");
+    let rows: Vec<StoredMessage> = (1..=3)
+        .rev()
+        .map(|m| race_message(&key, &format!("t{m}"), m))
+        .collect();
+    for m in &rows {
+        assert!(by_index.append(m.clone()).await.unwrap());
+    }
+    let cutoff = datetime!(2026-09-25 0:00 UTC);
+
+    let lock = blocker(
+        &db,
+        "SELECT 1 FROM wa_messages WHERE id = $1",
+        &["wamid.race.t2"],
+    )
+    .await;
+    let first = tokio::spawn({
+        let store = by_scan.clone();
+        async move { store.purge_before(None, cutoff).await }
+    });
+    until_waiting(&db, &app, 1, || false).await;
+    let second = tokio::spawn({
+        let store = by_index.clone();
+        async move { store.purge_before(None, cutoff).await }
+    });
+    until_waiting(&db, &app, 2, || second.is_finished()).await;
+    lock.commit().await.unwrap();
+    let (first, second) = (first.await.unwrap(), second.await.unwrap());
+    assert!(
+        first.is_ok() && second.is_ok(),
+        "both purges succeed: {first:?}, {second:?}"
+    );
+    let purged = first.unwrap().messages + second.unwrap().messages;
+    assert_eq!(purged, 3, "the three rows, once");
+    assert_summary_matches_history(&by_index, &key).await;
+}
+
+/// Risk (b) again: an erasure (newest first, by the conversation's index)
+/// and a purge (oldest first, by the `ts` index) over the same old rows
+/// never deadlock.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_an_erasure_and_a_purge_at_once_never_deadlock() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let app = format!("race_{}", common::unique());
+    let store = PostgresConversationStore::new(
+        racing_pool(
+            &db,
+            &app,
+            &[("enable_seqscan", "off"), ("enable_bitmapscan", "off")],
+        )
+        .await,
+    );
+    let key = ConversationKey::new("106540352242922", "US.13491208655302741918");
+    for m in 1..=3 {
+        assert!(
+            store
+                .append(race_message(&key, &format!("t{m}"), m))
+                .await
+                .unwrap()
+        );
+    }
+    let cutoff = datetime!(2026-09-25 0:00 UTC);
+
+    let lock = blocker(
+        &db,
+        "SELECT 1 FROM wa_messages WHERE id = $1",
+        &["wamid.race.t2"],
+    )
+    .await;
+    let erase = tokio::spawn({
+        let (store, key) = (store.clone(), key.clone());
+        async move { store.erase(&key).await }
+    });
+    until_waiting(&db, &app, 1, || false).await;
+    let purge = tokio::spawn({
+        let store = store.clone();
+        async move { store.purge_before(None, cutoff).await }
+    });
+    until_waiting(&db, &app, 2, || purge.is_finished()).await;
+    lock.commit().await.unwrap();
+    let (erase, purge) = (erase.await.unwrap(), purge.await.unwrap());
+    assert!(
+        erase.is_ok() && purge.is_ok(),
+        "both succeed: {erase:?}, {purge:?}"
+    );
+    assert_eq!(erase.unwrap().messages + purge.unwrap().messages, 3);
+    assert_summary_matches_history(&store, &key).await;
+}
+
+/// Risk (c): `fill_media_placeholder` racing an erasure or a purge, in
+/// either order, never deadlocks, never stores the content after the
+/// deletion, and leaves history and summary together.
+#[allow(clippy::too_many_lines)] // four orders of one race, read top to bottom
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_fills_racing_erasures_and_purges() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let cutoff = datetime!(2026-09-25 0:00 UTC);
+    for (case, delete_first, erase) in [
+        ("fill-then-erase", false, true),
+        ("erase-then-fill", true, true),
+        ("fill-then-purge", false, false),
+        ("purge-then-fill", true, false),
+    ] {
+        let app = format!("race_{}", common::unique());
+        let store = PostgresConversationStore::new(racing_pool(&db, &app, &[]).await);
+        let key = ConversationKey::new("106540352242922", format!("US.{case}"));
+        assert!(
+            store
+                .append(race_message(&key, &format!("{case}-text"), 0))
+                .await
+                .unwrap()
+        );
+        let media = placeholder(&key, &format!("{case}-media"), 1);
+        assert_eq!(
+            store.append_synced(vec![media.clone()]).await.unwrap(),
+            [true]
+        );
+
+        // Fill first: the placeholder's row is held, the fill queues on it,
+        // then the deletion. Deletion first: the summary's row is held,
+        // the deletion (which takes the messages first) queues on it, then
+        // the fill queues on the placeholder the deletion took.
+        let lock = if delete_first {
+            blocker(
+                &db,
+                "SELECT 1 FROM wa_conversations WHERE phone_number_id = $1 AND contact = $2",
+                &[key.phone_number_id.as_str(), &key.contact],
+            )
+            .await
+        } else {
+            blocker(
+                &db,
+                "SELECT 1 FROM wa_messages WHERE id = $1",
+                &[media.id.as_str()],
+            )
+            .await
+        };
+        let fill = {
+            let (store, pn, id) = (store.clone(), key.phone_number_id.clone(), media.id.clone());
+            async move {
+                store
+                    .fill_media_placeholder(
+                        &pn,
+                        &id,
+                        "image".to_owned(),
+                        Some("caption".to_owned()),
+                        serde_json::json!({"image": {"caption": "caption"}}),
+                    )
+                    .await
+            }
+        };
+        let delete = {
+            let (store, key) = (store.clone(), key.clone());
+            async move {
+                if erase {
+                    store.erase(&key).await.map(|e| e.messages)
+                } else {
+                    store
+                        .purge_before(Some(&key.phone_number_id), cutoff)
+                        .await
+                        .map(|p| p.messages)
+                }
+            }
+        };
+        let (fill, delete) = if delete_first {
+            let delete = tokio::spawn(delete);
+            until_waiting(&db, &app, 1, || false).await;
+            let fill = tokio::spawn(fill);
+            until_waiting(&db, &app, 2, || fill.is_finished()).await;
+            lock.commit().await.unwrap();
+            (fill.await.unwrap(), delete.await.unwrap())
+        } else {
+            let fill = tokio::spawn(fill);
+            until_waiting(&db, &app, 1, || false).await;
+            let delete = tokio::spawn(delete);
+            until_waiting(&db, &app, 2, || delete.is_finished()).await;
+            lock.commit().await.unwrap();
+            (fill.await.unwrap(), delete.await.unwrap())
+        };
+        assert!(
+            fill.is_ok() && delete.is_ok(),
+            "{case}: {fill:?}, {delete:?}"
+        );
+        assert_eq!(
+            fill.unwrap(),
+            !delete_first,
+            "{case}: filled only before the deletion"
+        );
+        assert_eq!(delete.unwrap(), 2, "{case}: both messages deleted");
+        assert!(
+            store.messages(&key, None, 10).await.unwrap().is_empty(),
+            "{case}"
+        );
+        assert_eq!(
+            store
+                .message(&key.phone_number_id, &media.id)
+                .await
+                .unwrap(),
+            None,
+            "{case}"
+        );
+        assert_summary_matches_history(&store, &key).await;
+    }
+}
+
+/// The locks are the ones `store::postgres::conversation` documents (a
+/// stable identifier: replicas of two revisions must take the same ones),
+/// written out here apart from the code: held from outside, the number
+/// lock holds back an append and an erasure of that number only, and the
+/// purge lock a purge and an erasure.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_the_locks_are_the_documented_ones() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let app = format!("race_{}", common::unique());
+    let store = PostgresConversationStore::new(racing_pool(&db, &app, &[]).await);
+    let key = ConversationKey::new("106540352242922", "US.13491208655302741918");
+    let elsewhere = ConversationKey::new("106540352242923", "US.13491208655302741918");
+    let cutoff = datetime!(2026-09-25 0:00 UTC);
+
+    for (lock, held, number_lock) in [
+        (
+            "SELECT pg_advisory_xact_lock('wa_messages'::regclass::oid::int4, hashtext('106540352242922'))",
+            ["append", "append_synced", "erase"],
+            true,
+        ),
+        (
+            "SELECT pg_advisory_xact_lock('wa_conversations'::regclass::oid::int4, 0)",
+            ["purge", "purge_number", "erase"],
+            false,
+        ),
+    ] {
+        let mut outside = db.pool.begin().await.unwrap();
+        sqlx::query(AssertSqlSafe(lock))
+            .execute(&mut *outside)
+            .await
+            .unwrap();
+        let n = common::unique();
+        // Not held back: under the number lock, another number's append
+        // and erasure; under the purge lock, appends.
+        if number_lock {
+            assert!(
+                store
+                    .append(race_message(&elsewhere, &format!("{n}-free"), 0))
+                    .await
+                    .unwrap()
+            );
+            store.erase(&elsewhere).await.unwrap();
+        } else {
+            assert!(
+                store
+                    .append(race_message(&key, &format!("{n}-free"), 0))
+                    .await
+                    .unwrap()
+            );
+            assert_eq!(
+                store
+                    .append_synced(vec![race_message(&key, &format!("{n}-free-synced"), 0)])
+                    .await
+                    .unwrap(),
+                [true]
+            );
+        }
+        let mut waiting = Vec::new();
+        for (i, op) in held.into_iter().enumerate() {
+            let (store, key) = (store.clone(), key.clone());
+            let m = race_message(&key, &format!("{n}-{i}"), 0);
+            waiting.push(tokio::spawn(async move {
+                match op {
+                    "append" => store.append(m).await.map(drop),
+                    "append_synced" => store.append_synced(vec![m]).await.map(drop),
+                    "erase" => store.erase(&key).await.map(drop),
+                    "purge" => store.purge_before(None, cutoff).await.map(drop),
+                    _ => store
+                        .purge_before(Some(&key.phone_number_id), cutoff)
+                        .await
+                        .map(drop),
+                }
+            }));
+            until_waiting(&db, &app, i64::try_from(i).unwrap() + 1, || false).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            waiting.iter().all(|w| !w.is_finished()),
+            "{lock}: every operation waits"
+        );
+        outside.commit().await.unwrap();
+        for w in waiting {
+            w.await.unwrap().unwrap();
+        }
+    }
 }

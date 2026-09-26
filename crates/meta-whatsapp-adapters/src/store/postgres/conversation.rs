@@ -49,14 +49,44 @@
 //!   `put_contact` are one upsert each whose update only applies when the
 //!   stored record is not later (`ON CONFLICT … DO UPDATE … WHERE`), so
 //!   the rule holds under concurrency without a read.
-//! - `erase` is one statement: five `DELETE`s in data-modifying CTEs, over
-//!   one snapshot, so it deletes every record of the key committed before
-//!   it started, or nothing. A message a concurrent append commits while
-//!   it runs may survive it (as one recorded just after it would), and its
-//!   summary with it or not.
-//! - `purge_before` is one statement the same way; `wa_messages(ts)` and
-//!   `wa_conversations(last_message_at)` are indexed for it (migration
-//!   `0004`).
+//! - `erase` and `purge_before` order themselves against the writers with
+//!   two transaction-level advisory locks, in the two-key form (whose key
+//!   space never meets the one-key locks of sqlx's `migrate` or of the
+//!   service):
+//!   - the **number lock**, `('wa_messages'::regclass::oid::int4,
+//!     hashtext(<phone_number_id>))` under the default prefix (the class
+//!     is the table's object id: each schema and prefix has its own): `append`
+//!     and `append_synced` take it shared, first thing in their one
+//!     statement (a batch takes each of its numbers', in order); `erase`
+//!     takes it exclusive, then deletes in a second statement, whose
+//!     snapshot so holds every append that took the lock before it, and
+//!     no append can start meanwhile. Without it, an append that had
+//!     written its message but not yet its conversation's summary when
+//!     the erasure took its snapshot left the message behind, its summary
+//!     deleted (the erasure waited for the summary row and deleted the
+//!     appended version). An append that waits on the lock is recorded
+//!     after the erasure, with a summary of its own.
+//!   - the **purge lock**, `('wa_conversations'::regclass::oid::int4, 0)`:
+//!     `purge_before` takes it exclusive, `erase` shared, before the number
+//!     lock. Two purges, or a purge and an erasure, would otherwise take
+//!     the same rows' locks in the orders of their plans (the `ts` index
+//!     oldest first, the conversation's index newest first, a sequential
+//!     scan by position), and deadlock. Purges run one at a time; erasures
+//!     beside each other.
+//!
+//!   The deletion itself is one statement: five `DELETE`s in
+//!   data-modifying CTEs over one snapshot, the messages first. The other
+//!   writers take no advisory lock: `fill_media_placeholder` locks a
+//!   message then its summary, the order the deletion's statements take
+//!   them in, and the rest write one row. An instance of the revision
+//!   before these locks does not take them: while one still appends, an
+//!   erasure can leave a message without its summary (upgrade every
+//!   instance). A message recorded while a purge runs is not waited for:
+//!   one older than the cutoff (a late history chunk) may be kept, its
+//!   summary purged, until the next purge.
+//! - `purge_before`'s statement is built the same way;
+//!   `wa_messages(ts)` and `wa_conversations(last_message_at)` are indexed
+//!   for it (migration `0004`).
 
 use std::fmt;
 use std::sync::Arc;
@@ -87,9 +117,9 @@ const MAX_STATUS_ROUNDS: usize = 16;
 ///
 /// Retention is kept by default; [`with_retention`](Self::with_retention)
 /// sets what [`ConversationStore::apply_retention`] purges. Nothing purges
-/// on its own: schedule `apply_retention` from one replica at a time. Two
-/// runs at once lose nothing, but may deadlock, and Postgres then fails
-/// one of them with an error: run it again.
+/// on its own: schedule `apply_retention`. Runs from several replicas at
+/// once are safe: purges take turns (see the module docs), and an erasure
+/// waits for a purge in progress.
 #[derive(Clone)]
 pub struct PostgresConversationStore {
     pool: PgPool,
@@ -131,7 +161,9 @@ struct Sql {
     contact: Arc<str>,
     contacts: Arc<str>,
     contacts_after: Arc<str>,
+    erase_locks: [Arc<str>; 2],
     erase: Arc<str>,
+    purge_lock: Arc<str>,
     purge_all: Arc<str>,
     purge_number: Arc<str>,
 }
@@ -161,15 +193,33 @@ const MESSAGE_VALUES: &str = "$1, $2, $3, $4, $5, $6, $7::json, $8, $9, $10, $11
 const NEWER: &str = "(EXCLUDED.last_message_at, EXCLUDED.last_message_id) \
                      > (c.last_message_at, c.last_message_id)";
 
+/// The arguments of the number lock on business number `number` (an SQL
+/// expression): the class is the messages table's object id, so the
+/// tables of each prefix, and of each schema, have locks of their own. A
+/// stable identifier: every replica, of every revision, must take the
+/// same lock (`docs/architecture.md`).
+fn number_lock(messages: &str, number: &str) -> String {
+    format!("'{messages}'::regclass::oid::int4, hashtext({number})")
+}
+
+/// The arguments of the purge lock: the conversations table's object id
+/// (see [`number_lock`]).
+fn purge_lock(conversations: &str) -> String {
+    format!("'{conversations}'::regclass::oid::int4, 0")
+}
+
 /// The `append` statement. `inbound_at` and `unread` are the SQL
 /// expressions an inserted row contributes to its conversation's
-/// `last_inbound_at` and `unread`.
+/// `last_inbound_at` and `unread`. The message is inserted from the row of
+/// `lock`, so the number lock is held before anything is written.
 fn append_sql(messages: &str, conversations: &str, inbound_at: &str, unread: &str) -> String {
     let newer = NEWER;
+    let lock = number_lock(messages, "$2");
     format!(
-        "WITH inserted AS ( \
+        "WITH lock AS MATERIALIZED (SELECT pg_advisory_xact_lock_shared({lock})), \
+         inserted AS ( \
            INSERT INTO {messages} ({MESSAGE_COLUMNS}) \
-           VALUES ({MESSAGE_VALUES}) \
+           SELECT {MESSAGE_VALUES} FROM lock \
            ON CONFLICT (id) DO NOTHING \
            RETURNING id, phone_number_id, contact, direction, text_utf8, ts \
          ) \
@@ -206,15 +256,22 @@ fn purge_sql(prefix: &TablePrefix, scope: &str) -> String {
 }
 
 /// The `append_synced` statement: one row per element of the eleven
-/// column arrays, the first of each id kept, no inbound effects.
+/// column arrays, the first of each id kept, no inbound effects. Its rows
+/// are read under the number lock of each of the batch's numbers, taken
+/// shared, in order, before the first is inserted.
 fn append_synced_sql(messages: &str, conversations: &str) -> String {
     let newer = NEWER;
+    let lock = number_lock(messages, "number");
     format!(
-        "WITH input AS ( \
+        "WITH lock AS MATERIALIZED ( \
+           SELECT pg_advisory_xact_lock_shared({lock}) \
+           FROM unnest($2::text[]) AS number GROUP BY number ORDER BY number \
+         ), input AS ( \
            SELECT DISTINCT ON (id) * FROM UNNEST($1::text[], $2::text[], $3::text[], \
              $4::text[], $5::bytea[], $6::bytea[], $7::json[], $8::text[], \
              $9::timestamptz[], $10::timestamptz[], $11::json[]) \
              WITH ORDINALITY AS t({MESSAGE_COLUMNS}, n) \
+           WHERE (SELECT count(*) FROM lock) >= 0 \
            ORDER BY id, n \
          ), inserted AS ( \
            INSERT INTO {messages} ({MESSAGE_COLUMNS}) \
@@ -379,7 +436,21 @@ impl Sql {
                 "SELECT {CONTACT_COLUMNS} FROM {contacts} \
                  WHERE phone_number_id = $1 AND contact > $3 ORDER BY contact LIMIT $2"
             )),
-            // One snapshot for the five tables: all of it, or nothing.
+            // The purge lock shared, then the number lock exclusive: see the
+            // module docs. Each its own statement, so the deletion's
+            // snapshot is taken after both are held.
+            erase_locks: [
+                arc(format!(
+                    "SELECT pg_advisory_xact_lock_shared({})",
+                    purge_lock(&conversations)
+                )),
+                arc(format!(
+                    "SELECT pg_advisory_xact_lock({})",
+                    number_lock(&messages, "$1")
+                )),
+            ],
+            // One snapshot for the five tables, the messages first (the
+            // order `fill_media_placeholder` takes them in).
             erase: arc(format!(
                 "WITH m AS (DELETE FROM {messages} \
                    WHERE phone_number_id = $1 AND contact = $2 RETURNING 1), \
@@ -394,6 +465,10 @@ impl Sql {
                      AND $2 IN (contact, user_id, parent_user_id, phone_number) RETURNING 1) \
                  SELECT (SELECT count(*) FROM m), (SELECT count(*) FROM c), \
                    (SELECT count(*) FROM w), (SELECT count(*) FROM o), (SELECT count(*) FROM p)"
+            )),
+            purge_lock: arc(format!(
+                "SELECT pg_advisory_xact_lock({})",
+                purge_lock(&conversations)
             )),
             purge_all: arc(purge_sql(prefix, "")),
             purge_number: arc(purge_sql(prefix, " AND phone_number_id = $2")),
@@ -1037,12 +1112,24 @@ impl ConversationStore for PostgresConversationStore {
     }
 
     async fn erase(&self, key: &ConversationKey) -> Result<Erased, StorageError> {
+        let mut tx = self.pool.begin().await.map_err(backend)?;
+        let [purge, number] = &self.sql.erase_locks;
+        sqlx::query(AssertSqlSafe(Arc::clone(purge)))
+            .execute(&mut *tx)
+            .await
+            .map_err(backend)?;
+        sqlx::query(AssertSqlSafe(Arc::clone(number)))
+            .bind(key.phone_number_id.as_str())
+            .execute(&mut *tx)
+            .await
+            .map_err(backend)?;
         let row = sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.erase)))
             .bind(key.phone_number_id.as_str())
             .bind(key.contact.as_str())
-            .fetch_one(&self.pool)
+            .fetch_one(&mut *tx)
             .await
             .map_err(backend)?;
+        tx.commit().await.map_err(backend)?;
         Ok(Erased {
             messages: count(&row, 0)?,
             conversations: count(&row, 1)?,
@@ -1057,13 +1144,19 @@ impl ConversationStore for PostgresConversationStore {
         phone_number_id: Option<&PhoneNumberId>,
         cutoff: OffsetDateTime,
     ) -> Result<Purged, StorageError> {
+        let mut tx = self.pool.begin().await.map_err(backend)?;
+        sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.purge_lock)))
+            .execute(&mut *tx)
+            .await
+            .map_err(backend)?;
         let query = match phone_number_id {
             None => sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.purge_all))).bind(cutoff),
             Some(number) => sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.purge_number)))
                 .bind(cutoff)
                 .bind(number.as_str()),
         };
-        let row = query.fetch_one(&self.pool).await.map_err(backend)?;
+        let row = query.fetch_one(&mut *tx).await.map_err(backend)?;
+        tx.commit().await.map_err(backend)?;
         Ok(Purged {
             messages: count(&row, 0)?,
             conversations: count(&row, 1)?,
@@ -1117,6 +1210,43 @@ mod tests {
             parse_owner("somebody".to_owned()),
             Err(StorageError::Corrupt { .. })
         ));
+    }
+
+    /// The advisory locks are stable identifiers: replicas of two
+    /// revisions must take the same ones (`docs/architecture.md`). `\x77`
+    /// is `w`, so a search-and-replace of the prefix cannot rewrite this
+    /// pin along with the code.
+    #[test]
+    fn the_locks_are_pinned() {
+        let sql = Sql::new(&TablePrefix::DEFAULT);
+        let number = "'\x77a_messages'::regclass::oid::int4, hashtext(";
+        assert_eq!(
+            sql.purge_lock.as_ref(),
+            "SELECT pg_advisory_xact_lock('\x77a_conversations'::regclass::oid::int4, 0)"
+        );
+        assert_eq!(
+            sql.erase_locks[0].as_ref(),
+            "SELECT pg_advisory_xact_lock_shared('\x77a_conversations'::regclass::oid::int4, 0)"
+        );
+        assert_eq!(
+            sql.erase_locks[1].as_ref(),
+            format!("SELECT pg_advisory_xact_lock({number}$1))")
+        );
+        assert!(
+            sql.append.starts_with(&format!(
+                "WITH lock AS MATERIALIZED (SELECT pg_advisory_xact_lock_shared({number}$2))), "
+            )),
+            "{}",
+            sql.append
+        );
+        assert!(
+            sql.append_synced.contains(&format!(
+                "SELECT pg_advisory_xact_lock_shared({number}number)) \
+                 FROM unnest($2::text[]) AS number GROUP BY number ORDER BY number"
+            )),
+            "{}",
+            sql.append_synced
+        );
     }
 
     #[test]
