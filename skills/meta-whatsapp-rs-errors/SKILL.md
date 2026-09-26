@@ -90,30 +90,25 @@ on a 1xx–3xx is `false`~~: until 8238853 (2026-09-24).
   nothing (`RateLimited` or `PairRateLimited` on any status, an HTTP 429,
   or `131057`, the account in maintenance, on a 4xx). It is the
   library's one rule for a resend no one checks: the bot's paced
-  broadcast follows it too. **A timeout or 5xx on a send is returned,
-  never replayed**, nor is a `131000` on a 400: a duplicate OTP or order
-  confirmation is worse than an error. The example's tests prove both
-  behaviours.
-- From a job queue, resend only what Meta provably refused and may accept
-  later; reconcile the rest with status webhooks first (match
-  `biz_opaque_callback_data`, see `meta-whatsapp-rs-webhook-events`). The
-  rule below also resends later what `may_resend` would not replay at
-  once (a template still syncing, a `131000` on a 400); to be as strict
-  as the library, test `e.may_resend()` first:
+  broadcast follows it too. **A timeout or a 5xx on a send is returned,
+  never replayed** (a throttling code excepted, on any status), nor is a
+  `131000` on a 400: a duplicate OTP or order confirmation is worse than
+  an error. The example's tests prove both behaviours.
+- From a job queue, follow the same rule: resend later exactly what
+  `e.may_resend()` allows. Anything else that could succeed later (a
+  timeout, a `131000` on a 400, a template still syncing) is reconciled
+  with status webhooks first (match `biz_opaque_callback_data`, see
+  `meta-whatsapp-rs-webhook-events`):
 
 ```rust
 pub fn after_failed_send(e: &Error) -> Resend {
-    if matches!(e, Error::Validation(_)) {
-        return Resend::Never; // refused locally: nothing was sent
+    if e.may_resend() {
+        return Resend::Later; // the library's one rule for a blind resend
     }
-    if e.may_have_been_sent() {
-        return Resend::ReconcileFirst;
+    if e.may_have_been_sent() || e.is_retryable() {
+        return Resend::ReconcileFirst; // may be out, or a 131000 on a 400: check first
     }
-    if e.is_retryable() {
-        Resend::Later
-    } else {
-        Resend::Never // includes 131049, 131050 and 131048: never auto-retry
-    }
+    Resend::Never // a local refusal too; includes 131049, 131050 and 131048
 }
 ```
 

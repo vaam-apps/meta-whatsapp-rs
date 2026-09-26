@@ -22,7 +22,7 @@ lists the kinds below in this order, `Unknown` last.
 
 "Auto-retry" = `ErrorKind::is_retryable()`. "Replay a send" =
 `Error::may_resend()`: `is_rejected_before_processing()` (on any status), plus
-`131057` on a 4xx; the only errors for which the client (and the bot's paced
+`131057` on a 4xx or without a status; the only errors for which the client (and the bot's paced
 broadcast) replays a non-idempotent request.
 
 | Kind | Codes | Auto-retry | Replay a send | What to do |
