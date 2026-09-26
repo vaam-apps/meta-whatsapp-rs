@@ -123,7 +123,8 @@ up -d --wait` starts one on port 55432 (`postgres://wa:wa@127.0.0.1:55432/wa`).
 ### Storage and migrations
 
 Postgres holds everything: the library's tables (`wa_kv`, the inbox's
-`wa_messages` and `wa_conversations`) and the service's (`wa_server_tenants`,
+`wa_messages`, `wa_conversations`, `wa_window_events`, `wa_thread_owners`,
+`wa_synced_contacts` and `wa_identity_links`) and the service's (`wa_server_tenants`,
 `wa_server_api_keys`, `wa_server_wabas`, `wa_server_numbers`,
 `wa_server_idempotency`, the event outbox `wa_server_events` and its
 per-tenant `wa_server_event_streams`), each with its own migration
@@ -133,6 +134,17 @@ Service migrations only ever add (expand, then contract in a later
 release), so replicas of two versions can share the database during a
 rolling deploy. Back up the database and, separately, the vault key: a
 backup without the key cannot decrypt a single token.
+
+The inbox tables are kept forever for now: the service sets no
+retention on them (roadmap M2a wires one into housekeeping) and has no
+erasure route (roadmap M2f). The event outbox keeps whole events
+(message texts, BSUIDs, phone numbers) for `WA_SERVER_OUTBOX_RETENTION`
+(7 days by default), with no column to find a customer's rows by. Until
+M2f, an erasure request is a job of your own: the library's
+`PostgresConversationStore` on the same database (`identities`, then
+`erase_all` per number: the
+[cms-inbox guide](cms-inbox.md#8-erasing-a-customer-and-retention)),
+and Postgres's side of it ([production.md § 8](production.md#8-retention-and-erasure-on-postgres)).
 
 ## Tenants and keys
 

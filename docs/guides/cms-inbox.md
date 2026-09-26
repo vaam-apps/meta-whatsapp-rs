@@ -93,6 +93,14 @@ let conversations: Arc<dyn ConversationStore> = Arc::new(PostgresConversationSto
   ([open question](../../OPEN_QUESTIONS.md#cms-inbox) 33).
 - `MemoryConversationStore` is for tests and demos. There is no Redis
   conversation store.
+- Migration 4 (roadmap L5) adds `wa_window_events`, `wa_thread_owners`,
+  `wa_synced_contacts` and `wa_identity_links`, a `sender` column on
+  `wa_messages` (section 8) and three indexes. It changes no existing
+  column, but it back-fills the sender of the inbound messages already
+  stored, and writes to `wa_messages` and `wa_conversations` wait while
+  it runs: on a large inbox, run `migrate` once from a one-off job. Once
+  it has run, an older revision's `migrate` refuses the database:
+  upgrade every instance that migrates at startup.
 
 ## 2. Wire the pipeline
 
@@ -271,6 +279,97 @@ events.addEventListener('lagged', () => reloadHistory()); // the browser fell be
   nothing live. Relay events between instances (Postgres `LISTEN/NOTIFY`,
   Redis pub/sub) into each instance's channel; meta-whatsapp-rs does not provide it.
 
+## 8. Erasing a customer, and retention
+
+A customer is stored under several keys on one number: a history thread
+under their phone number, live messages under their BSUID, an earlier
+BSUID after a number change. Erase the person, not one key: collect
+their keys with `Inbox::identities`, then `Inbox::erase_all`, on each of
+the merchant's numbers, behind section 3's ownership check (an `Inbox`
+is bound to its number; `Inbox::erase` and `Inbox::identities` refuse
+another number's key before the store is called, and a raw
+`ConversationStore::erase_all` or `erase` trusts the number it is given,
+so it must sit behind that check too).
+
+```rust
+let key = inbox.key(contact); // any of their keys on this number
+let ids: Vec<String> = inbox.identities(&key).await?.into_iter().collect();
+let erased = inbox.erase_all(&ids).await?; // `Erased`: counts only; log those, never the ids
+```
+
+`identities` follows the synced address book contacts (a contact's key,
+BSUID, parent BSUID and phone number are one person) and the identity
+links (`ConversationStore::link_identity`: a BSUID change or a number
+change; `InboxSink` records them from roadmap L7, until then your
+own sink does). Add the identities you hold yourself (the phone number
+the customer gave you). `erase_all` deletes, not hides, in one step:
+every record under those keys (messages of every origin and revoke
+tombstones, summaries, window events, thread ownership), the synced
+contacts and identity links naming them, and the contact removals kept
+under them. Their messages in a group (a conversation keyed by the
+group) are matched by sender (the BSUID, else the phone number, of an
+inbound message) and, by default, redacted in place: kind `erased`
+(`StoredMessage::ERASED`), no text, `{}` as payload, no sender, so the
+other participants' history keeps its shape; the group's preview never
+keeps their text. `with_erasure_mode(ErasureMode::Delete)` on the store
+deletes them instead (design D31). An erasure never crosses numbers: a
+`wa_id` is the same on every number, and another number's records may
+be another business's customers.
+
+What the erasure does not reach, and what you do about it:
+
+- **In the store**: the customer as quoted or shared in someone else's
+  message (a reply's `context`, a contact card; a number-change `system`
+  message under their old key names the new one, so erase both);
+  identities nothing connects (a thread under a phone number the address
+  book never showed you); when redacting, the ids of their group
+  messages (Meta's `wamid` encodes the sender's phone number: choose
+  `ErasureMode::Delete` if that must go too); and, in either mode, the
+  tombstone a revoke of theirs left in a group when it arrived before
+  its message (no content, no sender: the id alone). A phone number
+  recycled by the operator connects its two owners: check what
+  `identities` returns.
+- **In Postgres**: dead rows and index entries until `VACUUM`, the WAL,
+  replicas, change-data-capture consumers, backups, and statement logs
+  ([production.md § 8](production.md#8-retention-and-erasure-on-postgres):
+  vacuum, an erasure journal replayed after any restore,
+  `log_parameter_max_length = 0`).
+- **Outside the store**: the webhook dedup markers (hashed, 7 days: keep
+  them, they stop Meta's redeliveries from recording the customer
+  again), OTP challenges (hashed, expiring), what your sinks forwarded
+  (the service's event outbox and its 24-hour idempotency answers,
+  roadmap M2f; a dead-letter store, L21a; SSE clients), your own copies
+  (media you downloaded, section 4), logs, and Meta's side (the
+  business's contact book, roadmap L9; the WhatsApp Business app under
+  coexistence).
+- **Afterwards**: what arrives after the erasure is recorded as any new
+  event: a new message, an echo, a history chunk or address book sync
+  not delivered yet, a late revoke (its tombstone holds the BSUID and the
+  message id), a redelivery once its dedup marker expired. An erased
+  tombstone frees its message id, so the revoked message, arriving
+  later in a history chunk, is stored with its content. Erase again once
+  Meta's 7-day redelivery window has passed.
+
+Which erasure requests you must honour is your privacy obligations'
+call (design D10); the full procedure is production.md's.
+
+History is kept by default. `with_retention(Retention::days(90))` on
+`PostgresConversationStore` (or `MemoryConversationStore`) sets the
+store's retention, which `ConversationStore::apply_retention(now)`
+applies: nothing purges on its own, so schedule it (daily is enough;
+runs from several replicas at once take turns on Postgres, and an
+erasure waits for a purge in progress). It deletes the messages, window
+events and ownership records older than the cutoff, the removals of
+synced contacts made before it (a removal is kept, its key and time
+only, so that an older sync delivered late cannot undo it), and the
+summary of a conversation whose latest message went (it holds that
+message's preview); synced contacts and identity links stay (an erasure
+follows them; a link outlives the retention on purpose, design D35: a
+thread under the other identity can be newer than the link). For another policy (per tenant, or a number that leaves
+your platform), call
+`ConversationStore::purge_before(Some(&phone_number_id), cutoff)`
+yourself.
+
 ## Pitfalls
 
 - Mounting the inbox routes without the ownership check: any merchant could
@@ -278,7 +377,9 @@ events.addEventListener('lagged', () => reloadHistory()); // the browser fell be
   is read, not with what the vault returns.
 - Keying customers by phone number: the `wa_id` may be absent, and a
   customer's BSUID changes when they change number (`UserIdChanged`); the
-  inbox starts a new conversation then and does not merge.
+  inbox starts a new conversation then and does not merge. Record the
+  change as an identity link (`ConversationStore::link_identity`) so an
+  erasure finds both.
 - Sending a reply with the platform's own token instead of the merchant's:
   it comes from the wrong business, or fails.
 
@@ -345,6 +446,12 @@ very large sync can take several of Meta's redeliveries to finish.
 
 ## Not recorded
 
-BSUID changes; media bytes; calls; the contacts sync
+BSUID changes (keep them with `link_identity`, section 8); media bytes;
+calls; the contacts sync
 (`smb_app_state_sync`); every event other than messages, statuses, echoes
-and history. Handle those in your own sink if you need them.
+and history. Handle those in your own sink if you need them. The
+`ConversationStore` can keep calls and standby messages as window events
+(`record_window_event`), thread ownership (`set_thread_owner`) and the
+synced contacts (`put_contact`) since roadmap L5; `InboxSink` records
+them from L7 and L8, and until then the window ignores calls
+([open question](../../OPEN_QUESTIONS.md#cms-inbox) 32).

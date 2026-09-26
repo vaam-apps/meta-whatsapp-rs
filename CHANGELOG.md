@@ -723,6 +723,102 @@ stored data, the owner's).
 
 ### Changed
 
+- **Breaking — the `ConversationStore` port change of roadmap L5**: the
+  port gains fourteen required methods and four provided ones, so a
+  store of your own must implement them and pass
+  `conversation_conformance::run`, which checks each part (under each
+  `ErasureMode` it offers). The memory and Postgres stores implement all
+  of it.
+  - `message(phone_number_id, id)`: the lookup by message id, scoped to
+    the business number, never another number's (whichever way
+    `OPEN_QUESTIONS.md` #33, still open, is answered).
+  - `record_window_event` / `window_events`: a `WindowEvent`
+    (`WindowEventKind`: a customer's call, a call they accepted, a
+    standby message) reopens the customer service window without being a
+    message: never history, never the summary, recorded once per number
+    and id (#32, #44; the inbox records them in L7).
+  - `set_thread_owner` / `thread_owner`: `ThreadOwnership` under
+    Conversation Routing (`ThreadOwner`, the role, the app, since when);
+    the latest record wins, one of the same second too (#44; L7).
+  - `put_contact` / `remove_contact` / `contact` / `contacts`: the
+    coexistence address book (`smb_app_state_sync`) as `StoredContact`,
+    per number, the latest sync winning (the inbox records it in L8). A
+    removal is kept (its key and time, nothing else of the contact), so
+    an older `add` arriving after it, a retried delivery, cannot undo it;
+    `erase` and `purge_before` delete kept removals.
+  - `link_identity` / `identity_links`: an `IdentityLink`
+    (`phone_number_id`, `previous`, `current`, `at`: a BSUID or number
+    change, as Meta's `user_id_update` names it), stored once per number
+    and pair (the inbox records them in L7).
+  - `identities(key)`: a person's keys on one number, the closure over
+    the synced contacts (key, BSUID, parent BSUID, phone number) and the
+    links, never through an empty value (contacts that share an empty
+    field are not one person); read only (design D30).
+  - `erase_all(phone_number_id, ids)`: erases a person on one number,
+    in one step: deletes, not hides, every record keyed by the ids
+    (messages of every origin and tombstones, summaries, window events,
+    ownership records), the synced contacts and identity links naming
+    them and the removals kept under them, and redacts in place
+    (`ErasureMode::Redact`, the default: kind `StoredMessage::ERASED`, no
+    content, no sender) or deletes (`ErasureMode::Delete`) their
+    messages in conversations keyed by someone else, a group's, matched
+    by `StoredMessage::sender` (design D31); a group's preview never
+    keeps the erased text. Returns what it did (`Erased`). No erasure
+    across numbers: a `wa_id` is the same on every number. `erase(key)`,
+    provided, is its one-key case; `erasure_mode`, provided, is the
+    store's setting (`with_erasure_mode` on both adapters). The rustdoc
+    lists what an erasure does not reach (quotes and contact cards in
+    other people's messages, the ids of redacted group messages,
+    identities nothing connects, the dedup markers, the service's
+    outbox, copies, Postgres's remnants, logs, Meta's side) and what
+    creates records again after it; an erased tombstone frees its
+    message id. `Inbox::identities`, `Inbox::erase` (both refuse a key
+    of another number before the store is called) and `Inbox::erase_all`
+    (bound to the inbox's number) wrap them (security and privacy
+    review of L5: M2, M3, L3, L4).
+  - `StoredContact`, `WindowEvent` and `IdentityLink` print no personal
+    data in `Debug`: the business number, the times and which fields are
+    present (review L1).
+  - `purge_before(number or all, cutoff)`: deletes messages, window
+    events, ownership records and kept contact removals older than the
+    cutoff, and the summary of a conversation whose latest message went
+    (`Purged`). Synced contacts and identity links stay: a link outlives
+    a retention on purpose, so that an erasure still finds a thread
+    under the other identity that is newer than the link (design D35).
+  - `retention` / `apply_retention`, provided: a `Retention` set per
+    store (design D10: kept by default), taken by
+    `MemoryConversationStore::with_retention` and
+    `PostgresConversationStore::with_retention`; nothing purges on its
+    own, so schedule `apply_retention`.
+
+  **Postgres**: migration 4 adds `wa_window_events`, `wa_thread_owners`,
+  `wa_synced_contacts` (names and usernames as UTF-8 bytes, U+0000
+  kept; identifiers `TEXT COLLATE "C"`, U+0000 refused) and
+  `wa_identity_links`, a nullable `wa_messages.sender` (indexed with the
+  business number, written by every insert, back-filled for the inbound
+  messages already stored but those whose payload holds U+0000; those,
+  and the rows the previous revision writes, get it from the next
+  erasure on their number, which reads their payloads in Rust through a
+  partial index, `wa_messages_unsent_idx`) and indexes for purge by age.
+  It changes no existing column, so the
+  previous revision keeps working beside it (writing no sender), but
+  its `migrate` then refuses the database (`VersionMissing(4)`): upgrade
+  every instance that migrates at startup. The back-fill and the indexes
+  make writes to the inbox tables wait, and reads of `wa_messages` too
+  (adding the column): on a large inbox, run `migrate`
+  from a one-off job. `erase_all` and `purge_before` delete in one
+  statement each, under two advisory locks (stable identifiers, design
+  D33): `append` and `append_synced` take the business number's lock
+  shared and `erase_all` exclusive, so an erasure never leaves a message
+  appended concurrently without its summary; purges take a purge lock
+  exclusive and erasures shared, so `apply_retention` may run from
+  several replicas at once and never deadlocks with another purge or an
+  erasure. An instance of the previous revision takes no lock: finish
+  the upgrade before erasing. The new table names, the stored names of
+  `WindowEventKind` and `ThreadOwner` and the message kinds `revoked`
+  and `erased` are stable identifiers (docs/architecture.md). `InboxSink`
+  is unchanged: calls, standby messages, ownership and identity links
+  are not recorded yet (L7), nor synced contacts (L8).
 - **meta-whatsapp-server's domain is a crate of its own,
   `meta-whatsapp-server-core`** (`publish = false`, not a default member;
   no axum, sqlx or utoipa), so the service's API and storage can each be
