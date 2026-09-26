@@ -531,14 +531,21 @@ async fn live_postgres_an_insert_in_flight_is_never_skipped() {
 }
 
 /// Housekeeping runs on one replica at a time: while another session holds
-/// its lock, a purge does nothing.
+/// its lock (`HOUSEKEEPING_LOCK`, a replica of the previous release
+/// included, whose purges took it themselves), a round purges nothing;
+/// once it is free, a round purges. Since roadmap S2 the purges take no
+/// lock of their own: the round's one `LeaderLock` turn is the lock.
+/// Decisive: the turn in `serve::round`.
 #[tokio::test]
 async fn live_postgres_one_replica_purges_at_a_time() {
+    use meta_whatsapp_server::serve::{Sweep, round};
+    use meta_whatsapp_server::store::{Backend as _, PgBackend};
     let Some(db) = TestDb::new().await else {
         return;
     };
     let pool = db.pool(4).await;
     migrate(&pool).await.unwrap();
+    let backend = PgBackend::new(pool.clone());
     let store = PgEventStore::new(pool.clone());
     store
         .insert(&common::events_suite::row(
@@ -549,6 +556,16 @@ async fn live_postgres_one_replica_purges_at_a_time() {
         ))
         .await
         .unwrap();
+    let sweep = Sweep {
+        leader: backend.leader_lock(),
+        janitor: backend.janitor(),
+    };
+    let stored = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM wa_server_events")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    };
     let mut held = pool.acquire().await.unwrap();
     sqlx::query("SELECT pg_advisory_lock($1)")
         .bind(HOUSEKEEPING_LOCK)
@@ -556,16 +573,34 @@ async fn live_postgres_one_replica_purges_at_a_time() {
         .await
         .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    assert_eq!(store.purge(std::time::Duration::ZERO).await.unwrap(), None);
+    let ran = round(
+        backend.outbox().as_ref(),
+        backend.idempotency().as_ref(),
+        Some(&sweep),
+        std::time::Duration::ZERO,
+    )
+    .await;
+    assert!(!ran, "a round ran under another replica's lock");
+    assert_eq!(stored().await, 1, "purged under another replica's lock");
     sqlx::query("SELECT pg_advisory_unlock($1)")
         .bind(HOUSEKEEPING_LOCK)
         .execute(&mut *held)
         .await
         .unwrap();
-    assert_eq!(
-        store.purge(std::time::Duration::ZERO).await.unwrap(),
-        Some(1)
-    );
+    // Other tests' rounds may hold the database's lock for a moment.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !round(
+        backend.outbox().as_ref(),
+        backend.idempotency().as_ref(),
+        Some(&sweep),
+        std::time::Duration::ZERO,
+    )
+    .await
+    {
+        assert!(std::time::Instant::now() < deadline, "never a turn");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(stored().await, 0, "the round purged");
 }
 
 /// Fix #1 of the M1c review, on Postgres: a tenant deleted and created
@@ -1202,7 +1237,7 @@ async fn turn_of(
 ) -> meta_whatsapp_server::store::LeaderTurn {
     use meta_whatsapp_server::store::LeaderLock as _;
     for _ in 0..500 {
-        if let Some(turn) = lock.try_exclusive(name).await.unwrap() {
+        if let Some(turn) = lock.try_exclusive(name, LEASE).await.unwrap() {
             return turn;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -1210,12 +1245,16 @@ async fn turn_of(
     panic!("another holder kept {name} for 5 s");
 }
 
+/// A lease long enough for any test's turn.
+const LEASE: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// The leader lock on Postgres: one turn per name, whichever replica asks,
-/// until it is released or dropped; its housekeeping turn is the lock the
-/// purges take, so an outbox purge skips while it is held. The turns'
-/// rules run on a name of this test's own (no other test takes it, so
-/// every answer is certain); the housekeeping turn is held no longer than
-/// it takes to show a purge skipping. Decisive: the transaction-scoped
+/// until it is released or dropped; its housekeeping turn is
+/// `HOUSEKEEPING_LOCK` (what a replica of the previous release's purges
+/// take), so another session cannot take that key while it is held. The
+/// turns' rules run on a name of this test's own (no other test takes it,
+/// so every answer is certain); the housekeeping turn is held no longer
+/// than it takes to show the key taken. Decisive: the transaction-scoped
 /// advisory lock in `PgLeaderLock::try_exclusive` (a session lock would
 /// outlive its turn), and `lock_key`'s derivation.
 #[tokio::test]
@@ -1233,24 +1272,27 @@ async fn live_postgres_the_leader_lock_gives_one_turn_at_a_time() {
     );
     let name = format!("test-{}", common::unique());
     let turn = a
-        .try_exclusive(&name)
+        .try_exclusive(&name, LEASE)
         .await
         .unwrap()
         .expect("nobody holds it");
-    assert!(b.try_exclusive(&name).await.unwrap().is_none(), "one turn");
     assert!(
-        a.try_exclusive(&name).await.unwrap().is_none(),
+        b.try_exclusive(&name, LEASE).await.unwrap().is_none(),
+        "one turn"
+    );
+    assert!(
+        a.try_exclusive(&name, LEASE).await.unwrap().is_none(),
         "one turn, on the same replica too"
     );
     turn.release().await.unwrap();
-    let again = b.try_exclusive(&name).await.unwrap();
+    let again = b.try_exclusive(&name, LEASE).await.unwrap();
     assert!(again.is_some(), "released");
     drop(again);
     // Dropped: its transaction is rolled back as its connection goes back
     // to the pool, which ends the turn.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
-        if let Some(turn) = a.try_exclusive(&name).await.unwrap() {
+        if let Some(turn) = a.try_exclusive(&name, LEASE).await.unwrap() {
             turn.release().await.unwrap();
             break;
         }
@@ -1260,26 +1302,82 @@ async fn live_postgres_the_leader_lock_gives_one_turn_at_a_time() {
         );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    // The housekeeping turn is the purges' lock; other names are not.
+    // The housekeeping turn is `HOUSEKEEPING_LOCK`; other names are not.
     let housekeeping = turn_of(&a, HOUSEKEEPING).await;
-    assert!(b.try_exclusive(HOUSEKEEPING).await.unwrap().is_none());
-    let purged = PgEventStore::new(pool.clone())
-        .purge(std::time::Duration::ZERO)
+    assert!(
+        b.try_exclusive(HOUSEKEEPING, LEASE)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let mut session = pool.acquire().await.unwrap();
+    let taken: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+        .bind(HOUSEKEEPING_LOCK)
+        .fetch_one(&mut *session)
         .await
         .unwrap();
-    let other = b.try_exclusive(&name).await.unwrap();
+    let other = b.try_exclusive(&name, LEASE).await.unwrap();
     housekeeping.release().await.unwrap();
-    assert_eq!(purged, None, "the purges take the housekeeping lock");
+    assert!(!taken, "the housekeeping turn is HOUSEKEEPING_LOCK");
     assert!(other.is_some(), "each name its own lock");
 }
 
+/// A turn is a lease (roadmap S2): one its holder never releases (a
+/// replica paused, or its connection wedged) ends once the lease has
+/// passed, and another replica gets the name; the stale turn's release
+/// then reports that it had ended. Decisive: the
+/// `idle_in_transaction_session_timeout` of `PgLeaderLock::try_exclusive`
+/// (without it the turn is held until its connection dies).
+#[tokio::test]
+async fn live_postgres_a_leader_turn_ends_with_its_lease() {
+    use meta_whatsapp_server::store::{LeaderLock as _, PgLeaderLock};
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(2).await;
+    migrate(&pool).await.unwrap();
+    let (a, b) = (
+        PgLeaderLock::new(pool.clone()),
+        PgLeaderLock::new(db.pool(2).await),
+    );
+    let name = format!("test-{}", common::unique());
+    let lease = std::time::Duration::from_millis(300);
+    let stale = a
+        .try_exclusive(&name, lease)
+        .await
+        .unwrap()
+        .expect("nobody holds it");
+    assert!(
+        b.try_exclusive(&name, LEASE).await.unwrap().is_none(),
+        "within the lease"
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let fresh = loop {
+        if let Some(turn) = b.try_exclusive(&name, LEASE).await.unwrap() {
+            break turn;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the lease never ended"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    };
+    assert!(
+        stale.release().await.is_err(),
+        "the stale turn's session was ended"
+    );
+    assert!(
+        a.try_exclusive(&name, LEASE).await.unwrap().is_none(),
+        "the fresh turn holds"
+    );
+    fresh.release().await.unwrap();
+}
+
 /// Housekeeping on the Postgres backend sweeps the library's expired
-/// key/value rows under the housekeeping turn it takes right after its
-/// outbox purge released the same advisory lock (the purge neither blocks
-/// nor starves the sweep), and leaves a live row. Other tests' purges take
-/// that lock too: a round that finds it taken skips, and a later one
-/// sweeps. Decisive: the sweep in `serve::housekeeping`,
-/// `PgBackend::janitor`, and `PgJanitor::purge_expired`.
+/// key/value rows under the round's housekeeping turn, and leaves a live
+/// row. Other tests' rounds take that lock too: a round that finds it
+/// taken skips, and a later one sweeps. Decisive: the sweep in
+/// `serve::round`, `PgBackend::janitor`, and `PgJanitor::purge_expired`.
 #[tokio::test]
 async fn live_postgres_housekeeping_sweeps_expired_key_value_rows() {
     use meta_whatsapp_server::serve::{Sweep, housekeeping};

@@ -38,7 +38,9 @@ use time::OffsetDateTime;
 
 use crate::error::ServiceError;
 use crate::model::TenantId;
-use crate::outbox::{DedupWindow, EventQuery, NewEvent, Outbox, StoredEvent};
+use crate::outbox::{
+    DedupWindow, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard, StoredEvent,
+};
 use crate::store::{RecordStore, StoreResult};
 
 /// How long an event the library gives no dedup key (`error_reported`,
@@ -169,6 +171,20 @@ pub struct Route {
     /// (Meta dated it before the dedup lease's memory: a replay), or `type`
     /// (a type no tenant receives). `None` for a tenant's row.
     pub operator_only: Option<&'static str>,
+    /// The binding the owner was found by, which the outbox checks again
+    /// before it keeps the row's tenant ([`crate::outbox::Outbox::insert`]);
+    /// `None` when nobody owns the event.
+    pub guard: Option<RouteGuard>,
+}
+
+/// Who holds an event ([`owner`]): the tenant, and the binding it was
+/// found by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Holder {
+    /// The tenant.
+    pub tenant: TenantId,
+    /// The binding, and the event's date, for the outbox's check.
+    pub guard: RouteGuard,
 }
 
 /// When Meta says the event happened: the message's, status's, call's…
@@ -237,8 +253,9 @@ pub fn event_number(event: &WebhookEvent) -> Option<PhoneNumberId> {
         .map(PhoneNumberId::new)
 }
 
-/// The tenant holding `event`'s number or WABA, by the bindings, and why
-/// nobody does (see [`Route::operator_only`]).
+/// The tenant holding `event`'s number or WABA, by the bindings, and the
+/// binding it holds it by ([`Holder::guard`]); or why nobody does (see
+/// [`Route::operator_only`]).
 ///
 /// - Number first: the event's number (or an untyped change's
 ///   `metadata.phone_number_id`), bound under the WABA the event names;
@@ -255,12 +272,13 @@ pub async fn owner(
     store: &dyn RecordStore,
     event: &WebhookEvent,
     not_before: OffsetDateTime,
-) -> StoreResult<Result<TenantId, &'static str>> {
+) -> StoreResult<Result<Holder, &'static str>> {
+    let dated = meta_time(event);
     // A replay: dated before what the dedup lease remembers.
-    if meta_time(event).is_some_and(|at| at < not_before) {
+    if dated.is_some_and(|at| at < not_before) {
         return Ok(Err("stale"));
     }
-    let binding = if let Some(pn) = event_number(event) {
+    let (binding, guarded) = if let Some(pn) = event_number(event) {
         let Some(number) = store.number(&pn).await? else {
             return Ok(Err("unowned"));
         };
@@ -269,20 +287,31 @@ pub async fn owner(
         if event.waba_id().is_some_and(|waba| *waba != number.waba_id) {
             return Ok(Err("unowned"));
         }
-        store.waba(&number.waba_id).await?
+        (
+            store.waba(&number.waba_id).await?,
+            GuardedBinding::Number {
+                phone_number_id: pn,
+                waba_id: number.waba_id,
+            },
+        )
     } else if let Some(waba) = event.waba_id() {
-        store.waba(waba).await?
+        (store.waba(waba).await?, GuardedBinding::Waba(waba.clone()))
     } else {
-        None
+        return Ok(Err("unowned"));
     };
     let Some(binding) = binding else {
         return Ok(Err("unowned"));
     };
-    if meta_time(event).is_some_and(|at| at.unix_timestamp() < binding.attached_at.unix_timestamp())
-    {
+    if !crate::outbox::began_by(binding.attached_at, dated) {
         return Ok(Err("before_binding"));
     }
-    Ok(Ok(binding.tenant_id))
+    Ok(Ok(Holder {
+        tenant: binding.tenant_id,
+        guard: RouteGuard {
+            binding: guarded,
+            not_after: dated,
+        },
+    }))
 }
 
 /// Where `event` goes: its owner, and the outbox row's tenant. An event
@@ -298,20 +327,23 @@ pub async fn route(
     not_before: OffsetDateTime,
 ) -> StoreResult<Route> {
     Ok(match owner(store, event, not_before).await? {
-        Ok(owner) if tenant_visible(event.kind()) => Route {
-            tenant: Some(owner.clone()),
-            owner: Some(owner),
+        Ok(Holder { tenant, guard }) if tenant_visible(event.kind()) => Route {
+            owner: Some(tenant.clone()),
+            tenant: Some(tenant),
             operator_only: None,
+            guard: Some(guard),
         },
-        Ok(owner) => Route {
-            owner: Some(owner),
+        Ok(Holder { tenant, guard }) => Route {
+            owner: Some(tenant),
             tenant: None,
             operator_only: Some("type"),
+            guard: Some(guard),
         },
         Err(reason) => Route {
             owner: None,
             tenant: None,
             operator_only: Some(reason),
+            guard: None,
         },
     })
 }
@@ -439,8 +471,12 @@ pub fn outbox_row(
     ids: &EventIdKey,
 ) -> Result<NewEvent, RowError> {
     let data = event_data(event).map_err(|e| RowError::Serialization(e.classify()))?;
-    let phone_number_id = event.phone_number_id().map(|pn| pn.as_str().to_owned());
-    let dedup_key = outbox_key(key, phone_number_id.as_deref(), &data);
+    let phone_number_id = event.phone_number_id().cloned();
+    let dedup_key = outbox_key(
+        key,
+        phone_number_id.as_ref().map(PhoneNumberId::as_str),
+        &data,
+    );
     let (id_of, dedup_window) = match key {
         EventKey::Library(_) => (dedup_key.clone(), None),
         EventKey::Delivery { .. } => (
@@ -456,10 +492,12 @@ pub fn outbox_row(
         id,
         dedup_key: Some(dedup_key),
         dedup_window,
-        meta_time: meta_time(event),
         tenant: route.tenant.clone(),
+        // The binding the tenant was found by: the outbox keeps the tenant
+        // only while it holds.
+        route_guard: route.tenant.as_ref().and(route.guard.clone()),
         phone_number_id,
-        waba_id: event.waba_id().map(|waba| waba.as_str().to_owned()),
+        waba_id: event.waba_id().cloned(),
         event_type: event.kind().to_owned(),
         data,
     })
@@ -504,17 +542,16 @@ pub async fn poll(outbox: &dyn Outbox, query: &EventQuery) -> Result<Polled, Ser
     })
 }
 
-/// One round of housekeeping: purge the outbox past `retention`. `None`
-/// when another replica holds the housekeeping lock.
+/// Housekeeping's outbox purge: the events past `retention`, how many
+/// went. It takes no lock: housekeeping runs it under its `LeaderLock`
+/// turn, and two at once are safe ([`Outbox::purge`]).
 ///
 /// # Errors
 ///
 /// The store failing.
-pub async fn purge_outbox(outbox: &dyn Outbox, retention: Duration) -> StoreResult<Option<u64>> {
+pub async fn purge_outbox(outbox: &dyn Outbox, retention: Duration) -> StoreResult<u64> {
     let purged = outbox.purge(retention).await?;
-    if let Some(purged) = purged
-        && purged > 0
-    {
+    if purged > 0 {
         tracing::info!(purged, "outbox events past retention purged");
     }
     Ok(purged)

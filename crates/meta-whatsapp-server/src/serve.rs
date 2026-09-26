@@ -24,8 +24,8 @@ use crate::metrics::Metrics;
 use crate::model::KeyOwner;
 use crate::state::AppState;
 use crate::store::{
-    Backend, HOUSEKEEPING, IdempotencyRecords, Janitor, LeaderLock, MemoryBackend, Outbox,
-    PgBackend,
+    Backend, HOUSEKEEPING, HOUSEKEEPING_LEASE, IdempotencyRecords, Janitor, LeaderLock,
+    MemoryBackend, Outbox, PgBackend,
 };
 use crate::{api, listen};
 
@@ -205,9 +205,9 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     served
 }
 
-/// What housekeeping sweeps besides the outbox and the idempotency
-/// records: the expired rows nothing else deletes (on Postgres, the
-/// library's key/value rows), under the leader lock's housekeeping turn.
+/// What housekeeping shares with the other replicas: whose turn a round
+/// is (the backend's [`LeaderLock`]), and the expired rows nothing else
+/// deletes (its [`Janitor`]: on Postgres, the library's key/value rows).
 pub struct Sweep {
     /// Whose turn it is.
     pub leader: Arc<dyn LeaderLock>,
@@ -216,16 +216,7 @@ pub struct Sweep {
 }
 
 /// Housekeeping, every `every` until `stop` (docs/design/server.md,
-/// section 2.4): purge the outbox past `retention` and, with a `sweep`,
-/// the expired rows nothing else deletes (on Postgres, the library's dead
-/// key/value rows: webhook dedup markers add one per event), then
-/// `store`'s expired idempotency records (already ignored: this bounds the
-/// table). Each purge runs on one replica at a time (the housekeeping
-/// lock; a replica that does not get it skips that purge this round): the
-/// outbox and the idempotency records take it themselves, the sweep runs
-/// under a [`LeaderLock`] turn of [`HOUSEKEEPING`], and only on the replica
-/// whose outbox purge ran this round. A failure is logged and retried next
-/// round.
+/// section 2.4): one round at a time ([`round`]).
 pub async fn housekeeping(
     events: Arc<dyn Outbox>,
     store: Arc<dyn IdempotencyRecords>,
@@ -242,42 +233,62 @@ pub async fn housekeeping(
             () = &mut stop => return,
             _ = ticks.tick() => {}
         }
-        match purge_outbox(events.as_ref(), retention).await {
-            Ok(Some(_)) => {
-                if let Some(sweep) = &sweep {
-                    sweep_expired(sweep).await;
-                }
-            }
-            // Another replica holds the lock this round.
-            Ok(None) => {}
-            Err(error) => tracing::warn!(error = %error, "purging the outbox failed"),
-        }
-        match store.purge_idempotency_keys().await {
-            Ok(0) => {}
-            Ok(purged) => tracing::debug!(purged, "expired idempotency records purged"),
-            Err(error) => tracing::warn!(error = %error, "purging idempotency records failed"),
-        }
+        round(events.as_ref(), store.as_ref(), sweep.as_ref(), retention).await;
     }
 }
 
-/// The sweep of one round, under the housekeeping turn: skipped when
-/// another replica holds it.
-async fn sweep_expired(sweep: &Sweep) {
-    let turn = match sweep.leader.try_exclusive(HOUSEKEEPING).await {
-        Ok(Some(turn)) => turn,
-        // Another replica holds the lock this round.
-        Ok(None) => return,
-        Err(error) => {
-            tracing::warn!(error = %error, "purging expired key/value rows failed");
-            return;
-        }
+/// One round of housekeeping, under one [`LeaderLock`] turn of
+/// [`HOUSEKEEPING`], leased for [`HOUSEKEEPING_LEASE`]: purge the outbox
+/// past `retention`, then `store`'s expired idempotency records (already
+/// ignored: this bounds the table), then, with a `sweep`, the expired rows
+/// nothing else deletes (on Postgres, the library's dead key/value rows:
+/// webhook dedup markers add one per event). One replica at a time runs a
+/// round: one that does not get the turn skips it. The purges take no lock
+/// of their own and tolerate a round overlapping another (a lease that
+/// ended while its round ran). Without a `sweep` (one process, no leader
+/// lock) the purges run without a turn. A failure is logged and retried
+/// next round; `false` when the round was skipped.
+pub async fn round(
+    events: &dyn Outbox,
+    store: &dyn IdempotencyRecords,
+    sweep: Option<&Sweep>,
+    retention: Duration,
+) -> bool {
+    let turn = match sweep {
+        None => None,
+        Some(sweep) => match sweep
+            .leader
+            .try_exclusive(HOUSEKEEPING, HOUSEKEEPING_LEASE)
+            .await
+        {
+            Ok(Some(turn)) => Some(turn),
+            // Another replica's round.
+            Ok(None) => return false,
+            Err(error) => {
+                tracing::warn!(error = %error, "taking the housekeeping turn failed");
+                return false;
+            }
+        },
     };
-    if let Err(error) = sweep.janitor.purge_expired().await {
+    if let Err(error) = purge_outbox(events, retention).await {
+        tracing::warn!(error = %error, "purging the outbox failed");
+    }
+    match store.purge_idempotency_keys().await {
+        Ok(0) => {}
+        Ok(purged) => tracing::debug!(purged, "expired idempotency records purged"),
+        Err(error) => tracing::warn!(error = %error, "purging idempotency records failed"),
+    }
+    if let Some(sweep) = sweep
+        && let Err(error) = sweep.janitor.purge_expired().await
+    {
         tracing::warn!(error = %error, "purging expired key/value rows failed");
     }
-    if let Err(error) = turn.release().await {
+    if let Some(turn) = turn
+        && let Err(error) = turn.release().await
+    {
         tracing::warn!(error = %error, "ending the housekeeping turn failed");
     }
+    true
 }
 
 /// Completes once `stop` says so: the shutdown future of a listener.
@@ -556,13 +567,17 @@ mod tests {
     #[tokio::test]
     async fn housekeeping_purges_past_retention_until_stopped() {
         use crate::model::{IdempotencyClaim, IdempotencyKey, TenantId};
-        use crate::store::events::{EventQuery, NewEvent};
+        use crate::store::events::{EventQuery, GuardedBinding, NewEvent, RouteGuard};
         use crate::store::{MemoryStore, Outbox as EventStore, RecordStore};
-        let events: Arc<dyn EventStore> = Arc::new(crate::store::MemoryEventStore::new());
+        use meta_whatsapp_rs::core::ids::WabaId;
         // An idempotency record expired before the first round.
         let records = Arc::new(MemoryStore::new());
+        // The store's own outbox: it checks a row's route in its bindings.
+        let events: Arc<dyn EventStore> = records.outbox();
         let tenant = TenantId::parse("tenant-a").unwrap();
         records.create_tenant(&tenant, "").await.unwrap().unwrap();
+        let waba = WabaId::new("102290129340398");
+        records.bind_waba(&tenant, &waba, &[]).await.unwrap();
         let brief = Duration::from_millis(1);
         let claimed = records
             .claim_idempotency_key(
@@ -581,8 +596,11 @@ mod tests {
             id: id.to_owned(),
             dedup_key: None,
             dedup_window: None,
-            meta_time: None,
             tenant: crate::model::TenantId::parse("tenant-a"),
+            route_guard: Some(RouteGuard {
+                binding: GuardedBinding::Waba(waba.clone()),
+                not_after: None,
+            }),
             phone_number_id: None,
             waba_id: None,
             event_type: "message_received".to_owned(),
@@ -652,29 +670,123 @@ mod tests {
         }
     }
 
-    /// The sweep runs under the housekeeping turn: a replica finding the
-    /// turn taken skips it, and the turn is free again after a sweep.
-    /// Decisive: the turn in `sweep_expired`.
+    /// A round runs under one housekeeping turn, all its purges (roadmap
+    /// S2): a replica finding the turn taken purges nothing this round (no
+    /// outbox event, no idempotency record, no sweep), and the turn is free
+    /// again after a round. Decisive: the turn in `round`, and each purge
+    /// under it.
     #[tokio::test]
-    async fn the_sweep_runs_under_the_housekeeping_turn() {
-        use crate::store::MemoryLeaderLock;
+    #[allow(clippy::too_many_lines)] // one scenario, read top to bottom
+    async fn a_round_runs_under_one_housekeeping_turn() {
+        use crate::model::{IdempotencyKey, TenantId};
+        use crate::store::events::{EventQuery, GuardedBinding, NewEvent, RouteGuard};
+        use crate::store::{MemoryLeaderLock, MemoryStore, Outbox as _, RecordStore as _};
+        use meta_whatsapp_rs::core::ids::WabaId;
         let leader = MemoryLeaderLock::new();
         let janitor = Arc::new(Counting::default());
         let sweep = Sweep {
             leader: Arc::new(leader.clone()),
             janitor: janitor.clone(),
         };
-        sweep_expired(&sweep).await;
-        assert_eq!(janitor.sweeps(), 1);
-        let held = leader.try_exclusive(HOUSEKEEPING).await.unwrap().unwrap();
-        sweep_expired(&sweep).await;
-        assert_eq!(janitor.sweeps(), 1, "another replica's turn");
+        let records = MemoryStore::new();
+        let outbox = records.outbox();
+        let tenant = TenantId::parse("tenant-a").unwrap();
+        records.create_tenant(&tenant, "").await.unwrap().unwrap();
+        let waba = WabaId::new("102290129340398");
+        records.bind_waba(&tenant, &waba, &[]).await.unwrap();
+        let brief = Duration::from_millis(1);
+        let expired_record = |key: &'static str| {
+            let records = &records;
+            let tenant = &tenant;
+            async move {
+                records
+                    .claim_idempotency_key(
+                        tenant,
+                        &IdempotencyKey::parse(key).unwrap(),
+                        &[7; 32],
+                        "claim",
+                        brief,
+                        brief,
+                    )
+                    .await
+                    .unwrap();
+            }
+        };
+        // An event and an idempotency record, both past their time when
+        // the rounds run.
+        let sequence = outbox
+            .insert(&NewEvent {
+                id: "evt_round".to_owned(),
+                dedup_key: None,
+                dedup_window: None,
+                tenant: Some(tenant.clone()),
+                route_guard: Some(RouteGuard {
+                    binding: GuardedBinding::Waba(waba.clone()),
+                    not_after: None,
+                }),
+                phone_number_id: None,
+                waba_id: Some(waba),
+                event_type: "message_received".to_owned(),
+                data: "{}".to_owned(),
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        expired_record("first").await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let page = || {
+            let outbox = &outbox;
+            let tenant = tenant.clone();
+            async move {
+                outbox
+                    .page(&EventQuery {
+                        tenant,
+                        after: None,
+                        types: None,
+                        phone_number_id: None,
+                        limit: 10,
+                        max_bytes: crate::events::MAX_PAGE_DATA_BYTES,
+                    })
+                    .await
+                    .unwrap()
+            }
+        };
+
+        let held = leader
+            .try_exclusive(HOUSEKEEPING, HOUSEKEEPING_LEASE)
+            .await
+            .unwrap()
+            .unwrap();
+        let ran = round(outbox.as_ref(), &records, Some(&sweep), Duration::ZERO).await;
+        assert!(!ran, "a round ran during another replica's turn");
+        assert_eq!(janitor.sweeps(), 0, "swept outside the turn");
+        assert_eq!(page().await.events.len(), 1, "purged outside the turn");
+        assert_eq!(
+            records.purge_idempotency_keys().await.unwrap(),
+            1,
+            "the idempotency records were purged outside the turn"
+        );
+
         held.release().await.unwrap();
-        sweep_expired(&sweep).await;
-        assert_eq!(janitor.sweeps(), 2);
+        expired_record("second").await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        assert!(round(outbox.as_ref(), &records, Some(&sweep), Duration::ZERO).await);
+        assert_eq!(janitor.sweeps(), 1, "the round swept");
+        let after = page().await;
+        assert!(after.events.is_empty(), "the round purged the outbox");
+        assert_eq!(after.purged_through, sequence);
+        assert_eq!(
+            records.purge_idempotency_keys().await.unwrap(),
+            0,
+            "the round purged the idempotency records"
+        );
         assert!(
-            leader.try_exclusive(HOUSEKEEPING).await.unwrap().is_some(),
-            "the sweep released its turn"
+            leader
+                .try_exclusive(HOUSEKEEPING, HOUSEKEEPING_LEASE)
+                .await
+                .unwrap()
+                .is_some(),
+            "the round released its turn"
         );
     }
 
@@ -682,12 +794,13 @@ mod tests {
     /// outbox purge that ran. Decisive: the sweep in the loop.
     #[tokio::test]
     async fn housekeeping_sweeps_the_expired_rows() {
-        use crate::store::{MemoryEventStore, MemoryLeaderLock, MemoryStore};
+        use crate::store::{MemoryLeaderLock, MemoryStore};
         let janitor = Arc::new(Counting::default());
         let (stop, stopped) = watch::channel(false);
+        let records = MemoryStore::new();
         let task = tokio::spawn(housekeeping(
-            Arc::new(MemoryEventStore::new()),
-            Arc::new(MemoryStore::new()),
+            records.outbox(),
+            Arc::new(records),
             Some(Sweep {
                 leader: Arc::new(MemoryLeaderLock::new()),
                 janitor: janitor.clone(),

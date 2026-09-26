@@ -365,10 +365,10 @@ pub struct NumberBinding {
 }
 
 /// A page request: at most `limit` items after the exclusive cursor
-/// `after` (the last id of the previous page).
+/// `after` (the last id of the previous page), in byte order of the ids.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageRequest {
-    /// Exclusive lower bound, in id order.
+    /// Exclusive lower bound, in byte order of the ids.
     pub after: Option<String>,
     /// Page size, 1 to [`MAX_PAGE_SIZE`].
     pub limit: usize,
@@ -380,7 +380,7 @@ pub const MAX_PAGE_SIZE: usize = 100;
 /// A page of items and whether more follow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Listing<T> {
-    /// The items, in id order.
+    /// The items, in byte order of their ids.
     pub items: Vec<T>,
     /// The last id of this page when another page follows.
     pub next_after: Option<String>,
@@ -394,6 +394,9 @@ pub enum BindOutcome {
     /// The WABA, or one of its numbers, belongs to another tenant: nothing
     /// changed (decision D4: refuse).
     OwnedByAnotherTenant,
+    /// No such tenant (never created, or deleted before the binding):
+    /// nothing changed.
+    NoSuchTenant,
 }
 
 /// Whether a tenant was deleted.

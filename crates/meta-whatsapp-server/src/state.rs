@@ -195,7 +195,8 @@ impl AppState {
         inbound: Inbound,
         settings: Settings,
     ) -> Result<Self, Error> {
-        let authz = Authorizer::new(store.clone(), vault, client)?;
+        // One clock for the whole service: the webhook pipeline's.
+        let authz = Authorizer::new(store.clone(), vault, client)?.with_clock(inbound.clock());
         let events = Events::new(
             inbound,
             store.clone(),

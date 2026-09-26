@@ -26,6 +26,7 @@ use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
 use sha2::{Digest, Sha256};
 
+use super::events_postgres::busy_or_backend;
 use super::{
     Backend, BackendKind, IdempotencyRecords, Janitor, LeaderLock, LeaderTurn, Outbox,
     PgEventStore, RecordStore, SchemaMigrator, StoreResult, Turn, listing,
@@ -67,10 +68,14 @@ const MIGRATION_FILES: &[(i64, &str, &str)] = &[
     ),
 ];
 
-/// The advisory lock the housekeeping purges run under
+/// The advisory lock a housekeeping round runs under: the key of the
+/// [`PgLeaderLock`] turn named [`crate::store::HOUSEKEEPING`]
 /// (docs/design/server.md, section 2.4: any replica, one at a time; the
 /// others skip that round). The first eight bytes of
 /// SHA-256(`meta-whatsapp-server/housekeeping`), as a big-endian `i64`.
+/// The purges took it themselves before roadmap S2; a replica of that
+/// release and one of this take the same key, so they still take turns
+/// during a rolling deploy.
 pub const HOUSEKEEPING_LOCK: i64 = 0x0662_5bd9_6d85_d1cf;
 
 /// The advisory lock key of the service's lock `name`: the first eight
@@ -481,6 +486,18 @@ impl RecordStore for PgStore {
         numbers: &[PhoneNumberId],
     ) -> StoreResult<BindOutcome> {
         let mut tx = self.pool.begin().await.map_err(backend)?;
+        // The tenant, locked for the binding: `delete_tenant` locks the row
+        // `FOR UPDATE`, so the two serialize, and a tenant deleted first is
+        // `NoSuchTenant` here rather than a foreign key's error.
+        let exists = sqlx::query("SELECT 1 FROM wa_server_tenants WHERE id = $1 FOR KEY SHARE")
+            .bind(tenant.as_str())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(busy_or_backend)?;
+        if exists.is_none() {
+            tx.rollback().await.map_err(backend)?;
+            return Ok(BindOutcome::NoSuchTenant);
+        }
         // Insert, or lock the existing row and read its tenant: two tenants
         // racing for a new WABA serialize here, and the second sees the
         // first's binding.
@@ -760,33 +777,25 @@ impl IdempotencyRecords for PgStore {
     }
 
     async fn purge_idempotency_keys(&self) -> StoreResult<u64> {
-        // One replica at a time (the others skip this round); the delete
-        // itself is safe to repeat.
-        let mut tx = self.pool.begin().await.map_err(backend)?;
-        let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock($1)")
-            .bind(HOUSEKEEPING_LOCK)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(backend)?;
-        if !locked {
-            return Ok(0);
-        }
+        // No lock of its own (housekeeping holds its turn): two at once
+        // delete a record once.
         let done = sqlx::query("DELETE FROM wa_server_idempotency WHERE expires_at <= now()")
-            .execute(&mut *tx)
+            .execute(&self.pool)
             .await
-            .map_err(backend)?;
-        tx.commit().await.map_err(backend)?;
+            .map_err(busy_or_backend)?;
         Ok(done.rows_affected())
     }
 }
 
 /// Leader election on Postgres: a transaction-scoped advisory lock
 /// ([`lock_key`] of the name), held by an open transaction until the turn
-/// is released (committed) or dropped (rolled back). The purges of
-/// [`PgEventStore::purge`] and [`PgStore`]'s idempotency records take the
-/// same key ([`HOUSEKEEPING_LOCK`]) in their own transactions. Advisory
-/// locks are the database's, not a schema's: deployments sharing one
-/// database take turns. Cheap to clone.
+/// is released (committed), dropped (rolled back), or its lease ends: the
+/// transaction sets `idle_in_transaction_session_timeout` to the lease, so
+/// the server ends the session, and the lock with it, once the turn has
+/// sat that long (the work under a turn runs on other connections, so the
+/// turn's own is idle from the start). The `housekeeping` turn is
+/// [`HOUSEKEEPING_LOCK`]. Advisory locks are the database's, not a
+/// schema's: deployments sharing one database take turns. Cheap to clone.
 #[derive(Clone)]
 pub struct PgLeaderLock {
     pool: PgPool,
@@ -807,7 +816,11 @@ impl PgLeaderLock {
 
 #[async_trait]
 impl LeaderLock for PgLeaderLock {
-    async fn try_exclusive(&self, name: &str) -> StoreResult<Option<LeaderTurn>> {
+    async fn try_exclusive(
+        &self,
+        name: &str,
+        lease: std::time::Duration,
+    ) -> StoreResult<Option<LeaderTurn>> {
         let mut tx = self.pool.begin().await.map_err(backend)?;
         let ours: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock($1)")
             .bind(lock_key(name))
@@ -818,12 +831,24 @@ impl LeaderLock for PgLeaderLock {
             tx.rollback().await.map_err(backend)?;
             return Ok(None);
         }
+        // The lease: once the turn's transaction has sat idle this long,
+        // the server ends its session, which releases the lock. At least a
+        // millisecond (0 turns the timeout off), in whole milliseconds.
+        let millis = i64::try_from(lease.as_millis())
+            .unwrap_or(i64::from(i32::MAX))
+            .clamp(1, i64::from(i32::MAX));
+        sqlx::query("SELECT set_config('idle_in_transaction_session_timeout', $1, true)")
+            .bind(format!("{millis}ms"))
+            .execute(&mut *tx)
+            .await
+            .map_err(backend)?;
         Ok(Some(LeaderTurn::new(PgTurn { tx })))
     }
 }
 
 /// A turn of [`PgLeaderLock`]: the transaction holding the lock. Dropped
-/// without a release, sqlx rolls it back, which releases the lock.
+/// without a release, sqlx rolls it back, which releases the lock; past its
+/// lease, the server ended it, and releasing it reports that.
 struct PgTurn {
     tx: Transaction<'static, Postgres>,
 }

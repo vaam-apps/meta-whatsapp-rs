@@ -1,33 +1,54 @@
 //! The event outbox (`wa_server_events`, docs/design/server.md, section
 //! 2.3): the core's port ([`Outbox`]) and its types, re-exported here, and
 //! its two implementations: [`PgEventStore`] and [`MemoryEventStore`]
-//! (development and tests). Both keep the contract polling relies on: **a
+//! (development and tests). Both keep the port's two contracts: **a
 //! stream's inserts commit in sequence order**, so a reader that sees
 //! sequence `n` of a tenant sees every event of that tenant before it, and
-//! `next_after` never skips one that commits later.
+//! `next_after` never skips one that commits later; and **an insert checks
+//! the routing again** ([`RouteGuard`]), atomically with it.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
 pub use meta_whatsapp_server_core::outbox::{
-    DedupWindow, EventPage, EventQuery, NewEvent, Outbox, OutboxBusy, StoredEvent,
+    DedupWindow, EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard, StoredEvent,
+    began_by,
 };
 use time::OffsetDateTime;
 
 pub use super::events_postgres::PgEventStore;
+use super::memory::{State, lock_state};
 use crate::model::TenantId;
 use crate::store::StoreResult;
 
 /// The outbox in memory: one process, emptied on restart
-/// (`WA_SERVER_ENV=development` and tests). Unlike [`PgEventStore`], its
-/// insert does not re-read the binding an event was routed by: a tenant
-/// deleted and created again while one of its events is being recorded
-/// may receive it (Postgres narrows that race; see its module docs).
-#[derive(Debug, Default)]
+/// (`WA_SERVER_ENV=development` and tests). It is always a
+/// [`super::MemoryStore`]'s ([`super::MemoryStore::outbox`]): it reads that
+/// store's bindings to check an insert's [`RouteGuard`], under the store's
+/// lock, so no binding moves between the check and the insert; and
+/// deleting a tenant there deletes its events here.
 pub struct MemoryEventStore {
+    /// The records of the store it belongs to: locked before [`Self::state`]
+    /// (the store's own order, [`super::MemoryStore::delete_tenant`]).
+    records: Arc<Mutex<State>>,
     state: Mutex<MemoryState>,
+}
+
+impl std::fmt::Debug for MemoryEventStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The rows hold customers' messages: counts only, and without
+        // waiting for the lock (a `{:?}` while this thread holds it).
+        let mut out = f.debug_struct("MemoryEventStore");
+        if let Ok(state) = self.state.try_lock() {
+            out.field("streams", &state.streams.len()).field(
+                "rows",
+                &state.streams.values().map(|s| s.rows.len()).sum::<usize>(),
+            );
+        }
+        out.finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -59,10 +80,35 @@ fn stream_of(tenant: Option<&TenantId>) -> String {
     tenant.map(|t| t.as_str().to_owned()).unwrap_or_default()
 }
 
+/// Whether `guard` holds for `tenant` in `records`: the check of
+/// [`Outbox::insert`] ([`RouteGuard`]), on the memory store's bindings.
+fn holds(records: &State, tenant: &TenantId, guard: &RouteGuard) -> bool {
+    let waba = guard.binding.waba_id();
+    let number_holds = match &guard.binding {
+        GuardedBinding::Number {
+            phone_number_id,
+            waba_id,
+        } => records
+            .numbers
+            .get(phone_number_id.as_str())
+            .is_some_and(|n| &n.tenant_id == tenant && &n.waba_id == waba_id),
+        GuardedBinding::Waba(_) => true,
+    };
+    number_holds
+        && records
+            .wabas
+            .get(waba.as_str())
+            .is_some_and(|w| &w.tenant_id == tenant && began_by(w.attached_at, guard.not_after))
+}
+
 impl MemoryEventStore {
-    /// An empty outbox.
-    pub fn new() -> Self {
-        Self::default()
+    /// The outbox of the store whose records are `records`
+    /// ([`super::MemoryStore::outbox`]).
+    pub(super) fn of(records: Arc<Mutex<State>>) -> Self {
+        Self {
+            records,
+            state: Mutex::new(MemoryState::default()),
+        }
     }
 
     fn lock(&self) -> MutexGuard<'_, MemoryState> {
@@ -87,6 +133,9 @@ impl MemoryEventStore {
 #[async_trait]
 impl Outbox for MemoryEventStore {
     async fn insert(&self, event: &NewEvent) -> StoreResult<Option<i64>> {
+        // The records first, as the store locks them: no binding moves
+        // until this insert is done.
+        let records = lock_state(&self.records);
         let mut guard = self.lock();
         let state = &mut *guard;
         if let Some(key) = &event.dedup_key
@@ -108,7 +157,22 @@ impl Outbox for MemoryEventStore {
                 _ => return Ok(None),
             }
         }
-        let name = stream_of(event.tenant.as_ref());
+        // The routing, again: the tenant only while the binding it was
+        // routed by still holds it (none without a guard).
+        let tenant = event.tenant.as_ref().filter(|tenant| {
+            event
+                .route_guard
+                .as_ref()
+                .is_some_and(|guard| holds(&records, tenant, guard))
+        });
+        if event.tenant.is_some() && tenant.is_none() {
+            tracing::warn!(
+                event_type = %event.event_type,
+                "an event's tenant lost the binding it was routed by while it was recorded \
+                 (or holds it again, bound after the event): kept operator-only"
+            );
+        }
+        let name = stream_of(tenant);
         let stream = state.streams.entry(name.clone()).or_default();
         stream.last += 1;
         let sequence = stream.last;
@@ -120,7 +184,7 @@ impl Outbox for MemoryEventStore {
                 event: StoredEvent {
                     sequence,
                     id: event.id.clone(),
-                    tenant: event.tenant.clone(),
+                    tenant: tenant.cloned(),
                     phone_number_id: event.phone_number_id.clone(),
                     waba_id: event.waba_id.clone(),
                     event_type: event.event_type.clone(),
@@ -181,7 +245,7 @@ impl Outbox for MemoryEventStore {
         })
     }
 
-    async fn purge(&self, older_than: Duration) -> StoreResult<Option<u64>> {
+    async fn purge(&self, older_than: Duration) -> StoreResult<u64> {
         let mut state = self.lock();
         let cutoff = OffsetDateTime::now_utc() - older_than;
         let mut purged = 0u64;
@@ -206,6 +270,6 @@ impl Outbox for MemoryEventStore {
         for key in gone {
             state.dedup.remove(&key);
         }
-        Ok(Some(purged))
+        Ok(purged)
     }
 }

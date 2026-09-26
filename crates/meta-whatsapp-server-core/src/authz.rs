@@ -62,6 +62,7 @@ use std::sync::Arc;
 
 use meta_whatsapp_rs::Client;
 use meta_whatsapp_rs::client::embedded_signup::{StoredBusinessToken, TokenVault};
+use meta_whatsapp_rs::core::clock::{Clock, SystemClock};
 use meta_whatsapp_rs::core::error::ConfigError;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_rs::{Error, ErrorKind};
@@ -282,12 +283,15 @@ impl AdminCaller {
 /// Graph client: who a request is ([`Caller`], [`AdminCaller`]), and what
 /// it owns ([`OwnedNumber`], [`OwnedWaba`]: the only way to a stored
 /// token). It accepts only the capabilities it made itself (see the
-/// [module](self)).
+/// [module](self)). Whether a key or a stored token expired is read from
+/// its [`Clock`] ([`Self::with_clock`]; the system clock by default): the
+/// service's one clock, which every replica agrees on.
 pub struct Authorizer {
     records: Arc<dyn RecordStore>,
     tokens: Tokens,
     client: Client,
     issuer: Issuer,
+    clock: Arc<dyn Clock>,
 }
 
 impl std::fmt::Debug for Authorizer {
@@ -324,7 +328,18 @@ impl Authorizer {
             tokens: Tokens::new(vault),
             client,
             issuer: Issuer::new(),
+            clock: Arc::new(SystemClock),
         })
+    }
+
+    /// Read "now" from `clock`: whether a key ([`Self::authenticate`]) or
+    /// a stored token (steps 4 and 5) expired. The service passes the one
+    /// clock its other parts read (the webhook pipeline's), so that every
+    /// replica, and every part of one, agrees on it.
+    #[must_use]
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
     }
 
     /// Whether this [`Authorizer`] made the capability carrying `issuer`,
@@ -386,8 +401,7 @@ impl Authorizer {
             let _ = presented.matches(&[0; 32]);
             return Err(ServiceError::unauthenticated());
         };
-        if !presented.matches(&record.secret_sha256) || !record.is_usable(OffsetDateTime::now_utc())
-        {
+        if !presented.matches(&record.secret_sha256) || !record.is_usable(self.clock.now()) {
             return Err(ServiceError::unauthenticated());
         }
         tracing::Span::current().record("key_id", record.key_id.as_str());
@@ -496,7 +510,7 @@ impl Authorizer {
             NumberStatus::Disconnected => return Err(ServiceError::new("number_not_connected")),
         }
         let token = self.tokens.vault.get_by_phone_number(&pn).await?;
-        let token = usable(token, &binding.waba_id)?;
+        let token = usable(token, &binding.waba_id, self.clock.now())?;
         Ok(OwnedNumber {
             client: self.client.with_token(token.token),
             phone_number_id: pn,
@@ -540,7 +554,7 @@ impl Authorizer {
     /// Step 5 for a WABA bound to a tenant: its token.
     async fn open(&self, waba_id: WabaId) -> Result<OwnedWaba, ServiceError> {
         let token = self.tokens.vault.get(&waba_id).await?;
-        let token = usable(token, &waba_id)?;
+        let token = usable(token, &waba_id, self.clock.now())?;
         Ok(OwnedWaba {
             client: self.client.with_token(token.token),
             waba_id,
@@ -618,17 +632,18 @@ impl Authorizer {
     }
 }
 
-/// Step 5 for one WABA: the token, or why there is none to use.
+/// Step 5 for one WABA: the token, or why there is none to use at `now`.
 fn usable(
     token: Option<StoredBusinessToken>,
     waba_id: &WabaId,
+    now: OffsetDateTime,
 ) -> Result<StoredBusinessToken, ServiceError> {
     let token = token.ok_or_else(|| ServiceError::new("number_not_connected"))?;
     if &token.waba_id != waba_id {
         tracing::warn!("the vault routes a bound number to another WABA");
         return Err(ServiceError::new("number_not_connected"));
     }
-    if token.is_expired(OffsetDateTime::now_utc()) {
+    if token.is_expired(now) {
         return Err(ServiceError::new("reconnect_required"));
     }
     Ok(token)

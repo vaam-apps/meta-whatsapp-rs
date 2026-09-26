@@ -237,7 +237,7 @@ fn a_blank_or_missing_app_secret_builds_no_pipeline() {
             secrets,
             kv.clone(),
             Arc::new(meta_whatsapp_rs::adapters::store::MemoryConversationStore::new()),
-            Arc::new(meta_whatsapp_server::store::MemoryEventStore::new()),
+            meta_whatsapp_server::store::MemoryStore::new().outbox(),
         );
         assert!(built.is_err());
     }
@@ -554,6 +554,49 @@ async fn a_failure_after_the_inbox_is_redelivered_safely() {
     assert_eq!(h.outbox.rows().len(), 1);
     assert_eq!(polled(&h, A).await.len(), 1);
     assert_eq!(inbox(&h, PN_A, "16505551234").await, 1, "one message");
+}
+
+/// Roadmap S2: contention is typed. An outbox that reports
+/// `StorageError::Busy` (whatever its database: a lock wait, a write
+/// conflict) makes the webhook path answer `503`, which Meta retries,
+/// counted as busy and not as a failed stage; the claim is released, and
+/// the redelivery records the row. Decisive: `is_busy` in the sink (the
+/// downcast to a Postgres-only error type it replaced answered `500` for
+/// any other backend's contention).
+#[tokio::test]
+async fn a_busy_outbox_is_503_whatever_the_backend() {
+    let h = two_tenants().await;
+    let body = example_text();
+    h.outbox.fates(&[common::Fate::Busy]);
+    let reply = h.webhook(&body).await;
+    assert_eq!(
+        reply.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        reply.text
+    );
+    assert!(h.outbox.rows().is_empty());
+    assert_eq!(
+        metric(&h, "wa_server_webhook_deliveries_total{outcome=\"busy\"}"),
+        1
+    );
+    assert_eq!(
+        metric(
+            &h,
+            "wa_server_webhook_sink_failures_total{stage=\"outbox_busy\"}"
+        ),
+        1
+    );
+    assert_eq!(
+        metric(
+            &h,
+            "wa_server_webhook_sink_failures_total{stage=\"outbox\"}"
+        ),
+        0
+    );
+    // Meta redelivers.
+    assert_eq!(h.webhook(&body).await.status, StatusCode::OK);
+    assert_eq!(polled(&h, A).await.len(), 1);
 }
 
 /// A batch: its events are recorded in order, one row each, with

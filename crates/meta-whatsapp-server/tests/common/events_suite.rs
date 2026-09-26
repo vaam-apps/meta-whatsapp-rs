@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_server::model::TenantId;
-use meta_whatsapp_server::store::events::{DedupWindow, EventQuery, NewEvent};
+use meta_whatsapp_server::store::events::{
+    DedupWindow, EventQuery, GuardedBinding, NewEvent, RouteGuard,
+};
 use meta_whatsapp_server::store::{Outbox as EventStore, Store};
 
 fn tenant(id: &str) -> TenantId {
@@ -19,9 +21,9 @@ pub fn waba_of(pn: &str) -> String {
 }
 
 /// Bind `pn` (under [`waba_of`]) to `tenant`, creating the tenant first
-/// when it does not exist. The Postgres outbox keeps a row's tenant only
-/// while the binding the row names still holds it (and only for a tenant
-/// that exists); the memory one does not look.
+/// when it does not exist. Every outbox keeps a row's tenant only while
+/// the binding the row's guard names still holds it (and only for a tenant
+/// that exists): [`row`] guards a tenant's row by its number.
 pub async fn bind(store: &dyn Store, tenant_id: &str, pn: &str) {
     let tenant = tenant(tenant_id);
     store.create_tenant(&tenant, "").await.unwrap();
@@ -36,7 +38,7 @@ pub async fn bind(store: &dyn Store, tenant_id: &str, pn: &str) {
 }
 
 /// A row for `tenant` (`None`: operator-only), about `pn` of
-/// [`waba_of`]`(pn)`.
+/// [`waba_of`]`(pn)`, guarded by that number's binding ([`bind`]), undated.
 pub fn row(tenant_id: Option<&str>, event_type: &str, pn: &str, dedup: Option<&str>) -> NewEvent {
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -44,10 +46,16 @@ pub fn row(tenant_id: Option<&str>, event_type: &str, pn: &str, dedup: Option<&s
         id: format!("evt_suite_{n}_{}", super::unique()),
         dedup_key: dedup.map(str::to_owned),
         dedup_window: None,
-        meta_time: None,
         tenant: tenant_id.map(tenant),
-        phone_number_id: Some(pn.to_owned()),
-        waba_id: Some(waba_of(pn)),
+        route_guard: tenant_id.map(|_| RouteGuard {
+            binding: GuardedBinding::Number {
+                phone_number_id: PhoneNumberId::new(pn),
+                waba_id: WabaId::new(waba_of(pn)),
+            },
+            not_after: None,
+        }),
+        phone_number_id: Some(PhoneNumberId::new(pn)),
+        waba_id: Some(WabaId::new(waba_of(pn))),
         event_type: event_type.to_owned(),
         // U+0000 in a message text: `json` keeps it, `jsonb` would refuse
         // it.
@@ -101,8 +109,8 @@ pub async fn insert_and_page(store: &dyn EventStore) {
     assert_eq!(got.id, written.id);
     assert_eq!(got.data, written.data, "data as written, U+0000 included");
     assert_eq!(got.event_type, "status_updated");
-    assert_eq!(got.phone_number_id.as_deref(), Some("12"));
-    assert_eq!(got.waba_id, Some(waba_of("12")));
+    assert_eq!(got.phone_number_id, Some(PhoneNumberId::new("12")));
+    assert_eq!(got.waba_id, Some(WabaId::new(waba_of("12"))));
     assert_eq!(got.tenant, Some(tenant("suite-a")));
     // Another tenant's inserts move nothing of suite-a's.
     store
@@ -278,17 +286,17 @@ pub async fn filters(store: &dyn EventStore) {
     let pns: Vec<&str> = page
         .events
         .iter()
-        .map(|e| e.phone_number_id.as_deref().unwrap())
+        .map(|e| e.phone_number_id.as_ref().unwrap().as_str())
         .collect();
     assert_eq!(pns, ["61", "62"]);
-    q.phone_number_id = Some("62".to_owned());
+    q.phone_number_id = Some(PhoneNumberId::new("62"));
     let page = store.page(&q).await.unwrap();
     assert_eq!(page.events.len(), 1);
     q.types = Some(vec![
         "status_updated".to_owned(),
         "message_received".to_owned(),
     ]);
-    q.phone_number_id = Some("61".to_owned());
+    q.phone_number_id = Some(PhoneNumberId::new("61"));
     let page = store.page(&q).await.unwrap();
     assert_eq!(page.events.len(), 2);
     // The stream's bounds are the stream's, whatever the filter: a page
@@ -303,17 +311,11 @@ pub async fn filters(store: &dyn EventStore) {
     assert_eq!(page.high_water, 3);
 }
 
-/// Purge past `older_than`, waiting while another replica holds the
-/// housekeeping lock (`None`): on Postgres that lock is the database's,
-/// shared by every test running on it.
+/// Purge past `older_than`: the outbox takes no lock of its own (roadmap
+/// S2: housekeeping holds one turn per round), so it never waits for
+/// another replica's.
 pub async fn purge_now(store: &dyn EventStore, older_than: Duration) -> u64 {
-    for _ in 0..500 {
-        if let Some(purged) = store.purge(older_than).await.unwrap() {
-            return purged;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    panic!("another replica held the housekeeping lock for 5 s");
+    store.purge(older_than).await.unwrap()
 }
 
 /// A purge cuts each stream by its own events' age: an older tenant's
@@ -441,6 +443,127 @@ pub async fn purge_keeps_a_taken_key(store: &dyn EventStore) {
     );
 }
 
+/// Roadmap S2, the port's requirement on every backend: an insert keeps
+/// its row's tenant only while the binding its `RouteGuard` names still
+/// holds it, checked with the insert, else the row is operator-only (in
+/// no tenant's stream). A number's binding moved to another tenant, a
+/// WABA's, a binding that began after the event's second, a guard naming
+/// another WABA than the number's, and a tenant with no guard: each
+/// operator-only; the same guards holding: the tenant's. Decisive: the
+/// check in each backend's insert (the memory one's `holds`).
+pub async fn the_route_guard_is_checked_with_the_insert(
+    store: &dyn EventStore,
+    tenants: &dyn Store,
+) {
+    use time::{Duration as Span, OffsetDateTime};
+    let polled = |tenant_id: &'static str| async move {
+        store
+            .page(&query(tenant_id, None, 100))
+            .await
+            .unwrap()
+            .events
+            .into_iter()
+            .map(|e| e.id)
+            .collect::<Vec<_>>()
+    };
+    let now = OffsetDateTime::now_utc();
+    // Holding: the number's guard, then the WABA's, dated after the
+    // binding began (and undated, above in `row`).
+    let kept = NewEvent {
+        route_guard: Some(RouteGuard {
+            binding: GuardedBinding::Number {
+                phone_number_id: PhoneNumberId::new("31"),
+                waba_id: WabaId::new(waba_of("31")),
+            },
+            not_after: Some(now + Span::HOUR),
+        }),
+        ..row(Some("suite-g"), "message_received", "31", None)
+    };
+    let waba_kept = NewEvent {
+        route_guard: Some(RouteGuard {
+            binding: GuardedBinding::Waba(WabaId::new(waba_of("31"))),
+            not_after: Some(now + Span::HOUR),
+        }),
+        ..row(Some("suite-g"), "template_status_updated", "31", None)
+    };
+    // Not holding: a binding that began after Meta dated the event (an
+    // hour before now: the binding is from this test's start).
+    let dated_before = NewEvent {
+        route_guard: Some(RouteGuard {
+            binding: GuardedBinding::Waba(WabaId::new(waba_of("31"))),
+            not_after: Some(now - Span::HOUR),
+        }),
+        ..row(Some("suite-g"), "template_status_updated", "31", None)
+    };
+    // Not holding: the number under another WABA than its binding's.
+    let other_waba = NewEvent {
+        route_guard: Some(RouteGuard {
+            binding: GuardedBinding::Number {
+                phone_number_id: PhoneNumberId::new("31"),
+                waba_id: WabaId::new(waba_of("32")),
+            },
+            not_after: None,
+        }),
+        ..row(Some("suite-g"), "message_received", "31", None)
+    };
+    // Not holding: no guard at all.
+    let unguarded = NewEvent {
+        route_guard: None,
+        ..row(Some("suite-g"), "message_received", "31", None)
+    };
+    for event in [&kept, &waba_kept, &dated_before, &other_waba, &unguarded] {
+        store.insert(event).await.unwrap().unwrap();
+    }
+    assert_eq!(
+        polled("suite-g").await,
+        [kept.id.clone(), waba_kept.id.clone()],
+        "only the rows whose guard held"
+    );
+    // The WABA and its number move to suite-h between the routing (to
+    // suite-g) and the insert: operator-only, neither tenant's.
+    let waba = WabaId::new(waba_of("31"));
+    assert!(tenants.unbind_waba(&waba).await.unwrap());
+    tenants
+        .create_tenant(&TenantId::parse("suite-h").unwrap(), "")
+        .await
+        .unwrap();
+    assert_eq!(
+        tenants
+            .bind_waba(
+                &TenantId::parse("suite-h").unwrap(),
+                &waba,
+                &[PhoneNumberId::new("31")]
+            )
+            .await
+            .unwrap(),
+        meta_whatsapp_server::model::BindOutcome::Bound
+    );
+    let moved = row(Some("suite-g"), "message_received", "31", None);
+    let waba_moved = NewEvent {
+        route_guard: Some(RouteGuard {
+            binding: GuardedBinding::Waba(waba.clone()),
+            not_after: None,
+        }),
+        ..row(Some("suite-g"), "template_status_updated", "31", None)
+    };
+    for event in [&moved, &waba_moved] {
+        store.insert(event).await.unwrap().unwrap();
+    }
+    assert_eq!(
+        polled("suite-g").await,
+        [kept.id.clone(), waba_kept.id.clone()],
+        "suite-g lost the binding before the insert"
+    );
+    assert!(
+        polled("suite-h").await.is_empty(),
+        "suite-h got suite-g's events"
+    );
+    // The new holder's own row, guarded by its binding: its.
+    let theirs = row(Some("suite-h"), "message_received", "31", None);
+    store.insert(&theirs).await.unwrap().unwrap();
+    assert_eq!(polled("suite-h").await, [theirs.id]);
+}
+
 /// Everything above, in an order where the purge comes last. `tenants` is
 /// the service's store on the same backend (the tenants and bindings the
 /// rows name).
@@ -459,9 +582,11 @@ pub async fn run(store: &dyn EventStore, tenants: &dyn Store) {
         ("suite-s", "91"),
         ("suite-u", "96"),
         ("suite-v", "97"),
+        ("suite-g", "31"),
     ] {
         bind(tenants, tenant_id, pn).await;
     }
+    the_route_guard_is_checked_with_the_insert(store, tenants).await;
     insert_and_page(store).await;
     page_budget(store).await;
     dedup(store).await;

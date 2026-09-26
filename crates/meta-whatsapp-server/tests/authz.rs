@@ -333,7 +333,9 @@ async fn revoked_and_expired_keys_are_401() {
         h.call(Call::get("/v1/numbers").key(&expiring)).await.status,
         StatusCode::OK
     );
-    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    // Expiry is read from the service's one clock (roadmap S2: the core's
+    // `Authorizer` takes it injected), the harness's.
+    h.clock.advance(std::time::Duration::from_secs(2));
     let reply = h.call(Call::get("/v1/numbers").key(&expiring)).await;
     assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "expired");
 }

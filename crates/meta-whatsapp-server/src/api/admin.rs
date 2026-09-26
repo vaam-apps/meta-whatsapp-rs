@@ -1037,6 +1037,8 @@ pub(crate) async fn attach_waba(
         BindOutcome::OwnedByAnotherTenant => {
             return Err(ApiError::new("waba_owned_by_another_tenant"));
         }
+        // Deleted since it was read above.
+        BindOutcome::NoSuchTenant => return Err(ApiError::not_found()),
     }
     let record = StoredBusinessToken::new(waba_id.clone(), token).phone_number_ids(numbers.clone());
     state.authz().store_token(&admin, &record).await?;
