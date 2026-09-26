@@ -17,12 +17,12 @@ use common::{NUMBER, Recording, client, send_response, text_event};
 use futures::future::{Either, select};
 use meta_whatsapp_bot::{
     Backoff, Bot, Broadcast, BroadcastHandle, BroadcastPolicy, Command, Ctx, Ended, MarkRead,
-    Outbound, Outcome, Pacer, Rate, Timer, TokenBucket, Verdict,
+    Outbound, Outcome, PacedOutbound, Pacer, Rate, RateLimiter, Timer, TokenBucket, Verdict,
 };
 use meta_whatsapp_client::messages::{OutboundMessage, SendResponse, Text};
 use meta_whatsapp_client::templates::TemplateMessage;
 use meta_whatsapp_core::clock::{Clock, ManualClock};
-use meta_whatsapp_core::error::TransportError;
+use meta_whatsapp_core::error::{StorageError, TransportError};
 use meta_whatsapp_core::ids::{MessageId, PhoneNumberId};
 use meta_whatsapp_core::recipient::Recipient;
 use meta_whatsapp_core::sink::EventSink;
@@ -891,6 +891,166 @@ fn the_run_is_send() {
         .unwrap();
     let run = broadcast.run();
     send(&run);
+}
+
+/// A policy by code: the pair limit after 1 s, throughput after 10 s,
+/// never a slow-down (so the times below are the pacer's 50 ms only).
+#[derive(Debug)]
+struct ByCode;
+
+impl BroadcastPolicy for ByCode {
+    fn on_failure(&self, error: &Error, _: u32) -> Verdict {
+        match error.graph().map(|g| g.code) {
+            Some(131056) => Verdict::RetryAfter(Duration::from_secs(1)),
+            Some(130429) => Verdict::RetryAfter(Duration::from_secs(10)),
+            _ => Verdict::Fail,
+        }
+    }
+
+    fn slows_down(&self, _: &Error) -> bool {
+        false
+    }
+}
+
+/// Retries go in the order they fall due: one due in 1 s does not wait
+/// behind one due in 10 s.
+#[tokio::test]
+async fn retries_go_in_the_order_they_fall_due() {
+    let clock = ManualClock::new(T0);
+    let outbound = Timed::new(&clock);
+    outbound.fail(&phone(1), || graph(130429)); // again at 10 s
+    outbound.fail(&phone(2), || graph(131056)); // again 1 s after 50 ms
+    let report = Broadcast::builder(NUMBER)
+        .to([phone(1), phone(2)])
+        .content(Text::new("Spring sale"))
+        .outbound(outbound.clone())
+        .pacer(pacer(&clock, 20))
+        .policy(ByCode)
+        .concurrency(1)
+        .build()
+        .unwrap()
+        .run()
+        .await;
+    let sends: Vec<(u128, String)> = outbound
+        .sends()
+        .into_iter()
+        .map(|(t, to)| (ms(t), to))
+        .collect();
+    assert_eq!(
+        sends,
+        [
+            (0, "+16505550001".to_owned()),
+            (50, "+16505550002".to_owned()),
+            (1050, "+16505550002".to_owned()),
+            (10_000, "+16505550001".to_owned()),
+        ]
+    );
+    assert_eq!(report.progress().sent, 2);
+}
+
+/// A retry that falls due is sent then, not after every recipient not
+/// sent yet: here at the first slot after 1 s, in a run of 5 s.
+#[tokio::test]
+async fn a_due_retry_goes_before_the_recipients_not_sent_yet() {
+    let clock = ManualClock::new(T0);
+    let outbound = Timed::new(&clock);
+    outbound.fail(&phone(0), || graph(131056));
+    let report = Broadcast::builder(NUMBER)
+        .to((0..100).map(phone))
+        .content(Text::new("Spring sale"))
+        .outbound(outbound.clone())
+        .pacer(pacer(&clock, 20))
+        .policy(ByCode)
+        .concurrency(1)
+        .build()
+        .unwrap()
+        .run()
+        .await;
+    let first: Vec<u128> = outbound
+        .sends()
+        .into_iter()
+        .filter(|(_, to)| to == "+16505550000")
+        .map(|(t, _)| ms(t))
+        .collect();
+    assert_eq!(first, [0, 1050]);
+    assert_eq!(report.progress().sent, 100);
+    assert_eq!(report.recipients[0].attempts, 2);
+}
+
+/// A rate limiter that cannot be reached (a shared one, down).
+#[derive(Debug)]
+struct Unreachable;
+
+#[async_trait]
+impl RateLimiter for Unreachable {
+    async fn reserve(
+        &self,
+        _: &PhoneNumberId,
+        _: OffsetDateTime,
+    ) -> meta_whatsapp_core::Result<Duration> {
+        Err(StorageError::Backend(anyhow::anyhow!("limiter unreachable")).into())
+    }
+
+    async fn slow_down(
+        &self,
+        _: &PhoneNumberId,
+        _: OffsetDateTime,
+    ) -> meta_whatsapp_core::Result<()> {
+        Err(StorageError::Backend(anyhow::anyhow!("limiter unreachable")).into())
+    }
+}
+
+/// A limiter that fails lets nothing through: the run stops at the first
+/// recipient, before any send, and the rest are skipped.
+#[tokio::test]
+async fn a_failing_rate_limiter_stops_the_run_before_any_send() {
+    let clock = ManualClock::new(T0);
+    let outbound = Timed::new(&clock);
+    let report = Broadcast::builder(NUMBER)
+        .to((0..3).map(phone))
+        .content(Text::new("Spring sale"))
+        .outbound(outbound.clone())
+        .pacer(Pacer::new(Unreachable).with_timer(clock.clone()))
+        .concurrency(1)
+        .build()
+        .unwrap()
+        .run()
+        .await;
+    assert!(outbound.sends().is_empty());
+    assert_eq!(report.ended, Ended::Stopped { recipient: 0 });
+    let Outcome::Failed(error) = &report.recipients[0].outcome else {
+        panic!("{:?}", report.recipients[0].outcome)
+    };
+    assert!(matches!(error, Error::Storage(_)));
+    assert_eq!(report.recipients[0].attempts, 0);
+    assert!(
+        report.recipients[1..]
+            .iter()
+            .all(|r| matches!(r.outcome, Outcome::Skipped))
+    );
+}
+
+/// `PacedOutbound`: a limiter that fails fails the call, and nothing is
+/// sent or marked read.
+#[tokio::test]
+async fn a_paced_outbound_sends_nothing_when_its_limiter_fails() {
+    let clock = ManualClock::new(T0);
+    let outbound = Timed::new(&clock);
+    let paced = PacedOutbound::new(
+        outbound.clone(),
+        Pacer::new(Unreachable).with_timer(clock.clone()),
+    );
+    let from = PhoneNumberId::new(NUMBER);
+    let sent = paced
+        .send(&from, &OutboundMessage::text(phone(1), "Hello"))
+        .await;
+    assert!(matches!(sent, Err(Error::Storage(_))), "{sent:?}");
+    let read = paced
+        .mark_read(&from, &MessageId::new("wamid.X"), true)
+        .await;
+    assert!(matches!(read, Err(Error::Storage(_))), "{read:?}");
+    assert!(outbound.sends().is_empty());
+    assert!(outbound.reads.lock().unwrap().is_empty());
 }
 
 /// `BotBuilder::pacer`: the typing indicator (`MarkRead`) and the reply

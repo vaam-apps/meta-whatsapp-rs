@@ -702,6 +702,86 @@ mod tests {
         );
     }
 
+    /// The wait before the second of two sends booked at `now`: the
+    /// number's interval at its current rate.
+    async fn interval_at(bucket: &TokenBucket, now: OffsetDateTime) -> Duration {
+        bucket.reserve(&number(), now).await.unwrap();
+        bucket.reserve(&number(), now).await.unwrap()
+    }
+
+    /// Each quiet recovery period doubles the rate once, and the time spent
+    /// toward the next doubling is kept.
+    #[tokio::test]
+    async fn recovery_steps_count_every_quiet_period() {
+        let s = |secs: u64| later(T0, Duration::from_secs(secs));
+        // Three slow-downs: 8/s becomes 1/s.
+        let bucket = TokenBucket::new(Rate::per_second(8).unwrap());
+        for at in [0, 1, 2] {
+            bucket.slow_down(&number(), s(at)).await.unwrap();
+        }
+        assert_eq!(interval_at(&bucket, s(3)).await, Duration::from_secs(1));
+        // Three quiet periods later: three doublings, back to 8/s.
+        assert_eq!(
+            interval_at(&bucket, s(2 + 90)).await,
+            Duration::from_millis(125)
+        );
+
+        // Two slow-downs (8/s → 2/s); 45 s after the last, one doubling
+        // (4/s) and 15 s toward the next, which comes 15 s later.
+        let bucket = TokenBucket::new(Rate::per_second(8).unwrap());
+        for at in [0, 1] {
+            bucket.slow_down(&number(), s(at)).await.unwrap();
+        }
+        assert_eq!(
+            interval_at(&bucket, s(46)).await,
+            Duration::from_millis(250)
+        );
+        assert_eq!(
+            interval_at(&bucket, later(s(61), Duration::from_millis(500))).await,
+            Duration::from_millis(125)
+        );
+    }
+
+    /// A wall clock stepping back moves the recovery with it: an hour back
+    /// does not keep a slowed number slow for an hour.
+    #[tokio::test]
+    async fn a_clock_stepping_back_moves_the_recovery_with_it() {
+        let bucket = TokenBucket::new(Rate::per_second(8).unwrap());
+        bucket.slow_down(&number(), T0).await.unwrap();
+        let back = earlier(T0, Duration::from_secs(3600));
+        bucket.reserve(&number(), back).await.unwrap();
+        assert_eq!(
+            interval_at(&bucket, later(back, Duration::from_secs(31))).await,
+            Duration::from_millis(125)
+        );
+    }
+
+    /// ... and the last slow-down with it: a throttle two seconds after the
+    /// step back is not taken for one in the same second as the last.
+    #[tokio::test]
+    async fn a_clock_stepping_back_moves_the_last_slow_down_with_it() {
+        let bucket = TokenBucket::new(Rate::per_second(8).unwrap());
+        bucket.slow_down(&number(), T0).await.unwrap();
+        let back = earlier(T0, Duration::from_secs(3600));
+        bucket.reserve(&number(), back).await.unwrap();
+        let two_later = later(back, Duration::from_secs(2));
+        bucket.slow_down(&number(), two_later).await.unwrap();
+        assert_eq!(
+            interval_at(&bucket, two_later).await,
+            Duration::from_millis(500)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_burst_of_zero_counts_as_one() {
+        let bucket = TokenBucket::new(Rate::per_second(10).unwrap()).burst(0);
+        assert_eq!(bucket.reserve(&number(), T0).await.unwrap(), Duration::ZERO);
+        assert_eq!(
+            bucket.reserve(&number(), T0).await.unwrap(),
+            Duration::from_millis(100)
+        );
+    }
+
     #[tokio::test]
     async fn a_manual_clock_sleeps_by_moving_forward() {
         let clock = ManualClock::new(T0);

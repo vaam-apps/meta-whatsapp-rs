@@ -1,0 +1,328 @@
+//! The paced broadcast under real concurrency, over long runs: Tokio's
+//! paused clock drives the pacer, so the concurrent senders sleep at once
+//! and time moves only when every one of them waits, as it does for real
+//! (a `ManualClock` moves forward on each sleep, so its sleeps add up).
+//! Every one-second window of 10,000 sends is checked, with slow sends, a
+//! burst, a slow-down and its recovery, and a wall clock stepping back.
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+mod common;
+
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use common::{NUMBER, send_response};
+use meta_whatsapp_bot::{Broadcast, Ended, Outbound, Outcome, Pacer, Rate, Timer, TokenBucket};
+use meta_whatsapp_client::messages::{OutboundMessage, SendResponse, Text};
+use meta_whatsapp_core::clock::Clock;
+use meta_whatsapp_core::ids::{MessageId, PhoneNumberId};
+use meta_whatsapp_core::recipient::Recipient;
+use meta_whatsapp_core::{Error, GraphApiError};
+use time::OffsetDateTime;
+use time::macros::datetime;
+use tokio::time::Instant;
+
+const T0: OffsetDateTime = datetime!(2026-09-26 12:00 UTC);
+
+/// Tokio's clock as the pacer's `Timer`, plus an offset a test moves to
+/// step the wall clock back (Tokio's own clock never steps back).
+#[derive(Debug, Clone)]
+struct TokioClock {
+    start: Instant,
+    offset_ms: Arc<AtomicI64>,
+}
+
+impl TokioClock {
+    fn new() -> Self {
+        Self {
+            start: Instant::now(),
+            offset_ms: Arc::default(),
+        }
+    }
+
+    /// Time since the test started, on Tokio's monotonic clock: what the
+    /// sends are measured on, whatever the wall clock does.
+    fn elapsed(&self) -> Duration {
+        self.start.elapsed()
+    }
+
+    fn step_back(&self, by: Duration) {
+        let ms = i64::try_from(by.as_millis()).unwrap();
+        self.offset_ms.fetch_sub(ms, Ordering::SeqCst);
+    }
+}
+
+impl Clock for TokioClock {
+    fn now(&self) -> OffsetDateTime {
+        T0 + self.start.elapsed()
+            + time::Duration::milliseconds(self.offset_ms.load(Ordering::SeqCst))
+    }
+}
+
+#[async_trait]
+impl Timer for TokioClock {
+    async fn sleep(&self, duration: Duration) {
+        tokio::time::sleep(duration).await;
+    }
+}
+
+/// Decides which sends fail: `(start, recipient)` in, an error out.
+type Failures = Arc<dyn Fn(Duration, &str) -> Option<Error> + Send + Sync>;
+
+/// An `Outbound` whose sends take `latency` each, recording when each
+/// started (on Tokio's clock) and to whom.
+#[derive(Clone)]
+struct Slow {
+    clock: TokioClock,
+    latency: Duration,
+    starts: Arc<Mutex<Vec<(Duration, String)>>>,
+    /// When each failure was answered.
+    failed_at: Arc<Mutex<Vec<Duration>>>,
+    fail: Failures,
+}
+
+impl std::fmt::Debug for Slow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Slow")
+    }
+}
+
+impl Slow {
+    fn new(clock: &TokioClock, latency: Duration) -> Self {
+        Self {
+            clock: clock.clone(),
+            latency,
+            starts: Arc::default(),
+            failed_at: Arc::default(),
+            fail: Arc::new(|_, _| None),
+        }
+    }
+
+    fn failing(
+        mut self,
+        fail: impl Fn(Duration, &str) -> Option<Error> + Send + Sync + 'static,
+    ) -> Self {
+        self.fail = Arc::new(fail);
+        self
+    }
+
+    /// Send start times, in order.
+    fn starts(&self) -> Vec<Duration> {
+        let mut starts: Vec<Duration> = self
+            .starts
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(t, _)| *t)
+            .collect();
+        starts.sort();
+        starts
+    }
+
+    fn recipients(&self) -> Vec<String> {
+        self.starts
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, to)| to.clone())
+            .collect()
+    }
+}
+
+#[async_trait]
+impl Outbound for Slow {
+    async fn send(
+        &self,
+        _: &PhoneNumberId,
+        message: &OutboundMessage,
+    ) -> meta_whatsapp_core::Result<SendResponse> {
+        let start = self.clock.elapsed();
+        let who = serde_json::to_value(message).unwrap()["to"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        self.starts.lock().unwrap().push((start, who.clone()));
+        tokio::time::sleep(self.latency).await;
+        if let Some(error) = (self.fail)(start, &who) {
+            self.failed_at.lock().unwrap().push(self.clock.elapsed());
+            return Err(error);
+        }
+        Ok(serde_json::from_value(send_response()).unwrap())
+    }
+
+    async fn mark_read(
+        &self,
+        _: &PhoneNumberId,
+        _: &MessageId,
+        _: bool,
+    ) -> meta_whatsapp_core::Result<()> {
+        Ok(())
+    }
+}
+
+fn phone(i: usize) -> Recipient {
+    Recipient::phone(format!("+1650{i:07}"))
+}
+
+/// The most sends starting in one half-open second `[t, t + 1 s)`, over
+/// the windows starting at a send in `from..to` (the busiest window
+/// always starts at a send). `starts` is sorted.
+fn busiest_second(starts: &[Duration], from: Duration, to: Duration) -> usize {
+    let mut most = 0;
+    let mut end = 0;
+    for (i, start) in starts.iter().enumerate() {
+        while end < starts.len() && starts[end] < *start + Duration::from_secs(1) {
+            end += 1;
+        }
+        if (from..to).contains(start) {
+            most = most.max(end - i);
+        }
+    }
+    most
+}
+
+fn all(starts: &[Duration]) -> usize {
+    busiest_second(starts, Duration::ZERO, Duration::MAX)
+}
+
+fn throttled() -> Error {
+    let mut error = GraphApiError::new(130429, "(#130429) Rate limit hit");
+    error.http_status = Some(400);
+    error.into()
+}
+
+/// 10,000 sends: no one-second window ever holds more than the rate (plus
+/// `burst - 1`), and the rate is reached, because the concurrent senders
+/// cover the sends' latency. Removing the concurrency, or pacing wrong,
+/// fails this.
+#[tokio::test(start_paused = true)]
+async fn ten_thousand_sends_never_exceed_the_rate_in_any_second() {
+    const N: usize = 10_000;
+    // (rate, burst, concurrency, a send's latency)
+    let cases: [(u32, u32, usize, u64); 4] = [
+        (80, 1, 32, 200),    // Meta's default, the broadcast's default concurrency
+        (7, 1, 4, 300),      // a rate that does not divide a second
+        (1000, 1, 400, 150), // higher throughput
+        (80, 10, 32, 200),   // a burst of 10: up to 9 more in a window
+    ];
+    for (rate, burst, concurrency, latency) in cases {
+        let clock = TokioClock::new();
+        let outbound = Slow::new(&clock, Duration::from_millis(latency));
+        let pacer = Pacer::new(TokenBucket::new(Rate::per_second(rate).unwrap()).burst(burst))
+            .with_timer(clock.clone());
+        let report = Broadcast::builder(NUMBER)
+            .to((0..N).map(phone))
+            .content(Text::new("Spring sale"))
+            .outbound(outbound.clone())
+            .pacer(pacer)
+            .concurrency(concurrency)
+            .build()
+            .unwrap()
+            .run()
+            .await;
+
+        let case = format!("{rate}/s, burst {burst}, {concurrency} at once, {latency} ms");
+        assert_eq!(report.ended, Ended::Completed, "{case}");
+        assert_eq!(report.progress().sent, N, "{case}");
+        let starts = outbound.starts();
+        assert_eq!(starts.len(), N, "{case}");
+        let unique: HashSet<String> = outbound.recipients().into_iter().collect();
+        assert_eq!(unique.len(), N, "{case}: each recipient once");
+        let most = rate as usize + burst as usize - 1;
+        assert_eq!(all(&starts), most, "{case}: the busiest second");
+        // Not slower than the rate either: the last send starts about
+        // (N - burst) / rate seconds in.
+        let last = starts[N - 1].as_secs_f64();
+        let expected = f64::from(u32::try_from(N).unwrap() - burst) / f64::from(rate);
+        assert!(
+            (expected..expected + 1.0).contains(&last),
+            "{case}: last send at {last} s, expected about {expected} s"
+        );
+    }
+}
+
+/// A throttle (`130429`) under load halves the rate once, however many
+/// sends in flight report it; 30 quiet seconds later the full rate is back.
+#[tokio::test(start_paused = true)]
+async fn a_slow_down_holds_then_recovers_under_load() {
+    const N: usize = 5_000;
+    let clock = TokioClock::new();
+    let throttled_once: Arc<Mutex<HashSet<String>>> = Arc::default();
+    let outbound = Slow::new(&clock, Duration::from_millis(200)).failing({
+        let throttled_once = Arc::clone(&throttled_once);
+        move |start, to| {
+            let window = Duration::from_secs(5)..Duration::from_millis(5300);
+            (window.contains(&start) && throttled_once.lock().unwrap().insert(to.to_owned()))
+                .then(throttled)
+        }
+    });
+    let pacer = Pacer::new(TokenBucket::new(Rate::DEFAULT)).with_timer(clock.clone());
+    let report = Broadcast::builder(NUMBER)
+        .to((0..N).map(phone))
+        .content(Text::new("Spring sale"))
+        .outbound(outbound.clone())
+        .pacer(pacer)
+        .build()
+        .unwrap()
+        .run()
+        .await;
+
+    assert_eq!(report.progress().sent, N);
+    let throttled = throttled_once.lock().unwrap().len();
+    assert!((20..=25).contains(&throttled), "{throttled} throttled");
+    let starts = outbound.starts();
+    assert_eq!(starts.len(), N + throttled, "each throttled send once more");
+    let slowed = outbound.failed_at.lock().unwrap()[0];
+    let secs = |s: f64| slowed + Duration::from_secs_f64(s);
+    assert_eq!(busiest_second(&starts, Duration::ZERO, slowed), 80);
+    // The sends booked before the slow-down (one per sender) go at the
+    // full rate; from then on, 40 a second, one halving only.
+    assert_eq!(busiest_second(&starts, secs(0.5), secs(29.0)), 40);
+    // Back to 80 a second after 30 quiet seconds.
+    assert_eq!(busiest_second(&starts, secs(31.0), Duration::MAX), 80);
+    assert_eq!(all(&starts), 80);
+}
+
+/// The wall clock stepping back an hour mid-run neither pauses the run for
+/// the hour nor lets a burst through: on Tokio's monotonic clock, the
+/// sends keep the rate.
+#[tokio::test(start_paused = true)]
+async fn a_wall_clock_stepping_back_neither_pauses_nor_bursts() {
+    const N: usize = 400;
+    let clock = TokioClock::new();
+    let outbound = Slow::new(&clock, Duration::from_millis(100));
+    let pacer =
+        Pacer::new(TokenBucket::new(Rate::per_second(20).unwrap())).with_timer(clock.clone());
+    let stepper = {
+        let clock = clock.clone();
+        async move {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            clock.step_back(Duration::from_secs(3600));
+        }
+    };
+    let run = Broadcast::builder(NUMBER)
+        .to((0..N).map(phone))
+        .content(Text::new("Spring sale"))
+        .outbound(outbound.clone())
+        .pacer(pacer)
+        .concurrency(8)
+        .build()
+        .unwrap()
+        .run();
+    let (report, ()) = tokio::join!(run, stepper);
+
+    assert_eq!(report.progress().sent, N);
+    let starts = outbound.starts();
+    assert_eq!(all(&starts), 20);
+    let last = starts[N - 1].as_secs_f64();
+    assert!(last < 21.0, "the last send at {last} s: the run paused");
+    assert!(
+        matches!(report.recipients[N - 1].outcome, Outcome::Sent(_)),
+        "{:?}",
+        report.recipients[N - 1].outcome
+    );
+}

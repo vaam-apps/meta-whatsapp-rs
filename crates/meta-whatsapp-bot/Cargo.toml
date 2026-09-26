@@ -37,7 +37,9 @@ meta-whatsapp-core = { workspace = true, features = ["testing"] }
 meta-whatsapp-adapters = { workspace = true, features = ["memory"] }
 pretty_assertions.workspace = true
 serde_json.workspace = true
-tokio = { workspace = true, features = ["macros", "rt"] }
+# `test-util`: the pacing tests run on Tokio's paused clock, where concurrent
+# sleeps overlap as they do for real (a `ManualClock` adds them up).
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 
 [lints]
 workspace = true
