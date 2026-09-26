@@ -5,7 +5,7 @@ description: "Running meta-whatsapp-rs in production - the secrets (system user 
 
 # meta-whatsapp-rs-production
 
-> **Verified against meta-whatsapp-rs ef0fe364e3a21a535238007db5276fe5ef6ce970 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 202091c44f47bcc4a8ab1ff2585f1cf5007bbcb9 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/production.rs](examples/production.rs),
 compiled and tested by meta-whatsapp-rs's own gate. Longer walkthrough:
@@ -119,8 +119,7 @@ timeouts longer than your slowest sink.
 
 ## Pitfalls
 
-- A blank secret read from an unset variable: fail at boot (the example's
-  `required`), not on the first webhook.
+- A blank secret read from an unset variable: fail at boot (the example's `required`), not on the first webhook.
 - Upgrade crossings (read the skill named before moving the `rev`):
   e40b86f invalidates OTP codes in flight once (`meta-whatsapp-rs-otp-login`);
   4b47bf7 changes a custom `ConversationStore`'s `update_status`
@@ -139,20 +138,21 @@ timeouts longer than your slowest sink.
   instance left running fails on every content statement (500s Meta
   redelivers, replies sent but not recorded). Upgrades back-fill
   nothing: rows and summaries recorded before stay as written (a U+FFFD
-  an older revision stored for a NUL stays one).
+  an older revision stored for a NUL stays one). Roadmap L5's pull request adds eleven
+  required `ConversationStore` methods (erasure, retention, window events, thread ownership,
+  synced contacts) and Postgres migration 4, after which an older revision's `migrate`
+  refuses the database: upgrade every instance that migrates at startup (`meta-whatsapp-rs-storage`).
 
 ## What meta-whatsapp-rs does not do
 
 Read [OPEN_QUESTIONS.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md)
-before going live: the defaults decided (OTP issue limit, PIN policy, no
-token refresh) and what is decided but not built (dead-lettering, Redis TLS). No
-metrics exporter, no health endpoint, no secret manager integration. A
-revoked message keeps its content in the inbox (decided 2026-09-25;
+before going live: the defaults decided (OTP issue limit, PIN policy, no token refresh) and what is
+decided but not built (dead-lettering, Redis TLS). No metrics exporter, no health endpoint, no secret
+manager integration. A revoked message keeps its content in the inbox (decided 2026-09-25;
 `meta-whatsapp-rs-cms-inbox`). ~~Whether the OTP namespace becomes
 required~~: decided in d67b3ac (2026-09-24), it is (`meta-whatsapp-rs-otp-login`).
-~~The provisional U+0000 replacement~~: until the pull request that
-made U+0000 lossless (PR #7, 2026-09-25); message content keeps it
-(`meta-whatsapp-rs-storage`).
+~~The provisional U+0000 replacement~~: until the pull request that made U+0000 lossless
+(PR #7, 2026-09-25); message content keeps it (`meta-whatsapp-rs-storage`).
 
 ## Related skills
 

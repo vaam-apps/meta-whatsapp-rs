@@ -55,13 +55,27 @@ never leaks its library's types through a port.
 | --- | --- | --- |
 | `transport::HttpTransport` | `send`, `send_streaming` | rustdoc; non-2xx is *not* an error at this layer |
 | `store::KvStore` | `get`, `put`, `put_if_absent`, `compare_and_swap`, `delete` | `meta_whatsapp_adapters::store::conformance` (executable) |
-| `store::ConversationStore` | `append`, `append_synced` (a batch of coexistence history: no window, never unread), `fill_media_placeholder`, `revoke` (number and direction scoped, never the conversation; the content kept; a tombstone, history only, when the message is not stored yet), `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at` | `meta_whatsapp_adapters::store::conversation_conformance` (executable) |
+| `store::ConversationStore` | `append`, `append_synced` (a batch of coexistence history: no window, never unread), `fill_media_placeholder`, `revoke` (number and direction scoped, never the conversation; the content kept; a tombstone, history only, when the message is not stored yet), `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at`; `message` (the lookup, scoped: `phone_number_id, id`, never another number's); `record_window_event`, `window_events` (a call or a standby message that reopens the window: never history, never the summary); `set_thread_owner`, `thread_owner` (Conversation Routing: the latest record wins); `put_contact`, `remove_contact`, `contact`, `contacts` (the coexistence address book); `erase` (every record of one key on one number, deleted); `purge_before` (by age, one number or all); `retention`, `apply_retention` (provided: keep unless the adapter is configured) | `meta_whatsapp_adapters::store::conversation_conformance` (executable) |
 | `sink::EventSink<E>` | `deliver` | rustdoc |
 | `clock::Clock` | `now` | — |
 
 Typed stores are built **on `KvStore`**, never as new ports: token vault,
 OTP challenges, webhook dedup, Embedded Signup sessions. An adapter author
 implements five methods once and every feature works.
+
+What the inbox keeps about a conversation beside its messages (window
+events, thread ownership, the coexistence address book) is on
+`ConversationStore` itself, not on `KvStore`: it is keyed like the
+history, and `erase` must reach it in the same step. Its personal data
+is every record keyed by a contact: `erase(key)` deletes the messages
+(tombstones included), the summary, the window events, the ownership
+record and the synced contacts naming the key, and nothing of another
+key or number; what lies outside the store (dedup markers and OTP
+challenges on `KvStore`, the service's event outbox, logs, backups) it
+does not reach. Retention is set per store (design D10): the adapters
+take a `Retention` (`with_retention`, keep by default) that
+`apply_retention(now)` applies; nothing purges on its own, and a caller
+with another policy calls `purge_before` with its own cutoff.
 
 ## Stable identifiers
 
@@ -87,7 +101,8 @@ rewrite them along with the code.
 | `wa.otp`, `wa.otp.rate` | `NAMESPACE`, `ISSUE_LOG_NAMESPACE`, same file | store namespaces of the challenges and of the issue limit | `the_derivations_and_namespaces_are_pinned` |
 | `wa.es.session` | `SESSION_NAMESPACE`, `meta-whatsapp-client/src/embedded_signup/session.rs` | store namespace of signup sessions in flight | `the_session_namespace_is_pinned` |
 | `wa.webhook.dedup` | `DEDUP_NAMESPACE`, `meta-whatsapp-webhooks/src/dedup.rs` | store namespace of the dedup markers (key: SHA-256 hex of the event's dedup key) | `the_marker_key_is_pinned` |
-| `wa_` | `TablePrefix::DEFAULT`, `meta-whatsapp-adapters/src/store/postgres/mod.rs` | default table prefix: `wa_kv`, `wa_messages`, `wa_conversations`, `wa_sqlx_migrations` | `the_default_tables_and_migration_checksums_are_pinned`, `prefix_validation`, the `live_postgres_*` table-name tests |
+| `wa_` | `TablePrefix::DEFAULT`, `meta-whatsapp-adapters/src/store/postgres/mod.rs` | default table prefix: `wa_kv`, `wa_messages`, `wa_conversations`, `wa_window_events`, `wa_thread_owners`, `wa_synced_contacts`, `wa_sqlx_migrations` | `the_default_tables_and_migration_checksums_are_pinned`, `prefix_validation`, the `live_postgres_*` table-name tests |
+| `customer_call`, `call_accepted`, `standby_message`; `this_app`, `another_app`, `idle` | `WindowEventKind::as_str`, `ThreadOwner` (its serde names), `meta-whatsapp-core/src/store/conversation.rs` | the names a conversation store keeps for a window event's kind and a thread's owner (`wa_window_events.kind`, `wa_thread_owners.owner`) | `stored_names_are_pinned` |
 | the migration files | `meta-whatsapp-adapters/migrations/*.sql` | sqlx records each file's checksum; an edit, a comment included, makes `migrate` refuse every database migrated before. So they keep naming `wa_adapters`, including in the hint migration 3 raises | `the_default_tables_and_migration_checksums_are_pinned` |
 | `wa:` | `RedisKvStore::new`, `meta-whatsapp-adapters/src/store/redis_kv.rs` | default Redis key prefix, before `{<len>:<namespace>}:<key>` | `the_default_prefix_and_key_layout_are_pinned` |
 | `meta-whatsapp-server/outbox-key/v1` | `outbox_key`, `meta-whatsapp-server/src/events.rs` | domain of the SHA-256 stored as `wa_server_events.dedup_key` (with the tags `library` and `delivery`, the NUL separators and a keyless event's position as 8 big-endian bytes): derived otherwise, a redelivery across the upgrade is recorded twice | `the_outbox_key_is_pinned` (known answers) |
@@ -665,6 +680,13 @@ Logs carry sizes, digests and field names only — never payload values.
 - `store::{MemoryKvStore, MemoryConversationStore}` (feature `memory`).
 - `store::{PostgresKvStore, PostgresConversationStore}` (feature
   `postgres`, sqlx, embedded migrations, `wa_` table prefix configurable).
+  Migration 4 adds `wa_window_events`, `wa_thread_owners` and
+  `wa_synced_contacts` (keyed by business number and contact; a window
+  event by business number and id) and the indexes purge by age reads;
+  it changes no column, so the previous revision keeps working beside it,
+  but its `migrate` refuses the database. `erase` and `purge_before` are
+  one statement each; `set_thread_owner` and `put_contact` one upsert
+  whose update applies only when the stored record is not later.
 - `store::RedisKvStore` (feature `redis`; CAS via Lua). Requires the
   `noeviction` policy: every key with a TTL here enforces a limit (OTP
   issue logs, dedup markers), and Redis evicts silently.

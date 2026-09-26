@@ -123,7 +123,8 @@ up -d --wait` starts one on port 55432 (`postgres://wa:wa@127.0.0.1:55432/wa`).
 ### Storage and migrations
 
 Postgres holds everything: the library's tables (`wa_kv`, the inbox's
-`wa_messages` and `wa_conversations`) and the service's (`wa_server_tenants`,
+`wa_messages`, `wa_conversations`, `wa_window_events`, `wa_thread_owners`
+and `wa_synced_contacts`) and the service's (`wa_server_tenants`,
 `wa_server_api_keys`, `wa_server_wabas`, `wa_server_numbers`,
 `wa_server_idempotency`, the event outbox `wa_server_events` and its
 per-tenant `wa_server_event_streams`), each with its own migration

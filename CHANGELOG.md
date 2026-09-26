@@ -669,6 +669,51 @@ stored data, the owner's).
 
 ### Changed
 
+- **Breaking — the `ConversationStore` port change of roadmap L5**: the
+  port gains eleven required methods and two provided ones, so a store
+  of your own must implement them and pass
+  `conversation_conformance::run`, which checks each part. The memory
+  and Postgres stores implement all of it.
+  - `message(phone_number_id, id)`: the lookup by message id, scoped to
+    the business number, never another number's (whichever way
+    `OPEN_QUESTIONS.md` #33, still open, is answered).
+  - `record_window_event` / `window_events`: a `WindowEvent`
+    (`WindowEventKind`: a customer's call, a call they accepted, a
+    standby message) reopens the customer service window without being a
+    message: never history, never the summary, recorded once per number
+    and id (#32, #44; the inbox records them in L7).
+  - `set_thread_owner` / `thread_owner`: `ThreadOwnership` under
+    Conversation Routing (`ThreadOwner`, the role, the app, since when);
+    the latest record wins, one of the same second too (#44; L7).
+  - `put_contact` / `remove_contact` / `contact` / `contacts`: the
+    coexistence address book (`smb_app_state_sync`) as `StoredContact`,
+    per number, the latest sync winning (the inbox records it in L8).
+  - `erase(key)`: deletes, not hides, every record of one conversation
+    key on one number (messages of every origin and tombstones, the
+    summary, window events, the ownership record, the synced contacts
+    naming the key) in one step, and returns what it deleted (`Erased`).
+  - `purge_before(number or all, cutoff)`: deletes messages, window
+    events and ownership records older than the cutoff, and the summary
+    of a conversation whose latest message went (`Purged`).
+  - `retention` / `apply_retention`, provided: a `Retention` set per
+    store (design D10: kept by default), taken by
+    `MemoryConversationStore::with_retention` and
+    `PostgresConversationStore::with_retention`; nothing purges on its
+    own, so schedule `apply_retention`.
+
+  **Postgres**: migration 4 adds `wa_window_events`, `wa_thread_owners`
+  and `wa_synced_contacts` (names and usernames as UTF-8 bytes, U+0000
+  kept; identifiers `TEXT COLLATE "C"`, U+0000 refused) and two indexes
+  for purge by age. It changes no column, so the previous revision keeps
+  working beside it, but its `migrate` then refuses the database
+  (`VersionMissing(4)`): upgrade every instance that migrates at startup.
+  Building the indexes makes writes to the inbox tables wait: on a large
+  inbox, run `migrate` from a one-off job. `erase` and `purge_before` are
+  one statement each. The new table names and the stored names of
+  `WindowEventKind` and `ThreadOwner` are stable identifiers
+  (docs/architecture.md). `InboxSink` and `Inbox` are unchanged: calls,
+  standby messages, ownership and synced contacts are not recorded yet
+  (L7, L8).
 - **The plans of 2026-09-26** (docs only; the owner's directive of that
   day, recorded in AGENTS.md § Decisions and design §10, now titled
   "Decisions", whose anchor moved to `#10-decisions`):

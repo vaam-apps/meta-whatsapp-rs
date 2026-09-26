@@ -1,11 +1,11 @@
 ---
 name: meta-whatsapp-rs-storage
-description: "Choosing and running meta-whatsapp-rs storage - the KvStore (token vault, OTP challenges, webhook dedup, signup sessions) and ConversationStore (inbox history) ports, MemoryKvStore and MemoryConversationStore for tests, PostgresKvStore and PostgresConversationStore (migrate at startup, table prefixes, purge_expired, U+0000 kept in message content and refused in ids and keys, the lossless-content upgrade), RedisKvStore (noeviction, persistence, prefixes, bring your own TLS connection), server clocks, and writing your own adapter that passes the conformance suites. Load when wiring databases for meta-whatsapp-rs, deploying Postgres or Redis for it, or implementing a custom KvStore or ConversationStore."
+description: "Choosing and running meta-whatsapp-rs storage - the KvStore (token vault, OTP challenges, webhook dedup, signup sessions) and ConversationStore (inbox history) ports, MemoryKvStore and MemoryConversationStore for tests, PostgresKvStore and PostgresConversationStore (migrate at startup, table prefixes, purge_expired, U+0000 kept in message content and refused in ids and keys, the lossless-content upgrade, inbox retention and erasure with with_retention, apply_retention and erase), RedisKvStore (noeviction, persistence, prefixes, bring your own TLS connection), server clocks, and writing your own adapter that passes the conformance suites. Load when wiring databases for meta-whatsapp-rs, deploying Postgres or Redis for it, or implementing a custom KvStore or ConversationStore."
 ---
 
 # meta-whatsapp-rs-storage
 
-> **Verified against meta-whatsapp-rs b7211bc1f282f873b605e7a3a1126ce4e45e5677 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 202091c44f47bcc4a8ab1ff2585f1cf5007bbcb9 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/stores.rs](examples/stores.rs), compiled by
 meta-whatsapp-rs's own gate; its tests run the conformance suites on the memory
@@ -68,6 +68,12 @@ that is one-way: back up, stop the older writers, drop your own objects
 on those columns, run `migrate` once from a job, in that order
 ([references/lossless-upgrade.md](references/lossless-upgrade.md)).
 
+Inbox history is kept unless you set a retention (`with_retention(Retention::days(90))`
+on the conversation store) and schedule `apply_retention(now)`; `erase(&key)`
+deletes every record of one contact key on one number. Migration 4 adds
+three tables and two indexes (writes wait while they build: migrate a
+large inbox from a one-off job).
+
 ## Redis
 
 ```rust
@@ -113,7 +119,9 @@ count; `fill_media_placeholder` rewrites only a row whose `kind` is
 `StoredMessage::MEDIA_PLACEHOLDER` and whose status is not `Deleted`;
 `revoke` matches number and direction and stores
 `StoredMessage::tombstone` when the id is unknown, as history only (the
-summary never sees it). The suite checks all three, and that content
+summary never sees it). Since roadmap L5: `message` (scoped to the
+number), window events, thread ownership and synced contacts (the latest
+record wins), `erase` and `purge_before`. The suite checks all of it, and that content
 (kind, text, payload strings and keys, status error, preview) reads back
 exactly, U+0000 included. A `KvStore` keeps values as any bytes; a key
 holding U+0000 may be refused, never stored as another key.
@@ -142,8 +150,7 @@ until the pull request that made U+0000 lossless (PR #7, 2026-09-25).
   ([OPEN_QUESTIONS.md #19](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#storage),
   decided on 2026-09-26: `rediss://` with an explicit provider, roadmap
   L21c),
-  no Redis `ConversationStore`, no backups or retention policy for inbox
-  history.
+  no Redis `ConversationStore`, no backups of inbox history.
 - Message ids are unique per store, not per business number
   ([open question 33](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)).
 

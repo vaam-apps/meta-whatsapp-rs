@@ -93,6 +93,13 @@ let conversations: Arc<dyn ConversationStore> = Arc::new(PostgresConversationSto
   ([open question](../../OPEN_QUESTIONS.md#cms-inbox) 33).
 - `MemoryConversationStore` is for tests and demos. There is no Redis
   conversation store.
+- Migration 4 (roadmap L5) adds `wa_window_events`, `wa_thread_owners`
+  and `wa_synced_contacts` and two indexes for purge by age (section 8).
+  It changes no column, but writes to `wa_messages` and
+  `wa_conversations` wait while its indexes are built: on a large inbox,
+  run `migrate` once from a one-off job. Once it has run, an older
+  revision's `migrate` refuses the database: upgrade every instance
+  that migrates at startup.
 
 ## 2. Wire the pipeline
 
@@ -271,6 +278,35 @@ events.addEventListener('lagged', () => reloadHistory()); // the browser fell be
   nothing live. Relay events between instances (Postgres `LISTEN/NOTIFY`,
   Redis pub/sub) into each instance's channel; meta-whatsapp-rs does not provide it.
 
+## 8. Erasing a customer, and retention
+
+`ConversationStore::erase(&key)` deletes, not hides, everything the store
+keeps under one conversation key on one number: its messages of every
+origin (revoke tombstones too), its summary, its window events, its
+thread ownership record, and the synced address book contacts that name
+the key as their key, BSUID, parent BSUID or phone number. It returns
+what it deleted (`Erased`: counts only; log those, never the key). A
+customer can be stored under several keys (a history thread keyed by
+their phone number, live messages by their BSUID, a new BSUID after a
+number change) and on several of your numbers: erase each. It does not
+reach what lies outside the store: the webhook dedup markers and OTP
+challenges (hashed, expiring), events your sinks forwarded elsewhere, logs
+and backups; and a message Meta redelivers after the erasure is recorded
+again. Which erasure requests you must honour is your privacy
+obligations' call (design D10).
+
+History is kept by default. `with_retention(Retention::days(90))` on
+`PostgresConversationStore` (or `MemoryConversationStore`) sets the
+store's retention, which `ConversationStore::apply_retention(now)`
+applies: nothing purges on its own, so schedule it (daily is enough;
+concurrent runs are safe). It deletes the messages, window events and
+ownership records older than the cutoff, and the summary of a
+conversation whose latest message went (it holds that message's
+preview); synced contacts stay. For another policy (per tenant, or a
+number that leaves your platform), call
+`ConversationStore::purge_before(Some(&phone_number_id), cutoff)`
+yourself.
+
 ## Pitfalls
 
 - Mounting the inbox routes without the ownership check: any merchant could
@@ -347,4 +383,9 @@ very large sync can take several of Meta's redeliveries to finish.
 
 BSUID changes; media bytes; calls; the contacts sync
 (`smb_app_state_sync`); every event other than messages, statuses, echoes
-and history. Handle those in your own sink if you need them.
+and history. Handle those in your own sink if you need them. The
+`ConversationStore` can keep calls and standby messages as window events
+(`record_window_event`), thread ownership (`set_thread_owner`) and the
+synced contacts (`put_contact`) since roadmap L5; `InboxSink` records
+them from L7 and L8, and until then the window ignores calls
+([open question](../../OPEN_QUESTIONS.md#cms-inbox) 32).

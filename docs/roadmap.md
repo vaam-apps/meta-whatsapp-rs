@@ -408,7 +408,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** a new process resumes from stored session info alone;
     sending a placeholder code to Meta fails the test's request
     assertion.
-- [ ] **L5. The `ConversationStore` port change** (`meta-whatsapp-core`,
+- [x] **L5. The `ConversationStore` port change** (`meta-whatsapp-core`,
   `meta-whatsapp-adapters`; D10; OPEN_QUESTIONS #32, #44; rows 69, 111):
   one change for everything the port gains before M2, so adapters change
   once. Erasure of one contact on one number, purge by age, retention

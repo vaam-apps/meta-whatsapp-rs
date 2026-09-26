@@ -1,22 +1,20 @@
 ---
 name: meta-whatsapp-rs-cms-inbox
-description: "The merchant-to-customer chat inbox of a multi-tenant CMS built on meta-whatsapp-rs (meta_whatsapp_rs::inbox) - InboxSink recording webhook messages, statuses and coexistence echoes and history into a ConversationStore, Inbox listing conversations and history and replying with the merchant's token, the tenant ownership check before the token vault, conversation keys (BSUID, wa_id, group), the 24-hour window with a template fallback, quoted replies, unread counts, NUL handling on Postgres, and what the inbox does not record. Load when building inbox screens, reply endpoints, or the webhook-to-inbox pipeline of a CMS."
+description: "The merchant-to-customer chat inbox of a multi-tenant CMS built on meta-whatsapp-rs (meta_whatsapp_rs::inbox) - InboxSink recording webhook messages, statuses and coexistence echoes and history into a ConversationStore, Inbox listing conversations and history and replying with the merchant's token, the tenant ownership check before the token vault, conversation keys (BSUID, wa_id, group), the 24-hour window with a template fallback, quoted replies, unread counts, NUL handling on Postgres, erasing a customer and retention, and what the inbox does not record. Load when building inbox screens, reply endpoints, or the webhook-to-inbox pipeline of a CMS."
 ---
 
 # meta-whatsapp-rs-cms-inbox
 
-> **Verified against meta-whatsapp-rs ef0fe364e3a21a535238007db5276fe5ef6ce970 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 202091c44f47bcc4a8ab1ff2585f1cf5007bbcb9 (2026-09-26).** On another revision, trust the code over this page.
 
-Reference code: [examples/inbox.rs](examples/inbox.rs), compiled and
-tested by meta-whatsapp-rs's own gate. The full server (webhook endpoint, SSE,
-bearer-token tenants), exercised in-process by meta-whatsapp-rs's tests:
+Reference code: [examples/inbox.rs](examples/inbox.rs), compiled and tested by meta-whatsapp-rs's own gate.
+The full server (webhook endpoint, SSE, bearer-token tenants), exercised in-process by meta-whatsapp-rs's tests:
 [`cms_inbox.rs`](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/crates/meta-whatsapp-rs/examples/cms_inbox.rs).
 
 ## When to use
 
-Merchants connected their number (`meta-whatsapp-rs-embedded-signup`) and chat with
-their customers in your CMS. Module `meta_whatsapp_rs::inbox`; storage port
-`ConversationStore`.
+Merchants connected their number (`meta-whatsapp-rs-embedded-signup`) and chat with their customers
+in your CMS. Module `meta_whatsapp_rs::inbox`; storage port `ConversationStore`.
 
 ```text
 Meta ─webhook─► WebhookHandler ─► FanoutSink ─┬─► InboxSink ──► ConversationStore
@@ -34,17 +32,15 @@ let sink = FanoutSink::new()
     .with(BroadcastSink::from_sender(live.clone()));
 ```
 
-`InboxSink` records inbound messages and status updates; it is
-idempotent (a known message id is ignored; a status never moves a message
-backwards). Statuses and revokes only change a message of the business
-number they arrived on. Run `postgres::migrate(&pool)` at startup for
+`InboxSink` records inbound messages and status updates; it is idempotent (a known message id is
+ignored; a status never moves a message backwards). Statuses and revokes only change a message of
+the business number they arrived on. Run `postgres::migrate(&pool)` at startup for
 `PostgresConversationStore` (`meta-whatsapp-rs-storage`).
 
-Coexistence (the merchant keeps the WhatsApp Business app): `MessageEchoed`
-(sent from the app) is outbound `Sent`, in the customer's BSUID (else phone)
-conversation; `HistorySynced` is recorded message by message, outbound when
-`from` is the business number (status from `history_context`), else inbound,
-opens no reply window, never unread (`append_synced`); a later media content
+Coexistence (the merchant keeps the WhatsApp Business app): `MessageEchoed` (sent from the app) is
+outbound `Sent`, in the customer's BSUID (else phone) conversation; `HistorySynced` is recorded
+message by message, outbound when `from` is the business number (status from `history_context`),
+else inbound, opens no reply window, never unread (`append_synced`); a later media content
 fills its placeholder unless revoked (`fill_media_placeholder`). A declined
 sync (2593109) records nothing; a malformed item is skipped, logged by position.
 
@@ -75,9 +71,8 @@ let page = inbox.history(&key, None, 50).await?; // next page: the last row's (t
 inbox.mark_read(&key).await?; // your unread counter, not WhatsApp's blue ticks
 ```
 
-`inbox.conversations(before, limit)` lists newest activity first (next
-page: the last row's `(last_message_at, key.contact)`); cursors are
-exclusive. Blue ticks are `client.messages(pnid).mark_read(&id)`.
+`inbox.conversations(before, limit)` lists newest activity first (next page: the last row's
+`(last_message_at, key.contact)`); cursors are exclusive. Blue ticks are `client.messages(pnid).mark_read(&id)`.
 
 ## The 24-hour window
 
@@ -129,6 +124,10 @@ go to `+<digits>`; a contact with a `.` is a BSUID. The rules are public:
   exactly and the Postgres store keeps it, so render or strip it in your
   UI; your own SQL on those columns follows `meta-whatsapp-rs-storage`, as does a
   store of your own. The Postgres store refuses it in Meta-assigned ids.
+- **Erasing a customer, and retention**, are the store's:
+  `ConversationStore::erase(&key)` for each key they have (BSUID, `wa_id`)
+  on each number; history is kept unless the store has `with_retention`
+  and you schedule `apply_retention` (`meta-whatsapp-rs-storage`).
 
 ~~`update_status` matched on the message id alone~~: until 4b47bf7.
 ~~A `wa_id` conversation replied without `+`~~: until 2b2679a (on an
@@ -144,11 +143,12 @@ request change the `ConversationStore` contract.
 
 ## What meta-whatsapp-rs does not do
 
-- Not recorded: calls (a call reopens the window on Meta's side but
+- Not recorded by `InboxSink`: calls (a call reopens the window on Meta's side but
   `Inbox::window` cannot see it; recording calls is decided, roadmap L7:
   [OPEN_QUESTIONS.md #32](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)),
-  media bytes (rows keep the media id; download within 7 days), BSUID
-  merges, the synced contacts (`smb_app_state_sync`).
+  thread ownership, the synced contacts (`smb_app_state_sync`, L8), media bytes (rows
+  keep the media id; download within 7 days), BSUID merges. The store can keep calls, ownership
+  and contacts already (`record_window_event`, `set_thread_owner`, `put_contact`).
 - Message ids are unique per store, not per business number (open
   question 33). No Redis `ConversationStore`.
 

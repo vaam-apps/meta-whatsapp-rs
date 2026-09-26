@@ -28,7 +28,7 @@ Everything stateful sits on two ports. The typed stores are built on
 | `ConversationStore` | `MemoryConversationStore` | `PostgresConversationStore` | — |
 | survives restarts, shared by instances | no | yes | yes, with persistence on |
 | expiry clock | the process | the database server | the Redis server |
-| maintenance | — | `migrate` at startup; `purge_expired()` every few minutes to hourly | eviction policy `noeviction`, on an instance of its own |
+| maintenance | `apply_retention` on a schedule, when a retention is set | `migrate` at startup; `purge_expired()` every few minutes to hourly; `apply_retention` on a schedule, when a retention is set | eviction policy `noeviction`, on an instance of its own |
 | limits | one instance | refuses U+0000 in ids and keys (message content keeps it, as bytes and `json`: search on bytes, no payload indexes) | no built-in TLS |
 
 Postgres alone covers everything and is the simplest choice. Put the vault
@@ -244,6 +244,10 @@ notification queue on top must be idempotent itself: tag each message with
     only once Business Suite shows it is not your line;
 - Webhook fields subscribed; alerts wired ([webhooks.md](webhooks.md#8-operational-alerts)).
 - Secrets from the secret manager, none in the repository or the database.
+- Inbox history's retention chosen (kept by default; `with_retention` on
+  the conversation store and a scheduled `apply_retention`), and erasure
+  requests wired to `ConversationStore::erase` if your privacy
+  obligations require it ([cms-inbox.md](cms-inbox.md#8-erasing-a-customer-and-retention)).
 - [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) read: its defaults (OTP
   issue limit, PIN policy, no token refresh) were decided on 2026-09-26,
   and some decisions are not built yet (a dead-letter path for webhook
@@ -315,6 +319,15 @@ notification queue on top must be idempotent itself: tag each message with
     writes that record. From that revision on, fields a later revision
     adds to a credit record or an audit entry are kept. Keep your own
     append-only log of each returned `ClearedShare` too.
+  - The pull request of roadmap L5 (the `ConversationStore` port
+    change): a custom `ConversationStore` must implement eleven new
+    methods (`message`, window events, thread ownership, synced contacts,
+    `erase`, `purge_before`) and pass `conversation_conformance::run`.
+    Postgres migration 4 adds three tables and two indexes and changes no
+    column: the previous revision keeps working beside it, but its
+    `migrate` then refuses the database, so upgrade every instance that
+    migrates at startup; on a large inbox, run it from a one-off job
+    (writes to the inbox tables wait while the indexes are built).
   - Nothing is back-filled: rows and conversation summaries recorded
     before an upgrade stay as they were written (synced history recorded
     before 6d50701 keeps the unread count and window it moved, for
