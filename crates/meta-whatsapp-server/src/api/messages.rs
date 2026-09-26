@@ -596,7 +596,7 @@ fn unsupported() -> ApiError {
 
 /// The message a request body asks for, checked against every limit Meta
 /// documents: nothing is sent when this fails.
-pub fn parse_message(body: Value) -> Result<OutboundMessage, ApiError> {
+pub(crate) fn parse_message(body: Value) -> Result<OutboundMessage, ApiError> {
     if let Some(object) = body.as_object() {
         if DIRECT_SEND_FIELDS.iter().any(|f| object.contains_key(*f)) {
             return Err(unsupported());
@@ -622,7 +622,7 @@ pub fn parse_message(body: Value) -> Result<OutboundMessage, ApiError> {
 
 /// The recipient, E.164 checked: a phone number without its `+` is
 /// refused here, before any request.
-pub fn recipient(to: RecipientObject) -> Result<Recipient, ApiError> {
+pub(crate) fn recipient(to: RecipientObject) -> Result<Recipient, ApiError> {
     let phone = to.phone.map(e164).transpose()?;
     let user = to
         .user_id
@@ -965,7 +965,7 @@ fn request_field(library: &str) -> String {
 
 /// Send `message` with the number's token: `202` with its id, or the
 /// error, with Meta's `details`.
-pub async fn send(
+pub(crate) async fn send(
     state: &AppState,
     owned: &OwnedNumber,
     message: &OutboundMessage,
@@ -1027,7 +1027,7 @@ fn accepted(response: SendResponse) -> Result<MessageAccepted, ApiError> {
         (status = 504, description = "`timeout`: the message may have been sent (`may_have_been_sent: true`)", body = ErrorBody),
     )
 )]
-pub async fn send_message(
+pub(crate) async fn send_message(
     State(state): State<AppState>,
     caller: Caller,
     owned: OwnedNumber,
@@ -1106,7 +1106,7 @@ where
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
 )]
-pub async fn mark_read(
+pub(crate) async fn mark_read(
     State(state): State<AppState>,
     owned: OwnedNumber,
     Path((_, message_id)): Path<(String, String)>,

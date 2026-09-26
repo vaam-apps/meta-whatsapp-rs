@@ -11,11 +11,8 @@ use meta_whatsapp_rs::adapters::store::postgres::sqlx::PgPool;
 use meta_whatsapp_rs::adapters::store::postgres::sqlx::postgres::{
     PgConnectOptions, PgPoolOptions,
 };
-use meta_whatsapp_rs::adapters::store::{
-    MemoryConversationStore, MemoryKvStore, PostgresConversationStore, PostgresKvStore,
-};
 use meta_whatsapp_rs::client::embedded_signup::{TokenVault, VaultKeys};
-use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
+use meta_whatsapp_rs::core::store::KvStore;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -26,7 +23,10 @@ use crate::events::{HOUSEKEEPING_INTERVAL, Inbound, purge_outbox};
 use crate::metrics::Metrics;
 use crate::model::KeyOwner;
 use crate::state::AppState;
-use crate::store::{EventStore, MemoryStore, PgEventStore, PgStore, Store, migrate};
+use crate::store::{
+    Backend, HOUSEKEEPING, IdempotencyRecords, Janitor, LeaderLock, MemoryBackend, Outbox,
+    PgBackend,
+};
 use crate::{api, listen};
 
 /// Connections per replica.
@@ -62,48 +62,25 @@ fn redacted(error: &meta_whatsapp_rs::adapters::store::postgres::sqlx::Error) ->
     }
 }
 
-/// The records, the library's key/value store and, with Postgres, the
-/// pool, for `config`'s storage.
-pub struct Backends {
-    /// The service's records.
-    pub store: Arc<dyn Store>,
-    /// The library's key/value store (the token vault's, webhook dedup's).
-    pub kv: Arc<dyn KvStore>,
-    /// The library's conversation store (the inbox's).
-    pub conversations: Arc<dyn ConversationStore>,
-    /// The event outbox.
-    pub events: Arc<dyn EventStore>,
-    /// The pool, with Postgres.
-    pub pool: Option<PgPool>,
-}
-
 /// Open the storage `config` names, migrating it unless
-/// `WA_SERVER_MIGRATE=skip`.
-pub async fn backends(config: &Config) -> anyhow::Result<Backends> {
+/// `WA_SERVER_MIGRATE=skip`: every port over one database (a
+/// [`Backend`]).
+pub async fn backends(config: &Config) -> anyhow::Result<Arc<dyn Backend>> {
     match &config.storage {
         Storage::Postgres(url) => {
-            let pool = connect(url).await?;
+            let backend = PgBackend::new(connect(url).await?);
             if config.migrate == MigrateMode::Auto {
-                migrate(&pool).await.context("migrations failed")?;
+                backend
+                    .migrator()
+                    .migrate()
+                    .await
+                    .context("migrations failed")?;
             }
-            Ok(Backends {
-                store: Arc::new(PgStore::new(pool.clone())),
-                kv: Arc::new(PostgresKvStore::new(pool.clone())),
-                conversations: Arc::new(PostgresConversationStore::new(pool.clone())),
-                events: Arc::new(PgEventStore::new(pool.clone())),
-                pool: Some(pool),
-            })
+            Ok(Arc::new(backend))
         }
         Storage::Memory => {
             tracing::warn!("memory storage: everything is lost on restart (development only)");
-            let store = MemoryStore::new();
-            Ok(Backends {
-                events: store.outbox(),
-                store: Arc::new(store),
-                kv: Arc::new(MemoryKvStore::new()),
-                conversations: Arc::new(MemoryConversationStore::new()),
-                pool: None,
-            })
+            Ok(Arc::new(MemoryBackend::new()))
         }
     }
 }
@@ -132,7 +109,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
             "WA_GRAPH_ENDPOINT is set: Graph calls, and the tokens they carry, go to this host, not graph.facebook.com"
         );
     }
-    let backends = backends(&config).await?;
+    let backend = backends(&config).await?;
     let client = graph_client(&config)?;
     let Config {
         vault_keys,
@@ -145,25 +122,23 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         settings,
         ..
     } = config;
-    let vault = vault(backends.kv.clone(), vault_keys)?;
-    let memory = backends.pool.is_none();
+    let vault = vault(backend.kv(), vault_keys)?;
     let inbound = Inbound::new(
         app_secrets,
-        backends.kv.clone(),
-        backends.conversations.clone(),
-        backends.events.clone(),
+        backend.kv(),
+        backend.conversations(),
+        backend.outbox(),
     )?;
-    let records = backends.store.clone();
-    let state = AppState::with_settings(
-        backends.store,
+    let state = AppState::from_backend(
+        backend.as_ref(),
         vault,
         client,
         verify_token,
         Metrics::new(),
         inbound,
         settings,
-    );
-    if memory {
+    )?;
+    if backend.kind().is_process_local() {
         // Memory storage exists in development only (the configuration
         // refuses it elsewhere), and the CLI cannot reach it: the first
         // admin key is minted here and written once to standard error,
@@ -194,9 +169,12 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
 
     let (stop, stopped) = watch::channel(false);
     let housekeeping = tokio::spawn(housekeeping(
-        backends.events.clone(),
-        records,
-        backends.pool.clone().map(PostgresKvStore::new),
+        backend.outbox(),
+        backend.idempotency(),
+        Some(Sweep {
+            leader: backend.leader_lock(),
+            janitor: backend.janitor(),
+        }),
         outbox_retention,
         HOUSEKEEPING_INTERVAL,
         stop_signal(stopped.clone()),
@@ -223,23 +201,35 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     )
     .await;
     housekeeping.abort();
-    if let Some(pool) = backends.pool {
-        pool.close().await;
-    }
+    backend.close().await;
     served
 }
 
+/// What housekeeping sweeps besides the outbox and the idempotency
+/// records: the expired rows nothing else deletes (on Postgres, the
+/// library's key/value rows), under the leader lock's housekeeping turn.
+pub struct Sweep {
+    /// Whose turn it is.
+    pub leader: Arc<dyn LeaderLock>,
+    /// What it sweeps.
+    pub janitor: Arc<dyn Janitor>,
+}
+
 /// Housekeeping, every `every` until `stop` (docs/design/server.md,
-/// section 2.4): purge the outbox past `retention` and, on Postgres, the
-/// library's dead key/value rows (webhook dedup markers add one per event),
-/// then `store`'s expired idempotency records (already ignored: this
-/// bounds the table). Each purge runs on one replica at a time (the
-/// housekeeping advisory lock; a replica that does not get it skips that
-/// purge this round). A failure is logged and retried next round.
+/// section 2.4): purge the outbox past `retention` and, with a `sweep`,
+/// the expired rows nothing else deletes (on Postgres, the library's dead
+/// key/value rows: webhook dedup markers add one per event), then
+/// `store`'s expired idempotency records (already ignored: this bounds the
+/// table). Each purge runs on one replica at a time (the housekeeping
+/// lock; a replica that does not get it skips that purge this round): the
+/// outbox and the idempotency records take it themselves, the sweep runs
+/// under a [`LeaderLock`] turn of [`HOUSEKEEPING`], and only on the replica
+/// whose outbox purge ran this round. A failure is logged and retried next
+/// round.
 pub async fn housekeeping(
-    events: Arc<dyn EventStore>,
-    store: Arc<dyn Store>,
-    kv: Option<PostgresKvStore>,
+    events: Arc<dyn Outbox>,
+    store: Arc<dyn IdempotencyRecords>,
+    sweep: Option<Sweep>,
     retention: Duration,
     every: Duration,
     stop: impl Future<Output = ()>,
@@ -254,10 +244,8 @@ pub async fn housekeeping(
         }
         match purge_outbox(events.as_ref(), retention).await {
             Ok(Some(_)) => {
-                if let Some(kv) = &kv
-                    && let Err(error) = kv.purge_expired().await
-                {
-                    tracing::warn!(error = %error, "purging expired key/value rows failed");
+                if let Some(sweep) = &sweep {
+                    sweep_expired(sweep).await;
                 }
             }
             // Another replica holds the lock this round.
@@ -269,6 +257,26 @@ pub async fn housekeeping(
             Ok(purged) => tracing::debug!(purged, "expired idempotency records purged"),
             Err(error) => tracing::warn!(error = %error, "purging idempotency records failed"),
         }
+    }
+}
+
+/// The sweep of one round, under the housekeeping turn: skipped when
+/// another replica holds it.
+async fn sweep_expired(sweep: &Sweep) {
+    let turn = match sweep.leader.try_exclusive(HOUSEKEEPING).await {
+        Ok(Some(turn)) => turn,
+        // Another replica holds the lock this round.
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(error = %error, "purging expired key/value rows failed");
+            return;
+        }
+    };
+    if let Err(error) = sweep.janitor.purge_expired().await {
+        tracing::warn!(error = %error, "purging expired key/value rows failed");
+    }
+    if let Err(error) = turn.release().await {
+        tracing::warn!(error = %error, "ending the housekeeping turn failed");
     }
 }
 
@@ -549,6 +557,7 @@ mod tests {
     async fn housekeeping_purges_past_retention_until_stopped() {
         use crate::model::{IdempotencyClaim, IdempotencyKey, TenantId};
         use crate::store::events::{EventQuery, NewEvent};
+        use crate::store::{MemoryStore, Outbox as EventStore, RecordStore};
         let events: Arc<dyn EventStore> = Arc::new(crate::store::MemoryEventStore::new());
         // An idempotency record expired before the first round.
         let records = Arc::new(MemoryStore::new());
@@ -618,6 +627,80 @@ mod tests {
             0,
             "the expired idempotency record was never purged"
         );
+        stop.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("stopped with the service")
+            .unwrap();
+    }
+
+    /// A janitor counting its sweeps.
+    #[derive(Debug, Default)]
+    struct Counting(std::sync::atomic::AtomicUsize);
+
+    impl Counting {
+        fn sweeps(&self) -> usize {
+            self.0.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Janitor for Counting {
+        async fn purge_expired(&self) -> crate::store::StoreResult<u64> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(0)
+        }
+    }
+
+    /// The sweep runs under the housekeeping turn: a replica finding the
+    /// turn taken skips it, and the turn is free again after a sweep.
+    /// Decisive: the turn in `sweep_expired`.
+    #[tokio::test]
+    async fn the_sweep_runs_under_the_housekeeping_turn() {
+        use crate::store::MemoryLeaderLock;
+        let leader = MemoryLeaderLock::new();
+        let janitor = Arc::new(Counting::default());
+        let sweep = Sweep {
+            leader: Arc::new(leader.clone()),
+            janitor: janitor.clone(),
+        };
+        sweep_expired(&sweep).await;
+        assert_eq!(janitor.sweeps(), 1);
+        let held = leader.try_exclusive(HOUSEKEEPING).await.unwrap().unwrap();
+        sweep_expired(&sweep).await;
+        assert_eq!(janitor.sweeps(), 1, "another replica's turn");
+        held.release().await.unwrap();
+        sweep_expired(&sweep).await;
+        assert_eq!(janitor.sweeps(), 2);
+        assert!(
+            leader.try_exclusive(HOUSEKEEPING).await.unwrap().is_some(),
+            "the sweep released its turn"
+        );
+    }
+
+    /// Housekeeping sweeps the expired rows round after round, after an
+    /// outbox purge that ran. Decisive: the sweep in the loop.
+    #[tokio::test]
+    async fn housekeeping_sweeps_the_expired_rows() {
+        use crate::store::{MemoryEventStore, MemoryLeaderLock, MemoryStore};
+        let janitor = Arc::new(Counting::default());
+        let (stop, stopped) = watch::channel(false);
+        let task = tokio::spawn(housekeeping(
+            Arc::new(MemoryEventStore::new()),
+            Arc::new(MemoryStore::new()),
+            Some(Sweep {
+                leader: Arc::new(MemoryLeaderLock::new()),
+                janitor: janitor.clone(),
+            }),
+            Duration::from_secs(60),
+            Duration::from_millis(20),
+            stop_signal(stopped),
+        ));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while janitor.sweeps() < 2 {
+            assert!(tokio::time::Instant::now() < deadline, "never swept twice");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         stop.send(true).unwrap();
         tokio::time::timeout(Duration::from_secs(5), task)
             .await

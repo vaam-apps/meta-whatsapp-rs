@@ -14,6 +14,39 @@ use std::time::{Duration, Instant};
 
 const BIN: &str = env!("CARGO_BIN_EXE_meta-whatsapp-server");
 
+/// A spawned `meta-whatsapp-server`, killed and reaped when dropped: a
+/// test that fails before [`terminate`] leaves no server behind, holding
+/// its ports and, on Postgres, its connections and the housekeeping lock.
+struct Served(Child);
+
+impl std::ops::Deref for Served {
+    type Target = Child;
+
+    fn deref(&self) -> &Child {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Served {
+    fn deref_mut(&mut self) -> &mut Child {
+        &mut self.0
+    }
+}
+
+impl Drop for Served {
+    fn drop(&mut self) {
+        // After `terminate` the child is reaped already, and both are
+        // no-ops (std sends no signal to a reaped child).
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// `command`, spawned, killed when the guard drops.
+fn spawn(command: &mut Command) -> Served {
+    Served(command.spawn().unwrap())
+}
+
 /// Two free local ports.
 fn two_ports() -> (SocketAddr, SocketAddr) {
     let a = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -112,11 +145,11 @@ fn base(command: &mut Command, public: SocketAddr, internal: SocketAddr) -> &mut
 #[test]
 fn serve_answers_on_both_listeners_and_stops_on_sigterm() {
     let (public, internal) = two_ports();
-    let mut child = base(&mut Command::new(BIN), public, internal)
-        .env("WA_SERVER_ENV", "development")
-        .arg("serve")
-        .spawn()
-        .unwrap();
+    let mut child = spawn(
+        base(&mut Command::new(BIN), public, internal)
+            .env("WA_SERVER_ENV", "development")
+            .arg("serve"),
+    );
     wait_live(internal, &mut child);
     wait_live(public, &mut child);
     let (status, spec) = http(internal, "GET", "/v1/openapi.json", &[], "").unwrap();
@@ -154,6 +187,28 @@ fn serve_answers_on_both_listeners_and_stops_on_sigterm() {
     assert!(!down.success(), "healthcheck against a stopped service");
 }
 
+/// A test that fails while its server is up leaves none running: the
+/// guard kills and reaps it as the panic unwinds, so it answers no more.
+/// Decisive: `Served`'s `Drop`.
+#[test]
+fn a_failing_test_leaves_no_server_running() {
+    let (public, internal) = two_ports();
+    let failed = std::panic::catch_unwind(|| {
+        let mut child = spawn(
+            base(&mut Command::new(BIN), public, internal)
+                .env("WA_SERVER_ENV", "development")
+                .arg("serve"),
+        );
+        wait_live(internal, &mut child);
+        panic!("deliberate: a test failing while its server is up");
+    });
+    assert!(failed.is_err(), "the scope did fail");
+    assert!(
+        http(internal, "GET", "/livez", &[], "").is_none(),
+        "the server still answers after its test failed"
+    );
+}
+
 /// In development on memory storage (which the CLI cannot reach), `serve`
 /// writes a one-time admin key to standard error, which the served API
 /// accepts (coordinator's decision DP9). The key is a plain line of its
@@ -164,12 +219,12 @@ fn serve_answers_on_both_listeners_and_stops_on_sigterm() {
 fn development_on_memory_prints_a_one_time_admin_key() {
     use std::io::BufRead as _;
     let (public, internal) = two_ports();
-    let mut child = base(&mut Command::new(BIN), public, internal)
-        .env("WA_SERVER_ENV", "development")
-        .env("WA_SERVER_LOG_FORMAT", "json")
-        .arg("serve")
-        .spawn()
-        .unwrap();
+    let mut child = spawn(
+        base(&mut Command::new(BIN), public, internal)
+            .env("WA_SERVER_ENV", "development")
+            .env("WA_SERVER_LOG_FORMAT", "json")
+            .arg("serve"),
+    );
     let stderr = child.stderr.take().unwrap();
     let (found, key) = std::sync::mpsc::channel();
     let reader = std::thread::spawn(move || {
@@ -248,11 +303,11 @@ fn development_on_memory_prints_a_one_time_admin_key() {
 #[test]
 fn serve_cuts_off_a_slow_request_head_on_both_listeners() {
     let (public, internal) = two_ports();
-    let mut child = base(&mut Command::new(BIN), public, internal)
-        .env("WA_SERVER_ENV", "development")
-        .arg("serve")
-        .spawn()
-        .unwrap();
+    let mut child = spawn(
+        base(&mut Command::new(BIN), public, internal)
+            .env("WA_SERVER_ENV", "development")
+            .arg("serve"),
+    );
     wait_live(internal, &mut child);
     wait_live(public, &mut child);
     let slow = |addr: SocketAddr| {
@@ -320,15 +375,15 @@ fn serve_receives_signed_deliveries() {
     use meta_whatsapp_rs::webhooks::sign;
 
     let (public, internal) = two_ports();
-    let mut child = base(&mut Command::new(BIN), public, internal)
-        .env("WA_SERVER_ENV", "development")
-        .env(
-            "WA_APP_SECRET_PREVIOUS",
-            "previous-app-secret-for-the-binary-test",
-        )
-        .arg("serve")
-        .spawn()
-        .unwrap();
+    let mut child = spawn(
+        base(&mut Command::new(BIN), public, internal)
+            .env("WA_SERVER_ENV", "development")
+            .env(
+                "WA_APP_SECRET_PREVIOUS",
+                "previous-app-secret-for-the-binary-test",
+            )
+            .arg("serve"),
+    );
     wait_live(internal, &mut child);
     wait_live(public, &mut child);
     let body = r#"{"object": "whatsapp_business_account", "entry": [{"id": "102290129340398",
@@ -392,13 +447,13 @@ fn serve_receives_signed_deliveries() {
 fn serve_applies_the_configured_rate_limits() {
     use std::io::BufRead as _;
     let (public, internal) = two_ports();
-    let mut child = base(&mut Command::new(BIN), public, internal)
-        .env("WA_SERVER_ENV", "development")
-        .env("WA_SERVER_RATE_READ", "1")
-        .env("WA_SERVER_RATE_READ_BURST", "1")
-        .arg("serve")
-        .spawn()
-        .unwrap();
+    let mut child = spawn(
+        base(&mut Command::new(BIN), public, internal)
+            .env("WA_SERVER_ENV", "development")
+            .env("WA_SERVER_RATE_READ", "1")
+            .env("WA_SERVER_RATE_READ_BURST", "1")
+            .arg("serve"),
+    );
     let stderr = child.stderr.take().unwrap();
     let (found, admin) = std::sync::mpsc::channel();
     // Reads standard error to its end, so the service never blocks on it.
@@ -569,7 +624,7 @@ fn live_postgres_cli_bootstrap_key_works_against_the_served_api() {
 
     let mut serve = Command::new(BIN);
     with_db(&mut serve);
-    let mut child = serve.arg("serve").spawn().unwrap();
+    let mut child = spawn(serve.arg("serve"));
     wait_live(internal, &mut child);
     let bearer = format!("Bearer {key}");
     let (status, body) = http(
@@ -679,7 +734,7 @@ fn live_postgres_cli_vault_rotate_fails_when_a_record_does() {
     use meta_whatsapp_rs::core::secret::AccessToken;
     use meta_whatsapp_rs::core::store::KvStore;
     use meta_whatsapp_server::model::TenantId;
-    use meta_whatsapp_server::store::{PgStore, Store, migrate};
+    use meta_whatsapp_server::store::{PgStore, RecordStore, migrate};
 
     const ACTIVE: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
     const PREVIOUS: &str = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";

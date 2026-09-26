@@ -34,8 +34,8 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
   error code, metrics labels). Code that maps kinds iterates
   `ErrorKind::ALL` in its tests, so the new kind fails them until it is
   decided there too: the service's HTTP status table
-  (`crates/meta-whatsapp-server/src/error.rs`, `kind_code` and `CODES`;
-  `tests/errors.rs` there, which reads the table of
+  (`crates/meta-whatsapp-server-core/src/error.rs`, `kind_code` and `CODES`;
+  `crates/meta-whatsapp-server/tests/errors.rs`, which reads the table of
   `docs/design/server.md` section 5.2: add the code there too) is one,
   and its codes are a public contract (the OpenAPI document's
   `ErrorCode`, regenerate and commit it).

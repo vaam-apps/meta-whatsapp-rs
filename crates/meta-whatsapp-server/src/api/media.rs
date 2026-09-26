@@ -487,7 +487,7 @@ fn media_slot(state: &AppState, tenant: &TenantId) -> Result<Slot, ApiError> {
         (status = 504, description = "`timeout`: the upload may have happened", body = ErrorBody),
     )
 )]
-pub async fn upload_media(
+pub(crate) async fn upload_media(
     State(state): State<AppState>,
     caller: Caller,
     owned: OwnedNumber,
@@ -647,7 +647,7 @@ async fn download_failed(state: &AppState, owned: &OwnedNumber, error: &Error) -
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
 )]
-pub async fn download_media(
+pub(crate) async fn download_media(
     State(state): State<AppState>,
     caller: Caller,
     owned: OwnedNumber,
@@ -843,7 +843,7 @@ impl futures::Stream for HeldBack {
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
 )]
-pub async fn delete_media(
+pub(crate) async fn delete_media(
     State(state): State<AppState>,
     owned: OwnedNumber,
     Path((_, media_id)): Path<(String, String)>,

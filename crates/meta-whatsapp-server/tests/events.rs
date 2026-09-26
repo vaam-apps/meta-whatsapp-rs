@@ -26,7 +26,7 @@ async fn harness() -> Harness {
 
 /// Insert `event` straight into the outbox; its sequence.
 async fn insert(h: &Harness, event: &NewEvent) -> i64 {
-    use meta_whatsapp_server::store::EventStore as _;
+    use meta_whatsapp_server::store::Outbox as _;
     h.outbox.insert(event).await.unwrap().unwrap()
 }
 

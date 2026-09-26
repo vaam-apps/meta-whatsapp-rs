@@ -1096,7 +1096,7 @@ async fn rotating_the_vault_key_walks_every_page_of_bindings() {
     use meta_whatsapp_rs::core::store::KvStore;
     use meta_whatsapp_server::auth::rotate_vault;
     use meta_whatsapp_server::model::MAX_PAGE_SIZE;
-    use meta_whatsapp_server::store::{MemoryStore, Store};
+    use meta_whatsapp_server::store::{MemoryStore, RecordStore};
 
     let old =
         || VaultKey::from_base64("k1", "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=").unwrap();
@@ -1156,7 +1156,7 @@ async fn rotating_the_vault_key_rewrites_every_bound_token() {
     use meta_whatsapp_rs::core::secret::AccessToken;
     use meta_whatsapp_rs::core::store::KvStore;
     use meta_whatsapp_server::auth::rotate_vault;
-    use meta_whatsapp_server::store::{MemoryStore, Store};
+    use meta_whatsapp_server::store::{MemoryStore, RecordStore};
 
     // 32 bytes of one value each, in base64.
     let key = |id: &str, byte: u8| {

@@ -10,15 +10,17 @@ members = [
   "crates/meta-whatsapp-typst",
   "crates/meta-whatsapp-bot",
   "crates/meta-whatsapp-rs",
+  "crates/meta-whatsapp-server-core",
   "crates/meta-whatsapp-server",
 ]
 # Repository automation is its own workspace (own Cargo.lock): its HTTP
 # client (ureq → rustls with `ring`) must not be resolved into the
 # library's builds and tests. See .xtask/Cargo.toml.
 exclude = [".xtask"]
-# The service is a member (every `--workspace` recipe, and so `just ci`,
-# covers it) but not a default one: a bare `cargo build` or `cargo test` in
-# the root builds the library alone, with the features its crates choose.
+# The service's crates (meta-whatsapp-server-core, meta-whatsapp-server)
+# are members (every `--workspace` recipe, and so `just ci`, covers them)
+# but not default ones: a bare `cargo build` or `cargo test` in the root
+# builds the library alone, with the features its crates choose.
 default-members = [
   "crates/meta-whatsapp-core",
   "crates/meta-whatsapp-client",
@@ -52,9 +54,13 @@ meta-whatsapp-webhooks = { path = "crates/meta-whatsapp-webhooks" }
 meta-whatsapp-adapters = { path = "crates/meta-whatsapp-adapters", default-features = false }
 meta-whatsapp-typst = { path = "crates/meta-whatsapp-typst" }
 meta-whatsapp-bot = { path = "crates/meta-whatsapp-bot" }
-# The facade, for binaries only: no library crate depends on it
-# (docs/architecture.md, dependency rule).
+# The facade, for binaries and the service's crates (the service's core is
+# a library crate, but not one of the library's): no crate of the library
+# depends on it (docs/architecture.md, dependency rule).
 meta-whatsapp-rs = { path = "crates/meta-whatsapp-rs", default-features = false }
+# The service's framework-free core: the service's crates only, never the
+# library's.
+meta-whatsapp-server-core = { path = "crates/meta-whatsapp-server-core" }
 
 # Errors. `thiserror` shapes the typed tree; `anyhow` is the opaque leaf for
 # failures an adapter or integrator raises that have no typed home.
@@ -149,6 +155,10 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 pretty_assertions = "1"
 tower = "0.5"
 http-body-util = "0.1"
+# UI tests of the service's crates: what must not compile outside them
+# (private vault methods, capabilities no one else can make), pinned with
+# the compiler's error code and text rather than "some error".
+trybuild = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

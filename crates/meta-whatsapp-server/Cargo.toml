@@ -18,36 +18,34 @@ name = "meta-whatsapp-server"
 path = "src/main.rs"
 
 [dependencies]
-# The only crate of this workspace the service depends on
-# (docs/architecture.md, § Service): axum through
-# `meta_whatsapp_rs::webhooks::axum`, sqlx through
+# The library, through the facade alone (docs/architecture.md, § Service):
+# axum through `meta_whatsapp_rs::webhooks::axum`, sqlx through
 # `meta_whatsapp_rs::adapters::store::postgres::sqlx`.
 meta-whatsapp-rs = { workspace = true, features = ["reqwest", "memory", "postgres", "axum"] }
+# The service's framework-free core: the domain, the authorization order,
+# the error model as data, and the ports this crate's backends implement.
+meta-whatsapp-server-core.workspace = true
 
 anyhow.workspace = true
 async-trait.workspace = true
 futures.workspace = true
-# Random API keys (key id and secret).
+# Request ids (`req_` and 16 random hex digits).
 getrandom.workspace = true
 # Opaque list cursors; `X-WA-SHA256` in hex.
 hex.workspace = true
 # Meta reports a media file's SHA-256 in hex or base64: a streamed
 # download announces it (`X-WA-SHA256`, hex) before the first byte.
 base64.workspace = true
-# Event ids: a keyed hash of the event's outbox key (src/events.rs).
-hmac.workspace = true
 # Media uploads: multipart parsing with per-field size limits.
 multer.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-# API keys are stored as SHA-256 digests and compared in constant time.
+# SHA-256: of a keyless event's body (src/events.rs), of an upload in its
+# idempotency fingerprint and of a download, checked against Meta's
+# (src/api/media.rs), and the advisory lock keys (src/store/postgres.rs).
 sha2.workspace = true
-subtle.workspace = true
 thiserror.workspace = true
 time.workspace = true
-# Meta's `details` lose format characters and line separators, not only
-# control characters (src/error.rs).
-unicode-properties.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time", "io-util"] }
 tracing.workspace = true
 # JSON logs (`WA_SERVER_LOG_FORMAT=json`, the default).
@@ -68,6 +66,8 @@ http-body-util.workspace = true
 pretty_assertions.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync", "test-util"] }
 tower = { workspace = true, features = ["util"] }
+# tests/visibility.rs: what does not compile outside this crate.
+trybuild.workspace = true
 
 [lints]
 workspace = true

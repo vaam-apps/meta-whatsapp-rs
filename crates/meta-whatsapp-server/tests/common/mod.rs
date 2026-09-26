@@ -3,6 +3,7 @@
 //! `ScriptedTransport`.
 #![allow(dead_code)] // each test binary uses a different subset
 
+pub mod backend_suite;
 pub mod capture;
 pub mod events_suite;
 pub mod meta;
@@ -37,7 +38,7 @@ use meta_whatsapp_server::model::{AllowedTenants, KeyOwner, Scope, TenantId};
 use meta_whatsapp_server::ratelimit::{Rate, RateLimits};
 use meta_whatsapp_server::state::{AppState, Settings};
 use meta_whatsapp_server::store::events::{EventPage, EventQuery, NewEvent};
-use meta_whatsapp_server::store::{EventStore, MemoryStore, Store};
+use meta_whatsapp_server::store::{MemoryStore, Outbox as EventStore, Store};
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -535,7 +536,8 @@ impl Harness {
             Metrics::new(),
             inbound,
             settings,
-        );
+        )
+        .unwrap();
         Self {
             internal: internal_router(&state),
             public: public_router(&state),

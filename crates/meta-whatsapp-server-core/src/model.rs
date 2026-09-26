@@ -452,8 +452,10 @@ pub enum IdempotencyClaim {
     Existing(IdempotencyRecord),
 }
 
-/// An idempotency record another request left.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// An idempotency record another request left. `Debug` shows its state
+/// only: the fingerprint hashes the request's body, and a kept answer's
+/// body is the caller's data.
+#[derive(Clone, PartialEq, Eq)]
 pub struct IdempotencyRecord {
     /// SHA-256 of the request that claimed it (method, path, body).
     pub fingerprint: [u8; 32],
@@ -461,8 +463,17 @@ pub struct IdempotencyRecord {
     pub state: IdempotencyState,
 }
 
-/// Where the request holding a key stands.
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl fmt::Debug for IdempotencyRecord {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IdempotencyRecord")
+            .field("state", &self.state)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Where the request holding a key stands. `Debug` shows a kept answer's
+/// length (`body_len`), never its bytes.
+#[derive(Clone, PartialEq, Eq)]
 pub enum IdempotencyState {
     /// Still running, or stopped without settling it.
     InProgress {
@@ -477,4 +488,20 @@ pub enum IdempotencyState {
         /// JSON body, byte for byte.
         body: Vec<u8>,
     },
+}
+
+impl fmt::Debug for IdempotencyState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InProgress { lease_expired } => f
+                .debug_struct("InProgress")
+                .field("lease_expired", lease_expired)
+                .finish(),
+            Self::Completed { status, body } => f
+                .debug_struct("Completed")
+                .field("status", status)
+                .field("body_len", &body.len())
+                .finish(),
+        }
+    }
 }

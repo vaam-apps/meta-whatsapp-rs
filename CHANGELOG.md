@@ -723,6 +723,51 @@ stored data, the owner's).
 
 ### Changed
 
+- **meta-whatsapp-server's domain is a crate of its own,
+  `meta-whatsapp-server-core`** (`publish = false`, not a default member;
+  no axum, sqlx or utoipa), so the service's API and storage can each be
+  swapped. It holds the records and keys (`model`, `keys`), the
+  authorization order as services (`authz`: a credential to a `Caller`,
+  ownership to an `OwnedNumber` or `OwnedWaba`, still the only way to a
+  vault token), event routing, outbox keys, event ids and polling
+  (`events`), the idempotency engine, the rate limiter, and the error
+  model as data (`ServiceError`, `ErrorCode`, statuses as `u16`), which
+  `meta_whatsapp_server::error::ApiError` answers over HTTP. Storage goes
+  through its ports: `RecordStore` and `IdempotencyRecords` (the former
+  `store::Store`, split; `Store` is now both at once), `Outbox` (the
+  former `EventStore`), `LeaderLock`, `Janitor` and `SchemaMigrator`,
+  bundled per database as a `Backend`. The memory and Postgres
+  implementations stay in `meta-whatsapp-server` (`MemoryBackend`,
+  `PgBackend`), and `serve::backends` returns a `Backend` instead of
+  `Backends` and its `pool`. No change to the HTTP API: `openapi/v1.json`
+  is byte-identical. In code: import `RecordStore` and
+  `IdempotencyRecords` to call a concrete store's methods, and `Outbox`
+  for `EventStore`; `meta_whatsapp_server::{model, keys}` and the items of
+  `events`, `ratelimit`, `idempotency` and `error` keep their paths. One
+  change in housekeeping: the library's expired key/value rows are now
+  purged under the housekeeping lock too (a `LeaderLock` turn), so two
+  replicas never purge them at once. That turn is a transaction of its
+  own, so while the sweep runs it holds a second pooled connection besides
+  the one `purge_expired` uses. Other signatures that changed:
+  `serve::housekeeping` takes `(Arc<dyn Outbox>, Arc<dyn
+  IdempotencyRecords>, Option<Sweep>, retention, every, stop)` instead of
+  `(Arc<dyn EventStore>, Arc<dyn Store>, Option<PostgresKvStore>, …)`
+  (`Sweep` pairs the backend's `LeaderLock` and `Janitor`);
+  `state::AppState::new`, `with_settings` and `from_backend` return a
+  `Result`, as the core's `Authorizer::new` refuses a Graph client built
+  with a token (see "Security", the server core's review, L4); the
+  handlers of `api::{admin, numbers, events, messages, media,
+  templates}`, with `messages::send`, `templates::list` and `create`,
+  and `idempotency::run` are crate-private (see "Security", H1 there),
+  as are the helpers of those modules and of `api::common` that nothing
+  outside the crate used (`admin::allowed_tenants`,
+  `messages::parse_message` and `recipient`, `common::meta_object`,
+  `graph_id`, `encode_cursor`, `next_cursor`, `rfc3339`,
+  `parse_rfc3339` and `json`; `api::admin::mint` stays public);
+  `telemetry::record_tenant` and `record_key` are gone (the core's
+  `Authorizer` records `tenant` and `key_id` on the request's span); and
+  `keys::MintedKey::generate` fails with the library's `CryptoError::Rng`
+  instead of a `getrandom::Error`.
 - **The plans of 2026-09-26** (docs only; the owner's directive of that
   day, recorded in AGENTS.md § Decisions and design §10, now titled
   "Decisions", whose anchor moved to `#10-decisions`):
@@ -1124,3 +1169,68 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   response of `Messages::send` or `Marketing::send` (which echo the
   recipient's number) is reported without the body snippet and without
   serde's message.
+- The security review of `meta-whatsapp-server-core` (on the branch that
+  extracted it) found, and fixed before it merged:
+  - **H1 — a capability one `Authorizer` made was accepted by another.**
+    `Authorizer::new` is public, so any crate could build one over records
+    of its own, have it make an `AdminCaller` or a `Caller` for any
+    tenant, and hand it to the service's `Authorizer`, which then read,
+    stored, rotated and deleted vault tokens. Each `Authorizer` now has an
+    identity of its own that `Caller`, `AdminCaller`, `OwnedNumber` and
+    `OwnedWaba` carry, and every core method taking one refuses another's
+    with `403 forbidden`, logged at `warn`, before it reads or writes
+    anything. `Authorizer::store_token` and `rotate_vault` now fail with a
+    `ServiceError` (the same code as before for the vault's own failures).
+    A second review found the server re-opening it: its handlers were
+    public, took a `Caller` or an `AdminCaller` by value and acted on the
+    records for `Caller::tenant()` without asking the `Authorizer`. A
+    crate holding an `AppState` handed `api::numbers::list_wabas` a
+    forged `Caller` (any tenant's WABAs) and `api::admin::mint_platform_key`
+    a forged `AdminCaller` (a real platform key for every tenant), and
+    that key read a tenant's vault token through the service's own guard
+    and extractor. The handlers, and `idempotency::run` (it takes a tenant
+    as given), are crate-private now; `Authorizer::admit` and
+    `admit_admin` ask the core's check of a capability an adapter took
+    from outside its own code, and the server's `Caller` and `AdminCaller`
+    extractors call them on what they find in a request's extensions
+    (`403 forbidden` otherwise). So the brand holds for the core's
+    methods, the server's extractors and every handler, which only the
+    routers reach, behind their guards.
+  - **L4 — the tokenless Graph client was only tokenless by convention.**
+    `Authorizer::new` refuses a client built with a token (a
+    configuration error) rather than stripping it: the library's `Client`
+    cannot drop one, and a silent strip would hide the misconfiguration.
+    So `Authorizer::new`, and `meta_whatsapp_server::state::AppState::new`,
+    `with_settings` and `from_backend`, return a `Result`.
+  - **M1 — `AppState::store` was public**, a way around the handlers to
+    the records that decide who owns what; it is crate-private. The
+    handlers were a way around too, public themselves and writing the
+    records for whatever capability they were handed (see H1): they are
+    crate-private now, so another crate reaches the records only through
+    the routers.
+  - **L3 — `Debug` printed kept answers.** `Repeat::Replay`,
+    `IdempotencyState::Completed`, `IdempotencyRecord`,
+    `idempotency::Outcome::Answered`, the server's `MemoryStore` and its
+    `idempotency::Success` print a body's length (`body_len`), never its
+    bytes (`MemoryStore` prints counts only: no idempotency key either).
+  - **L1 — the visibility pins could pass for the wrong reason.** The
+    `compile_fail` doctests on `Tokens` accepted any compile error (a
+    typo'd path passed). They are `trybuild` UI tests now
+    (`tests/visibility.rs` in both service crates), each checked against
+    the compiler's error code and text, with a control case that names
+    every path they use and compiles; `AppState::store` and
+    `AppState::authz` are pinned too, and so are the handlers
+    (`api::admin::mint_platform_key`, `api::numbers::list_wabas`) and
+    `idempotency::run`.
+  - An admin unbind logged "unbinding a WABA without a usable token"
+    before its admin was checked, so a refused one logged an unbinding it
+    did not do. The line now follows the unbind.
+  - Not fixed here: **L2**, a race in `OwnedWaba::forget`. It deletes the
+    WABA's token and binding whatever they became since the WABA was
+    opened: attached again in between (a new token, another tenant), the
+    new ones go. Conditioning both on what the capability was made from
+    is a port change, recorded in docs/roadmap.md, item S2. The same
+    race in `OwnedNumber::failed` and `OwnedWaba::failed`: a `190`
+    answered to a capability made before the WABA was attached again
+    marks the new binding's numbers `reconnect_required`. S2 conditions
+    that update on the binding too (its tenant and `attached_at`).

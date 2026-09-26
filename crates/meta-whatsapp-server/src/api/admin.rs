@@ -18,7 +18,7 @@ use time::OffsetDateTime;
 use utoipa::ToSchema;
 
 use super::common::{ApiJson, PageParams, PageQuery, json, next_cursor, parse_rfc3339, rfc3339};
-use crate::auth::{AdminCaller, OwnedWaba, VaultRotation, graph_failed};
+use crate::auth::{AdminCaller, OwnedWaba, VaultRotation, graph_failed_for_admin};
 use crate::error::{ApiError, ErrorBody};
 use crate::keys::MintedKey;
 use crate::model::{
@@ -26,7 +26,7 @@ use crate::model::{
     MAX_NAME_CHARS, NewApiKey, PageRequest, Scope, Tenant, TenantId, TenantStatus,
 };
 use crate::state::AppState;
-use crate::store::Store;
+use crate::store::RecordStore;
 use crate::telemetry::{self, Subject};
 
 /// Log an operator's change (see [`crate::telemetry::audit`]).
@@ -160,7 +160,7 @@ fn path_tenant(id: &str) -> Result<TenantId, ApiError> {
         (status = 422, description = "`invalid_request` on `id` (malformed), `name` or `body`", body = ErrorBody),
     )
 )]
-pub async fn create_tenant(
+pub(crate) async fn create_tenant(
     State(state): State<AppState>,
     admin: AdminCaller,
     ApiJson(body): ApiJson<CreateTenant>,
@@ -193,7 +193,7 @@ pub async fn create_tenant(
         (status = 422, description = "`invalid_request` on `limit` or `cursor`", body = ErrorBody),
     )
 )]
-pub async fn list_tenants(
+pub(crate) async fn list_tenants(
     State(state): State<AppState>,
     _admin: AdminCaller,
     PageQuery(page): PageQuery,
@@ -220,7 +220,7 @@ pub async fn list_tenants(
         (status = 404, description = "`not_found`", body = ErrorBody),
     )
 )]
-pub async fn get_tenant(
+pub(crate) async fn get_tenant(
     State(state): State<AppState>,
     _admin: AdminCaller,
     Path(id): Path<String>,
@@ -250,7 +250,7 @@ pub async fn get_tenant(
         (status = 422, description = "`invalid_request` on `name` or `body`", body = ErrorBody),
     )
 )]
-pub async fn update_tenant(
+pub(crate) async fn update_tenant(
     State(state): State<AppState>,
     admin: AdminCaller,
     Path(id): Path<String>,
@@ -299,7 +299,7 @@ pub async fn update_tenant(
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
 )]
-pub async fn delete_tenant(
+pub(crate) async fn delete_tenant(
     State(state): State<AppState>,
     admin: AdminCaller,
     Path(id): Path<String>,
@@ -608,7 +608,7 @@ impl From<MintError> for ApiError {
 /// Mint and store a key for `owner`. The admin API and the CLI's
 /// bootstrap both use it. Returns the key (to show once) and its record.
 pub async fn mint(
-    store: &dyn Store,
+    store: &dyn RecordStore,
     owner: KeyOwner,
     scopes: Vec<Scope>,
     name: String,
@@ -672,7 +672,7 @@ fn minted_view(minted: &MintedKey, record: ApiKeyRecord) -> MintedKeyView {
         (status = 422, description = "`invalid_request` on `scopes`, `name`, `expires_at` or `body`", body = ErrorBody),
     )
 )]
-pub async fn mint_tenant_key(
+pub(crate) async fn mint_tenant_key(
     State(state): State<AppState>,
     admin: AdminCaller,
     Path(id): Path<String>,
@@ -722,7 +722,7 @@ pub async fn mint_tenant_key(
         (status = 404, description = "`not_found`: no such tenant", body = ErrorBody),
     )
 )]
-pub async fn list_tenant_keys(
+pub(crate) async fn list_tenant_keys(
     State(state): State<AppState>,
     _admin: AdminCaller,
     Path(id): Path<String>,
@@ -736,7 +736,7 @@ pub async fn list_tenant_keys(
 }
 
 async fn key_list(
-    store: &dyn Store,
+    store: &dyn RecordStore,
     scope: &KeyScope,
     page: &PageRequest,
 ) -> Result<Json<KeyList>, ApiError> {
@@ -766,7 +766,7 @@ async fn key_list(
         (status = 404, description = "`not_found`: no such key for this tenant", body = ErrorBody),
     )
 )]
-pub async fn revoke_tenant_key(
+pub(crate) async fn revoke_tenant_key(
     State(state): State<AppState>,
     admin: AdminCaller,
     Path((id, key_id)): Path<(String, String)>,
@@ -806,7 +806,7 @@ pub async fn revoke_tenant_key(
         (status = 422, description = "`invalid_request` on `tenants`, `scopes`, `name`, `expires_at` or `body`", body = ErrorBody),
     )
 )]
-pub async fn mint_platform_key(
+pub(crate) async fn mint_platform_key(
     State(state): State<AppState>,
     admin: AdminCaller,
     ApiJson(body): ApiJson<MintPlatformKey>,
@@ -829,7 +829,7 @@ pub async fn mint_platform_key(
 
 /// Validate a platform key's tenants: `"*"`, or a non-empty list of tenant
 /// ids (which need not exist yet).
-pub fn allowed_tenants(spec: TenantsSpec) -> Result<AllowedTenants, ApiError> {
+pub(crate) fn allowed_tenants(spec: TenantsSpec) -> Result<AllowedTenants, ApiError> {
     match spec {
         TenantsSpec::All(star) if star == "*" => Ok(AllowedTenants::All),
         TenantsSpec::All(_) => Err(ApiError::invalid("tenants")),
@@ -861,7 +861,7 @@ pub fn allowed_tenants(spec: TenantsSpec) -> Result<AllowedTenants, ApiError> {
         (status = 403, description = "Not an admin key", body = ErrorBody),
     )
 )]
-pub async fn list_platform_keys(
+pub(crate) async fn list_platform_keys(
     State(state): State<AppState>,
     _admin: AdminCaller,
     PageQuery(page): PageQuery,
@@ -883,7 +883,7 @@ pub async fn list_platform_keys(
         (status = 404, description = "`not_found`", body = ErrorBody),
     )
 )]
-pub async fn revoke_platform_key(
+pub(crate) async fn revoke_platform_key(
     State(state): State<AppState>,
     admin: AdminCaller,
     Path(key_id): Path<String>,
@@ -975,7 +975,7 @@ fn graph_id(field: &'static str, id: &str) -> Result<String, ApiError> {
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
 )]
-pub async fn attach_waba(
+pub(crate) async fn attach_waba(
     State(state): State<AppState>,
     admin: AdminCaller,
     Path(id): Path<String>,
@@ -1039,7 +1039,7 @@ pub async fn attach_waba(
         }
     }
     let record = StoredBusinessToken::new(waba_id.clone(), token).phone_number_ids(numbers.clone());
-    state.tokens().store(&record).await?;
+    state.authz().store_token(&admin, &record).await?;
     audit(
         "waba_attached",
         &admin,
@@ -1061,7 +1061,7 @@ pub async fn attach_waba(
     // was bound.
     if let Err(error) = waba.subscribe_app(None).await {
         let error = error.in_step(steps::SUBSCRIBE_APP);
-        return Err(graph_failed(&state, &waba_id, &error)
+        return Err(graph_failed_for_admin(&state, &admin, &waba_id, &error)
             .await
             .with_details(&error)
             .resumable(true));
@@ -1106,7 +1106,7 @@ pub struct WabaBindingView {
         (status = 404, description = "`not_found`: not bound", body = ErrorBody),
     )
 )]
-pub async fn get_waba(
+pub(crate) async fn get_waba(
     State(state): State<AppState>,
     _admin: AdminCaller,
     Path(waba_id): Path<String>,
@@ -1143,7 +1143,7 @@ pub async fn get_waba(
         (status = 404, description = "`not_found`: not bound", body = ErrorBody),
     )
 )]
-pub async fn unbind_waba(
+pub(crate) async fn unbind_waba(
     State(state): State<AppState>,
     admin: AdminCaller,
     Path(waba_id): Path<String>,
@@ -1190,11 +1190,11 @@ pub async fn unbind_waba(
         (status = 504, description = "`timeout`: the walk outlived the 55 s request deadline, part of the records rotated; repeat it, or run `meta-whatsapp-server vault rotate`, which has no deadline", body = ErrorBody),
     )
 )]
-pub async fn rotate_vault(
+pub(crate) async fn rotate_vault(
     State(state): State<AppState>,
     admin: AdminCaller,
 ) -> Result<Json<VaultRotation>, ApiError> {
-    let report = state.tokens().rotate_all(state.store()).await?;
+    let report = state.authz().rotate_vault(&admin).await?;
     audit("vault_rotated", &admin, Subject::default());
-    Ok(Json(report))
+    Ok(Json(report.into()))
 }

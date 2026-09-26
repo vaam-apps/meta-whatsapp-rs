@@ -1,0 +1,51 @@
+[package]
+name = "meta-whatsapp-server-core"
+description = "The meta-whatsapp-rs service's domain, framework-free: records, API keys, event routing and polling, idempotency, rate limits, the error model as data, authorization, and the ports a backend implements."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+# Part of the service (crates/meta-whatsapp-server), never a library
+# dependency: no crate of the library depends on it.
+publish = false
+
+[lib]
+name = "meta_whatsapp_server_core"
+
+[dependencies]
+# The library, through the facade and without its adapters: no HTTP
+# framework (axum), no database driver (sqlx), no HTTP client (reqwest)
+# (docs/architecture.md, § Service). What a backend or an API adapter
+# needs beyond it, it brings itself.
+meta-whatsapp-rs.workspace = true
+
+async-trait.workspace = true
+# Random API keys and idempotency claim ids.
+getrandom.workspace = true
+# Event ids and outbox keys, in hex.
+hex.workspace = true
+# Event ids: a keyed hash of the event's outbox key.
+hmac.workspace = true
+serde_json.workspace = true
+# API keys are stored as SHA-256 digests and compared in constant time.
+sha2.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+time.workspace = true
+# The rate limiter's buckets and the transfer slots; an idempotency key
+# cut before it settled is settled from a task of its own.
+tokio = { workspace = true, features = ["sync", "time", "rt"] }
+tracing.workspace = true
+# Meta's `details` lose format characters and line separators, not only
+# control characters (src/error.rs).
+unicode-properties.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync", "test-util"] }
+# tests/visibility.rs: what does not compile outside this crate.
+trybuild.workspace = true
+
+[lints]
+workspace = true

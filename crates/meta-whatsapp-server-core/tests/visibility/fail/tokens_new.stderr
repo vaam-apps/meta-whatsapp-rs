@@ -1,0 +1,10 @@
+error[E0624]: associated function `new` is private
+ --> tests/visibility/fail/tokens_new.rs:6:13
+  |
+6 |     Tokens::new(vault)
+  |             ^^^ private associated function
+  |
+ ::: src/authz.rs
+  |
+  |     pub(crate) fn new(vault: TokenVault) -> Self {
+  |     -------------------------------------------- private associated function defined here
