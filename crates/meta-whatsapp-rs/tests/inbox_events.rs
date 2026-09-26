@@ -201,12 +201,19 @@ async fn control_taken_refuses_a_reply_locally(store: Arc<dyn ConversationStore>
     assert!(is_thread_owned_elsewhere(&refused), "{refused}");
     assert_eq!(transport.requests().len(), 1, "refused with zero requests");
 
-    // A template needs no ownership.
+    // A template needs no ownership, and sending one changes no owner
+    // (`conversation-routing/thread-lifecycle`).
     transport.push_json(200, accepted("wamid.TEMPLATE"));
     inbox
         .reply(&key, TemplateMessage::new("order_update", "en_US").into())
         .await
         .unwrap();
+    assert_eq!(transport.requests().len(), 2);
+    let refused = inbox
+        .reply(&key, text("After the template"))
+        .await
+        .unwrap_err();
+    assert!(is_thread_owned_elsewhere(&refused), "{refused}");
     assert_eq!(transport.requests().len(), 2);
 
     // The caller's explicit override of the local check.
@@ -523,6 +530,43 @@ mod rules {
         );
     }
 
+    /// A picked-up business call is dated when the customer picked it up
+    /// (`start_time`: "Only present when the call was picked up by the
+    /// other party"), and a call status names the customer by its
+    /// `recipient_user_id` when no `contacts` come with it.
+    #[tokio::test]
+    async fn a_business_call_is_dated_when_picked_up() {
+        // A long call of the business's, picked up: dated when the
+        // customer picked it up, not when it ended an hour later.
+        let store = memory();
+        deliver(
+            &store,
+            &fixture(
+                "pages/calling.reference__call_terminate_webhook.json",
+                &[("1671644824", "1671648424")], // its `timestamp`, not `start_time`
+            ),
+        )
+        .await;
+        let events = store
+            .window_events(&ConversationKey::new("105615555715855", BSUID), None, 10)
+            .await
+            .unwrap();
+        assert_eq!((events.len(), events[0].at), (1, at(1_671_644_824)));
+
+        // A status without `contacts`: keyed by its `recipient_user_id`.
+        let store = memory();
+        let accepted = change(
+            "calls",
+            &json!({"messaging_product": "whatsapp",
+                "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
+                "statuses": [{"id": "wacid.ACCEPTED", "type": "call", "status": "ACCEPTED",
+                    "timestamp": "1750030073", "recipient_id": PHONE, "recipient_user_id": BSUID}]}),
+        );
+        deliver(&store, &accepted).await;
+        assert_eq!(events_of(&store, BSUID).await.len(), 1);
+        assert!(events_of(&store, PHONE).await.is_empty());
+    }
+
     /// Without a BSUID, a call is keyed by the customer's phone number:
     /// the contact's `wa_id`, else whichever of `from` and `to` is not the
     /// business number.
@@ -777,6 +821,26 @@ mod rules {
         );
     }
 
+    /// A handover's number with a `+` is the customer's `wa_id` all the
+    /// same, as the key of a message (`from`) has none.
+    #[tokio::test]
+    async fn a_handover_number_with_a_plus_names_the_wa_id() {
+        let store = memory();
+        let taken = fixture(
+            "pages/conversation-routing.thread-control__control_taken.json",
+            &[(
+                r#""phone_number": "16505551234""#,
+                r#""phone_number": "+16505551234""#,
+            )],
+        );
+        deliver(&store, &taken).await;
+        assert_eq!(
+            owner_of(&store, PHONE).await.unwrap().owner,
+            ThreadOwner::AnotherApp
+        );
+        assert_eq!(owner_of(&store, "+16505551234").await, None);
+    }
+
     /// A handover follows the identity links from its phone number: the
     /// latest link it is the `previous` of, then on from there.
     #[tokio::test]
@@ -801,6 +865,25 @@ mod rules {
         }
         assert_eq!(
             owner_of(&store, "US.3").await.unwrap().owner,
+            ThreadOwner::AnotherApp
+        );
+
+        // A loop of three stops where it closes too: at its last new identity.
+        let store = memory();
+        for l in [
+            link(PHONE, "US.A", 100),
+            link("US.A", "US.B", 200),
+            link("US.B", "US.C", 300),
+            link("US.C", "US.A", 400),
+        ] {
+            store.link_identity(l).await.unwrap();
+        }
+        deliver(&store, CONTROL_TAKEN).await;
+        for contact in [PHONE, "US.A", "US.B"] {
+            assert_eq!(owner_of(&store, contact).await, None, "{contact}");
+        }
+        assert_eq!(
+            owner_of(&store, "US.C").await.unwrap().owner,
             ThreadOwner::AnotherApp
         );
     }
@@ -831,6 +914,29 @@ mod rules {
             .unwrap();
         deliver(&store, CONTROL_TAKEN).await;
         assert_eq!(owner_of(&store, PHONE).await, None);
+        assert_eq!(owner_of(&store, "US.OLD").await, None);
+        assert_eq!(
+            owner_of(&store, BSUID).await.unwrap().owner,
+            ThreadOwner::AnotherApp
+        );
+
+        // Only a contact whose number it is counts, however recently
+        // another one the person's links connect was synced: here the
+        // previous identity, under the number it had then.
+        let store = memory();
+        store
+            .put_contact(contact(BSUID, PHONE, BSUID, 100))
+            .await
+            .unwrap();
+        store
+            .put_contact(contact("US.OLD", "16505559876", "US.OLD", 200))
+            .await
+            .unwrap();
+        store
+            .link_identity(IdentityLink::new(PNID, "US.OLD", BSUID, at(150)))
+            .await
+            .unwrap();
+        deliver(&store, CONTROL_TAKEN).await;
         assert_eq!(owner_of(&store, "US.OLD").await, None);
         assert_eq!(
             owner_of(&store, BSUID).await.unwrap().owner,
@@ -915,6 +1021,20 @@ mod rules {
             }
         );
 
+        // The handover's time counts as activity: a thread taken 23 hours
+        // after the customer's last message known here is still another
+        // app's two hours later.
+        let store = memory();
+        let key = inbox.key(PHONE);
+        deliver(&store, &message("wamid.early", 1_750_101_000 - 23 * 3_600)).await;
+        deliver(&store, CONTROL_TAKEN).await; // 1750101000
+        clock.set(at(1_750_101_000 + 2 * 3_600));
+        let late = super::inbox(&store, &transport, &clock);
+        assert_eq!(
+            late.thread_owner(&key).await.unwrap().unwrap().owner,
+            ThreadOwner::AnotherApp
+        );
+
         // Another app's thread goes idle 24 hours after the handover when
         // no later message is known; an idle thread is not refused.
         let store = memory();
@@ -958,6 +1078,16 @@ mod rules {
         let key = inbox.key(BSUID);
         deliver(&store, PERMISSION_REPLY).await; // links the phone number to the BSUID
         deliver(&store, CONTROL_TAKEN).await; // 1750101000
+        // A message of the handover's second: before the take, which it
+        // does not undo (the take came after the message reached this app).
+        let same_second = change(
+            "messages",
+            &json!({"messaging_product": "whatsapp",
+                "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
+                "messages": [{"from": PHONE, "from_user_id": BSUID, "id": "wamid.SAME",
+                    "timestamp": "1750101000", "type": "text", "text": {"body": "a human, please"}}]}),
+        );
+        deliver(&store, &same_second).await;
         let answer = fixture(
             "pages/business-scoped-user-ids__call_permission_request_webhooks.json",
             &[
@@ -974,6 +1104,13 @@ mod rules {
             Some(at(1_750_101_300)),
             "recorded, and it opens the window"
         );
+        // A template needs no ownership; this app's own message, the latest
+        // of the conversation now, claims nothing either.
+        transport.push_json(200, accepted("wamid.TEMPLATE"));
+        inbox
+            .reply(&key, TemplateMessage::new("call_back", "en_US").into())
+            .await
+            .unwrap();
         let owner = inbox.thread_owner(&key).await.unwrap().unwrap();
         assert_eq!(
             (owner.owner, owner.since),
@@ -984,7 +1121,8 @@ mod rules {
             .await
             .unwrap_err();
         assert!(is_thread_owned_elsewhere(&refused), "{refused}");
-        assert!(transport.requests().is_empty());
+        assert_eq!(transport.requests().len(), 1, "the template only");
+        assert_eq!(transport.remaining(), 0);
 
         let message = change(
             "messages",
