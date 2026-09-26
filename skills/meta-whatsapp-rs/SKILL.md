@@ -5,7 +5,7 @@ description: "Start here for meta-whatsapp-rs, the Rust toolkit for Meta's Whats
 
 # meta-whatsapp-rs
 
-> **Verified against meta-whatsapp-rs 53c06801fa58ac137baf0dfba25722dda5563326 (2026-09-25).** On another revision, trust the code over this page (see "Versioning" below).
+> **Verified against meta-whatsapp-rs 68c8321127ea3dfa2691b2edbc1be7c3e347b970 (2026-09-26).** On another revision, trust the code over this page (see "Versioning" below).
 
 meta-whatsapp-rs is a Cargo workspace for Meta's WhatsApp Business Platform: a typed
 client for the Cloud API and the Business Management API (Graph API
@@ -92,6 +92,7 @@ the inbox. It leaves out `Result`: write `meta_whatsapp_rs::Result`.
 | Memory, Postgres or Redis stores, your own adapter | `meta-whatsapp-rs-storage` |
 | Secrets, logs, limits, several instances, going live | `meta-whatsapp-rs-production` |
 | An app not written in Rust, through the HTTP service meta-whatsapp-server | `meta-whatsapp-rs-server` |
+| Receiving WhatsApp events through meta-whatsapp-server (Meta's webhook, polling) | `meta-whatsapp-rs-server-events` |
 | Sending messages, media and templates through that service | `meta-whatsapp-rs-server-send` |
 
 Anything else the client wraps: its rustdoc

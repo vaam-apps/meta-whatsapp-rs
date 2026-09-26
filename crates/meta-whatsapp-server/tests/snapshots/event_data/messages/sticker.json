@@ -1,0 +1,30 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {
+          "name": "Sheena Nelson"
+        },
+        "wa_id": "16505551234"
+      },
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "from": "16505551234",
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQTRBNjU5OUFFRTAzODEwMTQ0RgA=",
+        "sticker": {
+          "animated": true,
+          "id": "1908647269898587",
+          "mime_type": "image/webp",
+          "sha256": "wvqXMe6n7n1W0zphvLPoLj+s/NtKqmr3zZ7YzTP7xFI=",
+          "url": "https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=133..."
+        },
+        "timestamp": "1744344496",
+        "type": "sticker"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

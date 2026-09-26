@@ -3,17 +3,20 @@
 //!
 //! | Listener | Routes |
 //! | --- | --- |
-//! | public (`WA_SERVER_PUBLIC_BIND`) | `GET /webhooks/meta`, `GET /livez`, nothing else |
-//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`; messages `send`; media `media`; templates `templates`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
+//! | public (`WA_SERVER_PUBLIC_BIND`) | `GET` and `POST /webhooks/meta` (Meta's subscription check and deliveries, bodies up to 3 MiB), `GET /livez`, nothing else |
+//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`; messages `send`; media `media`; templates `templates`), `/v1/events` (scope `events`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
 //!
 //! Every API route is registered through utoipa-axum's `routes!`, which
 //! adds the handler and its `#[utoipa::path]` documentation at once: a
 //! route cannot be served without being in the OpenAPI document, which is
 //! what the tests iterate (the committed copy is
-//! `crates/meta-whatsapp-server/openapi/v1.json`).
+//! `crates/meta-whatsapp-server/openapi/v1.json`). The router and the
+//! document are built from one list of route groups (`api_routes`), so no
+//! group is served without being documented either.
 
 pub mod admin;
 pub mod common;
+pub mod events;
 pub mod media;
 pub mod messages;
 pub mod numbers;
@@ -39,6 +42,7 @@ use utoipa_axum::routes;
 
 use crate::auth::{admin_guard, guard, tenant_guard};
 use crate::error::{ApiError, ErrorBody, ErrorCode, KnownErrorCode};
+use crate::events::MAX_WEBHOOK_BODY_BYTES;
 use crate::model::Scope;
 use crate::state::AppState;
 use crate::telemetry::{Listener, Observed, observe};
@@ -56,8 +60,17 @@ pub const MAX_BODY_BYTES: usize = 64 * 1024;
 pub const REQUEST_DEADLINE: Duration = Duration::from_secs(55);
 
 /// The public listener's routes (not in the OpenAPI document: Meta's
-/// contract, not the integrators').
+/// contract, not the integrators'): the paths of [`PUBLIC_OPERATIONS`].
 pub const PUBLIC_ROUTES: [&str; 2] = ["/webhooks/meta", "/livez"];
+
+/// The public listener's operations, `(method, path)`: Meta's subscription
+/// check and deliveries, and liveness. Every other method on these paths is
+/// `405`, every other path `404` (a test sends each).
+pub const PUBLIC_OPERATIONS: [(&str, &str); 3] = [
+    ("GET", "/webhooks/meta"),
+    ("POST", "/webhooks/meta"),
+    ("GET", "/livez"),
+];
 
 struct Security;
 
@@ -89,13 +102,14 @@ impl Modify for Security {
                        `error.code` (`ErrorCode`), and resend only when `may_have_been_sent` is false."
     ),
     modifiers(&Security),
-    components(schemas(ErrorBody, ErrorCode, KnownErrorCode)),
+    components(schemas(ErrorBody, ErrorCode, KnownErrorCode, events::EventType, events::KnownEventType)),
     tags(
         (name = "admin", description = "Tenants, keys, WABA bindings and the vault key (admin key)"),
         (name = "numbers", description = "WABAs, numbers and business profiles (scope `numbers`)"),
         (name = "messages", description = "Sending messages and read receipts (scope `send`)"),
         (name = "media", description = "Uploading, downloading and deleting media (scope `media`)"),
         (name = "templates", description = "Listing, creating and deleting message templates (scope `templates`)"),
+        (name = "events", description = "Meta's webhook events, routed to their tenant (scope `events`)"),
         (name = "operations", description = "Health, metrics, this document, versions (no key)"),
     )
 )]
@@ -126,6 +140,10 @@ fn numbers_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(numbers::get_number))
         .routes(routes!(numbers::get_profile, numbers::update_profile))
         .routes(routes!(numbers::disconnect_waba))
+}
+
+fn events_routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new().routes(routes!(events::list_events))
 }
 
 fn messages_routes() -> OpenApiRouter<AppState> {
@@ -159,16 +177,29 @@ fn ops_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(ops::version))
 }
 
+/// The internal listener's route groups, one list for the router and the
+/// document: a group the router served but the document left out would
+/// escape every test that iterates the document (the `429` and
+/// authorization ones among them). `admin` wraps `/v1/admin`, `tenant`
+/// each tenant group with its scope: the document passes them through,
+/// the router adds the guards.
+fn api_routes(
+    admin: impl FnOnce(OpenApiRouter<AppState>) -> OpenApiRouter<AppState>,
+    tenant: impl Fn(OpenApiRouter<AppState>, Scope) -> OpenApiRouter<AppState>,
+) -> OpenApiRouter<AppState> {
+    OpenApiRouter::with_openapi(ApiDoc::openapi())
+        .merge(admin(admin_routes()))
+        .merge(tenant(numbers_routes(), Scope::Numbers))
+        .merge(tenant(messages_routes(), Scope::Send))
+        .merge(tenant(media_routes(), Scope::Media))
+        .merge(tenant(templates_routes(), Scope::Templates))
+        .merge(tenant(events_routes(), Scope::Events))
+        .merge(ops_routes())
+}
+
 /// The OpenAPI document of the internal listener's routes.
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    let (_, mut document) = OpenApiRouter::<AppState>::with_openapi(ApiDoc::openapi())
-        .merge(admin_routes())
-        .merge(numbers_routes())
-        .merge(messages_routes())
-        .merge(media_routes())
-        .merge(templates_routes())
-        .merge(ops_routes())
-        .split_for_parts();
+    let (_, mut document) = api_routes(|routes| routes, |routes, _| routes).split_for_parts();
     add_default_errors(&mut document);
     document
 }
@@ -263,22 +294,16 @@ pub fn with_deadline(router: Router, limit: Duration) -> Router {
 
 /// The internal listener's router.
 pub fn internal_router(state: &AppState) -> Router {
-    let admin =
-        admin_routes().route_layer(middleware::from_fn_with_state(state.clone(), admin_guard));
+    let admin = |routes: OpenApiRouter<AppState>| {
+        routes.route_layer(middleware::from_fn_with_state(state.clone(), admin_guard))
+    };
     let tenant = |routes: OpenApiRouter<AppState>, scope: Scope| {
         routes.route_layer(middleware::from_fn_with_state(
             guard(state, scope),
             tenant_guard,
         ))
     };
-    let (router, _) = OpenApiRouter::with_openapi(ApiDoc::openapi())
-        .merge(admin)
-        .merge(tenant(numbers_routes(), Scope::Numbers))
-        .merge(tenant(messages_routes(), Scope::Send))
-        .merge(tenant(media_routes(), Scope::Media))
-        .merge(tenant(templates_routes(), Scope::Templates))
-        .merge(ops_routes())
-        .split_for_parts();
+    let (router, _) = api_routes(admin, tenant).split_for_parts();
     let observed = Observed {
         listener: Listener::Internal,
         routes: Arc::new(internal_routes()),
@@ -296,15 +321,17 @@ pub fn internal_router(state: &AppState) -> Router {
 /// The public listener's router: Meta's webhook and `/livez`, nothing
 /// else.
 pub fn public_router(state: &AppState) -> Router {
+    // Meta's subscription check and its deliveries.
+    let webhook = get(webhooks::verify).post(webhooks::receive);
     let routes = axum::Router::new()
-        .route("/webhooks/meta", get(webhooks::verify))
+        .route("/webhooks/meta", webhook)
         .route("/livez", get(ops::livez));
     public_router_with(routes, state)
 }
 
-/// The public listener's router around `paths`: its layers, deadline
-/// included, are the ones [`public_router`] serves (a test adds a slow
-/// route, which no public route is in M1a).
+/// The public listener's router around `paths`: its layers, the body limit
+/// and the deadline included, are the ones [`public_router`] serves (a test
+/// adds a slow route).
 fn public_router_with(paths: axum::Router<AppState>, state: &AppState) -> Router {
     let observed = Observed {
         listener: Listener::Public,
@@ -314,6 +341,8 @@ fn public_router_with(paths: axum::Router<AppState>, state: &AppState) -> Router
     let router = paths
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
+        // Meta's payloads reach 3 MB (axum's own default is 2 MiB).
+        .layer(DefaultBodyLimit::max(MAX_WEBHOOK_BODY_BYTES))
         .layer(middleware::from_fn(catch_panic))
         .with_state(state.clone());
     with_deadline(router, REQUEST_DEADLINE).layer(middleware::from_fn_with_state(observed, observe))
@@ -373,7 +402,7 @@ mod tests {
 
     /// The public listener's router cuts a request at its deadline, as
     /// the internal one does (tests/numbers.rs): `POST /webhooks/meta`
-    /// (M1c) will read bodies and run sinks. Decisive: the deadline layer
+    /// reads bodies and runs sinks. Decisive: the deadline layer
     /// of the public router.
     #[tokio::test(start_paused = true)]
     async fn the_public_router_cuts_a_request_at_its_deadline() {
@@ -401,6 +430,71 @@ mod tests {
         assert_eq!(started.elapsed(), REQUEST_DEADLINE);
     }
 
+    /// The public listener's own body limit is 3 MiB, whatever a handler
+    /// behind it checks (the webhook's library handler checks it too):
+    /// 3 MiB is read, one byte more is `413` before a handler sees it.
+    /// Decisive: the public router's body limit.
+    #[tokio::test]
+    async fn the_public_router_reads_3_mib_and_refuses_one_byte_more() {
+        use meta_whatsapp_rs::webhooks::axum::body::Bytes;
+        use meta_whatsapp_rs::webhooks::axum::routing::post;
+        let state = AppState::for_tests();
+        let router = public_router_with(
+            axum::Router::new().route(
+                "/echo",
+                post(|body: Bytes| async move { body.len().to_string() }),
+            ),
+            &state,
+        );
+        for (len, status) in [
+            (MAX_WEBHOOK_BODY_BYTES, StatusCode::OK),
+            (MAX_WEBHOOK_BODY_BYTES + 1, StatusCode::PAYLOAD_TOO_LARGE),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    meta_whatsapp_rs::webhooks::axum::http::Request::post("/echo")
+                        .body(Body::from(vec![b' '; len]))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status, "{len} bytes");
+        }
+        assert_eq!(MAX_WEBHOOK_BODY_BYTES, 3 * 1024 * 1024);
+    }
+
+    /// The public listener serves exactly [`PUBLIC_OPERATIONS`]: each is
+    /// answered (not `404` or `405`), any other method on their paths is
+    /// `405`. The skills gate reads the list (`SERVER_PUBLIC_ROUTES` in
+    /// crates/meta-whatsapp-rs/tests/skills.rs).
+    #[tokio::test]
+    async fn the_public_listener_serves_exactly_its_operations() {
+        use meta_whatsapp_rs::webhooks::axum::http::{Method, Request};
+        let mut paths: Vec<&str> = PUBLIC_OPERATIONS.iter().map(|(_, p)| *p).collect();
+        paths.dedup();
+        assert_eq!(paths, PUBLIC_ROUTES);
+        let router = public_router(&AppState::for_tests());
+        for path in PUBLIC_ROUTES {
+            for method in ["GET", "POST", "PUT", "PATCH", "DELETE"] {
+                let request = Request::builder()
+                    .method(Method::from_bytes(method.as_bytes()).unwrap())
+                    .uri(path)
+                    .body(Body::empty())
+                    .unwrap();
+                let status = router.clone().oneshot(request).await.unwrap().status();
+                if PUBLIC_OPERATIONS.contains(&(method, path)) {
+                    assert!(
+                        status != StatusCode::NOT_FOUND && status != StatusCode::METHOD_NOT_ALLOWED,
+                        "{method} {path}: {status}"
+                    );
+                } else {
+                    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "{method} {path}");
+                }
+            }
+        }
+    }
+
     /// Every API route is added with `routes!`, which documents it: the
     /// only plain axum routes are the public listener's, which the document
     /// leaves out on purpose. A route added any other way would escape the
@@ -411,6 +505,7 @@ mod tests {
             ("mod.rs", include_str!("mod.rs")),
             ("admin.rs", include_str!("admin.rs")),
             ("numbers.rs", include_str!("numbers.rs")),
+            ("events.rs", include_str!("events.rs")),
             ("ops.rs", include_str!("ops.rs")),
             ("webhooks.rs", include_str!("webhooks.rs")),
             ("common.rs", include_str!("common.rs")),
@@ -432,7 +527,7 @@ mod tests {
         assert_eq!(
             plain,
             [
-                "mod.rs: .route(\"/webhooks/meta\", get(webhooks::verify))",
+                "mod.rs: .route(\"/webhooks/meta\", webhook)",
                 "mod.rs: .route(\"/livez\", get(ops::livez));",
             ]
         );

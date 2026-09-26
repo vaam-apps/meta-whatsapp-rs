@@ -1,0 +1,22 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {},
+        "wa_id": "16505551234"
+      },
+      "display_phone_number": "15550783881",
+      "event": "user_preference_changed",
+      "phone_number_id": "106540352242922",
+      "preference": {
+        "category": "marketing_messages",
+        "detail": "User requested to resume marketing messages",
+        "timestamp": "1731705721",
+        "value": "resume",
+        "wa_id": "16505551234"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "user_preference_changed"
+  }
+]

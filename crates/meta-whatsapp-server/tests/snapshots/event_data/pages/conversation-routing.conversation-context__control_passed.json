@@ -1,0 +1,34 @@
+[
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "event": "thread_control_changed",
+      "phone_number_id": "106540352242922",
+      "update": {
+        "control_passed": {
+          "conversation_context": {
+            "summary": {
+              "text": "AI-generated summary string"
+            },
+            "type": "summary"
+          },
+          "metadata": "WhatsApp user requested human agent",
+          "new_owner_role": "escalation",
+          "previous_owner_role": "ai_agent"
+        },
+        "messaging_product": "whatsapp",
+        "recipient": {
+          "display_phone_number": "15550783881",
+          "phone_number_id": "106540352242922"
+        },
+        "sender": {
+          "phone_number": "16505551234"
+        },
+        "timestamp": "1750101000",
+        "type": "control_passed"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "thread_control_changed"
+  }
+]

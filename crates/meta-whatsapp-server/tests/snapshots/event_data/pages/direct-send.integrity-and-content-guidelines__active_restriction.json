@@ -1,0 +1,23 @@
+[
+  {
+    "data": {
+      "entry_id": "102290129340398",
+      "event": "account_updated",
+      "time": "1750101000",
+      "update": {
+        "event": "ACCOUNT_RESTRICTION",
+        "restriction_info": [
+          {
+            "expiration": "1750705800",
+            "restriction_type": "RESTRICTED_DIRECT_SEND_UTILITY_TEMPLATES"
+          }
+        ],
+        "violation_info": {
+          "violation_type": "DIRECT_SEND_UTILITY_CATEGORY_ABUSE_RATE_LIMIT"
+        }
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "account_updated"
+  }
+]

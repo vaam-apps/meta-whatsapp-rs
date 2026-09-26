@@ -1,0 +1,33 @@
+[
+  {
+    "data": {
+      "contact": {
+        "parent_user_id": "US.ENT.11815799212886844830",
+        "profile": {
+          "name": "Pablo Morales",
+          "username": "pablomorales"
+        },
+        "user_id": "US.13491208655302741918",
+        "wa_id": "16505551234"
+      },
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "audio": {
+          "id": "1002764438271669",
+          "mime_type": "audio/ogg; codecs=opus",
+          "sha256": "Y9vvGyeo3n76ptkXu3CwDBsnzbRFqpjHskQdMGSVqas="
+        },
+        "from": "16505551234",
+        "from_parent_user_id": "US.ENT.11815799212886844830",
+        "from_user_id": "US.13491208655302741918",
+        "id": "wacid.HBgLMTQxMjYxMzYyASG...",
+        "timestamp": "1728932177",
+        "type": "audio"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

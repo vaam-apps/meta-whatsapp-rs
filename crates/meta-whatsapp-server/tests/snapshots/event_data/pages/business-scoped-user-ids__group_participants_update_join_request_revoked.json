@@ -1,0 +1,22 @@
+[
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "event": "group_updated",
+      "field": "group_participants_update",
+      "phone_number_id": "106540352242922",
+      "update": {
+        "group_id": "Y2FwaV9ncm91cDoxOTUwNTU1MDA3OToxMjAzNjMzOTQzMjAdOTY0MTUZD",
+        "join_request_id": "MTY0NjcwNDM1OTU6MTIwMzYzNDA0Njk0MjMzODIw",
+        "parent_user_id": "US.ENT.11815799212886844830",
+        "timestamp": "1750030073",
+        "type": "group_join_request_revoked",
+        "user_id": "US.13491208655302741918",
+        "username": "pablomorales",
+        "wa_id": "16505551234"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "group_updated"
+  }
+]

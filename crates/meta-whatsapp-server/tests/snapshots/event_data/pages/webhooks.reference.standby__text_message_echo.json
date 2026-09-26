@@ -1,0 +1,31 @@
+[
+  {
+    "data": {
+      "contact": null,
+      "display_phone_number": "15550783881",
+      "event": "standby_observed",
+      "item": {
+        "echo": {
+          "id": "wamid.HBgLMTY1MDU1NTEyMzQVAgASGBQzRUIwQTk4NkNGMUZCMDZERTREMAA=",
+          "message": {
+            "context": {
+              "message_id": "wamid.HBgLMTY1MDU1NTEyMzQVAgARGBI2QzNGOEI5RTJGMkI0RkE3QTAA"
+            },
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "text": {
+              "body": "Hello! Your order #12345 has shipped.",
+              "preview_url": true
+            },
+            "to": "16505551234",
+            "type": "text"
+          },
+          "timestamp": "1750101000"
+        }
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "standby_observed"
+  }
+]

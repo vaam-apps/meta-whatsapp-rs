@@ -49,6 +49,11 @@ const MIGRATION_FILES: &[(i64, &str, &str)] = &[
         "idempotency",
         include_str!("../../migrations/0002_idempotency.sql"),
     ),
+    (
+        3,
+        "events",
+        include_str!("../../migrations/0003_events.sql"),
+    ),
 ];
 
 /// The advisory lock the housekeeping purges run under
@@ -325,12 +330,32 @@ impl Store for PgStore {
         if has_wabas.is_some() {
             return Ok(DeleteTenantOutcome::HasWabas);
         }
-        // Keys go with it (ON DELETE CASCADE).
+        // Keys, idempotency records and events go with it (ON DELETE
+        // CASCADE); its event stream
+        // records them purged, so a tenant created later with the same id
+        // goes on after them and an old cursor is `410 cursor_expired`; and
+        // a platform key allowed it does not carry the allowance over to
+        // that tenant.
         sqlx::query("DELETE FROM wa_server_tenants WHERE id = $1")
             .bind(id.as_str())
             .execute(&mut *tx)
             .await
             .map_err(backend)?;
+        sqlx::query(
+            "UPDATE wa_server_api_keys SET allowed_tenants = array_remove(allowed_tenants, $1) \
+             WHERE $1 = ANY(allowed_tenants)",
+        )
+        .bind(id.as_str())
+        .execute(&mut *tx)
+        .await
+        .map_err(backend)?;
+        sqlx::query(
+            "UPDATE wa_server_event_streams SET purged_through = last_sequence WHERE stream = $1",
+        )
+        .bind(id.as_str())
+        .execute(&mut *tx)
+        .await
+        .map_err(backend)?;
         tx.commit().await.map_err(backend)?;
         Ok(DeleteTenantOutcome::Deleted)
     }
@@ -741,7 +766,7 @@ mod tests {
     /// `(version, SHA-384 hex)` of every service migration, as sqlx records
     /// it. A new migration adds a line; an existing line never changes (an
     /// edited migration makes `migrate` refuse every database it ran on).
-    const PINNED_CHECKSUMS: [(i64, &str); 2] = [
+    const PINNED_CHECKSUMS: [(i64, &str); 3] = [
         (
             1,
             "4d1c5a2555461deec494d1d0f8a6be354e0f092115ee74abdc6e270670a441d3856222ca2ade7598a98e62dc80075a47",
@@ -749,6 +774,10 @@ mod tests {
         (
             2,
             "07f54d21a6d32d8a87420469f6f5e35d3b93f47ce7a5aec34ed526ca13d7b7fb08b9858065b74c1d522b3a88b82f24b2",
+        ),
+        (
+            3,
+            "ca0cec491b00af0a22afff8e45913f1f4f1e59d08250804c1eb1f85306d33ae577c050208ad6a0c67ab8e3066296a1cd",
         ),
     ];
 
@@ -768,7 +797,9 @@ mod tests {
             recorded,
             PINNED_CHECKSUMS.map(|(v, h)| (v, h.to_owned())).to_vec()
         );
-        assert_eq!(MIGRATIONS_TABLE, "wa_server_sqlx_migrations");
+        // `\x77` is `w`: spelled so that a search-and-replace of the table
+        // prefix cannot rewrite this pin along with the code.
+        assert_eq!(MIGRATIONS_TABLE, "\x77a_server_sqlx_migrations");
     }
 
     #[test]

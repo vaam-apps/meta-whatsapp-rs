@@ -1,7 +1,7 @@
 //! The real binary: `serve` starts both listeners and stops on `SIGTERM`,
-//! `healthcheck` reaches the internal one, a refused configuration exits
-//! without quoting the value, and (live) the CLI's first admin key works
-//! against the served API.
+//! `healthcheck` reaches the internal one, `serve` applies the configured
+//! settings, a refused configuration exits without quoting the value, and
+//! (live) the CLI's first admin key works against the served API.
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test crate: a panic is the report
 
 mod common;
@@ -307,6 +307,161 @@ fn vault_rotate_refuses_memory_storage() {
         !String::from_utf8_lossy(&output.stdout).contains("WABAs walked"),
         "nothing was walked"
     );
+}
+
+/// The served binary takes Meta's deliveries on the public listener,
+/// verified with `WA_APP_SECRET` or `WA_APP_SECRET_PREVIOUS`, into its
+/// outbox (an operator-only event here, counted on `/metrics`); an
+/// unsigned or forged one is `401`. Decisive: `serve` wiring the
+/// configured app secrets and stores into the pipeline.
+#[test]
+fn serve_receives_signed_deliveries() {
+    use meta_whatsapp_rs::core::secret::AppSecret;
+    use meta_whatsapp_rs::webhooks::sign;
+
+    let (public, internal) = two_ports();
+    let mut child = base(&mut Command::new(BIN), public, internal)
+        .env("WA_SERVER_ENV", "development")
+        .env(
+            "WA_APP_SECRET_PREVIOUS",
+            "previous-app-secret-for-the-binary-test",
+        )
+        .arg("serve")
+        .spawn()
+        .unwrap();
+    wait_live(internal, &mut child);
+    wait_live(public, &mut child);
+    let body = r#"{"object": "whatsapp_business_account", "entry": [{"id": "102290129340398",
+        "changes": [{"field": "a_field_meta_adds_later", "value": {"note": "anything"}}]}]}"#;
+    let post = |signature: Option<String>| {
+        let mut headers = vec![("Content-Type".to_owned(), "application/json".to_owned())];
+        if let Some(signature) = signature {
+            headers.push(("X-Hub-Signature-256".to_owned(), signature));
+        }
+        let headers: Vec<(&str, &str)> = headers
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.as_str()))
+            .collect();
+        http(public, "POST", "/webhooks/meta", &headers, body)
+            .unwrap()
+            .0
+    };
+    assert_eq!(post(None), 401);
+    assert_eq!(
+        post(Some(sign(
+            &AppSecret::new("a-forger-s-secret"),
+            body.as_bytes()
+        ))),
+        401
+    );
+    for secret in [
+        "app-secret-for-the-binary-test",
+        "previous-app-secret-for-the-binary-test",
+    ] {
+        assert_eq!(
+            post(Some(sign(&AppSecret::new(secret), body.as_bytes()))),
+            200
+        );
+    }
+    let (status, metrics) = http(internal, "GET", "/metrics", &[], "").unwrap();
+    assert_eq!(status, 200);
+    let recorded = metrics
+        .lines()
+        .find(|l| {
+            l.starts_with(
+                "wa_server_webhook_events_total{event_type=\"unknown\",audience=\"operator\"}",
+            )
+        })
+        .unwrap_or_else(|| panic!("{metrics}"));
+    // The same body twice: one event (the second is a duplicate).
+    assert!(recorded.ends_with(" 1"), "{recorded}");
+    assert!(
+        metrics.contains("wa_server_webhook_deliveries_total{outcome=\"unauthenticated\"} 2"),
+        "{metrics}"
+    );
+    terminate(&mut child);
+}
+
+/// `serve` gives the service the settings it read (M1b's `WA_SERVER_*`
+/// limits, plumbed next to M1c's webhook pipeline): with a read budget of
+/// one a second and a burst of one, a tenant polling its events back to
+/// back is soon `429 too_many_requests`, which the defaults (50 a second)
+/// never answer to five calls. Decisive: `serve` passing the configured
+/// settings, not the defaults, to the service's state.
+#[test]
+fn serve_applies_the_configured_rate_limits() {
+    use std::io::BufRead as _;
+    let (public, internal) = two_ports();
+    let mut child = base(&mut Command::new(BIN), public, internal)
+        .env("WA_SERVER_ENV", "development")
+        .env("WA_SERVER_RATE_READ", "1")
+        .env("WA_SERVER_RATE_READ_BURST", "1")
+        .arg("serve")
+        .spawn()
+        .unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let (found, admin) = std::sync::mpsc::channel();
+    // Reads standard error to its end, so the service never blocks on it.
+    let reader = std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stderr)
+            .lines()
+            .map_while(Result::ok)
+        {
+            if let Some((_, key)) = line.split_once("shown once: ") {
+                let _ = found.send(key.trim().to_owned());
+            }
+        }
+    });
+    let admin = admin
+        .recv_timeout(Duration::from_secs(30))
+        .expect("no development admin key on standard error");
+    wait_live(internal, &mut child);
+    let bearer = format!("Bearer {admin}");
+    let json = [
+        ("Authorization", bearer.as_str()),
+        ("Content-Type", "application/json"),
+    ];
+    let (status, body) = http(
+        internal,
+        "POST",
+        "/v1/admin/tenants",
+        &json,
+        r#"{"id": "merchant-42"}"#,
+    )
+    .unwrap();
+    assert_eq!(status, 201, "{body}");
+    let (status, body) = http(
+        internal,
+        "POST",
+        "/v1/admin/tenants/merchant-42/keys",
+        &json,
+        r#"{"scopes": ["events"]}"#,
+    )
+    .unwrap();
+    assert_eq!(status, 201, "{body}");
+    let minted: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let tenant = format!("Bearer {}", minted["key"].as_str().unwrap());
+    let polls: Vec<(u16, String)> = (0..5)
+        .map(|_| {
+            http(
+                internal,
+                "GET",
+                "/v1/events",
+                &[("Authorization", tenant.as_str())],
+                "",
+            )
+            .unwrap()
+        })
+        .collect();
+    assert_eq!(polls[0].0, 200, "{}", polls[0].1);
+    assert!(
+        polls
+            .iter()
+            .any(|(status, body)| *status == 429 && body.contains("\"too_many_requests\"")),
+        "{polls:?}"
+    );
+    terminate(&mut child);
+    reader.join().unwrap();
 }
 
 #[test]

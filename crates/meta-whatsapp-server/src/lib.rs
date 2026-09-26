@@ -14,6 +14,7 @@
 //! | [`keys`] | the API key format, digests, constant-time comparison |
 //! | [`auth`] | the authorization order: key, tenant, scope, ownership, vault |
 //! | [`api`] | both routers and the OpenAPI document |
+//! | [`events`] | Meta's webhooks into the inbox and the event outbox, and polling it |
 //! | [`idempotency`] | `Idempotency-Key`: claim, replay, release |
 //! | [`ratelimit`] | per-tenant token buckets by route class |
 //! | [`error`] | the error body, codes and statuses |
@@ -25,6 +26,7 @@ pub mod auth;
 pub mod cli;
 pub mod config;
 pub mod error;
+pub mod events;
 pub mod idempotency;
 pub mod keys;
 pub mod listen;

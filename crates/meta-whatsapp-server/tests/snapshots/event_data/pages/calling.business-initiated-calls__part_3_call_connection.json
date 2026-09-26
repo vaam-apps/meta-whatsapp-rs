@@ -1,0 +1,40 @@
+[
+  {
+    "data": {
+      "call": {
+        "biz_opaque_callback_data": "TRx334DUDFTI4Mj",
+        "connection": {
+          "webrtc": {
+            "sdp": "v=0\r\no=- 741807839102053725 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS 798a9670-c0d6-47a8-925e-5f082ef4d8a0\r\na=ice-lite\r\nm=audio 3482 UDP/TLS/RTP/SAVPF 111 9 0 8 110 126\r\nc=IN IP4 31.13.65.130\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=candidate:2754936280 1 udp 2113937151 31.13.65.130 3482 typ host generation 0 network-cost 50 ufrag JHqAXFH4HcAY/8\r\na=candidate:1581496399 1 udp 2113939711 2a03:2880:f211:d1:face:b00c:0:699c 3482 typ host generation 0 network-cost 50 ufrag JHqAXFH4HcAY/8\r\na=ice-ufrag:JHqAXFH4HcAY/8\r\na=ice-pwd:dNNMmR8wUcGezvfBZOO0Qgcwl2m86GP/\r\na=ice-options:trickle\r\na=fingerprint:sha-256 9C:97:5C:4C:A9:BE:9E:2F:06:94:F5:BB:38:2C:A1:29:B5:69:B8:FA:94:10:56:1D:0B:5D:80:28:C1:FD:F0:F6\r\na=setup:active\r\na=mid:0\r\na=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level\r\na=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\na=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=sendrecv\r\na=rtcp-mux\r\na=rtpmap:111 opus/48000/2\r\na=rtcp-fb:111 transport-cc\r\na=fmtp:111 minptime=10;useinbandfec=1\r\na=rtpmap:9 G722/8000\r\na=rtpmap:0 PCMU/8000\r\na=rtpmap:8 PCMA/8000\r\na=rtpmap:110 telephone-event/48000\r\na=rtpmap:126 telephone-event/8000\r\na=ssrc:3407645770 cname:bg8KQDoIk2UJa6sf\r\na=ssrc:3407645770 msid:798a9670-c0d6-47a8-925e-5f082ef4d8a0 audio#nuxVMf9EAJX\r\na=ssrc:3407645770 mslabel:798a9670-c0d6-47a8-925e-5f082ef4d8a0\r\na=ssrc:3407645770 label:audio#nuxVMf9EAJX\r\n"
+          }
+        },
+        "direction": "BUSINESS_INITIATED",
+        "event": "connect",
+        "from": "13175551399",
+        "id": "wacid.HBgLMTIxODU1NTI4MjgVAgARGCAyODRQIAFRoA",
+        "session": {
+          "sdp": "v=0\r\no=- 741807839102053725 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS 798a9670-c0d6-47a8-925e-5f082ef4d8a0\r\na=ice-lite\r\nm=audio 3482 UDP/TLS/RTP/SAVPF 111 9 0 8 110 126\r\nc=IN IP4 31.13.65.130\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=candidate:2754936280 1 udp 2113937151 31.13.65.130 3482 typ host generation 0 network-cost 50 ufrag JHqAXFH4HcAY/8\r\na=candidate:1581496399 1 udp 2113939711 2a03:2880:f211:d1:face:b00c:0:699c 3482 typ host generation 0 network-cost 50 ufrag JHqAXFH4HcAY/8\r\na=ice-ufrag:JHqAXFH4HcAY/8\r\na=ice-pwd:dNNMmR8wUcGezvfBZOO0Qgcwl2m86GP/\r\na=ice-options:trickle\r\na=fingerprint:sha-256 9C:97:5C:4C:A9:BE:9E:2F:06:94:F5:BB:38:2C:A1:29:B5:69:B8:FA:94:10:56:1D:0B:5D:80:28:C1:FD:F0:F6\r\na=setup:active\r\na=mid:0\r\na=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level\r\na=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\na=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=sendrecv\r\na=rtcp-mux\r\na=rtpmap:111 opus/48000/2\r\na=rtcp-fb:111 transport-cc\r\na=fmtp:111 minptime=10;useinbandfec=1\r\na=rtpmap:9 G722/8000\r\na=rtpmap:0 PCMU/8000\r\na=rtpmap:8 PCMA/8000\r\na=rtpmap:110 telephone-event/48000\r\na=rtpmap:126 telephone-event/8000\r\na=ssrc:3407645770 cname:bg8KQDoIk2UJa6sf\r\na=ssrc:3407645770 msid:798a9670-c0d6-47a8-925e-5f082ef4d8a0 audio#nuxVMf9EAJX\r\na=ssrc:3407645770 mslabel:798a9670-c0d6-47a8-925e-5f082ef4d8a0\r\na=ssrc:3407645770 label:audio#nuxVMf9EAJX\r\n",
+          "sdp_type": "answer"
+        },
+        "timestamp": "1749196895",
+        "to": "12185552828",
+        "to_parent_user_id": "US.ENT.11815799212886844830",
+        "to_user_id": "US.13491208655302741918"
+      },
+      "contact": {
+        "parent_user_id": "US.ENT.11815799212886844830",
+        "profile": {
+          "name": "Pablo Morales",
+          "username": "pablomorales"
+        },
+        "user_id": "US.13491208655302741918",
+        "wa_id": "12185552828"
+      },
+      "display_phone_number": "13175551399",
+      "event": "call_updated",
+      "phone_number_id": "436666719526789",
+      "waba_id": "366634483210360"
+    },
+    "type": "call_updated"
+  }
+]

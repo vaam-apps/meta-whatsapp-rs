@@ -1,0 +1,32 @@
+[
+  {
+    "data": {
+      "contact": {
+        "parent_user_id": "US.ENT.11815799212886844830",
+        "profile": {
+          "name": "Pablo M.",
+          "username": "pablomorales"
+        },
+        "user_id": "US.13491208655302741918",
+        "wa_id": "16505551234"
+      },
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "from": "16505551234",
+        "from_parent_user_id": "US.ENT.11815799212886844830",
+        "from_user_id": "US.13491208655302741918",
+        "group_id": "Y2FwaV9ncm91cDoxOTUwNTU1MDA3OToxMjAzNjMzOTQzMjAdOTY0MTUZD",
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQUFERjg0NDEzNDdFODU3MUMxMAA=",
+        "text": {
+          "body": "Does it come in another color?"
+        },
+        "timestamp": "1750030073",
+        "type": "text"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

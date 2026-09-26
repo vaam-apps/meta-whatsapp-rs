@@ -1,0 +1,41 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {
+          "name": "Sheena Nelson"
+        },
+        "wa_id": "16505551234"
+      },
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "from": "16505551234",
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQUFERjg0NDEzNDdFODU3MUMxMAA=",
+        "order": {
+          "catalog_id": "194836987003835",
+          "product_items": [
+            {
+              "currency": "USD",
+              "item_price": 30.0,
+              "product_retailer_id": "di9ozbzfi4",
+              "quantity": 2
+            },
+            {
+              "currency": "USD",
+              "item_price": 25.0,
+              "product_retailer_id": "nqryix03ez",
+              "quantity": 1
+            }
+          ],
+          "text": "Love these!"
+        },
+        "timestamp": "1750096325",
+        "type": "order"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

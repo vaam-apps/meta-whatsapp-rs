@@ -34,6 +34,8 @@ hex.workspace = true
 # Meta reports a media file's SHA-256 in hex or base64: a streamed
 # download announces it (`X-WA-SHA256`, hex) before the first byte.
 base64.workspace = true
+# Event ids: a keyed hash of the event's outbox key (src/events.rs).
+hmac.workspace = true
 # Media uploads: multipart parsing with per-field size limits.
 multer.workspace = true
 serde.workspace = true

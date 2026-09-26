@@ -38,10 +38,12 @@ pub struct Limits {
 }
 
 /// The public listener's limits: Meta and whoever else reaches the
-/// ingress.
+/// ingress. Only 64 deliveries are read at once per replica
+/// ([`crate::events::MAX_DELIVERIES_IN_FLIGHT`]); the rest are answered
+/// `503` at once, so the cap only bounds idle and refused connections.
 pub const PUBLIC_LIMITS: Limits = Limits {
     header_read_timeout: Duration::from_secs(10),
-    max_connections: 1024,
+    max_connections: 256,
 };
 
 /// The internal listener's limits: the integrators' backends and

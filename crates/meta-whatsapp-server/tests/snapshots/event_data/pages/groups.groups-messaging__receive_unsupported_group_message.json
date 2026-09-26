@@ -1,0 +1,35 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {
+          "name": "Pablo Morales"
+        },
+        "wa_id": "16505551234"
+      },
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "errors": [
+          {
+            "code": 130501,
+            "error_data": {
+              "details": "Message type is not currently supported"
+            },
+            "message": "Message type is not currently supported",
+            "title": "Unsupported message type"
+          }
+        ],
+        "from": "16505551234",
+        "group_id": "Y2FwaV9ncm91cDoxOTUwNTU1MDA3OToxMjAzNjMzOTQzMjAdOTY0MTUZD",
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQUFERjg0NDEzNDdFODU3MUMxMAA=",
+        "timestamp": "1750101000",
+        "type": "unsupported",
+        "unsupported": {}
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

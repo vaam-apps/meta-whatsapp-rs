@@ -1,0 +1,17 @@
+[
+  {
+    "data": {
+      "event": "template_category_misuse_detected",
+      "time": "1767168600",
+      "update": {
+        "category": "UTILITY",
+        "correct_category": "MARKETING",
+        "message_template_id": "1689556908129832",
+        "message_template_language": "en_US",
+        "message_template_name": "order_confirmation"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "template_category_misuse_detected"
+  }
+]

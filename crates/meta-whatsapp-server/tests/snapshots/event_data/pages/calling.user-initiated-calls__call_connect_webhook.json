@@ -1,0 +1,36 @@
+[
+  {
+    "data": {
+      "call": {
+        "cta_payload": "cta_payload",
+        "deeplink_payload": "deeplink_payload",
+        "direction": "USER_INITIATED",
+        "event": "connect",
+        "from": "16315553602",
+        "from_parent_user_id": "US.ENT.11815799212886844830",
+        "from_user_id": "US.13491208655302741918",
+        "id": "wacid.ABGGFjFVU2AfAgo6V-Hc5eCgK5Gh",
+        "session": {
+          "sdp": "v=0\r\no=- 7602563789789945080 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE audio\r\na=msid-semantic: WMS 6932bc1c-db1a-4abe-b437-0c4168be8a13\r\na=ice-lite\r\nm=audio 40012 UDP/TLS/RTP/SAVPF 111 126\r\nc=IN IP4 31.13.65.60\r\na=rtcp:9 IN IP4 0.0.0.0\r\na=candidate:1972637320 1 udp 2113937151 31.13.65.60 40012 typ host generation 0 network-cost 50 ufrag 6k2qP1R6kBfI/2\r\na=candidate:1652262791 1 udp 2113939711 2a03:2880:f211:cf:face:b00c:0:6443 40012 typ host generation 0 network-cost 50 ufrag 6k2qP1R6kBfI/2\r\na=ice-ufrag:6k2qP1R6kBfI/2\r\na=ice-pwd:UApvJw3NcwFRDvIMKdM0vWCdlXah25E9\r\na=fingerprint:sha-256 1B:B6:6B:40:A5:0B:8C:75:0D:8C:CB:90:2F:99:74:1E:26:45:AE:AF:45:C1:51:60:8F:73:C9:2D:10:6D:8A:88\r\na=setup:actpass\r\na=mid:audio\r\na=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level\r\na=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\na=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\na=sendrecv\r\na=rtcp-mux\r\na=rtpmap:111 opus/48000/2\r\na=rtcp-fb:111 transport-cc\r\na=fmtp:111 minptime=10;useinbandfec=1\r\na=rtpmap:126 telephone-event/8000\r\na=ssrc:4208138518 cname:gAXq2V9TKltrnapv\r\na=ssrc:4208138518 msid:6932bc1c-db1a-4abe-b437-0c4168be8a13 audio#R5wfXFcdmT6\r\na=ssrc:4208138518 mslabel:6932bc1c-db1a-4abe-b437-0c4168be8a13\r\na=ssrc:4208138518 label:audio#R5wfXFcdmT6\r\n",
+          "sdp_type": "offer"
+        },
+        "timestamp": "1671644824",
+        "to": "16315553601"
+      },
+      "contact": {
+        "parent_user_id": "US.ENT.11815799212886844830",
+        "profile": {
+          "name": "Pablo Morales",
+          "username": "pablomorales"
+        },
+        "user_id": "US.13491208655302741918",
+        "wa_id": "16315553602"
+      },
+      "display_phone_number": "16315553601",
+      "event": "call_updated",
+      "phone_number_id": "436666719526789",
+      "waba_id": "366634483210360"
+    },
+    "type": "call_updated"
+  }
+]

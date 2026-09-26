@@ -1,0 +1,17 @@
+[
+  {
+    "data": {
+      "event": "template_quality_updated",
+      "time": "1674864290",
+      "update": {
+        "message_template_id": "806312974732579",
+        "message_template_language": "en-US",
+        "message_template_name": "welcome_template",
+        "new_quality_score": "YELLOW",
+        "previous_quality_score": "GREEN"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "template_quality_updated"
+  }
+]

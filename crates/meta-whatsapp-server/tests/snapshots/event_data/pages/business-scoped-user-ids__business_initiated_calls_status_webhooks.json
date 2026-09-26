@@ -1,0 +1,29 @@
+[
+  {
+    "data": {
+      "contact": {
+        "parent_user_id": "US.ENT.11815799212886844830",
+        "profile": {
+          "username": "pablomorales"
+        },
+        "user_id": "US.13491208655302741918",
+        "wa_id": "16505551234"
+      },
+      "display_phone_number": "15550783881",
+      "event": "call_status_updated",
+      "phone_number_id": "106540352242922",
+      "status": {
+        "biz_opaque_callback_data": "TRx334DUDFTI4Mj",
+        "id": "wacid.ABGGFjFVU2AfAgo6V-Hc5eCgK5Gh",
+        "recipient_id": "16505551234",
+        "recipient_parent_user_id": "US.ENT.11815799212886844830",
+        "recipient_user_id": "US.13491208655302741918",
+        "status": "RINGING",
+        "timestamp": "1750030073",
+        "type": "call"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "call_status_updated"
+  }
+]

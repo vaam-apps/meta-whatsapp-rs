@@ -1,0 +1,28 @@
+[
+  {
+    "data": {
+      "call": {
+        "call_transcript": {
+          "document": {
+            "id": "1002764438271669",
+            "mime_type": "application/json",
+            "sha256": "Y9vvGyeo3n76ptkXu3CwDBsnzbRFqpjHskQdMGSVqas=",
+            "url": "https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=133..."
+          }
+        },
+        "event": "call_transcription_available",
+        "from": "16505551234",
+        "from_parent_user_id": "US.ENT.11815799212886844830",
+        "from_user_id": "US.13491208655302741918",
+        "id": "wacid.HBgLMTQxMjYxMzYyNTMVAgASGCBGO...",
+        "timestamp": "1728932177"
+      },
+      "contact": null,
+      "display_phone_number": "15550783881",
+      "event": "call_updated",
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "call_updated"
+  }
+]

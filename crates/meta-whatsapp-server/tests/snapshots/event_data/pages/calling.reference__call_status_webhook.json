@@ -1,0 +1,22 @@
+[
+  {
+    "data": {
+      "contact": null,
+      "display_phone_number": "16315553601",
+      "event": "call_status_updated",
+      "phone_number_id": "105615555715855",
+      "status": {
+        "biz_opaque_callback_data": "random_string",
+        "id": "wacid.ABGGFjFVU2AfAgo6V",
+        "recipient_id": "163155536021",
+        "recipient_parent_user_id": "US.ENT.11815799212886844830",
+        "recipient_user_id": "US.13491208655302741918",
+        "status": "RINGING",
+        "timestamp": "1671644824",
+        "type": "call"
+      },
+      "waba_id": "112735964992110"
+    },
+    "type": "call_status_updated"
+  }
+]

@@ -1,0 +1,29 @@
+[
+  {
+    "data": {
+      "contact": null,
+      "display_phone_number": "15550783881",
+      "event": "status_updated",
+      "phone_number_id": "106540352242922",
+      "status": {
+        "errors": [
+          {
+            "code": 131049,
+            "error_data": {
+              "details": "In order to maintain a healthy ecosystem engagement, the message failed to be delivered."
+            },
+            "href": "/documentation/business-messaging/whatsapp/support/error-codes",
+            "message": "This message was not delivered to maintain healthy ecosystem engagement.",
+            "title": "This message was not delivered to maintain healthy ecosystem engagement."
+          }
+        ],
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgARGBI0QUQ2MjA4NEYyRkExNjMyREUA",
+        "recipient_id": "16505551234",
+        "status": "failed",
+        "timestamp": "1751142888"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "status_updated"
+  }
+]

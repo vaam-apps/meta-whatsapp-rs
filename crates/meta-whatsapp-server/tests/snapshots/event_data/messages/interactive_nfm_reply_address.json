@@ -1,0 +1,37 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {
+          "name": "Sheena Nelson"
+        },
+        "user_id": "IN.13491208655302741918",
+        "wa_id": "919876543210"
+      },
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "context": {
+          "from": "15550783881",
+          "id": "wamid.HBgLMTIwNjU1NTAxMDcVAgARGBI3NjNFN0U5QzMzNDlCQjY0M0QA"
+        },
+        "from": "919876543210",
+        "from_user_id": "IN.13491208655302741918",
+        "id": "wamid.HBgLMTIwNjU1NTAxMDcVAgASGCA5RDhBNENEMEQ3RENEOEEzMEI0RUExRDczN0I1NThFQwA=",
+        "interactive": {
+          "nfm_reply": {
+            "body": "Sheena Nelson\n +919876543210\n 400063, Goregaon, Wing A, Cello Triumph,IB Patel Rd, Mumbai, 8",
+            "name": "address_message",
+            "response_json": "{\"saved_address_id\":\"address1\",\"values\":{\"in_pin_code\":\"400063\",\"building_name\":\"\",\"landmark_area\":\"Goregaon\",\"address\":\"Wing A, Cello Triumph, IB Patel Rd\",\"city\":\"Mumbai\",\"name\":\"Sheena Nelson\",\"phone_number\":\"+919876543210\",\"floor_number\":\"8\"}}"
+          },
+          "type": "nfm_reply"
+        },
+        "timestamp": "1671498855",
+        "type": "interactive"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

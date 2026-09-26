@@ -1,0 +1,32 @@
+[
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "event": "history_synced",
+      "history": {
+        "messages": [
+          {
+            "from": "16505551234",
+            "id": "wamid.QyNUEHBgLMTY0NjcwNDM1OTUVAgARGBI1Rj3NEYxMzAzMzQ5MkEA",
+            "image": {
+              "caption": "Black Prince echeveria",
+              "id": "24230790383178626",
+              "mime_type": "image/jpeg",
+              "sha256": "3f9d94d399fa61c191bc1d4ca71375a035cd9b9f5b1128e1f0963a415c16b0cc"
+            },
+            "timestamp": "1738796547",
+            "type": "image"
+          }
+        ],
+        "messaging_product": "whatsapp",
+        "metadata": {
+          "display_phone_number": "15550783881",
+          "phone_number_id": "106540352242922"
+        }
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "history_synced"
+  }
+]

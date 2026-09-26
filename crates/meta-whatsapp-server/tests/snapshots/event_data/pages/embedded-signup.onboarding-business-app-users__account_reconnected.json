@@ -1,0 +1,14 @@
+[
+  {
+    "data": {
+      "entry_id": "862475293675413",
+      "event": "account_updated",
+      "time": "1768477203",
+      "update": {
+        "event": "ACCOUNT_RECONNECTED"
+      },
+      "waba_id": "862475293675413"
+    },
+    "type": "account_updated"
+  }
+]

@@ -1,0 +1,30 @@
+[
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "event": "group_updated",
+      "field": "group_lifecycle_update",
+      "phone_number_id": "106540352242922",
+      "update": {
+        "description": "Test Description",
+        "errors": [
+          {
+            "code": 131211,
+            "error_data": {
+              "details": "Reached the limit for the maximum number of groups that can be created for this number."
+            },
+            "message": "Reached the limit for the maximum number of groups that can be created for this number.",
+            "title": "Group create limit reached"
+          }
+        ],
+        "group_id": "Y2FwaV9ncm91cDoxOTUwNTU1MDA3OToxMjAzNjMzOTQzMjAdOTY0MTUZD",
+        "request_id": "6f1c2d3e-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
+        "subject": "test invite link",
+        "timestamp": "1750101000",
+        "type": "group_create"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "group_updated"
+  }
+]

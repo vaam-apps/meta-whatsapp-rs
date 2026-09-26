@@ -183,13 +183,17 @@ async fn the_public_listener_serves_metas_check_and_livez_only() {
         assert_eq!(reply.status, StatusCode::FORBIDDEN, "{query}");
         assert!(reply.text.is_empty());
     }
-    // Deliveries arrive with M1c: no POST yet, so Meta retries.
+    // Deliveries: an unsigned one is a bare 401 (tests/webhooks.rs has the
+    // rest); any other method is 405.
     let post = send(&h.public, Call::new(Method::POST, "/webhooks/meta").build()).await;
+    assert_eq!(post.status, StatusCode::UNAUTHORIZED);
+    assert!(post.text.is_empty());
+    let put = send(&h.public, Call::new(Method::PUT, "/webhooks/meta").build()).await;
     assert_eq!(
-        (post.status, post.code().as_str()),
+        (put.status, put.code().as_str()),
         (StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed")
     );
-    assert_eq!(post.headers["allow"], "GET,HEAD");
+    assert_eq!(put.headers["allow"], "GET,HEAD,POST");
     assert_eq!(
         send(&h.public, Call::get("/livez").build()).await.status,
         StatusCode::OK
@@ -328,6 +332,74 @@ async fn a_wrong_method_is_405_with_the_error_body() {
         );
         assert_eq!(reply.headers["allow"], allow, "{path}");
     }
+}
+
+/// Every tenant route is behind the tenant's rate limit (steps 1 to 3 of
+/// the authorization order, then the budget of the route's class:
+/// `src/auth.rs`), so every one answers `429 too_many_requests` and the
+/// document must say so. With a budget of one request per class and one
+/// tenant per operation, the second call of each operation is refused
+/// before ownership (the sample's number and WABA are nobody's, and Meta
+/// is never asked), and its operation declares the `429`. Decisive: a
+/// tenant route mounted without the limiter, or not declaring its `429`.
+#[tokio::test]
+async fn every_rate_limited_operation_declares_its_429() {
+    use meta_whatsapp_server::ratelimit::{Rate, RateLimits};
+    use meta_whatsapp_server::state::Settings;
+    let spec: Value = serde_json::from_str(COMMITTED).unwrap();
+    let one = Rate {
+        per_second: 1,
+        burst: 1,
+    };
+    let h = Harness::with_settings(Settings {
+        rate_limits: RateLimits {
+            send: one,
+            read: one,
+            templates: one,
+        },
+        ..common::test_settings()
+    });
+    let mut limited = Vec::new();
+    for (i, operation) in common::spec_operations().into_iter().enumerate() {
+        if !operation.keyed || operation.admin() {
+            continue;
+        }
+        let label = operation.label();
+        // A tenant of its own: every class's budget is whole.
+        let tenant = format!("tenant-{i}");
+        h.tenant(&tenant).await;
+        let key = h.tenant_key(&tenant, &common::ALL_SCOPES).await;
+        let sample = common::Sample {
+            tenant: tenant.clone(),
+            waba: "102290129340398".to_owned(),
+            pn: "106540352242922".to_owned(),
+            key_id: "placeholder".to_owned(),
+        };
+        let first = h
+            .call(common::sample_call(&operation, &sample, Some(&key)))
+            .await;
+        assert_ne!(first.status, StatusCode::TOO_MANY_REQUESTS, "{label}");
+        let second = h
+            .call(common::sample_call(&operation, &sample, Some(&key)))
+            .await;
+        assert_eq!(
+            second.status,
+            StatusCode::TOO_MANY_REQUESTS,
+            "{label}: not rate-limited"
+        );
+        assert_eq!(second.code(), "too_many_requests", "{label}");
+        let declared = spec["paths"][&operation.template][operation.method.as_str().to_lowercase()]
+            ["responses"]["429"]["description"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            declared.contains("`too_many_requests`"),
+            "{label} does not declare its 429: {declared:?}"
+        );
+        limited.push(label);
+    }
+    assert!(limited.len() >= 16, "{limited:?}");
+    assert!(h.graph.requests().is_empty(), "Meta was asked");
 }
 
 /// Exactly the routes that honour `Idempotency-Key` declare it (sends,

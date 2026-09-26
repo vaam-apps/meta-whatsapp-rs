@@ -1,0 +1,37 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {
+          "name": "Sheena Nelson"
+        },
+        "user_id": "US.13491208655302741918",
+        "wa_id": "16505551234"
+      },
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "context": {
+          "from": "16315558151",
+          "id": "gBGGEiRVVgBPAgm7FUgc73noXjo"
+        },
+        "from": "16505551234",
+        "from_user_id": "US.13491208655302741918",
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQTc4RkNFMUU2QjFBNzBERjM0QQA=",
+        "interactive": {
+          "nfm_reply": {
+            "body": "Sent",
+            "name": "flow",
+            "response_json": "{\"flow_token\": \"order-7781\", \"optional_param1\": \"blue\", \"optional_param2\": \"large\"}"
+          },
+          "type": "nfm_reply"
+        },
+        "timestamp": "1750102000",
+        "type": "interactive"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

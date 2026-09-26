@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use crate::api::templates::TemplateCache;
 use crate::auth::Tokens;
+use crate::events::{Events, Inbound};
 use crate::metrics::Metrics;
 use crate::ratelimit::{RateLimiter, RateLimits, Slots};
 use crate::store::Store;
@@ -89,6 +90,7 @@ struct Inner {
     client: Client,
     verify_token: VerifyToken,
     metrics: Metrics,
+    events: Events,
     shutting_down: AtomicBool,
     settings: Settings,
     limiter: RateLimiter,
@@ -106,13 +108,15 @@ impl std::fmt::Debug for AppState {
 impl AppState {
     /// State on `store` and `vault`, calling Graph with `client` (built
     /// without a default token: each call runs with the tenant's token),
-    /// with the default [`Settings`].
+    /// receiving Meta's webhooks into `inbound`'s stores, with the default
+    /// [`Settings`].
     pub fn new(
         store: Arc<dyn Store>,
         vault: TokenVault,
         client: Client,
         verify_token: VerifyToken,
         metrics: Metrics,
+        inbound: Inbound,
     ) -> Self {
         Self::with_settings(
             store,
@@ -120,6 +124,7 @@ impl AppState {
             client,
             verify_token,
             metrics,
+            inbound,
             Settings::default(),
         )
     }
@@ -131,8 +136,15 @@ impl AppState {
         client: Client,
         verify_token: VerifyToken,
         metrics: Metrics,
+        inbound: Inbound,
         settings: Settings,
     ) -> Self {
+        let events = Events::new(
+            inbound,
+            store.clone(),
+            verify_token.clone(),
+            metrics.clone(),
+        );
         Self {
             inner: Arc::new(Inner {
                 store,
@@ -140,6 +152,7 @@ impl AppState {
                 client,
                 verify_token,
                 metrics,
+                events,
                 shutting_down: AtomicBool::new(false),
                 limiter: RateLimiter::new(settings.rate_limits),
                 media_slots: Slots::new(settings.media_concurrency),
@@ -174,6 +187,11 @@ impl AppState {
     /// The metrics.
     pub fn metrics(&self) -> &Metrics {
         &self.inner.metrics
+    }
+
+    /// Meta's webhook pipeline and the event outbox.
+    pub(crate) fn events(&self) -> &Events {
+        &self.inner.events
     }
 
     /// The settings.
@@ -230,8 +248,9 @@ impl AppState {
         use meta_whatsapp_rs::client::embedded_signup::{VaultKey, VaultKeys};
         use meta_whatsapp_rs::core::testing::ScriptedTransport;
 
+        let kv = Arc::new(MemoryKvStore::new());
         let vault = TokenVault::new(
-            Arc::new(MemoryKvStore::new()),
+            kv.clone(),
             VaultKeys::new(VaultKey::generate("test").unwrap()),
         )
         .unwrap();
@@ -239,12 +258,23 @@ impl AppState {
             .transport(ScriptedTransport::new())
             .build()
             .unwrap();
+        let store = crate::store::MemoryStore::new();
+        let inbound = Inbound::new(
+            vec![meta_whatsapp_rs::core::secret::AppSecret::new(
+                "app-secret-for-unit-tests",
+            )],
+            kv,
+            Arc::new(meta_whatsapp_rs::adapters::store::MemoryConversationStore::new()),
+            store.outbox(),
+        )
+        .unwrap();
         Self::new(
-            Arc::new(crate::store::MemoryStore::new()),
+            Arc::new(store),
             vault,
             client,
             VerifyToken::new("verify-token-for-unit-tests"),
             Metrics::new(),
+            inbound,
         )
     }
 }

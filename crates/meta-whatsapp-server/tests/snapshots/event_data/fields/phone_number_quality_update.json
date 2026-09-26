@@ -1,0 +1,15 @@
+[
+  {
+    "data": {
+      "event": "phone_number_quality_updated",
+      "time": "1748454394",
+      "update": {
+        "current_limit": "TIER_UNLIMITED",
+        "display_phone_number": "15550783881",
+        "event": "THROUGHPUT_UPGRADE"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "phone_number_quality_updated"
+  }
+]

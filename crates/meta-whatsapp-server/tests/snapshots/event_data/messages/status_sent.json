@@ -1,0 +1,31 @@
+[
+  {
+    "data": {
+      "contact": null,
+      "display_phone_number": "15550783881",
+      "event": "status_updated",
+      "phone_number_id": "106540352242922",
+      "status": {
+        "conversation": {
+          "expiration_timestamp": "1750116480",
+          "id": "72b14d6bd5407799e66f64d1b338e567",
+          "origin": {
+            "type": "marketing"
+          }
+        },
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQUFERjg0NDEzNDdFODU3MUMxMAA=",
+        "pricing": {
+          "billable": true,
+          "category": "marketing",
+          "pricing_model": "PMP",
+          "type": "regular"
+        },
+        "recipient_id": "16505551234",
+        "status": "sent",
+        "timestamp": "1750030073"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "status_updated"
+  }
+]

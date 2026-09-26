@@ -1,0 +1,44 @@
+[
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "event": "history_synced",
+      "history": {
+        "contacts": [
+          {
+            "parent_user_id": "US.ENT.11815799212886844830",
+            "profile": {
+              "username": "pablomorales"
+            },
+            "user_id": "US.13491208655302741918",
+            "wa_id": "16505551234"
+          }
+        ],
+        "messages": [
+          {
+            "from": "16505551234",
+            "from_parent_user_id": "US.ENT.11815799212886844830",
+            "from_user_id": "US.13491208655302741918",
+            "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQUFERjg0NDEzNDdFODU3MUMxMAA=",
+            "image": {
+              "caption": "Black Prince echeveria",
+              "id": "24230790383178626",
+              "mime_type": "image/jpeg",
+              "sha256": "3f9d94d399fa61c191bc1d4ca71375a035cd9b9f5b1128e1f0963a415c16b0cc"
+            },
+            "timestamp": "1738796547",
+            "type": "image"
+          }
+        ],
+        "messaging_product": "whatsapp",
+        "metadata": {
+          "display_phone_number": "15550783881",
+          "phone_number_id": "106540352242922"
+        }
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "history_synced"
+  }
+]

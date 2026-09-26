@@ -1,0 +1,32 @@
+[
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "event": "history_synced",
+      "history": {
+        "history": [
+          {
+            "errors": [
+              {
+                "code": 2593109,
+                "error_data": {
+                  "details": "History sharing is turned off by the business"
+                },
+                "message": "History sync is turned off by the business from the WhatsApp Business App",
+                "title": "History sync is turned off by the business from the WhatsApp Business App"
+              }
+            ]
+          }
+        ],
+        "messaging_product": "whatsapp",
+        "metadata": {
+          "display_phone_number": "15550783881",
+          "phone_number_id": "106540352242922"
+        }
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "history_synced"
+  }
+]

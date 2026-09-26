@@ -4,21 +4,25 @@
 #![allow(dead_code)] // each test binary uses a different subset
 
 pub mod capture;
+pub mod events_suite;
+pub mod meta;
+pub mod scenarios;
 pub mod store_suite;
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use http_body_util::BodyExt;
-use meta_whatsapp_rs::adapters::store::MemoryKvStore;
+use meta_whatsapp_rs::adapters::store::{MemoryConversationStore, MemoryKvStore};
 use meta_whatsapp_rs::client::embedded_signup::{
     StoredBusinessToken, TOKEN_NAMESPACE, TokenVault, VaultKey, VaultKeys,
 };
+use meta_whatsapp_rs::core::clock::ManualClock;
 use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
-use meta_whatsapp_rs::core::secret::{AccessToken, VerifyToken};
-use meta_whatsapp_rs::core::store::{Expiry, KvStore, StoreKey, Versioned};
+use meta_whatsapp_rs::core::secret::{AccessToken, AppSecret, VerifyToken};
+use meta_whatsapp_rs::core::store::{ConversationStore, Expiry, KvStore, StoreKey, Versioned};
 use meta_whatsapp_rs::core::testing::ScriptedTransport;
 use meta_whatsapp_rs::core::transport::HttpTransport;
 use meta_whatsapp_rs::webhooks::axum::Router;
@@ -27,16 +31,28 @@ use meta_whatsapp_rs::webhooks::axum::http::{HeaderMap, Method, Request, StatusC
 use meta_whatsapp_rs::{Client, RetryPolicy};
 use meta_whatsapp_server::api::admin::mint;
 use meta_whatsapp_server::api::{internal_router, public_router};
+use meta_whatsapp_server::events::Inbound;
 use meta_whatsapp_server::metrics::Metrics;
 use meta_whatsapp_server::model::{AllowedTenants, KeyOwner, Scope, TenantId};
 use meta_whatsapp_server::ratelimit::{Rate, RateLimits};
 use meta_whatsapp_server::state::{AppState, Settings};
-use meta_whatsapp_server::store::{MemoryStore, Store};
+use meta_whatsapp_server::store::events::{EventPage, EventQuery, NewEvent};
+use meta_whatsapp_server::store::{EventStore, MemoryStore, Store};
 use serde_json::Value;
 use tower::ServiceExt;
 
 /// The verify token of every test service.
 pub const VERIFY_TOKEN: &str = "verify-token-for-tests";
+
+/// The app secret Meta's test deliveries are signed with.
+pub const APP_SECRET: &str = "app-secret-for-tests";
+
+/// A second app secret, the previous one while rotating.
+pub const PREVIOUS_APP_SECRET: &str = "previous-app-secret-for-tests";
+
+/// The app secrets of every test service: [`APP_SECRET`], then
+/// [`PREVIOUS_APP_SECRET`].
+pub const DEFAULT_APP_SECRETS: &[&str] = &[APP_SECRET, PREVIOUS_APP_SECRET];
 
 /// A `KvStore` that counts reads of the token vault's namespace.
 #[derive(Debug)]
@@ -100,6 +116,118 @@ impl KvStore for CountingKv {
     }
 }
 
+/// What an insert into [`RecordingEvents`] does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fate {
+    /// It goes to the store.
+    Pass,
+    /// It fails (a storage error).
+    Fail,
+    /// It never finishes: the request is cut there, as a crash would.
+    Hang,
+}
+
+/// Work run just before the next insert reaches the store.
+pub type BeforeInsert =
+    Box<dyn FnOnce() -> futures::future::BoxFuture<'static, ()> + Send + Sync + 'static>;
+
+/// An [`EventStore`] that records every insert the sink makes, and can
+/// fail or hang the next ones, or run something just before one.
+pub struct RecordingEvents {
+    inner: Arc<dyn EventStore>,
+    inserted: Mutex<Vec<(NewEvent, Option<i64>)>>,
+    /// The next inserts' fates; then they pass.
+    script: Mutex<std::collections::VecDeque<Fate>>,
+    before: Mutex<Option<BeforeInsert>>,
+}
+
+impl RecordingEvents {
+    pub fn new(inner: Arc<dyn EventStore>) -> Self {
+        Self {
+            inner,
+            inserted: Mutex::new(Vec::new()),
+            script: Mutex::new(std::collections::VecDeque::new()),
+            before: Mutex::new(None),
+        }
+    }
+
+    /// Fail the next `n` inserts (a storage error).
+    pub fn fail_next(&self, n: usize) {
+        self.script(&vec![true; n]);
+    }
+
+    /// The next inserts' fates, in order (`true`: fails); then they pass.
+    pub fn script(&self, fates: &[bool]) {
+        self.fates(
+            &fates
+                .iter()
+                .map(|&fail| if fail { Fate::Fail } else { Fate::Pass })
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    /// The next inserts' fates, in order; then they pass.
+    pub fn fates(&self, fates: &[Fate]) {
+        *self.script.lock().unwrap() = fates.iter().copied().collect();
+    }
+
+    /// Run `work` just before the next insert reaches the store (after the
+    /// sink routed the event).
+    pub fn before_next_insert(&self, work: BeforeInsert) {
+        *self.before.lock().unwrap() = Some(work);
+    }
+
+    /// Every insert so far and its outcome (`None`: already stored).
+    pub fn inserts(&self) -> Vec<(NewEvent, Option<i64>)> {
+        self.inserted.lock().unwrap().clone()
+    }
+
+    /// The rows written (inserts that stored a row).
+    pub fn rows(&self) -> Vec<NewEvent> {
+        self.inserts()
+            .into_iter()
+            .filter(|(_, sequence)| sequence.is_some())
+            .map(|(row, _)| row)
+            .collect()
+    }
+}
+
+#[async_trait]
+impl EventStore for RecordingEvents {
+    async fn insert(&self, event: &NewEvent) -> Result<Option<i64>, StorageError> {
+        let fate = self
+            .script
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or(Fate::Pass);
+        match fate {
+            Fate::Pass => {}
+            Fate::Fail => {
+                return Err(StorageError::Backend(anyhow::anyhow!(
+                    "scripted outbox failure"
+                )));
+            }
+            Fate::Hang => futures::future::pending::<()>().await,
+        }
+        let before = self.before.lock().unwrap().take();
+        if let Some(work) = before {
+            work().await;
+        }
+        let outcome = self.inner.insert(event).await?;
+        self.inserted.lock().unwrap().push((event.clone(), outcome));
+        Ok(outcome)
+    }
+
+    async fn page(&self, query: &EventQuery) -> Result<EventPage, StorageError> {
+        self.inner.page(query).await
+    }
+
+    async fn purge(&self, older_than: std::time::Duration) -> Result<Option<u64>, StorageError> {
+        self.inner.purge(older_than).await
+    }
+}
+
 /// The service under test.
 pub struct Harness {
     pub state: AppState,
@@ -109,6 +237,45 @@ pub struct Harness {
     pub kv: Arc<CountingKv>,
     pub vault: TokenVault,
     pub store: Arc<dyn Store>,
+    pub conversations: Arc<dyn ConversationStore>,
+    /// The outbox, recording what the sink writes.
+    pub outbox: Arc<RecordingEvents>,
+    /// The webhook pipeline's "now" (the replay window, the keyless dedup
+    /// window): the time the harness was built until a test moves it.
+    pub clock: ManualClock,
+}
+
+/// The stores a [`Harness`] runs on.
+pub struct Stores {
+    pub store: Arc<dyn Store>,
+    pub kv: Arc<dyn KvStore>,
+    pub conversations: Arc<dyn ConversationStore>,
+    pub events: Arc<dyn EventStore>,
+}
+
+impl Stores {
+    /// Everything in memory.
+    pub fn memory() -> Self {
+        let store = MemoryStore::new();
+        Self {
+            events: store.outbox(),
+            store: Arc::new(store),
+            kv: Arc::new(MemoryKvStore::new()),
+            conversations: Arc::new(MemoryConversationStore::new()),
+        }
+    }
+
+    /// Everything on Postgres, on `pool` (migrated).
+    pub fn postgres(pool: &meta_whatsapp_rs::adapters::store::postgres::sqlx::PgPool) -> Self {
+        use meta_whatsapp_rs::adapters::store::{PostgresConversationStore, PostgresKvStore};
+        use meta_whatsapp_server::store::{PgEventStore, PgStore};
+        Self {
+            store: Arc::new(PgStore::new(pool.clone())),
+            kv: Arc::new(PostgresKvStore::new(pool.clone())),
+            conversations: Arc::new(PostgresConversationStore::new(pool.clone())),
+            events: Arc::new(PgEventStore::new(pool.clone())),
+        }
+    }
 }
 
 /// An answer.
@@ -279,21 +446,41 @@ impl Harness {
 
     /// On a memory store, with `settings`.
     pub fn with_settings(settings: Settings) -> Self {
-        Self::on_with(
-            Arc::new(MemoryStore::new()),
-            Arc::new(MemoryKvStore::new()),
-            settings,
-        )
+        Self::build(Stores::memory(), settings, DEFAULT_APP_SECRETS, |graph| {
+            Arc::new(graph)
+        })
     }
 
-    /// On `store` and `kv`.
+    /// On `store` and `kv`, the inbox and the outbox in memory.
     pub fn on(store: Arc<dyn Store>, kv: Arc<dyn KvStore>) -> Self {
         Self::on_with(store, kv, test_settings())
     }
 
-    /// On `store` and `kv`, with `settings`.
+    /// On `store` and `kv`, with `settings`, the inbox and the outbox in
+    /// memory.
     pub fn on_with(store: Arc<dyn Store>, kv: Arc<dyn KvStore>, settings: Settings) -> Self {
-        Self::on_with_transport(store, kv, settings, |graph| Arc::new(graph))
+        let stores = Stores {
+            store,
+            kv,
+            ..Stores::memory()
+        };
+        Self::build(stores, settings, DEFAULT_APP_SECRETS, |graph| {
+            Arc::new(graph)
+        })
+    }
+
+    /// On `stores`, verifying deliveries against [`APP_SECRET`] and
+    /// [`PREVIOUS_APP_SECRET`].
+    pub fn with(stores: Stores) -> Self {
+        Self::with_app_secrets(stores, DEFAULT_APP_SECRETS)
+    }
+
+    /// On `stores`, verifying deliveries against `app_secrets` (the first
+    /// one derives event ids).
+    pub fn with_app_secrets(stores: Stores, app_secrets: &[&str]) -> Self {
+        Self::build(stores, test_settings(), app_secrets, |graph| {
+            Arc::new(graph)
+        })
     }
 
     /// On a memory store, with `settings`, Meta reached through what
@@ -303,21 +490,23 @@ impl Harness {
         settings: Settings,
         wrap: impl FnOnce(ScriptedTransport) -> Arc<dyn HttpTransport>,
     ) -> Self {
-        Self::on_with_transport(
-            Arc::new(MemoryStore::new()),
-            Arc::new(MemoryKvStore::new()),
-            settings,
-            wrap,
-        )
+        Self::build(Stores::memory(), settings, DEFAULT_APP_SECRETS, wrap)
     }
 
-    fn on_with_transport(
-        store: Arc<dyn Store>,
-        kv: Arc<dyn KvStore>,
+    fn build(
+        stores: Stores,
         settings: Settings,
+        app_secrets: &[&str],
         wrap: impl FnOnce(ScriptedTransport) -> Arc<dyn HttpTransport>,
     ) -> Self {
+        let Stores {
+            store,
+            kv,
+            conversations,
+            events,
+        } = stores;
         let kv = Arc::new(CountingKv::new(kv));
+        let outbox = Arc::new(RecordingEvents::new(events));
         let vault = TokenVault::new(
             kv.clone(),
             VaultKeys::new(VaultKey::generate("test").unwrap()),
@@ -329,12 +518,22 @@ impl Harness {
             .retry(RetryPolicy::NONE)
             .build()
             .unwrap();
+        let clock = ManualClock::new(time::OffsetDateTime::now_utc());
+        let inbound = Inbound::new(
+            app_secrets.iter().copied().map(AppSecret::new).collect(),
+            kv.clone(),
+            conversations.clone(),
+            outbox.clone(),
+        )
+        .unwrap()
+        .with_clock(Arc::new(clock.clone()));
         let state = AppState::with_settings(
             store.clone(),
             vault.clone(),
             client,
             VerifyToken::new(VERIFY_TOKEN),
             Metrics::new(),
+            inbound,
             settings,
         );
         Self {
@@ -345,7 +544,15 @@ impl Harness {
             kv,
             vault,
             store,
+            conversations,
+            outbox,
+            clock,
         }
+    }
+
+    /// Deliver `body` to `POST /webhooks/meta`, signed with [`APP_SECRET`].
+    pub async fn webhook(&self, body: &[u8]) -> Reply {
+        send(&self.public, signed(body).build()).await
     }
 
     /// Call the internal listener.
@@ -418,6 +625,16 @@ impl Harness {
             .await
             .unwrap();
     }
+}
+
+/// A `POST /webhooks/meta` of `body`, signed as Meta signs it, with
+/// [`APP_SECRET`].
+pub fn signed(body: &[u8]) -> Call {
+    let signature = meta_whatsapp_rs::webhooks::sign(&AppSecret::new(APP_SECRET), body);
+    Call::new(Method::POST, "/webhooks/meta")
+        .header("content-type", "application/json")
+        .header("x-hub-signature-256", &signature)
+        .body(Body::from(body.to_vec()))
 }
 
 /// Every scope.

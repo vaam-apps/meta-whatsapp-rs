@@ -1,0 +1,15 @@
+[
+  {
+    "data": {
+      "event": "phone_number_name_updated",
+      "time": "1731617831",
+      "update": {
+        "decision": "APPROVED",
+        "display_phone_number": "124545784358810",
+        "requested_verified_name": "WhatsApp"
+      },
+      "waba_id": "495709166956424"
+    },
+    "type": "phone_number_name_updated"
+  }
+]

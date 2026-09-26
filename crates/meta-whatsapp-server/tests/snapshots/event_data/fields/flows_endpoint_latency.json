@@ -1,0 +1,20 @@
+[
+  {
+    "data": {
+      "event": "flow_updated",
+      "time": "1674160476",
+      "update": {
+        "alert_state": "ACTIVATED",
+        "event": "ENDPOINT_LATENCY",
+        "flow_id": "691244242662581",
+        "message": "Flow endpoint latency has reached the p90 threshold in the last 30 minutes. High latency will increase the loading time between screens in the flow, impacting user experience.",
+        "p50_latency": 500.0,
+        "p90_latency": 8000.0,
+        "requests_count": 34,
+        "threshold": 7000.0
+      },
+      "waba_id": "106181168862417"
+    },
+    "type": "flow_updated"
+  }
+]

@@ -1,0 +1,24 @@
+[
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "event": "group_updated",
+      "field": "group_participants_update",
+      "phone_number_id": "106540352242922",
+      "update": {
+        "added_participants": [
+          {
+            "input": "16505551234",
+            "wa_id": "16505551234"
+          }
+        ],
+        "group_id": "Y2FwaV9ncm91cDoxOTUwNTU1MDA3OToxMjAzNjMzOTQzMjAdOTY0MTUZD",
+        "reason": "invite_link",
+        "timestamp": "1750101000",
+        "type": "group_participants_add"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "group_updated"
+  }
+]

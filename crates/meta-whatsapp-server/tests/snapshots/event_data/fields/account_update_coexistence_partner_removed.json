@@ -1,0 +1,19 @@
+[
+  {
+    "data": {
+      "entry_id": "102290129340398",
+      "event": "account_updated",
+      "time": "1739212624",
+      "update": {
+        "disconnection_info": {
+          "initiated_by": "SYSTEM",
+          "reason": "PRIMARY_INACTIVITY"
+        },
+        "event": "PARTNER_REMOVED",
+        "phone_number": "15550783881"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "account_updated"
+  }
+]

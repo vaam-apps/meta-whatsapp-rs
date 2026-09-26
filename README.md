@@ -201,9 +201,12 @@ through **meta-whatsapp-server**, an HTTP service built on the library and
 deployed next to them: one deployment per Meta app, many tenants, keys per
 tenant or per platform, the `/v1` REST API described by a committed OpenAPI
 document ([`crates/meta-whatsapp-server/openapi/v1.json`](crates/meta-whatsapp-server/openapi/v1.json)).
-Milestone M1a is here: tenants, keys, the admin API, the platform's own
-WABAs, numbers and business profiles, vault key rotation, health, metrics. Sending messages,
-Meta's webhooks, the inbox, Embedded Signup, OTP, the Docker image and the
+Milestone M1 is here: tenants, keys, the admin API, the platform's own
+WABAs, numbers and business profiles, vault key rotation, sending
+messages, media and templates (with idempotency keys and rate limits),
+Meta's webhooks into the inbox and an event outbox polled with
+`GET /v1/events`, health, metrics. The inbox routes, live events,
+webhooks to your backend, Embedded Signup, OTP, the Docker image and the
 TypeScript client come in the next milestones
 ([docs/design/server.md](docs/design/server.md), section 9).
 

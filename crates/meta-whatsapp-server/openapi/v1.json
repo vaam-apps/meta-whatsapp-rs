@@ -594,7 +594,7 @@
         "tags": [
           "admin"
         ],
-        "summary": "Delete a tenant: disconnect every WABA it has (as\n`DELETE /v1/wabas/{waba_id}` does), then delete it and its keys. Stops\nat the first WABA that cannot be disconnected; the tenant stays.",
+        "summary": "Delete a tenant: disconnect every WABA it has (as\n`DELETE /v1/wabas/{waba_id}` does), then delete it and its keys. Stops\nat the first WABA that cannot be disconnected; the tenant stays. Its\nevents go with it, and every platform key listing it stops allowing\nit, for good: no route edits a key's tenants, so a tenant created\nlater with the same id polls none of its events and needs a new\nplatform key (a `*` key allows it at once).",
         "operationId": "delete_tenant",
         "parameters": [
           {
@@ -1399,6 +1399,148 @@
         ]
       }
     },
+    "/v1/events": {
+      "get": {
+        "tags": [
+          "events"
+        ],
+        "summary": "`GET /v1/events`: the tenant's events after a sequence.",
+        "operationId": "list_events",
+        "parameters": [
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Events after this sequence: `next_after` of the previous answer.\nOmit it to start at the oldest event still kept.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "types",
+            "in": "query",
+            "description": "Only these types (`KnownEventType`), comma-separated\n(`message_received,status_updated`) or repeated\n(`types=message_received&types=status_updated`), or both; every type\nwhen omitted.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "phone_number_id",
+            "in": "query",
+            "description": "Only this business phone number's events.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "At most this many events.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's events after `after`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (no `events` scope), `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "`cursor_expired`: events after `after` were purged (past retention, or deleted with a tenant of the same id); start again without `after`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `after` (malformed, or past the tenant's newest sequence), `types` (not a `KnownEventType`), `phone_number_id` or `limit`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/numbers": {
       "get": {
         "tags": [
@@ -1475,6 +1617,16 @@
           },
           "422": {
             "description": "`invalid_request` on `limit` or `cursor`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1574,6 +1726,16 @@
           },
           "409": {
             "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`), or Meta's throttling",
             "content": {
               "application/json": {
                 "schema": {
@@ -2516,6 +2678,16 @@
               }
             }
           },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "502": {
             "description": "Meta failed",
             "content": {
@@ -2645,6 +2817,16 @@
           },
           "422": {
             "description": "`invalid_request` (`address` over 256 characters, a vertical that cannot be set), or Meta's `invalid_parameter`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling",
             "content": {
               "application/json": {
                 "schema": {
@@ -2837,6 +3019,16 @@
               }
             }
           },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Any other error: branch on `error.code`",
             "content": {
@@ -2921,6 +3113,16 @@
           },
           "409": {
             "description": "`number_not_connected`, `reconnect_required` (nothing deleted)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling (nothing deleted)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4165,6 +4367,106 @@
           }
         }
       },
+      "Event": {
+        "type": "object",
+        "description": "One event (docs/design/server.md, section 4.4): the same envelope a\nwebhook endpoint (M2) receives.",
+        "required": [
+          "id",
+          "sequence",
+          "type",
+          "api_version",
+          "tenant_id",
+          "phone_number_id",
+          "waba_id",
+          "received_at",
+          "truncated",
+          "data"
+        ],
+        "properties": {
+          "api_version": {
+            "type": "string",
+            "description": "The envelope's version: `v1`."
+          },
+          "data": {
+            "type": "object",
+            "description": "The event: meta-whatsapp-rs's WebhookEvent JSON, tagged by `event` (the envelope's `type`). Its fields are Meta's, as the library normalizes them; new fields may appear.",
+            "additionalProperties": true
+          },
+          "id": {
+            "type": "string",
+            "description": "The event's id (`evt_…`): derived from the event, so the same event\nkeeps it wherever it is recorded again (until the operator rotates\nthe Meta app secret it is derived with); deduplicate on it. An\nerror, or a body that is not a webhook, seen again over an hour\nlater is a new event, with a new id."
+          },
+          "phone_number_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The business phone number, when the event names one."
+          },
+          "received_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the service received it (RFC 3339)."
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its position among the tenant's events (each tenant has its own\nsequence): increasing (with gaps), never reused within one\ndatabase's history (a point-in-time restore of the service's\ndatabase rolls sequences back: resynchronise and poll without\n`after` when the operator says so); order on it."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "The tenant it belongs to."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Whether `data` was left out for its size (webhook deliveries only;\nalways `false` here)."
+          },
+          "type": {
+            "$ref": "#/components/schemas/EventType",
+            "description": "Its type (`EventType`), the `event` tag of `data`."
+          },
+          "waba_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its WhatsApp Business Account, when the event names one."
+          }
+        }
+      },
+      "EventList": {
+        "type": "object",
+        "description": "A page of events.",
+        "required": [
+          "data",
+          "next_after"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            },
+            "description": "The events, in sequence order."
+          },
+          "next_after": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Pass as `after` to continue: the last event's sequence when more\nfollow, else the tenant's newest sequence (so a poll never starts\nagain from an old cursor). A filtered poll (`types`,\n`phone_number_id`) moves it past the events the filter left out:\nkeep one cursor per filter set."
+          }
+        }
+      },
+      "EventType": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/KnownEventType"
+          },
+          {
+            "type": "string"
+          }
+        ],
+        "description": "An event type: a KnownEventType today. Types only grow within v1: ignore an unknown one."
+      },
       "GraphErrorInfo": {
         "type": "object",
         "description": "Meta's error, as the body carries it: the code and trace id, and, on\nthe routes that opt in, `error_data.details`. Never Meta's `message` or\ntitles.",
@@ -4652,6 +4954,40 @@
           "storage_unavailable",
           "shutting_down",
           "internal"
+        ]
+      },
+      "KnownEventType": {
+        "type": "string",
+        "description": "The event types a tenant receives today (switch on them and let any other fall to a default).",
+        "enum": [
+          "message_received",
+          "status_updated",
+          "error_reported",
+          "message_echoed",
+          "history_synced",
+          "app_state_synced",
+          "call_updated",
+          "call_status_updated",
+          "user_preference_changed",
+          "user_id_changed",
+          "automatic_event_detected",
+          "group_updated",
+          "flow_updated",
+          "account_alert",
+          "account_review_updated",
+          "account_updated",
+          "account_settings_updated",
+          "business_capability_updated",
+          "business_username_updated",
+          "payment_configuration_updated",
+          "phone_number_name_updated",
+          "phone_number_quality_updated",
+          "security_updated",
+          "template_components_updated",
+          "template_quality_updated",
+          "template_status_updated",
+          "template_category_updated",
+          "template_category_misuse_detected"
         ]
       },
       "ListRow": {
@@ -5877,6 +6213,10 @@
     {
       "name": "templates",
       "description": "Listing, creating and deleting message templates (scope `templates`)"
+    },
+    {
+      "name": "events",
+      "description": "Meta's webhook events, routed to their tenant (scope `events`)"
     },
     {
       "name": "operations",

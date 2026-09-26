@@ -1,0 +1,30 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {
+          "name": "Sheena Nelson"
+        },
+        "wa_id": "16505551234"
+      },
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "from": "16505551234",
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQTRBNjU5OUFFRTAzODEwMTQ0RgA=",
+        "timestamp": "1744344496",
+        "type": "video",
+        "video": {
+          "caption": "Timelapse of growth",
+          "id": "731675419373506",
+          "mime_type": "video/mp4",
+          "sha256": "vdGU5X4caz12KwFgYwpljlUNqMt1YnkH+5GkPc3mMnc=",
+          "url": "https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=133..."
+        }
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

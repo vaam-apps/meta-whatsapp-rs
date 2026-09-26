@@ -1,0 +1,55 @@
+[
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "event": "history_synced",
+      "history": {
+        "history": [
+          {
+            "metadata": {
+              "chunk_order": 1,
+              "phase": 0,
+              "progress": 55
+            },
+            "threads": [
+              {
+                "context": {
+                  "parent_user_id": "US.ENT.11815799212886844830",
+                  "user_id": "US.13491208655302741918",
+                  "username": "pablomorales",
+                  "wa_id": "16505551234"
+                },
+                "id": "16505551234",
+                "messages": [
+                  {
+                    "from": "15550783881",
+                    "from_parent_user_id": "US.ENT.11815799212886844830",
+                    "from_user_id": "US.13491208655302741918",
+                    "history_context": {
+                      "status": "READ"
+                    },
+                    "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQUFERjg0NDEzNDdFODU3MUMxMAA=",
+                    "text": {
+                      "body": "Here's the info you requested! https://www.meta.com/quest/quest-3/"
+                    },
+                    "timestamp": "1738796547",
+                    "to": "16505551234",
+                    "type": "text"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "messaging_product": "whatsapp",
+        "metadata": {
+          "display_phone_number": "15550783881",
+          "phone_number_id": "106540352242922"
+        }
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "history_synced"
+  }
+]

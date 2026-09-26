@@ -1,0 +1,32 @@
+[
+  {
+    "data": {
+      "contact": null,
+      "display_phone_number": "15550783881",
+      "event": "standby_observed",
+      "item": {
+        "status": {
+          "conversation": {
+            "id": "b1946ac92492d2347c6235b4d2611184",
+            "origin": {
+              "type": "utility"
+            }
+          },
+          "id": "wamid.HBgLMTY1MDU1NTEyMzQVAgASGBQzRUIwQTk4NkNGMUZCMDZERTREMAA=",
+          "pricing": {
+            "billable": true,
+            "category": "utility",
+            "pricing_model": "PMP",
+            "type": "regular"
+          },
+          "recipient_id": "16505551234",
+          "status": "delivered",
+          "timestamp": "1750101000"
+        }
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "standby_observed"
+  }
+]

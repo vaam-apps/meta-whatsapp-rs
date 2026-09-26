@@ -1,0 +1,33 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {
+          "name": "Pablo Morales"
+        },
+        "wa_id": "16505551234"
+      },
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "context": {
+          "from": "15550783881",
+          "id": "wamid.HBgLMTY0NjcwNDM1OTUVAgARGBI1QjJGRjI1RDY0RkE4Nzg4QzcA"
+        },
+        "from": "16505551234",
+        "id": "wamid.HBgLMTY0NjcwNDM1OTUVAgASGBQzQTRCRDcwNzgzMTRDNTAwRTgwRQA=",
+        "location": {
+          "address": "1071 5th Ave, New York, NY 10128",
+          "latitude": 40.782910059774,
+          "longitude": -73.959075808525,
+          "name": "Solomon R. Guggenheim Museum"
+        },
+        "timestamp": "1702920965",
+        "type": "location"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

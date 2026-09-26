@@ -34,6 +34,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   after changing a route, regenerate the spec with
   `cargo run -p meta-whatsapp-server -- openapi > crates/meta-whatsapp-server/openapi/v1.json`
   and review the diff (within v1 a change must be additive).
+- Event data snapshots (after a webhook change in the library):
+  `META_WHATSAPP_SERVER_UPDATE_SNAPSHOTS=1 cargo test -p meta-whatsapp-server --all-features --test event_data`,
+  then review what it wrote under `crates/meta-whatsapp-server/tests/snapshots/event_data/`.
 - `live_*` adapter and service tests need real services: `just test-live` (or set
   `META_WHATSAPP_RS_TEST_POSTGRES_URL` / `META_WHATSAPP_RS_TEST_REDIS_URL`
   and `META_WHATSAPP_RS_REQUIRE_LIVE=1`).
@@ -105,6 +108,14 @@ flowchart LR
 - PRs are **squash-merged**: cite "PR #N", never a branch commit, in docs;
   the squash body is `just squash-body <pr>` so skill stamps resolve on main
   (CONTRIBUTING.md § Merging).
+- **A library-only webhook change can fail the server's tests.**
+  `meta-whatsapp-server/tests/event_data.rs` walks
+  `meta-whatsapp-webhooks/tests/fixtures` (a new fixture needs its
+  snapshot; a changed snapshot is a v1 API change, where only additions
+  are allowed) and text-parses `WebhookEvent::kind` in `src/event.rs` (a
+  new kind must be classified in `TENANT_EVENT_TYPES` or
+  `OPERATOR_EVENT_TYPES`, `crates/meta-whatsapp-server/src/events.rs`).
+  Steps: `.claude/skills/add-webhook-field`.
 - Consumer skills' Rust blocks are excerpts of
   `skills/<name>/examples/*.rs`; README snippets are excerpts of
   `crates/meta-whatsapp-rs/examples/` (`tests/readme.rs`). Change the

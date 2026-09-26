@@ -1,0 +1,22 @@
+[
+  {
+    "data": {
+      "contact": null,
+      "display_phone_number": "15550783881",
+      "echo": {
+        "from": "15550783881",
+        "id": "wamid.HBgLMTY0NjcwNDM1OTUVAgARGBIyNDlBOEI5QUQ4NDc0N0FCNjMA",
+        "text": {
+          "body": "Here's the info you requested! https://www.meta.com/quest/quest-3/"
+        },
+        "timestamp": "1700255121",
+        "to": "16505551234",
+        "type": "text"
+      },
+      "event": "message_echoed",
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_echoed"
+  }
+]

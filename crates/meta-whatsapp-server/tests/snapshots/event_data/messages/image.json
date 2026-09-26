@@ -1,0 +1,30 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {
+          "name": "Sheena Nelson"
+        },
+        "wa_id": "16505551234"
+      },
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "from": "16505551234",
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQTRBNjU5OUFFRTAzODEwMTQ0RgA=",
+        "image": {
+          "caption": "Taj Mahal",
+          "id": "1003383421387256",
+          "mime_type": "image/jpeg",
+          "sha256": "SfInY0gGKTsJlUWbwxC1k+FAD0FZHvzwfpvO0zX0GUI=",
+          "url": "https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=133..."
+        },
+        "timestamp": "1744344496",
+        "type": "image"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

@@ -1,0 +1,41 @@
+[
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "event": "group_updated",
+      "field": "group_settings_update",
+      "phone_number_id": "106540352242922",
+      "update": {
+        "group_description": {
+          "text": "Test Description",
+          "update_successful": true
+        },
+        "group_id": "Y2FwaV9ncm91cDoxNzA1NTU1MDEzOToxMjAzNjM0MDQ2OTQyMzM4MjAZD",
+        "group_subject": {
+          "errors": [
+            {
+              "code": 131009,
+              "error_data": {
+                "details": "Subject is too long"
+              },
+              "message": "Parameter value is not valid",
+              "title": "Parameter value is not valid"
+            }
+          ],
+          "text": "Test Subject",
+          "update_successful": false
+        },
+        "profile_picture": {
+          "mime_type": "image/jpeg",
+          "sha256": "3f9d94d399fa61c191bc1d4ca71375a035cd9b9f5b1128e1f0963a415c16b0cc",
+          "update_successful": true
+        },
+        "request_id": "ae5b60d19fbc8c4d",
+        "timestamp": "1750100700",
+        "type": "group_settings_update"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "group_updated"
+  }
+]

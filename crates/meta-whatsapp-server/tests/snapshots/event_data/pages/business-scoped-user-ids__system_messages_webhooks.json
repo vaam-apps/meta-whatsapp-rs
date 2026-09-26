@@ -1,0 +1,25 @@
+[
+  {
+    "data": {
+      "contact": null,
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "from": "16505551234",
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQUFERjg0NDEzNDdFODU3MUMxMAA=",
+        "system": {
+          "body": "User...",
+          "parent_user_id": "US.ENT.20837465019283746502",
+          "type": "user_changed_user_id",
+          "user_id": "US.20837465019283746501",
+          "wa_id": "16505559876"
+        },
+        "timestamp": "1750030073",
+        "type": "system"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

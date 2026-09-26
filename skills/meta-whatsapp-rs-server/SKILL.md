@@ -5,7 +5,7 @@ description: "Using WhatsApp through meta-whatsapp-server, the meta-whatsapp-rs 
 
 # meta-whatsapp-rs-server
 
-> **Verified against meta-whatsapp-rs 2773e6d1d42c13db481acbfa65c75b28291a1e2f (2026-09-25).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 5e35867fed8b56cea5796c62f3aa808bab7407ed (2026-09-26).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/client.ts](examples/client.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
@@ -15,11 +15,13 @@ Your app is not Rust and reaches WhatsApp through meta-whatsapp-server:
 you deploy it, hold its keys, call its /v1 API and handle its errors.
 Rust code uses the library directly (`meta-whatsapp-rs`).
 
-## What the service does today (milestones M1a and M1b)
+## What the service does today (milestones M1a, M1b and M1c)
 
-Meta's webhooks, the inbox, events, Embedded Signup and OTP do not exist
-yet: write no code against them. Sends, media and templates do: load
-`meta-whatsapp-rs-server-send`.
+The inbox routes, live events (SSE), webhooks to your backend,
+Embedded Signup and OTP do not exist yet: write no code against them.
+Sends, media and templates do (load `meta-whatsapp-rs-server-send`), and
+so do Meta's webhooks and polling events (load
+`meta-whatsapp-rs-server-events`).
 
 | Route | Needs | Does |
 | --- | --- | --- |
@@ -28,6 +30,7 @@ yet: write no code against them. Sends, media and templates do: load
 | `GET /v1/numbers/{pn}/profile`, `PATCH /v1/numbers/{pn}/profile` | scope `numbers` | the business profile (`about`, `address`, `description`, `email`, `websites`, `vertical`) |
 | `DELETE /v1/wabas/{waba_id}` | scope `numbers` | disconnect: the token and bindings go only once Meta unsubscribed the app |
 | `POST /v1/numbers/{pn}/messages`, `POST /v1/numbers/{pn}/media`, `GET /v1/wabas/{waba_id}/templates`, … | scopes `send`, `media`, `templates` | sends, media, templates: `meta-whatsapp-rs-server-send` |
+| `GET /v1/events` | scope `events` | Meta's webhook events for the tenant, after a cursor: `meta-whatsapp-rs-server-events` |
 | `POST /v1/admin/tenants`, `POST /v1/admin/tenants/{id}/keys`, `POST /v1/admin/platform-keys` | admin key | tenants and keys |
 | `POST /v1/admin/tenants/{id}/wabas`, `GET /v1/admin/wabas/{waba_id}`, `DELETE /v1/admin/wabas/{waba_id}/binding` | admin key | attach the platform's own WABA (numbers listed by Meta, app subscribed); who holds one; unbind it (token deleted too) |
 | `/livez`, `/readyz`, `/metrics`, `/v1/version`, `/v1/openapi.json` | nothing | operations, and the document every client is generated from |
@@ -35,11 +38,10 @@ yet: write no code against them. Sends, media and templates do: load
 ## Deploy
 
 One deployment per Meta app. The public listener (default
-`127.0.0.1:8080`) serves only `GET /webhooks/meta` (Meta's subscription
-check) and `GET /livez`; the internal one (`127.0.0.1:8081`) serves
-everything else and must stay on your private network. No image yet:
-build it. Do not point Meta's callback URL at it before webhooks land
-(deliveries answer `405`, and Meta retries for days).
+`127.0.0.1:8080`) serves only `GET /webhooks/meta` and
+`POST /webhooks/meta` (Meta's subscription check and deliveries: point
+the app's callback URL at it) and `GET /livez`; the internal one (`127.0.0.1:8081`) serves everything else
+and must stay on your private network. No image yet: build it.
 
 ```bash
 cargo build --release -p meta-whatsapp-server
@@ -92,10 +94,10 @@ export function whatsapp(baseUrl: string, key: string, tenant?: string) {
 }
 ```
 
-Lists take `limit` (1 to 100) and `cursor`, and answer `data` and
-`next_cursor`; annotate request literals with the generated types (the
-numbers query, `ProfilePatch` in the example), or a misspelled field
-goes unnoticed:
+Lists take `limit` (1 to 100) and `cursor` and answer `data` and
+`next_cursor` (`GET /v1/events`: `after` and `next_after` instead);
+annotate request literals with the generated types (`ProfilePatch`, the
+numbers query), or a misspelled field goes unnoticed:
 
 ```ts
 const query: NumbersQuery = cursor === undefined ? { limit: 100 } : { limit: 100, cursor };
@@ -151,8 +153,8 @@ export function nextStep(error: ErrorObject): Next {
 ## Related skills
 
 `meta-whatsapp-rs-server-send` (sending messages, media and templates
-through the service), `meta-whatsapp-rs` (the Rust library, when you
-write Rust),
-`meta-whatsapp-rs-errors` (the error kinds behind the Meta codes),
-`meta-whatsapp-rs-production` (what the service does for you: secrets,
-logs, several instances).
+through the service), `meta-whatsapp-rs-server-events` (Meta's webhooks
+through the service, polling events), `meta-whatsapp-rs` (the Rust
+library, when you write Rust), `meta-whatsapp-rs-errors` (the error
+kinds behind the Meta codes), `meta-whatsapp-rs-production` (what the
+service does for you: secrets, logs, several instances).

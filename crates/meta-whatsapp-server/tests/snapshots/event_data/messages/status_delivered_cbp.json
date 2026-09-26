@@ -1,0 +1,29 @@
+[
+  {
+    "data": {
+      "contact": null,
+      "display_phone_number": "15550783881",
+      "event": "status_updated",
+      "phone_number_id": "106540352242922",
+      "status": {
+        "conversation": {
+          "id": "6ceb9d929c9bdc4f90e967a32f8639b4",
+          "origin": {
+            "type": "service"
+          }
+        },
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgARGBI3MTE5MjVBOTE3MDk5QUVFM0YA",
+        "pricing": {
+          "billable": true,
+          "category": "service",
+          "pricing_model": "CBP"
+        },
+        "recipient_id": "16505551234",
+        "status": "delivered",
+        "timestamp": "1750263773"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "status_updated"
+  }
+]

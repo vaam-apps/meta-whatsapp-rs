@@ -1,0 +1,20 @@
+[
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "error": {
+        "code": 131035,
+        "error_data": {
+          "details": "Webhook could not be delivered within data retention limit"
+        },
+        "message": "Webhook could not be delivered within data retention limit",
+        "title": "Webhook could not be delivered within data retention limit"
+      },
+      "event": "error_reported",
+      "field": "messages",
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "error_reported"
+  }
+]

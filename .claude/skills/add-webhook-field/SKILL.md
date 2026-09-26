@@ -21,6 +21,28 @@ metadata:
 5. Tests: parse the fixture; assert every documented property; assert the
    normalized events (count, variants, ids); assert a valid signature over
    the exact fixture bytes verifies and a one-byte change does not.
-6. Update `docs/coverage.md`, and the consumer skill in `skills/` if the
+6. The service (`meta-whatsapp-server`) serves the library's events as
+   its v1 API, and its tests read the library's files: a library-only
+   change can fail them.
+   - Snapshots: `tests/event_data.rs` walks
+     `crates/meta-whatsapp-webhooks/tests/fixtures`. Run
+     `META_WHATSAPP_SERVER_UPDATE_SNAPSHOTS=1 cargo test -p meta-whatsapp-server --all-features --test event_data`
+     and review what it wrote under
+     `crates/meta-whatsapp-server/tests/snapshots/event_data/`. A new
+     snapshot is fine; a **changed existing snapshot is a v1 API
+     change**, where only additions are allowed: stop and raise it.
+   - A new `WebhookEvent::kind` (the test text-parses it in
+     `src/event.rs`): classify it in `OPERATOR_EVENT_TYPES` (operator-only)
+     in `crates/meta-whatsapp-server/src/events.rs`, the design's rule for
+     a type the service has not reviewed for tenants
+     (`docs/design/server.md` § 2.3); `TENANT_EVENT_TYPES` (tenants receive
+     it) only once that review is done, as its own change. Promoting a
+     type later is additive, the reverse is not. A tenant type changes the
+     `KnownEventType` schema: regenerate the document with
+     `cargo run -p meta-whatsapp-server -- openapi > crates/meta-whatsapp-server/openapi/v1.json`.
+     Make `meta_time` in the same file return the date Meta gives the
+     event (routing refuses an event dated before its binding), unless it
+     carries none (`every_dated_event_type_has_its_meta_time` says which).
+7. Update `docs/coverage.md`, and the consumer skill in `skills/` if the
    event is part of the public surface.
-7. `just ci`.
+8. `just ci`.

@@ -2,23 +2,26 @@
 //! `WA_SERVER_ENV=development` and tests.
 
 use std::collections::BTreeMap;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use async_trait::async_trait;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use time::{Duration, OffsetDateTime};
 
-use super::{Store, StoreResult, listing};
+use super::{MemoryEventStore, Store, StoreResult, listing};
 use crate::model::{
-    ApiKeyRecord, BindOutcome, DeleteTenantOutcome, IdempotencyClaim, IdempotencyKey,
-    IdempotencyRecord, IdempotencyState, KeyOwner, KeyScope, Listing, NewApiKey, NumberBinding,
-    NumberStatus, PageRequest, Tenant, TenantId, TenantStatus, WabaBinding,
+    AllowedTenants, ApiKeyRecord, BindOutcome, DeleteTenantOutcome, IdempotencyClaim,
+    IdempotencyKey, IdempotencyRecord, IdempotencyState, KeyOwner, KeyScope, Listing, NewApiKey,
+    NumberBinding, NumberStatus, PageRequest, Tenant, TenantId, TenantStatus, WabaBinding,
 };
 
-/// In-memory [`Store`].
+/// In-memory [`Store`]. Its event outbox is [`MemoryStore::outbox`]: one
+/// process's database, so that deleting a tenant reaches its events as it
+/// does on Postgres.
 #[derive(Debug, Default)]
 pub struct MemoryStore {
     state: Mutex<State>,
+    outbox: Arc<MemoryEventStore>,
 }
 
 #[derive(Debug, Default)]
@@ -54,6 +57,12 @@ impl MemoryStore {
     /// An empty store.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The event outbox of this store: deleting a tenant here deletes its
+    /// events there, and records its stream purged.
+    pub fn outbox(&self) -> Arc<MemoryEventStore> {
+        self.outbox.clone()
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -154,10 +163,20 @@ impl Store for MemoryStore {
         state
             .keys
             .retain(|_, key| !matches!(&key.owner, KeyOwner::Tenant(t) if t == id));
+        // A platform key allowed this tenant does not carry the allowance
+        // over to a tenant created later with the same id.
+        for key in state.keys.values_mut() {
+            if let KeyOwner::Platform(AllowedTenants::Only(list)) = &mut key.owner {
+                list.retain(|t| t != id);
+            }
+        }
         // Its idempotency records go too, as on Postgres (ON DELETE CASCADE).
         state
             .idempotency
             .retain(|(tenant, _), _| tenant != id.as_str());
+        // Its events: under the store's lock, as Postgres does it in the
+        // deleting transaction.
+        self.outbox.forget_tenant(id);
         Ok(DeleteTenantOutcome::Deleted)
     }
 

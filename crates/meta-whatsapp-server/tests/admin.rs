@@ -7,7 +7,7 @@ mod common;
 use common::{Call, Harness};
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode};
-use meta_whatsapp_server::model::{NumberStatus, Scope, TenantId};
+use meta_whatsapp_server::model::{AllowedTenants, NumberStatus, Scope, TenantId};
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
 
@@ -1224,4 +1224,40 @@ async fn the_rotation_route_reports_the_walk() {
         json!({"wabas": 1, "rotated": 0, "failed": []})
     );
     assert!(h.graph.requests().is_empty());
+}
+
+/// A platform key allowed a tenant loses it when the tenant is deleted: a
+/// tenant created again with the same id is another tenant, and the key
+/// naming it is `403 forbidden` (security review M4). Decisive: deleting
+/// the tenant from the platform keys' allowed tenants.
+#[tokio::test]
+async fn a_platform_key_does_not_follow_a_recreated_tenant_id() {
+    let h = Harness::new();
+    let admin = h.admin_key().await;
+    h.tenant("merchant-a").await;
+    let platform = h
+        .platform_key(
+            AllowedTenants::Only(vec![TenantId::parse("merchant-a").unwrap()]),
+            &[Scope::Numbers],
+        )
+        .await;
+    let as_a = || Call::get("/v1/numbers").key(&platform).tenant("merchant-a");
+    assert_eq!(h.call(as_a()).await.status, StatusCode::OK);
+    let deleted = h
+        .call(Call::new(Method::DELETE, "/v1/admin/tenants/merchant-a").key(&admin))
+        .await;
+    assert_eq!(deleted.status, StatusCode::NO_CONTENT);
+    let created = h
+        .call(post(
+            "/v1/admin/tenants",
+            &admin,
+            &json!({"id": "merchant-a", "name": "someone else"}),
+        ))
+        .await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    let reply = h.call(as_a()).await;
+    assert_eq!(
+        (reply.status, reply.code().as_str()),
+        (StatusCode::FORBIDDEN, "forbidden")
+    );
 }

@@ -1,0 +1,22 @@
+[
+  {
+    "data": {
+      "event": "template_status_updated",
+      "time": "1751247548",
+      "update": {
+        "event": "REJECTED",
+        "message_template_category": "MARKETING",
+        "message_template_id": "1689556908129835",
+        "message_template_language": "en",
+        "message_template_name": "abandoned_cart",
+        "reason": "INVALID_FORMAT",
+        "rejection_info": {
+          "reason": "Your template has parameters placed next to each other (like {{1}}{{2}}) without text or punctuation between them.",
+          "recommendation": "Separate parameters with descriptive text and ensure each parameter is clearly contextualized."
+        }
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "template_status_updated"
+  }
+]

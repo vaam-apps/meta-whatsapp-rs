@@ -1,0 +1,29 @@
+[
+  {
+    "data": {
+      "contact": {
+        "parent_user_id": "US.ENT.11815799212886844830",
+        "profile": {
+          "name": "Sheena Nelson",
+          "username": "realsheenanelson"
+        },
+        "user_id": "US.13491208655302741918"
+      },
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "from_parent_user_id": "US.ENT.11815799212886844830",
+        "from_user_id": "US.13491208655302741918",
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQTRBNjU5OUFFRTAzODEwMTQ0RgA=",
+        "text": {
+          "body": "Does it come in another color?"
+        },
+        "timestamp": "1749416383",
+        "type": "text"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

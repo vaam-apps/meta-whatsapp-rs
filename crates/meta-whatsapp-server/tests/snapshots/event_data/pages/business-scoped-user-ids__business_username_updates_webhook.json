@@ -1,0 +1,15 @@
+[
+  {
+    "data": {
+      "event": "business_username_updated",
+      "time": "1750030073",
+      "update": {
+        "display_phone_number": "15550783881",
+        "status": "approved",
+        "username": "lucky_shrub"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "business_username_updated"
+  }
+]

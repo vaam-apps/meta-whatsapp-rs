@@ -873,6 +873,8 @@ mod tests {
             include_str!("api/messages.rs"),
             include_str!("api/media.rs"),
             include_str!("api/templates.rs"),
+            include_str!("api/events.rs"),
+            include_str!("events.rs"),
         ];
         let mut named = 0;
         for source in sources {

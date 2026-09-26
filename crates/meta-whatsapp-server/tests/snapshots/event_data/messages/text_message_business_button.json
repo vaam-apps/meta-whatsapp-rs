@@ -1,0 +1,34 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {
+          "name": "Sheena Nelson"
+        },
+        "wa_id": "16505551234"
+      },
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "context": {
+          "from": "15550783881",
+          "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgARGA9wcm9kdWN0X2lucXVpcnkA",
+          "referred_product": {
+            "catalog_id": "194836987003835",
+            "product_retailer_id": "di9ozbzfi4"
+          }
+        },
+        "from": "16505551234",
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQTA2NTUwRkNEMDdFQjJCRUU0NQA=",
+        "text": {
+          "body": "Is this still available?"
+        },
+        "timestamp": "1750016800",
+        "type": "text"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "419561257915477"
+    },
+    "type": "message_received"
+  }
+]

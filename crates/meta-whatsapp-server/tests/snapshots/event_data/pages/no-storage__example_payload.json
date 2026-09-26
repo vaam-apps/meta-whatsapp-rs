@@ -1,0 +1,28 @@
+[
+  {
+    "data": {
+      "contact": null,
+      "display_phone_number": "15550783881",
+      "event": "status_updated",
+      "phone_number_id": "106540352242922",
+      "status": {
+        "errors": [
+          {
+            "code": 131036,
+            "error_data": {
+              "details": "Message payload not found"
+            },
+            "message": "Message failed to be delivered on at least one of the user's device",
+            "title": "Message failed to be delivered on at least one of the user's device"
+          }
+        ],
+        "id": "wamid.HBgMNDQ3ODI1MDYzOTQxFQIAERgSN0MzMTg0Nzk2RkMwOEQ5NTQ2AA==",
+        "recipient_id": "16505551234",
+        "status": "failed",
+        "timestamp": "1712597457"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "status_updated"
+  }
+]

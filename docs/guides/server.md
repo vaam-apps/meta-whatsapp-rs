@@ -8,21 +8,18 @@ its reasons and the owner's decisions, is
 [docs/design/server.md](../design/server.md); the rules it keeps are in
 [architecture.md](../architecture.md#service-meta-whatsapp-server).
 
-> **What exists today (milestones M1a and M1b).** Tenants, API keys, the
-> admin API, attaching the platform's own WhatsApp Business Accounts
-> (WABAs), the numbers and business profile routes, vault key rotation,
-> sending messages (with idempotency keys), read receipts, media upload,
-> verified download and delete, template listing, creation and deletion,
-> per-tenant rate limits, health, metrics and the OpenAPI document. **Not
-> yet**: receiving Meta's webhooks (M1c: `POST /webhooks/meta` answers
-> `405`, so delivery statuses do not reach you yet), the inbox and live
-> events (M2), Embedded Signup, OTP and authentication templates (M3), the
-> Docker image and the TypeScript client (M4).
+> **What exists today (milestones M1a, M1b and M1c).** Tenants, API
+> keys, the admin API, attaching the platform's own WhatsApp Business
+> Accounts (WABAs), the numbers and business profile routes, vault key
+> rotation, sending messages (with idempotency keys), read receipts,
+> media upload, verified download and delete, template listing, creation
+> and deletion, per-tenant rate limits, Meta's webhooks into the inbox
+> and the event outbox, polling events (`GET /v1/events`), health,
+> metrics and the OpenAPI document. **Not yet**: the inbox routes, live
+> events (SSE) and webhooks to your backend (M2), Embedded Signup, OTP
+> and authentication templates (M3), the Docker image and the TypeScript
+> client (M4).
 > [coverage.md](../coverage.md) tracks it.
->
-> **Do not point a Meta app's callback URL at an M1a deployment**: Meta's
-> subscription check passes, but every delivery is refused (`405`) and
-> Meta retries each for up to seven days.
 
 ## The shape of it
 
@@ -31,7 +28,7 @@ your store). It has two listeners:
 
 | Listener | Default bind | Serves | Who reaches it |
 | --- | --- | --- | --- |
-| public | `127.0.0.1:8080` | `GET /webhooks/meta` (Meta's subscription check), `GET /livez` | Meta, through your HTTPS ingress |
+| public | `127.0.0.1:8080` | `GET /webhooks/meta` (Meta's subscription check), `POST /webhooks/meta` (Meta's deliveries), `GET /livez` | Meta, through your HTTPS ingress |
 | internal | `127.0.0.1:8081` | the `/v1` API, `/v1/admin`, `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` | your backends and operators, on the private network only |
 
 Both default to loopback; in a container, set them to `0.0.0.0:…`
@@ -85,6 +82,7 @@ read yet: set, it stops the start.
 | `WA_GRAPH_API_VERSION`, `WA_GRAPH_ENDPOINT` | `v25.0`, Graph | a proxy or a test stub: every token travels to it, so `https` outside development, and `serve` warns with its host |
 | `WA_SERVER_MIGRATE` | `auto` | `skip` when a job runs `meta-whatsapp-server migrate` |
 | `WA_SERVER_SHUTDOWN_GRACE` | `25s` | how long open requests get after `SIGTERM` |
+| `WA_SERVER_OUTBOX_RETENTION` | `7d` | how long the event outbox keeps an event (a positive duration, `30d`, `72h`); retention is the owner's open decision D10, so this default is the design's proposal until then |
 | `WA_SERVER_LOG_FORMAT`, `RUST_LOG` | `json`, `info` | `text` for humans |
 | `WA_SERVER_IDEMPOTENCY_TTL` | `24h` | how long an `Idempotency-Key`'s answer is kept (more than the key's one-minute lease) |
 | `WA_SERVER_MEDIA_MAX_BYTES` | `104857600` (100 MiB) | the largest upload, and the largest streamed download |
@@ -127,7 +125,9 @@ up -d --wait` starts one on port 55432 (`postgres://wa:wa@127.0.0.1:55432/wa`).
 Postgres holds everything: the library's tables (`wa_kv`, the inbox's
 `wa_messages` and `wa_conversations`) and the service's (`wa_server_tenants`,
 `wa_server_api_keys`, `wa_server_wabas`, `wa_server_numbers`,
-`wa_server_idempotency`), each with its own migration history. `serve` and `migrate` run both under an
+`wa_server_idempotency`, the event outbox `wa_server_events` and its
+per-tenant `wa_server_event_streams`), each with its own migration
+history. `serve` and `migrate` run both under an
 advisory lock, so replicas starting together never interleave them.
 Service migrations only ever add (expand, then contract in a later
 release), so replicas of two versions can share the database during a
@@ -147,9 +147,9 @@ immutable. Three kinds of API key, all `wak_<key id>_<secret>`, sent as
 | platform key | the tenant named in the `WA-Tenant` header, if among its allowed tenants (`*` or a list) | the CMS backend, acting for each merchant |
 | admin key | nobody: `/v1/admin` only | operators |
 
-Tenant and platform keys carry scopes (`numbers`, `send`, `media` and
-`templates` today; `inbox`, `events`, `webhooks`, `signup`, `otp` for the
-routes to come). The service keeps only each key's id and the SHA-256 of its
+Tenant and platform keys carry scopes (`numbers`, `send`, `media`,
+`templates` and `events` today; `inbox`, `webhooks`, `signup`, `otp` for
+the routes to come). The service keeps only each key's id and the SHA-256 of its
 secret, and shows the key once. Rotate by minting a new one, deploying
 it, then revoking the old one: revocation and suspension take effect on
 the next request, on every replica.
@@ -210,8 +210,10 @@ cannot disconnect it. Suspend a tenant with `PATCH
 /v1/admin/tenants/{id}` and `{"status": "suspended"}`; delete it with
 `DELETE /v1/admin/tenants/{id}`, which first disconnects each of its
 WABAs from Meta and stops at the first that fails (`409` for one without
-a usable token: unbind it first). A tenant id already taken is `409
-tenant_exists`.
+a usable token: unbind it first); its events go with it, and platform
+keys listing it stop allowing it, for good (see
+[Receiving Meta's webhooks](#receiving-metas-webhooks)). A tenant id
+already taken is `409 tenant_exists`.
 
 **One token, several tenants.** Nothing stops you attaching the same
 system user token to WABAs of different tenants, and the service does
@@ -266,7 +268,8 @@ Meta agreed.
 `POST /v1/numbers/{pn}/messages` (scope `send`) takes Meta's message
 object under the service's envelope: `to`, `type`, the object `type`
 names, and optionally `reply_to` (a received message's id) and
-`callback_data` (echoed in the message's status events):
+`callback_data` (echoed in the message's status events as
+`data.status.biz_opaque_callback_data`, Meta's name for it):
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8081/v1/numbers/106540352242922/messages \
@@ -277,7 +280,12 @@ curl -sS -X POST http://127.0.0.1:8081/v1/numbers/106540352242922/messages \
 ```
 
 It answers `202 {"message_id": "wamid.…", "contacts": [...]}`: Meta
-accepted the message; delivery arrives later as status events (M1c).
+accepted the message; delivery arrives later as `status_updated` events
+(`GET /v1/events`), whose `data.status.id` is that `message_id` and
+`data.status.status` the new state (`sent`, `delivered`, `read`,
+`played`, `failed`). After a `504`, which gives you no `message_id`, look for your
+`callback_data` in `data.status.biz_opaque_callback_data` before
+concluding the message never went out.
 
 - **Recipients**: `{"phone": "+16505551234"}` in E.164 **with** its `+`
   (a number without it is refused, `422` on `to.phone`, before any
@@ -413,8 +421,8 @@ yet, refused on the key named:
   `status` or `correct_category`.
 
 Meta refusing a definition is `422 template_rejected`, a WABA
-at its limit `409 template_limit_reached`. Review results will arrive
-as `template_status_updated` events (M1c). A creation or deletion drops
+at its limit `409 template_limit_reached`. Review results arrive as
+`template_status_updated` events (`GET /v1/events`). A creation or deletion drops
 the WABA's cached pages on the replica that made it; others may answer
 the old list for up to 60 seconds.
 
@@ -460,6 +468,140 @@ The whole contract is the OpenAPI document: `GET /v1/openapi.json`, or
 in the repository. Generate TypeScript types from it with
 `npx openapi-typescript`.
 
+## Receiving Meta's webhooks
+
+One callback URL per Meta app receives every merchant's events: point
+the app at the public listener, and the service routes each event to the
+tenant that owns its number.
+
+**1. Point the Meta app at the service.** In the App Dashboard
+(WhatsApp, Configuration), set the callback URL to
+`https://<your public host>/webhooks/meta` and the verify token to
+`WA_VERIFY_TOKEN`'s value; Meta's check (`GET /webhooks/meta`) answers
+the challenge. Subscribe the fields you need (`messages` at least).
+Attaching a WABA subscribes the app to it (Embedded Signup will too, M3):
+without that, Meta sends nothing for its numbers.
+
+Your ingress must pass bodies of 3 MiB untouched (no decompression, no
+rewriting: the signature covers the raw bytes), buffer each request
+before it reaches the service (slow clients stay at the ingress), wait
+longer than the slowest delivery, and **admit to `/webhooks/meta` only
+Meta's webhook IP ranges, or mutual TLS with Meta's client
+certificate**. A signature is only checked once a body is read, and
+anyone can send a well-formed one: without that filter, anyone on the
+internet makes the service read bodies. The app secret signs every
+tenant's deliveries: whoever holds it can forge any tenant's events.
+
+**2. What the service does with a delivery** (`POST /webhooks/meta`):
+
+- `401` without a well-formed `X-Hub-Signature-256` (before reading the
+  body), or when no app secret produced it (`WA_APP_SECRET`, or
+  `WA_APP_SECRET_PREVIOUS` while rotating); `413` past 3 MiB; `408` when
+  the body takes over 15 s to arrive.
+- A replica reads at most 64 deliveries at once and records at most 4
+  (its pool of 10 connections keeps room for API calls): past that,
+  `503` and Meta retries. So does a delivery whose tenant's events stay
+  locked over 2 s by others being recorded.
+- Each event is claimed for 60 s in the shared store: a delivery another
+  replica is handling right now answers `503` and Meta retries; one
+  already recorded is acknowledged without being recorded again.
+- **Routing is an allow-list.** An event naming a business phone number
+  goes to the tenant that number is bound to (and only when Meta names the
+  WABA the service bound it under); one naming only a WABA (template
+  reviews, account and quality updates) to the WABA's tenant; and only
+  if Meta dated it no earlier than that WABA's attaching, so a WABA moved
+  to another tenant does not bring the first one's late events along.
+  It is recorded in the inbox first, then in the event outbox.
+- **Operator-only events** are recorded without a tenant, never shown to
+  one, logged with their size and digest and counted
+  (`wa_server_webhook_events_total{audience="operator"}`): events of a
+  number or WABA no tenant holds, a field the library does not type
+  (`unknown`), a signed body that is not a webhook (`unparsed`), partner
+  solution updates, any event type the service has not reviewed yet
+  (today Conversation Routing's `standby_observed` and
+  `thread_control_changed`, and `user_action_reported`, a marketing
+  message's click, which M2 makes visible to their tenant),
+  events Meta dated before the WABA's attaching, and replays (dated more
+  than 7 days and an hour ago, what the dedup markers remember). A rising
+  count usually means a WABA is subscribed but not attached.
+- `200` once every event is recorded; `500` when recording failed: Meta
+  retries the batch at once, then with decreasing frequency for up to 7
+  days (`webhooks/create-webhook-endpoint`), the events already recorded
+  are acknowledged as duplicates, and neither the inbox nor the outbox
+  records one twice. An event that fails every time (a permanent sink
+  error) holds its whole batch back for those 7 days, after which Meta
+  drops it: the events after it in the same body are lost with it
+  ([OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) #30; watch
+  `wa_server_webhook_sink_failures_total`).
+- Errors and bodies that are not webhooks carry no id: they are told
+  apart by the body they came in and their place in it, for an hour
+  (design D23, a coordinator's decision the owner may change). This
+  assumes Meta redelivers the same bytes, which Meta does not document.
+  The same body again after that hour is recorded again, as a new event
+  with its own id (the same error can legitimately recur): an outage
+  longer than an hour, the database answering `500` while Meta retries,
+  records the batch's errors twice, under new ids.
+
+**3. Poll the events** with a key holding the `events` scope:
+
+```bash
+curl -sS "http://127.0.0.1:8081/v1/events?limit=100" -H "Authorization: Bearer $KEY"
+curl -sS "http://127.0.0.1:8081/v1/events?after=18342&types=message_received,status_updated" \
+  -H "Authorization: Bearer $KEY"
+```
+
+The answer is `{"data": [...], "next_after": 18350}`. Store `next_after`
+and pass it as `after` next time: it is the last event's `sequence` when
+more follow (poll again at once), else the tenant's newest sequence (wait
+a little). Each tenant has its own sequence, increasing (with gaps)
+for its events alone; a tenant created again under a deleted tenant's id
+goes on after the deleted one's last sequence. Omitting `after` starts
+at the oldest event kept. Each event is an envelope:
+
+```json
+{"id": "evt_3f9c…", "sequence": 18342, "type": "message_received", "api_version": "v1",
+ "tenant_id": "merchant-42", "phone_number_id": "106540352242922", "waba_id": "102290129340398",
+ "received_at": "2026-09-25T10:00:01Z", "truncated": false,
+ "data": {"event": "message_received", "message": {"id": "wamid.…", "type": "text", "…": "…"}}}
+```
+
+`data` is meta-whatsapp-rs's `WebhookEvent` JSON (Meta's fields,
+normalized; key customers by `contact.user_id`, the BSUID, since
+`wa_id` may be absent). Deduplicate on `id` (an event recorded again,
+Meta's late retry or a replay, keeps its id, unless `WA_APP_SECRET` was
+rotated in between: ids are derived with it) and order on `sequence`;
+what your backend does per message (an order confirmation), make
+idempotent on the message id too (`data.message.id`), as a last guard.
+Filter with `types` (comma-separated, or repeated) and `phone_number_id`;
+a page stops before 8 MiB of `data` (history syncs are large). A
+filtered poll's `next_after` moves past the events the filter left out
+(to the tenant's newest sequence when no more match), so keep one cursor
+per filter set (`types`, `phone_number_id`): a cursor saved by one
+filter skips, for another, what the first left out. A cursor
+older than what was purged, by retention or with a deleted tenant of the
+same id, is `410 cursor_expired`: resynchronise (from the inbox, when it
+lands in M2) and start again without `after`. A cursor past the tenant's
+newest sequence (a restored database) is `422` on `after`.
+
+**Restoring the database.** A point-in-time restore rolls the tenants'
+sequences back: the events recorded after it are numbered again from
+the restore point, so a sequence an integrator already saw can name
+another event. The `422` above only catches a cursor still ahead when
+it polls; one that polls after new events have passed it skips them
+without an error. After a restore, tell every integrator to resynchronise
+and reset their cursors (poll without `after`), as after `410`.
+
+Events are kept `WA_SERVER_OUTBOX_RETENTION` (7 days by default, until
+the owner's retention decision D10); every replica runs housekeeping
+every 10 minutes, one at a time, which also deletes the expired webhook
+dedup markers. Deleting a tenant deletes its events (design D22, a
+coordinator's decision the owner may still change, like the default
+above), and takes it out of every platform key's allowed tenants (D24,
+likewise): a tenant created again with the same id starts with neither.
+No route or command edits a platform key's allowed tenants, so mint a new
+platform key for a tenant created again (a key allowing every tenant,
+`*`, allows it at once).
+
 ## Errors
 
 Every error answers one body:
@@ -504,23 +646,30 @@ Every error answers one body:
   same moment: keep a preStop delay in Kubernetes if the load balancer
   must see the replica unready first).
 - Limits, per listener: a request head must arrive within 10 s (slow
-  clients are cut off), 1,024 connections on the public listener and
+  clients are cut off), 256 connections on the public listener and
   4,096 on the internal one (more wait), and every request is answered
   within 55 s (past it, `504 timeout` with `may_have_been_sent: true`).
 - `/metrics` (Prometheus) counts requests by listener, method, route
   template, status and error code, their duration, failed Graph calls by
   code, idempotent repeats by outcome (`replayed`, `reused`,
-  `in_progress`, `outcome_unknown`) and rate-limited requests by class;
-  never an id, a number or a key.
+  `in_progress`, `outcome_unknown`), rate-limited requests by class,
+  Meta's deliveries by outcome (`delivered`, `unauthenticated`,
+  `payload_too_large`, `slow_body`, `busy`: the replica at capacity,
+  `in_flight`: a run of them means recording outlasts the 60 s lease,
+  `failed`), recorded events by type and audience (`tenant`,
+  `operator`), duplicates and recording failures by stage; never an id,
+  a number or a key.
 - Expired idempotency records are purged every 10 minutes by one replica
-  at a time.
+  at a time, with the outbox's housekeeping.
 - Logs are JSON, one line per request with its id (`X-Request-Id`, echoed
   or generated), route template (never the raw path), tenant, the public
   id of the key that made it, status and duration; every change an
   operator makes is also an `audit` event (action, admin key id, the
   tenant, key or WABA touched), and so is a tenant's template deletion
   (with the key's id). No secret, token, message text or phone number is
-  logged; Meta's error texts only at `debug`.
+  logged, and no webhook body or event content (an operator-only event
+  is logged by type, size and digest); refused deliveries at most once a
+  minute per reason; Meta's error texts only at `debug`.
 - Idempotency records keep each kept answer for
   `WA_SERVER_IDEMPOTENCY_TTL`: a send's holds the recipient's phone
   number, WhatsApp id or BSUID, in plain text. Database encryption at
@@ -533,8 +682,8 @@ Every error answers one body:
 
 ## Not yet
 
-`POST /webhooks/meta` into the inbox and the event outbox, `GET /v1/events`
-(M1c); the inbox routes, SSE and webhooks-out (M2); Embedded Signup,
+The inbox routes, `GET /v1/events/{id}`, SSE, webhooks-out and the
+service's own number events (M2); Embedded Signup,
 disconnection by Meta's webhooks, coexistence sync and OTP (M3); the
 Docker image, a Compose file, the documents route and the TypeScript
 client (M4). Tenant settings (OTP sender and template, limits) in `PATCH

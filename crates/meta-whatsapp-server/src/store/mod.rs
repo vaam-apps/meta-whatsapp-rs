@@ -5,10 +5,14 @@
 //! The library's records (the token vault, OTP challenges, signup
 //! sessions, webhook dedup) stay in its `KvStore`; these are the tables
 //! the design adds (`wa_server_*`, docs/design/server.md, section 2.2).
+//! The event outbox has a store of its own: [`events::EventStore`].
 
+pub mod events;
+mod events_postgres;
 mod memory;
 mod postgres;
 
+pub use events::{EventStore, MemoryEventStore, PgEventStore};
 pub use memory::MemoryStore;
 pub use postgres::{
     HOUSEKEEPING_LOCK, MIGRATION_LOCK, MIGRATIONS_TABLE, PgStore, migrate, migrations,
@@ -55,7 +59,9 @@ pub trait Store: Send + Sync + 'static {
         status: Option<TenantStatus>,
     ) -> StoreResult<Option<Tenant>>;
 
-    /// Delete a tenant and its keys, unless it still has WABAs.
+    /// Delete a tenant, its keys and its events, unless it still has
+    /// WABAs; platform keys stop allowing it (a tenant created later with
+    /// the same id is another tenant for them).
     async fn delete_tenant(&self, id: &TenantId) -> StoreResult<DeleteTenantOutcome>;
 
     /// Store a new key; `None` when its id is taken (the caller draws a

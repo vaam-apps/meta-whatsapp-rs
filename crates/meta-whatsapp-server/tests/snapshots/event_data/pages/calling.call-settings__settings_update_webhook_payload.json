@@ -1,0 +1,55 @@
+[
+  {
+    "data": {
+      "event": "account_settings_updated",
+      "time": null,
+      "update": {
+        "messaging_product": "whatsapp",
+        "phone_number_settings": {
+          "calling": {
+            "call_hours": {
+              "holiday_schedule": [
+                {
+                  "date": "2026-01-01",
+                  "end_time": "2359",
+                  "start_time": "0000"
+                }
+              ],
+              "status": "ENABLED",
+              "timezone_id": "[REDACTED]",
+              "weekly_operating_hours": [
+                {
+                  "close_time": "1020",
+                  "day_of_week": "MONDAY",
+                  "open_time": "0400"
+                },
+                {
+                  "close_time": "1020",
+                  "day_of_week": "TUESDAY",
+                  "open_time": "0108"
+                }
+              ]
+            },
+            "call_icon_visibility": "DEFAULT",
+            "callback_permission_status": "ENABLED",
+            "sip": {
+              "servers": [
+                {
+                  "hostname": "[REDACTED]",
+                  "port": 5061
+                }
+              ],
+              "status": "ENABLED"
+            },
+            "status": "ENABLED"
+          },
+          "phone_number_id": "106540352242922"
+        },
+        "timestamp": "1671644824",
+        "type": "phone_number_settings"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "account_settings_updated"
+  }
+]

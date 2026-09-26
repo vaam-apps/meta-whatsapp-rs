@@ -1,0 +1,60 @@
+[
+  {
+    "data": {
+      "contact": null,
+      "display_phone_number": "15550783881",
+      "event": "status_updated",
+      "phone_number_id": "106540352242922",
+      "status": {
+        "conversation": {
+          "id": "72b14d6bd5407799e66f64d1b338e567",
+          "origin": {
+            "type": "group_marketing"
+          },
+          "pricing": {
+            "billable": true,
+            "category": "group_marketing",
+            "pricing_model": "PMP"
+          }
+        },
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQUFERjg0NDEzNDdFODU3MUMxMAA=",
+        "recipient_id": "Y2FwaV9ncm91cDoxOTUwNTU1MDA3OToxMjAzNjMzOTQzMjAdOTY0MTUZD",
+        "recipient_participant_id": "16505551234",
+        "recipient_type": "group",
+        "status": "read",
+        "timestamp": "1750101000"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "status_updated"
+  },
+  {
+    "data": {
+      "contact": null,
+      "display_phone_number": "15550783881",
+      "event": "status_updated",
+      "phone_number_id": "106540352242922",
+      "status": {
+        "conversation": {
+          "id": "72b14d6bd5407799e66f64d1b338e567",
+          "origin": {
+            "type": "group_marketing"
+          },
+          "pricing": {
+            "billable": true,
+            "category": "group_marketing",
+            "pricing_model": "PMP"
+          }
+        },
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQUFERjg0NDEzNDdFODU3MUMxMAA=",
+        "recipient_id": "Y2FwaV9ncm91cDoxOTUwNTU1MDA3OToxMjAzNjMzOTQzMjAdOTY0MTUZD",
+        "recipient_participant_id": "16505551235",
+        "recipient_type": "group",
+        "status": "read",
+        "timestamp": "1750101000"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "status_updated"
+  }
+]

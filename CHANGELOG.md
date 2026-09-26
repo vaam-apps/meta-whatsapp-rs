@@ -119,6 +119,58 @@ volumes (Claude config, shell history, cargo caches) start empty
 
 ### Added
 
+- **meta-whatsapp-server, milestone M1c**: Meta's webhooks into the inbox
+  and an event outbox, and polling it. `POST /webhooks/meta` on the public
+  listener refuses a missing or malformed `X-Hub-Signature-256` with `401`
+  before reading the body, a body over 3 MiB with `413`, one slower than
+  15 s with `408`, and a signature no app secret produced
+  (`WA_APP_SECRET`, or `WA_APP_SECRET_PREVIOUS` while rotating) with
+  `401`; a replica reads at most 64 deliveries and records at most 4 at
+  once (`503`, Meta retries), and refused deliveries write at most one
+  warning a minute per reason. The library's `WebhookHandler` parses the
+  body and leases each event in the shared key/value store (another
+  replica delivering it: `503`). Each event goes to the tenant that owns
+  its number (under the WABA Meta names) or, naming no number, its WABA,
+  and only if Meta dated it no earlier than that binding began: into the
+  inbox (`InboxSink`), then into the outbox (`wa_server_events`,
+  migration 3), idempotent on the event's key, so Meta's redeliveries
+  after a failure (`500`) record nothing twice. Errors and bodies that
+  are not webhooks, which the library gives no key, are keyed by the
+  signed body and their place in it and deduplicated for an hour only
+  (a coordinator's decision, reversible: design D23): the same body later
+  is recorded again, as a new event with its own id, so an outage longer
+  than an hour records them twice. On Postgres, the insert checks
+  the routing again under a lock on the binding: an event whose WABA
+  moved, or whose tenant was deleted, created again and bound again
+  after Meta dated the event, is operator-only (an undated one, such as
+  an error, goes to the tenant holding the binding then). Events of
+  numbers or WABAs no tenant holds, events dated more than 7 days and an
+  hour ago (replays), `unknown`, `unparsed`, `partner_solution_updated` and any
+  type the service has not reviewed (today PR #17's `standby_observed`,
+  `thread_control_changed` and `user_action_reported`, which M2 makes
+  tenant-visible: design D25, the owner's decision) are operator-only
+  rows, never shown to a tenant, logged by size and digest. `GET /v1/events` (scope
+  `events`) answers the caller's tenant's events after `after` in the
+  tenant's own sequence (`types`, `phone_number_id`, `limit`, pages of at
+  most 8 MiB of data), `{data, next_after}`, `410 cursor_expired` past
+  retention (`WA_SERVER_OUTBOX_RETENTION`, 7 days until the owner decides
+  D10) or after a tenant of the same id was deleted; a read for the rate
+  limits (M1b, below). Each tenant has its own sequence (a coordinator's
+  decision, reversible: design D21). An event's id is derived from the
+  event under a key derived from `WA_APP_SECRET`, so it keeps it when
+  recorded again, until that secret is rotated. Deleting a tenant
+  deletes its events (a coordinator's decision touching the open
+  retention decision D10: design D22) and takes it out of every platform
+  key's allowed tenants (a coordinator's decision, reversible: design
+  D24; a tenant created again under the id needs a new platform key).
+  Event `data` is
+  the library's `WebhookEvent` JSON, pinned by snapshots over every
+  Meta example among the library's fixtures (PR #17's conformance
+  fixtures included; a new fixture directory is walked too). Metrics for deliveries, events by type and audience,
+  duplicates and failures. Skill: `meta-whatsapp-rs-server-events`. The
+  OpenAPI document now declares the `429` of every rate-limited route
+  (M1a's numbers, profile and WABA routes, PR #11, lacked it: additive),
+  and a test holds every tenant route to it.
 - **Webhook conformance sweep**: every example payload on every page of
   Meta's WhatsApp docs that prints a webhook body (88 pages: the
   `webhooks/reference/*` pages, and the calling, groups, flows,

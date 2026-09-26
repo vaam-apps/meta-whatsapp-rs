@@ -1,0 +1,22 @@
+[
+  {
+    "data": {
+      "contact": null,
+      "display_phone_number": "15550783881",
+      "echo": {
+        "from": "15550783881",
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQUFERjg0NDEzNDdFODU3MUMxMAA=",
+        "revoke": {
+          "original_message_id": "wamid.HBgLMTQxMjU1NTA4MjkVAgASGBQzQUNCNjk5RDUwNUZGMUZEM0VBRAA="
+        },
+        "timestamp": "1749854575",
+        "to": "16505551234",
+        "type": "revoke"
+      },
+      "event": "message_echoed",
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_echoed"
+  }
+]

@@ -92,6 +92,7 @@ pub async fn tenants(store: &dyn Store) {
         .await
         .unwrap()
         .unwrap();
+
     store
         .bind_waba(&id("tenant-d"), &WabaId::new("waba-d"), &pns(&["pn-d"]))
         .await
@@ -109,6 +110,7 @@ pub async fn tenants(store: &dyn Store) {
         store.key("k-of-d").await.unwrap().is_none(),
         "keys go with the tenant"
     );
+
     assert_eq!(
         store.delete_tenant(&id("tenant-d")).await.unwrap(),
         DeleteTenantOutcome::NotFound
@@ -375,6 +377,45 @@ pub async fn bindings(store: &dyn Store) {
     assert_eq!(store.waba(&waba).await.unwrap().unwrap().tenant_id, b);
 }
 
+/// Deleting a tenant takes it out of every platform key's allowed tenants
+/// (security review M4): a tenant created later with the same id is not
+/// theirs. A key allowed every tenant stays so.
+pub async fn deleting_a_tenant_revokes_platform_allowances(store: &dyn Store) {
+    for t in ["gone", "stays"] {
+        store.create_tenant(&id(t), "").await.unwrap().unwrap();
+    }
+    for (key_id, allowed) in [
+        (
+            "p-both",
+            AllowedTenants::Only(vec![id("stays"), id("gone")]),
+        ),
+        ("p-gone", AllowedTenants::Only(vec![id("gone")])),
+        ("p-all", AllowedTenants::All),
+    ] {
+        store
+            .insert_key(&key(key_id, KeyOwner::Platform(allowed)))
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    assert_eq!(
+        store.delete_tenant(&id("gone")).await.unwrap(),
+        DeleteTenantOutcome::Deleted
+    );
+    store.create_tenant(&id("gone"), "").await.unwrap().unwrap();
+    for (key_id, allowed) in [
+        ("p-both", AllowedTenants::Only(vec![id("stays")])),
+        ("p-gone", AllowedTenants::Only(Vec::new())),
+        ("p-all", AllowedTenants::All),
+    ] {
+        assert_eq!(
+            store.key(key_id).await.unwrap().unwrap().owner,
+            KeyOwner::Platform(allowed),
+            "{key_id}"
+        );
+    }
+}
+
 /// Every case.
 /// Idempotency keys: claimed once, found by a repeat, completed with the
 /// answer byte for byte, released, scoped to their tenant, leased,
@@ -572,5 +613,6 @@ pub async fn run(store: &dyn Store) {
     tenants(store).await;
     keys(store).await;
     bindings(store).await;
+    deleting_a_tenant_revokes_platform_allowances(store).await;
     idempotency(store).await;
 }

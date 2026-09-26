@@ -1,0 +1,33 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {
+          "name": "Sheena Nelson"
+        },
+        "user_id": "US.13491208655302741918",
+        "wa_id": "16505551234"
+      },
+      "display_phone_number": "15550783881",
+      "event": "status_updated",
+      "phone_number_id": "106540352242922",
+      "status": {
+        "biz_opaque_callback_data": "order-7781",
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgARGBI3MTE5MjVBOTE3MDk5QUVFM0YA",
+        "pricing": {
+          "billable": false,
+          "category": "utility",
+          "pricing_model": "PMP",
+          "type": "free_customer_service"
+        },
+        "recipient_id": "16505551234",
+        "recipient_identity_key_hash": "DF2lS5v2W6x=",
+        "recipient_user_id": "US.13491208655302741918",
+        "status": "delivered",
+        "timestamp": "1750263773"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "status_updated"
+  }
+]

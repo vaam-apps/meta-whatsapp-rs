@@ -5,7 +5,7 @@ description: "Sending WhatsApp messages, media and templates through meta-whatsa
 
 # meta-whatsapp-rs-server-send
 
-> **Verified against meta-whatsapp-rs 8c6d6f2e936063da2b0cd224085cce8fad992fae (2026-09-25).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 5e35867fed8b56cea5796c62f3aa808bab7407ed (2026-09-26).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/send.ts](examples/send.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
@@ -25,9 +25,9 @@ notifications, replies, files or templates (scopes `send`, `media`, `templates`)
 
 ## Send a message
 
-The body is `to`, `type` and the object `type` names, written as Meta's
-page for that type writes it (`SendMessage`); `reply_to` quotes a
-received message, `callback_data` comes back in its status events:
+The body (`SendMessage`) is `to`, `type` and the object `type` names, as
+Meta's page for it writes it; `reply_to` quotes a received message, and
+`callback_data` returns in status events as `data.status.biz_opaque_callback_data`:
 
 ```ts
 export async function send(api: WhatsApp, pn: string, message: SendMessage, reference: string): Promise<Outcome> {
@@ -87,7 +87,7 @@ export function outcome(error: ErrorObject, retryAfter: string | null): Outcome 
 
 - `may_have_been_sent` true (a `timeout`, a Meta failure): never send it
   again under a **new** key. Repeat with the same key (you get the kept
-  answer) or wait for the status event.
+  answer) or wait for the status event carrying your `callback_data`.
 - false (`invalid_request`, a Meta refusal such as
   `customer_service_window_closed`, throttling): nothing went out and the
   key is released: fix the cause, then repeat with the same key.
@@ -144,7 +144,7 @@ sent; a platform key shares the tenant's budget. Meta's own limits answer
 ## What meta-whatsapp-rs does not do
 
 - It never retries a send for you, and it cannot tell you whether a
-  timed-out message went out: the status event (M1c) or your
+  timed-out message went out: its status event (`GET /v1/events`) or your
   `Idempotency-Key` repeat does.
 - No campaign pacing or opt-out registry: respect `marketing_opted_out`
   and pace your own sends.

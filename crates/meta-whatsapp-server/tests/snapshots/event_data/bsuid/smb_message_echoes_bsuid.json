@@ -1,0 +1,29 @@
+[
+  {
+    "data": {
+      "contact": {
+        "parent_user_id": "US.ENT.11815799212886844830",
+        "profile": {
+          "username": "realsheenanelson"
+        },
+        "user_id": "US.13491208655302741918"
+      },
+      "display_phone_number": "15550783881",
+      "echo": {
+        "from": "15550783881",
+        "id": "wamid.HBgLMTY0NjcwNDM1OTUVAgARGBIyNDlBOEI5QUQ4NDc0N0FCNjQA",
+        "text": {
+          "body": "Your order has shipped!"
+        },
+        "timestamp": "1767168800",
+        "to_parent_user_id": "US.ENT.11815799212886844830",
+        "to_user_id": "US.13491208655302741918",
+        "type": "text"
+      },
+      "event": "message_echoed",
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_echoed"
+  }
+]

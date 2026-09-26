@@ -1,0 +1,18 @@
+[
+  {
+    "data": {
+      "entry_id": "0",
+      "event": "account_updated",
+      "time": "1623862418",
+      "update": {
+        "event": "ACCOUNT_VIOLATION",
+        "phone_number": "16505552771",
+        "violation_info": {
+          "violation_type": "LOW_BUSINESS_INITIATED_CALLING_QUALITY"
+        }
+      },
+      "waba_id": "0"
+    },
+    "type": "account_updated"
+  }
+]

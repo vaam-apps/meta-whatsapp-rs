@@ -1,0 +1,65 @@
+[
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "event": "group_updated",
+      "field": "group_lifecycle_update",
+      "phone_number_id": "106540352242922",
+      "update": {
+        "group_id": "Y2FwaV9ncm91cDoxNzA1NTU1MDEzOToxMjAzNjM0MDQ2OTQyMzM4MjAZD",
+        "invite_link": "https://chat.whatsapp.com/Ab12Cd34Ef56",
+        "join_approval_mode": "approval_required",
+        "request_id": "6a1f2c9e5b7d4e0f",
+        "subject": "test invite link",
+        "timestamp": "1750100000",
+        "type": "group_create"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "group_updated"
+  },
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "event": "group_updated",
+      "field": "group_lifecycle_update",
+      "phone_number_id": "106540352242922",
+      "update": {
+        "description": "Early access to new succulents",
+        "errors": [
+          {
+            "code": 131000,
+            "error_data": {
+              "details": "Group could not be created"
+            },
+            "message": "Something went wrong",
+            "title": "Something went wrong"
+          }
+        ],
+        "group_id": "Y2FwaV9ncm91cDoxNzA1NTU1MDEzOToxMjAzNjM0MDQ2OTQyMzM4MjEZD",
+        "request_id": "7b2e3dae6c8e5f1a",
+        "subject": "Lucky Shrub VIPs",
+        "timestamp": "1750100100",
+        "type": "group_create"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "group_updated"
+  },
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "event": "group_updated",
+      "field": "group_lifecycle_update",
+      "phone_number_id": "106540352242922",
+      "update": {
+        "group_id": "Y2FwaV9ncm91cDoxNzA1NTU1MDEzOToxMjAzNjM0MDQ2OTQyMzM4MjAZD",
+        "request_id": "8c3f4ebf7d9f6a2b",
+        "timestamp": "1750100200",
+        "type": "group_delete"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "group_updated"
+  }
+]

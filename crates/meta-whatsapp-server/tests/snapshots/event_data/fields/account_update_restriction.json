@@ -1,0 +1,24 @@
+[
+  {
+    "data": {
+      "entry_id": "102290129340398",
+      "event": "account_updated",
+      "time": "1641330498",
+      "update": {
+        "event": "ACCOUNT_RESTRICTION",
+        "restriction_info": [
+          {
+            "expiration": "1641330498",
+            "restriction_type": "RESTRICTED_BIZ_INITIATED_MESSAGING"
+          },
+          {
+            "expiration": "1641330498",
+            "restriction_type": "RESTRICTED_ADD_PHONE_NUMBER_ACTION"
+          }
+        ]
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "account_updated"
+  }
+]

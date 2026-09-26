@@ -1,0 +1,34 @@
+[
+  {
+    "data": {
+      "call": {
+        "direction": "BUSINESS_INITIATED",
+        "event": "connect",
+        "from": "16315553602",
+        "id": "wacid.ABGGFjFVU2AfAgo6V-Hc5eCgK5Gh",
+        "session": {
+          "sdp": "v=0\r\no=- 8076734947255960322 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n",
+          "sdp_type": "answer"
+        },
+        "timestamp": "1671644824",
+        "to": "16315553601",
+        "to_parent_user_id": "US.ENT.11815799212886844830",
+        "to_user_id": "US.13491208655302741918"
+      },
+      "contact": {
+        "parent_user_id": "US.ENT.11815799212886844830",
+        "profile": {
+          "name": "Pablo Morales",
+          "username": "pablomorales"
+        },
+        "user_id": "US.13491208655302741918",
+        "wa_id": "16315553602"
+      },
+      "display_phone_number": "16315553601",
+      "event": "call_updated",
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "call_updated"
+  }
+]

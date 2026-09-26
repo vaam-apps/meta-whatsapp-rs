@@ -1,5 +1,5 @@
 //! The M1.7 log capture, shared by `logs.rs` (memory) and
-//! `live_postgres.rs` (Postgres).
+//! `live_logs.rs` (Postgres).
 
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -8,7 +8,11 @@ use std::sync::{Arc, Mutex};
 use meta_whatsapp_rs::webhooks::axum::http::Method;
 use serde_json::json;
 
-use super::{Call, Harness, VERIFY_TOKEN, send};
+use super::meta::{
+    EXAMPLE_BSUID, EXAMPLE_DISPLAY_NUMBER, EXAMPLE_NAME, EXAMPLE_TEXT, EXAMPLE_WA_ID, bytes,
+    fixture, text, unknown_field, with_ids,
+};
+use super::{APP_SECRET, Call, Harness, PREVIOUS_APP_SECRET, VERIFY_TOKEN, send, signed};
 
 /// Everything written, shared with the subscriber.
 #[derive(Clone, Default)]
@@ -44,6 +48,8 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
         admin.clone(),
         SYSTEM_TOKEN.to_owned(),
         VERIFY_TOKEN.to_owned(),
+        APP_SECRET.to_owned(),
+        PREVIOUS_APP_SECRET.to_owned(),
     ];
     let post = |path: &str, key: &str, body: serde_json::Value| {
         Call::new(Method::POST, path).key(key).json(&body)
@@ -63,7 +69,7 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
         .call(post(
             "/v1/admin/tenants/merchant-42/keys",
             &admin,
-            json!({"scopes": ["numbers"]}),
+            json!({"scopes": ["numbers", "events"]}),
         ))
         .await
         .json();
@@ -101,6 +107,8 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
         ))
         .await;
     assert_eq!(attached.status.as_u16(), 201, "{}", attached.text);
+
+    secrets.extend(webhooks(h, &tenant_key).await);
 
     // Numbers calls, by both keys, with Meta answering phone numbers.
     h.graph.push_json(
@@ -293,6 +301,148 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
     }
     assert_eq!(h.graph.remaining(), 0);
     secrets
+}
+
+const ECHO_TEXT: &str = "An echo the logs must not hold";
+const HISTORY_TEXT: &str = "use code THANKS30";
+const UNPARSED_TEXT: &str = "a body that is not a webhook, which the logs must not hold";
+const OVERSIZED_TEXT: &str = "an oversized body the logs must not hold";
+const FAILED_TEXT: &str = "a message whose recording failed once";
+
+/// Coexistence: an echo of the merchant's phone app and a history sync; a
+/// signed body that is not a webhook; one over 3 MiB; one whose recording
+/// fails once (500), then goes through on Meta's redelivery. Returns the
+/// texts they carried.
+async fn more_deliveries(h: &Harness, waba: &str, pn: &str) -> Vec<String> {
+    let mut echo = with_ids(fixture("fields/smb_message_echoes_text.json"), waba, pn);
+    let item = &mut echo["entry"][0]["changes"][0]["value"]["message_echoes"][0];
+    item["id"] = json!("wamid.CAPTURE-ECHO");
+    item["text"]["body"] = json!(ECHO_TEXT);
+    let history = with_ids(fixture("fields/history_threads.json"), waba, pn);
+    let unparsed = format!("{{\"note\": \"{UNPARSED_TEXT}\"}}").into_bytes();
+    for body in [bytes(&echo), bytes(&history), unparsed] {
+        let reply = send(&h.public, signed(&body).build()).await;
+        assert_eq!(reply.status.as_u16(), 200, "{}", reply.text);
+    }
+    let mut oversized = format!("{{\"note\": \"{OVERSIZED_TEXT}\"}}").into_bytes();
+    oversized.resize(3 * 1024 * 1024 + 1, b' ');
+    let reply = send(&h.public, signed(&oversized).build()).await;
+    assert_eq!(reply.status.as_u16(), 413);
+    let mut failing = text(waba, pn, "wamid.CAPTURE-FAILED");
+    failing["entry"][0]["changes"][0]["value"]["messages"][0]["text"]["body"] = json!(FAILED_TEXT);
+    let failing = bytes(&failing);
+    h.outbox.fail_next(1);
+    assert_eq!(
+        send(&h.public, signed(&failing).build())
+            .await
+            .status
+            .as_u16(),
+        500
+    );
+    assert_eq!(
+        send(&h.public, signed(&failing).build())
+            .await
+            .status
+            .as_u16(),
+        200
+    );
+    [
+        ECHO_TEXT,
+        HISTORY_TEXT,
+        UNPARSED_TEXT,
+        OVERSIZED_TEXT,
+        FAILED_TEXT,
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+/// Meta's deliveries for merchant-42's first number (Meta's text examples,
+/// by phone number and by BSUID, a status, an error, a field no library
+/// types, and refused ones), then polling them; returns what they carried
+/// that the logs must not: the signatures, the message text, the customer's
+/// name, BSUIDs and username.
+async fn webhooks(h: &Harness, tenant_key: &str) -> Vec<String> {
+    const WABA: &str = "102290129340398";
+    const PN: &str = "1972385232742141";
+    let by_phone = bytes(&text(WABA, PN, "wamid.CAPTURE-1"));
+    let mut by_bsuid = with_ids(fixture("bsuid/text_username_no_wa_id.json"), WABA, PN);
+    by_bsuid["entry"][0]["changes"][0]["value"]["messages"][0]["id"] = json!("wamid.CAPTURE-2");
+    let bodies = [
+        by_phone.clone(),
+        bytes(&by_bsuid),
+        bytes(&with_ids(fixture("messages/status_sent.json"), WABA, PN)),
+        bytes(&with_ids(fixture("messages/errors.json"), WABA, PN)),
+        bytes(&unknown_field(WABA)),
+    ];
+    let mut carried = Vec::new();
+    for body in &bodies {
+        let call = signed(body);
+        let reply = send(&h.public, call.build()).await;
+        assert_eq!(reply.status.as_u16(), 200, "{}", reply.text);
+        let signature = meta_whatsapp_rs::webhooks::sign(
+            &meta_whatsapp_rs::core::secret::AppSecret::new(APP_SECRET),
+            body,
+        );
+        carried.push(signature.trim_start_matches("sha256=").to_owned());
+    }
+    carried.extend(more_deliveries(h, WABA, PN).await);
+    // Refused: unsigned, and signed with another secret.
+    let unsigned = Call::new(Method::POST, "/webhooks/meta").body(by_phone.clone().into());
+    assert_eq!(send(&h.public, unsigned.build()).await.status.as_u16(), 401);
+    let forged = meta_whatsapp_rs::webhooks::sign(
+        &meta_whatsapp_rs::core::secret::AppSecret::new("a-forger-s-secret"),
+        &by_phone,
+    );
+    let wrong = Call::new(Method::POST, "/webhooks/meta")
+        .header("x-hub-signature-256", &forged)
+        .body(by_phone.clone().into());
+    assert_eq!(send(&h.public, wrong.build()).await.status.as_u16(), 401);
+    carried.push(forged.trim_start_matches("sha256=").to_owned());
+    // The tenant polls them: the answer holds what the logs must not.
+    let polled = h.call(Call::get("/v1/events").key(tenant_key)).await;
+    assert_eq!(polled.status.as_u16(), 200, "{}", polled.text);
+    let types: Vec<String> = polled.json()["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["type"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        types,
+        [
+            "message_received",
+            "message_received",
+            "status_updated",
+            "error_reported",
+            "message_echoed",
+            "history_synced",
+            "message_received"
+        ]
+    );
+    for private in [
+        EXAMPLE_TEXT,
+        EXAMPLE_NAME,
+        EXAMPLE_BSUID,
+        EXAMPLE_WA_ID,
+        ECHO_TEXT,
+        HISTORY_TEXT,
+        FAILED_TEXT,
+    ] {
+        assert!(polled.text.contains(private), "{private}: {}", polled.text);
+    }
+    carried.extend(
+        [
+            EXAMPLE_TEXT,
+            EXAMPLE_NAME,
+            EXAMPLE_BSUID,
+            "US.ENT.11815799212886844830",
+            "realsheenanelson",
+            "wamid.CAPTURE-1",
+        ]
+        .map(str::to_owned),
+    );
+    carried
 }
 
 /// A message's text, a recipient, a contact and the caller's references,
@@ -679,6 +829,12 @@ pub fn check(logs: &str, secrets: &[String]) {
         );
     }
     assert!(logged.contains(&("GET".to_owned(), "/webhooks/meta".to_owned())));
+    assert!(logged.contains(&("POST".to_owned(), "/webhooks/meta".to_owned())));
+    assert!(
+        logs.lines()
+            .any(|l| l.contains("operator-only event recorded") && l.contains("data_sha256")),
+        "the operator-only event is logged, by size and digest"
+    );
     assert!(logged.contains(&("other".to_owned(), "/livez".to_owned())));
     assert!(
         !logs.contains(MADE_UP_METHOD),
@@ -702,6 +858,8 @@ pub fn check(logs: &str, secrets: &[String]) {
         "16315551111",
         "6315551111",
         "6315553333",
+        EXAMPLE_WA_ID,
+        EXAMPLE_DISPLAY_NUMBER,
     ] {
         assert!(
             !logs.contains(phone),

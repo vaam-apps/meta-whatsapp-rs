@@ -1,0 +1,18 @@
+[
+  {
+    "data": {
+      "event": "template_category_updated",
+      "time": "1746082800",
+      "update": {
+        "category_update_timestamp": "1746169200",
+        "correct_category": "MARKETING",
+        "message_template_id": "278077987957091",
+        "message_template_language": "en-US",
+        "message_template_name": "welcome_template",
+        "new_category": "UTILITY"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "template_category_updated"
+  }
+]
