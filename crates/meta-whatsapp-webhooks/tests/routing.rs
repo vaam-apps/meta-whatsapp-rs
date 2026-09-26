@@ -325,3 +325,106 @@ fn conversation_context_rides_on_every_message_of_the_change() {
     assert_eq!(contact.as_ref().unwrap().name(), Some("Sheena Nelson"));
     assert_eq!(message.message_type(), Some("text"));
 }
+
+/// Every standby copy's key is `standby:` plus the key the same item has
+/// on the owner's side (`messages` statuses, `smb_message_echoes` echoes),
+/// so a partner that is also subscribed to those fields never drops one
+/// for the other.
+#[test]
+fn standby_echo_and_status_keys_are_the_owner_keys_prefixed() {
+    let standby_of = |standby: serde_json::Value| {
+        let body = json!({"object": "whatsapp_business_account", "entry": [{"id": WABA, "changes": [{
+            "field": "standby",
+            "value": {"messaging_product": "whatsapp",
+                      "metadata": {"display_phone_number": "15550783881", "phone_number_id": NUMBER_ID},
+                      "standby": standby}
+        }]}]});
+        let mut events = WebhookPayload::from_slice(body.to_string().as_bytes())
+            .unwrap()
+            .into_events();
+        assert_eq!(events.len(), 1, "{events:?}");
+        events.remove(0)
+    };
+
+    let owner = common::events("messages/group_statuses_aggregated.json").remove(0);
+    let WebhookEvent::StatusUpdated { status, .. } = &owner else {
+        panic!("{owner:?}")
+    };
+    let copy = standby_of(json!({"statuses": [serde_json::to_value(status).unwrap()]}));
+    assert!(
+        matches!(&copy, WebhookEvent::StandbyObserved { item, .. } if matches!(**item, StandbyItem::Status(_)))
+    );
+    assert_eq!(
+        copy.dedup_key().unwrap(),
+        format!("standby:{}", owner.dedup_key().unwrap())
+    );
+
+    let owner = common::events("fields/smb_message_echoes_text.json").remove(0);
+    let WebhookEvent::MessageEchoed { echo, .. } = &owner else {
+        panic!("{owner:?}")
+    };
+    let copy = standby_of(json!({"message_echoes": [{
+        "id": echo.id.as_str(), "timestamp": "1750101000",
+        "message": {"messaging_product": "whatsapp", "to": USER, "type": "text", "text": {"body": "x"}}
+    }]}));
+    assert_eq!(
+        copy.dedup_key().unwrap(),
+        format!("standby:{}", owner.dedup_key().unwrap())
+    );
+    // An echo and an inbound message never share a key, whatever their ids.
+    let message = standby_of(json!({"messages": [{
+        "from": USER, "id": echo.id.as_str(), "timestamp": "1750101000",
+        "type": "text", "text": {"body": "x"}
+    }]}));
+    assert_ne!(copy.dedup_key(), message.dedup_key());
+}
+
+/// A standby item finds its user the way the `messages` field does: by
+/// BSUID first, then by phone number, never by position.
+#[test]
+fn standby_items_find_their_contact_by_bsuid_then_phone() {
+    let contacts = json!([
+        {"profile": {"name": "First"}, "wa_id": "16505550000", "user_id": "US.1111"},
+        {"profile": {"name": "Second"}, "user_id": "US.2222"},
+        {"profile": {"name": "Third"}, "wa_id": "16505553333"}
+    ]);
+    let names = |standby: serde_json::Value| -> Vec<Option<String>> {
+        let body = json!({"object": "whatsapp_business_account", "entry": [{"id": WABA, "changes": [{
+            "field": "standby",
+            "value": {"messaging_product": "whatsapp",
+                      "metadata": {"display_phone_number": "15550783881", "phone_number_id": NUMBER_ID},
+                      "standby": standby}
+        }]}]});
+        WebhookPayload::from_slice(body.to_string().as_bytes())
+            .unwrap()
+            .into_events()
+            .iter()
+            .map(|e| e.contact().and_then(|c| c.name().map(str::to_owned)))
+            .collect()
+    };
+    let some = |s: &str| Some(s.to_owned());
+
+    // Messages: `from_user_id` (no phone number), `from`, neither matching.
+    let text = json!({"body": "x"});
+    assert_eq!(
+        names(json!({"contacts": contacts, "messages": [
+            {"from_user_id": "US.2222", "id": "wamid.a", "timestamp": "1", "type": "text", "text": text},
+            {"from": "+16505553333", "id": "wamid.b", "timestamp": "1", "type": "text", "text": text},
+            {"from": "16505559999", "id": "wamid.c", "timestamp": "1", "type": "text", "text": text}
+        ]})),
+        [some("Second"), some("Third"), None]
+    );
+
+    // Statuses: `recipient_user_id`, a group participant's BSUID,
+    // `recipient_id`, neither matching.
+    assert_eq!(
+        names(json!({"contacts": contacts, "statuses": [
+            {"id": "wamid.a", "status": "delivered", "timestamp": "1", "recipient_user_id": "US.2222"},
+            {"id": "wamid.b", "status": "read", "timestamp": "1", "recipient_id": "120363000000000000",
+             "recipient_type": "group", "recipient_participant_user_id": "US.1111"},
+            {"id": "wamid.c", "status": "sent", "timestamp": "1", "recipient_id": "16505553333"},
+            {"id": "wamid.d", "status": "sent", "timestamp": "1", "recipient_id": "16505559999"}
+        ]})),
+        [some("Second"), some("First"), some("Third"), None]
+    );
+}

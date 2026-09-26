@@ -16,7 +16,8 @@
 //!   matched user's BSUID and phone number;
 //! - every value the example shows survives the typed parse (ids,
 //!   timestamps, enum values, text), so nothing documented is dropped or
-//!   altered;
+//!   altered; only an id or unix time may come back as a string where Meta
+//!   printed a number, and the typed form invents nothing;
 //! - no enum value lands in an `Other` catch-all and no message content in
 //!   `Unknown`/`Invalid`: every value the page shows is a known variant;
 //! - JSON is kept untyped only in the few properties the docs define as
@@ -42,7 +43,7 @@ use meta_whatsapp_webhooks::{
     DedupGuard, SignatureVerifier, WebhookEvent, WebhookHandler, WebhookPayload, sign,
 };
 use pretty_assertions::assert_eq;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use common::RecordingSink;
 use manifest::{CASES, PAGES};
@@ -155,8 +156,9 @@ const ALIASES: &[(&str, &str)] = &[
     ("parent_recipient_user_id", "recipient_parent_user_id"),
 ];
 
-/// Values the pages spell two ways, and the one this crate writes back
-/// (`fields::calls` module docs: terminate `status`).
+/// Values the pages spell two ways, and the one this crate writes back:
+/// a call terminate `status` (`fields::calls` module docs). Accepted for a
+/// `status` property only.
 const VALUE_ALIASES: &[(&str, &str)] = &[("Failed", "FAILED"), ("Completed", "COMPLETED")];
 
 fn case(name: &str) -> &'static Case {
@@ -166,77 +168,107 @@ fn case(name: &str) -> &'static Case {
         .unwrap_or_else(|| panic!("{name}: not in the manifest (tests/conformance/manifest.rs)"))
 }
 
-#[test]
-fn the_manifest_lists_every_fixture_exactly_once() {
-    let files: BTreeSet<String> = common::all_fixtures().into_iter().collect();
+/// What is wrong with the manifest's list of fixtures, against the files on
+/// disk: both directions, so neither a new fixture nor a deleted one slips by.
+fn manifest_problems<'a>(
+    files: &BTreeSet<String>,
+    cases: impl IntoIterator<Item = &'a Case>,
+) -> Vec<String> {
+    let mut out = Vec::new();
     let mut listed = BTreeSet::new();
-    for c in CASES {
-        assert!(listed.insert(c.fixture), "{}: listed twice", c.fixture);
-        assert!(!c.sources.is_empty(), "{}: no source", c.fixture);
-        assert!(!c.events.is_empty(), "{}: no expected event", c.fixture);
+    for c in cases {
+        if !listed.insert(c.fixture.to_owned()) {
+            out.push(format!("{}: listed twice", c.fixture));
+        }
+        if c.sources.is_empty() {
+            out.push(format!("{}: no source", c.fixture));
+        }
+        if c.events.is_empty() {
+            out.push(format!("{}: no expected event", c.fixture));
+        }
     }
-    let listed: BTreeSet<String> = listed.into_iter().map(str::to_owned).collect();
-    let unlisted: Vec<_> = files.difference(&listed).collect();
-    let missing: Vec<_> = listed.difference(&files).collect();
-    assert!(
-        unlisted.is_empty(),
-        "fixtures without a manifest case: {unlisted:?}"
-    );
-    assert!(
-        missing.is_empty(),
-        "manifest cases without a fixture: {missing:?}"
-    );
+    for f in files.difference(&listed) {
+        out.push(format!("{f}: fixture without a manifest case"));
+    }
+    for f in listed.difference(files) {
+        out.push(format!("{f}: manifest case without a fixture"));
+    }
+    out
 }
 
 #[test]
-fn every_example_on_every_page_has_a_fixture() {
-    let pages: BTreeMap<&str, &Page> = PAGES.iter().map(|p| (p.path, p)).collect();
-    assert_eq!(pages.len(), PAGES.len(), "a page is listed twice");
+fn the_manifest_lists_every_fixture_exactly_once() {
+    let files: BTreeSet<String> = common::all_fixtures().into_iter().collect();
+    let problems = manifest_problems(&files, CASES);
+    assert!(problems.is_empty(), "{problems:#?}");
+}
+
+/// What is wrong with the page list against the cases: a case citing an
+/// unlisted page, an unreadable page or an example the page does not show,
+/// and a page example no `Verbatim`/`Filled` case covers.
+fn coverage_problems<'a>(pages: &[Page], cases: impl IntoIterator<Item = &'a Case>) -> Vec<String> {
+    let mut out = Vec::new();
+    let by_path: BTreeMap<&str, &Page> = pages.iter().map(|p| (p.path, p)).collect();
+    if by_path.len() != pages.len() {
+        out.push("a page is listed twice".to_owned());
+    }
     let mut covered: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-    for c in CASES {
+    for c in cases {
         for &(origin, page, example) in c.sources {
-            let listed = pages.get(page).unwrap_or_else(|| {
-                panic!("{}: cites {page}, which PAGES does not list", c.fixture)
-            });
-            assert!(
-                !matches!(listed.status, Status::Unreadable(_)),
-                "{}: cites unreadable {page}",
-                c.fixture
-            );
-            if origin != Origin::Composed {
-                assert!(
-                    listed.examples.contains(&example),
-                    "{}: {page} has no example {example:?}",
+            let Some(listed) = by_path.get(page) else {
+                out.push(format!(
+                    "{}: cites {page}, which PAGES does not list",
                     c.fixture
-                );
+                ));
+                continue;
+            };
+            if matches!(listed.status, Status::Unreadable(_)) {
+                out.push(format!("{}: cites unreadable {page}", c.fixture));
+            }
+            if origin != Origin::Composed {
+                if !listed.examples.contains(&example) {
+                    out.push(format!("{}: {page} has no example {example:?}", c.fixture));
+                }
                 covered.entry(page).or_default().insert(example);
             }
         }
     }
-    for page in PAGES {
+    for page in pages {
         let have = covered.remove(page.path).unwrap_or_default();
         match page.status {
             Status::Unreadable(why) | Status::Fragments(why) => {
-                assert!(!why.is_empty() && page.examples.is_empty(), "{}", page.path);
-                assert!(have.is_empty(), "{}: {have:?}", page.path);
+                if why.is_empty() || !page.examples.is_empty() {
+                    out.push(format!(
+                        "{}: a page without examples says why, and lists none",
+                        page.path
+                    ));
+                }
+                if !have.is_empty() {
+                    out.push(format!("{}: cited as an example: {have:?}", page.path));
+                }
             }
             Status::Typed | Status::Partial(_) => {
-                assert!(
-                    !page.examples.is_empty(),
-                    "{}: no example listed",
-                    page.path
-                );
+                if page.examples.is_empty() {
+                    out.push(format!("{}: no example listed", page.path));
+                }
                 let want: BTreeSet<&str> = page.examples.iter().copied().collect();
-                assert_eq!(want.len(), page.examples.len(), "{}: duplicate", page.path);
+                if want.len() != page.examples.len() {
+                    out.push(format!("{}: duplicate example", page.path));
+                }
                 let uncovered: Vec<_> = want.difference(&have).collect();
-                assert!(
-                    uncovered.is_empty(),
-                    "{}: no fixture for {uncovered:?}",
-                    page.path
-                );
+                if !uncovered.is_empty() {
+                    out.push(format!("{}: no fixture for {uncovered:?}", page.path));
+                }
             }
         }
     }
+    out
+}
+
+#[test]
+fn every_example_on_every_page_has_a_fixture() {
+    let problems = coverage_problems(PAGES, CASES);
+    assert!(problems.is_empty(), "{problems:#?}");
 }
 
 fn contact_ids(event: &WebhookEvent) -> (Option<String>, Option<String>) {
@@ -295,35 +327,59 @@ fn every_case_parses_into_exactly_its_events() {
     }
 }
 
-/// Whether `typed` carries the same value as `orig`: equal, or the same
-/// scalar written as a string (ids and unix timestamps are strings once
-/// typed; Meta prints some as numbers), or a documented second spelling.
-fn same_scalar(orig: &Value, typed: &Value) -> bool {
-    let text = |v: &Value| match v {
-        Value::String(s) => Some(s.clone()),
-        Value::Number(n) => Some(n.to_string()),
-        Value::Bool(b) => Some(b.to_string()),
-        _ => None,
-    };
+/// Whether `key` names an id or a unix time: the only properties whose
+/// number Meta prints may come back as a string (this crate types ids and
+/// timestamps as strings).
+fn id_or_time(key: &str) -> bool {
+    key == "id"
+        || key.ends_with("_id")
+        || key.ends_with("_ids")
+        || key == "time"
+        || key.ends_with("_time")
+        || key.ends_with("timestamp")
+        || key == "expiration"
+}
+
+/// Whether `typed` carries the same value as `orig` under property `key`:
+/// equal; the same number (`25000` typed as `f64` writes back `25000.0`,
+/// compared exactly on purpose); an id or unix time Meta printed as a
+/// number, written back as the same digits in a string; or a documented
+/// second spelling of a `status`. Nothing else crosses JSON types: a
+/// number typed as a string, a boolean as a string, or a string as a number
+/// is a wrong type, not the same value.
+fn same_scalar(key: &str, orig: &Value, typed: &Value) -> bool {
     if orig == typed {
         return true;
     }
-    match (text(orig), text(typed)) {
-        (Some(a), Some(b)) => {
-            a == b
-                || VALUE_ALIASES.contains(&(a.as_str(), b.as_str()))
-                // `25000` typed as `f64` writes back `25000.0`: the same
-                // number, compared exactly on purpose.
-                || matches!(
-                    (orig.as_f64(), typed.as_f64()),
-                    (Some(x), Some(y)) if x.to_bits() == y.to_bits()
-                )
+    match (orig, typed) {
+        (Value::Number(a), Value::Number(b)) => matches!(
+            (a.as_f64(), b.as_f64()),
+            (Some(x), Some(y)) if x.to_bits() == y.to_bits()
+        ),
+        (Value::Number(n), Value::String(s)) => id_or_time(key) && n.to_string() == *s,
+        (Value::String(a), Value::String(b)) => {
+            key == "status" && VALUE_ALIASES.contains(&(a.as_str(), b.as_str()))
         }
         _ => false,
     }
 }
 
+/// An empty list or object says nothing; typed lists and options skip
+/// serializing when empty.
+fn says_nothing(value: &Value) -> bool {
+    value.is_null()
+        || value.as_array().is_some_and(Vec::is_empty)
+        || value.as_object().is_some_and(serde_json::Map::is_empty)
+}
+
+/// Every difference between the example (`orig`) and its typed parse
+/// written back (`typed`): a value dropped, altered or retyped, a list that
+/// changed length, and a value the typed form invents.
 fn compare(orig: &Value, typed: &Value, path: &str, out: &mut Vec<String>) {
+    compare_at("", orig, typed, path, out);
+}
+
+fn compare_at(key: &str, orig: &Value, typed: &Value, path: &str, out: &mut Vec<String>) {
     match (orig, typed) {
         (Value::Object(a), Value::Object(b)) => {
             for (key, value) in a {
@@ -333,26 +389,35 @@ fn compare(orig: &Value, typed: &Value, path: &str, out: &mut Vec<String>) {
                     .map_or(key.as_str(), |(_, to)| to);
                 let p = format!("{path}.{key}");
                 match b.get(canonical) {
-                    Some(w) => compare(value, w, &p, out),
-                    None if value.is_null() => {}
-                    // An empty list or object says nothing; typed lists
-                    // skip serializing when empty.
-                    None if value.as_array().is_some_and(Vec::is_empty) => {}
-                    None if value.as_object().is_some_and(serde_json::Map::is_empty) => {}
+                    Some(w) => compare_at(canonical, value, w, &p, out),
+                    None if says_nothing(value) => {}
                     None => out.push(format!("{p}: dropped")),
+                }
+            }
+            for (key, value) in b {
+                let spellings: Vec<&str> = std::iter::once(key.as_str())
+                    .chain(
+                        ALIASES
+                            .iter()
+                            .filter(|(_, to)| to == key)
+                            .map(|(alias, _)| *alias),
+                    )
+                    .collect();
+                if !spellings.iter().any(|k| a.contains_key(*k)) && !says_nothing(value) {
+                    out.push(format!("{path}.{key}: added {value}"));
                 }
             }
         }
         (Value::Array(a), Value::Array(b)) => {
             if a.len() == b.len() {
                 for (i, (v, w)) in a.iter().zip(b).enumerate() {
-                    compare(v, w, &format!("{path}[{i}]"), out);
+                    compare_at(key, v, w, &format!("{path}[{i}]"), out);
                 }
             } else {
                 out.push(format!("{path}: {} items became {}", a.len(), b.len()));
             }
         }
-        (orig, typed) if same_scalar(orig, typed) => {}
+        (orig, typed) if same_scalar(key, orig, typed) => {}
         (orig, typed) => out.push(format!("{path}: {orig} became {typed}")),
     }
 }
@@ -398,26 +463,30 @@ fn untyped_properties(debug: &str) -> BTreeSet<String> {
     out
 }
 
+/// A value in a catch-all (`Other("…")` of an open enum, an `Unknown` or
+/// `Invalid` message or change), or JSON kept untyped outside [`OPAQUE`],
+/// in the `Debug` of a parsed payload.
+fn typing_problems(debug: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for catch_all in ["Other(\"", "Unknown {", "Unknown(", "Invalid {"] {
+        if debug.contains(catch_all) {
+            out.push(format!("a value fell into `{catch_all}`"));
+        }
+    }
+    for name in untyped_properties(debug) {
+        if !OPAQUE.contains(&name.as_str()) {
+            out.push(format!("`{name}` kept as JSON"));
+        }
+    }
+    out
+}
+
 #[test]
 fn no_value_falls_into_a_catch_all_or_stays_json() {
     for c in CASES {
         let debug = format!("{:?}", common::payload(c.fixture));
-        for catch_all in ["Other(\"", "Unknown {", "Invalid {"] {
-            assert!(
-                !debug.contains(catch_all),
-                "{}: a value fell into `{catch_all}`: {debug}",
-                c.fixture
-            );
-        }
-        let untyped: Vec<_> = untyped_properties(&debug)
-            .into_iter()
-            .filter(|name| !OPAQUE.contains(&name.as_str()))
-            .collect();
-        assert!(
-            untyped.is_empty(),
-            "{}: kept as JSON: {untyped:?}",
-            c.fixture
-        );
+        let problems = typing_problems(&debug);
+        assert!(problems.is_empty(), "{}: {problems:?}\n{debug}", c.fixture);
     }
 }
 
@@ -478,57 +547,217 @@ async fn every_case_arrives_through_the_signed_handler() {
         assert_eq!(first.delivered, expected.len(), "{}: {first:?}", c.fixture);
         assert_eq!(first.duplicates, 0, "{}: keys collide", c.fixture);
         let retry = deduped.deliver(Some(&header), &body).await.unwrap();
-        let unkeyed = expected.iter().filter(|e| e.dedup_key().is_none()).count();
+        // Only error reports go without a key (`WebhookEvent::dedup_key`);
+        // counted from the variant, not from the key under test.
+        let unkeyed = expected
+            .iter()
+            .filter(|e| matches!(e, WebhookEvent::ErrorReported { .. }))
+            .count();
+        assert_eq!(
+            expected.iter().filter(|e| e.dedup_key().is_none()).count(),
+            unkeyed,
+            "{}: an event without a dedup key",
+            c.fixture
+        );
         assert_eq!(retry.delivered, unkeyed, "{}", c.fixture);
         assert_eq!(retry.duplicates, expected.len() - unkeyed, "{}", c.fixture);
     }
 }
 
-/// The guards above are only as good as their failure paths: a catch-all,
-/// an altered value, a dropped property and an unlisted fixture must each
-/// be caught.
-#[test]
-fn the_checks_catch_what_they_claim_to() {
+// The guards above are only as good as their failure paths: each check,
+// fed what it must refuse, refuses it.
+
+fn text_example() -> (Value, Value) {
     let c = case("messages/text.json");
     let orig: Value = serde_json::from_slice(&common::fixture_bytes(c.fixture)).unwrap();
+    let typed = serde_json::to_value(common::payload(c.fixture)).unwrap();
+    (orig, typed)
+}
 
+fn diff(orig: &Value, typed: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    compare(orig, typed, "", &mut out);
+    out
+}
+
+#[test]
+fn compare_catches_dropped_altered_retyped_and_invented_values() {
+    let (orig, typed) = text_example();
+    assert_eq!(diff(&orig, &typed), Vec::<String>::new());
+
+    // An altered value.
     let mut altered = orig.clone();
     altered["entry"][0]["changes"][0]["value"]["messages"][0]["timestamp"] = "1".into();
-    let mut changed = Vec::new();
-    compare(
-        &altered,
-        &serde_json::to_value(common::payload(c.fixture)).unwrap(),
-        "",
-        &mut changed,
-    );
-    assert_eq!(changed.len(), 1, "{changed:?}");
+    assert_eq!(diff(&altered, &typed).len(), 1);
 
+    // A property the typed parse drops.
     let mut added = orig.clone();
     added["entry"][0]["changes"][0]["value"]["messages"][0]["brand_new"] = "x".into();
-    let typed = serde_json::to_value(
+    let reparsed = serde_json::to_value(
         WebhookPayload::from_slice(&serde_json::to_vec(&added).unwrap()).unwrap(),
     )
     .unwrap();
-    let mut dropped = Vec::new();
-    compare(&added, &typed, "", &mut dropped);
     assert_eq!(
-        dropped,
+        diff(&added, &reparsed),
         [".entry[0].changes[0].value.messages[0].brand_new: dropped"]
     );
 
-    let mut other = orig;
-    other["entry"][0]["changes"][0]["value"]["messages"][0]["referral"] =
-        serde_json::json!({"source_type": "billboard"});
-    let debug = format!(
-        "{:?}",
-        WebhookPayload::from_slice(&serde_json::to_vec(&other).unwrap()).unwrap()
+    // A list that changed length.
+    let mut shorter = typed.clone();
+    shorter["entry"][0]["changes"][0]["value"]["contacts"] = json!([]);
+    assert_eq!(
+        diff(&orig, &shorter),
+        [".entry[0].changes[0].value.contacts: 1 items became 0"]
     );
-    assert!(debug.contains("Other(\""), "{debug}");
 
-    assert!(untyped_properties("X { a: 1, raw: Some(Object {}) }").contains("raw"));
-    assert!(
-        CASES
-            .iter()
-            .all(|c| c.fixture != "fields/not_a_fixture.json")
+    // A value the typed form invents.
+    let mut invented = typed.clone();
+    invented["entry"][0]["changes"][0]["value"]["messages"][0]["invented"] = "x".into();
+    assert_eq!(
+        diff(&orig, &invented),
+        [".entry[0].changes[0].value.messages[0].invented: added \"x\""]
+    );
+    let mut empty = typed;
+    empty["entry"][0]["changes"][0]["value"]["messages"][0]["nothing"] = json!({});
+    assert_eq!(diff(&orig, &empty), Vec::<String>::new());
+
+    // Types: only an id or unix time may go from number to string.
+    for (orig, typed, same) in [
+        (
+            json!({"timestamp": 1_750_101_000}),
+            json!({"timestamp": "1750101000"}),
+            true,
+        ),
+        (json!({"waba_id": 102}), json!({"waba_id": "102"}), true),
+        (json!({"time": 1}), json!({"time": "1"}), true),
+        (json!({"amount": 25_000}), json!({"amount": 25_000.0}), true),
+        (json!({"amount": 25_000}), json!({"amount": "25000"}), false),
+        (json!({"timestamp": 1}), json!({"timestamp": "2"}), false),
+        (json!({"id": "1"}), json!({"id": 1}), false),
+        (
+            json!({"billable": true}),
+            json!({"billable": "true"}),
+            false,
+        ),
+        (
+            json!({"billable": "true"}),
+            json!({"billable": true}),
+            false,
+        ),
+        (
+            json!({"status": "Failed"}),
+            json!({"status": "FAILED"}),
+            true,
+        ),
+        (
+            json!({"event": "Failed"}),
+            json!({"event": "FAILED"}),
+            false,
+        ),
+        (
+            json!({"status": "Failed"}),
+            json!({"status": "COMPLETED"}),
+            false,
+        ),
+    ] {
+        assert_eq!(diff(&orig, &typed).is_empty(), same, "{orig} vs {typed}");
+    }
+}
+
+#[test]
+fn the_typing_check_catches_catch_alls_and_untyped_json() {
+    let (orig, _) = text_example();
+    // Catch-alls and untyped JSON.
+    let mut other = orig.clone();
+    other["entry"][0]["changes"][0]["value"]["messages"][0]["referral"] =
+        json!({"source_type": "billboard"});
+    let mut unknown = orig;
+    unknown["entry"][0]["changes"][0]["value"]["messages"][0]["type"] = "hologram".into();
+    for (body, want) in [(other, "Other(\""), (unknown, "Unknown {")] {
+        let debug = format!(
+            "{:?}",
+            WebhookPayload::from_slice(&serde_json::to_vec(&body).unwrap()).unwrap()
+        );
+        let problems = typing_problems(&debug);
+        assert!(
+            problems.iter().any(|p| p.contains(want)),
+            "{want}: {problems:?}"
+        );
+    }
+    assert_eq!(
+        typing_problems("X { a: 1, raw: Some(Object {}) }"),
+        ["`raw` kept as JSON"]
+    );
+    assert!(typing_problems("X { message: Object {}, flow: Some(Object {}) }").is_empty());
+}
+
+#[test]
+fn the_manifest_check_catches_both_directions_and_duplicates() {
+    // The manifest against the files: both directions, and duplicates.
+    let files: BTreeSet<String> = common::all_fixtures().into_iter().collect();
+    let mut extra = files.clone();
+    extra.insert("pages/not_a_fixture.json".to_owned());
+    assert_eq!(
+        manifest_problems(&extra, CASES),
+        ["pages/not_a_fixture.json: fixture without a manifest case"]
+    );
+    let mut fewer = files.clone();
+    fewer.remove(CASES[0].fixture);
+    assert_eq!(
+        manifest_problems(&fewer, CASES),
+        [format!(
+            "{}: manifest case without a fixture",
+            CASES[0].fixture
+        )]
+    );
+    let problems = manifest_problems(&files, CASES.iter().chain([&CASES[0]]));
+    assert_eq!(problems, [format!("{}: listed twice", CASES[0].fixture)]);
+}
+
+#[test]
+fn the_coverage_check_catches_uncovered_and_wrongly_cited_examples() {
+    const PAGES_: &[Page] = &[
+        Page {
+            path: "p",
+            status: Status::Typed,
+            examples: &["A", "B"],
+        },
+        Page {
+            path: "gone",
+            status: Status::Unreadable("404"),
+            examples: &[],
+        },
+    ];
+    const ONLY_A: Case = Case {
+        fixture: "a.json",
+        sources: &[(Origin::Filled, "p", "A"), (Origin::Composed, "p", "B")],
+        events: &[],
+    };
+    const B: Case = Case {
+        fixture: "b.json",
+        sources: &[(Origin::Verbatim, "p", "B")],
+        events: &[],
+    };
+    const WRONG: Case = Case {
+        fixture: "w.json",
+        sources: &[
+            (Origin::Filled, "p", "C"),
+            (Origin::Composed, "gone", "x"),
+            (Origin::Filled, "nowhere", "x"),
+        ],
+        events: &[],
+    };
+    assert!(coverage_problems(PAGES_, [&ONLY_A, &B]).is_empty());
+    assert_eq!(
+        coverage_problems(PAGES_, [&ONLY_A]),
+        ["p: no fixture for [\"B\"]"]
+    );
+    assert_eq!(
+        coverage_problems(PAGES_, [&ONLY_A, &B, &WRONG]),
+        [
+            "w.json: p has no example \"C\"",
+            "w.json: cites unreadable gone",
+            "w.json: cites nowhere, which PAGES does not list",
+        ]
     );
 }

@@ -201,6 +201,32 @@ fn account_update_waba_id_is_the_customers_waba_not_a_business() {
     }
 }
 
+/// `embedded-signup/app-only-install` shows `PARTNER_APP_UNINSTALLED`
+/// with no `waba_info` and `<PARTNER_BUSINESS_ID>` as the entry id: the
+/// partner app events go to the partner's business, never a WABA.
+#[test]
+fn partner_app_events_without_waba_info_name_no_waba() {
+    const PARTNER_BUSINESS: &str = "2949482758682047";
+    for event in ["PARTNER_APP_UNINSTALLED", "PARTNER_APP_INSTALLED"] {
+        let body = json!({"entry": [{
+            "id": PARTNER_BUSINESS, "time": "1748477359",
+            "changes": [{"value": {"event": event}, "field": "account_update"}]
+        }], "object": "whatsapp_business_account"});
+        let parsed = WebhookPayload::from_slice(body.to_string().as_bytes())
+            .unwrap()
+            .into_events()
+            .remove(0);
+        assert_eq!(parsed.waba_id(), None, "{event}");
+        let WebhookEvent::AccountUpdated { entry_id, .. } = &parsed else {
+            panic!("{parsed:?}")
+        };
+        assert_eq!(entry_id, PARTNER_BUSINESS, "{event}");
+        let back: WebhookEvent =
+            serde_json::from_value(serde_json::to_value(&parsed).unwrap()).unwrap();
+        assert_eq!(back, parsed, "{event}");
+    }
+}
+
 /// An `account_update` that does not parse into the typed value keeps the
 /// WABA its raw `waba_info` names, not the entry's business id.
 #[test]

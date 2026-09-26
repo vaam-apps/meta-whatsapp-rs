@@ -19,10 +19,10 @@ use time::OffsetDateTime;
 
 use crate::fields::common::find_contact;
 use crate::fields::{
-    AccountAlertsValue, AccountReviewUpdateValue, AccountSettingsUpdateValue, AccountUpdateValue,
-    AutomaticEvent, BusinessCapabilityUpdateValue, BusinessUsernameUpdateValue, Call, CallStatus,
-    Contact, ConversationContext, FlowsValue, GroupUpdate, HistoryValue, InboundMessage,
-    MessageEcho, MessagingHandoversValue, Metadata, PartnerSolutionsValue,
+    AccountAlertsValue, AccountReviewUpdateValue, AccountSettingsUpdateValue, AccountUpdateEvent,
+    AccountUpdateValue, AutomaticEvent, BusinessCapabilityUpdateValue, BusinessUsernameUpdateValue,
+    Call, CallStatus, Contact, ConversationContext, FlowsValue, GroupUpdate, HistoryValue,
+    InboundMessage, MessageEcho, MessagingHandoversValue, Metadata, PartnerSolutionsValue,
     PaymentConfigurationUpdateValue, PhoneNumberNameUpdateValue, PhoneNumberQualityUpdateValue,
     SecurityValue, StandbyItem, StateSyncItem, Status, TemplateCategoryUpdateValue,
     TemplateComponentsUpdateValue, TemplateCorrectCategoryDetectionValue,
@@ -265,7 +265,9 @@ pub enum WebhookEvent {
     /// `AD_ACCOUNT_LINKED`, `MM_LITE_TERMS_SIGNED`) names the customer's
     /// WABA in `waba_info.waba_id` and a business portfolio as the entry id
     /// (for `PARTNER_ADDED`, one of `solution_partner_business_ids`); every
-    /// update without one carries the WABA as the entry id.
+    /// update without one carries the WABA as the entry id, except a
+    /// `PARTNER_APP_INSTALLED` / `PARTNER_APP_UNINSTALLED`, which always
+    /// goes to the partner's business (`embedded-signup/app-only-install`).
     ///
     /// An event serialized by a revision before `entry_id` existed (its
     /// `waba_id` was the entry id) is read back the same way: `waba_id`
@@ -275,10 +277,12 @@ pub enum WebhookEvent {
     AccountUpdated {
         /// The WABA the update is about: `waba_info.waba_id` when the update
         /// has a `waba_info`, else the entry id. `None` when a `waba_info`
-        /// names no WABA: the entry id is then not one.
+        /// names no WABA, or a partner app event has no `waba_info`: the
+        /// entry id is then not one.
         waba_id: Option<WabaId>,
         /// The entry's `id`, verbatim: the WABA for updates without a
-        /// `waba_info`, a business portfolio for those with one.
+        /// `waba_info`, a business portfolio for those with one and for
+        /// the partner app events.
         entry_id: String,
         /// When.
         #[serde(default, with = "meta_whatsapp_core::timestamp::unix_option")]
@@ -732,9 +736,12 @@ impl WebhookPayload {
 /// WABA in `waba_info.waba_id`. Every example without a `waba_info`
 /// (`ACCOUNT_DELETED`, …, and the coexistence `PARTNER_REMOVED` of
 /// `embedded-signup/onboarding-business-app-users`) shows the WABA as the
-/// entry id. So: `waba_info.waba_id` when there is a `waba_info`, `None` if
-/// it names none (the entry id is then a business, never a WABA), and the
-/// entry id only when there is no `waba_info`.
+/// entry id, except the `PARTNER_APP_UNINSTALLED` of
+/// `embedded-signup/app-only-install`, whose entry id is
+/// `<PARTNER_BUSINESS_ID>`: the partner app events always go to the
+/// partner's business. So: `waba_info.waba_id` when there is a `waba_info`,
+/// `None` if it names none (the entry id is then a business, never a WABA)
+/// and for a partner app event without one, and the entry id otherwise.
 fn account_update_waba(update: &AccountUpdateValue, entry: WabaId) -> Option<WabaId> {
     match &update.waba_info {
         Some(info) => info
@@ -742,6 +749,13 @@ fn account_update_waba(update: &AccountUpdateValue, entry: WabaId) -> Option<Wab
             .as_ref()
             .filter(|id| !id.as_str().trim().is_empty())
             .cloned(),
+        None if matches!(
+            update.event,
+            AccountUpdateEvent::PartnerAppInstalled | AccountUpdateEvent::PartnerAppUninstalled
+        ) =>
+        {
+            None
+        }
         None => Some(entry),
     }
 }

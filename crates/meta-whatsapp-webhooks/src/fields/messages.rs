@@ -13,7 +13,8 @@
 //! and `messages/address-messages` (`nfm_reply`),
 //! `calling/user-call-permissions` (`call_permission_reply`),
 //! `webhooks/reference/history` (`media_placeholder`),
-//! `conversation-routing/conversation-context` (`conversation_context`).
+//! `conversation-routing/conversation-context` (`conversation_context`),
+//! `direct-send/supported-message-types` (a status's `template_id`).
 //!
 //! # Where the pages disagree with each other
 //!
@@ -31,7 +32,7 @@
 //!   [`PricingCategory::AuthenticationInternational`].
 
 use meta_whatsapp_core::GraphApiError;
-use meta_whatsapp_core::ids::{CatalogId, GroupId, MediaId, MessageId, UserId, WaId};
+use meta_whatsapp_core::ids::{CatalogId, GroupId, MediaId, MessageId, TemplateId, UserId, WaId};
 use serde::de::Error as _;
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -966,6 +967,14 @@ pub struct Status {
     /// The `biz_opaque_callback_data` you sent the message with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub biz_opaque_callback_data: Option<String>,
+    /// The template a Direct Send message was sent with
+    /// (`direct-send/supported-message-types`).
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_ext::id_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub template_id: Option<TemplateId>,
     /// Conversation; omitted from v24.0 except in free entry point windows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation: Option<Conversation>,

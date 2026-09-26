@@ -32,20 +32,30 @@ pub fn events(name: &str) -> Vec<WebhookEvent> {
     payload(name).into_events()
 }
 
-/// Every fixture file, relative to the fixture directory, sorted.
+/// Every fixture file, relative to the fixture directory (`/`-separated),
+/// sorted. Walks every directory, so a fixture in a new one is not missed.
 pub fn all_fixtures() -> Vec<String> {
-    let mut out = Vec::new();
-    for dir in ["messages", "fields", "bsuid", "pages"] {
-        for entry in std::fs::read_dir(fixture_dir().join(dir)).unwrap() {
-            let name = entry.unwrap().file_name().into_string().unwrap();
-            if Path::new(&name)
+    fn walk(dir: &Path, prefix: &str, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name().into_string().unwrap();
+            let rel = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{prefix}/{name}")
+            };
+            if entry.file_type().unwrap().is_dir() {
+                walk(&entry.path(), &rel, out);
+            } else if Path::new(&name)
                 .extension()
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
             {
-                out.push(format!("{dir}/{name}"));
+                out.push(rel);
             }
         }
     }
+    let mut out = Vec::new();
+    walk(&fixture_dir(), "", &mut out);
     out.sort();
     out
 }

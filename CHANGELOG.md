@@ -131,7 +131,10 @@ volumes (Claude config, shell history, cargo caches) start empty
   survives the typed parse, that none falls into an `Other`/`Unknown`
   catch-all, and signed delivery through `WebhookHandler` with dedup. A
   fixture missing from the manifest, or a page example without a fixture,
-  fails it.
+  fails it. Only an id or a unix time may come back as a string where Meta
+  printed a number, a `Failed`/`Completed` second spelling is accepted for
+  a `status` only, and the typed form may not invent a value; each check
+  has a test that feeds it what it must refuse.
 - **Conversation Routing webhooks** (`webhooks/reference/messaging-handovers`,
   `webhooks/reference/standby`, `conversation-routing/*`), formerly
   `Unknown`: `messaging_handovers` → `WebhookEvent::ThreadControlChanged`
@@ -147,6 +150,9 @@ volumes (Claude config, shell history, cargo caches) start empty
   `MessageReceived::conversation_context`.
 - **`fields::ViolationInfo::remediation`**: the calling warnings of
   `calling/call-settings` carry it; it was dropped.
+- **`fields::Status::template_id`**: Direct Send's status webhook names
+  the template the message was sent with
+  (`direct-send/supported-message-types`); it was dropped.
 - **`meta_whatsapp_client::business_verification`**, partner-led business
   verification for approved Select and Premier Solution Partners
   (`solution-providers/partner-led-business-verification`; the rest of
@@ -528,7 +534,14 @@ volumes (Claude config, shell history, cargo caches) start empty
   arrived as `Unknown`. Their dedup keys change with them, from
   `unknown:{sha256}` to `thread_control_changed:{sha256}` and
   `standby:…`: a delivery stored before this change and retried after it
-  is delivered again, once.
+  is delivered again, once. `fields::Status` has one more public field
+  too (`template_id: None` in a struct literal).
+- **`WebhookEvent::AccountUpdated::waba_id` is `None` for a
+  `PARTNER_APP_INSTALLED` / `PARTNER_APP_UNINSTALLED` without a
+  `waba_info`**: it was the entry id, which
+  `embedded-signup/app-only-install` shows is the partner's business, not
+  a WABA (`entry_id` still carries it). Such an event's dedup key changes
+  with it.
 
 - **The `wa-rs-embedded-signup` skill's Solution Partner example** (for
   anyone who copied it): `PartnerAction::CoexistenceDisconnected`,
