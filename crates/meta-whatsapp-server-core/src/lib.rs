@@ -26,14 +26,18 @@
 //! | [`store::RecordStore`] | tenants, keys, bindings (`ping` … `set_waba_status`) | memory, Postgres |
 //! | [`store::IdempotencyRecords`] | `claim_idempotency_key`, `complete_…`, `release_…`, `purge_…` | memory, Postgres |
 //! | [`outbox::Outbox`] | `insert`, `page`, `purge` | memory, Postgres |
-//! | [`store::LeaderLock`] | `try_exclusive(name)` | memory (the process), Postgres (an advisory lock) |
+//! | [`store::LeaderLock`] | `try_exclusive(name, lease)`: a lease | memory (the process), Postgres (an advisory lock, the session ended past the lease) |
 //! | [`store::Janitor`] | `purge_expired` | memory (nothing to do), Postgres (the library's key/value rows) |
 //! | [`store::SchemaMigrator`] | `migrate` | memory (nothing to do), Postgres |
 //! | [`backend::Backend`] | all of the above, and the library's `KvStore` and `ConversationStore`, over one database | memory, Postgres |
 //!
 //! No port names a type of a database driver, an HTTP framework or an
 //! API toolkit: failures are the library's `StorageError`, times are
-//! `time`'s, and an HTTP method is its name.
+//! `time`'s, and an HTTP method is its name. What every backend
+//! guarantees, whatever its database (the routing checked again with each
+//! outbox insert, the referential rules, one clock, typed contention,
+//! purges without locks, byte order), is [`store`]'s module
+//! documentation.
 
 pub mod authz;
 pub mod backend;

@@ -98,7 +98,7 @@ and `store-postgres`.
     (SR-L3), and the visibility pins are UI tests with the compiler's
     errors (SR-L1).
     SR-L2, and the same race in `failed`, wait for S2.
-- [ ] **S2. The port contracts, right for any backend**
+- [x] **S2. The port contracts, right for any backend**
   (`meta-whatsapp-server-core` and both in-tree backends): what Postgres
   guarantees by accident becomes a requirement of the ports, cheap now
   and costly once a third backend exists.
@@ -150,6 +150,34 @@ and `store-postgres`.
     another, whose call Meta then answers `190`, leaves the new
     binding's numbers `connected` in both cases (conditioning the update
     on the tenant alone fails the first, on nothing both).
+  - **Landed:** every bullet, in the core's ports and both in-tree
+    backends, with the decisive tests on memory and live on Postgres
+    (the store, events, backend and capability suites of the server's
+    `tests/common`). The route guard is `outbox::RouteGuard` (a
+    `GuardedBinding` and the event's date), set by `events::outbox_row`
+    from the routing's `Holder`; a tenant without a guard is
+    operator-only, and the memory outbox belongs to its `MemoryStore`
+    and checks under the store's lock. `BindOutcome::NoSuchTenant`;
+    `bind_waba` locks the tenant `FOR KEY SHARE` on Postgres. The purges
+    return a count and take no lock; `serve::round` takes one
+    `HOUSEKEEPING` turn, leased for `HOUSEKEEPING_LEASE` (5 minutes; on
+    Postgres the turn's session is ended past it, and the key is still
+    `HOUSEKEEPING_LOCK`). `Authorizer::with_clock`, which the service
+    hands the webhook pipeline's clock. `StorageError::Busy` in the
+    library (additive). `PhoneNumberId` and `WabaId` in the outbox
+    types. SR-L2 and `failed`: a `BindingEpoch` and, for an `OwnedWaba`,
+    the vault record's `TokenVersion` (the library's
+    `TokenVault::get_versioned` and `delete_if_unchanged`, additive);
+    `RecordStore::unbind_waba_if` and `set_waba_status_if`. Left, and
+    why: a binding refreshed for its own tenant (attached again without
+    an unbind) keeps its epoch, so a `190` answered to a capability made
+    before it still marks its numbers (the vault version covers
+    `forget` there, not `failed`); a disconnection racing a vault
+    rotation deletes nothing and answers `503` (retryable); the admin's
+    unbind of a WABA without a usable token, and the admin's own `190`
+    right after attaching, stay unconditioned (no capability was made
+    from a binding); the memory stores read the system clock, not the
+    injected one (one process).
 - [ ] **S3. Conformance into core** (`meta-whatsapp-server-core`,
   `meta_whatsapp_server_core::conformance`, a feature, like the
   library's `store::conformance`, run over a `&dyn Backend`): the store

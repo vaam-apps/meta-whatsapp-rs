@@ -948,14 +948,30 @@ decisions and the delivery milestones, is
     backends.
 - **Ports, and a backend as the unit of swapping.** The core stores
   through ports: `RecordStore` (tenants, keys, bindings),
-  `IdempotencyRecords`, `Outbox`, `LeaderLock` (`try_exclusive(name)`),
-  `Janitor` (expired rows nothing else deletes) and `SchemaMigrator`. A
-  `Backend` gives all of them, and the library's `KvStore` and
-  `ConversationStore`, over one database, because they share its
-  guarantees (deleting a tenant reaches its idempotency records and its
-  event stream; the Postgres outbox re-reads the bindings under a lock).
-  The service has two, memory and Postgres. No port names a database
-  driver's, an HTTP framework's or an API toolkit's type.
+  `IdempotencyRecords`, `Outbox`, `LeaderLock` (a lease,
+  `try_exclusive(name, lease)`), `Janitor` (expired rows nothing else
+  deletes) and `SchemaMigrator`. A `Backend` gives all of them, and the
+  library's `KvStore` and `ConversationStore`, over one database, because
+  they share its guarantees (deleting a tenant reaches its idempotency
+  records and its event stream; every outbox insert checks the routing
+  again against the bindings, atomically with the insert). The service
+  has two, memory and Postgres. No port names a database driver's, an
+  HTTP framework's or an API toolkit's type.
+- **What every backend guarantees**, as the ports' contracts require it
+  (roadmap S2, so that a MongoDB or a CrateStack-models backend cannot
+  meet the traits without it; the `meta_whatsapp_server_core::store`
+  module documents each): the outbox keeps a row's tenant only while the
+  binding it was routed by (a typed `RouteGuard`) still holds, checked
+  with the insert; binding a WABA to a missing tenant is
+  `BindOutcome::NoSuchTenant`, and a binding and a deletion of one
+  tenant serialize; one clock all replicas agree on (the database's,
+  else the service's `Clock`, which the core's `Authorizer` takes
+  injected); contention is the library's `StorageError::Busy`; purges
+  take no lock of their own, under one `LeaderLock` turn per
+  housekeeping round; listings are in byte order; each `Backend`
+  accessor hands out the same data on every call; and a capability
+  (`OwnedNumber`, `OwnedWaba`) writes only to the binding (a
+  `BindingEpoch`) and the vault record it was made from.
 - **One multi-tenant deployment per Meta app** (the owner's decision D1):
   every merchant onboarded through the app delivers to its one callback
   URL. Tenants are the integrator's ids; a tenant owns WABAs, a WABA owns

@@ -185,6 +185,22 @@ stored data, the owner's).
 
 ### Added
 
+- **`StorageError::Busy`** (meta-whatsapp-core; the enum is
+  `#[non_exhaustive]`, so this is additive): contention, reported by a
+  storage adapter that gave up waiting for another writer (a lock wait
+  past its timeout, a write conflict, a transaction it had to abort) and
+  did nothing. `StorageError::is_busy` asks it; `Error::is_retryable` is
+  `true` for it (and stays `false` for every other storage error);
+  `may_have_been_sent` stays `false`. The service's Postgres backend
+  reports its lock timeouts, serialization failures and deadlocks this
+  way (roadmap S2).
+- **`TokenVault::get_versioned`, `get_by_phone_number_versioned` and
+  `delete_if_unchanged`**, with `TokenVersion` (meta-whatsapp-client,
+  additive): a token and the version of the vault record it was read from
+  (after a read-time re-encryption, the record's new version), and a
+  delete, by compare-and-swap, of that record only: a token stored since
+  (the WABA connected again) or a record re-encrypted since is never
+  deleted. The service's disconnection uses it (roadmap S2, SR-L2 below).
 - **meta-whatsapp-bot**, a bot framework over Cloud API webhooks
   (roadmap B1), re-exported as `meta_whatsapp_rs::bot` behind the
   facade's new `bot` feature (off by default, in `full`). A `Bot` is an
@@ -723,6 +739,63 @@ stored data, the owner's).
 
 ### Changed
 
+- **The service core's port contracts are right for any backend**
+  (roadmap S2; breaking, pre-release, `meta-whatsapp-server-core` and
+  `meta-whatsapp-server`). What Postgres guaranteed by accident is a
+  requirement of the ports, which the memory backend now meets too, so a
+  MongoDB or a CrateStack-models backend cannot follow the traits' text
+  without it:
+  - **The outbox checks the routing again**: `NewEvent` has a
+    `route_guard: Option<RouteGuard>` (a `GuardedBinding`, the number
+    under its WABA or the WABA, and the event's date as `not_after`),
+    and `Outbox::insert` keeps a row's tenant only while that binding
+    still holds it, atomically with the insert; a tenant without a guard
+    is operator-only. `NewEvent::meta_time` is gone (the guard's
+    `not_after`). `events::owner` returns a `Holder` (the tenant and the
+    guard), `Route` has a `guard`, `outbox_row` sets it. The memory
+    outbox is always a `MemoryStore`'s (`MemoryStore::outbox`;
+    `MemoryEventStore::new` and its `Default` are gone), and checks under
+    the store's lock: before, a tenant deleted and created again during
+    an insert could receive the event on memory.
+  - **Referential rules**: `BindOutcome::NoSuchTenant` (a new variant):
+    `bind_waba` to a tenant that does not exist binds nothing (memory
+    bound it; Postgres failed with a foreign key's error, now `404
+    not_found` on the attach route, as for a tenant missing before), and
+    `bind_waba` and `delete_tenant` on one tenant serialize.
+  - **Purges take no lock**: `Outbox::purge` returns `u64` (not
+    `Option<u64>`), `events::purge_outbox` too, and
+    `purge_idempotency_keys` no longer answers `0` for "another replica
+    is purging"; the Postgres purges no longer take `HOUSEKEEPING_LOCK`
+    in their own transactions. A housekeeping round (`serve::round`,
+    new) takes one `LeaderLock` turn for its three purges. `LeaderLock`
+    is a lease: `try_exclusive(name, lease)` (was `try_exclusive(name)`),
+    ending at release, drop or expiry; `HOUSEKEEPING_LEASE` (5 minutes).
+    On Postgres the turn's transaction sets
+    `idle_in_transaction_session_timeout` to the lease; its key is still
+    `HOUSEKEEPING_LOCK`, so a replica of the previous release and one of
+    this take turns during a rolling deploy.
+  - **One clock**: the core's `Authorizer` reads key and token expiry
+    from an injected `Clock` (`Authorizer::with_clock`, the system clock
+    by default); `AppState` hands it the webhook pipeline's
+    (`Inbound::with_clock`), so a test moving that clock moves key expiry
+    too.
+  - **Typed contention**: the outbox reports a lock timeout as
+    `StorageError::Busy` (above); `outbox::OutboxBusy` is gone, and the
+    webhook pipeline answers `503` for `Busy` from any backend.
+  - `NewEvent`, `StoredEvent` and `EventQuery` carry `PhoneNumberId`
+    and `WabaId` (were `String`); listings are documented, and tested,
+    in byte order.
+  - **A capability acts only on what it was made from** (SR-L2, see
+    "Security"): `RecordStore` has `unbind_waba_if` and
+    `set_waba_status_if`, taking a `BindingEpoch` (`WabaBinding::epoch`);
+    `OwnedWaba::forget` returns `Result<bool, _>` (`false`: the token or
+    the binding moved, nothing more deleted), and the server's
+    `auth::OwnedWaba::forget` too, with `forget_or_busy` answering `503
+    storage_unavailable` (retryable) for it on the tenant's disconnect
+    and the admin unbind. `OwnedNumber` now reads its WABA's binding
+    too.
+
+  No change to the HTTP API: `openapi/v1.json` is byte-identical.
 - **meta-whatsapp-server's domain is a crate of its own,
   `meta-whatsapp-server-core`** (`publish = false`, not a default member;
   no axum, sqlx or utoipa), so the service's API and storage can each be
@@ -1225,12 +1298,18 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   - An admin unbind logged "unbinding a WABA without a usable token"
     before its admin was checked, so a refused one logged an unbinding it
     did not do. The line now follows the unbind.
-  - Not fixed here: **L2**, a race in `OwnedWaba::forget`. It deletes the
+  - **L2**, a race in `OwnedWaba::forget`, fixed later with roadmap S2
+    (it was left open when this review's fixes merged). It deleted the
     WABA's token and binding whatever they became since the WABA was
     opened: attached again in between (a new token, another tenant), the
-    new ones go. Conditioning both on what the capability was made from
-    is a port change, recorded in docs/roadmap.md, item S2. The same
-    race in `OwnedNumber::failed` and `OwnedWaba::failed`: a `190`
-    answered to a capability made before the WABA was attached again
-    marks the new binding's numbers `reconnect_required`. S2 conditions
-    that update on the binding too (its tenant and `attached_at`).
+    new ones went. The same race in `OwnedNumber::failed` and
+    `OwnedWaba::failed`: a `190` answered to a capability made before
+    the WABA was attached again marked the new binding's numbers
+    `reconnect_required`. A capability now keeps the binding it was made
+    from (its tenant and `attached_at`, a `BindingEpoch`) and, for an
+    `OwnedWaba`, the version of its vault record: `forget` deletes that
+    token and that binding only, each checked atomically by its store,
+    and `failed` marks that binding's numbers only. Not covered: a
+    binding refreshed for its own tenant without an unbind keeps its
+    epoch, so a `190` answered to a capability made before the refresh
+    still marks its numbers.

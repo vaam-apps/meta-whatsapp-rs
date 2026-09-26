@@ -5,9 +5,10 @@
 //!
 //! One bundle rather than loose ports, because the ports share their
 //! database's guarantees: deleting a tenant ([`RecordStore::delete_tenant`])
-//! reaches its idempotency records and its event stream, and a Postgres
-//! outbox insert re-reads the bindings under a lock. Two ports from two
-//! backends would lose both.
+//! reaches its idempotency records and its event stream, and every outbox
+//! insert checks the routing again against the bindings, atomically with
+//! the insert ([`Outbox::insert`]). Two ports from two backends would lose
+//! both.
 
 use std::sync::Arc;
 

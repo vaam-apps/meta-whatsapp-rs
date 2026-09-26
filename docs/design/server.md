@@ -226,21 +226,22 @@ rest follows from the list above and decides nothing for the owner:
   (no date) route by the current binding. The inbox records an event only
   when a tenant owns it, so an unowned number's messages never wait in
   the inbox for whoever binds it later; the outbox records every event.
-  The Postgres insert checks the routing again, in its own transaction:
-  it keeps the tenant only while the binding the event was routed by (the
-  number under the WABA the event names, else the WABA) still names that
-  tenant and, for an event Meta dated, began no later than the event's
-  second. It reads that binding under a `FOR KEY SHARE` lock, so an
-  unbinding (and with it a deletion of the tenant) waits for the insert
-  to commit. So an event routed just before its WABA moved to another
-  tenant, or before its tenant was deleted and created again under the
-  same id and bound again, is operator-only. An undated event (errors,
-  syncs) has only the tenant's id to go by: in that last race it reaches
-  the tenant created again. The memory outbox (development) does not
-  check again, and the core's `Outbox` port does not yet require the
-  check: roadmap S2 makes it a requirement of every backend, memory
-  included, with a typed route guard on each new event
-  ([§8.1](#81-a-framework-free-core-with-ports)).
+  Every outbox insert checks the routing again, atomically with the
+  insert (a requirement of the core's `Outbox` port since roadmap S2,
+  [§8.1](#81-a-framework-free-core-with-ports)): the routing hands the
+  insert a typed route guard (`RouteGuard`: the binding the event was
+  routed by, the number under the WABA it was bound under, else the WABA;
+  and the event's date), and the insert keeps the tenant only while that
+  binding still names that tenant and, for an event Meta dated, began no
+  later than the event's second; a row with a tenant and no guard is
+  operator-only. On Postgres the insert reads that binding under a `FOR
+  KEY SHARE` lock, so an unbinding (and with it a deletion of the tenant)
+  waits for the insert to commit; the memory outbox checks under the lock
+  of the store whose bindings it reads. So an event routed just before
+  its WABA moved to another tenant, or before its tenant was deleted and
+  created again under the same id and bound again, is operator-only. An
+  undated event (errors, syncs) has only the tenant's id to go by: in
+  that last race it reaches the tenant created again.
 - **Replays go to nobody, under the same id.** An event Meta dated before
   what the dedup lease remembers (7 days and an hour) is operator-only.
   An event's id is derived from it (HMAC-SHA256 of its outbox key, under
@@ -262,7 +263,10 @@ rest follows from the list above and decides nothing for the owner:
   row of `wa_server_event_streams`, locked until it commits, so a
   stream's events commit in order and a poll that saw sequence `n` saw
   every event of the tenant before it; other tenants' inserts do not
-  wait. A lock waited for over 2 s answers Meta `503`.
+  wait. A lock waited for over 2 s answers Meta `503`: the outbox reports
+  it as the library's typed `StorageError::Busy`, as any backend reports
+  its contention (roadmap S2), and the webhook pipeline answers `503` for
+  that, whatever the database.
 - **Polling.** `next_after` is the last event's sequence when more follow,
   else the tenant's newest sequence. `410 cursor_expired` is a cursor
   below what was purged; a cursor above the tenant's newest sequence (a
@@ -337,14 +341,14 @@ rest follows from the list above and decides nothing for the owner:
 
 | Concern | Behaviour |
 | --- | --- |
-| vault, OTP, signup sessions, dedup, inbox, outbox, keys | shared in Postgres; expiry by the database clock (NTP); roadmap S2 states the clock rule for any backend |
+| vault, OTP, signup sessions, dedup, inbox, outbox, keys | shared in Postgres; expiry by the database clock (NTP). The rule for any backend (roadmap S2): one clock all replicas agree on, the database's where it has one, else the service's `Clock`, with its skew between replicas below the shortest lease it measures; the core's `Authorizer` reads the service's `Clock` (key and token expiry), the one the webhook pipeline reads |
 | dedup lease (60 s) | a retry meeting a live lease on another replica gets 503 and Meta returns; a crashed replica's lease expires; the sink path (two inserts) stays far below 60 s |
 | outbox inserts | each tenant's in turn (its stream's row, locked to the commit); tenants in parallel; at most 4 deliveries recording per replica |
 | SSE | per replica, fed from the outbox by `LISTEN/NOTIFY`; `Last-Event-ID` resumes on any replica |
 | webhooks-out | workers on every replica claim rows with `FOR UPDATE SKIP LOCKED` and a lease; no leader |
 | rate limits | token buckets per replica (limit ÷ replicas); a shared limiter only if needed |
 | API key cache | none in v1: every request reads its key, so a revocation or suspension holds on the next request, on every replica (a cache of at most 30 s, purged by a revocation `NOTIFY`, if the key reads ever cost too much) |
-| housekeeping (the outbox and idempotency purges, the library's expired key/value rows) | any replica, one at a time, under the housekeeping lock: the outbox and idempotency purges take it themselves (on Postgres, `HOUSEKEEPING_LOCK` in their own transactions), and the key/value janitor (`Janitor::purge_expired`) runs under a `LeaderLock` turn named `housekeeping`, the same key on Postgres, on the replica whose outbox purge ran that round; a replica without the lock skips that round (roadmap S2: one turn per round) |
+| housekeeping (the outbox and idempotency purges, the library's expired key/value rows) | any replica, one at a time: each round takes one `LeaderLock` turn named `housekeeping`, a lease of 5 minutes (`HOUSEKEEPING_LEASE`; on Postgres the advisory lock `HOUSEKEEPING_LOCK`, held by a transaction whose session the server ends past the lease), and runs the three purges under it; a replica without the turn skips that round. The purges take no lock of their own and are safe to run twice at once, so a round that outlives its lease and overlaps the next replica's does no harm (roadmap S2). A replica of the release before S2, whose purges took `HOUSEKEEPING_LOCK` themselves, takes turns with this one during a rolling deploy |
 | migrations | at start, through the backend's `SchemaMigrator` (on Postgres, under the library's lock and the service's `MIGRATION_LOCK`); expand-then-contract so rolling deploys can mix versions. One exception predates the service: the library's migration 3 (lossless message content) converts in one step and needs older writers stopped first, then `migrate` run once from a one-off job (`docs/guides/production.md`); it runs before the service's first deploy, so no service rollout crosses it |
 
 ## 3. Tenancy and authentication
@@ -1034,7 +1038,7 @@ database's where it has one, else the service's `Clock`); contention is
 a typed error; a bundle's accessors return the same data on every call;
 listings are in byte order.
 
-**As built (roadmap S1).** `crates/meta-whatsapp-server-core` exists,
+**As built (roadmap S1, S2).** `crates/meta-whatsapp-server-core` exists,
 with the model, the keys, event routing and polling, the idempotency
 engine, the rate limiter, the error model and authorization; the
 operations (messages, media, templates, numbers, admin, the webhook
@@ -1042,13 +1046,42 @@ pipeline) are still the axum crate's handlers (roadmap S5a–S5e). What
 it holds today, where it differs from the target above:
 
 - **The ports** are `RecordStore`, `IdempotencyRecords`, `Outbox`,
-  `LeaderLock`, `Janitor` and `SchemaMigrator`, with S2's requirements
-  not yet in their contracts: the routing re-check is Postgres's alone
-  (§2.3), a purge takes the housekeeping lock itself and reports another
-  replica's turn as `None` (the outbox) or `0` (idempotency records), and
-  times are "the store's clock". Their failures are the library's
-  `StorageError`; no port names a driver's, a framework's or an API
-  toolkit's type, and an HTTP method is its name.
+  `LeaderLock`, `Janitor` and `SchemaMigrator`, and their contracts carry
+  S2's requirements, which both in-tree backends meet:
+  - `Outbox::insert` must check the routing again, atomically with the
+    insert: `NewEvent` carries a `RouteGuard` (a `GuardedBinding`, the
+    number under the WABA it was bound under or the WABA, and the
+    event's date as `not_after`), which the core's routing sets
+    (`events::owner` returns the tenant and the guard, `outbox_row`
+    copies it); a row keeps its tenant only while the guarded binding
+    names it and began no later than the event's second, and a tenant
+    without a guard is operator-only (§2.3). The memory outbox belongs
+    to its `MemoryStore` and checks under its lock.
+  - Referential rules: `bind_waba` to a missing tenant answers
+    `BindOutcome::NoSuchTenant`, and `bind_waba` and `delete_tenant` on
+    one tenant serialize (Postgres: the tenant's row, `FOR KEY SHARE`
+    against `FOR UPDATE`; memory: one lock).
+  - Purges take no lock of their own, return a count, and are safe on
+    two replicas at once; a housekeeping round (`serve::round`) takes
+    one `LeaderLock` turn for all three.
+  - Times: one clock all replicas agree on, the database's where it has
+    one (Postgres: `now()`), else the service's `Clock`, its skew below
+    the shortest lease it measures. The core's `Authorizer` takes an
+    injected `Clock` (`with_clock`); the service hands it the webhook
+    pipeline's. The memory stores read the system clock (one process).
+  - Contention is the library's typed `StorageError::Busy` (on Postgres,
+    a lock timeout, a serialization failure or a deadlock); the webhook
+    pipeline answers Meta `503` for it, whatever the backend.
+  - The outbox's types carry `PhoneNumberId` and `WabaId`; listings are
+    in byte order of their ids.
+  - A capability's writes are conditioned on what it was made from
+    (below): `unbind_waba_if` and `set_waba_status_if` take a
+    `BindingEpoch` (the WABA, its tenant, when the binding began) and do
+    nothing once the WABA was unbound since.
+
+  Their failures are the library's `StorageError`; no port names a
+  driver's, a framework's or an API toolkit's type, and an HTTP method
+  is its name.
 - **`Backend`** gives every port over one database, and the library's
   `KvStore` and `ConversationStore`, with its `kind()` (memory,
   Postgres, or another by name) and `close()`. Each accessor returns a
@@ -1056,17 +1089,22 @@ it holds today, where it differs from the target above:
   the next reads. The service has two, `MemoryBackend` and `PgBackend`,
   still in `meta-whatsapp-server` (S7 splits them out), and is not yet
   composed from a bundle alone (S4).
-- **`LeaderLock`** is `try_exclusive(name)`: the turn for a name, ended
-  by its release or its drop, not yet a lease (S2). Locks are named by
+- **`LeaderLock`** is a lease, `try_exclusive(name, lease)`: the turn
+  for a name, ended by its release, its drop or its lease's expiry, with
+  best-effort exclusion (work under a turn tolerates an overlap).
+  Housekeeping's is `HOUSEKEEPING_LEASE`, 5 minutes. Locks are named by
   strings (`HOUSEKEEPING`, `"housekeeping"`); a backend maps a name to
   whatever its database locks. On Postgres the key is the first eight
   bytes of SHA-256(`meta-whatsapp-server/<name>`), big-endian, as an
-  `i64` (`lock_key`), held by a transaction: so the `housekeeping` turn
-  takes `HOUSEKEEPING_LOCK`, the key the outbox and idempotency purges
-  take in their own transactions, and `MIGRATION_LOCK` is
+  `i64` (`lock_key`), held by a transaction whose
+  `idle_in_transaction_session_timeout` is the lease (the server ends
+  the session, and the lock, past it): so the `housekeeping` turn takes
+  `HOUSEKEEPING_LOCK`, the key the purges of the release before S2 took
+  in their own transactions, and `MIGRATION_LOCK` is
   `lock_key("migrate")`. Both keys are stable identifiers
   ([architecture.md](../architecture.md#stable-identifiers)): replicas
-  of two releases must take the same ones.
+  of two releases must take the same ones, and do. Memory leases on the
+  process's monotonic clock.
 - **`ServiceError`** is the §5 error model as data: a code of `CODES`
   (§5.2), its status as a number, `retryable`, `may_have_been_sent`, the
   field for `invalid`, the step and `resumable` of a multi-step call, and
@@ -1101,15 +1139,30 @@ it holds today, where it differs from the target above:
   the server `AppState::store` and `authz`, the handlers and
   `idempotency::run`) is pinned by UI tests with the compiler's errors.
   Deleting an opened WABA's token and binding, and marking its numbers
-  `reconnect_required` after a `190`, are not yet conditioned on what
-  the capability was made from (SR-L2, S2).
+  `reconnect_required` after a `190`, are conditioned on what the
+  capability was made from (SR-L2, S2): an `OwnedNumber` and an
+  `OwnedWaba` keep the WABA's `BindingEpoch`, and an `OwnedWaba` the
+  version of the vault record its token came from (the library's
+  `TokenVault::get_versioned`). `OwnedWaba::forget` deletes the token
+  only if that record is unchanged (`TokenVault::delete_if_unchanged`),
+  then the binding only if unchanged (`unbind_waba_if`), and answers
+  whether both went; the server answers `503 storage_unavailable`
+  (retryable) when they did not. `OwnedNumber::failed` and
+  `OwnedWaba::failed` mark through `set_waba_status_if`. So a WABA
+  unbound and attached again since (the same tenant or another, a new
+  token) keeps its binding, its token and its numbers' status. Not
+  covered: a binding refreshed for its own tenant without an unbind
+  keeps its epoch (a `190` answered to a capability made before it
+  still marks its numbers); the admin's unbind of a WABA without a
+  usable token, and the admin's own `190` right after attaching, are
+  not a capability's and stay unconditioned.
 - **Conformance** is still the server's tests' (S3).
 
 ### 8.2 The backend bundle is the unit of swapping
 
-`RecordStore` and `Outbox` are not independent: the Postgres outbox
-insert reads the binding tables again under a lock, and deleting a
-tenant writes the stream table. So one factory, `Backend`, returns every
+`RecordStore` and `Outbox` are not independent: every outbox insert
+reads the bindings again, atomically with the insert (on Postgres under
+a lock; roadmap S2), and deleting a tenant writes the stream table. So one factory, `Backend`, returns every
 port over one database, with its kind and capabilities, and ports from
 two databases are never mixed. It replaced (roadmap S1) the optional
 Postgres pool the service used as its "memory?" flag: that is
