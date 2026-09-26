@@ -829,7 +829,7 @@ pub(crate) async fn mint_platform_key(
 
 /// Validate a platform key's tenants: `"*"`, or a non-empty list of tenant
 /// ids (which need not exist yet).
-pub fn allowed_tenants(spec: TenantsSpec) -> Result<AllowedTenants, ApiError> {
+pub(crate) fn allowed_tenants(spec: TenantsSpec) -> Result<AllowedTenants, ApiError> {
     match spec {
         TenantsSpec::All(star) if star == "*" => Ok(AllowedTenants::All),
         TenantsSpec::All(_) => Err(ApiError::invalid("tenants")),

@@ -758,7 +758,12 @@ stored data, the owner's).
   with a token (see "Security", the server core's review, L4); the
   handlers of `api::{admin, numbers, events, messages, media,
   templates}`, with `messages::send`, `templates::list` and `create`,
-  and `idempotency::run` are crate-private (see "Security", H1 there);
+  and `idempotency::run` are crate-private (see "Security", H1 there),
+  as are the helpers of those modules and of `api::common` that nothing
+  outside the crate used (`admin::allowed_tenants`,
+  `messages::parse_message` and `recipient`, `common::meta_object`,
+  `graph_id`, `encode_cursor`, `next_cursor`, `rfc3339`,
+  `parse_rfc3339` and `json`; `api::admin::mint` stays public);
   `telemetry::record_tenant` and `record_key` are gone (the core's
   `Authorizer` records `tenant` and `key_id` on the request's span); and
   `keys::MintedKey::generate` fails with the library's `CryptoError::Rng`

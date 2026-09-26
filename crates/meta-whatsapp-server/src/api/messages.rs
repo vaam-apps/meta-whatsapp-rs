@@ -596,7 +596,7 @@ fn unsupported() -> ApiError {
 
 /// The message a request body asks for, checked against every limit Meta
 /// documents: nothing is sent when this fails.
-pub fn parse_message(body: Value) -> Result<OutboundMessage, ApiError> {
+pub(crate) fn parse_message(body: Value) -> Result<OutboundMessage, ApiError> {
     if let Some(object) = body.as_object() {
         if DIRECT_SEND_FIELDS.iter().any(|f| object.contains_key(*f)) {
             return Err(unsupported());
@@ -622,7 +622,7 @@ pub fn parse_message(body: Value) -> Result<OutboundMessage, ApiError> {
 
 /// The recipient, E.164 checked: a phone number without its `+` is
 /// refused here, before any request.
-pub fn recipient(to: RecipientObject) -> Result<Recipient, ApiError> {
+pub(crate) fn recipient(to: RecipientObject) -> Result<Recipient, ApiError> {
     let phone = to.phone.map(e164).transpose()?;
     let user = to
         .user_id
