@@ -7,7 +7,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased] — 0.1.0
 
 First feature set. See [docs/coverage.md](docs/coverage.md) for the full
-matrix and [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for decisions still open.
+matrix, [docs/parity.md](docs/parity.md) and
+[docs/roadmap.md](docs/roadmap.md) for what is missing and the plan, and
+[OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for the decisions (all but one
+decided on 2026-09-26).
 
 ### Renamed
 
@@ -117,8 +120,79 @@ volumes (Claude config, shell history, cargo caches) start empty
   business later in Solution Partner mode needs
   `OnboardingRequest::reshare_after_revocation`.
 
+### Open questions decided
+
+On 2026-09-26, under the owner's delegation (AGENTS.md § Decisions): the
+coordinator decided every entry whose choice ships swappable, and the
+code decides nothing legal (a legal act is an explicit, audited operator
+action; performing it is the deployer's). Each entry in
+[OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) says how to swap its choice and
+names its roadmap item; "no code" means none is needed. Still open: #33
+(message ids unique per store or per number: a primary-key migration of
+stored data, the owner's).
+
+- Naming: #2, `meta_whatsapp_rs::client` stays both the module and the
+  shortcut (no code).
+- Embedded Signup:
+  - #4, the two-step PIN is typed per attempt, never generated or
+    stored (design D6; no code);
+  - #5, one WABA per signup by default, every granted WABA as an opt-in
+    (L11b);
+  - #6, no tenant policy in the library: `onboard_with_approval` stays
+    the hook, the service refuses a WABA another tenant holds (D4; no
+    code);
+  - #7, the coexistence sync runs inside onboarding by default, an
+    option turns it off (L11d);
+  - #8, no refresh: the expiry is surfaced before it lapses (L11e, M3e);
+  - #9, key custody stays the integrator's, rotation on demand, the
+    cadence documented (M3a);
+  - #10, a code-less `OnboardingRequest` for `resume`, additive (L4);
+  - #11, hosted Embedded Signup integrated beside the code flow (L11a);
+  - #12, the worked example's pre-fill shape kept, checked in Meta's
+    Integration Helper (L25).
+- OTP: #13, the issue limit, cooldown and attempts kept (no code); #14,
+  the pepper stays the integrator's, with no rotation (no code).
+- Webhooks: #15, the 60 s dedup lease kept (no code); #16, an additive
+  check for a blank verify token (L20d).
+- Storage: #19, `rediss://` with an explicit aws-lc-rs provider, never
+  the process default (L21c).
+- Security: #20, ids checked against their documented shape, opaque ids
+  still one encoded segment (L20c); #21, the scoped quick-xml ignore
+  kept until typst upgrades (no other code).
+- Product details:
+  - #22, product-card carousel templates created with exactly two cards
+    (L20e);
+  - #23, `add_participants` kept, with its warning (no code);
+  - #24, `set_button_click_tracking` stays in analytics (no code);
+  - #25, rendering keeps failing until `with_today` is set (no code);
+  - #26, accepting the In-App Signup terms: an explicit, audited operator
+    action, the deployer's act (M5i);
+  - #45 (new), the max-price beta agreement: an explicit call in the
+    library, an audited operator action in the service, the deployer's
+    act (L13, M5h).
+- API conventions: #27, one catch-all shape, `Other(String)`, from one
+  macro in core (L20a, breaking); #28, `#[non_exhaustive]` on response
+  and webhook types and open enums (L20b, breaking); #29, the axum and
+  sqlx re-exports kept (no code).
+- Webhooks and live updates: #30, a permanently failing event is
+  dead-lettered, the rest of the batch delivered (L21a); #31, live
+  events shared as `Arc<WebhookEvent>` (L21b, breaking).
+- CMS inbox: #32, the calls that reopen the window recorded as window
+  events (L5, L7); #44, standby messages as window events and thread
+  ownership tracked, each with an explicit override (L5, L7, M2d).
+- Service: #43, media ids the service recorded as received exempted from
+  the `phone_number_id` check (M2e).
+
 ### Added
 
+- **Planning docs** (no code): [docs/parity.md](docs/parity.md), the
+  capability table against Zaileys and Meta's Cloud API (155 rows);
+  [docs/categories.md](docs/categories.md), Meta's platform categories
+  (40); [docs/roadmap.md](docs/roadmap.md), the plan to parity in
+  pull-request-sized items, each with its crate, what it comes after and
+  its decisive test, and the owner's touchpoints. A test,
+  `crates/meta-whatsapp-rs/tests/docs_tables.rs` (in `just test`), keeps
+  their counts, statuses, cross-references and cited symbols in step.
 - **meta-whatsapp-server, milestone M1c**: Meta's webhooks into the inbox
   and an event outbox, and polling it. `POST /webhooks/meta` on the public
   listener refuses a missing or malformed `X-Hub-Signature-256` with `401`
@@ -153,14 +227,16 @@ volumes (Claude config, shell history, cargo caches) start empty
   `events`) answers the caller's tenant's events after `after` in the
   tenant's own sequence (`types`, `phone_number_id`, `limit`, pages of at
   most 8 MiB of data), `{data, next_after}`, `410 cursor_expired` past
-  retention (`WA_SERVER_OUTBOX_RETENTION`, 7 days until the owner decides
-  D10) or after a tenant of the same id was deleted; a read for the rate
+  retention (`WA_SERVER_OUTBOX_RETENTION`, 7 days by default; design D10,
+  decided on 2026-09-26, sets retention per store) or after a tenant of
+  the same id was deleted; a read for the rate
   limits (M1b, below). Each tenant has its own sequence (a coordinator's
   decision, reversible: design D21). An event's id is derived from the
   event under a key derived from `WA_APP_SECRET`, so it keeps it when
   recorded again, until that secret is rotated. Deleting a tenant
-  deletes its events (a coordinator's decision touching the open
-  retention decision D10: design D22) and takes it out of every platform
+  deletes its events (a coordinator's decision beside the retention
+  decision D10: design D22, which the owner confirms before the first
+  release) and takes it out of every platform
   key's allowed tenants (a coordinator's decision, reversible: design
   D24; a tenant created again under the id needs a new platform key).
   Event `data` is
@@ -178,8 +254,8 @@ volumes (Claude config, shell history, cargo caches) start empty
   Signup, solution partner, pricing, marketing messages, templates and
   messages guides that show one) is a fixture of `meta-whatsapp-webhooks`,
   132 of them new, placeholders filled with the pages' own example values.
-  The manifest records the two payments pages as out of scope (coverage
-  row 32), two examples printed malformed (`embedded-signup/app-only-install`,
+  The manifest records the two payments pages as not typed yet
+  (`OutOfScope`; coverage row 32, planned since 2026-09-26: roadmap P1), two examples printed malformed (`embedded-signup/app-only-install`,
   `direct-send/supported-message-types`) with what is wrong, and two pages
   Meta lists but serves as "Page Not Found" (`webhooks/reference/pricing`,
   `webhooks/message_echoes`).
@@ -590,6 +666,34 @@ volumes (Claude config, shell history, cargo caches) start empty
   Use v4, which needs no `version`.
 
 ### Changed
+
+- **The plans of 2026-09-26** (docs only; the owner's directive of that
+  day, recorded in AGENTS.md § Decisions and design §10, now titled
+  "Decisions", whose anchor moved to `#10-decisions`):
+  - `docs/coverage.md` grades a row done only when every endpoint and
+    field its pages document is wrapped: rows 1, 3, 9, 10, 12, 13 and 19
+    are partial now (they were done), each naming what is missing.
+  - Payments (India, Brazil) are in scope, planned last (roadmap P1,
+    P2); they were out of scope.
+  - Design §1's non-goals are lifted: paced broadcast, scheduled
+    messages, the bot framework and the modules once left "on demand"
+    are goals, in library crates behind ports (`meta-whatsapp-bot`,
+    D28, D29), exposed by the service.
+  - The service becomes modular (design §8, D26): a framework-free core,
+    swappable backend bundles and API adapters. CrateStack for the API
+    and the models is the default once the owner accepts its licence
+    (D20 (a)); `api-axum`, today's `/v1` and `openapi/v1.json`, stays
+    permanently as the swap target.
+  - M4 is re-scoped to packaging (the image, the TypeScript client, the
+    documents route): the move onto CrateStack is the modular split's
+    (roadmap S1–S16). M5 is added: routes for the modules parity
+    requires (M5a–M5l).
+  - D15 is widened (CrateStack for the API and the models, a hybrid
+    store) and D18 revised (CrateStack's generated clients are the
+    primary contract; `openapi/v1.json` stays with `api-axum`).
+  - Legal acts Meta ties to an API call (the In-App Signup terms, the
+    max-price agreement) are explicit, audited operator actions, never
+    taken automatically; performing one is the deployer's decision.
 
 - **`WebhookEvent::MessageReceived` has a `conversation_context` field**
   (`Option<Box<ConversationContext>>`, serialized only when set), and
