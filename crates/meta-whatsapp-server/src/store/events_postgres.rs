@@ -47,16 +47,12 @@ use meta_whatsapp_rs::core::error::StorageError;
 use time::OffsetDateTime;
 
 use super::StoreResult;
+// The housekeeping purges' advisory lock, the idempotency purge's too: one
+// replica at a time purges. Advisory locks are the database's, not a
+// schema's: deployments sharing one database purge in turn.
 use super::events::{EventPage, EventQuery, EventStore, NewEvent, OutboxBusy, StoredEvent};
+use super::postgres::HOUSEKEEPING_LOCK;
 use crate::model::TenantId;
-
-/// The advisory lock of housekeeping (the outbox purge): one replica at a
-/// time purges. The first eight bytes of
-/// SHA-256(`meta-whatsapp-server/housekeeping`), as a big-endian `i64`.
-/// Advisory locks are the database's, not a schema's: deployments sharing
-/// one database purge in turn.
-pub const HOUSEKEEPING_LOCK: i64 =
-    i64::from_be_bytes([0x06, 0x62, 0x5b, 0xd9, 0x6d, 0x85, 0xd1, 0xcf]);
 
 /// The outbox on Postgres. Cheap to clone.
 #[derive(Clone)]
@@ -330,28 +326,5 @@ impl EventStore for PgEventStore {
         .map_err(backend)?;
         tx.commit().await.map_err(backend)?;
         Ok(Some(u64::try_from(deleted).unwrap_or_default()))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use sha2::{Digest, Sha256};
-
-    use super::*;
-
-    fn derived(name: &[u8]) -> i64 {
-        let digest = Sha256::digest(name);
-        let mut first = [0u8; 8];
-        first.copy_from_slice(&digest[..8]);
-        i64::from_be_bytes(first)
-    }
-
-    #[test]
-    fn the_lock_key_is_derived_as_documented() {
-        assert_eq!(
-            HOUSEKEEPING_LOCK,
-            derived(b"meta-whatsapp-server/housekeeping")
-        );
-        assert_ne!(HOUSEKEEPING_LOCK, super::super::MIGRATION_LOCK);
     }
 }

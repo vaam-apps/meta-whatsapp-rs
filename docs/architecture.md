@@ -817,6 +817,15 @@ decisions and the delivery milestones, is
   not exist), and only then reads the vault and calls
   `Client::with_token`. The library leaves this check to the integrator
   (see [CMS inbox](#cms-inbox-meta_whatsapp_rsinbox)); the service is one.
+  A token may reach several tenants' WABAs, so an object a path names by
+  id (a media id, a template id) must also be the number's or WABA's own,
+  established through the number or the WABA (`phone_number_id={pn}` on
+  every media call; a template id found in the WABA's own template list).
+  The bare id is only used to read its name (a template's, which that
+  list is searched by), never to act on it or to answer anything of it;
+  one that is not the number's or WABA's is `404` like a missing one. A
+  route for a new kind of id (flows, groups, QR codes) owes the same
+  check.
 - **Errors keep the library's classification.** A Graph failure's error
   code is `ErrorKind::as_str()`; its HTTP status comes from a table the
   service owns, tested over `ErrorKind::ALL` so a new kind cannot fall
@@ -826,6 +835,11 @@ decisions and the delivery milestones, is
   is Meta's text, not the service's, kept only on the routes that opt in
   (never OTP or signup), bounded and without control or format
   characters or line separators.
+- **Sends are never repeated behind the caller's back.** The service
+  adds no send retries to the library's; a caller's `Idempotency-Key`
+  (sends, uploads, template creation) keeps the answer of a request that
+  may have taken effect and replays it, and releases the key only when
+  the library's `Error::may_have_been_sent` is `false`.
 - **Webhooks in** go through the library's `WebhookHandler` (signature
   before parsing, 3 MiB, the leased `DedupGuard` in the shared
   `KvStore`) into `InboxSink`, then the service's event outbox, one

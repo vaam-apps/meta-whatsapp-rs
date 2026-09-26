@@ -7,7 +7,10 @@
 //! 2. **Resolve the tenant**: the tenant key's own, or the `WA-Tenant`
 //!    header's within the platform key's allowed set, else `403
 //!    forbidden`; a suspended tenant is `403 tenant_suspended`.
-//! 3. **Check the scope**, else `403 forbidden`.
+//! 3. **Check the scope**, else `403 forbidden`. Then the tenant's rate
+//!    limit for the route's class ([`crate::ratelimit`]), else `429
+//!    too_many_requests`: before ownership, so a limited request reads
+//!    neither the bindings nor the vault.
 //! 4. **Ownership**: the path's `{pn}` or `{waba_id}` must be bound to that
 //!    tenant, else `404 not_found`, the answer for one that does not exist
 //!    ([`OwnedNumber`], [`OwnedWaba`]).
@@ -39,6 +42,7 @@ use crate::model::{
     ApiKeyRecord, KeyOwner, MAX_PAGE_SIZE, NumberStatus, PageRequest, Scope, TenantId,
     TenantStatus, WabaBinding,
 };
+use crate::ratelimit::{RouteClass, retry_after_secs};
 use crate::state::AppState;
 use crate::store::Store;
 use crate::telemetry;
@@ -281,6 +285,12 @@ pub async fn tenant_guard(
     if !key.scopes.contains(&guard.scope) {
         return ApiError::forbidden().into_response();
     }
+    // The tenant's budget for this class of route, per replica.
+    let class = RouteClass::of(guard.scope, request.method());
+    if let Err(wait) = guard.state.limiter().check(&tenant, class) {
+        guard.state.metrics().rate_limited(class.as_str());
+        return ApiError::too_many_requests(retry_after_secs(wait)).into_response();
+    }
     request.extensions_mut().insert(Caller {
         key_id: key.key_id,
         tenant,
@@ -375,6 +385,14 @@ impl OwnedNumber {
     pub async fn failed(&self, state: &AppState, error: &Error) -> ApiError {
         graph_failed(state, &self.waba_id, error).await
     }
+
+    /// The API error for a failed Graph call on an object named by id (a
+    /// media id): Meta refusing it (not this number's, or none at all) is
+    /// `404 not_found`, like a missing one; anything else is
+    /// [`Self::failed`] with Meta's `details`.
+    pub async fn failed_on_object(&self, state: &AppState, error: &Error) -> ApiError {
+        object_failed(state, &self.waba_id, error).await
+    }
 }
 
 impl FromRequestParts<AppState> for OwnedNumber {
@@ -437,6 +455,11 @@ impl OwnedWaba {
     /// See [`OwnedNumber::failed`].
     pub async fn failed(&self, state: &AppState, error: &Error) -> ApiError {
         graph_failed(state, &self.waba_id, error).await
+    }
+
+    /// See [`OwnedNumber::failed_on_object`] (a template id).
+    pub async fn failed_on_object(&self, state: &AppState, error: &Error) -> ApiError {
+        object_failed(state, &self.waba_id, error).await
     }
 
     /// Delete the WABA's token and its binding, and its numbers': the last
@@ -532,6 +555,52 @@ impl FromRequestParts<AppState> for OwnedWaba {
         // Step 5.
         Self::open(state, binding.waba_id).await
     }
+}
+
+/// Whether Meta refused a call on an object named by id (a media id, a
+/// template id) as one it does not have, or not for this caller: an
+/// invalid parameter (`100`, `33`), a permission error, a not-found, or an
+/// unknown code, answered with a 4xx; a 4xx without a Graph error object;
+/// or a JSON answer that is not that kind of object (another node the id
+/// names). A token's own failure (`190`), throttling, Meta's failures
+/// (5xx) and an answer that is not JSON are not refusals of the object.
+pub(crate) fn object_refused(error: &Error) -> bool {
+    if let Error::Decode { source, .. } = error {
+        return source.classify() == serde_json::error::Category::Data;
+    }
+    if let Some(graph) = error.graph() {
+        return graph.http_status.is_none_or(|status| status < 500)
+            && matches!(
+                graph.kind(),
+                ErrorKind::InvalidParameter
+                    | ErrorKind::Permission
+                    | ErrorKind::NotFound
+                    | ErrorKind::Unknown
+            );
+    }
+    matches!(
+        error,
+        Error::Http {
+            status: 400 | 403 | 404,
+            ..
+        }
+    )
+}
+
+/// [`graph_failed`] for a call on an object named by id: Meta refusing the
+/// object ([`object_refused`]) is `404 not_found`, without Meta's code or
+/// text, the answer for an object that does not exist: another tenant's
+/// looks like a missing one. Anything else keeps its code and `details`.
+async fn object_failed(state: &AppState, waba_id: &WabaId, error: &Error) -> ApiError {
+    let api = graph_failed(state, waba_id, error).await;
+    if object_refused(error) {
+        tracing::debug!(
+            code = api.code(),
+            "Meta refused an object named by id: answered not_found"
+        );
+        return ApiError::not_found();
+    }
+    api.with_details(error)
 }
 
 /// The API error of a failed Graph call made with `waba_id`'s stored

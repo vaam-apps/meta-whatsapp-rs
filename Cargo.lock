@@ -2287,6 +2287,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "clap",
  "futures",
  "getrandom 0.3.4",
@@ -2296,6 +2297,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "meta-whatsapp-rs",
+ "multer",
  "pretty_assertions",
  "prometheus-client",
  "serde",

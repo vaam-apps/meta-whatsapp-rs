@@ -13,17 +13,21 @@ mod memory;
 mod postgres;
 
 pub use events::{EventStore, MemoryEventStore, PgEventStore};
-pub use events_postgres::HOUSEKEEPING_LOCK;
 pub use memory::MemoryStore;
-pub use postgres::{MIGRATION_LOCK, MIGRATIONS_TABLE, PgStore, migrate, migrations};
+pub use postgres::{
+    HOUSEKEEPING_LOCK, MIGRATION_LOCK, MIGRATIONS_TABLE, PgStore, migrate, migrations,
+};
+
+use std::time::Duration;
 
 use async_trait::async_trait;
 use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 
 use crate::model::{
-    ApiKeyRecord, BindOutcome, DeleteTenantOutcome, KeyScope, Listing, NewApiKey, NumberBinding,
-    NumberStatus, PageRequest, Tenant, TenantId, TenantStatus, WabaBinding,
+    ApiKeyRecord, BindOutcome, DeleteTenantOutcome, IdempotencyClaim, IdempotencyKey, KeyScope,
+    Listing, NewApiKey, NumberBinding, NumberStatus, PageRequest, Tenant, TenantId, TenantStatus,
+    WabaBinding,
 };
 
 /// Result of a store call. Every failure is the library's
@@ -125,6 +129,48 @@ pub trait Store: Send + Sync + 'static {
 
     /// Set the status of every number of `waba_id`.
     async fn set_waba_status(&self, waba_id: &WabaId, status: NumberStatus) -> StoreResult<()>;
+
+    // ─── Idempotency keys (docs/design/server.md, section 5.4) ───────────
+
+    /// Claim `key` for `tenant`: when no live record holds it (none, or
+    /// one past its `ttl`), write one `in_progress` with `fingerprint`,
+    /// the claim id `claim`, a lease ending after `lease` and an expiry
+    /// after `ttl`, and answer [`IdempotencyClaim::Claimed`]; else answer
+    /// the record found. Atomic: of two requests racing for a key, one
+    /// claims it. Times are the store's clock (the database's).
+    async fn claim_idempotency_key(
+        &self,
+        tenant: &TenantId,
+        key: &IdempotencyKey,
+        fingerprint: &[u8; 32],
+        claim: &str,
+        lease: Duration,
+        ttl: Duration,
+    ) -> StoreResult<IdempotencyClaim>;
+
+    /// Record the answer of the request holding `key` under `claim`:
+    /// `completed`, kept until its expiry. `false` when `claim` no longer
+    /// holds it.
+    async fn complete_idempotency_key(
+        &self,
+        tenant: &TenantId,
+        key: &IdempotencyKey,
+        claim: &str,
+        status: u16,
+        body: &[u8],
+    ) -> StoreResult<bool>;
+
+    /// Release `key`: delete its record, if `claim` holds it (the request
+    /// proved nothing was sent). `false` when `claim` no longer holds it.
+    async fn release_idempotency_key(
+        &self,
+        tenant: &TenantId,
+        key: &IdempotencyKey,
+        claim: &str,
+    ) -> StoreResult<bool>;
+
+    /// Delete the records past their expiry; how many went.
+    async fn purge_idempotency_keys(&self) -> StoreResult<u64>;
 }
 
 /// `items` (one more than asked, when there is more) as a page.

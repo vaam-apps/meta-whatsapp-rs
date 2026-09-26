@@ -333,3 +333,36 @@ async fn a_wrong_method_is_405_with_the_error_body() {
         assert_eq!(reply.headers["allow"], allow, "{path}");
     }
 }
+
+/// Exactly the routes that honour `Idempotency-Key` declare it (sends,
+/// uploads, template creation: docs/design/server.md, section 5.4), and
+/// the upload is a multipart form.
+#[test]
+fn idempotent_operations_declare_their_key() {
+    let spec: Value = serde_json::from_str(COMMITTED).unwrap();
+    let mut declaring = std::collections::BTreeSet::new();
+    for (path, item) in spec["paths"].as_object().unwrap() {
+        for (method, operation) in item.as_object().unwrap() {
+            let declares = operation["parameters"].as_array().is_some_and(|ps| {
+                ps.iter()
+                    .any(|p| p["name"] == "Idempotency-Key" && p["in"] == "header")
+            });
+            if declares {
+                declaring.insert(format!("{} {path}", method.to_uppercase()));
+            }
+        }
+    }
+    assert_eq!(
+        declaring.into_iter().collect::<Vec<_>>(),
+        [
+            "POST /v1/numbers/{pn}/media",
+            "POST /v1/numbers/{pn}/messages",
+            "POST /v1/wabas/{waba_id}/templates",
+        ]
+    );
+    let upload = &spec["paths"]["/v1/numbers/{pn}/media"]["post"]["requestBody"]["content"];
+    assert_eq!(
+        upload["multipart/form-data"]["schema"]["$ref"],
+        "#/components/schemas/MediaUpload"
+    );
+}

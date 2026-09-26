@@ -112,8 +112,8 @@ pub const KEYLESS_DEDUP_WINDOW: Duration = Duration::from_hours(1);
 /// stands until the owner decides.
 pub const DEFAULT_OUTBOX_RETENTION: Duration = Duration::from_hours(7 * 24);
 
-/// How often a replica runs housekeeping (the outbox purge, and the
-/// library's expired key/value rows on Postgres).
+/// How often a replica runs housekeeping (the outbox purge, the library's
+/// expired key/value rows on Postgres, and expired idempotency records).
 pub const HOUSEKEEPING_INTERVAL: Duration = Duration::from_secs(600);
 
 /// The most `data` a page of `GET /v1/events` carries: the store stops

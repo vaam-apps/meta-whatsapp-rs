@@ -832,8 +832,39 @@ fn meta_whatsapp_rs_features() -> HashSet<String> {
 /// and char literals and every character of comments blanked (newlines
 /// kept, so offsets and lines stay put), and for each line whether it
 /// starts in code rather than inside a string or a block comment.
-#[allow(clippy::too_many_lines)] // one arm per lexer state and token
 fn code_mask(source: &str) -> (Vec<char>, Vec<bool>) {
+    let lexed = lex(source);
+    (lexed.masked, lexed.starts)
+}
+
+/// The contents of every string literal of `source` (`"…"`, `b"…"`,
+/// `c"…"`, raw strings), as written, escapes included: [`lex`] reads
+/// escaped quotes, char literals such as `'"'`, comments and raw strings,
+/// so a quote in any of them never shifts the next literal.
+fn string_literals(source: &str) -> Vec<String> {
+    let lexed = lex(source);
+    let chars: Vec<char> = source.chars().collect();
+    lexed
+        .strings
+        .iter()
+        .map(|&(from, to)| chars[from..to].iter().collect())
+        .collect()
+}
+
+/// What [`lex`] finds in a Rust source.
+struct Lexed {
+    /// See [`code_mask`].
+    masked: Vec<char>,
+    /// See [`code_mask`].
+    starts: Vec<bool>,
+    /// The char ranges of string literals' contents, quotes excluded.
+    strings: Vec<(usize, usize)>,
+}
+
+/// The one lexer of Rust sources this gate has ([`code_mask`],
+/// [`string_literals`]).
+#[allow(clippy::too_many_lines)] // one arm per lexer state and token
+fn lex(source: &str) -> Lexed {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Lex {
         Code,
@@ -852,6 +883,8 @@ fn code_mask(source: &str) -> (Vec<char>, Vec<bool>) {
         }
     };
     let mut starts = vec![true];
+    let mut strings = Vec::new();
+    let mut opened = 0;
     let mut state = Lex::Code;
     let mut i = 0;
     while let Some(c) = at(i) {
@@ -878,11 +911,13 @@ fn code_mask(source: &str) -> (Vec<char>, Vec<bool>) {
                 '"' => {
                     state = Lex::Str;
                     i += 1;
+                    opened = i;
                 }
                 // b"…" (and c"…", which the `"` arm reads the same).
                 'b' if boundary && at(i + 1) == Some('"') => {
                     state = Lex::Str;
                     i += 2;
+                    opened = i;
                 }
                 // Raw strings: r"…", br#"…"#, cr#"…"#.
                 'r' | 'b' | 'c' if boundary => {
@@ -900,6 +935,7 @@ fn code_mask(source: &str) -> (Vec<char>, Vec<bool>) {
                     if at(j) == Some('"') {
                         state = Lex::RawStr(hashes);
                         i = j + 1;
+                        opened = i;
                     } else {
                         i += 1;
                     }
@@ -925,6 +961,7 @@ fn code_mask(source: &str) -> (Vec<char>, Vec<bool>) {
                     i += if at(i + 1) == Some('\n') { 1 } else { 2 };
                     blank(&mut masked, i - 1, i, false);
                 } else if c == '"' {
+                    strings.push((opened, i));
                     state = Lex::Code;
                     i += 1;
                 } else {
@@ -934,6 +971,7 @@ fn code_mask(source: &str) -> (Vec<char>, Vec<bool>) {
             }
             Lex::RawStr(hashes) => {
                 if c == '"' && (1..=hashes).all(|k| at(i + k) == Some('#')) {
+                    strings.push((opened, i));
                     state = Lex::Code;
                     i += 1 + hashes;
                 } else {
@@ -961,7 +999,11 @@ fn code_mask(source: &str) -> (Vec<char>, Vec<bool>) {
             }
         }
     }
-    (masked, starts)
+    Lexed {
+        masked,
+        starts,
+        strings,
+    }
 }
 
 /// Whether code under a `cfg` predicate is built: always, in some builds
@@ -2881,7 +2923,9 @@ impl Spec {
         Self::from(&read(&repo().join(SERVER_SPEC)), &server_sources())
     }
 
-    fn from(document: &str, sources: &str) -> Self {
+    /// From the OpenAPI `document` and the service's `sources`, one Rust
+    /// file each.
+    fn from(document: &str, sources: &[String]) -> Self {
         let doc: serde_json::Value = serde_json::from_str(document).unwrap();
         let mut spec = Spec {
             operations: HashSet::new(),
@@ -2928,11 +2972,15 @@ impl Spec {
                 .keys()
                 .cloned(),
         );
-        // String literals of the source shaped like environment variables.
-        for piece in sources.split('"').skip(1).step_by(2) {
-            if is_env_name(piece) {
-                spec.env.insert(piece.to_owned());
-            }
+        // String literals of the source shaped like environment variables,
+        // read by the lexer, file by file: an escaped quote, a `'"'` or a
+        // quote in a comment never shifts the next literal.
+        for source in sources {
+            spec.env.extend(
+                string_literals(source)
+                    .into_iter()
+                    .filter(|literal| is_env_name(literal)),
+            );
         }
         spec
     }
@@ -2986,18 +3034,18 @@ fn collect_words(value: &serde_json::Value, words: &mut HashSet<String>) {
     }
 }
 
-/// Every `.rs` file of the service, concatenated.
-fn server_sources() -> String {
-    fn walk(dir: &Path, out: &mut String) {
+/// Every `.rs` file of the service, one string each.
+fn server_sources() -> Vec<String> {
+    fn walk(dir: &Path, out: &mut Vec<String>) {
         for path in sorted_dir(dir) {
             if path.is_dir() {
                 walk(&path, out);
             } else if path.extension().is_some_and(|e| e == "rs") {
-                out.push_str(&read(&path));
+                out.push(read(&path));
             }
         }
     }
-    let mut out = String::new();
+    let mut out = Vec::new();
     walk(&repo().join(SERVER_SRC), &mut out);
     assert!(!out.is_empty(), "no service source found");
     out
@@ -3375,7 +3423,7 @@ const TEST_DOCUMENT: &str = r#"{"openapi": "3.1.0",
 fn the_server_span_checks_reject_known_bad_input() {
     let spec = Spec::from(
         TEST_DOCUMENT,
-        r#"r.plain("WA_SERVER_ENV"); r.secret("DATABASE_URL")"#,
+        &[r#"r.plain("WA_SERVER_ENV"); r.secret("DATABASE_URL")"#.to_owned()],
     );
     let ok = |span: &str| server_span_problems(&spec, span) == Some(Vec::new());
     let bad = |span: &str| server_span_problems(&spec, span).is_some_and(|p| !p.is_empty());
@@ -3416,9 +3464,59 @@ fn the_server_span_checks_reject_known_bad_input() {
     );
 }
 
+/// The service's variables are its string literals, read by the lexer: an
+/// escaped quote, a quote in a char literal, a comment or a raw string
+/// early in a file hides no variable after it, in that file or the next;
+/// a name in a comment or outside a literal is not one. Decisive: reading
+/// literals with the lexer rather than splitting on `"`.
+#[test]
+fn the_service_variables_survive_quotes_before_them() {
+    // Seven quotes on the first line, a `'"'` and a raw string on the
+    // second, a quote in a block comment on the third: splitting on `"`
+    // reads the variable after them as code.
+    let first = [
+        r#"assert_eq!(f("a\"b"), "c"); // a "quote" in a comment"#,
+        "let q = '\"'; let raw = r#\"say \"hi\"\"#;",
+        r#"/* "block */ let v = r.plain("WA_SERVER_EARLY_SHIFTED")?;"#,
+        r#"// r.plain("WA_SERVER_IN_A_COMMENT")"#,
+        "const NOT_A_LITERAL: u8 = 1; let WA_SERVER_BARE = 2;",
+    ]
+    .join("\n");
+    let second = r#"let d = r.secret("DATABASE_URL")?; let o = "odd \" quote";"#.to_owned();
+    let third = r#"let t = r.plain("WA_SERVER_NEXT_FILE")?;"#.to_owned();
+    let spec = Spec::from(TEST_DOCUMENT, &[first, second, third]);
+    for found in [
+        "WA_SERVER_EARLY_SHIFTED",
+        "DATABASE_URL",
+        "WA_SERVER_NEXT_FILE",
+    ] {
+        assert!(spec.env.contains(found), "{found}: {:?}", spec.env);
+    }
+    for absent in ["WA_SERVER_IN_A_COMMENT", "WA_SERVER_BARE", "NOT_A_LITERAL"] {
+        assert!(!spec.env.contains(absent), "{absent}: {:?}", spec.env);
+    }
+    assert_eq!(
+        string_literals(r##"x("a\"b", b"c", r#"d"e"#, '"', "\\")"##),
+        [r#"a\"b"#, "c", r#"d"e"#, r"\\"]
+    );
+    // The service's own files: every variable config.rs reads is found,
+    // whatever the files before it hold.
+    let spec = Spec::load();
+    for name in [
+        "WA_SERVER_ENV",
+        "WA_SERVER_IDEMPOTENCY_TTL",
+        "WA_SERVER_MEDIA_CONCURRENCY",
+        "WA_SERVER_RATE_TEMPLATES_BURST",
+        "WA_ONBOARDING_MODE",
+        "RUST_LOG",
+    ] {
+        assert!(spec.env.contains(name), "{name}: {:?}", spec.env);
+    }
+}
+
 #[test]
 fn the_server_fence_checks_reject_known_bad_input() {
-    let spec = Spec::from(TEST_DOCUMENT, "");
+    let spec = Spec::from(TEST_DOCUMENT, &[]);
 
     assert!(
         curl_problems(

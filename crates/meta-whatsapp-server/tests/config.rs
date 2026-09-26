@@ -397,3 +397,102 @@ fn refuses_a_vault_key_id_used_twice() {
         assert!(!error.to_string().contains(VAULT_KEY));
     }
 }
+
+/// The service's limits: the design's defaults (sections 5.4, 6, 7.2),
+/// each overridable, a rate without its burst keeping the default's
+/// proportion; anything else refused naming the variable.
+#[test]
+fn the_service_limits_default_to_the_designs_and_parse() {
+    use std::time::Duration;
+
+    use meta_whatsapp_server::ratelimit::Rate;
+    let settings = Config::from_env(&production()).unwrap().settings;
+    assert_eq!(settings.idempotency_ttl, Duration::from_hours(24));
+    assert_eq!(
+        settings.idempotency_lease,
+        Duration::from_secs(60),
+        "twice the Graph timeout"
+    );
+    assert_eq!(settings.media_max_bytes, 100 * 1024 * 1024);
+    assert_eq!(settings.media_concurrency, 4);
+    assert_eq!(settings.media_streams, 16);
+    assert_eq!(settings.template_cache_ttl, Duration::from_secs(60));
+    let limits = settings.rate_limits;
+    assert_eq!(
+        limits.send,
+        Rate {
+            per_second: 20,
+            burst: 40
+        }
+    );
+    assert_eq!(
+        limits.read,
+        Rate {
+            per_second: 50,
+            burst: 50
+        }
+    );
+    assert_eq!(
+        limits.templates,
+        Rate {
+            per_second: 2,
+            burst: 2
+        }
+    );
+
+    let settings = Config::from_env(
+        &production()
+            .set("WA_SERVER_IDEMPOTENCY_TTL", "48h")
+            .set("WA_SERVER_MEDIA_MAX_BYTES", "16777216")
+            .set("WA_SERVER_MEDIA_CONCURRENCY", "2")
+            .set("WA_SERVER_MEDIA_STREAMS", "3")
+            .set("WA_SERVER_RATE_SEND", "10")
+            .set("WA_SERVER_RATE_READ", "5")
+            .set("WA_SERVER_RATE_READ_BURST", "7")
+            .set("WA_SERVER_RATE_TEMPLATES", "1"),
+    )
+    .unwrap()
+    .settings;
+    assert_eq!(settings.idempotency_ttl, Duration::from_hours(48));
+    assert_eq!(settings.media_max_bytes, 16 * 1024 * 1024);
+    assert_eq!(settings.media_concurrency, 2);
+    assert_eq!(settings.media_streams, 3);
+    assert_eq!(
+        settings.rate_limits.send,
+        Rate {
+            per_second: 10,
+            burst: 20
+        }
+    );
+    assert_eq!(
+        settings.rate_limits.read,
+        Rate {
+            per_second: 5,
+            burst: 7
+        }
+    );
+    assert_eq!(
+        settings.rate_limits.templates,
+        Rate {
+            per_second: 1,
+            burst: 1
+        }
+    );
+
+    for (name, value) in [
+        ("WA_SERVER_IDEMPOTENCY_TTL", "soon"),
+        ("WA_SERVER_IDEMPOTENCY_TTL", "1m"),
+        ("WA_SERVER_MEDIA_MAX_BYTES", "0"),
+        ("WA_SERVER_MEDIA_STREAMS", "0"),
+        ("WA_SERVER_MEDIA_MAX_BYTES", "100MiB"),
+        ("WA_SERVER_MEDIA_CONCURRENCY", "-1"),
+        ("WA_SERVER_RATE_SEND", "0"),
+        ("WA_SERVER_RATE_SEND_BURST", "x"),
+        ("WA_SERVER_RATE_TEMPLATES", "4294967296"),
+    ] {
+        match refused(&production().set(name, value)) {
+            ConfigError::Invalid { name: named, .. } => assert_eq!(named, name, "{value}"),
+            other => panic!("{name}={value}: {other:?}"),
+        }
+    }
+}

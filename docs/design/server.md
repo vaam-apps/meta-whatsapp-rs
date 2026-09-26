@@ -1,13 +1,14 @@
 # Design: a deployable meta-whatsapp-rs service (`meta-whatsapp-server`)
 
-> **Milestones M1a and M1c are implemented** in `crates/meta-whatsapp-server`
-> (M1a: the crate, configuration, listeners, storage, tenants and keys,
-> the admin API with attach, unbind and vault rotation, the numbers
-> routes, errors, operations, the committed OpenAPI document; M1c:
-> `POST /webhooks/meta` into the inbox and the event outbox, and
-> `GET /v1/events`; [§9](#9-delivery-plan) says which acceptance tests
-> they meet, [coverage.md](../coverage.md) row 33 what is missing); the
-> rest is design. Written against `main` =
+> **Milestones M1a, M1b and M1c are implemented** in
+> `crates/meta-whatsapp-server` (M1a: the crate, configuration, listeners,
+> storage, tenants and keys, the admin API with attach, unbind and vault
+> rotation, the numbers routes, errors, operations, the committed OpenAPI
+> document; M1b: messages, read receipts, media, templates, idempotency
+> keys and rate limits; M1c: `POST /webhooks/meta` into the inbox and the
+> event outbox, and `GET /v1/events`; [§9](#9-delivery-plan) says which
+> acceptance tests they meet, [coverage.md](../coverage.md) row 33 what
+> is missing); the rest is design. Written against `main` =
 > bbf24a3 (2026-09-24), Graph API v25.0; the library changes it assumed have
 > since landed on `main` (#4: `OtpConfig::namespace` required, the Intent
 > API's result renamed `marketing::OnboardingRequested`; #5: Solution Partner
@@ -442,8 +443,8 @@ Rules the service implements:
 | `POST /v1/numbers/{pn}/messages` | send free-form (Meta enforces the window), template or reaction ([§4.3](#43-message-content)) | `{to, type, <type>: {…}, reply_to?, callback_data?}` → `202 {message_id, contacts}` | 409 `customer_service_window_closed`, `marketing_opted_out`; 422 `template_*`; 429; 502/504 with `may_have_been_sent` |
 | `POST /v1/numbers/{pn}/messages/{message_id}/read` | blue ticks; optional typing indicator (never replayed) | `{typing_indicator?}` → 204 | |
 | `POST /v1/numbers/{pn}/media` | upload, type and size checked first | multipart `file`, `type` → `201 {media_id}` | 422 `type`, 413 |
-| `GET /v1/numbers/{pn}/media/{media_id}` | download, SHA-256 verified before the first byte; `?max_bytes=` (default and cap 16 MiB), larger with `?stream=true` | → bytes, `X-WA-SHA256` | 413 `media_too_large`, 502 `integrity` |
-| `DELETE /v1/numbers/{pn}/media/{media_id}` | delete | → 204 | |
+| `GET /v1/numbers/{pn}/media/{media_id}` | download, SHA-256 verified before the first byte; `?max_bytes=` (default and cap 16 MiB), larger with `?stream=true` | → bytes, `X-WA-SHA256` | 413 `media_too_large`, 502 `integrity`; *as built in M1b*: 422 `media_id` (not digits), 404 for a media id not the number's (asked with `phone_number_id={pn}`; Meta's refusal, 4xx, answered like a missing id) |
+| `DELETE /v1/numbers/{pn}/media/{media_id}` | delete | → 204 | *as built in M1b*: looked up first, with `phone_number_id={pn}` (`DELETE /{id}` deletes whatever node an id names): 422 `media_id`, 404 for a media id not the number's or a node that is not that media, nothing deleted |
 | `POST /v1/numbers/{pn}/documents` (M4) | render `invoice`, `receipt` or `voucher` from its JSON input (`date` required: the renderer has no clock), upload | `{template, input, date, format}` → `201 {media_id, filename, mime_type}` | 422 on the input |
 
 **Templates** (scope `templates`)
@@ -451,10 +452,10 @@ Rules the service implements:
 | Method and path | Does | Request → response | Notable errors |
 | --- | --- | --- | --- |
 | `GET /v1/wabas/{waba_id}/templates` | list, `?status=&name=&cursor=`, cached 60 s per WABA (Meta allows 200 management calls an hour per WABA) | → page of `{id, name, language, status, category, components}` | |
-| `GET /v1/wabas/{waba_id}/templates/{id}` | one | → template | |
-| `POST /v1/wabas/{waba_id}/templates` | create from Meta's JSON shape (`TemplateDefinition` deserializes it), validated locally | → `201 {id, status, category}` | 422 `template_rejected`; 409 `template_limit_reached` |
+| `GET /v1/wabas/{waba_id}/templates/{id}` | one | → template | *as built in M1b*: 422 `id` (not digits); the id's name read, then the id looked for in the WABA's own list of that name (5 pages of 100 at most): 404 for another WABA's template, or one past those pages |
+| `POST /v1/wabas/{waba_id}/templates` | create from Meta's JSON shape (`TemplateDefinition` deserializes it), validated locally | → `201 {id, status, category}` | 422 `template_rejected`; 409 `template_limit_reached`; *as built in M1b*: 422 `invalid_request` on a key `TemplateDefinition` would not send (never dropped; the shapes it cannot carry are listed in the guide's Templates section) |
 | `POST /v1/wabas/{waba_id}/templates/authentication` (M3) | copy-code, one-tap or zero-tap, several languages | → 201 | |
-| `DELETE /v1/wabas/{waba_id}/templates?name=[&id=]` | every language of a name, or one | → 204 | |
+| `DELETE /v1/wabas/{waba_id}/templates?name=[&id=]` | every language of a name, or one | → 204 | *as built in M1b*: with an id, looked for in the WABA's own list of that name first: 404 when it is not there, nothing deleted |
 
 Review results arrive as `template_status_updated` events.
 
@@ -507,7 +508,7 @@ a caller's generic error handling can never swallow `invalid`.
 | `…/tenants/{id}/keys[/{key_id}]`, `/v1/admin/platform-keys[/{key_id}]` | mint, list, revoke keys; platform keys with their allowed tenants |
 | `POST /v1/admin/tenants/{id}/wabas`; `GET /v1/admin/wabas/{waba_id}`; `DELETE /v1/admin/wabas/{waba_id}/binding` | attach an own WABA, verified with Meta and subscribed; which tenant holds a WABA, and its numbers; unbind (D4: token deleted too, [§3.4](#34-how-numbers-get-bound)) |
 | `POST /v1/admin/vault/rotate` | re-encrypt every WABA's token under the active key, walking `wa_server_wabas` (the vault cannot list itself), within the request deadline: a walk cut there answers `504 timeout` and is repeated (idempotent), and `meta-whatsapp-server vault rotate` has no deadline. It walks bound WABAs only, which holds every vault record in M1a; M3 keeps records past a binding (credit ledgers of offboarded WABAs, revocation markers), and the walk must cover those too (`TokenVault::rotate` on each such WABA, `rotate_business` on each marker) before an operator may drop an old key |
-| `GET /livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` | internal listener, no key; `version` reports server, meta-whatsapp-rs revision, Graph and API versions |
+| `GET /livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` | internal listener, no key; `version` reports server, meta-whatsapp-rs revision, Graph and API versions; `/v1/openapi.json` until M4, when the `.cstack` schema replaces it ([§8](#8-client-sdks)) |
 
 The public listener serves `GET|POST /webhooks/meta` and `GET /livez`,
 nothing else.
@@ -718,9 +719,9 @@ sends twice. The service adds no send retries of its own.
 | Forged Meta deliveries | signature over raw bytes with any of N app secrets; missing or malformed header `401` before the body is read; 3 MiB; at most 64 read at once per replica (`503` before the body), 15 s to send one (`408`), refusals logged once a minute; the public listener serves nothing else; Meta's IP ranges or mTLS at the ingress (below) |
 | Replayed Meta bodies | dedup for 7 days (errors and bodies that are not webhooks: an hour); events Meta dated before that go to nobody; an event keeps its id when recorded again, until `WA_APP_SECRET` is rotated; bodies never logged |
 | A WABA or number moving between tenants | events Meta dated before the binding began go to nobody, inbox included; the previous tenant's inbox rows stay under the number (M2's inbox reads must filter by binding epoch, or D10 decides a purge on unbind) |
-| A tenant reading or sending as another | ownership before the vault ([§3.3](#33-authorization-order)); foreign numbers are `404`; extractors are the only path to a token |
+| A tenant reading or sending as another | ownership before the vault ([§3.3](#33-authorization-order)); foreign numbers are `404`; extractors are the only path to a token. *As built in M1b*: one token may reach several tenants' WABAs (the platform's system user token attached to each), so an id in a path is checked to be the path's number's or WABA's own: media with Meta's `phone_number_id`, templates through the WABA's own list; another's is `404` like a missing one |
 | A stolen platform key | limited to its tenants and scopes; internal network only; revocation effective across replicas at once |
-| A stolen database dump | tokens encrypted (vault key elsewhere), API keys hashed, OTP codes and numbers only as HMACs (pepper elsewhere), webhook secrets encrypted (data key elsewhere); the inbox history and the event outbox (`wa_server_events`: message texts, vCards, orders, Flow answers, BSUIDs, phone numbers, coexistence history; operator-only rows keep whole raw bodies and parse error texts) are readable, so database encryption at rest is the operator's, and their retention is D10 |
+| A stolen database dump | tokens encrypted (vault key elsewhere), API keys hashed, OTP codes and numbers only as HMACs (pepper elsewhere), webhook secrets encrypted (data key elsewhere); the inbox history, the event outbox (`wa_server_events`: message texts, vCards, orders, Flow answers, BSUIDs, phone numbers, coexistence history; operator-only rows keep whole raw bodies and parse error texts) and the answers idempotency records keep for 24 h (a send's recipient: phone number, `wa_id` or BSUID) are readable, so database encryption at rest is the operator's, and the inbox's and the outbox's retention is D10 |
 | Signup attributed to the wrong merchant | state bound to the tenant, redeemed for the credential's tenant; ids verified with Meta; D4 |
 | OTP brute force, cross-tenant codes | the library's limits, per-tenant rate limits, namespace = tenant |
 | SSRF | no URL fetching (media by id, through the library's host allow-list); webhooks-out allow-list, no redirects, pinned address |
@@ -748,6 +749,12 @@ the route template, not the raw path (contacts identify customers).
 20/s (burst 40), reads 50/s, template management 2/s, OTP issue 5/s, 20
 streams; `429` with `Retry-After`. Meta's limits (80 messages/s per number,
 portfolio limits) still apply; pacing campaigns is the caller's job.
+*As built in M1b*: token buckets keyed by tenant and route class, checked
+after the scope and before ownership; the bursts this paragraph does not
+state (reads, template management) are one second's worth; read
+receipts, media and profile writes count as sends; the operator sets
+them per deployment (`WA_SERVER_RATE_*`, [§7.2](#72-environment)), and
+per-tenant overrides wait for the tenant settings (M3).
 
 **CORS**: none (D3). **TLS** terminates at the ingress: valid certificate,
 body limit of at least 3 MiB, no body rewriting or decompression, a timeout
@@ -793,6 +800,9 @@ crate names, settled when OQ #1 closed (`meta-whatsapp-*`, 2026-09-25).
 | `WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS` | none | hosts and CIDRs for webhooks-out |
 | `WA_SERVER_OUTBOX_RETENTION`, `…_IDEMPOTENCY_TTL`, `…_WEBHOOK_RETRY_WINDOW` | 7 d, 24 h, 72 h | |
 | `WA_SERVER_MEDIA_MAX_BYTES`, `WA_SERVER_SHUTDOWN_GRACE`, `WA_SERVER_MIGRATE` | 100 MiB, 25 s, `auto` | `skip` when a job runs `meta-whatsapp-server migrate` |
+| `WA_SERVER_MEDIA_CONCURRENCY` (M1b) | 4 | uploads and whole-file downloads held in memory at once per replica (section 6's "bounded media concurrency"; the next is `429`); one tenant holds half at most (the service's default, not the design's) |
+| `WA_SERVER_MEDIA_STREAMS` (M1b) | 16 | streamed downloads at once per replica, one tenant holding half at most (the service's defaults, not the design's) |
+| `WA_SERVER_RATE_SEND`, `…_READ`, `…_TEMPLATES`, each with `…_BURST` (M1b) | 20 and 40, 50 and 50, 2 and 2 | section 6's rates, per tenant and replica; the bursts of reads and template management are the service's defaults (section 6 states none) |
 | `RUST_LOG`, `WA_SERVER_LOG_FORMAT`, `OTEL_EXPORTER_OTLP_ENDPOINT` | `info`, `json`, unset | |
 
 ### 7.3 Start, observability, shutdown
@@ -845,20 +855,52 @@ if the platform's privacy obligations require it. A legal and product call.
 
 Within `/v1`, changes are additive; a breaking change is `/v2`, served
 beside `/v1` for a deprecation period; webhook endpoints keep their
-`api_version`. The spec is committed (`crates/meta-whatsapp-server/openapi/v1.json`):
+`api_version`. Until M4 the spec is committed (`crates/meta-whatsapp-server/openapi/v1.json`):
 CI fails when the generated one differs, and `oasdiff` checks breaking
-changes against the last release. Image, spec `info.version` and the
-TypeScript client share one semver; `/v1/version` adds the meta-whatsapp-rs revision.
+changes against the last release. From M4 ([§8](#8-client-sdks)) the committed
+`.cstack` schema takes its place: CrateStack's check mode fails on a stale
+generated client, and `cratestack diff` checks breaking changes against the
+last release. Image, API contract (spec, then schema) and the TypeScript
+client share one semver; `/v1/version` adds the meta-whatsapp-rs revision.
 
 ## 8. Client SDKs
 
-Generate types, not a runtime: `openapi-typescript` turns the committed
-spec into types, `openapi-fetch` (a few kB, `fetch`, Node 20+) types calls
-by path and method; no Java toolchain, no generated classes to review. A
-thin hand-written layer adds the credential and `WA-Tenant` headers, an
-`Idempotency-Key` option, a `WaServerError` whose `code` is a union of the
-documented codes, an SSE reader that sends headers and resumes, and
-`verifyWebhook()`. It lives in `clients/typescript`, built and tested in CI.
+**From M4 the API layer is CrateStack** (the owner's schema-first framework,
+[cratestack/cratestack](https://github.com/cratestack/cratestack)), not
+OpenAPI (owner, 2026-09-25; D15–D18). M1 (M1a–M1c) is built on axum with a
+committed OpenAPI document; M4 moves it:
+
+- **Facade `cratestack-api`, procedures only** (`db = None`, D15): a
+  `.cstack` schema declares the service's procedures, types and enums;
+  the service keeps its own store, migrations, authorization order
+  ([§3.3](#33-authorization-order)) and memory storage for development.
+  Handlers written in M1 keep their logic in plain functions so they
+  become procedures without a rewrite.
+- **The contract is the `.cstack` schema** and the clients generated from
+  it (D18): TypeScript for Medusa and the CMS, Dart and Rust as needed; no
+  OpenAPI document. Routes outside CrateStack (`/webhooks/meta`, media
+  upload and download, SSE, health and metrics) are documented in the
+  guide and listed in a constant the tests read.
+- **Errors ([§5](#5-error-model)) go upstream** (D16): CrateStack's error
+  type gains domain errors (own `code`, status, `details` on the wire,
+  502/504/410/413) so the service's body survives the move. Until that
+  lands upstream, M4 cannot keep §5.
+- A thin hand-written layer over the generated TypeScript client adds the
+  credential and `WA-Tenant` headers, `Idempotency-Key`, a typed error
+  from the §5 body, an SSE reader that resumes, media, and
+  `verifyWebhook()`. It lives in `clients/typescript`; the consumer skills'
+  TypeScript is type-checked against it (replacing today's
+  openapi-typescript gate).
+
+What CrateStack 0.12 does not do today, found in a fit study
+(2026-09-25): domain error bodies; a 404 from `@authorize`; authenticating
+before the body is read; resource-shaped URLs (procedures are `POST
+/$procs/<name>`); idempotency with release-when-not-sent (§5.4 stays the
+service's own middleware); cursor pagination; resumable SSE; multipart
+and streamed media; per-procedure body limits. Also a bug: its generated
+clients ignore `@api_version` while its server honours it. Each is an
+upstream change in CrateStack (which requires REST, RPC, every client,
+docs and skills), or stays a custom route in the service.
 
 **Decision for owner (D11): publishing the client.** (a) Public npm under
 the organization's scope; (b) GitHub Packages (consumers need a token even
@@ -896,7 +938,7 @@ Tests use `ScriptedTransport` (method, path, token, exact JSON,
 | **M1** skeleton, auth, messages and templates, webhooks in | the crate, fail-closed configuration, both listeners, storage and migrations, tenants, keys, admin API and CLI bootstrap, admin attach, the authorization order, messages, media, templates (list, get, create, delete), `/webhooks/meta` into inbox and outbox, `GET /v1/events`, errors (L1), idempotency, rate limits, health, metrics, tracing, the committed spec | `docs/guides/server.md` (run, configure, tenants, keys, first send); a README section "Not writing Rust? Run the service"; L6; a `docs/coverage.md` row; skills `meta-whatsapp-rs-server` (hub for HTTP callers: deploy, credentials, errors, idempotency, routing) and `meta-whatsapp-rs-server-send` (messages, templates, media); the skills gate below |
 | **M2** inbox, live updates, webhooks out | inbox routes (their reads filter by the number's binding epoch: a number moved to another tenant shows it nothing from before its binding, the inbox half of security review M3, unless D10 purges on unbind), SSE (`LISTEN/NOTIFY`, `Last-Event-ID`), `GET /v1/events/{id}`, webhook endpoints, dispatcher, retries, destination allow-list, the service's number events | `server.md` inbox and events; skill `meta-whatsapp-rs-server-inbox` (inbox API, relaying live events to the CMS's browsers, receiving and verifying webhooks-out) |
 | **M3** Embedded Signup in both modes, OTP | signup routes, persisted attempts, disconnection, coexistence sync, authentication templates, OTP and its per-tenant settings; needs L2 (and L3 for partner mode). Vault rotation extended to the records partner mode keeps past a binding (credit ledgers that outlive their token, revocation markers: the library's `rotate_business`), without which a rotation's empty `failed` no longer means the old key is unused | `server.md` onboarding and OTP, and its key rotation advice ("drop the old key once `failed` is empty", caveated since M1a) made true again; skills `meta-whatsapp-rs-server-onboarding` (the CMS connect flow through the service: page, relay, PIN, resume, both modes) and `meta-whatsapp-rs-server-otp` |
-| **M4** TypeScript client, Docker image, docs | `clients/typescript`, the image and its CI, a Compose file, the documents route, the deployment guide | `server.md` deployment (Docker, Compose, Kubernetes notes); a `docs/guides/README.md` row; skill `meta-whatsapp-rs-server-typescript` (install, calls, errors, idempotency, SSE, webhook verification in Medusa or any Node backend); `meta-whatsapp-rs-production` points to the service |
+| **M4** CrateStack, TypeScript client, Docker image, docs | the API layer moved onto `cratestack-api` procedures ([§8](#8-client-sdks); needs D16 upstream), `clients/typescript` generated by CrateStack, the image and its CI, a Compose file, the documents route, the deployment guide | `server.md` deployment (Docker, Compose, Kubernetes notes); a `docs/guides/README.md` row; skill `meta-whatsapp-rs-server-typescript` (install, calls, errors, idempotency, SSE, webhook verification in Medusa or any Node backend); `meta-whatsapp-rs-production` points to the service |
 
 **M1 ships in three parts**, each its own pull request: **M1a** the
 crate, configuration, listeners, storage and migrations, tenants, keys,
@@ -907,10 +949,14 @@ messages, media, templates, idempotency keys and rate limits; **M1c**
 `/webhooks/meta` into inbox and outbox and `GET /v1/events`. M1a meets
 M1.1, M1.3, M1.5 and M1.6, and M1.7's parallel migrations and its log
 capture over every M1a route (the M1a routes stand in for a send and a
-webhook). M1c meets M1.2 and M1.7's webhook half (two instances on one
-database deduplicating a webhook, the capture of webhooks and of
-`GET /v1/events`), and keeps M1.1, M1.3, M1.5 and M1.6 over its route.
-M1.4 and M1.7's send capture are M1b's: M1 is complete once M1b lands.
+webhook). **M1b meets M1.4** (`tests/messages.rs`, and on Postgres
+`tests/live_postgres.rs`), **M1.3 and M1.5 over its routes** (the tests
+iterate the committed document) **and M1.7's send part** (the capture
+exercises every route, sends with text, a phone number, a BSUID and a
+contact card included). **M1c meets M1.2 and M1.7's webhook half** (two
+instances on one database deduplicating a webhook, the capture of
+webhooks and of `GET /v1/events`), and keeps M1.1, M1.3, M1.5 and M1.6
+over its route. With both, M1 is complete (M1.1 on the merged head).
 
 Acceptance tests. "Decisive" names the guard whose removal must make the
 test fail.
@@ -936,7 +982,7 @@ test fail.
 | M3.5 | OTP: every outcome; tenant A's code verifies at no other tenant on the same number (decisive: the namespace); logs hold neither code nor number; a sentinel in a scripted Graph error on issue reaches no response |
 | M4.1 | The image builds for both architectures, runs non-root on a read-only file system, has no shell; `meta-whatsapp-server healthcheck` works in it |
 | M4.2 | A Compose smoke test in CI (Postgres, the image, a Graph stub via `WA_GRAPH_ENDPOINT`): CLI admin key, tenant, attach, send, a signed Meta webhook, a webhooks-out delivery verified at a stub receiver |
-| M4.3 | The client is generated from the committed spec; `tsc --noEmit` passes on it and on every TypeScript excerpt of the server skills; a Node test verifies a real delivery with `verifyWebhook()`; a breaking change within `v1` fails the spec diff; the invoice fixture renders byte-identically |
+| M4.3 | The client is generated from the committed `.cstack` schema (CrateStack's check mode fails on drift); `tsc --noEmit` passes on it and on every TypeScript excerpt of the server skills; a Node test verifies a real delivery with `verifyWebhook()`; a breaking change within `v1` fails `cratestack diff` against the last release; the invoice fixture renders byte-identically |
 
 **The skills gate for HTTP callers (M1).** `crates/meta-whatsapp-rs/tests/skills.rs`
 assumes Rust (no TypeScript fences; backticked names must exist in
@@ -955,7 +1001,7 @@ atomically and are checked against the same commit.
 
 ## 10. Decisions for the owner
 
-D1–D4 and D7 were decided by the owner on 2026-09-24 and D13–D14 on 2026-09-25 (the recommended option in each case); D5 is settled as "support both modes, chosen per deployment". D21 and D22 are the coordinator's decisions of 2026-09-25, reversible, which M1c ships until the owner confirms or changes them. The rest are open and are asked at the milestone that needs them.
+D1–D4 and D7 were decided by the owner on 2026-09-24, D13–D14 on 2026-09-25 (the recommended option in each case) and D15–D18 on 2026-09-25 (D17 against the recommendation to move before M1b); D5 is settled as "support both modes, chosen per deployment". D21 and D22 are the coordinator's decisions of 2026-09-25, reversible, which M1c ships until the owner confirms or changes them. The rest are open and are asked at the milestone that needs them.
 
 | # | Question | Options | Recommendation | Needed by |
 | --- | --- | --- | --- | --- |
@@ -973,6 +1019,12 @@ D1–D4 and D7 were decided by the owner on 2026-09-24 and D13–D14 on 2026-09-
 | D12 | A Medusa plugin | none / now / after the first integration | after the first integration | after M4 |
 | D13 | Where the server skills live | this repository / a separate one | **Decided 2026-09-25: this repository** (under `skills/`, same stamp gate and `npx skills add vaam-apps/meta-whatsapp-rs`) | M1 |
 | D14 | Credit line after a merchant unshares (`PARTNER_REMOVED`) | revoke at once (Meta's recommendation) / revoke after a grace period when `disconnection_info` says the coexistence number may reconnect / operator decides | **Decided 2026-09-25: revoke at once** on every `PARTNER_REMOVED` for our solution, coexistence included; a merchant who reconnects re-onboards and is funded again only through the explicit re-share (`reshare_after_revocation`) | M3 |
+| D15 | API layer framework | OpenAPI (axum + utoipa) / CrateStack `cratestack-api` (procedures) / `cratestack-pg` (models + policies) / schema for clients only | **Decided 2026-09-25: CrateStack, `cratestack-api`, procedures only** | M4 |
+| D16 | The §5 error body under CrateStack | add domain errors to CrateStack upstream / rewrite layer in the service / two shapes / results instead of errors | **Decided 2026-09-25: upstream in CrateStack** | before M4 |
+| D17 | When to move to CrateStack | before M1b / finish M1 first, migrate at M4 | **Decided 2026-09-25: finish M1 on axum + OpenAPI, migrate at M4** | M1 |
+| D18 | Callers that do not use a generated client | generated clients only / an OpenAPI emitter upstream / a hand-kept OpenAPI document | **Decided 2026-09-25: generated clients only** (TypeScript, Dart, Rust) | M4 |
+| D19 | CrateStack transport | REST (JSON, `@status`, `POST /$procs/<name>`) / RPC (batching, subscriptions; CBOR by default in the TS client) | REST | M4 |
+| D20 | CrateStack's dependencies | allow BlueOak-1.0.0 (`minicbor`) in `deny.toml`; accept `ring` beside `aws-lc-rs` (explicit TLS provider at start); accept its `sqlx =0.9.0` pin / change them upstream first | — | M4 |
 | D21 | Event sequences ([§2.3](#23-the-event-pipeline)) | one sequence for the whole outbox / one per tenant | **Coordinator's decision 2026-09-25, reversible, for the owner to confirm: one per tenant** (security review L2: a global sequence shows every tenant the platform's volume and timing); `sequence`, `after`, `next_after`, `410` and `422` are the tenant's | M1 |
 | D22 | A deleted tenant's outbox events (related to D10) | delete them with the tenant / keep them, hidden from a tenant created again under the id | **Coordinator's decision 2026-09-25, reversible, for the owner to confirm: delete them** (the outbox's foreign key cascades; the tenant's stream records them purged, so an old cursor is `410`) | M1 |
 

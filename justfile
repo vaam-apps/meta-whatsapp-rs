@@ -35,6 +35,41 @@ test-live:
 test-live-down:
     docker compose -f compose.test.yaml down -v
 
+# Drop what live tests left on the test Postgres: `wa_test_*` databases and
+# `wa_test_*` / `wa_server_test_*` schemas. The adapter tests drop their own,
+# when they panic too (tests/common's PgCleanup); this clears older runs and
+# killed ones (SIGKILL and abort skip Drop). Uses META_WHATSAPP_RS_TEST_POSTGRES_URL
+# when set (the devcontainer's sidecar), otherwise the compose.test.yaml server.
+# Not during a live run: it would drop that run's objects too.
+#
+# Drop leftover live-test databases and schemas, keeping the server up
+test-live-clean:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -n "${META_WHATSAPP_RS_TEST_POSTGRES_URL:-}" ]; then
+        psql=(psql "$META_WHATSAPP_RS_TEST_POSTGRES_URL")
+    else
+        psql=(docker compose -f compose.test.yaml exec -T postgres psql -U wa -d wa)
+    fi
+    "${psql[@]}" -q -X -v ON_ERROR_STOP=1 <<'SQL'
+    SET client_min_messages = warning;
+    CREATE TEMP VIEW leftover AS
+      SELECT 'DATABASE' AS kind, datname::text AS name,
+             format('DROP DATABASE %I WITH (FORCE)', datname) AS statement
+      FROM pg_database WHERE datname LIKE 'wa\_test\_%'
+      UNION ALL
+      SELECT 'SCHEMA', nspname::text, format('DROP SCHEMA %I CASCADE', nspname)
+      FROM pg_namespace
+      WHERE nspname LIKE 'wa\_test\_%' OR nspname LIKE 'wa\_server\_test\_%';
+    SELECT count(*) FILTER (WHERE kind = 'DATABASE') AS databases,
+           count(*) FILTER (WHERE kind = 'SCHEMA') AS schemas
+    FROM leftover \gset
+    \echo test-live-clean: dropping :databases databases and :schemas schemas
+    SELECT statement FROM leftover ORDER BY kind, name \gexec
+    SELECT count(*) AS left FROM leftover \gset
+    \echo test-live-clean: :left left
+    SQL
+
 # Formatting and clippy, warnings are errors. `.xtask` is a workspace of its
 # own (see .xtask/Cargo.toml), so it is checked by manifest path.
 lint:

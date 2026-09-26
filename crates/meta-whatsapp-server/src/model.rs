@@ -406,3 +406,75 @@ pub enum DeleteTenantOutcome {
     /// It still has WABAs: disconnect or unbind them first.
     HasWabas,
 }
+
+/// Longest `Idempotency-Key` accepted, in bytes.
+pub const MAX_IDEMPOTENCY_KEY_LEN: usize = 255;
+
+/// A caller's `Idempotency-Key` (docs/design/server.md, section 5.4): 1
+/// to [`MAX_IDEMPOTENCY_KEY_LEN`] visible ASCII characters (`!` to `~`),
+/// scoped to its tenant. Callers derive it from their own records
+/// (`order:1234:shipped`). `Debug` shows its length only: it names the
+/// caller's records.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct IdempotencyKey(String);
+
+impl IdempotencyKey {
+    /// Validate `key`; `None` when it is empty, too long, or holds a
+    /// character outside `!` to `~` (a space or a control character could
+    /// forge a log line; the key is never logged, but stays inert).
+    pub fn parse(key: &str) -> Option<Self> {
+        let valid = !key.is_empty()
+            && key.len() <= MAX_IDEMPOTENCY_KEY_LEN
+            && key.bytes().all(|b| b.is_ascii_graphic());
+        valid.then(|| Self(key.to_owned()))
+    }
+
+    /// The key.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for IdempotencyKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "IdempotencyKey({} bytes)", self.0.len())
+    }
+}
+
+/// What claiming an idempotency key found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IdempotencyClaim {
+    /// The key was free (or its record had expired): it is now
+    /// `in_progress` for this request, which settles it with the claim id
+    /// it gave.
+    Claimed,
+    /// Another request holds, or held, the key.
+    Existing(IdempotencyRecord),
+}
+
+/// An idempotency record another request left.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdempotencyRecord {
+    /// SHA-256 of the request that claimed it (method, path, body).
+    pub fingerprint: [u8; 32],
+    /// Its state.
+    pub state: IdempotencyState,
+}
+
+/// Where the request holding a key stands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IdempotencyState {
+    /// Still running, or stopped without settling it.
+    InProgress {
+        /// Whether its lease ended: the request crashed or was cut, and
+        /// its outcome is unknown.
+        lease_expired: bool,
+    },
+    /// Done, and this is what it answered.
+    Completed {
+        /// HTTP status.
+        status: u16,
+        /// JSON body, byte for byte.
+        body: Vec<u8>,
+    },
+}

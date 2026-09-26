@@ -417,6 +417,8 @@ struct Details {
     step: Option<&'static str>,
     resumable: Option<bool>,
     graph: Option<GraphErrorInfo>,
+    /// `Retry-After`, in seconds, when the service knows it.
+    retry_after: Option<u64>,
 }
 
 impl fmt::Debug for ApiError {
@@ -490,7 +492,15 @@ impl ApiError {
             step: None,
             resumable: None,
             graph: None,
+            retry_after: None,
         }))
+    }
+
+    /// `429 too_many_requests`, retryable, with `Retry-After`.
+    pub fn too_many_requests(retry_after_secs: u64) -> Self {
+        let mut error = Self::new("too_many_requests").retryable(true);
+        error.0.retry_after = Some(retry_after_secs);
+        error
     }
 
     /// `422 invalid_request` on `field`.
@@ -568,6 +578,16 @@ impl ApiError {
     /// Whether the request may have taken effect.
     pub fn may_have_been_sent(&self) -> bool {
         self.0.may_have_been_sent
+    }
+
+    /// Whether repeating the request later may succeed.
+    pub fn is_retryable(&self) -> bool {
+        self.0.retryable
+    }
+
+    /// The field at fault, for `invalid_request`.
+    pub fn field(&self) -> Option<&str> {
+        self.0.field.as_deref()
     }
 
     /// The code and status of a library error, `retryable` and
@@ -679,6 +699,11 @@ impl IntoResponse for ApiError {
             response
                 .headers_mut()
                 .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+        }
+        if let Some(seconds) = self.0.retry_after {
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from(seconds));
         }
         response.extensions_mut().insert(ErrorCodeTag(self.0.code));
         response
@@ -838,12 +863,16 @@ mod tests {
         let sources = [
             include_str!("auth.rs"),
             include_str!("error.rs"),
+            include_str!("idempotency.rs"),
             include_str!("api/mod.rs"),
             include_str!("api/admin.rs"),
             include_str!("api/numbers.rs"),
             include_str!("api/ops.rs"),
             include_str!("api/common.rs"),
             include_str!("api/webhooks.rs"),
+            include_str!("api/messages.rs"),
+            include_str!("api/media.rs"),
+            include_str!("api/templates.rs"),
             include_str!("api/events.rs"),
             include_str!("events.rs"),
         ];

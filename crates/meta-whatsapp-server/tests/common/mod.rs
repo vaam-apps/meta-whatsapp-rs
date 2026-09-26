@@ -24,6 +24,7 @@ use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_rs::core::secret::{AccessToken, AppSecret, VerifyToken};
 use meta_whatsapp_rs::core::store::{ConversationStore, Expiry, KvStore, StoreKey, Versioned};
 use meta_whatsapp_rs::core::testing::ScriptedTransport;
+use meta_whatsapp_rs::core::transport::HttpTransport;
 use meta_whatsapp_rs::webhooks::axum::Router;
 use meta_whatsapp_rs::webhooks::axum::body::Body;
 use meta_whatsapp_rs::webhooks::axum::http::{HeaderMap, Method, Request, StatusCode, header};
@@ -33,7 +34,8 @@ use meta_whatsapp_server::api::{internal_router, public_router};
 use meta_whatsapp_server::events::Inbound;
 use meta_whatsapp_server::metrics::Metrics;
 use meta_whatsapp_server::model::{AllowedTenants, KeyOwner, Scope, TenantId};
-use meta_whatsapp_server::state::AppState;
+use meta_whatsapp_server::ratelimit::{Rate, RateLimits};
+use meta_whatsapp_server::state::{AppState, Settings};
 use meta_whatsapp_server::store::events::{EventPage, EventQuery, NewEvent};
 use meta_whatsapp_server::store::{EventStore, MemoryStore, Store};
 use serde_json::Value;
@@ -47,6 +49,10 @@ pub const APP_SECRET: &str = "app-secret-for-tests";
 
 /// A second app secret, the previous one while rotating.
 pub const PREVIOUS_APP_SECRET: &str = "previous-app-secret-for-tests";
+
+/// The app secrets of every test service: [`APP_SECRET`], then
+/// [`PREVIOUS_APP_SECRET`].
+pub const DEFAULT_APP_SECRETS: &[&str] = &[APP_SECRET, PREVIOUS_APP_SECRET];
 
 /// A `KvStore` that counts reads of the token vault's namespace.
 #[derive(Debug)]
@@ -343,6 +349,14 @@ impl Call {
         self
     }
 
+    /// A `multipart/form-data` body of `(name, file name, bytes)` parts.
+    pub fn multipart(mut self, parts: &[(&str, Option<&str>, &[u8])]) -> Self {
+        let (content_type, body) = multipart(parts);
+        self.body = Some(Body::from(body));
+        self.headers.push(("content-type".to_owned(), content_type));
+        self
+    }
+
     pub fn header(mut self, name: &str, value: &str) -> Self {
         self.headers.push((name.to_owned(), value.to_owned()));
         self
@@ -363,6 +377,32 @@ impl Call {
     }
 }
 
+/// A `multipart/form-data` body of `(name, file name, bytes)` parts, and
+/// its content type.
+pub fn multipart(parts: &[(&str, Option<&str>, &[u8])]) -> (String, Vec<u8>) {
+    const BOUNDARY: &str = "wa-test-boundary-7MA4YWxkTrZu0gW";
+    let mut body = Vec::new();
+    for (name, filename, data) in parts {
+        body.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
+        match filename {
+            Some(filename) => body.extend_from_slice(
+                format!(
+                    "Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n\
+                     Content-Type: application/octet-stream\r\n\r\n"
+                )
+                .as_bytes(),
+            ),
+            None => body.extend_from_slice(
+                format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+            ),
+        }
+        body.extend_from_slice(data);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
+    (format!("multipart/form-data; boundary={BOUNDARY}"), body)
+}
+
 /// Send `request` to `router`.
 pub async fn send(router: &Router, request: Request<Body>) -> Reply {
     let response = router.clone().oneshot(request).await.unwrap();
@@ -376,30 +416,89 @@ pub async fn send(router: &Router, request: Request<Body>) -> Reply {
     }
 }
 
+/// Rate limits no test reaches by accident: the tests of the limits set
+/// their own.
+pub fn unlimited() -> RateLimits {
+    let rate = Rate {
+        per_second: 1_000_000,
+        burst: 1_000_000,
+    };
+    RateLimits {
+        send: rate,
+        read: rate,
+        templates: rate,
+    }
+}
+
+/// The settings of a test service: the defaults, without rate limits.
+pub fn test_settings() -> Settings {
+    Settings {
+        rate_limits: unlimited(),
+        ..Settings::default()
+    }
+}
+
 impl Harness {
     /// On a memory store.
     pub fn new() -> Self {
-        Self::with(Stores::memory())
+        Self::with_settings(test_settings())
+    }
+
+    /// On a memory store, with `settings`.
+    pub fn with_settings(settings: Settings) -> Self {
+        Self::build(Stores::memory(), settings, DEFAULT_APP_SECRETS, |graph| {
+            Arc::new(graph)
+        })
     }
 
     /// On `store` and `kv`, the inbox and the outbox in memory.
     pub fn on(store: Arc<dyn Store>, kv: Arc<dyn KvStore>) -> Self {
-        Self::with(Stores {
+        Self::on_with(store, kv, test_settings())
+    }
+
+    /// On `store` and `kv`, with `settings`, the inbox and the outbox in
+    /// memory.
+    pub fn on_with(store: Arc<dyn Store>, kv: Arc<dyn KvStore>, settings: Settings) -> Self {
+        let stores = Stores {
             store,
             kv,
             ..Stores::memory()
+        };
+        Self::build(stores, settings, DEFAULT_APP_SECRETS, |graph| {
+            Arc::new(graph)
         })
     }
 
     /// On `stores`, verifying deliveries against [`APP_SECRET`] and
     /// [`PREVIOUS_APP_SECRET`].
     pub fn with(stores: Stores) -> Self {
-        Self::with_app_secrets(stores, &[APP_SECRET, PREVIOUS_APP_SECRET])
+        Self::with_app_secrets(stores, DEFAULT_APP_SECRETS)
     }
 
     /// On `stores`, verifying deliveries against `app_secrets` (the first
     /// one derives event ids).
     pub fn with_app_secrets(stores: Stores, app_secrets: &[&str]) -> Self {
+        Self::build(stores, test_settings(), app_secrets, |graph| {
+            Arc::new(graph)
+        })
+    }
+
+    /// On a memory store, with `settings`, Meta reached through what
+    /// `wrap` makes of the scripted transport (`graph` still records every
+    /// request): a download body streamed in parts, say.
+    pub fn with_transport(
+        settings: Settings,
+        wrap: impl FnOnce(ScriptedTransport) -> Arc<dyn HttpTransport>,
+    ) -> Self {
+        Self::build(Stores::memory(), settings, DEFAULT_APP_SECRETS, wrap)
+    }
+
+    fn build(
+        stores: Stores,
+        settings: Settings,
+        app_secrets: &[&str],
+        wrap: impl FnOnce(ScriptedTransport) -> Arc<dyn HttpTransport>,
+    ) -> Self {
         let Stores {
             store,
             kv,
@@ -415,7 +514,7 @@ impl Harness {
         .unwrap();
         let graph = ScriptedTransport::new();
         let client = Client::builder()
-            .transport(graph.clone())
+            .shared_transport(wrap(graph.clone()))
             .retry(RetryPolicy::NONE)
             .build()
             .unwrap();
@@ -428,13 +527,14 @@ impl Harness {
         )
         .unwrap()
         .with_clock(Arc::new(clock.clone()));
-        let state = AppState::new(
+        let state = AppState::with_settings(
             store.clone(),
             vault.clone(),
             client,
             VerifyToken::new(VERIFY_TOKEN),
             Metrics::new(),
             inbound,
+            settings,
         );
         Self {
             internal: internal_router(&state),
@@ -604,8 +704,11 @@ impl Sample {
             out.push_str(match &rest[start + 1..end] {
                 "pn" => &self.pn,
                 "waba_id" => &self.waba,
+                "id" if template.contains("/templates/") => SAMPLE_TEMPLATE_ID,
                 "id" => &self.tenant,
                 "key_id" => &self.key_id,
+                "message_id" => SAMPLE_MESSAGE_ID,
+                "media_id" => SAMPLE_MEDIA_ID,
                 _ => "placeholder",
             });
             rest = &rest[end + 1..];
@@ -615,12 +718,61 @@ impl Sample {
     }
 }
 
+/// A received message's id (`messages/mark-message-as-read`).
+pub const SAMPLE_MESSAGE_ID: &str = "wamid.HBgLMTY1MDM4Nzk0MzkVAgARGBJDQjZCMzlEQUE4OTJBMTE4RTUA";
+
+/// A media id (`business-phone-numbers/media`).
+pub const SAMPLE_MEDIA_ID: &str = "1037543291543636";
+
+/// A template id (`templates/template-management`).
+pub const SAMPLE_TEMPLATE_ID: &str = "1407680676729941";
+
+/// The phone number every sample send goes to (`messages/text-messages`).
+pub const SAMPLE_TO: &str = "+16505551234";
+
+/// A template definition Meta documents (`templates/template-management`,
+/// "Edit template components", as a creation).
+pub fn sample_template_definition() -> Value {
+    serde_json::json!({
+        "name": "spring_sale",
+        "language": "en_US",
+        "category": "MARKETING",
+        "components": [
+            {"type": "HEADER", "format": "TEXT", "text": "Our {{1}} is on!",
+             "example": {"header_text": ["Spring Sale"]}},
+            {"type": "BODY",
+             "text": "Shop now through {{1}} and use code {{2}} to get {{3}} off of all merchandise.",
+             "example": {"body_text": [["the end of April", "25OFF", "25%"]]}},
+            {"type": "FOOTER", "text": "Use the buttons below to manage your marketing subscriptions"},
+            {"type": "BUTTONS", "buttons": [
+                {"type": "QUICK_REPLY", "text": "Unsubscribe from Promos"},
+                {"type": "QUICK_REPLY", "text": "Unsubscribe from All"}
+            ]}
+        ]
+    })
+}
+
+/// The query string an operation needs, so that a refusal is never the
+/// query's fault.
+pub fn sample_query(method: &Method, template: &str) -> Option<&'static str> {
+    match (method.as_str(), template) {
+        ("DELETE", "/v1/wabas/{waba_id}/templates") => Some("name=order_confirmation"),
+        _ => None,
+    }
+}
+
 /// A body the operation accepts, so that a refusal is never the body's
 /// fault; `{}` for a body-taking operation this table does not know yet
 /// (whatever it answers then shows up in the tests iterating the
 /// document).
 pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
     Some(match (method.as_str(), template) {
+        ("POST", "/v1/numbers/{pn}/messages") => serde_json::json!({
+            "to": {"phone": SAMPLE_TO},
+            "type": "text",
+            "text": {"body": "Your order has shipped."}
+        }),
+        ("POST", "/v1/wabas/{waba_id}/templates") => sample_template_definition(),
         ("POST", "/v1/admin/tenants") => serde_json::json!({"id": "sample-new-tenant"}),
         ("PATCH", "/v1/admin/tenants/{id}") => serde_json::json!({"name": "Renamed"}),
         ("POST", "/v1/admin/tenants/{id}/keys") => serde_json::json!({"scopes": ["numbers"]}),
@@ -636,11 +788,26 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
     })
 }
 
+/// The file every sample upload sends: a PNG signature.
+pub const SAMPLE_PNG: &[u8] = b"\x89PNG\r\n\x1a\n-sample-image";
+
 /// A sample call of `operation` with `key` (none for an unkeyed one).
 pub fn sample_call(operation: &Operation, sample: &Sample, key: Option<&str>) -> Call {
-    let mut call = Call::new(operation.method.clone(), sample.fill(&operation.template));
+    let mut path = sample.fill(&operation.template);
+    if let Some(query) = sample_query(&operation.method, &operation.template) {
+        path = format!("{path}?{query}");
+    }
+    let mut call = Call::new(operation.method.clone(), path);
     if let Some(key) = key {
         call = call.key(key);
+    }
+    if (operation.method.as_str(), operation.template.as_str())
+        == ("POST", "/v1/numbers/{pn}/media")
+    {
+        return call.multipart(&[
+            ("type", None, b"image/png"),
+            ("file", Some("voucher.png"), SAMPLE_PNG),
+        ]);
     }
     if let Some(body) = sample_body(&operation.method, &operation.template) {
         call = call.json(&body);

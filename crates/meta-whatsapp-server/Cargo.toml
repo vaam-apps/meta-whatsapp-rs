@@ -29,10 +29,15 @@ async-trait.workspace = true
 futures.workspace = true
 # Random API keys (key id and secret).
 getrandom.workspace = true
-# Opaque list cursors.
+# Opaque list cursors; `X-WA-SHA256` in hex.
 hex.workspace = true
+# Meta reports a media file's SHA-256 in hex or base64: a streamed
+# download announces it (`X-WA-SHA256`, hex) before the first byte.
+base64.workspace = true
 # Event ids: a keyed hash of the event's outbox key (src/events.rs).
 hmac.workspace = true
+# Media uploads: multipart parsing with per-field size limits.
+multer.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # API keys are stored as SHA-256 digests and compared in constant time.

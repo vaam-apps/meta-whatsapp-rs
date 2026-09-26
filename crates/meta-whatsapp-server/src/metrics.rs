@@ -16,6 +16,8 @@
 //! | `wa_server_webhook_events_total` | `event_type` (the event's type), `audience` (`tenant` or `operator`: an operator-only row) |
 //! | `wa_server_webhook_duplicate_events_total` | `stage`: `dedup` (the dedup lease had seen it), `outbox` (the outbox had it) |
 //! | `wa_server_webhook_sink_failures_total` | `stage`: `routing`, `serialization`, `inbox`, `outbox`, `outbox_busy` (a lock waited for over 2 s: `busy`) |
+//! | `wa_server_idempotency_total` | `outcome`: `replayed`, `reused`, `in_progress`, `outcome_unknown` (a repeat that met a key's record) |
+//! | `wa_server_rate_limited_total` | `class` (`send`, `read`, `templates`): requests refused `429` by the service's own limits |
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -66,6 +68,11 @@ struct StageLabels {
     stage: String,
 }
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct ClassLabels {
+    class: String,
+}
+
 type DurationFamily = Family<RouteLabels, Histogram, fn() -> Histogram>;
 
 /// An HTTP method as a label or a log field: the methods an API client
@@ -96,6 +103,8 @@ pub struct Metrics {
     webhook_events: Family<EventLabels, Counter>,
     webhook_duplicates: Family<StageLabels, Counter>,
     webhook_failures: Family<StageLabels, Counter>,
+    idempotency: Family<OutcomeLabels, Counter>,
+    rate_limited: Family<ClassLabels, Counter>,
 }
 
 impl std::fmt::Debug for Metrics {
@@ -161,6 +170,18 @@ impl Metrics {
             "Webhook events that failed to be recorded, by stage (Meta redelivers them)",
             webhook_failures.clone(),
         );
+        let idempotency = Family::<OutcomeLabels, Counter>::default();
+        registry.register(
+            "idempotency",
+            "Requests whose Idempotency-Key met an earlier request's record, by outcome",
+            idempotency.clone(),
+        );
+        let rate_limited = Family::<ClassLabels, Counter>::default();
+        registry.register(
+            "rate_limited",
+            "Requests refused by the service's rate limits, by route class",
+            rate_limited.clone(),
+        );
         Self {
             registry: Arc::new(Mutex::new(registry)),
             requests,
@@ -170,6 +191,8 @@ impl Metrics {
             webhook_events,
             webhook_duplicates,
             webhook_failures,
+            idempotency,
+            rate_limited,
         }
     }
 
@@ -223,6 +246,16 @@ impl Metrics {
             .inc();
     }
 
+    /// Count a repeat that met an idempotency key's record (`outcome`:
+    /// `replayed`, `reused`, `in_progress`, `outcome_unknown`).
+    pub fn idempotency(&self, outcome: &'static str) {
+        self.idempotency
+            .get_or_create(&OutcomeLabels {
+                outcome: outcome.to_owned(),
+            })
+            .inc();
+    }
+
     /// Count an event recorded in the outbox. `event_type` is the library's
     /// `WebhookEvent::kind` (a fixed set), `audience` `tenant` or
     /// `operator`.
@@ -252,6 +285,15 @@ impl Metrics {
         self.webhook_failures
             .get_or_create(&StageLabels {
                 stage: stage.to_owned(),
+            })
+            .inc();
+    }
+
+    /// Count a request refused by the rate limits of `class`.
+    pub fn rate_limited(&self, class: &'static str) {
+        self.rate_limited
+            .get_or_create(&ClassLabels {
+                class: class.to_owned(),
             })
             .inc();
     }

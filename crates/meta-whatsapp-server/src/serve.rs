@@ -142,6 +142,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         internal_bind,
         shutdown_grace,
         outbox_retention,
+        settings,
         ..
     } = config;
     let vault = vault(backends.kv.clone(), vault_keys)?;
@@ -152,13 +153,15 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         backends.conversations.clone(),
         backends.events.clone(),
     )?;
-    let state = AppState::new(
+    let records = backends.store.clone();
+    let state = AppState::with_settings(
         backends.store,
         vault,
         client,
         verify_token,
         Metrics::new(),
         inbound,
+        settings,
     );
     if memory {
         // Memory storage exists in development only (the configuration
@@ -192,6 +195,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     let (stop, stopped) = watch::channel(false);
     let housekeeping = tokio::spawn(housekeeping(
         backends.events.clone(),
+        records,
         backends.pool.clone().map(PostgresKvStore::new),
         outbox_retention,
         HOUSEKEEPING_INTERVAL,
@@ -225,13 +229,16 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     served
 }
 
-/// Housekeeping, every `every` until `stop`: purge the outbox past
-/// `retention` and, on Postgres, the library's dead key/value rows (webhook
-/// dedup markers add one per event). Each round runs on one replica at a
-/// time (the outbox purge's advisory lock; a replica that does not get it
-/// skips the round). A failure is logged and retried next round.
+/// Housekeeping, every `every` until `stop` (docs/design/server.md,
+/// section 2.4): purge the outbox past `retention` and, on Postgres, the
+/// library's dead key/value rows (webhook dedup markers add one per event),
+/// then `store`'s expired idempotency records (already ignored: this
+/// bounds the table). Each purge runs on one replica at a time (the
+/// housekeeping advisory lock; a replica that does not get it skips that
+/// purge this round). A failure is logged and retried next round.
 pub async fn housekeeping(
     events: Arc<dyn EventStore>,
+    store: Arc<dyn Store>,
     kv: Option<PostgresKvStore>,
     retention: Duration,
     every: Duration,
@@ -256,6 +263,11 @@ pub async fn housekeeping(
             // Another replica holds the lock this round.
             Ok(None) => {}
             Err(error) => tracing::warn!(error = %error, "purging the outbox failed"),
+        }
+        match store.purge_idempotency_keys().await {
+            Ok(0) => {}
+            Ok(purged) => tracing::debug!(purged, "expired idempotency records purged"),
+            Err(error) => tracing::warn!(error = %error, "purging idempotency records failed"),
         }
     }
 }
@@ -551,6 +563,7 @@ mod tests {
         let (stop, stopped) = watch::channel(false);
         let task = tokio::spawn(housekeeping(
             events.clone(),
+            Arc::new(MemoryStore::new()),
             None,
             Duration::from_millis(1),
             Duration::from_millis(20),

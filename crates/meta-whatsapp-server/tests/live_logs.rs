@@ -1,5 +1,6 @@
 //! Acceptance test M1.7's log capture on a real Postgres: the capture of
-//! `logs.rs` (admin, numbers, webhooks and events) holds there too.
+//! `logs.rs` (every route of the committed document, sends included, and
+//! Meta's webhooks) holds there too.
 //! Skipped unless `META_WHATSAPP_RS_TEST_POSTGRES_URL` is set; `just
 //! test-live` sets `META_WHATSAPP_RS_REQUIRE_LIVE=1`, which turns the skip
 //! into a failure.
@@ -16,8 +17,10 @@ use common::capture::{Captured, check, exercise, subscriber};
 use common::{Harness, Stores, TestDb};
 use meta_whatsapp_server::store::migrate;
 
+/// M1.7 on Postgres: sqlx's own events join the capture, and still no
+/// secret, key, message text, phone number or contact is logged.
 #[tokio::test]
-async fn live_postgres_logs_hold_no_secret_key_or_phone_number() {
+async fn live_postgres_logs_hold_no_secret_key_message_or_contact() {
     let Some(db) = TestDb::new().await else {
         return;
     };

@@ -1752,6 +1752,821 @@
         ]
       }
     },
+    "/v1/numbers/{pn}/media": {
+      "post": {
+        "tags": [
+          "media"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/media`: upload a file.",
+        "operationId": "upload_media",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and file never upload twice (a repeat gets the kept answer, with `Idempotent-Replayed: true`)",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/MediaUpload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaUploaded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`media_too_large`: larger than its type allows or `WA_SERVER_MEDIA_MAX_BYTES`; `payload_too_large`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `type` (not a supported media type), `file` or `body` (not a form of `type` and `file`, or its framing past 16 KiB); `idempotency_key_reused`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's rate limit, or its share of the replica's media slots busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed (`media_upload_failed`, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the upload may have happened",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/media/{media_id}": {
+      "get": {
+        "tags": [
+          "media"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/media/{media_id}`: download a file, verified\nagainst Meta's SHA-256.",
+        "operationId": "download_media",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "media_id",
+            "in": "path",
+            "description": "Media id (an upload's, or a received message's)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "max_bytes",
+            "in": "query",
+            "description": "Largest file accepted, in bytes: default and cap 16 MiB; with\n`stream=true`, default and cap `WA_SERVER_MEDIA_MAX_BYTES`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "stream",
+            "in": "query",
+            "description": "Forward the bytes as they arrive (a mismatch aborts the\nconnection) instead of answering a verified whole file.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file, with Meta's MIME type as `Content-Type`; whole and verified, or streamed (`stream=true`: a digest mismatch aborts the connection)",
+            "headers": {
+              "X-WA-SHA256": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The file's SHA-256, hex"
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaBytes"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or no such media on this number (another number's media id looks like a missing one)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`media_too_large`: larger than `max_bytes`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `media_id` (digits), `max_bytes` (over 16 MiB without `stream=true`) or `stream`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's rate limit, or its share of the replica's media (or stream) slots busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "`integrity` (the digest does not match: nothing of the file was answered), `media_download_failed`, `upstream`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "media"
+        ],
+        "summary": "`DELETE /v1/numbers/{pn}/media/{media_id}`: delete an uploaded file.",
+        "operationId": "delete_media",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "media_id",
+            "in": "path",
+            "description": "Media id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or no such media on this number (another number's media id looks like a missing one)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `media_id` (digits)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/messages": {
+      "post": {
+        "tags": [
+          "messages"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/messages`: send a message.",
+        "operationId": "send_message",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never send twice (a repeat gets the kept answer, with `Idempotent-Replayed: true`)",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMessage"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted by Meta; delivery arrives as status events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageAccepted"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`permission`, `marketing_not_allowed`, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`customer_service_window_closed`, `marketing_opted_out`, `number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`, …",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (with `field`: `to.phone` without `+`, a `template` key the service would not send to Meta, …), `unsupported_message_type`, `idempotency_key_reused`, Meta's `template_*`, …: nothing was sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests` (the service's limits, `Retry-After`) or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the message may have been sent (`may_have_been_sent: true`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/messages/{message_id}/read": {
+      "post": {
+        "tags": [
+          "messages"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/messages/{message_id}/read`: show the blue ticks\non a received message (and every earlier one); with\n`typing_indicator`, \"typing…\" too.",
+        "operationId": "mark_read",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "message_id",
+            "in": "path",
+            "description": "A received message's id (`wamid.…`), percent-encoded",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Optional; an empty body marks the message read",
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/MarkRead"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Marked read"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`body`, `message_id`), or Meta's `invalid_parameter` (an unknown or too old message)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/numbers/{pn}/profile": {
       "get": {
         "tags": [
@@ -2283,10 +3098,682 @@
           }
         ]
       }
+    },
+    "/v1/wabas/{waba_id}/templates": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/templates`: the WABA's templates, cached 60 s\nper WABA.",
+        "operationId": "list_templates",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only templates with this status, as Meta names it (`APPROVED`,\n`REJECTED`, …).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "Only templates with this name.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of templates (at most 60 seconds old)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `status`, `name`, `limit` or `cursor`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "`POST /v1/wabas/{waba_id}/templates`: create a template from Meta's\nJSON, checked locally first.",
+        "operationId": "create_template",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and definition never create twice",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Meta's template definition: `name`, `language`, `category`, `parameter_format`, `components` (templates/overview)",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateDefinition"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Submitted for review; the result arrives as a `template_status_updated` event",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateCreated"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`template_limit_reached`, `number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (with `field`: the definition breaks a documented limit, or holds a key the service would not send to Meta), `template_rejected`, `invalid_parameter`, `idempotency_key_reused`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the template may have been created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "`DELETE /v1/wabas/{waba_id}/templates?name=[&id=]`: delete every\nlanguage of a name, or one.",
+        "operationId": "delete_templates",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "The template's name: every language of it goes, unless `id` names\none.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "description": "One template (one language) of that name.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted (an approved template's name cannot be reused for 30 days)"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or (with `id`) no template of that name and id in this WABA",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `name` or `id`, or Meta's `invalid_parameter` (no template of that name)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/templates/{id}": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/templates/{id}`: one template.",
+        "operationId": "get_template",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Template"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no such template in this WABA (another WABA's template id looks like a missing one)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `id`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
     }
   },
   "components": {
     "schemas": {
+      "AcceptedContact": {
+        "type": "object",
+        "description": "The addressee, as Meta resolved it.",
+        "required": [
+          "input",
+          "wa_id",
+          "user_id",
+          "parent_user_id"
+        ],
+        "properties": {
+          "input": {
+            "type": "string",
+            "description": "What the request addressed (phone number, BSUID or group id)."
+          },
+          "parent_user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The parent BSUID, for portfolios that use them."
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The user's BSUID, when addressed by BSUID."
+          },
+          "wa_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The user's WhatsApp id, when addressed by phone number."
+          }
+        }
+      },
       "AttachWaba": {
         "type": "object",
         "description": "`POST /v1/admin/tenants/{id}/wabas`: the platform's own WABA and a\nsystem user token with access to it.",
@@ -2334,6 +3821,311 @@
           }
         }
       },
+      "AudioContent": {
+        "type": "object",
+        "description": "`audio` (`messages/audio-messages`).",
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Uploaded media id."
+          },
+          "link": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`https://` URL Meta fetches."
+          },
+          "voice": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`true`: a voice message (an Ogg file with the OPUS codec)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ContactAddress": {
+        "type": "object",
+        "description": "A contact card's address.",
+        "properties": {
+          "city": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "City."
+          },
+          "country": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Country."
+          },
+          "country_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Two-letter country code."
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "State."
+          },
+          "street": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Street and number."
+          },
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Label, e.g. `Home`."
+          },
+          "zip": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Postal code."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ContactCard": {
+        "type": "object",
+        "description": "One card of a `contacts` message (`messages/contacts-messages`).",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "addresses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContactAddress"
+            },
+            "description": "Addresses."
+          },
+          "birthday": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Birthday, `YYYY-MM-DD`."
+          },
+          "emails": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContactEmail"
+            },
+            "description": "Email addresses."
+          },
+          "name": {
+            "$ref": "#/components/schemas/ContactName",
+            "description": "Name."
+          },
+          "org": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ContactOrg",
+                "description": "Organization."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "phones": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContactPhone"
+            },
+            "description": "Phone numbers."
+          },
+          "urls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContactUrl"
+            },
+            "description": "Websites."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ContactEmail": {
+        "type": "object",
+        "description": "A contact card's email address.",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Address."
+          },
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Label, e.g. `Work`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ContactName": {
+        "type": "object",
+        "description": "A contact card's `name`.",
+        "required": [
+          "formatted_name"
+        ],
+        "properties": {
+          "first_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "First name."
+          },
+          "formatted_name": {
+            "type": "string",
+            "description": "Full name, as shown. Required."
+          },
+          "last_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last name."
+          },
+          "middle_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Middle name."
+          },
+          "prefix": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Prefix."
+          },
+          "suffix": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Suffix."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ContactOrg": {
+        "type": "object",
+        "description": "A contact card's organization.",
+        "properties": {
+          "company": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Company."
+          },
+          "department": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Department."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Job title."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ContactPhone": {
+        "type": "object",
+        "description": "A contact card's phone number (content: shown as written).",
+        "required": [
+          "phone"
+        ],
+        "properties": {
+          "phone": {
+            "type": "string",
+            "description": "The number, as shown."
+          },
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Label, e.g. `Mobile`."
+          },
+          "wa_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The contact's WhatsApp id: WhatsApp then offers \"Message\"."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ContactUrl": {
+        "type": "object",
+        "description": "A contact card's website.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Label, e.g. `Company`."
+          },
+          "url": {
+            "type": "string",
+            "description": "URL."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Coordinate": {
+        "oneOf": [
+          {
+            "type": "number",
+            "format": "double",
+            "description": "A JSON number."
+          },
+          {
+            "type": "string",
+            "description": "A string, as Meta's pages write it."
+          }
+        ],
+        "description": "A coordinate in decimal degrees: Meta's pages write it as a string\n(`\"37.44216251868683\"`); a JSON number is accepted too."
+      },
       "CreateTenant": {
         "type": "object",
         "description": "`POST /v1/admin/tenants`.",
@@ -2351,6 +4143,60 @@
               "null"
             ],
             "description": "A label for operators, at most 256 characters."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CtaUrlParameters": {
+        "type": "object",
+        "description": "A URL button's `parameters`.",
+        "required": [
+          "display_text",
+          "url"
+        ],
+        "properties": {
+          "display_text": {
+            "type": "string",
+            "description": "Button label, at most 20 characters."
+          },
+          "url": {
+            "type": "string",
+            "description": "The URL the button opens."
+          }
+        },
+        "additionalProperties": false
+      },
+      "DocumentContent": {
+        "type": "object",
+        "description": "`document` (`messages/document-messages`).",
+        "properties": {
+          "caption": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Caption, at most 1,024 characters."
+          },
+          "filename": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "File name shown, with its extension."
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Uploaded media id."
+          },
+          "link": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`https://` URL Meta fetches."
           }
         },
         "additionalProperties": false
@@ -2590,6 +4436,44 @@
           }
         }
       },
+      "HeaderMedia": {
+        "type": "object",
+        "description": "A media asset of an interactive header: an uploaded `id` or an\n`https://` `link`.",
+        "properties": {
+          "filename": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "File name (documents only)."
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Uploaded media id."
+          },
+          "link": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`https://` URL Meta fetches."
+          }
+        },
+        "additionalProperties": false
+      },
+      "HeaderType": {
+        "type": "string",
+        "description": "The kinds of interactive header.",
+        "enum": [
+          "text",
+          "image",
+          "video",
+          "document"
+        ]
+      },
       "Health": {
         "type": "object",
         "description": "A probe's answer.",
@@ -2609,6 +4493,209 @@
         "enum": [
           "ok",
           "ready"
+        ]
+      },
+      "ImageContent": {
+        "type": "object",
+        "description": "`image` (`messages/image-messages`): an uploaded `id` or an `https://`\n`link`.",
+        "properties": {
+          "caption": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Caption, at most 1,024 characters."
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Uploaded media id."
+          },
+          "link": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`https://` URL Meta fetches."
+          }
+        },
+        "additionalProperties": false
+      },
+      "InteractiveAction": {
+        "type": "object",
+        "description": "An interactive message's `action`: `buttons` for `button`; `button` and\n`sections` for `list`; `name` (`cta_url`) and `parameters` for\n`cta_url`.",
+        "properties": {
+          "button": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The list's button label."
+          },
+          "buttons": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ReplyButton"
+            },
+            "description": "Reply buttons, 1 to 3."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`cta_url`."
+          },
+          "parameters": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CtaUrlParameters",
+                "description": "The URL button."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sections": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ListSection"
+            },
+            "description": "The list's sections."
+          }
+        },
+        "additionalProperties": false
+      },
+      "InteractiveContent": {
+        "type": "object",
+        "description": "`interactive`, as Meta writes it: `button`, `list` or `cta_url`.",
+        "required": [
+          "type",
+          "body",
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/InteractiveAction",
+            "description": "Buttons, list or URL button."
+          },
+          "body": {
+            "$ref": "#/components/schemas/InteractiveText",
+            "description": "Body."
+          },
+          "footer": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/InteractiveText",
+                "description": "Footer."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "header": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/InteractiveHeader",
+                "description": "Header."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": {
+            "$ref": "#/components/schemas/InteractiveType",
+            "description": "Which kind."
+          }
+        },
+        "additionalProperties": false
+      },
+      "InteractiveHeader": {
+        "type": "object",
+        "description": "An interactive message's header: `list` takes `text` only.",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "document": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HeaderMedia",
+                "description": "The document, for `document`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "image": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HeaderMedia",
+                "description": "The image, for `image`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The text, for `text`."
+          },
+          "type": {
+            "$ref": "#/components/schemas/HeaderType",
+            "description": "Which kind."
+          },
+          "video": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HeaderMedia",
+                "description": "The video, for `video`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "InteractiveText": {
+        "type": "object",
+        "description": "`{\"text\": …}`: an interactive message's body or footer.",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The text."
+          }
+        },
+        "additionalProperties": false
+      },
+      "InteractiveType": {
+        "type": "string",
+        "description": "The interactive types the service sends.",
+        "enum": [
+          "button",
+          "list",
+          "cta_url"
         ]
       },
       "Key": {
@@ -2831,6 +4918,203 @@
           "template_status_updated",
           "template_category_updated",
           "template_category_misuse_detected"
+        ]
+      },
+      "ListRow": {
+        "type": "object",
+        "description": "A list row.",
+        "required": [
+          "id",
+          "title"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Description, at most 72 characters."
+          },
+          "id": {
+            "type": "string",
+            "description": "Returned in the reply's webhook."
+          },
+          "title": {
+            "type": "string",
+            "description": "Title, at most 24 characters."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ListSection": {
+        "type": "object",
+        "description": "A list section.",
+        "required": [
+          "rows"
+        ],
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ListRow"
+            },
+            "description": "Its rows."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Title, at most 24 characters."
+          }
+        },
+        "additionalProperties": false
+      },
+      "LocationContent": {
+        "type": "object",
+        "description": "`location` (`messages/location-messages`).",
+        "required": [
+          "latitude",
+          "longitude"
+        ],
+        "properties": {
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Address."
+          },
+          "latitude": {
+            "$ref": "#/components/schemas/Coordinate",
+            "description": "Latitude, -90 to 90."
+          },
+          "longitude": {
+            "$ref": "#/components/schemas/Coordinate",
+            "description": "Longitude, -180 to 180."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Place name."
+          }
+        },
+        "additionalProperties": false
+      },
+      "MarkRead": {
+        "type": "object",
+        "description": "`POST /v1/numbers/{pn}/messages/{message_id}/read`.",
+        "properties": {
+          "typing_indicator": {
+            "type": "boolean",
+            "description": "Also show \"typing…\" (until the reply, or 25 seconds): only when\nabout to reply. Never replayed."
+          }
+        },
+        "additionalProperties": false
+      },
+      "MediaBytes": {
+        "type": "string",
+        "format": "binary",
+        "description": "A downloaded file's bytes."
+      },
+      "MediaUpload": {
+        "type": "object",
+        "description": "An upload's form (`multipart/form-data`).",
+        "required": [
+          "file",
+          "type"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "description": "The file."
+          },
+          "type": {
+            "type": "string",
+            "description": "Its MIME type, one of Meta's supported media types (e.g.\n`image/png`, `application/pdf`)."
+          }
+        }
+      },
+      "MediaUploaded": {
+        "type": "object",
+        "description": "The answer to an upload.",
+        "required": [
+          "media_id"
+        ],
+        "properties": {
+          "media_id": {
+            "type": "string",
+            "description": "The media id (kept by Meta for 30 days): send it in a message's\n`id`."
+          }
+        }
+      },
+      "MessageAccepted": {
+        "type": "object",
+        "description": "Meta accepted the message; delivery comes later, as status events.",
+        "required": [
+          "message_id",
+          "contacts"
+        ],
+        "properties": {
+          "contacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AcceptedContact"
+            },
+            "description": "The addressee, as Meta resolved it."
+          },
+          "message_id": {
+            "type": "string",
+            "description": "The message's id (`wamid.…`): the key of its status events."
+          }
+        }
+      },
+      "MessageRecipient": {
+        "type": "object",
+        "description": "Who receives a message: a phone number, a business-scoped user id\n(BSUID), both (Meta then uses the phone number), or a group.",
+        "properties": {
+          "group_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A group's id (Groups API); alone."
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "E.164 **with** its `+` (`+16505551234`): a number without it is\nrefused, as Meta would read it as local to the sender's country."
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Business-scoped user id (e.g. `US.13491208655302741918`), from a\nwebhook's `user_id`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "MessageType": {
+        "type": "string",
+        "description": "The message types the service sends.",
+        "enum": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "document",
+          "sticker",
+          "location",
+          "contacts",
+          "reaction",
+          "template",
+          "interactive"
         ]
       },
       "MintPlatformKey": {
@@ -3157,6 +5441,63 @@
         },
         "additionalProperties": false
       },
+      "ReactionContent": {
+        "type": "object",
+        "description": "`reaction` (`messages/reaction-messages`): an emoji on a received\nmessage; an empty `emoji` removes it.",
+        "required": [
+          "message_id",
+          "emoji"
+        ],
+        "properties": {
+          "emoji": {
+            "type": "string",
+            "description": "The emoji."
+          },
+          "message_id": {
+            "type": "string",
+            "description": "The received message's id (`wamid.…`)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Reply": {
+        "type": "object",
+        "description": "A reply button's `reply`.",
+        "required": [
+          "id",
+          "title"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Returned in the reply's webhook; unique in the message."
+          },
+          "title": {
+            "type": "string",
+            "description": "Label, at most 20 characters."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ReplyButton": {
+        "type": "object",
+        "description": "A reply button: `{\"type\": \"reply\", \"reply\": {…}}`.",
+        "required": [
+          "type",
+          "reply"
+        ],
+        "properties": {
+          "reply": {
+            "$ref": "#/components/schemas/Reply",
+            "description": "The button."
+          },
+          "type": {
+            "type": "string",
+            "description": "`reply`."
+          }
+        },
+        "additionalProperties": false
+      },
       "Scope": {
         "type": "string",
         "description": "A scope of a tenant or platform key.",
@@ -3171,6 +5512,298 @@
           "otp",
           "numbers"
         ]
+      },
+      "SendMessage": {
+        "type": "object",
+        "description": "A message to send: `type` names the one content object present.",
+        "required": [
+          "to",
+          "type"
+        ],
+        "properties": {
+          "audio": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AudioContent",
+                "description": "For `audio`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "callback_data": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Echoed in this message's status events: set it to your own\nreference (the `Idempotency-Key`, say) to reconcile."
+          },
+          "contacts": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ContactCard"
+            },
+            "description": "For `contacts`: 1 to 257 cards."
+          },
+          "document": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DocumentContent",
+                "description": "For `document`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "image": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImageContent",
+                "description": "For `image`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "interactive": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/InteractiveContent",
+                "description": "For `interactive`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "location": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LocationContent",
+                "description": "For `location`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reaction": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReactionContent",
+                "description": "For `reaction`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reply_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Reply to this received message (`wamid.…`); not with `reaction`."
+          },
+          "sticker": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StickerContent",
+                "description": "For `sticker`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "template": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "For `template`: Meta's template object (`name`, `language`,\n`components`), as the send-template pages write it.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "text": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TextContent",
+                "description": "For `text`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "to": {
+            "$ref": "#/components/schemas/MessageRecipient",
+            "description": "Who receives it."
+          },
+          "type": {
+            "$ref": "#/components/schemas/MessageType",
+            "description": "Which content object follows."
+          },
+          "video": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/VideoContent",
+                "description": "For `video`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "StickerContent": {
+        "type": "object",
+        "description": "`sticker` (`messages/sticker-messages`).",
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Uploaded media id."
+          },
+          "link": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`https://` URL Meta fetches."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Template": {
+        "type": "object",
+        "description": "A template, as Meta describes it.",
+        "required": [
+          "id",
+          "name",
+          "language",
+          "status",
+          "category",
+          "components"
+        ],
+        "properties": {
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Category, as Meta names it (`MARKETING`, `UTILITY`,\n`AUTHENTICATION`)."
+          },
+          "components": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {},
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "description": "Components, in Meta's JSON (`templates/components`)."
+          },
+          "id": {
+            "type": "string",
+            "description": "Template id."
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Language code, e.g. `en_US`."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name (several languages share one)."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Review status, as Meta names it (`APPROVED`, `PENDING`, `REJECTED`,\n`PAUSED`, …): only `APPROVED` templates can be sent."
+          }
+        }
+      },
+      "TemplateCreated": {
+        "type": "object",
+        "description": "A created template, as Meta answered.",
+        "required": [
+          "id",
+          "status",
+          "category"
+        ],
+        "properties": {
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The category Meta assigned."
+          },
+          "id": {
+            "type": "string",
+            "description": "Template id."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Initial status (usually `PENDING`)."
+          }
+        }
+      },
+      "TemplateDefinition": {
+        "type": "object",
+        "description": "A template definition in Meta's JSON (`name`, `language`, `category`,\n`parameter_format`, `components`), as `templates/overview` writes it.",
+        "additionalProperties": {},
+        "propertyNames": {
+          "type": "string"
+        }
+      },
+      "TemplateList": {
+        "type": "object",
+        "description": "A page of templates.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Template"
+            },
+            "description": "The templates."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; `null` on the last one."
+          }
+        }
       },
       "Tenant": {
         "type": "object",
@@ -3258,6 +5891,27 @@
           }
         ],
         "description": "The tenants a platform key may name with WA-Tenant: \"*\" for any, or a non-empty list of tenant ids."
+      },
+      "TextContent": {
+        "type": "object",
+        "description": "`text` (`messages/text-messages`).",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Body text, at most 4,096 characters."
+          },
+          "preview_url": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Ask WhatsApp to render a preview of the first URL."
+          }
+        },
+        "additionalProperties": false
       },
       "Throughput": {
         "type": "object",
@@ -3356,6 +6010,34 @@
           }
         }
       },
+      "VideoContent": {
+        "type": "object",
+        "description": "`video` (`messages/video-messages`).",
+        "properties": {
+          "caption": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Caption, at most 1,024 characters."
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Uploaded media id."
+          },
+          "link": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`https://` URL Meta fetches."
+          }
+        },
+        "additionalProperties": false
+      },
       "Waba": {
         "type": "object",
         "description": "A WABA of the tenant.",
@@ -3449,6 +6131,18 @@
     {
       "name": "numbers",
       "description": "WABAs, numbers and business profiles (scope `numbers`)"
+    },
+    {
+      "name": "messages",
+      "description": "Sending messages and read receipts (scope `send`)"
+    },
+    {
+      "name": "media",
+      "description": "Uploading, downloading and deleting media (scope `media`)"
+    },
+    {
+      "name": "templates",
+      "description": "Listing, creating and deleting message templates (scope `templates`)"
     },
     {
       "name": "events",

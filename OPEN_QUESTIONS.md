@@ -199,3 +199,24 @@ Found while writing the integrator guides and checking them against
     Options: key messages by `(phone_number_id, id)` (a migration of the
     primary key; history cursors are already per conversation), or keep it
     and document it (what the guides and skills do today).
+
+## Service (meta-whatsapp-server)
+
+Found in the review of milestone M1b (43).
+
+43. **Media received by webhook, and the `phone_number_id` check.** The
+    service's media routes ask Meta with `phone_number_id={pn}`, so that
+    Meta acts only on that number's media and one tenant cannot reach
+    another's files when one token reaches both tenants' numbers
+    (`reference/media/media-api`). Meta documents that check for media
+    *uploaded* on the number only. If Meta also refuses media a customer
+    sent to the number (a media id received by webhook), the M2 inbox
+    cannot fetch customers' files through the service: they answer `404`
+    like another tenant's.
+    Today: every media id goes through the check; nothing exempts a
+    received one.
+    Planned remedy, a follow-up once M1c records inbound events: exempt
+    a media id the service itself recorded as received on that tenant's
+    number (from M1c's events), and ask Meta for it without
+    `phone_number_id`. Before M2 relies on either behaviour, a live check
+    with a real received media id must say which one Meta has.
