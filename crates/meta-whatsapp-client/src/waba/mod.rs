@@ -50,8 +50,9 @@ mod types;
 pub use business::{Business, CreatedMessagingCustomerBase, WabaListQuery};
 pub use types::{
     AccountReviewStatus, AssignedUser, AssignedUserType, BusinessInfo, BusinessRef,
-    CallbackOverride, Filter, MAX_CALLBACK_URI_CHARS, MessagingCustomerBase, NewPhoneNumber,
-    OwnershipType, SubscribedApp, SubscribedAppData, WabaInfo, WabaSort, WabaTask, WabaUpdate,
+    BusinessVerificationStatus, CallbackOverride, Filter, MAX_CALLBACK_URI_CHARS,
+    MessagingCustomerBase, NewPhoneNumber, OwnershipType, SubscribedApp, SubscribedAppData,
+    WabaInfo, WabaSort, WabaTask, WabaUpdate,
 };
 
 pub(crate) use types::lenient_string;

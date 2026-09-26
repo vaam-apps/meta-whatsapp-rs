@@ -96,15 +96,15 @@ use std::str::FromStr;
 use futures::Stream;
 #[doc(no_inline)]
 pub use meta_whatsapp_core::error::CreditRevocation;
-use meta_whatsapp_core::error::{RevocationIncomplete, ValidationError, snippet};
+use meta_whatsapp_core::error::{RevocationIncomplete, ValidationError};
 use meta_whatsapp_core::ids::{AllocationConfigId, BusinessId, CreditLineId, FundingId, WabaId};
 use meta_whatsapp_core::paging::Page;
 use meta_whatsapp_core::{Error, Result};
-use serde::de::{DeserializeOwned, Deserializer};
+use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 
 use crate::phone_numbers::fields_param;
-use crate::request::{decode_json, decode_json_private};
+use crate::request::{decode_json_private, send_checked};
 use crate::waba::BusinessRef;
 use crate::{Client, GraphRequest};
 
@@ -345,28 +345,6 @@ pub fn is_shared(allocation: &AllocationConfig, funding: &WabaFunding) -> bool {
         (Some(c), Some(f)) => !c.as_str().trim().is_empty() && c == f,
         _ => false,
     }
-}
-
-/// `{"success": false}` from a call that answers `success` next to its
-/// payload is an error, as in [`GraphRequest::send_success`].
-async fn send_checked<T: DeserializeOwned>(
-    request: GraphRequest,
-    context: &'static str,
-) -> Result<T> {
-    #[derive(Deserialize)]
-    struct Success {
-        #[serde(default)]
-        success: Option<bool>,
-    }
-    let resp = request.context(context).send_raw().await?;
-    let flag: Success = decode_json(context, &resp.body)?;
-    if flag.success == Some(false) {
-        return Err(Error::Http {
-            status: resp.status.as_u16(),
-            body_snippet: snippet(&resp.body),
-        });
-    }
-    decode_json(context, &resp.body)
 }
 
 fn required<'a>(field: &'static str, id: &'a str) -> Result<&'a str> {

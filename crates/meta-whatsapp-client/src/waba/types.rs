@@ -9,6 +9,8 @@ use serde::de::Deserializer;
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 
+use crate::templates::macros::string_enum;
+
 /// Maximum length of a callback override URL (`webhooks/override`).
 pub const MAX_CALLBACK_URI_CHARS: usize = 200;
 
@@ -468,6 +470,46 @@ pub struct BusinessInfo {
         skip_serializing_if = "Option::is_none"
     )]
     pub timezone_id: Option<String>,
+    /// Business verification status (`fields=verification_status`; see
+    /// [`crate::business_verification`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_status: Option<BusinessVerificationStatus>,
+}
+
+impl BusinessInfo {
+    /// `verification_status` is `verified`.
+    pub fn is_verified(&self) -> bool {
+        self.verification_status == Some(BusinessVerificationStatus::Verified)
+    }
+}
+
+string_enum! {
+    /// A business portfolio's `verification_status` (the ten values of the
+    /// `Business` node's reference,
+    /// `ads-commerce/marketing-api/reference/business`). Parsed
+    /// case-insensitively; any other value is kept verbatim.
+    pub enum BusinessVerificationStatus {
+        /// Expired.
+        Expired => "expired",
+        /// Failed.
+        Failed => "failed",
+        /// Ineligible.
+        Ineligible => "ineligible",
+        /// Not verified.
+        NotVerified => "not_verified",
+        /// Pending.
+        Pending => "pending",
+        /// Pending, Meta needs more information.
+        PendingNeedMoreInfo => "pending_need_more_info",
+        /// Pending submission.
+        PendingSubmission => "pending_submission",
+        /// Rejected.
+        Rejected => "rejected",
+        /// Revoked.
+        Revoked => "revoked",
+        /// Verified.
+        Verified => "verified",
+    }
 }
 
 /// A messaging customer base (In-App Signup subscribers land in one).
