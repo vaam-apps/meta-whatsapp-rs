@@ -47,6 +47,23 @@ pub enum StorageError {
     /// The backend (database, cache) failed.
     #[error("storage backend failure: {0}")]
     Backend(#[source] anyhow::Error),
+    /// Contention: the backend gave up waiting for another writer (a lock
+    /// wait past its timeout, a write conflict, a transaction it had to
+    /// abort) and did nothing. Trying again later may succeed
+    /// ([`crate::Error::is_retryable`]). An adapter reports its own
+    /// contention this way rather than as [`Self::Backend`], so that a
+    /// caller can tell "busy, come back" from "broken" without knowing the
+    /// adapter's error types.
+    #[error("storage backend busy: gave up waiting for another writer")]
+    Busy,
+}
+
+impl StorageError {
+    /// Whether this is contention ([`Self::Busy`]): nothing was done, and
+    /// trying again later may succeed.
+    pub fn is_busy(&self) -> bool {
+        matches!(self, Self::Busy)
+    }
 }
 
 /// An [`crate::sink::EventSink`] failed to accept an event.

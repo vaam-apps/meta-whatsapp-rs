@@ -194,6 +194,8 @@ impl Error {
             Self::Api(e) => e.is_retryable(),
             Self::Http { status, .. } => *status >= 500 || *status == 429,
             Self::Transport(e) => e.is_retryable(),
+            // Contention: the backend did nothing, and later it may.
+            Self::Storage(e) => e.is_busy(),
             Self::Credit(e) => e.is_retryable(),
             Self::Step { source, .. } => source.is_retryable(),
             _ => false,
@@ -590,5 +592,20 @@ mod tests {
         };
         assert!(e5.is_retryable());
         assert!(!e4.is_retryable());
+    }
+
+    /// A busy store did nothing and may do it later: retryable, and never
+    /// a send that may have gone out. Any other storage failure is not
+    /// retryable. Decisive: the `Storage` arm of `is_retryable`.
+    #[test]
+    fn a_busy_store_is_retryable_and_sent_nothing() {
+        let busy = Error::from(StorageError::Busy);
+        assert!(busy.is_retryable());
+        assert!(!busy.may_have_been_sent());
+        assert!(StorageError::Busy.is_busy());
+        let broken = Error::from(StorageError::Backend(anyhow::anyhow!("db down")));
+        assert!(!broken.is_retryable());
+        assert!(!StorageError::Backend(anyhow::anyhow!("x")).is_busy());
+        assert!(busy.in_step("record").is_retryable(), "through a step");
     }
 }
