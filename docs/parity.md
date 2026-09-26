@@ -26,7 +26,7 @@ reached.
 - Each of the library's 44 partial or gap rows is cited by a
   [roadmap](roadmap.md) item. Each of the service's 91 names, in its
   status, the roadmap items that bring it; by family (a row can name
-  two): M2 8, M3 11, M4 2, M5 69, S 1 (the modular split), L 1 (L22a,
+  two): M2 8, M3 11, M4 2, M5 70, S 1 (the modular split), L 1 (L22a,
   tooling), P 2 (payments).
 - The largest gaps: the bot framework (section G: only the typed
   message events of row 84 and the command registration with Meta of
@@ -242,7 +242,7 @@ The owner's definition (2026-09-26):
 | 88 | Bots | Sender allow and deny lists (owners, banned users) | Yes | Yes | none (ours; row 71 is Meta's block list) | gap (`meta-whatsapp-bot`, B1) | gap (M5k) | gap / gap (M5k) |
 | 89 | Bots | Broadcast with pacing (progress, retries) | Yes (5 a second by default) | No (throws) | limits to respect: `throughput.md` (80 messages a second per number by default), the pair limit (131056, `support/error-codes.md`), `templates/marketing-templates/per-user-limits.md`, `messaging-limits` | gap: `RetryPolicy` handles a throttle, nothing paces a batch (`meta-whatsapp-bot`, B2; design D29) | gap (M5k) | gap / gap (M5k) |
 | 90 | Bots | Scheduled messages: send at a time, cancel, survive restarts, retry | Yes | No (fails when due) | Meta's WABA campaign schedules, reference only (`reference/whatsapp-business-account/schedules-api.md`; its `audience_id` is explained nowhere in the mirror) | gap: durable jobs, a typed store on `KvStore` (`meta-whatsapp-bot`, B3; design D29); Meta's schedules API not wrapped (L10b) | gap (M5k) | gap / gap (M5k) |
-| 91 | Bots | Auto-delete stored messages (by age, a cap per chat) | Yes | No ("not yet" on the Cloud API) | none (local data) | gap: `core::store::ConversationStore` has no retention or erasure (L5 and design D10; `meta-whatsapp-bot`, B4) | gap: the outbox purges after 7 days (`server::events::DEFAULT_OUTBOX_RETENTION`); the inbox keeps everything (retention per store: M2a) | gap / gap (M2a) |
+| 91 | Bots | Auto-delete stored messages (by age, a cap per chat) | Yes | No ("not yet" on the Cloud API) | none (local data) | gap: `core::store::ConversationStore` has no retention or erasure (L5 and design D10; `meta-whatsapp-bot`, B4) | gap: the outbox purges after 7 days (`server::events::DEFAULT_OUTBOX_RETENTION`); the inbox keeps everything (retention per store: M2a; the bot's auto-delete over HTTP: M5k) | gap / gap (M2a, M5k) |
 | 92 | Bots | Throttling our own typing indicators and group operations | Yes | Yes, per the summary of its configuration page (doubtful for group operations, which Zaileys does not offer on the Cloud API; unverified) | none (ours) | gap (`meta-whatsapp-bot`, B2, with pacing) | gap (M5k) | gap / gap (M5k) |
 
 ### H. Templates, commerce, numbers

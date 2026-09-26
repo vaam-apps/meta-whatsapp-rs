@@ -30,9 +30,10 @@ condition: every choice stays swappable. The rule:
 - **The test**: a choice may be decided when it ships swappable (behind
   a trait, a port or a setting, with a documented way to swap it), or
   names the [roadmap](docs/roadmap.md) item that adds the swap.
-- **What stays the owner's**: legal and terms-of-service choices,
-  licences among them; what cannot be undone: irreversible deletion or
-  data migrations, a released contract, and the stable identifiers
+- **What stays the owner's**, even when the choice would ship
+  swappable: legal and terms-of-service choices, licences among them;
+  what cannot be undone: irreversible deletion or data migrations, a
+  released contract, and the stable identifiers
   (`docs/architecture.md` § Stable identifiers). When unsure whether a
   choice is one of these, it is the owner's: surface it, never pick a
   default. The ones that wait for the owner before parity are

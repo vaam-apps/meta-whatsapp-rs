@@ -231,14 +231,16 @@ stored data, the owner's).
   decided on 2026-09-26, sets retention per store) or after a tenant of
   the same id was deleted; a read for the rate
   limits (M1b, below). Each tenant has its own sequence (a coordinator's
-  decision, reversible: design D21). An event's id is derived from the
+  decision, reversible until the first release, which the owner
+  confirms before then: design D21). An event's id is derived from the
   event under a key derived from `WA_APP_SECRET`, so it keeps it when
   recorded again, until that secret is rotated. Deleting a tenant
   deletes its events (a coordinator's decision beside the retention
   decision D10: design D22, which the owner confirms before the first
   release) and takes it out of every platform
-  key's allowed tenants (a coordinator's decision, reversible: design
-  D24; a tenant created again under the id needs a new platform key).
+  key's allowed tenants (a coordinator's decision, which the owner
+  confirms before the first release: design D24; a tenant created again
+  under the id needs a new platform key).
   Event `data` is
   the library's `WebhookEvent` JSON, pinned by snapshots over every
   Meta example among the library's fixtures (PR #17's conformance

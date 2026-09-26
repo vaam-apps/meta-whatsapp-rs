@@ -1016,14 +1016,14 @@ the service uses today as its "memory?" flag.
 
 | Backend | Database | Status |
 | --- | --- | --- |
-| `…-store-cratestack` (the default once the owner accepts D20 (a); until then `…-store-postgres`) | Postgres: CrateStack models for the records tables (tenants, API keys, WABAs, numbers); the outbox, idempotency, locks, janitor and migrations reuse store-postgres's SQL on the same pool, and the library's stores are `PostgresKvStore` and `PostgresConversationStore` on it | planned |
-| `…-store-postgres` | Postgres through sqlx: today's code and migrations | built; kept and conformance-tested |
-| `…-store-memory` | memory, development only | built; kept |
-| `…-store-mongodb` | MongoDB, a replica set | later: first an `Outbox` spike against the conformance suite, before the port shapes freeze (roadmap S9), then the library's MongoDB adapters (S17) and the whole bundle (S18) |
+| `meta-whatsapp-server-store-cratestack` (the default once the owner accepts D20 (a); until then `meta-whatsapp-server-store-postgres`) | Postgres: CrateStack models for the records tables (tenants, API keys, WABAs, numbers); the outbox, idempotency, locks, janitor and migrations reuse store-postgres's SQL on the same pool, and the library's stores are `PostgresKvStore` and `PostgresConversationStore` on it | planned |
+| `meta-whatsapp-server-store-postgres` | Postgres through sqlx: today's code and migrations | built; kept and conformance-tested |
+| `meta-whatsapp-server-store-memory` | memory, development only | built; kept |
+| `meta-whatsapp-server-store-mongodb` | MongoDB, a replica set | later: first an `Outbox` spike against the conformance suite, before the port shapes freeze (roadmap S9), then the library's MongoDB adapters (S17) and the whole bundle (S18) |
 
 ### 8.3 API adapters
 
-`…-server-http` (axum) is shared by every adapter: the listeners,
+`meta-whatsapp-server-http` (axum) is shared by every adapter: the listeners,
 telemetry, request ids, authentication before the body is read, rate
 limits, the §5 renderer, and the routes CrateStack cannot express
 (`/webhooks/meta`, media upload and download, SSE, the operations
@@ -1032,8 +1032,8 @@ merge.
 
 | Adapter | Contract | Status |
 | --- | --- | --- |
-| `…-api-cratestack` (the default once the owner accepts D20 (a); until then `…-api-axum`) | `api.cstack`: procedures, types and enums, REST (D19) | planned |
-| `…-api-axum` | today's `/v1` resource routes and `openapi/v1.json` | built; permanent, the swap target: every new route lands in it too, and it stays conformance-tested |
+| `meta-whatsapp-server-api-cratestack` (the default once the owner accepts D20 (a); until then `meta-whatsapp-server-api-axum`) | `api.cstack`: procedures, types and enums, REST (D19) | planned |
+| `meta-whatsapp-server-api-axum` | today's `/v1` resource routes and `openapi/v1.json` | built; permanent, the swap target: every new route lands in it too, and it stays conformance-tested |
 
 The binary composes one adapter and one backend: Cargo features choose
 which are compiled in (`api-cratestack` and `store-cratestack` by
@@ -1160,7 +1160,7 @@ library changes from L7 on are the roadmap's too.
 | **M1** skeleton, auth, messages and templates, webhooks in | the crate, fail-closed configuration, both listeners, storage and migrations, tenants, keys, admin API and CLI bootstrap, admin attach, the authorization order, messages, media, templates (list, get, create, delete), `/webhooks/meta` into inbox and outbox, `GET /v1/events`, errors (L1), idempotency, rate limits, health, metrics, tracing, the committed spec | `docs/guides/server.md` (run, configure, tenants, keys, first send); a README section "Not writing Rust? Run the service"; L6; a `docs/coverage.md` row; skills `meta-whatsapp-rs-server` (hub for HTTP callers: deploy, credentials, errors, idempotency, routing) and `meta-whatsapp-rs-server-send` (messages, templates, media); the skills gate below |
 | **M2** inbox, live updates, webhooks out | inbox routes (their reads filter by the number's binding epoch: a number moved to another tenant shows it nothing from before its binding, the inbox half of security review SR-M3; D10 hides, never purges), SSE (an `EventNotifier` port: `LISTEN/NOTIFY` on Postgres; `Last-Event-ID`), `GET /v1/events/{id}`, webhook endpoints, dispatcher, retries, destination allow-list, the service's number events, and the three types PR #17 typed made tenant-visible (D25: `standby_observed`, `thread_control_changed`, `user_action_reported` into `TENANT_EVENT_TYPES`, `KnownEventType` growing, additive) with the inbox's answer to `OPEN_QUESTIONS.md` #44, retention per store (D10), the received-media exemption (`OPEN_QUESTIONS.md` #43) | `server.md` inbox and events; skill `meta-whatsapp-rs-server-inbox` (inbox API, relaying live events to the CMS's browsers, receiving and verifying webhooks-out) |
 | **M3** Embedded Signup in both modes, OTP | signup routes, persisted attempts, disconnection, coexistence sync, authentication templates, OTP and its per-tenant settings; needs L2 (and L3 for partner mode). Vault rotation extended to the records partner mode keeps past a binding (credit ledgers that outlive their token, revocation markers: the library's `rotate_business`), without which a rotation's empty `failed` no longer means the old key is unused | `server.md` onboarding and OTP, and its key rotation advice ("drop the old key once `failed` is empty", caveated since M1a) made true again; `docs/guides/production.md` gains the vault key cadence of `OPEN_QUESTIONS.md` #9; skills `meta-whatsapp-rs-server-onboarding` (the CMS connect flow through the service: page, relay, PIN, resume, both modes) and `meta-whatsapp-rs-server-otp` |
-| **M4** packaging: Docker image, TypeScript client, docs | the image and its CI (D9), its contents listed and the image's third-party licences listed in the image (no `ffmpeg`: conversion is an optional feature or a sidecar the deployer adds, roadmap L19), a Compose file, `clients/typescript` generated by CrateStack and published (D11), the documents route, the deployment guide. Re-scoped on 2026-09-26: the move onto CrateStack is the modular split's ([§8](#8-modular-architecture-and-client-sdks), [roadmap.md](../roadmap.md) S1–S16; the default flips once D16 lands upstream), no longer this milestone's | `server.md` deployment (Docker, Compose, Kubernetes notes); a `docs/guides/README.md` row; skill `meta-whatsapp-rs-server-typescript` (install, calls, errors, idempotency, SSE, webhook verification in Medusa or any Node backend); `meta-whatsapp-rs-production` points to the service |
+| **M4** packaging: Docker image, TypeScript client, docs | the image and its CI (D9), its contents listed and the image's third-party licences listed in the image (no `ffmpeg`: conversion is an optional feature or a sidecar the deployer adds, roadmap L19), a Compose file, `clients/typescript` generated by CrateStack (if the owner refuses D20 (a), from `openapi/v1.json` by openapi-typescript) and published (D11), the documents route, the deployment guide. Re-scoped on 2026-09-26: the move onto CrateStack is the modular split's ([§8](#8-modular-architecture-and-client-sdks), [roadmap.md](../roadmap.md) S1–S16; the default flips once D16 lands upstream), no longer this milestone's | `server.md` deployment (Docker, Compose, Kubernetes notes); a `docs/guides/README.md` row; skill `meta-whatsapp-rs-server-typescript` (install, calls, errors, idempotency, SSE, webhook verification in Medusa or any Node backend); `meta-whatsapp-rs-production` points to the service |
 | **M5** the modules parity requires (added 2026-09-26) | routes over the library modules §1 once left "on demand", one PR per family ([roadmap.md](../roadmap.md) M5a–M5l): the send union's other types (pin, request contact info, Direct Send, interactive carousels, voice call, location request, address, call permission request, Flow, product messages), template edit, library, migration, comparison and unpausing, numbers and profile settings, WABA management, Flows, calling, groups, commerce, QR codes, analytics, block users, the Marketing Messages API and CTWA (the max-price agreement an explicit, audited operator action, off by default: `OPEN_QUESTIONS.md` #45), In-App Signup (accepting Meta's terms an explicit, audited operator action, off by default: `OPEN_QUESTIONS.md` #26), partner APIs, conversation routing, and the bot and broadcast APIs over `meta-whatsapp-bot`. Each route checks the object an id names against the path's number or WABA ([architecture.md § Service](../architecture.md#service-meta-whatsapp-server)); M1.3's table covers it by construction | a `server.md` section and a server skill (or a section of one) per family |
 
 **M1 ships in three parts**, each its own pull request: **M1a** the
@@ -1206,7 +1206,7 @@ test fail.
 | M3.5 | OTP: every outcome; tenant A's code verifies at no other tenant on the same number (decisive: the namespace); logs hold neither code nor number; a sentinel in a scripted Graph error on issue reaches no response |
 | M4.1 | The image builds for both architectures, runs non-root on a read-only file system, has no shell; `meta-whatsapp-server healthcheck` works in it |
 | M4.2 | A Compose smoke test in CI (Postgres, the image, a Graph stub via `WA_GRAPH_ENDPOINT`): CLI admin key, tenant, attach, send, a signed Meta webhook, a webhooks-out delivery verified at a stub receiver |
-| M4.3 | The client is generated from the committed `.cstack` schema (CrateStack's check mode fails on drift); `tsc --noEmit` passes on it and on every TypeScript excerpt of the server skills; a Node test verifies a real delivery with `verifyWebhook()`; a breaking change within `v1` fails `cratestack diff` against the last release; the invoice fixture renders byte-identically |
+| M4.3 | The client is generated from the committed `.cstack` schema (CrateStack's check mode fails on drift); `tsc --noEmit` passes on it and on every TypeScript excerpt of the server skills; a Node test verifies a real delivery with `verifyWebhook()`; a breaking change within `v1` fails `cratestack diff` against the last release; the invoice fixture renders byte-identically. If the owner refuses D20 (a), the client is generated from `openapi/v1.json` by openapi-typescript, a stale client fails the same drift gate, and `oasdiff` takes `cratestack diff`'s place |
 | M5.1 | M1.3's table covers every M5 route by construction: tenant B's key on A's number or WABA is `404`, with zero vault reads |
 | M5.2 | Each family checks the object an id names against the path's number or WABA (a group, a Flow, a QR code, a call): a route that skips it fails the family's cross-tenant test |
 | M5.3 | The legal acts (the max-price agreement, M5h; the In-App Signup terms, M5i) are explicit operator actions: with the deployment's setting off, the route makes no request to Meta; with it on, one request and one audit event naming the admin key; no other route performs them |
@@ -1235,10 +1235,11 @@ each decision (the owner's examples: MongoDB for the database;
 CrateStack for the API and the models, as the default, and CrateStack
 itself swappable altogether). The rule is AGENTS.md's § Decisions: a
 decision is taken when it ships swappable, or names the roadmap item
-that adds the swap, and its row says how to swap it. **The owner keeps
-legal and terms-of-service choices (licences among them) and what
-cannot be undone: irreversible deletion or data migrations, released
-contracts and the stable identifiers.**
+that adds the swap, and its row says how to swap it. **The owner keeps,
+even when the choice would ship swappable, legal and terms-of-service
+choices (licences among them) and what cannot be undone: irreversible
+deletion or data migrations, released contracts and the stable
+identifiers.**
 
 **Legal acts.** The code decides nothing legal. Where Meta ties a legal
 act to an API call (accepting the In-App Signup terms, signing the

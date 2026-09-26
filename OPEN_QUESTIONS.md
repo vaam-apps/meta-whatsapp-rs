@@ -9,9 +9,10 @@ in [AGENTS.md § Decisions](AGENTS.md#decisions) (and
 entry is decided when its choice ships swappable, or names the roadmap
 item that adds the swap. Legal and terms-of-service choices, and what
 cannot be undone (irreversible deletion or data migrations, released
-contracts, stable identifiers), stay the owner's. A legal act Meta ties
-to an API call is exposed as an explicit, audited operator action and
-never taken automatically; performing it is the deployer's decision.
+contracts, stable identifiers), stay the owner's, even when swappable.
+A legal act Meta ties to an API call is exposed as an explicit, audited
+operator action and never taken automatically; performing it is the
+deployer's decision.
 
 **Recording format.** A decided entry keeps its text and gains one
 paragraph: `**Decided <date> (<who>, owner's delegation):** <the
