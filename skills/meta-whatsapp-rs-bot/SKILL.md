@@ -5,7 +5,7 @@ description: "A WhatsApp bot on Cloud API webhooks with meta-whatsapp-rs (featur
 
 # meta-whatsapp-rs-bot
 
-> **Verified against meta-whatsapp-rs 412e292c74b0776ef9307f23ff6c8e00d65d832c (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 7068cff7122c08d40e5b7c23f4077d2689bf46ee (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/bot.rs](examples/bot.rs), compiled and tested
 by meta-whatsapp-rs's own gate. Everything is in `meta_whatsapp_rs::bot`
