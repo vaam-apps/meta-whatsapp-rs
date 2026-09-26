@@ -1839,18 +1839,23 @@ impl Index {
             return true;
         }
         let made_by_macro = self.files.iter().any(|f| f.macro_types.contains(owner));
-        if found && !made_by_macro {
-            return false;
+        // What a `macro_rules!` generates for the types it declares
+        // (`as_str`, say) is declared in the macro's own file.
+        let by_macro = made_by_macro
+            && self
+                .files
+                .iter()
+                .filter(|f| f.has_macro_rules)
+                .any(|f| f.decls.contains_key(member));
+        if found {
+            // The type's body was read: its members are known, and a
+            // macro adds only what its definition declares.
+            return by_macro;
         }
-        files
-            .iter()
-            .any(|f| f.decls.contains_key(member) || f.members.values().any(|m| m.contains(member)))
-            || (made_by_macro
-                && self
-                    .files
-                    .iter()
-                    .filter(|f| f.has_macro_rules)
-                    .any(|f| f.decls.contains_key(member)))
+        by_macro
+            || files.iter().any(|f| {
+                f.decls.contains_key(member) || f.members.values().any(|m| m.contains(member))
+            })
     }
 
     /// Resolve `prefix::module::…::Item::member` in its crate.
@@ -2239,6 +2244,8 @@ fn the_resolver_refuses_what_does_not_exist() {
         "MessageEchoed",
         "client::embedded_signup::StoredBusinessToken::expires_at",
         "webhooks::verify::verify_subscription",
+        "webhooks::fields::GroupUpdateType::GroupCreate",
+        "webhooks::fields::GroupUpdateType::as_str",
     ] {
         assert_eq!(index.span_problem(good), None, "{good}");
     }
@@ -2254,6 +2261,7 @@ fn the_resolver_refuses_what_does_not_exist() {
         "verify::verify_subscription",
         "client::SignatureVerifier",
         "client::embedded_signup::StoredBusinessToken::debug_token",
+        "webhooks::fields::GroupUpdateType::StatusUpdated",
     ] {
         assert!(index.span_problem(bad).is_some(), "{bad} resolved");
     }
