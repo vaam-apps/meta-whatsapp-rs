@@ -13,9 +13,8 @@ stores.
 
 ## When to use
 
-Before production: everything stateful in meta-whatsapp-rs sits on two ports, and
-the typed stores (vault, OTP, dedup, sessions) are built on `KvStore`, so
-one adapter serves them all.
+Before production: everything stateful in meta-whatsapp-rs sits on two ports, and the typed
+stores (vault, OTP, dedup, sessions, bot cooldowns) are built on `KvStore`, so one adapter serves them all.
 
 | Data | Port | Namespace | Lose it and |
 | --- | --- | --- | --- |
@@ -23,6 +22,7 @@ one adapter serves them all.
 | signup attempts (`SignupSessions`) | `KvStore` | `wa.es.session` | attempts in flight fail |
 | OTP challenges and limits (`OtpService`) | `KvStore` | `wa.otp`, `wa.otp.rate` | codes fail; limits reset |
 | webhook dedup (`DedupGuard`) | `KvStore` | `wa.webhook.dedup` | Meta's retries delivered again |
+| bot cooldowns (`KvCooldowns`) | `KvStore` | `wa.bot.cooldown` | running cooldowns reset |
 | inbox history (`InboxSink`, `Inbox`) | `ConversationStore` | tables `wa_*` | the history |
 
 | | Memory (`memory`) | Postgres (`postgres`) | Redis (`redis`) |
