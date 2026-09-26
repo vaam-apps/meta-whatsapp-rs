@@ -63,8 +63,12 @@ registrar.command(
   for a group message, else to the sender's business-scoped user id
   (BSUID), else to `+<wa_id>`. A sender is keyed the same way
   (`Sender::key`): since 2026 a message may carry no phone number at all.
-  Standby copies and your own echoes never run a command, and there is
-  nothing to reply to in them.
+  Standby copies, your own echoes and synchronized history never run a
+  command, and there is nothing to reply to in them.
+- **Listeners.** `Listen::Messages` gets every received message no
+  command took: reactions, edits, deletions and system notices too, so
+  check the content before an automatic answer (else a user's reaction
+  to your reply gets a reply of its own).
 
 ## 2. Guards
 

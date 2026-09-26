@@ -778,6 +778,38 @@ async fn a_banned_sender_gets_no_middleware_and_no_read_receipt() {
     assert_eq!(out.reads.lock().unwrap().len(), 1);
 }
 
+/// The ban is about what a sender sends: the status of a message the
+/// business sent to a banned user still reaches its listeners (delivery
+/// tracking keeps working).
+#[tokio::test]
+async fn a_ban_leaves_other_events_about_the_user_alone() {
+    let statuses = Arc::new(AtomicUsize::new(0));
+    let statuses_in = Arc::clone(&statuses);
+    let bot = Bot::builder()
+        .outbound(Recording::default())
+        .access(AccessList::new().ban(BSUID))
+        .listen(Listen::event("status_updated"), move |ctx: Ctx| {
+            let statuses = Arc::clone(&statuses_in);
+            async move {
+                assert!(ctx.sender().is_some());
+                statuses.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .build()
+        .await
+        .unwrap();
+    let status = event("bsuid/status_delivered_bsuid_only.json");
+    assert!(
+        status
+            .contact()
+            .and_then(|c| c.user_id.as_ref())
+            .is_some_and(|user| user.as_str() == BSUID)
+    );
+    bot.handle(status).await.unwrap();
+    assert_eq!(count(&statuses), 1);
+}
+
 /// Decisive: a middleware that does not call `next` stops the event.
 #[tokio::test]
 async fn a_middleware_that_does_not_call_next_stops_the_event() {

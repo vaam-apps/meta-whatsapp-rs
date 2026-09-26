@@ -176,6 +176,7 @@ fn only_web_mail_and_phone_urls_are_written() {
         ("[click](javascript:alert(1))".into(), &["click"]),
         ("[click](JavaScript:alert(1))".into(), &["click"]),
         ("[click](<\tjavascript:alert(1)>)".into(), &["click"]),
+        ("[click](< javascript:alert(1)>)".into(), &["click"]),
         ("[x](vbscript:msgbox)".into(), &["x"]),
         ("[notes](file:///etc/passwd)".into(), &["notes"]),
         (format!("![chart]({data})"), &["chart"]),

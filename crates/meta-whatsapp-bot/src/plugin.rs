@@ -67,7 +67,10 @@ pub trait Plugin: Send + Sync + 'static {
 #[non_exhaustive]
 pub enum Listen {
     /// Received messages that are not a (known) command, from senders who
-    /// are not banned.
+    /// are not banned. Every kind of message: reactions, edits, deletions,
+    /// system notices (a number change) and unsupported ones too, so an
+    /// auto-responder checks `ctx.message()`'s content before it answers
+    /// (else a user's reaction to its reply gets a reply of its own).
     Messages,
     /// Events of this kind (`WebhookEvent::kind`, e.g. `"status_updated"`)
     /// that no command handled.
