@@ -57,7 +57,8 @@ WebhookEvent::UserIdChanged { update, .. } => Action::CustomerRenamed {
 },
 ```
 
-Conversation Routing: track thread ownership, never answer a standby copy:
+Conversation Routing: track thread ownership from the handovers, and record
+a `StandbyObserved` copy without ever answering it (`Action::Observed`):
 
 ```rust
 WebhookEvent::ThreadControlChanged {
@@ -74,8 +75,6 @@ WebhookEvent::ThreadControlChanged {
     // control_passed: reply to the user; control_taken: stop.
     owner: handover.kind == HandoverType::ControlPassed,
 },
-// A copy of a thread another responder owns: record it, never reply.
-WebhookEvent::StandbyObserved { .. } => Action::Ignore,
 ```
 
 `WebhookEvent` is `#[non_exhaustive]`: keep a `_` arm. Serialized, it is

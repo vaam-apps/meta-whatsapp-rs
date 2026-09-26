@@ -41,6 +41,11 @@ pub enum Action {
         name: String,
         status: String,
     },
+    /// Conversation Routing: a copy of a thread another responder owns.
+    /// Record it; never reply.
+    Observed {
+        number: PhoneNumberId,
+    },
     /// Conversation Routing: whether you own the thread with this user now.
     Ownership {
         number: PhoneNumberId,
@@ -131,7 +136,11 @@ pub fn action(event: &WebhookEvent) -> Action {
             owner: handover.kind == HandoverType::ControlPassed,
         },
         // A copy of a thread another responder owns: record it, never reply.
-        WebhookEvent::StandbyObserved { .. } => Action::Ignore,
+        WebhookEvent::StandbyObserved {
+            phone_number_id, ..
+        } => Action::Observed {
+            number: phone_number_id.clone(),
+        },
         WebhookEvent::Unknown { field, .. } => Action::Untyped(field.clone()),
         WebhookEvent::Unparsed { .. } => Action::Untyped("(unparsed body)".into()), // alert on it
         _ => Action::Ignore,
@@ -284,7 +293,12 @@ mod tests {
                 "metadata": {"display_phone_number": "15550783881", "phone_number_id": "106540352242922"},
                 "standby": {"messages": [{"from": "16505551234", "id": "wamid.S",
                     "timestamp": "1750101000", "type": "text", "text": {"body": "Hi"}}]}}}]}]});
-        assert_eq!(action(&events(&standby)[0]), Action::Ignore);
+        assert_eq!(
+            action(&events(&standby)[0]),
+            Action::Observed {
+                number: "106540352242922".into()
+            }
+        );
     }
 
     #[test]
