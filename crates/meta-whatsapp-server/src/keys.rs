@@ -173,6 +173,31 @@ mod tests {
         );
     }
 
+    /// Every integrator holds keys of this layout (docs/architecture.md,
+    /// "Stable identifiers"): pinned in literals, not through the
+    /// constants, so a changed width fails here instead of refusing every
+    /// key already issued. The `w` is spelled `\x77` so that a
+    /// search-and-replace of the prefix cannot rewrite the pin with it.
+    /// Decisive: `PREFIX`, `KEY_ID_CHARS`, `SECRET_CHARS`.
+    #[test]
+    fn the_key_layout_is_pinned() {
+        assert_eq!(PREFIX, "\x77ak_");
+        let issued = format!("\x77ak_{}_{}", "0".repeat(17), "z".repeat(43));
+        let presented = PresentedKey::parse(&issued).unwrap();
+        assert_eq!(presented.key_id(), "0".repeat(17));
+        for wrong in [
+            format!("\x77ak_{}_{}", "0".repeat(16), "z".repeat(43)),
+            format!("\x77ak_{}_{}", "0".repeat(18), "z".repeat(43)),
+            format!("\x77ak_{}_{}", "0".repeat(17), "z".repeat(42)),
+            format!("\x77ak_{}_{}", "0".repeat(17), "z".repeat(44)),
+        ] {
+            assert!(PresentedKey::parse(&wrong).is_none(), "{wrong}");
+        }
+        let minted = MintedKey::generate().unwrap();
+        assert_eq!(minted.expose_key().len(), 4 + 17 + 1 + 43);
+        assert_eq!(minted.key_id().len(), 17);
+    }
+
     #[test]
     fn a_minted_key_parses_and_matches_its_digest_only() {
         let minted = MintedKey::generate().unwrap();

@@ -797,7 +797,9 @@ mod tests {
             recorded,
             PINNED_CHECKSUMS.map(|(v, h)| (v, h.to_owned())).to_vec()
         );
-        assert_eq!(MIGRATIONS_TABLE, "wa_server_sqlx_migrations");
+        // `\x77` is `w`: spelled so that a search-and-replace of the table
+        // prefix cannot rewrite this pin along with the code.
+        assert_eq!(MIGRATIONS_TABLE, "\x77a_server_sqlx_migrations");
     }
 
     #[test]
