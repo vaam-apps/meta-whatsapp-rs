@@ -13,9 +13,9 @@
 //! | fenced or indented code | ```` ```code``` ```` (language dropped) |
 //! | `> quote` | `> quote`, on every line |
 //! | `- item`, `1. item` | `• item`, `1. item` (nested: indented) |
-//! | `[text](url)` | `text (url)`; a link whose text is its URL, or an autolink: `url` |
+//! | `[text](url)` | `text (url)`; a link whose text is its URL, or an autolink: `url` (only `http`, `https`, `mailto`, `tel` or relative URLs: any other scheme, such as `javascript:` or `data:`, keeps just the text) |
 //! | tables | a monospace block, columns padded |
-//! | `![alt](url)` | `alt (url)`, or `url` without alt text |
+//! | `![alt](url)` | `alt (url)`, or `url` without alt text (the same URL rule) |
 //! | `---` | a line of `———` |
 //! | raw HTML | its text |
 //!
@@ -340,11 +340,19 @@ impl Inline {
 
     /// `text (url)`; just `url` when the text is empty or is the URL
     /// (autolinks included), just the text when there is no URL or it is
-    /// the text's `mailto:`.
+    /// the text's `mailto:`. A URL [`url_allowed`] refuses is never
+    /// written: the link is its text alone (nothing when that text is the
+    /// URL).
     fn close_link(&mut self) {
         let Some(link) = self.links.pop() else {
             return;
         };
+        if !url_allowed(&link.url) {
+            if link.auto || link.raw == link.url {
+                self.out.truncate(link.start);
+            }
+            return;
+        }
         let text = self.out[link.start..].trim();
         let url = link.url.as_str();
         let mailto = url
@@ -368,6 +376,31 @@ impl Inline {
             text.to_owned()
         }
     }
+}
+
+/// Schemes a link or image URL may have to be written into a message.
+const URL_SCHEMES: [&str; 4] = ["http", "https", "mailto", "tel"];
+
+/// Whether a link's or image's `url` may be written into a message: an
+/// `http`, `https`, `mailto` or `tel` URL, or a relative one (no scheme).
+/// Anything else (`javascript:`, `data:`, `file:`, …) is left out. The
+/// scheme is read the way browsers read it: leading spaces and control
+/// characters skipped, tabs and line breaks ignored, any case.
+fn url_allowed(url: &str) -> bool {
+    let cleaned: String = url
+        .trim_start_matches(|c: char| c == ' ' || c.is_ascii_control())
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+        .collect();
+    let Some((scheme, _)) = cleaned.split_once(':') else {
+        return true;
+    };
+    let is_scheme = scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    // Not a scheme (`/a:b`, `?q=x:y`): a relative URL.
+    !is_scheme || URL_SCHEMES.iter().any(|s| scheme.eq_ignore_ascii_case(s))
 }
 
 /// A table being read: rows of rendered cells, the header first.

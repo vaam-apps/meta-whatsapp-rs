@@ -128,7 +128,7 @@ description fails `Bot::command_menu` rather than being dropped.
 
 `ctx.reply_markdown(md)` uses `meta_whatsapp_rs::bot::markdown::render`:
 bold and headings `*b*`, italics `_i_`, `~s~`, code, quotes, `•` lists,
-`text (url)` links, tables as a monospace block; a message per 4096
+`text (url)` links (web, mail, phone), monospace tables; a message per 4096
 characters, cut between blocks, never inside a code block that fits.
 Text is left as written (`NoEscape`, the default): copied addresses,
 codes and `/commands` work, but a literal `*`, `_` or `~` may format.

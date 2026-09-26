@@ -191,7 +191,7 @@ sends it as one message per 4096 characters (Meta's text body limit):
 | inline code, code blocks | `` `code` ``, ```` ```block``` ```` |
 | `> quote` | `> quote` |
 | lists | `• item`, `1. item` |
-| `[text](url)`, `![alt](url)` | `text (url)`, `alt (url)` |
+| `[text](url)`, `![alt](url)` | `text (url)`, `alt (url)`; only `http`, `https`, `mailto`, `tel` or relative URLs, so a `javascript:` or `data:` one keeps just its text |
 | tables | a monospace block, columns padded |
 
 Messages are cut between blocks (paragraphs, list items, code blocks,

@@ -165,6 +165,39 @@ async fn the_default_escape_leaves_copyable_text_as_written() {
     assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
+/// Only `http`, `https`, `mailto` and `tel` URLs (and relative ones) are
+/// written into a message: a `javascript:`, `data:` or `file:` link keeps
+/// its text and loses its target, so a data-URI image in an LLM's answer
+/// is its alt text, not pages of base64.
+#[test]
+fn only_web_mail_and_phone_urls_are_written() {
+    let data = format!("data:image/png;base64,{}", "iVBORw0KGgo".repeat(500));
+    let table: &[(String, &[&str])] = &[
+        ("[click](javascript:alert(1))".into(), &["click"]),
+        ("[click](JavaScript:alert(1))".into(), &["click"]),
+        ("[click](<\tjavascript:alert(1)>)".into(), &["click"]),
+        ("[x](vbscript:msgbox)".into(), &["x"]),
+        ("[notes](file:///etc/passwd)".into(), &["notes"]),
+        (format!("![chart]({data})"), &["chart"]),
+        (format!("![]({data})"), &[]),
+        ("<javascript:alert(1)>".into(), &[]),
+        (
+            "[javascript:alert(1)](javascript:alert(1)) and more".into(),
+            &["and more"],
+        ),
+        (
+            "[call](tel:+16505551234)".into(),
+            &["call (tel:+16505551234)"],
+        ),
+        ("[site](http://x.io)".into(), &["site (http://x.io)"]),
+        ("[site](HTTPS://x.io)".into(), &["site (HTTPS://x.io)"]),
+        ("[docs](/help/start)".into(), &["docs (/help/start)"]),
+    ];
+    for (markdown, expected) in table {
+        assert_eq!(&markdown::render(markdown), expected, "input: {markdown:?}");
+    }
+}
+
 #[test]
 fn tables_become_a_padded_monospace_block() {
     let markdown = "| Item | Qty |\n| --- | ---: |\n| Aloe *vera* | 3 |\n| Pot_S | 12 |";
