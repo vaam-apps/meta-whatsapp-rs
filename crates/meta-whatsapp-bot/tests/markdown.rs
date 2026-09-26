@@ -607,3 +607,220 @@ async fn reply_markdown_sends_every_part_in_order() {
         })
     );
 }
+
+// ─── Fuzzed split ────────────────────────────────────────────────────────
+
+/// xorshift64: a fixed seed, so a failure replays.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        x
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        usize::try_from(self.next() % n as u64).unwrap()
+    }
+
+    fn chance(&mut self, percent: usize) -> bool {
+        self.below(100) < percent
+    }
+
+    fn pick<'a>(&mut self, items: &[&'a str]) -> &'a str {
+        items[self.below(items.len())]
+    }
+}
+
+/// Words with astral emoji (skin tones, ZWJ families, flags), CJK, accents,
+/// Markdown and WhatsApp markup, backticks, links, HTML and invisible
+/// joiners.
+const ATOMS: &[&str] = &[
+    "word",
+    "déjà",
+    "😀",
+    "👍🏽",
+    "👨‍👩‍👧",
+    "🇫🇷",
+    "𝔘𝔫𝔦",
+    "漢字",
+    "テスト",
+    "한국어",
+    "a*b",
+    "snake_case",
+    "~x~",
+    "`",
+    "``",
+    "```",
+    ">",
+    "**",
+    "_",
+    "~~",
+    "http://x.io/a_b",
+    "[link](https://x.io/😀)",
+    "[bad](javascript:alert(1))",
+    "<https://auto.link>",
+    "`code`",
+    "``a ` b``",
+    "**bold**",
+    "*it*",
+    "~~s~~",
+    "foo**bar**baz",
+    "***both***",
+    "\\*",
+    "<b>html</b>",
+    "|",
+    "\u{2060}",
+    "\u{200d}",
+    "\u{fe0f}",
+    "é\u{301}",
+];
+
+fn fuzz_word(rng: &mut Rng) -> String {
+    let atom = rng.pick(ATOMS);
+    if rng.chance(1) {
+        // One word longer than a message: cut between characters.
+        atom.repeat(1 + rng.below(1200))
+    } else if rng.chance(20) {
+        let other = rng.pick(ATOMS);
+        format!("{atom}{other}")
+    } else {
+        atom.to_owned()
+    }
+}
+
+fn fuzz_line(rng: &mut Rng, words: usize) -> String {
+    (0..=rng.below(words))
+        .map(|_| fuzz_word(rng))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn fuzz_block(rng: &mut Rng) -> String {
+    match rng.below(10) {
+        0 => format!("{} {}", "#".repeat(1 + rng.below(6)), fuzz_line(rng, 8)),
+        1 => {
+            // A list, nested up to past the nesting cap.
+            let mut depth = 0;
+            (0..=rng.below(30))
+                .map(|i| {
+                    depth = (depth + rng.below(3)).saturating_sub(1).min(20);
+                    let marker = if rng.chance(50) {
+                        "- ".to_owned()
+                    } else {
+                        format!("{}. ", i + 1)
+                    };
+                    format!("{}{marker}{}", "   ".repeat(depth), fuzz_line(rng, 12))
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+        2 => format!("{}{}", "> ".repeat(1 + rng.below(20)), fuzz_line(rng, 30)),
+        3 => {
+            // A fenced code block, some lines starting or ending with a
+            // backtick, some holding a fence.
+            let most = if rng.chance(5) { 150 } else { 12 };
+            let lines = (0..=rng.below(most))
+                .map(|_| {
+                    let line = fuzz_line(rng, 10);
+                    match rng.below(8) {
+                        0 => format!("`{line}"),
+                        1 => format!("{line}`"),
+                        2 => format!("x ``` {line}"),
+                        _ => line,
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("```{}\n{lines}\n```", rng.pick(&["", "rust", "sh"]))
+        }
+        4 => format!("    {}\n    {}", fuzz_line(rng, 10), fuzz_line(rng, 10)),
+        5 => {
+            let columns = 1 + rng.below(4);
+            let row = |rng: &mut Rng| {
+                let cells: Vec<String> = (0..columns).map(|_| fuzz_line(rng, 3)).collect();
+                format!("| {} |", cells.join(" | "))
+            };
+            let mut table = vec![row(rng), format!("|{}", "---|".repeat(columns))];
+            for _ in 0..rng.below(10) {
+                table.push(row(rng));
+            }
+            table.join("\n")
+        }
+        6 => "---".to_owned(),
+        _ => {
+            // A paragraph, with line breaks, sometimes long.
+            let words = if rng.chance(5) { 300 } else { 40 };
+            (0..=rng.below(3))
+                .map(|_| fuzz_line(rng, words))
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+    }
+}
+
+fn fuzz_document(rng: &mut Rng) -> String {
+    (0..=rng.below(8))
+        .map(|_| fuzz_block(rng))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// Without whitespace or backticks: what a part may add (fences on a cut
+/// code block) or drop (the whitespace at a cut) is left out.
+fn content(text: &str) -> String {
+    text.chars()
+        .filter(|c| !c.is_whitespace() && *c != '`')
+        .collect()
+}
+
+/// Decisive for the split: 3000 random Markdown documents (fixed seed)
+/// with emoji, CJK, nesting, tables and code, many longer than a message.
+/// At the default limit every part is at most 4096 UTF-16 code units, not
+/// blank, and accepted by the client's own `OutboundMessage::validate`;
+/// under a random smaller limit (2 to 400) every part fits it too; and the
+/// parts hold what one unsplit message would, in order.
+#[test]
+fn fuzzed_markdown_always_splits_into_parts_the_client_accepts() {
+    let to = Recipient::phone("+16505551234");
+    let mut rng = Rng(0x05ee_d202_6092_6b07);
+    let mut split_documents = 0;
+    for case in 0..3000 {
+        let markdown = fuzz_document(&mut rng);
+        let parts = markdown::render(&markdown);
+        split_documents += usize::from(parts.len() > 1);
+        for part in &parts {
+            let units = part.encode_utf16().count();
+            assert!(units <= TEXT_MAX_CHARS, "case {case}: {units} units");
+            assert!(!part.trim().is_empty(), "case {case}: a blank part");
+            if let Err(e) = OutboundMessage::text(to.clone(), part.clone()).validate() {
+                panic!("case {case}: {e}");
+            }
+        }
+        let unsplit = Renderer::new().render_unsplit(&markdown);
+        assert_eq!(
+            content(&parts.concat()),
+            content(&unsplit),
+            "case {case}: content lost or moved"
+        );
+
+        let max = 2 + rng.below(399);
+        let parts = Renderer::new().max_chars(max).render(&markdown);
+        for part in &parts {
+            let units = part.encode_utf16().count();
+            assert!(units <= max, "case {case}: {units} units > {max}");
+            assert!(!part.trim().is_empty(), "case {case}: a blank part");
+        }
+        assert_eq!(
+            content(&parts.concat()),
+            content(&unsplit),
+            "case {case} (max {max}): content lost or moved"
+        );
+    }
+    // The generator does exercise the split.
+    assert!(split_documents > 100, "{split_documents}");
+}
