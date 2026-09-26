@@ -505,7 +505,7 @@ impl fmt::Debug for StoredContact {
 /// their earlier identities. A link is personal data:
 /// [`erase_all`](ConversationStore::erase_all) deletes the links naming an
 /// erased identity. Recording them from the webhooks is `InboxSink`'s
-/// (roadmap L7, L8); until then an integrator records them from its own
+/// (roadmap L7); until then an integrator records them from its own
 /// sink.
 ///
 /// Its `Debug` shows the business number and the time, never the
@@ -573,7 +573,9 @@ pub enum ErasureMode {
     /// [`Delete`](Self::Delete) when it must go too.
     #[default]
     Redact,
-    /// Delete the message (its id is then free to be recorded again).
+    /// Delete the message (its id is then free to be recorded again). A
+    /// revoke's tombstone in the group, which has no sender, stays (see
+    /// [`ConversationStore::erase_all`]).
     Delete,
 }
 
@@ -948,7 +950,12 @@ pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
     /// same link (business number, `previous`, `current`) is stored,
     /// whatever its time: webhook retries make this common. Links are not
     /// history: [`purge_before`](Self::purge_before) keeps them, and
-    /// [`erase_all`](Self::erase_all) deletes them.
+    /// [`erase_all`](Self::erase_all) deletes them. They outlive a
+    /// retention on purpose (design D35): records under the other identity
+    /// can be newer than the link (a history thread keyed by a phone
+    /// number, synced after a link recorded earlier), and a link purged by
+    /// age would hide them from a later erasure; a link holds two
+    /// identifiers and a time, no content.
     async fn link_identity(&self, link: IdentityLink) -> Result<bool, StorageError>;
 
     /// The links of business number `key.phone_number_id` that name
@@ -1019,7 +1026,10 @@ pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
     ///   message (a reply's `context`, a contact card, a number-change
     ///   `system` message under their earlier key names the new one: erase
     ///   both), and, under [`ErasureMode::Redact`], the ids of their group
-    ///   messages (Meta's `wamid`, which encodes their phone number);
+    ///   messages (Meta's `wamid`, which encodes their phone number); under
+    ///   either mode, the tombstone of a revoke of theirs that arrived
+    ///   before its message in a group ([`revoke`](Self::revoke): no
+    ///   content and no sender, the id of their message);
     /// - identities nothing connects (see [`identities`](Self::identities));
     /// - outside it: the webhook dedup markers and OTP challenges
     ///   (`KvStore`: hashed keys, expiring; keep the dedup markers, they

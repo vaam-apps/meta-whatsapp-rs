@@ -402,7 +402,9 @@ The procedure, per erasure request:
    the customer gave you, a BSUID in your CRM).
 2. `Inbox::erase_all(&identities)` on each of the merchant's numbers,
    behind your ownership check of the number (an `Inbox` is bound to
-   one number and refuses another's keys).
+   one number and refuses another's keys). Their group messages are
+   redacted and keep their ids (a `wamid` encodes the phone number)
+   unless the store deletes them (`ErasureMode::Delete`).
 3. Delete your own copies (downloaded media, exports, SSE clients'
    caches), the service's outbox rows (roadmap M2f) and your dead
    letters (L21a) for that customer.

@@ -300,7 +300,7 @@ let erased = inbox.erase_all(&ids).await?; // `Erased`: counts only; log those, 
 `identities` follows the synced address book contacts (a contact's key,
 BSUID, parent BSUID and phone number are one person) and the identity
 links (`ConversationStore::link_identity`: a BSUID change or a number
-change; `InboxSink` records them from roadmap L7 and L8, until then your
+change; `InboxSink` records them from roadmap L7, until then your
 own sink does). Add the identities you hold yourself (the phone number
 the customer gave you). `erase_all` deletes, not hides, in one step:
 every record under those keys (messages of every origin and revoke
@@ -322,10 +322,13 @@ What the erasure does not reach, and what you do about it:
   message (a reply's `context`, a contact card; a number-change `system`
   message under their old key names the new one, so erase both);
   identities nothing connects (a thread under a phone number the address
-  book never showed you); and, when redacting, the ids of their group
+  book never showed you); when redacting, the ids of their group
   messages (Meta's `wamid` encodes the sender's phone number: choose
-  `ErasureMode::Delete` if that must go too). A phone number recycled by
-  the operator connects its two owners: check what `identities` returns.
+  `ErasureMode::Delete` if that must go too); and, in either mode, the
+  tombstone a revoke of theirs left in a group when it arrived before
+  its message (no content, no sender: the id alone). A phone number
+  recycled by the operator connects its two owners: check what
+  `identities` returns.
 - **In Postgres**: dead rows and index entries until `VACUUM`, the WAL,
   replicas, change-data-capture consumers, backups, and statement logs
   ([production.md § 8](production.md#8-retention-and-erasure-on-postgres):
@@ -361,7 +364,8 @@ synced contacts made before it (a removal is kept, its key and time
 only, so that an older sync delivered late cannot undo it), and the
 summary of a conversation whose latest message went (it holds that
 message's preview); synced contacts and identity links stay (an erasure
-follows them). For another policy (per tenant, or a number that leaves
+follows them; a link outlives the retention on purpose, design D35: a
+thread under the other identity can be newer than the link). For another policy (per tenant, or a number that leaves
 your platform), call
 `ConversationStore::purge_before(Some(&phone_number_id), cutoff)`
 yourself.

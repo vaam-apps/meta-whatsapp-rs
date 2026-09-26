@@ -27,7 +27,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
   comments) are cited in the docs as SR-H1, SR-M3, SR-L2, so they never
   read as items.
 - The choices behind the items are recorded in
-  [design §10](design/server.md#10-decisions) (D26–D34 and the rows
+  [design §10](design/server.md#10-decisions) (D26–D35 and the rows
   updated on 2026-09-26) and in
   [OPEN_QUESTIONS.md](../OPEN_QUESTIONS.md), under the rule in AGENTS.md
   § Decisions. What stays the owner's is listed in
@@ -435,13 +435,20 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   `InboxSink` records the calls that reopen the 24-hour window and
   standby messages as window events (never unread), and ownership from
   the handovers; `Inbox::reply` refuses locally when another app owns
-  the thread; a caller's explicit override of the local check.
+  the thread; a caller's explicit override of the local check. It also
+  records L5's identity links (`ConversationStore::link_identity`), so
+  that an erasure finds a person's other keys: from `user_id_update`
+  (`WebhookEvent::UserIdChanged`), from a number-change `system`
+  message, and a phone number to BSUID link when an inbound message
+  carries both `from` and `from_user_id` (a thread keyed by the `wa_id`
+  before BSUIDs is found only through one).
   - **Kind:** additive (on L5's port).
   - **After:** L5.
   - **Decisive:** after a scripted call, `Inbox::reply` sends a
     free-form reply it refused before; after `control_taken`, a reply is
-    refused locally with zero requests; each fails when its recording is
-    removed.
+    refused locally with zero requests; after a `user_id_update`,
+    `Inbox::identities` of the new BSUID holds the previous one; each
+    fails when its recording is removed.
 - [ ] **L8. Message and contact stores** (`meta-whatsapp-adapters`,
   features `redis` and a new `sqlite`; `meta_whatsapp_rs::inbox`; rows
   69, 111): a Redis `ConversationStore`, SQLite adapters for both ports,

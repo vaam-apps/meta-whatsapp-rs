@@ -695,10 +695,11 @@ stored data, the owner's).
   - `link_identity` / `identity_links`: an `IdentityLink`
     (`phone_number_id`, `previous`, `current`, `at`: a BSUID or number
     change, as Meta's `user_id_update` names it), stored once per number
-    and pair (the inbox records them in L7 and L8).
+    and pair (the inbox records them in L7).
   - `identities(key)`: a person's keys on one number, the closure over
     the synced contacts (key, BSUID, parent BSUID, phone number) and the
-    links; read only (design D30).
+    links, never through an empty value (contacts that share an empty
+    field are not one person); read only (design D30).
   - `erase_all(phone_number_id, ids)`: erases a person on one number,
     in one step: deletes, not hides, every record keyed by the ids
     (messages of every origin and tombstones, summaries, window events,
@@ -727,7 +728,9 @@ stored data, the owner's).
   - `purge_before(number or all, cutoff)`: deletes messages, window
     events, ownership records and kept contact removals older than the
     cutoff, and the summary of a conversation whose latest message went
-    (`Purged`).
+    (`Purged`). Synced contacts and identity links stay: a link outlives
+    a retention on purpose, so that an erasure still finds a thread
+    under the other identity that is newer than the link (design D35).
   - `retention` / `apply_retention`, provided: a `Retention` set per
     store (design D10: kept by default), taken by
     `MemoryConversationStore::with_retention` and
@@ -760,8 +763,8 @@ stored data, the owner's).
   the upgrade before erasing. The new table names, the stored names of
   `WindowEventKind` and `ThreadOwner` and the message kinds `revoked`
   and `erased` are stable identifiers (docs/architecture.md). `InboxSink`
-  is unchanged: calls, standby messages, ownership, synced contacts and
-  identity links are not recorded yet (L7, L8).
+  is unchanged: calls, standby messages, ownership and identity links
+  are not recorded yet (L7), nor synced contacts (L8).
 - **The plans of 2026-09-26** (docs only; the owner's directive of that
   day, recorded in AGENTS.md § Decisions and design §10, now titled
   "Decisions", whose anchor moved to `#10-decisions`):
