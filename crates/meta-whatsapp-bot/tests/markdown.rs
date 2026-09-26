@@ -248,20 +248,240 @@ fn tables_become_a_padded_monospace_block() {
 
 /// A table cell wider than `format!` can pad (65 535) is padded all the
 /// same, never a panic (an LLM's or a user's table reaches the renderer
-/// as is).
+/// as is), when the table limits allow padding at all; by default such a
+/// table is not padded (the next tests).
 #[test]
 fn a_table_cell_wider_than_formatting_allows_is_padded() {
     let wide = "a".repeat(70_000);
     let markdown = format!("| {wide} | b |\n| --- | --- |\n| c | d |");
-    let parts = markdown::render(&markdown);
+    let unbounded = Renderer::new()
+        .table_max_width(usize::MAX)
+        .table_max_growth(usize::MAX);
+    let parts = unbounded.render(&markdown);
     assert!(parts.len() > 30, "{}", parts.len());
     for part in &parts {
         assert!(part.encode_utf16().count() <= TEXT_MAX_CHARS);
     }
-    let unsplit = Renderer::new().render_unsplit(&markdown);
+    let unsplit = unbounded.render_unsplit(&markdown);
     let lines: Vec<&str> = unsplit.lines().collect();
     assert_eq!(lines.len(), 3);
     assert_eq!(lines[2], format!("c{} | d```", " ".repeat(69_999)));
+    // The defaults: the header as a label once, not padding on every row.
+    let default = Renderer::new().render_unsplit(&markdown);
+    assert_eq!(default, format!("```{wide}: c\nb: d```"));
+}
+
+/// Parts and characters `markdown` renders to with the default renderer,
+/// every part within the client's limit.
+fn measured(markdown: &str) -> (Vec<String>, usize) {
+    let parts = markdown::render(markdown);
+    let mut total = 0;
+    for part in &parts {
+        let units = part.encode_utf16().count();
+        assert!(units <= TEXT_MAX_CHARS, "{units} units");
+        total += units;
+    }
+    (parts, total)
+}
+
+/// A 1000-row table: `k0000 | v0000` and so on, row 500's cell in `column`
+/// (0: the key, 1: the value) 10 000 characters long, or the header's
+/// first cell when `column` is `None`.
+fn long_table_with_one_wide_cell(column: Option<usize>) -> String {
+    let wide = "x".repeat(10_000);
+    let header = if column.is_none() {
+        wide.as_str()
+    } else {
+        "key"
+    };
+    let mut lines = vec![format!("| {header} | value |"), "| --- | --- |".to_owned()];
+    for i in 0..1000 {
+        let mut cells = [format!("k{i:04}"), format!("v{i:04}")];
+        if i == 500
+            && let Some(c) = column
+        {
+            cells[c].clone_from(&wide);
+        }
+        lines.push(format!("| {} | {} |", cells[0], cells[1]));
+    }
+    lines.join("\n")
+}
+
+/// Decisive for the table limits (each reply part is a billable send):
+/// a 1000-row table with one 10 000-character cell, wherever the cell is,
+/// renders to at most 12 messages (10 when measured). Its unpadded rows
+/// are about 24 000 characters, so a layout may take twice that, 48 000:
+/// 12 messages. Without the limits, padding every row to a wide first
+/// cell takes about 2 000 messages, and repeating a wide header on every
+/// record about 3 000.
+#[test]
+fn a_long_table_with_one_wide_cell_renders_to_a_bounded_number_of_messages() {
+    for column in [Some(0), Some(1), None] {
+        let markdown = long_table_with_one_wide_cell(column);
+        let (parts, total) = measured(&markdown);
+        assert!(
+            parts.len() <= 12,
+            "{column:?}: {} messages, {total} units",
+            parts.len()
+        );
+        assert!(total <= 50_000, "{column:?}: {total} units");
+        // Nothing is lost: the wide cell and every row are there.
+        let text = parts.concat();
+        assert_eq!(text.matches('x').count(), 10_000, "{column:?}");
+        for i in [0, 499, 501, 999] {
+            assert!(text.contains(&format!("k{i:04}")), "{column:?}: row {i}");
+        }
+    }
+    // The wide cell in a row: one `header: value` line per cell; a wide
+    // header: plain rows, the header once.
+    let records = Renderer::new().render_unsplit(&long_table_with_one_wide_cell(Some(0)));
+    assert!(
+        records.starts_with("```key: k0000\nvalue: v0000\n\nkey: k0001\n"),
+        "{}",
+        &records[..40]
+    );
+    let rows = Renderer::new().render_unsplit(&long_table_with_one_wide_cell(None));
+    assert!(
+        rows.starts_with(&format!(
+            "```{} | value\n———\nk0000 | v0000\n",
+            "x".repeat(10_000)
+        )),
+        "{}",
+        rows.chars().skip(10_000).take(40).collect::<String>()
+    );
+}
+
+/// Narrow enough for columns (58 characters), but padding 1000 short
+/// rows to one 50-character cell would be over four times the rows'
+/// text: records instead, half as many messages.
+#[test]
+fn a_long_table_is_not_padded_past_the_growth_limit() {
+    let mut lines = vec!["| key | value |".to_owned(), "| --- | --- |".to_owned()];
+    for i in 0..1000 {
+        let key = if i == 500 {
+            "y".repeat(50)
+        } else {
+            format!("k{i:04}")
+        };
+        lines.push(format!("| {key} | v{i:04} |"));
+    }
+    let markdown = lines.join("\n");
+    let (parts, total) = measured(&markdown);
+    assert!(
+        parts[0].starts_with("```key: k0000\nvalue: v0000\n\n"),
+        "{}",
+        &parts[0][..40]
+    );
+    assert!(
+        parts.len() <= 7 && total <= 28_200,
+        "{} messages, {total} units",
+        parts.len()
+    );
+    // Allowed to grow further, it pads (about 59 000 characters).
+    let padded = Renderer::new()
+        .table_max_growth(5)
+        .render_unsplit(&markdown);
+    assert!(padded.starts_with(&format!("```key{} | value\n", " ".repeat(47))));
+}
+
+#[test]
+fn a_table_too_wide_for_columns_becomes_records() {
+    let features = "10 GB of storage, email support, a custom domain and backups";
+    let markdown = format!(
+        "| Plan | Price | Features |\n| --- | --- | --- |\n| Basic | $5 | {features} |\n| Pro | $12 | |"
+    );
+    // A padded row would be 5 + 3 + 5 + 3 + 60 = 76 characters wide.
+    assert_eq!(
+        one(&markdown),
+        format!("```Plan: Basic\nPrice: $5\nFeatures: {features}\n\nPlan: Pro\nPrice: $12```")
+    );
+    // Configurable: a wider limit keeps the columns, 0 never pads.
+    let padded = Renderer::new().table_max_width(76).render(&markdown);
+    assert_eq!(
+        padded,
+        [format!(
+            "```Plan  | Price | Features\n------|-------|{}\nBasic | $5    | {features}\nPro   | $12   |```",
+            "-".repeat(61)
+        )]
+    );
+    assert_eq!(
+        Renderer::new()
+            .table_max_width(75)
+            .render(&markdown)
+            .concat(),
+        one(&markdown)
+    );
+    assert_eq!(
+        Renderer::new()
+            .table_max_width(0)
+            .render("| Item | Qty |\n| --- | ---: |\n| Pot | 12 |"),
+        ["```Item: Pot\nQty: 12```"]
+    );
+}
+
+/// Records repeat the header on every row: with many short cells under
+/// long headers they grow past twice the unpadded rows, which are used
+/// instead. The factor is configurable.
+#[test]
+fn records_longer_than_the_growth_limit_become_plain_rows() {
+    let header: Vec<String> = (0..10).map(|i| format!("Column number {i:02}")).collect();
+    let mut lines = vec![
+        format!("| {} |", header.join(" | ")),
+        format!("|{}", " --- |".repeat(10)),
+    ];
+    for _ in 0..200 {
+        lines.push(format!("| {} |", ["x"; 10].join(" | ")));
+    }
+    let markdown = lines.join("\n");
+    let rows = Renderer::new().render_unsplit(&markdown);
+    let expected_head = format!(
+        "```{}\n———\n{}\n",
+        header.join(" | "),
+        ["x"; 10].join(" | ")
+    );
+    assert!(
+        rows.starts_with(&expected_head),
+        "{}",
+        rows.chars().take(240).collect::<String>()
+    );
+    assert_eq!(rows.lines().count(), 202);
+    // Records are 200 × 10 lines of `Column number NN: x`: allowed at a
+    // growth of 10.
+    let records = Renderer::new()
+        .table_max_growth(10)
+        .render_unsplit(&markdown);
+    assert!(
+        records.starts_with("```Column number 00: x\nColumn number 01: x\n"),
+        "{}",
+        &records[..80]
+    );
+    // A table that fits in one message is never held to the factor.
+    let small = lines[..4].join("\n");
+    assert!(
+        Renderer::new()
+            .render_unsplit(&small)
+            .starts_with("```Column number 00: x\n")
+    );
+}
+
+#[test]
+fn plain_rows_leave_out_the_empty_cells_that_end_a_row() {
+    // Wider than the columns allow, and records would repeat the 6 000
+    // characters of header on 8 values, past twice the rows: plain rows,
+    // where the second row's missing cells are not written.
+    let header: Vec<String> = (0..3).map(|i| format!("{i}").repeat(2_000)).collect();
+    let markdown = format!(
+        "| {} |\n| --- | --- | --- |\n| a | b | c |\n| d |\n| | | e |\n| f | g | h |",
+        header.join(" | ")
+    );
+    let rows = Renderer::new().render_unsplit(&markdown);
+    let lines: Vec<&str> = rows.lines().collect();
+    assert_eq!(lines.len(), 6);
+    assert_eq!(lines[0], format!("```{}", header.join(" | ")));
+    assert_eq!(
+        &lines[1..],
+        ["———", "a | b | c", "d", " |  | e", "f | g | h```"]
+    );
 }
 
 #[test]

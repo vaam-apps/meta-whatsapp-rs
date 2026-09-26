@@ -354,7 +354,18 @@ CommonMark to WhatsApp formatting:
 | `> quote` | `> quote` |
 | lists | `• item`, `1. item` |
 | `[text](url)`, `![alt](url)` | `text (url)`, `alt (url)`; only `http`, `https`, `mailto`, `tel` or relative URLs, so a `javascript:` or `data:` one keeps just its text |
-| tables | a monospace block, columns padded |
+| tables | a monospace block: padded columns, else one `header: value` line per cell, else unpadded rows (below) |
+
+A table is laid out as padded columns while a padded row is at most 60
+characters wide (`Renderer::table_max_width`: a wider row wraps on a
+phone and its columns stop lining up), else as records (a
+`header: value` line per non-empty cell, a blank line between rows),
+and as either only while that text is at most twice the table's
+unpadded rows, or one message, whichever is larger
+(`Renderer::table_max_growth`); past both, as the unpadded rows
+themselves. Padding a thousand rows to one very wide cell, or repeating
+a long header on every record, would otherwise turn a few kilobytes of
+Markdown into thousands of messages, each a billable send.
 
 Messages are cut between blocks (paragraphs, list items, code blocks,
 tables); a code block that fits in a message is never cut, and only a

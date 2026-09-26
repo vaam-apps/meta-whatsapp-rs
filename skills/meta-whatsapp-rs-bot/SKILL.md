@@ -129,12 +129,12 @@ bot.sync_command_menu(client, number).await // at most 30 commands, each with a 
 
 ## Markdown replies
 
-`ctx.reply_markdown(md)` renders with the bot's `MarkdownRenderer`
-(`Renderer` unless `BotBuilder::markdown` sets another): `*b*`, `_i_`,
-`~s~`, code, quotes, `•` lists, `text (url)` (web, mail, phone), tables
-monospaced; emphasis inside a word loses its markers. Parts fit 4096
-UTF-16 units, cut between blocks. Text is left as written (`NoEscape`);
-`WordJoinerEscape` is opt-in.
+`ctx.reply_markdown(md)` renders with the bot's `MarkdownRenderer` (`Renderer` unless
+`BotBuilder::markdown` sets another): `*b*`, `_i_`, `~s~`, code, quotes, `•` lists,
+`text (url)` (web, mail, phone); emphasis inside a word loses its markers. Tables: padded
+columns up to 60 wide, else `header: value` lines, within twice their text
+(`Renderer::table_max_width`, `Renderer::table_max_growth`). Parts fit 4096 UTF-16 units,
+cut between blocks. Text is left as written (`NoEscape`); `WordJoinerEscape` is opt-in.
 
 ## Pitfalls
 

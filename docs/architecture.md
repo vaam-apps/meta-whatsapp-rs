@@ -877,8 +877,13 @@ for every event, after the ban and the match.
   since Meta does not say which unit it counts (never fewer than the
   client's count of characters), never cutting a code block that fits.
   Code a fence cannot hold and emphasis inside a word go out as plain
-  text. Meta documents no escape syntax: the default leaves text as
-  written, so copied addresses, codes and commands work;
+  text. A table is padded columns while a padded row fits 60 characters,
+  else one `header: value` line per cell, and either only while it is at
+  most twice the table's unpadded rows (or one message), else those rows:
+  a reply's length, so its number of billable sends, stays proportional
+  to the Markdown's (both limits are `Renderer` options). Meta documents
+  no escape syntax: the default leaves text as written, so copied
+  addresses, codes and commands work;
   `WordJoinerEscape` (U+2060 around literal markup characters, copied
   along with the text) is the opt-in.
 - **Listeners** name what they get: received messages, one message

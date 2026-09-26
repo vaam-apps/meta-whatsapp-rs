@@ -17,7 +17,7 @@
 //! | `> quote` | `> quote`, on every line |
 //! | `- item`, `1. item` | `• item`, `1. item` (nested: indented; quotes and lists deeper than 16 levels are flattened into the 16th) |
 //! | `[text](url)` | `text (url)`; a link whose text is its URL, or an autolink: `url` (only `http`, `https`, `mailto`, `tel` or relative URLs: any other scheme, such as `javascript:` or `data:`, keeps just the text) |
-//! | tables | a monospace block, columns padded |
+//! | tables | a monospace block: padded columns, or `header: value` lines when the columns would be too wide (see [Tables](self#tables)) |
 //! | `![alt](url)` | `alt (url)`, or `url` without alt text (the same URL rule) |
 //! | `---` | a line of `———` |
 //! | raw HTML | its text |
@@ -39,6 +39,38 @@
 //! no longer works) and cut WhatsApp's link detection short; whether a
 //! client honours them at all is WhatsApp's behaviour, not a documented
 //! contract. Choose with [`Renderer::escape`] (or your own [`Escape`]).
+//!
+//! # Tables
+//!
+//! A table becomes a monospace block (its cells are neither formatted nor
+//! escaped), in the first of these layouts that fits the limits below:
+//!
+//! 1. **Columns**: each cell padded to its column's widest, ` | ` between
+//!    them, a `-|-` rule under the header.
+//! 2. **Records**: one `header: value` line per non-empty cell of a row
+//!    (the value alone under an empty header), a blank line between rows.
+//! 3. **Rows**: one line per row, cells joined by ` | ` without padding
+//!    (empty cells at the end of a row left out), a `———` line under the
+//!    header.
+//!
+//! Padding every row to one very wide cell, or repeating a long header on
+//! every record, would turn a few kilobytes of Markdown into megabytes:
+//! hundreds of messages, each a billable send. So the layouts are bounded
+//! by two limits, set with [`Renderer::table_max_width`] and
+//! [`Renderer::table_max_growth`]:
+//!
+//! - **Width**: columns only while a padded row (as wide as the rule under
+//!   the header) is at most [`TABLE_MAX_WIDTH`] (60) characters. A wider
+//!   row wraps on a phone's screen, and its columns stop lining up anyway.
+//! - **Growth**: columns or records only while their text is at most
+//!   [`TABLE_MAX_GROWTH`] (2) times the rows layout's, or
+//!   [`TEXT_MAX_CHARS`] characters (one message), whichever is larger. The
+//!   rows layout is used whatever its length: so a table never renders to
+//!   more than that, however its cells are shaped.
+//!
+//! The limits count characters, and do not depend on
+//! [`Renderer::max_chars`]: a table is laid out the same way however the
+//! text is then split.
 //!
 //! # Splitting
 //!
@@ -72,6 +104,16 @@ use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd, TextMergeStr
 /// measures parts in UTF-16 code units against it (see
 /// [Splitting](self#splitting)).
 pub const TEXT_MAX_CHARS: usize = meta_whatsapp_client::messages::TEXT_BODY_MAX_CHARS;
+
+/// Widest padded table row, in characters, that [`Renderer`] lays out as
+/// columns by default ([`Renderer::table_max_width`]; see
+/// [Tables](self#tables)).
+pub const TABLE_MAX_WIDTH: usize = 60;
+
+/// How many times the length of its unpadded rows a table's columns or
+/// records may be by default ([`Renderer::table_max_growth`]; see
+/// [Tables](self#tables)).
+pub const TABLE_MAX_GROWTH: usize = 2;
 
 /// What a thematic break (`---`) renders to.
 const RULE: &str = "———";
@@ -198,6 +240,7 @@ impl Escape for NoEscape {
 pub struct Renderer {
     max_chars: usize,
     escape: Arc<dyn Escape>,
+    tables: TableLimits,
 }
 
 impl Default for Renderer {
@@ -205,14 +248,38 @@ impl Default for Renderer {
         Self {
             max_chars: TEXT_MAX_CHARS,
             escape: Arc::new(NoEscape),
+            tables: TableLimits {
+                max_width: TABLE_MAX_WIDTH,
+                max_growth: TABLE_MAX_GROWTH,
+            },
         }
     }
 }
 
 impl Renderer {
-    /// The defaults: [`TEXT_MAX_CHARS`], [`NoEscape`].
+    /// The defaults: [`TEXT_MAX_CHARS`], [`NoEscape`], [`TABLE_MAX_WIDTH`],
+    /// [`TABLE_MAX_GROWTH`].
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Lay a table out as padded columns only while a padded row is at
+    /// most `width` characters wide (default [`TABLE_MAX_WIDTH`]); 0 never
+    /// pads. See [Tables](self#tables).
+    #[must_use]
+    pub fn table_max_width(mut self, width: usize) -> Self {
+        self.tables.max_width = width;
+        self
+    }
+
+    /// Lay a table out as columns or records only while that text is at
+    /// most `factor` times its unpadded rows' length, or one message
+    /// ([`TEXT_MAX_CHARS`] characters), whichever is larger (default
+    /// [`TABLE_MAX_GROWTH`]). See [Tables](self#tables).
+    #[must_use]
+    pub fn table_max_growth(mut self, factor: usize) -> Self {
+        self.tables.max_growth = factor;
+        self
     }
 
     /// At most `max_chars` per message, in UTF-16 code units: at least 1,
@@ -254,7 +321,7 @@ impl Renderer {
         // read as text.)
         let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
         let events = TextMergeStream::new(Parser::new_ext(markdown, options));
-        let mut builder = Builder::new(self.escape.as_ref());
+        let mut builder = Builder::new(self.escape.as_ref(), self.tables);
         for event in events {
             builder.event(event);
         }
@@ -502,6 +569,15 @@ fn url_allowed(url: &str) -> bool {
     !is_scheme || URL_SCHEMES.iter().any(|s| scheme.eq_ignore_ascii_case(s))
 }
 
+/// The limits on a table's layout (see [Tables](self#tables)).
+#[derive(Debug, Clone, Copy)]
+struct TableLimits {
+    /// Widest padded row laid out as columns, in characters.
+    max_width: usize,
+    /// Columns or records at most this many times the rows layout.
+    max_growth: usize,
+}
+
 /// A table being read: rows of rendered cells, the header first.
 #[derive(Default)]
 struct Table {
@@ -519,6 +595,7 @@ const MAX_NESTING: usize = 16;
 
 struct Builder<'e> {
     escape: &'e dyn Escape,
+    tables: TableLimits,
     frames: Vec<Frame>,
     /// For each open quote or list, whether it got its own frame (at most
     /// [`MAX_NESTING`] do).
@@ -532,9 +609,10 @@ struct Builder<'e> {
 }
 
 impl<'e> Builder<'e> {
-    fn new(escape: &'e dyn Escape) -> Self {
+    fn new(escape: &'e dyn Escape, tables: TableLimits) -> Self {
         Self {
             escape,
+            tables,
             frames: vec![Frame::Root(Vec::new())],
             containers: Vec::new(),
             kept: 0,
@@ -747,7 +825,10 @@ impl<'e> Builder<'e> {
             }
             TagEnd::Table => {
                 if let Some(table) = self.table.take() {
-                    self.push(Node::Code(format_table(&table)));
+                    let text = format_table(&table, self.tables);
+                    if !text.trim().is_empty() {
+                        self.push(Node::Code(text));
+                    }
                 }
             }
             TagEnd::Emphasis => self.inline().close(Style::Italic),
@@ -791,15 +872,100 @@ fn units(text: &str) -> usize {
     text.encode_utf16().count()
 }
 
+/// A table as text: columns, else records, else rows, the first within
+/// `limits` (see [Tables](self#tables)).
+fn format_table(table: &Table, limits: TableLimits) -> String {
+    let rows = unpadded_rows(table);
+    let budget = chars(&rows)
+        .saturating_mul(limits.max_growth)
+        .max(TEXT_MAX_CHARS);
+    padded_columns(table, limits.max_width, budget)
+        .or_else(|| records(table, budget))
+        .unwrap_or(rows)
+}
+
+/// A row's cells up to its last non-empty one (the parser fills a short
+/// row up to the header's length with empty cells).
+fn trimmed(row: &[String]) -> &[String] {
+    let end = row.iter().rposition(|c| !c.is_empty()).map_or(0, |i| i + 1);
+    &row[..end]
+}
+
+/// One line per row, cells joined by ` | ` without padding, a `———` line
+/// under the header. Never longer than the table's cells and separators.
+fn unpadded_rows(table: &Table) -> String {
+    let mut lines = Vec::with_capacity(table.rows.len() + 1);
+    for (r, row) in table.rows.iter().enumerate() {
+        lines.push(trimmed(row).join(" | "));
+        if r == 0 && table.header {
+            lines.push(RULE.to_owned());
+        }
+    }
+    lines.join("\n")
+}
+
+/// One `header: value` line per non-empty cell (the value alone under an
+/// empty header), a blank line between rows; `None` when that is longer
+/// than `budget` characters or holds no value (a table with no rows
+/// under its header).
+fn records(table: &Table, budget: usize) -> Option<String> {
+    let (labels, body) = match table.rows.split_first() {
+        Some((header, body)) if table.header => (header.as_slice(), body),
+        _ => (&[][..], table.rows.as_slice()),
+    };
+    let mut out = String::new();
+    let mut length = 0;
+    for row in body {
+        let mut first = true;
+        for (i, value) in row.iter().enumerate() {
+            if value.is_empty() {
+                continue;
+            }
+            let label = labels.get(i).map_or("", String::as_str);
+            let sep = match (first, out.is_empty()) {
+                (_, true) => "",
+                (true, false) => "\n\n",
+                (false, false) => "\n",
+            };
+            let label_length = if label.is_empty() {
+                0
+            } else {
+                chars(label) + 2
+            };
+            // Counted before it is written: never more than `budget` held.
+            length += sep.len() + label_length + chars(value);
+            if length > budget {
+                return None;
+            }
+            out.push_str(sep);
+            if !label.is_empty() {
+                out.push_str(label);
+                out.push_str(": ");
+            }
+            out.push_str(value);
+            first = false;
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
 /// Columns padded to their widest cell, ` | ` between them, a `-|-` rule
-/// under the header.
-fn format_table(table: &Table) -> String {
+/// under the header; `None` when a padded row would be wider than
+/// `max_width` characters, or the whole longer than `budget`.
+fn padded_columns(table: &Table, max_width: usize, budget: usize) -> Option<String> {
     let columns = table.rows.iter().map(Vec::len).max().unwrap_or(0);
     let mut widths = vec![0; columns];
     for row in &table.rows {
         for (i, cell) in row.iter().enumerate() {
             widths[i] = widths[i].max(chars(cell));
         }
+    }
+    // The rule under the header is as wide as a padded row, or wider
+    // (an empty column has a one-character rule).
+    let width = widths.iter().map(|w| (*w).max(1)).sum::<usize>() + 3 * columns.saturating_sub(1);
+    let lines = table.rows.len() + usize::from(table.header);
+    if width > max_width || lines.saturating_mul(width + 1) > budget {
+        return None;
     }
     let line = |cells: Vec<String>| cells.join(" | ").trim_end().to_owned();
     let mut lines = Vec::new();
@@ -825,7 +991,7 @@ fn format_table(table: &Table) -> String {
             );
         }
     }
-    lines.join("\n")
+    Some(lines.join("\n"))
 }
 
 // ─── Blocks and packing ──────────────────────────────────────────────────
