@@ -481,11 +481,13 @@ async fn migrate_like_b66972c(pool: &PgPool) -> Result<(), sqlx::migrate::Migrat
 }
 
 /// Migration 4 adds tables, indexes and a column: a database the previous
-/// revision (b66972c) wrote keeps its rows, which get their sender (so an
-/// erasure reaches a group message written before, but not one whose
-/// payload holds U+0000), that revision's `append` (which takes no lock
-/// and writes no sender) keeps working beside the new one, and only its
-/// `migrate` refuses the database.
+/// revision (b66972c) wrote keeps its rows, which get their sender (but
+/// one whose payload holds U+0000), that revision's `append` (which takes
+/// no lock and writes no sender) keeps working beside the new one, and
+/// only its `migrate` refuses the database. An erasure reaches every group
+/// message of the person all the same: the one written before, the one
+/// the back-fill skipped and the one the previous revision wrote after
+/// the migration.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)] // one upgrade, read top to bottom
 async fn live_postgres_migration_4_keeps_the_previous_revision_working() {
@@ -561,6 +563,14 @@ async fn live_postgres_migration_4_keeps_the_previous_revision_working() {
     append_like_b66972c(&db.pool, &late)
         .await
         .expect("the previous revision's append still works");
+    // A group message the previous revision records after the migration
+    // ran (a rolling upgrade): it writes no sender.
+    let late_in_group = StoredMessage {
+        id: MessageId::new("wamid.after-4-group"),
+        timestamp: datetime!(2026-09-24 16:02 UTC),
+        ..in_group.clone()
+    };
+    append_like_b66972c(&db.pool, &late_in_group).await.unwrap();
     let later = StoredMessage {
         id: MessageId::new("wamid.after-4-new"),
         timestamp: datetime!(2026-09-24 16:01 UTC),
@@ -605,26 +615,144 @@ async fn live_postgres_migration_4_keeps_the_previous_revision_working() {
         .await
         .unwrap();
     assert_eq!(
-        erased.group_messages, 1,
-        "the group message written before migration 4 is reached"
+        erased.group_messages, 3,
+        "the group messages written before migration 4, the one whose payload holds U+0000 \
+         (not back-filled) and the one the previous revision wrote after the migration (no \
+         sender): the erasure reads the payloads of the rows without a sender"
     );
-    let mut redacted = in_group.clone();
-    redacted.redact();
-    assert_eq!(
-        store
-            .message(&group.phone_number_id, &in_group.id)
+    for m in [&in_group, &with_nul, &late_in_group] {
+        let mut redacted = m.clone();
+        redacted.redact();
+        assert_eq!(
+            store.message(&group.phone_number_id, &m.id).await.unwrap(),
+            Some(redacted),
+            "{}",
+            m.id
+        );
+    }
+    let left: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT id, sender FROM wa_messages WHERE contact = $1 ORDER BY id")
+            .bind(&group.contact)
+            .fetch_all(&db.pool)
             .await
-            .unwrap(),
-        Some(redacted)
+            .unwrap();
+    assert!(
+        left.iter().all(|(_, sender)| sender.is_none()),
+        "no sender left on a redacted row: {left:?}"
     );
-    assert_eq!(
-        store
-            .message(&group.phone_number_id, &with_nul.id)
+}
+
+/// Migration 4's back-fill follows `StoredMessage::sender`'s rule, row for
+/// row (the BSUID, else the phone number, of an inbound message; an empty
+/// or non-string value is none; an outbound message has none), except for
+/// a payload whose JSON text holds the escape `\u0000` (the `json`
+/// operators fail on a NUL; a text holding a backslash then `u0000` is
+/// skipped too). Those rows get their sender from the first erasure on
+/// their number, which reads the payload in Rust: the erasure reaches
+/// every one of them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_migration_4_backfills_senders_by_the_rust_rule() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    migrate_like_b66972c(&db.pool).await.unwrap();
+    let group = ConversationKey::new("pn-backfill", "HBgBACKFILL");
+    let variants = [
+        serde_json::json!({"from": "16505550001", "from_user_id": "US.1", "type": "text"}),
+        serde_json::json!({"from": "16505550002"}),
+        serde_json::json!({"from": "16505550003", "from_user_id": ""}),
+        serde_json::json!({"from": "16505550004", "from_user_id": 4}),
+        serde_json::json!({"from": "16505550005", "from_user_id": null}),
+        serde_json::json!({"from": ""}),
+        serde_json::json!({"text": {"from": "16505550006"}}),
+        serde_json::json!({}),
+        serde_json::json!([{"from": "16505550007"}]),
+        serde_json::json!("16505550008"),
+        serde_json::json!({"from": "16505550009", "from_user_id": "US.9",
+            "text": {"body": "a\u{0}b"}}),
+        serde_json::json!({"from": "16505550010", "from_user_id": "US.10",
+            "text": {"body": "typed \\u0000"}}),
+        serde_json::json!({"from": "16505550011", "from_user_id": "US.\u{e9}11"}),
+    ];
+    let mut messages: Vec<StoredMessage> = variants
+        .iter()
+        .enumerate()
+        .map(|(i, payload)| StoredMessage {
+            id: MessageId::new(format!("wamid.backfill-{i:02}")),
+            conversation: group.clone(),
+            direction: Direction::Inbound,
+            kind: "text".to_owned(),
+            text: Some(format!("variant {i}")),
+            payload: payload.clone(),
+            status: DeliveryStatus::Received,
+            timestamp: datetime!(2026-09-24 12:00 UTC)
+                + time::Duration::minutes(i64::try_from(i).unwrap()),
+            status_at: None,
+            error: None,
+        })
+        .collect();
+    messages.push(StoredMessage {
+        id: MessageId::new("wamid.backfill-outbound"),
+        direction: Direction::Outbound,
+        status: DeliveryStatus::Accepted,
+        ..messages[0].clone()
+    });
+    for m in &messages {
+        append_like_b66972c(&db.pool, m).await.unwrap();
+    }
+    postgres::migrate(&db.pool).await.unwrap();
+
+    let stored: std::collections::BTreeMap<String, Option<String>> =
+        sqlx::query_as::<_, (String, Option<String>)>("SELECT id, sender FROM wa_messages")
+            .fetch_all(&db.pool)
             .await
-            .unwrap(),
-        Some(with_nul),
-        "one whose payload holds U+0000 was not back-filled"
+            .unwrap()
+            .into_iter()
+            .collect();
+    for m in &messages {
+        let text = serde_json::to_string(&m.payload).unwrap();
+        let expected = if text.contains("\\u0000") {
+            None
+        } else {
+            m.sender().map(str::to_owned)
+        };
+        assert_eq!(stored[m.id.as_str()], expected, "{}: {}", m.id, m.payload);
+    }
+    assert_eq!(
+        messages[10].sender(),
+        Some("US.9"),
+        "the Rust rule reads past a NUL elsewhere in the payload"
     );
+    assert_eq!(stored["wamid.backfill-10"], None, "not back-filled");
+    assert_eq!(stored["wamid.backfill-11"], None, "not back-filled");
+
+    let store = PostgresConversationStore::new(db.pool.clone());
+    let senders: Vec<String> = messages
+        .iter()
+        .filter_map(|m| m.sender().map(str::to_owned))
+        .collect();
+    assert_eq!(senders.len(), 8);
+    let erased = store
+        .erase_all(&group.phone_number_id, &senders)
+        .await
+        .unwrap();
+    assert_eq!(
+        erased.group_messages, 8,
+        "every message with a sender, back-filled or not"
+    );
+    for m in &messages {
+        let left = store
+            .message(&group.phone_number_id, &m.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            left.kind == StoredMessage::ERASED,
+            m.sender().is_some(),
+            "{}",
+            m.id
+        );
+    }
 }
 
 /// b66972c's `append` statement, verbatim (default prefix): lossless

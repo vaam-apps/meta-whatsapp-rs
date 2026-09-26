@@ -61,7 +61,12 @@
 //!   read field by field in SQL, see the [module docs](super#content-keeps-u0000))
 //!   to `wa_messages.sender`, indexed with the business number, which no
 //!   read returns: it is what an erasure matches a person's group
-//!   messages on.
+//!   messages on. A row without one (migration `0004` could not read its
+//!   payload, which holds U+0000, or an instance of the previous revision
+//!   wrote it) gets it from the first erasure on its number: `erase_all`
+//!   reads the payloads of its number's inbound rows without a sender
+//!   (`wa_messages_unsent_idx`; tombstones and redacted rows aside),
+//!   computes their sender in Rust and writes it, before it deletes.
 //! - `erase_all` (and `erase`, its one-key case) and `purge_before` order
 //!   themselves against the writers with
 //!   two transaction-level advisory locks, in the two-key form (whose key
@@ -91,7 +96,9 @@
 //!     scan by position), and deadlock. Purges run one at a time;
 //!     erasures of different numbers beside each other.
 //!
-//!   The deletion itself is one statement over one snapshot: six `DELETE`s
+//!   Under both locks, `erase_all` first fills in the sender of the
+//!   number's rows that have none (above), then deletes. The deletion
+//!   itself is one statement over one snapshot: six `DELETE`s
 //!   in data-modifying CTEs, the messages first (`contact = ANY($2)`; a
 //!   synced contact on any of its four ids, a link on either side), then
 //!   the person's messages in other conversations (`sender = ANY($2)` and
@@ -105,8 +112,10 @@
 //!   message then its summary, the order the deletion's statements take
 //!   them in, and the rest write one row. An instance of the revision
 //!   before these locks does not take them: while one still appends, an
-//!   erasure can leave a message without its summary, and its messages
-//!   carry no sender (upgrade every instance). A message recorded while a
+//!   erasure can leave a message without its summary, or miss a group
+//!   message it records during the erasure (it writes no sender; one
+//!   recorded before the erasure is filled in and reached): upgrade every
+//!   instance. A message recorded while a
 //!   purge runs is not waited for:
 //!   one older than the cutoff (a late history chunk) may be kept, its
 //!   summary purged, until the next purge.
@@ -198,6 +207,8 @@ struct Sql {
     identity_links: Arc<str>,
     identities: Arc<str>,
     erase_locks: [Arc<str>; 2],
+    unsent: Arc<str>,
+    fill_senders: Arc<str>,
     erase_redacting: Arc<str>,
     erase_deleting: Arc<str>,
     purge_lock: Arc<str>,
@@ -229,6 +240,14 @@ const CONTACT_COLUMNS: &str = "phone_number_id, contact, full_name_utf8, first_n
 /// `text` nor `jsonb` can hold U+0000, and content keeps it (see the
 /// [module docs](super#content-keeps-u0000)).
 const MESSAGE_VALUES: &str = "$1, $2, $3, $4, $5, $6, $7::json, $8, $9, $10, $11::json, $12";
+
+/// The inbound rows without a sender that an erasure reads the payload of
+/// (`StoredMessage::sender`, in Rust), tombstones and redacted rows aside:
+/// the predicate of migration 4's `messages_unsent_idx`, word for word
+/// (`revoked` and `erased` are `StoredMessage::REVOKED` and
+/// `StoredMessage::ERASED`; a test checks both).
+const UNSENT: &str = "sender IS NULL AND direction = 'inbound' \
+     AND kind_utf8 <> 'revoked'::bytea AND kind_utf8 <> 'erased'::bytea";
 
 /// The summary's "newest message" is the max by `(ts, id)`, the same order
 /// the history pages in.
@@ -622,6 +641,20 @@ impl Sql {
                     number_lock(&messages, "$1")
                 )),
             ],
+            // The inbound rows of a number that have no sender (written by
+            // an instance of the previous revision, or whose payload
+            // migration 4 could not read), tombstones and redacted rows
+            // aside: the predicate of `messages_unsent_idx`, written the
+            // same way so the planner uses that index.
+            unsent: arc(format!(
+                "SELECT id, payload_json FROM {messages} \
+                 WHERE phone_number_id = $1 AND {UNSENT}"
+            )),
+            fill_senders: arc(format!(
+                "UPDATE {messages} AS m SET sender = t.found \
+                 FROM UNNEST($2::text[], $3::text[]) AS t(row_id, found) \
+                 WHERE m.phone_number_id = $1 AND m.id = t.row_id AND {UNSENT}"
+            )),
             erase_redacting: arc(erase_sql(prefix, true)),
             erase_deleting: arc(erase_sql(prefix, false)),
             purge_lock: arc(format!(
@@ -843,6 +876,24 @@ fn link_from_row(row: &PgRow) -> Result<IdentityLink, StorageError> {
         current: row.try_get("current").map_err(backend)?,
         at: row.try_get("ts").map_err(backend)?,
     })
+}
+
+/// [`StoredMessage::sender`] of an inbound message whose payload is
+/// `payload`, for a row read without its other columns.
+fn inbound_sender(payload: serde_json::Value) -> Option<String> {
+    let message = StoredMessage {
+        id: MessageId::new(String::new()),
+        conversation: ConversationKey::new(String::new(), String::new()),
+        direction: Direction::Inbound,
+        kind: String::new(),
+        text: None,
+        payload,
+        status: DeliveryStatus::Received,
+        timestamp: OffsetDateTime::UNIX_EPOCH,
+        status_at: None,
+        error: None,
+    };
+    message.sender().map(str::to_owned)
 }
 
 /// A `count(*)` column as a `u64`: never negative.
@@ -1353,6 +1404,27 @@ impl ConversationStore for PostgresConversationStore {
             .execute(&mut *tx)
             .await
             .map_err(backend)?;
+        // Rows without a sender get it from their payload first, so that
+        // the deletion matches them too.
+        let unsent: Vec<(String, serde_json::Value)> =
+            sqlx::query_as(AssertSqlSafe(Arc::clone(&self.sql.unsent)))
+                .bind(phone_number_id.as_str())
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(backend)?;
+        let (ids, senders): (Vec<String>, Vec<String>) = unsent
+            .into_iter()
+            .filter_map(|(id, payload)| inbound_sender(payload).map(|sender| (id, sender)))
+            .unzip();
+        if !ids.is_empty() {
+            sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.fill_senders)))
+                .bind(phone_number_id.as_str())
+                .bind(&ids)
+                .bind(&senders)
+                .execute(&mut *tx)
+                .await
+                .map_err(backend)?;
+        }
         // An empty id names no one: it matches what is keyed by it, never a
         // contact's other ids nor a link's sides.
         let named: Vec<&str> = contacts
@@ -1492,6 +1564,35 @@ mod tests {
             )),
             "{}",
             sql.append_synced
+        );
+    }
+
+    /// The rows an erasure fills the sender of are migration 4's
+    /// `messages_unsent_idx`, word for word (or the planner would not use
+    /// the index), and skip this crate's own kinds, whose payload is `{}`.
+    #[test]
+    fn the_unsent_rows_are_the_indexed_ones() {
+        let words = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        let migration = words(include_str!(
+            "../../../migrations/0004_conversation_records.sql"
+        ));
+        assert!(
+            migration.contains(&format!(
+                "ON {{prefix}}messages (phone_number_id) WHERE {};",
+                words(UNSENT)
+            )),
+            "{UNSENT}"
+        );
+        for kind in [StoredMessage::REVOKED, StoredMessage::ERASED] {
+            assert!(UNSENT.contains(&format!("kind_utf8 <> '{kind}'::bytea")));
+        }
+        let sql = Sql::new(&TablePrefix::DEFAULT);
+        assert!(sql.unsent.ends_with(UNSENT) && sql.fill_senders.ends_with(UNSENT));
+        let payload = serde_json::json!({"from": "16505551234", "from_user_id": "US.\u{0}"});
+        assert_eq!(
+            inbound_sender(payload).as_deref(),
+            Some("16505551234"),
+            "the rule of `StoredMessage::sender`"
         );
     }
 

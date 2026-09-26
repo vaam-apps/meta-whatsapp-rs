@@ -330,17 +330,19 @@ notification queue on top must be idempotent itself: tag each message with
     identity links, `identities`, `erase_all`, `purge_before`; `erase`
     is provided) and pass `conversation_conformance::run`, under each
     `ErasureMode` it offers. Postgres migration 4 adds four tables, a
-    `sender` column on `wa_messages` and three indexes on the existing
+    `sender` column on `wa_messages` and four indexes on the existing
     tables, and changes no existing column: the previous revision keeps
     working beside it, but its `migrate` then refuses the database, so
     upgrade every instance that migrates at startup. It back-fills the
     sender of every inbound message already stored (one `UPDATE` of
-    those rows): on a large inbox, run it from a one-off job (writes to
-    the inbox tables wait meanwhile). An instance of the previous
-    revision takes none of the advisory locks that keep an erasure and
-    the appends in flight consistent, and writes no sender (an erasure
-    then misses that instance's group messages): finish the upgrade
-    before you erase.
+    those rows): on a large inbox, run it from a one-off job with a
+    `lock_timeout` (reads and writes of `wa_messages` wait meanwhile).
+    An instance of the previous revision takes none of the advisory
+    locks that keep an erasure and the appends in flight consistent, and
+    writes no sender: the next erasure on a number fills in the senders
+    missing there (from the payloads, in Rust) before it matches, but a
+    group message such an instance records while an erasure runs is
+    missed. Finish the upgrade before you erase.
   - Nothing else is back-filled: rows and conversation summaries
     recorded before an upgrade stay as they were written (synced history
     recorded before 6d50701 keeps the unread count and window it moved,

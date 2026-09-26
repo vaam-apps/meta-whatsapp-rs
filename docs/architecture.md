@@ -703,9 +703,11 @@ Logs carry sizes, digests and field names only — never payload values.
   `wa_synced_contacts` (keyed by business number and contact; a window
   event by business number and id) and `wa_identity_links`, a nullable
   `wa_messages.sender` (back-filled from the payloads already stored,
-  indexed with the business number) and the indexes purge by age reads;
-  it changes no existing column, so the previous revision keeps working
-  beside it (writing no sender), but its `migrate` refuses the database.
+  indexed with the business number; a row the back-fill could not read,
+  or that the previous revision wrote, gets it from the next erasure on
+  its number, in Rust) and the indexes purge by age reads; it changes no
+  existing column, so the previous revision keeps working beside it
+  (writing no sender), but its `migrate` refuses the database.
   `erase_all` and `purge_before` delete in one statement each, under two
   transaction-level advisory locks (design D33): the **number lock**
   (`append` and `append_synced` take it shared, `erase_all` exclusive, so

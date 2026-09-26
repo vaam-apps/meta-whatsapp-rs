@@ -739,12 +739,16 @@ stored data, the owner's).
   kept; identifiers `TEXT COLLATE "C"`, U+0000 refused) and
   `wa_identity_links`, a nullable `wa_messages.sender` (indexed with the
   business number, written by every insert, back-filled for the inbound
-  messages already stored but those whose payload holds U+0000) and
-  indexes for purge by age. It changes no existing column, so the
+  messages already stored but those whose payload holds U+0000; those,
+  and the rows the previous revision writes, get it from the next
+  erasure on their number, which reads their payloads in Rust through a
+  partial index, `wa_messages_unsent_idx`) and indexes for purge by age.
+  It changes no existing column, so the
   previous revision keeps working beside it (writing no sender), but
   its `migrate` then refuses the database (`VersionMissing(4)`): upgrade
   every instance that migrates at startup. The back-fill and the indexes
-  make writes to the inbox tables wait: on a large inbox, run `migrate`
+  make writes to the inbox tables wait, and reads of `wa_messages` too
+  (adding the column): on a large inbox, run `migrate`
   from a one-off job. `erase_all` and `purge_before` delete in one
   statement each, under two advisory locks (stable identifiers, design
   D33): `append` and `append_synced` take the business number's lock

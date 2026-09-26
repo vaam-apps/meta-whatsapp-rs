@@ -112,13 +112,19 @@
 //! migrates at startup again, or migrate from the new revision only.
 //!
 //! It back-fills the sender of every inbound message already stored, by
-//! [`StoredMessage::sender`]'s rule, except where the payload holds
-//! U+0000 (the `json` operators fail on such a document; that message
-//! keeps no sender, and an erasure does not reach it in a group). That
-//! `UPDATE` writes every inbound row, and building the indexes reads the
-//! messages and conversations tables once; writes to them wait until it
-//! is done (inside the migration's transaction): on a large inbox, run
-//! [`migrate`] from a one-off job, as for migration 3 below.
+//! [`StoredMessage::sender`]'s rule, except where the payload's text holds
+//! the escape `\u0000` (the `json` operators fail on a NUL; a text
+//! holding a backslash then `u0000` is skipped too). Those rows, and the
+//! group messages an instance of the previous revision records after the
+//! migration (it writes no sender), get their sender from the first
+//! erasure on their number, which reads their payloads in Rust
+//! (`wa_messages_unsent_idx` finds them): an erasure reaches them all.
+//! Its indexes hold back writes to the messages and conversations tables
+//! while they are built, and adding the `sender` column locks
+//! `wa_messages` against reads too (`ACCESS EXCLUSIVE`) until the
+//! migration commits, after its `UPDATE` wrote every inbound row. On a
+//! large inbox, run [`migrate`] from a one-off job, as for migration 3
+//! below, with a `lock_timeout`.
 //!
 //! Every table the adapter keeps about a contact is keyed by business
 //! number and contact (a link by business number and its two
@@ -481,7 +487,7 @@ mod tests {
         ),
         (
             4,
-            "3943a564f9ef2c2aaea48f15843f73ba76ad15f6696923a5a09a3ede5d068889ee9053366c3d3577cea1aa537c8dee50",
+            "507506d34ea4f3bceac2d8db41849ac7ea8967145cdf3e775bce49b021a7818b3d9be6cfd6af4ac2a711cf350d06b675",
         ),
     ];
 

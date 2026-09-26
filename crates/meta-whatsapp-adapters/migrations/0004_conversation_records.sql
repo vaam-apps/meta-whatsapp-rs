@@ -94,7 +94,8 @@ ALTER TABLE {prefix}messages ADD COLUMN sender TEXT COLLATE "C";
 
 -- The messages recorded before this migration, by the same rule. A payload
 -- holding U+0000 anywhere cannot be read field by field (the `json`
--- operators fail on it): such a row keeps no sender.
+-- operators fail on it): such a row is left without a sender here, and
+-- gets it from the first erasure on its number (below).
 UPDATE {prefix}messages SET sender = COALESCE(
         CASE WHEN json_typeof(payload_json -> 'from_user_id') = 'string'
              THEN NULLIF(payload_json ->> 'from_user_id', '') END,
@@ -104,3 +105,13 @@ UPDATE {prefix}messages SET sender = COALESCE(
 
 CREATE INDEX {prefix}messages_sender_idx
     ON {prefix}messages (phone_number_id, sender) WHERE sender IS NOT NULL;
+
+-- The inbound messages without a sender, this crate's own kinds aside (a
+-- revoke's tombstone, a redacted message: their payload is `{}`): those
+-- the update above skipped, and those an instance of the previous
+-- revision records after it (it writes no sender). `erase_all` reads
+-- their payloads first, fills in their sender by the same rule, and then
+-- matches them like any other.
+CREATE INDEX {prefix}messages_unsent_idx
+    ON {prefix}messages (phone_number_id) WHERE sender IS NULL AND direction = 'inbound'
+     AND kind_utf8 <> 'revoked'::bytea AND kind_utf8 <> 'erased'::bytea;
