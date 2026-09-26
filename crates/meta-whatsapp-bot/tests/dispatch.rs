@@ -1810,3 +1810,341 @@ async fn message_type_listeners_get_their_type_only() {
         .unwrap();
     assert_eq!(*kinds.lock().unwrap(), ["reaction", "image"]);
 }
+
+// ─── The order under review: every path, reroutes, replicas ─────────────
+
+/// Every path a received message can take: a command, a command with
+/// arguments, an unknown command, plain text, an image and a video
+/// captioned with a command or an unknown one, a plain image, a reply
+/// button, a list row, a template quick-reply button and a reaction.
+/// Meta's fixtures, all from `+1 650 555 1234`.
+fn every_path() -> Vec<(&'static str, meta_whatsapp_webhooks::WebhookEvent)> {
+    vec![
+        ("command", text_event(TEXT, "/ping")),
+        ("command with arguments", text_event(TEXT, "/ping now")),
+        ("unknown command", text_event(TEXT, "/nope")),
+        ("plain text", text_event(TEXT, "hello")),
+        (
+            "image caption command",
+            captioned("messages/image.json", "image", "/sticker big"),
+        ),
+        (
+            "video caption unknown command",
+            captioned("messages/video.json", "video", "/nope"),
+        ),
+        ("plain image", event("messages/image.json")),
+        (
+            "reply button payload",
+            event("messages/interactive_button_reply.json"),
+        ),
+        (
+            "list row payload",
+            event("messages/interactive_list_reply.json"),
+        ),
+        ("quick-reply button payload", event("messages/button.json")),
+        ("reaction", event("messages/reaction.json")),
+    ]
+}
+
+/// A bot where every path of [`every_path`] answers: `MarkRead` with a
+/// typing indicator, commands (typed, captioned, tapped), an
+/// unknown-command handler and listeners of every kind, all replying.
+fn answering_everything(builder: meta_whatsapp_bot::BotBuilder) -> meta_whatsapp_bot::BotBuilder {
+    let reply = |text: &'static str| {
+        move |ctx: Ctx| async move {
+            ctx.reply(text).await?;
+            Ok(())
+        }
+    };
+    builder
+        .middleware(MarkRead::with_typing_indicator())
+        .command(Command::new("ping", reply("pong")))
+        .command(Command::new("sticker", reply("sticker")))
+        .command(
+            Command::new("tap", reply("tapped"))
+                .payload("cancel-button")
+                .payload("priority_express")
+                .payload("Unsubscribe"),
+        )
+        .unknown_command(reply("unknown"))
+        .listen(Listen::All, reply("all"))
+        .listen(Listen::Messages, reply("messages"))
+        .listen(Listen::message_type("image"), reply("image"))
+        .listen(Listen::event("message_received"), reply("received"))
+}
+
+/// Decisive for check "a banned sender triggers nothing": on every path,
+/// with every kind of handler registered, a banned sender makes no request
+/// at all (no receipt, no "typing…", no reply) and the `Refusals` hears of
+/// each message as `Banned`. The control: the same events from a sender
+/// who is not banned each make a receipt and a reply.
+#[tokio::test]
+async fn a_banned_sender_makes_no_request_on_any_path() {
+    #[derive(Debug, Clone, Default)]
+    struct Seen(Arc<Mutex<Vec<Refusal>>>);
+    #[async_trait]
+    impl Refusals for Seen {
+        async fn refused(&self, _: &Ctx, refusal: &Refusal) -> meta_whatsapp_core::Result<()> {
+            self.0.lock().unwrap().push(*refusal);
+            Ok(())
+        }
+    }
+    let t = ScriptedTransport::new();
+    let seen = Seen::default();
+    let banned = answering_everything(
+        Bot::builder()
+            .client(client(&t))
+            .refusals(seen.clone())
+            .access(AccessList::new().ban_phone("+1 650 555 1234")),
+    )
+    .build()
+    .await
+    .unwrap();
+    let paths = every_path();
+    for (path, event) in paths.clone() {
+        banned.deliver(event).await.unwrap();
+        assert!(t.requests().is_empty(), "{path}: {:?}", t.requests());
+    }
+    assert_eq!(t.remaining(), 0);
+    assert_eq!(*seen.0.lock().unwrap(), vec![Refusal::Banned; paths.len()]);
+
+    // Control: not banned, every path is answered.
+    let out = Recording::default();
+    let open = answering_everything(Bot::builder().outbound(out.clone()))
+        .build()
+        .await
+        .unwrap();
+    for (path, event) in paths {
+        let (sent, reads) = (out.sent().len(), out.reads.lock().unwrap().len());
+        open.handle(event).await.unwrap();
+        assert_eq!(out.reads.lock().unwrap().len(), reads + 1, "{path}");
+        assert!(out.sent().len() > sent, "{path}: no reply");
+    }
+}
+
+/// A middleware may hand an event to another command
+/// (`Ctx::with_invocation`): `go <name>` runs `<name>`. The command it lands
+/// on still meets its own guards (owner-only, scope, cooldown), so a
+/// reroute is no way around them; for an owner it runs (control).
+#[tokio::test]
+async fn a_rerouted_event_meets_the_guards_of_the_command_it_lands_on() {
+    #[derive(Debug)]
+    struct Reroute;
+    #[async_trait]
+    impl Middleware for Reroute {
+        async fn handle(&self, ctx: Ctx, next: Next<'_>) -> meta_whatsapp_core::Result<()> {
+            let target = ctx
+                .text()
+                .and_then(|t| t.strip_prefix("go "))
+                .map(str::to_owned);
+            let ctx = match target {
+                Some(name) => ctx.with_invocation(meta_whatsapp_bot::Invocation::new(
+                    name.clone(),
+                    Trigger::Text {
+                        prefix: String::new(),
+                        name,
+                    },
+                    meta_whatsapp_bot::Args::default(),
+                )),
+                None => ctx,
+            };
+            next.run(ctx).await
+        }
+    }
+    #[derive(Debug, Clone, Default)]
+    struct Seen(Arc<Mutex<Vec<Refusal>>>);
+    #[async_trait]
+    impl Refusals for Seen {
+        async fn refused(&self, _: &Ctx, refusal: &Refusal) -> meta_whatsapp_core::Result<()> {
+            self.0.lock().unwrap().push(*refusal);
+            Ok(())
+        }
+    }
+    let (admin, poll, roll) = (
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
+    );
+    let clock = ManualClock::new(datetime!(2026-09-26 12:00 UTC));
+    let kv = Arc::new(MemoryKvStore::with_clock(Arc::new(clock.clone())));
+    let seen = Seen::default();
+    let bot = Bot::builder()
+        .outbound(Recording::default())
+        .refusals(seen.clone())
+        .access(AccessList::new().owner(BSUID))
+        .cooldown_store(kv, Arc::new(clock))
+        .middleware(Reroute)
+        .command(counting("admin", &admin).owner_only())
+        .command(counting("poll", &poll).group_only())
+        .command(counting("roll", &roll).cooldown(Duration::from_secs(60)))
+        .build()
+        .await
+        .unwrap();
+
+    // Plain text, so the match found no command: the middleware's is the
+    // only invocation.
+    bot.handle(text_event(TEXT, "go admin")).await.unwrap();
+    bot.handle(text_event(TEXT, "go poll")).await.unwrap();
+    bot.handle(text_event(TEXT, "go roll")).await.unwrap();
+    bot.handle(text_event(TEXT, "go roll")).await.unwrap();
+    assert_eq!((count(&admin), count(&poll), count(&roll)), (0, 0, 1));
+    let refusals = seen.0.lock().unwrap().clone();
+    assert_eq!(refusals.len(), 3, "{refusals:?}");
+    assert_eq!(refusals[..2], [Refusal::NotOwner, Refusal::GroupOnly]);
+    assert!(
+        matches!(refusals[2], Refusal::CoolingDown { notify: true, .. }),
+        "{refusals:?}"
+    );
+
+    // Control: the owner's reroute runs the owner-only command.
+    bot.handle(text_event(BSUID_ONLY, "go admin"))
+        .await
+        .unwrap();
+    assert_eq!(count(&admin), 1);
+}
+
+/// A `KvStore` that holds every operation on a cooldown notice marker until
+/// `n` of them are waiting, then lets them all go: the worst interleaving
+/// of `n` replicas refusing the same user at once, on one runtime thread.
+#[derive(Debug)]
+struct NoticeRendezvous {
+    inner: MemoryKvStore,
+    n: usize,
+    arrived: AtomicUsize,
+}
+
+impl NoticeRendezvous {
+    async fn meet(&self, key: &StoreKey) {
+        if key.namespace() != meta_whatsapp_bot::COOLDOWN_NOTICE_NAMESPACE {
+            return;
+        }
+        let me = self.arrived.fetch_add(1, Ordering::SeqCst) + 1;
+        let round = me.div_ceil(self.n) * self.n;
+        while self.arrived.load(Ordering::SeqCst) < round {
+            tokio::task::yield_now().await;
+        }
+    }
+}
+
+#[async_trait]
+impl KvStore for NoticeRendezvous {
+    async fn get(&self, key: &StoreKey) -> Result<Option<Versioned>, StorageError> {
+        self.meet(key).await;
+        self.inner.get(key).await
+    }
+    async fn put(
+        &self,
+        key: &StoreKey,
+        value: Vec<u8>,
+        expiry: Expiry,
+    ) -> Result<u64, StorageError> {
+        self.meet(key).await;
+        self.inner.put(key, value, expiry).await
+    }
+    async fn put_if_absent(
+        &self,
+        key: &StoreKey,
+        value: Vec<u8>,
+        expiry: Expiry,
+    ) -> Result<Option<u64>, StorageError> {
+        self.meet(key).await;
+        self.inner.put_if_absent(key, value, expiry).await
+    }
+    async fn compare_and_swap(
+        &self,
+        key: &StoreKey,
+        expected: u64,
+        new: Option<Vec<u8>>,
+        expiry: Expiry,
+    ) -> Result<Option<u64>, StorageError> {
+        self.meet(key).await;
+        self.inner
+            .compare_and_swap(key, expected, new, expiry)
+            .await
+    }
+    async fn delete(&self, key: &StoreKey) -> Result<bool, StorageError> {
+        self.meet(key).await;
+        self.inner.delete(key).await
+    }
+}
+
+/// Decisive: two replicas (two bots, each with its own `KvCooldowns`) on
+/// one store, four refusals of one user's running cooldown at once, every
+/// marker operation held until all four reach it: exactly one notice. A
+/// marker read before it is written (not one atomic `put_if_absent`) lets
+/// all four notify.
+#[tokio::test]
+async fn replicas_on_one_store_tell_a_running_cooldown_once() {
+    let clock = ManualClock::new(datetime!(2026-09-26 12:00 UTC));
+    let kv = Arc::new(NoticeRendezvous {
+        inner: MemoryKvStore::with_clock(Arc::new(clock.clone())),
+        n: 4,
+        arrived: AtomicUsize::new(0),
+    });
+    let runs = Arc::new(AtomicUsize::new(0));
+    let (out_a, out_b) = (Recording::default(), Recording::default());
+    let replica = |out: &Recording| {
+        Bot::builder()
+            .outbound(out.clone())
+            .cooldown_store(kv.clone(), Arc::new(clock.clone()))
+            .command(counting("roll", &runs).cooldown(Duration::from_secs(30)))
+            .build()
+    };
+    let (a, b) = (
+        replica(&out_a).await.unwrap(),
+        replica(&out_b).await.unwrap(),
+    );
+    a.handle(text_event(TEXT, "/roll")).await.unwrap();
+    clock.advance(Duration::from_secs(1));
+    let (r1, r2, r3, r4) = tokio::join!(
+        a.handle(text_event(TEXT, "/roll")),
+        b.handle(text_event(TEXT, "/roll")),
+        a.handle(text_event(TEXT, "/roll")),
+        b.handle(text_event(TEXT, "/roll")),
+    );
+    for r in [r1, r2, r3, r4] {
+        r.unwrap();
+    }
+    assert_eq!(count(&runs), 1);
+    let mut notices = out_a.bodies();
+    notices.extend(out_b.bodies());
+    assert_eq!(
+        notices,
+        ["Please wait 29 s before using this command again."]
+    );
+    assert_eq!(kv.arrived.load(Ordering::SeqCst), 4);
+}
+
+/// Decisive: the marker ends when its cooldown ends, not a period after the
+/// first refusal. Refused 29 s into a 30 s cooldown, run again at 31 s, then
+/// refused at 32 s: that new cooldown's refusal is told (a marker that
+/// lived 30 s from its own write would still be there until 59 s).
+#[tokio::test]
+async fn the_notice_marker_ends_with_its_cooldown() {
+    let clock = ManualClock::new(datetime!(2026-09-26 12:00 UTC));
+    let kv = Arc::new(MemoryKvStore::with_clock(Arc::new(clock.clone())));
+    let runs = Arc::new(AtomicUsize::new(0));
+    let out = Recording::default();
+    let bot = Bot::builder()
+        .outbound(out.clone())
+        .cooldown_store(kv, Arc::new(clock.clone()))
+        .command(counting("roll", &runs).cooldown(Duration::from_secs(30)))
+        .build()
+        .await
+        .unwrap();
+    bot.handle(text_event(TEXT, "/roll")).await.unwrap();
+    clock.advance(Duration::from_secs(29));
+    bot.handle(text_event(TEXT, "/roll")).await.unwrap();
+    clock.advance(Duration::from_secs(2));
+    bot.handle(text_event(TEXT, "/roll")).await.unwrap();
+    clock.advance(Duration::from_secs(1));
+    bot.handle(text_event(TEXT, "/roll")).await.unwrap();
+    assert_eq!(count(&runs), 2);
+    assert_eq!(
+        out.bodies(),
+        [
+            "Please wait 1 s before using this command again.",
+            "Please wait 29 s before using this command again."
+        ]
+    );
+}
