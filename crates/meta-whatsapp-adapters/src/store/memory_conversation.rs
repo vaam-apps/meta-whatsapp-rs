@@ -640,6 +640,10 @@ impl ConversationStore for MemoryConversationStore {
         let mut found = BTreeSet::from([key.contact.clone()]);
         let mut todo = vec![key.contact.clone()];
         while let Some(id) = todo.pop() {
+            if id.is_empty() {
+                // An empty id names no one: never followed, nor found.
+                continue;
+            }
             let mut next: Vec<String> = Vec::new();
             for ((n, contact), synced) in &st.contacts {
                 let Some(stored) = synced.contact().filter(|_| n == number) else {
@@ -662,7 +666,7 @@ impl ConversationStore for MemoryConversationStore {
                 }
             }
             for other in next {
-                if found.insert(other.clone()) {
+                if !other.is_empty() && found.insert(other.clone()) {
                     todo.push(other);
                 }
             }
@@ -706,16 +710,19 @@ impl ConversationStore for MemoryConversationStore {
             }
             erased.thread_owners += u64::from(st.owners.remove(&key).is_some());
         }
+        // An empty id names no one: it matches what is keyed by it, never a
+        // contact's other ids nor a link's sides.
+        let named: BTreeSet<&str> = ids.iter().copied().filter(|id| !id.is_empty()).collect();
         let before = st.contacts.len();
         st.contacts.retain(|(number, contact), synced| {
             number != phone_number_id
-                || !(ids.contains(contact.as_str()) || State::names(synced, &ids))
+                || !(ids.contains(contact.as_str()) || State::names(synced, &named))
         });
         erased.contacts = (before - st.contacts.len()) as u64;
         let before = st.links.len();
         st.links.retain(|(number, previous, current), _| {
             number != phone_number_id
-                || !(ids.contains(previous.as_str()) || ids.contains(current.as_str()))
+                || !(named.contains(previous.as_str()) || named.contains(current.as_str()))
         });
         erased.identity_links = (before - st.links.len()) as u64;
         // Their messages in conversations keyed by someone else (a

@@ -964,7 +964,10 @@ pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
     /// number `key.phone_number_id`, `key.contact` included: the closure
     /// over the synced contacts (a contact's key, `user_id`,
     /// `parent_user_id` and `phone_number` are one person; a kept removal
-    /// connects nothing) and the [identity links](IdentityLink). Read only.
+    /// connects nothing) and the [identity links](IdentityLink). An empty
+    /// value names no one: it is neither followed nor returned (unless it
+    /// is `key.contact` itself), so contacts that share an empty field are
+    /// not one person. Read only.
     /// Never another number's: a `wa_id` is the same on every number, and
     /// another number's records may be another business's.
     ///
@@ -1000,6 +1003,9 @@ pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
     ///   [`ErasureMode::Delete`] the latest remaining message (never a
     ///   tombstone) becomes the summary's, and a conversation left with
     ///   none has no summary. Its window and unread count stay.
+    ///
+    /// An empty id in `contacts` names no one: it matches what is keyed by
+    /// it, never a contact through its other ids, a link or a sender.
     ///
     /// Records of other numbers are never touched: erase each number's.
     /// There is no erasure across numbers on purpose: a `wa_id` is the

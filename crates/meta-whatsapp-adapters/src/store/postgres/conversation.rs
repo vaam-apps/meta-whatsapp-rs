@@ -308,7 +308,9 @@ fn purge_sql(prefix: &TablePrefix, scope: &str) -> String {
 /// The deletion of `erase_all`, in one statement over one snapshot: `$1`
 /// the business number, `$2` the erased ids (`text[]`), `$3` the kind an
 /// erased person's group message gets (`redact`) or the tombstone's kind,
-/// which the recomputed summaries skip (not `redact`). The messages go
+/// which the recomputed summaries skip (not `redact`), `$4` the erased ids
+/// that are not empty, which a synced contact's other ids and a link's
+/// sides are matched on (an empty one names no one). The messages go
 /// first (the order `fill_media_placeholder` takes a message and its
 /// summary in). `g` is the person's messages in conversations keyed by
 /// someone else: disjoint from `m`'s rows (their conversation is not one
@@ -361,10 +363,10 @@ fn erase_sql(prefix: &TablePrefix, redact: bool) -> String {
          o AS (DELETE FROM {owners} \
            WHERE phone_number_id = $1 AND contact = ANY($2) RETURNING 1), \
          p AS (DELETE FROM {contacts} WHERE phone_number_id = $1 \
-           AND (contact = ANY($2) OR user_id = ANY($2) OR parent_user_id = ANY($2) \
-             OR phone_number = ANY($2)) RETURNING 1), \
+           AND (contact = ANY($2) OR user_id = ANY($4) OR parent_user_id = ANY($4) \
+             OR phone_number = ANY($4)) RETURNING 1), \
          l AS (DELETE FROM {links} WHERE phone_number_id = $1 \
-           AND (previous = ANY($2) OR current = ANY($2)) RETURNING 1), \
+           AND (previous = ANY($4) OR current = ANY($4)) RETURNING 1), \
          {group} \
          SELECT (SELECT count(*) FROM m), (SELECT count(*) FROM c), \
            (SELECT count(*) FROM w), (SELECT count(*) FROM o), (SELECT count(*) FROM p), \
@@ -586,7 +588,8 @@ impl Sql {
             )),
             // The closure from `$2`: a synced contact (not a kept removal)
             // naming an identity found adds its four, a link its other
-            // side. `UNION` drops what was found already, so it ends.
+            // side. An empty identity names no one: it is never followed
+            // nor found. `UNION` drops what was found already, so it ends.
             identities: arc(format!(
                 "WITH RECURSIVE ids(id) AS ( \
                    SELECT $2::text COLLATE \"C\" \
@@ -602,7 +605,7 @@ impl Sql {
                      UNION ALL \
                      SELECT l.current FROM {links} AS l \
                      WHERE l.phone_number_id = $1 AND l.previous = ids.id \
-                   ) AS n(id) WHERE n.id IS NOT NULL \
+                   ) AS n(id) WHERE ids.id <> '' AND n.id <> '' \
                  ) \
                  SELECT id FROM ids"
             )),
@@ -1350,10 +1353,18 @@ impl ConversationStore for PostgresConversationStore {
             .execute(&mut *tx)
             .await
             .map_err(backend)?;
+        // An empty id names no one: it matches what is keyed by it, never a
+        // contact's other ids nor a link's sides.
+        let named: Vec<&str> = contacts
+            .iter()
+            .map(String::as_str)
+            .filter(|id| !id.is_empty())
+            .collect();
         let row = sqlx::query(AssertSqlSafe(Arc::clone(sql)))
             .bind(phone_number_id.as_str())
             .bind(contacts)
             .bind(kind.as_bytes())
+            .bind(&named)
             .fetch_one(&mut *tx)
             .await
             .map_err(backend)?;

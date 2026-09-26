@@ -87,7 +87,9 @@
 //!   identities, whatever its time, and read from either side, oldest
 //!   first; `identities` closes over the synced contacts (key, BSUID,
 //!   parent BSUID, phone number; a kept removal connects nothing) and the
-//!   links, on one number only;
+//!   links, on one number only; an empty identifier connects no one, and
+//!   an erasure never matches a contact's other ids or a link's sides on
+//!   one;
 //! - an erasure deletes every record of one key on one number (messages
 //!   of every origin and tombstones, the summary, window events, the
 //!   ownership record, the synced contacts naming the key as key, BSUID,
@@ -169,6 +171,7 @@ pub async fn run<S: ConversationStore + ?Sized>(store: &S) {
     erase_deletes_every_record_of_one_contact_on_one_number(store).await;
     erase_all_reaches_a_person_under_every_identity(store).await;
     an_erasure_redacts_or_deletes_the_persons_group_messages(store).await;
+    an_empty_identifier_connects_nobody(store).await;
     purge_deletes_exactly_what_is_older(store).await;
     apply_retention_follows_the_retention(store).await;
 }
@@ -2923,6 +2926,67 @@ async fn an_erasure_redacts_or_deletes_the_persons_group_messages<S: Conversatio
             .unwrap()
             .is_empty(),
         "erasing again changes nothing"
+    );
+}
+
+/// An empty identifier names nobody (review of the L5 remediation): a
+/// synced contact whose phone number, BSUID or parent BSUID is empty, and
+/// a link with an empty side, connect no one through it. Otherwise
+/// `identities` would join everyone sharing the empty field into one
+/// person, and `erase_all` would delete their records with theirs.
+async fn an_empty_identifier_connects_nobody<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("empty-ids");
+    for contact in [
+        StoredContact {
+            phone_number: Some(String::new()),
+            ..r.contact("US.A", 1)
+        },
+        StoredContact {
+            phone_number: Some(String::new()),
+            user_id: Some(UserId::new("")),
+            parent_user_id: Some(UserId::new("")),
+            ..r.contact("US.B", 1)
+        },
+    ] {
+        assert!(store.put_contact(contact).await.unwrap());
+    }
+    for l in [link(&r, "", "US.A", 1), link(&r, "US.C", "", 1)] {
+        assert!(store.link_identity(l).await.unwrap());
+    }
+    let b = r.key("US.B");
+    record_everything(store, &r, &b, "b").await;
+    let b_before = recorded(store, &b).await;
+    for from in ["US.A", "US.B", "US.C", ""] {
+        assert_eq!(
+            store.identities(&r.key(from)).await.unwrap(),
+            set(&[from]),
+            "from {from:?}: an empty field connects no one"
+        );
+    }
+    assert_eq!(
+        store.erase_all(&r.pn, &["US.A".to_owned()]).await.unwrap(),
+        Erased {
+            contacts: 1,
+            identity_links: 1,
+            ..Erased::default()
+        },
+        "their contact and the link naming them"
+    );
+    assert_eq!(
+        store.erase_all(&r.pn, &[String::new()]).await.unwrap(),
+        Erased::default(),
+        "the empty id names no contact and no link"
+    );
+    assert!(
+        store.contact(&b).await.unwrap().is_some(),
+        "a contact sharing an empty field stays"
+    );
+    recorded(store, &b)
+        .await
+        .assert_same(&b_before, "someone sharing an empty field");
+    assert_eq!(
+        store.identity_links(&r.key("US.C")).await.unwrap(),
+        [link(&r, "US.C", "", 1)]
     );
 }
 
