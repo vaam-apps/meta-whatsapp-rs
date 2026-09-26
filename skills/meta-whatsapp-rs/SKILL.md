@@ -144,9 +144,8 @@ own gate. On another `rev`, trust the rustdoc
 ## What meta-whatsapp-rs does not do
 
 - No tenant model, no job queue or outbox, no consent registry.
-- Not wrapped: Multi-Partner Solutions and migration intents (credit
-  lines and partner-led business verification are), payments, the
-  thread control API (its webhooks are typed)
+- Not wrapped: Multi-Partner Solutions and migration intents (credit lines and
+  partner-led business verification are), payments, the thread control API (its webhooks are typed)
   ([coverage](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/coverage.md),
   [parity](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/parity.md),
   [roadmap](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/roadmap.md)).
