@@ -17,8 +17,9 @@ use meta_whatsapp_bot::{
     PropagateErrors, Registrar, SilentRefusals, Trigger,
 };
 use meta_whatsapp_core::clock::ManualClock;
-use meta_whatsapp_core::error::SinkError;
+use meta_whatsapp_core::error::{SinkError, StorageError};
 use meta_whatsapp_core::sink::EventSink;
+use meta_whatsapp_core::store::{Expiry, KvStore, StoreKey, Versioned};
 use meta_whatsapp_core::testing::ScriptedTransport;
 use meta_whatsapp_core::{Error, ErrorKind};
 use pretty_assertions::assert_eq;
@@ -341,6 +342,65 @@ async fn interactive_replies_with_a_registered_payload_run_their_command() {
     assert_eq!(count(&plain), 1);
 }
 
+/// A tap goes through the same guards as typed text: a payload is no way
+/// around an owner-only or group-only command, or a ban; and typed text
+/// equal to a payload is plain text, not a tap.
+#[tokio::test]
+async fn payload_triggers_pass_the_same_guards() {
+    let wipe_runs = Arc::new(AtomicUsize::new(0));
+    let poll_runs = Arc::new(AtomicUsize::new(0));
+    let menu_runs = Arc::new(AtomicUsize::new(0));
+    let out = Recording::default();
+    let bot = Bot::builder()
+        .outbound(out.clone())
+        .access(AccessList::new().owner("US.10000000000000000001"))
+        .command(
+            counting("wipe", &wipe_runs)
+                .owner_only()
+                .payload("cancel-button"),
+        )
+        .command(
+            counting("poll", &poll_runs)
+                .group_only()
+                .payload("priority_express"),
+        )
+        .command(counting("menu", &menu_runs).payload("Unsubscribe"))
+        .build()
+        .await
+        .unwrap();
+
+    // Meta's reply button (`cancel-button`) and list row
+    // (`priority_express`) examples, from a private chat and not an owner.
+    bot.handle(event("messages/interactive_button_reply.json"))
+        .await
+        .unwrap();
+    bot.handle(event("messages/interactive_list_reply.json"))
+        .await
+        .unwrap();
+    assert_eq!((count(&wipe_runs), count(&poll_runs)), (0, 0));
+    assert_eq!(out.bodies(), ["This command only works in a group."]);
+
+    // The payload typed as text: not a tap.
+    for body in ["cancel-button", "Unsubscribe", "priority_express"] {
+        bot.handle(text_event(TEXT, body)).await.unwrap();
+    }
+    assert_eq!(count(&menu_runs), 0);
+    // The tap itself does run it.
+    bot.handle(event("messages/button.json")).await.unwrap();
+    assert_eq!(count(&menu_runs), 1);
+
+    // A banned sender's tap runs nothing.
+    let banned = Bot::builder()
+        .outbound(Recording::default())
+        .access(AccessList::new().ban_phone("+1 650 555 1234"))
+        .command(counting("menu", &menu_runs).payload("Unsubscribe"))
+        .build()
+        .await
+        .unwrap();
+    banned.handle(event("messages/button.json")).await.unwrap();
+    assert_eq!(count(&menu_runs), 1);
+}
+
 // ─── Guards ──────────────────────────────────────────────────────────────
 
 /// Decisive: remove the cooldown check and the second run goes through.
@@ -453,6 +513,152 @@ async fn a_banned_sender_runs_nothing() {
     bot.handle(text_event(TEXT, "/ping")).await.unwrap();
     bot.handle(text_event(TEXT, "hello")).await.unwrap();
     assert_eq!((count(&runs), count(&listened)), (1, 1));
+}
+
+/// The sender's identities are completed from the change's contact, so a
+/// ban matches whichever the message itself leaves out: a BSUID only in
+/// `contacts[].user_id`, a phone number only in `contacts[].wa_id`.
+#[tokio::test]
+async fn a_ban_matches_identities_only_the_contact_carries() {
+    let runs = Arc::new(AtomicUsize::new(0));
+    let bot = Bot::builder()
+        .outbound(Recording::default())
+        .access(
+            AccessList::new()
+                .ban("US.10000000000000000001")
+                .ban_phone("+1 212 555 7890"),
+        )
+        .command(counting("ping", &runs))
+        .build()
+        .await
+        .unwrap();
+
+    // `from` only on the message; the BSUID is in the contact.
+    let mut json = common::fixture_json(TEXT);
+    let value = &mut json["entry"][0]["changes"][0]["value"];
+    value["contacts"][0]["user_id"] = json!("US.10000000000000000001");
+    value["messages"][0]["text"]["body"] = json!("/ping");
+    let [by_contact_bsuid] = common::events_of(&json).try_into().unwrap();
+    assert!(
+        by_contact_bsuid
+            .contact()
+            .is_some_and(|c| c.user_id.is_some())
+    );
+    bot.handle(by_contact_bsuid).await.unwrap();
+
+    // `from_user_id` only on the message; the phone number is in the contact.
+    let mut json = common::fixture_json(BSUID_ONLY);
+    let value = &mut json["entry"][0]["changes"][0]["value"];
+    value["contacts"][0]["wa_id"] = json!("12125557890");
+    value["messages"][0]["text"]["body"] = json!("/ping");
+    let [by_contact_phone] = common::events_of(&json).try_into().unwrap();
+    bot.handle(by_contact_phone).await.unwrap();
+
+    assert_eq!(count(&runs), 0);
+    // Control: the unmodified senders are not banned.
+    bot.handle(text_event(TEXT, "/ping")).await.unwrap();
+    bot.handle(text_event(BSUID_ONLY, "/ping")).await.unwrap();
+    assert_eq!(count(&runs), 2);
+}
+
+/// The wait the default refusal quotes is rounded up to whole seconds.
+#[tokio::test]
+async fn the_quoted_wait_is_rounded_up() {
+    let clock = ManualClock::new(datetime!(2026-09-26 12:00 UTC));
+    let kv = Arc::new(MemoryKvStore::with_clock(Arc::new(clock.clone())));
+    let out = Recording::default();
+    let bot = Bot::builder()
+        .outbound(out.clone())
+        .cooldown_store(kv, Arc::new(clock.clone()))
+        .command(counting("roll", &Arc::default()).cooldown(Duration::from_secs(30)))
+        .build()
+        .await
+        .unwrap();
+    bot.handle(text_event(TEXT, "/roll")).await.unwrap();
+    clock.advance(Duration::from_millis(10_500));
+    bot.handle(text_event(TEXT, "/roll")).await.unwrap();
+    clock.advance(Duration::from_millis(19_400));
+    bot.handle(text_event(TEXT, "/roll")).await.unwrap();
+    assert_eq!(
+        out.bodies(),
+        [
+            "Please wait 20 s before using this command again.",
+            "Please wait 1 s before using this command again."
+        ]
+    );
+}
+
+/// A `KvStore` whose first `put_if_absent` finds a record that has expired
+/// by the time `get` reads it: the race `KvCooldowns` retries once.
+#[derive(Debug)]
+struct ExpiresMidway {
+    inner: MemoryKvStore,
+    raced: AtomicUsize,
+}
+
+#[async_trait]
+impl KvStore for ExpiresMidway {
+    async fn get(&self, key: &StoreKey) -> Result<Option<Versioned>, StorageError> {
+        if self.raced.load(Ordering::SeqCst) == 1 {
+            return Ok(None);
+        }
+        self.inner.get(key).await
+    }
+    async fn put(
+        &self,
+        key: &StoreKey,
+        value: Vec<u8>,
+        expiry: Expiry,
+    ) -> Result<u64, StorageError> {
+        self.inner.put(key, value, expiry).await
+    }
+    async fn put_if_absent(
+        &self,
+        key: &StoreKey,
+        value: Vec<u8>,
+        expiry: Expiry,
+    ) -> Result<Option<u64>, StorageError> {
+        if self.raced.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Ok(None);
+        }
+        self.inner.put_if_absent(key, value, expiry).await
+    }
+    async fn compare_and_swap(
+        &self,
+        key: &StoreKey,
+        expected: u64,
+        new: Option<Vec<u8>>,
+        expiry: Expiry,
+    ) -> Result<Option<u64>, StorageError> {
+        self.inner
+            .compare_and_swap(key, expected, new, expiry)
+            .await
+    }
+    async fn delete(&self, key: &StoreKey) -> Result<bool, StorageError> {
+        self.inner.delete(key).await
+    }
+}
+
+/// A record that expired between the refused create and the read is gone:
+/// the cooldown starts and the command runs.
+#[tokio::test]
+async fn a_cooldown_that_expires_mid_check_starts_again() {
+    let runs = Arc::new(AtomicUsize::new(0));
+    let kv = Arc::new(ExpiresMidway {
+        inner: MemoryKvStore::new(),
+        raced: AtomicUsize::new(0),
+    });
+    let out = Recording::default();
+    let bot = Bot::builder()
+        .outbound(out.clone())
+        .cooldown_store(kv, Arc::new(meta_whatsapp_core::clock::SystemClock))
+        .command(counting("roll", &runs).cooldown(Duration::from_secs(30)))
+        .build()
+        .await
+        .unwrap();
+    bot.handle(text_event(TEXT, "/roll")).await.unwrap();
+    assert_eq!(count(&runs), 1);
+    assert!(out.sent().is_empty(), "{:?}", out.bodies());
 }
 
 /// Decisive: remove either scope check and the refused command runs.
@@ -780,6 +986,90 @@ async fn listeners_get_the_events_of_their_kind() {
     );
 }
 
+/// A failing listener does not keep the others from running; the event
+/// still fails, once, with the first error.
+#[tokio::test]
+async fn every_listener_runs_when_one_fails() {
+    #[derive(Debug, Clone)]
+    struct Kinds(Arc<Mutex<Vec<ErrorKind>>>);
+    #[async_trait]
+    impl ErrorHandler for Kinds {
+        async fn on_error(&self, _: &Ctx, error: Error) -> meta_whatsapp_core::Result<()> {
+            self.0.lock().unwrap().push(error.kind());
+            Ok(())
+        }
+    }
+    let ran = Arc::new(AtomicUsize::new(0));
+    let ran_in = Arc::clone(&ran);
+    let failed = Arc::new(Mutex::new(Vec::new()));
+    let bot = Bot::builder()
+        .outbound(Recording::default())
+        .errors(Kinds(Arc::clone(&failed)))
+        .listen(Listen::Messages, |_ctx: Ctx| async move {
+            Err(Error::Other(anyhow::anyhow!("first listener fails")))
+        })
+        .listen(Listen::Messages, move |_ctx: Ctx| {
+            let ran = Arc::clone(&ran_in);
+            async move {
+                ran.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .build()
+        .await
+        .unwrap();
+    bot.handle(text_event(TEXT, "hello")).await.unwrap();
+    assert_eq!(count(&ran), 1);
+    assert_eq!(*failed.lock().unwrap(), [ErrorKind::Unknown]);
+}
+
+/// Synchronized history (`history`) is another event: a user's `/test` in
+/// it is the past, and runs no command.
+#[tokio::test]
+async fn history_never_runs_commands() {
+    let runs = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let seen_in = Arc::clone(&seen);
+    let out = Recording::default();
+    let bot = Bot::builder()
+        .outbound(out.clone())
+        .command(counting("test", &runs))
+        .listen(Listen::All, move |ctx: Ctx| {
+            let seen = Arc::clone(&seen_in);
+            async move {
+                let refused = ctx.reply("hi").await.unwrap_err();
+                seen.lock()
+                    .unwrap()
+                    .push((ctx.event().kind(), refused.kind()));
+                Ok(())
+            }
+        })
+        .build()
+        .await
+        .unwrap();
+    let mut history = common::fixture_json("fields/history_threads.json");
+    for thread in history["entry"][0]["changes"][0]["value"]["history"][0]["threads"]
+        .as_array_mut()
+        .unwrap()
+    {
+        for message in thread["messages"].as_array_mut().unwrap() {
+            if message["type"] == "text" {
+                message["text"]["body"] = json!("/test");
+            }
+        }
+    }
+    assert!(history.to_string().contains("/test"));
+    for e in common::events_of(&history) {
+        bot.handle(e).await.unwrap();
+    }
+    assert_eq!(count(&runs), 0);
+    assert!(out.sent().is_empty());
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [("history_synced", ErrorKind::InvalidParameter)]
+    );
+}
+
 // ─── Errors ──────────────────────────────────────────────────────────────
 
 fn failing() -> Command {
@@ -905,6 +1195,47 @@ async fn plugins_register_in_order_and_unload_in_reverse_once() {
     assert!(bot.deliver(text_event(TEXT, "/dice-roll")).await.is_err());
 }
 
+/// A plugin whose `on_unload` fails does not keep the others from
+/// unloading; its error is returned after they all ran.
+#[tokio::test]
+async fn unload_runs_every_plugin_and_returns_the_first_error() {
+    struct Flaky(Arc<Mutex<Vec<&'static str>>>);
+    #[async_trait]
+    impl Plugin for Flaky {
+        fn name(&self) -> &'static str {
+            "flaky"
+        }
+        async fn setup(&self, _: &mut Registrar) -> meta_whatsapp_core::Result<()> {
+            Ok(())
+        }
+        async fn on_unload(&self) -> meta_whatsapp_core::Result<()> {
+            self.0.lock().unwrap().push("flaky");
+            Err(meta_whatsapp_core::error::ConfigError::new("flaky unload").into())
+        }
+    }
+    let unloads = Arc::new(Mutex::new(Vec::new()));
+    let bot = Bot::builder()
+        .outbound(Recording::default())
+        .plugin(Games {
+            unloads: Arc::clone(&unloads),
+            name: "dice",
+        })
+        .plugin(Flaky(Arc::clone(&unloads)))
+        .plugin(Games {
+            unloads: Arc::clone(&unloads),
+            name: "coin",
+        })
+        .build()
+        .await
+        .unwrap();
+    let err = bot.unload().await.unwrap_err();
+    assert!(
+        matches!(&err, Error::Config(e) if e.0 == "flaky unload"),
+        "{err}"
+    );
+    assert_eq!(*unloads.lock().unwrap(), ["coin", "flaky", "dice"]);
+}
+
 #[tokio::test]
 async fn a_failed_plugin_setup_fails_the_build_in_its_step() {
     struct Broken;
@@ -974,6 +1305,11 @@ async fn the_build_refuses_ambiguous_or_incomplete_registrations() {
         )
         .await
         .contains("payload")
+    );
+    assert!(
+        config(base().command(Command::new("a", noop()).payload(" ")))
+            .await
+            .contains("empty payload")
     );
     assert!(
         config(base().command(Command::new("a", noop()).cooldown(Duration::from_secs(5))))

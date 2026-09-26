@@ -5,7 +5,7 @@
 
 mod common;
 
-use meta_whatsapp_bot::markdown::{self, NoEscape, Renderer, TEXT_MAX_CHARS};
+use meta_whatsapp_bot::markdown::{self, NoEscape, Renderer, TEXT_MAX_CHARS, WordJoinerEscape};
 use meta_whatsapp_bot::{Bot, Command, Ctx};
 use meta_whatsapp_client::messages::OutboundMessage;
 use meta_whatsapp_core::recipient::Recipient;
@@ -189,6 +189,57 @@ fn five_thousand_characters_split_into_two_messages_at_a_paragraph() {
             .validate()
             .unwrap();
     }
+}
+
+/// Two blocks that fill a message exactly, separator included, share it.
+#[test]
+fn blocks_that_fill_a_message_exactly_share_it() {
+    let markdown = [paragraph(2047, 'a'), paragraph(2047, 'b')].join("\n\n");
+    assert_eq!(markdown.chars().count(), TEXT_MAX_CHARS);
+    assert_eq!(markdown::render(&markdown), std::slice::from_ref(&markdown));
+    let one_more = format!("{markdown}b");
+    assert_eq!(markdown::render(&one_more).len(), 2);
+}
+
+/// Characters, as the client counts them (Unicode scalar values), not
+/// bytes: 4096 two-byte letters are one message.
+#[test]
+fn the_limit_counts_characters_not_bytes() {
+    let text = "é".repeat(TEXT_MAX_CHARS);
+    assert_eq!(markdown::render(&text), std::slice::from_ref(&text));
+    let emoji = "😀".repeat(TEXT_MAX_CHARS);
+    assert_eq!(markdown::render(&emoji), std::slice::from_ref(&emoji));
+}
+
+/// The escape's word joiners are characters Meta counts too: a text
+/// dense with escaped markup still splits into parts the client accepts.
+#[test]
+fn escapes_count_toward_the_limit() {
+    let renderer = Renderer::new().escape(WordJoinerEscape);
+    let markdown = "a\\_b ".repeat(1500);
+    let parts = renderer.render(&markdown);
+    assert!(parts.len() > 1, "{}", parts.len());
+    for part in &parts {
+        assert!(part.contains('\u{2060}'));
+        assert!(
+            part.chars().count() <= TEXT_MAX_CHARS,
+            "{}",
+            part.chars().count()
+        );
+        OutboundMessage::text(Recipient::phone("+16505551234"), part.clone())
+            .validate()
+            .unwrap();
+    }
+}
+
+/// `WordJoinerEscape` leaves `http://` and `https://` URLs as written.
+#[test]
+fn word_joiner_escape_leaves_urls_alone() {
+    let renderer = Renderer::new().escape(WordJoinerEscape);
+    assert_eq!(
+        renderer.render("see http://example.com/a_b~c and HTTPS://x.io/*"),
+        ["see http://example.com/a_b~c and HTTPS://x.io/*"]
+    );
 }
 
 /// A code block that fits in a message moves to the next one whole

@@ -198,7 +198,10 @@ async fn a_menu_the_client_would_refuse_fails_before_any_request() {
     for i in 0..31 {
         many = many.command(Command::new(format!("c{i}"), noop()).description("d"));
     }
-    assert_eq!(menu_error(many.build().await.unwrap()).await, "commands");
+    let many = many.build().await.unwrap();
+    // `command_menu` itself refuses it, not only the request.
+    assert_eq!(many.command_menu().unwrap_err().field, "commands");
+    assert_eq!(menu_error(many).await, "commands");
 
     let long = out()
         .command(Command::new("n".repeat(33), noop()).description("d"))

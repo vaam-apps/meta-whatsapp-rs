@@ -899,6 +899,22 @@ mod tests {
     }
 
     #[test]
+    fn a_zero_limit_is_one_character() {
+        assert_eq!(split("abc", 0), ["a", "b", "c"]);
+        assert_eq!(Renderer::new().max_chars(0).render("abc"), ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn a_cut_never_yields_a_blank_part() {
+        let parts = split("aaaaaaaaaa\n \nbbbbbbbbbb", 10);
+        assert_eq!(parts, ["aaaaaaaaaa", "bbbbbbbbbb"]);
+        let parts = Renderer::new()
+            .max_chars(16)
+            .render("```\naaaaaaaaaa\n \nbbbbbbbbbb\n```");
+        assert_eq!(parts, ["```aaaaaaaaaa```", "```bbbbbbbbbb```"]);
+    }
+
+    #[test]
     fn an_oversized_code_block_keeps_fences_on_every_piece() {
         let code = (0..30).map(|i| format!("line {i:02}")).collect::<Vec<_>>();
         let markdown = format!("```\n{}\n```", code.join("\n"));
