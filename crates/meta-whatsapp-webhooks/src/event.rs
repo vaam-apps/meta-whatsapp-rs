@@ -19,14 +19,15 @@ use time::OffsetDateTime;
 
 use crate::fields::common::find_contact;
 use crate::fields::{
-    AccountAlertsValue, AccountReviewUpdateValue, AccountSettingsUpdateValue, AccountUpdateValue,
-    AutomaticEvent, BusinessCapabilityUpdateValue, BusinessUsernameUpdateValue, Call, CallStatus,
-    Contact, FlowsValue, GroupUpdate, HistoryValue, InboundMessage, MessageEcho, Metadata,
-    PartnerSolutionsValue, PaymentConfigurationUpdateValue, PhoneNumberNameUpdateValue,
-    PhoneNumberQualityUpdateValue, SecurityValue, StateSyncItem, Status,
-    TemplateCategoryUpdateValue, TemplateComponentsUpdateValue,
-    TemplateCorrectCategoryDetectionValue, TemplateQualityUpdateValue, TemplateStatusUpdateValue,
-    UserIdUpdate, UserPreference,
+    AccountAlertsValue, AccountReviewUpdateValue, AccountSettingsUpdateValue, AccountUpdateEvent,
+    AccountUpdateValue, AutomaticEvent, BusinessCapabilityUpdateValue, BusinessUsernameUpdateValue,
+    Call, CallStatus, Contact, ConversationContext, FlowsValue, GroupUpdate, HistoryValue,
+    InboundMessage, MessageEcho, MessagingHandoversValue, Metadata, PartnerSolutionsValue,
+    PaymentConfigurationUpdateValue, PhoneNumberNameUpdateValue, PhoneNumberQualityUpdateValue,
+    SecurityValue, StandbyItem, StateSyncItem, Status, TemplateCategoryUpdateValue,
+    TemplateComponentsUpdateValue, TemplateCorrectCategoryDetectionValue,
+    TemplateQualityUpdateValue, TemplateStatusUpdateValue, UserAction, UserIdUpdate,
+    UserPreference,
 };
 use crate::payload::{Change, ChangeValue, WebhookPayload};
 
@@ -50,6 +51,10 @@ pub enum WebhookEvent {
         contact: Option<Contact>,
         /// The message.
         message: Box<InboundMessage>,
+        /// Conversation Routing's summary of the conversation so far, when
+        /// the change carried one (the same on every message of the change).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        conversation_context: Option<Box<ConversationContext>>,
     },
     /// A message the business sent changed status (`messages`).
     StatusUpdated {
@@ -168,6 +173,53 @@ pub enum WebhookEvent {
         /// The change.
         update: Box<UserIdUpdate>,
     },
+    /// A user clicked a marketing message's body or call-to-action
+    /// (`messages`, `user_actions`; `marketing-messages/track-click-events`).
+    /// Meta names neither the user nor the message: see
+    /// [`crate::fields::UserAction`].
+    UserActionReported {
+        /// WABA.
+        waba_id: WabaId,
+        /// Business phone number.
+        phone_number_id: PhoneNumberId,
+        /// Business number, as displayed.
+        display_phone_number: String,
+        /// The action.
+        action: Box<UserAction>,
+    },
+    /// A thread changed owner under Conversation Routing
+    /// (`messaging_handovers`): you gained it (`control_passed`, reply to
+    /// the user) or lost it (`control_taken`, stop replying). No endpoint
+    /// reports the owner: keep it yourself from these, from which field a
+    /// user's messages arrive on (`messages` or `standby`), from your own
+    /// `release` (no event) and from the 24-hour idle timeout (see
+    /// [`crate::fields::routing`]).
+    ThreadControlChanged {
+        /// WABA.
+        waba_id: WabaId,
+        /// The business phone number the thread belongs to.
+        phone_number_id: PhoneNumberId,
+        /// Business number, as displayed.
+        display_phone_number: String,
+        /// The notification.
+        update: Box<MessagingHandoversValue>,
+    },
+    /// A copy of a thread you observe without owning it (`standby`): an
+    /// inbound message, the owner's send, or its status. Kept apart from
+    /// [`Self::MessageReceived`] and [`Self::StatusUpdated`] on purpose: a
+    /// standby partner must not reply.
+    StandbyObserved {
+        /// WABA.
+        waba_id: WabaId,
+        /// Business phone number.
+        phone_number_id: PhoneNumberId,
+        /// Business number, as displayed.
+        display_phone_number: String,
+        /// The WhatsApp user, when the change listed them (messages only).
+        contact: Option<Contact>,
+        /// The copy.
+        item: Box<StandbyItem>,
+    },
     /// A purchase or lead was detected in a CTWA chat (`automatic_events`).
     AutomaticEventDetected {
         /// WABA.
@@ -231,7 +283,9 @@ pub enum WebhookEvent {
     /// `AD_ACCOUNT_LINKED`, `MM_LITE_TERMS_SIGNED`) names the customer's
     /// WABA in `waba_info.waba_id` and a business portfolio as the entry id
     /// (for `PARTNER_ADDED`, one of `solution_partner_business_ids`); every
-    /// update without one carries the WABA as the entry id.
+    /// update without one carries the WABA as the entry id, except a
+    /// `PARTNER_APP_INSTALLED` / `PARTNER_APP_UNINSTALLED`, which always
+    /// goes to the partner's business (`embedded-signup/app-only-install`).
     ///
     /// An event serialized by a revision before `entry_id` existed (its
     /// `waba_id` was the entry id) is read back the same way: `waba_id`
@@ -241,10 +295,12 @@ pub enum WebhookEvent {
     AccountUpdated {
         /// The WABA the update is about: `waba_info.waba_id` when the update
         /// has a `waba_info`, else the entry id. `None` when a `waba_info`
-        /// names no WABA: the entry id is then not one.
+        /// names no WABA, or a partner app event has no `waba_info`: the
+        /// entry id is then not one.
         waba_id: Option<WabaId>,
         /// The entry's `id`, verbatim: the WABA for updates without a
-        /// `waba_info`, a business portfolio for those with one.
+        /// `waba_info`, a business portfolio for those with one and for
+        /// the partner app events.
         entry_id: String,
         /// When.
         #[serde(default, with = "meta_whatsapp_core::timestamp::unix_option")]
@@ -428,6 +484,9 @@ impl WebhookEvent {
             Self::CallStatusUpdated { .. } => "call_status_updated",
             Self::UserPreferenceChanged { .. } => "user_preference_changed",
             Self::UserIdChanged { .. } => "user_id_changed",
+            Self::UserActionReported { .. } => "user_action_reported",
+            Self::ThreadControlChanged { .. } => "thread_control_changed",
+            Self::StandbyObserved { .. } => "standby_observed",
             Self::AutomaticEventDetected { .. } => "automatic_event_detected",
             Self::GroupUpdated { .. } => "group_updated",
             Self::FlowUpdated { .. } => "flow_updated",
@@ -468,6 +527,9 @@ impl WebhookEvent {
             | Self::CallStatusUpdated { waba_id, .. }
             | Self::UserPreferenceChanged { waba_id, .. }
             | Self::UserIdChanged { waba_id, .. }
+            | Self::UserActionReported { waba_id, .. }
+            | Self::ThreadControlChanged { waba_id, .. }
+            | Self::StandbyObserved { waba_id, .. }
             | Self::AutomaticEventDetected { waba_id, .. }
             | Self::GroupUpdated { waba_id, .. }
             | Self::FlowUpdated { waba_id, .. }
@@ -526,6 +588,15 @@ impl WebhookEvent {
             | Self::UserIdChanged {
                 phone_number_id, ..
             }
+            | Self::UserActionReported {
+                phone_number_id, ..
+            }
+            | Self::ThreadControlChanged {
+                phone_number_id, ..
+            }
+            | Self::StandbyObserved {
+                phone_number_id, ..
+            }
             | Self::AutomaticEventDetected {
                 phone_number_id, ..
             }
@@ -549,7 +620,8 @@ impl WebhookEvent {
             | Self::CallUpdated { contact, .. }
             | Self::CallStatusUpdated { contact, .. }
             | Self::UserPreferenceChanged { contact, .. }
-            | Self::UserIdChanged { contact, .. } => contact.as_ref(),
+            | Self::UserIdChanged { contact, .. }
+            | Self::StandbyObserved { contact, .. } => contact.as_ref(),
             _ => None,
         }
     }
@@ -563,6 +635,10 @@ impl WebhookEvent {
     ///   same message id into a single webhook (`groups/webhooks`).
     /// - Echoes: `echo:{id}`; calls: `call:{id}:{event}`; call statuses:
     ///   `call:{id}:{status}`; automatic events: `auto:{id}:{event_name}`.
+    /// - Standby copies: `standby:` followed by the key the same item has
+    ///   outside standby (`standby:{id}`, `standby:echo:{id}`,
+    ///   `standby:{id}:{status}[:{participant}]`), so a copy never collides
+    ///   with the owner-side event of the same message.
     /// - Every other event: `{kind}:{sha256 of its canonical JSON}`. The
     ///   hash covers the entry `time` where Meta sends one, so an identical
     ///   notification re-issued later is a new event, while a retry of the
@@ -574,19 +650,12 @@ impl WebhookEvent {
     pub fn dedup_key(&self) -> Option<String> {
         match self {
             Self::MessageReceived { message, .. } => Some(message.id.to_string()),
-            Self::StatusUpdated { status, .. } => {
-                let mut key = format!("{}:{}", status.id, status.status);
-                let participant = status
-                    .recipient_participant_user_id
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .or_else(|| status.recipient_participant_id.clone());
-                if let Some(participant) = participant {
-                    key.push(':');
-                    key.push_str(&participant);
-                }
-                Some(key)
-            }
+            Self::StatusUpdated { status, .. } => Some(status_key(status)),
+            Self::StandbyObserved { item, .. } => Some(match item.as_ref() {
+                StandbyItem::Message(message) => format!("standby:{}", message.id),
+                StandbyItem::Echo(echo) => format!("standby:echo:{}", echo.id),
+                StandbyItem::Status(status) => format!("standby:{}", status_key(status)),
+            }),
             Self::MessageEchoed { echo, .. } => Some(format!("echo:{}", echo.id)),
             Self::CallUpdated { call, .. } => Some(format!("call:{}:{}", call.id, call.event)),
             Self::CallStatusUpdated { status, .. } => {
@@ -605,6 +674,21 @@ impl WebhookEvent {
             }
         }
     }
+}
+
+/// `{message id}:{status}[:{participant}]`: see [`WebhookEvent::dedup_key`].
+fn status_key(status: &Status) -> String {
+    let mut key = format!("{}:{}", status.id, status.status);
+    let participant = status
+        .recipient_participant_user_id
+        .as_ref()
+        .map(ToString::to_string)
+        .or_else(|| status.recipient_participant_id.clone());
+    if let Some(participant) = participant {
+        key.push(':');
+        key.push_str(&participant);
+    }
+    key
 }
 
 /// JSON with object keys sorted, so the hash does not depend on whether
@@ -675,9 +759,12 @@ impl WebhookPayload {
 /// WABA in `waba_info.waba_id`. Every example without a `waba_info`
 /// (`ACCOUNT_DELETED`, …, and the coexistence `PARTNER_REMOVED` of
 /// `embedded-signup/onboarding-business-app-users`) shows the WABA as the
-/// entry id. So: `waba_info.waba_id` when there is a `waba_info`, `None` if
-/// it names none (the entry id is then a business, never a WABA), and the
-/// entry id only when there is no `waba_info`.
+/// entry id, except the `PARTNER_APP_UNINSTALLED` of
+/// `embedded-signup/app-only-install`, whose entry id is
+/// `<PARTNER_BUSINESS_ID>`: the partner app events always go to the
+/// partner's business. So: `waba_info.waba_id` when there is a `waba_info`,
+/// `None` if it names none (the entry id is then a business, never a WABA)
+/// and for a partner app event without one, and the entry id otherwise.
 fn account_update_waba(update: &AccountUpdateValue, entry: WabaId) -> Option<WabaId> {
     match &update.waba_info {
         Some(info) => info
@@ -685,6 +772,13 @@ fn account_update_waba(update: &AccountUpdateValue, entry: WabaId) -> Option<Wab
             .as_ref()
             .filter(|id| !id.as_str().trim().is_empty())
             .cloned(),
+        None if matches!(
+            update.event,
+            AccountUpdateEvent::PartnerAppInstalled | AccountUpdateEvent::PartnerAppUninstalled
+        ) =>
+        {
+            None
+        }
         None => Some(entry),
     }
 }
@@ -778,6 +872,7 @@ impl Ctx {
                     display_phone_number,
                     phone_number_id,
                 } = v.metadata;
+                let conversation_context = v.conversation_context.map(Box::new);
                 for message in v.messages {
                     let contact = find_contact(
                         &v.contacts,
@@ -791,6 +886,7 @@ impl Ctx {
                         display_phone_number: display_phone_number.clone(),
                         contact,
                         message: Box::new(message),
+                        conversation_context: conversation_context.clone(),
                     });
                 }
                 for status in v.statuses {
@@ -821,6 +917,14 @@ impl Ctx {
                         phone_number_id: phone_number_id.clone(),
                         display_phone_number: display_phone_number.clone(),
                         error: Box::new(error),
+                    });
+                }
+                for action in v.user_actions {
+                    out.push(WebhookEvent::UserActionReported {
+                        waba_id: waba_id.clone(),
+                        phone_number_id: phone_number_id.clone(),
+                        display_phone_number: display_phone_number.clone(),
+                        action: Box::new(action),
                     });
                 }
             }
@@ -942,6 +1046,58 @@ impl Ctx {
                         contact,
                         update: Box::new(update),
                     });
+                }
+            }
+            ChangeValue::MessagingHandovers(update) => {
+                out.push(WebhookEvent::ThreadControlChanged {
+                    waba_id,
+                    phone_number_id: update.recipient.phone_number_id.clone(),
+                    display_phone_number: update.recipient.display_phone_number.clone(),
+                    update,
+                });
+            }
+            ChangeValue::Standby(v) => {
+                let v = *v;
+                let Metadata {
+                    display_phone_number,
+                    phone_number_id,
+                } = v.metadata;
+                let standby = v.standby;
+                let mut push = |contact: Option<Contact>, item: StandbyItem| {
+                    out.push(WebhookEvent::StandbyObserved {
+                        waba_id: waba_id.clone(),
+                        phone_number_id: phone_number_id.clone(),
+                        display_phone_number: display_phone_number.clone(),
+                        contact,
+                        item: Box::new(item),
+                    });
+                };
+                for message in standby.messages {
+                    let contact = find_contact(
+                        &standby.contacts,
+                        &[message.from_user_id.as_ref()],
+                        &[message.from.as_ref().map(WaId::as_str)],
+                    )
+                    .cloned();
+                    push(contact, StandbyItem::Message(message));
+                }
+                for echo in standby.message_echoes {
+                    push(None, StandbyItem::Echo(echo));
+                }
+                for status in standby.statuses {
+                    let contact = find_contact(
+                        &standby.contacts,
+                        &[
+                            status.recipient_user_id.as_ref(),
+                            status.recipient_participant_user_id.as_ref(),
+                        ],
+                        &[
+                            status.recipient_id.as_deref(),
+                            status.recipient_participant_id.as_deref(),
+                        ],
+                    )
+                    .cloned();
+                    push(contact, StandbyItem::Status(status));
                 }
             }
             ChangeValue::AutomaticEvents(v) => {

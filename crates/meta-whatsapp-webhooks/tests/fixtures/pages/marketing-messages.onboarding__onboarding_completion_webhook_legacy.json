@@ -1,0 +1,22 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "time": "1750030073",
+      "changes": [
+        {
+          "field": "account_update",
+          "value": {
+            "event": "AD_ACCOUNT_LINKED",
+            "waba_info": {
+              "waba_id": "102290129340398",
+              "ad_account_id": "980198427534243",
+              "owner_business_id": "2329417887457253"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

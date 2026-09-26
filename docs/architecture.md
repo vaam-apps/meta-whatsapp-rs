@@ -616,12 +616,21 @@ Logs carry sizes, digests and field names only — never payload values.
   business capability; security; user preferences (marketing opt-out);
   history, smb app state sync, smb message echoes (coexistence); partner
   solutions; payment configuration; calls; flows; groups;
-  business_username_updates, user_id_update). Unknown fields and unknown
+  business_username_updates, user_id_update; Conversation Routing's
+  messaging_handovers and standby, and the `conversation_context` summary
+  on messages; the Marketing Messages API's `user_actions` click events).
+  Every example payload on a page that prints a webhook body is a fixture,
+  listed with its page in `tests/conformance/manifest.rs`, whose test
+  checks the exact events, that every value survives the typed parse, that
+  no value falls into a catch-all, and signed delivery through the handler
+  (a fixture missing from the manifest fails it). Unknown fields and unknown
   message types parse into `Unknown { … raw: serde_json::Value }` — **a new
   Meta field must never fail a delivery**.
 - `WebhookEvent` carries `waba_id`, `phone_number_id` (when the field has
   one), and the user identity (`wa_id?`, `user_id?` BSUID, `parent_user_id?`,
-  `username?`).
+  `username?`). Standby copies (`StandbyObserved`) are a variant of their
+  own, never a `MessageReceived`: a responder that only observes a thread
+  must not answer it.
 - A body that verifies but fails to parse is acknowledged (so Meta stops
   retrying for 7 days) and surfaced as `WebhookEvent::Unparsed{raw}` +
   a `tracing::error!` carrying only size and digest. A bad signature is

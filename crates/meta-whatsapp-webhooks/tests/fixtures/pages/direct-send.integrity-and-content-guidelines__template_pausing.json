@@ -1,0 +1,20 @@
+{
+  "entry": [
+    {
+      "id": "102290129340398",
+      "time": 1751247548,
+      "changes": [
+        {
+          "value": {
+            "event": "PAUSED",
+            "message_template_id": 1689556908129832,
+            "message_template_name": "auto_generated_123456",
+            "message_template_language": "en-US"
+          },
+          "field": "message_template_status_update"
+        }
+      ]
+    }
+  ],
+  "object": "whatsapp_business_account"
+}

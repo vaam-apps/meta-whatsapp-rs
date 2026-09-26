@@ -1,0 +1,60 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "366634483210360",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "16505553602",
+              "phone_number_id": "436666719526789"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "Pablo Morales",
+                  "username": "pablomorales"
+                },
+                "wa_id": "16315553602",
+                "user_id": "US.13491208655302741918",
+                "parent_user_id": "US.ENT.11815799212886844830"
+              }
+            ],
+            "calls": [
+              {
+                "id": "wacid.ABGGFjFVU2AfAgo6V-Hc5eCgK5Gh",
+                "to": "16315553601",
+                "from": "16315553602",
+                "from_user_id": "US.13491208655302741918",
+                "from_parent_user_id": "US.ENT.11815799212886844830",
+                "event": "terminate",
+                "direction": "USER_INITIATED",
+                "deeplink_payload": "deeplink_payload",
+                "cta_payload": "cta_payload",
+                "biz_opaque_callback_data": "random_string",
+                "timestamp": "1671644824",
+                "status": "FAILED",
+                "start_time": "1671644824",
+                "end_time": "1671644944",
+                "duration": 120
+              }
+            ],
+            "errors": [
+              {
+                "code": 138007,
+                "message": "Connect Timeout error",
+                "href": "https://developers.facebook.com/documentation/business-messaging/whatsapp/calling/troubleshooting#calling-error-codes",
+                "error_data": {
+                  "details": "Call was unable to connect due to a timeout"
+                }
+              }
+            ]
+          },
+          "field": "calls"
+        }
+      ]
+    }
+  ]
+}

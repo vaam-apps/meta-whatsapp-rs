@@ -152,6 +152,7 @@ mod tests {
                 }))
                 .unwrap(),
             ),
+            conversation_context: None,
         };
         InboxSink::new(store.clone()).deliver(event).await.unwrap();
 

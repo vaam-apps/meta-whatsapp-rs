@@ -1,0 +1,17 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "495709166956424",
+      "time": 1731617831,
+      "changes": [
+        {
+          "field": "account_review_update",
+          "value": {
+            "decision": "APPROVED"
+          }
+        }
+      ]
+    }
+  ]
+}

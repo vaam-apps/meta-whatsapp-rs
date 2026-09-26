@@ -1,0 +1,19 @@
+{
+  "entry": [
+    {
+      "id": "506914307656634",
+      "time": 1718143652,
+      "changes": [
+        {
+          "value": {
+            "event": "SOLUTION_CREATED",
+            "solution_id": "774485461512159",
+            "solution_status": "INITIATED"
+          },
+          "field": "partner_solutions"
+        }
+      ]
+    }
+  ],
+  "object": "whatsapp_business_account"
+}

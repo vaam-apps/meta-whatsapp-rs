@@ -1,0 +1,26 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "time": "1750101000",
+      "changes": [
+        {
+          "value": {
+            "event": "ACCOUNT_RESTRICTION",
+            "violation_info": {
+              "violation_type": "DIRECT_SEND_UTILITY_CATEGORY_ABUSE_RATE_LIMIT"
+            },
+            "restriction_info": [
+              {
+                "restriction_type": "RESTRICTED_DIRECT_SEND_UTILITY_TEMPLATES",
+                "expiration": "1750705800"
+              }
+            ]
+          },
+          "field": "account_update"
+        }
+      ]
+    }
+  ]
+}

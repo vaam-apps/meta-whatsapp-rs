@@ -5,7 +5,7 @@ description: "Understanding and handling meta-whatsapp-rs WebhookEvent values - 
 
 # meta-whatsapp-rs-webhook-events
 
-> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs f1f200de558e454d51b64027129b06e5cce65982 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/events.rs](examples/events.rs), compiled and
 tested by meta-whatsapp-rs's own gate with Meta-shaped payloads. Every variant and
@@ -57,6 +57,26 @@ WebhookEvent::UserIdChanged { update, .. } => Action::CustomerRenamed {
 },
 ```
 
+Conversation Routing: track who owns each thread (a `StandbyObserved` copy is never answered):
+
+```rust
+WebhookEvent::ThreadControlChanged {
+    phone_number_id,
+    update,
+    ..
+} => Action::Ownership {
+    number: phone_number_id.clone(),
+    // Meta may omit it: then key by the user you track for the thread.
+    user: update
+        .sender
+        .as_ref()
+        .and_then(|s| s.phone_number.as_ref())
+        .map(ToString::to_string),
+    // control_passed: reply to the user; control_taken: stop.
+    owner: update.handover_type == HandoverType::ControlPassed,
+},
+```
+
 `WebhookEvent` is `#[non_exhaustive]`: keep a `_` arm. Serialized, it is
 tagged `"event"` with the same snake-case name as `event.kind()`.
 
@@ -71,12 +91,12 @@ tagged `"event"` with the same snake-case name as `event.kind()`.
 | `TemplateStatusUpdated`, `TemplateQualityUpdated`, `TemplateCategoryUpdated` | template review and health (`meta-whatsapp-rs-templates`) |
 | `AccountUpdated`, `PhoneNumberQualityUpdated`, `PhoneNumberNameUpdated`, `AccountAlert` | account restrictions, limits, names |
 | `MessageEchoed`, `HistorySynced`, `AppStateSynced` | coexistence (WhatsApp Business app) |
+| `ThreadControlChanged`, `StandbyObserved` | Conversation Routing: thread ownership (`messaging_handovers`), copies of threads you only observe (`standby`); `MessageReceived` may carry a `conversation_context` summary |
 | `ErrorReported` | app- or system-level errors |
 | `Unknown` | a field or shape this meta-whatsapp-rs version does not type: log `field` |
 | `Unparsed` | a signed body that is not a webhook envelope: alert |
 
-Helpers: `event.phone_number_id()` (route to the merchant),
-`event.waba_id()`, `event.contact()`, `event.kind()` (metrics).
+Helpers: `event.phone_number_id()`, `waba_id()`, `contact()`, `kind()` (metrics).
 
 ## Identity: key customers by BSUID
 
@@ -125,8 +145,9 @@ pub fn quality(score: &TemplateQualityScore) -> QualityRating {
 
 ## What meta-whatsapp-rs does not do
 
-- Messaging handovers, `message_echoes` and `consumer_profile` have no
-  documented payload: they arrive as `Unknown`.
+- `message_echoes`, `consumer_profile` (undocumented) arrive as `Unknown`
+  (~~and handovers / standby~~: until PR #17). No Thread control API
+  (`pass`, `release`, `take`).
 - It does not merge conversations when a BSUID changes. The inbox records
   `MessageEchoed` and `HistorySynced` (`meta-whatsapp-rs-cms-inbox`), but not the
   contacts of `AppStateSynced`. ~~Nor does it record coexistence echoes

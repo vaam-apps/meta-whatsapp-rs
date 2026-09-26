@@ -1,0 +1,22 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "0",
+      "time": 1641848059,
+      "changes": [
+        {
+          "field": "account_update",
+          "value": {
+            "phone_number": "16505552771",
+            "event": "ACCOUNT_VIOLATION",
+            "violation_info": {
+              "violation_type": "USER_INITIATED_CALLS_LOW_PICKUP_RATE",
+              "remediation": "Please identify and address the cause of user-initiated calls not being picked up and make sure the business is properly resourced to handle expected call volumes."
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

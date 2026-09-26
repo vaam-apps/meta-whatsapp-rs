@@ -1,0 +1,47 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550051310",
+              "phone_number_id": "106540352242922"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "Pablo Morales"
+                },
+                "wa_id": "16505551234"
+              }
+            ],
+            "messages": [
+              {
+                "from": "16505551234",
+                "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQTMxNzA1QzNENEI4ODY0OTY2MAA=",
+                "timestamp": "1683223069",
+                "type": "order",
+                "order": {
+                  "catalog_id": "1537566713439863",
+                  "product_items": [
+                    {
+                      "product_retailer_id": "n6k6x0y7oe",
+                      "quantity": 1,
+                      "item_price": 99.99,
+                      "currency": "USD"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}

@@ -200,6 +200,24 @@ Found while writing the integrator guides and checking them against
     primary key; history cursors are already per conversation), or keep it
     and document it (what the guides and skills do today).
 
+<!-- 44 follows 33 in this section: a list of its own. -->
+
+44. **Conversation Routing and the inbox.** Under Conversation Routing
+    (`conversation-routing/*`) one responder owns a thread; the others may
+    receive standby copies. `InboxSink` drops `StandbyObserved` and
+    `ThreadControlChanged` (they arrive typed since the webhook
+    conformance sweep), so: a merchant that observed a thread in standby
+    and then gets `control_passed` has no recorded inbound message, and
+    `Inbox::window` refuses a free-form reply Meta would accept; and the
+    inbox does not know ownership, so after `control_taken` it still lets
+    a reply through (Meta rejects Service sends from a non-owner). Options:
+    record standby inbound messages as window events (not as unread
+    messages), track ownership in the `ConversationStore` from the
+    handovers, the `messages`/`standby` split, `release` and the 24-hour
+    idle timeout (`conversation-routing/thread-control` § Tracking
+    ownership), or keep it and document it (what the guides and skills do
+    today).
+
 ## Service (meta-whatsapp-server)
 
 Found in the review of milestone M1b (43).

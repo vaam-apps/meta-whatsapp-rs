@@ -22,6 +22,7 @@ pub mod common;
 pub mod flows;
 pub mod groups;
 pub mod messages;
+pub mod routing;
 pub mod templates;
 pub mod users;
 
@@ -33,5 +34,6 @@ pub use common::{Contact, Metadata, Profile};
 pub use flows::*;
 pub use groups::*;
 pub use messages::*;
+pub use routing::*;
 pub use templates::*;
 pub use users::*;

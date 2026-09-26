@@ -1,0 +1,30 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "changes": [
+        {
+          "field": "messages",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550783881",
+              "phone_number_id": "106540352242922"
+            },
+            "errors": [
+              {
+                "code": 131035,
+                "title": "Webhook could not be delivered within data retention limit",
+                "message": "Webhook could not be delivered within data retention limit",
+                "error_data": {
+                  "details": "Webhook could not be delivered within data retention limit"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
