@@ -114,9 +114,17 @@ async fn busy_and_slow_deliveries_are_logged_at_most_once_a_minute() {
     for task in slow {
         assert_eq!(task.await.unwrap(), StatusCode::REQUEST_TIMEOUT);
     }
+    // Broken bodies within the same minute have a line of their own.
+    for _ in 0..5 {
+        assert_eq!(
+            send(&h.public, broken(&signature)).await.status,
+            StatusCode::BAD_REQUEST
+        );
+    }
     let logs = captured.text();
     assert_eq!(warnings(&logs, "too many webhook deliveries at once"), 1);
     assert_eq!(warnings(&logs, "did not arrive in time"), 1);
+    assert_eq!(warnings(&logs, "could not read a webhook body"), 1);
     let metrics = h.state.metrics().render();
     for series in [
         "wa_server_webhook_deliveries_total{outcome=\"busy\"} 20",
@@ -126,31 +134,55 @@ async fn busy_and_slow_deliveries_are_logged_at_most_once_a_minute() {
     }
 }
 
-/// A body that breaks off before it all arrived (a reset connection): the
-/// same, one line a minute, whoever sends them. Decisive: the rejection log
-/// on the broken-body path.
+/// A delivery whose body breaks off before it all arrived (a reset
+/// connection).
+fn broken(signature: &str) -> meta_whatsapp_rs::webhooks::axum::http::Request<Body> {
+    let broken = futures::stream::iter([Err::<Bytes, _>(std::io::Error::other("reset"))]);
+    Call::new(Method::POST, "/webhooks/meta")
+        .header("x-hub-signature-256", signature)
+        .body(Body::from_stream(broken))
+        .build()
+}
+
+/// Broken bodies: the same, one line a minute, whoever sends them, and a
+/// line of their own after the other refusals' lines of the minute
+/// (unsigned, forged, too large here; busy and slow above). Decisive: the
+/// rejection log on the broken-body path, in a slot of its own.
 #[tokio::test]
 async fn broken_bodies_are_logged_at_most_once_a_minute() {
     let captured = Captured::default();
     let _guard = tracing::subscriber::set_default(subscriber(&captured));
     let h = Harness::new();
+    let body = example_text();
+    let forged = sign(&AppSecret::new("a-forger-s-secret"), &body);
+    let refused = [
+        Call::new(Method::POST, "/webhooks/meta").body(Body::from(body.clone())),
+        Call::new(Method::POST, "/webhooks/meta")
+            .header("x-hub-signature-256", &forged)
+            .body(Body::from(body.clone())),
+        Call::new(Method::POST, "/webhooks/meta")
+            .header("x-hub-signature-256", &forged)
+            .body(Body::from(vec![b' '; 3 * 1024 * 1024 + 1])),
+    ];
+    for call in refused {
+        assert!(send(&h.public, call.build()).await.status.is_client_error());
+    }
     let signature = format!("sha256={}", "ab".repeat(32));
     for _ in 0..20 {
-        let broken = futures::stream::iter([Err::<Bytes, _>(std::io::Error::other("reset"))]);
-        let reply = send(
-            &h.public,
-            Call::new(Method::POST, "/webhooks/meta")
-                .header("x-hub-signature-256", &signature)
-                .body(Body::from_stream(broken))
-                .build(),
-        )
-        .await;
-        assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            send(&h.public, broken(&signature)).await.status,
+            StatusCode::BAD_REQUEST
+        );
     }
-    assert_eq!(
-        warnings(&captured.text(), "could not read a webhook body"),
-        1
-    );
+    let logs = captured.text();
+    assert_eq!(warnings(&logs, "could not read a webhook body"), 1);
+    for needle in [
+        "without a well-formed signature header",
+        "no app secret produced its signature",
+        "over the body limit",
+    ] {
+        assert_eq!(warnings(&logs, needle), 1, "{needle}");
+    }
     let metrics = h.state.metrics().render();
     assert!(
         metrics.contains("wa_server_webhook_deliveries_total{outcome=\"failed\"} 20"),

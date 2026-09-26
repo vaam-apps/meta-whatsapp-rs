@@ -402,6 +402,40 @@ pub async fn tenant_deleted(store: &dyn EventStore, tenants: &dyn Store) {
     assert_eq!(sequences, [3]);
 }
 
+/// A purge of an earlier occurrence of a keyless event leaves the key with
+/// the later occurrence that took it over: a redelivery within the later
+/// one's window is still a duplicate. It purges every stream's rows older
+/// than 200 ms: it runs last. Decisive: the earlier row giving the key up
+/// (else, in memory, purging it frees the key the later one holds).
+pub async fn purge_keeps_a_taken_key(store: &dyn EventStore) {
+    use time::{Duration as Span, macros::datetime};
+    let key = format!("keyless-purged-{}", super::unique());
+    let t0 = datetime!(2031-06-01 0:00 UTC);
+    let at = |offset: Span| NewEvent {
+        dedup_window: Some(DedupWindow {
+            now: t0 + offset,
+            until: t0 + offset + Span::HOUR,
+        }),
+        ..row(Some("suite-k"), "error_reported", "56", Some(&key))
+    };
+    assert_eq!(store.insert(&at(Span::ZERO)).await.unwrap(), Some(1));
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(store.insert(&at(Span::HOUR)).await.unwrap(), Some(2));
+    assert!(purge_now(store, Duration::from_millis(200)).await >= 1);
+    let page = store.page(&query("suite-k", None, 10)).await.unwrap();
+    let sequences: Vec<i64> = page.events.iter().map(|e| e.sequence).collect();
+    assert_eq!(
+        sequences,
+        [2],
+        "the earlier occurrence purged, the later kept"
+    );
+    assert_eq!(
+        store.insert(&at(Span::minutes(90))).await.unwrap(),
+        None,
+        "the later occurrence still holds the key"
+    );
+}
+
 /// Everything above, in an order where the purge comes last. `tenants` is
 /// the service's store on the same backend (the tenants and bindings the
 /// rows name).
@@ -412,6 +446,7 @@ pub async fn run(store: &dyn EventStore, tenants: &dyn Store) {
         ("suite-b", "21"),
         ("suite-d", "41"),
         ("suite-w", "51"),
+        ("suite-k", "56"),
         ("suite-f", "61"),
         ("suite-f", "62"),
         ("suite-p", "71"),
@@ -430,4 +465,5 @@ pub async fn run(store: &dyn EventStore, tenants: &dyn Store) {
     tenant_deleted(store, tenants).await;
     purge_is_per_stream(store).await;
     purge(store).await;
+    purge_keeps_a_taken_key(store).await;
 }
