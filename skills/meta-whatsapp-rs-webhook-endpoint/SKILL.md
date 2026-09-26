@@ -5,7 +5,7 @@ description: "The WhatsApp webhook endpoint with meta-whatsapp-rs - WebhookHandl
 
 # meta-whatsapp-rs-webhook-endpoint
 
-> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs ef0fe364e3a21a535238007db5276fe5ef6ce970 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/endpoint.rs](examples/endpoint.rs), compiled and
 tested by meta-whatsapp-rs's own gate (axum through `tower::ServiceExt::oneshot`,

@@ -5,7 +5,7 @@ description: "Receiving WhatsApp events through meta-whatsapp-server, the meta-w
 
 # meta-whatsapp-rs-server-events
 
-> **Verified against meta-whatsapp-rs 5e35867fed8b56cea5796c62f3aa808bab7407ed (2026-09-26).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs ef0fe364e3a21a535238007db5276fe5ef6ce970 (2026-09-26).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/events.ts](examples/events.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md#receiving-metas-webhooks).
 
