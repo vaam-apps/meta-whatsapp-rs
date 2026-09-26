@@ -193,8 +193,9 @@ Rules for every endpoint module:
    `Deserialize`.** Unknown response fields are ignored (never
    `deny_unknown_fields`); enums Meta may extend get a catch-all variant
    so a new value never breaks parsing. Which name and shape all of them
-   should share, and the `#[non_exhaustive]` policy, are open
-   (`OPEN_QUESTIONS.md`). Until decided, follow the module you are in, and
+   share, and the `#[non_exhaustive]` policy, were decided on 2026-09-26
+   (`OPEN_QUESTIONS.md` #27, #28) and land with roadmap L20. Until then,
+   follow the module you are in, and
    add no new unit `#[serde(other)] Unknown` variants: they drop Meta's
    value, and a type that also derives `Serialize` writes its own name
    (e.g. `"UNKNOWN"`) back instead.

@@ -68,7 +68,8 @@ let app = meta_whatsapp_rs::webhooks::axum::Router::new().nest("/webhooks/whatsa
   may parse, decompress or re-serialize the body.
 - A blank app secret fails at startup. A blank verify token makes every
   verification answer `403`, but only when one arrives
-  ([open question](../../OPEN_QUESTIONS.md#webhooks) 16): read both from
+  ([decided](../../OPEN_QUESTIONS.md#webhooks) 16: a build-time check
+  is to come, roadmap L20): read both from
   your secret store and check them at boot.
 
 | Outcome | Answer | Meta then |
@@ -169,8 +170,8 @@ let sink = FanoutSink::new()
   redelivers the whole body (the events after the failing one too) for 7
   days, then drops it. Keep permanent failures out of the sink path
   (`InboxSink` records content exactly, and the stores keep it, U+0000
-  included, for that reason); a dead-letter design
-  is an [open question](../../OPEN_QUESTIONS.md#webhooks-and-live-updates) (30).
+  included, for that reason); dead-lettering is
+  [decided](../../OPEN_QUESTIONS.md#webhooks-and-live-updates) (30) and not built yet (roadmap L21).
 - **At least once.** The dedup guard removes Meta's retries, but a sink call
   that outlasts the lease, or a batch redelivered after one fanned-out sink
   failed, reaches the others again. Make every sink idempotent (key by

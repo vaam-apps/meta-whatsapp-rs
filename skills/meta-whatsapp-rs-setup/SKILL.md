@@ -127,9 +127,11 @@ decoding and the credential host allowlist. Mark a POST
 - No token acquisition or refresh: system user tokens come from Business
   Settings, merchants' tokens from Embedded Signup, and an expired one
   (`ErrorKind::Authentication`, code 190) means a new one
-  ([open question 8](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)).
+  ([OPEN_QUESTIONS.md #8](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants),
+  decided on 2026-09-26: no refresh).
 - `meta_whatsapp_rs::client` is both a module and a function
-  ([open question 2](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#naming-and-publishing)).
+  ([OPEN_QUESTIONS.md #2](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#naming-and-publishing),
+  decided on 2026-09-26: it stays both).
 
 ## Related skills
 

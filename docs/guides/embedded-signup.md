@@ -204,8 +204,8 @@ Parse it with the other inputs (`TwoStepPin::new`, exactly 6 digits) before
 `redeem`, so a typo does not burn the attempt; never log or store it; never
 register every merchant's number with one PIN of yours, which one leak would
 expose. Without a PIN the number is left unregistered (a later `resume`
-with one registers it). Who chooses and keeps PINs is an
-[open decision](#open-decisions) (4).
+with one registers it). Who chooses and keeps PINs is
+[decided](#decisions) (4): you, per attempt; nothing stores them.
 
 `onboard` runs these steps; every failure is `Error::Step { step, source }`
 with the names in `embedded_signup::steps`:
@@ -240,7 +240,7 @@ WABA at once both pass. Checking after `onboard` returns is too late for a
 Solution Partner: the credit line is attached by then, and an attached
 line cannot be taken back from the WABA, which is why a Solution Partner
 deployment refuses plain `onboard`. Which merchant may have a WABA is your
-policy: meta-whatsapp-rs decides none ([open decision](#open-decisions) 6).
+policy: meta-whatsapp-rs decides none ([decided](#decisions), 6).
 
 ## 6. Resume
 
@@ -265,7 +265,7 @@ a placeholder code (ignored by `resume`) and an empty `SessionInfo`:
 `OnboardingRequest::new(SignupCode::new("unused")?, SessionInfo::default()).register_with_pin(pin)`.
 With no number named, `resume` registers the first number stored for the
 WABA (the onboarded one); without `register_with_pin` it only subscribes.
-A code-less constructor is an [open question](../../OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants) (10).
+A code-less constructor is [decided](../../OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants) (10) and not built yet (roadmap L4).
 
 ## 7. The token vault
 
@@ -699,26 +699,28 @@ records the echoes and the synced history in the merchant's conversations
   redact `Debug`; `expose_secret()` does not.
 - Leaving the callback's body size unbounded (the example allows 16 KiB).
 
-## Open decisions
+## Decisions
 
 Read [OPEN_QUESTIONS.md § Embedded Signup](../../OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)
-before production. Each is a product call; today the code does this
-(#3, Tech Provider or Solution Partner, was decided on 2026-09-24: both,
-one per deployment; on 2026-09-25 the owner decided to revoke at once on
-every removal, to keep the approval required, to let an operator clear a
-lost share, and to keep marking a business on offboarding, all above):
+before production. Each was a product call, decided on 2026-09-26 under
+the owner's delegation; where the decision needs code, the code still
+does what "Today" says until its roadmap item lands (#3, Tech Provider
+or Solution Partner, was decided on 2026-09-24: both, one per
+deployment; on 2026-09-25 the owner decided to revoke at once on every
+removal, to keep the approval required, to let an operator clear a lost
+share, and to keep marking a business on offboarding, all above):
 
-| # | Question | Today |
-| --- | --- | --- |
-| 4 | Two-step PIN policy | you pass a 6-digit PIN on every `onboard`/`resume`; nothing generates or stores it (the example asks the merchant each time) |
-| 5 | Multi-WABA signups | only the claimed (or first, or newest granted) WABA is onboarded |
-| 6 | One WABA shared by several tenants | the vault is keyed by WABA; the last onboarding wins unless your `onboard_with_approval` refuses it (required for a Solution Partner, whose approval is recorded; the policy is still yours) |
-| 7 | Coexistence sync | flagged by `needs_coexistence_sync()`, not triggered |
-| 8 | Token expiry and refresh | expiry recorded, nothing refreshes |
-| 9 | Vault key custody and rotation cadence | you supply keys; rotation supported, not scheduled |
-| 10 | Resuming after a restart | needs a placeholder code (above) |
-| 11 | App-only install, Hosted Embedded Signup | not integrated |
-| 12 | Pre-fill shape | follows Meta's worked example; confirm in the Integration Helper |
+| # | Question | Today | Decided |
+| --- | --- | --- | --- |
+| 4 | Two-step PIN policy | you pass a 6-digit PIN on every `onboard`/`resume`; nothing generates or stores it (the example asks the merchant each time) | keep it so |
+| 5 | Multi-WABA signups | only the claimed (or first, or newest granted) WABA is onboarded | the default stays; every granted WABA as an option (roadmap L11) |
+| 6 | One WABA shared by several tenants | the vault is keyed by WABA; the last onboarding wins unless your `onboard_with_approval` refuses it (required for a Solution Partner, whose approval is recorded; the policy is still yours) | keep it so: no tenant policy in the library |
+| 7 | Coexistence sync | flagged by `needs_coexistence_sync()`, not triggered | automatic after a coexistence onboarding, with an option to turn it off (roadmap L11) |
+| 8 | Token expiry and refresh | expiry recorded, nothing refreshes | no refresh; the expiry surfaced before it lapses (roadmap L11) |
+| 9 | Vault key custody and rotation cadence | you supply keys; rotation supported, not scheduled | custody yours; rotation on demand, at least yearly |
+| 10 | Resuming after a restart | needs a placeholder code (above) | a code-less constructor (roadmap L4) |
+| 11 | App-only install, Hosted Embedded Signup | not integrated | integrate both, opt-in (roadmap L11) |
+| 12 | Pre-fill shape | follows Meta's worked example; confirm in the Integration Helper | keep the worked example's shape |
 
 ## Not handled
 

@@ -112,7 +112,8 @@ key the order by the message id.
   no order state machine.
 - Product-card carousel templates accept 2–10 cards where Meta's page says
   "exactly two"
-  ([open question 22](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#product-details)).
+  ([OPEN_QUESTIONS.md #22](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#product-details),
+  decided on 2026-09-26: creation will check exactly two, roadmap L20).
 
 ## Related skills
 

@@ -293,7 +293,7 @@ workspace stays `publish = false` until a release is decided.
 | [docs/guides/](docs/guides/README.md) | integrator guides: Meta setup, Embedded Signup, webhooks, CMS inbox, marketing, OTP login, documents, production, the HTTP service |
 | [docs/coverage.md](docs/coverage.md) | what is implemented, per Meta feature |
 | [docs/architecture.md](docs/architecture.md) | the design spec: ports, error tree, security rules |
-| [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) | product decisions still open (read before production) |
+| [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) | product decisions, most decided on 2026-09-26, and what the code does today (read before production) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | setup, the `just ci` gate, review pipeline, docs/skills parity |
 | [docs/dev-environment.md](docs/dev-environment.md) | the Claude Code dev container and its firewall |
 | [CHANGELOG.md](CHANGELOG.md) | what changed |

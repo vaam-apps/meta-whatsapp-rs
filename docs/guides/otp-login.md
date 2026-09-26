@@ -221,8 +221,8 @@ cannot exceed the limit. Trim what the user typed.
 
 The attacker chooses the victim's number, so the issue limit is per number,
 not per IP. `issue_limit: None` is an explicit opt-out for when an
-equivalent per-number limit sits in front. The default is a
-[pending decision](../../OPEN_QUESTIONS.md#authentication-otp) (13). The
+equivalent per-number limit sits in front. The default is
+[decided](../../OPEN_QUESTIONS.md#authentication-otp) (13): it stays. The
 `purpose` argument (`"login"`, `"reset_password"`) keeps flows apart.
 
 ## 7. Pepper custody
@@ -236,7 +236,7 @@ equivalent per-number limit sits in front. The default is a
   database that holds the challenges: with both, a 6-digit code falls to
   10⁶ guesses offline.
 - Rotating it invalidates outstanding codes and resets issue limits. Who
-  holds it and when it rotates is [open question](../../OPEN_QUESTIONS.md#authentication-otp) 14.
+  holds it and when it rotates is yours ([decided](../../OPEN_QUESTIONS.md#authentication-otp) 14).
 
 ## Pitfalls
 

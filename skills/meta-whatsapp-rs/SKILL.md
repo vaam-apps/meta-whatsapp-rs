@@ -146,7 +146,8 @@ own gate. On another `rev`, trust the rustdoc
   verification, Multi-Partner Solutions, migration), payments,
   conversation routing
   ([coverage](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/coverage.md)).
-- Open product decisions, with what the code does today:
+- Product decisions, most decided on 2026-09-26 (each with the roadmap
+  item that builds it), and what the code does today:
   [OPEN_QUESTIONS.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md).
   Read it before production.
 

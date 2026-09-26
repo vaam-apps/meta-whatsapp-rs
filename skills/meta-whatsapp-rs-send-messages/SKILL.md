@@ -127,7 +127,8 @@ late "typing…" after the answer looks broken).
   escape hatch.
 - The 24-hour window is not tracked here; the CMS inbox tracks it from
   recorded messages (`meta-whatsapp-rs-cms-inbox`,
-  [open question 32](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)).
+  [OPEN_QUESTIONS.md #32](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox),
+  decided on 2026-09-26: calls to be recorded too, roadmap L7).
 
 ## Related skills
 

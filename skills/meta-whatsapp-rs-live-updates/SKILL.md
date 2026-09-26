@@ -95,16 +95,18 @@ while let Some(event) = jobs.recv().await {
 - **SSE cost**: a broadcast receiver clones every event before the filter
   sees it, so each open stream copies every merchant's events (including
   multi-megabyte `HistorySynced` bodies). Fine for a handful of open
-  inboxes; see open question 31 before hundreds.
+  inboxes; see OPEN_QUESTIONS.md #31 before hundreds (decided on
+  2026-09-26: shared events instead of clones, roadmap L21).
 - The broadcast channel is per process: with several instances, relay
   events yourself (Postgres `LISTEN/NOTIFY`, Redis pub/sub) or pin a
   merchant's traffic to one instance.
 
 ## What meta-whatsapp-rs does not do
 
-- No dead-letter store for events a sink cannot take
-  ([open question 30](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#webhooks-and-live-updates)),
-  no cross-instance relay, no per-number channels (open question 31).
+- No dead-letter store yet for events a sink cannot take
+  ([OPEN_QUESTIONS.md #30](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#webhooks-and-live-updates),
+  decided on 2026-09-26, roadmap L21), no cross-instance relay, no
+  per-number channels (#31).
 - No durable queue: use your own outbox table inside a sink.
 
 ## Related skills

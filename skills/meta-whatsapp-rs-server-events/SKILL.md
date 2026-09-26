@@ -149,7 +149,7 @@ per filter set.
 - It never shows you another tenant's events, nor operator-only ones
   (the operator reads those, outbox rows without a tenant).
 - It does not resynchronise you after `cursor_expired`, and keeps events
-  7 days by default (the owner's retention decision is still open).
+  7 days by default (design D10, decided on 2026-09-26: set per store).
 - Meta's own retries, deduplication and signature are its business: you
   never talk to Meta, and never verify Meta's signature yourself.
 

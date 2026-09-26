@@ -115,7 +115,9 @@ Calls arrive as `WebhookEvent::CallUpdated` and `CallStatusUpdated`
 - A call, answered or not, opens the 24-hour window on Meta's side, but
   the inbox records no calls: `Inbox::reply` still refuses free-form text
   unless the customer wrote in the last 24 hours
-  ([open question 32](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)).
+  ([OPEN_QUESTIONS.md #32](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox),
+  decided on 2026-09-26: calls to be recorded as window events, roadmap
+  L7).
 
 ## What meta-whatsapp-rs does not do
 

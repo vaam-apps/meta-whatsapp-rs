@@ -149,9 +149,9 @@ the namespace changes its keys (`NotFound`, limits restart).
 - No session or JWT after `Verified`, no account linking, no SMS fallback
   when WhatsApp is undeliverable (`ErrorKind::Undeliverable`, 131026), no
   per-IP or per-device throttle in front of `issue`.
-- It does not choose the namespace: your tenant model does. The default
-  issue limit and pepper custody are open
-  ([open questions 13, 14](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#authentication-otp)).
+- It does not choose the namespace: your tenant model does. The issue
+  limit default stays and the pepper is yours to hold, both decided on
+  2026-09-26 ([OPEN_QUESTIONS.md #13, #14](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#authentication-otp)).
 
 ## Related skills
 

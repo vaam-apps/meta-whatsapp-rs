@@ -145,8 +145,8 @@ request change the `ConversationStore` contract.
 ## What meta-whatsapp-rs does not do
 
 - Not recorded: calls (a call reopens the window on Meta's side but
-  `Inbox::window` cannot see it:
-  [open question 32](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)),
+  `Inbox::window` cannot see it; recording calls is decided, roadmap L7:
+  [OPEN_QUESTIONS.md #32](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)),
   media bytes (rows keep the media id; download within 7 days), BSUID
   merges, the synced contacts (`smb_app_state_sync`).
 - Message ids are unique per store, not per business number (open

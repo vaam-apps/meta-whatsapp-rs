@@ -118,10 +118,13 @@ is gone).
 - No token refresh: `expires_at` records Meta's expiry when there is one;
   an `ErrorKind::Authentication` (190) on a merchant's calls means running
   Embedded Signup again
-  ([open question 8](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)).
-- No key custody or rotation schedule (open question 9), and no tenant
-  mapping: one WABA shared by two of your tenants is your product's call
-  (open question 6).
+  ([OPEN_QUESTIONS.md #8](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants),
+  decided on 2026-09-26: no refresh; the expiry is to be surfaced before
+  it lapses, roadmap L11).
+- No key custody or rotation schedule: custody stays yours, rotation on
+  demand, at least yearly (#9, decided); and no tenant mapping: one WABA
+  shared by two of your tenants is your product's call (#6, decided:
+  meta-whatsapp-rs keeps no tenant policy).
 - It does not protect against someone holding both the key and the store.
 
 ## Related skills

@@ -138,7 +138,7 @@ let pdf = Renderer::new().with_today(today).render_pdf(&slip, &serde_json::json!
 - `Renderer::new()` has **no clock**. A template calling `datetime.today()`
   fails, and the PDF carries no creation date, until you set
   `with_today(date)`. There is deliberately no fallback to the system clock
-  ([open question](../../OPEN_QUESTIONS.md#product-details) 25): pass the
+  ([decided](../../OPEN_QUESTIONS.md#product-details) 25: it stays so): pass the
   date in the shop's or customer's time zone.
 - Same template, input and date: byte-identical output on every machine
   (bundled fonts only). Store the input, not only the PDF, and you can

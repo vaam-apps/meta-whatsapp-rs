@@ -82,7 +82,7 @@ read yet: set, it stops the start.
 | `WA_GRAPH_API_VERSION`, `WA_GRAPH_ENDPOINT` | `v25.0`, Graph | a proxy or a test stub: every token travels to it, so `https` outside development, and `serve` warns with its host |
 | `WA_SERVER_MIGRATE` | `auto` | `skip` when a job runs `meta-whatsapp-server migrate` |
 | `WA_SERVER_SHUTDOWN_GRACE` | `25s` | how long open requests get after `SIGTERM` |
-| `WA_SERVER_OUTBOX_RETENTION` | `7d` | how long the event outbox keeps an event (a positive duration, `30d`, `72h`); retention is the owner's open decision D10, so this default is the design's proposal until then |
+| `WA_SERVER_OUTBOX_RETENTION` | `7d` | how long the event outbox keeps an event (a positive duration, `30d`, `72h`); the outbox's own retention (design D10, decided on 2026-09-26 under the owner's delegation: retention is set per store) |
 | `WA_SERVER_LOG_FORMAT`, `RUST_LOG` | `json`, `info` | `text` for humans |
 | `WA_SERVER_IDEMPOTENCY_TTL` | `24h` | how long an `Idempotency-Key`'s answer is kept (more than the key's one-minute lease) |
 | `WA_SERVER_MEDIA_MAX_BYTES` | `104857600` (100 MiB) | the largest upload, and the largest streamed download |
@@ -387,7 +387,7 @@ the check for media uploaded on the number; that it accepts media
 received on it by webhook is not documented. If Meta refuses those, a
 received file answers `404` too: report it, as the check stays (it is
 what keeps one tenant from reading another's files when one token
-reaches both); the remedy planned is
+reaches both); the remedy, decided for M2, is
 [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) #43.
 
 ## Templates
@@ -531,11 +531,13 @@ tenant's deliveries: whoever holds it can forge any tenant's events.
   records one twice. An event that fails every time (a permanent sink
   error) holds its whole batch back for those 7 days, after which Meta
   drops it: the events after it in the same body are lost with it
-  ([OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) #30; watch
+  ([OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) #30: dead-lettering is
+  decided, not built yet; watch
   `wa_server_webhook_sink_failures_total`).
 - Errors and bodies that are not webhooks carry no id: they are told
   apart by the body they came in and their place in it, for an hour
-  (design D23, a coordinator's decision the owner may change). This
+  (design D23, a coordinator's decision that stands under the owner's
+  delegation). This
   assumes Meta redelivers the same bytes, which Meta does not document.
   The same body again after that hour is recorded again, as a new event
   with its own id (the same error can legitimately recur): an outage
@@ -591,12 +593,12 @@ it polls; one that polls after new events have passed it skips them
 without an error. After a restore, tell every integrator to resynchronise
 and reset their cursors (poll without `after`), as after `410`.
 
-Events are kept `WA_SERVER_OUTBOX_RETENTION` (7 days by default, until
-the owner's retention decision D10); every replica runs housekeeping
+Events are kept `WA_SERVER_OUTBOX_RETENTION` (7 days by default, the
+outbox's own setting: design D10 sets retention per store); every replica runs housekeeping
 every 10 minutes, one at a time, which also deletes the expired webhook
 dedup markers. Deleting a tenant deletes its events (design D22, a
-coordinator's decision the owner may still change, like the default
-above), and takes it out of every platform key's allowed tenants (D24,
+coordinator's decision that stands under the owner's delegation), and
+takes it out of every platform key's allowed tenants (D24,
 likewise): a tenant created again with the same id starts with neither.
 No route or command edits a platform key's allowed tenants, so mint a new
 platform key for a tenant created again (a key allowing every tenant,

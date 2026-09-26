@@ -144,8 +144,8 @@ timeouts longer than your slowest sink.
 ## What meta-whatsapp-rs does not do
 
 Read [OPEN_QUESTIONS.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md)
-before going live: the OTP issue limit, PIN policy, the missing
-dead-letter path for webhook batches, token refresh, Redis TLS. No
+before going live: the defaults decided (OTP issue limit, PIN policy, no
+token refresh) and what is decided but not built (dead-lettering, Redis TLS). No
 metrics exporter, no health endpoint, no secret manager integration. A
 revoked message keeps its content in the inbox (decided 2026-09-25;
 `meta-whatsapp-rs-cms-inbox`). ~~Whether the OTP namespace becomes
