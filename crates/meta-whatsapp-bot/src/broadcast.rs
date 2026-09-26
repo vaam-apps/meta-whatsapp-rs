@@ -460,20 +460,42 @@ struct Book {
     attempts: Vec<u32>,
     outcomes: Vec<Option<Outcome>>,
     stopped_by: Option<usize>,
+    /// The run's latest time, and how far the pacer's clock stepped back
+    /// in all (see [`Book::now`]).
+    seen: Option<OffsetDateTime>,
+    skew: Duration,
 }
 
 /// What a worker does next.
 enum Next {
     /// Send to this recipient (its message, when a retry).
     Send(usize, Option<Box<OutboundMessage>>),
-    /// Nothing is due before this time.
-    WaitUntil(OffsetDateTime),
+    /// Nothing is due for this long.
+    Wait(Duration),
     /// Nothing is left.
     Done,
 }
 
 impl Book {
-    fn next(&mut self, now: OffsetDateTime, total: usize) -> Next {
+    /// The run's time: the pacer's (wall) clock, held where it was when
+    /// that clock steps back and going on from there, so a retry due in
+    /// one second is not put off by the step.
+    fn now(&mut self, wall: OffsetDateTime) -> OffsetDateTime {
+        let now = after(wall, self.skew);
+        match self.seen {
+            Some(seen) if now < seen => {
+                self.skew = self.skew.saturating_add(elapsed(now, seen));
+                seen
+            }
+            _ => {
+                self.seen = Some(now);
+                now
+            }
+        }
+    }
+
+    fn next(&mut self, wall: OffsetDateTime, total: usize) -> Next {
+        let now = self.now(wall);
         if self.deferred.peek().is_some_and(|d| d.at <= now)
             && let Some(due) = self.deferred.pop()
         {
@@ -484,9 +506,21 @@ impl Book {
             return Next::Send(self.next - 1, None);
         }
         match self.deferred.peek() {
-            Some(due) => Next::WaitUntil(due.at),
+            Some(due) => Next::Wait(elapsed(now, due.at)),
             None => Next::Done,
         }
+    }
+
+    /// Send to the recipient at `index` again, `delay` from now.
+    fn defer(
+        &mut self,
+        wall: OffsetDateTime,
+        delay: Duration,
+        index: usize,
+        message: Box<OutboundMessage>,
+    ) {
+        let at = after(self.now(wall), delay);
+        self.deferred.push(Deferred { at, index, message });
     }
 }
 
@@ -587,12 +621,11 @@ impl Broadcast {
             if self.shared.halted() {
                 return;
             }
-            let now = self.pacer.now();
-            let next = self.book().next(now, self.recipients.len());
+            let next = self.book().next(self.pacer.now(), self.recipients.len());
             match next {
                 Next::Send(index, message) => self.attempt(index, message).await,
-                Next::WaitUntil(at) => {
-                    if !self.wait(elapsed(now, at)).await {
+                Next::Wait(duration) => {
+                    if !self.wait(duration).await {
                         return;
                     }
                 }
@@ -675,8 +708,7 @@ impl Broadcast {
         }
         match self.policy.on_failure(&error, failures) {
             Verdict::RetryAfter(delay) if may_resend(&error) => {
-                let at = after(self.pacer.now(), delay);
-                self.book().deferred.push(Deferred { at, index, message });
+                self.book().defer(self.pacer.now(), delay, index, message);
             }
             Verdict::Stop => {
                 tracing::warn!(
@@ -887,6 +919,8 @@ impl BroadcastBuilder {
                 attempts: vec![0; total],
                 outcomes: (0..total).map(|_| None).collect(),
                 stopped_by: None,
+                seen: None,
+                skew: Duration::ZERO,
             }),
             recipients: self.recipients,
         })
@@ -994,5 +1028,35 @@ mod tests {
             skipped: 1,
         };
         assert_eq!(p.remaining(), 4);
+    }
+
+    /// The run's time never steps back: a retry due in 1 s stays 1 s away
+    /// when the wall clock steps back an hour.
+    #[test]
+    fn the_runs_time_holds_when_the_clock_steps_back() {
+        let t0 = time::macros::datetime!(2026-09-26 12:00 UTC);
+        let mut book = Book {
+            next: 1,
+            deferred: BinaryHeap::new(),
+            attempts: vec![0],
+            outcomes: vec![None],
+            stopped_by: None,
+            seen: None,
+            skew: Duration::ZERO,
+        };
+        book.defer(
+            t0,
+            Duration::from_secs(1),
+            0,
+            Box::new(OutboundMessage::text(Recipient::phone("+1"), "x")),
+        );
+        let back = t0 - time::Duration::hours(1);
+        assert!(matches!(book.next(back, 1), Next::Wait(d) if d == Duration::from_secs(1)));
+        let later = back + time::Duration::milliseconds(400);
+        assert!(matches!(book.next(later, 1), Next::Wait(d) if d == Duration::from_millis(600)));
+        assert!(matches!(
+            book.next(later + time::Duration::milliseconds(600), 1),
+            Next::Send(0, Some(_))
+        ));
     }
 }

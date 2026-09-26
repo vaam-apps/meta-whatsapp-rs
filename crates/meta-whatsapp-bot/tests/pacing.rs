@@ -123,6 +123,13 @@ impl Slow {
         starts
     }
 
+    /// `(start, recipient)` of every send, in order.
+    fn sends(&self) -> Vec<(Duration, String)> {
+        let mut sends = self.starts.lock().unwrap().clone();
+        sends.sort();
+        sends
+    }
+
     fn recipients(&self) -> Vec<String> {
         self.starts
             .lock()
@@ -370,4 +377,63 @@ async fn a_minute_of_maintenance_loses_no_recipient() {
         refused < N,
         "{refused} sends tried against the number in maintenance"
     );
+}
+
+/// A retry pending when the wall clock steps back an hour goes when it
+/// was due, not an hour later.
+#[tokio::test(start_paused = true)]
+async fn a_retry_pending_when_the_wall_clock_steps_back_goes_when_due() {
+    const N: usize = 400;
+    let clock = TokioClock::new();
+    let limited = Arc::new(Mutex::new(false));
+    let outbound = Slow::new(&clock, Duration::from_millis(100)).failing(move |start, _| {
+        let mut once = limited.lock().unwrap();
+        (start >= Duration::from_millis(4500) && !*once).then(|| {
+            *once = true;
+            graph(131_056, "(#131056) Pair rate limit hit")
+        })
+    });
+    let stepper = {
+        let clock = clock.clone();
+        async move {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            clock.step_back(Duration::from_secs(3600));
+        }
+    };
+    let run = Broadcast::builder(NUMBER)
+        .to((0..N).map(phone))
+        .content(Text::new("Spring sale"))
+        .outbound(outbound.clone())
+        .pacer(
+            Pacer::new(TokenBucket::new(Rate::per_second(20).unwrap())).with_timer(clock.clone()),
+        )
+        .concurrency(8)
+        .build()
+        .unwrap()
+        .run();
+    let (report, ()) = tokio::join!(run, stepper);
+
+    assert_eq!(report.progress().sent, N);
+    let sends = outbound.sends();
+    let limited: Vec<Duration> = {
+        let first = &sends
+            .iter()
+            .find(|(t, _)| *t >= Duration::from_millis(4500))
+            .unwrap()
+            .1;
+        sends
+            .iter()
+            .filter(|(_, to)| to == first)
+            .map(|(t, _)| *t)
+            .collect()
+    };
+    assert_eq!(limited.len(), 2);
+    // Pair-limited at 4.5 s, answered at 4.6 s, due again 1 s later, then
+    // behind the slots the 8 senders booked (8 at 50 ms): not an hour on.
+    let again = limited[1].as_secs_f64();
+    assert!(
+        (5.6..6.1).contains(&again),
+        "the retry went at {again} s, not when due"
+    );
+    assert!(sends[N].0 < Duration::from_secs(21));
 }
