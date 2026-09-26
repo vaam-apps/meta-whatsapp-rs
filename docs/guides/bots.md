@@ -350,7 +350,7 @@ CommonMark to WhatsApp formatting:
 | `*italic*`, `_italic_` | `_italic_` |
 | `~~strike~~` | `~strike~` |
 | emphasis inside a word (`foo**bar**baz`) | the text alone: WhatsApp formats no part of a word |
-| inline code, code blocks | `` `code` ``, ```` ```block``` ````; code holding a backtick (a block: a fence, or a backtick at an end) goes out as plain text, never a broken fence |
+| inline code, code blocks | `` `code` ``, ```` ```block``` ````; code holding a backtick (a block, or a piece of a block cut in two: a fence, or a backtick at an end) goes out as plain text, never a broken fence |
 | `> quote` | `> quote` |
 | lists | `• item`, `1. item` |
 | `[text](url)`, `![alt](url)` | `text (url)`, `alt (url)`; only `http`, `https`, `mailto`, `tel` or relative URLs, so a `javascript:` or `data:` one keeps just its text |

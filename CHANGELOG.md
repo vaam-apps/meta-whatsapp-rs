@@ -156,6 +156,21 @@ volumes (Claude config, shell history, cargo caches) start empty
   the `async_trait` attribute is re-exported. Guide:
   [docs/guides/bots.md](docs/guides/bots.md); skill:
   `meta-whatsapp-rs-bot`. Paced broadcasts and scheduling come later.
+  **Breaking, for anyone who built against the crate before it was
+  merged** (it is unreleased and new in this release, so nothing
+  published breaks): `Handler` is `CommandHandler` and `Sender` is
+  `BotSender`; `Plugin` needs `Debug` and `Plugin::category` returns
+  `Option<&str>` (`None`: the bot's default category);
+  `CooldownOutcome::CoolingDown` and `Refusal::CoolingDown` have a
+  `notify` field (a `Cooldowns` of your own sets it, a match on them
+  needs `..`); `Ctx::new` takes, and `Ctx::renderer` returns, an
+  `Arc<dyn MarkdownRenderer>`; `Extensions` is private; the router no
+  longer lowercases names, so a `CommandParser` of your own that folds
+  case implements `normalize` too; `COOLDOWN_NAMESPACE` is
+  `wa.bot.cooldown` (was `bot.cooldown`: running cooldowns are forgotten
+  once); middleware run after the command match; events after
+  `Bot::unload` fail with `SinkError::Closed`, not a `ConfigError`; and
+  a `Listen::Event` kind not in `WebhookEvent::KINDS` fails `build`.
 - `meta_whatsapp_client::messages::TEXT_BODY_MAX_CHARS` (4096, the text
   limit the client already checked) and `WebhookEvent::KINDS` (every
   value `WebhookEvent::kind` returns).
