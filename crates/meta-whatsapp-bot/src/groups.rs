@@ -11,7 +11,11 @@
 //!
 //! Meta documents no rate for group operations (`groups`, `groups/reference`):
 //! pacing them in the number's message budget is a choice, not a rule of
-//! Meta's. The paging streams (`Groups::list_stream`,
+//! Meta's. One slot per call: the client's own retries of a call (its
+//! `RetryPolicy`) go out inside it, without a slot of their own. To pace
+//! every request, wrap the groups of a client that does not retry
+//! (`client.clone().with_retry(RetryPolicy::NONE).groups(number)`) and
+//! retry yourself after [`Pacer::acquire`]. The paging streams (`Groups::list_stream`,
 //! `Group::join_requests_stream`) are not wrapped: page with
 //! [`PacedGroups::list`] and [`PacedGroup::join_requests`], one slot a
 //! page.
