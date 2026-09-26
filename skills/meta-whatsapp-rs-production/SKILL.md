@@ -1,11 +1,11 @@
 ---
 name: meta-whatsapp-rs-production
-description: "Running meta-whatsapp-rs in production - the secrets (system user token, app secrets, verify token, vault key, OTP pepper) loaded once and checked at boot, what meta-whatsapp-rs logs and never logs, Meta's limits (throughput, pair rate, messaging tiers, management rate limits, registration budget), timeouts and retries, pinning and upgrading the Graph API version, several instances (shared stores, clocks, SSE relay), and the open product decisions to read before going live. Load when preparing a deployment, reviewing security or logging of a WhatsApp integration, scaling to several instances, or upgrading the meta-whatsapp-rs revision or Graph API version."
+description: "Running meta-whatsapp-rs in production - the secrets (system user token, app secrets, verify token, vault key, OTP pepper) loaded once and checked at boot, what meta-whatsapp-rs logs and never logs, Meta's limits (throughput, pair rate, messaging tiers, management rate limits, registration budget), timeouts and retries, pinning and upgrading the Graph API version, several instances (shared stores, clocks, SSE relay), erasing a customer (the whole procedure, Postgres remnants), and the open product decisions to read before going live. Load when preparing a deployment, reviewing security or logging of a WhatsApp integration, scaling to several instances, or upgrading the meta-whatsapp-rs revision or Graph API version."
 ---
 
 # meta-whatsapp-rs-production
 
-> **Verified against meta-whatsapp-rs 72a1f25fa2b89ef7a174292f39dc4a5b8bbfd25d (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 62eff88817c73465bb3aad8527779eb64de5850b (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/production.rs](examples/production.rs),
 compiled and tested by meta-whatsapp-rs's own gate. Longer walkthrough:
@@ -34,10 +34,9 @@ if let Ok(previous) = required("WA_APP_SECRET_PREVIOUS") {
 | OTP pepper | secret manager, **not** the OTP database | invalidates codes in flight |
 | merchants' tokens | the vault only | the merchant reconnects |
 
-`AccessToken`, `AppSecret`, `VerifyToken`, `SecretBytes`, `SignupCode`,
-`TwoStepPin`, `OtpPepper` and `VaultKey` redact their `Debug`; the value
-comes out only through `expose_secret()`: call it at the boundary that
-needs it, nowhere near a log line.
+`AccessToken`, `AppSecret`, `VerifyToken`, `SecretBytes`, `SignupCode`, `TwoStepPin`, `OtpPepper`
+and `VaultKey` redact their `Debug`; the value comes out only through `expose_secret()`: call it at
+the boundary that needs it, nowhere near a log line.
 
 ## Logs
 
@@ -47,29 +46,25 @@ tracing_subscriber::fmt()
     .init();
 ```
 
-meta-whatsapp-rs logs through `tracing` (`RUST_LOG=info,meta_whatsapp_client=debug`): requests
-and retries at `debug`, rejected webhooks and sink failures at `warn`,
-unparseable signed bodies at `error` — sizes, digests, field names and
-error kinds only. **Never logged**: tokens, secrets, codes, PINs, query
-strings, payload values. Keep it that way: never log request bodies, the
-signature header, `WebhookEvent`'s `Debug`, or `expose_secret()`.
-`TracingSink::new()` logs kinds; `.with_payload(true)` logs customer data.
-Worth a metric: `DeliveryReport` counts (`unparsed` > 0 → alert), webhook
-answers by status (a run of 503s: sinks outlast the dedup lease),
-`err.kind()` of failed sends, the rate of `Unknown` events.
+meta-whatsapp-rs logs through `tracing` (`RUST_LOG=info,meta_whatsapp_client=debug`): requests and
+retries at `debug`, rejected webhooks and sink failures at `warn`, unparseable signed bodies at
+`error` — sizes, digests, field names and error kinds only. **Never logged**: tokens, secrets,
+codes, PINs, query strings, payload values. Keep it that way: never log request bodies, the
+signature header, `WebhookEvent`'s `Debug`, or `expose_secret()`. `TracingSink::new()` logs kinds;
+`.with_payload(true)` logs customer data. Worth a metric: `DeliveryReport` counts (`unparsed` > 0 →
+alert), webhook answers by status (a run of 503s: sinks outlast the dedup lease), `err.kind()` of
+failed sends, the rate of `Unknown` events.
 
 ## Solution Partner checklist
 
-A deployment funding merchants with its credit line
-(`meta-whatsapp-rs-embedded-signup`, `references/solution-partner.md` there):
-onboarding only through `onboard_with_approval`; every `PartnerRemoved`
-wired to `revoke_credit_line` at once, coexistence disconnections included
-(unless its `solution_partner_business_ids` omit your business),
-`PartnerAppUninstalled` of **your** app to `offboard`; the key rotation
-above; an alert on `CreditError::Reconcile` and on a `RevocationIncomplete`
-that is not retryable (`ErrorKind::Unknown`: a person checks Meta Business
-Suite), and a retry of one that is; a staff-only admin action for a lost
-share Meta never lists (`clear_pending_share`, with an operator id).
+A deployment funding merchants with its credit line (`meta-whatsapp-rs-embedded-signup`,
+`references/solution-partner.md` there): onboarding only through `onboard_with_approval`; every
+`PartnerRemoved` wired to `revoke_credit_line` at once, coexistence disconnections included (unless
+its `solution_partner_business_ids` omit your business), `PartnerAppUninstalled` of **your** app to
+`offboard`; the key rotation above; an alert on `CreditError::Reconcile` and on a
+`RevocationIncomplete` that is not retryable (`ErrorKind::Unknown`: a person checks Meta Business
+Suite), and a retry of one that is; a staff-only admin action for a lost share Meta never lists
+(`clear_pending_share`, with an operator id).
 
 ## Limits and retries
 
@@ -91,57 +86,62 @@ meta_whatsapp_rs::client_builder()?
     .timeout(Duration::from_secs(15))
 ```
 
-Sends are never replayed after a timeout or 5xx: a queue on top must be
-idempotent (tag sends with `callback_data`, reconcile with status webhooks;
-`meta-whatsapp-rs-errors`).
+Sends are never replayed after a timeout or 5xx: a queue on top must be idempotent (tag sends with
+`callback_data`, reconcile with status webhooks; `meta-whatsapp-rs-errors`).
 
 ## Versions
 
-- `ApiVersion::DEFAULT` is v25.0; pin meta-whatsapp-rs by `rev`, and the Graph
-  version moves only with it — or hold one with
-  `.api_version(ApiVersion::new(25, 0))`. Use the same version in the
+- `ApiVersion::DEFAULT` is v25.0; pin meta-whatsapp-rs by `rev`, and the Graph version moves only
+  with it — or hold one with `.api_version(ApiVersion::new(25, 0))`. Use the same version in the
   Embedded Signup page's `FB.init`.
 - Before moving either: read Meta's changelog, run your tests against a
   test WABA, watch the `Unknown` event count.
-- Each skill is stamped with the commit it was verified against: after
-  moving the `rev`, re-read the skills whose stamps differ, and the
-  struck-through notes in them.
+- Each skill is stamped with the commit it was verified against: after moving the `rev`, re-read the
+  skills whose stamps differ, and the struck-through notes in them.
 
 ## Several instances
 
-Shared stores for everything (`meta-whatsapp-rs-storage`); hosts on NTP (Postgres and
-Redis expire by their own clock); one `Client` per process, `with_token`
-per merchant; the SSE broadcast channel is per process (relay events or
-pin merchants to an instance); a `ChannelSink` queue dies with its
-process. A load balancer in front of the webhook: HTTPS with a valid
-certificate, body limit ≥ 3 MiB, no body rewriting or decompression,
-timeouts longer than your slowest sink.
+Shared stores for everything (`meta-whatsapp-rs-storage`); hosts on NTP (Postgres and Redis expire
+by their own clock); one `Client` per process, `with_token` per merchant; the SSE broadcast channel
+is per process (relay events or pin merchants to an instance); a `ChannelSink` queue dies with its
+process. A load balancer in front of the webhook: HTTPS with a valid certificate, body limit
+≥ 3 MiB, no body rewriting or decompression, timeouts longer than your slowest sink.
+
+## Erasing a customer
+
+A procedure, not one call (`meta-whatsapp-rs-cms-inbox`; the production guide's section 8). On
+Postgres, deleted rows live on until VACUUM, in the WAL, replicas and backups, and in statement
+logs unless the application's role has `log_parameter_max_length = 0`:
+
+1. collect every identity: `Inbox::identities` on each of the merchant's numbers, and yours;
+2. `Inbox::erase_all` on each of those numbers, behind your ownership check of the number;
+3. delete your media copies, the service's outbox rows and your dead letters for them;
+4. delete the customer from Meta's contact book (roadmap L9);
+5. journal it (an HMAC of `phone_number_id|contact`, and the time), replayed after any restore;
+6. erase again after Meta's 7-day redelivery window; never purge the dedup markers to erase.
 
 ## Pitfalls
 
 - A blank secret read from an unset variable: fail at boot (the example's `required`), not on the first webhook.
-- Upgrade crossings (read the skill named before moving the `rev`):
-  e40b86f invalidates OTP codes in flight once (`meta-whatsapp-rs-otp-login`);
-  4b47bf7 changes a custom `ConversationStore`'s `update_status`
-  signature (`meta-whatsapp-rs-cms-inbox`); 6d50701 and a9593f3 add three required
-  `ConversationStore` methods, `append_synced`, `fill_media_placeholder`
-  and `revoke` (`meta-whatsapp-rs-storage`), and af5b1f8 tightens their conformance
-  suite; 8238853 makes OTP codes in flight
-  answer `Invalid` once; 8238853 and 7e4801f refuse a namespace with edge
-  whitespace, control or format characters at `OtpService::new`, and
-  fixing it restarts codes and limits (`meta-whatsapp-rs-otp-login`). Lossless
-  message content (PR #7, 2026-09-25) is Postgres migration 3, one-way:
-  back up first (a rollback is a restore, losing what was recorded
-  since), stop the older instances that write to the inbox tables, drop
-  your own objects on the content columns, run `migrate` once from a job
-  with a lock timeout, then start (steps: `meta-whatsapp-rs-storage`). An older
-  instance left running fails on every content statement (500s Meta
-  redelivers, replies sent but not recorded). Upgrades back-fill
-  nothing: rows and summaries recorded before stay as written (a U+FFFD
-  an older revision stored for a NUL stays one). Roadmap L5's pull request adds eleven
-  required `ConversationStore` methods (erasure, retention, window events, thread ownership,
-  synced contacts) and Postgres migration 4, after which an older revision's `migrate` refuses
-  the database: upgrade every instance, and erase only then (an older one's appends take no lock).
+- Upgrade crossings (read the skill named before moving the `rev`): e40b86f invalidates OTP codes in
+  flight once (`meta-whatsapp-rs-otp-login`); 4b47bf7 changes a custom `ConversationStore`'s
+  `update_status` signature (`meta-whatsapp-rs-cms-inbox`); 6d50701 and a9593f3 add three required
+  `ConversationStore` methods, `append_synced`, `fill_media_placeholder` and `revoke`
+  (`meta-whatsapp-rs-storage`), and af5b1f8 tightens their conformance suite; 8238853 makes OTP
+  codes in flight answer `Invalid` once; 8238853 and 7e4801f refuse a namespace with edge
+  whitespace, control or format characters at `OtpService::new`, and fixing it restarts codes and
+  limits (`meta-whatsapp-rs-otp-login`). Lossless message content (PR #7, 2026-09-25) is Postgres
+  migration 3, one-way: back up first (a rollback is a restore, losing what was recorded since),
+  stop the older instances that write to the inbox tables, drop your own objects on the content
+  columns, run `migrate` once from a job with a lock timeout, then start (steps:
+  `meta-whatsapp-rs-storage`). An older instance left running fails on every content statement (500s
+  Meta redelivers, replies sent but not recorded). Upgrades back-fill nothing but migration 4's
+  senders: rows and summaries recorded before stay as written (a U+FFFD an older revision stored for
+  a NUL stays one). Roadmap L5's pull request adds fourteen required `ConversationStore` methods
+  (erasure by person, identity links, retention, window events, thread ownership, synced contacts)
+  and Postgres migration 4 (four tables, a back-filled `sender` column: migrate a large inbox from a
+  job), after which an older revision's `migrate` refuses the database: upgrade every instance, and
+  erase only then (an older one's appends take no lock and write no sender).
 
 ## What meta-whatsapp-rs does not do
 

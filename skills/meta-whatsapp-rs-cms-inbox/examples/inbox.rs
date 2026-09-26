@@ -1,6 +1,6 @@
 //! Reference code for the `meta-whatsapp-rs-cms-inbox` skill: the merchant's inbox —
-//! ownership check, the merchant's token, history, the 24-hour window, and
-//! replies that fall back to a template.
+//! ownership check, the merchant's token, history, the 24-hour window,
+//! replies that fall back to a template, and erasing a customer.
 //!
 //! The full server (webhook endpoint, SSE, bearer-token tenants) is
 //! `crates/meta-whatsapp-rs/examples/cms_inbox.rs`. meta-whatsapp-rs compiles this file and runs
@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use meta_whatsapp_rs::client::embedded_signup::TokenVault;
 use meta_whatsapp_rs::client::messages::{MessageContent, OutboundMessage, Text};
-use meta_whatsapp_rs::core::store::StoredMessage;
+use meta_whatsapp_rs::core::store::{Erased, StoredMessage};
 use meta_whatsapp_rs::prelude::*;
 
 /// Why a request to the inbox was refused.
@@ -91,6 +91,15 @@ pub async fn quote(
     inbox.send(&key, message).await // any other recipient is refused
 }
 
+/// Erase a customer on the inbox's number: every key the store connects to
+/// one of theirs (their BSUID, phone number, an earlier BSUID), in one step.
+/// Run it on each of the merchant's numbers, behind `inbox_for`'s check.
+pub async fn erase_customer(inbox: &Inbox, contact: &str) -> meta_whatsapp_rs::Result<Erased> {
+    let key = inbox.key(contact); // any of their keys on this number
+    let ids: Vec<String> = inbox.identities(&key).await?.into_iter().collect();
+    inbox.erase_all(&ids).await // `Erased` holds counts only: log those, never the ids
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -98,6 +107,9 @@ mod tests {
     use meta_whatsapp_rs::adapters::store::{MemoryConversationStore, MemoryKvStore};
     use meta_whatsapp_rs::client::embedded_signup::{StoredBusinessToken, VaultKey, VaultKeys};
     use meta_whatsapp_rs::core::clock::ManualClock;
+    use meta_whatsapp_rs::core::store::{
+        DeliveryStatus, Direction, IdentityLink, StoredContact, StoredMessage,
+    };
     use meta_whatsapp_rs::core::testing::ScriptedTransport;
     use serde_json::json;
     use time::OffsetDateTime;
@@ -192,5 +204,75 @@ mod tests {
         assert_eq!(sent["type"], "template");
         assert_eq!(sent["template"]["name"], "reopen_conversation");
         assert_eq!(transport.remaining(), 0);
+    }
+
+    /// A message of `contact`'s conversation, sent by `from` (a BSUID).
+    fn row(id: &str, contact: &str, from: &str) -> StoredMessage {
+        StoredMessage {
+            id: MessageId::new(id),
+            conversation: ConversationKey::new(NUMBER, contact),
+            direction: Direction::Inbound,
+            kind: "text".to_owned(),
+            text: Some("my address is 1 Main St".to_owned()),
+            payload: json!({"from": "16505551234", "from_user_id": from,
+                "text": {"body": "my address is 1 Main St"}}),
+            status: DeliveryStatus::Received,
+            timestamp: OffsetDateTime::now_utc(),
+            status_at: None,
+            error: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn erasing_a_customer_reaches_every_key_and_their_group_messages() {
+        let store: Arc<dyn ConversationStore> = Arc::new(MemoryConversationStore::new());
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        record_inbound(store.clone(), now - 60).await; // keyed by CUSTOMER, their BSUID
+        // A history thread under their phone number, which the address book
+        // ties to the BSUID; an earlier BSUID linked to it; a group message.
+        let contact = StoredContact {
+            key: ConversationKey::new(NUMBER, "16505551234"),
+            full_name: Some("Pablo Morales".to_owned()),
+            first_name: None,
+            phone_number: Some("16505551234".to_owned()),
+            user_id: Some(UserId::new(CUSTOMER)),
+            parent_user_id: None,
+            username: None,
+            synced_at: OffsetDateTime::now_utc(),
+        };
+        store.put_contact(contact).await.unwrap();
+        store
+            .link_identity(IdentityLink::new(
+                NUMBER,
+                "US.1",
+                CUSTOMER,
+                OffsetDateTime::now_utc(),
+            ))
+            .await
+            .unwrap();
+        for m in [
+            row("wamid.h", "16505551234", CUSTOMER),
+            row("wamid.old", "US.1", "US.1"),
+            row("wamid.g", "HBgGROUP", CUSTOMER),
+        ] {
+            store.append(m).await.unwrap();
+        }
+        let inbox = Inbox::new(
+            Client::builder()
+                .transport(ScriptedTransport::new())
+                .build()
+                .unwrap(),
+            NUMBER,
+            store.clone(),
+        );
+
+        let erased = erase_customer(&inbox, CUSTOMER).await.unwrap();
+        assert_eq!((erased.messages, erased.group_messages), (3, 1));
+        for contact in [CUSTOMER, "16505551234", "US.1"] {
+            assert!(open_conversation(&inbox, contact).await.unwrap().is_empty());
+        }
+        let group = open_conversation(&inbox, "HBgGROUP").await.unwrap();
+        assert_eq!(group[0].kind, StoredMessage::ERASED); // kept in place, without content
+        assert_eq!(group[0].text, None);
     }
 }
