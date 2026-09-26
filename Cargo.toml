@@ -9,15 +9,17 @@ members = [
   "crates/meta-whatsapp-adapters",
   "crates/meta-whatsapp-typst",
   "crates/meta-whatsapp-rs",
+  "crates/meta-whatsapp-server-core",
   "crates/meta-whatsapp-server",
 ]
 # Repository automation is its own workspace (own Cargo.lock): its HTTP
 # client (ureq → rustls with `ring`) must not be resolved into the
 # library's builds and tests. See .xtask/Cargo.toml.
 exclude = [".xtask"]
-# The service is a member (every `--workspace` recipe, and so `just ci`,
-# covers it) but not a default one: a bare `cargo build` or `cargo test` in
-# the root builds the library alone, with the features its crates choose.
+# The service's crates (meta-whatsapp-server-core, meta-whatsapp-server)
+# are members (every `--workspace` recipe, and so `just ci`, covers them)
+# but not default ones: a bare `cargo build` or `cargo test` in the root
+# builds the library alone, with the features its crates choose.
 default-members = [
   "crates/meta-whatsapp-core",
   "crates/meta-whatsapp-client",
@@ -52,6 +54,9 @@ meta-whatsapp-typst = { path = "crates/meta-whatsapp-typst" }
 # The facade, for binaries only: no library crate depends on it
 # (docs/architecture.md, dependency rule).
 meta-whatsapp-rs = { path = "crates/meta-whatsapp-rs", default-features = false }
+# The service's framework-free core: the service's crates only, never the
+# library's.
+meta-whatsapp-server-core = { path = "crates/meta-whatsapp-server-core" }
 
 # Errors. `thiserror` shapes the typed tree; `anyhow` is the opaque leaf for
 # failures an adapter or integrator raises that have no typed home.

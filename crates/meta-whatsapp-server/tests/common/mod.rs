@@ -37,7 +37,7 @@ use meta_whatsapp_server::model::{AllowedTenants, KeyOwner, Scope, TenantId};
 use meta_whatsapp_server::ratelimit::{Rate, RateLimits};
 use meta_whatsapp_server::state::{AppState, Settings};
 use meta_whatsapp_server::store::events::{EventPage, EventQuery, NewEvent};
-use meta_whatsapp_server::store::{EventStore, MemoryStore, Store};
+use meta_whatsapp_server::store::{MemoryStore, Outbox as EventStore, Store};
 use serde_json::Value;
 use tower::ServiceExt;
 

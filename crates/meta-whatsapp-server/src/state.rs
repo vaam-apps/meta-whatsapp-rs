@@ -5,11 +5,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crate::api::templates::TemplateCache;
-use crate::auth::Tokens;
+use crate::auth::{Authorizer, Tokens};
 use crate::events::{Events, Inbound};
 use crate::metrics::Metrics;
 use crate::ratelimit::{RateLimiter, RateLimits, Slots};
-use crate::store::Store;
+use crate::store::{Backend, IdempotencyRecords, RecordStore, Store};
 use meta_whatsapp_rs::Client;
 use meta_whatsapp_rs::client::DEFAULT_TIMEOUT;
 use meta_whatsapp_rs::client::embedded_signup::TokenVault;
@@ -85,9 +85,9 @@ pub struct AppState {
 }
 
 struct Inner {
-    store: Arc<dyn Store>,
-    tokens: Tokens,
-    client: Client,
+    store: Arc<dyn RecordStore>,
+    idempotency: Arc<dyn IdempotencyRecords>,
+    authz: Authorizer,
     verify_token: VerifyToken,
     metrics: Metrics,
     events: Events,
@@ -139,6 +139,50 @@ impl AppState {
         inbound: Inbound,
         settings: Settings,
     ) -> Self {
+        let records: Arc<dyn RecordStore> = store.clone();
+        let idempotency: Arc<dyn IdempotencyRecords> = store;
+        Self::build(
+            (records, idempotency),
+            vault,
+            client,
+            verify_token,
+            metrics,
+            inbound,
+            settings,
+        )
+    }
+
+    /// [`Self::with_settings`] on `backend`'s records and idempotency
+    /// records (`inbound` built on its other stores).
+    pub fn from_backend(
+        backend: &dyn Backend,
+        vault: TokenVault,
+        client: Client,
+        verify_token: VerifyToken,
+        metrics: Metrics,
+        inbound: Inbound,
+        settings: Settings,
+    ) -> Self {
+        Self::build(
+            (backend.records(), backend.idempotency()),
+            vault,
+            client,
+            verify_token,
+            metrics,
+            inbound,
+            settings,
+        )
+    }
+
+    fn build(
+        (store, idempotency): (Arc<dyn RecordStore>, Arc<dyn IdempotencyRecords>),
+        vault: TokenVault,
+        client: Client,
+        verify_token: VerifyToken,
+        metrics: Metrics,
+        inbound: Inbound,
+        settings: Settings,
+    ) -> Self {
         let events = Events::new(
             inbound,
             store.clone(),
@@ -147,9 +191,9 @@ impl AppState {
         );
         Self {
             inner: Arc::new(Inner {
+                authz: Authorizer::new(store.clone(), vault, client),
                 store,
-                tokens: Tokens::new(vault),
-                client,
+                idempotency,
                 verify_token,
                 metrics,
                 events,
@@ -164,19 +208,30 @@ impl AppState {
     }
 
     /// The service's records.
-    pub fn store(&self) -> &dyn Store {
+    pub fn store(&self) -> &dyn RecordStore {
         self.inner.store.as_ref()
     }
 
+    /// The idempotency keys' records.
+    pub fn idempotency_records(&self) -> &Arc<dyn IdempotencyRecords> {
+        &self.inner.idempotency
+    }
+
+    /// The authorization order (see [`crate::auth`]): the only way to a
+    /// stored token.
+    pub fn authz(&self) -> &Authorizer {
+        &self.inner.authz
+    }
+
     /// The token vault, behind the authorization order (see
-    /// [`crate::auth`]).
+    /// [`crate::auth`]): what writes to it.
     pub(crate) fn tokens(&self) -> &Tokens {
-        &self.inner.tokens
+        self.inner.authz.tokens()
     }
 
     /// The tokenless Graph client.
     pub(crate) fn client(&self) -> &Client {
-        &self.inner.client
+        self.inner.authz.client()
     }
 
     /// Meta's webhook verify token.
@@ -224,7 +279,7 @@ impl AppState {
 
     /// The Graph API version calls use.
     pub fn graph_api_version(&self) -> ApiVersion {
-        self.inner.client.endpoint().version()
+        self.client().endpoint().version()
     }
 
     /// Mark the service as shutting down: `/readyz` fails from now on.

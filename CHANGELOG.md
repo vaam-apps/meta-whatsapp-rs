@@ -591,6 +591,30 @@ volumes (Claude config, shell history, cargo caches) start empty
 
 ### Changed
 
+- **meta-whatsapp-server's domain is a crate of its own,
+  `meta-whatsapp-server-core`** (`publish = false`, not a default member;
+  no axum, sqlx or utoipa), so the service's API and storage can each be
+  swapped. It holds the records and keys (`model`, `keys`), the
+  authorization order as services (`authz`: a credential to a `Caller`,
+  ownership to an `OwnedNumber` or `OwnedWaba`, still the only way to a
+  vault token), event routing, outbox keys, event ids and polling
+  (`events`), the idempotency engine, the rate limiter, and the error
+  model as data (`ServiceError`, `ErrorCode`, statuses as `u16`), which
+  `meta_whatsapp_server::error::ApiError` answers over HTTP. Storage goes
+  through its ports: `RecordStore` and `IdempotencyRecords` (the former
+  `store::Store`, split; `Store` is now both at once), `Outbox` (the
+  former `EventStore`), `LeaderLock`, `Janitor` and `SchemaMigrator`,
+  bundled per database as a `Backend`. The memory and Postgres
+  implementations stay in `meta-whatsapp-server` (`MemoryBackend`,
+  `PgBackend`), and `serve::backends` returns a `Backend` instead of
+  `Backends` and its `pool`. No change to the HTTP API: `openapi/v1.json`
+  is byte-identical. In code: import `RecordStore` and
+  `IdempotencyRecords` to call a concrete store's methods, and `Outbox`
+  for `EventStore`; `meta_whatsapp_server::{model, keys}` and the items of
+  `events`, `ratelimit`, `idempotency` and `error` keep their paths. One
+  change in housekeeping: the library's expired key/value rows are now
+  purged under the housekeeping lock too (a `LeaderLock` turn), so two
+  replicas never purge them at once.
 - **`WebhookEvent::MessageReceived` has a `conversation_context` field**
   (`Option<Box<ConversationContext>>`, serialized only when set), and
   `MessagesValue` and `ViolationInfo` one more public field each: code

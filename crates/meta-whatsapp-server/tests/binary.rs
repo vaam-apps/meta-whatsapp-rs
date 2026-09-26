@@ -679,7 +679,7 @@ fn live_postgres_cli_vault_rotate_fails_when_a_record_does() {
     use meta_whatsapp_rs::core::secret::AccessToken;
     use meta_whatsapp_rs::core::store::KvStore;
     use meta_whatsapp_server::model::TenantId;
-    use meta_whatsapp_server::store::{PgStore, Store, migrate};
+    use meta_whatsapp_server::store::{PgStore, RecordStore, migrate};
 
     const ACTIVE: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
     const PREVIOUS: &str = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";

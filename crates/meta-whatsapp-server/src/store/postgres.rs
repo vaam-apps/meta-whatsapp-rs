@@ -1,5 +1,7 @@
-//! [`PgStore`]: the service's tables on Postgres, and [`migrate`], which
-//! creates or upgrades them together with the library's.
+//! The Postgres backend ([`PgBackend`]): [`PgStore`], the service's tables
+//! on Postgres; [`migrate`] ([`PgMigrator`]), which creates or upgrades
+//! them together with the library's; [`PgLeaderLock`] (advisory locks)
+//! and [`PgJanitor`] (the library's expired key/value rows).
 //!
 //! Every query is a runtime query on the sqlx the facade re-exports
 //! (`meta_whatsapp_rs::adapters::store::postgres::sqlx`), so building never
@@ -7,18 +9,27 @@
 //! the library's stores.
 
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use meta_whatsapp_rs::adapters::store::postgres::sqlx::migrate::{
     Migration, MigrationType, Migrator,
 };
 use meta_whatsapp_rs::adapters::store::postgres::sqlx::postgres::PgRow;
-use meta_whatsapp_rs::adapters::store::postgres::sqlx::{self, PgPool, Row, SqlSafeStr};
+use meta_whatsapp_rs::adapters::store::postgres::sqlx::{
+    self, PgPool, Postgres, Row, SqlSafeStr, Transaction,
+};
 use meta_whatsapp_rs::adapters::store::postgres::{self as library};
+use meta_whatsapp_rs::adapters::store::{PostgresConversationStore, PostgresKvStore};
 use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
+use sha2::{Digest, Sha256};
 
-use super::{Store, StoreResult, listing};
+use super::{
+    Backend, BackendKind, IdempotencyRecords, Janitor, LeaderLock, LeaderTurn, Outbox,
+    PgEventStore, RecordStore, SchemaMigrator, StoreResult, Turn, listing,
+};
 use crate::model::{
     AllowedTenants, ApiKeyRecord, BindOutcome, DeleteTenantOutcome, IdempotencyClaim,
     IdempotencyKey, IdempotencyRecord, IdempotencyState, KeyOwner, KeyScope, Listing, NewApiKey,
@@ -61,6 +72,17 @@ const MIGRATION_FILES: &[(i64, &str, &str)] = &[
 /// others skip that round). The first eight bytes of
 /// SHA-256(`meta-whatsapp-server/housekeeping`), as a big-endian `i64`.
 pub const HOUSEKEEPING_LOCK: i64 = 0x0662_5bd9_6d85_d1cf;
+
+/// The advisory lock key of the service's lock `name`: the first eight
+/// bytes of SHA-256(`meta-whatsapp-server/<name>`), as a big-endian `i64`.
+/// [`HOUSEKEEPING_LOCK`] is `lock_key("housekeeping")`
+/// ([`crate::store::HOUSEKEEPING`]), [`MIGRATION_LOCK`] `lock_key("migrate")`.
+pub fn lock_key(name: &str) -> i64 {
+    let digest = Sha256::digest(format!("meta-whatsapp-server/{name}").as_bytes());
+    let mut first = [0u8; 8];
+    first.copy_from_slice(&digest[..8]);
+    i64::from_be_bytes(first)
+}
 
 /// The service's migrations, as sqlx runs and records them.
 pub fn migrations() -> Vec<Migration> {
@@ -241,7 +263,7 @@ fn scope_filter(scope: &KeyScope) -> (&'static str, Option<&str>) {
 }
 
 #[async_trait]
-impl Store for PgStore {
+impl RecordStore for PgStore {
     async fn ping(&self) -> StoreResult<()> {
         sqlx::query("SELECT 1")
             .execute(&self.pool)
@@ -630,7 +652,10 @@ impl Store for PgStore {
         .map_err(backend)
         .map(|_| ())
     }
+}
 
+#[async_trait]
+impl IdempotencyRecords for PgStore {
     async fn claim_idempotency_key(
         &self,
         tenant: &TenantId,
@@ -755,6 +780,185 @@ impl Store for PgStore {
     }
 }
 
+/// Leader election on Postgres: a transaction-scoped advisory lock
+/// ([`lock_key`] of the name), held by an open transaction until the turn
+/// is released (committed) or dropped (rolled back). The purges of
+/// [`PgEventStore::purge`] and [`PgStore`]'s idempotency records take the
+/// same key ([`HOUSEKEEPING_LOCK`]) in their own transactions. Advisory
+/// locks are the database's, not a schema's: deployments sharing one
+/// database take turns. Cheap to clone.
+#[derive(Clone)]
+pub struct PgLeaderLock {
+    pool: PgPool,
+}
+
+impl std::fmt::Debug for PgLeaderLock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PgLeaderLock").finish_non_exhaustive()
+    }
+}
+
+impl PgLeaderLock {
+    /// Turns on `pool`'s database.
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl LeaderLock for PgLeaderLock {
+    async fn try_exclusive(&self, name: &str) -> StoreResult<Option<LeaderTurn>> {
+        let mut tx = self.pool.begin().await.map_err(backend)?;
+        let ours: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock($1)")
+            .bind(lock_key(name))
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(backend)?;
+        if !ours {
+            tx.rollback().await.map_err(backend)?;
+            return Ok(None);
+        }
+        Ok(Some(LeaderTurn::new(PgTurn { tx })))
+    }
+}
+
+/// A turn of [`PgLeaderLock`]: the transaction holding the lock. Dropped
+/// without a release, sqlx rolls it back, which releases the lock.
+struct PgTurn {
+    tx: Transaction<'static, Postgres>,
+}
+
+#[async_trait]
+impl Turn for PgTurn {
+    async fn release(self: Box<Self>) -> StoreResult<()> {
+        self.tx.commit().await.map_err(backend)
+    }
+}
+
+/// The library's expired key/value rows on Postgres
+/// (`PostgresKvStore::purge_expired`: webhook dedup markers add one per
+/// event).
+#[derive(Debug, Clone)]
+pub struct PgJanitor {
+    kv: PostgresKvStore,
+}
+
+impl PgJanitor {
+    /// The janitor of `pool`'s key/value store (the default `wa_` prefix).
+    pub fn new(pool: PgPool) -> Self {
+        Self {
+            kv: PostgresKvStore::new(pool),
+        }
+    }
+}
+
+#[async_trait]
+impl Janitor for PgJanitor {
+    async fn purge_expired(&self) -> StoreResult<u64> {
+        self.kv.purge_expired().await
+    }
+}
+
+/// [`migrate`], as a port.
+#[derive(Clone)]
+pub struct PgMigrator {
+    pool: PgPool,
+}
+
+impl std::fmt::Debug for PgMigrator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PgMigrator").finish_non_exhaustive()
+    }
+}
+
+impl PgMigrator {
+    /// Migrations on `pool`, of at least two connections (one holds the
+    /// lock).
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl SchemaMigrator for PgMigrator {
+    async fn migrate(&self) -> StoreResult<()> {
+        migrate(&self.pool).await
+    }
+}
+
+/// Every port on one Postgres database, through one pool: [`PgStore`],
+/// [`PgEventStore`], [`PgLeaderLock`], [`PgJanitor`], [`PgMigrator`], and
+/// the library's `PostgresKvStore` and `PostgresConversationStore` (the
+/// default `wa_` prefix). Cheap to clone.
+#[derive(Clone)]
+pub struct PgBackend {
+    pool: PgPool,
+    store: Arc<PgStore>,
+    outbox: Arc<PgEventStore>,
+}
+
+impl std::fmt::Debug for PgBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The pool's options could reveal connection settings.
+        f.debug_struct("PgBackend").finish_non_exhaustive()
+    }
+}
+
+impl PgBackend {
+    /// The ports on `pool`. Migrate it before serving
+    /// ([`Backend::migrator`]).
+    pub fn new(pool: PgPool) -> Self {
+        Self {
+            store: Arc::new(PgStore::new(pool.clone())),
+            outbox: Arc::new(PgEventStore::new(pool.clone())),
+            pool,
+        }
+    }
+}
+
+#[async_trait]
+impl Backend for PgBackend {
+    fn kind(&self) -> BackendKind {
+        BackendKind::Postgres
+    }
+
+    fn records(&self) -> Arc<dyn RecordStore> {
+        self.store.clone()
+    }
+
+    fn idempotency(&self) -> Arc<dyn IdempotencyRecords> {
+        self.store.clone()
+    }
+
+    fn outbox(&self) -> Arc<dyn Outbox> {
+        self.outbox.clone()
+    }
+
+    fn leader_lock(&self) -> Arc<dyn LeaderLock> {
+        Arc::new(PgLeaderLock::new(self.pool.clone()))
+    }
+
+    fn janitor(&self) -> Arc<dyn Janitor> {
+        Arc::new(PgJanitor::new(self.pool.clone()))
+    }
+
+    fn migrator(&self) -> Arc<dyn SchemaMigrator> {
+        Arc::new(PgMigrator::new(self.pool.clone()))
+    }
+
+    fn kv(&self) -> Arc<dyn KvStore> {
+        Arc::new(PostgresKvStore::new(self.pool.clone()))
+    }
+
+    fn conversations(&self) -> Arc<dyn ConversationStore> {
+        Arc::new(PostgresConversationStore::new(self.pool.clone()))
+    }
+
+    async fn close(&self) {
+        self.pool.close().await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fmt::Write as _;
@@ -811,6 +1015,14 @@ mod tests {
         let digest = Sha256::digest(b"meta-whatsapp-server/housekeeping");
         first.copy_from_slice(&digest[..8]);
         assert_eq!(HOUSEKEEPING_LOCK, i64::from_be_bytes(first));
+    }
+
+    /// The leader lock's keys are the same derivation: its `housekeeping`
+    /// turn is the lock the purges take. Decisive: the prefix of the name.
+    #[test]
+    fn the_leader_locks_keys_are_the_services_locks() {
+        assert_eq!(lock_key(crate::store::HOUSEKEEPING), HOUSEKEEPING_LOCK);
+        assert_eq!(lock_key("migrate"), MIGRATION_LOCK);
     }
 
     /// Why `sql` would contract the schema (what a replica of the previous

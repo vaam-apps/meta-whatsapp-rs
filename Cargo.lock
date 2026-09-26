@@ -2292,27 +2292,45 @@ dependencies = [
  "futures",
  "getrandom 0.3.4",
  "hex",
- "hmac 0.12.1",
  "http-body-util",
  "hyper",
  "hyper-util",
  "meta-whatsapp-rs",
+ "meta-whatsapp-server-core",
  "multer",
  "pretty_assertions",
  "prometheus-client",
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "subtle",
  "thiserror",
  "time",
  "tokio",
  "tower",
  "tracing",
  "tracing-subscriber",
- "unicode-properties",
  "utoipa",
  "utoipa-axum",
+]
+
+[[package]]
+name = "meta-whatsapp-server-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "getrandom 0.3.4",
+ "hex",
+ "hmac 0.12.1",
+ "meta-whatsapp-rs",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "thiserror",
+ "time",
+ "tokio",
+ "tracing",
+ "unicode-properties",
 ]
 
 [[package]]

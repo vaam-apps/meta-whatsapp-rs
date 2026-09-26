@@ -26,7 +26,7 @@ use crate::model::{
     MAX_NAME_CHARS, NewApiKey, PageRequest, Scope, Tenant, TenantId, TenantStatus,
 };
 use crate::state::AppState;
-use crate::store::Store;
+use crate::store::RecordStore;
 use crate::telemetry::{self, Subject};
 
 /// Log an operator's change (see [`crate::telemetry::audit`]).
@@ -608,7 +608,7 @@ impl From<MintError> for ApiError {
 /// Mint and store a key for `owner`. The admin API and the CLI's
 /// bootstrap both use it. Returns the key (to show once) and its record.
 pub async fn mint(
-    store: &dyn Store,
+    store: &dyn RecordStore,
     owner: KeyOwner,
     scopes: Vec<Scope>,
     name: String,
@@ -736,7 +736,7 @@ pub async fn list_tenant_keys(
 }
 
 async fn key_list(
-    store: &dyn Store,
+    store: &dyn RecordStore,
     scope: &KeyScope,
     page: &PageRequest,
 ) -> Result<Json<KeyList>, ApiError> {
@@ -1196,5 +1196,5 @@ pub async fn rotate_vault(
 ) -> Result<Json<VaultRotation>, ApiError> {
     let report = state.tokens().rotate_all(state.store()).await?;
     audit("vault_rotated", &admin, Subject::default());
-    Ok(Json(report))
+    Ok(Json(report.into()))
 }

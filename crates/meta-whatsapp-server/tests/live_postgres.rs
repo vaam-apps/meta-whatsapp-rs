@@ -24,7 +24,8 @@ use meta_whatsapp_rs::webhooks::{Claim, DedupGuard, WebhookPayload};
 use meta_whatsapp_server::model::{AllowedTenants, Scope, TenantId};
 use meta_whatsapp_server::store::events::NewEvent;
 use meta_whatsapp_server::store::{
-    EventStore, HOUSEKEEPING_LOCK, MIGRATION_LOCK, MIGRATIONS_TABLE, PgEventStore, PgStore, migrate,
+    HOUSEKEEPING_LOCK, MIGRATION_LOCK, MIGRATIONS_TABLE, Outbox as EventStore, PgEventStore,
+    PgStore, migrate,
 };
 
 /// An instance of the service on the test database: everything on
@@ -1156,7 +1157,7 @@ async fn live_postgres_a_timeout_is_replayed_and_a_131047_releases_its_key() {
 #[tokio::test]
 async fn live_postgres_one_of_two_racing_claims_wins() {
     use meta_whatsapp_server::model::{IdempotencyClaim, IdempotencyKey};
-    use meta_whatsapp_server::store::Store as _;
+    use meta_whatsapp_server::store::{IdempotencyRecords as _, RecordStore as _};
     let Some(db) = TestDb::new().await else {
         return;
     };
@@ -1179,4 +1180,55 @@ async fn live_postgres_one_of_two_racing_claims_wins() {
             .count();
         assert_eq!(claimed, 1, "round {round}");
     }
+}
+
+/// The leader lock on Postgres: one turn per name, whichever replica asks,
+/// until it is released or dropped; its housekeeping turn is the lock the
+/// purges take, so an outbox purge skips while it is held; the janitor
+/// sweeps on a migrated database. Decisive: the advisory lock in
+/// `PgLeaderLock::try_exclusive`, and `lock_key`'s derivation.
+#[tokio::test]
+async fn live_postgres_the_leader_lock_gives_one_turn_at_a_time() {
+    use meta_whatsapp_server::store::{
+        HOUSEKEEPING, Janitor as _, LeaderLock as _, PgJanitor, PgLeaderLock,
+    };
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(4).await;
+    migrate(&pool).await.unwrap();
+    let (a, b) = (
+        PgLeaderLock::new(pool.clone()),
+        PgLeaderLock::new(db.pool(2).await),
+    );
+    let turn = a.try_exclusive(HOUSEKEEPING).await.unwrap().unwrap();
+    assert!(b.try_exclusive(HOUSEKEEPING).await.unwrap().is_none());
+    let outbox = PgEventStore::new(pool.clone());
+    assert_eq!(
+        outbox.purge(std::time::Duration::ZERO).await.unwrap(),
+        None,
+        "the purges take the housekeeping lock"
+    );
+    let other = b.try_exclusive("another-name").await.unwrap();
+    assert!(other.is_some(), "each name its own lock");
+    drop(other);
+    turn.release().await.unwrap();
+    let again = b.try_exclusive(HOUSEKEEPING).await.unwrap();
+    assert!(again.is_some(), "released");
+    drop(again);
+    // Dropped: its transaction is rolled back as its connection goes back
+    // to the pool, which ends the turn.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if let Some(turn) = a.try_exclusive(HOUSEKEEPING).await.unwrap() {
+            turn.release().await.unwrap();
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "a dropped turn held on"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    PgJanitor::new(pool.clone()).purge_expired().await.unwrap();
 }
