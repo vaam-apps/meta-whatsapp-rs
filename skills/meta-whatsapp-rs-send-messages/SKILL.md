@@ -5,7 +5,7 @@ description: "Sending free-form WhatsApp messages with meta-whatsapp-rs - Outbou
 
 # meta-whatsapp-rs-send-messages
 
-> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs ef0fe364e3a21a535238007db5276fe5ef6ce970 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/send.rs](examples/send.rs), compiled and tested
 by meta-whatsapp-rs's own gate. Every constructor and content type:
@@ -127,7 +127,8 @@ late "typing…" after the answer looks broken).
   escape hatch.
 - The 24-hour window is not tracked here; the CMS inbox tracks it from
   recorded messages (`meta-whatsapp-rs-cms-inbox`,
-  [open question 32](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)).
+  [OPEN_QUESTIONS.md #32](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox),
+  decided on 2026-09-26: calls to be recorded too, roadmap L7).
 
 ## Related skills
 

@@ -78,8 +78,10 @@ pub enum Status {
     /// Shows only part of a payload (one message object), which a composed
     /// fixture wraps; the text says what the page shows. Lists no example.
     Fragments(&'static str),
-    /// Documents a feature `docs/coverage.md` puts out of scope; the text
-    /// says which. Lists no example, and no case may cite it.
+    /// Documents a feature this crate does not type yet: the payments
+    /// pages, `docs/coverage.md` row 32, planned since 2026-09-26 (roadmap
+    /// item P1 types them and moves them to `Typed`); the text says which.
+    /// Lists no example, and no case may cite it.
     OutOfScope(&'static str),
     /// Listed by Meta but not readable when the mirror was taken; the text
     /// says what was tried. No case may cite it.

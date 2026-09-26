@@ -5,7 +5,7 @@ description: "Managing WhatsApp message templates with meta-whatsapp-rs - Templa
 
 # meta-whatsapp-rs-templates
 
-> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs b7211bc1f282f873b605e7a3a1126ce4e45e5677 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/manage.rs](examples/manage.rs), compiled and
 tested by meta-whatsapp-rs's own gate.
@@ -116,12 +116,15 @@ while let Some(template) = stream.next().await {
 
 ## What meta-whatsapp-rs does not do
 
-- No archive/unarchive (Meta documents no endpoint for it).
+- No archive/unarchive: Meta's template management page says the API
+  archives and unarchives in bulk, but no mirrored page shows the
+  endpoint (roadmap L23).
 - It does not store which templates are approved: keep your own table,
   updated from the webhooks.
 - Product-card carousels: the code allows 2–10 cards where Meta's page
   says "exactly two"
-  ([open question 22](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#product-details)).
+  ([OPEN_QUESTIONS.md #22](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#product-details),
+  decided on 2026-09-26: creation will check exactly two, roadmap L20e).
 
 ## Related skills
 

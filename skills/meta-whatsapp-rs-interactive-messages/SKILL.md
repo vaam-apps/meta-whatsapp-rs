@@ -5,7 +5,7 @@ description: "Interactive WhatsApp messages with meta-whatsapp-rs - reply button
 
 # meta-whatsapp-rs-interactive-messages
 
-> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 7068cff7122c08d40e5b7c23f4077d2689bf46ee (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/interactive.rs](examples/interactive.rs),
 compiled and tested by meta-whatsapp-rs's own gate.
@@ -132,4 +132,5 @@ cards 2–10, card body 160 with at most 2 line breaks.
 
 `meta-whatsapp-rs-send-messages` (sending, recipients), `meta-whatsapp-rs-webhook-events` (the
 replies), `meta-whatsapp-rs-flows`, `meta-whatsapp-rs-commerce` (product messages),
-`meta-whatsapp-rs-send-templates` (buttons outside the window).
+`meta-whatsapp-rs-send-templates` (buttons outside the window), `meta-whatsapp-rs-bot`
+(a tap whose id is a `Command::payload` runs that bot command).

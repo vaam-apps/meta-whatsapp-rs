@@ -126,6 +126,7 @@ features:
     cargo check -p meta-whatsapp-webhooks --features axum
     cargo check -p meta-whatsapp-client --no-default-features
     cargo check -p meta-whatsapp-client --features flows-endpoint
+    cargo check -p meta-whatsapp-bot --all-targets
     cargo check -p meta-whatsapp-rs --no-default-features
     cargo check -p meta-whatsapp-rs --no-default-features --features reqwest
     cargo check -p meta-whatsapp-rs --no-default-features --features memory
@@ -135,6 +136,7 @@ features:
     cargo check -p meta-whatsapp-rs --no-default-features --features axum
     cargo check -p meta-whatsapp-rs --no-default-features --features typst
     cargo check -p meta-whatsapp-rs --no-default-features --features flows-endpoint
+    cargo check -p meta-whatsapp-rs --no-default-features --features bot
     cargo check -p meta-whatsapp-rs
     cargo check -p meta-whatsapp-server-core --all-targets
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude meta-whatsapp-server --no-default-features --no-deps

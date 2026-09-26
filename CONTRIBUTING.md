@@ -4,7 +4,8 @@ Read [AGENTS.md](AGENTS.md) first — it is the short version of everything
 below and applies to humans and coding agents alike.
 [docs/architecture.md](docs/architecture.md) is the spec;
 [docs/coverage.md](docs/coverage.md) says what exists;
-[OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) lists decisions nobody has made yet.
+[OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) lists the decisions the code has not
+made, and how each was decided under the owner's delegation.
 
 ## Environment
 
@@ -71,6 +72,11 @@ A public API change is not done until these agree with it:
 
 - rustdoc (every public item; module docs name the Meta pages implemented),
 - `docs/architecture.md` and `docs/coverage.md`,
+- `docs/parity.md`: the capability's row, updated in the same PR (and its
+  category in `docs/categories.md` when that moves, and its item in
+  `docs/roadmap.md` ticked); `crates/meta-whatsapp-rs/tests/docs_tables.rs`
+  checks that the tables agree with each other and that the symbols
+  they cite exist, not that they are true,
 - the consumer skills in `skills/` (they instruct other repos' coding
   agents — a stale skill generates wrong code at scale). Re-stamp every
   skill you verified with `Verified against meta-whatsapp-rs <full sha> (<date>)`.

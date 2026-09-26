@@ -5,7 +5,7 @@ description: "WhatsApp marketing with meta-whatsapp-rs - collecting opt-ins with
 
 # meta-whatsapp-rs-marketing
 
-> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs b7211bc1f282f873b605e7a3a1126ce4e45e5677 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/marketing.rs](examples/marketing.rs), compiled
 and tested by meta-whatsapp-rs's own gate.
@@ -132,10 +132,14 @@ let delivered = analytics
 - No consent registry, campaign scheduler, audience segmentation or
   conversion tracking.
 - Accepting the In-App Signup terms accepts Meta's marketing terms for
-  the business: a legal decision
-  ([open question 26](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#product-details)).
+  the business: a legal act. The code decides nothing legal:
+  `SignupPolicy::accept_terms()` is the explicit call, and making it is
+  the deployer's decision
+  ([open question 26](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#product-details),
+  decided on that basis).
 - MM API max-price agreement, partner allowlist and reach estimates are
-  not wrapped.
+  not wrapped. Signing the agreement is a legal act too: once wrapped,
+  it is its own explicit call, never made by a send (open question 45).
 
 ## Related skills
 
