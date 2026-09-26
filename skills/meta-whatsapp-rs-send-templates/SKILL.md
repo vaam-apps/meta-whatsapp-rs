@@ -115,7 +115,8 @@ the template.
 - No lookup of the approved definition, so no local check of parameter
   counts; cache your approved templates (`meta-whatsapp-rs-templates`) if you want
   one.
-- No campaign pacing or messaging-limit accounting.
+- No messaging-limit accounting. Campaign pacing (one template to many,
+  under the number's throughput): `Broadcast`, in `meta-whatsapp-rs-bot`.
 
 ## Related skills
 

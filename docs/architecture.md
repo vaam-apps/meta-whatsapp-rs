@@ -32,7 +32,7 @@ crates/
   meta-whatsapp-adapters   port implementations: reqwest, memory/Postgres/Redis stores, sinks.
   meta-whatsapp-typst      Typst → PDF/PNG for document and image messages.
   meta-whatsapp-bot        bot framework over webhooks: commands, guards, cooldowns, middleware,
-                           compile-time plugins, Markdown → WhatsApp formatting.
+                           compile-time plugins, Markdown → WhatsApp formatting, paced broadcasts.
   meta-whatsapp-rs         facade: re-exports, prelude, `client(token)`, the CMS inbox,
                            feature flags, runnable examples. What integrators depend on.
   meta-whatsapp-server     the HTTP service (a binary on the facade): tenants, keys, the /v1
@@ -889,6 +889,31 @@ for every event, after the ban and the match.
 - **Listeners** name what they get: received messages, one message
   `type`, an event kind (checked against `WebhookEvent::KINDS` at build),
   or everything.
+- **Paced broadcasts** (`broadcast`, `pacer`): a `Broadcast` sends one
+  message, or one per recipient, from one business number through an
+  `Outbound`, each send (retries included) after a slot of the number's
+  `Pacer`, up to a configurable number in flight; `run` returns a report
+  per recipient, and a `BroadcastHandle` gives progress and a cancel
+  (no send starts after it; sends in flight finish). The pacer is a
+  `RateLimiter` (default `TokenBucket`: per number, in this process,
+  evenly spaced at `Rate::DEFAULT`, 80 a second, Meta's `throughput`
+  default, with per-number rates, a burst and a slow-down on throttling)
+  and a `Timer` (a `Clock` that can wait: `SystemClock` on Tokio,
+  `ManualClock` in tests). A limiter reserves (returns the wait) rather
+  than waits, so a shared one, across replicas, implements two methods;
+  none ships, and each replica otherwise has its own budget. Failed sends
+  go to a `BroadcastPolicy` (default `Backoff`, on `ErrorKind`: the pair
+  limit defers one recipient on Meta's `4^X` schedule, throughput retries
+  and slows the pacer, spam and the per-user marketing limit are
+  reported, account-wide kinds stop the run), but a send is repeated only
+  when the error is retryable and `Error::may_have_been_sent` is false,
+  whatever the policy (enforced outside it; the client's `RetryPolicy`
+  is stricter still, replaying a send on throttling only).
+  `BotBuilder::pacer` wraps a bot's outbound in a `PacedOutbound`, so its
+  replies, read receipts and typing indicators share the budget;
+  `Pacer::acquire` is the hook for other calls (group operations). No
+  new port and no persistence: a run lives in memory (durable jobs are
+  B3's typed store on `KvStore`).
 
 ## Typst (`meta-whatsapp-typst`)
 

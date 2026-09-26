@@ -1,8 +1,8 @@
 # Parity: Zaileys, Meta's Cloud API and meta-whatsapp-rs
 
 Verified against `main` at b6fc893 (PR #20) on 2026-09-26; rows 17,
-19 and 84–88 again when the bot framework (roadmap B1) landed, against
-its code. Every cell about us was checked against the code: a cell that
+19 and 84–88 again when the bot framework (roadmap B1) landed, and rows
+89 and 92 when paced broadcast (B2) landed, against their code. Every cell about us was checked against the code: a cell that
 says a thing is done names the symbol that does it, and what the service
 (`meta-whatsapp-server`) does is read from its routes, not from its
 design. The plan to close the gaps is [roadmap.md](roadmap.md); the Meta
@@ -16,7 +16,7 @@ reached.
 
 | 131 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
-| Library | 89 | 23 | 18 | 1 |
+| Library | 91 | 23 | 16 | 1 |
 | Service | 39 | 24 | 67 | 1 |
 
 - The table has 155 rows. 24 of them are not counted: they work only
@@ -24,7 +24,7 @@ reached.
   n/a column is a side that does not carry the capability at all: the
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
-- Each of the library's 41 partial or gap rows is cited by a
+- Each of the library's 39 partial or gap rows is cited by a
   [roadmap](roadmap.md) item. Each of the service's 91 names, in its
   status, the roadmap items that bring it; by family (a row can name
   two): M2 8, M3 11, M4 2, M5 70, S 1 (the modular split), L 1 (L22a,
@@ -32,9 +32,9 @@ reached.
 - The largest gaps: the service routes for the modules the design once
   left "on demand" (M5), the inbox, live events and onboarding over HTTP
   (M2, M3), and the rest of the bot framework (section G: its commands,
-  middleware, plugins, access lists and Markdown replies exist, B1;
-  subcommands and flags, rich replies beyond text, paced broadcast,
-  scheduling and auto-delete do not, B1b, B1c, B2–B4).
+  middleware, plugins, access lists and Markdown replies exist, B1, and
+  paced broadcast, B2; subcommands and flags, rich replies beyond text,
+  scheduling and auto-delete do not, B1b, B1c, B3, B4).
 
 ## What parity means
 
@@ -246,10 +246,10 @@ The owner's definition (2026-09-26):
 | 86 | Bots | Middleware: ordered, `next()`, short-circuit, wraps the handler | Yes | No | none (ours to build) | `Middleware` in `meta-whatsapp-bot`, run in registration order (`BotBuilder::middleware`, `Registrar::middleware`) with `Next::run`: one that does not call it stops the event, and what follows the call runs after the handler (`Logging` times it); built in: `Logging`, `MarkRead`. Unlike Zaileys', it runs for every event, after the ban and the command match and before the command's guards | gap (M5k) | done / gap (M5k) |
 | 87 | Bots | Plugins: setup and unload hooks; loaded from a folder with hot reload | Yes | No | none | compile-time plugins in `meta-whatsapp-bot`: `Plugin::setup` registers commands, middleware and listeners through a `Registrar`, `Plugin::on_unload` runs at `Bot::unload`, `Plugin::category` names the help section; added with `BotBuilder::plugin`. Loading from a folder and hot reload are not offered, by design (D28): dynamic loading of Rust code is neither idiomatic nor safe, so a plugin is a crate | gap (M5k) | done / gap (M5k) |
 | 88 | Bots | Sender allow and deny lists (owners, banned users) | Yes | Yes | none (ours; row 71 is Meta's block list) | in `meta-whatsapp-bot`: an `AccessPolicy` (the default `AccessList`: owners and bans by BSUID, `AccessList::owner`, `AccessList::ban`, or by phone number, `AccessList::owner_phone`, `AccessList::ban_phone`), set with `BotBuilder::access`; a banned sender's message stops before the command match and the middleware (`Refusal::Banned`), and owners pass `Command::owner_only` | gap (M5k) | done / gap (M5k) |
-| 89 | Bots | Broadcast with pacing (progress, retries) | Yes (5 a second by default) | No (throws) | limits to respect: `throughput.md` (80 messages a second per number by default), the pair limit (131056, `support/error-codes.md`), `templates/marketing-templates/per-user-limits.md`, `messaging-limits` | gap: `RetryPolicy` handles a throttle, nothing paces a batch (`meta-whatsapp-bot`, B2; design D29) | gap (M5k) | gap / gap (M5k) |
+| 89 | Bots | Broadcast with pacing (progress, retries) | Yes (5 a second by default) | No (throws) | limits to respect: `throughput.md` (80 messages a second per number by default), the pair limit (131056, `support/error-codes.md`), `templates/marketing-templates/per-user-limits.md`, `messaging-limits` | in `meta-whatsapp-bot`: `Broadcast` (one message, or one per recipient with `BroadcastBuilder::compose`), each send after a slot of the number's `Pacer`, a swappable `RateLimiter` (default `TokenBucket`: per number, in this process, evenly spaced at `Rate::DEFAULT`, 80 a second, other numbers at `Rate::HIGHER_THROUGHPUT` or any `Rate::per_second` with `TokenBucket::rate_for`); progress and cancel (`BroadcastHandle::progress`, `BroadcastHandle::cancel`); a report per recipient (`BroadcastReport`, `Outcome`); retries decided by a `BroadcastPolicy` on `ErrorKind` (default `Backoff`: the pair limit defers only that recipient on Meta's 4^X schedule, throughput retries and slows the pacer, spam and the per-user marketing limit are reported, account-wide kinds stop the run), and never when `Error::may_have_been_sent`. One budget per process unless a shared `RateLimiter` is plugged in (none ships); a run does not survive a restart (row 90, B3); Meta's daily messaging limit is not counted | gap (M5k) | done / gap (M5k) |
 | 90 | Bots | Scheduled messages: send at a time, cancel, survive restarts, retry | Yes | No (fails when due) | Meta's WABA campaign schedules, reference only (`reference/whatsapp-business-account/schedules-api.md`; its `audience_id` is explained nowhere in the mirror) | gap: durable jobs, a typed store on `KvStore` (`meta-whatsapp-bot`, B3; design D29); Meta's schedules API not wrapped (L10b) | gap (M5k) | gap / gap (M5k) |
 | 91 | Bots | Auto-delete stored messages (by age, a cap per chat) | Yes | No ("not yet" on the Cloud API) | none (local data) | gap: `core::store::ConversationStore` has no retention or erasure (L5 and design D10; `meta-whatsapp-bot`, B4) | gap: the outbox purges after 7 days (`server::events::DEFAULT_OUTBOX_RETENTION`); the inbox keeps everything (retention per store: M2a; the bot's auto-delete over HTTP: M5k) | gap / gap (M2a, M5k) |
-| 92 | Bots | Throttling our own typing indicators and group operations | Yes | Yes, per the summary of its configuration page (doubtful for group operations, which Zaileys does not offer on the Cloud API; unverified) | none (ours) | gap (`meta-whatsapp-bot`, B2, with pacing) | gap (M5k) | gap / gap (M5k) |
+| 92 | Bots | Throttling our own typing indicators and group operations | Yes | Yes, per the summary of its configuration page (doubtful for group operations, which Zaileys does not offer on the Cloud API; unverified) | none (ours) | in `meta-whatsapp-bot`: `BotBuilder::pacer` puts the bot's outbound in a `PacedOutbound`, so every read receipt and typing indicator (`MarkRead`), reply and refusal waits for a slot of its number's `Pacer`, the budget its broadcasts share; a group operation goes through the same pacer by calling `Pacer::acquire` before the client's call (the client's group calls are not paced by themselves, and Meta documents no rate for them) | gap (M5k) | done / gap (M5k) |
 
 ### H. Templates, commerce, numbers
 
@@ -340,8 +340,8 @@ item, each naming its crate, what it comes after and its decisive test:
 - **The bot framework**, a new library crate `meta-whatsapp-bot`:
   commands, middleware, compile-time plugins and markdown replies (B1,
   done; rows 17, 85–88), subcommands and flags (B1b; row 85), rich
-  replies beyond text (B1c; row 17), then paced broadcast and durable
-  scheduling (B2, B3; rows 89, 90, 92; D29), then retention and
+  replies beyond text (B1c; row 17), paced broadcast (B2, done; rows
+  89, 92; D29), then durable scheduling (B3; row 90; D29), then retention and
   auto-delete after the `ConversationStore` port change (B4, after L5;
   row 91).
 - **Library gap batches** (L4–L25), by crate and topic: every library

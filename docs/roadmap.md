@@ -395,7 +395,7 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     requests asserted; three suggestions become buttons and four a list
     (removing the count check fails the test); a `javascript:` image
     URL is never sent.
-- [ ] **B2. Paced broadcast** (`meta-whatsapp-bot`; rows 89, 92; D29): a
+- [x] **B2. Paced broadcast** (`meta-whatsapp-bot`; rows 89, 92; D29): a
   per-number rate under Meta's throughput (80 messages a second by
   default), progress, retries only when `Error::may_have_been_sent` is
   false, the pair and per-user marketing limits read from `ErrorKind`;
@@ -405,6 +405,14 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
   - **Decisive:** under a fake clock, 200 sends at a configured 20 a
     second never exceed it; a scripted timeout is never retried
     (removing the `may_have_been_sent` check fails the test).
+  - **Landed:** rows 89 and 92 done in the library (`Broadcast`,
+    `Pacer`, `TokenBucket`, `BroadcastPolicy`, `BotBuilder::pacer`,
+    `Pacer::acquire` for group operations). Swappable: the rate limiter
+    (`RateLimiter`), the clock (`Timer`) and the failure policy
+    (`BroadcastPolicy`) are traits with defaults. Not in it: a limiter
+    shared by replicas (the trait allows one; none ships), Meta's daily
+    messaging limit (Meta's to enforce), and runs that survive a
+    restart (B3).
 - [ ] **B3. Durable scheduling** (`meta-whatsapp-bot`; row 90; D29): jobs
   as a typed store on `KvStore` (a bucketed due-time index, claims by
   compare-and-swap with a lease; no new port), send at a time, cancel,

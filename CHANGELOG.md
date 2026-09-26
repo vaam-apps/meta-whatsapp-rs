@@ -232,8 +232,40 @@ stored data, the owner's).
   `pulldown-cmark` 0.13 (MIT, no default features). Guide:
   [docs/guides/bots.md](docs/guides/bots.md); skill:
   `meta-whatsapp-rs-bot`. Not yet: subcommands and flags, rich replies
-  beyond text, paced broadcasts, scheduling and auto-delete (roadmap
-  B1b, B1c, B2–B4).
+  beyond text, scheduling and auto-delete (roadmap B1b, B1c, B3, B4);
+  paced broadcasts are the next entry.
+- **Paced broadcasts** in `meta-whatsapp-bot` (roadmap B2): a
+  `Broadcast` sends one message (`BroadcastBuilder::content`) or one per
+  recipient (`BroadcastBuilder::compose`) from one business number
+  through an `Outbound`, each send, retries included, after a slot of
+  the number's `Pacer`, up to 32 in flight (`BroadcastBuilder::concurrency`).
+  `run` returns a `BroadcastReport` (per recipient: `Outcome::Sent`,
+  `Outcome::Failed` or `Outcome::Skipped`, the attempts, and how the run
+  `Ended`); a `BroadcastHandle` gives `progress` and `cancel` (no send
+  starts after it, sends in flight finish). The pacer is two traits with
+  defaults: `RateLimiter` (`TokenBucket`: per number, in this process,
+  evenly spaced so no one-second window holds more than the rate;
+  `Rate::DEFAULT` 80 a second, `Rate::HIGHER_THROUGHPUT` 1,000 and
+  `Rate::BUSINESS_APP` 20, from Meta's `throughput` page; per-number
+  rates, a burst, and a slow-down on throttling that recovers after 30
+  quiet seconds) and `Timer` (a `Clock` that can wait: `SystemClock` on
+  Tokio, `ManualClock` moving at once in tests). Failed sends go to a
+  `BroadcastPolicy` (default `Backoff`, on `ErrorKind`): the pair rate
+  limit (`131056`) defers only that recipient, on Meta's `4^X`
+  schedule; throughput (`130429`) is retried and slows the pacer; spam
+  (`131048`) slows it and is reported; the per-user marketing limit
+  (`131049`) is reported, never retried; the kinds of `Backoff::STOPS`
+  (token, permission, account, classification limit, payment) stop the
+  run. Whatever the policy, a send is repeated only when the error is
+  retryable and `Error::may_have_been_sent` is false: a timed-out send is
+  never replayed. `BotBuilder::pacer` puts a bot's outbound in a
+  `PacedOutbound`, so its replies, read receipts and typing indicators
+  share the number's budget; `Pacer::acquire` paces any other call
+  (group operations). One budget per process: a shared `RateLimiter`
+  across replicas is the integrator's to plug in (none ships). No new
+  port and no persistence: a run lives in memory (durable, resumable
+  jobs are B3). New dependencies of the bot crate, all already in the
+  workspace: `futures`, `time`, and `tokio` (`sync`, `time`).
 - `meta_whatsapp_client::messages::TEXT_BODY_MAX_CHARS` (4096, the text
   limit the client already checked) and `WebhookEvent::KINDS` (every
   value `WebhookEvent::kind` returns), for the bot framework. Both are

@@ -3,7 +3,8 @@
 **Goal:** a WhatsApp number that answers commands (`/status 1234`), taps
 on reply buttons and list rows, and free text, with formatted replies;
 built from plugins, one feature each, on the webhook endpoint you already
-run.
+run; and that sends one message to many customers at the pace Meta
+allows (section 9).
 
 Crate: `meta-whatsapp-bot`, re-exported as `meta_whatsapp_rs::bot`
 (feature `bot`, off by default; `full` includes it). Agent skill:
@@ -35,8 +36,8 @@ meta-whatsapp-rs = { git = "https://github.com/vaam-apps/meta-whatsapp-rs", rev 
 ```
 
 The async extension points (`Outbound`, `Middleware`, `Plugin`,
-`AccessPolicy`, `Cooldowns`, `Refusals`, `ErrorHandler`) are
-`#[async_trait]` traits. The attribute is re-exported as
+`AccessPolicy`, `Cooldowns`, `Refusals`, `ErrorHandler`, `RateLimiter`,
+`Timer`) are `#[async_trait]` traits. The attribute is re-exported as
 `meta_whatsapp_rs::bot::async_trait`, so you need no `async-trait`
 dependency of your own (write `#[async_trait]` on the `impl`: a native
 `async fn` there does not match the trait).
@@ -189,6 +190,7 @@ running.
 ```rust
 Bot::builder()
     .client(client) // replies go out with this client's token
+    .pacer(pacer) // replies and read receipts share the number's budget with broadcasts
     .prefixes(["/", "!"]) // `/` is what Meta's command menu sends
     .access(AccessList::new().owner("US.13491208655302741918")) // BSUIDs, not phone numbers
     .cooldown_store(kv, Arc::new(SystemClock)) // shared by every instance on the store
@@ -388,13 +390,127 @@ Choose with `Renderer::escape`, and set the renderer with
 `.markdown(renderer)` on the builder; for other rules (another heading
 or table style), implement `MarkdownRenderer` and pass that.
 
-## 9. Testing
+## 9. Paced broadcasts
+
+A campaign, an order-status sweep, a notice to every customer: one
+message to many recipients from one business number, sent no faster than
+Meta allows, with progress, a cancel, retries and a report per recipient.
+
+```rust
+let broadcast = Broadcast::builder(number)
+    .to(customers)
+    .compose(|to: &Recipient| {
+        let template = TemplateMessage::new("spring_sale", "en_US"); // outside the 24-hour window
+        Ok(OutboundMessage::template(to.clone(), template).callback_data("spring-sale"))
+    })
+    .client(client)
+    .pacer(pacer) // the same one as the bot's: one budget per number
+    .build()?;
+let handle = broadcast.handle(); // progress() and cancel(), from another task
+let report = broadcast.run().await; // spawn it to do something else meanwhile
+```
+
+`BroadcastBuilder::content` sends every recipient the same content;
+`BroadcastBuilder::compose` builds each one's message (their name in the
+template, a `biz_opaque_callback_data` to match the status webhooks). A
+message composed for someone else, or a compose error, fails that
+recipient without a send. The list is sent as given: a recipient listed
+twice gets two messages.
+
+**The pace.** Meta's throughput (`throughput`) is per registered
+business number: 80 messages a second by default (`Rate::DEFAULT`),
+1,000 once Meta upgrades the number (`Rate::HIGHER_THROUGHPUT`), 20 for
+a number also used in the WhatsApp Business app (`Rate::BUSINESS_APP`),
+counting inbound and outbound messages of every type. The default
+`RateLimiter`, `TokenBucket`, gives each number its rate
+(`TokenBucket::rate_for` for the ones that differ) and spaces the sends
+evenly, so no one-second window holds more than the rate
+(`TokenBucket::burst` allows a few at once, and that many more in a
+window). Meta documents no mapping from a number's reported throughput
+level to a rate, so set the rate yourself, for example on a
+`phone_number_quality_update` webhook announcing an upgrade.
+
+```rust
+pub fn shared_pacer(upgraded: PhoneNumberId) -> Pacer {
+    Pacer::new(TokenBucket::new(Rate::DEFAULT).rate_for(upgraded, Rate::HIGHER_THROUGHPUT))
+}
+```
+
+- **One `Pacer` per process**, shared by every broadcast
+  (`BroadcastBuilder::pacer`) and by the bot (`BotBuilder::pacer`, which
+  puts its outbound in a `PacedOutbound`: replies, refusals, read
+  receipts and typing indicators wait for a slot too). Two pacers give
+  one number two budgets. A reply waits behind at most a broadcast's
+  concurrency in slots.
+- **Group operations** go through the same budget when you call
+  `Pacer::acquire(&number)` before them. Meta documents no rate for
+  group operations; this is a choice, and the client's calls are not
+  paced by themselves.
+- **Several replicas** each count their own sends: two replicas at 80 a
+  second send 160. Give each its share of the rate
+  (`Rate::per_second`), or implement `RateLimiter` over a store they
+  share (`RateLimiter::reserve` books a slot and returns the wait;
+  `RateLimiter::slow_down` hears Meta's throttling). None ships.
+- **Concurrency.** Up to `BroadcastBuilder::concurrency` sends (default
+  32) are in flight at once, so the rate is reached when each send
+  takes a while: about the rate times a send's duration.
+- Don't give a broadcast a `PacedOutbound`: it paces its own sends, and
+  each would take two slots.
+
+**Failed sends.** A `BroadcastPolicy` decides, from the error's kind
+(its code, never its text); the default is `Backoff`:
+
+| Meta answers | `Backoff` |
+| --- | --- |
+| `131056`, the pair rate limit (one user messaged too often) | that recipient waits 1, 4, 16, 64 s (the `4^X` schedule of `about-the-platform`); the others go on |
+| `130429` throughput, or another `RateLimited` code | retried after 1, 2, 4, 8 s; the number's pacer halves its rate, back to full after 30 quiet seconds (`TokenBucket::recovery`) |
+| `131048`, sending restricted for spam | reported, not retried (Meta: retrying makes it worse); the pacer slows down |
+| `131049`, the per-user marketing limit | reported for that recipient, not retried (Meta: wait at least 24 hours) |
+| an error in `Backoff::STOPS` (the token, a permission, the account, the classification limit, payment) | the run stops: every recipient not sent yet is skipped |
+| anything else not retryable | reported for that recipient |
+
+Whatever the policy says, a recipient is sent again only when the error
+is retryable and `Error::may_have_been_sent` is false. A timeout, or a
+5xx after the request reached Meta, is reported as `Outcome::Failed`
+with `may_have_been_sent()` true and never resent, since a duplicate
+campaign message is worse than a missing one: match it with the status
+webhooks (the callback data) before sending again. Through a client
+with its default `RetryPolicy`, a throttled send was already replayed
+(up to three times, under the same rule) before the broadcast sees it.
+
+**The report.** `run` returns a `BroadcastReport`: one
+`RecipientReport` per recipient, in order (`attempts`, and an `Outcome`:
+`Sent` with Meta's response, `Failed` with the last error, or `Skipped`),
+and how the run `Ended`. `Sent` means Meta accepted the message: most
+`131049` refusals arrive later, as a `failed` status webhook
+(`templates/marketing-templates/per-user-limits`). Meta's daily
+messaging limit (unique users per 24 hours per business portfolio,
+`messaging-limits`) is Meta's to enforce; nothing here counts it.
+
+**Cancel.** `BroadcastHandle::cancel` starts no send afterwards: a wait
+for a slot or a retry ends at once, sends in flight finish and are
+reported (abandoning one would leave unknown whether it went out), and
+the rest are `Skipped`. `BroadcastHandle::progress` counts sent, failed,
+skipped and `Progress::remaining` meanwhile.
+
+**Not durable.** A run lives in memory: a restart loses it, and the
+report is its only record. Broadcasts that survive a restart, and
+scheduled sends, are [roadmap](../roadmap.md) item B3 (a typed store on
+`KvStore`).
+
+**Time** comes from the pacer's `Timer`, a `Clock` that can wait:
+`SystemClock` sleeps on Tokio; a `ManualClock` moves forward at once
+when waited on, so a test runs a whole paced broadcast instantly and
+reads when each send started (`Pacer::with_timer`).
+
+## 10. Testing
 
 Build the bot on a client with a `ScriptedTransport` (feature `testing`)
 and deliver events parsed from Meta's documented payloads; assert the
 exact requests (see the skill's example and
 [`meta-whatsapp-rs-testing`](../../skills/meta-whatsapp-rs-testing/SKILL.md)).
-Or implement `Outbound` to record what the bot sends.
+Or implement `Outbound` to record what the bot sends. A bot or broadcast
+with a pacer on a `ManualClock` never waits for real.
 
 A handler is a function of its context, so it can be tested without a
 bot: `Ctx::new(event, outbound, renderer)`, then
@@ -403,8 +519,8 @@ and call it.
 
 ## Not here yet
 
-Paced broadcasts and scheduling ([roadmap](../roadmap.md) B2, B3),
-subcommands and `--flag` arguments (B1b), images, suggestions and
+Scheduling and broadcasts that survive a restart ([roadmap](../roadmap.md)
+B3), subcommands and `--flag` arguments (B1b), images, suggestions and
 product cards in replies as media, buttons, lists and carousels (B1c),
 and auto-delete (B4). Conversation state and multi-step forms are
 yours: keep them in your store, keyed by `BotSender::key`.

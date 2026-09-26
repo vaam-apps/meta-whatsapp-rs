@@ -1,8 +1,8 @@
 //! Reference code for the `meta-whatsapp-rs-bot` skill: a WhatsApp bot on
 //! Cloud API webhooks — commands with prefixes, aliases, guards and
 //! cooldowns, a plugin per feature, middleware, Markdown replies, the
-//! generated help and Meta's command menu, and replies recorded in the CMS
-//! inbox.
+//! generated help and Meta's command menu, replies recorded in the CMS
+//! inbox, and a paced broadcast sharing the bot's pacer.
 //!
 //! meta-whatsapp-rs compiles this file and runs its tests in its own gate
 //! (`crates/meta-whatsapp-rs/tests/skills.rs`). It needs the `bot` feature.
@@ -11,8 +11,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use meta_whatsapp_rs::bot::{
-    AccessList, Bot, ClientOutbound, Command, Ctx, Logging, MarkRead, Middleware, Next, Outbound,
-    Plugin, Registrar, async_trait,
+    AccessList, Bot, Broadcast, BroadcastReport, ClientOutbound, Command, Ctx, Logging, MarkRead,
+    Middleware, Next, Outbound, Pacer, Plugin, Rate, Registrar, TokenBucket, async_trait,
 };
 use meta_whatsapp_rs::core::clock::SystemClock;
 use meta_whatsapp_rs::core::error::{SinkError, ValidationError};
@@ -97,14 +97,22 @@ impl Middleware for OnlyOurNumber {
     }
 }
 
+/// One pacer per process, shared by the bot and its broadcasts: Meta's
+/// default 80 messages a second per number, 1,000 for one Meta upgraded.
+pub fn shared_pacer(upgraded: PhoneNumberId) -> Pacer {
+    Pacer::new(TokenBucket::new(Rate::DEFAULT).rate_for(upgraded, Rate::HIGHER_THROUGHPUT))
+}
+
 /// The bot: the defaults, and the parts this shop sets.
 pub async fn build_bot(
     client: Client,
     kv: Arc<dyn KvStore>,
     number: PhoneNumberId,
+    pacer: Pacer,
 ) -> meta_whatsapp_rs::Result<Bot> {
     Bot::builder()
         .client(client) // replies go out with this client's token
+        .pacer(pacer) // replies and read receipts share the number's budget with broadcasts
         .prefixes(["/", "!"]) // `/` is what Meta's command menu sends
         .access(AccessList::new().owner("US.13491208655302741918")) // BSUIDs, not phone numbers
         .cooldown_store(kv, Arc::new(SystemClock)) // shared by every instance on the store
@@ -116,6 +124,29 @@ pub async fn build_bot(
         .help_command() // `/help`, from the commands not hidden
         .build() // async: the plugins' `setup` run here
         .await
+}
+
+/// A template to every customer, paced by the pacer the bot shares, each
+/// with callback data to match its status webhooks.
+pub async fn spring_sale(
+    client: Client,
+    pacer: Pacer,
+    number: PhoneNumberId,
+    customers: Vec<Recipient>,
+) -> meta_whatsapp_rs::Result<BroadcastReport> {
+    let broadcast = Broadcast::builder(number)
+        .to(customers)
+        .compose(|to: &Recipient| {
+            let template = TemplateMessage::new("spring_sale", "en_US"); // outside the 24-hour window
+            Ok(OutboundMessage::template(to.clone(), template).callback_data("spring-sale"))
+        })
+        .client(client)
+        .pacer(pacer) // the same one as the bot's: one budget per number
+        .build()?;
+    let handle = broadcast.handle(); // progress() and cancel(), from another task
+    let report = broadcast.run().await; // spawn it to do something else meanwhile
+    tracing::info!(sent = handle.progress().sent, "spring sale sent");
+    Ok(report) // per recipient: Sent, Failed (may_have_been_sent?) or Skipped
 }
 
 /// The bot is an `EventSink`: behind the webhook handler, with dedup so
@@ -228,7 +259,8 @@ pub async fn bot_in_the_inbox(
 #[cfg(test)]
 mod tests {
     use meta_whatsapp_rs::adapters::store::{MemoryConversationStore, MemoryKvStore};
-    use meta_whatsapp_rs::core::clock::ManualClock;
+    use meta_whatsapp_rs::bot::{Ended, Outcome};
+    use meta_whatsapp_rs::core::clock::{Clock, ManualClock};
     use meta_whatsapp_rs::core::testing::ScriptedTransport;
     use meta_whatsapp_rs::webhooks::WebhookPayload;
     use serde_json::json;
@@ -265,6 +297,11 @@ mod tests {
             .remove(0)
     }
 
+    /// The shared pacer on a fake clock: nothing waits for real.
+    fn pacer(clock: &ManualClock) -> Pacer {
+        shared_pacer("999".into()).with_timer(clock.clone())
+    }
+
     fn sent() -> serde_json::Value {
         json!({"messaging_product": "whatsapp", "contacts": [],
             "messages": [{"id": "wamid.REPLY"}]})
@@ -275,11 +312,22 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"success": true})); // read receipt + typing
         t.push_json(200, sent());
-        let bot = build_bot(client(&t), Arc::new(MemoryKvStore::new()), NUMBER.into())
-            .await
-            .unwrap();
+        let clock = ManualClock::new(OffsetDateTime::UNIX_EPOCH);
+        let bot = build_bot(
+            client(&t),
+            Arc::new(MemoryKvStore::new()),
+            NUMBER.into(),
+            pacer(&clock),
+        )
+        .await
+        .unwrap();
 
         bot.deliver(text("!S 1234")).await.unwrap();
+        // The reply waited one slot after the read receipt: 80 a second.
+        assert_eq!(
+            clock.now() - OffsetDateTime::UNIX_EPOCH,
+            time::Duration::microseconds(12_500)
+        );
 
         let reply = t.last_request().unwrap();
         assert_eq!(reply.path(), format!("/v25.0/{NUMBER}/messages"));
@@ -300,9 +348,15 @@ mod tests {
     #[tokio::test]
     async fn the_help_and_the_menu_leave_hidden_commands_out() {
         let t = ScriptedTransport::new();
-        let bot = build_bot(client(&t), Arc::new(MemoryKvStore::new()), NUMBER.into())
-            .await
-            .unwrap();
+        let clock = ManualClock::new(OffsetDateTime::UNIX_EPOCH);
+        let bot = build_bot(
+            client(&t),
+            Arc::new(MemoryKvStore::new()),
+            NUMBER.into(),
+            pacer(&clock),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             bot.help(),
             "*Orders*\n/status, /s <order number> — Where is my order?\n\n\
@@ -355,5 +409,46 @@ mod tests {
         assert_eq!(texts.len(), 2, "{texts:?}");
         assert!(texts.contains(&"/status 1234"));
         assert!(texts.contains(&"*Order 1234* has shipped."));
+    }
+
+    /// Each customer gets the template with its callback data, one slot
+    /// apart on the number's pacer.
+    #[tokio::test]
+    async fn the_sale_is_paced_and_reported_per_customer() {
+        let t = ScriptedTransport::new();
+        t.push_json(200, sent());
+        t.push_json(200, sent());
+        let clock = ManualClock::new(OffsetDateTime::UNIX_EPOCH);
+        let customers = vec![Recipient::user(USER), Recipient::phone("+16505551234")];
+
+        let report = spring_sale(client(&t), pacer(&clock), NUMBER.into(), customers)
+            .await
+            .unwrap();
+
+        assert_eq!(report.ended, Ended::Completed);
+        assert!(
+            report
+                .recipients
+                .iter()
+                .all(|r| matches!(r.outcome, Outcome::Sent(_)))
+        );
+        let requests = t.requests();
+        assert_eq!(requests[1].path(), format!("/v25.0/{NUMBER}/messages"));
+        assert_eq!(
+            requests[1].json(),
+            Some(json!({
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "to": "+16505551234",
+                "biz_opaque_callback_data": "spring-sale",
+                "type": "template",
+                "template": {"name": "spring_sale", "language": {"code": "en_US"}}
+            }))
+        );
+        assert_eq!(t.remaining(), 0);
+        assert_eq!(
+            clock.now() - OffsetDateTime::UNIX_EPOCH,
+            time::Duration::microseconds(12_500)
+        );
     }
 }

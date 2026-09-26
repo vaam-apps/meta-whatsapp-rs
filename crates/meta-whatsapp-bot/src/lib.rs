@@ -1,6 +1,7 @@
 //! A bot framework over WhatsApp Cloud API webhooks: commands with
 //! prefixes, aliases, guards, cooldowns and a generated help, middleware,
-//! compile-time plugins, and Markdown replies in WhatsApp formatting.
+//! compile-time plugins, Markdown replies in WhatsApp formatting, and
+//! paced broadcasts ([`broadcast`], [`pacer`]).
 //!
 //! Each event goes through these steps, in this order:
 //!
@@ -33,6 +34,9 @@
 //! | how Markdown becomes messages | [`MarkdownRenderer`] | [`markdown::Renderer`] |
 //! | how Markdown text is escaped | [`markdown::Escape`] | [`markdown::NoEscape`] (text as written; [`markdown::WordJoinerEscape`] opt-in) |
 //! | how the help reads | [`HelpFormatter`] | [`CategoryHelp`] (name, description and category configurable) |
+//! | how fast each business number sends (broadcasts; replies and read receipts with [`BotBuilder::pacer`]) | [`RateLimiter`] | [`TokenBucket`] (80 a second per number, in this process) |
+//! | what "now" is for the pacer, and how it waits | [`Timer`] | `SystemClock` (Tokio's sleep) |
+//! | what a failed broadcast send becomes | [`BroadcastPolicy`] | [`Backoff`] |
 //!
 //! Each of these traits also has an `Arc<T>` implementation, so one
 //! instance serves several bots (handlers and plugins are registered by
@@ -49,7 +53,8 @@
 //! Plugins are compiled in: there is no hot reload (see [`plugin`]).
 //! The async extension points ([`Outbound`], [`Middleware`], [`Plugin`],
 //! [`AccessPolicy`], [`Cooldowns`], [`Refusals`], [`ErrorHandler`],
-//! [`CommandHandler`]) are `#[async_trait]` traits; the attribute is
+//! [`CommandHandler`], [`RateLimiter`], [`Timer`]) are `#[async_trait]`
+//! traits; the attribute is
 //! re-exported as [`async_trait`](macro@async_trait), so no second
 //! dependency is needed.
 //!
@@ -78,9 +83,13 @@
 //! # let _ = bot; Ok(()) }
 //! ```
 //!
-//! Not here (yet): paced broadcasts and scheduling.
+//! A [`Broadcast`] sends one message to many recipients from one number,
+//! paced by a [`Pacer`] shared with the bot, and reports on each (see
+//! [`broadcast`]). Not here (yet): scheduling, and broadcasts that survive
+//! a restart (roadmap B3).
 
 pub mod bot;
+pub mod broadcast;
 pub mod command;
 pub mod ctx;
 pub mod errors;
@@ -89,6 +98,7 @@ pub mod help;
 pub mod markdown;
 pub mod middleware;
 pub mod outbound;
+pub mod pacer;
 pub mod parse;
 pub mod plugin;
 
@@ -97,6 +107,10 @@ pub mod plugin;
 /// `async-trait` crate.
 pub use async_trait::async_trait;
 pub use bot::{Bot, BotBuilder, PluginInfo};
+pub use broadcast::{
+    Backoff, Broadcast, BroadcastBuilder, BroadcastHandle, BroadcastPolicy, BroadcastReport, Ended,
+    Outcome, Progress, RecipientReport, Verdict,
+};
 pub use command::{Args, Command, CommandHandler, CommandInfo, Invocation, Scope, Trigger};
 pub use ctx::{BotSender, Chat, Ctx};
 pub use errors::{ErrorHandler, LogErrors, PropagateErrors};
@@ -108,5 +122,6 @@ pub use help::{CategoryHelp, HelpFormatter, HelpSection};
 pub use markdown::MarkdownRenderer;
 pub use middleware::{Logging, MarkRead, Middleware, Next};
 pub use outbound::{ClientOutbound, Outbound};
+pub use pacer::{PacedOutbound, Pacer, Rate, RateLimiter, Timer, TokenBucket};
 pub use parse::{CommandParser, ParsedCommand, PrefixParser};
 pub use plugin::{DEFAULT_CATEGORY, Listen, Plugin, Registrar};

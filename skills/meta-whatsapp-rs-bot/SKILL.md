@@ -1,25 +1,23 @@
 ---
 name: meta-whatsapp-rs-bot
-description: "A WhatsApp bot on Cloud API webhooks with meta-whatsapp-rs (feature bot) - commands with prefixes, aliases, usage hints and quoted arguments, image and video captions, reply buttons and list rows as commands, an unknown-command hook, private-only, group-only and owner-only guards, a banned list, per-user cooldowns on the KvStore, middleware such as logging and read receipts with a typing indicator, one plugin per feature compiled in (no hot reload), a generated help grouped by category, Meta's slash-command menu, reactions, Markdown replies converted to WhatsApp formatting and split at 4096 characters, and replies recorded in the CMS inbox. Load when building a chatbot, command handlers, an auto-responder or a help menu on WhatsApp in Rust, or when replying with Markdown or LLM output."
+description: "A WhatsApp bot on Cloud API webhooks with meta-whatsapp-rs (feature bot) - commands with prefixes, aliases, usage hints and quoted arguments, image and video captions, reply buttons and list rows as commands, an unknown-command hook, private-only, group-only and owner-only guards, a banned list, per-user cooldowns on the KvStore, middleware such as logging and read receipts with a typing indicator, one plugin per feature compiled in (no hot reload), a generated help grouped by category, Meta's slash-command menu, reactions, Markdown replies converted to WhatsApp formatting and split at 4096 characters, replies recorded in the CMS inbox, and paced broadcasts (a per-number rate under Meta's throughput, progress and cancel, retries only when nothing may have gone out, the pair and per-user marketing limits). Load when building a chatbot, command handlers, an auto-responder, a help menu or a campaign send to many users on WhatsApp in Rust, or when replying with Markdown or LLM output."
 ---
 
 # meta-whatsapp-rs-bot
 
 > **Verified against meta-whatsapp-rs 34beecb2720bac099d769ba1b5e91072d2d5eb36 (2026-09-26).** On another revision, trust the code over this page.
 
-Reference code: [examples/bot.rs](examples/bot.rs), compiled and tested
-by meta-whatsapp-rs's own gate. Everything is in `meta_whatsapp_rs::bot`
-(feature `bot`, off by default; `full` includes it), `async_trait` too.
+Reference code: [examples/bot.rs](examples/bot.rs), compiled and tested by the gate. All in
+`meta_whatsapp_rs::bot` (feature `bot`, off by default; `full` includes it), `async_trait` too.
 
 ## When to use
 
-For a number that answers commands, taps and free text. Per event: (1) a
-banned sender's message stops, nothing below runs; (2) the match, a `/name args`
-(or image or video caption; off: `BotBuilder::commands_from_captions(false)`) or a
-tapped button or list row whose id is a payload, sets `Ctx::invocation` (unknown:
-`Ctx::unknown_command`); (3) middleware, which see the match; (4) the command's
-guards (scope, owner, cooldown) and handler, else `BotBuilder::unknown_command`'s
-handler, else the listeners. (Zaileys: middleware after guards, commands only.)
+For a number that answers commands, taps and free text, and sends to many. Per event: (1) a
+banned sender's message stops, nothing below runs; (2) the match, a `/name args` (or image or
+video caption; off: `BotBuilder::commands_from_captions(false)`) or a tapped button or list row
+whose id is a payload, sets `Ctx::invocation` (unknown: `Ctx::unknown_command`); (3) middleware,
+which see the match; (4) the command's guards (scope, owner, cooldown) and handler, else
+`BotBuilder::unknown_command`'s handler, else the listeners. (Zaileys: middleware after guards.)
 
 ## A plugin per feature
 
@@ -46,20 +44,17 @@ async fn setup(&self, registrar: &mut Registrar) -> meta_whatsapp_rs::Result<()>
 }
 ```
 
-- `Plugin` needs `Debug`; `Plugin::category` returns `Some("Orders")`
-  (`None`: `BotBuilder::default_category`).
-- Names match as the parser gives them: `PrefixParser` ignores case
-  (`PrefixParser::ignore_case` with `false` keeps it). `Args` keeps
-  `"quoted strings"` whole. `Command::metadata` is yours alone.
-- `BotSender::key` is the BSUID first: list owners and bans by BSUID
-  (`AccessList::owner`, `AccessList::ban`); a phone-only ban misses users
-  without a number.
+- `Plugin` needs `Debug`; `Plugin::category`: `Some("Orders")` (`None`: `BotBuilder::default_category`).
+  `PrefixParser` ignores case (`PrefixParser::ignore_case`); `Args` keeps `"quoted strings"` whole.
+- `BotSender::key` is the BSUID first: list owners and bans by BSUID (`AccessList::owner`,
+  `AccessList::ban`); a phone-only ban misses users without a number.
 
 ## Build it
 
 ```rust
 Bot::builder()
     .client(client) // replies go out with this client's token
+    .pacer(pacer) // replies and read receipts share the number's budget with broadcasts
     .prefixes(["/", "!"]) // `/` is what Meta's command menu sends
     .access(AccessList::new().owner("US.13491208655302741918")) // BSUIDs, not phone numbers
     .cooldown_store(kv, Arc::new(SystemClock)) // shared by every instance on the store
@@ -73,15 +68,12 @@ Bot::builder()
     .await
 ```
 
-A cooldown without a store, a name taken twice or a `Listen::Event` kind
-not in `WebhookEvent::KINDS` fails `build`. A running cooldown is told
-once per period (store namespace `wa.bot.cooldown`, keys hashed).
-
-Traits with defaults: `Outbound` (`ClientOutbound`), `CommandParser`,
-`AccessPolicy`, `Cooldowns`, `Refusals` (`ReplyRefusals`: silent for bans
-and non-owners), `ErrorHandler` (`LogErrors`), `MarkdownRenderer`,
-`HelpFormatter`. `Ctx::reply` answers the group, else the BSUID, else
-`+<wa_id>`, quoting; to do otherwise, `Ctx::send` a message you build.
+A cooldown without a store, a name taken twice or a `Listen::Event` kind not in
+`WebhookEvent::KINDS` fails `build`. A running cooldown is told once per period (store namespace
+`wa.bot.cooldown`, keys hashed). Traits with defaults: `Outbound` (`ClientOutbound`),
+`CommandParser`, `AccessPolicy`, `Cooldowns`, `Refusals` (`ReplyRefusals`: silent for bans and
+non-owners), `ErrorHandler` (`LogErrors`), `MarkdownRenderer`, `HelpFormatter`. `Ctx::reply`
+answers the group, else the BSUID, else `+<wa_id>`, quoting; else `Ctx::send` your own message.
 
 ## Middleware
 
@@ -98,8 +90,8 @@ impl Middleware for OnlyOurNumber {
 }
 ```
 
-`ctx.insert(value)` hands a value on (`ctx.get::<T>()`); the
-`ErrorHandler` gets the context from before the middleware, without it.
+`ctx.insert(value)` hands a value on (`ctx.get::<T>()`); the `ErrorHandler` gets the context
+from before the middleware, without it.
 
 ## Behind the webhook
 
@@ -110,25 +102,35 @@ let handler = WebhookHandler::builder(verifier, verify_token, Arc::new(bot))
     .build();
 ```
 
-`LogErrors` logs a failure (kinds only) and acknowledges it, since an
-error makes Meta redeliver the batch and repeat its replies; a transient
-failure is lost with it (`PropagateErrors` redelivers). CMS:
-`InboxOutbound` and `InboxThenBot` (example) put replies in the inbox's
-history: record first, then the bot (a `FanoutSink` runs both at once).
+`LogErrors` logs a failure (kinds only) and acknowledges it, since an error makes Meta
+redeliver the batch and repeat its replies; a transient failure is lost with it
+(`PropagateErrors` redelivers). CMS: `InboxOutbound` and `InboxThenBot` (example) put
+replies in the inbox's history: record first, then the bot (a `FanoutSink` runs both at once).
 
-## Help and Meta's command menu
-
-`BotBuilder::help_command_with` sets the name, description and
-`HelpFormatter`; in a handler, `Ctx::commands` and `Ctx::help_sections`.
-The menu is the visible commands (`Command::menu` with `false` keeps one
-out), under the client's limits; one without a description fails:
+## Paced broadcast
 
 ```rust
-bot.sync_command_menu(client, number).await // at most 30 commands, each with a description
+let broadcast = Broadcast::builder(number)
+    .to(customers)
+    .compose(|to: &Recipient| {
+        let template = TemplateMessage::new("spring_sale", "en_US"); // outside the 24-hour window
+        Ok(OutboundMessage::template(to.clone(), template).callback_data("spring-sale"))
+    })
+    .client(client)
+    .pacer(pacer) // the same one as the bot's: one budget per number
+    .build()?;
+let handle = broadcast.handle(); // progress() and cancel(), from another task
+let report = broadcast.run().await; // spawn it to do something else meanwhile
 ```
 
-## Markdown replies
+A send that may have gone out (a timeout, a 5xx) is never resent, whatever the
+`BroadcastPolicy`. Rates, Meta's limits, replicas, tests: [references/broadcast.md](references/broadcast.md).
 
+## Help, menu and Markdown
+
+`BotBuilder::help_command_with` sets the help's name, description and `HelpFormatter`
+(`Ctx::commands`, `Ctx::help_sections` in a handler). `Bot::sync_command_menu` sends the
+visible commands (`Command::menu` with `false` keeps one out), at most 30, each described.
 `ctx.reply_markdown(md)` renders with the bot's `MarkdownRenderer` (`Renderer` unless
 `BotBuilder::markdown` sets another): `*b*`, `_i_`, `~s~`, code, quotes, `•` lists,
 `text (url)` (web, mail, phone); emphasis inside a word loses its markers. Tables: padded
@@ -138,18 +140,16 @@ cut between blocks. Text is left as written (`NoEscape`); `WordJoinerEscape` is 
 
 ## Pitfalls
 
-- **Plugins are compiled in**: ship one as a crate; `Bot::unload` runs
-  every `on_unload`, then events fail with `SinkError::Closed`.
-- A menu tap sends `/name`: keep `/` among the prefixes.
-- `MarkRead::with_typing_indicator` shows "typing…" for every message;
-  replies are free-form, refused outside the 24-hour window.
-- Test a handler alone: `Ctx::new` plus `Ctx::with_invocation`
-  (`Invocation::new`), with an `Outbound` that records.
+- **Plugins are compiled in** (ship one as a crate); `Bot::unload` runs every
+  `on_unload`, then events fail with `SinkError::Closed`. A menu tap sends `/name`.
+- `MarkRead::with_typing_indicator` shows "typing…" for every message; replies are free-form,
+  refused outside the 24-hour window. Test a handler alone: `Ctx::new` plus
+  `Ctx::with_invocation` (`Invocation::new`), with an `Outbound` that records.
 
 ## What meta-whatsapp-rs does not do
 
-- No paced broadcast or scheduling (planned), no subcommands or `--flags`,
-  no conversation state: keep it in your store, keyed by `BotSender::key`.
+- No scheduling or restart-proof broadcast (planned), subcommands, `--flags` or
+  conversation state: keep state in your store, keyed by `BotSender::key`.
 - Per-tenant tokens: implement `Outbound` (`meta-whatsapp-rs-token-vault`).
 - Guide: [docs/guides/bots.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/bots.md).
 

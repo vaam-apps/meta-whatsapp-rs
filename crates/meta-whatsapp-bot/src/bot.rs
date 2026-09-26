@@ -29,6 +29,7 @@ use crate::help::{Catalog, CategoryHelp, HelpFormatter, HelpSection};
 use crate::markdown::{MarkdownRenderer, Renderer, TEXT_MAX_CHARS, split};
 use crate::middleware::{Middleware, Next};
 use crate::outbound::{ClientOutbound, Outbound};
+use crate::pacer::{PacedOutbound, Pacer};
 use crate::parse::{CommandParser, ParsedCommand, PrefixParser};
 use crate::plugin::{DEFAULT_CATEGORY, Listen, Plugin, Registered, Registrar};
 
@@ -484,6 +485,7 @@ enum Step {
 #[must_use]
 pub struct BotBuilder {
     outbound: Option<Arc<dyn Outbound>>,
+    pacer: Option<Pacer>,
     parser: Arc<dyn CommandParser>,
     access: Arc<dyn AccessPolicy>,
     cooldowns: Option<Arc<dyn Cooldowns>>,
@@ -518,6 +520,7 @@ impl BotBuilder {
     pub fn new() -> Self {
         Self {
             outbound: None,
+            pacer: None,
             parser: Arc::new(PrefixParser::default()),
             access: Arc::new(AccessList::new()),
             cooldowns: None,
@@ -546,6 +549,18 @@ impl BotBuilder {
     /// Send with `client` ([`ClientOutbound`]).
     pub fn client(self, client: Client) -> Self {
         self.outbound(ClientOutbound::new(client))
+    }
+
+    /// Pace everything the bot sends through `pacer`: its outbound is put
+    /// in a [`PacedOutbound`] at `build`, so each reply, refusal, read
+    /// receipt and typing indicator (`MarkRead`) first waits for a slot of
+    /// its business number, in the budget its broadcasts share (give them
+    /// the same `Pacer`). Off by default: a reply then waits only for
+    /// the client. A busy number delays replies by its queue (a
+    /// broadcast holds at most its concurrency in slots ahead).
+    pub fn pacer(mut self, pacer: Pacer) -> Self {
+        self.pacer = Some(pacer);
+        self
     }
 
     /// Read commands with `parser` ([`CommandParser`]).
@@ -684,9 +699,12 @@ impl BotBuilder {
     /// plugins of one name, or no outbound is a `ConfigError`; a failed
     /// `setup` is its error in the step `"plugin_setup"`.
     pub async fn build(self) -> Result<Bot> {
-        let outbound = self
+        let mut outbound = self
             .outbound
             .ok_or_else(|| ConfigError::new("a bot needs an outbound (`BotBuilder::client`)"))?;
+        if let Some(pacer) = self.pacer {
+            outbound = Arc::new(PacedOutbound::shared(outbound, pacer));
+        }
         let default_category = self.default_category;
         let mut registrar = Registrar::new(&default_category, None, false);
         let mut plugins: Vec<(PluginInfo, Arc<dyn Plugin>)> = Vec::new();
