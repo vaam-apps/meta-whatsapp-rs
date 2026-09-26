@@ -1302,6 +1302,10 @@ mod tests {
             Recipient::user("US.2"),              // 9
         ];
         assert_eq!(duplicates(&list), [(1, 0), (3, 2), (4, 2), (6, 5)]);
+        // Numbers without a digit (Meta refuses them) are compared as
+        // written, not all taken for one empty number.
+        let digitless = [Recipient::phone("abc"), Recipient::phone("xyz")];
+        assert_eq!(duplicates(&digitless), []);
     }
 
     /// The run's time never steps back: a retry due in 1 s stays 1 s away
