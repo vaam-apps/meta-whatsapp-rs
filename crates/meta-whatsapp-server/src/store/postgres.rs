@@ -895,6 +895,8 @@ pub struct PgBackend {
     pool: PgPool,
     store: Arc<PgStore>,
     outbox: Arc<PgEventStore>,
+    kv: Arc<PostgresKvStore>,
+    conversations: Arc<PostgresConversationStore>,
 }
 
 impl std::fmt::Debug for PgBackend {
@@ -911,6 +913,8 @@ impl PgBackend {
         Self {
             store: Arc::new(PgStore::new(pool.clone())),
             outbox: Arc::new(PgEventStore::new(pool.clone())),
+            kv: Arc::new(PostgresKvStore::new(pool.clone())),
+            conversations: Arc::new(PostgresConversationStore::new(pool.clone())),
             pool,
         }
     }
@@ -947,11 +951,11 @@ impl Backend for PgBackend {
     }
 
     fn kv(&self) -> Arc<dyn KvStore> {
-        Arc::new(PostgresKvStore::new(self.pool.clone()))
+        self.kv.clone()
     }
 
     fn conversations(&self) -> Arc<dyn ConversationStore> {
-        Arc::new(PostgresConversationStore::new(self.pool.clone()))
+        self.conversations.clone()
     }
 
     async fn close(&self) {
