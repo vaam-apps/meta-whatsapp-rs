@@ -160,15 +160,16 @@ volumes (Claude config, shell history, cargo caches) start empty
   recorded again, until that secret is rotated. Deleting a tenant
   deletes its events (a coordinator's decision touching the open
   retention decision D10: design D22) and takes it out of every platform
-  key's allowed tenants (design D24: a tenant created again under the id
-  needs a new platform key). Event `data` is
+  key's allowed tenants (a coordinator's decision, reversible: design
+  D24; a tenant created again under the id needs a new platform key).
+  Event `data` is
   the library's `WebhookEvent` JSON, pinned by snapshots over every
   Meta example among the library's fixtures (PR #17's conformance
   fixtures included; a new fixture directory is walked too). Metrics for deliveries, events by type and audience,
   duplicates and failures. Skill: `meta-whatsapp-rs-server-events`. The
   OpenAPI document now declares the `429` of every rate-limited route
-  (M1b's numbers, profile and WABA routes lacked it: additive), and a
-  test holds every tenant route to it.
+  (M1a's numbers, profile and WABA routes, PR #11, lacked it: additive),
+  and a test holds every tenant route to it.
 - **Webhook conformance sweep**: every example payload on every page of
   Meta's WhatsApp docs that prints a webhook body (88 pages: the
   `webhooks/reference/*` pages, and the calling, groups, flows,

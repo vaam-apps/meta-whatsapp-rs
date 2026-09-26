@@ -32,9 +32,12 @@ metadata:
      snapshot is fine; a **changed existing snapshot is a v1 API
      change**, where only additions are allowed: stop and raise it.
    - A new `WebhookEvent::kind` (the test text-parses it in
-     `src/event.rs`): classify it in `TENANT_EVENT_TYPES` (tenants receive
-     it) or `OPERATOR_EVENT_TYPES` (operator-only) in
-     `crates/meta-whatsapp-server/src/events.rs`. A tenant type changes the
+     `src/event.rs`): classify it in `OPERATOR_EVENT_TYPES` (operator-only)
+     in `crates/meta-whatsapp-server/src/events.rs`, the design's rule for
+     a type the service has not reviewed for tenants
+     (`docs/design/server.md` § 2.3); `TENANT_EVENT_TYPES` (tenants receive
+     it) only once that review is done, as its own change. Promoting a
+     type later is additive, the reverse is not. A tenant type changes the
      `KnownEventType` schema: regenerate the document with
      `cargo run -p meta-whatsapp-server -- openapi > crates/meta-whatsapp-server/openapi/v1.json`.
      Make `meta_time` in the same file return the date Meta gives the
