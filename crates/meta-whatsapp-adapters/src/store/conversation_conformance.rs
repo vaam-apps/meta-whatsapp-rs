@@ -2843,9 +2843,18 @@ async fn an_erasure_redacts_or_deletes_the_persons_group_messages<S: Conversatio
     );
     let theirs = from(&other, &other.key("HBgGROUP1"), "x", 4, Some("US.9"));
     assert!(store.append(theirs.clone()).await.unwrap());
-    // Another number's conversation of the same group id.
-    let theirs_summary = summary(store, &other.key("HBgGROUP1")).await;
-    assert!(theirs_summary.is_some());
+    // Another number's conversations of the same group ids.
+    let theirs_quiet = StoredMessage {
+        payload: serde_json::json!({"from": "16505550002", "from_user_id": "US.2",
+            "group_id": quiet.contact, "type": "text", "text": {"body": "hi"}}),
+        ..other.msg(&quiet.contact, "q", Direction::Inbound, 1, "hi")
+    };
+    assert!(store.append(theirs_quiet).await.unwrap());
+    let theirs_summaries = [
+        summary(store, &other.key("HBgGROUP1")).await,
+        summary(store, &other.key("HBgGROUP2")).await,
+    ];
+    assert!(theirs_summaries.iter().all(Option::is_some));
     let history = store.messages(&group, None, 10).await.unwrap();
     let group_summary = summary(store, &group).await.unwrap();
     let quiet_summary = summary(store, &quiet).await.unwrap();
@@ -2953,9 +2962,12 @@ async fn an_erasure_redacts_or_deletes_the_persons_group_messages<S: Conversatio
         "the same person in another number's group stays"
     );
     assert_eq!(
-        summary(store, &other.key("HBgGROUP1")).await,
-        theirs_summary,
-        "and so does that group's summary"
+        [
+            summary(store, &other.key("HBgGROUP1")).await,
+            summary(store, &other.key("HBgGROUP2")).await,
+        ],
+        theirs_summaries,
+        "and so do the summaries of that number's groups"
     );
     assert!(
         store
