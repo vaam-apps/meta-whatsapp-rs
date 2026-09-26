@@ -87,8 +87,9 @@ const MAX_STATUS_ROUNDS: usize = 16;
 ///
 /// Retention is kept by default; [`with_retention`](Self::with_retention)
 /// sets what [`ConversationStore::apply_retention`] purges. Nothing purges
-/// on its own: schedule `apply_retention` (one replica at a time is
-/// enough; concurrent runs are safe).
+/// on its own: schedule `apply_retention` from one replica at a time. Two
+/// runs at once lose nothing, but may deadlock, and Postgres then fails
+/// one of them with an error: run it again.
 #[derive(Clone)]
 pub struct PostgresConversationStore {
     pool: PgPool,

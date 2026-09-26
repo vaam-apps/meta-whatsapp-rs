@@ -298,8 +298,9 @@ obligations' call (design D10).
 History is kept by default. `with_retention(Retention::days(90))` on
 `PostgresConversationStore` (or `MemoryConversationStore`) sets the
 store's retention, which `ConversationStore::apply_retention(now)`
-applies: nothing purges on its own, so schedule it (daily is enough;
-concurrent runs are safe). It deletes the messages, window events and
+applies: nothing purges on its own, so schedule it, daily and from one
+replica (two runs at once lose nothing, but one may fail with a
+deadlock error). It deletes the messages, window events and
 ownership records older than the cutoff, and the summary of a
 conversation whose latest message went (it holds that message's
 preview); synced contacts stay. For another policy (per tenant, or a
