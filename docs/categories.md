@@ -6,7 +6,8 @@ meta-whatsapp-rs implements in each: in the library, and in the service
 (`meta-whatsapp-server`).
 Verified against `main` at b6fc893 (PR #20) on 2026-09-26, category 40
 again when the bot framework (roadmap B1) landed, category 39 again when
-the service's core was extracted (roadmap S1). The
+the service's core was extracted (roadmap S1), categories 18 and 30
+again with the `ConversationStore` port change (roadmap L5). The
 per-feature detail is in [coverage.md](coverage.md) (the linked rows);
 the capability-level comparison with Zaileys is in [parity.md](parity.md)
 (the rows named); the plan is [roadmap.md](roadmap.md).

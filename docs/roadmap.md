@@ -494,6 +494,15 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     nothing of the person's thread under their phone number, and the
     live sweep of every table fails when the erasure's sender clause
     (their group message) is removed.
+  - **Landed:** row 91 partial in the library (purge by age, retention
+    set per store, erasure of a person on one number; no cap per chat
+    and no bot that deletes on its own: B4). Rows 69, 111 and 139 stay
+    partial: the inbox records what the port now keeps (synced
+    contacts, window events, thread ownership, identity links) in L7
+    and L8, and there is no Redis or SQLite store (L8) nor thread
+    control API (L15). OPEN_QUESTIONS #33 stays open. The erasure's
+    defaults and stored names wait for the owner before the first
+    release ([§ Owner touchpoints](#owner-touchpoints)).
 - [ ] **L7. Window events and thread ownership in the inbox**
   (`meta_whatsapp_rs::inbox`; OPEN_QUESTIONS #32, #44; rows 119, 139):
   `InboxSink` records the calls that reopen the 24-hour window and

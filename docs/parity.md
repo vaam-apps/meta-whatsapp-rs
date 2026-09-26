@@ -4,7 +4,8 @@ Verified against `main` at b6fc893 (PR #20) on 2026-09-26; rows 17,
 19 and 84–88 again when the bot framework (roadmap B1) landed, against
 its code; the service's cells of rows 5, 6, 9, 33, 84, 91, 112 and 113
 again when its core was extracted (roadmap S1), against the core's
-code. Every cell about us was checked against the code: a cell that
+code; rows 69, 91, 111 and 139 again with the `ConversationStore` port
+change (roadmap L5), against its code. Every cell about us was checked against the code: a cell that
 says a thing is done names the symbol that does it, and what the service
 (`meta-whatsapp-server`) does is read from its routes, not from its
 design. The plan to close the gaps is [roadmap.md](roadmap.md); the Meta
