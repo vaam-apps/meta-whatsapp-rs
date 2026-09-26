@@ -73,7 +73,10 @@ A public API change is not done until these agree with it:
 - rustdoc (every public item; module docs name the Meta pages implemented),
 - `docs/architecture.md` and `docs/coverage.md`,
 - `docs/parity.md`: the capability's row, updated in the same PR (and its
-  category in `docs/categories.md` when that moves),
+  category in `docs/categories.md` when that moves, and its item in
+  `docs/roadmap.md` ticked); `crates/meta-whatsapp-rs/tests/docs_tables.rs`
+  checks that the tables agree with each other and that the symbols
+  they cite exist, not that they are true,
 - the consumer skills in `skills/` (they instruct other repos' coding
   agents — a stale skill generates wrong code at scale). Re-stamp every
   skill you verified with `Verified against meta-whatsapp-rs <full sha> (<date>)`.

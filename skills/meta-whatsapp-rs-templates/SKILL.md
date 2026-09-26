@@ -124,7 +124,7 @@ while let Some(template) = stream.next().await {
 - Product-card carousels: the code allows 2–10 cards where Meta's page
   says "exactly two"
   ([OPEN_QUESTIONS.md #22](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#product-details),
-  decided on 2026-09-26: creation will check exactly two, roadmap L20).
+  decided on 2026-09-26: creation will check exactly two, roadmap L20e).
 
 ## Related skills
 

@@ -141,7 +141,7 @@ until the pull request that made U+0000 lossless (PR #7, 2026-09-25).
 - No built-in Redis TLS yet
   ([OPEN_QUESTIONS.md #19](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#storage),
   decided on 2026-09-26: `rediss://` with an explicit provider, roadmap
-  L21),
+  L21c),
   no Redis `ConversationStore`, no backups or retention policy for inbox
   history.
 - Message ids are unique per store, not per business number

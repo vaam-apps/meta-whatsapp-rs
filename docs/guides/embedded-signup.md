@@ -713,13 +713,13 @@ share, and to keep marking a business on offboarding, all above):
 | # | Question | Today | Decided |
 | --- | --- | --- | --- |
 | 4 | Two-step PIN policy | you pass a 6-digit PIN on every `onboard`/`resume`; nothing generates or stores it (the example asks the merchant each time) | keep it so |
-| 5 | Multi-WABA signups | only the claimed (or first, or newest granted) WABA is onboarded | the default stays; every granted WABA as an option (roadmap L11) |
+| 5 | Multi-WABA signups | only the claimed (or first, or newest granted) WABA is onboarded | the default stays; every granted WABA as an option (roadmap L11b) |
 | 6 | One WABA shared by several tenants | the vault is keyed by WABA; the last onboarding wins unless your `onboard_with_approval` refuses it (required for a Solution Partner, whose approval is recorded; the policy is still yours) | keep it so: no tenant policy in the library |
-| 7 | Coexistence sync | flagged by `needs_coexistence_sync()`, not triggered | automatic after a coexistence onboarding, with an option to turn it off (roadmap L11) |
-| 8 | Token expiry and refresh | expiry recorded, nothing refreshes | no refresh; the expiry surfaced before it lapses (roadmap L11) |
+| 7 | Coexistence sync | flagged by `needs_coexistence_sync()`, not triggered | automatic after a coexistence onboarding, with an option to turn it off (roadmap L11d) |
+| 8 | Token expiry and refresh | expiry recorded, nothing refreshes | no refresh; the expiry surfaced before it lapses (roadmap L11e) |
 | 9 | Vault key custody and rotation cadence | you supply keys; rotation supported, not scheduled | custody yours; rotation on demand, at least yearly |
 | 10 | Resuming after a restart | needs a placeholder code (above) | a code-less constructor (roadmap L4) |
-| 11 | App-only install, Hosted Embedded Signup | not integrated | integrate both, opt-in (roadmap L11) |
+| 11 | App-only install, Hosted Embedded Signup | not integrated | integrate both, opt-in (roadmap L11a) |
 | 12 | Pre-fill shape | follows Meta's worked example; confirm in the Integration Helper | keep the worked example's shape |
 
 ## Not handled

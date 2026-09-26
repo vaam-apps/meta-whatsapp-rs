@@ -138,5 +138,9 @@ metadata:
    list: the cursor reaches the query (`req.query("after")`), and the
    stream follows two pages and refuses a caller's cursor.
 7. **Docs**: rustdoc on every public item; module doc lists the Meta
-   paths. Update `docs/coverage.md`.
+   paths. Update `docs/coverage.md`, the capability's row in
+   `docs/parity.md` (the symbol that now does it, and its status), its
+   category in `docs/categories.md` when that moves, and tick the
+   `docs/roadmap.md` item, in the same PR (`just test` runs
+   `tests/docs_tables.rs` over them).
 8. `just ci`.

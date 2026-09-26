@@ -120,7 +120,7 @@ is gone).
   Embedded Signup again
   ([OPEN_QUESTIONS.md #8](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants),
   decided on 2026-09-26: no refresh; the expiry is to be surfaced before
-  it lapses, roadmap L11).
+  it lapses, roadmap L11e).
 - No key custody or rotation schedule: custody stays yours, rotation on
   demand, at least yearly (#9, decided); and no tenant mapping: one WABA
   shared by two of your tenants is your product's call (#6, decided:

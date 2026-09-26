@@ -140,7 +140,7 @@ pub fn after_failed_send(e: &Error) -> Resend {
 - Webhook sink errors fail the whole batch; dead-lettering was decided
   on 2026-09-26 and is not built yet
   ([OPEN_QUESTIONS.md #30](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#webhooks-and-live-updates),
-  roadmap L21).
+  roadmap L21a).
 
 ## Related skills
 

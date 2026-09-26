@@ -263,7 +263,7 @@ events.addEventListener('lagged', () => reloadHistory()); // the browser fell be
   it, multi-megabyte history syncs included: fine for a handful of open
   inboxes, a cost to measure with many
   ([decided](../../OPEN_QUESTIONS.md#webhooks-and-live-updates) 31: shared
-  events instead of clones, roadmap L21, not built yet).
+  events instead of clones, roadmap L21b, not built yet).
 - The two sinks run concurrently: a live event can reach the browser before
   the store has it. Render the event itself; it carries the whole message.
 - The broadcast channel lives in one process. With several instances, a

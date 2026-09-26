@@ -194,7 +194,7 @@ Rules for every endpoint module:
    `deny_unknown_fields`); enums Meta may extend get a catch-all variant
    so a new value never breaks parsing. Which name and shape all of them
    share, and the `#[non_exhaustive]` policy, were decided on 2026-09-26
-   (`OPEN_QUESTIONS.md` #27, #28) and land with roadmap L20. Until then,
+   (`OPEN_QUESTIONS.md` #27, #28) and land with roadmap L20a and L20b. Until then,
    follow the module you are in, and
    add no new unit `#[serde(other)] Unknown` variants: they drop Meta's
    value, and a type that also derives `Serialize` writes its own name

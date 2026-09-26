@@ -150,7 +150,7 @@ a malformed post spent the attempt. Check everything local first.
   number pools or multi-WABA onboarding; no token refresh (an expired
   token means running the flow again), no PIN policy, no code-less
   `OnboardingRequest` for `resume` after a restart (hence the placeholder
-  code above) ([OPEN_QUESTIONS.md #4–#12](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants), all decided: roadmap L4, L11).
+  code above) ([OPEN_QUESTIONS.md #4–#12](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants), all decided: roadmap L4, L11a–L11e, L25).
 - No tenant model: which of your merchants owns a WABA is your table.
 
 ## Related skills

@@ -71,7 +71,7 @@ connection panic). Enable redis's `tokio-rustls-comp` in your own crate,
 install a provider at startup, and hand the connection to
 `RedisKvStore::new(conn)`; the type's rustdoc shows how
 ([decided](../../OPEN_QUESTIONS.md#storage) 19: `rediss://` with an explicit
-provider, roadmap L21, not built yet).
+provider, roadmap L21c, not built yet).
 
 Every store adapter runs an executable conformance suite; `just test-live`
 runs it against real Postgres and Redis.

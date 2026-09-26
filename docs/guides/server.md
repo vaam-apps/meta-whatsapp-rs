@@ -466,7 +466,11 @@ number, pair and portfolio limits) still apply and answer their own codes
 The whole contract is the OpenAPI document: `GET /v1/openapi.json`, or
 [crates/meta-whatsapp-server/openapi/v1.json](../../crates/meta-whatsapp-server/openapi/v1.json)
 in the repository. Generate TypeScript types from it with
-`npx openapi-typescript`.
+`npx openapi-typescript`. This contract stays: the service's axum API,
+which serves it, is permanent, and remains a deployment's choice after
+the default moves to CrateStack's procedures and generated client
+([roadmap](../roadmap.md) S16, design D26). Swapping the API swaps the
+contract and the client with it.
 
 ## Receiving Meta's webhooks
 
