@@ -13,9 +13,9 @@ use std::time::Duration;
 use common::{Call, Harness, Reply};
 use meta_whatsapp_rs::core::error::TransportError;
 use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode};
-use meta_whatsapp_server::idempotency::{Fingerprint, Success, run};
+use meta_whatsapp_server::idempotency::Fingerprint;
 use meta_whatsapp_server::model::{
-    AllowedTenants, IdempotencyClaim, IdempotencyKey, IdempotencyState, Scope, TenantId,
+    AllowedTenants, IdempotencyClaim, IdempotencyKey, Scope, TenantId,
 };
 use meta_whatsapp_server::state::Settings;
 use pretty_assertions::assert_eq;
@@ -417,51 +417,6 @@ async fn a_running_key_is_in_progress_and_a_lapsed_lease_is_unknown() {
     assert_eq!(body["may_have_been_sent"], true);
     assert_eq!(body["retryable"], false);
     assert!(h.graph.requests().is_empty(), "never a new send");
-}
-
-/// A request dropped before it settled its key (the deadline cut it)
-/// leaves a kept `504 timeout` that may have been sent, not a free key.
-#[tokio::test]
-async fn a_request_cut_before_settling_keeps_a_timeout() {
-    let (h, _) = connected().await;
-    let tenant = TenantId::parse(TENANT).unwrap();
-    let key = IdempotencyKey::parse("k-cut").unwrap();
-    let fingerprint = Fingerprint::json(&Method::POST, "/v1/numbers/1/messages", &json!({}));
-    let never = std::future::pending::<Result<Success, meta_whatsapp_server::error::ApiError>>();
-    let cut = tokio::time::timeout(
-        Duration::from_millis(20),
-        run(&h.state, &tenant, Some(key.clone()), fingerprint, never),
-    )
-    .await;
-    assert!(cut.is_err(), "the request was cut");
-    // The settlement runs on a task of its own.
-    let mut kept = None;
-    for _ in 0..50 {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        let claim = h
-            .store
-            .claim_idempotency_key(
-                &tenant,
-                &key,
-                fingerprint.as_bytes(),
-                "probe",
-                Duration::from_secs(60),
-                Duration::from_secs(3600),
-            )
-            .await
-            .unwrap();
-        if let IdempotencyClaim::Existing(record) = claim
-            && let IdempotencyState::Completed { status, body } = record.state
-        {
-            kept = Some((status, body));
-            break;
-        }
-    }
-    let (status, body) = kept.expect("the cut request's key was settled");
-    assert_eq!(status, 504);
-    let body: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(body["error"]["code"], "timeout");
-    assert_eq!(body["error"]["may_have_been_sent"], true);
 }
 
 #[tokio::test]

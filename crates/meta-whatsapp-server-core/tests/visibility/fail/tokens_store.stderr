@@ -1,0 +1,10 @@
+error[E0624]: method `store` is private
+ --> tests/visibility/fail/tokens_store.rs:6:20
+  |
+6 |     let _ = tokens.store(token).await;
+  |                    ^^^^^ private method
+  |
+ ::: src/authz.rs
+  |
+  |     pub(crate) async fn store(&self, token: &StoredBusinessToken) -> Result<(), Error> {
+  |     ---------------------------------------------------------------------------------- private method defined here

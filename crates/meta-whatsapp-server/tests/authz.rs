@@ -637,6 +637,57 @@ async fn a_token_for_another_waba_is_never_used() {
     assert!(h.graph.requests().is_empty(), "B's token reached Meta");
 }
 
+/// Step 5 for a number marked `disconnected`: `409 number_not_connected`,
+/// though its token is still in the vault, and refused before the vault is
+/// read, as a number marked `reconnect_required` is. Decisive: the
+/// `Disconnected` arm of the number's status in `Authorizer::owned_number`.
+#[tokio::test]
+async fn a_disconnected_number_is_not_connected_before_the_vault() {
+    let h = two_tenants().await;
+    let key = h.tenant_key(A, &[Scope::Numbers]).await;
+    h.store
+        .set_waba_status(&WabaId::new(WABA_A), NumberStatus::Disconnected)
+        .await
+        .unwrap();
+    let before = h.kv.vault_reads();
+    for path in [
+        format!("/v1/numbers/{PN_A}"),
+        format!("/v1/numbers/{PN_A}/profile"),
+    ] {
+        let reply = h.call(Call::get(&path).key(&key)).await;
+        assert_eq!(
+            (reply.status, reply.code().as_str()),
+            (StatusCode::CONFLICT, "number_not_connected"),
+            "{path}: {}",
+            reply.text
+        );
+    }
+    assert_eq!(h.kv.vault_reads(), before, "the vault was read");
+    assert!(h.graph.requests().is_empty(), "A's token reached Meta");
+    // B's number, connected, still reaches Meta with B's token.
+    let b_key = h.tenant_key(B, &[Scope::Numbers]).await;
+    // solution-providers/manage-phone-numbers, as in tests/numbers.rs.
+    h.graph.push_json(
+        200,
+        json!({
+            "id": PN_B,
+            "display_phone_number": "+1 631-555-1111",
+            "verified_name": "John's Cake Shop",
+            "quality_rating": "GREEN",
+            "name_status": "APPROVED",
+            "throughput": {"level": "STANDARD"}
+        }),
+    );
+    let reply = h
+        .call(Call::get(format!("/v1/numbers/{PN_B}")).key(&b_key))
+        .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+    let request = h.graph.last_request().unwrap();
+    assert_eq!(request.path(), format!("/v25.0/{PN_B}"));
+    assert_eq!(request.bearer(), Some("TOKEN-OF-B"));
+    assert_eq!(h.graph.remaining(), 0);
+}
+
 /// One token reaching two tenants' WABAs: the platform's system user
 /// token, attached (`POST /v1/admin/tenants/{id}/wabas`) to a WABA of each.
 async fn one_token_two_tenants() -> Harness {

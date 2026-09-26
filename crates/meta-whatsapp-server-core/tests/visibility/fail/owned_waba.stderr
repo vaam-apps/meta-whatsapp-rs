@@ -1,0 +1,9 @@
+error: cannot construct `OwnedWaba` with struct literal syntax due to private fields
+ --> tests/visibility/fail/owned_waba.rs:7:5
+  |
+7 |     OwnedWaba { waba_id, client }
+  |     ^^^^^^^^^   -------  ------ private field
+  |                 |
+  |                 private field
+  |
+  = note: ...and other private field `issuer` that was not provided

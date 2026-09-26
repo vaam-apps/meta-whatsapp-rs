@@ -14,6 +14,7 @@
 
 use std::fmt;
 
+use meta_whatsapp_rs::core::error::CryptoError;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
@@ -70,12 +71,13 @@ impl fmt::Debug for MintedKey {
 }
 
 impl MintedKey {
-    /// Draw a new key from the operating system's random number generator.
-    pub fn generate() -> Result<Self, getrandom::Error> {
+    /// Draw a new key from the operating system's random number generator;
+    /// [`CryptoError::Rng`] when it fails.
+    pub fn generate() -> Result<Self, CryptoError> {
         let mut id = [0u8; KEY_ID_BYTES];
         let mut secret = [0u8; SECRET_BYTES];
-        getrandom::fill(&mut id)?;
-        getrandom::fill(&mut secret)?;
+        getrandom::fill(&mut id).map_err(|_| CryptoError::Rng)?;
+        getrandom::fill(&mut secret).map_err(|_| CryptoError::Rng)?;
         let key_id = base62(&id, KEY_ID_CHARS);
         let secret = base62(&secret, SECRET_CHARS);
         let digest = digest(&secret);

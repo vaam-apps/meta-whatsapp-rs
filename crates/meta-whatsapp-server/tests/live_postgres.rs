@@ -24,7 +24,8 @@ use meta_whatsapp_rs::webhooks::{Claim, DedupGuard, WebhookPayload};
 use meta_whatsapp_server::model::{AllowedTenants, Scope, TenantId};
 use meta_whatsapp_server::store::events::NewEvent;
 use meta_whatsapp_server::store::{
-    EventStore, HOUSEKEEPING_LOCK, MIGRATION_LOCK, MIGRATIONS_TABLE, PgEventStore, PgStore, migrate,
+    HOUSEKEEPING_LOCK, MIGRATION_LOCK, MIGRATIONS_TABLE, Outbox as EventStore, PgEventStore,
+    PgStore, migrate,
 };
 
 /// An instance of the service on the test database: everything on
@@ -53,6 +54,17 @@ async fn live_postgres_event_store_passes_the_suite() {
     let pool = db.pool(5).await;
     migrate(&pool).await.unwrap();
     common::events_suite::run(&PgEventStore::new(pool.clone()), &PgStore::new(pool)).await;
+}
+
+#[tokio::test]
+async fn live_postgres_backend_hands_out_the_same_data_on_every_call() {
+    use meta_whatsapp_server::store::PgBackend;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(5).await;
+    migrate(&pool).await.unwrap();
+    common::backend_suite::run(&PgBackend::new(pool)).await;
 }
 
 /// Two instances starting at once on an empty database both migrate, and
@@ -1156,7 +1168,7 @@ async fn live_postgres_a_timeout_is_replayed_and_a_131047_releases_its_key() {
 #[tokio::test]
 async fn live_postgres_one_of_two_racing_claims_wins() {
     use meta_whatsapp_server::model::{IdempotencyClaim, IdempotencyKey};
-    use meta_whatsapp_server::store::Store as _;
+    use meta_whatsapp_server::store::{IdempotencyRecords as _, RecordStore as _};
     let Some(db) = TestDb::new().await else {
         return;
     };
@@ -1179,4 +1191,151 @@ async fn live_postgres_one_of_two_racing_claims_wins() {
             .count();
         assert_eq!(claimed, 1, "round {round}");
     }
+}
+
+/// `lock`'s turn of `name`, waiting while another holder has it: advisory
+/// locks are the database's, and the purges of every test running on it
+/// take the housekeeping one.
+async fn turn_of(
+    lock: &meta_whatsapp_server::store::PgLeaderLock,
+    name: &str,
+) -> meta_whatsapp_server::store::LeaderTurn {
+    use meta_whatsapp_server::store::LeaderLock as _;
+    for _ in 0..500 {
+        if let Some(turn) = lock.try_exclusive(name).await.unwrap() {
+            return turn;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("another holder kept {name} for 5 s");
+}
+
+/// The leader lock on Postgres: one turn per name, whichever replica asks,
+/// until it is released or dropped; its housekeeping turn is the lock the
+/// purges take, so an outbox purge skips while it is held. The turns'
+/// rules run on a name of this test's own (no other test takes it, so
+/// every answer is certain); the housekeeping turn is held no longer than
+/// it takes to show a purge skipping. Decisive: the transaction-scoped
+/// advisory lock in `PgLeaderLock::try_exclusive` (a session lock would
+/// outlive its turn), and `lock_key`'s derivation.
+#[tokio::test]
+async fn live_postgres_the_leader_lock_gives_one_turn_at_a_time() {
+    use meta_whatsapp_server::store::{HOUSEKEEPING, LeaderLock as _, PgLeaderLock};
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(4).await;
+    migrate(&pool).await.unwrap();
+    // Two replicas.
+    let (a, b) = (
+        PgLeaderLock::new(pool.clone()),
+        PgLeaderLock::new(db.pool(2).await),
+    );
+    let name = format!("test-{}", common::unique());
+    let turn = a
+        .try_exclusive(&name)
+        .await
+        .unwrap()
+        .expect("nobody holds it");
+    assert!(b.try_exclusive(&name).await.unwrap().is_none(), "one turn");
+    assert!(
+        a.try_exclusive(&name).await.unwrap().is_none(),
+        "one turn, on the same replica too"
+    );
+    turn.release().await.unwrap();
+    let again = b.try_exclusive(&name).await.unwrap();
+    assert!(again.is_some(), "released");
+    drop(again);
+    // Dropped: its transaction is rolled back as its connection goes back
+    // to the pool, which ends the turn.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if let Some(turn) = a.try_exclusive(&name).await.unwrap() {
+            turn.release().await.unwrap();
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "a dropped turn held on"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    // The housekeeping turn is the purges' lock; other names are not.
+    let housekeeping = turn_of(&a, HOUSEKEEPING).await;
+    assert!(b.try_exclusive(HOUSEKEEPING).await.unwrap().is_none());
+    let purged = PgEventStore::new(pool.clone())
+        .purge(std::time::Duration::ZERO)
+        .await
+        .unwrap();
+    let other = b.try_exclusive(&name).await.unwrap();
+    housekeeping.release().await.unwrap();
+    assert_eq!(purged, None, "the purges take the housekeeping lock");
+    assert!(other.is_some(), "each name its own lock");
+}
+
+/// Housekeeping on the Postgres backend sweeps the library's expired
+/// key/value rows under the housekeeping turn it takes right after its
+/// outbox purge released the same advisory lock (the purge neither blocks
+/// nor starves the sweep), and leaves a live row. Other tests' purges take
+/// that lock too: a round that finds it taken skips, and a later one
+/// sweeps. Decisive: the sweep in `serve::housekeeping`,
+/// `PgBackend::janitor`, and `PgJanitor::purge_expired`.
+#[tokio::test]
+async fn live_postgres_housekeeping_sweeps_expired_key_value_rows() {
+    use meta_whatsapp_server::serve::{Sweep, housekeeping};
+    use meta_whatsapp_server::store::{Backend as _, PgBackend};
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(10).await;
+    migrate(&pool).await.unwrap();
+    // Both last written a day ago, past the library's purge grace: one
+    // expired a day ago, one expires in a day.
+    sqlx::query(
+        "INSERT INTO wa_kv (namespace, key, value, version, expires_at, updated_at) VALUES \
+         ('wa.test', 'expired', decode('00', 'hex'), nextval('wa_kv_version_seq'), \
+          now() - interval '1 day', now() - interval '1 day'), \
+         ('wa.test', 'live', decode('00', 'hex'), nextval('wa_kv_version_seq'), \
+          now() + interval '1 day', now() - interval '1 day')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let keys = || async {
+        sqlx::query_scalar::<_, String>(
+            "SELECT key FROM wa_kv WHERE namespace = 'wa.test' ORDER BY key",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+    };
+    assert_eq!(keys().await, ["expired", "live"]);
+    let backend = PgBackend::new(pool.clone());
+    let (stop, mut stopped) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(housekeeping(
+        backend.outbox(),
+        backend.idempotency(),
+        Some(Sweep {
+            leader: backend.leader_lock(),
+            janitor: backend.janitor(),
+        }),
+        meta_whatsapp_server::events::DEFAULT_OUTBOX_RETENTION,
+        std::time::Duration::from_millis(50),
+        async move {
+            let _ = stopped.wait_for(|stop| *stop).await;
+        },
+    ));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while keys().await != ["live"] {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the expired row was never swept"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    stop.send(true).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), task)
+        .await
+        .expect("stopped with the service")
+        .unwrap();
 }

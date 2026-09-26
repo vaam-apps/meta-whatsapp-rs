@@ -260,6 +260,7 @@ coding agents of those apps: the `meta-whatsapp-rs-server` skill.
 | `meta-whatsapp-typst` | Typst → PDF/PNG (invoices, receipts, vouchers) for document and image messages. |
 | `meta-whatsapp-bot` | Bot framework over webhooks: commands, guards, cooldowns, middleware, compile-time plugins, Markdown → WhatsApp formatting. |
 | `meta-whatsapp-server` | The HTTP service (a binary, not a dependency): tenants, keys, the `/v1` API over the facade. See [Not writing Rust? Run the service](#not-writing-rust-run-the-service). |
+| `meta-whatsapp-server-core` | The service's framework-free core (not a dependency either): its domain, authorization order, error model as data, and the storage ports its memory and Postgres backends implement. No axum, sqlx or utoipa. |
 
 ## Development
 
