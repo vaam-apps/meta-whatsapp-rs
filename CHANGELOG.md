@@ -687,14 +687,18 @@ stored data, the owner's).
     the latest record wins, one of the same second too (#44; L7).
   - `put_contact` / `remove_contact` / `contact` / `contacts`: the
     coexistence address book (`smb_app_state_sync`) as `StoredContact`,
-    per number, the latest sync winning (the inbox records it in L8).
+    per number, the latest sync winning (the inbox records it in L8). A
+    removal is kept (its key and time, nothing else of the contact), so
+    an older `add` arriving after it, a retried delivery, cannot undo it;
+    `erase` and `purge_before` delete kept removals.
   - `erase(key)`: deletes, not hides, every record of one conversation
     key on one number (messages of every origin and tombstones, the
     summary, window events, the ownership record, the synced contacts
     naming the key) in one step, and returns what it deleted (`Erased`).
   - `purge_before(number or all, cutoff)`: deletes messages, window
-    events and ownership records older than the cutoff, and the summary
-    of a conversation whose latest message went (`Purged`).
+    events, ownership records and kept contact removals older than the
+    cutoff, and the summary of a conversation whose latest message went
+    (`Purged`).
   - `retention` / `apply_retention`, provided: a `Retention` set per
     store (design D10: kept by default), taken by
     `MemoryConversationStore::with_retention` and

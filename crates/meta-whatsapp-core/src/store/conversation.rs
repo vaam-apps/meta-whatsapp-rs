@@ -677,6 +677,12 @@ pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
     /// change in the same second as the stored one (Meta's timestamps are
     /// seconds) does. Returns whether it was stored. It touches neither
     /// the history nor the summary.
+    ///
+    /// Two records of the same second end in the order the store receives
+    /// them: the last one stored wins, whichever replica wrote it, and a
+    /// redelivery of the first, processed after the second, wins back.
+    /// Meta's timestamps give no finer order; the webhook dedup markers
+    /// keep redeliveries of a delivered event out (seven days by default).
     async fn set_thread_owner(
         &self,
         key: &ConversationKey,

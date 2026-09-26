@@ -5,7 +5,7 @@ description: "Running meta-whatsapp-rs in production - the secrets (system user 
 
 # meta-whatsapp-rs-production
 
-> **Verified against meta-whatsapp-rs 202091c44f47bcc4a8ab1ff2585f1cf5007bbcb9 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 72a1f25fa2b89ef7a174292f39dc4a5b8bbfd25d (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/production.rs](examples/production.rs),
 compiled and tested by meta-whatsapp-rs's own gate. Longer walkthrough:
@@ -140,8 +140,8 @@ timeouts longer than your slowest sink.
   nothing: rows and summaries recorded before stay as written (a U+FFFD
   an older revision stored for a NUL stays one). Roadmap L5's pull request adds eleven
   required `ConversationStore` methods (erasure, retention, window events, thread ownership,
-  synced contacts) and Postgres migration 4, after which an older revision's `migrate`
-  refuses the database: upgrade every instance that migrates at startup (`meta-whatsapp-rs-storage`).
+  synced contacts) and Postgres migration 4, after which an older revision's `migrate` refuses
+  the database: upgrade every instance, and erase only then (an older one's appends take no lock).
 
 ## What meta-whatsapp-rs does not do
 

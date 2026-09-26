@@ -284,7 +284,8 @@ events.addEventListener('lagged', () => reloadHistory()); // the browser fell be
 keeps under one conversation key on one number: its messages of every
 origin (revoke tombstones too), its summary, its window events, its
 thread ownership record, and the synced address book contacts that name
-the key as their key, BSUID, parent BSUID or phone number. It returns
+the key as their key, BSUID, parent BSUID or phone number, and a
+contact removal kept under the key. It returns
 what it deleted (`Erased`: counts only; log those, never the key). A
 customer can be stored under several keys (a history thread keyed by
 their phone number, live messages by their BSUID, a new BSUID after a
@@ -300,10 +301,12 @@ History is kept by default. `with_retention(Retention::days(90))` on
 store's retention, which `ConversationStore::apply_retention(now)`
 applies: nothing purges on its own, so schedule it (daily is enough;
 runs from several replicas at once take turns on Postgres, and an
-erasure waits for a purge in progress). It deletes the messages, window events and
-ownership records older than the cutoff, and the summary of a
-conversation whose latest message went (it holds that message's
-preview); synced contacts stay. For another policy (per tenant, or a
+erasure waits for a purge in progress). It deletes the messages, window
+events and ownership records older than the cutoff, the removals of
+synced contacts made before it (a removal is kept, its key and time
+only, so that an older sync delivered late cannot undo it), and the
+summary of a conversation whose latest message went (it holds that
+message's preview); synced contacts stay. For another policy (per tenant, or a
 number that leaves your platform), call
 `ConversationStore::purge_before(Some(&phone_number_id), cutoff)`
 yourself.

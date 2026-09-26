@@ -327,7 +327,10 @@ notification queue on top must be idempotent itself: tag each message with
     column: the previous revision keeps working beside it, but its
     `migrate` then refuses the database, so upgrade every instance that
     migrates at startup; on a large inbox, run it from a one-off job
-    (writes to the inbox tables wait while the indexes are built).
+    (writes to the inbox tables wait while the indexes are built). An
+    instance of the previous revision takes none of the advisory locks
+    that keep an erasure and the appends in flight consistent: finish
+    the upgrade before you erase.
   - Nothing is back-filled: rows and conversation summaries recorded
     before an upgrade stay as they were written (synced history recorded
     before 6d50701 keeps the unread count and window it moved, for

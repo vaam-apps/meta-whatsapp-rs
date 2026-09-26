@@ -5,7 +5,7 @@ description: "Choosing and running meta-whatsapp-rs storage - the KvStore (token
 
 # meta-whatsapp-rs-storage
 
-> **Verified against meta-whatsapp-rs 202091c44f47bcc4a8ab1ff2585f1cf5007bbcb9 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 72a1f25fa2b89ef7a174292f39dc4a5b8bbfd25d (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/stores.rs](examples/stores.rs), compiled by
 meta-whatsapp-rs's own gate; its tests run the conformance suites on the memory
@@ -69,10 +69,10 @@ on those columns, run `migrate` once from a job, in that order
 ([references/lossless-upgrade.md](references/lossless-upgrade.md)).
 
 Inbox history is kept unless you set a retention (`with_retention(Retention::days(90))`
-on the conversation store) and schedule `apply_retention(now)`; `erase(&key)`
-deletes every record of one contact key on one number. Migration 4 adds
-three tables and two indexes (writes wait while they build: migrate a
-large inbox from a one-off job).
+on the conversation store) and schedule `apply_retention(now)` (from any replica: purges
+take turns); `erase(&key)` deletes every record of one contact key on one number, the
+appends in flight on it included. Migration 4 adds three tables and two indexes (writes
+wait while they build: migrate a large inbox from a one-off job).
 
 ## Redis
 
@@ -119,9 +119,9 @@ count; `fill_media_placeholder` rewrites only a row whose `kind` is
 `StoredMessage::MEDIA_PLACEHOLDER` and whose status is not `Deleted`;
 `revoke` matches number and direction and stores
 `StoredMessage::tombstone` when the id is unknown, as history only (the
-summary never sees it). Since roadmap L5: `message` (scoped to the
-number), window events, thread ownership and synced contacts (the latest
-record wins), `erase` and `purge_before`. The suite checks all of it, and that content
+summary never sees it). Since roadmap L5: `message` (scoped to the number), window
+events, thread ownership and synced contacts (the latest record wins; a removal is kept,
+key and time only, and refuses an older sync), `erase` and `purge_before`. The suite checks all of it, and that content
 (kind, text, payload strings and keys, status error, preview) reads back
 exactly, U+0000 included. A `KvStore` keeps values as any bytes; a key
 holding U+0000 may be refused, never stored as another key.
