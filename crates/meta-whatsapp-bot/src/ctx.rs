@@ -268,7 +268,7 @@ impl Ctx {
 
     /// A text (or caption) the parser read as a command, whose name no
     /// registered command has: `ctx.unknown_command().map(|c| &c.name)`
-    /// is the name typed. Set from the match on, like
+    /// is the name as the parser read it. Set from the match on, like
     /// [`Self::invocation`].
     pub fn unknown_command(&self) -> Option<&ParsedCommand> {
         self.unknown.as_deref()

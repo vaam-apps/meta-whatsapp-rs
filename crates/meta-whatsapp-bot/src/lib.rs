@@ -34,6 +34,10 @@
 //! | how Markdown text is escaped | [`markdown::Escape`] | [`markdown::NoEscape`] (text as written; [`markdown::WordJoinerEscape`] opt-in) |
 //! | how the help reads | [`HelpFormatter`] | [`CategoryHelp`] (name, description and category configurable) |
 //!
+//! Each of these traits also has an `Arc<T>` implementation, so one
+//! instance serves several bots (handlers and plugins are registered by
+//! value).
+//!
 //! Not behind a trait: the order of the steps above, and where the reply
 //! helpers answer. [`Ctx::reply`] and its siblings answer the group for a
 //! group message, else the sender by business-scoped user id (BSUID),
@@ -43,7 +47,9 @@
 //! phone number at all.
 //!
 //! Plugins are compiled in: there is no hot reload (see [`plugin`]).
-//! Every extension point is an `#[async_trait]` trait; the macro is
+//! The async extension points ([`Outbound`], [`Middleware`], [`Plugin`],
+//! [`AccessPolicy`], [`Cooldowns`], [`Refusals`], [`ErrorHandler`],
+//! [`CommandHandler`]) are `#[async_trait]` traits; the attribute is
 //! re-exported as [`async_trait`](macro@async_trait), so no second
 //! dependency is needed.
 //!
@@ -86,7 +92,7 @@ pub mod outbound;
 pub mod parse;
 pub mod plugin;
 
-/// The attribute every extension point's `impl` needs
+/// The attribute every async extension point's `impl` needs
 /// (`#[async_trait] impl Middleware for …`), re-exported from the
 /// `async-trait` crate.
 pub use async_trait::async_trait;

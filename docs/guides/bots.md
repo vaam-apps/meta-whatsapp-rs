@@ -34,10 +34,12 @@ the ban and the match and before the command's own guards.
 meta-whatsapp-rs = { git = "https://github.com/vaam-apps/meta-whatsapp-rs", rev = "<commit>", features = ["axum", "bot"] }
 ```
 
-Every extension point is an `#[async_trait]` trait. The attribute is
-re-exported as `meta_whatsapp_rs::bot::async_trait`, so you need no
-`async-trait` dependency of your own (write `#[async_trait]` on the
-`impl`, not a native `async fn` in a trait impl).
+The async extension points (`Outbound`, `Middleware`, `Plugin`,
+`AccessPolicy`, `Cooldowns`, `Refusals`, `ErrorHandler`) are
+`#[async_trait]` traits. The attribute is re-exported as
+`meta_whatsapp_rs::bot::async_trait`, so you need no `async-trait`
+dependency of your own (write `#[async_trait]` on the `impl`: a native
+`async fn` there does not match the trait).
 
 ## 1. Commands
 
@@ -235,8 +237,10 @@ Several merchants' numbers: the default `ClientOutbound` sends with one
 token. Implement `Outbound` to look the merchant's token up by business
 number (the [token vault](embedded-signup.md)), after your own tenant
 checks, as the [CMS inbox](cms-inbox.md) does. One outbound shared by
-several bots: `BotBuilder::shared_outbound(Arc<dyn Outbound>)`; every
-trait the builder takes also accepts an `Arc` of an implementation.
+several bots: `BotBuilder::shared_outbound(Arc<dyn Outbound>)`. The
+builder's other trait parameters (parser, access, cooldowns, refusals,
+errors, middleware, Markdown renderer, help format) accept an `Arc` of an
+implementation too; handlers and plugins are registered by value.
 
 ## 6. Replies in the CMS inbox
 
@@ -265,6 +269,18 @@ impl Outbound for InboxOutbound {
         let key = ConversationKey::new(from.clone(), contact); // another number: refused
         self.inbox.send(&key, message.clone()).await
     }
+
+    async fn mark_read(
+        &self,
+        from: &PhoneNumberId,
+        message_id: &MessageId,
+        typing_indicator: bool,
+    ) -> meta_whatsapp_rs::Result<()> {
+        self.receipts
+            .mark_read(from, message_id, typing_indicator)
+            .await
+    }
+}
 ```
 
 ```rust
