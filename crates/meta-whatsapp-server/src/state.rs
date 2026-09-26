@@ -218,8 +218,10 @@ impl AppState {
     }
 
     /// The authorization order (see [`crate::auth`]): the only way to a
-    /// stored token.
-    pub fn authz(&self) -> &Authorizer {
+    /// stored token. Crate-private, as the vault and the tokenless client
+    /// were before it: its `tokens()` writes and deletes vault records
+    /// without an ownership check, for the admin routes that need it.
+    pub(crate) fn authz(&self) -> &Authorizer {
         &self.inner.authz
     }
 
