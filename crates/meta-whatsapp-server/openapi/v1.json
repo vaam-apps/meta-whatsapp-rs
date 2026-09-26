@@ -1625,6 +1625,16 @@
               }
             }
           },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Any other error: branch on `error.code`",
             "content": {
@@ -1716,6 +1726,16 @@
           },
           "409": {
             "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`), or Meta's throttling",
             "content": {
               "application/json": {
                 "schema": {
@@ -2658,6 +2678,16 @@
               }
             }
           },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "502": {
             "description": "Meta failed",
             "content": {
@@ -2787,6 +2817,16 @@
           },
           "422": {
             "description": "`invalid_request` (`address` over 256 characters, a vertical that cannot be set), or Meta's `invalid_parameter`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling",
             "content": {
               "application/json": {
                 "schema": {
@@ -2979,6 +3019,16 @@
               }
             }
           },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Any other error: branch on `error.code`",
             "content": {
@@ -3063,6 +3113,16 @@
           },
           "409": {
             "description": "`number_not_connected`, `reconnect_required` (nothing deleted)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling (nothing deleted)",
             "content": {
               "application/json": {
                 "schema": {
