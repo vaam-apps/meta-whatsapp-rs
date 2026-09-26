@@ -517,8 +517,10 @@ impl Turn for MemoryTurn {
     }
 }
 
-/// What memory has no work for: no schema to migrate, and no expired rows
-/// left behind (the key/value store drops what expired as it reads).
+/// What memory has no work for: no schema to migrate, and no sweep. The
+/// library's `MemoryKvStore` does keep what expired (its reads ignore it)
+/// until its own `purge_expired`, which the service does not call: memory
+/// storage is one development process's, emptied on restart.
 #[derive(Debug)]
 struct Nothing;
 
