@@ -293,6 +293,15 @@ impl StoredBusinessToken {
     }
 }
 
+/// Which write of a WABA's vault record a token was read from
+/// ([`TokenVault::get_versioned`], [`TokenVault::get_by_phone_number_versioned`]):
+/// what [`TokenVault::delete_if_unchanged`] compares, so that a delete
+/// never takes a record written after the read (the WABA connected again,
+/// a new token; or the record re-encrypted by a rotation). The store's
+/// version of the record: never reused for a key, even after a delete.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TokenVersion(u64);
+
 /// Encrypted business token storage, keyed by WABA, with a phone number
 /// index. Cheap to clone.
 ///
@@ -478,23 +487,41 @@ impl TokenVault {
     /// (wrong key, tampering, a record copied from another WABA) or was
     /// written with a key id not in [`VaultKeys`].
     pub async fn get(&self, waba_id: &WabaId) -> Result<Option<StoredBusinessToken>> {
+        Ok(self.get_versioned(waba_id).await?.map(|(token, _)| token))
+    }
+
+    /// [`Self::get`], and the version of the record it was read from: pass
+    /// it to [`Self::delete_if_unchanged`] to delete this token and not one
+    /// written since. A record this read re-encrypted ([`Self::rotate_on_read`])
+    /// is at its new version.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::get`].
+    pub async fn get_versioned(
+        &self,
+        waba_id: &WabaId,
+    ) -> Result<Option<(StoredBusinessToken, TokenVersion)>> {
         let key = waba_key(waba_id);
-        let Some((record, version)) = self.read_record(&key).await? else {
+        let Some((record, mut version)) = self.read_record(&key).await? else {
             return Ok(None);
         };
         let token = self.open(waba_id, &record)?;
-        if self.rotate_on_read
-            && record.kid != self.keys.active.id
-            && let Err(e) = self.reseal(&key, &token, version).await
-        {
-            // The kind only: a backend error's text is not ours to vouch for.
-            tracing::warn!(
-                waba_id = %waba_id,
-                kind = ?e.kind(),
-                "token vault: re-encrypting under the active key failed; retried on next read"
-            );
+        if self.rotate_on_read && record.kid != self.keys.active.id {
+            match self.reseal(&key, &token, version).await {
+                Ok(Some(resealed)) => version = resealed,
+                // A concurrent write got there first: this token is still
+                // the one read, at the version read.
+                Ok(None) => {}
+                // The kind only: a backend error's text is not ours to vouch for.
+                Err(e) => tracing::warn!(
+                    waba_id = %waba_id,
+                    kind = ?e.kind(),
+                    "token vault: re-encrypting under the active key failed; retried on next read"
+                ),
+            }
         }
-        Ok(Some(token))
+        Ok(Some((token, TokenVersion(version))))
     }
 
     /// The token for the WABA `phone_number_id` belongs to.
@@ -505,18 +532,34 @@ impl TokenVault {
         &self,
         phone_number_id: &PhoneNumberId,
     ) -> Result<Option<StoredBusinessToken>> {
+        Ok(self
+            .get_by_phone_number_versioned(phone_number_id)
+            .await?
+            .map(|(token, _)| token))
+    }
+
+    /// [`Self::get_by_phone_number`], and the version of the WABA's record
+    /// it was read from (see [`Self::get_versioned`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::get_by_phone_number`].
+    pub async fn get_by_phone_number_versioned(
+        &self,
+        phone_number_id: &PhoneNumberId,
+    ) -> Result<Option<(StoredBusinessToken, TokenVersion)>> {
         let pkey = phone_key(phone_number_id);
         let Some(v) = self.kv.get(&pkey).await? else {
             return Ok(None);
         };
         let index: PhoneIndex = decode(&pkey, &v)?;
-        let Some(token) = self.get(&index.waba_id).await? else {
+        let Some((token, version)) = self.get_versioned(&index.waba_id).await? else {
             return Ok(None);
         };
         Ok(token
             .phone_number_ids
             .contains(phone_number_id)
-            .then_some(token))
+            .then_some((token, version)))
     }
 
     /// Delete the token of `waba_id` and the phone index entries that point
@@ -537,6 +580,45 @@ impl TokenVault {
             }
         }
         Ok(removed)
+    }
+
+    /// [`Self::delete`], only if the WABA's record is still the one read at
+    /// `version` ([`Self::get_versioned`]): atomically with the delete
+    /// (compare-and-swap), so a token stored since (the WABA connected
+    /// again, with a new token) is never deleted. `false`, deleting
+    /// nothing, when the record was written since (stored again, or
+    /// re-encrypted by a rotation: read it again), or is gone. Its phone
+    /// index entries go with it, as with [`Self::delete`], unless they
+    /// already point to another WABA.
+    ///
+    /// # Errors
+    ///
+    /// The store failing; an unreadable record at `version` (its phone
+    /// index entries cannot be found: nothing is deleted).
+    pub async fn delete_if_unchanged(
+        &self,
+        waba_id: &WabaId,
+        version: TokenVersion,
+    ) -> Result<bool> {
+        let key = waba_key(waba_id);
+        let Some((record, current)) = self.read_record(&key).await? else {
+            return Ok(false);
+        };
+        if current != version.0 {
+            return Ok(false);
+        }
+        if self
+            .kv
+            .compare_and_swap(&key, version.0, None, Expiry::Keep)
+            .await?
+            .is_none()
+        {
+            return Ok(false);
+        }
+        for phone in &record.phone_number_ids {
+            self.unlink_phone(phone, waba_id).await?;
+        }
+        Ok(true)
     }
 
     /// Re-encrypt the record of `waba_id` under the active key if it is
@@ -566,22 +648,24 @@ impl TokenVault {
             return Ok(false);
         }
         let token = self.open(waba_id, &record)?;
-        self.reseal(&key, &token, version).await
+        Ok(self.reseal(&key, &token, version).await?.is_some())
     }
 
+    /// Re-encrypt `token` under the active key, if the record is still at
+    /// `version`: its new version, `None` when a concurrent write got there
+    /// first.
     async fn reseal(
         &self,
         key: &StoreKey,
         token: &StoredBusinessToken,
         version: u64,
-    ) -> Result<bool> {
+    ) -> Result<Option<u64>> {
         let created_at = token.created_at.unwrap_or_else(|| self.clock.now());
         let record = self.seal(token, created_at)?;
-        let swapped = self
+        Ok(self
             .kv
             .compare_and_swap(key, version, Some(encode(key, &record)?), Expiry::Keep)
-            .await?;
-        Ok(swapped.is_some())
+            .await?)
     }
 
     async fn read_record(&self, key: &StoreKey) -> Result<Option<(Record, u64)>> {
@@ -1576,6 +1660,72 @@ pub(crate) mod tests {
         assert!(v.get_by_phone_number(&p1).await.unwrap().is_none());
         assert!(raw(&kv, "phone/P1").await.is_none());
         assert!(!v.delete(&WabaId::new("W2")).await.unwrap());
+    }
+
+    /// A conditional delete takes the token it read, and only that one: a
+    /// token stored since (the WABA connected again), or the record
+    /// re-encrypted since, stays, with its phone index; a missing record
+    /// is `false`. The version a read-time re-encryption hands out is the
+    /// record's new one. Decisive: the version compared (and swapped) in
+    /// `delete_if_unchanged`, and `get_versioned`'s version after a
+    /// re-encryption.
+    #[tokio::test]
+    async fn a_conditional_delete_takes_only_the_token_it_read() {
+        let kv = kv();
+        let v = vault(&kv, VaultKeys::new(key("k1", 7)));
+        let w1 = WabaId::new("W1");
+        let p1 = PhoneNumberId::new("106540352242922");
+        v.store(&sample("W1")).await.unwrap();
+        let (read, version) = v.get_versioned(&w1).await.unwrap().unwrap();
+        assert_eq!(read.token.expose_secret(), format!("{TOKEN}-W1"));
+        let (_, by_phone) = v.get_by_phone_number_versioned(&p1).await.unwrap().unwrap();
+        assert_eq!(by_phone, version, "the same record, by its number");
+
+        // Stored again since: another token, another version.
+        v.store(
+            &StoredBusinessToken::new("W1", AccessToken::new("RECONNECTED"))
+                .phone_number_ids(["106540352242922"]),
+        )
+        .await
+        .unwrap();
+        assert!(!v.delete_if_unchanged(&w1, version).await.unwrap());
+        let kept = v.get_by_phone_number(&p1).await.unwrap().unwrap();
+        assert_eq!(kept.token.expose_secret(), "RECONNECTED", "and its index");
+
+        // Re-encrypted since (a rotation): the version moved too.
+        let (_, current) = v.get_versioned(&w1).await.unwrap().unwrap();
+        let rotating = vault(
+            &kv,
+            VaultKeys::new(key("k2", 8)).with_previous(key("k1", 7)),
+        )
+        .rotate_on_read(false);
+        assert!(rotating.rotate(&w1).await.unwrap());
+        assert!(!rotating.delete_if_unchanged(&w1, current).await.unwrap());
+        assert!(rotating.get(&w1).await.unwrap().is_some());
+
+        // Unchanged: deleted, with its phone index.
+        let (_, current) = rotating.get_versioned(&w1).await.unwrap().unwrap();
+        assert!(rotating.delete_if_unchanged(&w1, current).await.unwrap());
+        assert!(rotating.get(&w1).await.unwrap().is_none());
+        assert!(raw(&kv, "phone/106540352242922").await.is_none());
+        assert!(!rotating.delete_if_unchanged(&w1, current).await.unwrap());
+
+        // A read that re-encrypts hands out the new version.
+        vault(&kv, VaultKeys::new(key("k1", 7)))
+            .store(&sample("W1"))
+            .await
+            .unwrap();
+        let auto = vault(
+            &kv,
+            VaultKeys::new(key("k2", 8)).with_previous(key("k1", 7)),
+        );
+        let (_, resealed) = auto.get_versioned(&w1).await.unwrap().unwrap();
+        assert_eq!(raw_json(&kv, "waba/W1").await["kid"], "k2");
+        assert_eq!(
+            resealed,
+            TokenVersion(raw(&kv, "waba/W1").await.unwrap().version)
+        );
+        assert!(auto.delete_if_unchanged(&w1, resealed).await.unwrap());
     }
 
     #[tokio::test]
