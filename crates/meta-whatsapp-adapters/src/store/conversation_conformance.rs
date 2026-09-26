@@ -2795,9 +2795,11 @@ async fn an_erasure_redacts_or_deletes_the_persons_group_messages<S: Conversatio
     };
     let x5 = from(&r, &quiet, "x5", 5, Some("US.9"));
     let own = from(&r, &r.key("US.9"), "own", 6, Some("US.9"));
-    for m in [&x0, &p1, &b2, &x4, &placeholder, &x5, &own] {
+    for m in [&x0, &p1, &b2, &x4, &placeholder, &own] {
         assert!(store.append(m.clone()).await.unwrap(), "{}", m.id);
     }
+    // Synced history keeps its sender too.
+    assert_eq!(store.append_synced(vec![x5.clone()]).await.unwrap(), [true]);
     // Another participant's revoke of a message not stored: a tombstone,
     // after everything but x4.
     assert!(
@@ -2971,6 +2973,16 @@ async fn erase_deletes_every_record_of_one_contact_on_one_number<S: Conversation
     for c in named.iter().chain(&kept) {
         assert!(store.put_contact(c.clone()).await.unwrap());
     }
+    // The links naming the key, on either side; one that does not, and
+    // the same one on the other number.
+    for l in [
+        link(&r, "US.8", "US.9", 1),
+        link(&r, "US.9", "US.10", 2),
+        link(&r, "US.1", "US.2", 1),
+        link(&other, "US.8", "US.9", 1),
+    ] {
+        assert!(store.link_identity(l).await.unwrap());
+    }
     let neighbour_before = recorded(store, &neighbour).await;
     let elsewhere_before = recorded(store, &elsewhere).await;
     let erased_before = recorded(store, &key).await;
@@ -2989,11 +3001,22 @@ async fn erase_deletes_every_record_of_one_contact_on_one_number<S: Conversation
             window_events: 2,
             thread_owners: 1,
             contacts: 3,
-            identity_links: 0,
+            identity_links: 2,
             group_messages: 0,
         },
         "every record of the key: live, synced, placeholder, failed and tombstone messages, \
-         the summary, two window events, the owner, three contacts"
+         the summary, two window events, the owner, three contacts, two links"
+    );
+    assert!(store.identity_links(&key).await.unwrap().is_empty());
+    assert_eq!(
+        store.identity_links(&r.key("US.1")).await.unwrap(),
+        [link(&r, "US.1", "US.2", 1)],
+        "a link not naming the key stays"
+    );
+    assert_eq!(
+        store.identity_links(&elsewhere).await.unwrap(),
+        [link(&other, "US.8", "US.9", 1)],
+        "and the same link on another number"
     );
     let after = recorded(store, &key).await;
     assert!(after.messages.is_empty(), "no message left");
