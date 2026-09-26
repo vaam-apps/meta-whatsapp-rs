@@ -929,7 +929,10 @@ decisions and the delivery milestones, is
     authorization order (credential to `Caller`; ownership to
     `OwnedNumber`/`OwnedWaba`, the only way to a vault token; each
     capability works only with the `Authorizer` that made it, which
-    refuses another's with `403`: design §8.1), event
+    refuses another's with `403`; an adapter that takes a capability
+    from outside its own code calls `Authorizer::admit` or
+    `admit_admin` before acting on it, as the service's extractors do:
+    design §8.1), event
     routing and polling, the idempotency engine, the rate limiter, and
     the error model as data (`ServiceError`: a code of `CODES`, its status
     as a number, `retryable`, `may_have_been_sent`). It depends on the

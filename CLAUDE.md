@@ -38,7 +38,8 @@ capability table) and `docs/categories.md` (Meta's platform categories).
   `cargo test -p meta-whatsapp-server-core`; one module:
   `cargo test -p meta-whatsapp-server-core idempotency::`.
 - What must not compile outside the service's crates (the vault's
-  methods, capabilities, `AppState::store`) is pinned by `trybuild` UI
+  methods, capabilities, `AppState::store`, the API handlers,
+  `idempotency::run`) is pinned by `trybuild` UI
   tests: `cargo test -p meta-whatsapp-server-core --test visibility`
   (and `-p meta-whatsapp-server --all-features`). After changing a case
   or the toolchain, regenerate the expected errors with
