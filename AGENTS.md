@@ -7,9 +7,17 @@ and WhatsApp OTP authentication.
 
 **Read [`docs/architecture.md`](docs/architecture.md) before designing
 anything.** It is the spec. [`docs/coverage.md`](docs/coverage.md) says what
-exists and what does not. [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) lists
-decisions reserved for the maintainer — surface them, never pick a default.
-[`CONTRIBUTING.md`](CONTRIBUTING.md) and
+exists and what does not; [`docs/parity.md`](docs/parity.md) compares it
+with Zaileys and Meta's Cloud API, capability by capability, and
+[`docs/categories.md`](docs/categories.md) by Meta platform category;
+[`docs/roadmap.md`](docs/roadmap.md) is the plan to parity, in PR-sized
+items. [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) lists the decisions the code
+has not made. Since 2026-09-26 the owner delegates them: decide one when
+the choice can be made swappable (behind a trait, a port or a setting, with
+a documented way to swap it), and record it in the entry and, for the
+service, in design §10. Legal and terms-of-service choices, licences among
+them, and irreversible data migrations still go to the owner: surface
+those, never pick a default. [`CONTRIBUTING.md`](CONTRIBUTING.md) and
 [`docs/dev-environment.md`](docs/dev-environment.md) cover setup and process.
 
 ## Commands
@@ -101,3 +109,6 @@ phone number alone.
 - A change to a public API is not done until `docs/`, `skills/` and the
   rustdoc agree with it. Say in the PR what happened to each (a link, or
   `n/a — <reason>`).
+- A change to a capability updates its row in `docs/parity.md` (and its
+  category in `docs/categories.md`, its row in `docs/coverage.md`) in the
+  same PR; a row says done only when the code shows it.
