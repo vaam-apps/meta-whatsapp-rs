@@ -928,9 +928,10 @@ or WABA fails the family's own cross-tenant test).
 - `just ci` exits 0 on `main` at that commit, with the live tests
   forced (`META_WHATSAPP_RS_REQUIRE_LIVE=1`).
 - The parity-completion report goes to the owner, with everything
-  decided on the way that is not an owner touchpoint, and every entry
-  still left open for the owner in
-  [OPEN_QUESTIONS.md](../OPEN_QUESTIONS.md) (on 2026-09-26, #33).
+  decided on the way that is not an owner touchpoint, and every choice
+  still left to the owner: the entries left open in
+  [OPEN_QUESTIONS.md](../OPEN_QUESTIONS.md) (on 2026-09-26, #33) and
+  design D5's production mode.
 
 ## Owner touchpoints
 
