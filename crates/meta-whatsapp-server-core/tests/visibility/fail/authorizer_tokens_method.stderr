@@ -1,0 +1,5 @@
+error[E0599]: no method named `tokens` found for reference `&Authorizer` in the current scope
+ --> tests/visibility/fail/authorizer_tokens_method.rs:5:19
+  |
+5 |     let _ = authz.tokens();
+  |                   ^^^^^^ private field, not a method

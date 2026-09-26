@@ -6,7 +6,7 @@ use std::time::Duration;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_server::model::TenantId;
 use meta_whatsapp_server::store::events::{DedupWindow, EventQuery, NewEvent};
-use meta_whatsapp_server::store::{EventStore, Store};
+use meta_whatsapp_server::store::{Outbox as EventStore, Store};
 
 fn tenant(id: &str) -> TenantId {
     TenantId::parse(id).unwrap()

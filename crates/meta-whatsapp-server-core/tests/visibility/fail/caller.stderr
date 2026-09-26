@@ -1,0 +1,11 @@
+error: cannot construct `Caller` with struct literal syntax due to private fields
+ --> tests/visibility/fail/caller.rs:6:5
+  |
+6 |     Caller {
+  |     ^^^^^^
+7 |         key_id: "forged".to_owned(),
+  |         --------------------------- private field
+8 |         tenant,
+  |         ------ private field
+  |
+  = note: ...and other private field `issuer` that was not provided

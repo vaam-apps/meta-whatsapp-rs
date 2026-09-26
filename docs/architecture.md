@@ -31,23 +31,32 @@ crates/
   meta-whatsapp-webhooks   verify, parse, normalize, dedup, dispatch; axum router (feature).
   meta-whatsapp-adapters   port implementations: reqwest, memory/Postgres/Redis stores, sinks.
   meta-whatsapp-typst      Typst → PDF/PNG for document and image messages.
+  meta-whatsapp-bot        bot framework over webhooks: commands, guards, cooldowns, middleware,
+                           compile-time plugins, Markdown → WhatsApp formatting.
   meta-whatsapp-rs         facade: re-exports, prelude, `client(token)`, the CMS inbox,
                            feature flags, runnable examples. What integrators depend on.
-  meta-whatsapp-server     the HTTP service (a binary on the facade): tenants, keys, the /v1
-                           API for apps not written in Rust. See "Service" below.
+  meta-whatsapp-server-core  the service's framework-free core: its domain, authorization,
+                           error model as data, and the ports its backends implement.
+  meta-whatsapp-server     the HTTP service (a binary on the facade and the core): tenants,
+                           keys, the /v1 API for apps not written in Rust, its backends.
+                           See "Service" below.
 .xtask                     repo automation (`cargo xtask meta-docs`): a workspace of its own,
                            with its own Cargo.lock, excluded from the root one, so its ureq
                            (rustls with `ring`) never enters a library or test build.
 ```
 
 Dependency rule: every library crate depends on `meta-whatsapp-core`; no
-library crate depends on `meta-whatsapp-rs`; binaries may, and a binary
-of this workspace (the [service](#service-meta-whatsapp-server)) depends
-on `meta-whatsapp-rs` alone among them, reaching axum and sqlx through its
-re-exports, as an outside integrator would; `meta-whatsapp-client` and
-`meta-whatsapp-webhooks` never depend on each other or on
-`meta-whatsapp-adapters` (except as a dev-dependency for tests). An adapter
-never leaks its library's types through a port.
+library crate depends on `meta-whatsapp-rs`; binaries may, and the
+[service](#service-meta-whatsapp-server)'s crates do: they depend on
+`meta-whatsapp-rs` and on each other, never on another crate of the
+library, reaching axum and sqlx through the facade's re-exports, as an
+outside integrator would; no library crate depends on a service crate;
+`meta-whatsapp-client` and `meta-whatsapp-webhooks` never depend on each
+other or on `meta-whatsapp-adapters` (except as a dev-dependency for
+tests); `meta-whatsapp-bot` sits above both and depends on core, client
+and webhooks only, never on the adapters (dev-dependency aside) or the
+facade, which re-exports it behind its `bot` feature. An adapter never
+leaks its library's types through a port.
 
 ## Ports (`meta-whatsapp-core`)
 
@@ -60,8 +69,8 @@ never leaks its library's types through a port.
 | `clock::Clock` | `now` | — |
 
 Typed stores are built **on `KvStore`**, never as new ports: token vault,
-OTP challenges, webhook dedup, Embedded Signup sessions. An adapter author
-implements five methods once and every feature works.
+OTP challenges, webhook dedup, Embedded Signup sessions, bot cooldowns. An
+adapter author implements five methods once and every feature works.
 
 What the inbox keeps about a conversation beside its messages (window
 events, thread ownership, the coexistence address book, the links
@@ -125,11 +134,17 @@ rewrite them along with the code.
 | the migration files | `meta-whatsapp-adapters/migrations/*.sql` | sqlx records each file's checksum; an edit, a comment included, makes `migrate` refuse every database migrated before. So they keep naming `wa_adapters`, including in the hint migration 3 raises, and the columns and indexes they create keep their names (migration 4's `wa_messages.sender`, `wa_messages_sender_idx`, `wa_messages_unsent_idx`, `wa_identity_links_idx`, among others) | `the_default_tables_and_migration_checksums_are_pinned` |
 | a message's sender: the payload's `from_user_id`, else its `from`, of an inbound message (an empty value, or one holding U+0000, is none) | `StoredMessage::sender`, `meta-whatsapp-core/src/store/conversation.rs`; migration 4's back-fill | what a store keeps beside each message (`wa_messages.sender`) and an erasure matches a person's group messages on: a changed rule leaves the rows written before out of every erasure | `the_sender_is_the_bsuid_else_the_phone_number_of_an_inbound_message`, `live_postgres_migration_4_backfills_senders_by_the_rust_rule` |
 | `wa:` | `RedisKvStore::new`, `meta-whatsapp-adapters/src/store/redis_kv.rs` | default Redis key prefix, before `{<len>:<namespace>}:<key>` | `the_default_prefix_and_key_layout_are_pinned` |
-| `meta-whatsapp-server/outbox-key/v1` | `outbox_key`, `meta-whatsapp-server/src/events.rs` | domain of the SHA-256 stored as `wa_server_events.dedup_key` (with the tags `library` and `delivery`, the NUL separators and a keyless event's position as 8 big-endian bytes): derived otherwise, a redelivery across the upgrade is recorded twice | `the_outbox_key_is_pinned` (known answers) |
+| `meta-whatsapp-server/outbox-key/v1` | `outbox_key`, `meta-whatsapp-server-core/src/events.rs` | domain of the SHA-256 stored as `wa_server_events.dedup_key` (with the tags `library` and `delivery`, the NUL separators and a keyless event's position as 8 big-endian bytes): derived otherwise, a redelivery across the upgrade is recorded twice | `the_outbox_key_is_pinned` (known answers) |
 | `meta-whatsapp-server/event-id/v1`, `evt_` + 32 hex digits | `EventIdKey`, same file | HMAC label of the key event ids are derived with under the app secret, and the id's shape: stored as `wa_server_events.id` and what receivers deduplicate on | `event_ids_are_pinned` (known answers) |
-| `meta-whatsapp-server/migrate`, `meta-whatsapp-server/housekeeping` | `MIGRATION_LOCK`, `HOUSEKEEPING_LOCK`, `meta-whatsapp-server/src/store/postgres.rs` | Postgres advisory lock keys (the first 8 bytes of their SHA-256): replicas of two releases take the same ones | `the_lock_key_is_derived_as_documented` |
+| `meta-whatsapp-server/migrate`, `meta-whatsapp-server/housekeeping` | `MIGRATION_LOCK`, `HOUSEKEEPING_LOCK`, `lock_key`, `meta-whatsapp-server/src/store/postgres.rs` | Postgres advisory lock keys (the first 8 bytes of their SHA-256; `lock_key` derives the leader lock's the same way, so its `housekeeping` turn is `HOUSEKEEPING_LOCK`): replicas of two releases take the same ones | `the_lock_key_is_derived_as_documented`, `the_leader_locks_keys_are_the_services_locks` |
 | the service's migration files, `wa_server_sqlx_migrations` | `meta-whatsapp-server/migrations/*.sql`, `MIGRATIONS_TABLE` | the service's `wa_server_*` tables (the operator-only event stream `''` included) and its migration history; an edited file makes `migrate` refuse every database migrated before | `the_migrations_and_their_checksums_are_pinned` |
-| `wak_` | `PREFIX`, `KEY_ID_CHARS`, `SECRET_CHARS`, `meta-whatsapp-server/src/keys.rs` | API keys' prefix and layout (`wak_` + 17 + `_` + 43 base62 characters), held by every integrator | `the_key_layout_is_pinned` (literals); `a_minted_key_parses_and_matches_its_digest_only`, `malformed_keys_do_not_parse`, `base62_is_fixed_width_big_endian` |
+| `wak_` | `PREFIX`, `KEY_ID_CHARS`, `SECRET_CHARS`, `meta-whatsapp-server-core/src/keys.rs` | API keys' prefix and layout (`wak_` + 17 + `_` + 43 base62 characters), held by every integrator | `the_key_layout_is_pinned` (literals); `a_minted_key_parses_and_matches_its_digest_only`, `malformed_keys_do_not_parse`, `base62_is_fixed_width_big_endian` |
+| `wa.bot.cooldown`, `wa.bot.cooldown.notice` | `COOLDOWN_NAMESPACE`, `COOLDOWN_NOTICE_NAMESPACE`, `meta-whatsapp-bot/src/guard.rs` | store namespaces of the bot's command cooldowns and of their "please wait" markers (key: SHA-256 hex of the length-prefixed business number, command and user key). **Ephemeral**: changing it forgets running cooldowns (they last one period at most) and may repeat one notice each; no data is stranded | `the_cooldown_key_is_pinned_and_hashed` |
+
+Library store namespaces are `wa.<module>[.<purpose>]` (`wa.token`,
+`wa.otp.rate`, `wa.webhook.dedup`, `wa.bot.cooldown`): a new typed store
+takes one under its module, and an integrator who keeps their own
+records in the same `KvStore` stays clear of `wa.`.
 
 Not ours to rename either: Meta's names (`wa_id`, `wamid`, `waba_id`,
 `wa.me`, `WA_EMBEDDED_SIGNUP`, …), and the `WA_` environment variables
@@ -852,6 +867,88 @@ exposes the 24-hour `CustomerServiceWindow`, and sends replies.
   adapter needs no schema change: the summary is maintained when a row is
   written, so the difference lives in the write.
 
+## Bot framework (`meta-whatsapp-bot`)
+
+A `Bot` is an `EventSink<WebhookEvent>`, so it sits behind
+`WebhookHandler` and its `DedupGuard` like any sink. Per event, in this
+order:
+
+1. **Ban.** A received message from a banned sender stops here: no match,
+   no middleware (so no read receipt or typing indicator), no command, no
+   listener. `Refusals` hears of it as `Refusal::Banned`.
+2. **Match.** For a received message: typed text or an image or video
+   caption (unless `BotBuilder::commands_from_captions(false)`) the
+   `CommandParser` accepts, or a reply button, list row or
+   template quick-reply button whose id is a registered payload. A match
+   sets `Ctx::invocation`; a parsed name no command has sets
+   `Ctx::unknown_command`.
+3. **Middleware**, in registration order; each gets the context (the
+   match included) and `Next`, and not calling it stops the event.
+4. **The command's guards**, in order (scope, owner, cooldown last so a
+   refusal starts none), then its handler; else the unknown-command
+   handler, if one is registered; else the listeners, which get every
+   other event too.
+
+Standby copies, echoes and synchronized history are other events: they
+never run a command. Zaileys, whose framework features this mirrors,
+runs middleware for commands only and after their guards; here it runs
+for every event, after the ban and the match.
+
+- **Traits with defaults**: `Outbound` (`ClientOutbound`, the client's
+  `messages(pn).send` and read receipts), `CommandParser` (`PrefixParser`;
+  it also normalizes names, so case folding is its option), `AccessPolicy`
+  (`AccessList`), `Cooldowns` (`KvCooldowns`), `Refusals`
+  (`ReplyRefusals`), `ErrorHandler` (`LogErrors`), `MarkdownRenderer`
+  (`markdown::Renderer`) and its `Escape` (`NoEscape`; `WordJoinerEscape`
+  opt-in), `HelpFormatter` (`CategoryHelp`; the help command's name,
+  description and default category are builder options). Each has an
+  `Arc<T>` implementation, so one instance serves several bots. Not
+  traits: the order above, and the reply helpers' target (the group, else
+  the BSUID, else `+<wa_id>`, quoting), which `Ctx::send` bypasses.
+- **Identity** is the BSUID first (`BotSender::key`), else `wa_id`. Bans
+  and owners listed by phone number cannot match a sender without one.
+- **Cooldowns** are a typed store on `KvStore` (namespace
+  `wa.bot.cooldown`, key: SHA-256 of the length-prefixed business
+  number, command and user key, so no phone number is stored), started
+  with `put_if_absent`: atomic across instances sharing the store. A
+  refusal writes a marker in `wa.bot.cooldown.notice` expiring with the
+  cooldown, and only the refusal that creates it tells the user, so
+  repeated attempts get one notice per period. Records expire in place:
+  invisible at once, deleted by Redis itself or by `purge_expired` on the
+  memory and Postgres stores.
+- **Errors**: a handler's error is logged (kinds only) and acknowledged
+  by default, because an error answers `500` and Meta redelivers the
+  whole batch, repeating replies already sent; a transient failure is
+  then lost but for the log, until the dead-letter store of
+  `OPEN_QUESTIONS.md` #30 exists. `PropagateErrors` opts into
+  redelivery. The `ErrorHandler` gets the context from before the
+  middleware (the match set, a middleware's values not). After
+  `Bot::unload`, delivery fails with `SinkError::Closed`.
+- **Plugins** are compiled in (`Plugin::setup` registers commands,
+  middleware and listeners; `on_unload` at `Bot::unload`). No dynamic
+  loading or hot reload: Rust has no stable ABI.
+- **Command menu**: `Bot::sync_command_menu` sends the visible commands
+  through the client's conversational automation call, under its limits
+  (30 commands, names up to 32 characters, descriptions 1 to 256).
+- **Markdown**: `markdown::Renderer` (pulldown-cmark) converts CommonMark
+  to WhatsApp formatting and packs blocks into messages of at most 4096
+  (the client's `TEXT_BODY_MAX_CHARS`), measured in UTF-16 code units
+  since Meta does not say which unit it counts (never fewer than the
+  client's count of characters), never cutting a code block that fits.
+  Code a fence cannot hold and emphasis inside a word go out as plain
+  text. A table is padded columns while a padded row fits 60 characters,
+  else one `header: value` line per cell, and either only while it is at
+  most twice the table's unpadded rows (or one message), else those rows:
+  a reply's length, so its number of billable sends, stays proportional
+  to the Markdown's (both limits are `Renderer` options). Meta documents
+  no escape syntax: the default leaves text as written, so copied
+  addresses, codes and commands work;
+  `WordJoinerEscape` (U+2060 around literal markup characters, copied
+  along with the text) is the opt-in.
+- **Listeners** name what they get: received messages, one message
+  `type`, an event kind (checked against `WebhookEvent::KINDS` at build),
+  or everything.
+
 ## Typst (`meta-whatsapp-typst`)
 
 Render a Typst source with JSON inputs (`sys.inputs.data`, read with
@@ -875,14 +972,45 @@ decisions and the delivery milestones, is
 [docs/design/server.md](design/server.md); what is built so far is in
 [docs/coverage.md](coverage.md). The rules that bind it to the library:
 
-- **A binary on the facade.** `crates/meta-whatsapp-server` (binary
-  `meta-whatsapp-server`, `publish = false`, a workspace member so `just
-  ci` covers it) depends on `meta-whatsapp-rs` and on no other crate of
-  this workspace; axum and sqlx come through the facade's re-exports
-  (`meta_whatsapp_rs::webhooks::axum`,
-  `meta_whatsapp_rs::adapters::store::postgres::sqlx`). What the service
-  cannot build from the facade, an integrator could not either: the gap is
-  a library change of its own, not a private shortcut.
+- **A family of crates on the facade.** The service's crates depend on
+  `meta-whatsapp-rs` and on each other, never on another crate of the
+  library, and no library crate depends on them. Each is `publish =
+  false`, a workspace member (so `just ci` covers it) but not a default
+  one. What the service cannot build from the facade, an integrator could
+  not either: the gap is a library change of its own, not a private
+  shortcut.
+  - `crates/meta-whatsapp-server-core`: the framework-free core. The
+    domain (tenants, keys, bindings, idempotency records), the
+    authorization order (credential to `Caller`; ownership to
+    `OwnedNumber`/`OwnedWaba`, the only way to a vault token; each
+    capability works only with the `Authorizer` that made it, which
+    refuses another's with `403`; an adapter that takes a capability
+    from outside its own code calls `Authorizer::admit` or
+    `admit_admin` before acting on it, as the service's extractors do:
+    design §8.1), event
+    routing and polling, the idempotency engine, the rate limiter, and
+    the error model as data (`ServiceError`: a code of `CODES`, its status
+    as a number, `retryable`, `may_have_been_sent`). It depends on the
+    facade without its adapters' features: no axum, no sqlx, no utoipa
+    (the `http` crate is in its graph only through the library, whose
+    `HttpTransport` port and client speak it; no `http` type crosses the
+    core's API).
+  - `crates/meta-whatsapp-server` (binary `meta-whatsapp-server`): the
+    HTTP API (axum and the OpenAPI document, through the facade's
+    re-exports `meta_whatsapp_rs::webhooks::axum` and
+    `meta_whatsapp_rs::adapters::store::postgres::sqlx`), which renders
+    the core's errors, the webhook pipeline, configuration, and the
+    backends.
+- **Ports, and a backend as the unit of swapping.** The core stores
+  through ports: `RecordStore` (tenants, keys, bindings),
+  `IdempotencyRecords`, `Outbox`, `LeaderLock` (`try_exclusive(name)`),
+  `Janitor` (expired rows nothing else deletes) and `SchemaMigrator`. A
+  `Backend` gives all of them, and the library's `KvStore` and
+  `ConversationStore`, over one database, because they share its
+  guarantees (deleting a tenant reaches its idempotency records and its
+  event stream; the Postgres outbox re-reads the bindings under a lock).
+  The service has two, memory and Postgres. No port names a database
+  driver's, an HTTP framework's or an API toolkit's type.
 - **One multi-tenant deployment per Meta app** (the owner's decision D1):
   every merchant onboarded through the app delivers to its one callback
   URL. Tenants are the integrator's ids; a tenant owns WABAs, a WABA owns

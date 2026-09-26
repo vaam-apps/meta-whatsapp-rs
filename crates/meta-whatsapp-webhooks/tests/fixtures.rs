@@ -256,3 +256,26 @@ fn change_value_variant_matches_field_for_group_fields() {
         ChangeValue::GroupStatusUpdate(_)
     ));
 }
+
+/// `WebhookEvent::KINDS` names every kind Meta's examples produce, and
+/// every typed kind it names is produced by one of them (only the two
+/// catch-alls have no example).
+#[test]
+fn the_kinds_list_matches_what_the_examples_report() {
+    let mut seen = std::collections::BTreeSet::new();
+    for name in common::all_fixtures() {
+        for event in common::events(&name) {
+            assert!(
+                WebhookEvent::KINDS.contains(&event.kind()),
+                "{name}: {} is not in WebhookEvent::KINDS",
+                event.kind()
+            );
+            seen.insert(event.kind());
+        }
+    }
+    let unseen: Vec<_> = WebhookEvent::KINDS
+        .iter()
+        .filter(|k| !seen.contains(*k))
+        .collect();
+    assert_eq!(unseen, [&"unknown", &"unparsed"]);
+}

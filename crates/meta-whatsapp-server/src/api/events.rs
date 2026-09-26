@@ -252,7 +252,7 @@ fn envelope(tenant: &TenantId, event: StoredEvent) -> Result<EventEnvelope, ApiE
         (status = 429, description = "`too_many_requests`: the tenant's `read` budget (`Retry-After`)", body = ErrorBody),
     )
 )]
-pub async fn list_events(
+pub(crate) async fn list_events(
     State(state): State<AppState>,
     caller: Caller,
     query: EventsQuery,

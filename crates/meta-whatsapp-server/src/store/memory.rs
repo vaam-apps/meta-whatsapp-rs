@@ -1,30 +1,66 @@
-//! [`MemoryStore`]: one process, emptied on restart. Only for
-//! `WA_SERVER_ENV=development` and tests.
+//! The memory backend ([`MemoryBackend`]): one process, emptied on
+//! restart. Only for `WA_SERVER_ENV=development` and tests.
 
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 
 use async_trait::async_trait;
+use meta_whatsapp_rs::adapters::store::{MemoryConversationStore, MemoryKvStore};
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
 use time::{Duration, OffsetDateTime};
 
-use super::{MemoryEventStore, Store, StoreResult, listing};
+use super::{
+    Backend, BackendKind, IdempotencyRecords, Janitor, LeaderLock, LeaderTurn, MemoryEventStore,
+    Outbox, RecordStore, SchemaMigrator, StoreResult, Turn, listing,
+};
 use crate::model::{
     AllowedTenants, ApiKeyRecord, BindOutcome, DeleteTenantOutcome, IdempotencyClaim,
     IdempotencyKey, IdempotencyRecord, IdempotencyState, KeyOwner, KeyScope, Listing, NewApiKey,
     NumberBinding, NumberStatus, PageRequest, Tenant, TenantId, TenantStatus, WabaBinding,
 };
 
-/// In-memory [`Store`]. Its event outbox is [`MemoryStore::outbox`]: one
+/// In-memory [`RecordStore`] and [`IdempotencyRecords`]. Its event outbox is [`MemoryStore::outbox`]: one
 /// process's database, so that deleting a tenant reaches its events as it
-/// does on Postgres.
-#[derive(Debug, Default)]
+/// does on Postgres. `Debug` shows how many records it holds, never what
+/// they hold: idempotency keys name the caller's records, and a kept
+/// answer's body is the caller's data.
+#[derive(Default)]
 pub struct MemoryStore {
     state: Mutex<State>,
     outbox: Arc<MemoryEventStore>,
 }
 
-#[derive(Debug, Default)]
+impl std::fmt::Debug for MemoryStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut out = f.debug_struct("MemoryStore");
+        // Not `lock`: a `{:?}` while this thread holds the lock would
+        // deadlock.
+        let state = match self.state.try_lock() {
+            Ok(state) => Some(state),
+            Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+            Err(TryLockError::WouldBlock) => None,
+        };
+        if let Some(state) = state {
+            let kept: usize = state
+                .idempotency
+                .values()
+                .filter_map(|entry| entry.completed.as_ref())
+                .map(|(_, body)| body.len())
+                .sum();
+            out.field("tenants", &state.tenants.len())
+                .field("keys", &state.keys.len())
+                .field("wabas", &state.wabas.len())
+                .field("numbers", &state.numbers.len())
+                .field("idempotency_records", &state.idempotency.len())
+                .field("body_len", &kept);
+        }
+        out.finish_non_exhaustive()
+    }
+}
+
+/// No `Debug`: [`MemoryStore`]'s shows counts only.
+#[derive(Default)]
 struct State {
     tenants: BTreeMap<String, Tenant>,
     keys: BTreeMap<String, ApiKeyRecord>,
@@ -34,8 +70,9 @@ struct State {
     idempotency: BTreeMap<(String, String), IdempotencyEntry>,
 }
 
-/// An idempotency record in memory.
-#[derive(Debug, Clone)]
+/// An idempotency record in memory. No `Debug`: its body is the caller's
+/// data.
+#[derive(Clone)]
 struct IdempotencyEntry {
     fingerprint: [u8; 32],
     claim: String,
@@ -96,7 +133,7 @@ fn in_scope(key: &ApiKeyRecord, scope: &KeyScope) -> bool {
 }
 
 #[async_trait]
-impl Store for MemoryStore {
+impl RecordStore for MemoryStore {
     async fn ping(&self) -> StoreResult<()> {
         Ok(())
     }
@@ -365,7 +402,10 @@ impl Store for MemoryStore {
         }
         Ok(())
     }
+}
 
+#[async_trait]
+impl IdempotencyRecords for MemoryStore {
     async fn claim_idempotency_key(
         &self,
         tenant: &TenantId,
@@ -451,5 +491,235 @@ impl Store for MemoryStore {
         let before = state.idempotency.len();
         state.idempotency.retain(|_, entry| entry.expires_at > now);
         Ok(u64::try_from(before - state.idempotency.len()).unwrap_or(u64::MAX))
+    }
+}
+
+/// Leader election within one process: the memory backend's replicas are
+/// the tasks of one process. Cheap to clone; clones share their turns.
+#[derive(Debug, Default, Clone)]
+pub struct MemoryLeaderLock {
+    held: Arc<Mutex<BTreeSet<String>>>,
+}
+
+impl MemoryLeaderLock {
+    /// No turn held.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl LeaderLock for MemoryLeaderLock {
+    async fn try_exclusive(&self, name: &str) -> StoreResult<Option<LeaderTurn>> {
+        let taken = self
+            .held
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(name.to_owned());
+        Ok(taken.then(|| {
+            LeaderTurn::new(MemoryTurn {
+                held: self.held.clone(),
+                name: name.to_owned(),
+            })
+        }))
+    }
+}
+
+/// A turn of [`MemoryLeaderLock`]: its name goes when it is released or
+/// dropped.
+struct MemoryTurn {
+    held: Arc<Mutex<BTreeSet<String>>>,
+    name: String,
+}
+
+impl Drop for MemoryTurn {
+    fn drop(&mut self) {
+        self.held
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.name);
+    }
+}
+
+#[async_trait]
+impl Turn for MemoryTurn {
+    async fn release(self: Box<Self>) -> StoreResult<()> {
+        drop(self);
+        Ok(())
+    }
+}
+
+/// What memory has no work for: no schema to migrate, and no sweep. The
+/// library's `MemoryKvStore` does keep what expired (its reads ignore it)
+/// until its own `purge_expired`, which the service does not call: memory
+/// storage is one development process's, emptied on restart.
+#[derive(Debug)]
+struct Nothing;
+
+#[async_trait]
+impl Janitor for Nothing {
+    async fn purge_expired(&self) -> StoreResult<u64> {
+        Ok(0)
+    }
+}
+
+#[async_trait]
+impl SchemaMigrator for Nothing {
+    async fn migrate(&self) -> StoreResult<()> {
+        Ok(())
+    }
+}
+
+/// Every port in one process's memory, emptied on restart
+/// (`WA_SERVER_ENV=development` and tests): [`MemoryStore`] and its
+/// outbox, the library's `MemoryKvStore` and `MemoryConversationStore`,
+/// and a [`MemoryLeaderLock`].
+#[derive(Debug, Clone)]
+pub struct MemoryBackend {
+    store: Arc<MemoryStore>,
+    outbox: Arc<MemoryEventStore>,
+    leader: Arc<MemoryLeaderLock>,
+    kv: Arc<MemoryKvStore>,
+    conversations: Arc<MemoryConversationStore>,
+}
+
+impl Default for MemoryBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MemoryBackend {
+    /// Empty stores.
+    pub fn new() -> Self {
+        let store = MemoryStore::new();
+        Self {
+            outbox: store.outbox(),
+            store: Arc::new(store),
+            leader: Arc::new(MemoryLeaderLock::new()),
+            kv: Arc::new(MemoryKvStore::new()),
+            conversations: Arc::new(MemoryConversationStore::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl Backend for MemoryBackend {
+    fn kind(&self) -> BackendKind {
+        BackendKind::Memory
+    }
+
+    fn records(&self) -> Arc<dyn RecordStore> {
+        self.store.clone()
+    }
+
+    fn idempotency(&self) -> Arc<dyn IdempotencyRecords> {
+        self.store.clone()
+    }
+
+    fn outbox(&self) -> Arc<dyn Outbox> {
+        self.outbox.clone()
+    }
+
+    fn leader_lock(&self) -> Arc<dyn LeaderLock> {
+        self.leader.clone()
+    }
+
+    fn janitor(&self) -> Arc<dyn Janitor> {
+        Arc::new(Nothing)
+    }
+
+    fn migrator(&self) -> Arc<dyn SchemaMigrator> {
+        Arc::new(Nothing)
+    }
+
+    fn kv(&self) -> Arc<dyn KvStore> {
+        self.kv.clone()
+    }
+
+    fn conversations(&self) -> Arc<dyn ConversationStore> {
+        self.conversations.clone()
+    }
+
+    async fn close(&self) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `Debug` counts the records and the kept bodies' bytes, and prints
+    /// none of them: not a body, not an idempotency key. Decisive: the
+    /// hand-written `Debug` (a derived one prints both).
+    #[tokio::test]
+    async fn debug_shows_counts_never_a_body_or_a_key() {
+        let store = MemoryStore::new();
+        let tenant = TenantId::parse("tenant-a").unwrap();
+        let key = IdempotencyKey::parse("order:SECRET-KEY-31:shipped").unwrap();
+        let body = br#"{"messages":[{"id":"wamid.SECRET-BODY-7Q"}]}"#;
+        let claimed = store
+            .claim_idempotency_key(
+                &tenant,
+                &key,
+                &[9; 32],
+                "claim-1",
+                std::time::Duration::from_secs(60),
+                std::time::Duration::from_secs(600),
+            )
+            .await
+            .unwrap();
+        assert_eq!(claimed, IdempotencyClaim::Claimed);
+        assert!(
+            store
+                .complete_idempotency_key(&tenant, &key, "claim-1", 200, body)
+                .await
+                .unwrap()
+        );
+        let debug = format!("{store:?}");
+        assert!(debug.contains("idempotency_records: 1"), "{debug}");
+        assert!(
+            debug.contains(&format!("body_len: {}", body.len())),
+            "{debug}"
+        );
+        let bytes = format!("{:?}", body.to_vec());
+        for secret in [
+            "SECRET-BODY",
+            "SECRET-KEY",
+            "claim-1",
+            &bytes[1..bytes.len() - 1],
+            "9, 9, 9",
+        ] {
+            assert!(!debug.contains(secret), "{debug} shows {secret}");
+        }
+        // Held by this thread: no deadlock, and still nothing shown.
+        let held = store.lock();
+        assert_eq!(format!("{store:?}"), "MemoryStore { .. }");
+        drop(held);
+    }
+
+    /// One turn per name at a time; released or dropped, it is free again.
+    /// Decisive: the name's removal on drop.
+    #[tokio::test]
+    async fn one_turn_per_name_until_released_or_dropped() {
+        let lock = MemoryLeaderLock::new();
+        let turn = lock.try_exclusive("housekeeping").await.unwrap().unwrap();
+        assert!(lock.try_exclusive("housekeeping").await.unwrap().is_none());
+        assert!(
+            lock.clone()
+                .try_exclusive("housekeeping")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let other = lock.try_exclusive("elsewhere").await.unwrap();
+        assert!(other.is_some(), "each name its own");
+        turn.release().await.unwrap();
+        let again = lock.try_exclusive("housekeeping").await.unwrap();
+        assert!(again.is_some(), "released");
+        drop(again);
+        assert!(
+            lock.try_exclusive("housekeeping").await.unwrap().is_some(),
+            "dropped"
+        );
     }
 }

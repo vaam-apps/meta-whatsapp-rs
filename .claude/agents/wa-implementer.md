@@ -1,6 +1,6 @@
 ---
 name: wa-implementer
-description: "Implements or extends one meta-whatsapp-rs module (a meta-whatsapp-client endpoint family, meta-whatsapp-webhooks types, an adapter, or meta-whatsapp-typst) against docs/architecture.md and Meta's docs, with ScriptedTransport tests. Use for drafting feature work; its result always goes to wa-sabotage-reviewer before merge."
+description: "Implements or extends one meta-whatsapp-rs module (a meta-whatsapp-client endpoint family, meta-whatsapp-webhooks types, an adapter, meta-whatsapp-typst, or the meta-whatsapp-bot framework) against docs/architecture.md and Meta's docs, with ScriptedTransport tests. Use for drafting feature work; its result always goes to wa-sabotage-reviewer before merge."
 tools: Read, Grep, Glob, Bash, Edit, Write
 ---
 

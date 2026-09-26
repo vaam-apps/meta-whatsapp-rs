@@ -1,0 +1,37 @@
+[package]
+name = "meta-whatsapp-bot"
+description = "Bot framework over WhatsApp Cloud API webhooks: commands, guards, cooldowns, middleware, compile-time plugins and Markdown replies."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Dependency rule (docs/architecture.md): core, client and webhooks only;
+# never the adapters (the cooldown store is the `KvStore` port) or the facade.
+meta-whatsapp-core.workspace = true
+meta-whatsapp-client.workspace = true
+meta-whatsapp-webhooks.workspace = true
+
+anyhow.workspace = true
+async-trait.workspace = true
+hex.workspace = true
+pulldown-cmark.workspace = true
+sha2.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+meta-whatsapp-core = { workspace = true, features = ["testing"] }
+# The in-memory KvStore, for the cooldown store's tests.
+meta-whatsapp-adapters = { workspace = true, features = ["memory"] }
+pretty_assertions.workspace = true
+serde_json.workspace = true
+# `datetime!` for the tests' manual clocks.
+time.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

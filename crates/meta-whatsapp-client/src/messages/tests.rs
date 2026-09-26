@@ -1476,6 +1476,12 @@ fn buttons(n: usize) -> Vec<ReplyButton> {
 
 #[test]
 fn text_and_caption_limits() {
+    // The public constant is the limit the check applies (pinned apart, so
+    // a change to one is a change to both).
+    assert_eq!(TEXT_BODY_MAX_CHARS, 4096);
+    assert_limit("text.body", TEXT_BODY_MAX_CHARS, |n| {
+        OutboundMessage::text(phone(), s(n))
+    });
     assert_limit("text.body", 4096, |n| OutboundMessage::text(phone(), s(n)));
     assert_limit("text.body", 1024, |n| {
         OutboundMessage::text(phone(), s(n)).category(DirectSendCategory::Utility)

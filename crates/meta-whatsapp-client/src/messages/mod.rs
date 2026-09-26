@@ -144,7 +144,8 @@ pub use contacts::{
     Contact, ContactAddress, ContactEmail, ContactName, ContactOrg, ContactPhone, ContactUrl,
 };
 pub use content::{
-    Audio, Document, Image, Location, MediaSource, Pin, Reaction, Sticker, Text, Video,
+    Audio, Document, Image, Location, MediaSource, Pin, Reaction, Sticker, TEXT_BODY_MAX_CHARS,
+    Text, Video,
 };
 pub use interactive::{
     AddressMessage, AddressParameters, CallPermissionRequest, CardAction, CardHeader, CtaUrl,

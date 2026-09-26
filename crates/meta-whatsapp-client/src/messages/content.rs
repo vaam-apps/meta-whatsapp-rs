@@ -6,6 +6,14 @@ use serde::ser::{SerializeMap, Serializer};
 
 use super::validate::{self, Check};
 
+/// Longest `text.body` Meta accepts outside Direct Send, in characters
+/// (`messages/text-messages`: "Maximum 4096 characters"). The client
+/// counts Unicode scalar values (`str::chars`); Meta does not say which
+/// unit it counts, so text meant to fit under either reading can count
+/// UTF-16 code units instead (never fewer). Direct Send allows 1024
+/// (`direct-send/supported-features-and-limits`).
+pub const TEXT_BODY_MAX_CHARS: usize = 4096;
+
 /// `text` object (`messages/text-messages`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Text {

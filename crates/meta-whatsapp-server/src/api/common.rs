@@ -50,7 +50,7 @@ where
 /// (the library writes `body_text: ["a", "b"]`, Meta's positional
 /// parameters syntax in `templates/components`, as `[["a", "b"]]`): a
 /// list of values holds no key.
-pub fn meta_object<T>(field: &'static str, value: &serde_json::Value) -> Result<T, ApiError>
+pub(crate) fn meta_object<T>(field: &'static str, value: &serde_json::Value) -> Result<T, ApiError>
 where
     T: serde::de::DeserializeOwned + serde::Serialize,
 {
@@ -133,7 +133,7 @@ const MAX_GRAPH_ID_LEN: usize = 64;
 /// Checked before any request: an id is a Graph path segment, and a
 /// route for one kind of object must not reach another (`DELETE
 /// /{id}` deletes whatever node the id names).
-pub fn graph_id(field: &'static str, id: &str) -> Result<(), ApiError> {
+pub(crate) fn graph_id(field: &'static str, id: &str) -> Result<(), ApiError> {
     let valid = !id.is_empty()
         && id.len() <= MAX_GRAPH_ID_LEN
         && id.bytes().all(|b| b.is_ascii_digit())
@@ -191,7 +191,7 @@ impl<S: Send + Sync> meta_whatsapp_rs::webhooks::axum::extract::FromRequestParts
 }
 
 /// An opaque cursor: the hex of the last id of the page.
-pub fn encode_cursor(after: &str) -> String {
+pub(crate) fn encode_cursor(after: &str) -> String {
     hex::encode(after)
 }
 
@@ -200,24 +200,24 @@ fn decode_cursor(cursor: &str) -> Option<String> {
 }
 
 /// The `next_cursor` of a listing.
-pub fn next_cursor<T>(listing: &Listing<T>) -> Option<String> {
+pub(crate) fn next_cursor<T>(listing: &Listing<T>) -> Option<String> {
     listing.next_after.as_deref().map(encode_cursor)
 }
 
 /// RFC 3339, UTC.
-pub fn rfc3339(at: OffsetDateTime) -> String {
+pub(crate) fn rfc3339(at: OffsetDateTime) -> String {
     at.to_offset(time::UtcOffset::UTC)
         .format(&Rfc3339)
         .unwrap_or_default()
 }
 
 /// Parse an RFC 3339 time from the request's `field`.
-pub fn parse_rfc3339(field: &'static str, value: &str) -> Result<OffsetDateTime, ApiError> {
+pub(crate) fn parse_rfc3339(field: &'static str, value: &str) -> Result<OffsetDateTime, ApiError> {
     OffsetDateTime::parse(value, &Rfc3339).map_err(|_| ApiError::invalid(field))
 }
 
 /// `(StatusCode, Json)` shorthand.
-pub fn json<T: serde::Serialize>(status: StatusCode, body: T) -> (StatusCode, Json<T>) {
+pub(crate) fn json<T: serde::Serialize>(status: StatusCode, body: T) -> (StatusCode, Json<T>) {
     (status, Json(body))
 }
 

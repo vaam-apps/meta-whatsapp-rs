@@ -45,7 +45,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | --- | --- |
 | 0 | this plan (parity, categories, roadmap, decisions) |
 | 1 | S1 (server core), B1 (bot framework), U4 (upstream issues) |
-| 2 | S2, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L25, which may start here and run alongside every later wave |
+| 2 | S2, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L25, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
 | 3 | S5a–S5e, S6, S7, S9 |
 | 4 | S10 (waits on the owner's answer to D20 (a)), S11, S12; M2a–M2f |
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3f; B2–B4 |
@@ -67,7 +67,7 @@ CrateStack defaults of D26 hold once the owner accepts D20 (a); until
 then, and for good if the owner refuses, the defaults stay `api-axum`
 and `store-postgres`.
 
-- [ ] **S1. Extract `meta-whatsapp-server-core`** (new crate, depending
+- [x] **S1. Extract `meta-whatsapp-server-core`** (new crate, depending
   on the facade with `default-features = false`): the model, keys, event
   routing and type lists, outbox keys and ids, polling, the idempotency
   engine, the rate limiter, the §5 error model as data, authorization as
@@ -84,6 +84,20 @@ and `store-postgres`.
     -p meta-whatsapp-server-core` shows no axum, hyper, tower, utoipa,
     sqlx or cratestack (`http` enters only through the library's
     `HttpTransport` port).
+  - **Landed:** the crate, its ports and the `Backend` bundle, with the
+    memory and Postgres implementations in `meta-whatsapp-server`;
+    `openapi/v1.json` unchanged. Row 112 stays partial on the service
+    (conformance in core: S3; composed from a bundle alone: S4). Its
+    security review's fixes landed with it: capabilities (`Caller`,
+    `AdminCaller`, `OwnedNumber`, `OwnedWaba`) work only with the
+    `Authorizer` that made them (SR-H1: the core's methods refuse
+    another's, the server's extractors admit what they take from a
+    request, and its handlers are crate-private), the Graph client it
+    is given carries no token (SR-L4), `AppState::store` is
+    crate-private (SR-M1), `Debug` never prints a kept answer's body
+    (SR-L3), and the visibility pins are UI tests with the compiler's
+    errors (SR-L1).
+    SR-L2, and the same race in `failed`, wait for S2.
 - [ ] **S2. The port contracts, right for any backend**
   (`meta-whatsapp-server-core` and both in-tree backends): what Postgres
   guarantees by accident becomes a requirement of the ports, cheap now
@@ -109,12 +123,33 @@ and `store-postgres`.
     call.
   - The outbox's types carry the id newtypes; listings are in byte
     order.
+  - Unbind and vault delete conditioned on the binding and the vault
+    record version the capability was made from (SR-L2, from the core's
+    security review): `OwnedWaba::forget` deletes whatever the WABA's
+    binding and token became since the `OwnedWaba` was made, so a WABA
+    unbound and attached again in between (a new token, even another
+    tenant's binding) loses them. The unbind and the delete take what the
+    capability was made from, and do nothing when either moved.
+  - The `reconnect_required` marking conditioned the same way (the
+    `failed` race, which the core's second review found):
+    `OwnedNumber::failed` and `OwnedWaba::failed` mark the numbers of
+    whatever binding the WABA has when Meta's `190` comes back, so a
+    capability made before the WABA was unbound and attached again (a
+    new token, even another tenant) marks the new binding's numbers. The
+    status update takes the binding the capability was made from (its
+    tenant and `attached_at`), and marks nothing when it moved.
   - **After:** S1.
   - **Decisive:** on memory and, live, on Postgres: `bind_waba` to a
     missing tenant answers `NoSuchTenant` (memory binds it today); an
     insert whose guarded binding moved is operator-only (removing
     memory's re-check fails it); a backend reporting the typed busy
-    error makes the webhook path answer `503`.
+    error makes the webhook path answer `503`; an `OwnedWaba` made
+    before its WABA was attached again forgets neither the new binding
+    nor the new token; an `OwnedNumber` or `OwnedWaba` made before its
+    WABA was unbound and attached again, to the same tenant and to
+    another, whose call Meta then answers `190`, leaves the new
+    binding's numbers `connected` in both cases (conditioning the update
+    on the tenant alone fails the first, on nothing both).
 - [ ] **S3. Conformance into core** (`meta-whatsapp-server-core`,
   `meta_whatsapp_server_core::conformance`, a feature, like the
   library's `store::conformance`, run over a `&dyn Backend`): the store
@@ -346,7 +381,7 @@ A new library crate on core, client and webhooks (never adapters or the
 facade), re-exported by the facade behind a feature. A `Bot` is an
 `EventSink`, so it plugs into `WebhookHandler` like any sink.
 
-- [ ] **B1. Commands, middleware, compile-time plugins, markdown
+- [x] **B1. Commands, middleware, compile-time plugins, markdown
   replies** (`meta-whatsapp-bot`; rows 17, 85–88): a command parser
   (prefixes, aliases, quoted arguments, button and list payloads),
   guards (private or group only, owner and banned lists behind a trait),
@@ -366,6 +401,35 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     `next` stops the handler; a 5000-character text splits into exactly
     two messages at a paragraph boundary; a sender with no `wa_id`
     (BSUID only) is served.
+  - **Landed:** rows 86–88 done in the library; row 85 partial
+    (subcommands and flags: B1b) and row 17 partial (rich replies
+    beyond text: B1c). Folder loading and hot reload stay out (D28).
+- [ ] **B1b. Subcommands and flags** (`meta-whatsapp-bot`; row 85): a
+  command's subcommands (`/order status 42` runs `status` under
+  `order`, each with its own guards, usage and help line) and flags in
+  its arguments (`--dry-run`, `--limit=5`), read from `Args` next to
+  the positional arguments. Companions: the guide's and the skill's
+  "not here yet".
+  - **After:** B1.
+  - **Decisive:** `/order status 42` runs the subcommand with `42` as
+    its only argument, and `/order` alone runs the parent; a
+    subcommand's own cooldown refuses a second run (removing its guard
+    check fails the test); a quoted `"--limit=5"` stays a positional
+    argument (removing the quote check fails the test).
+- [ ] **B1c. Rich replies beyond text** (`meta-whatsapp-bot`; row 17):
+  a reply built from Markdown and a few typed parts, sent as the
+  messages Meta documents for them: an image as an image message (by
+  link, under the renderer's URL rule), suggestions as reply buttons
+  (up to 3, `messages/interactive-reply-buttons-messages`) or a list
+  (up to 10 rows, `messages/interactive-list-messages`), product cards
+  as a product carousel; the text parts through the Markdown renderer
+  as today.
+  - **After:** B1.
+  - **Decisive:** a reply of a paragraph and an image sends a text
+    message and then an image message, in order, with the exact
+    requests asserted; three suggestions become buttons and four a list
+    (removing the count check fails the test); a `javascript:` image
+    URL is never sent.
 - [ ] **B2. Paced broadcast** (`meta-whatsapp-bot`; rows 89, 92; D29): a
   per-number rate under Meta's throughput (80 messages a second by
   default), progress, retries only when `Error::may_have_been_sent` is

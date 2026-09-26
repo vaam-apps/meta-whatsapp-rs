@@ -47,7 +47,7 @@ use meta_whatsapp_rs::core::error::StorageError;
 use time::OffsetDateTime;
 
 use super::StoreResult;
-use super::events::{EventPage, EventQuery, EventStore, NewEvent, OutboxBusy, StoredEvent};
+use super::events::{EventPage, EventQuery, NewEvent, Outbox, OutboxBusy, StoredEvent};
 // The housekeeping purges' advisory lock, the idempotency purge's too: one
 // replica at a time purges. Advisory locks are the database's, not a
 // schema's: deployments sharing one database purge in turn.
@@ -128,7 +128,7 @@ fn i64_of(n: usize) -> i64 {
 }
 
 #[async_trait]
-impl EventStore for PgEventStore {
+impl Outbox for PgEventStore {
     async fn insert(&self, event: &NewEvent) -> StoreResult<Option<i64>> {
         let data_bytes = i32::try_from(event.data.len())
             .map_err(|_| StorageError::Backend(anyhow::anyhow!("an event over 2 GiB")))?;

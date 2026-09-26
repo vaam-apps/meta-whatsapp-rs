@@ -33,7 +33,7 @@ metadata:
      change**, where only additions are allowed: stop and raise it.
    - A new `WebhookEvent::kind` (the test text-parses it in
      `src/event.rs`): classify it in `OPERATOR_EVENT_TYPES` (operator-only)
-     in `crates/meta-whatsapp-server/src/events.rs`, the design's rule for
+     in `crates/meta-whatsapp-server-core/src/events.rs`, the design's rule for
      a type the service has not reviewed for tenants
      (`docs/design/server.md` § 2.3); `TENANT_EVENT_TYPES` (tenants receive
      it) only once that review is done, as its own change. Promoting a

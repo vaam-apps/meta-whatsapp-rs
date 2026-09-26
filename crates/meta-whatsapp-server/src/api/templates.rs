@@ -322,7 +322,7 @@ fn status_filter(status: &str) -> Result<String, ApiError> {
 }
 
 /// One page of the WABA's templates, from the cache or from Meta.
-pub async fn list(
+pub(crate) async fn list(
     state: &AppState,
     tenant: &TenantId,
     owned: &OwnedWaba,
@@ -398,7 +398,7 @@ pub async fn list(
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
 )]
-pub async fn list_templates(
+pub(crate) async fn list_templates(
     State(state): State<AppState>,
     caller: Caller,
     owned: OwnedWaba,
@@ -442,7 +442,7 @@ pub async fn list_templates(
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
 )]
-pub async fn get_template(
+pub(crate) async fn get_template(
     State(state): State<AppState>,
     owned: OwnedWaba,
     Path((_, id)): Path<(String, String)>,
@@ -506,7 +506,7 @@ async fn in_waba(
 /// Create `definition` in the WABA: `201`, or Meta's refusal with its
 /// `details`. The WABA's cached lists go either way (a refusal can follow
 /// a creation Meta did make).
-pub async fn create(
+pub(crate) async fn create(
     state: &AppState,
     owned: &OwnedWaba,
     definition: &TemplateDefinition,
@@ -555,7 +555,7 @@ pub async fn create(
         (status = 504, description = "`timeout`: the template may have been created", body = ErrorBody),
     )
 )]
-pub async fn create_template(
+pub(crate) async fn create_template(
     State(state): State<AppState>,
     caller: Caller,
     owned: OwnedWaba,
@@ -618,7 +618,7 @@ pub struct TemplateDeletion {
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
 )]
-pub async fn delete_templates(
+pub(crate) async fn delete_templates(
     State(state): State<AppState>,
     caller: Caller,
     owned: OwnedWaba,

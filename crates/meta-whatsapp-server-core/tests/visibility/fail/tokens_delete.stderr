@@ -1,0 +1,10 @@
+error[E0624]: method `delete` is private
+ --> tests/visibility/fail/tokens_delete.rs:6:20
+  |
+6 |     let _ = tokens.delete(waba_id).await;
+  |                    ^^^^^^ private method
+  |
+ ::: src/authz.rs
+  |
+  |     async fn delete(&self, waba_id: &WabaId) -> Result<bool, Error> {
+  |     --------------------------------------------------------------- private method defined here

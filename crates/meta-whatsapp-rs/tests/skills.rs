@@ -61,7 +61,8 @@
     feature = "redis",
     feature = "axum",
     feature = "typst",
-    feature = "flows-endpoint"
+    feature = "flows-endpoint",
+    feature = "bot"
 ))]
 mod skill_examples;
 
@@ -2228,6 +2229,7 @@ const FACADE: &[(&str, &str)] = &[
     ("webhooks", "meta_whatsapp_webhooks"),
     ("adapters", "meta_whatsapp_adapters"),
     ("typst", "meta_whatsapp_typst"),
+    ("bot", "meta_whatsapp_bot"),
 ];
 
 const CRATES: &[&str] = &[
@@ -2237,6 +2239,7 @@ const CRATES: &[&str] = &[
     "meta_whatsapp_webhooks",
     "meta_whatsapp_adapters",
     "meta_whatsapp_typst",
+    "meta_whatsapp_bot",
 ];
 
 /// Rust's own words: never meta-whatsapp-rs API, never worth listing.
