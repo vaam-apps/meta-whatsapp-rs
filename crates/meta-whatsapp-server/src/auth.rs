@@ -34,6 +34,7 @@ use std::collections::HashMap;
 use meta_whatsapp_rs::Client;
 use meta_whatsapp_rs::Error;
 use meta_whatsapp_rs::client::embedded_signup::TokenVault;
+use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_rs::webhooks::axum::extract::{FromRequestParts, Path, Request, State};
 use meta_whatsapp_rs::webhooks::axum::http::request::Parts;
@@ -307,9 +308,23 @@ impl OwnedWaba {
     }
 
     /// Delete the WABA's token and its binding, and its numbers': the last
-    /// step of a disconnection, once Meta unsubscribed the app.
-    pub async fn forget(self, state: &AppState) -> Result<(), ApiError> {
+    /// step of a disconnection, once Meta unsubscribed the app. Only the
+    /// token and the binding this was made from
+    /// ([`core_authz::OwnedWaba::forget`]): `false` when either moved
+    /// since (the WABA attached again, a rotation), nothing deleted.
+    pub async fn forget(self, state: &AppState) -> Result<bool, ApiError> {
         self.0.forget(state.authz()).await.map_err(ApiError::from)
+    }
+
+    /// [`Self::forget`], answering `503 storage_unavailable` (retryable)
+    /// when the WABA's token or binding moved since this was made: a
+    /// repeat of the request acts on what is there now.
+    pub async fn forget_or_busy(self, state: &AppState) -> Result<(), ApiError> {
+        if self.forget(state).await? {
+            return Ok(());
+        }
+        tracing::info!("the WABA's token or binding changed while it was being forgotten");
+        Err(ApiError::from(ServiceError::from(StorageError::Busy)))
     }
 
     /// Unbind a WABA as the operator (decision D4's admin unbind): with
@@ -337,7 +352,7 @@ impl OwnedWaba {
                         "unbinding a WABA Meta did not unsubscribe the app from"
                     );
                 }
-                owned.forget(state).await
+                owned.forget_or_busy(state).await
             }
             // Storage down: nothing can be deleted either.
             Err(error) if error.code() == "storage_unavailable" => Err(error),

@@ -46,9 +46,9 @@ use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 
 use crate::model::{
-    ApiKeyRecord, BindOutcome, DeleteTenantOutcome, IdempotencyClaim, IdempotencyKey, KeyScope,
-    Listing, NewApiKey, NumberBinding, NumberStatus, PageRequest, Tenant, TenantId, TenantStatus,
-    WabaBinding,
+    ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim, IdempotencyKey,
+    KeyScope, Listing, NewApiKey, NumberBinding, NumberStatus, PageRequest, Tenant, TenantId,
+    TenantStatus, WabaBinding,
 };
 
 /// Result of a store call. Every failure is the library's
@@ -131,9 +131,18 @@ pub trait RecordStore: Send + Sync + 'static {
         numbers: &[PhoneNumberId],
     ) -> StoreResult<BindOutcome>;
 
-    /// Remove the binding of `waba_id` and its numbers. `false` when it was
-    /// not bound.
+    /// Remove the binding of `waba_id` and its numbers, whoever holds it:
+    /// the operator's unbind. `false` when it was not bound. A capability
+    /// unbinds only the binding it was made from ([`Self::unbind_waba_if`]).
     async fn unbind_waba(&self, waba_id: &WabaId) -> StoreResult<bool>;
+
+    /// Remove the binding of `epoch.waba_id` and its numbers only if it is
+    /// still `epoch`'s: bound to `epoch.tenant_id` since
+    /// `epoch.attached_at`, checked atomically with the removal. `false`,
+    /// removing nothing, once the WABA was unbound since (and bound again,
+    /// to any tenant), or when it is not bound. What `OwnedWaba::forget`
+    /// takes (roadmap S2: the core's security review, SR-L2).
+    async fn unbind_waba_if(&self, epoch: &BindingEpoch) -> StoreResult<bool>;
 
     /// The binding of a WABA.
     async fn waba(&self, waba_id: &WabaId) -> StoreResult<Option<WabaBinding>>;
@@ -163,8 +172,19 @@ pub trait RecordStore: Send + Sync + 'static {
         page: &PageRequest,
     ) -> StoreResult<Listing<NumberBinding>>;
 
-    /// Set the status of every number of `waba_id`.
+    /// Set the status of every number of `waba_id`, whoever holds it.
     async fn set_waba_status(&self, waba_id: &WabaId, status: NumberStatus) -> StoreResult<()>;
+
+    /// Set the status of every number of `epoch.waba_id` only if the WABA
+    /// is still `epoch`'s (as [`Self::unbind_waba_if`]), checked atomically
+    /// with the update: a binding made since keeps its numbers' status.
+    /// Whether it was `epoch`'s. What a capability's `failed` takes after
+    /// Meta's `190` (roadmap S2).
+    async fn set_waba_status_if(
+        &self,
+        epoch: &BindingEpoch,
+        status: NumberStatus,
+    ) -> StoreResult<bool>;
 }
 
 /// The records of `Idempotency-Key`s (docs/design/server.md, section

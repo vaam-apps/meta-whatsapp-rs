@@ -32,7 +32,7 @@ use super::{
     PgEventStore, RecordStore, SchemaMigrator, StoreResult, Turn, listing,
 };
 use crate::model::{
-    AllowedTenants, ApiKeyRecord, BindOutcome, DeleteTenantOutcome, IdempotencyClaim,
+    AllowedTenants, ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim,
     IdempotencyKey, IdempotencyRecord, IdempotencyState, KeyOwner, KeyScope, Listing, NewApiKey,
     NumberBinding, NumberStatus, PageRequest, Scope, Tenant, TenantId, TenantStatus, WabaBinding,
 };
@@ -560,6 +560,23 @@ impl RecordStore for PgStore {
         Ok(done.rows_affected() > 0)
     }
 
+    async fn unbind_waba_if(&self, epoch: &BindingEpoch) -> StoreResult<bool> {
+        // One statement: the row is deleted only as `epoch` read it (its
+        // numbers with it, ON DELETE CASCADE); a binding made since has
+        // another `attached_at`.
+        let done = sqlx::query(
+            "DELETE FROM wa_server_wabas \
+             WHERE waba_id = $1 AND tenant_id = $2 AND attached_at = $3",
+        )
+        .bind(epoch.waba_id.as_str())
+        .bind(epoch.tenant_id.as_str())
+        .bind(epoch.attached_at)
+        .execute(&self.pool)
+        .await
+        .map_err(busy_or_backend)?;
+        Ok(done.rows_affected() > 0)
+    }
+
     async fn waba(&self, waba_id: &WabaId) -> StoreResult<Option<WabaBinding>> {
         let row = sqlx::query(
             "SELECT waba_id, tenant_id, credit_allocation_id, attached_at \
@@ -668,6 +685,37 @@ impl RecordStore for PgStore {
         .await
         .map_err(backend)
         .map(|_| ())
+    }
+
+    async fn set_waba_status_if(
+        &self,
+        epoch: &BindingEpoch,
+        status: NumberStatus,
+    ) -> StoreResult<bool> {
+        // The WABA's row, as `epoch` read it, locked `FOR KEY SHARE`: an
+        // unbinding (the row's delete, and its numbers') waits for this
+        // update, and one committed before it leaves no row to find. Only
+        // then its numbers.
+        let held: bool = sqlx::query_scalar(
+            "WITH held AS ( \
+               SELECT waba_id FROM wa_server_wabas \
+               WHERE waba_id = $1 AND tenant_id = $2 AND attached_at = $3 \
+               FOR KEY SHARE \
+             ), marked AS ( \
+               UPDATE wa_server_numbers n SET status = $4, updated_at = now() \
+               FROM held WHERE n.waba_id = held.waba_id \
+               RETURNING 1 \
+             ) \
+             SELECT EXISTS (SELECT 1 FROM held)",
+        )
+        .bind(epoch.waba_id.as_str())
+        .bind(epoch.tenant_id.as_str())
+        .bind(epoch.attached_at)
+        .bind(status.as_str())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(busy_or_backend)?;
+        Ok(held)
     }
 }
 

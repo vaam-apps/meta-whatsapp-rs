@@ -316,6 +316,35 @@ pub struct WabaBinding {
     pub attached_at: OffsetDateTime,
 }
 
+impl WabaBinding {
+    /// This binding's epoch: what a write conditioned on it compares.
+    pub fn epoch(&self) -> BindingEpoch {
+        BindingEpoch {
+            waba_id: self.waba_id.clone(),
+            tenant_id: self.tenant_id.clone(),
+            attached_at: self.attached_at,
+        }
+    }
+}
+
+/// A WABA's binding as it was read (by a capability, when it was made):
+/// which tenant held the WABA, since when. A write conditioned on it
+/// (`RecordStore::unbind_waba_if`, `RecordStore::set_waba_status_if`)
+/// does nothing once the WABA was unbound since, and bound again or not,
+/// to the same tenant or another: a binding made later begins later.
+/// A binding refreshed for its own tenant (`RecordStore::bind_waba` on a
+/// WABA the tenant holds) keeps its epoch. `attached_at` is compared as
+/// the store gave it (a backend returns what it stored).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BindingEpoch {
+    /// The WABA.
+    pub waba_id: WabaId,
+    /// The tenant that held it.
+    pub tenant_id: TenantId,
+    /// When that binding began.
+    pub attached_at: OffsetDateTime,
+}
+
 /// The connection status of a bound number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NumberStatus {

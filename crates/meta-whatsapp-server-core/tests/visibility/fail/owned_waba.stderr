@@ -6,4 +6,4 @@ error: cannot construct `OwnedWaba` with struct literal syntax due to private fi
   |                 |
   |                 private field
   |
-  = note: ...and other private field `issuer` that was not provided
+  = note: ...and other private fields `issuer`, `epoch` and `token` that were not provided

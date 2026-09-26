@@ -989,6 +989,13 @@ impl meta_whatsapp_rs::core::store::KvStore for FailingDeletes {
         new: Option<Vec<u8>>,
         expiry: meta_whatsapp_rs::core::store::Expiry,
     ) -> Result<Option<u64>, meta_whatsapp_rs::core::error::StorageError> {
+        // A delete by compare-and-swap (the vault's conditional delete,
+        // roadmap S2) is a delete too.
+        if new.is_none() && self.failing.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(meta_whatsapp_rs::core::error::StorageError::Backend(
+                anyhow::anyhow!("the store is down"),
+            ));
+        }
         self.inner
             .compare_and_swap(key, expected, new, expiry)
             .await

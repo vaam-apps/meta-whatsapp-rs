@@ -15,7 +15,7 @@ use super::{
     Outbox, RecordStore, SchemaMigrator, StoreResult, Turn, listing,
 };
 use crate::model::{
-    AllowedTenants, ApiKeyRecord, BindOutcome, DeleteTenantOutcome, IdempotencyClaim,
+    AllowedTenants, ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim,
     IdempotencyKey, IdempotencyRecord, IdempotencyState, KeyOwner, KeyScope, Listing, NewApiKey,
     NumberBinding, NumberStatus, PageRequest, Tenant, TenantId, TenantStatus, WabaBinding,
 };
@@ -362,6 +362,16 @@ impl RecordStore for MemoryStore {
         Ok(removed)
     }
 
+    async fn unbind_waba_if(&self, epoch: &BindingEpoch) -> StoreResult<bool> {
+        let mut state = self.lock();
+        if !holds(&state, epoch) {
+            return Ok(false);
+        }
+        state.wabas.remove(epoch.waba_id.as_str());
+        state.numbers.retain(|_, b| b.waba_id != epoch.waba_id);
+        Ok(true)
+    }
+
     async fn waba(&self, waba_id: &WabaId) -> StoreResult<Option<WabaBinding>> {
         Ok(self.lock().wabas.get(waba_id.as_str()).cloned())
     }
@@ -425,6 +435,34 @@ impl RecordStore for MemoryStore {
         }
         Ok(())
     }
+
+    async fn set_waba_status_if(
+        &self,
+        epoch: &BindingEpoch,
+        status: NumberStatus,
+    ) -> StoreResult<bool> {
+        let now = OffsetDateTime::now_utc();
+        let mut state = self.lock();
+        if !holds(&state, epoch) {
+            return Ok(false);
+        }
+        for number in state.numbers.values_mut() {
+            if number.waba_id == epoch.waba_id {
+                number.status = status;
+                number.updated_at = now;
+            }
+        }
+        Ok(true)
+    }
+}
+
+/// Whether `epoch.waba_id` is still bound as `epoch` says: the same
+/// tenant, since the same instant.
+fn holds(state: &State, epoch: &BindingEpoch) -> bool {
+    state
+        .wabas
+        .get(epoch.waba_id.as_str())
+        .is_some_and(|w| w.tenant_id == epoch.tenant_id && w.attached_at == epoch.attached_at)
 }
 
 #[async_trait]

@@ -4,6 +4,7 @@
 #![allow(dead_code)] // each test binary uses a different subset
 
 pub mod backend_suite;
+pub mod capability_suite;
 pub mod capture;
 pub mod events_suite;
 pub mod meta;

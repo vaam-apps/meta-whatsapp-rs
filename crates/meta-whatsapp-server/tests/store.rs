@@ -21,3 +21,13 @@ async fn the_memory_event_store_passes_the_suite() {
 async fn the_memory_backend_hands_out_the_same_data_on_every_call() {
     common::backend_suite::run(&MemoryBackend::new()).await;
 }
+
+/// Roadmap S2 (SR-L2, the `failed` race) on memory.
+#[tokio::test]
+async fn capabilities_act_only_on_what_they_were_made_from() {
+    common::capability_suite::run(
+        std::sync::Arc::new(MemoryStore::new()),
+        std::sync::Arc::new(meta_whatsapp_rs::adapters::store::MemoryKvStore::new()),
+    )
+    .await;
+}

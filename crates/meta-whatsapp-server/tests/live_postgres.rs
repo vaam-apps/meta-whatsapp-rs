@@ -67,6 +67,24 @@ async fn live_postgres_backend_hands_out_the_same_data_on_every_call() {
     common::backend_suite::run(&PgBackend::new(pool)).await;
 }
 
+/// Roadmap S2 (SR-L2, the `failed` race) on Postgres: a capability acts
+/// only on the binding and the vault record it was made from
+/// (`common::capability_suite`).
+#[tokio::test]
+async fn live_postgres_capabilities_act_only_on_what_they_were_made_from() {
+    use meta_whatsapp_rs::adapters::store::PostgresKvStore;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(5).await;
+    migrate(&pool).await.unwrap();
+    common::capability_suite::run(
+        std::sync::Arc::new(PgStore::new(pool.clone())),
+        std::sync::Arc::new(PostgresKvStore::new(pool)),
+    )
+    .await;
+}
+
 /// Two instances starting at once on an empty database both migrate, and
 /// each migration is applied once.
 #[tokio::test]

@@ -470,6 +470,6 @@ pub(crate) async fn disconnect_waba(
     if let Err(error) = unsubscribed {
         return Err(owned.failed(&state, &error).await.with_details(&error));
     }
-    owned.forget(&state).await?;
+    owned.forget_or_busy(&state).await?;
     Ok(StatusCode::NO_CONTENT)
 }

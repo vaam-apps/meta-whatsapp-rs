@@ -330,7 +330,11 @@ pub(crate) async fn delete_tenant(
             if let Err(error) = unsubscribed {
                 return Err(owned.failed(&state, &error).await.with_details(&error));
             }
-            owned.forget(&state).await?;
+            if !owned.forget(&state).await? {
+                // Attached again (or its token rotated) meanwhile: the
+                // next round sees it as it is now.
+                continue;
+            }
             let waba_id = binding.waba_id.as_str();
             audit(
                 "waba_disconnected",
