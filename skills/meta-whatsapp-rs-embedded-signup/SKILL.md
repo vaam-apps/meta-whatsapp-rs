@@ -5,7 +5,7 @@ description: "Letting each merchant of a multi-tenant CMS connect their own What
 
 # meta-whatsapp-rs-embedded-signup
 
-> **Verified against meta-whatsapp-rs 42e6fd1c486feffcde54d676b7e799a618e1a94b (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs b7211bc1f282f873b605e7a3a1126ce4e45e5677 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code, compiled and tested by meta-whatsapp-rs's own gate:
 [examples/onboarding.rs](examples/onboarding.rs), [examples/solution_partner.rs](examples/solution_partner.rs), [examples/business_verification.rs](examples/business_verification.rs). The page side: [references/frontend.md](references/frontend.md). A full
@@ -150,7 +150,7 @@ a malformed post spent the attempt. Check everything local first.
   number pools or multi-WABA onboarding; no token refresh (an expired
   token means running the flow again), no PIN policy, no code-less
   `OnboardingRequest` for `resume` after a restart (hence the placeholder
-  code above) ([open questions 4–12](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)).
+  code above) ([OPEN_QUESTIONS.md #4–#12](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants), all decided: roadmap L4, L11a–L11e, L25).
 - No tenant model: which of your merchants owns a WABA is your table.
 
 ## Related skills

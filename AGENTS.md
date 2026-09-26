@@ -7,10 +7,49 @@ and WhatsApp OTP authentication.
 
 **Read [`docs/architecture.md`](docs/architecture.md) before designing
 anything.** It is the spec. [`docs/coverage.md`](docs/coverage.md) says what
-exists and what does not. [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) lists
-decisions reserved for the maintainer — surface them, never pick a default.
+exists and what does not; [`docs/parity.md`](docs/parity.md) compares it
+with Zaileys and Meta's Cloud API, capability by capability, and
+[`docs/categories.md`](docs/categories.md) by Meta platform category;
+[`docs/roadmap.md`](docs/roadmap.md) is the plan to parity, in PR-sized
+items. [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) lists the decisions the code
+has not made, and how each was decided (§ Decisions below).
 [`CONTRIBUTING.md`](CONTRIBUTING.md) and
 [`docs/dev-environment.md`](docs/dev-environment.md) cover setup and process.
+
+## Decisions
+
+Since 2026-09-26 the owner delegates this repository's decisions, on one
+condition: every choice stays swappable. The rule:
+
+- **Who decides**: the coordinating agent. An implementer's draft
+  proposes a choice, in its report and its PR body; it does not record
+  one.
+- **What it covers**: the entries of `OPEN_QUESTIONS.md`, the design's
+  D-rows ([design §10](docs/design/server.md#10-decisions)), and any
+  decision a task meets on the way.
+- **The test**: a choice may be decided when it ships swappable (behind
+  a trait, a port or a setting, with a documented way to swap it), or
+  names the [roadmap](docs/roadmap.md) item that adds the swap.
+- **What stays the owner's**, even when the choice would ship
+  swappable: legal and terms-of-service choices, licences among them;
+  what cannot be undone: irreversible deletion or data migrations, a
+  released contract, and the stable identifiers
+  (`docs/architecture.md` § Stable identifiers). When unsure whether a
+  choice is one of these, it is the owner's: surface it, never pick a
+  default. The ones that wait for the owner before parity are
+  [roadmap.md § Owner touchpoints](docs/roadmap.md#owner-touchpoints).
+- **Legal acts**: the code decides nothing legal. Where Meta ties a
+  legal act to an API call (accepting terms, signing an agreement), the
+  library exposes it as an explicit call that no other call makes, and
+  the service as an explicit, audited operator action, off until the
+  deployment enables it and never taken automatically. Performing it is
+  the deployer's decision, for their own deployment.
+- **Recording**: in the entry, in the format the
+  [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) header gives, and for the
+  service in design §10.
+- For this repository only, and only while the choice stays swappable,
+  this replaces the global rule to surface a decision reserved for the
+  maintainer rather than pick a default.
 
 ## Commands
 
@@ -101,3 +140,9 @@ phone number alone.
 - A change to a public API is not done until `docs/`, `skills/` and the
   rustdoc agree with it. Say in the PR what happened to each (a link, or
   `n/a — <reason>`).
+- A change to a capability updates its row in `docs/parity.md` (and its
+  category in `docs/categories.md`, its row in `docs/coverage.md`, and
+  the item in `docs/roadmap.md`) in the same PR; a row says done only
+  when the code shows it. `crates/meta-whatsapp-rs/tests/docs_tables.rs`
+  (in `just test`) checks the tables' counts, statuses, cross-references
+  and cited symbols.

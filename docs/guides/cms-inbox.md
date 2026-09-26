@@ -211,7 +211,8 @@ match inbox.reply(&key, content).await {
   both.
 - Meta also opens the window when the customer **calls** you; the inbox only
   sees messages, so after a call it still shows "closed" and `reply` refuses
-  free text ([open question](../../OPEN_QUESTIONS.md#cms-inbox) 32). And Meta
+  free text (recording calls is [decided](../../OPEN_QUESTIONS.md#cms-inbox) 32,
+  roadmap L7, not built yet). And Meta
   notes that, rarely, a reply inside the window is refused anyway. Keep the
   template fallback reachable in both cases.
 - Templates must be approved in the merchant's WABA, in that language;
@@ -261,7 +262,8 @@ events.addEventListener('lagged', () => reloadHistory()); // the browser fell be
 - Each open stream's receiver clones every event before the filter drops
   it, multi-megabyte history syncs included: fine for a handful of open
   inboxes, a cost to measure with many
-  ([open question](../../OPEN_QUESTIONS.md#webhooks-and-live-updates) 31).
+  ([decided](../../OPEN_QUESTIONS.md#webhooks-and-live-updates) 31: shared
+  events instead of clones, roadmap L21b, not built yet).
 - The two sinks run concurrently: a live event can reach the browser before
   the store has it. Render the event itself; it carries the whole message.
 - The broadcast channel lives in one process. With several instances, a

@@ -5,7 +5,7 @@ description: "WhatsApp commerce with meta-whatsapp-rs - commerce settings (cart,
 
 # meta-whatsapp-rs-commerce
 
-> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs b7211bc1f282f873b605e7a3a1126ce4e45e5677 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/commerce.rs](examples/commerce.rs), compiled and
 tested by meta-whatsapp-rs's own gate.
@@ -112,7 +112,8 @@ key the order by the message id.
   no order state machine.
 - Product-card carousel templates accept 2–10 cards where Meta's page says
   "exactly two"
-  ([open question 22](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#product-details)).
+  ([OPEN_QUESTIONS.md #22](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#product-details),
+  decided on 2026-09-26: creation will check exactly two, roadmap L20e).
 
 ## Related skills
 

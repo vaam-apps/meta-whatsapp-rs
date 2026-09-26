@@ -65,8 +65,10 @@ let link = deep_link("+15551234567", &created.id)?; // wa.me/15551234567/signup/
 The first `create` of a business must carry `accept_terms()` (without it:
 `2494168`); later ones must not (with it: `2494176`, nothing created).
 Accepting accepts Meta's marketing messages terms on the business's behalf:
-a [legal decision](../../OPEN_QUESTIONS.md#product-details) (26), not a
-technical one. Meta's page says a webhook notifies you of each
+a legal act, not a technical one. meta-whatsapp-rs decides nothing legal:
+`accept_terms()` is the explicit call, and making it is your decision for
+your deployment ([open question](../../OPEN_QUESTIONS.md#product-details)
+26, decided on that basis). Meta's page says a webhook notifies you of each
 subscription but does not document its payload; meta-whatsapp-rs has no typed event
 for it, so it would arrive as `WebhookEvent::Unknown` (or an unknown
 message type). Check on a test WABA before relying on it.

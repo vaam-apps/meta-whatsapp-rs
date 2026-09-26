@@ -38,7 +38,8 @@ let handler = WebhookHandler::builder(
 Read the app secret and verify token from your secret store at startup and
 let a blank one stop the process: a blank verify token otherwise answers
 403 to every verification, but only when one arrives
-([open question 16](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#webhooks)).
+([OPEN_QUESTIONS.md #16](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#webhooks); decided on
+2026-09-26: an additive check at build time, roadmap L20d, not built yet).
 List the old app secret next to the new one while rotating, then drop it.
 
 ## axum
@@ -125,8 +126,9 @@ Keep sink calls well under the lease (`.with_lease(d)` to change it).
 
 ## What meta-whatsapp-rs does not do
 
-- No dead-letter queue: one permanently failing event fails its batch
-  ([open question 30](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#webhooks-and-live-updates)).
+- No dead-letter queue yet: one permanently failing event fails its batch
+  ([OPEN_QUESTIONS.md #30](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#webhooks-and-live-updates),
+  decided on 2026-09-26: dead-lettering, roadmap L21a).
 - No API to fetch past webhooks: what your sink did not persist is gone
   after Meta's 7 days.
 - No mutual TLS setup (Meta offers it per app; configure it in front).

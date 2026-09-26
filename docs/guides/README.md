@@ -8,8 +8,10 @@ with Embedded Signup and chats with customers in-app).
 They sit between the [README](../../README.md) quick start and the API
 reference (`cargo doc -p meta-whatsapp-rs --all-features --open`). The design and its
 reasons are in [architecture.md](../architecture.md); what exists and what
-does not is in [coverage.md](../coverage.md); decisions nobody has made yet
-are in [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md).
+does not is in [coverage.md](../coverage.md) and
+[parity.md](../parity.md), and what comes next in
+[roadmap.md](../roadmap.md); product decisions, all but one decided, are
+in [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md).
 
 > Checked against meta-whatsapp-rs **7940d15** (2026-09-24), Graph API v25.0. Every
 > Rust name in these pages was checked against the source at that commit,

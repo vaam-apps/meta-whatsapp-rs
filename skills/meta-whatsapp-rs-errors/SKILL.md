@@ -5,7 +5,7 @@ description: "Handling meta-whatsapp-rs errors correctly - the Error tree (Api, 
 
 # meta-whatsapp-rs-errors
 
-> **Verified against meta-whatsapp-rs 5597ced54ccd5e940a4b1bea920ae29037b6665a (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs b7211bc1f282f873b605e7a3a1126ce4e45e5677 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/handle.rs](examples/handle.rs), compiled and
 tested by meta-whatsapp-rs's own gate. Every code, its `ErrorKind` and what to do:
@@ -137,8 +137,10 @@ pub fn after_failed_send(e: &Error) -> Resend {
 - No retry scheduler, outbox or dead-letter queue for sends: a job queue
   on top is yours, and it must be idempotent (tag sends with
   `callback_data`).
-- Webhook sink errors fail the whole batch; a dead-letter design is
-  [open question 30](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#webhooks-and-live-updates).
+- Webhook sink errors fail the whole batch; dead-lettering was decided
+  on 2026-09-26 and is not built yet
+  ([OPEN_QUESTIONS.md #30](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#webhooks-and-live-updates),
+  roadmap L21a).
 
 ## Related skills
 

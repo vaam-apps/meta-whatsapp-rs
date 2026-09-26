@@ -29,6 +29,11 @@ Review the change as a maintainer who has to live with its public API.
   say so instead.
 - Dependencies: new crates justified, workspace-pinned, licenses allowed by
   `deny.toml`, no second version of an existing crate without reason.
-- Docs parity: `docs/coverage.md` status matches reality; rustdoc names the
-  Meta pages; consumer skills in `skills/` describe the code as it is.
+- Docs parity: `docs/coverage.md`, `docs/parity.md` (the capability's
+  row, with the symbol that does it) and `docs/categories.md` (its
+  category) match reality, and `docs/roadmap.md`'s item for the change
+  is ticked or updated; `crates/meta-whatsapp-rs/tests/docs_tables.rs`
+  checks their counts and cross-references, not their truth. Rustdoc
+  names the Meta pages; consumer skills in `skills/` describe the code
+  as it is.
 Report findings by severity with file:line. Do not edit files.

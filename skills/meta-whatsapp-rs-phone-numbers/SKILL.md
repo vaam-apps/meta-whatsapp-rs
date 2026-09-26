@@ -111,8 +111,10 @@ number.sync_smb_app_data(SmbSyncType::History).await?; // a second call: SyncNot
 
 ## What meta-whatsapp-rs does not do
 
-- No PIN policy (who chooses it, storage, recovery)
-  ([open question 4](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants)).
+- No PIN storage or recovery: the caller supplies the PIN on every
+  attempt
+  ([OPEN_QUESTIONS.md #4](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants),
+  decided on 2026-09-26).
 - Not wrapped: payload-encryption settings, WABA creation, system users.
 - Nothing stores the synced contacts (`smb_app_state_sync`); the inbox
   records the synced history and the app's echoes (`meta-whatsapp-rs-cms-inbox`).

@@ -5,7 +5,7 @@ description: "Receiving WhatsApp events through meta-whatsapp-server, the meta-w
 
 # meta-whatsapp-rs-server-events
 
-> **Verified against meta-whatsapp-rs 5e35867fed8b56cea5796c62f3aa808bab7407ed (2026-09-26).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs ef0fe364e3a21a535238007db5276fe5ef6ce970 (2026-09-26).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/events.ts](examples/events.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md#receiving-metas-webhooks).
 
@@ -149,7 +149,7 @@ per filter set.
 - It never shows you another tenant's events, nor operator-only ones
   (the operator reads those, outbox rows without a tenant).
 - It does not resynchronise you after `cursor_expired`, and keeps events
-  7 days by default (the owner's retention decision is still open).
+  7 days by default (design D10, decided on 2026-09-26: set per store).
 - Meta's own retries, deduplication and signature are its business: you
   never talk to Meta, and never verify Meta's signature yourself.
 
