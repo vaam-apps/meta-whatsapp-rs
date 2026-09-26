@@ -954,8 +954,9 @@ async fn event_ids_are_keyed_by_the_first_app_secret() {
 }
 
 /// Security review L3: an event Meta dated before what the dedup lease
-/// remembers (7 days) is a replay, routed to nobody whoever holds its
-/// number; within it, it routes as usual.
+/// remembers (the window the caller passes; the pipeline's is below) is a
+/// replay, routed to nobody whoever holds its number; within it, it routes
+/// as usual.
 #[tokio::test]
 async fn an_event_dated_before_the_replay_window_is_nobodys() {
     use meta_whatsapp_server::events::route;
@@ -990,6 +991,44 @@ async fn an_event_dated_before_the_replay_window_is_nobodys() {
         Some(A.to_owned())
     );
     assert_eq!(fresh.operator_only, None);
+}
+
+/// The pipeline's replay window is what the library's dedup markers
+/// remember, `DEFAULT_DEDUP_TTL`: 7 days and an hour, the figure the design
+/// (section 6), the guide, the CHANGELOG and the events skill give. On the
+/// service's clock, eight days after the binding began: an event Meta
+/// dated a minute inside the window reaches its tenant, one a minute
+/// outside is operator-only. Decisive: `replay_window` in
+/// `ServiceSink` (7 days alone, or any longer window, fails).
+#[tokio::test]
+async fn the_replay_window_is_seven_days_and_an_hour() {
+    use meta_whatsapp_rs::webhooks::DEFAULT_DEDUP_TTL;
+    use time::{Duration, OffsetDateTime};
+    assert_eq!(
+        DEFAULT_DEDUP_TTL,
+        std::time::Duration::from_hours(7 * 24 + 1)
+    );
+    let h = two_tenants().await;
+    let now = OffsetDateTime::now_utc() + Duration::days(8);
+    h.clock.set(now);
+    let window = Duration::hours(7 * 24 + 1);
+    for (wamid, at) in [
+        ("wamid.inside", now - window + Duration::minutes(1)),
+        ("wamid.outside", now - window - Duration::minutes(1)),
+    ] {
+        let body = bytes(&common::meta::dated(
+            text(WABA_A, PN_A, wamid),
+            at.unix_timestamp(),
+        ));
+        assert_eq!(h.webhook(&body).await.status, StatusCode::OK, "{wamid}");
+    }
+    let rows = h.outbox.rows();
+    let tenant = |wamid: &str| {
+        let row = rows.iter().find(|r| r.data.contains(wamid)).unwrap();
+        row.tenant.as_ref().map(|t| t.as_str().to_owned())
+    };
+    assert_eq!(tenant("wamid.inside"), Some(A.to_owned()), "inside");
+    assert_eq!(tenant("wamid.outside"), None, "outside: a replay");
 }
 
 /// Security review M1: a replica reads at most 64 deliveries at once, and
