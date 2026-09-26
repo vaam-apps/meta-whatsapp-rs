@@ -37,6 +37,13 @@ capability table) and `docs/categories.md` (Meta's platform categories).
 - Service core tests (no database, no HTTP):
   `cargo test -p meta-whatsapp-server-core`; one module:
   `cargo test -p meta-whatsapp-server-core idempotency::`.
+- What must not compile outside the service's crates (the vault's
+  methods, capabilities, `AppState::store`) is pinned by `trybuild` UI
+  tests: `cargo test -p meta-whatsapp-server-core --test visibility`
+  (and `-p meta-whatsapp-server --all-features`). After changing a case
+  or the toolchain, regenerate the expected errors with
+  `TRYBUILD=overwrite` and review the `.stderr` diff: each case must
+  still fail for its own reason.
 - Service tests: `cargo test -p meta-whatsapp-server --all-features`;
   after changing a route, regenerate the spec with
   `cargo run -p meta-whatsapp-server -- openapi > crates/meta-whatsapp-server/openapi/v1.json`

@@ -927,7 +927,9 @@ decisions and the delivery milestones, is
   - `crates/meta-whatsapp-server-core`: the framework-free core. The
     domain (tenants, keys, bindings, idempotency records), the
     authorization order (credential to `Caller`; ownership to
-    `OwnedNumber`/`OwnedWaba`, the only way to a vault token), event
+    `OwnedNumber`/`OwnedWaba`, the only way to a vault token; each
+    capability works only with the `Authorizer` that made it, which
+    refuses another's with `403`: design §8.1), event
     routing and polling, the idempotency engine, the rate limiter, and
     the error model as data (`ServiceError`: a code of `CODES`, its status
     as a number, `retryable`, `may_have_been_sent`). It depends on the

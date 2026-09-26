@@ -1,7 +1,9 @@
 # Design: a deployable meta-whatsapp-rs service (`meta-whatsapp-server`)
 
 > **Milestones M1a, M1b and M1c are implemented** in
-> `crates/meta-whatsapp-server` (M1a: the crate, configuration, listeners,
+> `crates/meta-whatsapp-server`, on its framework-free core
+> `crates/meta-whatsapp-server-core` (roadmap S1,
+> [§8.1](#81-a-framework-free-core-with-ports)) (M1a: the crate, configuration, listeners,
 > storage, tenants and keys, the admin API with attach, unbind and vault
 > rotation, the numbers routes, errors, operations, the committed OpenAPI
 > document; M1b: messages, read receipts, media, templates, idempotency
@@ -25,14 +27,16 @@
 The product decision: apps not written in Rust (Medusa, in TypeScript; the
 CMS, any stack) use meta-whatsapp-rs through a **service deployed as a Docker image
 and called over HTTP**. In short: a binary crate, `crates/meta-whatsapp-server`
-(axum), built only on the `meta-whatsapp-rs` facade, productizes the runnable examples
+(axum), and its framework-free core, `crates/meta-whatsapp-server-core`,
+built only on the `meta-whatsapp-rs` facade, productize the runnable examples
 and keeps their security rules; one multi-tenant deployment per Meta app;
 a public listener serving only Meta's webhook and an internal one for the
 API; Postgres for all state, with an event outbox feeding SSE, polling and
 signed webhooks; `/v1` REST/JSON, a committed OpenAPI 3.1 spec, a generated
 TypeScript client; five milestones (M5, added on 2026-09-26, brings the
-modules parity requires). M1 is built as that one crate; §8 splits it
-into a framework-free core, API adapters and swappable backends, with
+modules parity requires). M1 was built as one crate; its core is a crate
+of its own since roadmap S1, and §8 splits the rest into API adapters
+and swappable backends, with
 CrateStack for the API and the models as the default once the owner
 accepts its licence (D20 (a)); axum and sqlx stay built beside it.
 
@@ -86,14 +90,28 @@ separate deployments only for separate apps or environments.
 
 ### 2.1 The crate
 
-`crates/meta-whatsapp-server`, binary `meta-whatsapp-server`, `publish = false`, a workspace
-member (so `just ci` covers it); as built through M1 (§8 splits it into
-a core, API adapters and backends, which depend on the facade and on
-each other, never the library on them). It depends only on the `meta-whatsapp-rs` facade
-(`postgres`, `axum`, `typst`; axum and sqlx through its re-exports, OQ
-#29): the API an outside integrator has, which proves the facade suffices.
-[architecture.md](../architecture.md)'s "nothing depends on `meta-whatsapp-rs`"
-becomes "no library crate depends on `meta-whatsapp-rs`; binaries may" (L6). New
+Two crates, as built through M1 and roadmap S1, both `publish = false`
+and workspace members (so `just ci` covers them) but not default ones:
+
+- `crates/meta-whatsapp-server-core`, a library: the domain, the
+  authorization order, event routing and polling, the idempotency
+  engine, the rate limiter, the §5 error model as data, and the ports a
+  backend implements ([§8.1](#81-a-framework-free-core-with-ports)). It
+  turns on none of the facade's adapter features: no axum, no sqlx, no
+  utoipa.
+- `crates/meta-whatsapp-server`, binary `meta-whatsapp-server`: the axum
+  API and the OpenAPI document, the webhook pipeline, configuration, the
+  command line, and the memory and Postgres backends. It turns on the
+  facade's `reqwest`, `memory`, `postgres` and `axum` (axum and sqlx
+  through its re-exports, OQ #29).
+
+They depend on the `meta-whatsapp-rs` facade and on each other, never on
+another crate of the library, and no library crate depends on them: the
+API an outside integrator has, which proves the facade suffices.
+[architecture.md](../architecture.md)'s "nothing depends on
+`meta-whatsapp-rs`" became "no library crate depends on
+`meta-whatsapp-rs`; binaries may, and the service's crates do" (L6). §8
+splits the server further, into API adapters and backends. New
 dependencies (OpenAPI generation, `tower-http`, a Prometheus exporter, a
 rate limiter, `clap`) must pass `cargo deny`.
 
@@ -133,8 +151,10 @@ travels to it), a vault key id used twice (`WA_VAULT_KEY_ID`'s and
 could never be opened), or Solution Partner mode without its
 credentials.
 
-Postgres is required outside development (memory stores and a throwaway
-vault key only there). Library tables keep their `wa_` prefix; the
+A shared backend is required outside development: Postgres, the only one
+built besides memory (memory stores and a throwaway vault key only in
+development; another database is a `Backend` of the core's ports,
+[§8.2](#82-the-backend-bundle-is-the-unit-of-swapping)). Library tables keep their `wa_` prefix; the
 service's use `wa_server_` and their own migration history:
 
 | Table | Holds |
@@ -184,7 +204,7 @@ rest follows from the list above and decides nothing for the owner:
 
 - **Types are an allow-list too.** A tenant receives only the event types
   the service reviewed and pinned (`TENANT_EVENT_TYPES` in
-  `src/events.rs`); `unknown`, `unparsed`, `partner_solution_updated`, the
+  `crates/meta-whatsapp-server-core/src/events.rs`); `unknown`, `unparsed`, `partner_solution_updated`, the
   types the library's webhook conformance sweep typed (PR #17:
   Conversation Routing's `standby_observed` and `thread_control_changed`,
   the Marketing Messages API's `user_action_reported`), which are not yet
@@ -217,7 +237,10 @@ rest follows from the list above and decides nothing for the owner:
   same id and bound again, is operator-only. An undated event (errors,
   syncs) has only the tenant's id to go by: in that last race it reaches
   the tenant created again. The memory outbox (development) does not
-  check again.
+  check again, and the core's `Outbox` port does not yet require the
+  check: roadmap S2 makes it a requirement of every backend, memory
+  included, with a typed route guard on each new event
+  ([§8.1](#81-a-framework-free-core-with-ports)).
 - **Replays go to nobody, under the same id.** An event Meta dated before
   what the dedup lease remembers (7 days and an hour) is operator-only.
   An event's id is derived from it (HMAC-SHA256 of its outbox key, under
@@ -314,15 +337,15 @@ rest follows from the list above and decides nothing for the owner:
 
 | Concern | Behaviour |
 | --- | --- |
-| vault, OTP, signup sessions, dedup, inbox, outbox, keys | shared in Postgres; expiry by the database clock (NTP) |
+| vault, OTP, signup sessions, dedup, inbox, outbox, keys | shared in Postgres; expiry by the database clock (NTP); roadmap S2 states the clock rule for any backend |
 | dedup lease (60 s) | a retry meeting a live lease on another replica gets 503 and Meta returns; a crashed replica's lease expires; the sink path (two inserts) stays far below 60 s |
 | outbox inserts | each tenant's in turn (its stream's row, locked to the commit); tenants in parallel; at most 4 deliveries recording per replica |
 | SSE | per replica, fed from the outbox by `LISTEN/NOTIFY`; `Last-Event-ID` resumes on any replica |
 | webhooks-out | workers on every replica claim rows with `FOR UPDATE SKIP LOCKED` and a lease; no leader |
 | rate limits | token buckets per replica (limit ÷ replicas); a shared limiter only if needed |
 | API key cache | none in v1: every request reads its key, so a revocation or suspension holds on the next request, on every replica (a cache of at most 30 s, purged by a revocation `NOTIFY`, if the key reads ever cost too much) |
-| housekeeping (`purge_expired`, outbox and idempotency purges) | any replica, under an advisory lock |
-| migrations | at start, under the library's lock and a service advisory lock; expand-then-contract so rolling deploys can mix versions. One exception predates the service: the library's migration 3 (lossless message content) converts in one step and needs older writers stopped first, then `migrate` run once from a one-off job (`docs/guides/production.md`); it runs before the service's first deploy, so no service rollout crosses it |
+| housekeeping (the outbox and idempotency purges, the library's expired key/value rows) | any replica, one at a time, under the housekeeping lock: the outbox and idempotency purges take it themselves (on Postgres, `HOUSEKEEPING_LOCK` in their own transactions), and the key/value janitor (`Janitor::purge_expired`) runs under a `LeaderLock` turn named `housekeeping`, the same key on Postgres, on the replica whose outbox purge ran that round; a replica without the lock skips that round (roadmap S2: one turn per round) |
+| migrations | at start, through the backend's `SchemaMigrator` (on Postgres, under the library's lock and the service's `MIGRATION_LOCK`); expand-then-contract so rolling deploys can mix versions. One exception predates the service: the library's migration 3 (lossless message content) converts in one step and needs older writers stopped first, then `migrate` run once from a one-off job (`docs/guides/production.md`); it runs before the service's first deploy, so no service rollout crosses it |
 
 ## 3. Tenancy and authentication
 
@@ -362,8 +385,13 @@ name, but the per-tenant checks still stop a CMS bug from crossing tenants.
 
 ### 3.3 Authorization order
 
-Every tenant route, as middleware plus typed extractors (`OwnedNumber`,
-`OwnedWaba`) that are the only way a handler obtains a token:
+Every tenant route, through the core's `Authorizer`
+(`meta_whatsapp_server_core::authz`), which the axum adapter calls from
+its middleware and its typed extractors. Only an `Authorizer` makes a
+`Caller`, an `AdminCaller`, an `OwnedNumber` or an `OwnedWaba`; the
+owned ones are the only way a handler obtains a token; and each works
+only with the `Authorizer` that made it
+([§8.1](#81-a-framework-free-core-with-ports)):
 
 1. Authenticate the key before reading the body, else `401`.
 2. Resolve the tenant (the key's, or `WA-Tenant` within the platform key's
@@ -779,7 +807,7 @@ which never sends twice. The service adds no send retries of its own.
 | Forged Meta deliveries | signature over raw bytes with any of N app secrets; missing or malformed header `401` before the body is read; 3 MiB; at most 64 read at once per replica (`503` before the body), 15 s to send one (`408`), refusals logged once a minute; the public listener serves nothing else; Meta's IP ranges or mTLS at the ingress (below) |
 | Replayed Meta bodies | dedup for 7 days and an hour (errors and bodies that are not webhooks: an hour, D23); events Meta dated before that go to nobody; an event keeps its id when recorded again, until `WA_APP_SECRET` is rotated; bodies never logged |
 | A WABA or number moving between tenants | events Meta dated before the binding began go to nobody, inbox included; the previous tenant's inbox rows stay under the number (M2's inbox reads must filter by binding epoch, or D10 decides a purge on unbind) |
-| A tenant reading or sending as another | ownership before the vault ([§3.3](#33-authorization-order)); foreign numbers are `404`; extractors are the only path to a token. *As built in M1b*: one token may reach several tenants' WABAs (the platform's system user token attached to each), so an id in a path is checked to be the path's number's or WABA's own: media with Meta's `phone_number_id`, templates through the WABA's own list; another's is `404` like a missing one |
+| A tenant reading or sending as another | ownership before the vault ([§3.3](#33-authorization-order)); foreign numbers are `404`; the core's `OwnedNumber` and `OwnedWaba` are the only path to a token, and a capability another `Authorizer` made is refused (`403`; the core's security review, SR-H1). *As built in M1b*: one token may reach several tenants' WABAs (the platform's system user token attached to each), so an id in a path is checked to be the path's number's or WABA's own: media with Meta's `phone_number_id`, templates through the WABA's own list; another's is `404` like a missing one |
 | A stolen platform key | limited to its tenants and scopes; internal network only; revocation effective across replicas at once |
 | A stolen database dump | tokens encrypted (vault key elsewhere), API keys hashed, OTP codes and numbers only as HMACs (pepper elsewhere), webhook secrets encrypted (data key elsewhere); the inbox history, the event outbox (`wa_server_events`: message texts, vCards, orders, Flow answers, BSUIDs, phone numbers, coexistence history; operator-only rows keep whole raw bodies and parse error texts) and the answers idempotency records keep for 24 h (a send's recipient: phone number, `wa_id` or BSUID) are readable, so database encryption at rest is the operator's, and the inbox's and the outbox's retention is D10 |
 | Signup attributed to the wrong merchant | state bound to the tenant, redeemed for the credential's tenant; ids verified with Meta; D4 |
@@ -871,8 +899,9 @@ third-party licences of what it contains (M4); it contains no `ffmpeg`
 
 ### 7.3 Start, observability, shutdown
 
-- `meta-whatsapp-server serve` validates the configuration, runs `postgres::migrate`
-  and the service's migrations (unless `skip`), opens both listeners.
+- `meta-whatsapp-server serve` validates the configuration, runs the
+  backend's `SchemaMigrator` (on Postgres, the library's `postgres::migrate`
+  and the service's migrations; unless `skip`), opens both listeners.
   Also: `migrate`, `openapi`, `healthcheck`, `admin …`, `vault rotate`.
 - Logs: `tracing` JSON, a span per request (request id, route template,
   tenant, status, duration); library events keep their levels
@@ -1005,14 +1034,73 @@ database's where it has one, else the service's `Clock`); contention is
 a typed error; a bundle's accessors return the same data on every call;
 listings are in byte order.
 
+**As built (roadmap S1).** `crates/meta-whatsapp-server-core` exists,
+with the model, the keys, event routing and polling, the idempotency
+engine, the rate limiter, the error model and authorization; the
+operations (messages, media, templates, numbers, admin, the webhook
+pipeline) are still the axum crate's handlers (roadmap S5a–S5e). What
+it holds today, where it differs from the target above:
+
+- **The ports** are `RecordStore`, `IdempotencyRecords`, `Outbox`,
+  `LeaderLock`, `Janitor` and `SchemaMigrator`, with S2's requirements
+  not yet in their contracts: the routing re-check is Postgres's alone
+  (§2.3), a purge takes the housekeeping lock itself and reports another
+  replica's turn as `None` (the outbox) or `0` (idempotency records), and
+  times are "the store's clock". Their failures are the library's
+  `StorageError`; no port names a driver's, a framework's or an API
+  toolkit's type, and an HTTP method is its name.
+- **`Backend`** gives every port over one database, and the library's
+  `KvStore` and `ConversationStore`, with its `kind()` (memory,
+  Postgres, or another by name) and `close()`. Each accessor returns a
+  handle to the same data on every call: what one call's handle writes,
+  the next reads. The service has two, `MemoryBackend` and `PgBackend`,
+  still in `meta-whatsapp-server` (S7 splits them out), and is not yet
+  composed from a bundle alone (S4).
+- **`LeaderLock`** is `try_exclusive(name)`: the turn for a name, ended
+  by its release or its drop, not yet a lease (S2). Locks are named by
+  strings (`HOUSEKEEPING`, `"housekeeping"`); a backend maps a name to
+  whatever its database locks. On Postgres the key is the first eight
+  bytes of SHA-256(`meta-whatsapp-server/<name>`), big-endian, as an
+  `i64` (`lock_key`), held by a transaction: so the `housekeeping` turn
+  takes `HOUSEKEEPING_LOCK`, the key the outbox and idempotency purges
+  take in their own transactions, and `MIGRATION_LOCK` is
+  `lock_key("migrate")`. Both keys are stable identifiers
+  ([architecture.md](../architecture.md#stable-identifiers)): replicas
+  of two releases must take the same ones.
+- **`ServiceError`** is the §5 error model as data: a code of `CODES`
+  (§5.2), its status as a number, `retryable`, `may_have_been_sent`, the
+  field for `invalid`, the step and `resumable` of a multi-step call, and
+  Meta's code, subcode, trace id and, where a route opts in, bounded
+  `details`. An API adapter renders it (the axum one: `ApiError`, the
+  §5.1 body), and the error's code table is §5.2's, read by the
+  service's tests.
+- **Capabilities are branded with their issuer.** `Authorizer::new` is
+  public, since an API adapter in another crate builds one, so anyone
+  can build an `Authorizer` over records of their own and have it make a
+  `Caller` or an `AdminCaller`. Each `Authorizer` therefore has an
+  identity of its own (an allocation made in `new`, compared by
+  address), which every `Caller`, `AdminCaller`, `OwnedNumber` and
+  `OwnedWaba` it makes carries, and every method taking one (ownership,
+  opening a WABA for an admin, storing, rotating or deleting vault
+  tokens, marking numbers after a `190`) refuses one another
+  `Authorizer` made: `403 forbidden`, logged at `warn`, before it reads
+  or writes anything (the core's security review, SR-H1). The
+  `Authorizer` also refuses a Graph client built with a token (SR-L4),
+  and what must not compile outside the core (the vault's methods, a
+  capability of one's own) is pinned by UI tests with the compiler's
+  errors. Deleting an opened WABA's token and binding is not yet
+  conditioned on what the `OwnedWaba` was made from (SR-L2, S2).
+- **Conformance** is still the server's tests' (S3).
+
 ### 8.2 The backend bundle is the unit of swapping
 
 `RecordStore` and `Outbox` are not independent: the Postgres outbox
 insert reads the binding tables again under a lock, and deleting a
 tenant writes the stream table. So one factory, `Backend`, returns every
 port over one database, with its kind and capabilities, and ports from
-two databases are never mixed. It replaces the optional Postgres pool
-the service uses today as its "memory?" flag.
+two databases are never mixed. It replaced (roadmap S1) the optional
+Postgres pool the service used as its "memory?" flag: that is
+`BackendKind::is_process_local` now.
 
 | Backend | Database | Status |
 | --- | --- | --- |

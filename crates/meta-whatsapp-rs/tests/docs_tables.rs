@@ -34,14 +34,14 @@
 //!   decision (D26) and open question (`OPEN_QUESTIONS` #26) exists.
 //! - **Symbols**: every backticked Rust path in a Library or Service cell
 //!   of the two tables resolves. `client::`, `webhooks::`, `core::`,
-//!   `adapters::`, `typst::`, `inbox::` and `server::` paths resolve module
-//!   by module in their crate to a `pub` item, then each member to a
-//!   variant, field, method or constant of the type before it; a path
-//!   starting with any other module is refused; other `Type::member`
-//!   paths and type names resolve to a declaration anywhere in `crates/`.
-//!   A bare lowercase name (`list`, `message_received`: a method of a type
-//!   the row named already, a Meta field or an event type) is not
-//!   checked.
+//!   `adapters::`, `typst::`, `inbox::`, `server::` and `server_core::`
+//!   paths resolve module by module in their crate to a `pub` item, then
+//!   each member to a variant, field, method or constant of the type
+//!   before it; a path starting with any other module is refused; other
+//!   `Type::member` paths and type names resolve to a declaration
+//!   anywhere in `crates/`. A bare lowercase name (`list`,
+//!   `message_received`: a method of a type the row named already, a Meta
+//!   field or an event type) is not checked.
 //! - **Links**: every relative link, and its `#anchor`, in the root and
 //!   `docs/` Markdown files resolves.
 //!
@@ -2238,7 +2238,9 @@ fn the_resolver_refuses_what_does_not_exist() {
         "webhooks::WebhookEvent::StatusUpdated",
         "core::store::ConversationStore::revoke",
         "inbox::Inbox::reply",
-        "server::events::TENANT_EVENT_TYPES",
+        "server_core::events::TENANT_EVENT_TYPES",
+        "server_core::authz::Authorizer::owned_number",
+        "server::state::DEFAULT_IDEMPOTENCY_TTL",
         "server::config",
         "OutboundMessage::reply_to",
         "MessageEchoed",
@@ -2255,6 +2257,8 @@ fn the_resolver_refuses_what_does_not_exist() {
         "client::no_such_module::Thing",
         "client::messages::Interactive::Carousel2",
         "server::events::NO_SUCH_CONST",
+        "server_core::events::NO_SUCH_CONST",
+        "server_core::authz::Authorizer::no_such_method",
         "OutboundMessage::no_such_member",
         "NoSuchType",
         "webhook::SignatureVerifier",
