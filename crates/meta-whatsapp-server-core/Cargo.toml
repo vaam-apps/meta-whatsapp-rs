@@ -21,7 +21,6 @@ name = "meta_whatsapp_server_core"
 # needs beyond it, it brings itself.
 meta-whatsapp-rs.workspace = true
 
-anyhow.workspace = true
 async-trait.workspace = true
 # Random API keys and idempotency claim ids.
 getrandom.workspace = true
@@ -44,7 +43,6 @@ tracing.workspace = true
 unicode-properties.workspace = true
 
 [dev-dependencies]
-meta-whatsapp-rs = { workspace = true, features = ["memory", "testing"] }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync", "test-util"] }
 
 [lints]
