@@ -44,6 +44,8 @@ unicode-properties.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync", "test-util"] }
+# tests/visibility.rs: what does not compile outside this crate.
+trybuild.workspace = true
 
 [lints]
 workspace = true

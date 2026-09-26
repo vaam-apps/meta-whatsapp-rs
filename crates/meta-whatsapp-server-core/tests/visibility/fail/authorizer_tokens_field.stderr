@@ -1,0 +1,5 @@
+error[E0616]: field `tokens` of struct `Authorizer` is private
+ --> tests/visibility/fail/authorizer_tokens_field.rs:5:20
+  |
+5 |     let _ = &authz.tokens;
+  |                    ^^^^^^ private field

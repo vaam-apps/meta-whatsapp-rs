@@ -998,3 +998,40 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   response of `Messages::send` or `Marketing::send` (which echo the
   recipient's number) is reported without the body snippet and without
   serde's message.
+- The security review of `meta-whatsapp-server-core` (on the branch that
+  extracted it) found, and fixed before it merged:
+  - **H1 — a capability one `Authorizer` made was accepted by another.**
+    `Authorizer::new` is public, so any crate could build one over records
+    of its own, have it make an `AdminCaller` or a `Caller` for any
+    tenant, and hand it to the service's `Authorizer`, which then read,
+    stored, rotated and deleted vault tokens. Each `Authorizer` now has an
+    identity of its own that `Caller`, `AdminCaller`, `OwnedNumber` and
+    `OwnedWaba` carry, and every method taking one refuses another's with
+    `403 forbidden`, logged at `warn`, before it reads or writes anything.
+    `Authorizer::store_token` and `rotate_vault` now fail with a
+    `ServiceError` (the same code as before for the vault's own failures).
+  - **L4 — the tokenless Graph client was only tokenless by convention.**
+    `Authorizer::new` refuses a client built with a token (a
+    configuration error) rather than stripping it: the library's `Client`
+    cannot drop one, and a silent strip would hide the misconfiguration.
+    So `Authorizer::new`, and `meta_whatsapp_server::state::AppState::new`,
+    `with_settings` and `from_backend`, return a `Result`.
+  - **M1 — `AppState::store` was public**, a way around the handlers to
+    the records that decide who owns what; it is crate-private.
+  - **L3 — `Debug` printed kept answers.** `Repeat::Replay`,
+    `IdempotencyState::Completed`, `IdempotencyRecord`,
+    `idempotency::Outcome::Answered` and the server's `MemoryStore` print a
+    body's length (`body_len`), never its bytes (`MemoryStore` prints
+    counts only: no idempotency key either).
+  - **L1 — the visibility pins could pass for the wrong reason.** The
+    `compile_fail` doctests on `Tokens` accepted any compile error (a
+    typo'd path passed). They are `trybuild` UI tests now
+    (`tests/visibility.rs` in both service crates), each checked against
+    the compiler's error code and text, with a control case that names
+    every path they use and compiles; `AppState::store` and
+    `AppState::authz` are pinned too.
+  - Not fixed here: **L2**, a race in `OwnedWaba::forget`. It deletes the
+    WABA's token and binding whatever they became since the WABA was
+    opened: attached again in between (a new token, another tenant), the
+    new ones go. Conditioning both on what the capability was made from
+    is a port change, recorded in docs/roadmap.md, item S2.

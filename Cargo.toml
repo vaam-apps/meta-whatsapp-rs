@@ -146,6 +146,10 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 pretty_assertions = "1"
 tower = "0.5"
 http-body-util = "0.1"
+# UI tests of the service's crates: what must not compile outside them
+# (private vault methods, capabilities no one else can make), pinned with
+# the compiler's error code and text rather than "some error".
+trybuild = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

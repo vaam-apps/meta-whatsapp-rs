@@ -10,11 +10,11 @@ use crate::events::{Events, Inbound};
 use crate::metrics::Metrics;
 use crate::ratelimit::{RateLimiter, RateLimits, Slots};
 use crate::store::{Backend, IdempotencyRecords, RecordStore, Store};
-use meta_whatsapp_rs::Client;
 use meta_whatsapp_rs::client::DEFAULT_TIMEOUT;
 use meta_whatsapp_rs::client::embedded_signup::TokenVault;
 use meta_whatsapp_rs::core::config::ApiVersion;
 use meta_whatsapp_rs::core::secret::VerifyToken;
+use meta_whatsapp_rs::{Client, Error};
 
 /// Default `WA_SERVER_IDEMPOTENCY_TTL`: how long an idempotency key's
 /// record is kept (docs/design/server.md, section 5.4).
@@ -110,6 +110,10 @@ impl AppState {
     /// without a default token: each call runs with the tenant's token),
     /// receiving Meta's webhooks into `inbound`'s stores, with the default
     /// [`Settings`].
+    ///
+    /// # Errors
+    ///
+    /// `client` carries a token (the core's `Authorizer::new` refuses it).
     pub fn new(
         store: Arc<dyn Store>,
         vault: TokenVault,
@@ -117,7 +121,7 @@ impl AppState {
         verify_token: VerifyToken,
         metrics: Metrics,
         inbound: Inbound,
-    ) -> Self {
+    ) -> Result<Self, Error> {
         Self::with_settings(
             store,
             vault,
@@ -130,6 +134,10 @@ impl AppState {
     }
 
     /// [`Self::new`] with `settings`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`].
     pub fn with_settings(
         store: Arc<dyn Store>,
         vault: TokenVault,
@@ -138,7 +146,7 @@ impl AppState {
         metrics: Metrics,
         inbound: Inbound,
         settings: Settings,
-    ) -> Self {
+    ) -> Result<Self, Error> {
         let records: Arc<dyn RecordStore> = store.clone();
         let idempotency: Arc<dyn IdempotencyRecords> = store;
         Self::build(
@@ -154,6 +162,10 @@ impl AppState {
 
     /// [`Self::with_settings`] on `backend`'s records and idempotency
     /// records (`inbound` built on its other stores).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`].
     pub fn from_backend(
         backend: &dyn Backend,
         vault: TokenVault,
@@ -162,7 +174,7 @@ impl AppState {
         metrics: Metrics,
         inbound: Inbound,
         settings: Settings,
-    ) -> Self {
+    ) -> Result<Self, Error> {
         Self::build(
             (backend.records(), backend.idempotency()),
             vault,
@@ -182,16 +194,17 @@ impl AppState {
         metrics: Metrics,
         inbound: Inbound,
         settings: Settings,
-    ) -> Self {
+    ) -> Result<Self, Error> {
+        let authz = Authorizer::new(store.clone(), vault, client)?;
         let events = Events::new(
             inbound,
             store.clone(),
             verify_token.clone(),
             metrics.clone(),
         );
-        Self {
+        Ok(Self {
             inner: Arc::new(Inner {
-                authz: Authorizer::new(store.clone(), vault, client),
+                authz,
                 store,
                 idempotency,
                 verify_token,
@@ -204,11 +217,12 @@ impl AppState {
                 templates: TemplateCache::new(settings.template_cache_ttl),
                 settings,
             }),
-        }
+        })
     }
 
-    /// The service's records.
-    pub fn store(&self) -> &dyn RecordStore {
+    /// The service's records. Crate-private: the records decide who owns
+    /// what, and only the service's own handlers write them.
+    pub(crate) fn store(&self) -> &dyn RecordStore {
         self.inner.store.as_ref()
     }
 
@@ -327,5 +341,6 @@ impl AppState {
             Metrics::new(),
             inbound,
         )
+        .unwrap()
     }
 }

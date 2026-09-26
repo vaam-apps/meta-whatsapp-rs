@@ -66,6 +66,8 @@ http-body-util.workspace = true
 pretty_assertions.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync", "test-util"] }
 tower = { workspace = true, features = ["util"] }
+# tests/visibility.rs: what does not compile outside this crate.
+trybuild.workspace = true
 
 [lints]
 workspace = true

@@ -1,0 +1,10 @@
+error[E0624]: method `rotate_all` is private
+ --> tests/visibility/fail/tokens_rotate_all.rs:6:20
+  |
+6 |     let _ = tokens.rotate_all(records).await;
+  |                    ^^^^^^^^^^ private method
+  |
+ ::: src/authz.rs
+  |
+  |     pub(crate) async fn rotate_all(&self, store: &dyn RecordStore) -> Result<VaultRotation, Error> {
+  |     ---------------------------------------------------------------------------------------------- private method defined here

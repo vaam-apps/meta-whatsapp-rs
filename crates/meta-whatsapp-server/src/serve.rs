@@ -137,7 +137,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         Metrics::new(),
         inbound,
         settings,
-    );
+    )?;
     if backend.kind().is_process_local() {
         // Memory storage exists in development only (the configuration
         // refuses it elsewhere), and the CLI cannot reach it: the first

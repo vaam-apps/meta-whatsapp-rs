@@ -36,11 +36,21 @@
 //! [`OwnedWaba::failed`], [`Authorizer::graph_failed_for_admin`]). An
 //! [`Authorizer`] handed to an API adapter therefore writes nothing
 //! without one; see [`Tokens`] for what does not compile.
+//!
+//! **A capability works only with the [`Authorizer`] that made it.**
+//! [`Authorizer::new`] is public, so anyone can build one over records of
+//! their own (a key they wrote, a binding they invented) and have it make
+//! a [`Caller`] or an [`AdminCaller`]. Each [`Authorizer`] therefore has
+//! an identity of its own, which every capability it makes carries, and
+//! every method taking a capability refuses one another [`Authorizer`]
+//! made: `403 forbidden`, logged at `warn`, before it reads or writes
+//! anything.
 
 use std::sync::Arc;
 
 use meta_whatsapp_rs::Client;
 use meta_whatsapp_rs::client::embedded_signup::{StoredBusinessToken, TokenVault};
+use meta_whatsapp_rs::core::error::ConfigError;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_rs::{Error, ErrorKind};
 use time::OffsetDateTime;
@@ -59,10 +69,9 @@ use crate::store::RecordStore;
 /// outside this crate makes one or calls its methods.
 ///
 /// What an API adapter (another crate) can do with an [`Authorizer`] and
-/// an [`AdminCaller`]:
+/// an [`AdminCaller`] it made:
 ///
 /// ```no_run
-/// use meta_whatsapp_rs::Error;
 /// use meta_whatsapp_rs::client::embedded_signup::StoredBusinessToken;
 /// use meta_whatsapp_rs::core::ids::WabaId;
 /// use meta_whatsapp_server_core::ServiceError;
@@ -72,7 +81,7 @@ use crate::store::RecordStore;
 ///     authz: &Authorizer,
 ///     admin: &AdminCaller,
 ///     token: &StoredBusinessToken,
-/// ) -> Result<(), Error> {
+/// ) -> Result<(), ServiceError> {
 ///     authz.store_token(admin, token).await?;
 ///     authz.rotate_vault(admin).await.map(drop)
 /// }
@@ -86,77 +95,17 @@ use crate::store::RecordStore;
 /// }
 /// ```
 ///
-/// Without one, none of these compile (each for the item's visibility
-/// alone: made public, its snippet compiles), the vault itself,
-///
-/// ```compile_fail
-/// # use meta_whatsapp_server_core::authz::Authorizer;
-/// fn vault(authz: &Authorizer) {
-///     let _ = authz.tokens();
-/// }
-/// ```
-///
-/// a `Tokens` of one's own,
-///
-/// ```compile_fail
-/// # use meta_whatsapp_rs::client::embedded_signup::TokenVault;
-/// # use meta_whatsapp_server_core::authz::Tokens;
-/// fn own(vault: TokenVault) -> Tokens {
-///     Tokens::new(vault)
-/// }
-/// ```
-///
-/// storing,
-///
-/// ```compile_fail
-/// # use meta_whatsapp_rs::client::embedded_signup::StoredBusinessToken;
-/// # use meta_whatsapp_server_core::authz::Tokens;
-/// async fn store(tokens: &Tokens, token: &StoredBusinessToken) {
-///     let _ = tokens.store(token).await;
-/// }
-/// ```
-///
-/// deleting,
-///
-/// ```compile_fail
-/// # use meta_whatsapp_rs::core::ids::WabaId;
-/// # use meta_whatsapp_server_core::authz::Tokens;
-/// async fn delete(tokens: &Tokens, waba_id: &WabaId) {
-///     let _ = tokens.delete(waba_id).await;
-/// }
-/// ```
-///
-/// rotating,
-///
-/// ```compile_fail
-/// # use meta_whatsapp_server_core::authz::Tokens;
-/// # use meta_whatsapp_server_core::store::RecordStore;
-/// async fn rotate(tokens: &Tokens, records: &dyn RecordStore) {
-///     let _ = tokens.rotate_all(records).await;
-/// }
-/// ```
-///
-/// marking a WABA's numbers `reconnect_required`,
-///
-/// ```compile_fail
-/// # use meta_whatsapp_rs::Error;
-/// # use meta_whatsapp_rs::core::ids::WabaId;
-/// # use meta_whatsapp_server_core::authz::Authorizer;
-/// async fn mark(authz: &Authorizer, waba_id: &WabaId, error: &Error) {
-///     let _ = authz.graph_failed(waba_id, error).await;
-/// }
-/// ```
-///
-/// or an [`AdminCaller`] of one's own.
-///
-/// ```compile_fail
-/// # use meta_whatsapp_server_core::authz::AdminCaller;
-/// fn forge() -> AdminCaller {
-///     AdminCaller {
-///         key_id: "forged".to_owned(),
-///     }
-/// }
-/// ```
+/// Without one, nothing reaches the vault. What does not compile outside
+/// this crate is pinned, with the compiler's error, by the UI tests in
+/// `tests/visibility/` (`tests/visibility.rs`): the vault itself
+/// (`Authorizer::tokens`, a method that does not exist, and the private
+/// field of that name), a `Tokens` of one's own (`Tokens::new`), storing,
+/// deleting and rotating through one (`Tokens::store`, `Tokens::delete`,
+/// `Tokens::rotate_all`), marking a WABA's numbers `reconnect_required`
+/// without a capability (`Authorizer::graph_failed`), and a [`Caller`],
+/// an [`AdminCaller`], an [`OwnedNumber`] or an [`OwnedWaba`] of one's
+/// own. A capability another [`Authorizer`] made compiles, and is refused
+/// when used (see the [module](self)).
 pub struct Tokens {
     vault: TokenVault,
 }
@@ -241,12 +190,43 @@ pub async fn rotate_vault(
     }
 }
 
+/// Which [`Authorizer`] made a capability: an allocation only
+/// [`Authorizer::new`] creates, compared by address ([`Arc::ptr_eq`]).
+/// Every capability holds a strong reference to its maker's, so the
+/// allocation outlives it and no other [`Authorizer`]'s can have its
+/// address while it is held (an `ArcInner<()>` holds its two counters: it
+/// is never zero-sized). Private, and made nowhere else: not forgeable.
+#[derive(Clone)]
+struct Issuer(Arc<()>);
+
+impl Issuer {
+    fn new() -> Self {
+        Self(Arc::new(()))
+    }
+
+    /// Whether `self` and `other` are the same [`Authorizer`]'s.
+    fn is(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 /// A tenant request that passed steps 1 to 3. Only
-/// [`Authorizer::tenant_caller`] makes one.
-#[derive(Debug, Clone)]
+/// [`Authorizer::tenant_caller`] makes one, and only that [`Authorizer`]
+/// accepts it.
+#[derive(Clone)]
 pub struct Caller {
     key_id: String,
     tenant: TenantId,
+    issuer: Issuer,
+}
+
+impl std::fmt::Debug for Caller {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Caller")
+            .field("key_id", &self.key_id)
+            .field("tenant", &self.tenant)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Caller {
@@ -262,10 +242,20 @@ impl Caller {
 }
 
 /// An admin request that passed step 1 with an admin key. Only
-/// [`Authorizer::admin_caller`] makes one.
-#[derive(Debug, Clone)]
+/// [`Authorizer::admin_caller`] makes one, and only that [`Authorizer`]
+/// accepts it.
+#[derive(Clone)]
 pub struct AdminCaller {
     key_id: String,
+    issuer: Issuer,
+}
+
+impl std::fmt::Debug for AdminCaller {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AdminCaller")
+            .field("key_id", &self.key_id)
+            .finish_non_exhaustive()
+    }
 }
 
 impl AdminCaller {
@@ -278,11 +268,13 @@ impl AdminCaller {
 /// The authorization order over the records, the vault and the tokenless
 /// Graph client: who a request is ([`Caller`], [`AdminCaller`]), and what
 /// it owns ([`OwnedNumber`], [`OwnedWaba`]: the only way to a stored
-/// token).
+/// token). It accepts only the capabilities it made itself (see the
+/// [module](self)).
 pub struct Authorizer {
     records: Arc<dyn RecordStore>,
     tokens: Tokens,
     client: Client,
+    issuer: Issuer,
 }
 
 impl std::fmt::Debug for Authorizer {
@@ -292,15 +284,45 @@ impl std::fmt::Debug for Authorizer {
 }
 
 impl Authorizer {
-    /// The order over `records` and `vault`, calling Graph with `client`
-    /// (built without a default token: each call runs with the tenant's
-    /// token).
-    pub fn new(records: Arc<dyn RecordStore>, vault: TokenVault, client: Client) -> Self {
-        Self {
+    /// The order over `records` and `vault`, calling Graph with `client`,
+    /// which must carry no token: each call runs with the tenant's (or the
+    /// admin's) token, set by [`OwnedNumber`], [`OwnedWaba`] or the caller
+    /// itself (`Client::with_token`). A client carrying one is refused
+    /// rather than stripped: the token would otherwise ride along on any
+    /// call made with [`Self::client`] that forgot to set one, and the
+    /// library's `Client` cannot drop a token it was built with.
+    ///
+    /// # Errors
+    ///
+    /// `client` carries a token: a configuration error.
+    pub fn new(
+        records: Arc<dyn RecordStore>,
+        vault: TokenVault,
+        client: Client,
+    ) -> Result<Self, Error> {
+        if client.token().is_some() {
+            return Err(ConfigError::new(
+                "the authorizer's Graph client carries a token: build it without one",
+            )
+            .into());
+        }
+        Ok(Self {
             records,
             tokens: Tokens::new(vault),
             client,
+            issuer: Issuer::new(),
+        })
+    }
+
+    /// Whether this [`Authorizer`] made the capability carrying `issuer`,
+    /// else `403 forbidden`, logged at `warn` (the operation's name only:
+    /// a forged capability's fields are the forger's).
+    fn check(&self, issuer: &Issuer, operation: &'static str) -> Result<(), ServiceError> {
+        if self.issuer.is(issuer) {
+            return Ok(());
         }
+        tracing::warn!(operation, "refused a capability another authorizer made");
+        Err(ServiceError::forbidden())
     }
 
     /// The tokenless Graph client.
@@ -394,6 +416,7 @@ impl Authorizer {
         Ok(Caller {
             key_id: key.key_id,
             tenant,
+            issuer: self.issuer.clone(),
         })
     }
 
@@ -406,16 +429,21 @@ impl Authorizer {
         if key.owner != KeyOwner::Admin {
             return Err(ServiceError::forbidden());
         }
-        Ok(AdminCaller { key_id: key.key_id })
+        Ok(AdminCaller {
+            key_id: key.key_id,
+            issuer: self.issuer.clone(),
+        })
     }
 
     /// Steps 4 and 5 for the number `pn`: bound to `caller`'s tenant (else
-    /// it does not exist), connected, with a usable token.
+    /// it does not exist), connected, with a usable token. A `caller`
+    /// another [`Authorizer`] made is `403 forbidden`.
     pub async fn owned_number(
         &self,
         caller: &Caller,
         pn: PhoneNumberId,
     ) -> Result<OwnedNumber, ServiceError> {
+        self.check(&caller.issuer, "owned_number")?;
         // Step 4: bound to this tenant, else it does not exist.
         let binding = self
             .records
@@ -437,16 +465,19 @@ impl Authorizer {
             client: self.client.with_token(token.token),
             phone_number_id: pn,
             waba_id: binding.waba_id,
+            issuer: self.issuer.clone(),
         })
     }
 
     /// Steps 4 and 5 for the WABA `waba_id`: bound to `caller`'s tenant
-    /// (else it does not exist), with a usable token.
+    /// (else it does not exist), with a usable token. A `caller` another
+    /// [`Authorizer`] made is `403 forbidden`.
     pub async fn owned_waba(
         &self,
         caller: &Caller,
         waba_id: WabaId,
     ) -> Result<OwnedWaba, ServiceError> {
+        self.check(&caller.issuer, "owned_waba")?;
         // Step 4.
         let binding = self
             .records
@@ -459,12 +490,14 @@ impl Authorizer {
     }
 
     /// A WABA for an admin operation (deleting its tenant, unbinding it):
-    /// step 5 only, as the admin key may act on every tenant.
+    /// step 5 only, as the admin key may act on every tenant. An `admin`
+    /// another [`Authorizer`] made is `403 forbidden`.
     pub async fn waba_for_admin(
         &self,
-        _admin: &AdminCaller,
+        admin: &AdminCaller,
         binding: &WabaBinding,
     ) -> Result<OwnedWaba, ServiceError> {
+        self.check(&admin.issuer, "waba_for_admin")?;
         self.open(binding.waba_id.clone()).await
     }
 
@@ -475,49 +508,61 @@ impl Authorizer {
         Ok(OwnedWaba {
             client: self.client.with_token(token.token),
             waba_id,
+            issuer: self.issuer.clone(),
         })
     }
 
     /// Store `token` in the vault, for an admin attaching a WABA: its
     /// phone numbers must be the ones Meta listed with it
     /// (`TokenVault::store` trusts its input), and the WABA bound to its
-    /// tenant first.
+    /// tenant first. An `admin` another [`Authorizer`] made is `403
+    /// forbidden`; the vault's failure is the library's error's code.
     pub async fn store_token(
         &self,
-        _admin: &AdminCaller,
+        admin: &AdminCaller,
         token: &StoredBusinessToken,
-    ) -> Result<(), Error> {
-        self.tokens.store(token).await
+    ) -> Result<(), ServiceError> {
+        self.check(&admin.issuer, "store_token")?;
+        Ok(self.tokens.store(token).await?)
     }
 
     /// Re-encrypt every bound WABA's token (and its credit ledger) under
-    /// the active vault key, for an admin: see [`rotate_vault`].
-    pub async fn rotate_vault(&self, _admin: &AdminCaller) -> Result<VaultRotation, Error> {
-        self.tokens.rotate_all(self.records.as_ref()).await
+    /// the active vault key, for an admin: see [`rotate_vault`]. An
+    /// `admin` another [`Authorizer`] made is `403 forbidden`.
+    pub async fn rotate_vault(&self, admin: &AdminCaller) -> Result<VaultRotation, ServiceError> {
+        self.check(&admin.issuer, "rotate_vault")?;
+        Ok(self.tokens.rotate_all(self.records.as_ref()).await?)
     }
 
     /// Delete a WABA's token and its binding, and its numbers', without
     /// opening it: an admin unbinding a WABA whose token is missing,
     /// expired or no longer decrypts (decision D4). [`OwnedWaba::forget`]
-    /// does the same for an opened one.
+    /// does the same for an opened one. An `admin` another [`Authorizer`]
+    /// made is `403 forbidden`, and nothing is deleted.
     pub async fn forget_for_admin(
         &self,
-        _admin: &AdminCaller,
+        admin: &AdminCaller,
         waba_id: &WabaId,
     ) -> Result<(), ServiceError> {
+        self.check(&admin.issuer, "forget_for_admin")?;
         self.tokens.delete(waba_id).await?;
         self.records.unbind_waba(waba_id).await?;
         Ok(())
     }
 
     /// [`OwnedWaba::failed`] for an admin's call with a token of its own
-    /// on `waba_id` (attaching a WABA, once its token is stored).
+    /// on `waba_id` (attaching a WABA, once its token is stored). An
+    /// `admin` another [`Authorizer`] made is `403 forbidden`, and marks
+    /// nothing.
     pub async fn graph_failed_for_admin(
         &self,
-        _admin: &AdminCaller,
+        admin: &AdminCaller,
         waba_id: &WabaId,
         error: &Error,
     ) -> ServiceError {
+        if let Err(refused) = self.check(&admin.issuer, "graph_failed_for_admin") {
+            return refused;
+        }
         self.graph_failed(waba_id, error).await
     }
 
@@ -554,12 +599,14 @@ fn usable(
 }
 
 /// A phone number the caller's tenant owns, with a client acting with its
-/// WABA's token. Only [`Authorizer::owned_number`] makes one.
+/// WABA's token. Only [`Authorizer::owned_number`] makes one, and only
+/// that [`Authorizer`] accepts it.
 #[derive(Clone)]
 pub struct OwnedNumber {
     phone_number_id: PhoneNumberId,
     waba_id: WabaId,
     client: Client,
+    issuer: Issuer,
 }
 
 impl std::fmt::Debug for OwnedNumber {
@@ -589,18 +636,24 @@ impl OwnedNumber {
 
     /// The error of a failed Graph call made with this number's token
     /// (through `authz`, which made it): a `190` (or `0`) marks the WABA's
-    /// numbers `reconnect_required`.
+    /// numbers `reconnect_required`. Through an `authz` that did not make
+    /// it: `403 forbidden`, and nothing is marked.
     pub async fn failed(&self, authz: &Authorizer, error: &Error) -> ServiceError {
+        if let Err(refused) = authz.check(&self.issuer, "OwnedNumber::failed") {
+            return refused;
+        }
         authz.graph_failed(&self.waba_id, error).await
     }
 }
 
 /// A WABA the caller's tenant owns (or an admin reaches), with a client
-/// acting with its token. Only [`Authorizer`] makes one.
+/// acting with its token. Only [`Authorizer`] makes one, and only the
+/// [`Authorizer`] that made it accepts it.
 #[derive(Clone)]
 pub struct OwnedWaba {
     waba_id: WabaId,
     client: Client,
+    issuer: Issuer,
 }
 
 impl std::fmt::Debug for OwnedWaba {
@@ -624,12 +677,18 @@ impl OwnedWaba {
 
     /// See [`OwnedNumber::failed`].
     pub async fn failed(&self, authz: &Authorizer, error: &Error) -> ServiceError {
+        if let Err(refused) = authz.check(&self.issuer, "OwnedWaba::failed") {
+            return refused;
+        }
         authz.graph_failed(&self.waba_id, error).await
     }
 
     /// Delete the WABA's token and its binding, and its numbers': the last
-    /// step of a disconnection, once Meta unsubscribed the app.
+    /// step of a disconnection, once Meta unsubscribed the app. Through an
+    /// `authz` that did not make it: `403 forbidden`, and nothing is
+    /// deleted.
     pub async fn forget(self, authz: &Authorizer) -> Result<(), ServiceError> {
+        authz.check(&self.issuer, "OwnedWaba::forget")?;
         authz.tokens.delete(&self.waba_id).await?;
         authz.records.unbind_waba(&self.waba_id).await?;
         Ok(())

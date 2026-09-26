@@ -2,7 +2,7 @@
 //! restart. Only for `WA_SERVER_ENV=development` and tests.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 
 use async_trait::async_trait;
 use meta_whatsapp_rs::adapters::store::{MemoryConversationStore, MemoryKvStore};
@@ -22,14 +22,45 @@ use crate::model::{
 
 /// In-memory [`RecordStore`] and [`IdempotencyRecords`]. Its event outbox is [`MemoryStore::outbox`]: one
 /// process's database, so that deleting a tenant reaches its events as it
-/// does on Postgres.
-#[derive(Debug, Default)]
+/// does on Postgres. `Debug` shows how many records it holds, never what
+/// they hold: idempotency keys name the caller's records, and a kept
+/// answer's body is the caller's data.
+#[derive(Default)]
 pub struct MemoryStore {
     state: Mutex<State>,
     outbox: Arc<MemoryEventStore>,
 }
 
-#[derive(Debug, Default)]
+impl std::fmt::Debug for MemoryStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut out = f.debug_struct("MemoryStore");
+        // Not `lock`: a `{:?}` while this thread holds the lock would
+        // deadlock.
+        let state = match self.state.try_lock() {
+            Ok(state) => Some(state),
+            Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+            Err(TryLockError::WouldBlock) => None,
+        };
+        if let Some(state) = state {
+            let kept: usize = state
+                .idempotency
+                .values()
+                .filter_map(|entry| entry.completed.as_ref())
+                .map(|(_, body)| body.len())
+                .sum();
+            out.field("tenants", &state.tenants.len())
+                .field("keys", &state.keys.len())
+                .field("wabas", &state.wabas.len())
+                .field("numbers", &state.numbers.len())
+                .field("idempotency_records", &state.idempotency.len())
+                .field("body_len", &kept);
+        }
+        out.finish_non_exhaustive()
+    }
+}
+
+/// No `Debug`: [`MemoryStore`]'s shows counts only.
+#[derive(Default)]
 struct State {
     tenants: BTreeMap<String, Tenant>,
     keys: BTreeMap<String, ApiKeyRecord>,
@@ -39,8 +70,9 @@ struct State {
     idempotency: BTreeMap<(String, String), IdempotencyEntry>,
 }
 
-/// An idempotency record in memory.
-#[derive(Debug, Clone)]
+/// An idempotency record in memory. No `Debug`: its body is the caller's
+/// data.
+#[derive(Clone)]
 struct IdempotencyEntry {
     fingerprint: [u8; 32],
     claim: String,
@@ -615,6 +647,55 @@ impl Backend for MemoryBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `Debug` counts the records and the kept bodies' bytes, and prints
+    /// none of them: not a body, not an idempotency key. Decisive: the
+    /// hand-written `Debug` (a derived one prints both).
+    #[tokio::test]
+    async fn debug_shows_counts_never_a_body_or_a_key() {
+        let store = MemoryStore::new();
+        let tenant = TenantId::parse("tenant-a").unwrap();
+        let key = IdempotencyKey::parse("order:SECRET-KEY-31:shipped").unwrap();
+        let body = br#"{"messages":[{"id":"wamid.SECRET-BODY-7Q"}]}"#;
+        let claimed = store
+            .claim_idempotency_key(
+                &tenant,
+                &key,
+                &[9; 32],
+                "claim-1",
+                std::time::Duration::from_secs(60),
+                std::time::Duration::from_secs(600),
+            )
+            .await
+            .unwrap();
+        assert_eq!(claimed, IdempotencyClaim::Claimed);
+        assert!(
+            store
+                .complete_idempotency_key(&tenant, &key, "claim-1", 200, body)
+                .await
+                .unwrap()
+        );
+        let debug = format!("{store:?}");
+        assert!(debug.contains("idempotency_records: 1"), "{debug}");
+        assert!(
+            debug.contains(&format!("body_len: {}", body.len())),
+            "{debug}"
+        );
+        let bytes = format!("{:?}", body.to_vec());
+        for secret in [
+            "SECRET-BODY",
+            "SECRET-KEY",
+            "claim-1",
+            &bytes[1..bytes.len() - 1],
+            "9, 9, 9",
+        ] {
+            assert!(!debug.contains(secret), "{debug} shows {secret}");
+        }
+        // Held by this thread: no deadlock, and still nothing shown.
+        let held = store.lock();
+        assert_eq!(format!("{store:?}"), "MemoryStore { .. }");
+        drop(held);
+    }
 
     /// One turn per name at a time; released or dropped, it is free again.
     /// Decisive: the name's removal on drop.

@@ -536,7 +536,8 @@ impl Harness {
             Metrics::new(),
             inbound,
             settings,
-        );
+        )
+        .unwrap();
         Self {
             internal: internal_router(&state),
             public: public_router(&state),

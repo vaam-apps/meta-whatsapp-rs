@@ -143,8 +143,9 @@ pub enum Admission {
     Repeat(Repeat),
 }
 
-/// The answer to a request meeting another request's record.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The answer to a request meeting another request's record. `Debug`
+/// shows a kept answer's length (`body_len`), never its bytes.
+#[derive(Clone, PartialEq, Eq)]
 pub enum Repeat {
     /// Another method, path or body: `422 idempotency_key_reused`.
     Reused,
@@ -161,6 +162,21 @@ pub enum Repeat {
         /// Its body, byte for byte.
         body: Vec<u8>,
     },
+}
+
+impl std::fmt::Debug for Repeat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Reused => f.write_str("Reused"),
+            Self::InProgress => f.write_str("InProgress"),
+            Self::OutcomeUnknown => f.write_str("OutcomeUnknown"),
+            Self::Replay { status, body } => f
+                .debug_struct("Replay")
+                .field("status", status)
+                .field("body_len", &body.len())
+                .finish(),
+        }
+    }
 }
 
 impl Repeat {
@@ -250,8 +266,9 @@ fn claim_id() -> Option<String> {
     Some(hex::encode(bytes))
 }
 
-/// How the request holding a key ended.
-#[derive(Debug, Clone, Copy)]
+/// How the request holding a key ended. `Debug` shows an answer's length
+/// (`body_len`), never its bytes.
+#[derive(Clone, Copy)]
 pub enum Outcome<'a> {
     /// It answered this: kept, byte for byte.
     Answered {
@@ -263,6 +280,19 @@ pub enum Outcome<'a> {
     /// It failed: kept (as the adapter renders it) when it may have been
     /// sent, else the key is released.
     Failed(&'a ServiceError),
+}
+
+impl std::fmt::Debug for Outcome<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Answered { status, body } => f
+                .debug_struct("Answered")
+                .field("status", status)
+                .field("body_len", &body.len())
+                .finish(),
+            Self::Failed(error) => f.debug_tuple("Failed").field(error).finish(),
+        }
+    }
 }
 
 /// A key this request claimed, until it settles it. Dropped unsettled (the
@@ -627,5 +657,50 @@ mod tests {
             Fingerprint::json("POST", "/p", &body),
             Fingerprint::json("PUT", "/p", &body)
         );
+    }
+
+    /// `Debug` of a kept answer shows its length, never its bytes: the
+    /// body is the caller's data (a recipient, a message), and a `{:?}`
+    /// in a log line or a panic would otherwise print it. Decisive: each
+    /// hand-written `Debug`.
+    #[test]
+    fn debug_shows_a_kept_bodys_length_never_its_bytes() {
+        let body = br#"{"messages":[{"id":"wamid.SECRET-BODY-7Q"}],"to":"+15551234567"}"#.to_vec();
+        let text = String::from_utf8(body.clone()).unwrap();
+        let bytes = format!("{body:?}");
+        let bytes = &bytes[1..bytes.len() - 1];
+        let state = IdempotencyState::Completed {
+            status: 200,
+            body: body.clone(),
+        };
+        let record = IdempotencyRecord {
+            fingerprint: [7; 32],
+            state: state.clone(),
+        };
+        let printed = [
+            format!("{state:?}"),
+            format!("{record:?}"),
+            format!("{:?}", IdempotencyClaim::Existing(record.clone())),
+            format!("{:?}", Repeat::of(record, &Fingerprint([7; 32]))),
+            format!(
+                "{:?}",
+                Outcome::Answered {
+                    status: 200,
+                    body: &body,
+                }
+            ),
+        ];
+        for debug in &printed {
+            assert!(debug.contains("status: 200"), "{debug}");
+            assert!(
+                debug.contains(&format!("body_len: {}", body.len())),
+                "{debug}"
+            );
+            assert!(!debug.contains("SECRET-BODY"), "the text: {debug}");
+            assert!(!debug.contains(&text), "the text: {debug}");
+            assert!(!debug.contains(bytes), "the bytes: {debug}");
+            assert!(!debug.contains("7, 7, 7"), "the fingerprint: {debug}");
+        }
+        assert!(printed[3].starts_with("Replay"), "{}", printed[3]);
     }
 }
