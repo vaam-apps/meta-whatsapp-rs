@@ -89,17 +89,15 @@ impl Client {
         }
     }
 
-    /// A copy of this client that retries with `retry` (same transport,
-    /// endpoint and token). [`RetryPolicy::NONE`] suits a caller that
-    /// retries on its own schedule: a paced broadcast retries a throttled
-    /// send through its pacer, which the client's own replays would bypass.
+    /// This client, retrying with `retry` (same transport, endpoint and
+    /// token; `client.clone().with_retry(…)` keeps the original).
+    /// [`RetryPolicy::NONE`] suits a caller that retries on its own
+    /// schedule: a paced broadcast retries a throttled send through its
+    /// pacer, which the client's own replays would bypass.
     #[must_use]
-    pub fn with_retry(&self, retry: RetryPolicy) -> Self {
-        Self {
-            shared: Arc::clone(&self.shared),
-            token: self.token.clone(),
-            retry,
-        }
+    pub fn with_retry(mut self, retry: RetryPolicy) -> Self {
+        self.retry = retry;
+        self
     }
 
     /// The retry policy this client's requests follow.

@@ -777,6 +777,7 @@ mod tests {
         let t = ScriptedTransport::new();
         let base = client(&t);
         let none = base
+            .clone()
             .with_retry(RetryPolicy::NONE)
             .with_token("OTHER".into());
         assert_eq!(none.retry_policy(), RetryPolicy::NONE);
