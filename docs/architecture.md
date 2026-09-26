@@ -820,8 +820,8 @@ are other events: they never run a command.
   (`ClientOutbound`, the client's `messages(pn).send` and read receipts),
   `CommandParser` (`PrefixParser`), `AccessPolicy` (`AccessList`),
   `Cooldowns` (`KvCooldowns`), `Refusals` (`ReplyRefusals`),
-  `ErrorHandler` (`LogErrors`), the renderer's `Escape`
-  (`WordJoinerEscape`).
+  `ErrorHandler` (`LogErrors`), the renderer's `Escape` (`NoEscape`;
+  `WordJoinerEscape` opt-in).
 - **Identity** is the BSUID first (`Sender::key`), else `wa_id`. A reply
   quotes the message and goes to the group, else the BSUID, else
   `+<wa_id>`. Bans and owners listed by phone number cannot match a
@@ -842,8 +842,10 @@ are other events: they never run a command.
 - **Markdown**: `markdown::render` (pulldown-cmark) converts CommonMark to
   WhatsApp formatting and packs blocks into messages of at most 4096
   characters (the client's text limit, counted the same way), never
-  cutting a code block that fits. Meta documents no escape syntax, so the
-  default escape (U+2060 around literal markup characters) is swappable.
+  cutting a code block that fits. Meta documents no escape syntax: the
+  default leaves text as written, so copied addresses, codes and commands
+  work; `WordJoinerEscape` (U+2060 around literal markup characters,
+  copied along with the text) is the opt-in.
 
 ## Typst (`meta-whatsapp-typst`)
 

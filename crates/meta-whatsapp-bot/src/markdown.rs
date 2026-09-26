@@ -17,21 +17,25 @@
 //! | tables | a monospace block, columns padded |
 //! | `![alt](url)` | `alt (url)`, or `url` without alt text |
 //! | `---` | a line of `———` |
-//! | raw HTML | its text, escaped |
+//! | raw HTML | its text |
 //!
 //! A line break in the source is a line break in the message (WhatsApp
 //! shows what the author typed, not a reflowed paragraph).
 //!
 //! # Escaping
 //!
-//! `*`, `_`, `~` and `` ` `` in the text, and `>` at the start of a text
-//! run, would otherwise turn into formatting. Meta documents no escape
-//! syntax for WhatsApp text, so the default, [`WordJoinerEscape`], puts an
-//! invisible U+2060 WORD JOINER around each such character, so it can
-//! neither open nor close a span; URLs (`http://…`, `https://…`), code and
-//! table cells are left as written. Whether a WhatsApp client honours this
-//! is WhatsApp's behaviour, not a documented contract: swap the strategy
-//! with [`Renderer::escape`] ([`NoEscape`], or your own [`Escape`]).
+//! Meta documents no escape syntax for WhatsApp text, so literal `*`, `_`,
+//! `~`, `` ` `` or a leading `>` in the Markdown's text (`\*`, `snake_case`)
+//! can still format in WhatsApp. The default, [`NoEscape`], leaves the text
+//! exactly as written: what a reader copies out of a reply (an email
+//! address, a coupon code, a `/command`, a bare `www.` link) is what the
+//! Markdown said. [`WordJoinerEscape`] is the opt-in alternative: it puts
+//! an invisible U+2060 WORD JOINER around each such character so it can
+//! neither open nor close a span, but those invisible characters are
+//! copied with the text (a copied `john_doe@example.com` or `/add_item`
+//! no longer works) and cut WhatsApp's link detection short; whether a
+//! client honours them at all is WhatsApp's behaviour, not a documented
+//! contract. Choose with [`Renderer::escape`] (or your own [`Escape`]).
 //!
 //! # Splitting
 //!
@@ -61,7 +65,7 @@ const RULE: &str = "———";
 const WORD_JOINER: char = '\u{2060}';
 
 /// [`Renderer::render`] with the defaults: [`TEXT_MAX_CHARS`] per message,
-/// [`WordJoinerEscape`].
+/// [`NoEscape`].
 pub fn render(markdown: &str) -> Vec<String> {
     Renderer::default().render(markdown)
 }
@@ -87,8 +91,11 @@ pub trait Escape: Send + Sync + fmt::Debug + 'static {
     fn escape(&self, text: &str, out: &mut String);
 }
 
-/// The default [`Escape`]: U+2060 WORD JOINER around `*`, `_`, `~` and
-/// `` ` ``, before a `>` that starts a run or a line; URLs untouched.
+/// An opt-in [`Escape`]: U+2060 WORD JOINER around `*`, `_`, `~` and
+/// `` ` ``, before a `>` that starts a run or a line; `http(s)://` URLs
+/// untouched. The joiners are copied with the text, so an email address,
+/// a code or a `/command` with an `_` in it no longer works once copied;
+/// see the [module docs](self#escaping).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WordJoinerEscape;
 
@@ -134,8 +141,9 @@ fn url_len(text: &str) -> Option<usize> {
     Some(text.find(char::is_whitespace).unwrap_or(text.len()))
 }
 
-/// An [`Escape`] that escapes nothing: literal `*bold*` in the Markdown's
-/// text shows as bold.
+/// The default [`Escape`]: escapes nothing, so text reads and copies
+/// exactly as written; literal `*bold*` in the Markdown's text may show as
+/// bold.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoEscape;
 
@@ -156,13 +164,13 @@ impl Default for Renderer {
     fn default() -> Self {
         Self {
             max_chars: TEXT_MAX_CHARS,
-            escape: Arc::new(WordJoinerEscape),
+            escape: Arc::new(NoEscape),
         }
     }
 }
 
 impl Renderer {
-    /// The defaults: [`TEXT_MAX_CHARS`], [`WordJoinerEscape`].
+    /// The defaults: [`TEXT_MAX_CHARS`], [`NoEscape`].
     pub fn new() -> Self {
         Self::default()
     }

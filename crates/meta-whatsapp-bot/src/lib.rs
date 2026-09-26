@@ -22,7 +22,7 @@
 //! | where cooldowns are kept | [`Cooldowns`] | [`KvCooldowns`] (a typed store on `KvStore`, namespace `bot.cooldown`) |
 //! | what a refused user is told | [`Refusals`] | [`ReplyRefusals`] |
 //! | what a failure becomes | [`ErrorHandler`] | [`LogErrors`] (log, acknowledge) |
-//! | how Markdown is escaped | [`markdown::Escape`] | [`markdown::WordJoinerEscape`] |
+//! | how Markdown is escaped | [`markdown::Escape`] | [`markdown::NoEscape`] (text as written; [`markdown::WordJoinerEscape`] opt-in) |
 //!
 //! Users are identified by business-scoped user id first ([`Sender::key`]):
 //! a message may carry no phone number at all. A reply goes to the group

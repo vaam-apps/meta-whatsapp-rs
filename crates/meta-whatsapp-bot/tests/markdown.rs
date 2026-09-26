@@ -85,7 +85,29 @@ fn markdown_becomes_whatsapp_formatting() {
         ("above\n\n---\n\nbelow", "above\n\n———\n\nbelow".into()),
         // Raw HTML is text.
         ("<b>hi</b> there", "<b>hi</b> there".into()),
-        // Escaping: literal markup cannot format; URLs and code stay usable.
+        // Literal text stays as written: the default escape is `NoEscape`
+        // (`WordJoinerEscape` is the opt-in, tested below).
+        ("2 \\* 3 \\* 4", "2 * 3 * 4".into()),
+        ("snake_case_name", "snake_case_name".into()),
+        ("\\~tilde\\~ and \\`tick\\`", "~tilde~ and `tick`".into()),
+        ("a > b", "a > b".into()),
+        (
+            "see https://example.com/a_b_c?q=1~2 now",
+            "see https://example.com/a_b_c?q=1~2 now".into(),
+        ),
+        ("`a_b*c`", "`a_b*c`".into()),
+    ];
+    for (markdown, expected) in table {
+        assert_eq!(&one(markdown), expected, "input: {markdown:?}");
+    }
+}
+
+/// `WordJoinerEscape`, opted into: literal markup gets U+2060 on each side
+/// so it cannot format; URLs and code stay usable.
+#[test]
+fn word_joiner_escape_keeps_literal_markup_from_formatting() {
+    let renderer = Renderer::new().escape(WordJoinerEscape);
+    let table: &[(&str, String)] = &[
         ("2 \\* 3 \\* 4", format!("2 {J}*{J} 3 {J}*{J} 4")),
         ("snake_case_name", format!("snake{J}_{J}case{J}_{J}name")),
         (
@@ -99,10 +121,48 @@ fn markdown_becomes_whatsapp_formatting() {
             "see https://example.com/a_b_c?q=1~2 now".into(),
         ),
         ("`a_b*c`", "`a_b*c`".into()),
+        ("**bold** and *it*", "*bold* and _it_".into()),
     ];
     for (markdown, expected) in table {
-        assert_eq!(&one(markdown), expected, "input: {markdown:?}");
+        assert_eq!(
+            &renderer.render(markdown),
+            std::slice::from_ref(expected),
+            "input: {markdown:?}"
+        );
     }
+}
+
+/// Decisive for the default: what a reader copies out of a reply is what
+/// the Markdown said. An invisible character inside an email address, a
+/// code, a command or a bare link rides along on copy and cuts WhatsApp's
+/// link detection short; a command copied back must still run.
+#[tokio::test]
+async fn the_default_escape_leaves_copyable_text_as_written() {
+    let text = "Mail john_doe@example.com, use code SAVE_20*, \
+                open www.example.com/my_page or send /add_item";
+    let rendered = markdown::render(text);
+    assert_eq!(rendered, [text]);
+    assert!(!rendered[0].contains('\u{2060}'));
+
+    let runs = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let runs_in = std::sync::Arc::clone(&runs);
+    let bot = Bot::builder()
+        .outbound(Recording::default())
+        .command(Command::new("add_item", move |_ctx: Ctx| {
+            let runs = std::sync::Arc::clone(&runs_in);
+            async move {
+                runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }
+        }))
+        .build()
+        .await
+        .unwrap();
+    let copied = rendered[0].split_whitespace().last().unwrap();
+    bot.handle(text_event("messages/text.json", copied))
+        .await
+        .unwrap();
+    assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -129,6 +189,17 @@ fn escaping_is_swappable() {
         ["2 * 3 and snake_case"]
     );
     assert_eq!(plain.render_unsplit("**b**\n\n- x"), "*b*\n\n• x");
+    // `NoEscape` is the default; `WordJoinerEscape` swaps in.
+    assert_eq!(
+        markdown::render("2 \\* 3 and snake_case"),
+        plain.render("2 \\* 3 and snake_case")
+    );
+    assert_eq!(
+        Renderer::new()
+            .escape(WordJoinerEscape)
+            .render("snake_case"),
+        [format!("snake{J}_{J}case")]
+    );
 }
 
 /// `TEXT_MAX_CHARS` is the client's own limit: a text body of exactly

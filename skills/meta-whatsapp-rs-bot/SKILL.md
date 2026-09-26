@@ -66,11 +66,10 @@ Bot::builder()
     .plugin(Orders)
 ```
 
-Guards, in order: banned (checked before the middleware: nothing runs,
-not even a read receipt), scope (`Command::private_only`,
-`Command::group_only`), `Command::owner_only`, then the cooldown, so a
-refused attempt starts none. A cooldown without
-a store or a name taken twice fails `build`.
+Guards, in order: banned (before the middleware: nothing runs, not even
+a read receipt), scope (`Command::private_only`, `Command::group_only`),
+`Command::owner_only`, then the cooldown, so a refused attempt starts
+none. A cooldown without a store or a name taken twice fails `build`.
 
 Every decision is a trait with a default: `Outbound` (`ClientOutbound`),
 `CommandParser` (`PrefixParser`), `AccessPolicy` (`AccessList`),
@@ -131,9 +130,9 @@ description fails `Bot::command_menu` rather than being dropped.
 bold and headings `*b*`, italics `_i_`, `~s~`, code, quotes, `•` lists,
 `text (url)` links, tables as a monospace block; a message per 4096
 characters, cut between blocks, never inside a code block that fits.
-Literal `*`, `_`, `~` and backticks get an invisible U+2060 on each side
-(`WordJoinerEscape`): Meta documents no escape syntax, so this rests on
-how WhatsApp clients parse; `Renderer::escape` swaps it (`NoEscape`).
+Text is left as written (`NoEscape`, the default): copied addresses,
+codes and `/commands` work, but a literal `*`, `_` or `~` may format.
+`WordJoinerEscape` (opt-in) wraps them in U+2060, which is copied too.
 
 ## Pitfalls
 

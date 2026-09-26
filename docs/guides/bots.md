@@ -196,11 +196,17 @@ sends it as one message per 4096 characters (Meta's text body limit):
 
 Messages are cut between blocks (paragraphs, list items, code blocks,
 tables); a code block that fits in a message is never cut, and only a
-block longer than a whole message is split inside. Literal `*`, `_`, `~`
-and backticks in the text get an invisible U+2060 WORD JOINER on each
-side so they cannot open formatting. Meta documents no escape syntax for
-WhatsApp text, so that rests on how the clients parse; swap it with
-`Renderer::escape` and `.markdown(renderer)` on the builder.
+block longer than a whole message is split inside.
+
+Text is left as written (`NoEscape`, the default), so what a reader
+copies from a reply (an email address, a coupon code, a `/command`, a
+`www.` link) is what you wrote. Meta documents no escape syntax for
+WhatsApp text, so a literal `*`, `_` or `~` can still format there.
+`WordJoinerEscape` is the opt-in alternative: an invisible U+2060 WORD
+JOINER on each side of such a character keeps it from formatting, but it
+is copied along with the text (a copied `john_doe@example.com` or
+`/add_item` no longer works) and cuts WhatsApp's link detection short.
+Choose with `Renderer::escape` and `.markdown(renderer)` on the builder.
 
 ## 8. Testing
 
