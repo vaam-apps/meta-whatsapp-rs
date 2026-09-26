@@ -24,6 +24,18 @@
 //! keeps the vault in a private field that only this module reads, and
 //! only [`Authorizer`] makes them, after step 4 (or, for an admin, from an
 //! [`AdminCaller`], which only [`Authorizer::admin_caller`] makes).
+//!
+//! Writing to the vault takes a capability too. Storing a token, rotating
+//! the vault's key, and deleting a token without opening it are
+//! [`Authorizer`]'s methods that take an [`AdminCaller`]
+//! ([`Authorizer::store_token`], [`Authorizer::rotate_vault`],
+//! [`Authorizer::forget_for_admin`]); deleting an opened WABA's token is
+//! [`OwnedWaba::forget`]. Marking a WABA's numbers `reconnect_required`
+//! after Meta refused its token takes the [`OwnedNumber`], the
+//! [`OwnedWaba`] or an [`AdminCaller`] ([`OwnedNumber::failed`],
+//! [`OwnedWaba::failed`], [`Authorizer::graph_failed_for_admin`]). An
+//! [`Authorizer`] handed to an API adapter therefore writes nothing
+//! without one; see [`Tokens`] for what does not compile.
 
 use std::sync::Arc;
 
@@ -42,7 +54,109 @@ use crate::model::{
 use crate::store::RecordStore;
 
 /// The business token vault, readable only through the authorization
-/// order.
+/// order, and written only through [`Authorizer`]'s methods that take a
+/// capability ([`AdminCaller`], or an [`OwnedWaba`] to forget). Nothing
+/// outside this crate makes one or calls its methods.
+///
+/// What an API adapter (another crate) can do with an [`Authorizer`] and
+/// an [`AdminCaller`]:
+///
+/// ```no_run
+/// use meta_whatsapp_rs::Error;
+/// use meta_whatsapp_rs::client::embedded_signup::StoredBusinessToken;
+/// use meta_whatsapp_rs::core::ids::WabaId;
+/// use meta_whatsapp_server_core::ServiceError;
+/// use meta_whatsapp_server_core::authz::{AdminCaller, Authorizer};
+///
+/// async fn attach(
+///     authz: &Authorizer,
+///     admin: &AdminCaller,
+///     token: &StoredBusinessToken,
+/// ) -> Result<(), Error> {
+///     authz.store_token(admin, token).await?;
+///     authz.rotate_vault(admin).await.map(drop)
+/// }
+///
+/// async fn unbind(
+///     authz: &Authorizer,
+///     admin: &AdminCaller,
+///     waba_id: &WabaId,
+/// ) -> Result<(), ServiceError> {
+///     authz.forget_for_admin(admin, waba_id).await
+/// }
+/// ```
+///
+/// Without one, none of these compile (each for the item's visibility
+/// alone: made public, its snippet compiles), the vault itself,
+///
+/// ```compile_fail
+/// # use meta_whatsapp_server_core::authz::Authorizer;
+/// fn vault(authz: &Authorizer) {
+///     let _ = authz.tokens();
+/// }
+/// ```
+///
+/// a `Tokens` of one's own,
+///
+/// ```compile_fail
+/// # use meta_whatsapp_rs::client::embedded_signup::TokenVault;
+/// # use meta_whatsapp_server_core::authz::Tokens;
+/// fn own(vault: TokenVault) -> Tokens {
+///     Tokens::new(vault)
+/// }
+/// ```
+///
+/// storing,
+///
+/// ```compile_fail
+/// # use meta_whatsapp_rs::client::embedded_signup::StoredBusinessToken;
+/// # use meta_whatsapp_server_core::authz::Tokens;
+/// async fn store(tokens: &Tokens, token: &StoredBusinessToken) {
+///     let _ = tokens.store(token).await;
+/// }
+/// ```
+///
+/// deleting,
+///
+/// ```compile_fail
+/// # use meta_whatsapp_rs::core::ids::WabaId;
+/// # use meta_whatsapp_server_core::authz::Tokens;
+/// async fn delete(tokens: &Tokens, waba_id: &WabaId) {
+///     let _ = tokens.delete(waba_id).await;
+/// }
+/// ```
+///
+/// rotating,
+///
+/// ```compile_fail
+/// # use meta_whatsapp_server_core::authz::Tokens;
+/// # use meta_whatsapp_server_core::store::RecordStore;
+/// async fn rotate(tokens: &Tokens, records: &dyn RecordStore) {
+///     let _ = tokens.rotate_all(records).await;
+/// }
+/// ```
+///
+/// marking a WABA's numbers `reconnect_required`,
+///
+/// ```compile_fail
+/// # use meta_whatsapp_rs::Error;
+/// # use meta_whatsapp_rs::core::ids::WabaId;
+/// # use meta_whatsapp_server_core::authz::Authorizer;
+/// async fn mark(authz: &Authorizer, waba_id: &WabaId, error: &Error) {
+///     let _ = authz.graph_failed(waba_id, error).await;
+/// }
+/// ```
+///
+/// or an [`AdminCaller`] of one's own.
+///
+/// ```compile_fail
+/// # use meta_whatsapp_server_core::authz::AdminCaller;
+/// fn forge() -> AdminCaller {
+///     AdminCaller {
+///         key_id: "forged".to_owned(),
+///     }
+/// }
+/// ```
 pub struct Tokens {
     vault: TokenVault,
 }
@@ -55,24 +169,24 @@ impl std::fmt::Debug for Tokens {
 
 impl Tokens {
     /// Wrap the vault.
-    pub fn new(vault: TokenVault) -> Self {
+    pub(crate) fn new(vault: TokenVault) -> Self {
         Self { vault }
     }
 
     /// Store a token whose phone numbers were listed by Meta with it
     /// (`TokenVault::store` trusts its input).
-    pub async fn store(&self, token: &StoredBusinessToken) -> Result<(), Error> {
+    pub(crate) async fn store(&self, token: &StoredBusinessToken) -> Result<(), Error> {
         self.vault.store(token).await
     }
 
     /// Delete a WABA's token and its phone index.
-    pub async fn delete(&self, waba_id: &WabaId) -> Result<bool, Error> {
+    async fn delete(&self, waba_id: &WabaId) -> Result<bool, Error> {
         self.vault.delete(waba_id).await
     }
 
     /// Re-encrypt every bound WABA's token (and its credit ledger) under
     /// the active vault key: see [`rotate_vault`].
-    pub async fn rotate_all(&self, store: &dyn RecordStore) -> Result<VaultRotation, Error> {
+    pub(crate) async fn rotate_all(&self, store: &dyn RecordStore) -> Result<VaultRotation, Error> {
         rotate_vault(store, &self.vault).await
     }
 }
@@ -187,13 +301,6 @@ impl Authorizer {
             tokens: Tokens::new(vault),
             client,
         }
-    }
-
-    /// The vault, for what writes to it (attaching a WABA, rotating its
-    /// key, forgetting a WABA): reading a token is [`Self::owned_number`]'s
-    /// and [`Self::owned_waba`]'s.
-    pub fn tokens(&self) -> &Tokens {
-        &self.tokens
     }
 
     /// The tokenless Graph client.
@@ -371,10 +478,53 @@ impl Authorizer {
         })
     }
 
+    /// Store `token` in the vault, for an admin attaching a WABA: its
+    /// phone numbers must be the ones Meta listed with it
+    /// (`TokenVault::store` trusts its input), and the WABA bound to its
+    /// tenant first.
+    pub async fn store_token(
+        &self,
+        _admin: &AdminCaller,
+        token: &StoredBusinessToken,
+    ) -> Result<(), Error> {
+        self.tokens.store(token).await
+    }
+
+    /// Re-encrypt every bound WABA's token (and its credit ledger) under
+    /// the active vault key, for an admin: see [`rotate_vault`].
+    pub async fn rotate_vault(&self, _admin: &AdminCaller) -> Result<VaultRotation, Error> {
+        self.tokens.rotate_all(self.records.as_ref()).await
+    }
+
+    /// Delete a WABA's token and its binding, and its numbers', without
+    /// opening it: an admin unbinding a WABA whose token is missing,
+    /// expired or no longer decrypts (decision D4). [`OwnedWaba::forget`]
+    /// does the same for an opened one.
+    pub async fn forget_for_admin(
+        &self,
+        _admin: &AdminCaller,
+        waba_id: &WabaId,
+    ) -> Result<(), ServiceError> {
+        self.tokens.delete(waba_id).await?;
+        self.records.unbind_waba(waba_id).await?;
+        Ok(())
+    }
+
+    /// [`OwnedWaba::failed`] for an admin's call with a token of its own
+    /// on `waba_id` (attaching a WABA, once its token is stored).
+    pub async fn graph_failed_for_admin(
+        &self,
+        _admin: &AdminCaller,
+        waba_id: &WabaId,
+        error: &Error,
+    ) -> ServiceError {
+        self.graph_failed(waba_id, error).await
+    }
+
     /// The error of a failed Graph call made with `waba_id`'s stored
     /// token: a `190` (or `0`) marks the WABA's numbers
     /// `reconnect_required`.
-    pub async fn graph_failed(&self, waba_id: &WabaId, error: &Error) -> ServiceError {
+    async fn graph_failed(&self, waba_id: &WabaId, error: &Error) -> ServiceError {
         if error.kind() == ErrorKind::Authentication
             && let Err(storage) = self
                 .records
@@ -436,6 +586,13 @@ impl OwnedNumber {
     pub fn client(&self) -> &Client {
         &self.client
     }
+
+    /// The error of a failed Graph call made with this number's token
+    /// (through `authz`, which made it): a `190` (or `0`) marks the WABA's
+    /// numbers `reconnect_required`.
+    pub async fn failed(&self, authz: &Authorizer, error: &Error) -> ServiceError {
+        authz.graph_failed(&self.waba_id, error).await
+    }
 }
 
 /// A WABA the caller's tenant owns (or an admin reaches), with a client
@@ -463,6 +620,11 @@ impl OwnedWaba {
     /// A client acting with its token.
     pub fn client(&self) -> &Client {
         &self.client
+    }
+
+    /// See [`OwnedNumber::failed`].
+    pub async fn failed(&self, authz: &Authorizer, error: &Error) -> ServiceError {
+        authz.graph_failed(&self.waba_id, error).await
     }
 
     /// Delete the WABA's token and its binding, and its numbers': the last
@@ -505,7 +667,8 @@ pub fn object_refused(error: &Error) -> bool {
 }
 
 /// The error of a failed Graph call on an object named by id, given the
-/// call's error (`api`, from [`Authorizer::graph_failed`]): Meta refusing
+/// call's error (`api`, from [`OwnedNumber::failed`] or
+/// [`OwnedWaba::failed`]): Meta refusing
 /// the object ([`object_refused`]) is `404 not_found`, without Meta's code
 /// or text, the answer for an object that does not exist: another
 /// tenant's looks like a missing one. Anything else keeps its code and

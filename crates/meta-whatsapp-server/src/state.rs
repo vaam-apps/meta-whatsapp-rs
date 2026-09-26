@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crate::api::templates::TemplateCache;
-use crate::auth::{Authorizer, Tokens};
+use crate::auth::Authorizer;
 use crate::events::{Events, Inbound};
 use crate::metrics::Metrics;
 use crate::ratelimit::{RateLimiter, RateLimits, Slots};
@@ -213,22 +213,16 @@ impl AppState {
     }
 
     /// The idempotency keys' records.
-    pub fn idempotency_records(&self) -> &Arc<dyn IdempotencyRecords> {
+    pub(crate) fn idempotency_records(&self) -> &Arc<dyn IdempotencyRecords> {
         &self.inner.idempotency
     }
 
     /// The authorization order (see [`crate::auth`]): the only way to a
-    /// stored token. Crate-private, as the vault and the tokenless client
-    /// were before it: its `tokens()` writes and deletes vault records
-    /// without an ownership check, for the admin routes that need it.
+    /// stored token, and to write the vault (with an admin's
+    /// [`crate::auth::AdminCaller`], or an owned WABA). Crate-private, as
+    /// the vault and the tokenless client were before it.
     pub(crate) fn authz(&self) -> &Authorizer {
         &self.inner.authz
-    }
-
-    /// The token vault, behind the authorization order (see
-    /// [`crate::auth`]): what writes to it.
-    pub(crate) fn tokens(&self) -> &Tokens {
-        self.inner.authz.tokens()
     }
 
     /// The tokenless Graph client.

@@ -18,7 +18,7 @@ use time::OffsetDateTime;
 use utoipa::ToSchema;
 
 use super::common::{ApiJson, PageParams, PageQuery, json, next_cursor, parse_rfc3339, rfc3339};
-use crate::auth::{AdminCaller, OwnedWaba, VaultRotation, graph_failed};
+use crate::auth::{AdminCaller, OwnedWaba, VaultRotation, graph_failed_for_admin};
 use crate::error::{ApiError, ErrorBody};
 use crate::keys::MintedKey;
 use crate::model::{
@@ -1039,7 +1039,7 @@ pub async fn attach_waba(
         }
     }
     let record = StoredBusinessToken::new(waba_id.clone(), token).phone_number_ids(numbers.clone());
-    state.tokens().store(&record).await?;
+    state.authz().store_token(&admin, &record).await?;
     audit(
         "waba_attached",
         &admin,
@@ -1061,7 +1061,7 @@ pub async fn attach_waba(
     // was bound.
     if let Err(error) = waba.subscribe_app(None).await {
         let error = error.in_step(steps::SUBSCRIBE_APP);
-        return Err(graph_failed(&state, &waba_id, &error)
+        return Err(graph_failed_for_admin(&state, &admin, &waba_id, &error)
             .await
             .with_details(&error)
             .resumable(true));
@@ -1194,7 +1194,7 @@ pub async fn rotate_vault(
     State(state): State<AppState>,
     admin: AdminCaller,
 ) -> Result<Json<VaultRotation>, ApiError> {
-    let report = state.tokens().rotate_all(state.store()).await?;
+    let report = state.authz().rotate_vault(&admin).await?;
     audit("vault_rotated", &admin, Subject::default());
     Ok(Json(report.into()))
 }

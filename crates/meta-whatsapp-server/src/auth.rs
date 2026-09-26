@@ -29,6 +29,7 @@ use meta_whatsapp_rs::webhooks::axum::http::request::Parts;
 use meta_whatsapp_rs::webhooks::axum::http::{HeaderName, HeaderValue, header};
 use meta_whatsapp_rs::webhooks::axum::middleware::Next;
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
+use meta_whatsapp_server_core::ServiceError;
 use meta_whatsapp_server_core::authz as core_authz;
 pub use meta_whatsapp_server_core::authz::{AdminCaller, Authorizer, Caller, Tokens};
 
@@ -221,9 +222,9 @@ impl OwnedNumber {
 
     /// The API error for a failed Graph call made with this number's
     /// token; a `190` (or `0`) marks the WABA's numbers
-    /// `reconnect_required`.
+    /// `reconnect_required` ([`core_authz::OwnedNumber::failed`]).
     pub async fn failed(&self, state: &AppState, error: &Error) -> ApiError {
-        graph_failed(state, self.waba_id(), error).await
+        counted(state, self.0.failed(state.authz(), error).await, error)
     }
 
     /// The API error for a failed Graph call on an object named by id (a
@@ -231,7 +232,7 @@ impl OwnedNumber {
     /// `404 not_found`, like a missing one; anything else is
     /// [`Self::failed`] with Meta's `details`.
     pub async fn failed_on_object(&self, state: &AppState, error: &Error) -> ApiError {
-        object_failed(state, self.waba_id(), error).await
+        object_failed(self.failed(state, error).await, error)
     }
 }
 
@@ -271,12 +272,12 @@ impl OwnedWaba {
 
     /// See [`OwnedNumber::failed`].
     pub async fn failed(&self, state: &AppState, error: &Error) -> ApiError {
-        graph_failed(state, self.waba_id(), error).await
+        counted(state, self.0.failed(state.authz(), error).await, error)
     }
 
     /// See [`OwnedNumber::failed_on_object`] (a template id).
     pub async fn failed_on_object(&self, state: &AppState, error: &Error) -> ApiError {
-        object_failed(state, self.waba_id(), error).await
+        object_failed(self.failed(state, error).await, error)
     }
 
     /// Delete the WABA's token and its binding, and its numbers': the last
@@ -320,9 +321,11 @@ impl OwnedWaba {
                     code = unusable.code(),
                     "unbinding a WABA without a usable token: the app stays subscribed"
                 );
-                state.tokens().delete(&binding.waba_id).await?;
-                state.store().unbind_waba(&binding.waba_id).await?;
-                Ok(())
+                state
+                    .authz()
+                    .forget_for_admin(admin, &binding.waba_id)
+                    .await
+                    .map_err(ApiError::from)
             }
         }
     }
@@ -355,21 +358,37 @@ impl FromRequestParts<AppState> for OwnedWaba {
     }
 }
 
-/// [`graph_failed`] for a call on an object named by id: Meta refusing the
+/// `api`, the error of a failed Graph call on an object named by id
+/// ([`OwnedNumber::failed`], [`OwnedWaba::failed`]): Meta refusing the
 /// object (the core's [`core_authz::object_refused`]) is `404 not_found`,
 /// without Meta's code or text, the answer for an object that does not
 /// exist: another tenant's looks like a missing one. Anything else keeps
 /// its code and `details`.
-async fn object_failed(state: &AppState, waba_id: &WabaId, error: &Error) -> ApiError {
-    let api = graph_failed(state, waba_id, error).await;
+fn object_failed(api: ApiError, error: &Error) -> ApiError {
     ApiError::from(core_authz::object_failed(api.into_service_error(), error))
 }
 
-/// The API error of a failed Graph call made with `waba_id`'s stored
-/// token: a `190` (or `0`) marks the WABA's numbers `reconnect_required`
-/// ([`Authorizer::graph_failed`]); a Graph error is counted.
-pub(crate) async fn graph_failed(state: &AppState, waba_id: &WabaId, error: &Error) -> ApiError {
-    let api = ApiError::from(state.authz().graph_failed(waba_id, error).await);
+/// The API error of a failed Graph call an admin made with a token of its
+/// own on `waba_id`, once stored: a `190` (or `0`) marks the WABA's
+/// numbers `reconnect_required`
+/// ([`Authorizer::graph_failed_for_admin`]); a Graph error is counted.
+pub(crate) async fn graph_failed_for_admin(
+    state: &AppState,
+    admin: &AdminCaller,
+    waba_id: &WabaId,
+    error: &Error,
+) -> ApiError {
+    let api = state
+        .authz()
+        .graph_failed_for_admin(admin, waba_id, error)
+        .await;
+    counted(state, api, error)
+}
+
+/// `api`, the error of a failed Graph call, over HTTP; a Graph error is
+/// counted.
+fn counted(state: &AppState, api: ServiceError, error: &Error) -> ApiError {
+    let api = ApiError::from(api);
     if error.graph().is_some() {
         state.metrics().graph_error(api.code());
     }
