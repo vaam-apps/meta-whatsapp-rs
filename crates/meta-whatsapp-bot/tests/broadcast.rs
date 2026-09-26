@@ -718,6 +718,32 @@ async fn cancelling_stops_further_sends() {
     );
 }
 
+/// A cancel that comes as the last send settles leaves nobody unsent: the
+/// run completed (Lightbridge's review of PR #26: the report said
+/// `Cancelled` for a broadcast every recipient of which was sent to).
+#[tokio::test]
+async fn a_cancel_that_leaves_nobody_unsent_is_a_completed_run() {
+    let clock = ManualClock::new(T0);
+    let outbound = Timed::new(&clock);
+    let broadcast = Broadcast::builder(NUMBER)
+        .to((0..3).map(phone))
+        .content(Text::new("Spring sale"))
+        .outbound(outbound.clone())
+        .pacer(pacer(&clock, 20))
+        .build()
+        .unwrap();
+    let handle = broadcast.handle();
+    outbound.cancel_after.set((3, handle.clone())).unwrap();
+
+    let report = broadcast.run().await;
+
+    assert_eq!(outbound.sends().len(), 3);
+    assert!(handle.is_cancelled(), "the cancel was called");
+    assert_eq!(report.ended, BroadcastEnd::Completed);
+    let progress = report.progress();
+    assert_eq!((progress.sent, progress.skipped), (3, 0));
+}
+
 /// A clock whose sleeps never end: only a cancel gets a waiting sender
 /// out.
 #[derive(Debug)]

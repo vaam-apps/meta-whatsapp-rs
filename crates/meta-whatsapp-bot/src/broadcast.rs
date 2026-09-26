@@ -540,7 +540,9 @@ impl BroadcastHandle {
     /// retry ends at once, the slot handed back to the pacer); sends in
     /// flight finish and are reported, since abandoning one would leave
     /// unknown whether it went out. Recipients not sent are
-    /// [`SendOutcome::Skipped`]. Nothing after the run ended.
+    /// [`SendOutcome::Skipped`]. Nothing after the run ended; a cancel
+    /// that leaves nobody unsent ends the run as
+    /// [`BroadcastEnd::Completed`].
     pub fn cancel(&self) {
         if self.shared.halt(Halt::Cancelled) {
             tracing::debug!("broadcast cancelled");
@@ -816,6 +818,10 @@ impl Broadcast {
         let recipient = book.stopped_by.unwrap_or_default();
         let ended = match halt {
             Halt::Running | Halt::Finished => BroadcastEnd::Completed,
+            // A cancel that left nobody unsent (it came as the last sends
+            // settled, before the run could mark itself finished) did not
+            // end the run: every recipient was sent to or reported.
+            Halt::Cancelled if unsettled == 0 => BroadcastEnd::Completed,
             Halt::Cancelled => BroadcastEnd::Cancelled,
             Halt::Stopped => BroadcastEnd::Stopped { recipient },
             Halt::LimiterFailed => BroadcastEnd::LimiterFailed { recipient },
