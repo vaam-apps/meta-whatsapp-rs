@@ -147,7 +147,8 @@ volumes (Claude config, shell history, cargo caches) start empty
   numbers or WABAs no tenant holds, events dated more than 7 days and an
   hour ago (replays), `unknown`, `unparsed`, `partner_solution_updated` and any
   type the service has not reviewed (today PR #17's `standby_observed`,
-  `thread_control_changed` and `user_action_reported`) are operator-only
+  `thread_control_changed` and `user_action_reported`, which M2 makes
+  tenant-visible: design D25, the owner's decision) are operator-only
   rows, never shown to a tenant, logged by size and digest. `GET /v1/events` (scope
   `events`) answers the caller's tenant's events after `after` in the
   tenant's own sequence (`types`, `phone_number_id`, `limit`, pages of at

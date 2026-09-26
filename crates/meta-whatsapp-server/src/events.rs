@@ -178,7 +178,9 @@ pub const TENANT_EVENT_TYPES: [&str; 28] = [
 /// were `unknown` before it: Conversation Routing's standby copies and
 /// handovers (`standby_observed`, `thread_control_changed`) and the
 /// Marketing Messages API's clicks (`user_action_reported`). Moving one to
-/// [`TENANT_EVENT_TYPES`] later is additive; the reverse is not.
+/// [`TENANT_EVENT_TYPES`] later is additive; the reverse is not. The owner
+/// decided on 2026-09-26 that M2 makes these three tenant-visible (design
+/// decision D25).
 pub const OPERATOR_EVENT_TYPES: [&str; 6] = [
     "unknown",
     "unparsed",
