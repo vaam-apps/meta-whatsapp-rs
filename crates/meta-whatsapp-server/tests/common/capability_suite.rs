@@ -17,8 +17,12 @@ use meta_whatsapp_rs::core::store::KvStore;
 use meta_whatsapp_rs::core::testing::ScriptedTransport;
 use meta_whatsapp_server::api::admin::mint;
 use meta_whatsapp_server::auth::{Authorizer, Caller};
-use meta_whatsapp_server::model::{KeyOwner, NumberStatus, Scope, TenantId};
-use meta_whatsapp_server::store::{RecordStore, Store};
+use meta_whatsapp_server::model::{
+    ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, KeyOwner, KeyScope, Listing,
+    NewApiKey, NumberBinding, NumberStatus, PageRequest, Scope, Tenant, TenantId, TenantStatus,
+    WabaBinding,
+};
+use meta_whatsapp_server::store::{RecordStore, Store, StoreResult};
 
 /// The tenant the capabilities are made for, and the one a WABA moves to.
 const A: &str = "cap-a";
@@ -373,8 +377,267 @@ pub async fn racing_a_reattach(
     }
 }
 
+type Hook = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
+/// A `RecordStore` that runs a hook once, right after the next WABA
+/// binding it reads (`waba`): the binding moves between a capability's
+/// read of it and its read of the vault.
+struct MovesAfterRead {
+    inner: Arc<dyn Store>,
+    hook: std::sync::Mutex<Option<Hook>>,
+    /// Run after the next number read instead (`number`).
+    after_number: std::sync::Mutex<Option<Hook>>,
+}
+
+impl MovesAfterRead {
+    fn arm(&self, hook: Hook) {
+        *self.hook.lock().unwrap() = Some(hook);
+    }
+
+    fn arm_after_number(&self, hook: Hook) {
+        *self.after_number.lock().unwrap() = Some(hook);
+    }
+}
+
+#[async_trait::async_trait]
+impl RecordStore for MovesAfterRead {
+    async fn ping(&self) -> StoreResult<()> {
+        self.inner.ping().await
+    }
+    async fn create_tenant(&self, id: &TenantId, name: &str) -> StoreResult<Option<Tenant>> {
+        self.inner.create_tenant(id, name).await
+    }
+    async fn tenant(&self, id: &TenantId) -> StoreResult<Option<Tenant>> {
+        self.inner.tenant(id).await
+    }
+    async fn tenants(&self, page: &PageRequest) -> StoreResult<Listing<Tenant>> {
+        self.inner.tenants(page).await
+    }
+    async fn update_tenant(
+        &self,
+        id: &TenantId,
+        name: Option<&str>,
+        status: Option<TenantStatus>,
+    ) -> StoreResult<Option<Tenant>> {
+        self.inner.update_tenant(id, name, status).await
+    }
+    async fn delete_tenant(&self, id: &TenantId) -> StoreResult<DeleteTenantOutcome> {
+        self.inner.delete_tenant(id).await
+    }
+    async fn insert_key(&self, key: &NewApiKey) -> StoreResult<Option<ApiKeyRecord>> {
+        self.inner.insert_key(key).await
+    }
+    async fn key(&self, key_id: &str) -> StoreResult<Option<ApiKeyRecord>> {
+        self.inner.key(key_id).await
+    }
+    async fn keys(
+        &self,
+        scope: &KeyScope,
+        page: &PageRequest,
+    ) -> StoreResult<Listing<ApiKeyRecord>> {
+        self.inner.keys(scope, page).await
+    }
+    async fn revoke_key(&self, scope: &KeyScope, key_id: &str) -> StoreResult<bool> {
+        self.inner.revoke_key(scope, key_id).await
+    }
+    async fn touch_key(&self, key_id: &str) -> StoreResult<()> {
+        self.inner.touch_key(key_id).await
+    }
+    async fn bind_waba(
+        &self,
+        tenant: &TenantId,
+        waba_id: &WabaId,
+        numbers: &[PhoneNumberId],
+    ) -> StoreResult<BindOutcome> {
+        self.inner.bind_waba(tenant, waba_id, numbers).await
+    }
+    async fn unbind_waba(&self, waba_id: &WabaId) -> StoreResult<bool> {
+        self.inner.unbind_waba(waba_id).await
+    }
+    async fn unbind_waba_if(&self, epoch: &BindingEpoch) -> StoreResult<bool> {
+        self.inner.unbind_waba_if(epoch).await
+    }
+    async fn waba(&self, waba_id: &WabaId) -> StoreResult<Option<WabaBinding>> {
+        let read = self.inner.waba(waba_id).await;
+        let hook = self.hook.lock().unwrap().take();
+        if let Some(hook) = hook {
+            hook.await;
+        }
+        read
+    }
+    async fn number(&self, phone_number_id: &PhoneNumberId) -> StoreResult<Option<NumberBinding>> {
+        let read = self.inner.number(phone_number_id).await;
+        let hook = self.after_number.lock().unwrap().take();
+        if let Some(hook) = hook {
+            hook.await;
+        }
+        read
+    }
+    async fn all_wabas(&self, page: &PageRequest) -> StoreResult<Listing<WabaBinding>> {
+        self.inner.all_wabas(page).await
+    }
+    async fn wabas(
+        &self,
+        tenant: &TenantId,
+        page: &PageRequest,
+    ) -> StoreResult<Listing<WabaBinding>> {
+        self.inner.wabas(tenant, page).await
+    }
+    async fn waba_numbers(&self, waba_id: &WabaId) -> StoreResult<Vec<NumberBinding>> {
+        self.inner.waba_numbers(waba_id).await
+    }
+    async fn numbers(
+        &self,
+        tenant: &TenantId,
+        page: &PageRequest,
+    ) -> StoreResult<Listing<NumberBinding>> {
+        self.inner.numbers(tenant, page).await
+    }
+    async fn set_waba_status(&self, waba_id: &WabaId, status: NumberStatus) -> StoreResult<()> {
+        self.inner.set_waba_status(waba_id, status).await
+    }
+    async fn set_waba_status_if(
+        &self,
+        epoch: &BindingEpoch,
+        status: NumberStatus,
+    ) -> StoreResult<bool> {
+        self.inner.set_waba_status_if(epoch, status).await
+    }
+}
+
+/// SR-L2 when the capability is made: a WABA unbound and attached to
+/// another tenant, with that tenant's token, between the capability's read
+/// of the binding and its read of the vault, yields no capability (`503
+/// storage_unavailable`, retryable), never the old holder's binding with
+/// the new holder's token, which it would call Meta with (unsubscribing
+/// the new holder's app, sending from its number) and which `forget` would
+/// delete. For an `OwnedWaba` and an `OwnedNumber` (the move in the
+/// middle of their making), and for an admin's `OwnedWaba` made from a
+/// binding read earlier (a tenant deletion walking its WABAs, one moved
+/// meanwhile). An `OwnedNumber` whose WABA moves between its number's read
+/// and its WABA's is `404 not_found`: the WABA read is another tenant's.
+/// The new holder keeps its binding, its token and its number's status.
+/// Decisive: the binding read again after the vault, in
+/// `Authorizer::open` and `Authorizer::owned_number`, and the tenant
+/// filter on `owned_number`'s WABA read.
+#[allow(clippy::too_many_lines)] // one scenario per capability, read top to bottom
+pub async fn a_capability_made_while_its_waba_moves_is_refused(
+    store: Arc<dyn Store>,
+    kv: Arc<dyn KvStore>,
+) {
+    let s = Arc::new(Setup::new(store.clone(), kv).await);
+    let moving = Arc::new(MovesAfterRead {
+        inner: store.clone(),
+        hook: std::sync::Mutex::new(None),
+        after_number: std::sync::Mutex::new(None),
+    });
+    let records: Arc<dyn RecordStore> = moving.clone();
+    let authz = Authorizer::new(
+        records,
+        s.vault.clone(),
+        Client::builder()
+            .transport(ScriptedTransport::new())
+            .build()
+            .unwrap(),
+    )
+    .unwrap();
+    let bearer = |owner: KeyOwner, scopes: Vec<Scope>| {
+        let store = store.clone();
+        async move {
+            let (key, _) = mint(store.as_ref(), owner, scopes, String::new(), None)
+                .await
+                .unwrap();
+            format!("Bearer {}", key.expose_key())
+        }
+    };
+    let tenant_key = bearer(
+        KeyOwner::Tenant(TenantId::parse(A).unwrap()),
+        vec![Scope::Numbers],
+    )
+    .await;
+    let caller = authz
+        .tenant_caller(Some(&tenant_key), None, Scope::Numbers)
+        .await
+        .unwrap();
+    let admin_key = bearer(KeyOwner::Admin, vec![]).await;
+    let admin = authz.admin_caller(Some(&admin_key)).await.unwrap();
+    let move_to_b = |waba: &WabaId, pn: &PhoneNumberId| -> Hook {
+        let (s, waba, pn) = (s.clone(), waba.clone(), pn.clone());
+        Box::pin(async move { s.attached_again(B, &waba, &pn, Some("TOKEN-OF-B")).await })
+    };
+    for how in [
+        "owned_waba",
+        "owned_number",
+        "owned_number_after_its_number",
+        "waba_for_admin",
+    ] {
+        let case = format!("made-while-moving-{how}");
+        let (waba, pn) = ids(&case);
+        s.attach(A, &waba, &pn, Some("TOKEN-OF-A")).await;
+        let made = match how {
+            "owned_waba" => {
+                moving.arm(move_to_b(&waba, &pn));
+                authz.owned_waba(&caller, waba.clone()).await.map(|owned| {
+                    let token = owned.client().token().map(|t| t.expose_secret().to_owned());
+                    (Some(owned), token)
+                })
+            }
+            "owned_number" => {
+                moving.arm(move_to_b(&waba, &pn));
+                authz.owned_number(&caller, pn.clone()).await.map(|owned| {
+                    let token = owned.client().token().map(|t| t.expose_secret().to_owned());
+                    (None, token)
+                })
+            }
+            "owned_number_after_its_number" => {
+                // Between the number's read and its WABA's: the WABA read
+                // is the new holder's binding, whose own token follows.
+                moving.arm_after_number(move_to_b(&waba, &pn));
+                authz.owned_number(&caller, pn.clone()).await.map(|owned| {
+                    let token = owned.client().token().map(|t| t.expose_secret().to_owned());
+                    (None, token)
+                })
+            }
+            _ => {
+                // Read as a tenant deletion lists its WABAs, then moved.
+                let listed = store.waba(&waba).await.unwrap().unwrap();
+                move_to_b(&waba, &pn).await;
+                authz.waba_for_admin(&admin, &listed).await.map(|owned| {
+                    let token = owned.client().token().map(|t| t.expose_secret().to_owned());
+                    (Some(owned), token)
+                })
+            }
+        };
+        // Moved after its WABA's read: `503`, repeat; before it, the WABA
+        // read is already another tenant's: not this tenant's number.
+        let refused = if how == "owned_number_after_its_number" {
+            "not_found"
+        } else {
+            "storage_unavailable"
+        };
+        match made {
+            Err(error) => assert_eq!(error.code(), refused, "{case}"),
+            Ok((owned, token)) => {
+                // What the capability would do with the new holder's token.
+                if let Some(owned) = owned {
+                    let _ = owned.forget(&authz).await;
+                }
+                panic!("{case}: made a capability of {A}'s binding with the token {token:?}");
+            }
+        }
+        assert_eq!(s.holder(&waba).await.as_deref(), Some(B), "{case}");
+        assert_eq!(
+            s.token(&waba).await.as_deref(),
+            Some("TOKEN-OF-B"),
+            "{case}"
+        );
+        assert_eq!(s.status(&pn).await, Some(NumberStatus::Connected), "{case}");
+    }
+}
+
 /// Everything above.
 pub async fn run(store: Arc<dyn Store>, kv: Arc<dyn KvStore>) {
     forget_leaves_a_waba_attached_again(store.clone(), kv.clone()).await;
-    failed_leaves_a_waba_attached_again(store, kv).await;
+    failed_leaves_a_waba_attached_again(store.clone(), kv.clone()).await;
+    a_capability_made_while_its_waba_moves_is_refused(store, kv).await;
 }

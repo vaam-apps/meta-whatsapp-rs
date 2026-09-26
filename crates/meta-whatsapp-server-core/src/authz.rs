@@ -49,6 +49,10 @@
 //! status. Each condition is checked by the store atomically with its
 //! write (`TokenVault::delete_if_unchanged`,
 //! [`RecordStore::unbind_waba_if`], [`RecordStore::set_waba_status_if`]).
+//! And what a capability is made from is consistent: its token is read
+//! from the vault while its binding held (the binding is read again after
+//! the vault; moved in between, no capability is made, `503`), never the
+//! binding of one holder with the token of the next.
 //!
 //! **A capability works only with the [`Authorizer`] that made it.**
 //! [`Authorizer::new`] is public, so anyone can build one over records of
@@ -76,7 +80,7 @@ use std::sync::Arc;
 use meta_whatsapp_rs::Client;
 use meta_whatsapp_rs::client::embedded_signup::{StoredBusinessToken, TokenVault, TokenVersion};
 use meta_whatsapp_rs::core::clock::{Clock, SystemClock};
-use meta_whatsapp_rs::core::error::ConfigError;
+use meta_whatsapp_rs::core::error::{ConfigError, StorageError};
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_rs::{Error, ErrorKind};
 use time::OffsetDateTime;
@@ -541,6 +545,7 @@ impl Authorizer {
             .filter(|waba| waba.tenant_id == caller.tenant)
             .ok_or_else(ServiceError::not_found)?;
         let token = self.tokens.vault.get_by_phone_number(&pn).await?;
+        self.still_bound(&waba).await?;
         let token = usable(token, &binding.waba_id, self.clock.now())?;
         Ok(OwnedNumber {
             client: self.client.with_token(token.token),
@@ -584,12 +589,14 @@ impl Authorizer {
     }
 
     /// Step 5 for a WABA bound to a tenant (`binding`, as read): its token,
-    /// and the version of the vault record it came from.
+    /// and the version of the vault record it came from, read while
+    /// `binding` held ([`Self::still_bound`]).
     async fn open(&self, binding: &WabaBinding) -> Result<OwnedWaba, ServiceError> {
         let waba_id = &binding.waba_id;
         let Some((token, version)) = self.tokens.vault.get_versioned(waba_id).await? else {
             return Err(ServiceError::new("number_not_connected"));
         };
+        self.still_bound(binding).await?;
         let token = usable(Some(token), waba_id, self.clock.now())?;
         Ok(OwnedWaba {
             client: self.client.with_token(token.token),
@@ -598,6 +605,25 @@ impl Authorizer {
             epoch: binding.epoch(),
             token: version,
         })
+    }
+
+    /// Whether the WABA is still bound as `binding` says, read again once
+    /// its token was read from the vault: a capability is made from a
+    /// binding and the token read while it held. A WABA unbound and
+    /// attached again between the two reads (to another tenant, with that
+    /// tenant's token) would otherwise pair this binding with the new
+    /// holder's token, which the capability would call Meta with and
+    /// [`OwnedWaba::forget`] would delete; a binding made since begins
+    /// later, so an unchanged [`BindingEpoch`] means no unbinding came in
+    /// between. Moved: `503 storage_unavailable` (retryable), and a repeat
+    /// acts on what is there now.
+    async fn still_bound(&self, binding: &WabaBinding) -> Result<(), ServiceError> {
+        let now = self.records.waba(&binding.waba_id).await?;
+        if now.is_some_and(|now| now.epoch() == binding.epoch()) {
+            return Ok(());
+        }
+        tracing::info!("a WABA's binding moved while a capability was being made from it");
+        Err(ServiceError::from(StorageError::Busy))
     }
 
     /// Store `token` in the vault, for an admin attaching a WABA: its
