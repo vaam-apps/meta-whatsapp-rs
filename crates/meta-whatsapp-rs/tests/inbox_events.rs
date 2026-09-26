@@ -1029,6 +1029,62 @@ mod rules {
         assert!(!ReplyChecks::none().checks_window() && !ReplyChecks::none().checks_thread_owner());
     }
 
+    /// `direct-send/send-utility-and-authentication-messages`: a `service`
+    /// category "follows the existing service-message flow; the message is
+    /// dropped if the service window isn't open". `utility` and
+    /// `authentication` are sent as templates, and a category this crate
+    /// does not know is left to Meta (it answers `100` for one it does not
+    /// know either): neither local check refuses them.
+    #[tokio::test]
+    async fn a_direct_send_service_message_needs_the_window_and_the_thread() {
+        let store = memory();
+        // The customer wrote at 1749416383: the window closed 17 s ago.
+        let clock = ManualClock::new(at(1_749_416_383 + 86_400 + 17));
+        let transport = ScriptedTransport::new();
+        let inbox = inbox(&store, &transport, &clock);
+        let key = inbox.key(PHONE);
+        deliver(&store, PHONE_TEXT).await;
+        let direct = |category| {
+            OutboundMessage::new(inbox.recipient(&key), Text::new("Your order shipped"))
+                .category(category)
+        };
+        let refused = inbox
+            .send(&key, direct(DirectSendCategory::Service))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.kind(), ErrorKind::CustomerServiceWindowClosed);
+        assert!(
+            transport.requests().is_empty(),
+            "refused before any request"
+        );
+
+        let taken = fixture(
+            "pages/conversation-routing.thread-control__control_taken.json",
+            &[("1750101000", "1749500000")],
+        );
+        deliver(&store, &taken).await;
+        let refused = inbox
+            .clone()
+            .with_reply_checks(ReplyChecks::all().window(false))
+            .send(&key, direct(DirectSendCategory::Service))
+            .await
+            .unwrap_err();
+        assert!(is_thread_owned_elsewhere(&refused), "{refused}");
+        assert!(transport.requests().is_empty());
+
+        // Another app owns the thread, outside the window.
+        for (category, id) in [
+            (DirectSendCategory::Utility, "wamid.U"),
+            (DirectSendCategory::Authentication, "wamid.A"),
+            (DirectSendCategory::Other("future".to_owned()), "wamid.F"),
+        ] {
+            transport.push_json(200, accepted(id));
+            inbox.send(&key, direct(category)).await.unwrap();
+        }
+        assert_eq!(transport.requests().len(), 3);
+        assert_eq!(transport.remaining(), 0);
+    }
+
     // ─── Identity links ──────────────────────────────────────────────────
 
     /// A number change (`system`), old identity to new, and the new phone

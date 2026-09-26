@@ -26,8 +26,9 @@
 //! [`Error::kind`](meta_whatsapp_core::Error::kind) is `CustomerServiceWindowClosed`,
 //! like Meta's `131047`)
 //! instead of paying for a request Meta would reject. Templates and Direct
-//! Send (`category`) messages are exempt. Use [`Inbox::window`] to decide up
-//! front.
+//! Send `utility` and `authentication` messages (a `category` Meta sends as
+//! a template) are exempt; a Direct Send `service` message is not (Meta
+//! drops it outside the window). Use [`Inbox::window`] to decide up front.
 //!
 //! **Window events.** Meta also starts or refreshes the window when the
 //! customer calls the business number, answered or not, and when they
@@ -1945,13 +1946,16 @@ impl Inbox {
     /// addressed to [`Inbox::recipient`] of `key`; anything else is refused,
     /// so a conversation can't be used to message someone outside it.
     ///
-    /// The window check exempts templates and every Direct Send `category`;
-    /// the ownership check exempts templates and the `utility` and
-    /// `authentication` categories, which Meta sends as templates
-    /// (`conversation-routing/thread-lifecycle`: marketing, utility and
-    /// authentication templates need no ownership). Ownership is checked
-    /// first: while another app owns the thread, the merchant should not
-    /// answer in free text at all.
+    /// Both checks exempt templates and the Direct Send `utility` and
+    /// `authentication` categories, which Meta sends as templates (outside
+    /// the window, and `conversation-routing/thread-lifecycle`: marketing,
+    /// utility and authentication templates need no ownership), and leave
+    /// a category this crate does not know ([`DirectSendCategory::Other`])
+    /// to Meta. A `service` category is a service message: Meta drops it
+    /// outside the window
+    /// (`direct-send/send-utility-and-authentication-messages`), so both
+    /// checks apply. Ownership is checked first: while another app owns the
+    /// thread, the merchant should not answer in free text at all.
     pub async fn send(
         &self,
         key: &ConversationKey,
@@ -1965,14 +1969,21 @@ impl Inbox {
             )
             .into());
         }
-        let template = matches!(message.content, MessageContent::Template(_));
-        let check_window = self.checks.window && !template && message.category.is_none();
-        let check_owner = self.checks.thread_owner
-            && !template
-            && !matches!(
+        // Meta sends a Direct Send `utility` or `authentication` message as a
+        // template; `service` "follows the existing service-message flow"
+        // (`direct-send/send-utility-and-authentication-messages`), and a
+        // category this crate does not know is Meta's to judge.
+        let as_template = matches!(message.content, MessageContent::Template(_))
+            || matches!(
                 message.category,
-                Some(DirectSendCategory::Utility | DirectSendCategory::Authentication)
+                Some(
+                    DirectSendCategory::Utility
+                        | DirectSendCategory::Authentication
+                        | DirectSendCategory::Other(_)
+                )
             );
+        let check_window = self.checks.window && !as_template;
+        let check_owner = self.checks.thread_owner && !as_template;
         if check_window || check_owner {
             let last = self.store.last_inbound_at(key).await?;
             if check_owner {
