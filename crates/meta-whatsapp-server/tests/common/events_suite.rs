@@ -495,7 +495,8 @@ pub async fn the_route_guard_is_checked_with_the_insert(
         }),
         ..row(Some("suite-g"), "template_status_updated", "31", None)
     };
-    // Not holding: the number under another WABA than its binding's.
+    // Not holding: the number under another WABA than its binding's (one
+    // suite-g holds too: only the number's own binding refuses it).
     let other_waba = NewEvent {
         route_guard: Some(RouteGuard {
             binding: GuardedBinding::Number {
@@ -583,6 +584,7 @@ pub async fn run(store: &dyn EventStore, tenants: &dyn Store) {
         ("suite-u", "96"),
         ("suite-v", "97"),
         ("suite-g", "31"),
+        ("suite-g", "32"),
     ] {
         bind(tenants, tenant_id, pn).await;
     }
