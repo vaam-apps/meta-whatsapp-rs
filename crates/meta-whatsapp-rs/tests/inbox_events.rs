@@ -63,6 +63,12 @@ fn at(unix: i64) -> OffsetDateTime {
     OffsetDateTime::from_unix_timestamp(unix).unwrap()
 }
 
+/// The `since` of the ownership a standby copy of `unix` records: 1 ms
+/// before its second, so that a handover of that second is always later.
+fn just_before(unix: i64) -> OffsetDateTime {
+    at(unix) - time::Duration::milliseconds(1)
+}
+
 /// Deliver every event of a webhook body, as the handler would.
 async fn deliver(store: &Arc<dyn ConversationStore>, body: &str) {
     let events = WebhookPayload::from_slice(body.as_bytes())
@@ -294,7 +300,8 @@ async fn a_standby_message_is_a_window_event(store: Arc<dyn ConversationStore>) 
     let owner = inbox.thread_owner(&key).await.unwrap().unwrap();
     assert_eq!(
         (owner.owner, owner.since),
-        (ThreadOwner::AnotherApp, at(1_750_101_000))
+        (ThreadOwner::AnotherApp, just_before(1_750_101_000)),
+        "that app owned the thread when the message reached it"
     );
     let refused = inbox.reply(&key, text("Hello")).await.unwrap_err();
     assert!(is_thread_owned_elsewhere(&refused), "{refused}");
@@ -654,8 +661,51 @@ mod rules {
             (
                 ThreadOwner::AnotherApp,
                 Some("escalation"),
-                at(1_750_101_060)
+                just_before(1_750_101_060)
             )
+        );
+
+        // The other order: the copy first, then the handover of its second.
+        let store = memory();
+        deliver(&store, STANDBY_MESSAGE).await; // 1750101000
+        deliver(
+            &store,
+            &fixture(
+                "pages/conversation-routing.thread-control__control_passed.json",
+                &[],
+            ),
+        )
+        .await;
+        assert_eq!(
+            owner_of(&store, PHONE).await.unwrap(),
+            ThreadOwnership {
+                owner: ThreadOwner::ThisApp,
+                role: Some("escalation".to_owned()),
+                app_id: None,
+                since: at(1_750_101_000),
+            }
+        );
+
+        // A message on `messages` of a copy's second reached this app: it
+        // owns the thread, and the merchant may answer.
+        let store = memory();
+        let clock = ManualClock::new(at(1_750_101_000 + 60));
+        let transport = ScriptedTransport::new();
+        let inbox = inbox(&store, &transport, &clock);
+        deliver(&store, STANDBY_MESSAGE).await; // 1750101000
+        deliver(
+            &store,
+            &fixture("messages/text.json", &[("1749416383", "1750101000")]),
+        )
+        .await;
+        let owner = inbox
+            .thread_owner(&inbox.key(PHONE))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (owner.owner, owner.since),
+            (ThreadOwner::ThisApp, at(1_750_101_000))
         );
 
         // After control_passed to this app, a later copy: another app again,

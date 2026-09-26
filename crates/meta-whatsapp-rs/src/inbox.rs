@@ -82,13 +82,18 @@
 //! - a standby copy of a customer's message (`StandbyObserved`): a window
 //!   event ([`WindowEventKind::StandbyMessage`]: the customer wrote, but not
 //!   to this app, so it is neither history nor unread) and
-//!   [`ThreadOwner::AnotherApp`] at the message's time, unless a record of
-//!   that second or later is stored (a handover is the stronger signal).
-//!   Standby echoes and receipts record nothing, and a group's copy records
-//!   no owner (the routing pages describe threads with one customer);
-//! - a message on the `messages` field after the stored record: this app
-//!   received it, so it owns the thread ([`Inbox::thread_owner`] derives
-//!   it; nothing is written per message);
+//!   [`ThreadOwner::AnotherApp`] since just before the message's time (1
+//!   ms: that app owned the thread when the message reached it), unless a
+//!   record of that second or later is stored. A handover is the stronger
+//!   signal: dated before the copy's second, the record never overrides a
+//!   handover of that second, in whichever order they are stored, and
+//!   also when two replicas race. Standby echoes and receipts record
+//!   nothing, and a group's copy records no owner (the routing pages
+//!   describe threads with one customer);
+//! - a message on the `messages` field after the stored record (one of a
+//!   standby copy's second included): this app received it, so it owns the
+//!   thread ([`Inbox::thread_owner`] derives it; nothing is written per
+//!   message);
 //! - this app's own `release` (no webhook reports it):
 //!   [`Inbox::record_release`];
 //! - 24 hours without the customer ([`Inbox::THREAD_IDLE_AFTER`]): the
@@ -615,6 +620,15 @@ fn handover_owner(
 /// How many identity links [`InboxSink`] follows from a handover's phone
 /// number at most.
 const MAX_LINK_STEPS: usize = 16;
+
+/// How long before a standby copy's timestamp [`InboxSink`] dates the
+/// ownership by another app that the copy records: that app owned the
+/// thread before the customer's message reached it. Meta's timestamps are
+/// whole seconds, so a handover of the copy's second is always the later
+/// record ([`ConversationStore::set_thread_owner`] keeps it whichever
+/// replica writes last), and so is a message on `messages` of that second
+/// ([`Inbox::thread_owner`]: this app then).
+const STANDBY_OWNER_LEAD: time::Duration = time::Duration::milliseconds(1);
 
 /// The customer an echo went to: BSUID first, then phone number.
 fn echo_conversation_key(
@@ -1287,9 +1301,16 @@ impl InboxSink {
             .await
     }
 
-    /// Another app owns `key`'s thread since `at` (a standby copy), unless
-    /// a record of that second or later is stored. The stored owner's role
-    /// and app stay when it was another app already.
+    /// Another app owns `key`'s thread since just before `at` (a standby
+    /// copy: [`STANDBY_OWNER_LEAD`] before it), unless a record of that
+    /// second or later is stored. The stored owner's role and app stay
+    /// when it was another app already.
+    ///
+    /// The read and the write are two calls, so another replica can store
+    /// a handover of the same second between them. Dating the record
+    /// before the copy's second keeps the handover anyway:
+    /// [`ConversationStore::set_thread_owner`] refuses a record older than
+    /// the stored one, whichever replica writes last.
     async fn observed_in_standby(
         &self,
         key: &ConversationKey,
@@ -1310,7 +1331,7 @@ impl InboxSink {
                     owner: ThreadOwner::AnotherApp,
                     role,
                     app_id,
-                    since: at,
+                    since: at.saturating_sub(STANDBY_OWNER_LEAD),
                 },
             )
             .await
@@ -4071,6 +4092,9 @@ mod tests {
         reads: std::sync::atomic::AtomicUsize,
         /// Answer `append_synced` with one answer too few (a broken store).
         short: bool,
+        /// Answer `thread_owner` with `None`: the read of a replica that
+        /// ran before another replica's write landed (a race).
+        stale_owner: bool,
     }
 
     #[async_trait]
@@ -4186,6 +4210,9 @@ mod tests {
             key: &ConversationKey,
         ) -> std::result::Result<Option<meta_whatsapp_core::store::ThreadOwnership>, StorageError>
         {
+            if self.stale_owner {
+                return Ok(None);
+            }
             self.inner.thread_owner(key).await
         }
         async fn put_contact(
@@ -4419,5 +4446,55 @@ mod tests {
             let kind = event.kind();
             assert!(sink.deliver(event).await.is_err(), "{kind}");
         }
+    }
+
+    /// Two replicas, one second: one records a `control_passed`, the other
+    /// a standby copy of that second whose read of the owner ran before the
+    /// handover's write and whose write lands after it. The handover still
+    /// wins, so the merchant can answer the customer who asked for them.
+    #[tokio::test]
+    async fn a_racing_standby_copy_never_overrides_a_handover_of_its_second() {
+        let shared = MemoryConversationStore::new();
+        let handover = change(
+            "messaging_handovers",
+            &json!({"messaging_product": "whatsapp", "sender": {"phone_number": "16505551234"},
+                "recipient": {"phone_number_id": PNID, "display_phone_number": "15550783881"},
+                "type": "control_passed", "timestamp": "1750101000",
+                "control_passed": {"previous_owner_role": "ai_agent", "new_owner_role": "escalation"}}),
+        );
+        let standby = change(
+            "standby",
+            &json!({"messaging_product": "whatsapp",
+                "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
+                "standby": {"messages": [{"from": "16505551234", "id": "wamid.S",
+                    "timestamp": "1750101000", "type": "text", "text": {"body": "a human, please"}}]}}),
+        );
+        deliver_all(&InboxSink::new(Arc::new(shared.clone())), handover).await;
+        let replica = Arc::new(CountingStore {
+            inner: shared.clone(),
+            stale_owner: true,
+            ..CountingStore::default()
+        });
+        deliver_all(&InboxSink::new(replica), standby).await;
+
+        let clock = ManualClock::new(datetime!(2025-06-16 19:11:00 UTC));
+        let t = ScriptedTransport::new();
+        let inbox = inbox(&t, Arc::new(shared), &clock);
+        let key = inbox.key("16505551234");
+        let owner = inbox.thread_owner(&key).await.unwrap().unwrap();
+        assert_eq!(
+            (owner.owner, owner.role.as_deref()),
+            (ThreadOwner::ThisApp, Some("escalation"))
+        );
+        assert!(
+            inbox.window_is_open(&key).await.unwrap(),
+            "the standby copy"
+        );
+        t.push_json(200, sent("wamid.R"));
+        inbox
+            .reply(&key, Text::new("Hi, I'm here").into())
+            .await
+            .unwrap();
+        assert_eq!(t.remaining(), 0);
     }
 }
