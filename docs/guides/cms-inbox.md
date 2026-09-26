@@ -313,8 +313,9 @@ let escalation = inbox.with_reply_checks(ReplyChecks::all().thread_owner(false))
   (`conversation-routing/thread-lifecycle`, "Sending without ownership").
 - An idle thread is not refused: the customer's next message claims it.
   Meta refuses a service message on an idle thread too (except from the
-  escalation partner), and outside the window the window check refuses
-  it first.
+  escalation partner); a thread idle after 24 hours without the
+  customer is usually outside the window too, which the window check
+  refuses.
 - A pass by your own app is not reported to you (the new owner gets
   `control_passed`): until the thread control API is wrapped (roadmap
   L15), record it with `ConversationStore::set_thread_owner`

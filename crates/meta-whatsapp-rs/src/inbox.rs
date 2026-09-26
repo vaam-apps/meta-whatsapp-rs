@@ -105,7 +105,8 @@
 //! the ownership check off. A thread with no ownership record (no routing)
 //! is never refused for ownership, nor is an idle one: Meta refuses a
 //! service message on an idle thread too, except from the escalation
-//! partner, and outside the window the window check refuses it first.
+//! partner; a thread idle after 24 hours without the customer is usually
+//! outside the window too, which the window check refuses.
 //!
 //! **Identity links.** A customer is stored under several keys (a thread
 //! under their phone number from before BSUIDs, live messages under their
