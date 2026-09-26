@@ -1,0 +1,18 @@
+[
+  {
+    "data": {
+      "entry_id": "495709166956424",
+      "event": "account_updated",
+      "time": "1731617831",
+      "update": {
+        "ban_info": {
+          "waba_ban_date": "April 17, 2025",
+          "waba_ban_state": "SCHEDULE_FOR_DISABLE"
+        },
+        "event": "DISABLED_UPDATE"
+      },
+      "waba_id": "495709166956424"
+    },
+    "type": "account_updated"
+  }
+]

@@ -146,8 +146,9 @@ volumes (Claude config, shell history, cargo caches) start empty
   an error, goes to the tenant holding the binding then). Events of
   numbers or WABAs no tenant holds, events dated more than 7 days and an
   hour ago (replays), `unknown`, `unparsed`, `partner_solution_updated` and any
-  type the service has not reviewed are operator-only rows, never shown
-  to a tenant, logged by size and digest. `GET /v1/events` (scope
+  type the service has not reviewed (today PR #17's `standby_observed`,
+  `thread_control_changed` and `user_action_reported`) are operator-only
+  rows, never shown to a tenant, logged by size and digest. `GET /v1/events` (scope
   `events`) answers the caller's tenant's events after `after` in the
   tenant's own sequence (`types`, `phone_number_id`, `limit`, pages of at
   most 8 MiB of data), `{data, next_after}`, `410 cursor_expired` past
@@ -161,8 +162,9 @@ volumes (Claude config, shell history, cargo caches) start empty
   retention decision D10: design D22) and takes it out of every platform
   key's allowed tenants (design D24: a tenant created again under the id
   needs a new platform key). Event `data` is
-  the library's `WebhookEvent` JSON, pinned by snapshots over Meta's
-  examples. Metrics for deliveries, events by type and audience,
+  the library's `WebhookEvent` JSON, pinned by snapshots over every
+  Meta example among the library's fixtures (PR #17's conformance
+  fixtures included; a new fixture directory is walked too). Metrics for deliveries, events by type and audience,
   duplicates and failures. Skill: `meta-whatsapp-rs-server-events`. The
   OpenAPI document now declares the `429` of every rate-limited route
   (M1b's numbers, profile and WABA routes lacked it: additive), and a

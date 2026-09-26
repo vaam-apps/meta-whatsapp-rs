@@ -1,0 +1,32 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {
+          "name": "Sheena Nelson"
+        },
+        "wa_id": "16505551234"
+      },
+      "conversation_context": {
+        "summary": {
+          "text": "AI-generated summary string"
+        },
+        "type": "summary"
+      },
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "from": "16505551234",
+        "id": "wamid.HBgLMTY1MDU1NTEyMzQVAgASGBQzRUIwQTk4NkNGMUZCMDZERTREMAA=",
+        "text": {
+          "body": "Hello, I need help with my order"
+        },
+        "timestamp": "1750101000",
+        "type": "text"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

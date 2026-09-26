@@ -1,0 +1,21 @@
+[
+  {
+    "data": {
+      "entry_id": "102290129340398",
+      "event": "account_updated",
+      "time": "1743451903",
+      "update": {
+        "event": "VOLUME_BASED_PRICING_TIER_UPDATE",
+        "volume_tier_info": {
+          "effective_month": "2025-11",
+          "pricing_category": "UTILITY",
+          "region": "India",
+          "tier": "25000001:50000000",
+          "tier_update_time": "1743451903"
+        }
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "account_updated"
+  }
+]

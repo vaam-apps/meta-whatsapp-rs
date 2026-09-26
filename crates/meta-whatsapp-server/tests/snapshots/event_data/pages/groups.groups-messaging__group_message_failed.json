@@ -1,0 +1,30 @@
+[
+  {
+    "data": {
+      "contact": null,
+      "display_phone_number": "15550783881",
+      "event": "status_updated",
+      "phone_number_id": "106540352242922",
+      "status": {
+        "errors": [
+          {
+            "code": 131020,
+            "error_data": {
+              "details": "Cannot send messages to single member groups."
+            },
+            "href": "/documentation/business-messaging/whatsapp/support/error-codes",
+            "message": "Cannot send messages to single member groups.",
+            "title": "Bad Group"
+          }
+        ],
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQUFERjg0NDEzNDdFODU3MUMxMAA=",
+        "recipient_id": "Y2FwaV9ncm91cDoxOTUwNTU1MDA3OToxMjAzNjMzOTQzMjAdOTY0MTUZD",
+        "recipient_type": "group",
+        "status": "failed",
+        "timestamp": "1750101000"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "status_updated"
+  }
+]

@@ -1,0 +1,21 @@
+[
+  {
+    "data": {
+      "contact": null,
+      "display_phone_number": "15551797781",
+      "event": "message_received",
+      "message": {
+        "from": "17863559966",
+        "id": "wamid.HBgLMTc4NjM1NTk5NjYVAGHAYWYET688aASGNTI1QzZFQjhEMDk2QQA=",
+        "text": {
+          "body": "Hi!"
+        },
+        "timestamp": "1758254144",
+        "type": "text"
+      },
+      "phone_number_id": "7794189252778687",
+      "waba_id": "215589313241560883"
+    },
+    "type": "message_received"
+  }
+]

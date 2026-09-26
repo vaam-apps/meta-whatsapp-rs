@@ -1,0 +1,17 @@
+[
+  {
+    "data": {
+      "event": "template_status_updated",
+      "time": "1731617831",
+      "update": {
+        "event": "APPROVED",
+        "message_template_id": "64244916695",
+        "message_template_language": "en_US",
+        "message_template_name": "Summer 20 Template",
+        "reason": "NONE"
+      },
+      "waba_id": "495709166956424"
+    },
+    "type": "template_status_updated"
+  }
+]

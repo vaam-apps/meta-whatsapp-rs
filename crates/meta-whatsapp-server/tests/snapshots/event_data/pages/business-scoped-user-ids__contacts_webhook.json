@@ -1,0 +1,37 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {
+          "name": "Pablo M.",
+          "username": "pablomorales"
+        },
+        "user_id": "US.13491208655302741918"
+      },
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "contacts": [
+          {
+            "origin": "other",
+            "phones": [
+              {
+                "phone": "+1 (650) 555-1234",
+                "type": "MOBILE",
+                "wa_id": "16505551234"
+              }
+            ],
+            "vcard": "BEGIN:VCARD\nVERSION:3.0\nFN:Pablo M.\nTEL;type=MOBILE;waid=16505551234:+1 (650) 555-1234\nEND:VCARD"
+          }
+        ],
+        "from_user_id": "US.13491208655302741918",
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQUFERjg0NDEzNDdFODU3MUMxMAA=",
+        "timestamp": "1750030073",
+        "type": "contacts"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

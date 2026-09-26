@@ -1,0 +1,21 @@
+[
+  {
+    "data": {
+      "entry_id": "0",
+      "event": "account_updated",
+      "time": "1641848059",
+      "update": {
+        "event": "ACCOUNT_RESTRICTION",
+        "phone_number": "16505552771",
+        "restriction_info": [
+          {
+            "remediation": "The call button has been hidden due to low pickup rates. Please identify and address the cause of user-initiated calls not being picked up.  Next, display the calling buttons by either working with your partner or going to WhatsApp Manager > Account tools > Phone numbers > select Phone number > Calls > toggle on Display call buttons",
+            "restriction_type": "RESTRICTED_USER_INITIATED_CALLING_CALL_BUTTON_HIDDEN"
+          }
+        ]
+      },
+      "waba_id": "0"
+    },
+    "type": "account_updated"
+  }
+]

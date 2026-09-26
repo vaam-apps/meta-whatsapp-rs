@@ -28,11 +28,29 @@ fn snapshots_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/snapshots/event_data")
 }
 
+/// The fixture directories: every one the library has, so a new directory
+/// of Meta's examples cannot escape the snapshots.
+fn fixture_dirs() -> Vec<String> {
+    let mut dirs: Vec<String> = std::fs::read_dir(fixtures_dir())
+        .unwrap()
+        .map(|entry| entry.unwrap())
+        .filter(|entry| entry.file_type().unwrap().is_dir())
+        .map(|entry| entry.file_name().into_string().unwrap())
+        .collect();
+    dirs.sort();
+    // The library's layout today: its own fixtures, and one per example of
+    // every page of Meta's docs that prints a webhook body (PR #17).
+    for dir in ["bsuid", "fields", "messages", "pages"] {
+        assert!(dirs.iter().any(|d| d == dir), "{dir} missing: {dirs:?}");
+    }
+    dirs
+}
+
 /// Every fixture, `dir/name.json`, sorted.
 fn fixtures() -> Vec<String> {
     let mut out = Vec::new();
-    for dir in ["messages", "fields", "bsuid"] {
-        for entry in std::fs::read_dir(fixtures_dir().join(dir)).unwrap() {
+    for dir in fixture_dirs() {
+        for entry in std::fs::read_dir(fixtures_dir().join(&dir)).unwrap() {
             let name = entry.unwrap().file_name().into_string().unwrap();
             if Path::new(&name)
                 .extension()
@@ -67,7 +85,7 @@ fn served(fixture: &str) -> Value {
 fn event_data_is_pinned_over_metas_examples() {
     let update = std::env::var("META_WHATSAPP_SERVER_UPDATE_SNAPSHOTS").is_ok_and(|v| v == "1");
     let fixtures = fixtures();
-    assert!(fixtures.len() >= 90, "{} fixtures", fixtures.len());
+    assert!(fixtures.len() >= 230, "{} fixtures", fixtures.len());
     let mut failures = Vec::new();
     let mut expected_files = BTreeSet::new();
     for fixture in &fixtures {
@@ -90,8 +108,13 @@ fn event_data_is_pinned_over_metas_examples() {
         }
     }
     // No snapshot outlives its fixture.
-    for dir in ["messages", "fields", "bsuid"] {
-        for entry in std::fs::read_dir(snapshots_dir().join(dir)).unwrap() {
+    for dir in std::fs::read_dir(snapshots_dir()).unwrap() {
+        let dir = dir.unwrap().path();
+        if !dir.is_dir() {
+            failures.push(format!("{}: not a fixture directory", dir.display()));
+            continue;
+        }
+        for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
             if !expected_files.contains(&path) {
                 failures.push(format!("{}: no such fixture", path.display()));
@@ -147,10 +170,12 @@ fn every_library_event_type_is_classified() {
 fn every_dated_event_type_has_its_meta_time() {
     const UNDATED: [&str; 3] = ["history_synced", "app_state_synced", "error_reported"];
     let mut dated = BTreeSet::new();
+    let mut seen = BTreeSet::new();
     for fixture in fixtures() {
         let body = std::fs::read(fixtures_dir().join(&fixture)).unwrap();
         for event in WebhookPayload::from_slice(&body).unwrap().into_events() {
             let kind = event.kind();
+            seen.insert(kind);
             let time = meta_time(&event);
             if UNDATED.contains(&kind) {
                 assert_eq!(time, None, "{fixture}: {kind}");
@@ -168,9 +193,16 @@ fn every_dated_event_type_has_its_meta_time() {
                 "preference",
                 "update",
                 "detected",
+                "action",
             ]
             .iter()
-            .find_map(|item| seconds(&data[item]["timestamp"]));
+            .find_map(|item| seconds(&data[item]["timestamp"]))
+            // A standby copy: `item` holds a message, an echo or a status.
+            .or_else(|| {
+                ["message", "echo", "status"]
+                    .iter()
+                    .find_map(|item| seconds(&data["item"][item]["timestamp"]))
+            });
             let expected = own.or_else(|| seconds(&data["time"]));
             assert_eq!(
                 time.map(time::OffsetDateTime::unix_timestamp),
@@ -182,9 +214,11 @@ fn every_dated_event_type_has_its_meta_time() {
             }
         }
     }
-    // Every tenant type but the undated ones is dated in some example.
-    for kind in TENANT_EVENT_TYPES {
-        if !UNDATED.contains(&kind) {
+    // Every tenant type but the undated ones is dated in some example, and
+    // so is every other type an example shows (operator-only ones too: the
+    // routing's date check applies to them before the audience does).
+    for kind in TENANT_EVENT_TYPES.iter().chain(seen.iter()) {
+        if !UNDATED.contains(kind) {
             assert!(dated.contains(kind), "no dated example of {kind}");
         }
     }

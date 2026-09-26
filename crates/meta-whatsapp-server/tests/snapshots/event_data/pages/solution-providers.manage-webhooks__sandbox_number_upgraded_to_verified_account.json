@@ -1,0 +1,15 @@
+[
+  {
+    "data": {
+      "entry_id": "495709166956424",
+      "event": "account_updated",
+      "time": "1731617831",
+      "update": {
+        "event": "VERIFIED_ACCOUNT",
+        "phone_number": "124545784358810"
+      },
+      "waba_id": "495709166956424"
+    },
+    "type": "account_updated"
+  }
+]

@@ -1,0 +1,17 @@
+[
+  {
+    "data": {
+      "entry_id": "102290129340398",
+      "event": "account_updated",
+      "time": "1750101000",
+      "update": {
+        "event": "ACCOUNT_RESTRICTION",
+        "violation_info": {
+          "violation_type": "DIRECT_SEND_UTILITY_CATEGORY_ABUSE_WARN"
+        }
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "account_updated"
+  }
+]

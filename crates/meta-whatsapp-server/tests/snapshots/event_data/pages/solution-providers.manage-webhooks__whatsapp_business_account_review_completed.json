@@ -1,0 +1,13 @@
+[
+  {
+    "data": {
+      "event": "account_review_updated",
+      "time": "1731617831",
+      "update": {
+        "decision": "APPROVED"
+      },
+      "waba_id": "495709166956424"
+    },
+    "type": "account_review_updated"
+  }
+]

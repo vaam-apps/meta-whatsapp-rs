@@ -1,0 +1,18 @@
+[
+  {
+    "data": {
+      "entry_id": "102290129340398",
+      "event": "account_updated",
+      "time": "1604703058",
+      "update": {
+        "event": "ACCOUNT_VIOLATION",
+        "phone_number": "16505551111",
+        "violation_info": {
+          "violation_type": "ALCOHOL"
+        }
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "account_updated"
+  }
+]

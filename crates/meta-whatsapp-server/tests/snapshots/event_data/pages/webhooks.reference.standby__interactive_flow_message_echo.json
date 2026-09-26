@@ -1,0 +1,56 @@
+[
+  {
+    "data": {
+      "contact": null,
+      "display_phone_number": "15550783881",
+      "event": "standby_observed",
+      "item": {
+        "echo": {
+          "flow": {
+            "categories": [
+              "APPOINTMENT_BOOKING"
+            ],
+            "id": "1234567890123456",
+            "name": "Appointment Booking",
+            "status": "PUBLISHED"
+          },
+          "id": "wamid.HBgLMTY1MDU1NTEyMzQVAgASGBQzRUIwQTk4NkNGMUZCMDZERTREMAA=",
+          "message": {
+            "interactive": {
+              "action": {
+                "name": "flow",
+                "parameters": {
+                  "flow_action": "navigate",
+                  "flow_action_payload": {
+                    "screen": "APPOINTMENT_SCREEN"
+                  },
+                  "flow_cta": "Book Now",
+                  "flow_id": "1234567890123456"
+                }
+              },
+              "body": {
+                "text": "Schedule your visit with us."
+              },
+              "footer": {
+                "text": "Tap below to continue"
+              },
+              "header": {
+                "text": "Book Appointment",
+                "type": "text"
+              },
+              "type": "flow"
+            },
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": "16505551234",
+            "type": "interactive"
+          },
+          "timestamp": "1750101000"
+        }
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "standby_observed"
+  }
+]

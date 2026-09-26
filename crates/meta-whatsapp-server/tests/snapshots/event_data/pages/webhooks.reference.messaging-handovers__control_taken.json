@@ -1,0 +1,29 @@
+[
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "event": "thread_control_changed",
+      "phone_number_id": "106540352242922",
+      "update": {
+        "control_taken": {
+          "metadata": "Human agent stepping in",
+          "new_owner_role": "escalation",
+          "previous_owner_app_id": "1066355071287456",
+          "previous_owner_role": "ai_agent"
+        },
+        "messaging_product": "whatsapp",
+        "recipient": {
+          "display_phone_number": "15550783881",
+          "phone_number_id": "106540352242922"
+        },
+        "sender": {
+          "phone_number": "16505551234"
+        },
+        "timestamp": "1750101000",
+        "type": "control_taken"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "thread_control_changed"
+  }
+]

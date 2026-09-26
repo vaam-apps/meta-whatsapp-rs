@@ -1,0 +1,19 @@
+[
+  {
+    "data": {
+      "entry_id": "102290129340398",
+      "event": "account_updated",
+      "time": "1750030073",
+      "update": {
+        "event": "AD_ACCOUNT_LINKED",
+        "waba_info": {
+          "ad_account_id": "980198427534243",
+          "owner_business_id": "2329417887457253",
+          "waba_id": "102290129340398"
+        }
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "account_updated"
+  }
+]

@@ -135,8 +135,9 @@ library's `KvStore` namespaces (`wa.token`, `wa.otp`, `wa.webhook.dedup`,
   `FanoutSink` does): whoever sees an event can already read its history.
 - **Routing is an allow-list.** An event naming a phone number goes to the
   tenant owning it; a WABA-level event (template, account, quality) to the
-  tenant owning the WABA. `unknown`, `unparsed`, `partner_solution_updated`
-  and events for unowned numbers or WABAs are operator-only rows (metric,
+  tenant owning the WABA. `unknown`, `unparsed`, `partner_solution_updated`,
+  the types not yet reviewed for tenants and events for unowned numbers
+  or WABAs are operator-only rows (metric,
   log with size and digest), never shown to a tenant.
 - Inserts are idempotent on the event's key (`WebhookEvent::dedup_key`;
   for the events the library gives none, the signed body and their place
@@ -159,10 +160,14 @@ rest follows from the list above and decides nothing for the owner:
 
 - **Types are an allow-list too.** A tenant receives only the event types
   the service reviewed and pinned (`TENANT_EVENT_TYPES` in
-  `src/events.rs`); `unknown`, `unparsed`, `partner_solution_updated` and
-  any type a later library adds are operator-only rows until the service
-  lists them (a test reads the library's `WebhookEvent::kind` and fails
-  on an unclassified one).
+  `src/events.rs`); `unknown`, `unparsed`, `partner_solution_updated`, the
+  types the library's webhook conformance sweep typed (PR #17:
+  Conversation Routing's `standby_observed` and `thread_control_changed`,
+  the Marketing Messages API's `user_action_reported`), which are not yet
+  reviewed for tenants, and any type a later library adds are
+  operator-only rows until the service lists them in `TENANT_EVENT_TYPES`
+  (a test reads the library's `WebhookEvent::kind` and fails on an
+  unclassified one; promoting a type is additive, the reverse is not).
 - **Ownership is by the bindings, number first, since before the
   event.** An event naming a number (an untyped change: the number its
   raw `metadata` names, which the inbox reads a `history` change by) goes

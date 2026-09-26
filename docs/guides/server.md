@@ -517,7 +517,10 @@ tenant's deliveries: whoever holds it can forge any tenant's events.
   (`wa_server_webhook_events_total{audience="operator"}`): events of a
   number or WABA no tenant holds, a field the library does not type
   (`unknown`), a signed body that is not a webhook (`unparsed`), partner
-  solution updates, any event type the service has not reviewed yet,
+  solution updates, any event type the service has not reviewed yet
+  (today Conversation Routing's `standby_observed` and
+  `thread_control_changed`, and `user_action_reported`, a marketing
+  message's click),
   events Meta dated before the WABA's attaching, and replays (dated more
   than 7 days and an hour ago, what the dedup markers remember). A rising
   count usually means a WABA is subscribed but not attached.

@@ -1,0 +1,43 @@
+[
+  {
+    "data": {
+      "contact": {
+        "parent_user_id": "US.ENT.11815799212886844830",
+        "profile": {
+          "name": "Pablo M.",
+          "username": "pablomorales"
+        },
+        "user_id": "US.13491208655302741918",
+        "wa_id": "16505551234"
+      },
+      "display_phone_number": "15550783881",
+      "event": "status_updated",
+      "phone_number_id": "106540352242922",
+      "status": {
+        "conversation": {
+          "expiration_timestamp": "1750116473",
+          "id": "72b14d6bd5407799e66f64d1b338e567",
+          "origin": {
+            "type": "group_marketing"
+          }
+        },
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQUFERjg0NDEzNDdFODU3MUMxMAA=",
+        "pricing": {
+          "billable": true,
+          "category": "marketing",
+          "pricing_model": "PMP",
+          "type": "regular"
+        },
+        "recipient_id": "Y2FwaV9ncm91cDoxOTUwNTU1MDA3OToxMjAzNjMzOTQzMjAdOTY0MTUZD",
+        "recipient_participant_id": "16505551234",
+        "recipient_participant_parent_user_id": "US.ENT.11815799212886844830",
+        "recipient_participant_user_id": "US.13491208655302741918",
+        "recipient_type": "group",
+        "status": "delivered",
+        "timestamp": "1750030073"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "status_updated"
+  }
+]

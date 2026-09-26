@@ -1,0 +1,21 @@
+[
+  {
+    "data": {
+      "entry_id": "0",
+      "event": "account_updated",
+      "time": "1641848059",
+      "update": {
+        "event": "ACCOUNT_RESTRICTION",
+        "phone_number": "16505552771",
+        "restriction_info": [
+          {
+            "expiration": "1641848057",
+            "restriction_type": "RESTRICTED_USER_INITIATED_CALLING"
+          }
+        ]
+      },
+      "waba_id": "0"
+    },
+    "type": "account_updated"
+  }
+]

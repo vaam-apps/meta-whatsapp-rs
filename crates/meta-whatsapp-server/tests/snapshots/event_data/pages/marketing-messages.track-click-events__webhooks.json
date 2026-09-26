@@ -1,0 +1,21 @@
+[
+  {
+    "data": {
+      "action": {
+        "action_type": "marketing_messages_link_click",
+        "marketing_messages_link_click_data": {
+          "click_component": "cta",
+          "click_id": "click_id",
+          "product_id": "sku_id",
+          "tracking_token": "example_token"
+        },
+        "timestamp": "1750030073"
+      },
+      "display_phone_number": "15550783881",
+      "event": "user_action_reported",
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "user_action_reported"
+  }
+]

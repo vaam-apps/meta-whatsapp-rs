@@ -1,0 +1,71 @@
+[
+  {
+    "data": {
+      "display_phone_number": "15550783881",
+      "event": "group_updated",
+      "field": "group_settings_update",
+      "phone_number_id": "106540352242922",
+      "update": {
+        "errors": [
+          {
+            "code": 131208,
+            "error_data": {
+              "details": "Group operation failed because there were too many group operations from this phone number in a short period."
+            },
+            "message": "Group operation failed because there were too many group operations from this phone number in a short period.",
+            "title": "Group Rate Limit Hit"
+          }
+        ],
+        "group_description": {
+          "errors": [
+            {
+              "code": 131208,
+              "error_data": {
+                "details": "Group operation failed because there were too many group operations from this phone number in a short period."
+              },
+              "message": "Group operation failed because there were too many group operations from this phone number in a short period.",
+              "title": "Group Rate Limit Hit"
+            }
+          ],
+          "text": "Test Description",
+          "update_successful": false
+        },
+        "group_id": "Y2FwaV9ncm91cDoxOTUwNTU1MDA3OToxMjAzNjMzOTQzMjAdOTY0MTUZD",
+        "group_subject": {
+          "errors": [
+            {
+              "code": 131208,
+              "error_data": {
+                "details": "Group operation failed because there were too many group operations from this phone number in a short period."
+              },
+              "message": "Group operation failed because there were too many group operations from this phone number in a short period.",
+              "title": "Group Rate Limit Hit"
+            }
+          ],
+          "text": "Test Subject",
+          "update_successful": false
+        },
+        "profile_picture": {
+          "errors": [
+            {
+              "code": 131209,
+              "error_data": {
+                "details": "Width and height of the image must be equal."
+              },
+              "message": "Width and height of the image must be equal.",
+              "title": "Invalid Group Profile Picture Aspect Ratio"
+            }
+          ],
+          "mime_type": "image/jpeg",
+          "sha256": "Y9vvGyeo3n76ptkXu3CwDBsnzbRFqpjHskQdMGSVqas=",
+          "update_successful": false
+        },
+        "request_id": "6f1c2d3e-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
+        "timestamp": "1750101000",
+        "type": "group_settings_update"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "group_updated"
+  }
+]

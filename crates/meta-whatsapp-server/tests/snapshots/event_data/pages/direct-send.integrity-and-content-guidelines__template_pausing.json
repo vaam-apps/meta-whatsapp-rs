@@ -1,0 +1,16 @@
+[
+  {
+    "data": {
+      "event": "template_status_updated",
+      "time": "1751247548",
+      "update": {
+        "event": "PAUSED",
+        "message_template_id": "1689556908129832",
+        "message_template_language": "en-US",
+        "message_template_name": "auto_generated_123456"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "template_status_updated"
+  }
+]

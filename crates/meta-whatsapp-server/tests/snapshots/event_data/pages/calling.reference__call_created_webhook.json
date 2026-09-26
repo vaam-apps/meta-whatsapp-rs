@@ -1,0 +1,30 @@
+[
+  {
+    "data": {
+      "call": {
+        "direction": "BUSINESS_INITIATED",
+        "event": "call_created",
+        "from": "16315553602",
+        "id": "wacid.ABGGFjFVU2AfAgo6V-Hc5eCgK5Gh",
+        "timestamp": "1671644824",
+        "to": "16315553601",
+        "to_parent_user_id": "US.ENT.11815799212886844830",
+        "to_user_id": "US.13491208655302741918"
+      },
+      "contact": {
+        "parent_user_id": "US.ENT.11815799212886844830",
+        "profile": {
+          "name": "Pablo Morales",
+          "username": "pablomorales"
+        },
+        "user_id": "US.13491208655302741918",
+        "wa_id": "16315553602"
+      },
+      "display_phone_number": "16315553601",
+      "event": "call_updated",
+      "phone_number_id": "105615555715855",
+      "waba_id": "112735964992110"
+    },
+    "type": "call_updated"
+  }
+]

@@ -1,0 +1,29 @@
+[
+  {
+    "data": {
+      "contact": null,
+      "display_phone_number": "15550783881",
+      "event": "status_updated",
+      "phone_number_id": "106540352242922",
+      "status": {
+        "errors": [
+          {
+            "code": 131042,
+            "error_data": {
+              "details": "Message failed to send because there were one or more errors related to your payment method."
+            },
+            "href": "https://developers.facebook.com/docs/whatsapp/cloud-api/support/error-codes/",
+            "message": "Business eligibility payment issue",
+            "title": "Business eligibility payment issue"
+          }
+        ],
+        "id": "wamid.HBgM...",
+        "recipient_id": "919xxxxxxxxx",
+        "status": "failed",
+        "timestamp": "1755600000"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "status_updated"
+  }
+]

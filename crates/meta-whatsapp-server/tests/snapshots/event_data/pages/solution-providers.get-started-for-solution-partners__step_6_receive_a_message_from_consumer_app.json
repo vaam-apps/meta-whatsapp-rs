@@ -1,0 +1,26 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {
+          "name": "Kerry Fisher"
+        },
+        "wa_id": "16315555555"
+      },
+      "display_phone_number": "16315551234",
+      "event": "message_received",
+      "message": {
+        "from": "16315555555",
+        "id": "wamid.ABGGFlA5FpafAgo6tHcNmNjXmuSf",
+        "text": {
+          "body": "Hello!"
+        },
+        "timestamp": "1602139392",
+        "type": "text"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

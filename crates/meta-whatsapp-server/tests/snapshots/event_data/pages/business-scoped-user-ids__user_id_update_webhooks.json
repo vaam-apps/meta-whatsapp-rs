@@ -1,0 +1,30 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {
+          "name": "Pablo M."
+        },
+        "wa_id": "16505551234"
+      },
+      "display_phone_number": "15550783881",
+      "event": "user_id_changed",
+      "phone_number_id": "106540352242922",
+      "update": {
+        "detail": "User id for Pablo M. has been updated.",
+        "parent_user_id": {
+          "current": "US.ENT.20837465019283746502",
+          "previous": "US.ENT.11815799212886844830"
+        },
+        "timestamp": "1750030073",
+        "user_id": {
+          "current": "US.20837465019283746501",
+          "previous": "US.13491208655302741918"
+        },
+        "wa_id": "16505551234"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "user_id_changed"
+  }
+]

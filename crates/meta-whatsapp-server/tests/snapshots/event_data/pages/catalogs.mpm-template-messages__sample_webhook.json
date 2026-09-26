@@ -1,0 +1,34 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {
+          "name": "Pablo Morales"
+        },
+        "wa_id": "16505551234"
+      },
+      "display_phone_number": "15550051310",
+      "event": "message_received",
+      "message": {
+        "from": "16505551234",
+        "id": "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQTMxNzA1QzNENEI4ODY0OTY2MAA=",
+        "order": {
+          "catalog_id": "1537566713439863",
+          "product_items": [
+            {
+              "currency": "USD",
+              "item_price": 99.99,
+              "product_retailer_id": "n6k6x0y7oe",
+              "quantity": 1
+            }
+          ]
+        },
+        "timestamp": "1683223069",
+        "type": "order"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

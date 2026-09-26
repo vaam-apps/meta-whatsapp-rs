@@ -1,0 +1,19 @@
+[
+  {
+    "data": {
+      "entry_id": "0",
+      "event": "account_updated",
+      "time": "1641848059",
+      "update": {
+        "event": "ACCOUNT_VIOLATION",
+        "phone_number": "16505552771",
+        "violation_info": {
+          "remediation": "Please identify and address the cause of user-initiated calls not being picked up and make sure the business is properly resourced to handle expected call volumes.",
+          "violation_type": "USER_INITIATED_CALLS_LOW_PICKUP_RATE"
+        }
+      },
+      "waba_id": "0"
+    },
+    "type": "account_updated"
+  }
+]

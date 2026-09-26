@@ -1,0 +1,31 @@
+[
+  {
+    "data": {
+      "call": {
+        "biz_opaque_callback_data": "TRx334DUDFTI4Mj",
+        "direction": "BUSINESS_INITIATED",
+        "event": "terminate",
+        "from": "15550783881",
+        "id": "wacid.ABGGFjFVU2AfAgo6V-Hc5eCgK5Gh",
+        "status": "COMPLETED",
+        "timestamp": "1750030073",
+        "to": "16505551234",
+        "to_parent_user_id": "US.ENT.11815799212886844830",
+        "to_user_id": "US.13491208655302741918"
+      },
+      "contact": {
+        "parent_user_id": "US.ENT.11815799212886844830",
+        "profile": {
+          "username": "pablomorales"
+        },
+        "user_id": "US.13491208655302741918",
+        "wa_id": "16505551234"
+      },
+      "display_phone_number": "15550783881",
+      "event": "call_updated",
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "call_updated"
+  }
+]

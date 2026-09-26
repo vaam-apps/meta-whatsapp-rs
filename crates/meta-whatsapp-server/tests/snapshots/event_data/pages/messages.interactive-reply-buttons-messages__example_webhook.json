@@ -1,0 +1,34 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {
+          "name": "Pablo Morales"
+        },
+        "wa_id": "16505551234"
+      },
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "context": {
+          "from": "15550783881",
+          "id": "wamid.HBgLMTY0NjcwNDM1OTUVAgARGBJBM0Y4RUU0RUNFQkFDMjYzQUMA"
+        },
+        "from": "16505551234",
+        "id": "wamid.HBgLMTY0NjcwNDM1OTUVAgASGBQzQThBREYwNzc2RDc2QjA1QTIwMgA=",
+        "interactive": {
+          "button_reply": {
+            "id": "change-button",
+            "title": "Change"
+          },
+          "type": "button_reply"
+        },
+        "timestamp": "1714510003",
+        "type": "interactive"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]

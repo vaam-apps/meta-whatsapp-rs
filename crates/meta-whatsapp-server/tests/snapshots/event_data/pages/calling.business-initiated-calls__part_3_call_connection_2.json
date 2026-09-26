@@ -1,0 +1,21 @@
+[
+  {
+    "data": {
+      "contact": null,
+      "display_phone_number": "13175551399",
+      "event": "call_status_updated",
+      "phone_number_id": "436666719526789",
+      "status": {
+        "id": "wacid.HBgLMTIxODU1NTI4MjgVAgARGCAyODRQIAFRoA",
+        "recipient_id": "12185552828",
+        "recipient_parent_user_id": "US.ENT.11815799212886844830",
+        "recipient_user_id": "US.13491208655302741918",
+        "status": "RINGING",
+        "timestamp": "1749197000",
+        "type": "call"
+      },
+      "waba_id": "366634483210360"
+    },
+    "type": "call_status_updated"
+  }
+]
