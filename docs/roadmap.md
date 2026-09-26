@@ -988,3 +988,12 @@ everything else goes into the parity-completion report.
 - **D21, D22 and D24**, confirmed before the first release: after it,
   D21's per-tenant sequences are a released contract, and D22's and
   D24's deletions cannot be undone.
+- **L5's erasure and its stored names**, confirmed before the first
+  release: D30's scope and D31's default for a person's group messages
+  (redacted, keeping their ids) decide what an erasure deletes for good
+  and what it leaves, D35 what a retention keeps, and the stable
+  identifiers L5 adds (D33's lock SQL, `wa_identity_links`,
+  `wa_messages.sender` and its rule, the `erased` kind, migration 4's
+  names: architecture.md § Stable identifiers) become permanent with
+  the release. Each ships swappable today; changing one after the
+  release is a data migration.
