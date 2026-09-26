@@ -17,25 +17,31 @@
 //!   every one is a gap, and the service's items are its cited rows' items.
 //! - **`docs/coverage.md`**: rows numbered once, each with its anchor, each
 //!   status one of the file's words.
-//! - **`docs/roadmap.md`**: item ids unique; every item has its `After:`
-//!   and `Decisive:` lines, and a library item its `Kind:`; every item is
-//!   in exactly one wave, no earlier than what it comes after; every parity
-//!   row an item cites exists and is open (partial or a gap) on some side
-//!   while the item is not ticked; every library row that is partial or a
-//!   gap is cited by an item, and every item a service status names cites
-//!   that row.
+//! - **`docs/roadmap.md`**: item ids unique; every item has non-empty
+//!   `After:` and `Decisive:` lines, and a library item its `Kind:`; the
+//!   `After:` lines make no cycle; every item is in exactly one wave, no
+//!   earlier than what it comes after; every parity row an item cites
+//!   exists and is open (partial or a gap) on some side while the item is
+//!   not ticked, and a library item (L, B) or a service item (M, S) that
+//!   is not ticked cites at least one row still open on its own side;
+//!   every library row that is partial or a gap is cited by an item, and
+//!   every item a service status names cites that row.
 //! - **`OPEN_QUESTIONS.md`**: entries numbered once, each decided or left
 //!   open exactly once, and the header's counts equal a recount.
-//! - **Citations** in the planning docs: every roadmap item id (S1, L20a,
-//!   M5c3, or a family such as M5), design decision (D26) and open
-//!   question (`OPEN_QUESTIONS` #26) exists.
+//! - **Citations** in every Markdown document (the root ones, `docs/`,
+//!   the consumer skills, `.claude/agents` and `.claude/skills`): every
+//!   roadmap item id (S1, L20a, M5c3, or a family such as M5), design
+//!   decision (D26) and open question (`OPEN_QUESTIONS` #26) exists.
 //! - **Symbols**: every backticked Rust path in a Library or Service cell
 //!   of the two tables resolves. `client::`, `webhooks::`, `core::`,
 //!   `adapters::`, `typst::`, `inbox::` and `server::` paths resolve module
 //!   by module in their crate to a `pub` item, then each member to a
-//!   variant, field, method or constant of the type before it; other
-//!   `Type::member` paths and type names resolve to a declaration anywhere
-//!   in `crates/`.
+//!   variant, field, method or constant of the type before it; a path
+//!   starting with any other module is refused; other `Type::member`
+//!   paths and type names resolve to a declaration anywhere in `crates/`.
+//!   A bare lowercase name (`list`, `message_received`: a method of a type
+//!   the row named already, a Meta field or an event type) is not
+//!   checked.
 //! - **Links**: every relative link, and its `#anchor`, in the root and
 //!   `docs/` Markdown files resolves.
 //!
@@ -61,8 +67,7 @@ const ROADMAP: &str = "docs/roadmap.md";
 const QUESTIONS: &str = "OPEN_QUESTIONS.md";
 const DESIGN: &str = "docs/design/server.md";
 
-/// The documents whose citations of items, decisions and questions must
-/// resolve.
+/// The planning docs.
 const PLANNING: &[&str] = &[
     PARITY,
     CATEGORIES,
@@ -72,6 +77,28 @@ const PLANNING: &[&str] = &[
     DESIGN,
     "AGENTS.md",
 ];
+
+/// The documents whose citations of items, decisions and questions must
+/// resolve: the planning docs, the other root documents, every guide and
+/// design under `docs/`, the consumer skills and the developer agents and
+/// skills (never `.claude/worktrees/`, other branches' checkouts).
+fn citing_docs() -> Vec<String> {
+    let root = repo();
+    let mut paths: Vec<PathBuf> = PLANNING
+        .iter()
+        .chain(&["README.md", "CONTRIBUTING.md", "CLAUDE.md", "CHANGELOG.md"])
+        .map(|f| root.join(f))
+        .collect();
+    for dir in ["docs", "skills", ".claude/agents", ".claude/skills"] {
+        walk(&root.join(dir), "md", &mut paths);
+    }
+    let mut seen = HashSet::new();
+    paths
+        .into_iter()
+        .filter(|p| seen.insert(p.clone()))
+        .map(|p| rel(&p))
+        .collect()
+}
 
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -512,7 +539,7 @@ struct Item {
     ticked: bool,
     block: String,
     after: Option<String>,
-    decisive: bool,
+    decisive: Option<String>,
     kind: Option<String>,
 }
 
@@ -540,7 +567,7 @@ impl Item {
             ticked,
             block: lines.join("\n"),
             after: bullet("After"),
-            decisive: bullet("Decisive").is_some(),
+            decisive: bullet("Decisive"),
             kind: bullet("Kind"),
         }
     }
@@ -619,6 +646,40 @@ fn design_ids() -> BTreeSet<String> {
         .collect();
     ids.extend(["M1", "M1a", "M1b", "M1c"].map(str::to_owned));
     ids
+}
+
+/// A cycle in the items' `After:` graph (item → the items it comes
+/// after), as the ids along it, first repeated last; `None` if the graph
+/// is acyclic.
+fn after_cycle(graph: &BTreeMap<String, BTreeSet<String>>) -> Option<Vec<String>> {
+    fn visit(
+        id: &str,
+        graph: &BTreeMap<String, BTreeSet<String>>,
+        done: &mut BTreeSet<String>,
+        path: &mut Vec<String>,
+    ) -> Option<Vec<String>> {
+        if let Some(at) = path.iter().position(|p| p == id) {
+            let mut cycle = path[at..].to_vec();
+            cycle.push(id.to_owned());
+            return Some(cycle);
+        }
+        if done.contains(id) {
+            return None;
+        }
+        path.push(id.to_owned());
+        for next in graph.get(id).into_iter().flatten() {
+            if let Some(cycle) = visit(next, graph, done, path) {
+                return Some(cycle);
+            }
+        }
+        path.pop();
+        done.insert(id.to_owned());
+        None
+    }
+    let mut done = BTreeSet::new();
+    graph
+        .keys()
+        .find_map(|id| visit(id, graph, &mut done, &mut Vec::new()))
 }
 
 /// The wave table: (rank, the items in the wave's cell), in order.
@@ -1031,11 +1092,17 @@ fn roadmap_items_waves_and_dependencies() {
         if !ids.insert(item.id.clone()) {
             problems.push(format!("{ROADMAP}: {} is used twice", item.id));
         }
-        if item.after.is_none() {
-            problems.push(format!("{ROADMAP}: {} has no `After:` line", item.id));
+        if item.after.as_deref().is_none_or(str::is_empty) {
+            problems.push(format!(
+                "{ROADMAP}: {} has no `After:` line, or an empty one (\"nothing.\" when none)",
+                item.id
+            ));
         }
-        if !item.decisive {
-            problems.push(format!("{ROADMAP}: {} has no `Decisive:` line", item.id));
+        if item.decisive.as_deref().is_none_or(str::is_empty) {
+            problems.push(format!(
+                "{ROADMAP}: {} has no `Decisive:` line, or an empty one",
+                item.id
+            ));
         }
         let kind_ok = item.kind.as_deref().is_some_and(|kind| {
             ["additive", "breaking", "port change"]
@@ -1064,6 +1131,22 @@ fn roadmap_items_waves_and_dependencies() {
                 }
             }
         }
+    }
+    let mut graph: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for item in &items {
+        let after = without_parentheses(item.after.as_deref().unwrap_or_default());
+        let before: BTreeSet<String> = id_mentions(&after)
+            .into_iter()
+            .flat_map(|(id, last)| expand_id(&id, last.as_deref(), &ids))
+            .filter(|before| ids.contains(before) && *before != item.id)
+            .collect();
+        graph.insert(item.id.clone(), before);
+    }
+    if let Some(cycle) = after_cycle(&graph) {
+        problems.push(format!(
+            "{ROADMAP}: the `After:` lines make a cycle: {}",
+            cycle.join(" after ")
+        ));
     }
     for item in &items {
         let Some(rank) = wave_of.get(&item.id) else {
@@ -1124,6 +1207,33 @@ fn every_open_row_is_planned_and_every_cited_row_is_real() {
                 }
                 Some(Some(_)) => {}
             }
+        }
+        // An item works on one side: a library batch (L) or the bot
+        // framework (B) on the library's, a service item (M, S) on the
+        // service's. Once every row it cites is done there, it has landed
+        // and must be ticked, even while the other side stays open.
+        let side = match item.id.chars().next() {
+            Some('L' | 'B') => "library",
+            Some('M' | 'S') => "service",
+            _ => continue,
+        };
+        let cited = &citations[item.id.as_str()];
+        let grades: Vec<Grade> = cited
+            .iter()
+            .filter_map(|n| by_number.get(n)?.status.as_ref())
+            .map(|s| {
+                if side == "library" {
+                    s.library
+                } else {
+                    s.service
+                }
+            })
+            .collect();
+        if !item.ticked && !grades.is_empty() && !grades.iter().any(|g| g.open()) {
+            problems.push(format!(
+                "{ROADMAP}: {} (not ticked) cites rows {cited:?}, none of them partial or a gap in the {side}: tick it once it has landed, or cite only rows it brings",
+                item.id
+            ));
         }
     }
     for row in &rows {
@@ -1207,7 +1317,9 @@ fn cited_items_decisions_and_questions_exist() {
     let known = |id: &str| names_items(id, &items) || design.contains(id);
     let mut problems = Vec::new();
     let mut checked = 0;
-    for file in PLANNING {
+    let files = citing_docs();
+    assert!(files.len() > 40, "only {} documents found", files.len());
+    for file in &files {
         for (line, text) in prose_lines(&doc(file)) {
             let prose = without_code(text);
             for (id, last) in id_mentions(&prose) {
@@ -1235,7 +1347,7 @@ fn cited_items_decisions_and_questions_exist() {
         }
     }
     assert!(checked >= 300, "only {checked} item ids found");
-    assert_none(&problems, "citations in the planning docs");
+    assert_none(&problems, "citations in the docs and skills");
 }
 
 // ─── Names in the code ───────────────────────────────────────────────────
@@ -1837,6 +1949,15 @@ impl Index {
         };
         let result = if PREFIXES.iter().any(|(p, _, _)| *p == segments[0]) {
             self.resolve(&segments)
+        } else if segments.len() > 1 && segments[0].starts_with(|c: char| c.is_ascii_lowercase()) {
+            // A module path must start at a crate the tables name, or it
+            // is resolved nowhere (`webhook::`, `verify::`).
+            let known: Vec<String> = PREFIXES.iter().map(|(p, _, _)| format!("{p}::")).collect();
+            Err(format!(
+                "`{}::` is not one of the tables' prefixes ({})",
+                segments[0],
+                known.join(", ")
+            ))
         } else if LANGUAGE.contains(&segments[0]) || !camel(segments[0]) {
             Ok(())
         } else if segments.len() == 1 {
@@ -2079,6 +2200,29 @@ fn the_parsers_read_what_the_docs_write() {
     }
     assert!(parse_status("n/a — unofficial protocol (the card)").is_ok_and(|s| s.is_none()));
     assert_eq!(slug("10. Decisions"), "10-decisions");
+    let graph = |edges: &[(&str, &[&str])]| -> BTreeMap<String, BTreeSet<String>> {
+        edges
+            .iter()
+            .map(|(id, after)| {
+                (
+                    (*id).to_owned(),
+                    after.iter().map(|a| (*a).to_owned()).collect(),
+                )
+            })
+            .collect()
+    };
+    assert_eq!(
+        after_cycle(&graph(&[
+            ("S1", &[]),
+            ("S2", &["S1"]),
+            ("S3", &["S1", "S2"])
+        ])),
+        None
+    );
+    assert_eq!(
+        after_cycle(&graph(&[("L5", &["L7"]), ("L7", &["L8"]), ("L8", &["L5"])])),
+        Some(["L5", "L7", "L8", "L5"].map(str::to_owned).to_vec())
+    );
 }
 
 #[test]
@@ -2093,6 +2237,8 @@ fn the_resolver_refuses_what_does_not_exist() {
         "server::config",
         "OutboundMessage::reply_to",
         "MessageEchoed",
+        "client::embedded_signup::StoredBusinessToken::expires_at",
+        "webhooks::verify::verify_subscription",
     ] {
         assert_eq!(index.span_problem(good), None, "{good}");
     }
@@ -2104,6 +2250,10 @@ fn the_resolver_refuses_what_does_not_exist() {
         "server::events::NO_SUCH_CONST",
         "OutboundMessage::no_such_member",
         "NoSuchType",
+        "webhook::SignatureVerifier",
+        "verify::verify_subscription",
+        "client::SignatureVerifier",
+        "client::embedded_signup::StoredBusinessToken::debug_token",
     ] {
         assert!(index.span_problem(bad).is_some(), "{bad} resolved");
     }
