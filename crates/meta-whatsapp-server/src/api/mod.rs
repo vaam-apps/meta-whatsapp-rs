@@ -10,7 +10,9 @@
 //! adds the handler and its `#[utoipa::path]` documentation at once: a
 //! route cannot be served without being in the OpenAPI document, which is
 //! what the tests iterate (the committed copy is
-//! `crates/meta-whatsapp-server/openapi/v1.json`).
+//! `crates/meta-whatsapp-server/openapi/v1.json`). The router and the
+//! document are built from one list of route groups (`api_routes`), so no
+//! group is served without being documented either.
 
 pub mod admin;
 pub mod common;
@@ -175,17 +177,29 @@ fn ops_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(ops::version))
 }
 
+/// The internal listener's route groups, one list for the router and the
+/// document: a group the router served but the document left out would
+/// escape every test that iterates the document (the `429` and
+/// authorization ones among them). `admin` wraps `/v1/admin`, `tenant`
+/// each tenant group with its scope: the document passes them through,
+/// the router adds the guards.
+fn api_routes(
+    admin: impl FnOnce(OpenApiRouter<AppState>) -> OpenApiRouter<AppState>,
+    tenant: impl Fn(OpenApiRouter<AppState>, Scope) -> OpenApiRouter<AppState>,
+) -> OpenApiRouter<AppState> {
+    OpenApiRouter::with_openapi(ApiDoc::openapi())
+        .merge(admin(admin_routes()))
+        .merge(tenant(numbers_routes(), Scope::Numbers))
+        .merge(tenant(messages_routes(), Scope::Send))
+        .merge(tenant(media_routes(), Scope::Media))
+        .merge(tenant(templates_routes(), Scope::Templates))
+        .merge(tenant(events_routes(), Scope::Events))
+        .merge(ops_routes())
+}
+
 /// The OpenAPI document of the internal listener's routes.
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    let (_, mut document) = OpenApiRouter::<AppState>::with_openapi(ApiDoc::openapi())
-        .merge(admin_routes())
-        .merge(numbers_routes())
-        .merge(messages_routes())
-        .merge(media_routes())
-        .merge(templates_routes())
-        .merge(events_routes())
-        .merge(ops_routes())
-        .split_for_parts();
+    let (_, mut document) = api_routes(|routes| routes, |routes, _| routes).split_for_parts();
     add_default_errors(&mut document);
     document
 }
@@ -280,23 +294,16 @@ pub fn with_deadline(router: Router, limit: Duration) -> Router {
 
 /// The internal listener's router.
 pub fn internal_router(state: &AppState) -> Router {
-    let admin =
-        admin_routes().route_layer(middleware::from_fn_with_state(state.clone(), admin_guard));
+    let admin = |routes: OpenApiRouter<AppState>| {
+        routes.route_layer(middleware::from_fn_with_state(state.clone(), admin_guard))
+    };
     let tenant = |routes: OpenApiRouter<AppState>, scope: Scope| {
         routes.route_layer(middleware::from_fn_with_state(
             guard(state, scope),
             tenant_guard,
         ))
     };
-    let (router, _) = OpenApiRouter::with_openapi(ApiDoc::openapi())
-        .merge(admin)
-        .merge(tenant(numbers_routes(), Scope::Numbers))
-        .merge(tenant(messages_routes(), Scope::Send))
-        .merge(tenant(media_routes(), Scope::Media))
-        .merge(tenant(templates_routes(), Scope::Templates))
-        .merge(tenant(events_routes(), Scope::Events))
-        .merge(ops_routes())
-        .split_for_parts();
+    let (router, _) = api_routes(admin, tenant).split_for_parts();
     let observed = Observed {
         listener: Listener::Internal,
         routes: Arc::new(internal_routes()),
