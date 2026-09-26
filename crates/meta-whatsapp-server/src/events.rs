@@ -696,7 +696,9 @@ pub fn outbox_key(key: &EventKey, phone_number_id: Option<&str>, data: &str) -> 
         } => {
             hash.update(b"delivery\0");
             hash.update(body_sha256);
-            hash.update(position.to_be_bytes());
+            // 8 bytes on every target (a `usize` is 4 on a 32-bit one): the
+            // key is stored, and replicas must agree on it.
+            hash.update(u64::try_from(*position).unwrap_or(u64::MAX).to_be_bytes());
             hash.update(Sha256::digest(data.as_bytes()));
         }
     }
