@@ -310,8 +310,10 @@ commit).
     `#[non_exhaustive]` on every response struct, webhook payload struct
     and open enum (Meta adds fields and values), never on request or
     builder types; integrators build test values through constructors or
-    from JSON fixtures. The rule goes into `docs/architecture.md`.
-    Swappable per kind. Roadmap L20.
+    from JSON fixtures. The rule goes into `docs/architecture.md`. A
+    breaking change for integrators (struct literals and exhaustive
+    matches of those types stop compiling), made before the first
+    release. Swappable per kind. Roadmap L20.
 
 29. **axum and sqlx: re-exports or your own pins?** Both are re-exported
     (`meta_whatsapp_rs::webhooks::axum`, `meta_whatsapp_rs::adapters::store::postgres::sqlx`)
@@ -349,9 +351,12 @@ Found by the security review of 8ee6fab.
     `KvStore`, raises an alert metric and keeps a replay path, and the
     rest of the batch is delivered and acknowledged; a transient one
     answers `500` as today. The delivery is acknowledged only after the
-    dead-letter write succeeds, so nothing is dropped silently. Swappable:
-    the sink classifies its own errors, and the store is a typed store
-    like the others. Roadmap L21.
+    dead-letter write succeeds, so nothing is dropped silently. An error
+    a sink does not classify stays transient, so a sink that never opts
+    in keeps today's behaviour. The raw events are personal data: the
+    dead-letter store is bounded by count and age, and L5's erasure
+    reaches it. Swappable: the sink classifies its own errors, and the
+    store is a typed store like the others. Roadmap L21.
 
 31. **SSE fan-out cost.** `webhooks::sse` reads a
     `broadcast::Receiver<WebhookEvent>`, and a broadcast receiver clones

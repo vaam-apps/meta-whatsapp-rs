@@ -31,7 +31,7 @@ an item below. Written against `main` at b6fc893 (PR #20).
 | 0 | this plan (parity, categories, roadmap, decisions) |
 | 1 | S1 (server core), B1 (bot framework) |
 | 2 | S2, S3, S4; U1–U3 in the cratestack repository; L5 (M2 needs its retention and L7 lands beside it); library batches L4 and L7–L23 may start here and run alongside every later wave |
-| 3 | S5–S9 (CrateStack adoption, the default flip last, gated on U1); M2 |
+| 3 | S5–S9 (CrateStack adoption: S5 waits on the owner's licence answer, D20 (a); the default flip last, gated on U1); M2 |
 | 4 | M3; B2, B3; B4 (after L5) |
 | 5 | M4; M5 route families |
 | 6 | S10–S12 (MongoDB) |
@@ -93,13 +93,17 @@ default flips (S9).
   release beside CrateStack.
 - [ ] **S5. CrateStack enters the workspace** (D20): the `deny.toml`
   licence exception for BlueOak-1.0.0 scoped to `minicbor` and
-  `minicbor-serde` (the owner can refuse it at this step: the swap is a
-  separate workspace for the CrateStack crates), aws-lc-rs installed as
-  rustls's process default at start, a minimal `…-api-cratestack` with
-  one procedure, not the default. *Decisive:* `just deny` passes and
-  fails again when the exception is removed; a live Postgres test with
-  `sslmode=require` passes in a binary that links both providers, and
-  fails when the process default is not installed.
+  `minicbor-serde`, **only once the owner has accepted it** (D20 (a): a
+  licence is the owner's; the coordinator asks at this step, and S5
+  does not merge without the answer; a refusal means no CrateStack in
+  the build, and S6–S9 do not happen), aws-lc-rs installed as rustls's
+  process default at start, a minimal `…-api-cratestack` with one
+  procedure, not the default. *Decisive:* `just deny` passes and fails
+  again when the exception is removed; a live Postgres test with
+  `sslmode=require` passes in a binary that links both providers (sqlx
+  picks `ring` itself until U2); a test that builds a rustls client
+  configuration from the process default after start-up passes in that
+  binary, and panics when the install is removed.
 - [ ] **S6. `…-api-cratestack` parity** (one PR per resource group:
   numbers, messages and media, templates, events, admin): `api.cstack`
   with `db = None`, REST (D19), procedures calling core. *Decisive:*
@@ -287,9 +291,10 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   `/` is refused before any request.
 - [ ] **L21. Webhook robustness** (OPEN_QUESTIONS #19, #30, #31;
   `webhooks`, `adapters`): sink errors classified transient or
-  permanent, a permanent one written to a dead-letter typed store on
-  `KvStore` (bounded, alerted, replayable) before the delivery is
-  acknowledged; `BroadcastSink` and `sse` over `Arc<WebhookEvent>`;
+  permanent (unclassified stays transient, today's behaviour), a
+  permanent one written to a dead-letter typed store on `KvStore`
+  (bounded by count and age, reached by L5's erasure, alerted,
+  replayable) before the delivery is acknowledged; `BroadcastSink` and `sse` over `Arc<WebhookEvent>`;
   `rediss://` with an explicit aws-lc-rs provider (never the process
   default), or integrator-built connections if redis-rs cannot take
   one. *Decisive:* a batch with one permanently failing event delivers
