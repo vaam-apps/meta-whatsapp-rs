@@ -2677,6 +2677,14 @@ async fn erase_all_reaches_a_person_under_every_identity<S: ConversationStore + 
         ..other.msg("HBgOTHER", "group", Direction::Inbound, 1, "hi")
     };
     assert!(store.append(their_group.clone()).await.unwrap());
+    // In this number's group, a message from their phone number alone (no
+    // BSUID): only the synced contact ties it to the BSUID erased.
+    let my_group = StoredMessage {
+        payload: serde_json::json!({"from": "16505550009", "group_id": "HBgMINE",
+            "type": "text", "text": {"body": "my address"}}),
+        ..r.msg("HBgMINE", "group", Direction::Inbound, 1, "my address")
+    };
+    assert!(store.append(my_group.clone()).await.unwrap());
     let neighbour_before = recorded(store, &neighbour).await;
     let others_before = [
         recorded(store, &their_phone).await,
@@ -2695,10 +2703,19 @@ async fn erase_all_reaches_a_person_under_every_identity<S: ConversationStore + 
             thread_owners: 3,
             contacts: 1,
             identity_links: 1,
-            group_messages: 0,
+            group_messages: 1,
         },
-        "the three threads, the contact that tied them and the link"
+        "the three threads, the contact that tied them, the link, and their group message sent \
+         from the phone number the contact ties to the BSUID"
     );
+    let left = store.message(&r.pn, &my_group.id).await.unwrap();
+    if store.erasure_mode() == ErasureMode::Delete {
+        assert_eq!(left, None);
+    } else {
+        let mut redacted = my_group.clone();
+        redacted.redact();
+        assert_eq!(left, Some(redacted));
+    }
     for key in [&phone, &bsuid, &earlier] {
         let left = recorded(store, key).await;
         assert!(left.messages.is_empty(), "{key}: messages");

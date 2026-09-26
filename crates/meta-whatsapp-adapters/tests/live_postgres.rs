@@ -2363,6 +2363,69 @@ async fn live_postgres_erasures_racing_appends_keep_history_and_summary_together
     }
 }
 
+/// Risk (a) in a group: erasures of one participant (their messages
+/// redacted, or deleted and the group's summary rebuilt from what stays)
+/// racing another participant's appends to the same group, from two
+/// pools, under both modes, never leave the group's summary on anything
+/// but its latest message.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_group_erasures_racing_appends_keep_the_group_summary() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let other_pool = TestDb::pool_on(&db.url, &db.schema, 10).await;
+    for mode in [ErasureMode::Redact, ErasureMode::Delete] {
+        let a = PostgresConversationStore::new(db.pool.clone()).with_erasure_mode(mode);
+        let b = PostgresConversationStore::new(other_pool.clone()).with_erasure_mode(mode);
+        for round in 0..20 {
+            let group = ConversationKey::new("106540352242922", format!("HBg{mode:?}{round}"));
+            let from = |who: &str, local: &str, minute: i64| StoredMessage {
+                payload: serde_json::json!({"from_user_id": who, "group_id": group.contact,
+                    "type": "text", "text": {"body": local}}),
+                ..race_message(&group, &format!("{mode:?}-{round}-{local}"), minute)
+            };
+            // The erased participant's messages, the group's latest among
+            // them.
+            for i in 0..3 {
+                assert!(
+                    a.append(from("US.X", &format!("x{i}"), 2 * i + 1))
+                        .await
+                        .unwrap()
+                );
+            }
+            let appends = (0..6).map(|i| {
+                let store = if i % 2 == 0 { &a } else { &b };
+                store.append(from("US.Y", &format!("y{i}"), i))
+            });
+            let (appended, erased) = tokio::join!(futures::future::join_all(appends), async {
+                tokio::task::yield_now().await;
+                b.erase_all(&group.phone_number_id, &["US.X".to_owned()])
+                    .await
+            });
+            for r in appended {
+                assert!(r.unwrap());
+            }
+            assert_eq!(erased.unwrap().group_messages, 3, "{mode:?} {round}");
+            // The latest message and its preview; the unread count keeps
+            // the deleted messages (documented on `erase_all`).
+            let latest = a.messages(&group, None, 1).await.unwrap().remove(0);
+            let summary = a
+                .conversations(&group.phone_number_id, None, 1000)
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|s| s.key == group)
+                .unwrap();
+            assert_eq!(
+                (summary.last_message_at, summary.last_text),
+                (latest.timestamp, latest.text),
+                "{mode:?} {round}"
+            );
+        }
+    }
+}
+
 /// Risk (b): two purges whose plans visit the old rows in opposite
 /// orders (two replicas' `apply_retention`, their cutoffs picking
 /// different plans) never deadlock.
