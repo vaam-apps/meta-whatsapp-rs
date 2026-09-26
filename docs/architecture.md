@@ -65,13 +65,18 @@ implements five methods once and every feature works.
 
 ## Stable identifiers
 
-These predate the rename from wa-rs to meta-whatsapp-rs and never change:
-each is encrypted into, hashed into, or names data already stored, so
-changing one strands that data (or makes `migrate` refuse the database)
-on the next upgrade. A test pins each one's exact bytes; a change that
-fails it is a data migration, not a rename. The pins spell the `w` of
-their literals `\x77`, or pin opaque bytes (captured records, digests),
-so that a search-and-replace cannot rewrite them along with the code.
+These never change, whatever the project is called: each is encrypted
+into, hashed into, or names data already stored (or, for a lock, is what
+replicas of two releases must agree on while a deploy rolls), so changing
+one strands that data (or makes `migrate` refuse the database) on the
+next upgrade. The library's predate the rename from wa-rs to
+meta-whatsapp-rs and keep the old name; the service's
+(`meta-whatsapp-server`) postdate it and carry the new one, and are just
+as fixed. A test pins each one's exact bytes; a change that fails it is a
+data migration, not a rename. The pins spell the `w` of their literals
+`\x77`, or pin opaque bytes (captured records, digests, known answers
+computed apart from the code), so that a search-and-replace cannot
+rewrite them along with the code.
 
 | Identifier | Defined in | What it is | Pinned by |
 | --- | --- | --- | --- |
@@ -85,6 +90,11 @@ so that a search-and-replace cannot rewrite them along with the code.
 | `wa_` | `TablePrefix::DEFAULT`, `meta-whatsapp-adapters/src/store/postgres/mod.rs` | default table prefix: `wa_kv`, `wa_messages`, `wa_conversations`, `wa_sqlx_migrations` | `the_default_tables_and_migration_checksums_are_pinned`, `prefix_validation`, the `live_postgres_*` table-name tests |
 | the migration files | `meta-whatsapp-adapters/migrations/*.sql` | sqlx records each file's checksum; an edit, a comment included, makes `migrate` refuse every database migrated before. So they keep naming `wa_adapters`, including in the hint migration 3 raises | `the_default_tables_and_migration_checksums_are_pinned` |
 | `wa:` | `RedisKvStore::new`, `meta-whatsapp-adapters/src/store/redis_kv.rs` | default Redis key prefix, before `{<len>:<namespace>}:<key>` | `the_default_prefix_and_key_layout_are_pinned` |
+| `meta-whatsapp-server/outbox-key/v1` | `outbox_key`, `meta-whatsapp-server/src/events.rs` | domain of the SHA-256 stored as `wa_server_events.dedup_key` (with the tags `library` and `delivery`, the NUL separators and a keyless event's position as 8 big-endian bytes): derived otherwise, a redelivery across the upgrade is recorded twice | `the_outbox_key_is_pinned` (known answers) |
+| `meta-whatsapp-server/event-id/v1`, `evt_` + 32 hex digits | `EventIdKey`, same file | HMAC label of the key event ids are derived with under the app secret, and the id's shape: stored as `wa_server_events.id` and what receivers deduplicate on | `event_ids_are_pinned` (known answers) |
+| `meta-whatsapp-server/migrate`, `meta-whatsapp-server/housekeeping` | `MIGRATION_LOCK`, `HOUSEKEEPING_LOCK`, `meta-whatsapp-server/src/store/postgres.rs` | Postgres advisory lock keys (the first 8 bytes of their SHA-256): replicas of two releases take the same ones | `the_lock_key_is_derived_as_documented` |
+| the service's migration files, `wa_server_sqlx_migrations` | `meta-whatsapp-server/migrations/*.sql`, `MIGRATIONS_TABLE` | the service's `wa_server_*` tables (the operator-only event stream `''` included) and its migration history; an edited file makes `migrate` refuse every database migrated before | `the_migrations_and_their_checksums_are_pinned` |
+| `wak_` | `PREFIX`, `meta-whatsapp-server/src/keys.rs` | API keys' prefix and layout (`wak_` + 17 + `_` + 43 base62 characters), held by every integrator | `a_minted_key_parses_and_matches_its_digest_only`, `malformed_keys_do_not_parse`, `base62_is_fixed_width_big_endian` |
 
 Not ours to rename either: Meta's names (`wa_id`, `wamid`, `waba_id`,
 `wa.me`, `WA_EMBEDDED_SIGNUP`, …), and the `WA_` environment variables

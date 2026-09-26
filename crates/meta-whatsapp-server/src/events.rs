@@ -950,6 +950,87 @@ mod tests {
         assert_eq!(MAX_PAGE_DATA_BYTES, 8 * 1024 * 1024, "8 MiB");
     }
 
+    /// The outbox key is stored (`wa_server_events.dedup_key`): derived
+    /// otherwise after an upgrade, an event Meta redelivers across it is
+    /// recorded twice. Known answers (docs/architecture.md, "Stable
+    /// identifiers"), computed apart from this code, the `w` of the domain
+    /// spelled `\x77` so that a rename cannot rewrite it:
+    //
+    // python3 - <<'EOF'
+    // import hashlib
+    // d = b"meta-\x77hatsapp-server/outbox-key/v1\x00"
+    // s = hashlib.sha256
+    // pn = b"106540352242922"
+    // print(s(d + pn + b"\x00library\x00wamid.HBgLMTY1MDM4Nzk0MzkVAgARGBI3MTE5MjVBOTE3MDk5QUVFM0YA:delivered").hexdigest())
+    // print(s(d + b"\x00library\x00template_status_updated:0f").hexdigest())
+    // body = s(b'{"object":"whatsapp_business_account","entry":[]}').digest()
+    // data = s(b'{"event":"error_reported"}').digest()
+    // print(s(d + pn + b"\x00delivery\x00" + body + (1).to_bytes(8, "big") + data).hexdigest())
+    // EOF
+    //
+    // Decisive: any byte of the domain, of a separator or of a tag, and
+    // the position's width (8 bytes, big-endian).
+    #[test]
+    fn the_outbox_key_is_pinned() {
+        let pn = Some("106540352242922");
+        assert_eq!(
+            outbox_key(
+                &EventKey::Library(
+                    "wamid.HBgLMTY1MDM4Nzk0MzkVAgARGBI3MTE5MjVBOTE3MDk5QUVFM0YA:delivered".into()
+                ),
+                pn,
+                "not part of a library key",
+            ),
+            "8b03965281267f2e3d95bcc9993f3eaa82bca4a1926e46035d8f504f39bc493b"
+        );
+        assert_eq!(
+            outbox_key(
+                &EventKey::Library("template_status_updated:0f".into()),
+                None,
+                ""
+            ),
+            "d44da459bea55c133593a8c93602889cc078495337367f90afa235431601884f"
+        );
+        let body = br#"{"object":"whatsapp_business_account","entry":[]}"#;
+        assert_eq!(
+            outbox_key(
+                &EventKey::Delivery {
+                    body_sha256: Sha256::digest(body).into(),
+                    position: 1,
+                },
+                pn,
+                r#"{"event":"error_reported"}"#,
+            ),
+            "35b3b949670586faf869b7fd42f64f8778e66ebf0f6baa4bf8dd5742cc750239"
+        );
+    }
+
+    /// Event ids are stored (`wa_server_events.id`) and receivers
+    /// deduplicate on them: derived otherwise after an upgrade, an event
+    /// recorded again gets another id. Known answers (`evt_` and the first
+    /// 16 bytes of the HMAC, in hex), computed apart from this code:
+    //
+    // key=$(printf %b 'meta-\x77hatsapp-server/event-id/v1' \
+    //   | openssl dgst -sha256 -hmac app-secret-for-tests -r | cut -c1-64)
+    // printf %s 8b03965281267f2e3d95bcc9993f3eaa82bca4a1926e46035d8f504f39bc493b \
+    //   | openssl dgst -sha256 -mac HMAC -macopt hexkey:$key -r | cut -c1-32
+    //
+    // Decisive: any byte of the label, the `evt_` prefix, the length.
+    #[test]
+    fn event_ids_are_pinned() {
+        let ids = EventIdKey::from_app_secret(&AppSecret::new("app-secret-for-tests")).unwrap();
+        assert_eq!(
+            ids.0.as_slice(),
+            hex::decode("25e756ec5c10294c3c94138600dd769f8b73af157b7aefac75fa33cf2d29ab78")
+                .unwrap()
+        );
+        assert_eq!(
+            ids.event_id("8b03965281267f2e3d95bcc9993f3eaa82bca4a1926e46035d8f504f39bc493b")
+                .unwrap(),
+            "evt_4042233518184f0e9822bebdbba028a8"
+        );
+    }
+
     /// The two lists split the library's kinds: none is both.
     #[test]
     fn tenant_and_operator_types_are_disjoint() {
