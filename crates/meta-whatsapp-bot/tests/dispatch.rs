@@ -750,6 +750,34 @@ impl Middleware for Trace {
     }
 }
 
+/// A banned sender's message stops before the middleware: no read
+/// receipt, no "typing…", nothing an integrator's middleware does.
+#[tokio::test]
+async fn a_banned_sender_gets_no_middleware_and_no_read_receipt() {
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let out = Recording::default();
+    let bot = Bot::builder()
+        .outbound(out.clone())
+        .access(AccessList::new().ban(BSUID))
+        .middleware(MarkRead::with_typing_indicator())
+        .middleware(Trace("integrator", Arc::clone(&order), true))
+        .command(counting("ping", &Arc::default()))
+        .build()
+        .await
+        .unwrap();
+
+    bot.handle(text_event(BSUID_ONLY, "/ping")).await.unwrap();
+    bot.handle(text_event(BSUID_ONLY, "hello")).await.unwrap();
+    assert!(order.lock().unwrap().is_empty());
+    assert!(out.reads.lock().unwrap().is_empty());
+    assert!(out.sent().is_empty());
+
+    // Everyone else goes through them.
+    bot.handle(text_event(TEXT, "hello")).await.unwrap();
+    assert_eq!(*order.lock().unwrap(), ["integrator"]);
+    assert_eq!(out.reads.lock().unwrap().len(), 1);
+}
+
 /// Decisive: a middleware that does not call `next` stops the event.
 #[tokio::test]
 async fn a_middleware_that_does_not_call_next_stops_the_event() {

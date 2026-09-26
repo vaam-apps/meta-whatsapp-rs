@@ -14,8 +14,8 @@ compiled and tested by the gate; the snippets below are copied from it
 
 ```text
 WebhookHandler ─► DedupGuard ─► Bot (an EventSink<WebhookEvent>)
+  ─► a received message from a banned sender: nothing runs, not even middleware
   ─► middleware, in registration order (any may stop the event)
-  ─► a received message from a banned sender: nothing runs
   ─► `/name args` or a tapped button / list row whose id is a payload
        ─► scope ─► owner ─► cooldown ─► the command's handler
   ─► anything else (and messages no command matched): the listeners
@@ -73,7 +73,7 @@ Checked in this order before the handler; a refusal goes to the bot's
 
 | Guard | Declared with | Refusal |
 | --- | --- | --- |
-| banned sender | `AccessList::ban` (BSUID) or `AccessList::ban_phone` | silent; no command and no listener runs |
+| banned sender | `AccessList::ban` (BSUID) or `AccessList::ban_phone` | silent; checked before the middleware, so no read receipt, typing indicator, command or listener either |
 | wrong chat | `Command::group_only`, `Command::private_only` | a short reply |
 | not an owner | `Command::owner_only` + `AccessList::owner` | silent |
 | cooldown running | `Command::cooldown` | "Please wait N s …" |
@@ -88,8 +88,9 @@ traits (`AccessPolicy`, `Cooldowns`) when a list in code does not fit.
 
 ## 3. Middleware
 
-Code around every event, before the command match; a middleware that
-does not call `next.run(ctx)` stops the event:
+Code around every event, before the command match (a banned sender's
+message never reaches it); a middleware that does not call
+`next.run(ctx)` stops the event:
 
 ```rust
 #[async_trait]

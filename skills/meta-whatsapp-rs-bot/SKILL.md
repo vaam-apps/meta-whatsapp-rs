@@ -66,9 +66,10 @@ Bot::builder()
     .plugin(Orders)
 ```
 
-Guards, in order: banned (nothing runs, silently), scope
-(`Command::private_only`, `Command::group_only`), `Command::owner_only`,
-then the cooldown, so a refused attempt starts none. A cooldown without
+Guards, in order: banned (checked before the middleware: nothing runs,
+not even a read receipt), scope (`Command::private_only`,
+`Command::group_only`), `Command::owner_only`, then the cooldown, so a
+refused attempt starts none. A cooldown without
 a store or a name taken twice fails `build`.
 
 Every decision is a trait with a default: `Outbound` (`ClientOutbound`),
@@ -94,8 +95,8 @@ impl Middleware for OnlyOurNumber {
 ```
 
 They run in registration order, before the command match
-(`Ctx::invocation` is `None` there); `ctx.insert(value)` hands a value on
-(`ctx.get::<T>()`).
+(`Ctx::invocation` is `None` there), never for a banned sender's message;
+`ctx.insert(value)` hands a value on (`ctx.get::<T>()`).
 
 ## Behind the webhook
 

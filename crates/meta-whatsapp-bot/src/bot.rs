@@ -51,17 +51,33 @@ pub(crate) struct Router {
 }
 
 impl Router {
+    /// Whether `ctx` is a received message from a banned sender, told to
+    /// the [`Refusals`] if so. Checked before the middleware chain, so a
+    /// banned sender gets nothing: no read receipt, no typing indicator,
+    /// no integrator middleware, no command, no listener.
+    pub(crate) async fn refuse_banned(&self, ctx: &Ctx) -> Result<bool> {
+        let (Some(_), Some(sender)) = (ctx.message(), ctx.sender()) else {
+            return Ok(false);
+        };
+        if !self.access.is_banned(sender).await? {
+            return Ok(false);
+        }
+        tracing::debug!(
+            event = ctx.event().kind(),
+            "bot dropped a message from a banned sender"
+        );
+        self.refusals.refused(ctx, &Refusal::Banned).await?;
+        Ok(true)
+    }
+
+    /// After the middleware: the command a received message invokes, or
+    /// the listeners.
     pub(crate) async fn dispatch(&self, ctx: Ctx) -> Result<()> {
-        if ctx.message().is_some()
-            && let Some(sender) = ctx.sender()
+        if ctx.sender().is_some()
+            && let Some((index, invocation)) = self.find(&ctx)
         {
-            if self.access.is_banned(sender).await? {
-                return self.refusals.refused(&ctx, &Refusal::Banned).await;
-            }
-            if let Some((index, invocation)) = self.find(&ctx) {
-                ctx.invocation.set(invocation).ok();
-                return self.run(&self.entries[index], ctx).await;
-            }
+            ctx.invocation.set(invocation).ok();
+            return self.run(&self.entries[index], ctx).await;
         }
         self.listen(ctx).await
     }
@@ -240,20 +256,28 @@ impl Bot {
         BotBuilder::new()
     }
 
-    /// Handle one event: the middleware chain, then a command or the
-    /// listeners. An error goes to the bot's [`ErrorHandler`] (by default
-    /// logged and acknowledged). After [`Self::unload`], every event is an
-    /// error (so Meta redelivers it to an instance still running).
+    /// Handle one event: a received message from a banned sender stops
+    /// here (before any middleware); anything else goes through the
+    /// middleware chain, then a command or the listeners. An error goes to
+    /// the bot's [`ErrorHandler`] (by default logged and acknowledged).
+    /// After [`Self::unload`], every event is an error (so Meta redelivers
+    /// it to an instance still running).
     pub async fn handle(&self, event: WebhookEvent) -> Result<()> {
         let inner = &self.inner;
         if inner.unloaded.load(Ordering::Acquire) {
             return Err(ConfigError::new("the bot was unloaded").into());
         }
         let ctx = Ctx::new(event, inner.outbound.clone(), inner.renderer.clone());
-        match Next::new(&inner.middleware, &inner.router)
-            .run(ctx.clone())
-            .await
-        {
+        let result = match inner.router.refuse_banned(&ctx).await {
+            Ok(true) => Ok(()),
+            Ok(false) => {
+                Next::new(&inner.middleware, &inner.router)
+                    .run(ctx.clone())
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        match result {
             Ok(()) => Ok(()),
             Err(error) => inner.errors.on_error(&ctx, error).await,
         }

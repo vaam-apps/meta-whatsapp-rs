@@ -804,16 +804,17 @@ exposes the 24-hour `CustomerServiceWindow`, and sends replies.
 ## Bot framework (`meta-whatsapp-bot`)
 
 A `Bot` is an `EventSink<WebhookEvent>`, so it sits behind
-`WebhookHandler` and its `DedupGuard` like any sink. Per event: the
-middleware chain in registration order (each gets the context and
-`Next`; not calling it stops the event), then for a received message
-from a sender who is not banned, the command match (typed text the
-`CommandParser` accepts, or a reply button, list row or template
-quick-reply button whose id is a registered payload), the guards in
-order (scope, owner, cooldown last so a refusal starts none) and the
-handler; every other event, and a message no command matched, goes to
-the listeners. Standby copies and echoes are other events: they never
-run a command.
+`WebhookHandler` and its `DedupGuard` like any sink. Per event: a
+received message from a banned sender stops first (no middleware, so no
+read receipt or typing indicator either); then the middleware chain in
+registration order (each gets the context and `Next`; not calling it
+stops the event), then for a received message the command match (typed
+text the `CommandParser` accepts, or a reply button, list row or
+template quick-reply button whose id is a registered payload), the
+guards in order (scope, owner, cooldown last so a refusal starts none)
+and the handler; every other event, and a message no command matched,
+goes to the listeners. Standby copies, echoes and synchronized history
+are other events: they never run a command.
 
 - **Every decision is a trait with a default**: `Outbound`
   (`ClientOutbound`, the client's `messages(pn).send` and read receipts),

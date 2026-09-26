@@ -1,6 +1,7 @@
 //! [`Middleware`]: code that runs around every event, before the command
 //! match, in registration order. Each gets the context and [`Next`]; not
 //! calling `next.run(ctx)` stops the event there (no command, no listener).
+//! A banned sender's message never reaches them: the bot drops it first.
 //!
 //! Shipped: [`Logging`] (event kind, message type, outcome and duration,
 //! never content or identities) and [`MarkRead`] (read receipt, optionally

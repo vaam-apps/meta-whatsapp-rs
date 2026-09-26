@@ -122,7 +122,9 @@ volumes (Claude config, shell history, cargo caches) start empty
 - **meta-whatsapp-bot**, a bot framework over Cloud API webhooks,
   re-exported as `meta_whatsapp_rs::bot` behind the facade's new `bot`
   feature (off by default, in `full`). A `Bot` is an
-  `EventSink<WebhookEvent>`: middleware in registration order (any may
+  `EventSink<WebhookEvent>`: a banned sender's message stops first (no
+  middleware, read receipt or typing indicator), then middleware in
+  registration order (any may
   stop the event; `Logging`, which logs kinds and durations but never
   content, senders or error text, and `MarkRead`, a read receipt with an
   optional typing indicator), then commands (configurable prefixes,

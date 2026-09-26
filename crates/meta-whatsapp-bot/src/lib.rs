@@ -4,10 +4,10 @@
 //!
 //! ```text
 //! WebhookHandler ─► DedupGuard ─► Bot (an EventSink<WebhookEvent>)
+//!   ─► a received message from a banned sender: nothing runs, not even middleware
 //!   ─► middleware, in order (any may stop the event)
-//!   ─► a received message: banned? → nothing runs
-//!        typed `/name args`, or a tapped button / list row whose id is a payload
-//!        → scope → owner → cooldown → the command's handler
+//!   ─► a received message: typed `/name args`, or a tapped button / list row
+//!        whose id is a payload → scope → owner → cooldown → the command's handler
 //!   ─► anything else (and messages no command matched): the listeners
 //! ```
 //!

@@ -1,7 +1,8 @@
 //! The guards a command passes before its handler runs, each behind a trait:
 //!
-//! 1. banned senders ([`AccessPolicy::is_banned`]): nothing runs for them,
-//!    no command and no listener;
+//! 1. banned senders ([`AccessPolicy::is_banned`]): nothing runs for their
+//!    messages, checked before the middleware (no read receipt or typing
+//!    indicator either), no command and no listener;
 //! 2. the command's [`Scope`](crate::Scope) (private or group only);
 //! 3. owner-only commands ([`AccessPolicy::is_owner`]);
 //! 4. the per-user cooldown ([`Cooldowns`]), checked last so a refused
@@ -249,7 +250,8 @@ pub enum Refusal {
 #[async_trait]
 pub trait Refusals: Send + Sync + fmt::Debug + 'static {
     /// `refusal` happened for `ctx` (its invocation is set, except for
-    /// [`Refusal::Banned`], which is checked before any match).
+    /// [`Refusal::Banned`], which is checked before the middleware and any
+    /// match).
     async fn refused(&self, ctx: &Ctx, refusal: &Refusal) -> Result<()>;
 }
 
