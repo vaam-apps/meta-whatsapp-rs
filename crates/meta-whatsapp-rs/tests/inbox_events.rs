@@ -939,6 +939,68 @@ mod rules {
         assert_eq!(transport.remaining(), 0);
     }
 
+    /// `conversation-routing/calling-webhooks`: a customer's answer to a
+    /// call permission request goes to the Incoming Call primary and the
+    /// standby partners, on `messages`, and "does not change thread
+    /// ownership": receiving one does not make this app the owner. A
+    /// message routing delivered after it does.
+    #[tokio::test]
+    async fn a_call_permission_reply_does_not_claim_the_thread() {
+        call_permission_reply_scenario(memory()).await;
+    }
+
+    /// [`a_call_permission_reply_does_not_claim_the_thread`], on `store`
+    /// (the rule reads the stored payload back: live on Postgres too).
+    pub(super) async fn call_permission_reply_scenario(store: Arc<dyn ConversationStore>) {
+        let clock = ManualClock::new(at(1_750_101_000 + 600));
+        let transport = ScriptedTransport::new();
+        let inbox = inbox(&store, &transport, &clock);
+        let key = inbox.key(BSUID);
+        deliver(&store, PERMISSION_REPLY).await; // links the phone number to the BSUID
+        deliver(&store, CONTROL_TAKEN).await; // 1750101000
+        let answer = fixture(
+            "pages/business-scoped-user-ids__call_permission_request_webhooks.json",
+            &[
+                (
+                    "wamid.HBgLMTY1MDM4Nzk0MzkVAgASGBQzQUFERjg0NDEzNDdFODU3MUMxMAA=",
+                    "wamid.PERMISSION.2",
+                ),
+                ("1750030073", "1750101300"),
+            ],
+        );
+        deliver(&store, &answer).await;
+        assert_eq!(
+            store.last_inbound_at(&key).await.unwrap(),
+            Some(at(1_750_101_300)),
+            "recorded, and it opens the window"
+        );
+        let owner = inbox.thread_owner(&key).await.unwrap().unwrap();
+        assert_eq!(
+            (owner.owner, owner.since),
+            (ThreadOwner::AnotherApp, at(1_750_101_000))
+        );
+        let refused = inbox
+            .reply(&key, text("Calling you now"))
+            .await
+            .unwrap_err();
+        assert!(is_thread_owned_elsewhere(&refused), "{refused}");
+        assert!(transport.requests().is_empty());
+
+        let message = change(
+            "messages",
+            &json!({"messaging_product": "whatsapp",
+                "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
+                "messages": [{"from": PHONE, "from_user_id": BSUID, "id": "wamid.BACK",
+                    "timestamp": "1750101400", "type": "text", "text": {"body": "back to you"}}]}),
+        );
+        deliver(&store, &message).await;
+        let owner = inbox.thread_owner(&key).await.unwrap().unwrap();
+        assert_eq!(
+            (owner.owner, owner.since),
+            (ThreadOwner::ThisApp, at(1_750_101_400))
+        );
+    }
+
     /// This app's own `release`: idle from the inbox's clock, until the
     /// customer's next message; a key of another number is refused.
     #[tokio::test]
@@ -1357,5 +1419,13 @@ mod live {
             return;
         };
         an_erasure_reaches_the_phone_keyed_thread(db.store.clone()).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn live_postgres_a_call_permission_reply_does_not_claim_the_thread() {
+        let Some(db) = TestDb::new().await else {
+            return;
+        };
+        super::rules::call_permission_reply_scenario(db.store.clone()).await;
     }
 }

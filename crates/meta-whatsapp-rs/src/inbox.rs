@@ -94,7 +94,10 @@
 //! - a message on the `messages` field after the stored record (one of a
 //!   standby copy's second included): this app received it, so it owns the
 //!   thread ([`Inbox::thread_owner`] derives it; nothing is written per
-//!   message);
+//!   message). Not a customer's answer to a call permission request: it
+//!   reaches the Incoming Call primary and the standby partners on
+//!   `messages`, and "does not change thread ownership"
+//!   (`conversation-routing/calling-webhooks`);
 //! - this app's own `release` (no webhook reports it):
 //!   [`Inbox::record_release`];
 //! - 24 hours without the customer ([`Inbox::THREAD_IDLE_AFTER`]): the
@@ -621,6 +624,29 @@ fn handover_owner(
 /// How many identity links [`InboxSink`] follows from a handover's phone
 /// number at most.
 const MAX_LINK_STEPS: usize = 16;
+
+/// How many of a conversation's latest messages [`Inbox::thread_owner`]
+/// reads for the latest one that claims the thread ([`claims_thread`]).
+const CLAIM_SCAN: usize = 20;
+
+/// Whether receiving `message` on the `messages` field means this app owns
+/// the thread (`conversation-routing/thread-control`, "Tracking
+/// ownership"): an inbound message recorded live (not a revoke's tombstone,
+/// a redacted message or a history placeholder, as for
+/// [`ConversationStore::last_inbound_at`]), except a customer's answer to a
+/// call permission request, which reaches the Incoming Call primary and the
+/// standby partners and "does not change thread ownership"
+/// (`conversation-routing/calling-webhooks`).
+fn claims_thread(message: &StoredMessage) -> bool {
+    let own_kind = [
+        StoredMessage::REVOKED,
+        StoredMessage::ERASED,
+        StoredMessage::MEDIA_PLACEHOLDER,
+    ]
+    .contains(&message.kind.as_str());
+    let permission_reply = message.payload["interactive"]["type"] == "call_permission_reply";
+    message.direction == Direction::Inbound && !own_kind && !permission_reply
+}
 
 /// How long before a standby copy's timestamp [`InboxSink`] dates the
 /// ownership by another app that the copy records: that app owned the
@@ -1804,8 +1830,14 @@ impl Inbox {
     /// [`Inbox::record_release`]), then:
     ///
     /// - a message received on the `messages` field after the record (its
-    ///   `last_inbound_at` strictly later than the record's `since`) means
-    ///   this app owns it ([`ThreadOwner::ThisApp`], since that message);
+    ///   timestamp strictly later than the record's `since`) means this app
+    ///   owns it ([`ThreadOwner::ThisApp`], since that message), except a
+    ///   customer's answer to a call permission request: Meta sends it to
+    ///   the Incoming Call primary and the standby partners, and it "does
+    ///   not change thread ownership" (`conversation-routing/calling-webhooks`).
+    ///   The conversation's latest 20 messages are read for it; when all
+    ///   of them are later than the record, the latest inbound message
+    ///   counts;
     /// - 24 hours ([`Inbox::THREAD_IDLE_AFTER`]) after the latest of that
     ///   message and the record, by this inbox's clock, the thread is idle
     ///   ([`ThreadOwner::Idle`], since then). The record's time counts as
@@ -1829,8 +1861,12 @@ impl Inbox {
             return Ok(None);
         };
         let activity = last.map_or(stored.since, |at| at.max(stored.since));
-        let mut owner = match last {
-            Some(at) if at > stored.since => ThreadOwnership {
+        let claimed = match last {
+            Some(at) if at > stored.since => self.claimed_after(key, stored.since, at).await?,
+            _ => None,
+        };
+        let mut owner = match claimed {
+            Some(at) => ThreadOwnership {
                 owner: ThreadOwner::ThisApp,
                 role: stored.role.filter(|_| stored.owner == ThreadOwner::ThisApp),
                 app_id: stored
@@ -1851,6 +1887,28 @@ impl Inbox {
             };
         }
         Ok(Some(owner))
+    }
+
+    /// The time of the latest message after `since` that routing delivered
+    /// to this app as the thread's owner ([`claims_thread`]), among the
+    /// conversation's latest [`CLAIM_SCAN`] messages; `last` (the latest
+    /// inbound message) when all of them are later than `since`.
+    async fn claimed_after(
+        &self,
+        key: &ConversationKey,
+        since: OffsetDateTime,
+        last: OffsetDateTime,
+    ) -> Result<Option<OffsetDateTime>> {
+        let latest = self.store.messages(key, None, CLAIM_SCAN).await?;
+        for message in &latest {
+            if message.timestamp <= since {
+                return Ok(None);
+            }
+            if claims_thread(message) {
+                return Ok(Some(message.timestamp));
+            }
+        }
+        Ok((latest.len() >= CLAIM_SCAN).then_some(last))
     }
 
     /// Record that this app released the conversation's thread (`release`,
