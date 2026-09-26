@@ -817,7 +817,8 @@ order:
    no middleware (so no read receipt or typing indicator), no command, no
    listener. `Refusals` hears of it as `Refusal::Banned`.
 2. **Match.** For a received message: typed text or an image or video
-   caption the `CommandParser` accepts, or a reply button, list row or
+   caption (unless `BotBuilder::commands_from_captions(false)`) the
+   `CommandParser` accepts, or a reply button, list row or
    template quick-reply button whose id is a registered payload. A match
    sets `Ctx::invocation`; a parsed name no command has sets
    `Ctx::unknown_command`.

@@ -53,6 +53,8 @@ pub(crate) struct Router {
     access: Arc<dyn AccessPolicy>,
     cooldowns: Option<Arc<dyn Cooldowns>>,
     refusals: Arc<dyn Refusals>,
+    /// Whether image and video captions are read as commands.
+    captions: bool,
 }
 
 impl Router {
@@ -96,10 +98,10 @@ impl Router {
         self.catalog.commands[index].name.clone()
     }
 
-    /// Typed text or an image or video caption the parser accepts (a
-    /// registered name, else an unknown one), or a tapped reply button,
-    /// list row or template quick-reply button whose id is a registered
-    /// payload.
+    /// Typed text or (unless turned off) an image or video caption the
+    /// parser accepts (a registered name, else an unknown one), or a
+    /// tapped reply button, list row or template quick-reply button whose
+    /// id is a registered payload.
     fn find(&self, ctx: &Ctx) -> Option<Found> {
         let payload = |id: &str| {
             let index = *self.by_payload.get(id)?;
@@ -128,7 +130,7 @@ impl Router {
         };
         match &ctx.message()?.content {
             MessageContent::Text(text) => typed(&text.body, false),
-            MessageContent::Image(media) | MessageContent::Video(media) => {
+            MessageContent::Image(media) | MessageContent::Video(media) if self.captions => {
                 typed(media.caption.as_deref()?, true)
             }
             MessageContent::Interactive(InteractiveReply::ButtonReply(reply)) => payload(&reply.id),
@@ -490,6 +492,7 @@ pub struct BotBuilder {
     renderer: Arc<dyn MarkdownRenderer>,
     default_category: String,
     unknown: Option<Arc<dyn CommandHandler>>,
+    captions: bool,
     steps: Vec<Step>,
 }
 
@@ -511,7 +514,7 @@ impl BotBuilder {
     /// The defaults: [`PrefixParser`] with `/` (names case-insensitive),
     /// an empty [`AccessList`], no cooldown store, [`ReplyRefusals`],
     /// [`LogErrors`], the default [`Renderer`], [`DEFAULT_CATEGORY`], no
-    /// unknown-command handler.
+    /// unknown-command handler, commands read from captions too.
     pub fn new() -> Self {
         Self {
             outbound: None,
@@ -523,6 +526,7 @@ impl BotBuilder {
             renderer: Arc::new(Renderer::default()),
             default_category: DEFAULT_CATEGORY.to_owned(),
             unknown: None,
+            captions: true,
             steps: Vec::new(),
         }
     }
@@ -633,6 +637,15 @@ impl BotBuilder {
         self
     }
 
+    /// Whether the caption of an image or a video is read as a command,
+    /// like a text (default: `true`). With `false`, a captioned `/name` is
+    /// a plain media message: the listeners get it, never a command or the
+    /// unknown-command handler.
+    pub fn commands_from_captions(mut self, read: bool) -> Self {
+        self.captions = read;
+        self
+    }
+
     /// Add a plugin; its `setup` runs in `build`, in order.
     pub fn plugin(mut self, plugin: impl Plugin) -> Self {
         self.steps.push(Step::Plugin(Arc::new(plugin)));
@@ -730,7 +743,7 @@ impl BotBuilder {
             }
         }
         check_listeners(&registrar.listeners)?;
-        let router = router(
+        let mut router = router(
             registrar.commands,
             registrar.listeners,
             self.unknown,
@@ -739,6 +752,7 @@ impl BotBuilder {
             self.cooldowns,
             self.refusals,
         )?;
+        router.captions = self.captions;
         Ok(Bot {
             inner: Arc::new(Inner {
                 middleware: registrar.middleware,
@@ -880,5 +894,6 @@ fn router(
         access,
         cooldowns,
         refusals,
+        captions: true,
     })
 }

@@ -76,7 +76,9 @@ registrar.command(
   with `false` keeps them as written. A parser of your own
   (`CommandParser`) decides both through `parse` and `normalize`.
 - **Captions.** The caption of an image or a video is read like a text
-  (`Trigger::Caption`); the media is in `ctx.message()`.
+  (`Trigger::Caption`); the media is in `ctx.message()`. With
+  `BotBuilder::commands_from_captions(false)`, a captioned `/name` is a
+  plain media message instead, for the listeners.
 - **Buttons as commands.** `Command::payload` registers the id of a reply
   button, a list row or a template quick-reply button: tapping it runs the
   command with no arguments (`Trigger::Payload`).

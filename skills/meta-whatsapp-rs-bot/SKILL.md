@@ -14,11 +14,11 @@ by meta-whatsapp-rs's own gate. Everything is in `meta_whatsapp_rs::bot`
 ## When to use
 
 For a number that answers commands, taps and free text. Per event: (1) a
-banned sender's message stops, nothing below runs; (2) the match, a
-`/name args` (or image or video caption) or a tapped button or list row
-whose id is a payload, sets `Ctx::invocation` (unknown: `Ctx::unknown_command`);
-(3) middleware, which see the match; (4) the command's guards (scope,
-owner, cooldown) and handler, else `BotBuilder::unknown_command`'s
+banned sender's message stops, nothing below runs; (2) the match, a `/name args`
+(or image or video caption; off: `BotBuilder::commands_from_captions(false)`) or a
+tapped button or list row whose id is a payload, sets `Ctx::invocation` (unknown:
+`Ctx::unknown_command`); (3) middleware, which see the match; (4) the command's
+guards (scope, owner, cooldown) and handler, else `BotBuilder::unknown_command`'s
 handler, else the listeners. (Zaileys: middleware after guards, commands only.)
 
 ## A plugin per feature

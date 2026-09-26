@@ -127,7 +127,8 @@ volumes (Claude config, shell history, cargo caches) start empty
   read receipt or typing indicator runs either); the command match
   (configurable prefixes, names and aliases compared as the parser
   normalizes them, case-insensitive by default, whitespace-split
-  arguments with quoted strings; image and video captions; reply
+  arguments with quoted strings; image and video captions, unless
+  `BotBuilder::commands_from_captions(false)`; reply
   buttons, list rows and template quick-reply buttons whose id is a
   registered payload; a name no command has is kept for an
   unknown-command handler); the middleware, which see the match

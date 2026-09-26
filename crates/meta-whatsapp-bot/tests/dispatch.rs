@@ -1744,6 +1744,63 @@ async fn an_image_or_video_caption_runs_its_command() {
     assert_eq!(seen.lock().unwrap().len(), 2);
 }
 
+/// Decisive for the switch: with `commands_from_captions(false)` a caption
+/// is never a command nor an unknown one; the media goes to the listeners.
+/// Typed text still is a command.
+#[tokio::test]
+async fn captions_can_be_left_out_of_the_match() {
+    let runs = Arc::new(AtomicUsize::new(0));
+    let unknown = Arc::new(AtomicUsize::new(0));
+    let unknown_in = Arc::clone(&unknown);
+    let images = Arc::new(Mutex::new(Vec::new()));
+    let images_in = Arc::clone(&images);
+    let bot = Bot::builder()
+        .outbound(Recording::default())
+        .commands_from_captions(false)
+        .command(counting("sticker", &runs))
+        .unknown_command(move |_ctx: Ctx| {
+            let unknown = Arc::clone(&unknown_in);
+            async move {
+                unknown.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .listen(Listen::Messages, move |ctx: Ctx| {
+            let images = Arc::clone(&images_in);
+            async move {
+                images.lock().unwrap().push((
+                    ctx.invocation().is_some(),
+                    ctx.unknown_command().is_some(),
+                    ctx.message()
+                        .and_then(|m| m.message_type())
+                        .map(str::to_owned),
+                ));
+                Ok(())
+            }
+        })
+        .build()
+        .await
+        .unwrap();
+
+    bot.handle(captioned("messages/image.json", "image", "/sticker big"))
+        .await
+        .unwrap();
+    bot.handle(captioned("messages/video.json", "video", "/nope"))
+        .await
+        .unwrap();
+    assert_eq!((count(&runs), count(&unknown)), (0, 0));
+    assert_eq!(
+        *images.lock().unwrap(),
+        [
+            (false, false, Some("image".to_owned())),
+            (false, false, Some("video".to_owned()))
+        ]
+    );
+    bot.handle(text_event(TEXT, "/sticker")).await.unwrap();
+    bot.handle(text_event(TEXT, "/nope")).await.unwrap();
+    assert_eq!((count(&runs), count(&unknown)), (1, 1));
+}
+
 /// `ctx.react` sends the documented reaction (`messages/reaction-messages`)
 /// to the message, from the number it arrived on.
 #[tokio::test]
