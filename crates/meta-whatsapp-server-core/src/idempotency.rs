@@ -558,6 +558,63 @@ mod tests {
         );
     }
 
+    /// Fingerprints are stored with their key (`wa_server_idempotency`,
+    /// kept `WA_SERVER_IDEMPOTENCY_TTL`): derived otherwise after an
+    /// upgrade, a caller repeating a request across it with the same key
+    /// gets `422 idempotency_key_reused`. Known answers, computed apart
+    /// from this code:
+    //
+    // python3 - <<'EOF'
+    // import hashlib, struct
+    // def framed(h, b): h.update(struct.pack('>Q', len(b))); h.update(b)
+    // def canonical(h, v):
+    //     if v is None: h.update(b'n')
+    //     elif isinstance(v, bool): h.update(b't' if v else b'f')
+    //     elif isinstance(v, int): h.update(b'#'); framed(h, str(v).encode())
+    //     elif isinstance(v, str): h.update(b's'); framed(h, v.encode())
+    //     elif isinstance(v, list):
+    //         h.update(b'[' + struct.pack('>Q', len(v)))
+    //         for x in v: canonical(h, x)
+    //     else:
+    //         h.update(b'{' + struct.pack('>Q', len(v)))
+    //         for k in sorted(v, key=str.encode): framed(h, k.encode()); canonical(h, v[k])
+    // h = hashlib.sha256()
+    // for b in (b'json', b'POST', b'/v1/numbers/106540352242922/messages'): framed(h, b)
+    // canonical(h, {"to": {"phone": "+15551234567"}, "type": "text",
+    //     "text": {"body": "hi", "preview_url": False}, "tags": [None, True, 1, "1"]})
+    // print(h.hexdigest())
+    // h = hashlib.sha256()
+    // for b in (b'parts', b'POST', b'/v1/numbers/106540352242922/media',
+    //           b'type', b'image/png', b'file', b'\x89PNG'): framed(h, b)
+    // print(h.hexdigest())
+    // EOF
+    //
+    // Decisive: each tag (`json`, `parts`, `n`, `t`, `#`, `s`, `[`, `{`),
+    // the length framing, and the order of an object's keys.
+    #[test]
+    fn fingerprints_are_pinned() {
+        let body = serde_json::json!({
+            "to": {"phone": "+15551234567"},
+            "type": "text",
+            "text": {"body": "hi", "preview_url": false},
+            "tags": [null, true, 1, "1"],
+        });
+        let json = Fingerprint::json("POST", "/v1/numbers/106540352242922/messages", &body);
+        assert_eq!(
+            hex::encode(json.as_bytes()),
+            "e83cc62715cb87890e03ddaa5d57b655ced695738930fc8c2ca164af6139f7d4"
+        );
+        let parts = Fingerprint::parts(
+            "POST",
+            "/v1/numbers/106540352242922/media",
+            &[("type", b"image/png"), ("file", b"\x89PNG")],
+        );
+        assert_eq!(
+            hex::encode(parts.as_bytes()),
+            "04edb1c222d03832376711c1ba9450a54e08c14793501b90e48af0fc13788db9"
+        );
+    }
+
     /// The method's name is hashed, whatever type carries it.
     #[test]
     fn a_fingerprint_hashes_the_methods_name() {

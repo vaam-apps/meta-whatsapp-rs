@@ -605,6 +605,38 @@ mod tests {
         );
     }
 
+    /// Meta's date for an account settings update is the update's own
+    /// `timestamp`, else its entry's `time` (Meta's example sends only the
+    /// first; a batch can carry both): routing compares it with the WABA's
+    /// binding. Decisive: the order of the two in `meta_time`, and the
+    /// fallback.
+    #[test]
+    fn an_account_settings_update_is_dated_by_the_update_then_the_entry() {
+        use meta_whatsapp_rs::webhooks::WebhookPayload;
+        let dated = |body: &serde_json::Value| {
+            let events = WebhookPayload::from_slice(body.to_string().as_bytes())
+                .unwrap()
+                .into_events();
+            let [event] = events.as_slice() else {
+                panic!("{events:?}")
+            };
+            assert_eq!(event.kind(), "account_settings_updated");
+            meta_time(event).map(OffsetDateTime::unix_timestamp)
+        };
+        let mut body: serde_json::Value = serde_json::from_str(include_str!(
+            "../../meta-whatsapp-webhooks/tests/fixtures/fields/account_settings_update.json"
+        ))
+        .unwrap();
+        assert_eq!(dated(&body), Some(1_671_644_824), "the update's own");
+        body["entry"][0]["time"] = serde_json::json!(1_671_000_000);
+        assert_eq!(dated(&body), Some(1_671_644_824), "before the entry's");
+        body["entry"][0]["changes"][0]["value"]
+            .as_object_mut()
+            .unwrap()
+            .remove("timestamp");
+        assert_eq!(dated(&body), Some(1_671_000_000), "else the entry's");
+    }
+
     /// The two lists split the library's kinds: none is both.
     #[test]
     fn tenant_and_operator_types_are_disjoint() {

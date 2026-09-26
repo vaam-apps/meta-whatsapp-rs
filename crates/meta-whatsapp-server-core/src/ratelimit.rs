@@ -311,6 +311,30 @@ mod tests {
         assert_eq!(Slots::new(0).per_tenant(), 1);
     }
 
+    /// A route's class follows its scope, then its method's name: reads
+    /// (`GET`, and `HEAD`, which axum answers on every `GET` route) apart
+    /// from writes, template management apart from both. Names are
+    /// case-sensitive, as HTTP methods are. Decisive: each name in
+    /// `RouteClass::of`, and the templates scope first.
+    #[test]
+    fn a_routes_class_follows_its_scope_and_its_methods_name() {
+        for (scope, method, class) in [
+            (Scope::Numbers, "GET", RouteClass::Read),
+            (Scope::Numbers, "HEAD", RouteClass::Read),
+            (Scope::Media, "GET", RouteClass::Read),
+            (Scope::Events, "HEAD", RouteClass::Read),
+            (Scope::Numbers, "PATCH", RouteClass::Send),
+            (Scope::Send, "POST", RouteClass::Send),
+            (Scope::Media, "DELETE", RouteClass::Send),
+            (Scope::Numbers, "get", RouteClass::Send),
+            (Scope::Templates, "GET", RouteClass::Templates),
+            (Scope::Templates, "HEAD", RouteClass::Templates),
+            (Scope::Templates, "POST", RouteClass::Templates),
+        ] {
+            assert_eq!(RouteClass::of(scope, method), class, "{scope:?} {method}");
+        }
+    }
+
     #[test]
     fn retry_after_rounds_up_to_whole_seconds() {
         assert_eq!(retry_after_secs(Duration::ZERO), 1);
