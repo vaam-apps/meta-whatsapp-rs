@@ -53,7 +53,7 @@
 //! Plugins are compiled in: there is no hot reload (see [`plugin`]).
 //! The async extension points ([`Outbound`], [`Middleware`], [`Plugin`],
 //! [`AccessPolicy`], [`Cooldowns`], [`Refusals`], [`ErrorHandler`],
-//! [`CommandHandler`], [`RateLimiter`], [`Timer`]) are `#[async_trait]`
+//! [`CommandHandler`], [`RateLimiter`], [`Timer`], [`ReportSink`]) are `#[async_trait]`
 //! traits; the attribute is
 //! re-exported as [`async_trait`](macro@async_trait), so no second
 //! dependency is needed.
@@ -109,7 +109,7 @@ pub use async_trait::async_trait;
 pub use bot::{Bot, BotBuilder, PluginInfo};
 pub use broadcast::{
     Backoff, Broadcast, BroadcastBuilder, BroadcastHandle, BroadcastPolicy, BroadcastReport, Ended,
-    Outcome, Progress, RecipientReport, Verdict,
+    Outcome, Progress, RecipientReport, ReportSink, Verdict,
 };
 pub use command::{Args, Command, CommandHandler, CommandInfo, Invocation, Scope, Trigger};
 pub use ctx::{BotSender, Chat, Ctx};

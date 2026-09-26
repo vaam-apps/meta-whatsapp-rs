@@ -6,6 +6,7 @@
 //!     .client(client) or .outbound(…) .pacer(pacer) .build()?
 //!   ├─ .handle()  → BroadcastHandle: progress() and cancel(), from any task
 //!   └─ .run()     → BroadcastReport: one RecipientReport each, in order
+//!                   (or each line to a ReportSink as it settles: .report_to(…))
 //! ```
 //!
 //! Every send (a retry too) first waits for a slot of the number's
@@ -48,6 +49,13 @@
 //! messaging limit (unique users per 24 hours, per business portfolio,
 //! `messaging-limits`) is Meta's to enforce; nothing here counts it.
 //!
+//! **Memory.** A run holds the list, and per recipient its attempts and
+//! whether it is settled; retries waiting hold their message. The report
+//! holds one line per recipient, with Meta's response or the error. For a
+//! list too long to keep every line, [`BroadcastBuilder::report_to`]
+//! hands each line to a [`ReportSink`] (a channel's sender, a store) as it
+//! settles, and the report comes back without lines.
+//!
 //! **Not durable.** The run lives in memory: a restart loses it, and the
 //! report is the only record. Durable, resumable jobs are roadmap item
 //! B3 (a typed store on `KvStore`).
@@ -56,19 +64,20 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 use std::fmt;
 use std::pin::pin;
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use futures::future::{Either, join_all, select};
 use meta_whatsapp_client::messages::{MessageContent, OutboundMessage, SendResponse};
 use meta_whatsapp_client::{Client, RetryPolicy};
-use meta_whatsapp_core::error::{ConfigError, ValidationError};
+use meta_whatsapp_core::error::{ConfigError, SinkError, ValidationError};
 use meta_whatsapp_core::ids::PhoneNumberId;
 use meta_whatsapp_core::recipient::Recipient;
 use meta_whatsapp_core::{Error, ErrorKind, Result};
 use time::OffsetDateTime;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 
 use crate::outbound::{ClientOutbound, Outbound};
 use crate::pacer::{Pacer, after, elapsed};
@@ -282,7 +291,8 @@ pub enum Ended {
     /// [`BroadcastHandle::cancel`] stopped it.
     Cancelled,
     /// A [`Verdict::Stop`] stopped it, on the failure of the recipient at
-    /// this index; or the rate limiter failed on that recipient.
+    /// this index; or the rate limiter, or the [`ReportSink`], failed on
+    /// that recipient.
     Stopped {
         /// Index (in the order given) of the recipient whose failure
         /// stopped the run.
@@ -317,7 +327,8 @@ pub enum Outcome {
 #[non_exhaustive]
 pub struct RecipientReport {
     /// Where the recipient is in the list given (the line's place in
-    /// [`BroadcastReport::recipients`]).
+    /// [`BroadcastReport::recipients`]; what identifies a line a
+    /// [`ReportSink`] receives).
     pub index: usize,
     /// The recipient, as given.
     pub recipient: Recipient,
@@ -330,32 +341,56 @@ pub struct RecipientReport {
     pub outcome: Outcome,
 }
 
-/// What a run did: one line per recipient, in the order given.
+/// What a run did.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct BroadcastReport {
-    /// One per recipient, in the order given.
+    /// One per recipient, in the order given; empty when the lines went to
+    /// a [`ReportSink`] instead ([`BroadcastBuilder::report_to`]).
     pub recipients: Vec<RecipientReport>,
     /// How the run ended.
     pub ended: Ended,
+    progress: Progress,
 }
 
 impl BroadcastReport {
-    /// The counts of [`Self::recipients`].
+    /// The final counts (the same as [`BroadcastHandle::progress`] after
+    /// the run), lines streamed or not.
     pub fn progress(&self) -> Progress {
-        let mut progress = Progress {
-            total: self.recipients.len(),
-            ..Progress::default()
-        };
-        for line in &self.recipients {
-            match line.outcome {
-                Outcome::Sent(_) => progress.sent += 1,
-                Outcome::Failed(_) => progress.failed += 1,
-                Outcome::Skipped => progress.skipped += 1,
-                Outcome::Duplicate { .. } => progress.duplicates += 1,
-            }
-        }
-        progress
+        self.progress
+    }
+}
+
+/// Where a broadcast's lines go as each recipient is settled, instead of
+/// the report ([`BroadcastBuilder::report_to`]): for a list too long to
+/// keep every line (Meta's response or the error) in memory.
+///
+/// Lines arrive in the order recipients settle: the duplicates first, the
+/// recipients never sent (cancelled, stopped) last; `line.index` says
+/// which recipient each is. A `tokio::sync::mpsc::Sender` is one (its
+/// receiver reads them as they come).
+#[async_trait]
+pub trait ReportSink: Send + Sync + fmt::Debug + 'static {
+    /// Record `line`. The sender that settled it waits meanwhile, so a slow
+    /// sink slows the run rather than letting lines pile up. An error stops
+    /// the run ([`Ended::Stopped`]), as a failing rate limiter does:
+    /// nothing more is sent whose line could not be recorded.
+    async fn record(&self, line: RecipientReport) -> Result<()>;
+}
+
+#[async_trait]
+impl<T: ReportSink + ?Sized> ReportSink for Arc<T> {
+    async fn record(&self, line: RecipientReport) -> Result<()> {
+        (**self).record(line).await
+    }
+}
+
+/// Each line into the channel, waiting while it is full; a closed channel
+/// (its receiver dropped) is `SinkError::Closed`, which stops the run.
+#[async_trait]
+impl ReportSink for mpsc::Sender<RecipientReport> {
+    async fn record(&self, line: RecipientReport) -> Result<()> {
+        self.send(line).await.map_err(|_| SinkError::Closed.into())
     }
 }
 
@@ -537,7 +572,8 @@ struct Book {
     attempts: Vec<u32>,
     /// Whether each recipient is settled (a duplicate, from the start).
     settled: Vec<bool>,
-    /// Each settled recipient's outcome, for the report.
+    /// Each settled recipient's outcome, for the report; empty when the
+    /// lines go to a sink.
     outcomes: Vec<Option<Outcome>>,
     stopped_by: Option<usize>,
     /// The run's latest time, and how far the pacer's clock stepped back
@@ -619,6 +655,11 @@ pub struct Broadcast {
     concurrency: usize,
     shared: Arc<Shared>,
     book: Mutex<Book>,
+    sink: Option<Arc<dyn ReportSink>>,
+    /// The sink failed: it gets nothing more.
+    sink_failed: AtomicBool,
+    /// The duplicates' lines, for the sink (the report has them already).
+    duplicates: Vec<(usize, usize)>,
 }
 
 impl fmt::Debug for Broadcast {
@@ -649,10 +690,30 @@ impl Broadcast {
     /// Send to every recipient, paced, and report on each. The future is
     /// `Send`: spawn it to run in the background.
     pub async fn run(self) -> BroadcastReport {
+        for &(index, of) in &self.duplicates {
+            self.record(self.line(index, Outcome::Duplicate { of }))
+                .await;
+        }
         let workers = self.concurrency.min(self.recipients.len()).max(1);
         join_all((0..workers).map(|_| self.work())).await;
         self.shared.halt(Halt::Finished);
+        // Never sent: not reached, or waiting for a retry, when the run
+        // halted.
+        let mut unsettled = 0;
+        for index in 0..self.recipients.len() {
+            if self.book().settled[index] {
+                continue;
+            }
+            unsettled += 1;
+            if self.sink.is_some() {
+                self.record(self.line(index, Outcome::Skipped)).await;
+            }
+        }
+        self.shared
+            .skipped
+            .fetch_add(unsettled, AtomicOrdering::AcqRel);
         let halt = *self.shared.halt.borrow();
+        let streamed = self.sink.is_some();
         let book = self
             .book
             .into_inner()
@@ -664,28 +725,29 @@ impl Broadcast {
                 recipient: book.stopped_by.unwrap_or_default(),
             },
         };
-        // Never sent: not reached, or waiting for a retry, when the run
-        // halted.
-        let unsettled = book.settled.iter().filter(|settled| !**settled).count();
-        self.shared
-            .skipped
-            .fetch_add(unsettled, AtomicOrdering::AcqRel);
-        let recipients = self
-            .recipients
-            .into_iter()
-            .zip(book.outcomes)
-            .zip(book.attempts)
-            .enumerate()
-            .map(
-                |(index, ((recipient, outcome), attempts))| RecipientReport {
-                    index,
-                    recipient,
-                    attempts,
-                    outcome: outcome.unwrap_or(Outcome::Skipped),
-                },
-            )
-            .collect();
-        let report = BroadcastReport { recipients, ended };
+        let recipients = if streamed {
+            Vec::new()
+        } else {
+            self.recipients
+                .into_iter()
+                .zip(book.outcomes)
+                .zip(book.attempts)
+                .enumerate()
+                .map(
+                    |(index, ((recipient, outcome), attempts))| RecipientReport {
+                        index,
+                        recipient,
+                        attempts,
+                        outcome: outcome.unwrap_or(Outcome::Skipped),
+                    },
+                )
+                .collect()
+        };
+        let report = BroadcastReport {
+            recipients,
+            ended,
+            progress: self.shared.progress(),
+        };
         let progress = report.progress();
         tracing::debug!(
             sent = progress.sent,
@@ -743,7 +805,7 @@ impl Broadcast {
             Some(message) => message,
             None => match self.compose(index) {
                 Ok(message) => Box::new(message),
-                Err(error) => return self.settle(index, Outcome::Failed(error)),
+                Err(error) => return self.settle(index, Outcome::Failed(error)).await,
             },
         };
         let wait = match self.pacer.reserve(&self.from).await {
@@ -755,7 +817,7 @@ impl Broadcast {
                     error_kind = ?error.kind(),
                     "broadcast stopped: the rate limiter failed"
                 );
-                self.settle(index, Outcome::Failed(error));
+                self.settle(index, Outcome::Failed(error)).await;
                 return self.stop(index);
             }
         };
@@ -769,7 +831,7 @@ impl Broadcast {
             book.attempts[index]
         };
         match result {
-            Ok(response) => self.settle(index, Outcome::Sent(response)),
+            Ok(response) => self.settle(index, Outcome::Sent(response)).await,
             Err(error) => self.failed(index, message, error, failures).await,
         }
     }
@@ -804,11 +866,11 @@ impl Broadcast {
                     error_kind = ?error.kind(),
                     "broadcast stopped by a failure every recipient would meet"
                 );
-                self.settle(index, Outcome::Failed(error));
+                self.settle(index, Outcome::Failed(error)).await;
                 self.stop(index);
             }
             Verdict::RetryAfter(_) | Verdict::Fail => {
-                self.settle(index, Outcome::Failed(error));
+                self.settle(index, Outcome::Failed(error)).await;
             }
         }
     }
@@ -834,19 +896,64 @@ impl Broadcast {
         }
     }
 
-    fn settle(&self, index: usize, outcome: Outcome) {
+    /// The line of the recipient at `index`, for the sink.
+    fn line(&self, index: usize, outcome: Outcome) -> RecipientReport {
+        RecipientReport {
+            index,
+            recipient: self.recipients[index].clone(),
+            attempts: self.book().attempts[index],
+            outcome,
+        }
+    }
+
+    /// Settle the recipient at `index`: count it, and keep its line for the
+    /// report or hand it to the sink.
+    async fn settle(&self, index: usize, outcome: Outcome) {
         let counter = match outcome {
             Outcome::Sent(_) => &self.shared.sent,
             Outcome::Failed(_) => &self.shared.failed,
             Outcome::Skipped => &self.shared.skipped,
             Outcome::Duplicate { .. } => &self.shared.duplicates,
         };
-        {
+        let line = {
             let mut book = self.book();
             book.settled[index] = true;
-            book.outcomes[index] = Some(outcome);
-        }
+            if self.sink.is_none() {
+                book.outcomes[index] = Some(outcome);
+                None
+            } else {
+                Some(RecipientReport {
+                    index,
+                    recipient: self.recipients[index].clone(),
+                    attempts: book.attempts[index],
+                    outcome,
+                })
+            }
+        };
         counter.fetch_add(1, AtomicOrdering::AcqRel);
+        if let Some(line) = line {
+            self.record(line).await;
+        }
+    }
+
+    /// Hand `line` to the sink; one that fails stops the run and gets
+    /// nothing more.
+    async fn record(&self, line: RecipientReport) {
+        let Some(sink) = &self.sink else {
+            return;
+        };
+        if self.sink_failed.load(AtomicOrdering::Acquire) {
+            return;
+        }
+        let index = line.index;
+        if let Err(error) = sink.record(line).await {
+            tracing::warn!(
+                error_kind = ?error.kind(),
+                "broadcast stopped: its report sink failed"
+            );
+            self.sink_failed.store(true, AtomicOrdering::Release);
+            self.stop(index);
+        }
     }
 
     fn stop(&self, index: usize) {
@@ -869,6 +976,7 @@ pub struct BroadcastBuilder {
     policy: Arc<dyn BroadcastPolicy>,
     concurrency: usize,
     dedupe: bool,
+    sink: Option<Arc<dyn ReportSink>>,
 }
 
 impl fmt::Debug for BroadcastBuilder {
@@ -891,6 +999,7 @@ impl BroadcastBuilder {
             policy: Arc::new(Backoff::default()),
             concurrency: 32,
             dedupe: true,
+            sink: None,
         }
     }
 
@@ -985,6 +1094,15 @@ impl BroadcastBuilder {
         self
     }
 
+    /// Hand each recipient's line to `sink` as it settles, instead of
+    /// keeping it for the report (which then has none, its counts only):
+    /// memory no longer grows with the lines. A `tokio::sync::mpsc`
+    /// sender is a sink; a sink that fails stops the run ([`ReportSink`]).
+    pub fn report_to(mut self, sink: impl ReportSink) -> Self {
+        self.sink = Some(Arc::new(sink));
+        self
+    }
+
     /// Check the settings: no outbound, no pacer, no message or a
     /// concurrency of zero is a `ConfigError`.
     pub fn build(self) -> Result<Broadcast> {
@@ -1012,10 +1130,15 @@ impl BroadcastBuilder {
             Vec::new()
         };
         let mut settled = vec![false; total];
-        let mut outcomes: Vec<Option<Outcome>> = (0..total).map(|_| None).collect();
+        let mut outcomes: Vec<Option<Outcome>> = Vec::new();
+        if self.sink.is_none() {
+            outcomes = (0..total).map(|_| None).collect();
+        }
         for &(index, of) in &duplicates {
             settled[index] = true;
-            outcomes[index] = Some(Outcome::Duplicate { of });
+            if let Some(slot) = outcomes.get_mut(index) {
+                *slot = Some(Outcome::Duplicate { of });
+            }
         }
         let (halt, _) = watch::channel(Halt::Running);
         Ok(Broadcast {
@@ -1044,6 +1167,13 @@ impl BroadcastBuilder {
                 skew: Duration::ZERO,
             }),
             recipients: self.recipients,
+            duplicates: if self.sink.is_some() {
+                duplicates
+            } else {
+                Vec::new()
+            },
+            sink: self.sink,
+            sink_failed: AtomicBool::new(false),
         })
     }
 }

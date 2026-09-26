@@ -1193,6 +1193,125 @@ async fn dedupe_off_sends_every_listing() {
     assert_eq!(report.progress().duplicates, 0);
 }
 
+/// `report_to`: each line goes to the sink as it settles (the duplicates
+/// first), none is kept in the report, and the counts still add up. The
+/// channel holds 2 of the 5 lines: the run waits for its reader.
+#[tokio::test]
+async fn lines_stream_to_a_channel_as_they_settle() {
+    let clock = ManualClock::new(T0);
+    let outbound = Timed::new(&clock);
+    outbound.fail(&phone(2), || graph(131049));
+    let (lines, mut read) = tokio::sync::mpsc::channel(2);
+    let broadcast = Broadcast::builder(NUMBER)
+        .to([phone(1), phone(2), phone(1), phone(3), phone(4)])
+        .content(Text::new("Spring sale"))
+        .outbound(outbound.clone())
+        .pacer(pacer(&clock, 20))
+        .report_to(lines)
+        .build()
+        .unwrap();
+    let reader = async {
+        let mut got = Vec::new();
+        while let Some(line) = read.recv().await {
+            got.push(line);
+        }
+        got
+    };
+    let (report, got) = tokio::join!(broadcast.run(), reader);
+
+    assert!(report.recipients.is_empty(), "the lines went to the sink");
+    let progress = report.progress();
+    assert_eq!(
+        (
+            progress.sent,
+            progress.failed,
+            progress.duplicates,
+            progress.remaining()
+        ),
+        (3, 1, 1, 0)
+    );
+    assert_eq!(got[0].index, 2, "the duplicate first");
+    let mut by_index: Vec<(usize, String, u32)> = got
+        .iter()
+        .map(|line| {
+            let what = match &line.outcome {
+                Outcome::Sent(_) => "sent".to_owned(),
+                Outcome::Failed(e) => format!("failed {:?}", e.graph().map(|g| g.code)),
+                Outcome::Duplicate { of } => format!("duplicate of {of}"),
+                Outcome::Skipped => "skipped".to_owned(),
+                other => panic!("{other:?}"),
+            };
+            (line.index, what, line.attempts)
+        })
+        .collect();
+    by_index.sort();
+    assert_eq!(
+        by_index,
+        [
+            (0, "sent".to_owned(), 1),
+            (1, "failed Some(131049)".to_owned(), 1),
+            (2, "duplicate of 0".to_owned(), 0),
+            (3, "sent".to_owned(), 1),
+            (4, "sent".to_owned(), 1),
+        ]
+    );
+    assert_eq!(got[1].recipient, phone(1));
+}
+
+/// A sink that fails (its receiver dropped) stops the run: nothing more is
+/// sent whose line would be lost.
+#[tokio::test]
+async fn a_sink_that_fails_stops_the_run() {
+    let clock = ManualClock::new(T0);
+    let outbound = Timed::new(&clock);
+    let (lines, read) = tokio::sync::mpsc::channel(8);
+    drop(read);
+    let report = Broadcast::builder(NUMBER)
+        .to((0..3).map(phone))
+        .content(Text::new("Spring sale"))
+        .outbound(outbound.clone())
+        .pacer(pacer(&clock, 20))
+        .concurrency(1)
+        .report_to(lines)
+        .build()
+        .unwrap()
+        .run()
+        .await;
+    assert_eq!(outbound.sends().len(), 1);
+    assert_eq!(report.ended, Ended::Stopped { recipient: 0 });
+    let progress = report.progress();
+    assert_eq!((progress.sent, progress.skipped), (1, 2));
+}
+
+/// A cancelled run hands the lines of the recipients it never sent to the
+/// sink too, last.
+#[tokio::test]
+async fn a_cancelled_run_streams_the_skipped_lines_last() {
+    let clock = ManualClock::new(T0);
+    let outbound = Timed::new(&clock);
+    let (lines, mut read) = tokio::sync::mpsc::channel(16);
+    let broadcast = Broadcast::builder(NUMBER)
+        .to((0..5).map(phone))
+        .content(Text::new("Spring sale"))
+        .outbound(outbound.clone())
+        .pacer(pacer(&clock, 20))
+        .report_to(lines)
+        .build()
+        .unwrap();
+    outbound.cancel_after.set((2, broadcast.handle())).unwrap();
+    let report = broadcast.run().await;
+    let mut got = Vec::new();
+    while let Some(line) = read.recv().await {
+        got.push((line.index, matches!(line.outcome, Outcome::Skipped)));
+    }
+    assert_eq!(report.ended, Ended::Cancelled);
+    assert_eq!(
+        got,
+        [(0, false), (1, false), (2, true), (3, true), (4, true)]
+    );
+    assert_eq!(report.progress().skipped, 3);
+}
+
 /// `BotBuilder::pacer`: the typing indicator (`MarkRead`) and the reply
 /// both wait for a slot of the number, in one budget.
 #[tokio::test]
