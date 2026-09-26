@@ -37,7 +37,7 @@ meta-whatsapp-rs = { git = "https://github.com/vaam-apps/meta-whatsapp-rs", rev 
 
 The async extension points (`Outbound`, `Middleware`, `Plugin`,
 `AccessPolicy`, `Cooldowns`, `Refusals`, `ErrorHandler`, `RateLimiter`,
-`Timer`) are `#[async_trait]` traits. The attribute is re-exported as
+`Timer`, `ReportSink`) are `#[async_trait]` traits. The attribute is re-exported as
 `meta_whatsapp_rs::bot::async_trait`, so you need no `async-trait`
 dependency of your own (write `#[async_trait]` on the `impl`: a native
 `async fn` there does not match the trait).
@@ -394,7 +394,8 @@ or table style), implement `MarkdownRenderer` and pass that.
 
 A campaign, an order-status sweep, a notice to every customer: one
 message to many recipients from one business number, sent no faster than
-Meta allows, with progress, a cancel, retries and a report per recipient.
+the rate you give the number (below Meta's, see the headroom below),
+with progress, a cancel, retries and a report per recipient.
 
 ```rust
 let broadcast = Broadcast::builder(number)
@@ -421,21 +422,24 @@ is billed, and a duplicate marketing message harms the merchant. The same
 person is the same phone number compared by its digits (`+1 650-555-1234`
 and `16505551234`), the same business-scoped user id, the same group, or
 a phone number and a user id that one `Recipient::PhoneAndUser` carried
-together. The repeat's line is `Outcome::Duplicate`, naming the first
-listing; `BroadcastBuilder::dedupe(false)` sends the list as given.
+together. The repeat's line is `SendOutcome::Duplicate`, naming the
+first listing; `BroadcastBuilder::dedupe(false)` sends the list as given.
 
 **The pace.** Meta's throughput (`throughput`) is per registered
 business number: 80 messages a second by default (`Rate::DEFAULT`),
 1,000 once Meta upgrades the number (`Rate::HIGHER_THROUGHPUT`), 20 for
-a number also used in the WhatsApp Business app (`Rate::BUSINESS_APP`),
-counting inbound and outbound messages of every type. The default
-`RateLimiter`, `TokenBucket`, gives each number its rate
+a number also used in the WhatsApp Business app (`Rate::BUSINESS_APP`).
+The default `RateLimiter`, `TokenBucket`, gives each number its rate
 (`TokenBucket::rate_for` for the ones that differ) and spaces the sends
 evenly, so no one-second window holds more than the rate
-(`TokenBucket::burst` allows a few at once, and that many more in a
-window). Meta documents no mapping from a number's reported throughput
-level to a rate, so set the rate yourself, for example on a
-`phone_number_quality_update` webhook announcing an upgrade.
+(`TokenBucket::burst` lets a few go at once after a quiet spell, and so
+up to `burst - 1` more than the rate in some one-second window). Meta
+documents no mapping from a number's reported throughput level to a
+rate, so set the rate yourself, and change it while running with
+`TokenBucket::set_rate` on a bucket you keep behind an `Arc`
+(`Pacer::shared`): for a number Meta upgrades (a
+`phone_number_quality_update` webhook, `ThroughputUpgrade`) or a
+merchant's number onboarded meanwhile.
 
 ```rust
 pub fn shared_pacer(upgraded: PhoneNumberId) -> Pacer {
@@ -443,87 +447,139 @@ pub fn shared_pacer(upgraded: PhoneNumberId) -> Pacer {
 }
 ```
 
+- **Headroom for inbound messages.** Meta's throughput is "inclusive of
+  inbound and outbound messages and all message types", and a pacer
+  counts only what this process sends. A campaign that draws replies
+  shares the number's rate with them: pace below it by the inbound
+  traffic you expect (at 80 a second and one reply for every four
+  messages, `Rate::per_second(64)`).
 - **One `Pacer` per process**, shared by every broadcast
   (`BroadcastBuilder::pacer`) and by the bot (`BotBuilder::pacer`, which
   puts its outbound in a `PacedOutbound`: replies, refusals, read
-  receipts and typing indicators wait for a slot too). Two pacers give
-  one number two budgets. A reply waits behind at most a broadcast's
-  concurrency in slots.
+  receipts and typing indicators wait for a slot too; a handler reaches
+  the pacer with `Ctx::pacer`). Two pacers give one number two budgets.
+  A reply waits behind at most a broadcast's concurrency in slots, and a
+  cancelled broadcast hands its waiting slots back
+  (`RateLimiter::release`).
 - **Group operations** go through the same budget through
   `PacedGroups::new(client.groups(number), pacer)` and its `group(id)`
   (a `PacedGroup`): each of the client's group calls, after a slot of the
   number. Meta documents no rate for group operations; this is a choice,
   and the client's own calls are not paced by themselves.
-  `Pacer::acquire(&number)` paces any other call.
+  `Pacer::acquire(&number)` paces any other call. Every call costs one
+  slot (`SlotRequest::cost`): Meta documents no lower cost for a read
+  receipt or a typing indicator.
 - **Several replicas** each count their own sends: two replicas at 80 a
   second send 160. Give each its share of the rate
   (`Rate::per_second`), or implement `RateLimiter` over a store they
-  share (`RateLimiter::reserve` books a slot and returns the wait;
-  `RateLimiter::slow_down` hears Meta's throttling). None ships.
+  share (`RateLimiter::reserve` books a slot and returns the wait,
+  `RateLimiter::release` takes an unused one back,
+  `RateLimiter::slow_down` hears Meta's throttling). None ships yet: a
+  shared limiter on `KvStore` is [roadmap](../roadmap.md) item B2b.
 - **Concurrency.** Up to `BroadcastBuilder::concurrency` sends (default
   32) are in flight at once, so the rate is reached when each send
-  takes a while: about the rate times a send's duration.
+  takes a while: about the rate times a send's duration. On a number at
+  `Rate::HIGHER_THROUGHPUT` the default caps it: 32 sends of 400 ms each
+  make 80 a second, so raise it to about 400.
 - Don't give a broadcast a `PacedOutbound`: it paces its own sends, and
   each would take two slots.
+- **Zero** where it means nothing is a `ConfigError` when given:
+  `Rate::per_second(0)`, `TokenBucket::burst(0)`,
+  `TokenBucket::recovery` of zero, a `TokenBucket::slow_down_factor`
+  below two, `Backoff::max_attempts(0)`, and a concurrency of zero at
+  `BroadcastBuilder::build`.
 
 **Failed sends.** A `BroadcastPolicy` decides, from the error's kind
-(its code, never its text); the default is `Backoff`:
+(its code, never its text), given a `SendFailure` (the error, how many
+sends to that recipient failed, and whether every recipient gets the
+same message); the default is `Backoff`:
 
 | Meta answers | `Backoff` |
 | --- | --- |
 | `131056`, the pair rate limit (one user messaged too often) | that recipient waits 1, 4, 16, 64 s (the `4^X` schedule of `about-the-platform`); the others go on |
-| `130429` throughput, or another `RateLimited` code | retried after 1, 2, 4, 8 s; the number's pacer halves its rate, back to full after 30 quiet seconds (`TokenBucket::recovery`) |
-| `131057`, the number in maintenance (Meta's throughput upgrade takes it off for up to a minute, `throughput`) | retried every 20 s (`Backoff::MAINTENANCE_RETRY`), so its five sends outlast the minute; the pacer slows down |
-| `131048`, sending restricted for spam | reported, not retried (Meta: retrying makes it worse); the pacer slows down |
-| `131049`, the per-user marketing limit | reported for that recipient, not retried (Meta: wait at least 24 hours) |
-| an error in `Backoff::STOPS` (the token, a permission, the account, the classification limit, payment) | the run stops: every recipient not sent yet is skipped |
+| `130429` throughput, or another `RateLimited` code | retried after 1, 2, 4, 8 s |
+| `131057`, the number in maintenance (Meta's throughput upgrade takes it off for up to a minute, `throughput`) | retried every 20 s (`Backoff::MAINTENANCE_RETRY`), so its five sends outlast the minute |
+| `131049`, the per-user marketing limit | reported for that recipient, not retried (Meta: wait at least 24 hours before resending) |
+| a kind of `Backoff::STOPS`, which holds for the number: the token, a permission, the account, the classification limit, payment, the spam limit (`131048`: Meta's advice is to check the number's quality status), registration, marketing turned off (`131063`) | the run stops: every recipient not sent yet is skipped |
+| a kind of `Backoff::CONTENT_STOPS` (the template not found, paused, disabled, or its parameters wrong), for a broadcast of one message (`BroadcastBuilder::content`) | the run stops, since every recipient would get it; with `compose`, reported for that recipient |
 | anything else not retryable | reported for that recipient |
 
-Whatever the policy says, a recipient is sent again only when the error
-is retryable and `Error::may_have_been_sent` is false. A timeout, or a
-5xx after the request reached Meta, is reported as `Outcome::Failed`
-with `may_have_been_sent()` true and never resent, since a duplicate
-campaign message is worse than a missing one: match it with the status
-webhooks (the callback data) before sending again.
-`BroadcastBuilder::client` turns the client's own replays off
-(`Client::with_retry(RetryPolicy::NONE)`), so a throttled send is
-retried by the broadcast, through the pacer; give an outbound of your
-own over a client the same policy.
+Every delay is at most `Backoff::max_delay` (64 s by default, the pair
+limit's fourth). `Backoff::stops` and `Backoff::content_stops` replace
+the two lists; `Backoff::max_attempts` (5), `Backoff::base_delay` (1 s)
+and `Backoff::max_delay` are settings.
+
+The number's pacer slows down on the errors its `SlowDownRule` names
+(default `ThrottlingErrors`: the `RateLimited` codes, `131048` and
+`131057`), for a broadcast's sends and a paced bot's replies alike: the
+`TokenBucket` halves the rate (`TokenBucket::slow_down_factor`), counts
+the slow-downs of one second as one (`TokenBucket::slow_down_spacing`,
+since every send in flight gets the same error), never goes below one
+message a second, and doubles back once per 30 quiet seconds
+(`TokenBucket::recovery`) until the rate is whole again.
+`TokenBucket::adaptive(false)` turns slow-downs off.
+
+**What is resent.** Whatever the policy says, a recipient is sent again
+only when `Error::may_resend` holds: the error proves Meta refused the
+send before doing anything (a throttling code on any status, an HTTP
+429, or `131057` on a 4xx). It is the library's one rule, the same the
+client's own retries follow; a policy can refuse more, never less. A
+timeout, a 5xx that is not a throttling refusal, a `131000` (Meta's
+"unknown error") or a connection refused is reported as
+`SendOutcome::Failed` and never resent, since a duplicate campaign
+message is worse than a missing one: when `may_have_been_sent()` is
+true, match it with the status webhooks (the callback data) before
+sending again. `BroadcastBuilder::client` turns the client's own replays
+off (`Client::with_retry(RetryPolicy::NONE)`), so a throttled send is
+retried by the broadcast, through the pacer. An outbound of your own
+(`BroadcastBuilder::outbound`) must not retry inside a call either, and
+must fail a send that may have reached Meta with an error whose
+`may_have_been_sent()` is true. `BotBuilder::pacer` does the same for a
+bot built with `BotBuilder::client`: its client stops retrying, and the
+`PacedOutbound` retries with the client's policy, each retry after its
+delay and a slot of its own (`PacedOutbound::retry`).
 
 **The report.** `run` returns a `BroadcastReport`: one
-`RecipientReport` per recipient, in order (its `index`, `attempts`, and
-an `Outcome`: `Sent` with Meta's response, `Failed` with the last error,
-`Skipped`, or `Duplicate`), its counts (`BroadcastReport::progress`) and
-how the run `Ended`. For a list too long to keep every line in memory,
-`BroadcastBuilder::report_to(sink)` hands each line to a `ReportSink` as
-it settles (a `tokio::sync::mpsc::Sender` is one), and the report keeps
-the counts only; the run waits for the sink, and a sink that fails stops
-it, so nothing is sent whose line would be lost. `Sent` means Meta
-accepted the message: most
-`131049` refusals arrive later, as a `failed` status webhook
+`RecipientReport` per recipient, in order (its `index`, `attempts`, a
+`SendOutcome`: `Sent` with Meta's response, `Failed` with the last
+error, `Skipped`, or `Duplicate`; and for a recipient skipped while it
+waited for a retry, its `last_error`), its counts
+(`BroadcastReport::progress`) and how the run ended (`BroadcastEnd`:
+completed, cancelled, stopped by the policy, or stopped because the rate
+limiter or the report sink failed). For a list too long to keep every
+line in memory, `BroadcastBuilder::report_to(sink)` hands each line to a
+`ReportSink` as it settles (a `tokio::sync::mpsc::Sender` is one), and
+the report keeps the counts only; the run waits for the sink, and a sink
+that fails stops it, so nothing is sent whose line would be lost.
+`Sent` means Meta accepted the message: a `131049` can also arrive
+later, as a `failed` status webhook
 (`templates/marketing-templates/per-user-limits`). Meta's daily
 messaging limit (unique users per 24 hours per business portfolio,
 `messaging-limits`) is Meta's to enforce; nothing here counts it.
 
 **Cancel.** `BroadcastHandle::cancel` starts no send afterwards: a wait
-for a slot or a retry ends at once, sends in flight finish and are
-reported (abandoning one would leave unknown whether it went out), and
-the rest are `Skipped`. `BroadcastHandle::progress` counts sent, failed,
-skipped, duplicates and `Progress::remaining` meanwhile.
+for a slot or a retry ends at once (the slot goes back to the pacer),
+sends in flight finish and are reported (abandoning one would leave
+unknown whether it went out), and the rest are `Skipped`.
+`BroadcastHandle::progress` counts sent, failed, skipped, duplicates and
+`BroadcastProgress::remaining` meanwhile. Dropping the `run` future
+instead (a `select!` it loses, an aborted task) abandons the sends in
+flight and the report: cancel, then let `run` return.
 
 **Not durable.** A run lives in memory: a restart loses it, and the
 report is its only record. Broadcasts that survive a restart, and
 scheduled sends, are [roadmap](../roadmap.md) item B3 (a typed store on
 `KvStore`).
 
-**Time** comes from the pacer's `Timer`, a `Clock` that can wait:
-`SystemClock` sleeps on Tokio; a `ManualClock` moves forward at once
-when waited on, so a test runs a whole paced broadcast instantly and
-reads when each send started (`Pacer::with_timer`). A `ManualClock`'s
-sleeps add up, so concurrent senders do not overlap on it: to test the
-rate under concurrency, implement `Timer` over Tokio's paused clock
-(`tokio::time::sleep` under `#[tokio::test(start_paused = true)]`). A
-wall clock stepping back neither pauses the pacer nor puts off a retry.
+**Time** comes from the pacer's `Timer`, a `Clock` that can wait until a
+deadline (`Timer::sleep_until`): `SystemClock` sleeps on Tokio; a
+`ManualClock` moves forward to the deadline at once and never back, so
+a test runs a whole paced broadcast instantly and reads when each send
+started, exactly, however many senders share it (`Pacer::with_timer`).
+A send takes no time on it: to test slow sends overlapping, implement
+`Timer` over Tokio's paused clock (`tokio::time::sleep` under
+`#[tokio::test(start_paused = true)]`). A wall clock stepping back
+neither pauses the pacer nor puts off a retry.
 
 ## 10. Testing
 
@@ -536,8 +592,8 @@ with a pacer on a `ManualClock` never waits for real.
 
 A handler is a function of its context, so it can be tested without a
 bot: `Ctx::new(event, outbound, renderer)`, then
-`.with_invocation(Invocation::new(name, trigger, args))` for a command,
-and call it.
+`.with_invocation(Invocation::new(name, trigger, args))` for a command
+(and `.with_pacer(pacer)` for one that uses `Ctx::pacer`), and call it.
 
 ## Not here yet
 

@@ -86,14 +86,20 @@ on a 1xx–3xx is `false`~~: until 8238853 (2026-09-24).
   a value) on any retryable error, with jittered backoff
   (`RetryPolicy::default()`; `RetryPolicy::NONE` turns it off).
 - A **send** (`Messages::send`, `Marketing::send`, uploads) is replayed
-  only when the error proves Meta did nothing: `RateLimited`,
-  `PairRateLimited`, HTTP 429 (`ErrorKind::is_rejected_before_processing`).
-  **A timeout or 5xx on a send is returned, never replayed**: a duplicate
-  OTP or order confirmation is worse than an error. The example's tests
-  prove both behaviours.
+  only when `Error::may_resend()` holds: the error proves Meta did
+  nothing (`RateLimited` or `PairRateLimited` on any status, an HTTP 429,
+  or `131057`, the account in maintenance, on a 4xx). It is the
+  library's one rule for a resend no one checks: the bot's paced
+  broadcast follows it too. **A timeout or 5xx on a send is returned,
+  never replayed**, nor is a `131000` on a 400: a duplicate OTP or order
+  confirmation is worse than an error. The example's tests prove both
+  behaviours.
 - From a job queue, resend only what Meta provably refused and may accept
   later; reconcile the rest with status webhooks first (match
-  `biz_opaque_callback_data`, see `meta-whatsapp-rs-webhook-events`):
+  `biz_opaque_callback_data`, see `meta-whatsapp-rs-webhook-events`). The
+  rule below also resends later what `may_resend` would not replay at
+  once (a template still syncing, a `131000` on a 400); to be as strict
+  as the library, test `e.may_resend()` first:
 
 ```rust
 pub fn after_failed_send(e: &Error) -> Resend {

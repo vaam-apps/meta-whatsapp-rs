@@ -123,8 +123,8 @@ let handle = broadcast.handle(); // progress() and cancel(), from another task
 let report = broadcast.run().await; // spawn it to do something else meanwhile
 ```
 
-A send that may have gone out (a timeout, a 5xx) is never resent, whatever the `BroadcastPolicy`;
-a person listed twice gets one. Rates, limits, groups, tests: [references/broadcast.md](references/broadcast.md).
+Resent only when Meta provably refused it (`Error::may_resend`), whatever the `BroadcastPolicy`;
+never a timeout, 5xx or `131000`; one per person. See [references/broadcast.md](references/broadcast.md).
 
 ## Help, menu and Markdown
 

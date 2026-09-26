@@ -129,7 +129,18 @@ of the examples and the dev container (`WA_TENANTS`, `WA_OTP_NAMESPACE`,
   `SinkError::Delivery`, `Error::Other`.
 - Branch on `Error::kind()` → `ErrorKind` (classified from Graph error
   `code`, per Meta's guidance) and `Error::is_retryable()`. Never on message
-  text, HTTP status, or subcode. One local refusal has a Graph kind: the
+  text, HTTP status, or subcode.
+- Two questions about a failed send, two methods.
+  `Error::may_have_been_sent` says whether it may have reached Meta
+  (`false`: fix and resend; `true`: reconcile with the status webhooks
+  first). `Error::may_resend` is the one rule for resending it
+  *automatically*, with no person or reconciliation in between, and it
+  is conservative: only an error that proves Meta refused the request
+  before doing anything (a throttling code on any status, an HTTP 429,
+  `131057` on a 4xx). The client's `RetryPolicy` (for a request that is
+  not idempotent) and the bot's broadcast both follow it, and a policy of
+  theirs can only be stricter. A `131000` on a 400 is not resent
+  automatically, although `may_have_been_sent` is `false`. One local refusal has a Graph kind: the
   inbox's closed-window refusal
   (`ValidationError::customer_service_window_closed()`) is
   `CustomerServiceWindowClosed`, like Meta's `131047`, so one condition has
@@ -894,33 +905,41 @@ for every event, after the ban and the match.
   `Outbound`, each send (retries included) after a slot of the number's
   `Pacer`, up to a configurable number in flight; `run` returns a report
   per recipient, and a `BroadcastHandle` gives progress and a cancel
-  (no send starts after it; sends in flight finish). The pacer is a
-  `RateLimiter` (default `TokenBucket`: per number, in this process,
-  evenly spaced at `Rate::DEFAULT`, 80 a second, Meta's `throughput`
-  default, with per-number rates, a burst and a slow-down on throttling)
-  and a `Timer` (a `Clock` that can wait: `SystemClock` on Tokio,
-  `ManualClock` in tests). A limiter reserves (returns the wait) rather
-  than waits, so a shared one, across replicas, implements two methods;
-  none ships, and each replica otherwise has its own budget. Failed sends
-  go to a `BroadcastPolicy` (default `Backoff`, on `ErrorKind`: the pair
-  limit defers one recipient on Meta's `4^X` schedule, throughput retries
-  and slows the pacer, spam and the per-user marketing limit are
-  reported, a number in maintenance (`131057`) is retried every 20 s,
-  account-wide kinds stop the run), but a send is repeated only when the
-  error is retryable and `Error::may_have_been_sent` is false, whatever
-  the policy (enforced outside it). `BroadcastBuilder::client` turns the
-  client's own replays off (`Client::with_retry`), so every retry is
-  paced. A person listed twice is sent once (`BroadcastBuilder::dedupe`);
-  each line can go to a `ReportSink` as it settles instead of the report
+  (no send starts after it, and the slots waited for go back; sends in
+  flight finish). The pacer is a `RateLimiter` (default `TokenBucket`:
+  per number, in this process, evenly spaced at `Rate::DEFAULT`, 80 a
+  second, Meta's `throughput` default, with per-number rates settable
+  while running, a burst and a slow-down on throttling whose factor,
+  spacing and recovery are settings), a `SlowDownRule` (which errors slow
+  a number down, default `ThrottlingErrors`) and a `Timer` (a `Clock`
+  that can wait until a deadline: `SystemClock` on Tokio, `ManualClock`
+  in tests). A limiter reserves (takes a `SlotRequest`: number, now,
+  cost; returns a `Reservation` with the wait) rather than waits, and
+  can take an unused slot back, so a shared one, across replicas, is a
+  `RateLimiter` too; none ships (roadmap B2b), and each replica otherwise
+  has its own budget. Failed sends go to a `BroadcastPolicy` (default
+  `Backoff`, on `ErrorKind`: the pair limit defers one recipient on
+  Meta's `4^X` schedule, throughput retries, a number in maintenance
+  (`131057`) is retried every 20 s, the per-user marketing limit is
+  reported, number-wide kinds stop the run and so do a template's own
+  refusals when everyone gets the same message; every delay capped), but
+  a send is repeated only when `Error::may_resend` holds, whatever the
+  policy (enforced outside it; the client's rule too).
+  `BroadcastBuilder::client` turns the client's own replays off
+  (`Client::with_retry`), so every retry is paced. A person listed twice
+  is sent once (`BroadcastBuilder::dedupe`); each line can go to a
+  `ReportSink` as it settles instead of the report
   (`BroadcastBuilder::report_to`), so memory does not grow with the
   lines; the run keeps its own time, so a wall clock stepping back
   neither pauses the pacer nor puts off a retry.
   `BotBuilder::pacer` wraps a bot's outbound in a `PacedOutbound`, so its
-  replies, read receipts and typing indicators share the budget;
-  `PacedGroups` and `PacedGroup` wrap the client's group operations the
-  same way, and `Pacer::acquire` is the hook for any other call. No new
-  port and no persistence: a run lives in memory (durable jobs are B3's
-  typed store on `KvStore`).
+  replies, read receipts and typing indicators share the budget and slow
+  it down when throttled (a bot built on a client retries there, each
+  retry paced, instead of in the client); `Ctx::pacer` hands the pacer to
+  handlers; `PacedGroups` and `PacedGroup` wrap the client's group
+  operations the same way, and `Pacer::acquire` is the hook for any other
+  call. No new port and no persistence: a run lives in memory (durable
+  jobs are B3's typed store on `KvStore`).
 
 ## Typst (`meta-whatsapp-typst`)
 

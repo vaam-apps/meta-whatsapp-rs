@@ -122,8 +122,11 @@ let delivered = analytics
 - Opt-in first: message only people who agreed; record how and when.
 - Marketing templates to US numbers (`+1` US area codes) are not
   delivered at the time of writing.
-- Messaging limits (unique users per rolling 24 h) and throughput
-  (80 msg/s by default; `130429`) are Meta's: pace campaigns in your queue.
+- Throughput (80 msg/s per number by default; `130429`): send a
+  campaign with the paced `Broadcast` (skill `meta-whatsapp-rs-bot`,
+  feature `bot`), which paces each number, sends each person once and
+  resends only what Meta refused. Messaging limits (unique users per
+  rolling 24 h) are Meta's to enforce: nothing here counts them.
 - A quick-reply "Stop promotions" arrives as an inbound `Button` message:
   treat it as an opt-out in your code.
 
