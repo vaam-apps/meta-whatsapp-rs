@@ -246,6 +246,24 @@ fn tables_become_a_padded_monospace_block() {
     );
 }
 
+/// A table cell wider than `format!` can pad (65 535) is padded all the
+/// same, never a panic (an LLM's or a user's table reaches the renderer
+/// as is).
+#[test]
+fn a_table_cell_wider_than_formatting_allows_is_padded() {
+    let wide = "a".repeat(70_000);
+    let markdown = format!("| {wide} | b |\n| --- | --- |\n| c | d |");
+    let parts = markdown::render(&markdown);
+    assert!(parts.len() > 30, "{}", parts.len());
+    for part in &parts {
+        assert!(part.encode_utf16().count() <= TEXT_MAX_CHARS);
+    }
+    let unsplit = Renderer::new().render_unsplit(&markdown);
+    let lines: Vec<&str> = unsplit.lines().collect();
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[2], format!("c{} | d```", " ".repeat(69_999)));
+}
+
 #[test]
 fn nothing_renders_to_no_message() {
     assert!(markdown::render("").is_empty());

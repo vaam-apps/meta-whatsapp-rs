@@ -801,8 +801,12 @@ fn format_table(table: &Table) -> String {
     for (r, row) in table.rows.iter().enumerate() {
         let cells = (0..columns)
             .map(|i| {
+                // Padded by hand: `format!`'s width is capped (65 535), and
+                // a wider cell would panic there.
                 let cell = row.get(i).map_or("", String::as_str);
-                format!("{cell:<width$}", width = widths[i])
+                let mut padded = cell.to_owned();
+                padded.extend(std::iter::repeat_n(' ', widths[i] - chars(cell)));
+                padded
             })
             .collect();
         lines.push(line(cells));
