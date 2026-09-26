@@ -1,6 +1,6 @@
 # Paced broadcasts
 
-> **Verified against meta-whatsapp-rs 2f6e7150f3eadb9eb68a72586ac73c2615b09557 (2026-09-26).** Also checked against Meta's
+> **Verified against meta-whatsapp-rs 63eee9761b545a2d6ac0ef3507f358bb9c9ab28b (2026-09-26).** Also checked against Meta's
 > `throughput`, `about-the-platform` (pair rate limits), `support/error-codes`,
 > `templates/marketing-templates/per-user-limits` and `messaging-limits` pages
 > as mirrored on 2026-09-24.
@@ -12,6 +12,11 @@ send, a retry too, first waits for a slot of the number's `Pacer`; up to
 so the rate is reached even when each send takes a while. `run` drives it
 in your task: spawn it and keep the `BroadcastHandle`
 (`BroadcastHandle::progress`, `BroadcastHandle::cancel`).
+
+**Each person once**, by default: a recipient listed again (same phone
+number by its digits, same BSUID, same group, or a phone and a BSUID one
+`Recipient::PhoneAndUser` carried) gets no second message; its line is
+`Outcome::Duplicate`. `BroadcastBuilder::dedupe(false)` turns it off.
 
 ## The pacer
 
@@ -32,9 +37,10 @@ pub fn shared_pacer(upgraded: PhoneNumberId) -> Pacer {
   up to `burst - 1` more in a window.
 - **One pacer per process**, shared: `BroadcastBuilder::pacer` for every
   broadcast and `BotBuilder::pacer` for the bot (its replies, refusals,
-  read receipts and typing indicators, through `PacedOutbound`). Before
-  a group operation, `Pacer::acquire` (Meta documents no rate for those;
-  pacing them in the same budget is a choice).
+  read receipts and typing indicators, through `PacedOutbound`). Group
+  operations: `PacedGroups::new(client.groups(number), pacer)` and its
+  `PacedGroup` (Meta documents no rate for those; pacing them in the same
+  budget is a choice). Any other call: `Pacer::acquire` first.
 - **Several replicas** each have their own budget: give each its share
   (`Rate::per_second`), or implement `RateLimiter` (two methods,
   `RateLimiter::reserve` and `RateLimiter::slow_down`) over a store they
@@ -51,6 +57,7 @@ error's kind, never its text:
 | --- | --- |
 | `131056`, pair rate limit | defers that recipient 1, 4, 16, 64 s (Meta's `4^X`); the others go on |
 | `130429` throughput, other `RateLimited` codes | retries after 1, 2, 4 … s (up to 60), and the pacer halves the rate for 30 s |
+| `131057`, number in maintenance (a throughput upgrade, up to a minute) | retries every 20 s (`Backoff::MAINTENANCE_RETRY`); the pacer slows down |
 | `131048`, spam | reports it, never retries; the pacer slows down |
 | `131049`, per-user marketing limit | reports it for that recipient, never retries (Meta: wait 24 hours) |
 | `Backoff::STOPS`: token, permission, account, classification limit, payment | the run stops (`Ended::Stopped`); the rest are skipped |
@@ -61,6 +68,9 @@ when the error is retryable and `Error::may_have_been_sent` is false. A
 timeout or a 5xx after the request reached Meta is `Outcome::Failed` with
 `may_have_been_sent()` true: reconcile it with the status webhooks
 (`OutboundMessage::callback_data` in `compose`) before sending again.
+`BroadcastBuilder::client` turns the client's own replays off
+(`Client::with_retry(RetryPolicy::NONE)`) so every retry is paced; do the
+same for an outbound of yours over a client.
 
 `Outcome::Sent` is Meta's acceptance, not delivery: most `131049`
 refusals arrive later as a `failed` status webhook. Meta's daily
@@ -72,14 +82,20 @@ enforce; nothing here counts it.
 `BroadcastHandle::cancel`: no send starts afterwards (a wait for a slot
 or a retry ends at once); sends in flight finish and are reported.
 Recipients never sent are `Outcome::Skipped`. The `BroadcastReport` has
-one `RecipientReport` per recipient, in order (`attempts`, `outcome`),
-and `Ended`. A restart loses a run in progress: durable broadcasts and
-scheduling are planned, not built.
+one `RecipientReport` per recipient, in order (`index`, `attempts`,
+`outcome`), its counts (`BroadcastReport::progress`) and `Ended`. For a
+long list, `BroadcastBuilder::report_to(tx)` sends each line to a
+`ReportSink` (a `tokio::sync::mpsc::Sender`) as it settles and keeps
+none: the run waits for the sink, and one that fails stops the run. A
+restart loses a run in progress: durable broadcasts and scheduling are
+planned, not built.
 
 ## Testing
 
 A `ManualClock` is a `Timer`: waiting on it moves it forward at once, so
 a whole paced run takes no real time and each send's start is readable.
+Its sleeps add up, so concurrent senders never overlap on it; to test the
+rate under concurrency, implement `Timer` over Tokio's paused clock.
 
 ```rust
 fn pacer(clock: &ManualClock) -> Pacer {

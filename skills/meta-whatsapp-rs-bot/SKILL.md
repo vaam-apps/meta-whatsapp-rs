@@ -5,7 +5,7 @@ description: "A WhatsApp bot on Cloud API webhooks with meta-whatsapp-rs (featur
 
 # meta-whatsapp-rs-bot
 
-> **Verified against meta-whatsapp-rs 2f6e7150f3eadb9eb68a72586ac73c2615b09557 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 63eee9761b545a2d6ac0ef3507f358bb9c9ab28b (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/bot.rs](examples/bot.rs), compiled and tested by the gate. All in
 `meta_whatsapp_rs::bot` (feature `bot`, off by default; `full` includes it), `async_trait` too.
@@ -123,8 +123,8 @@ let handle = broadcast.handle(); // progress() and cancel(), from another task
 let report = broadcast.run().await; // spawn it to do something else meanwhile
 ```
 
-A send that may have gone out (a timeout, a 5xx) is never resent, whatever the
-`BroadcastPolicy`. Rates, Meta's limits, replicas, tests: [references/broadcast.md](references/broadcast.md).
+A send that may have gone out (a timeout, a 5xx) is never resent, whatever the `BroadcastPolicy`;
+a person listed twice gets one. Rates, limits, groups, tests: [references/broadcast.md](references/broadcast.md).
 
 ## Help, menu and Markdown
 
