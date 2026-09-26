@@ -3,7 +3,7 @@
 //!
 //! | Route | Does |
 //! | --- | --- |
-//! | `GET /v1/events` | the caller's tenant's events after a sequence of its own, `?after=&types=&phone_number_id=&limit=`; `410 cursor_expired` past retention |
+//! | `GET /v1/events` | the caller's tenant's events after a sequence of its own, `?after=&types=&phone_number_id=&limit=`; `410 cursor_expired` past retention, or past a tenant deleted and created again under the same id |
 //!
 //! Operator-only events (no tenant) are never answered. The logic is
 //! [`crate::events::poll`]; this module parses the query and shapes the
@@ -40,7 +40,9 @@ pub struct EventsParams {
     #[param(minimum = 0)]
     pub after: Option<i64>,
     /// Only these types (`KnownEventType`), comma-separated
-    /// (`message_received,status_updated`); every type when omitted.
+    /// (`message_received,status_updated`) or repeated
+    /// (`types=message_received&types=status_updated`), or both; every type
+    /// when omitted.
     pub types: Option<String>,
     /// Only this business phone number's events.
     pub phone_number_id: Option<String>,
@@ -151,7 +153,10 @@ pub struct EventEnvelope {
     /// later is a new event, with a new id.
     pub id: String,
     /// Its position among the tenant's events (each tenant has its own
-    /// sequence): increasing (with gaps), never reused; order on it.
+    /// sequence): increasing (with gaps), never reused within one
+    /// database's history (a point-in-time restore of the service's
+    /// database rolls sequences back: resynchronise and poll without
+    /// `after` when the operator says so); order on it.
     pub sequence: i64,
     /// Its type (`EventType`), the `event` tag of `data`.
     #[serde(rename = "type")]
@@ -202,7 +207,9 @@ pub struct EventList {
     pub data: Vec<EventEnvelope>,
     /// Pass as `after` to continue: the last event's sequence when more
     /// follow, else the tenant's newest sequence (so a poll never starts
-    /// again from an old cursor).
+    /// again from an old cursor). A filtered poll (`types`,
+    /// `phone_number_id`) moves it past the events the filter left out:
+    /// keep one cursor per filter set.
     pub next_after: i64,
 }
 

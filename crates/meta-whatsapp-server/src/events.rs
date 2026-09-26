@@ -39,11 +39,15 @@
 //! message in the inbox and no row, and the redelivery records the row
 //! without a second message. The events the library gives no dedup key
 //! (`error_reported`, `unparsed`) are keyed by the signed body they came in
-//! and their position in it ([`EventKey::Delivery`]): Meta redelivers a
-//! body byte for byte, so a redelivered batch records them once too, within
-//! [`KEYLESS_DEDUP_WINDOW`]. The library never deduplicates them (the same
-//! error recurs, and carries no date): an identical body after the window
-//! is recorded again, as a new occurrence with an id of its own.
+//! and their position in it ([`EventKey::Delivery`]). Meta documents a
+//! retry at once, then with decreasing frequency over 7 days
+//! (`webhooks/create-webhook-endpoint`); that a redelivery carries the same
+//! bytes is assumed, not documented. On that assumption a batch redelivered
+//! within [`KEYLESS_DEDUP_WINDOW`] records them once too. The library never
+//! deduplicates them (the same error recurs, and carries no date): an
+//! identical body after the window is recorded again, as a new occurrence
+//! with an id of its own, so an outage longer than the window (the
+//! database answering `500`) records the batch's keyless events twice.
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -101,10 +105,15 @@ pub const RECORDING_WAIT: Duration = Duration::from_secs(10);
 /// How long an event the library gives no dedup key (`error_reported`,
 /// `unparsed`) is deduplicated for: the same body and position within it
 /// is Meta's redelivery; after it, a new occurrence, recorded again under
-/// a new id. Meta redelivers promptly after a failure; the library itself
-/// never deduplicates these events, since the same error legitimately
-/// recurs and carries no date. A coordinator's decision of 2026-09-25,
-/// reversible (docs/design/server.md, section 2.3).
+/// a new id. Meta documents its first retry as immediate, then fewer over
+/// 7 days (`webhooks/create-webhook-endpoint`); that a redelivery is the
+/// same bytes is an assumption Meta does not document. An outage longer
+/// than this (the database answering `500` while Meta retries) records
+/// the batch's keyless events twice, as new ids. The library itself never
+/// deduplicates these events, since the same error legitimately recurs
+/// and carries no date. Decision D23 of docs/design/server.md (section
+/// 10): a coordinator's decision of 2026-09-25, reversible, for the owner
+/// to confirm.
 pub const KEYLESS_DEDUP_WINDOW: Duration = Duration::from_hours(1);
 
 /// Default `WA_SERVER_OUTBOX_RETENTION`: 7 days, the design's proposal.
@@ -427,10 +436,10 @@ pub enum EventKey {
     Library(String),
     /// An event the library gives no key (`error_reported`, `unparsed`):
     /// the SHA-256 of the signed body it came in and its position among
-    /// that body's keyless events. Meta redelivers a batch byte for byte,
-    /// so a redelivery reproduces the key, and the event is recorded once
-    /// within [`KEYLESS_DEDUP_WINDOW`]; after it, again, as a new
-    /// occurrence.
+    /// that body's keyless events. A redelivery reproduces the key if it
+    /// carries the same bytes (assumed: Meta documents the retries, not
+    /// their bytes), and the event is recorded once within
+    /// [`KEYLESS_DEDUP_WINDOW`]; after it, again, as a new occurrence.
     Delivery {
         /// SHA-256 of the signed body.
         body_sha256: [u8; 32],

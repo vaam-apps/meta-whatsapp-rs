@@ -215,8 +215,9 @@ Found in the review of milestone M1b (43).
     like another tenant's.
     Today: every media id goes through the check; nothing exempts a
     received one.
-    Planned remedy, a follow-up once M1c records inbound events: exempt
-    a media id the service itself recorded as received on that tenant's
-    number (from M1c's events), and ask Meta for it without
-    `phone_number_id`. Before M2 relies on either behaviour, a live check
-    with a real received media id must say which one Meta has.
+    Planned remedy: exempt a media id the service itself recorded as
+    received on that tenant's number (from M1c's events), and ask Meta
+    for it without `phone_number_id`. M1c records inbound events now; the
+    remedy is a follow-up still to do before M2. Before M2 relies on
+    either behaviour, a live check with a real received media id must say
+    which one Meta has.

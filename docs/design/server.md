@@ -148,11 +148,14 @@ library's `KvStore` namespaces (`wa.token`, `wa.otp`, `wa.webhook.dedup`,
   over Meta's documented examples: a library change that alters it fails
   the server's tests and forces an API-version decision.
 
-How M1c settled what the list above leaves open (none of it is an owner
-decision, except three coordinator's decisions of 2026-09-25, reversible
-and flagged for the owner: the per-tenant sequences (D21), a deleted
-tenant's events deleted with it (D22), and the hour keyless events are
-deduplicated for; each is a place to look in review):
+How M1c settled what the list above leaves open. Four of these choices
+are coordinator's decisions of 2026-09-25, which M1c ships until the
+owner confirms or changes them, and each is a place to look in review:
+the per-tenant sequences (D21), a deleted tenant's events deleted with
+it (D22), the hour keyless events are deduplicated for (D23), and a
+deleted tenant taken out of platform keys (D24); their rows in
+[§10](#10-decisions-for-the-owner) say how far each is reversible. The
+rest follows from the list above and decides nothing for the owner:
 
 - **Types are an allow-list too.** A tenant receives only the event types
   the service reviewed and pinned (`TENANT_EVENT_TYPES` in
@@ -198,7 +201,7 @@ deduplicated for; each is a place to look in review):
   replay.
 - **Each tenant has its own sequence** (security review L2: global
   sequences showed every tenant the platform's volume and timing; D21, a
-  coordinator's decision, reversible). Sequences increase, with gaps (a
+  coordinator's decision). Sequences increase, with gaps (a
   duplicate that lost a race draws one), and a tenant created again
   under a deleted one's id goes on after the deleted one's last. `sequence`, `after`,
   `next_after`, `410` and `422` are the tenant's; operator-only rows have
@@ -216,16 +219,32 @@ deduplicated for; each is a place to look in review):
   of each stream past `WA_SERVER_OUTBOX_RETENTION` (7 days until D10 is
   decided), on one replica at a time, and the library's expired key/value
   rows with it.
+- **Restoring the database** reuses sequences. A point-in-time restore
+  rolls each stream's `last_sequence` back with it, and the events
+  recorded after the restore draw the sequences again. The `422` on
+  `after` catches only a consumer whose cursor is ahead of its stream
+  when it polls; one that polls after new events have passed its cursor
+  gets no error and misses the events drawn at the sequences it had
+  already seen. So sequences are never reused *within one database's
+  history*, and a restore is an operational event: the operator tells
+  integrators to resynchronise and reset their cursors (poll without
+  `after`), as after `410`. The service builds no mechanism for it.
 - **Keyless events** (`error_reported`, `unparsed`: no dedup key in the
   library) are keyed by the SHA-256 of the signed body and their position
   among its keyless events, and deduplicated for an hour only
-  (`KEYLESS_DEDUP_WINDOW`; a coordinator's decision of 2026-09-25,
-  reversible). Meta redelivers byte for byte and promptly, so a batch
-  redelivered within the hour records them once; the library itself never
-  deduplicates them, since the same error legitimately recurs and carries
-  no date. An identical body after the hour is recorded again, as a new
-  occurrence with its own id and sequence (the earlier row stays): the
-  trade-off is a redelivery later than an hour recorded twice, against a
+  (`KEYLESS_DEDUP_WINDOW`; D23, a coordinator's decision of 2026-09-25).
+  Meta documents a retry of a failed delivery at once, then with
+  decreasing frequency over 7 days, and asks receivers to deduplicate
+  (`webhooks/create-webhook-endpoint`); that a redelivery carries the
+  same bytes is this design's assumption, not Meta's statement (were the
+  bytes to differ, its keyless events would be recorded again, as new
+  ids). On that assumption a batch redelivered within the hour records
+  them once; the library itself never deduplicates them, since the same
+  error legitimately recurs and carries no date. An identical body after
+  the hour is recorded again, as a new occurrence with its own id and
+  sequence (the earlier row stays). The trade-off: an outage longer than
+  an hour (the database answering `500`, say, while Meta keeps retrying)
+  records the batch's keyless events twice, as new ids, against a
   recurring error recorded once for the whole retention. The hour is
   measured on the service's clock at both ends (a row holds its key until
   `dedup_until`). Keys also cover the business number.
@@ -233,7 +252,11 @@ deduplicated for; each is a place to look in review):
   touching D10: the outbox's foreign key cascades) and records its stream
   purged in the same transaction (a tenant created later with the same id
   polls none of them, its sequences go on after them, an old cursor is
-  `410`), and takes the id out of every platform key's allowed tenants.
+  `410`), and takes the id out of every platform key's allowed tenants
+  (D24, a coordinator's decision: a tenant created again under a
+  recycled id must not inherit another's access). No route or command
+  edits a key's allowed tenants, so a tenant created again needs a new
+  platform key (a `*` key allows it at once).
 - **The library's handler, the service's route.** `POST /webhooks/meta`
   calls the library's `WebhookHandler` (3 MiB, parsing, the dedup lease;
   the service checks the signature first) rather than mounting its
@@ -412,7 +435,9 @@ Rules the service implements:
 - JSON under `/v1`, snake_case; Meta ids as strings (they overflow JS
   numbers); RFC 3339 UTC times; lists take `?limit=` (≤ 100) and an opaque
   `cursor` and answer `{"data", "next_cursor"}` (inbox cursors wrap the
-  store's exclusive ones: no repeats, no gaps).
+  store's exclusive ones: no repeats, no gaps), except `GET /v1/events`,
+  which takes `after` and answers `next_after`, a sequence of the
+  tenant's ([§2.3](#23-the-event-pipeline)).
 - **Phone numbers are E.164 with `+` everywhere**; digits-only is `422` on
   the field (Meta would read it as local to the sender's country).
   Recipients: `{"phone"}`, `{"user_id"}` (BSUID), both, or `{"group_id"}`.
@@ -532,7 +557,7 @@ arrive as a complete body.
 For backends such as Medusa that prefer not to hold a stream open.
 
 ```json
-{"id": "evt_01J8Z6Q4M3", "sequence": 18342, "type": "message_received", "api_version": "v1",
+{"id": "evt_3f9c0a6e1b2d4c58a7e9f0b1c2d3e4f5", "sequence": 18342, "type": "message_received", "api_version": "v1",
  "tenant_id": "merchant-42", "phone_number_id": "106540352242922", "waba_id": "102290129340398",
  "received_at": "2026-09-24T10:00:01Z", "truncated": false,
  "data": {"event": "message_received", "…": "the meta-whatsapp-rs WebhookEvent JSON"}}
@@ -690,9 +715,11 @@ each new kind into `unknown` silently.
 Every error from a sending route carries `may_have_been_sent`
 (`Error::may_have_been_sent`) and `retryable` (`Error::is_retryable`). The
 rule the docs and the SDK teach: resend only when `may_have_been_sent` is
-`false`; otherwise reconcile through `status_updated` events carrying your
-`callback_data`, or repeat with the same `Idempotency-Key`, which never
-sends twice. The service adds no send retries of its own.
+`false`; otherwise reconcile through `status_updated` events, whose
+`data.status.biz_opaque_callback_data` is your `callback_data` (Meta's
+name for it; after a `504` it is all you have) and `data.status.id` the
+message id a `202` answers, or repeat with the same `Idempotency-Key`,
+which never sends twice. The service adds no send retries of its own.
 
 ### 5.4 Idempotency keys
 
@@ -717,7 +744,7 @@ sends twice. The service adds no send retries of its own.
 | Threat | Control |
 | --- | --- |
 | Forged Meta deliveries | signature over raw bytes with any of N app secrets; missing or malformed header `401` before the body is read; 3 MiB; at most 64 read at once per replica (`503` before the body), 15 s to send one (`408`), refusals logged once a minute; the public listener serves nothing else; Meta's IP ranges or mTLS at the ingress (below) |
-| Replayed Meta bodies | dedup for 7 days (errors and bodies that are not webhooks: an hour); events Meta dated before that go to nobody; an event keeps its id when recorded again, until `WA_APP_SECRET` is rotated; bodies never logged |
+| Replayed Meta bodies | dedup for 7 days and an hour (errors and bodies that are not webhooks: an hour, D23); events Meta dated before that go to nobody; an event keeps its id when recorded again, until `WA_APP_SECRET` is rotated; bodies never logged |
 | A WABA or number moving between tenants | events Meta dated before the binding began go to nobody, inbox included; the previous tenant's inbox rows stay under the number (M2's inbox reads must filter by binding epoch, or D10 decides a purge on unbind) |
 | A tenant reading or sending as another | ownership before the vault ([§3.3](#33-authorization-order)); foreign numbers are `404`; extractors are the only path to a token. *As built in M1b*: one token may reach several tenants' WABAs (the platform's system user token attached to each), so an id in a path is checked to be the path's number's or WABA's own: media with Meta's `phone_number_id`, templates through the WABA's own list; another's is `404` like a missing one |
 | A stolen platform key | limited to its tenants and scopes; internal network only; revocation effective across replicas at once |
@@ -856,8 +883,9 @@ if the platform's privacy obligations require it. A legal and product call.
 Within `/v1`, changes are additive; a breaking change is `/v2`, served
 beside `/v1` for a deprecation period; webhook endpoints keep their
 `api_version`. Until M4 the spec is committed (`crates/meta-whatsapp-server/openapi/v1.json`):
-CI fails when the generated one differs, and `oasdiff` checks breaking
-changes against the last release. From M4 ([§8](#8-client-sdks)) the committed
+CI fails when the generated one differs. From the first release on,
+`oasdiff` checks breaking changes against the last release's document;
+nothing runs it yet, since there is no release to compare with. From M4 ([§8](#8-client-sdks)) the committed
 `.cstack` schema takes its place: CrateStack's check mode fails on a stale
 generated client, and `cratestack diff` checks breaking changes against the
 last release. Image, API contract (spec, then schema) and the TypeScript
@@ -956,7 +984,7 @@ exercises every route, sends with text, a phone number, a BSUID and a
 contact card included). **M1c meets M1.2 and M1.7's webhook half** (two
 instances on one database deduplicating a webhook, the capture of
 webhooks and of `GET /v1/events`), and keeps M1.1, M1.3, M1.5 and M1.6
-over its route. With both, M1 is complete (M1.1 on the merged head).
+over its route. With all three, M1 is complete (M1.1 on the merged head).
 
 Acceptance tests. "Decisive" names the guard whose removal must make the
 test fail.
@@ -1001,7 +1029,7 @@ atomically and are checked against the same commit.
 
 ## 10. Decisions for the owner
 
-D1–D4 and D7 were decided by the owner on 2026-09-24, D13–D14 on 2026-09-25 (the recommended option in each case) and D15–D18 on 2026-09-25 (D17 against the recommendation to move before M1b); D5 is settled as "support both modes, chosen per deployment". D21 and D22 are the coordinator's decisions of 2026-09-25, reversible, which M1c ships until the owner confirms or changes them. The rest are open and are asked at the milestone that needs them.
+D1–D4 and D7 were decided by the owner on 2026-09-24, D13–D14 on 2026-09-25 (the recommended option in each case) and D15–D18 on 2026-09-25 (D17 against the recommendation to move before M1b); D5 is settled as "support both modes, chosen per deployment". D21–D24 (per-tenant sequences, a deleted tenant's events, the keyless dedup window, a deleted tenant on platform keys) are the coordinator's decisions of 2026-09-25, reversible within the limits their rows state, which M1c ships until the owner confirms or changes them. The rest are open and are asked at the milestone that needs them.
 
 | # | Question | Options | Recommendation | Needed by |
 | --- | --- | --- | --- | --- |
@@ -1025,8 +1053,10 @@ D1–D4 and D7 were decided by the owner on 2026-09-24, D13–D14 on 2026-09-25 
 | D18 | Callers that do not use a generated client | generated clients only / an OpenAPI emitter upstream / a hand-kept OpenAPI document | **Decided 2026-09-25: generated clients only** (TypeScript, Dart, Rust) | M4 |
 | D19 | CrateStack transport | REST (JSON, `@status`, `POST /$procs/<name>`) / RPC (batching, subscriptions; CBOR by default in the TS client) | REST | M4 |
 | D20 | CrateStack's dependencies | allow BlueOak-1.0.0 (`minicbor`) in `deny.toml`; accept `ring` beside `aws-lc-rs` (explicit TLS provider at start); accept its `sqlx =0.9.0` pin / change them upstream first | — | M4 |
-| D21 | Event sequences ([§2.3](#23-the-event-pipeline)) | one sequence for the whole outbox / one per tenant | **Coordinator's decision 2026-09-25, reversible, for the owner to confirm: one per tenant** (security review L2: a global sequence shows every tenant the platform's volume and timing); `sequence`, `after`, `next_after`, `410` and `422` are the tenant's | M1 |
-| D22 | A deleted tenant's outbox events (related to D10) | delete them with the tenant / keep them, hidden from a tenant created again under the id | **Coordinator's decision 2026-09-25, reversible, for the owner to confirm: delete them** (the outbox's foreign key cascades; the tenant's stream records them purged, so an old cursor is `410`) | M1 |
+| D21 | Event sequences ([§2.3](#23-the-event-pipeline)) | one sequence for the whole outbox / one per tenant | **Coordinator's decision 2026-09-25, reversible, for the owner to confirm: one per tenant** (security review L2: a global sequence shows every tenant the platform's volume and timing); `sequence`, `after`, `next_after`, `410` and `422` are the tenant's. Reversible until the first release, or the first deployment with polling consumers: the per-tenant sequence is in the v1 contract (the descriptions of `sequence` and `next_after` in `openapi/v1.json`), consumers store cursors in it, and within `/v1` changes are additive ([§7.5](#75-versioning)), so going back to one sequence then breaks every stored cursor | M1 |
+| D22 | A deleted tenant's outbox events (related to D10) | delete them with the tenant / keep them, hidden from a tenant created again under the id | **Coordinator's decision 2026-09-25, reversible, for the owner to confirm: delete them** (the outbox's foreign key cascades; the tenant's stream records them purged, so an old cursor is `410`). Reversing it keeps the events of tenants deleted afterwards only: events the cascade already deleted are not recoverable | M1 |
+| D23 | Dedup window of keyless events (`error_reported`, `unparsed`, [§2.3](#23-the-event-pipeline)) | 1 h / Meta's whole 7-day retry period / none | **Coordinator's decision 2026-09-25, reversible, for the owner to confirm: 1 h** (`KEYLESS_DEDUP_WINDOW`). Failure mode: Meta documents a retry at once, then with decreasing frequency over 7 days, and that receivers must deduplicate; it does not say a redelivery carries the same bytes, which the key assumes. An outage longer than an hour (the database answering `500`, say) records the batch's keyless events twice, as new ids. 7 days would record a recurring identical error once for that long; none would record every redelivery | M1 |
+| D24 | A deleted tenant on platform keys | scrubbed from every key's allowed tenants, a tenant created again needing a new key / kept | **Coordinator's decision 2026-09-25, reversible, for the owner to confirm: scrubbed** (a tenant created again under a recycled id must not inherit access). No route or command edits a key's allowed tenants, so a tenant created again under the id needs a new platform key; a `*` key allows it at once | M1 |
 
 **Inherited from [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md).** Until
 decided, the service keeps the library's behaviour and makes it visible to

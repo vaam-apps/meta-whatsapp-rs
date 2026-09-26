@@ -210,8 +210,10 @@ cannot disconnect it. Suspend a tenant with `PATCH
 /v1/admin/tenants/{id}` and `{"status": "suspended"}`; delete it with
 `DELETE /v1/admin/tenants/{id}`, which first disconnects each of its
 WABAs from Meta and stops at the first that fails (`409` for one without
-a usable token: unbind it first). A tenant id already taken is `409
-tenant_exists`.
+a usable token: unbind it first); its events go with it, and platform
+keys listing it stop allowing it, for good (see
+[Receiving Meta's webhooks](#receiving-metas-webhooks)). A tenant id
+already taken is `409 tenant_exists`.
 
 **One token, several tenants.** Nothing stops you attaching the same
 system user token to WABAs of different tenants, and the service does
@@ -266,7 +268,8 @@ Meta agreed.
 `POST /v1/numbers/{pn}/messages` (scope `send`) takes Meta's message
 object under the service's envelope: `to`, `type`, the object `type`
 names, and optionally `reply_to` (a received message's id) and
-`callback_data` (echoed in the message's status events):
+`callback_data` (echoed in the message's status events as
+`data.status.biz_opaque_callback_data`, Meta's name for it):
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8081/v1/numbers/106540352242922/messages \
@@ -278,7 +281,11 @@ curl -sS -X POST http://127.0.0.1:8081/v1/numbers/106540352242922/messages \
 
 It answers `202 {"message_id": "wamid.…", "contacts": [...]}`: Meta
 accepted the message; delivery arrives later as `status_updated` events
-(`GET /v1/events`).
+(`GET /v1/events`), whose `data.status.id` is that `message_id` and
+`data.status.status` the new state (`sent`, `delivered`, `read`,
+`played`, `failed`). After a `504`, which gives you no `message_id`, look for your
+`callback_data` in `data.status.biz_opaque_callback_data` before
+concluding the message never went out.
 
 - **Recipients**: `{"phone": "+16505551234"}` in E.164 **with** its `+`
   (a number without it is refused, `422` on `to.phone`, before any
@@ -512,16 +519,25 @@ tenant's deliveries: whoever holds it can forge any tenant's events.
   (`unknown`), a signed body that is not a webhook (`unparsed`), partner
   solution updates, any event type the service has not reviewed yet,
   events Meta dated before the WABA's attaching, and replays (dated more
-  than 7 days ago). A rising count usually means a WABA is subscribed but
-  not attached.
+  than 7 days and an hour ago, what the dedup markers remember). A rising
+  count usually means a WABA is subscribed but not attached.
 - `200` once every event is recorded; `500` when recording failed: Meta
-  redelivers the batch, the events already recorded are acknowledged as
-  duplicates, and neither the inbox nor the outbox records one twice.
-  Errors and bodies that are not webhooks carry no id: they are told
-  apart by the body they came in and their place in it, for an hour. The
-  same body again after that hour is recorded again, as a new event with
-  its own id (the same error can legitimately recur; a redelivery that
-  late is recorded twice).
+  retries the batch at once, then with decreasing frequency for up to 7
+  days (`webhooks/create-webhook-endpoint`), the events already recorded
+  are acknowledged as duplicates, and neither the inbox nor the outbox
+  records one twice. An event that fails every time (a permanent sink
+  error) holds its whole batch back for those 7 days, after which Meta
+  drops it: the events after it in the same body are lost with it
+  ([OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) #30; watch
+  `wa_server_webhook_sink_failures_total`).
+- Errors and bodies that are not webhooks carry no id: they are told
+  apart by the body they came in and their place in it, for an hour
+  (design D23, a coordinator's decision the owner may change). This
+  assumes Meta redelivers the same bytes, which Meta does not document.
+  The same body again after that hour is recorded again, as a new event
+  with its own id (the same error can legitimately recur): an outage
+  longer than an hour, the database answering `500` while Meta retries,
+  records the batch's errors twice, under new ids.
 
 **3. Poll the events** with a key holding the `events` scope:
 
@@ -536,8 +552,8 @@ and pass it as `after` next time: it is the last event's `sequence` when
 more follow (poll again at once), else the tenant's newest sequence (wait
 a little). Each tenant has its own sequence, increasing (with gaps)
 for its events alone; a tenant created again under a deleted tenant's id
-goes on after the deleted one's last sequence. Omitting `after` starts at the oldest event kept. Each event is an
-envelope:
+goes on after the deleted one's last sequence. Omitting `after` starts
+at the oldest event kept. Each event is an envelope:
 
 ```json
 {"id": "evt_3f9c…", "sequence": 18342, "type": "message_received", "api_version": "v1",
@@ -554,18 +570,34 @@ rotated in between: ids are derived with it) and order on `sequence`;
 what your backend does per message (an order confirmation), make
 idempotent on the message id too (`data.message.id`), as a last guard.
 Filter with `types` (comma-separated, or repeated) and `phone_number_id`;
-a page stops before 8 MiB of `data` (history syncs are large). A cursor
+a page stops before 8 MiB of `data` (history syncs are large). A
+filtered poll's `next_after` moves past the events the filter left out
+(to the tenant's newest sequence when no more match), so keep one cursor
+per filter set (`types`, `phone_number_id`): a cursor saved by one
+filter skips, for another, what the first left out. A cursor
 older than what was purged, by retention or with a deleted tenant of the
 same id, is `410 cursor_expired`: resynchronise (from the inbox, when it
 lands in M2) and start again without `after`. A cursor past the tenant's
 newest sequence (a restored database) is `422` on `after`.
 
+**Restoring the database.** A point-in-time restore rolls the tenants'
+sequences back: the events recorded after it are numbered again from
+the restore point, so a sequence an integrator already saw can name
+another event. The `422` above only catches a cursor still ahead when
+it polls; one that polls after new events have passed it skips them
+without an error. After a restore, tell every integrator to resynchronise
+and reset their cursors (poll without `after`), as after `410`.
+
 Events are kept `WA_SERVER_OUTBOX_RETENTION` (7 days by default, until
 the owner's retention decision D10); every replica runs housekeeping
 every 10 minutes, one at a time, which also deletes the expired webhook
-dedup markers. Deleting a tenant deletes its events, and takes it out of
-every platform key's allowed tenants: a tenant created again with the
-same id starts with neither.
+dedup markers. Deleting a tenant deletes its events (design D22, a
+coordinator's decision the owner may still change, like the default
+above), and takes it out of every platform key's allowed tenants (D24,
+likewise): a tenant created again with the same id starts with neither.
+No route or command edits a platform key's allowed tenants, so mint a new
+platform key for a tenant created again (a key allowing every tenant,
+`*`, allows it at once).
 
 ## Errors
 

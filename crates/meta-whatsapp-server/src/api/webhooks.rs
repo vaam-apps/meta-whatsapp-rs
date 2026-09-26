@@ -1,7 +1,10 @@
 //! `/webhooks/meta` on the public listener: Meta's contract, not the
-//! integrators' (not in the OpenAPI document). Answers are bare statuses,
-//! as the library's router answers them: Meta reads nothing but the
-//! status.
+//! integrators' (not in the OpenAPI document), as Meta's pages
+//! `webhooks/create-webhook-endpoint` (the subscription check, signed
+//! deliveries, retries for 7 days) and `webhooks/overview` (payloads up to
+//! 3 MB, retries on any answer but `200`) describe it. Answers are bare
+//! statuses, as the library's router answers them: Meta reads nothing but
+//! the status.
 //!
 //! - `GET`: Meta's subscription check. The verify token is compared in
 //!   constant time by the library's `verify_subscription`, and the

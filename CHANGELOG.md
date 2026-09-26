@@ -137,14 +137,15 @@ volumes (Claude config, shell history, cargo caches) start empty
   after a failure (`500`) record nothing twice. Errors and bodies that
   are not webhooks, which the library gives no key, are keyed by the
   signed body and their place in it and deduplicated for an hour only
-  (a coordinator's decision, reversible): the same body later is recorded
-  again, as a new event with its own id. On Postgres, the insert checks
+  (a coordinator's decision, reversible: design D23): the same body later
+  is recorded again, as a new event with its own id, so an outage longer
+  than an hour records them twice. On Postgres, the insert checks
   the routing again under a lock on the binding: an event whose WABA
   moved, or whose tenant was deleted, created again and bound again
   after Meta dated the event, is operator-only (an undated one, such as
   an error, goes to the tenant holding the binding then). Events of
-  numbers or WABAs no tenant holds, events dated more than 7 days ago
-  (replays), `unknown`, `unparsed`, `partner_solution_updated` and any
+  numbers or WABAs no tenant holds, events dated more than 7 days and an
+  hour ago (replays), `unknown`, `unparsed`, `partner_solution_updated` and any
   type the service has not reviewed are operator-only rows, never shown
   to a tenant, logged by size and digest. `GET /v1/events` (scope
   `events`) answers the caller's tenant's events after `after` in the
@@ -158,10 +159,14 @@ volumes (Claude config, shell history, cargo caches) start empty
   recorded again, until that secret is rotated. Deleting a tenant
   deletes its events (a coordinator's decision touching the open
   retention decision D10: design D22) and takes it out of every platform
-  key's allowed tenants. Event `data` is
+  key's allowed tenants (design D24: a tenant created again under the id
+  needs a new platform key). Event `data` is
   the library's `WebhookEvent` JSON, pinned by snapshots over Meta's
   examples. Metrics for deliveries, events by type and audience,
-  duplicates and failures. Skill: `meta-whatsapp-rs-server-events`.
+  duplicates and failures. Skill: `meta-whatsapp-rs-server-events`. The
+  OpenAPI document now declares the `429` of every rate-limited route
+  (M1b's numbers, profile and WABA routes lacked it: additive), and a
+  test holds every tenant route to it.
 - **`meta_whatsapp_client::business_verification`**, partner-led business
   verification for approved Select and Premier Solution Partners
   (`solution-providers/partner-led-business-verification`; the rest of

@@ -594,7 +594,7 @@
         "tags": [
           "admin"
         ],
-        "summary": "Delete a tenant: disconnect every WABA it has (as\n`DELETE /v1/wabas/{waba_id}` does), then delete it and its keys. Stops\nat the first WABA that cannot be disconnected; the tenant stays. Its\nevents go with it, and platform keys stop allowing it: a tenant created\nlater with the same id polls none of its events and is no platform\nkey's until allowed again.",
+        "summary": "Delete a tenant: disconnect every WABA it has (as\n`DELETE /v1/wabas/{waba_id}` does), then delete it and its keys. Stops\nat the first WABA that cannot be disconnected; the tenant stays. Its\nevents go with it, and every platform key listing it stops allowing\nit, for good: no route edits a key's tenants, so a tenant created\nlater with the same id polls none of its events and needs a new\nplatform key (a `*` key allows it at once).",
         "operationId": "delete_tenant",
         "parameters": [
           {
@@ -1433,7 +1433,7 @@
           {
             "name": "types",
             "in": "query",
-            "description": "Only these types (`KnownEventType`), comma-separated\n(`message_received,status_updated`); every type when omitted.",
+            "description": "Only these types (`KnownEventType`), comma-separated\n(`message_received,status_updated`) or repeated\n(`types=message_received&types=status_updated`), or both; every type\nwhen omitted.",
             "required": false,
             "schema": {
               "type": "string"
@@ -4411,7 +4411,7 @@
           "sequence": {
             "type": "integer",
             "format": "int64",
-            "description": "Its position among the tenant's events (each tenant has its own\nsequence): increasing (with gaps), never reused; order on it."
+            "description": "Its position among the tenant's events (each tenant has its own\nsequence): increasing (with gaps), never reused within one\ndatabase's history (a point-in-time restore of the service's\ndatabase rolls sequences back: resynchronise and poll without\n`after` when the operator says so); order on it."
           },
           "tenant_id": {
             "type": "string",
@@ -4452,7 +4452,7 @@
           "next_after": {
             "type": "integer",
             "format": "int64",
-            "description": "Pass as `after` to continue: the last event's sequence when more\nfollow, else the tenant's newest sequence (so a poll never starts\nagain from an old cursor)."
+            "description": "Pass as `after` to continue: the last event's sequence when more\nfollow, else the tenant's newest sequence (so a poll never starts\nagain from an old cursor). A filtered poll (`types`,\n`phone_number_id`) moves it past the events the filter left out:\nkeep one cursor per filter set."
           }
         }
       },

@@ -83,7 +83,10 @@ pub struct DedupWindow {
 /// An event as stored.
 #[derive(Clone, PartialEq, Eq)]
 pub struct StoredEvent {
-    /// Its position in its tenant's stream: increasing, never reused.
+    /// Its position in its tenant's stream: increasing, never reused
+    /// within one database's history (a point-in-time restore rolls the
+    /// stream's `last_sequence` back, and later events draw its sequences
+    /// again: docs/design/server.md, section 2.3).
     pub sequence: i64,
     /// Its public id.
     pub id: String,
