@@ -291,6 +291,28 @@ async fn a_timed_out_send_is_never_resent_whatever_the_policy() {
     assert_eq!(report.ended, Ended::Completed);
 }
 
+/// Nor is a refusal that cannot succeed later (`131049`: Meta says a
+/// resend within 24 hours only fails again), whatever the policy.
+#[tokio::test]
+async fn a_refusal_that_is_not_retryable_is_not_resent_whatever_the_policy() {
+    let clock = ManualClock::new(T0);
+    let outbound = Timed::new(&clock);
+    outbound.fail(&phone(1), || graph(131049));
+    let report = Broadcast::builder(NUMBER)
+        .to([phone(1)])
+        .content(Text::new("Spring sale"))
+        .outbound(outbound.clone())
+        .pacer(pacer(&clock, 20))
+        .policy(RetryEverything)
+        .build()
+        .unwrap()
+        .run()
+        .await;
+    assert_eq!(outbound.sends().len(), 1);
+    assert_eq!(report.recipients[0].attempts, 1);
+    assert!(matches!(report.recipients[0].outcome, Outcome::Failed(_)));
+}
+
 /// The same policy does resend what provably did not go out: the rule is
 /// "never when it may have been sent", not "never".
 #[tokio::test]
@@ -673,6 +695,61 @@ async fn cancelling_ends_a_wait_for_the_next_slot() {
         Either::Left((report, _)) => report,
         Either::Right(((), _)) => panic!("the cancelled run kept waiting for its slot"),
     };
+    assert_eq!(outbound.sends().len(), 1);
+    assert_eq!(report.ended, Ended::Cancelled);
+    assert_eq!(report.progress().skipped, 2);
+}
+
+/// A clock on which the broadcast is cancelled while a sender waits, and
+/// whose wait then ends as usual: the cancel and the slot arrive together.
+#[derive(Debug)]
+struct CancelWhileWaiting {
+    clock: ManualClock,
+    handle: Arc<OnceLock<BroadcastHandle>>,
+}
+
+impl Clock for CancelWhileWaiting {
+    fn now(&self) -> OffsetDateTime {
+        self.clock.now()
+    }
+}
+
+#[async_trait]
+impl Timer for CancelWhileWaiting {
+    async fn sleep(&self, duration: Duration) {
+        if let Some(handle) = self.handle.get() {
+            handle.cancel();
+        }
+        self.clock.advance(duration);
+    }
+}
+
+/// A slot that comes after the cancel is not used: nothing starts once
+/// the run is cancelled, even when the wait ended normally.
+#[tokio::test]
+async fn a_slot_reached_after_a_cancel_sends_nothing() {
+    let clock = ManualClock::new(T0);
+    let outbound = Timed::new(&clock);
+    let handle_slot = Arc::new(OnceLock::new());
+    let broadcast = Broadcast::builder(NUMBER)
+        .to((0..3).map(phone))
+        .content(Text::new("Spring sale"))
+        .outbound(outbound.clone())
+        .pacer(
+            Pacer::new(TokenBucket::new(Rate::per_second(1).unwrap())).with_timer(
+                CancelWhileWaiting {
+                    clock: clock.clone(),
+                    handle: Arc::clone(&handle_slot),
+                },
+            ),
+        )
+        .concurrency(1)
+        .build()
+        .unwrap();
+    handle_slot.set(broadcast.handle()).unwrap();
+    let report = broadcast.run().await;
+    // The first send needs no wait; the second waited, and was cancelled
+    // meanwhile.
     assert_eq!(outbound.sends().len(), 1);
     assert_eq!(report.ended, Ended::Cancelled);
     assert_eq!(report.progress().skipped, 2);
