@@ -423,6 +423,9 @@ fn emphasis_inside_a_word_drops_its_markers() {
         ("a***b*** c", "ab c"),
         ("a ***b***c", "a bc"),
         ("déjà**vu**", "déjàvu"),
+        // A digit is part of a word too.
+        ("10**x**20", "10x20"),
+        ("v**2**", "v2"),
         // At a word's edge, the markers stay.
         (
             "**bold**, (*it*) and ~~gone~~.",

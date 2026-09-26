@@ -664,6 +664,66 @@ async fn a_cooldown_that_expires_mid_check_starts_again() {
     assert!(out.sent().is_empty(), "{:?}", out.bodies());
 }
 
+/// A `KvStore` on which the cooldown record keeps expiring between the
+/// refused create and the read, every time.
+#[derive(Debug)]
+struct KeepsExpiring;
+
+#[async_trait]
+impl KvStore for KeepsExpiring {
+    async fn get(&self, _: &StoreKey) -> Result<Option<Versioned>, StorageError> {
+        Ok(None)
+    }
+    async fn put(&self, _: &StoreKey, _: Vec<u8>, _: Expiry) -> Result<u64, StorageError> {
+        Ok(1)
+    }
+    async fn put_if_absent(
+        &self,
+        _: &StoreKey,
+        _: Vec<u8>,
+        _: Expiry,
+    ) -> Result<Option<u64>, StorageError> {
+        Ok(None)
+    }
+    async fn compare_and_swap(
+        &self,
+        _: &StoreKey,
+        _: u64,
+        _: Option<Vec<u8>>,
+        _: Expiry,
+    ) -> Result<Option<u64>, StorageError> {
+        Ok(None)
+    }
+    async fn delete(&self, _: &StoreKey) -> Result<bool, StorageError> {
+        Ok(false)
+    }
+}
+
+/// When the record expires between the create and the read on both tries,
+/// there is no marker to count notices by: the command is refused (the
+/// safe side) and the user is told, with the whole period.
+#[tokio::test]
+async fn a_cooldown_that_keeps_expiring_mid_check_is_refused_and_told() {
+    let runs = Arc::new(AtomicUsize::new(0));
+    let out = Recording::default();
+    let bot = Bot::builder()
+        .outbound(out.clone())
+        .cooldown_store(
+            Arc::new(KeepsExpiring),
+            Arc::new(meta_whatsapp_core::clock::SystemClock),
+        )
+        .command(counting("roll", &runs).cooldown(Duration::from_secs(30)))
+        .build()
+        .await
+        .unwrap();
+    bot.handle(text_event(TEXT, "/roll")).await.unwrap();
+    assert_eq!(count(&runs), 0);
+    assert_eq!(
+        out.bodies(),
+        ["Please wait 30 s before using this command again."]
+    );
+}
+
 /// Decisive: remove either scope check and the refused command runs.
 #[tokio::test]
 async fn group_only_and_private_only_commands_run_only_there() {
