@@ -11,6 +11,7 @@
 
 mod common;
 
+use std::fmt::Write as _;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -19,10 +20,11 @@ use meta_whatsapp_adapters::store::{
     PostgresConversationStore, PostgresKvStore, conformance, conversation_conformance,
 };
 use meta_whatsapp_core::error::StorageError;
-use meta_whatsapp_core::ids::MessageId;
+use meta_whatsapp_core::ids::{AppId, MessageId, UserId};
 use meta_whatsapp_core::store::{
-    ConversationKey, ConversationStore, DeliveryStatus, Direction, Expiry, KvStore, StoreKey,
-    StoredMessage,
+    ConversationKey, ConversationStore, DeliveryStatus, Direction, Erased, Expiry, KvStore, Purged,
+    Retention, StoreKey, StoredContact, StoredMessage, ThreadOwner, ThreadOwnership, WindowEvent,
+    WindowEventKind,
 };
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{AssertSqlSafe, PgPool};
@@ -369,18 +371,21 @@ async fn live_postgres_migrate_is_idempotent_under_concurrency() {
         pool.close().await;
     }
     postgres::migrate(&db.pool).await.unwrap();
-    assert_eq!(
-        db.table_names().await,
-        [
-            "wa_conversations",
-            "wa_kv",
-            "wa_messages",
-            "wa_sqlx_migrations"
-        ]
-    );
-    assert_eq!(db.applied_migrations().await, [1, 2, 3]);
+    assert_eq!(db.table_names().await, DEFAULT_TABLES);
+    assert_eq!(db.applied_migrations().await, [1, 2, 3, 4]);
     assert_eq!(db.content_columns().await, LOSSLESS_CONTENT_COLUMNS);
 }
+
+/// Every table of the default prefix, by name.
+const DEFAULT_TABLES: [&str; 7] = [
+    "wa_conversations",
+    "wa_kv",
+    "wa_messages",
+    "wa_sqlx_migrations",
+    "wa_synced_contacts",
+    "wa_thread_owners",
+    "wa_window_events",
+];
 
 /// The content columns after migration 3: bytes and `json`, no `text` or
 /// `jsonb` left.
@@ -423,6 +428,100 @@ async fn migrate_like_09db4aa(pool: &PgPool) -> Result<(), sqlx::migrate::Migrat
     let mut migrator = Migrator::with_migrations(old);
     migrator.dangerous_set_table_name("wa_sqlx_migrations");
     migrator.run(pool).await
+}
+
+/// The three migrations of the revision before migration 4 (b66972c, PR
+/// #21), as its `migrate` ran them.
+async fn migrate_like_b66972c(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
+    use sqlx::SqlSafeStr;
+    use sqlx::migrate::{Migration, MigrationType, Migrator};
+    let old = [
+        (1, "kv", include_str!("../migrations/0001_kv.sql")),
+        (
+            2,
+            "conversations",
+            include_str!("../migrations/0002_conversations.sql"),
+        ),
+        (
+            3,
+            "lossless content",
+            include_str!("../migrations/0003_lossless_content.sql"),
+        ),
+    ]
+    .into_iter()
+    .map(|(version, description, sql)| {
+        Migration::new(
+            version,
+            description.into(),
+            MigrationType::Simple,
+            AssertSqlSafe(sql.replace("{prefix}", "wa_")).into_sql_str(),
+            false,
+        )
+    })
+    .collect();
+    let mut migrator = Migrator::with_migrations(old);
+    migrator.dangerous_set_table_name("wa_sqlx_migrations");
+    migrator.run(pool).await
+}
+
+/// Migration 4 adds tables and indexes and changes no column: a database
+/// the previous revision (b66972c) wrote keeps its rows, that revision's
+/// statements keep working beside the new one (its `append` is today's,
+/// unchanged), and only its `migrate` refuses the database.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_migration_4_keeps_the_previous_revision_working() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    migrate_like_b66972c(&db.pool).await.unwrap();
+    assert_eq!(db.applied_migrations().await, [1, 2, 3]);
+    let store = PostgresConversationStore::new(db.pool.clone());
+    let [inbound, outbound, other] = written_by_09db4aa();
+    for m in [&inbound, &outbound, &other] {
+        assert!(store.append(m.clone()).await.unwrap());
+    }
+    let key = inbound.conversation.clone();
+    let before = store.messages(&key, None, 10).await.unwrap();
+    let summaries = store
+        .conversations(&key.phone_number_id, None, 10)
+        .await
+        .unwrap();
+
+    let runs = (0..3).map(|_| postgres::migrate(&db.pool));
+    for result in futures::future::join_all(runs).await {
+        result.unwrap();
+    }
+    assert_eq!(db.applied_migrations().await, [1, 2, 3, 4]);
+    assert_eq!(db.table_names().await, DEFAULT_TABLES);
+    assert_eq!(store.messages(&key, None, 10).await.unwrap(), before);
+    assert_eq!(
+        store
+            .conversations(&key.phone_number_id, None, 10)
+            .await
+            .unwrap(),
+        summaries,
+        "rows written before keep their content, window and count"
+    );
+    let late = StoredMessage {
+        id: MessageId::new("wamid.after-4"),
+        timestamp: datetime!(2026-09-24 16:00 UTC),
+        ..inbound.clone()
+    };
+    assert!(
+        store.append(late.clone()).await.unwrap(),
+        "the append both revisions send still works"
+    );
+    assert!(
+        matches!(
+            migrate_like_b66972c(&db.pool).await,
+            Err(sqlx::migrate::MigrateError::VersionMissing(4))
+        ),
+        "the previous revision's migrate refuses the upgraded database"
+    );
+    assert_eq!(
+        store.message(&key.phone_number_id, &late.id).await.unwrap(),
+        Some(late)
+    );
 }
 
 /// 09db4aa's `append` statement, verbatim (default prefix): what an
@@ -599,7 +698,7 @@ async fn live_postgres_upgrade_keeps_existing_content_and_stops_old_writers() {
     for result in futures::future::join_all(runs).await {
         result.unwrap();
     }
-    assert_eq!(db.applied_migrations().await, [1, 2, 3]);
+    assert_eq!(db.applied_migrations().await, [1, 2, 3, 4]);
     assert_eq!(db.content_columns().await, LOSSLESS_CONTENT_COLUMNS);
 
     let store = PostgresConversationStore::new(db.pool.clone());
@@ -1050,19 +1149,13 @@ async fn live_postgres_custom_prefix_is_isolated() {
     postgres::migrate_with_prefix(&db.pool, &tenant)
         .await
         .unwrap();
-    assert_eq!(
-        db.table_names().await,
-        [
-            "tenant_x_conversations",
-            "tenant_x_kv",
-            "tenant_x_messages",
-            "tenant_x_sqlx_migrations",
-            "wa_conversations",
-            "wa_kv",
-            "wa_messages",
-            "wa_sqlx_migrations",
-        ]
-    );
+    let mut tables: Vec<String> = DEFAULT_TABLES
+        .iter()
+        .map(|t| t.replacen("wa_", "tenant_x_", 1))
+        .chain(DEFAULT_TABLES.iter().map(|t| (*t).to_owned()))
+        .collect();
+    tables.sort_unstable();
+    assert_eq!(db.table_names().await, tables);
 
     let default = PostgresKvStore::new(db.pool.clone());
     let custom = PostgresKvStore::with_prefix(db.pool.clone(), tenant.clone());
@@ -1079,10 +1172,11 @@ async fn live_postgres_custom_prefix_is_isolated() {
     assert_eq!(custom.get(&k).await.unwrap().unwrap().value, b"custom");
 
     conformance::run_with_real_time(&custom, Duration::from_millis(500)).await;
-    conversation_conformance::run(&PostgresConversationStore::with_prefix(
-        db.pool.clone(),
-        tenant,
-    ))
+    // With a retention, the suite's retention case takes its other branch.
+    conversation_conformance::run(
+        &PostgresConversationStore::with_prefix(db.pool.clone(), tenant)
+            .with_retention(Retention::days(30)),
+    )
     .await;
 }
 
@@ -1181,4 +1275,345 @@ async fn live_postgres_debug_is_redacted_and_missing_tables_are_errors() {
             .is_err(),
         "no tables yet: queries fail with a backend error, not a panic"
     );
+}
+
+/// Rows of every table of the schema whose JSON rendering holds one of
+/// `needles`, as text or (for a `BYTEA` column, which renders as hex) as
+/// the hex of its UTF-8 bytes, by table. Every table: one added later is
+/// swept too.
+async fn rows_mentioning(db: &TestDb, needles: &[&str]) -> Vec<(String, i64)> {
+    let mut found = Vec::new();
+    for table in db.table_names().await {
+        let mut total = 0;
+        for needle in needles {
+            let hex = needle.bytes().fold(String::new(), |mut hex, b| {
+                write!(hex, "{b:02x}").unwrap();
+                hex
+            });
+            let n: i64 = sqlx::query_scalar(AssertSqlSafe(format!(
+                "SELECT count(*) FROM {schema}.{table} t \
+                 WHERE position($1 IN row_to_json(t)::text) > 0 \
+                    OR position($2 IN row_to_json(t)::text) > 0",
+                schema = db.schema
+            )))
+            .bind(*needle)
+            .bind(hex)
+            .fetch_one(&db.admin)
+            .await
+            .unwrap();
+            total += n;
+        }
+        found.push((table, total));
+    }
+    found
+}
+
+/// Everything of one contact: a message of every origin and a tombstone,
+/// the summary, window events, the ownership record and synced contacts
+/// naming them, content marked with `marker`.
+#[allow(clippy::too_many_lines)] // one record of every kind
+async fn record_a_contact(store: &PostgresConversationStore, key: &ConversationKey, marker: &str) {
+    let id = |local: &str| MessageId::new(format!("wamid.{}.{local}", key.contact));
+    let message = |local: &str, direction, minute: i64| StoredMessage {
+        id: id(local),
+        conversation: key.clone(),
+        direction,
+        kind: "text".to_owned(),
+        text: Some(format!("{marker} said {local}")),
+        payload: serde_json::json!({"text": {"body": format!("{marker} \0 {local}")}}),
+        status: match direction {
+            Direction::Inbound => DeliveryStatus::Received,
+            Direction::Outbound => DeliveryStatus::Accepted,
+        },
+        timestamp: datetime!(2026-09-24 12:00 UTC) + time::Duration::minutes(minute),
+        status_at: None,
+        error: None,
+    };
+    assert!(
+        store
+            .append(message("in", Direction::Inbound, 1))
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .append(message("out", Direction::Outbound, 2))
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .update_status(
+                &key.phone_number_id,
+                &id("out"),
+                DeliveryStatus::Failed,
+                datetime!(2026-09-24 12:03 UTC),
+                Some(serde_json::json!({"title": format!("{marker} failed")})),
+            )
+            .await
+            .unwrap()
+    );
+    let placeholder = StoredMessage {
+        kind: StoredMessage::MEDIA_PLACEHOLDER.to_owned(),
+        text: None,
+        ..message("media", Direction::Inbound, -2)
+    };
+    assert_eq!(
+        store
+            .append_synced(vec![message("synced", Direction::Inbound, -1), placeholder])
+            .await
+            .unwrap(),
+        [true, true]
+    );
+    assert!(
+        store
+            .fill_media_placeholder(
+                &key.phone_number_id,
+                &id("media"),
+                "image".to_owned(),
+                Some(format!("{marker} caption")),
+                serde_json::json!({"image": {"caption": format!("{marker} caption")}}),
+            )
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .revoke(
+                key,
+                &id("gone"),
+                Direction::Inbound,
+                datetime!(2026-09-24 12:04 UTC)
+            )
+            .await
+            .unwrap()
+    );
+    for (local, kind) in [
+        ("call", WindowEventKind::CustomerCall),
+        ("standby", WindowEventKind::StandbyMessage),
+    ] {
+        assert!(
+            store
+                .record_window_event(WindowEvent {
+                    conversation: key.clone(),
+                    kind,
+                    id: format!("wacid.{}.{local}", key.contact),
+                    at: datetime!(2026-09-24 12:05 UTC),
+                })
+                .await
+                .unwrap()
+        );
+    }
+    assert!(
+        store
+            .set_thread_owner(
+                key,
+                ThreadOwnership {
+                    owner: ThreadOwner::AnotherApp,
+                    role: Some("escalation".to_owned()),
+                    app_id: Some(AppId::new("1234")),
+                    since: datetime!(2026-09-24 12:06 UTC),
+                },
+            )
+            .await
+            .unwrap()
+    );
+    let contact = StoredContact {
+        key: key.clone(),
+        full_name: Some(format!("{marker} Full")),
+        first_name: Some(format!("{marker} First")),
+        phone_number: None,
+        user_id: Some(UserId::new(key.contact.clone())),
+        parent_user_id: None,
+        username: Some(format!("{marker}_user")),
+        synced_at: datetime!(2026-09-24 12:07 UTC),
+    };
+    assert!(store.put_contact(contact.clone()).await.unwrap());
+    // Keyed by phone number, naming the contact's BSUID.
+    assert!(
+        store
+            .put_contact(StoredContact {
+                key: ConversationKey::new(
+                    key.phone_number_id.clone(),
+                    format!("1650555{}", key.contact.len())
+                ),
+                phone_number: Some(format!("1650555{}", key.contact.len())),
+                ..contact
+            })
+            .await
+            .unwrap()
+    );
+}
+
+/// Decisive for erasure on Postgres: after `erase`, no row of any table
+/// of the schema mentions the erased contact or holds its content (text,
+/// payloads, errors, the preview, window events, the owner, synced
+/// contacts' names), while another contact of the number keeps every one
+/// of its records. An erase that leaves any table out fails here.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_erase_leaves_nothing_of_the_contact_in_any_table() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let store = PostgresConversationStore::new(db.pool.clone());
+    let erased = ConversationKey::new("106540352242922", "US.ERASED.13491208655302741918");
+    let kept = ConversationKey::new("106540352242922", "US.KEPT.13491208655302741918");
+    let (erased_marker, kept_marker) = ("erase-me-7f3a", "keep-me-c21d");
+    record_a_contact(&store, &erased, erased_marker).await;
+    record_a_contact(&store, &kept, kept_marker).await;
+
+    let holding = |found: &[(String, i64)]| -> Vec<String> {
+        found
+            .iter()
+            .filter(|(_, n)| *n > 0)
+            .map(|(t, _)| t.clone())
+            .collect()
+    };
+    let every_record_table = [
+        "wa_conversations",
+        "wa_messages",
+        "wa_synced_contacts",
+        "wa_thread_owners",
+        "wa_window_events",
+    ];
+    let needles = [erased.contact.as_str(), erased_marker];
+    assert_eq!(
+        holding(&rows_mentioning(&db, &needles).await),
+        every_record_table,
+        "the sweep sees the contact in every table before the erasure"
+    );
+
+    assert_eq!(
+        store.erase(&erased).await.unwrap(),
+        Erased {
+            messages: 5,
+            conversations: 1,
+            window_events: 2,
+            thread_owners: 1,
+            contacts: 2,
+        }
+    );
+    let left = rows_mentioning(&db, &needles).await;
+    assert!(
+        holding(&left).is_empty(),
+        "rows mentioning the erased contact remain: {left:?}"
+    );
+    assert_eq!(
+        holding(&rows_mentioning(&db, &[kept.contact.as_str(), kept_marker]).await),
+        every_record_table,
+        "the other contact keeps every record"
+    );
+}
+
+/// `with_retention` is what `apply_retention` applies; the default keeps.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_apply_retention_purges_by_the_configured_retention() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let keep = PostgresConversationStore::new(db.pool.clone());
+    let thirty_days =
+        PostgresConversationStore::new(db.pool.clone()).with_retention(Retention::days(30));
+    assert_eq!(keep.retention(), Retention::Keep);
+    assert!(format!("{thirty_days:?}").contains("retention: For("));
+    let now = datetime!(2026-09-24 12:00 UTC);
+    let key = ConversationKey::new("pn-retention", "US.1");
+    for (id, days) in [("old", 31), ("new", 29)] {
+        keep.append(StoredMessage {
+            id: MessageId::new(id),
+            conversation: key.clone(),
+            direction: Direction::Inbound,
+            kind: "text".to_owned(),
+            text: Some(id.to_owned()),
+            payload: serde_json::json!({}),
+            status: DeliveryStatus::Received,
+            timestamp: now - time::Duration::days(days),
+            status_at: None,
+            error: None,
+        })
+        .await
+        .unwrap();
+    }
+    assert!(keep.apply_retention(now).await.unwrap().is_empty());
+    assert_eq!(keep.messages(&key, None, 10).await.unwrap().len(), 2);
+    assert_eq!(
+        thirty_days.apply_retention(now).await.unwrap(),
+        Purged {
+            messages: 1,
+            ..Purged::default()
+        }
+    );
+    let left: Vec<String> = keep
+        .messages(&key, None, 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|m| m.id.into_inner())
+        .collect();
+    assert_eq!(left, ["new"]);
+}
+
+/// The new records refuse U+0000 in their identifiers, as messages do,
+/// and store nothing then.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_records_refuse_nul_in_ids() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let store = PostgresConversationStore::new(db.pool.clone());
+    let at = datetime!(2026-09-24 12:00 UTC);
+    for key in [
+        ConversationKey::new("pn-\0", "US.1"),
+        ConversationKey::new("pn-nul", "US.\0"),
+    ] {
+        let event = WindowEvent {
+            conversation: key.clone(),
+            kind: WindowEventKind::CustomerCall,
+            id: "wacid.1".to_owned(),
+            at,
+        };
+        assert!(store.record_window_event(event).await.is_err(), "{key:?}");
+        let owner = ThreadOwnership {
+            owner: ThreadOwner::ThisApp,
+            role: None,
+            app_id: None,
+            since: at,
+        };
+        assert!(store.set_thread_owner(&key, owner).await.is_err());
+        let contact = StoredContact {
+            key: key.clone(),
+            full_name: None,
+            first_name: None,
+            phone_number: None,
+            user_id: None,
+            parent_user_id: None,
+            username: None,
+            synced_at: at,
+        };
+        assert!(store.put_contact(contact).await.is_err());
+        assert!(store.erase(&key).await.is_err());
+    }
+    let event = WindowEvent {
+        conversation: ConversationKey::new("pn-nul", "US.1"),
+        kind: WindowEventKind::CustomerCall,
+        id: "wacid.\0".to_owned(),
+        at,
+    };
+    assert!(store.record_window_event(event).await.is_err());
+    let counts: Vec<i64> = futures::future::join_all(
+        ["wa_window_events", "wa_thread_owners", "wa_synced_contacts"].map(|t| {
+            let pool = db.pool.clone();
+            async move {
+                sqlx::query_scalar(AssertSqlSafe(format!("SELECT count(*) FROM {t}")))
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+            }
+        }),
+    )
+    .await;
+    assert_eq!(counts, [0, 0, 0], "nothing stored");
 }

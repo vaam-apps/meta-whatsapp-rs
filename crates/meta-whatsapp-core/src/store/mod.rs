@@ -8,7 +8,9 @@
 //!   workspace (`TokenVault`, `OtpService`, `DedupGuard`, …) is built on it,
 //!   so an adapter implements five methods once and gets all of them.
 //! - [`ConversationStore`] — ordered message history per conversation, for
-//!   in-app chat between merchants and their customers.
+//!   in-app chat between merchants and their customers, with what the
+//!   inbox keeps beside it (window events, thread ownership, the
+//!   coexistence address book), erasure of one contact and purge by age.
 //!
 //! Adapters: `meta_whatsapp_adapters::store::{MemoryKvStore, PostgresKvStore, RedisKvStore,
 //! MemoryConversationStore, PostgresConversationStore}`.
@@ -28,7 +30,8 @@ use time::OffsetDateTime;
 
 pub use conversation::{
     ConversationKey, ConversationStore, ConversationSummary, CustomerServiceWindow, DeliveryStatus,
-    Direction, StoredMessage,
+    Direction, Erased, Purged, Retention, StoredContact, StoredMessage, ThreadOwner,
+    ThreadOwnership, WindowEvent, WindowEventKind,
 };
 
 use crate::error::StorageError;

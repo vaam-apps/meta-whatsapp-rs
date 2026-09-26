@@ -1,4 +1,14 @@
 //! Conversation history port, for in-app chat (a merchant's inbox).
+//!
+//! Besides the history ([`StoredMessage`]) and the inbox rows
+//! ([`ConversationSummary`]), a [`ConversationStore`] keeps what the inbox
+//! needs about a conversation that is not a message: [window
+//! events](WindowEvent) (a call, a standby message: they reopen the
+//! customer service window), [thread ownership](ThreadOwnership) under
+//! Conversation Routing, and the coexistence address book
+//! ([`StoredContact`]). It erases one contact's records
+//! ([`ConversationStore::erase`]) and purges by age
+//! ([`ConversationStore::purge_before`], [`Retention`]).
 
 use std::fmt;
 use std::time::Duration;
@@ -8,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::error::StorageError;
-use crate::ids::{MessageId, PhoneNumberId};
+use crate::ids::{AppId, MessageId, PhoneNumberId, UserId};
 
 /// One conversation: a business phone number and one contact.
 ///
@@ -213,6 +223,252 @@ pub struct ConversationSummary {
     pub unread: u64,
 }
 
+/// Why a [`WindowEvent`] opened or refreshed the customer service window.
+///
+/// Stored by name ([`as_str`](Self::as_str)): a store keeps the name, so
+/// the names never change. [`Other`](Self::Other) carries any other name,
+/// for a reason this crate does not name yet; parsing a known name never
+/// gives `Other`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum WindowEventKind {
+    /// The customer called the business number, answered or not
+    /// (`calling/pricing`, "How calling changes the 24 hour customer
+    /// service window"). `customer_call`.
+    CustomerCall,
+    /// The customer accepted a call from the business (same page).
+    /// `call_accepted`.
+    CallAccepted,
+    /// A customer's message observed in standby under Conversation Routing
+    /// (`webhooks/reference/standby`): it refreshes the window, but it is
+    /// not the business's to answer, nor unread (`OPEN_QUESTIONS.md` #44).
+    /// `standby_message`.
+    StandbyMessage,
+    /// Any other name.
+    Other(String),
+}
+
+impl WindowEventKind {
+    /// The stored name.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::CustomerCall => "customer_call",
+            Self::CallAccepted => "call_accepted",
+            Self::StandbyMessage => "standby_message",
+            Self::Other(name) => name,
+        }
+    }
+
+    /// The kind a stored name stands for.
+    pub fn from_name(name: &str) -> Self {
+        match name {
+            "customer_call" => Self::CustomerCall,
+            "call_accepted" => Self::CallAccepted,
+            "standby_message" => Self::StandbyMessage,
+            other => Self::Other(other.to_owned()),
+        }
+    }
+}
+
+impl fmt::Display for WindowEventKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Serialize for WindowEventKind {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for WindowEventKind {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        Ok(Self::from_name(&name))
+    }
+}
+
+/// Something that opened or refreshed a conversation's 24-hour customer
+/// service window without being a message of its history: a call, or a
+/// message observed in standby ([`WindowEventKind`]).
+///
+/// Recorded with [`ConversationStore::record_window_event`], read with
+/// [`ConversationStore::window_events`]. A window event is never part of
+/// the history ([`ConversationStore::messages`]) nor of the summary: it
+/// moves neither `last_message_at`, `last_text`,
+/// [`last_inbound_at`](ConversationSummary::last_inbound_at) nor the unread
+/// count, and creates no summary. Whoever checks the window combines it
+/// with `last_inbound_at` (roadmap L7).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowEvent {
+    /// The conversation whose window it opens.
+    pub conversation: ConversationKey,
+    /// What happened.
+    pub kind: WindowEventKind,
+    /// Meta's id of what happened: the call's id for a call, the message's
+    /// id (`wamid.…`) for a standby message. With the business number it
+    /// identifies the event: recording it again is a no-op.
+    pub id: String,
+    /// When it happened (Meta's timestamp).
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
+}
+
+/// Who holds a thread under Conversation Routing
+/// (`conversation-routing/thread-lifecycle`).
+///
+/// Stored by its serde name (`this_app`, `another_app`, `idle`), which
+/// never changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ThreadOwner {
+    /// The app this store belongs to: control was passed to it
+    /// (`control_passed`), or it received the thread's messages on the
+    /// `messages` field.
+    ThisApp,
+    /// Another responder: control was taken from this app
+    /// (`control_taken`), or a standby copy arrived.
+    AnotherApp,
+    /// Nobody: released (`release`, which no webhook reports) or back to
+    /// idle after 24 hours without the customer.
+    Idle,
+}
+
+/// Who owns a conversation's thread under Conversation Routing, and since
+/// when: [`ConversationStore::set_thread_owner`],
+/// [`ConversationStore::thread_owner`].
+///
+/// No endpoint reports the owner (`conversation-routing/thread-control`,
+/// "Tracking ownership"): the integrator keeps it from the handovers, the
+/// field a customer's messages arrive on, its own `release` and the
+/// 24-hour idle timeout. The store keeps the latest record and interprets
+/// nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadOwnership {
+    /// Who holds the thread.
+    pub owner: ThreadOwner,
+    /// The holder's role identifier as Meta names it
+    /// (`conversation-routing/overview`: `customer_service`, `escalation`,
+    /// `ai_agent`, …), when known: a handover's `new_owner_role`.
+    pub role: Option<String>,
+    /// The holder's app, when a handover named it (`new_owner_app_id`).
+    pub app_id: Option<AppId>,
+    /// Since when: the handover's `timestamp`, or the time of what set it.
+    #[serde(with = "time::serde::rfc3339")]
+    pub since: OffsetDateTime,
+}
+
+/// A contact of a business's WhatsApp Business app address book, synced
+/// under coexistence (`webhooks/reference/smb_app_state_sync`, whose
+/// `state_sync[].contact` fields these are, and the
+/// `smb_app_state_sync` section of `business-scoped-user-ids`):
+/// [`ConversationStore::put_contact`], [`ConversationStore::contacts`].
+///
+/// Names and the username are content: kept exactly, U+0000 included,
+/// like a message's text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredContact {
+    /// The business number whose address book it is, and the contact:
+    /// its BSUID (`user_id`) when Meta sent one, else its `phone_number`,
+    /// as in a [`ConversationKey`].
+    pub key: ConversationKey,
+    /// `full_name`, as in the business's address book.
+    pub full_name: Option<String>,
+    /// `first_name`, as in the business's address book.
+    pub first_name: Option<String>,
+    /// `phone_number`: omitted by Meta when it may not share it.
+    pub phone_number: Option<String>,
+    /// `user_id`: the BSUID.
+    pub user_id: Option<UserId>,
+    /// `parent_user_id`: the parent BSUID, when enabled.
+    pub parent_user_id: Option<UserId>,
+    /// `username`, when the customer uses one.
+    pub username: Option<String>,
+    /// When the address book changed: `state_sync[].metadata.timestamp`.
+    #[serde(with = "time::serde::rfc3339")]
+    pub synced_at: OffsetDateTime,
+}
+
+/// What [`ConversationStore::erase`] deleted, by record.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Erased {
+    /// Messages, tombstones included.
+    pub messages: u64,
+    /// Conversation summaries (0 or 1).
+    pub conversations: u64,
+    /// Window events.
+    pub window_events: u64,
+    /// Thread ownership records (0 or 1).
+    pub thread_owners: u64,
+    /// Synced address book contacts.
+    pub contacts: u64,
+}
+
+impl Erased {
+    /// Whether nothing was deleted.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// What [`ConversationStore::purge_before`] deleted, by record.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Purged {
+    /// Messages, tombstones included.
+    pub messages: u64,
+    /// Conversation summaries whose latest message was purged.
+    pub conversations: u64,
+    /// Window events.
+    pub window_events: u64,
+    /// Thread ownership records.
+    pub thread_owners: u64,
+}
+
+impl Purged {
+    /// Whether nothing was deleted.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// How long a conversation store keeps its history (design D10: set per
+/// store, kept by default).
+///
+/// A store applies it when [`ConversationStore::apply_retention`] is
+/// called: nothing purges on its own, so the inbox or the integrator calls
+/// it on a schedule. The adapters take it as configuration
+/// (`with_retention`); to swap the policy (per tenant, per number), call
+/// [`ConversationStore::purge_before`] with a cutoff of your own instead.
+/// Which retention a deployment needs is its privacy obligations' call.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Retention {
+    /// Keep everything (the default).
+    #[default]
+    Keep,
+    /// Purge what is older than this.
+    For(Duration),
+}
+
+impl Retention {
+    /// Keep `n` days.
+    pub fn days(n: u32) -> Self {
+        Self::For(Duration::from_hours(24 * u64::from(n)))
+    }
+
+    /// The cutoff at `now`: what is older is purged. `None` keeps
+    /// everything: [`Retention::Keep`], or a duration reaching before the
+    /// earliest representable time.
+    pub fn cutoff(self, now: OffsetDateTime) -> Option<OffsetDateTime> {
+        match self {
+            Self::Keep => None,
+            Self::For(d) => now.checked_sub(time::Duration::try_from(d).ok()?),
+        }
+    }
+}
+
 /// Paged, ordered message history.
 ///
 /// Ordering is by `(timestamp, id)` descending — newest first — and the
@@ -229,6 +485,18 @@ pub struct ConversationSummary {
 /// another id. The conformance suite
 /// (`meta_whatsapp_adapters::store::conversation_conformance`) checks the content
 /// rule.
+///
+/// Beside the history, a store keeps [window events](WindowEvent),
+/// [thread ownership](ThreadOwnership) and the coexistence address book
+/// ([`StoredContact`]), each under a [`ConversationKey`] (BSUID first,
+/// never a phone number when a BSUID is known). Every record keyed by a
+/// contact is personal data: [`erase`](Self::erase) deletes all of them
+/// for one key, and [`purge_before`](Self::purge_before) and
+/// [`apply_retention`](Self::apply_retention) delete history by age.
+///
+/// Every method is required but [`retention`](Self::retention) and
+/// [`apply_retention`](Self::apply_retention), whose defaults are correct
+/// for any store (keep everything unless configured).
 #[async_trait]
 pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
     /// Insert a message. Returns `false` (and changes nothing) if a message
@@ -369,6 +637,150 @@ pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
         &self,
         key: &ConversationKey,
     ) -> Result<Option<OffsetDateTime>, StorageError>;
+
+    /// Message `id` of business number `phone_number_id`, if one is stored
+    /// for that number: a live or synced message, or a revoke's tombstone
+    /// ([`StoredMessage::REVOKED`]). Never a message of another number,
+    /// whether the store keeps a message id once (today's rule,
+    /// `OPEN_QUESTIONS.md` #33) or once per number.
+    async fn message(
+        &self,
+        phone_number_id: &PhoneNumberId,
+        id: &MessageId,
+    ) -> Result<Option<StoredMessage>, StorageError>;
+
+    /// Record a [`WindowEvent`]. Returns `false` (and changes nothing) when
+    /// an event with the same `id` is stored for the same business number,
+    /// whatever its kind, time or conversation: webhook retries make this
+    /// common. It touches neither the history nor the summary (see
+    /// [`WindowEvent`]).
+    async fn record_window_event(&self, event: WindowEvent) -> Result<bool, StorageError>;
+
+    /// Window events of one conversation, newest first by `(at, id)`,
+    /// strictly older than `before` (an `(at, id)` cursor taken from the
+    /// last row of the previous page), as [`messages`](Self::messages)
+    /// pages. The first of `window_events(key, None, 1)` is the latest.
+    async fn window_events(
+        &self,
+        key: &ConversationKey,
+        before: Option<(OffsetDateTime, String)>,
+        limit: usize,
+    ) -> Result<Vec<WindowEvent>, StorageError>;
+
+    /// Record who owns conversation `key`'s thread: stored unless the
+    /// stored record is later (`ownership.since` before the stored
+    /// `since`), so a late handover never overwrites a newer one, while a
+    /// change in the same second as the stored one (Meta's timestamps are
+    /// seconds) does. Returns whether it was stored. It touches neither
+    /// the history nor the summary.
+    async fn set_thread_owner(
+        &self,
+        key: &ConversationKey,
+        ownership: ThreadOwnership,
+    ) -> Result<bool, StorageError>;
+
+    /// The latest [`ThreadOwnership`] stored for conversation `key`.
+    async fn thread_owner(
+        &self,
+        key: &ConversationKey,
+    ) -> Result<Option<ThreadOwnership>, StorageError>;
+
+    /// Store a synced address book contact (an `add` of
+    /// `smb_app_state_sync`, which is also how an edit arrives), replacing
+    /// the one stored under its key unless that one is later
+    /// (`contact.synced_at` before the stored `synced_at`), by the same
+    /// rule as [`set_thread_owner`](Self::set_thread_owner). Returns
+    /// whether it was stored. Contacts are not conversations: this creates
+    /// no summary.
+    async fn put_contact(&self, contact: StoredContact) -> Result<bool, StorageError>;
+
+    /// Remove the synced contact stored under `key` (a `remove` of
+    /// `smb_app_state_sync`), unless it was synced after `at`. Returns
+    /// whether one was removed. Nothing of it is kept: an `add` older than
+    /// the removal that arrives after it stores the contact again.
+    async fn remove_contact(
+        &self,
+        key: &ConversationKey,
+        at: OffsetDateTime,
+    ) -> Result<bool, StorageError>;
+
+    /// The synced contact stored under `key`.
+    async fn contact(&self, key: &ConversationKey) -> Result<Option<StoredContact>, StorageError>;
+
+    /// The synced contacts of business number `phone_number_id`, by
+    /// [`contact`](ConversationKey::contact) ascending in byte order (the
+    /// order of Rust's `str`), strictly after `after` (the last contact of
+    /// the previous page). Never another number's.
+    async fn contacts(
+        &self,
+        phone_number_id: &PhoneNumberId,
+        after: Option<String>,
+        limit: usize,
+    ) -> Result<Vec<StoredContact>, StorageError>;
+
+    /// Erase one contact on one business number: delete, not hide, every
+    /// record stored under conversation `key`, in one step:
+    ///
+    /// - its messages, live, synced and tombstones, content and all (so an
+    ///   erased message id can be recorded again);
+    /// - its conversation summary (the latest message's preview, the
+    ///   window, the unread count);
+    /// - its window events;
+    /// - its thread ownership record;
+    /// - the synced address book contacts of the number that name
+    ///   `key.contact` as their key, `user_id`, `parent_user_id` or
+    ///   `phone_number`.
+    ///
+    /// A person can be stored under several keys on one number (a history
+    /// thread keyed by their phone number, live messages by their BSUID,
+    /// a new BSUID after a number change): erase each. Records of other
+    /// numbers are never touched: erase each number's. Returns what was
+    /// deleted; erasing an unknown key deletes nothing.
+    ///
+    /// What this does not reach, being outside this store: the webhook
+    /// dedup markers and OTP challenges (`KvStore`: hashed keys, expiring),
+    /// events a sink forwarded elsewhere (the service's event outbox, a
+    /// dead-letter store), logs and backups. A message recorded while the
+    /// erasure runs, or redelivered by Meta after it, is recorded again,
+    /// as any new message is.
+    async fn erase(&self, key: &ConversationKey) -> Result<Erased, StorageError>;
+
+    /// Purge by age: delete the messages (tombstones included) timestamped
+    /// strictly before `cutoff`, the window events before it, the thread
+    /// ownership records set before it, and the summary of every
+    /// conversation whose latest message was purged (it holds that
+    /// message's preview). Of business number `phone_number_id` only, or
+    /// of every number with `None`. Synced address book contacts are not
+    /// history: [`remove_contact`](Self::remove_contact) and
+    /// [`erase`](Self::erase) delete them.
+    ///
+    /// A conversation keeping newer messages keeps its summary as it was:
+    /// its latest message, preview and window, and an unread count that
+    /// may include purged messages until the next
+    /// [`mark_read`](Self::mark_read). Returns what was deleted.
+    async fn purge_before(
+        &self,
+        phone_number_id: Option<&PhoneNumberId>,
+        cutoff: OffsetDateTime,
+    ) -> Result<Purged, StorageError>;
+
+    /// The [`Retention`] this store applies in
+    /// [`apply_retention`](Self::apply_retention): the adapter's
+    /// configuration, [`Retention::Keep`] unless set.
+    fn retention(&self) -> Retention {
+        Retention::Keep
+    }
+
+    /// Apply [`retention`](Self::retention) at `now`: purge every number's
+    /// records older than its cutoff ([`purge_before`](Self::purge_before)
+    /// with `None`), or nothing under [`Retention::Keep`]. Nothing calls
+    /// it on its own: schedule it (the inbox or the integrator).
+    async fn apply_retention(&self, now: OffsetDateTime) -> Result<Purged, StorageError> {
+        match self.retention().cutoff(now) {
+            Some(cutoff) => self.purge_before(None, cutoff).await,
+            None => Ok(Purged::default()),
+        }
+    }
 }
 
 /// The 24-hour customer service window.
@@ -416,6 +828,67 @@ mod tests {
         assert!(!S::Sent.supersedes(S::Failed));
         assert_eq!(S::from_webhook("read"), Some(S::Read));
         assert_eq!(S::from_webhook("warning"), None);
+    }
+
+    /// Stores keep these names: a change strands the rows written before.
+    #[test]
+    fn stored_names_are_pinned() {
+        use WindowEventKind as K;
+        for (kind, name) in [
+            (K::CustomerCall, "customer_call"),
+            (K::CallAccepted, "call_accepted"),
+            (K::StandbyMessage, "standby_message"),
+            (K::Other("future".to_owned()), "future"),
+        ] {
+            assert_eq!(kind.as_str(), name);
+            assert_eq!(WindowEventKind::from_name(name), kind);
+            assert_eq!(
+                serde_json::to_value(&kind).unwrap(),
+                serde_json::json!(name)
+            );
+            assert_eq!(
+                serde_json::from_value::<WindowEventKind>(serde_json::json!(name)).unwrap(),
+                kind
+            );
+        }
+        for (owner, name) in [
+            (ThreadOwner::ThisApp, "this_app"),
+            (ThreadOwner::AnotherApp, "another_app"),
+            (ThreadOwner::Idle, "idle"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(owner).unwrap(),
+                serde_json::json!(name)
+            );
+        }
+    }
+
+    #[test]
+    fn retention_cutoffs() {
+        let now = datetime!(2026-09-24 10:00 UTC);
+        assert_eq!(Retention::default(), Retention::Keep);
+        assert_eq!(Retention::Keep.cutoff(now), None);
+        assert_eq!(
+            Retention::days(30).cutoff(now),
+            Some(datetime!(2026-08-25 10:00 UTC))
+        );
+        assert_eq!(
+            Retention::For(Duration::from_secs(90)).cutoff(now),
+            Some(datetime!(2026-09-24 09:58:30 UTC))
+        );
+        assert_eq!(
+            Retention::For(Duration::MAX).cutoff(now),
+            None,
+            "nothing is older than the earliest time"
+        );
+        assert!(Erased::default().is_empty() && Purged::default().is_empty());
+        assert!(
+            !Erased {
+                contacts: 1,
+                ..Erased::default()
+            }
+            .is_empty()
+        );
     }
 
     #[test]

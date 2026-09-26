@@ -50,6 +50,7 @@
 //! | `kind`, `text` | `kind_utf8`, `text_utf8` | `BYTEA`, the UTF-8 bytes |
 //! | `payload`, `error` | `payload_json`, `error_json` | `JSON`, the document's text as written |
 //! | the summary's `last_text` | `last_text_utf8` | `BYTEA`, the UTF-8 bytes |
+//! | a synced contact's `full_name`, `first_name`, `username` (migration `0004`) | `full_name_utf8`, `first_name_utf8`, `username_utf8` | `BYTEA`, the UTF-8 bytes |
 //!
 //! Every string round-trips exactly, U+0000 included, in JSON strings and
 //! object keys alike, and a NUL never reads back as U+FFFD (nor two keys
@@ -93,6 +94,29 @@
 //! with a NUL; `meta_whatsapp_rs::inbox::InboxSink` skips a history item that has one.
 //! (The memory and Redis stores accept NUL there.) `PostgresKvStore` values
 //! are `BYTEA`: any bytes, NUL included.
+//!
+//! # The records beside the history (migration `0004`)
+//!
+//! Migration 4 adds `wa_window_events`, `wa_thread_owners` and
+//! `wa_synced_contacts` (window events, thread ownership and the
+//! coexistence address book: see [`PostgresConversationStore`]) and two
+//! indexes for purge by age, `wa_messages_ts_idx` and
+//! `wa_conversations_last_idx`. It changes no existing column, so an
+//! instance of the previous revision keeps working beside it (it only
+//! lacks the new methods), but its `migrate` then refuses the database
+//! (`VersionMissing(4)`): upgrade every instance before running one that
+//! migrates at startup again, or migrate from the new revision only.
+//! Building the two indexes reads the messages and conversations tables
+//! once, and writes to them wait until it is done (a plain `CREATE
+//! INDEX`, inside the migration's transaction): on a large inbox, run
+//! [`migrate`] from a one-off job, as for migration 3 below.
+//!
+//! Every table the adapter keeps about a contact is keyed by business
+//! number and contact: [`ConversationStore::erase`] deletes from
+//! `wa_messages`, `wa_conversations`, `wa_window_events`,
+//! `wa_thread_owners` and `wa_synced_contacts`, in one statement.
+//!
+//! [`ConversationStore::erase`]: meta_whatsapp_core::store::ConversationStore::erase
 //!
 //! # Upgrading to lossless content (migration `0003`)
 //!
@@ -393,11 +417,23 @@ mod tests {
         // `\x77` is `w`: spelled so that a search-and-replace of the prefix
         // cannot rewrite this pin along with the code.
         assert_eq!(
-            ["kv", "messages", "conversations", "sqlx_migrations"].map(|t| default.table(t)),
+            [
+                "kv",
+                "messages",
+                "conversations",
+                "window_events",
+                "thread_owners",
+                "synced_contacts",
+                "sqlx_migrations"
+            ]
+            .map(|t| default.table(t)),
             [
                 "\x77a_kv",
                 "\x77a_messages",
                 "\x77a_conversations",
+                "\x77a_window_events",
+                "\x77a_thread_owners",
+                "\x77a_synced_contacts",
                 "\x77a_sqlx_migrations"
             ]
         );
@@ -416,7 +452,7 @@ mod tests {
 
     /// `(version, SHA-384 hex)` of every migration under the default
     /// prefix. A new migration adds a line; an existing line never changes.
-    const PINNED_CHECKSUMS: [(i64, &str); 3] = [
+    const PINNED_CHECKSUMS: [(i64, &str); 4] = [
         (
             1,
             "67378b1ee4f8340fac500d4cbb845aaf2cd910d6971daf6737ee66d5ca0d3c49cf5eab437ce50e562cb10bd4405795b6",
@@ -428,6 +464,10 @@ mod tests {
         (
             3,
             "7f7d081efba61c1cfb5e4a4ec1a26fe93439ef0c39d2cb05b2bd843647bac0e83ad67378d570bf26a6344a606fe8d080",
+        ),
+        (
+            4,
+            "aebdc6b39ce9596dfa5a386904604cb84bf32db626bdb6e9d483a28efec4a06fe6a4037ae2ab307df90965e7020a13a8",
         ),
     ];
 

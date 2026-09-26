@@ -1487,6 +1487,84 @@ mod tests {
         ) -> std::result::Result<Option<OffsetDateTime>, StorageError> {
             self.inner.last_inbound_at(key).await
         }
+        async fn message(
+            &self,
+            phone_number_id: &PhoneNumberId,
+            id: &MessageId,
+        ) -> std::result::Result<Option<StoredMessage>, StorageError> {
+            self.inner.message(phone_number_id, id).await
+        }
+        async fn record_window_event(
+            &self,
+            event: meta_whatsapp_core::store::WindowEvent,
+        ) -> std::result::Result<bool, StorageError> {
+            self.inner.record_window_event(event).await
+        }
+        async fn window_events(
+            &self,
+            key: &ConversationKey,
+            before: Option<(OffsetDateTime, String)>,
+            limit: usize,
+        ) -> std::result::Result<Vec<meta_whatsapp_core::store::WindowEvent>, StorageError>
+        {
+            self.inner.window_events(key, before, limit).await
+        }
+        async fn set_thread_owner(
+            &self,
+            key: &ConversationKey,
+            ownership: meta_whatsapp_core::store::ThreadOwnership,
+        ) -> std::result::Result<bool, StorageError> {
+            self.inner.set_thread_owner(key, ownership).await
+        }
+        async fn thread_owner(
+            &self,
+            key: &ConversationKey,
+        ) -> std::result::Result<Option<meta_whatsapp_core::store::ThreadOwnership>, StorageError>
+        {
+            self.inner.thread_owner(key).await
+        }
+        async fn put_contact(
+            &self,
+            contact: meta_whatsapp_core::store::StoredContact,
+        ) -> std::result::Result<bool, StorageError> {
+            self.inner.put_contact(contact).await
+        }
+        async fn remove_contact(
+            &self,
+            key: &ConversationKey,
+            at: OffsetDateTime,
+        ) -> std::result::Result<bool, StorageError> {
+            self.inner.remove_contact(key, at).await
+        }
+        async fn contact(
+            &self,
+            key: &ConversationKey,
+        ) -> std::result::Result<Option<meta_whatsapp_core::store::StoredContact>, StorageError>
+        {
+            self.inner.contact(key).await
+        }
+        async fn contacts(
+            &self,
+            phone_number_id: &PhoneNumberId,
+            after: Option<String>,
+            limit: usize,
+        ) -> std::result::Result<Vec<meta_whatsapp_core::store::StoredContact>, StorageError>
+        {
+            self.inner.contacts(phone_number_id, after, limit).await
+        }
+        async fn erase(
+            &self,
+            key: &ConversationKey,
+        ) -> std::result::Result<meta_whatsapp_core::store::Erased, StorageError> {
+            self.inner.erase(key).await
+        }
+        async fn purge_before(
+            &self,
+            phone_number_id: Option<&PhoneNumberId>,
+            cutoff: OffsetDateTime,
+        ) -> std::result::Result<meta_whatsapp_core::store::Purged, StorageError> {
+            self.inner.purge_before(phone_number_id, cutoff).await
+        }
     }
 
     /// Security review M1: one NUL in a customer's message made every
@@ -3088,6 +3166,84 @@ mod tests {
             key: &ConversationKey,
         ) -> std::result::Result<Option<OffsetDateTime>, StorageError> {
             self.inner.last_inbound_at(key).await
+        }
+        async fn message(
+            &self,
+            phone_number_id: &PhoneNumberId,
+            id: &MessageId,
+        ) -> std::result::Result<Option<StoredMessage>, StorageError> {
+            self.inner.message(phone_number_id, id).await
+        }
+        async fn record_window_event(
+            &self,
+            event: meta_whatsapp_core::store::WindowEvent,
+        ) -> std::result::Result<bool, StorageError> {
+            self.inner.record_window_event(event).await
+        }
+        async fn window_events(
+            &self,
+            key: &ConversationKey,
+            before: Option<(OffsetDateTime, String)>,
+            limit: usize,
+        ) -> std::result::Result<Vec<meta_whatsapp_core::store::WindowEvent>, StorageError>
+        {
+            self.inner.window_events(key, before, limit).await
+        }
+        async fn set_thread_owner(
+            &self,
+            key: &ConversationKey,
+            ownership: meta_whatsapp_core::store::ThreadOwnership,
+        ) -> std::result::Result<bool, StorageError> {
+            self.inner.set_thread_owner(key, ownership).await
+        }
+        async fn thread_owner(
+            &self,
+            key: &ConversationKey,
+        ) -> std::result::Result<Option<meta_whatsapp_core::store::ThreadOwnership>, StorageError>
+        {
+            self.inner.thread_owner(key).await
+        }
+        async fn put_contact(
+            &self,
+            contact: meta_whatsapp_core::store::StoredContact,
+        ) -> std::result::Result<bool, StorageError> {
+            self.inner.put_contact(contact).await
+        }
+        async fn remove_contact(
+            &self,
+            key: &ConversationKey,
+            at: OffsetDateTime,
+        ) -> std::result::Result<bool, StorageError> {
+            self.inner.remove_contact(key, at).await
+        }
+        async fn contact(
+            &self,
+            key: &ConversationKey,
+        ) -> std::result::Result<Option<meta_whatsapp_core::store::StoredContact>, StorageError>
+        {
+            self.inner.contact(key).await
+        }
+        async fn contacts(
+            &self,
+            phone_number_id: &PhoneNumberId,
+            after: Option<String>,
+            limit: usize,
+        ) -> std::result::Result<Vec<meta_whatsapp_core::store::StoredContact>, StorageError>
+        {
+            self.inner.contacts(phone_number_id, after, limit).await
+        }
+        async fn erase(
+            &self,
+            key: &ConversationKey,
+        ) -> std::result::Result<meta_whatsapp_core::store::Erased, StorageError> {
+            self.inner.erase(key).await
+        }
+        async fn purge_before(
+            &self,
+            phone_number_id: Option<&PhoneNumberId>,
+            cutoff: OffsetDateTime,
+        ) -> std::result::Result<meta_whatsapp_core::store::Purged, StorageError> {
+            self.inner.purge_before(phone_number_id, cutoff).await
         }
     }
 
