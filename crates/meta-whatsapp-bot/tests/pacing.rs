@@ -189,10 +189,15 @@ fn all(starts: &[Duration]) -> usize {
     busiest_second(starts, Duration::ZERO, Duration::MAX)
 }
 
-fn throttled() -> Error {
-    let mut error = GraphApiError::new(130429, "(#130429) Rate limit hit");
+/// A Graph error as the client reports it on a 400.
+fn graph(code: i64, message: &str) -> Error {
+    let mut error = GraphApiError::new(code, message);
     error.http_status = Some(400);
     error.into()
+}
+
+fn throttled() -> Error {
+    graph(130429, "(#130429) Rate limit hit")
 }
 
 /// 10,000 sends: no one-second window ever holds more than the rate (plus
@@ -324,5 +329,45 @@ async fn a_wall_clock_stepping_back_neither_pauses_nor_bursts() {
         matches!(report.recipients[N - 1].outcome, Outcome::Sent(_)),
         "{:?}",
         report.recipients[N - 1].outcome
+    );
+}
+
+/// Meta's throughput upgrade takes a number off for up to a minute, the
+/// API answering `131057` meanwhile (`throughput`); a large broadcast can
+/// trigger it. No recipient is lost to that minute: each is retried until
+/// it is over, and the pacer slows down rather than trying the whole list
+/// against a number that cannot send.
+#[tokio::test(start_paused = true)]
+async fn a_minute_of_maintenance_loses_no_recipient() {
+    const N: usize = 400;
+    let clock = TokioClock::new();
+    let outbound = Slow::new(&clock, Duration::from_millis(200)).failing(|start, _| {
+        (start < Duration::from_secs(60))
+            .then(|| graph(131_057, "(#131057) Business Account is in maintenance mode"))
+    });
+    let report = Broadcast::builder(NUMBER)
+        .to((0..N).map(phone))
+        .content(Text::new("Spring sale"))
+        .outbound(outbound.clone())
+        .pacer(Pacer::new(TokenBucket::new(Rate::DEFAULT)).with_timer(clock.clone()))
+        .build()
+        .unwrap()
+        .run()
+        .await;
+    let progress = report.progress();
+    assert_eq!((progress.sent, progress.failed), (N, 0));
+    let refused = outbound.failed_at.lock().unwrap().len();
+    let first_minute = outbound
+        .starts()
+        .iter()
+        .filter(|s| **s < Duration::from_secs(60))
+        .count();
+    assert_eq!(refused, first_minute);
+    // Slowing down, it tries fewer sends in that minute than the list
+    // holds; at the full rate it would try all 400 in 5 s, then each again
+    // 20 and 40 s later.
+    assert!(
+        refused < N,
+        "{refused} sends tried against the number in maintenance"
     );
 }

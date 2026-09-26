@@ -15,12 +15,13 @@
 //! do something else meanwhile, and keep the handle.
 //!
 //! What a failed send becomes is a [`BroadcastPolicy`] (default
-//! [`Backoff`]), read from the error's kind, never its text:
+//! [`Backoff`]), read from the error's kind or code, never its text:
 //!
 //! | Meta says | Default |
 //! | --- | --- |
 //! | `131056`, the pair rate limit (one user messaged too often) | that recipient waits 1, 4, 16, 64 s (Meta's `4^X` schedule, `about-the-platform` § Pair rate limits); the others go on |
 //! | `130429` throughput (and the other `RateLimited` codes) | the recipient is retried with backoff, and the number's pacer slows down |
+//! | `131057`, the number in maintenance (Meta upgrading its throughput takes it off for up to a minute, `throughput`) | the recipient is retried every 20 s, so its five sends outlast the minute, and the pacer slows down |
 //! | `131048`, sending restricted for spam | reported, not retried (Meta: retrying makes it worse); the pacer slows down |
 //! | `131049`, the per-user marketing limit | reported for that recipient, not retried (Meta: wait at least 24 hours) |
 //! | the token, a permission, the account, the classification limit or payment refused ([`Backoff::STOPS`]) | the run stops: every recipient not sent yet is skipped |
@@ -110,8 +111,8 @@ pub enum Verdict {
     Stop,
 }
 
-/// The default [`BroadcastPolicy`], read from `ErrorKind` (the error's
-/// code, never its text):
+/// The default [`BroadcastPolicy`], read from `ErrorKind` and the Graph
+/// code (never the error's text):
 ///
 /// - [`Backoff::STOPS`] (the token, a permission, the account, the
 ///   classification limit or payment): stop the run;
@@ -119,12 +120,14 @@ pub enum Verdict {
 ///   is not retryable (`131049`, `131048`, `131050`, `131047`, …): fail;
 /// - the pair rate limit (`131056`): retry after `4^(failures - 1)`
 ///   seconds, Meta's schedule (1, 4, 16, 64 s);
+/// - the number in maintenance (`131057`): retry after
+///   [`Backoff::MAINTENANCE_RETRY`];
 /// - any other retryable error (`130429`, a 4xx `131000`, a connection
 ///   refused): retry after [`Backoff::base_delay`] doubled per failure, up
 ///   to [`Backoff::max_delay`].
 ///
 /// It slows the pacer down on `RateLimited` (`130429`, `80007`, `4`, an
-/// HTTP 429) and `SpamRateLimited` (`131048`).
+/// HTTP 429), `SpamRateLimited` (`131048`) and maintenance (`131057`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
 pub struct Backoff {
@@ -144,6 +147,14 @@ impl Default for Backoff {
     }
 }
 
+/// `131057`: "Business Account is in maintenance mode", which Meta's
+/// throughput upgrade causes for up to a minute (`throughput`).
+const MAINTENANCE: i64 = 131_057;
+
+fn in_maintenance(error: &Error) -> bool {
+    error.graph().is_some_and(|g| g.code == MAINTENANCE)
+}
+
 impl Backoff {
     /// The kinds that stop a run: they hold for every recipient, so every
     /// send left would fail the same way.
@@ -154,6 +165,12 @@ impl Backoff {
         ErrorKind::ClassificationLimitReached,
         ErrorKind::Payment,
     ];
+
+    /// The delay before each retry of a send refused with `131057`, the
+    /// number in maintenance. Meta's throughput upgrade, which a large
+    /// broadcast can trigger, takes the number off for up to a minute
+    /// (`throughput`); at 20 s apart, the default five sends span 80 s.
+    pub const MAINTENANCE_RETRY: Duration = Duration::from_secs(20);
 
     /// The defaults ([`Backoff::default`]).
     pub fn new() -> Self {
@@ -168,7 +185,7 @@ impl Backoff {
     }
 
     /// The first retry's delay, doubled for each later one (default 1 s).
-    /// The pair rate limit follows Meta's own schedule instead.
+    /// The pair rate limit and maintenance follow their own schedules.
     pub fn base_delay(mut self, delay: Duration) -> Self {
         self.base_delay = delay;
         self
@@ -197,6 +214,9 @@ impl BroadcastPolicy for Backoff {
             // failure)".
             return Verdict::RetryAfter(Duration::from_secs(4u64.saturating_pow(exponent)));
         }
+        if in_maintenance(error) {
+            return Verdict::RetryAfter(Self::MAINTENANCE_RETRY);
+        }
         Verdict::RetryAfter(
             self.base_delay
                 .saturating_mul(2u32.saturating_pow(exponent))
@@ -208,7 +228,7 @@ impl BroadcastPolicy for Backoff {
         matches!(
             error.kind(),
             ErrorKind::RateLimited | ErrorKind::SpamRateLimited
-        )
+        ) || in_maintenance(error)
     }
 }
 
@@ -912,6 +932,19 @@ mod tests {
                 .on_failure(&api(130429, 400), 4),
             Verdict::RetryAfter(Duration::from_secs(3))
         );
+        // Maintenance (a throughput upgrade, up to a minute): every 20 s,
+        // five sends spanning 80 s; other `ServiceUnavailable` codes back
+        // off as usual.
+        let maintenance: Vec<_> = (1..=4)
+            .map(|n| secs(p.on_failure(&api(131057, 400), n)))
+            .collect();
+        assert_eq!(maintenance, [Some(20), Some(20), Some(20), Some(20)]);
+        assert_eq!(p.on_failure(&api(131057, 400), 5), Verdict::Fail);
+        assert_eq!(
+            secs(p.on_failure(&api(131000, 400), 2)),
+            Some(2),
+            "131000 is not maintenance"
+        );
         // Never retried: the per-user marketing limit, spam, an opt-out.
         for code in [131049, 131048, 131050, 131047] {
             assert_eq!(p.on_failure(&api(code, 400), 1), Verdict::Fail, "{code}");
@@ -920,11 +953,14 @@ mod tests {
         for code in [190, 10, 131031, 131064, 131042] {
             assert_eq!(p.on_failure(&api(code, 400), 1), Verdict::Stop, "{code}");
         }
-        // Slow down on throughput and spam, not on the pair limit.
-        assert!(p.slows_down(&api(130429, 400)));
-        assert!(p.slows_down(&api(131048, 400)));
-        assert!(!p.slows_down(&api(131056, 400)));
-        assert!(!p.slows_down(&api(131049, 400)));
+        // Slow down on throughput, spam and maintenance; not on the pair
+        // limit, the marketing limit or another outage.
+        for code in [130429, 131048, 131057, 80007, 4] {
+            assert!(p.slows_down(&api(code, 400)), "{code}");
+        }
+        for code in [131056, 131049, 131000] {
+            assert!(!p.slows_down(&api(code, 400)), "{code}");
+        }
         assert_eq!(
             Backoff::new()
                 .max_attempts(0)
