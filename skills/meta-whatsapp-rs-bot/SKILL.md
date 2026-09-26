@@ -124,7 +124,7 @@ let report = broadcast.run().await; // spawn it to do something else meanwhile
 ```
 
 Resent only when Meta provably refused it (`Error::may_resend`), whatever the `BroadcastPolicy`;
-never a timeout, 5xx or `131000`; one per person. See [references/broadcast.md](references/broadcast.md).
+never a timeout, a `131000` or a 5xx but throttling; one per person. See [references/broadcast.md](references/broadcast.md).
 
 ## Help, menu and Markdown
 

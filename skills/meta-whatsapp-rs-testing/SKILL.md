@@ -113,8 +113,9 @@ let key = inbox.key(CUSTOMER);
 - **Assert `remaining() == 0`.** Without it a test passes when your code
   skipped a request you scripted.
 - Keep `RetryPolicy::NONE` unless the retry is what you test: the default
-  policy replays idempotent requests and throttled sends, consuming
-  scripted answers.
+  policy replays idempotent requests and the sends `Error::may_resend`
+  allows (throttled, or refused during maintenance), consuming scripted
+  answers.
 - A `MemoryKvStore` per test: shared stores leak dedup markers and OTP
   cooldowns between tests.
 - Postgres and Redis expire records by their own clock: a `ManualClock`

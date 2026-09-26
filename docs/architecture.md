@@ -129,7 +129,11 @@ of the examples and the dev container (`WA_TENANTS`, `WA_OTP_NAMESPACE`,
   `SinkError::Delivery`, `Error::Other`.
 - Branch on `Error::kind()` → `ErrorKind` (classified from Graph error
   `code`, per Meta's guidance) and `Error::is_retryable()`. Never on message
-  text, HTTP status, or subcode.
+  text, HTTP status, or subcode. One local refusal has a Graph kind: the
+  inbox's closed-window refusal
+  (`ValidationError::customer_service_window_closed()`) is
+  `CustomerServiceWindowClosed`, like Meta's `131047`, so one condition has
+  one kind.
 - Two questions about a failed send, two methods.
   `Error::may_have_been_sent` says whether it may have reached Meta
   (`false`: fix and resend; `true`: reconcile with the status webhooks
@@ -140,11 +144,7 @@ of the examples and the dev container (`WA_TENANTS`, `WA_OTP_NAMESPACE`,
   `131057` on a 4xx). The client's `RetryPolicy` (for a request that is
   not idempotent) and the bot's broadcast both follow it, and a policy of
   theirs can only be stricter. A `131000` on a 400 is not resent
-  automatically, although `may_have_been_sent` is `false`. One local refusal has a Graph kind: the
-  inbox's closed-window refusal
-  (`ValidationError::customer_service_window_closed()`) is
-  `CustomerServiceWindowClosed`, like Meta's `131047`, so one condition has
-  one kind.
+  automatically, although `may_have_been_sent` is `false`.
 - Multi-step flows (Embedded Signup onboarding) wrap failures with
   `Error::in_step("stable_step_name")` so callers know how far they got.
 - **`Error::Credit(CreditError)`**, the one leaf added for a feature

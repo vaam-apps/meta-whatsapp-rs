@@ -253,8 +253,10 @@ impl Messages {
     /// [`mark_read`](Self::mark_read) and show a typing indicator until you
     /// reply or 25 seconds pass. Only use it when you are about to reply.
     ///
-    /// Not replayed on transient errors (throttling excepted, which proves
-    /// Meta did nothing). Replaying would not duplicate anything, but an
+    /// Not replayed on transient errors (except what
+    /// [`Error::may_resend`](meta_whatsapp_core::Error::may_resend) allows:
+    /// throttling or the account in maintenance, which prove Meta did
+    /// nothing). Replaying would not duplicate anything, but an
     /// indicator is only worth showing promptly: a retry that lands after
     /// backoff — typically when this call runs concurrently with composing
     /// the reply — can put "typing…" on screen *after* the reply arrived.

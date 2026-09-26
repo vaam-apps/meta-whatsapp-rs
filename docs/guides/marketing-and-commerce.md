@@ -155,10 +155,11 @@ client.marketing(phone_number_id).send(&to, &offer, &MarketingOptions::new()).aw
 - Send a campaign with the bot crate's paced broadcast (`Broadcast`,
   feature `bot`; [bots.md](bots.md#9-paced-broadcasts)): it paces each
   number under Meta's throughput, sends each person once, stops on a
-  refusal that holds for everyone (a paused template), and resends only
-  what Meta provably refused (`Error::may_resend`). A client alone
-  replays throttled sends only within its retry budget, and never
-  replays timeouts.
+  refusal that holds for everyone (a paused template, when everyone gets
+  the same message: `BroadcastBuilder::content`), and resends only what
+  Meta provably refused (`Error::may_resend`). A client alone replays
+  what Meta refused only within its retry budget, and never replays
+  timeouts.
 
 ## 5. Opt-outs (131050) and per-user limits (131049)
 

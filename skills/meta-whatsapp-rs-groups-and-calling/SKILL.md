@@ -108,8 +108,9 @@ Calls arrive as `WebhookEvent::CallUpdated` and `CallStatusUpdated`
 - **Ownership first**: `block_users(number)` and `groups(number)` act on
   whatever number you pass; check that the calling tenant owns it.
 - `create` and `reset_invite_link` are not idempotent (a second group, a
-  dead link): the client replays them only on throttling, never after a
-  timeout or 5xx. Do not retry them yourself either.
+  dead link): the client replays them only when `Error::may_resend`
+  holds (throttling, the account in maintenance), never after a timeout
+  or 5xx. Do not retry them yourself either.
 - `add_participants` is wrapped, but Meta's guide says participants join
   through invite links: expect a refusal unless Meta enabled it for you.
 - A call, answered or not, opens the 24-hour window on Meta's side, but
