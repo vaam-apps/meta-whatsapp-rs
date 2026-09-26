@@ -210,6 +210,19 @@ async fn types_and_phone_number_narrow_the_page() {
     // newest sequence.
     let reply = poll(&h, &key, "?types=call_updated").await;
     assert_eq!((sequences(&reply), next_after(&reply)), (vec![], t));
+    // A filtered page moves the cursor past what the filter left out: to
+    // the newest sequence (the template event) when no more match, not to
+    // the last event it answered. So a cursor saved under one filter skips,
+    // for another, what the first left out: one cursor per filter set
+    // (the `next_after` schema, the guide, the events skill). While more
+    // match, it is the last event answered. Decisive: `poll`'s
+    // `next_after`.
+    let reply = poll(&h, &key, "?types=message_received").await;
+    assert_eq!((sequences(&reply), next_after(&reply)), (vec![m1, m2], t));
+    let reply = poll(&h, &key, "?phone_number_id=1").await;
+    assert_eq!((sequences(&reply), next_after(&reply)), (vec![m1, s1], t));
+    let reply = poll(&h, &key, "?types=message_received&limit=1").await;
+    assert_eq!((sequences(&reply), next_after(&reply)), (vec![m1], m1));
 }
 
 /// Past retention: once housekeeping purged events after a cursor, that

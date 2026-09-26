@@ -291,6 +291,11 @@ pub async fn filters(store: &dyn EventStore) {
     q.phone_number_id = Some("61".to_owned());
     let page = store.page(&q).await.unwrap();
     assert_eq!(page.events.len(), 2);
+    // The stream's bounds are the stream's, whatever the filter: a page
+    // that leaves the newest event out still reports it (a filtered poll's
+    // `next_after` goes past what the filter left out).
+    assert!(!page.more);
+    assert_eq!(page.high_water, 3);
     // A filter that leaves nothing: the stream's bounds still come.
     q.types = Some(vec!["call_updated".to_owned()]);
     let page = store.page(&q).await.unwrap();
