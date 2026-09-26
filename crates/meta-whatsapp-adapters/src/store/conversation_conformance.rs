@@ -107,7 +107,8 @@
 //!   store's `erasure_mode()`; the summary never keeps their text (under
 //!   `Delete` it follows the latest remaining message, never a tombstone,
 //!   or goes), the other participants' and the business's messages stay,
-//!   and a redacted placeholder is never filled;
+//!   and a redacted placeholder is never filled; a message's sender is the
+//!   one it was appended with (a fill naming someone else changes nothing);
 //! - purge by age deletes exactly what is older than the cutoff (a record
 //!   at the cutoff stays): messages and tombstones, window events,
 //!   ownership records, contact removals, and the summary of a
@@ -172,6 +173,7 @@ pub async fn run<S: ConversationStore + ?Sized>(store: &S) {
     erase_all_reaches_a_person_under_every_identity(store).await;
     an_erasure_redacts_or_deletes_the_persons_group_messages(store).await;
     an_empty_identifier_connects_nobody(store).await;
+    a_filled_placeholder_keeps_its_sender(store).await;
     purge_deletes_exactly_what_is_older(store).await;
     apply_retention_follows_the_retention(store).await;
 }
@@ -2987,6 +2989,76 @@ async fn an_empty_identifier_connects_nobody<S: ConversationStore + ?Sized>(stor
     assert_eq!(
         store.identity_links(&r.key("US.C")).await.unwrap(),
         [link(&r, "US.C", "", 1)]
+    );
+}
+
+/// A message's sender is the one it was appended with
+/// (`StoredMessage::sender`: a fill does not change it): a group
+/// placeholder filled with a payload naming someone else is still its
+/// sender's when they are erased, and is erased once.
+async fn a_filled_placeholder_keeps_its_sender<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("filled-sender");
+    let group = r.key("HBgFILLED");
+    let placeholder = StoredMessage {
+        kind: StoredMessage::MEDIA_PLACEHOLDER.to_owned(),
+        text: None,
+        payload: serde_json::json!({"from": "16505550009", "from_user_id": "US.9",
+            "group_id": group.contact, "type": "image"}),
+        ..r.msg(&group.contact, "p", Direction::Inbound, 1, "")
+    };
+    assert_eq!(
+        store
+            .append_synced(vec![placeholder.clone()])
+            .await
+            .unwrap(),
+        [true]
+    );
+    assert!(
+        store
+            .fill_media_placeholder(
+                &r.pn,
+                &placeholder.id,
+                "image".to_owned(),
+                Some("their photo".to_owned()),
+                serde_json::json!({"from_user_id": "US.8", "image": {"caption": "their photo"}}),
+            )
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .erase_all(&r.pn, &["US.8".to_owned()])
+            .await
+            .unwrap()
+            .is_empty(),
+        "the filled payload's `from_user_id` is not the message's sender"
+    );
+    assert_eq!(
+        store.erase_all(&r.pn, &["US.9".to_owned()]).await.unwrap(),
+        Erased {
+            group_messages: 1,
+            ..Erased::default()
+        },
+        "the sender it was appended with"
+    );
+    let left = store.message(&r.pn, &placeholder.id).await.unwrap();
+    if store.erasure_mode() == ErasureMode::Delete {
+        assert_eq!(left, None);
+    } else {
+        let left = left.unwrap();
+        assert_eq!(
+            (left.kind.as_str(), left.text, left.payload),
+            (StoredMessage::ERASED, None, serde_json::json!({}))
+        );
+    }
+    assert_eq!(summary(store, &group).await.and_then(|s| s.last_text), None);
+    assert!(
+        store
+            .erase_all(&r.pn, &["US.9".to_owned()])
+            .await
+            .unwrap()
+            .is_empty(),
+        "erased once"
     );
 }
 

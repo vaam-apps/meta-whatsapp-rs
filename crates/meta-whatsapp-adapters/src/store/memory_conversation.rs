@@ -55,6 +55,10 @@ struct State {
     /// conversations (the Postgres adapter's `(phone_number_id, sender)`
     /// index).
     senders: HashMap<(PhoneNumberId, String), BTreeSet<MessageId>>,
+    /// Each indexed message's sender, as it was appended: a later fill
+    /// replaces the payload, never the sender (the Postgres adapter's
+    /// `sender` column).
+    sender_of: HashMap<MessageId, String>,
     /// Identity links by `(business number, previous, current)`, their
     /// identity, with their time.
     links: BTreeMap<(PhoneNumberId, String, String), OffsetDateTime>,
@@ -171,20 +175,19 @@ impl State {
                 ))
                 .or_default()
                 .insert(message.id.clone());
+            self.sender_of.insert(message.id.clone(), sender.to_owned());
         }
         self.messages.insert(message.id.clone(), message);
         true
     }
 
-    /// Drop message `message`'s entry from the sender index.
+    /// Drop message `message`'s entry from the sender index: under the
+    /// sender it was appended with, whatever its payload says now.
     fn unindex_sender(&mut self, message: &StoredMessage) {
-        let Some(sender) = message.sender() else {
+        let Some(sender) = self.sender_of.remove(&message.id) else {
             return;
         };
-        let key = (
-            message.conversation.phone_number_id.clone(),
-            sender.to_owned(),
-        );
+        let key = (message.conversation.phone_number_id.clone(), sender);
         if let Some(ids) = self.senders.get_mut(&key) {
             ids.remove(&message.id);
             if ids.is_empty() {
