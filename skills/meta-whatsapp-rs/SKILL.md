@@ -57,6 +57,7 @@ anyhow = "1"
 | `axum` | | `webhooks::router` (the endpoint) and `webhooks::sse` (live stream) |
 | `typst` | | `meta_whatsapp_rs::typst`: invoices, receipts, vouchers → PDF/PNG |
 | `flows-endpoint` | | WhatsApp Flows data-endpoint crypto |
+| `bot` | | `meta_whatsapp_rs::bot`: commands, guards, cooldowns, middleware, plugins, Markdown replies |
 | `full` | | all of the above |
 | `testing` | | `ScriptedTransport` for your own tests; `[dev-dependencies]` only, not in `full` (`meta-whatsapp-rs-testing`) |
 
@@ -84,6 +85,7 @@ the inbox. It leaves out `Result`: write `meta_whatsapp_rs::Result`.
 | What each webhook event means and what to do with it | `meta-whatsapp-rs-webhook-events` |
 | Fan-out, live views over SSE, background workers | `meta-whatsapp-rs-live-updates` |
 | The merchant ↔ customer chat inbox of a CMS | `meta-whatsapp-rs-cms-inbox` |
+| A bot: commands, guards, cooldowns, middleware, plugins, Markdown replies | `meta-whatsapp-rs-bot` |
 | Blocking a customer, group chats, WhatsApp calls | `meta-whatsapp-rs-groups-and-calling` |
 | Campaigns, opt-ins and opt-outs, analytics, QR codes | `meta-whatsapp-rs-marketing` |
 | Catalogs, product messages, carts | `meta-whatsapp-rs-commerce` |

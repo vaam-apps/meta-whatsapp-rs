@@ -119,6 +119,32 @@ volumes (Claude config, shell history, cargo caches) start empty
 
 ### Added
 
+- **meta-whatsapp-bot**, a bot framework over Cloud API webhooks,
+  re-exported as `meta_whatsapp_rs::bot` behind the facade's new `bot`
+  feature (off by default, in `full`). A `Bot` is an
+  `EventSink<WebhookEvent>`: middleware in registration order (any may
+  stop the event; `Logging`, which logs kinds and durations but never
+  content, senders or error text, and `MarkRead`, a read receipt with an
+  optional typing indicator), then commands (configurable prefixes,
+  case-insensitive names and aliases, whitespace-split arguments with
+  quoted strings; reply buttons, list rows and template quick-reply
+  buttons whose id is a registered payload) behind guards (banned
+  senders, private-only and group-only, owner-only, and per-user
+  cooldowns kept in the `KvStore` under `bot.cooldown`, checked last),
+  else listeners. Senders are keyed by BSUID first; replies quote the
+  message and go to the group, the BSUID or `+<wa_id>`. Plugins are
+  compiled in (no hot reload), each with a category for the generated
+  help (`/help`); `Bot::sync_command_menu` publishes the visible commands
+  as Meta's slash-command menu within the client's limits.
+  `Ctx::reply_markdown` converts Markdown to WhatsApp formatting and
+  splits it into messages of at most 4096 characters between blocks,
+  never inside a code block that fits (new dependency: `pulldown-cmark`
+  0.13, MIT, no default features). Every decision is a trait with a
+  default: `Outbound`, `CommandParser`, `AccessPolicy`, `Cooldowns`,
+  `Refusals`, `ErrorHandler` and the renderer's `Escape`. Guide:
+  [docs/guides/bots.md](docs/guides/bots.md); skill:
+  `meta-whatsapp-rs-bot`. Paced broadcasts and scheduling come later.
+
 - **meta-whatsapp-server, milestone M1c**: Meta's webhooks into the inbox
   and an event outbox, and polling it. `POST /webhooks/meta` on the public
   listener refuses a missing or malformed `X-Hub-Signature-256` with `401`

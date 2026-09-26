@@ -13,7 +13,10 @@ are in [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md).
 
 > Checked against meta-whatsapp-rs **7940d15** (2026-09-24), Graph API v25.0. Every
 > Rust name in these pages was checked against the source at that commit,
-> and the snippets were compiled against it. On another revision, trust the
+> and the snippets were compiled against it; [bots.md](bots.md) was written
+> later (2026-09-26) with the crate it describes; its snippets are copied
+> from the skill example the gate compiles (the copies themselves are not
+> checked). On another revision, trust the
 > rustdoc over these pages.
 
 ## Which guide for which job
@@ -27,6 +30,7 @@ are in [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md).
 | [marketing-and-commerce.md](marketing-and-commerce.md) | send campaigns and order updates, collect opt-ins, show products | [`send_message`](../../crates/meta-whatsapp-rs/examples/send_message.rs) | [`meta-whatsapp-rs-marketing`](../../skills/meta-whatsapp-rs-marketing/SKILL.md), [`meta-whatsapp-rs-commerce`](../../skills/meta-whatsapp-rs-commerce/SKILL.md), [`meta-whatsapp-rs-templates`](../../skills/meta-whatsapp-rs-templates/SKILL.md), [`meta-whatsapp-rs-send-templates`](../../skills/meta-whatsapp-rs-send-templates/SKILL.md) |
 | [otp-login.md](otp-login.md) | log users in (or verify a number) with a WhatsApp code | [`otp_login`](../../crates/meta-whatsapp-rs/examples/otp_login.rs) | [`meta-whatsapp-rs-otp-login`](../../skills/meta-whatsapp-rs-otp-login/SKILL.md) |
 | [documents.md](documents.md) | send invoices, receipts and voucher images | [`invoice_document`](../../crates/meta-whatsapp-rs/examples/invoice_document.rs) | [`meta-whatsapp-rs-documents`](../../skills/meta-whatsapp-rs-documents/SKILL.md) |
+| [bots.md](bots.md) | answer commands, button taps and free text with a bot: guards, cooldowns, middleware, plugins, Markdown replies, Meta's command menu | [`bot.rs`](../../skills/meta-whatsapp-rs-bot/examples/bot.rs) | [`meta-whatsapp-rs-bot`](../../skills/meta-whatsapp-rs-bot/SKILL.md) |
 | [production.md](production.md) | pick storage, manage keys, log safely, scale, pin versions | — | [`meta-whatsapp-rs-production`](../../skills/meta-whatsapp-rs-production/SKILL.md), [`meta-whatsapp-rs-storage`](../../skills/meta-whatsapp-rs-storage/SKILL.md) |
 | [server.md](server.md) | run the HTTP service for an app not written in Rust: configure it, create tenants and keys, send, receive Meta's webhooks and poll events | [`client.ts`](../../skills/meta-whatsapp-rs-server/examples/client.ts), [`send.ts`](../../skills/meta-whatsapp-rs-server-send/examples/send.ts), [`events.ts`](../../skills/meta-whatsapp-rs-server-events/examples/events.ts) (TypeScript callers, type-checked against the service's OpenAPI document) | [`meta-whatsapp-rs-server`](../../skills/meta-whatsapp-rs-server/SKILL.md), [`meta-whatsapp-rs-server-send`](../../skills/meta-whatsapp-rs-server-send/SKILL.md), [`meta-whatsapp-rs-server-events`](../../skills/meta-whatsapp-rs-server-events/SKILL.md) |
 

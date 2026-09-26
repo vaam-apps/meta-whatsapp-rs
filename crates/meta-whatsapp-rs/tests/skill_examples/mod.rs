@@ -5,6 +5,8 @@
 // Reference code: not every function is called from a test.
 #![allow(dead_code)]
 
+#[path = "../../../../skills/meta-whatsapp-rs-bot/examples/bot.rs"]
+mod meta_whatsapp_rs_bot_bot;
 #[path = "../../../../skills/meta-whatsapp-rs-cms-inbox/examples/inbox.rs"]
 mod meta_whatsapp_rs_cms_inbox_inbox;
 #[path = "../../../../skills/meta-whatsapp-rs-commerce/examples/commerce.rs"]

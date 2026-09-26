@@ -31,6 +31,8 @@ crates/
   meta-whatsapp-webhooks   verify, parse, normalize, dedup, dispatch; axum router (feature).
   meta-whatsapp-adapters   port implementations: reqwest, memory/Postgres/Redis stores, sinks.
   meta-whatsapp-typst      Typst → PDF/PNG for document and image messages.
+  meta-whatsapp-bot        bot framework over webhooks: commands, guards, cooldowns, middleware,
+                           compile-time plugins, Markdown → WhatsApp formatting.
   meta-whatsapp-rs         facade: re-exports, prelude, `client(token)`, the CMS inbox,
                            feature flags, runnable examples. What integrators depend on.
   meta-whatsapp-server     the HTTP service (a binary on the facade): tenants, keys, the /v1
@@ -46,7 +48,10 @@ of this workspace (the [service](#service-meta-whatsapp-server)) depends
 on `meta-whatsapp-rs` alone among them, reaching axum and sqlx through its
 re-exports, as an outside integrator would; `meta-whatsapp-client` and
 `meta-whatsapp-webhooks` never depend on each other or on
-`meta-whatsapp-adapters` (except as a dev-dependency for tests). An adapter
+`meta-whatsapp-adapters` (except as a dev-dependency for tests);
+`meta-whatsapp-bot` sits above both and depends on core, client and
+webhooks only, never on the adapters (dev-dependency aside) or the
+facade, which re-exports it behind its `bot` feature. An adapter
 never leaks its library's types through a port.
 
 ## Ports (`meta-whatsapp-core`)
@@ -60,8 +65,8 @@ never leaks its library's types through a port.
 | `clock::Clock` | `now` | — |
 
 Typed stores are built **on `KvStore`**, never as new ports: token vault,
-OTP challenges, webhook dedup, Embedded Signup sessions. An adapter author
-implements five methods once and every feature works.
+OTP challenges, webhook dedup, Embedded Signup sessions, bot cooldowns. An
+adapter author implements five methods once and every feature works.
 
 ## Stable identifiers
 
@@ -795,6 +800,49 @@ exposes the 24-hour `CustomerServiceWindow`, and sends replies.
   executable conformance suite, so every adapter proves them. The Postgres
   adapter needs no schema change: the summary is maintained when a row is
   written, so the difference lives in the write.
+
+## Bot framework (`meta-whatsapp-bot`)
+
+A `Bot` is an `EventSink<WebhookEvent>`, so it sits behind
+`WebhookHandler` and its `DedupGuard` like any sink. Per event: the
+middleware chain in registration order (each gets the context and
+`Next`; not calling it stops the event), then for a received message
+from a sender who is not banned, the command match (typed text the
+`CommandParser` accepts, or a reply button, list row or template
+quick-reply button whose id is a registered payload), the guards in
+order (scope, owner, cooldown last so a refusal starts none) and the
+handler; every other event, and a message no command matched, goes to
+the listeners. Standby copies and echoes are other events: they never
+run a command.
+
+- **Every decision is a trait with a default**: `Outbound`
+  (`ClientOutbound`, the client's `messages(pn).send` and read receipts),
+  `CommandParser` (`PrefixParser`), `AccessPolicy` (`AccessList`),
+  `Cooldowns` (`KvCooldowns`), `Refusals` (`ReplyRefusals`),
+  `ErrorHandler` (`LogErrors`), the renderer's `Escape`
+  (`WordJoinerEscape`).
+- **Identity** is the BSUID first (`Sender::key`), else `wa_id`. A reply
+  quotes the message and goes to the group, else the BSUID, else
+  `+<wa_id>`. Bans and owners listed by phone number cannot match a
+  sender without one.
+- **Cooldowns** are a typed store on `KvStore` (namespace `bot.cooldown`,
+  key: SHA-256 of the length-prefixed business number, command and user
+  key, so no phone number is stored), started with `put_if_absent` and
+  left to expire: atomic across instances sharing the store.
+- **Errors**: a handler's error is logged (kinds only) and acknowledged
+  by default, because an error answers `500` and Meta redelivers the
+  whole batch, repeating replies already sent; `PropagateErrors` opts in.
+- **Plugins** are compiled in (`Plugin::setup` registers commands,
+  middleware and listeners; `on_unload` at `Bot::unload`). No dynamic
+  loading or hot reload: Rust has no stable ABI.
+- **Command menu**: `Bot::sync_command_menu` sends the visible commands
+  through the client's conversational automation call, under its limits
+  (30 commands, names up to 32 characters, descriptions 1 to 256).
+- **Markdown**: `markdown::render` (pulldown-cmark) converts CommonMark to
+  WhatsApp formatting and packs blocks into messages of at most 4096
+  characters (the client's text limit, counted the same way), never
+  cutting a code block that fits. Meta documents no escape syntax, so the
+  default escape (U+2060 around literal markup characters) is swappable.
 
 ## Typst (`meta-whatsapp-typst`)
 
