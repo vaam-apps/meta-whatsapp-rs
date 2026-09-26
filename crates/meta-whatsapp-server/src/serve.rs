@@ -543,11 +543,31 @@ mod tests {
     }
 
     /// Housekeeping purges the outbox past retention, round after round,
-    /// and stops with the service. Decisive: the purge in the loop.
+    /// and the expired idempotency records (M1b's purge, in the same loop),
+    /// and stops with the service. Decisive: each purge in the loop.
     #[tokio::test]
     async fn housekeeping_purges_past_retention_until_stopped() {
+        use crate::model::{IdempotencyClaim, IdempotencyKey, TenantId};
         use crate::store::events::{EventQuery, NewEvent};
         let events: Arc<dyn EventStore> = Arc::new(crate::store::MemoryEventStore::new());
+        // An idempotency record expired before the first round.
+        let records = Arc::new(MemoryStore::new());
+        let tenant = TenantId::parse("tenant-a").unwrap();
+        records.create_tenant(&tenant, "").await.unwrap().unwrap();
+        let brief = Duration::from_millis(1);
+        let claimed = records
+            .claim_idempotency_key(
+                &tenant,
+                &IdempotencyKey::parse("order:1234:shipped").unwrap(),
+                &[7; 32],
+                "claim",
+                brief,
+                brief,
+            )
+            .await
+            .unwrap();
+        assert_eq!(claimed, IdempotencyClaim::Claimed);
+        tokio::time::sleep(Duration::from_millis(5)).await;
         let row = |id: &str| NewEvent {
             id: id.to_owned(),
             dedup_key: None,
@@ -563,7 +583,7 @@ mod tests {
         let (stop, stopped) = watch::channel(false);
         let task = tokio::spawn(housekeeping(
             events.clone(),
-            Arc::new(MemoryStore::new()),
+            records.clone(),
             None,
             Duration::from_millis(1),
             Duration::from_millis(20),
@@ -591,6 +611,13 @@ mod tests {
             assert!(tokio::time::Instant::now() < deadline, "no second round");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+        // The first round, done before the second's outbox purge, took the
+        // expired record: nothing is left to purge.
+        assert_eq!(
+            records.purge_idempotency_keys().await.unwrap(),
+            0,
+            "the expired idempotency record was never purged"
+        );
         stop.send(true).unwrap();
         tokio::time::timeout(Duration::from_secs(5), task)
             .await
