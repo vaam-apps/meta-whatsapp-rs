@@ -52,9 +52,13 @@
 //! packed into messages whole, separated as in one message; a block goes
 //! to the next message when it does not fit, so a code block that fits in
 //! a message is never cut. A block longer than a message is cut at line
-//! breaks, then at spaces, then anywhere (a code block keeps its fences on
-//! every piece, but for a piece that starts or ends with a backtick, which
-//! goes out plain); formatting spanning such a cut is not repaired.
+//! breaks, then at spaces, then between characters (a code block keeps its
+//! fences on every piece, but for a piece that starts or ends with a
+//! backtick, which goes out plain); formatting spanning such a cut is not
+//! repaired. A cut never splits a character (so never a UTF-16 surrogate
+//! pair), but a single word longer than a message may be cut inside a
+//! cluster of characters shown as one (a flag, a skin-toned or family
+//! emoji).
 
 use std::collections::HashSet;
 use std::fmt;
