@@ -1069,11 +1069,12 @@ async fn live_postgres_an_event_dated_before_its_tenant_was_bound_again_is_nobod
 /// the event's second, the event is routed to nobody. Through the re-check:
 /// routed to tenant-a (bound for an hour), then, before the insert, bound
 /// again (tenant-a deleted and created again) half a second into the
-/// event's second: operator-only; half a second before it: tenant-a's. For
-/// an event naming a number, then one naming only its WABA; each case on a
-/// database of its own (a body is delivered once per database). Decisive:
-/// the routing's `began_by`, and the re-check's bound (`attached_at <
-/// to_timestamp(t)`) in each branch, both ways.
+/// event's second, or at its very first instant: operator-only; half a
+/// second before it: tenant-a's. For an event naming a number, then one
+/// naming only its WABA; each case on a database of its own (a body is
+/// delivered once per database). Decisive: the routing's `began_by`, and
+/// the re-check's bound (`attached_at < to_timestamp(t)`) in each branch,
+/// both ways, and strict (`<=` keeps the first instant's row).
 #[tokio::test]
 async fn live_postgres_an_event_dated_in_its_binding_s_first_second_is_nobodys() {
     use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
@@ -1085,6 +1086,7 @@ async fn live_postgres_an_event_dated_in_its_binding_s_first_second_is_nobodys()
     for bound_again in [
         None,
         Some(("0.5 second", false)),
+        Some(("0 second", false)),
         Some(("-0.5 second", true)),
     ] {
         let Some(db) = TestDb::new().await else {

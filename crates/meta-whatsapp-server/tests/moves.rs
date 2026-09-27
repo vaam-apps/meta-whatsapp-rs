@@ -156,6 +156,68 @@ async fn a_tenant_deletion_skips_a_waba_moved_since_its_listing() {
     }
 }
 
+/// A tenant's deletion never skips a WABA its tenant still holds: bound to
+/// merchant-a again once listed (unbound and attached again: a new
+/// binding, the listing's stale), it is skipped for that round only, and
+/// the next round disconnects it with its new token before the tenant
+/// goes; with no token stored again, the deletion answers `409
+/// number_not_connected`, and merchant-a stays, with its binding. A skip
+/// costs a round, never a binding left behind a deleted tenant (the store
+/// refuses to delete a tenant that holds a WABA: `HasWabas`). Decisive:
+/// `still_listed` telling a moved binding from a failed one (answering
+/// every failure makes the first case `503`; skipping every one makes the
+/// second `500` after five rounds, the tenant never deleted).
+#[tokio::test]
+async fn a_tenant_deletion_never_skips_a_waba_its_tenant_still_holds() {
+    for token in [Some("TOKEN-OF-A-AGAIN"), None] {
+        let s = setup().await;
+        let (store, vault) = (s.h.store.clone(), s.h.vault.clone());
+        s.moving.after_listing(Box::pin(async move {
+            move_waba(
+                store.as_ref(),
+                &vault,
+                &WabaId::new(WABA),
+                &PhoneNumberId::new(PN),
+                "merchant-a",
+                token,
+            )
+            .await;
+        }));
+        let deleted = s.h.call(s.delete_tenant()).await;
+        assert!(!s.moving.armed(), "{token:?}: the move never ran");
+        let tenant =
+            s.h.store
+                .tenant(&TenantId::parse("merchant-a").unwrap())
+                .await
+                .unwrap();
+        let holder =
+            s.h.store
+                .waba(&WabaId::new(WABA))
+                .await
+                .unwrap()
+                .map(|b| b.tenant_id.as_str().to_owned());
+        if token.is_some() {
+            assert_eq!(deleted.status, StatusCode::NO_CONTENT, "{}", deleted.text);
+            assert!(tenant.is_none());
+            assert_eq!(holder, None, "disconnected before the tenant went");
+            assert!(s.h.vault.get(&WabaId::new(WABA)).await.unwrap().is_none());
+            let [unsubscribe] = s.h.graph.requests().try_into().unwrap();
+            assert_eq!(unsubscribe.method, Method::DELETE);
+            assert_eq!(unsubscribe.bearer(), token);
+        } else {
+            assert_eq!(
+                (deleted.status, deleted.code().as_str()),
+                (StatusCode::CONFLICT, "number_not_connected"),
+                "{}",
+                deleted.text
+            );
+            assert!(tenant.is_some(), "deleted with a binding left");
+            assert_eq!(holder.as_deref(), Some("merchant-a"));
+            assert!(s.h.graph.requests().is_empty());
+        }
+    }
+}
+
 /// L1: the WABA moves to merchant-b (who subscribed the app again) once a
 /// capability of merchant-a's is made, before Meta is called: the
 /// unsubscribe with merchant-a's token is never sent. The tenant's

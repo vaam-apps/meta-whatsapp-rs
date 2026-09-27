@@ -901,6 +901,36 @@ async fn an_event_dated_before_its_binding_is_nobodys() {
     assert_eq!(inbox(&h, PN_A, "16505551234").await, 1);
 }
 
+/// Roadmap S2, the security review's L3, through the whole pipeline on
+/// memory: an event Meta dated in the second its WABA's binding began may
+/// be the previous holder's, so it reaches neither the tenant's stream nor
+/// its inbox (the routing and the inbox follow the outbox's rule); dated
+/// the next second, it reaches both. Decisive: the strict comparison in
+/// the routing (`events::owner`, through `outbox::began_by`), which the
+/// inbox write follows (a routing of `<=` fills the inbox with an event
+/// the outbox keeps from the tenant).
+#[tokio::test]
+async fn an_event_of_its_bindings_own_second_reaches_no_tenant_nor_inbox() {
+    let h = two_tenants().await;
+    let began = h
+        .store
+        .waba(&meta_whatsapp_rs::core::ids::WabaId::new(WABA_A))
+        .await
+        .unwrap()
+        .unwrap()
+        .attached_at
+        .unix_timestamp();
+    let same = common::meta::dated(text(WABA_A, PN_A, "wamid.SAME-SECOND"), began);
+    assert_eq!(h.webhook(&bytes(&same)).await.status, StatusCode::OK);
+    assert_eq!(tenants_of(&h.outbox.rows()), [None]);
+    assert!(polled(&h, A).await.is_empty());
+    assert_eq!(inbox(&h, PN_A, "16505551234").await, 0, "no inbox write");
+    let next = common::meta::dated(text(WABA_A, PN_A, "wamid.NEXT-SECOND"), began + 1);
+    assert_eq!(h.webhook(&bytes(&next)).await.status, StatusCode::OK);
+    assert_eq!(polled(&h, A).await.len(), 1);
+    assert_eq!(inbox(&h, PN_A, "16505551234").await, 1);
+}
+
 /// `history` Meta's `messages` variant the library could not type (one
 /// malformed message): routed as a `history` of the number its raw
 /// `metadata` names.

@@ -723,10 +723,108 @@ pub async fn a_capability_made_before_the_new_token_is_stored_is_refused(
     }
 }
 
+/// M1, when the vault fails during the move: the WABA moves to another
+/// tenant, whose token is stored under a vault key this replica does not
+/// have (a key rollout), between a capability's read of the binding and
+/// its read of the vault, which then fails to open the record. That
+/// failure is the new holder's record's, not this binding's: `503
+/// storage_unavailable` (retryable), as for any move, never the vault's
+/// own answer (`500 internal`). For an `OwnedWaba` and an `OwnedNumber`.
+/// The new holder keeps its binding and its token. Decisive: the binding
+/// read again before the vault's answer is used, whatever it is, in
+/// `Authorizer::open` and in `Authorizer::owned_number`.
+pub async fn a_vault_failure_while_its_waba_moves_is_answered_as_the_move(
+    store: Arc<dyn Store>,
+    kv: Arc<dyn KvStore>,
+) {
+    let s = Arc::new(Setup::new(store.clone(), kv.clone()).await);
+    // Another replica's vault: the same store, a key this one lacks.
+    let other = TokenVault::new(kv, VaultKeys::new(VaultKey::generate("rolled").unwrap())).unwrap();
+    let moving = Arc::new(MovesAfterRead {
+        inner: store.clone(),
+        hook: std::sync::Mutex::new(None),
+        after_number: std::sync::Mutex::new(None),
+    });
+    let records: Arc<dyn RecordStore> = moving.clone();
+    let authz = Authorizer::new(
+        records,
+        s.vault.clone(),
+        Client::builder()
+            .transport(ScriptedTransport::new())
+            .build()
+            .unwrap(),
+    )
+    .unwrap();
+    let (key, _) = mint(
+        store.as_ref(),
+        KeyOwner::Tenant(TenantId::parse(A).unwrap()),
+        vec![Scope::Numbers],
+        String::new(),
+        None,
+    )
+    .await
+    .unwrap();
+    let caller = authz
+        .tenant_caller(
+            Some(&format!("Bearer {}", key.expose_key())),
+            None,
+            Scope::Numbers,
+        )
+        .await
+        .unwrap();
+    for how in ["owned_waba", "owned_number"] {
+        let case = format!("vault-failing-while-moving-{how}");
+        let (waba, pn) = ids(&case);
+        s.attach(A, &waba, &pn, Some("TOKEN-OF-A")).await;
+        let hook: Hook = {
+            let (s, other, waba, pn) = (s.clone(), other.clone(), waba.clone(), pn.clone());
+            Box::pin(async move {
+                s.vault.delete(&waba).await.unwrap();
+                assert!(s.store.unbind_waba(&waba).await.unwrap());
+                let bound = s
+                    .store
+                    .bind_waba(
+                        &TenantId::parse(B).unwrap(),
+                        &waba,
+                        std::slice::from_ref(&pn),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(bound, BindOutcome::Bound);
+                other
+                    .store(
+                        &StoredBusinessToken::new(waba.clone(), AccessToken::new("TOKEN-OF-B"))
+                            .phone_number_ids([pn.clone()]),
+                    )
+                    .await
+                    .unwrap();
+            })
+        };
+        moving.arm(hook);
+        let made = if how == "owned_waba" {
+            authz.owned_waba(&caller, waba.clone()).await.map(drop)
+        } else {
+            authz.owned_number(&caller, pn.clone()).await.map(drop)
+        };
+        let refused = made.expect_err(&case);
+        assert_eq!(refused.code(), "storage_unavailable", "{case}");
+        assert!(moving.hook.lock().unwrap().is_none(), "{case}: never moved");
+        assert_eq!(s.holder(&waba).await.as_deref(), Some(B), "{case}");
+        let kept = other
+            .get(&waba)
+            .await
+            .unwrap()
+            .map(|t| t.token.expose_secret().to_owned());
+        assert_eq!(kept.as_deref(), Some("TOKEN-OF-B"), "{case}");
+        assert_eq!(s.status(&pn).await, Some(NumberStatus::Connected), "{case}");
+    }
+}
+
 /// Everything above.
 pub async fn run(store: Arc<dyn Store>, kv: Arc<dyn KvStore>) {
     forget_leaves_a_waba_attached_again(store.clone(), kv.clone()).await;
     failed_leaves_a_waba_attached_again(store.clone(), kv.clone()).await;
     a_capability_made_before_the_new_token_is_stored_is_refused(store.clone(), kv.clone()).await;
+    a_vault_failure_while_its_waba_moves_is_answered_as_the_move(store.clone(), kv.clone()).await;
     a_capability_made_while_its_waba_moves_is_refused(store, kv).await;
 }
