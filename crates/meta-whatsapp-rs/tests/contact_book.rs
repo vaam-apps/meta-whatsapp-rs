@@ -9,8 +9,9 @@
 //!   root manifest's `default-members`. The service's crates
 //!   (`meta-whatsapp-server*`) are members but not default ones, and are
 //!   not scanned: the service exposes the call to operators in roadmap
-//!   M5c3. Every other member, and every directory under `crates/`, must
-//!   be a default member, so no library crate goes unscanned.
+//!   M5c3. Every other directory under `crates/` must be a default member,
+//!   and any other member outside `crates/` (a tool) is scanned too, so
+//!   no library crate goes unscanned.
 //! - **What it skips**: comment lines, the lines of inline
 //!   `#[cfg(test)]` modules (to their closing brace, not to the end of the
 //!   file) and the files of out-of-line ones ([`library_lines`]).
@@ -298,26 +299,31 @@ fn nothing_in_the_library_calls_the_contact_book_deletion() {
             && crates.iter().any(|c| c == "crates/meta-whatsapp-rs"),
         "the library crates: {crates:?}"
     );
-    // The library is every crate but the service's: a new crate, a member
-    // of the workspace or a directory under `crates/`, is one or the other,
-    // and the scan never loses one silently.
-    let mut candidates = workspace_list(&root, "members");
+    // The library is every crate but the service's: a new crate under
+    // `crates/` is one or the other, and the scan never loses one silently.
     for dir in fs::read_dir(root.join("crates")).unwrap() {
         let dir = dir.unwrap().path();
-        if dir.is_dir() {
-            candidates.push(rel(&dir));
+        if !dir.is_dir() {
+            continue;
         }
-    }
-    for name in &candidates {
+        let name = rel(&dir);
         assert!(
-            is_service(name) != crates.contains(name),
+            is_service(&name) != crates.contains(&name),
             "{name}: a library crate is a default member, a service crate \
              (`meta-whatsapp-server*`) is not ({crates:?})"
         );
     }
+    // A member elsewhere that is not the service's (a tool under `tools/`)
+    // is scanned too.
+    let mut scanned_crates = crates.clone();
+    scanned_crates.extend(
+        workspace_list(&root, "members")
+            .into_iter()
+            .filter(|m| !is_service(m) && !crates.contains(m)),
+    );
 
     let mut files = Vec::new();
-    for krate in &crates {
+    for krate in &scanned_crates {
         rust_files(&root.join(krate).join("src"), &mut files);
     }
     assert!(files.len() > 50, "walked the library's sources");
