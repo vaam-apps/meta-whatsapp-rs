@@ -187,6 +187,40 @@ stored data, the owner's).
 
 ### Added
 
+- **The parent BSUID accounts API** (`meta_whatsapp_client::waba`,
+  roadmap L10a, parity row 152; the service's side is M5c4):
+  `Business::parent_bsuid_account` sends
+  `GET https://api.facebook.com/{BUSINESS_ID}/parent-bsuid-accounts` with
+  the client's token (behind a Graph proxy too) and returns a
+  `ParentBsuidAccount` (`parent_bsuid_account_id`, a string: core has no
+  id type for it; `enrolled_business_portfolios`, `BusinessId`s). A
+  business id that is not ASCII digits is refused before any request
+  (`Error::Validation` on `business_id`); replayed on transient errors as
+  every `GET` is. What Meta answers for a portfolio that is not enrolled
+  is not documented: without `parent_bsuid_account_id` it is a decode
+  error. The host is outside Graph: see Security, "Credential allow list
+  widened, for one URL". Decided by the coordinator on 2026-09-27 (owner's
+  delegation; each with its swap in `docs/architecture.md` § Credentials
+  never leave Meta): the rules do not follow a configured Graph proxy; the
+  business id is ASCII digits; an exact rule allows no query, fragment or
+  user info; the account id is a `String`, required, and the portfolio
+  list defaults to empty; the media host's rule is unchanged.
+- **`ReqwestTransport::with_clients(plain, credentialed)` and
+  `credential_redirect_policy()`** (`meta_whatsapp_adapters::http`,
+  additive; found reviewing L10a). For integrators who build their own
+  `reqwest::Client`s (a proxy set in code, mTLS, custom roots): the
+  credentialed client sends every request that carries a credential, the
+  plain one every other, as the stock transport does with its own two.
+  `credential_redirect_policy()` is the stock transport's policy for the
+  first (see Security, "Credentials no longer follow a redirect that
+  keeps them"); the rustdoc says the credentialed client must be built
+  with it or with `Policy::none()`, since the transport cannot check or
+  change a built client's policy. `with_client(client)` is **deprecated**:
+  it sends every request through that one client, and reqwest follows a
+  redirect inside `execute`, before the transport sees a response, so the
+  transport cannot keep the token off a second hop that client's own
+  policy follows. It still works; its rustdoc and the deprecation note
+  point to `with_clients`.
 - **`StorageError::Busy`** (meta-whatsapp-core; the enum is
   `#[non_exhaustive]`, so this is additive): contention, reported by a
   storage adapter that gave up waiting for another writer (a lock wait
@@ -950,6 +984,16 @@ stored data, the owner's).
 
 ### Changed
 
+- **Credential headers and redirects** (see Security): `GraphRequest::header`
+  refuses `Authorization`, `Proxy-Authorization` and `Cookie`
+  (`Error::Validation` on the name; use `bearer()` or `oauth()`), and
+  accepts a name in any case instead of panicking; the stock
+  `ReqwestTransport` returns the 3xx of a redirect that would carry a
+  request's credentials (same scheme, host and port) instead of following
+  it. A URL with a user name or password is refused on send
+  (`Error::Validation` on `url`), token or not, a Graph endpoint
+  configured with one included (`GraphEndpoint::custom` still accepts it;
+  every request through it fails).
 - **The service core's port contracts are right for any backend**
   (roadmap S2; breaking, pre-release, `meta-whatsapp-server-core` and
   `meta-whatsapp-server`). What Postgres guaranteed by accident is a
@@ -1741,3 +1785,87 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   - **L4 — the route guard cannot be checked on a third-party
     backend** until the conformance suites move into the core: roadmap
     S3 includes the `RouteGuard` cases.
+- **Credential allow list widened, for one URL (roadmap L10a).** Meta
+  serves the Parent BSUID Accounts API from `api.facebook.com`, without
+  an API version, not from Graph (`business-scoped-user-ids`; the page's
+  changelog entry of May 28, 2026 corrected the host from
+  `graph.facebook.com`). A token now reaches that host for
+  `GET https://api.facebook.com/{digits}/parent-bsuid-accounts` only:
+  https on the default port, the host compared exactly after URL
+  parsing, the path exactly two segments (ASCII digits, then the edge,
+  compared as sent: percent-encoding kept, `.` and `..` resolved), and
+  no query, fragment or user info. Any other path (a version segment, a
+  trailing segment or slash, another edge, an id that is not digits, a
+  percent-encoded `/`), any other method, `http` or another port on
+  that host is refused with `Error::Validation` on `url` before the
+  transport, and the error names the host and method, never the path,
+  the query or the token. The allow list is data now (`CREDENTIAL_RULES`
+  in the client's request module: the media host's line unchanged, this
+  one added), so the next exception is one reviewed line; neither line
+  follows a configured Graph proxy (`ClientBuilder::endpoint`): behind
+  one, the token goes to the proxy, the media host and this URL, never
+  to `graph.facebook.com`. A redirect cannot carry the token past that
+  path: see the next entry.
+- **Credentials no longer follow a redirect that keeps them**
+  (`meta-whatsapp-adapters`, the `HttpTransport` port; found reviewing
+  L10a). reqwest (0.13, with tower-http's redirect service) rebuilds every
+  hop from the request's original headers and drops `Authorization`,
+  `Proxy-Authorization` and `Cookie` only on a hop that changes scheme,
+  host or port from the URL that answered it. So the stock
+  `ReqwestTransport` sent the token on a same-origin redirect: from the
+  one Parent BSUID Accounts URL to any other path on `api.facebook.com`,
+  past the rule above. Worse, and older than L10a: after a redirect from
+  any origin the client allows (Graph, the media host, a configured
+  proxy) to another origin, a second redirect within that other origin
+  carried the token there. A request that carries one of those headers
+  now goes through a second `reqwest::Client`, with the same settings,
+  whose redirect policy stops at any hop that keeps scheme, host and
+  port: that 3xx is the response (`Error::Http` in the client). Hops to
+  another origin are followed without the credentials, up to 10, as
+  before; requests without credentials are unchanged. A client given to
+  `ReqwestTransport::with_client` keeps its own policy (its rustdoc says
+  to build it with `credential_redirect_policy()` or with no redirects;
+  `with_clients` takes a plain and a credentialed client, see Added). The
+  `HttpTransport` rustdoc states the rule
+  for other adapters: follow no redirect for a request that carries a
+  credential, or drop it on every hop. Tests:
+  `a_redirect_within_the_origin_never_carries_credentials`,
+  `a_second_redirect_within_another_origin_never_carries_the_token` and
+  `credentialed_redirects_between_origins_are_bounded`
+  (`meta-whatsapp-adapters/tests/reqwest_transport.rs`); the first two
+  fail on the previous transport.
+- **`GraphRequest::header` cannot attach a credential** (older than
+  L10a; found reviewing it). With `no_auth()`, or on a client without a
+  token, `.header("authorization", …)` sent a token to any URL, plain
+  `http` included, unchecked by the credential rules. `header()` now
+  refuses `Authorization`, `Proxy-Authorization` and `Cookie`, whatever
+  the name's case, with `Error::Validation` on the name before any
+  request (the value is never shown); `bearer()` and `oauth()`, which the
+  rules check, are the only ways to attach a token. The name is parsed
+  (`HeaderName::from_bytes`) instead of `from_static`, which panicked on
+  an uppercase or invalid name: any case is accepted and sent lowercase,
+  and an invalid name is a validation error. Tests:
+  `header_never_carries_a_credential`, `header_names_are_parsed`.
+- **User info in a URL is a credential too** (older than L10a; found
+  reviewing the fix above). reqwest takes a URL's user name and password
+  out of it and sends them as `Authorization: Basic`, a header the
+  transport never saw: the stock `ReqwestTransport` chose its client from
+  the request's own headers, so such a request went through the plain
+  client and, after a hop to another origin, reqwest put the header back
+  on every hop within it (a local test recorded the `Basic` value there).
+  The transport now chooses from the request reqwest built, so user info
+  takes the credentialed client like a header. And the client refuses
+  such a URL before sending (`Error::Validation` on `url`, the user info
+  never shown), with or without a token or `no_auth()`: with `no_auth()`
+  it was another way to send a credential to any host, which no rule
+  checked. `HttpRequest`'s `Debug` no longer prints user info. Tests:
+  `a_url_with_user_info_never_follows_a_redirect_with_it` and
+  `with_clients_never_sends_a_credential_to_a_second_hop`
+  (`meta-whatsapp-adapters/tests/reqwest_transport.rs`),
+  `a_url_with_user_info_is_refused` (`meta-whatsapp-client`),
+  `debug_never_prints_user_info` (`meta-whatsapp-core`); each fails on
+  the previous code. What the origin check sees is pinned by
+  `the_credential_redirect_policy_compares_origins_as_parsed` (the default
+  port spelled out, IPv6 literals, IDNs), and by
+  `a_redirect_to_the_same_origin_spelled_another_way_is_not_followed` and
+  `a_redirect_that_turns_a_post_into_a_get_keeps_the_rule`.

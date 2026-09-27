@@ -211,10 +211,21 @@ Never `client.get(&format!("{id}/…"))`: the literal-path builders split on
 object with your token.
 
 The token is only ever attached to the configured Graph endpoint (scheme,
-host and port) and to `https://lookaside.fbsbx.com`, where Meta's media
-download URLs point (default port). `client.request_url(method, url)` to
-any other origin, `*.whatsapp.net` included, is refused with
-`Error::Validation` on `url` before anything is sent.
+host and port), to `https://lookaside.fbsbx.com`, where Meta's media
+download URLs point (default port), and to one URL on
+`https://api.facebook.com`, `GET /{business id}/parent-bsuid-accounts`
+(the Parent BSUID Accounts API, which Meta serves there:
+`client.business(id).parent_bsuid_account()`). `client.request_url(method, url)`
+to any other origin or URL, `*.whatsapp.net` and every other path on
+`api.facebook.com` included, is refused with `Error::Validation` on `url`
+before anything is sent. So is a credential set by hand
+(`.header("authorization", …)`, `Proxy-Authorization`, `Cookie`, or a user
+name or password in the URL): a token goes through `.bearer(…)` or
+`.oauth(…)`, which the same check covers.
+Redirects cannot widen this: the stock transport follows no redirect that
+would carry the token (one that keeps scheme, host and port), so a `3xx`
+from that URL to another path is an `Error::Http`, and a redirect to
+another origin is followed without the token.
 
 ## What meta-whatsapp-rs does not do
 

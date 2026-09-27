@@ -93,12 +93,33 @@ runs it against real Postgres and Redis.
 in `Debug`; the value comes out only through `expose_secret()`. Call it at
 the boundary that needs it and nowhere near a log line.
 
-The client attaches a token to two origins only: the configured Graph
-endpoint (scheme, host and port) and `https://lookaside.fbsbx.com`, Meta's
-media download host. A request to any other URL with a token fails locally
-(`Error::Validation` on `url`). Behind a Graph proxy
-(`ClientBuilder::endpoint`), the token goes to the proxy and the media host,
-not to `graph.facebook.com`.
+The client attaches a token to the configured Graph endpoint (scheme, host
+and port), to `https://lookaside.fbsbx.com`, Meta's media download host,
+and to one URL on `api.facebook.com`, the Parent BSUID Accounts API:
+`GET https://api.facebook.com/{business id}/parent-bsuid-accounts` (no
+other path, method, scheme or port on that host). A
+request to any other URL with a token fails locally (`Error::Validation`
+on `url`), and so does a credential header set by hand
+(`GraphRequest::header` refuses `Authorization`, `Proxy-Authorization`
+and `Cookie`). The check covers the URL the client asked for; the stock
+transport follows no redirect that would carry the token (a hop that keeps
+scheme, host and port: the `3xx` is an `Error::Http`), and follows one to
+another origin without it. Behind a Graph proxy (`ClientBuilder::endpoint`), the token goes
+to the proxy, the media host and that one URL, not to `graph.facebook.com`;
+if every request must leave through your proxy, configure it on the
+transport instead. `HTTPS_PROXY` keeps the stock transport's redirect
+rule. For a proxy set in code, build two proxied `reqwest::Client`s, both
+with `.referer(false)`, the second also with
+`.redirect(meta_whatsapp_adapters::http::credential_redirect_policy())`,
+and pass them to `ReqwestTransport::with_clients(plain, credentialed)`:
+the second sends every request that carries a credential. A single
+client given to `ReqwestTransport::with_client` (deprecated) sends every request, the
+token's included, with its own redirect policy, which the transport cannot
+change: build it with `credential_redirect_policy()` or
+`reqwest::redirect::Policy::none()`, never reqwest's default, which
+forwards the token on a redirect within an origin. A URL with a user name
+or password is refused before sending (`Error::Validation` on `url`): it
+would go out as a credential no rule checks.
 
 ## 3. Logs and observability
 

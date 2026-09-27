@@ -168,11 +168,24 @@ impl Client {
     }
 
     /// A request to an absolute URL (media download links). The token is
-    /// only attached for the configured Graph endpoint and
-    /// `https://lookaside.fbsbx.com` (where media download URLs point); any
-    /// other origin fails with a validation error (field `url`) before a
-    /// byte is sent. Call [`GraphRequest::no_auth`] on the returned request
-    /// for a URL that needs no token.
+    /// only attached for the configured Graph endpoint,
+    /// `https://lookaside.fbsbx.com` (where media download URLs point), and
+    /// `GET https://api.facebook.com/{business id}/parent-bsuid-accounts`
+    /// (the Parent BSUID Accounts API, see [`crate::waba::Business::parent_bsuid_account`]:
+    /// that exact path, no other on that host); anything else fails with a
+    /// validation error (field `url`) before a byte is sent. Call
+    /// [`GraphRequest::no_auth`] on the returned request for a URL that
+    /// needs no token. A URL with a user name or password is refused the
+    /// same way, token or not: a transport would send them as a credential
+    /// (`Authorization: Basic`) that no rule checks.
+    ///
+    /// The check covers the URL given here, not where a redirect points:
+    /// keeping the token off a redirect is the transport's
+    /// ([`HttpTransport`](meta_whatsapp_core::transport::HttpTransport)).
+    /// The stock `ReqwestTransport` follows no redirect that would carry it
+    /// (a hop that keeps scheme, host and port), so a 3xx from that URL to
+    /// another path on `api.facebook.com` is an error ([`Error::Http`](meta_whatsapp_core::Error::Http)),
+    /// not a request.
     pub fn request_url(&self, method: Method, url: url::Url) -> GraphRequest {
         GraphRequest::new(self.clone(), method, url)
     }

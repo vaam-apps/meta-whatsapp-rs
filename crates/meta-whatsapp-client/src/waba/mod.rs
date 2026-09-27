@@ -1,8 +1,10 @@
 //! WhatsApp Business Account: details and update, health status, phone
 //! numbers (list, create), webhook subscriptions (`subscribed_apps`,
 //! WABA-level callback override), assigned users; plus the business
-//! portfolio accessor ([`Client::business`]) for client/owned WABA lists
-//! and messaging customer bases.
+//! portfolio accessor ([`Client::business`]) for client/owned WABA lists,
+//! messaging customer bases and the parent BSUID account
+//! ([`Business::parent_bsuid_account`], served from `api.facebook.com`,
+//! not Graph).
 //!
 //! Docs: `whatsapp-business-accounts`, `support/health-status`,
 //! `reference/whatsapp-business-account/{whatsapp-business-account-api,
@@ -11,7 +13,8 @@
 //! client-whatsapp-business-accounts-api, owned-whatsapp-business-accounts}`,
 //! `solution-providers/{manage-accounts, manage-webhooks, manage-phone-numbers,
 //! manage-system-users, registering-phone-numbers}`, `webhooks/override`,
-//! `in-app-signup` (messaging customer bases).
+//! `in-app-signup` (messaging customer bases), `business-scoped-user-ids`
+//! (§ Get parent BSUID account).
 //!
 //! Doc paths are relative to
 //! `https://developers.facebook.com/documentation/business-messaging/whatsapp/`
@@ -47,7 +50,7 @@
 mod business;
 mod types;
 
-pub use business::{Business, CreatedMessagingCustomerBase, WabaListQuery};
+pub use business::{Business, CreatedMessagingCustomerBase, ParentBsuidAccount, WabaListQuery};
 pub use types::{
     AccountReviewStatus, AssignedUser, AssignedUserType, BusinessInfo, BusinessRef,
     BusinessVerificationStatus, CallbackOverride, Filter, MAX_CALLBACK_URI_CHARS,

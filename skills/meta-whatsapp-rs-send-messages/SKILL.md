@@ -5,7 +5,7 @@ description: "Sending free-form WhatsApp messages with meta-whatsapp-rs - Outbou
 
 # meta-whatsapp-rs-send-messages
 
-> **Verified against meta-whatsapp-rs a0361269ea95d7c4a6101622364f3c3ff160ddb4 (2026-09-27).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs b72ff6f8c95dcabfebc5a888c2f7ea43c5b5456b (2026-09-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/send.rs](examples/send.rs), compiled and tested
 by meta-whatsapp-rs's own gate. Every constructor and content type:
@@ -31,7 +31,12 @@ Recipient::group("Y2FwaV9ncm91cDox"), // Groups API
 
 A `&str` is not `Into<Recipient>`: build one of these. A webhook `wa_id`
 is digits only — `Recipient::phone(format!("+{wa_id}"))`. Since 2026 a
-webhook may carry only the BSUID: address the customer with it.
+webhook may carry only the BSUID: address the customer with it. A parent
+BSUID (`US.ENT.…`, a webhook's `parent_user_id` once your portfolio is
+enrolled) goes in `Recipient::user` too, from a number of any portfolio of
+its parent BSUID account:
+`client.business(business_id).parent_bsuid_account()` lists them
+(`ParentBsuidAccount::enrolled_business_portfolios`).
 
 ## Send
 

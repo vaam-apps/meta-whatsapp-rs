@@ -3,7 +3,7 @@
 //! | Route | Graph calls, with the tenant's WABA token |
 //! | --- | --- |
 //! | `POST /v1/numbers/{pn}/media` | `POST /{pn}/media` (multipart: `messaging_product`, `type`, `file`) |
-//! | `GET /v1/numbers/{pn}/media/{media_id}` | `GET /{media_id}?phone_number_id={pn}` (URL, MIME type, SHA-256, size), then the URL (`lookaside.fbsbx.com`, the only other host a token may reach) |
+//! | `GET /v1/numbers/{pn}/media/{media_id}` | `GET /{media_id}?phone_number_id={pn}` (URL, MIME type, SHA-256, size), then the URL (`lookaside.fbsbx.com`, the only media host a token may reach; the client's one other exception is a single `GET` on `api.facebook.com`, roadmap L10a) |
 //! | `DELETE /v1/numbers/{pn}/media/{media_id}` | `GET /{media_id}?phone_number_id={pn}` (it must be that media), then `DELETE /{media_id}?phone_number_id={pn}` |
 //!
 //! Pages: `business-phone-numbers/media`, `reference/media/media-api`,

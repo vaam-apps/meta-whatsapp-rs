@@ -10,7 +10,9 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures::Stream;
-use http::header::{AUTHORIZATION, HeaderName, HeaderValue, RETRY_AFTER, USER_AGENT};
+use http::header::{
+    AUTHORIZATION, COOKIE, HeaderName, HeaderValue, PROXY_AUTHORIZATION, RETRY_AFTER, USER_AGENT,
+};
 use http::{HeaderMap, Method};
 use meta_whatsapp_core::error::{GraphErrorEnvelope, TransportError, ValidationError, snippet};
 use meta_whatsapp_core::paging::Page;
@@ -256,11 +258,36 @@ impl GraphRequest {
         self
     }
 
-    /// Extra header. Invalid values are reported on send.
+    /// Extra header. An invalid name or value is reported on send, as a
+    /// [`ValidationError`] on `name`, before anything is sent.
+    ///
+    /// Credentials are refused the same way, whatever the name's case:
+    /// `Authorization`, `Proxy-Authorization` and `Cookie`. Attach a token
+    /// with [`Self::bearer`] or [`Self::oauth`] (or the client's own): the
+    /// credential rules check where those go, and a header would go
+    /// anywhere, [`Self::no_auth`] and plain `http` included. (A URL with a
+    /// user name or password is refused on send for the same reason.) Any
+    /// other header goes wherever the request goes, redirects included: put
+    /// no secret in one.
     pub fn header(mut self, name: &'static str, value: impl AsRef<str>) -> Self {
+        let Ok(header) = HeaderName::from_bytes(name.as_bytes()) else {
+            self.fail(ValidationError::new(name, "invalid header name").into());
+            return self;
+        };
+        if CREDENTIAL_HEADERS.contains(&header) {
+            self.fail(
+                ValidationError::new(
+                    name,
+                    "credentials go through bearer() or oauth(), which the credential \
+                     rules check, never through header()",
+                )
+                .into(),
+            );
+            return self;
+        }
         match HeaderValue::from_str(value.as_ref()) {
             Ok(v) => {
-                self.headers.insert(HeaderName::from_static(name), v);
+                self.headers.insert(header, v);
             }
             Err(_) => self.fail(ValidationError::new(name, "invalid header value").into()),
         }
@@ -286,7 +313,8 @@ impl GraphRequest {
         self
     }
 
-    /// Send no `Authorization` header.
+    /// Send no `Authorization` header ([`Self::header`] cannot add one, nor
+    /// can user info in the URL, which is refused).
     pub fn no_auth(mut self) -> Self {
         self.auth = Auth::None;
         self
@@ -315,6 +343,16 @@ impl GraphRequest {
         if let Some(e) = self.error.take() {
             return Err(e);
         }
+        // A transport sends user info as `Authorization: Basic` (reqwest
+        // does), to the URL's host: a credential no rule would check.
+        if !self.url.username().is_empty() || self.url.password().is_some() {
+            return Err(ValidationError::new(
+                "url",
+                "refusing a URL with a user name or password: it would go out as a \
+                 credential; use bearer() or oauth(), which the credential rules check",
+            )
+            .into());
+        }
         let body = self.body.materialize()?;
         let mut headers = self.headers.clone();
         if let Ok(ua) = HeaderValue::from_str(&self.client.shared.user_agent) {
@@ -326,12 +364,13 @@ impl GraphRequest {
             Auth::None => None,
         };
         if let Some((scheme, token)) = auth {
-            if !credential_host_allowed(&self.client, &self.url) {
+            if !credential_host_allowed(&self.client, &self.method, &self.url) {
                 return Err(ValidationError::new(
                     "url",
                     format!(
-                        "refusing to send credentials to `{}`: not the Graph endpoint or https://{MEDIA_HOST}",
-                        self.url.host_str().unwrap_or_default()
+                        "refusing to send credentials to `{}` ({}): {AllowedTargets}",
+                        self.url.host_str().unwrap_or_default(),
+                        self.method,
                     ),
                 )
                 .into());
@@ -588,24 +627,175 @@ where
     stream_or_error(request.map(GraphRequest::paginate::<T>))
 }
 
-/// The one host besides the Graph endpoint that needs the token: media
-/// download URLs (from `GET /{media-id}` and media webhooks) point at it,
-/// and Meta refuses the download without the token
+/// Media download URLs (from `GET /{media-id}` and media webhooks) point at
+/// this host, and Meta refuses the download without the token
 /// (`business-phone-numbers/media`).
 pub(crate) const MEDIA_HOST: &str = "lookaside.fbsbx.com";
 
-/// Origins that may receive an `Authorization` header: the configured Graph
-/// endpoint (scheme, host and port), and `https://lookaside.fbsbx.com` on
-/// the default port. Nothing else — not other Meta hosts (CDN links such as
-/// `*.fbcdn.net` or `*.whatsapp.net` need no token), not subdomains, and not
-/// production Graph when the client is configured for a proxy.
-fn credential_host_allowed(client: &Client, url: &Url) -> bool {
-    if client.shared.endpoint.same_origin(url) {
-        return true;
+/// The host of Meta's Parent BSUID Accounts API (`business-scoped-user-ids`,
+/// § Get parent BSUID account): `GET https://api.facebook.com/{BUSINESS_ID}/parent-bsuid-accounts`,
+/// with no API version in the path. Meta's changelog entry of May 28, 2026
+/// on that page corrected the host from `graph.facebook.com` to this one.
+pub(crate) const PARENT_BSUID_ACCOUNTS_HOST: &str = "api.facebook.com";
+
+/// The edge of the Parent BSUID Accounts API, after the business id.
+pub(crate) const PARENT_BSUID_ACCOUNTS_EDGE: &str = "parent-bsuid-accounts";
+
+/// Headers that carry a credential, which [`GraphRequest::header`] refuses:
+/// a token goes only through the `Auth` the credential rules check.
+const CREDENTIAL_HEADERS: [HeaderName; 3] = [AUTHORIZATION, PROXY_AUTHORIZATION, COOKIE];
+
+/// One segment of a [`PathRule::Exact`] path.
+enum Segment {
+    /// This text, byte for byte (case included).
+    Literal(&'static str),
+    /// One or more ASCII digits: a Graph object id.
+    Digits,
+}
+
+impl Segment {
+    fn matches(&self, segment: &str) -> bool {
+        match self {
+            Self::Literal(literal) => segment == *literal,
+            Self::Digits => !segment.is_empty() && segment.bytes().all(|b| b.is_ascii_digit()),
+        }
     }
-    url.scheme() == "https"
-        && url.host_str() == Some(MEDIA_HOST)
-        && url.port_or_known_default() == Some(443)
+}
+
+/// Which URLs on a [`CredentialRule`]'s host the rule lets a token reach.
+enum PathRule {
+    /// Any path and query: media download URLs are links Meta mints.
+    Any,
+    /// Exactly these segments, and nothing else in the URL: no query, no
+    /// fragment, no user name or password. The path is compared as it will
+    /// be sent: still percent-encoded (`%2F` is not a `/`, `%31` not a
+    /// digit), and after URL parsing resolved `.` and `..` (a
+    /// [`Url`] never holds one).
+    Exact(&'static [Segment]),
+}
+
+impl PathRule {
+    fn matches(&self, url: &Url) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Exact(pattern) => {
+                if url.query().is_some()
+                    || url.fragment().is_some()
+                    || !url.username().is_empty()
+                    || url.password().is_some()
+                {
+                    return false;
+                }
+                let Some(mut segments) = url.path_segments() else {
+                    return false;
+                };
+                for want in *pattern {
+                    match segments.next() {
+                        Some(segment) if want.matches(segment) => {}
+                        _ => return false,
+                    }
+                }
+                segments.next().is_none()
+            }
+        }
+    }
+
+    fn describe(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Any => Ok(()),
+            Self::Exact(pattern) => pattern.iter().try_for_each(|segment| match segment {
+                Segment::Literal(literal) => write!(f, "/{literal}"),
+                Segment::Digits => f.write_str("/{digits}"),
+            }),
+        }
+    }
+}
+
+/// A request, other than one to the configured Graph endpoint, that may
+/// carry a token: `https` on the default port (every rule; not data, so no
+/// rule can loosen it), this exact host, this method, this path.
+struct CredentialRule {
+    /// The host, compared exactly after URL parsing (which lowercases it and
+    /// maps IDNs to punycode): no subdomain, suffix or trailing dot.
+    host: &'static str,
+    /// `None` for any method.
+    method: Option<Method>,
+    /// The URLs on the host it covers.
+    path: PathRule,
+}
+
+impl CredentialRule {
+    fn allows(&self, method: &Method, url: &Url) -> bool {
+        url.scheme() == "https"
+            && url.port_or_known_default() == Some(443)
+            && url.host_str() == Some(self.host)
+            && self.method.as_ref().is_none_or(|m| m == method)
+            && self.path.matches(url)
+    }
+}
+
+impl fmt::Display for CredentialRule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(method) = &self.method {
+            write!(f, "{method} ")?;
+        }
+        write!(f, "https://{}", self.host)?;
+        self.path.describe(f)
+    }
+}
+
+/// Where a token may go besides the configured Graph endpoint: one line per
+/// documented need, each reviewed on its own (a new line widens where
+/// credentials go: it needs the security review).
+///
+/// 1. `https://lookaside.fbsbx.com`, any method and path: media download
+///    URLs (see [`MEDIA_HOST`]).
+/// 2. `GET https://api.facebook.com/{digits}/parent-bsuid-accounts`, and
+///    nothing else on that host: the Parent BSUID Accounts API (see
+///    [`PARENT_BSUID_ACCOUNTS_HOST`]), which Meta serves there and not on
+///    Graph. No version segment, no query, no other method.
+///
+/// Neither depends on the configured Graph endpoint: behind a proxy
+/// ([`crate::ClientBuilder::endpoint`]) the token goes to the proxy and to
+/// these, never to `graph.facebook.com`.
+static CREDENTIAL_RULES: &[CredentialRule] = &[
+    CredentialRule {
+        host: MEDIA_HOST,
+        method: None,
+        path: PathRule::Any,
+    },
+    CredentialRule {
+        host: PARENT_BSUID_ACCOUNTS_HOST,
+        method: Some(Method::GET),
+        path: PathRule::Exact(&[
+            Segment::Digits,
+            Segment::Literal(PARENT_BSUID_ACCOUNTS_EDGE),
+        ]),
+    },
+];
+
+/// Whether a `method` request to `url` may carry an `Authorization` header:
+/// it goes to the configured Graph endpoint (scheme, host and port), or one
+/// of the [`CREDENTIAL_RULES`] allows it. Nothing else — not other Meta
+/// hosts (CDN links such as `*.fbcdn.net` or `*.whatsapp.net` need no
+/// token), not subdomains, and not production Graph when the client is
+/// configured for a proxy.
+fn credential_host_allowed(client: &Client, method: &Method, url: &Url) -> bool {
+    client.shared.endpoint.same_origin(url)
+        || CREDENTIAL_RULES.iter().any(|rule| rule.allows(method, url))
+}
+
+/// The refusal's reason: the rules, as text (never the URL's path or query).
+struct AllowedTargets;
+
+impl fmt::Display for AllowedTargets {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("not the configured Graph endpoint")?;
+        for rule in CREDENTIAL_RULES {
+            write!(f, ", nor {rule}")?;
+        }
+        Ok(())
+    }
 }
 
 fn retry_after(headers: &HeaderMap) -> Option<Duration> {
@@ -1131,5 +1321,690 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"success": false}));
         assert!(client(&t).post("x").send_success().await.is_err());
+    }
+}
+
+/// The credential rules beyond the media host: the Parent BSUID Accounts
+/// API's one URL on `api.facebook.com` (roadmap L10a). The allow list's
+/// earlier tests, in `tests` above, are unchanged.
+#[cfg(test)]
+mod credential_rule_tests {
+    use std::sync::{Arc, Mutex};
+
+    use meta_whatsapp_core::config::{ApiVersion, GraphEndpoint};
+    use meta_whatsapp_core::testing::ScriptedTransport;
+    use serde_json::json;
+
+    use super::*;
+    use crate::retry::RetryPolicy;
+
+    const ALLOWED: &str = "https://api.facebook.com/1234567890/parent-bsuid-accounts";
+
+    fn client(t: &ScriptedTransport) -> Client {
+        Client::builder()
+            .transport(t.clone())
+            .access_token("TOKEN")
+            .retry(RetryPolicy::NONE)
+            .build()
+            .unwrap()
+    }
+
+    fn proxied(t: &ScriptedTransport, base: &str) -> Client {
+        Client::builder()
+            .transport(t.clone())
+            .access_token("TOKEN")
+            .retry(RetryPolicy::NONE)
+            .endpoint(GraphEndpoint::custom(base, ApiVersion::DEFAULT).unwrap())
+            .build()
+            .unwrap()
+    }
+
+    /// Sends `method url` with the client's token and asserts it was refused
+    /// before the transport: `Error::Validation` on `url`, no request.
+    async fn assert_refused(c: &Client, t: &ScriptedTransport, method: Method, url: &str) {
+        let before = t.requests().len();
+        let err = c
+            .request_url(method.clone(), Url::parse(url).unwrap())
+            .send_raw()
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, Error::Validation(v) if v.field == "url"),
+            "{method} {url}: {err}"
+        );
+        assert_eq!(
+            t.requests().len(),
+            before,
+            "{method} {url} reached the transport"
+        );
+    }
+
+    /// The one request the rule exists for: `GET`, `https`, the default
+    /// port, `/{digits}/parent-bsuid-accounts`, no version segment. It
+    /// reaches the transport with the token, at exactly that URL.
+    #[tokio::test]
+    async fn the_parent_bsuid_accounts_url_takes_the_token() {
+        let allowed = [
+            (ALLOWED, ALLOWED),
+            (
+                "https://api.facebook.com/1/parent-bsuid-accounts",
+                "https://api.facebook.com/1/parent-bsuid-accounts",
+            ),
+            // The default port, spelled out: parsing drops it.
+            (
+                "https://api.facebook.com:443/1234567890/parent-bsuid-accounts",
+                ALLOWED,
+            ),
+            // Parsing lowercases the host: the same origin, sent lowercase.
+            (
+                "https://API.Facebook.COM/1234567890/parent-bsuid-accounts",
+                ALLOWED,
+            ),
+        ];
+        for (given, sent) in allowed {
+            let t = ScriptedTransport::new();
+            t.push_json(200, json!({}));
+            client(&t)
+                .request_url(Method::GET, Url::parse(given).unwrap())
+                .send_raw()
+                .await
+                .unwrap_or_else(|e| panic!("{given}: {e}"));
+            let req = t.last_request().unwrap();
+            assert_eq!(req.method, Method::GET, "{given}");
+            assert_eq!(req.url.as_str(), sent, "{given}");
+            assert_eq!(req.bearer(), Some("TOKEN"), "{given}");
+            assert_eq!(t.remaining(), 0);
+        }
+        // An explicit token obeys the same rule as the client's own.
+        let t = ScriptedTransport::new();
+        t.push_json(200, json!({}));
+        client(&t)
+            .request_url(Method::GET, Url::parse(ALLOWED).unwrap())
+            .bearer(&"OTHER".into())
+            .send_raw()
+            .await
+            .unwrap();
+        assert_eq!(t.last_request().unwrap().bearer(), Some("OTHER"));
+        for explicit in ["bearer", "oauth"] {
+            let t = ScriptedTransport::new();
+            let req = client(&t).request_url(
+                Method::GET,
+                Url::parse("https://api.facebook.com/1234567890/other").unwrap(),
+            );
+            let req = if explicit == "bearer" {
+                req.bearer(&"OTHER".into())
+            } else {
+                req.oauth(&"OTHER".into())
+            };
+            let err = req.send_raw().await.unwrap_err();
+            assert!(
+                matches!(&err, Error::Validation(v) if v.field == "url"),
+                "{explicit}: {err}"
+            );
+            assert!(t.requests().is_empty(), "{explicit} reached the transport");
+        }
+    }
+
+    /// Every other URL on `api.facebook.com`, and the right path anywhere
+    /// else, is refused before any request. Removing any part of the rule
+    /// (host, path shape, digits, scheme, port, the end of the path, the
+    /// empty query) lets one of these through.
+    #[tokio::test]
+    async fn every_other_url_on_api_facebook_com_is_refused_before_sending() {
+        let denied = [
+            // Other paths on the host.
+            "https://api.facebook.com/",
+            "https://api.facebook.com/me",
+            "https://api.facebook.com/1234567890",
+            "https://api.facebook.com/1234567890/other-edge",
+            "https://api.facebook.com/parent-bsuid-accounts",
+            "https://api.facebook.com/parent-bsuid-accounts/1234567890",
+            "https://api.facebook.com/1234567890/parent_bsuid_accounts",
+            // Paths are case-sensitive, unlike the host.
+            "https://api.facebook.com/1234567890/Parent-Bsuid-Accounts",
+            "https://api.facebook.com/1234567890/PARENT-BSUID-ACCOUNTS",
+            // A version segment: this API takes none.
+            "https://api.facebook.com/v25.0/1234567890/parent-bsuid-accounts",
+            "https://api.facebook.com/v1.0/1234567890/parent-bsuid-accounts",
+            "https://api.facebook.com/1234567890/v25.0/parent-bsuid-accounts",
+            // A trailing segment, or a trailing slash (an empty segment).
+            "https://api.facebook.com/1234567890/parent-bsuid-accounts/extra",
+            "https://api.facebook.com/1234567890/parent-bsuid-accounts/",
+            "https://api.facebook.com/1234567890/parent-bsuid-accounts/1234567890/parent-bsuid-accounts",
+            // An id that is not digits, or no id at all.
+            "https://api.facebook.com/abc/parent-bsuid-accounts",
+            "https://api.facebook.com/12a4/parent-bsuid-accounts",
+            "https://api.facebook.com/-1/parent-bsuid-accounts",
+            "https://api.facebook.com/1.5/parent-bsuid-accounts",
+            "https://api.facebook.com/me/parent-bsuid-accounts",
+            "https://api.facebook.com/%31%32%33/parent-bsuid-accounts",
+            "https://api.facebook.com//parent-bsuid-accounts",
+            "https://api.facebook.com/%20/parent-bsuid-accounts",
+            // Another scheme.
+            "http://api.facebook.com/1234567890/parent-bsuid-accounts",
+            "http://api.facebook.com:443/1234567890/parent-bsuid-accounts",
+            "wss://api.facebook.com/1234567890/parent-bsuid-accounts",
+            // Another port.
+            "https://api.facebook.com:8443/1234567890/parent-bsuid-accounts",
+            "https://api.facebook.com:80/1234567890/parent-bsuid-accounts",
+            // A percent-encoded `/` is not a separator: one segment, or an
+            // id that is not digits.
+            "https://api.facebook.com/1234567890%2Fparent-bsuid-accounts",
+            "https://api.facebook.com/1234567890%2F5/parent-bsuid-accounts",
+            "https://api.facebook.com/me%2F1234567890/parent-bsuid-accounts",
+            "https://api.facebook.com/1234567890/parent-bsuid-accounts%2Fextra",
+            // `..` segments: parsing resolves them, and what is left is not
+            // the path (see `the_rule_sees_the_url_as_parsed`).
+            "https://api.facebook.com/1234567890/../parent-bsuid-accounts",
+            "https://api.facebook.com/1234567890/parent-bsuid-accounts/..",
+            "https://api.facebook.com/1234567890/parent-bsuid-accounts/../../me",
+            "https://api.facebook.com/1234567890/%2e%2e/parent-bsuid-accounts",
+            "https://api.facebook.com/1234567890/parent-bsuid-accounts/%2E%2E/other",
+            // Anything but the path: a query (even empty), a fragment, a
+            // user name or password.
+            "https://api.facebook.com/1234567890/parent-bsuid-accounts?fields=id",
+            "https://api.facebook.com/1234567890/parent-bsuid-accounts?",
+            "https://api.facebook.com/1234567890/parent-bsuid-accounts#frag",
+            "https://user@api.facebook.com/1234567890/parent-bsuid-accounts",
+            "https://user:pw@api.facebook.com/1234567890/parent-bsuid-accounts",
+            "https://:pw@api.facebook.com/1234567890/parent-bsuid-accounts",
+            // The right path on another host: look-alikes, subdomains,
+            // suffixes, a trailing dot, the pre-correction host behind a
+            // proxy is in `the_rule_ignores_the_configured_graph_endpoint`.
+            "https://api.facebook.com./1234567890/parent-bsuid-accounts",
+            "https://evil.api.facebook.com/1234567890/parent-bsuid-accounts",
+            "https://xapi.facebook.com/1234567890/parent-bsuid-accounts",
+            "https://api.facebook.com.evil.example/1234567890/parent-bsuid-accounts",
+            "https://api.facebook.co/1234567890/parent-bsuid-accounts",
+            "https://api-facebook.com/1234567890/parent-bsuid-accounts",
+            "https://www.facebook.com/1234567890/parent-bsuid-accounts",
+            "https://facebook.com/1234567890/parent-bsuid-accounts",
+            "https://evil.example/1234567890/parent-bsuid-accounts",
+            "https://lookaside.fbsbx.com.evil.example/1234567890/parent-bsuid-accounts",
+            // A Cyrillic `а` (punycode after parsing).
+            "https://\u{430}pi.facebook.com/1234567890/parent-bsuid-accounts",
+        ];
+        for url in denied {
+            let t = ScriptedTransport::new();
+            assert_refused(&client(&t), &t, Method::GET, url).await;
+        }
+    }
+
+    /// The rule is `GET` only: every other method on the exact URL is
+    /// refused before any request.
+    #[tokio::test]
+    async fn only_get_takes_the_token_to_api_facebook_com() {
+        let t = ScriptedTransport::new();
+        let c = client(&t);
+        for method in [
+            Method::POST,
+            Method::DELETE,
+            Method::PUT,
+            Method::PATCH,
+            Method::HEAD,
+            Method::OPTIONS,
+            Method::from_bytes(b"get").unwrap(),
+        ] {
+            assert_refused(&c, &t, method, ALLOWED).await;
+        }
+        let err = c
+            .request_url(Method::POST, Url::parse(ALLOWED).unwrap())
+            .json(&json!({"a": 1}))
+            .send_raw()
+            .await
+            .unwrap_err();
+        assert!(matches!(&err, Error::Validation(v) if v.field == "url"));
+        assert!(t.requests().is_empty());
+    }
+
+    /// URL parsing normalises before the rule looks: it lowercases the host
+    /// and decodes it (IDNA, percent-escapes), turns `\` into `/` and
+    /// resolves `.` and `..`. The rule matches the URL as it goes on the
+    /// wire, so each of these is the one allowed URL, sent exactly as that:
+    /// no `..`, no other spelling, reaches the transport.
+    #[tokio::test]
+    async fn the_rule_sees_the_url_as_parsed() {
+        let upper = Url::parse("https://API.FACEBOOK.COM/1/parent-bsuid-accounts").unwrap();
+        assert_eq!(upper.host_str(), Some("api.facebook.com"));
+
+        // `push("..")` is dropped by the `url` crate: it cannot smuggle one
+        // in (the endpoint checks its id is digits before pushing it anyway).
+        let mut pushed = Url::parse("https://api.facebook.com/").unwrap();
+        pushed
+            .path_segments_mut()
+            .unwrap()
+            .pop_if_empty()
+            .push("1234567890")
+            .push("..")
+            .push("parent-bsuid-accounts");
+        assert_eq!(pushed.as_str(), ALLOWED);
+
+        let spellings = [
+            "https://api.facebook.com/me/../1234567890/./parent-bsuid-accounts",
+            "https://api.facebook.com/x/%2e%2e/1234567890/parent-bsuid-accounts",
+            "https://api.facebook.com/1234567890\\parent-bsuid-accounts",
+            "https://api%2Efacebook.com/1234567890/parent-bsuid-accounts",
+            "https://\u{ff41}pi.facebook.com/1234567890/parent-bsuid-accounts",
+        ];
+        for given in spellings {
+            let url = Url::parse(given).unwrap();
+            assert_eq!(url.as_str(), ALLOWED, "{given}");
+            let t = ScriptedTransport::new();
+            t.push_json(200, json!({}));
+            client(&t)
+                .request_url(Method::GET, url)
+                .send_raw()
+                .await
+                .unwrap();
+            let req = t.last_request().unwrap();
+            assert_eq!(req.url.as_str(), ALLOWED, "{given}");
+            assert_eq!(req.bearer(), Some("TOKEN"), "{given}");
+            assert_eq!(t.remaining(), 0);
+        }
+        let t = ScriptedTransport::new();
+        t.push_json(200, json!({}));
+        client(&t)
+            .request_url(Method::GET, pushed)
+            .send_raw()
+            .await
+            .unwrap();
+        assert_eq!(t.last_request().unwrap().url.as_str(), ALLOWED);
+    }
+
+    /// Behind a Graph proxy (or a custom base URL), the token goes to the
+    /// proxy, to the media host and to the one Parent BSUID Accounts URL:
+    /// the rule does not follow the configured endpoint. It widens nothing
+    /// else: `graph.facebook.com` (where Meta first documented this API)
+    /// stays refused, and so does every other URL or method on
+    /// `api.facebook.com`.
+    #[tokio::test]
+    async fn the_rule_ignores_the_configured_graph_endpoint() {
+        for base in [
+            "https://graph-proxy.internal/",
+            "http://127.0.0.1:8080/graph",
+        ] {
+            let t = ScriptedTransport::new();
+            let c = proxied(&t, base);
+            t.push_json(200, json!({}));
+            c.request_url(Method::GET, Url::parse(ALLOWED).unwrap())
+                .send_raw()
+                .await
+                .unwrap();
+            let req = t.last_request().unwrap();
+            assert_eq!(req.url.as_str(), ALLOWED, "{base}");
+            assert_eq!(req.bearer(), Some("TOKEN"), "{base}");
+            for url in [
+                "https://graph.facebook.com/1234567890/parent-bsuid-accounts",
+                "https://graph.facebook.com/v25.0/1234567890/parent-bsuid-accounts",
+                "https://api.facebook.com/v25.0/1234567890/parent-bsuid-accounts",
+                "https://api.facebook.com/1234567890/other-edge",
+            ] {
+                assert_refused(&c, &t, Method::GET, url).await;
+            }
+            assert_refused(&c, &t, Method::POST, ALLOWED).await;
+            assert_eq!(t.requests().len(), 1, "{base}");
+            assert_eq!(t.remaining(), 0);
+        }
+    }
+
+    /// The refusal says where a token may go, and names the host and the
+    /// method: never the path or the query.
+    #[tokio::test]
+    async fn the_refusal_names_the_rules() {
+        let t = ScriptedTransport::new();
+        let err = client(&t)
+            .request_url(
+                Method::POST,
+                Url::parse(
+                    "https://api.facebook.com/1234567890/parent-bsuid-accounts?q=private-query",
+                )
+                .unwrap(),
+            )
+            .send_raw()
+            .await
+            .unwrap_err();
+        let Error::Validation(v) = &err else {
+            panic!("{err:?}")
+        };
+        assert_eq!(v.field, "url");
+        assert_eq!(
+            v.reason,
+            "refusing to send credentials to `api.facebook.com` (POST): not the configured \
+             Graph endpoint, nor https://lookaside.fbsbx.com, nor \
+             GET https://api.facebook.com/{digits}/parent-bsuid-accounts"
+        );
+        assert!(!err.to_string().contains("private-query"), "{err}");
+        assert!(t.requests().is_empty());
+    }
+
+    /// The media host's rule is as it was before the rules became data: any
+    /// method, any path, https on the default port.
+    #[tokio::test]
+    async fn the_media_rule_is_unchanged() {
+        for method in [
+            Method::GET,
+            Method::HEAD,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+        ] {
+            let t = ScriptedTransport::new();
+            t.push_bytes(200, "image/jpeg", "jpg");
+            client(&t)
+                .request_url(
+                    method.clone(),
+                    Url::parse("https://lookaside.fbsbx.com/any/path?mid=1").unwrap(),
+                )
+                .send_raw()
+                .await
+                .unwrap_or_else(|e| panic!("{method}: {e}"));
+            let req = t.last_request().unwrap();
+            assert_eq!(req.method, method);
+            assert_eq!(req.bearer(), Some("TOKEN"), "{method}");
+            assert_eq!(t.remaining(), 0);
+        }
+    }
+
+    /// `header()` cannot attach a credential, in any case of the name, to
+    /// any URL, with the client's token, `no_auth()` or no token at all:
+    /// `bearer()` and `oauth()`, which the rules check, are the only ways.
+    /// The refusal is a validation error on the name, before any request,
+    /// that never shows the value.
+    #[tokio::test]
+    async fn header_never_carries_a_credential() {
+        const SENTINEL: &str = "EAAB-SENTINEL-header";
+        let names = [
+            "authorization",
+            "Authorization",
+            "AUTHORIZATION",
+            "proxy-authorization",
+            "Proxy-Authorization",
+            "cookie",
+            "Cookie",
+        ];
+        let urls = [
+            "https://evil.example/steal",
+            "http://evil.example/steal",
+            ALLOWED,
+            "https://graph.facebook.com/v25.0/me",
+        ];
+        let t = ScriptedTransport::new();
+        let with_token = client(&t);
+        let without_token = Client::builder()
+            .transport(t.clone())
+            .retry(RetryPolicy::NONE)
+            .build()
+            .unwrap();
+        for name in names {
+            for url in urls {
+                let url = Url::parse(url).unwrap();
+                for (how, req) in [
+                    (
+                        "no_auth",
+                        with_token.request_url(Method::GET, url.clone()).no_auth(),
+                    ),
+                    ("token", with_token.request_url(Method::GET, url.clone())),
+                    (
+                        "no token",
+                        without_token.request_url(Method::GET, url.clone()),
+                    ),
+                ] {
+                    let err = req
+                        .header(name, format!("Bearer {SENTINEL}"))
+                        .send_raw()
+                        .await
+                        .unwrap_err();
+                    assert!(
+                        matches!(&err, Error::Validation(v) if v.field == name),
+                        "{name} {url} ({how}): {err}"
+                    );
+                    let shown = format!("{err} {err:?} {err:#?}");
+                    assert!(!shown.contains("SENTINEL"), "{shown}");
+                }
+            }
+        }
+        assert!(t.requests().is_empty(), "a credential header was sent");
+    }
+
+    /// A header name is parsed, not trusted: any case is accepted (and sent
+    /// lowercase), and a name that is no header name is a validation error
+    /// on send, never a panic.
+    #[tokio::test]
+    async fn header_names_are_parsed() {
+        let t = ScriptedTransport::new();
+        t.push_json(200, json!({}));
+        let c = client(&t);
+        c.get("x")
+            .header("X-Custom-Header", "v1")
+            .send_raw()
+            .await
+            .unwrap();
+        let req = t.last_request().unwrap();
+        assert_eq!(req.header("x-custom-header"), Some("v1"));
+        assert_eq!(req.bearer(), Some("TOKEN"));
+        assert_eq!(t.remaining(), 0);
+        for bad in ["bad name", "", "x:y", "\u{e9}", "a\nb"] {
+            let err = c.get("x").header(bad, "v").send_raw().await.unwrap_err();
+            assert!(
+                matches!(&err, Error::Validation(v) if v.field == bad),
+                "{bad:?}: {err}"
+            );
+        }
+        assert_eq!(t.requests().len(), 1);
+    }
+
+    /// A user name or password in the URL is a credential no rule checks:
+    /// reqwest sends it as `Authorization: Basic`, to whatever host the URL
+    /// names. It is refused on every URL, with or without a token,
+    /// `no_auth()` included, and through a Graph endpoint configured with
+    /// one: a validation error on `url`, before any request, that never
+    /// shows it.
+    #[tokio::test]
+    async fn a_url_with_user_info_is_refused() {
+        const SENTINEL: &str = "EAAB-SENTINEL-userinfo";
+        let urls = [
+            format!("https://user:{SENTINEL}@evil.example/steal"),
+            format!("http://user:{SENTINEL}@evil.example/steal"),
+            format!("https://{SENTINEL}@evil.example/steal"),
+            format!("https://:{SENTINEL}@evil.example/steal"),
+            format!("https://user:{SENTINEL}@graph.facebook.com/v25.0/me"),
+            format!("https://user:{SENTINEL}@lookaside.fbsbx.com/any/path?mid=1"),
+        ];
+        let t = ScriptedTransport::new();
+        let with_token = client(&t);
+        let without_token = Client::builder()
+            .transport(t.clone())
+            .retry(RetryPolicy::NONE)
+            .build()
+            .unwrap();
+        let assert_refused = |err: Error, what: &str| {
+            assert!(
+                matches!(&err, Error::Validation(v) if v.field == "url"),
+                "{what}: {err}"
+            );
+            let shown = format!("{err} {err:?} {err:#?}");
+            assert!(!shown.contains("SENTINEL"), "{what}: {shown}");
+        };
+        for url in &urls {
+            let url = Url::parse(url).unwrap();
+            for (how, req) in [
+                ("token", with_token.request_url(Method::GET, url.clone())),
+                (
+                    "no_auth",
+                    with_token.request_url(Method::GET, url.clone()).no_auth(),
+                ),
+                (
+                    "no token",
+                    without_token.request_url(Method::GET, url.clone()),
+                ),
+            ] {
+                assert_refused(req.send_raw().await.unwrap_err(), &format!("{url} ({how})"));
+            }
+        }
+        for base in [
+            format!("https://user:{SENTINEL}@proxy.example/"),
+            format!("https://{SENTINEL}@proxy.example/"),
+        ] {
+            let proxied = proxied(&t, &base);
+            assert_refused(proxied.get("me").send_raw().await.unwrap_err(), &base);
+            assert_refused(
+                proxied
+                    .get("oauth/access_token")
+                    .no_auth()
+                    .send_raw()
+                    .await
+                    .unwrap_err(),
+                &base,
+            );
+        }
+        assert!(t.requests().is_empty(), "a URL with user info was sent");
+
+        // The same URLs without it go out.
+        t.push_json(200, json!({}));
+        with_token
+            .request_url(
+                Method::GET,
+                Url::parse("https://graph.facebook.com/v25.0/me").unwrap(),
+            )
+            .send_raw()
+            .await
+            .unwrap();
+        assert_eq!(t.remaining(), 0);
+    }
+
+    /// A `tracing` subscriber that renders every event and span field.
+    #[derive(Clone, Default)]
+    struct Capture(Arc<Mutex<String>>);
+
+    struct Render<'a>(&'a mut String);
+
+    impl tracing::field::Visit for Render<'_> {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn fmt::Debug) {
+            use std::fmt::Write as _;
+            let _ = write!(self.0, "{}={value:?} ", field.name());
+        }
+    }
+
+    impl tracing::Subscriber for Capture {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, attrs: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            attrs.record(&mut Render(&mut self.0.lock().unwrap()));
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, values: &tracing::span::Record<'_>) {
+            values.record(&mut Render(&mut self.0.lock().unwrap()));
+        }
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            let mut out = self.0.lock().unwrap();
+            out.push_str(event.metadata().target());
+            out.push(' ');
+            event.record(&mut Render(&mut out));
+            out.push('\n');
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    /// A sentinel token, as the client's own and as an explicit one (and in
+    /// a refused URL's query), never reaches a refusal's error (`Display`,
+    /// `Debug`, alternate `Debug`), the request's `Debug`, or the logs; nor
+    /// the logs of an accepted request retried once.
+    #[tokio::test]
+    async fn a_refused_request_never_shows_the_token() {
+        use std::fmt::Write as _;
+
+        const SENTINEL: &str = "EAAB-SENTINEL-l10a-7b2450e";
+        // As in `embedded_signup::onboard`: a second dispatcher makes every
+        // callsite consult this test's capture too.
+        let _second = tracing::Dispatch::new(Capture::default());
+        let capture = Capture::default();
+        let _guard = tracing::subscriber::set_default(capture.clone());
+
+        let t = ScriptedTransport::new();
+        let c = Client::builder()
+            .transport(t.clone())
+            .access_token(SENTINEL)
+            .retry(RetryPolicy {
+                max_retries: 1,
+                base_delay: Duration::ZERO,
+                max_delay: Duration::ZERO,
+            })
+            .build()
+            .unwrap();
+        let refused = [
+            (
+                Method::GET,
+                "https://api.facebook.com/1234567890/other-edge",
+            ),
+            (
+                Method::GET,
+                "https://api.facebook.com/v25.0/1234567890/parent-bsuid-accounts",
+            ),
+            (
+                Method::GET,
+                "https://api.facebook.com/abc/parent-bsuid-accounts",
+            ),
+            (
+                Method::GET,
+                "http://api.facebook.com/1234567890/parent-bsuid-accounts",
+            ),
+            (
+                Method::GET,
+                "https://api.facebook.com:8443/1234567890/parent-bsuid-accounts",
+            ),
+            (Method::POST, ALLOWED),
+            (
+                Method::GET,
+                "https://evil.example/1234567890/parent-bsuid-accounts",
+            ),
+        ];
+        let mut seen = String::new();
+        for (method, url) in refused {
+            for auth in ["client", "bearer", "oauth"] {
+                let req = c
+                    .request_url(method.clone(), Url::parse(url).unwrap())
+                    .query("access_token", SENTINEL);
+                let req = match auth {
+                    "bearer" => req.bearer(&SENTINEL.into()),
+                    "oauth" => req.oauth(&SENTINEL.into()),
+                    _ => req,
+                };
+                writeln!(seen, "{req:?} {req:#?}").unwrap();
+                let err = req.send_raw().await.unwrap_err();
+                assert!(
+                    matches!(&err, Error::Validation(v) if v.field == "url"),
+                    "{method} {url} ({auth}): {err}"
+                );
+                writeln!(seen, "{err} {err:?} {err:#?}").unwrap();
+            }
+        }
+        assert!(t.requests().is_empty());
+        writeln!(seen, "{c:?}").unwrap();
+
+        // Accepted and retried once: the retry is logged, the token is not.
+        t.push_json(
+            500,
+            json!({"error": {"message": "x", "code": 2, "is_transient": true}}),
+        );
+        t.push_json(200, json!({}));
+        c.request_url(Method::GET, Url::parse(ALLOWED).unwrap())
+            .send_raw()
+            .await
+            .unwrap();
+        assert_eq!(t.requests().len(), 2);
+        assert_eq!(t.remaining(), 0);
+
+        let logs = capture.0.lock().unwrap().clone();
+        assert!(logs.contains("retrying graph request"), "{logs}");
+        for (what, text) in [("errors and Debug", &seen), ("logs", &logs)] {
+            assert!(!text.contains(SENTINEL), "the token in {what}: {text}");
+            assert!(
+                !text.contains("SENTINEL"),
+                "part of the token in {what}: {text}"
+            );
+        }
     }
 }

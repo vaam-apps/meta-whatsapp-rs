@@ -5,7 +5,7 @@ description: "Setting up meta-whatsapp-rs for WhatsApp - what to create on Meta'
 
 # meta-whatsapp-rs-setup
 
-> **Verified against meta-whatsapp-rs ef0fe364e3a21a535238007db5276fe5ef6ce970 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs ecb4b40e5a4a442311d9097407d42c981330c154 (2026-09-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/client.rs](examples/client.rs), compiled and
 tested by meta-whatsapp-rs's own gate.
@@ -69,7 +69,16 @@ Client::builder()
 A Graph proxy or mock server: pass
 `GraphEndpoint::custom(base_url, ApiVersion::DEFAULT)?` to the builder's
 `.endpoint(..)`; the token then goes to the proxy, never to
-`graph.facebook.com`.
+`graph.facebook.com`. Media downloads and the parent BSUID accounts call
+still go to Meta's own hosts: to route every request through a proxy, set
+it on the transport. `HTTPS_PROXY` keeps the stock transport as it is. A
+proxy set in code: build two reqwest clients with it and pass them to
+`ReqwestTransport::with_clients`, whose rustdoc shows how (no referer on
+either; the second, which sends every request that carries the token,
+with `credential_redirect_policy()`). `ReqwestTransport::with_client` is
+deprecated for this reason: never hand it a client with reqwest's default redirect
+policy: that one client sends the token too, and would forward it on a
+redirect within an origin.
 
 ## Act as a merchant
 
@@ -114,9 +123,20 @@ decoding and the credential host allowlist. Mark a POST
   `123/subscribed_apps` would address another Graph object with your
   token. `get_at` keeps it one segment (the test proves it).
 - The token is attached only to the configured Graph endpoint (scheme,
-  host and port) and `https://lookaside.fbsbx.com` (media downloads); any
-  other URL given to `client.request_url(method, url)` fails with
-  `Error::Validation` on `url` before a byte is sent.
+  host and port), `https://lookaside.fbsbx.com` (media downloads) and one
+  URL on `api.facebook.com`, `GET /{business id}/parent-bsuid-accounts`
+  (`Business::parent_bsuid_account`); any other URL given to
+  `client.request_url(method, url)`, another path or method on
+  `api.facebook.com` included, fails with `Error::Validation` on `url`
+  before a byte is sent. The check is on that URL: the stock transport
+  follows no redirect that would carry the token (same scheme, host and
+  port; the `3xx` comes back as `Error::Http`), and one to another origin
+  without it.
+- Never set a credential with `.header(..)`: the Authorization,
+  Proxy-Authorization and Cookie headers are refused (`Error::Validation`
+  on the name), with or without `.no_auth()`, and so is a URL with a user
+  name or password (`Error::Validation` on `url`). Use `.bearer(&token)`
+  or `.oauth(&token)`, which the same check covers.
 - An employee system user sees nothing until the WABA is assigned to it:
   Graph error `200`, `ErrorKind::Permission`, not an HTTP 403.
 - `ClientBuilder::build` fails without a transport (`Error::Config`);

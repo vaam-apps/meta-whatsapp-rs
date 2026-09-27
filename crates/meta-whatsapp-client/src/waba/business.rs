@@ -1,16 +1,21 @@
 //! Business portfolio accessor: the WABAs shared with (client) or owned by
-//! a business, and its messaging customer bases.
+//! a business, its messaging customer bases, and the parent BSUID account
+//! it is enrolled in.
 
 use futures::Stream;
-use meta_whatsapp_core::Result;
-use meta_whatsapp_core::error::ValidationError;
+use http::Method;
+use meta_whatsapp_core::error::{TransportError, ValidationError};
 use meta_whatsapp_core::ids::BusinessId;
 use meta_whatsapp_core::paging::Page;
+use meta_whatsapp_core::{Error, Result};
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use super::types::{BusinessInfo, Filter, MessagingCustomerBase, WabaInfo, WabaSort};
 use crate::phone_numbers::fields_param;
-use crate::request::{paginate_or_error, reject_cursors};
+use crate::request::{
+    PARENT_BSUID_ACCOUNTS_EDGE, PARENT_BSUID_ACCOUNTS_HOST, paginate_or_error, reject_cursors,
+};
 use crate::{Client, GraphRequest};
 
 /// Entry point, see [`Client::business`].
@@ -112,6 +117,25 @@ pub struct CreatedMessagingCustomerBase {
 struct CustomerBases {
     #[serde(default)]
     messaging_customer_bases: Vec<MessagingCustomerBase>,
+}
+
+/// The parent BSUID account a business portfolio is enrolled in, from
+/// [`Business::parent_bsuid_account`] (`business-scoped-user-ids`,
+/// § Get parent BSUID account).
+///
+/// Every portfolio enrolled in one parent BSUID account sees a WhatsApp
+/// user under the same parent BSUID (`US.ENT.…`, a webhook's
+/// `parent_user_id`), and any of their business phone numbers can message
+/// it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[non_exhaustive]
+pub struct ParentBsuidAccount {
+    /// The id of the parent BSUID account the enrolled portfolios share.
+    pub parent_bsuid_account_id: String,
+    /// The business portfolios enrolled in it: any business phone number
+    /// in them can use the account's parent BSUIDs.
+    #[serde(default)]
+    pub enrolled_business_portfolios: Vec<BusinessId>,
 }
 
 impl Business {
@@ -244,6 +268,62 @@ impl Business {
             .await?;
         Ok(bases.messaging_customer_bases)
     }
+
+    /// `GET https://api.facebook.com/{BUSINESS_ID}/parent-bsuid-accounts`
+    /// (`business-scoped-user-ids`, § Get parent BSUID account): the parent
+    /// BSUID account this portfolio is enrolled in, and every portfolio
+    /// enrolled in it.
+    ///
+    /// Meta serves this API from `api.facebook.com`, without an API
+    /// version, not from Graph (the page's changelog, May 28, 2026,
+    /// corrected the host). It goes there with the client's token, whatever
+    /// [`crate::ClientBuilder::endpoint`] names: behind a Graph proxy too.
+    /// That URL is the only one on that host the client sends a token to
+    /// (`GraphRequest`'s credential rules); an egress proxy that must see
+    /// every request belongs in the [`HttpTransport`](meta_whatsapp_core::transport::HttpTransport).
+    ///
+    /// The credential rule takes a business id of ASCII digits only (the
+    /// shape of every business id Meta's pages show), so anything else is
+    /// refused here, before any request ([`ValidationError`] on
+    /// `business_id`). Replayed on transient errors, as every `GET` is
+    /// ([`crate::RetryPolicy`]).
+    /// What Meta answers for a portfolio that is not enrolled is not
+    /// documented: an answer without `parent_bsuid_account_id` is a
+    /// decode error.
+    pub async fn parent_bsuid_account(&self) -> Result<ParentBsuidAccount> {
+        let url = parent_bsuid_accounts_url(&self.business_id)?;
+        self.client
+            .request_url(Method::GET, url)
+            .context("parent BSUID account")
+            .send()
+            .await
+    }
+}
+
+/// `https://api.facebook.com/{business_id}/parent-bsuid-accounts`, for a
+/// business id of digits only.
+fn parent_bsuid_accounts_url(business_id: &BusinessId) -> Result<Url> {
+    let id = business_id.as_str();
+    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(ValidationError::new(
+            "business_id",
+            "must be a business portfolio id (digits only)",
+        )
+        .into());
+    }
+    let build = |why: &str| {
+        Error::Transport(TransportError::Build(format!(
+            "parent BSUID accounts URL: {why}"
+        )))
+    };
+    let mut url = Url::parse(&format!("https://{PARENT_BSUID_ACCOUNTS_HOST}/"))
+        .map_err(|e| build(&e.to_string()))?;
+    url.path_segments_mut()
+        .map_err(|()| build("not a hierarchical URL"))?
+        .pop_if_empty()
+        .push(id)
+        .push(PARENT_BSUID_ACCOUNTS_EDGE);
+    Ok(url)
 }
 
 #[derive(Serialize)]
@@ -451,5 +531,220 @@ mod tests {
             Some("id,name,timezone_id")
         );
         assert_eq!(t.remaining(), 0);
+    }
+
+    /// `business-scoped-user-ids`, § Get parent BSUID account: the response
+    /// syntax as printed (its placeholders are strings).
+    fn parent_bsuid_account_example() -> serde_json::Value {
+        json!({
+          "parent_bsuid_account_id": "<PARENT_BSUID_ACCOUNT_ID>",
+          "enrolled_business_portfolios": [
+            "<BUSINESS_PORTFOLIO_ID>",
+            "<BUSINESS_PORTFOLIO_ID>"
+          ]
+        })
+    }
+
+    /// The request goes to `https://api.facebook.com/{id}/parent-bsuid-accounts`
+    /// (no version, no query, no body) with the client's token, and the
+    /// page's example parses.
+    #[tokio::test]
+    async fn parent_bsuid_account_reaches_api_facebook_com_with_the_token() {
+        let t = ScriptedTransport::new();
+        t.push_json(200, parent_bsuid_account_example());
+        let account = client(&t)
+            .business("805021500648488")
+            .parent_bsuid_account()
+            .await
+            .unwrap();
+        assert_eq!(account.parent_bsuid_account_id, "<PARENT_BSUID_ACCOUNT_ID>");
+        assert_eq!(
+            account.enrolled_business_portfolios,
+            [
+                BusinessId::new("<BUSINESS_PORTFOLIO_ID>"),
+                BusinessId::new("<BUSINESS_PORTFOLIO_ID>")
+            ]
+        );
+        let req = t.last_request().unwrap();
+        assert_eq!(req.method, Method::GET);
+        assert_eq!(
+            req.url.as_str(),
+            "https://api.facebook.com/805021500648488/parent-bsuid-accounts"
+        );
+        assert_eq!(req.bearer(), Some("TOKEN"));
+        assert_eq!(req.url.query(), None);
+        assert_eq!(req.body, meta_whatsapp_core::testing::RecordedBody::Empty);
+        assert_eq!(t.remaining(), 0);
+
+        // A merchant's client sends the merchant's token there.
+        t.push_json(
+            200,
+            json!({
+                "parent_bsuid_account_id": "1122334455",
+                "enrolled_business_portfolios": ["805021500648488", "109876543210"],
+                "a_field_meta_adds_later": true
+            }),
+        );
+        let account = client(&t)
+            .with_token("MERCHANT".into())
+            .business(BusinessId::new("109876543210"))
+            .parent_bsuid_account()
+            .await
+            .unwrap();
+        assert_eq!(account.parent_bsuid_account_id, "1122334455");
+        assert_eq!(
+            account.enrolled_business_portfolios[1].as_str(),
+            "109876543210"
+        );
+        let req = t.last_request().unwrap();
+        assert_eq!(
+            req.url.as_str(),
+            "https://api.facebook.com/109876543210/parent-bsuid-accounts"
+        );
+        assert_eq!(req.bearer(), Some("MERCHANT"));
+        assert_eq!(t.remaining(), 0);
+    }
+
+    /// Behind a Graph proxy the call still goes to `api.facebook.com`: the
+    /// proxy stands in for Graph, and Meta serves this API elsewhere.
+    #[tokio::test]
+    async fn parent_bsuid_account_ignores_a_graph_proxy() {
+        let t = ScriptedTransport::new();
+        t.push_json(200, parent_bsuid_account_example());
+        let proxied = Client::builder()
+            .transport(t.clone())
+            .access_token("TOKEN")
+            .retry(RetryPolicy::NONE)
+            .endpoint(
+                meta_whatsapp_core::config::GraphEndpoint::custom(
+                    "https://graph-proxy.internal/",
+                    meta_whatsapp_core::config::ApiVersion::DEFAULT,
+                )
+                .unwrap(),
+            )
+            .build()
+            .unwrap();
+        proxied
+            .business("805021500648488")
+            .parent_bsuid_account()
+            .await
+            .unwrap();
+        let req = t.last_request().unwrap();
+        assert_eq!(
+            req.url.as_str(),
+            "https://api.facebook.com/805021500648488/parent-bsuid-accounts"
+        );
+        assert_eq!(req.bearer(), Some("TOKEN"));
+        assert_eq!(t.remaining(), 0);
+    }
+
+    /// An id that is not digits is refused before any request, naming the
+    /// business id (the credential rule would refuse it too, on `url`).
+    #[tokio::test]
+    async fn parent_bsuid_account_refuses_an_id_that_is_not_digits() {
+        let t = ScriptedTransport::new();
+        let c = client(&t);
+        for id in [
+            "",
+            "abc",
+            "12a4",
+            "123/x",
+            "123/parent-bsuid-accounts",
+            "..",
+            ".",
+            "v25.0",
+            "1 2",
+            " 123",
+            "+123",
+            "-1",
+            "1.5",
+            "123?x=1",
+            "123#x",
+            "%31",
+            "\u{661}\u{662}\u{663}", // Arabic-Indic digits
+            "\u{ff11}\u{ff12}",      // fullwidth digits
+        ] {
+            let err = c.business(id).parent_bsuid_account().await.unwrap_err();
+            assert!(
+                matches!(&err, meta_whatsapp_core::Error::Validation(v) if v.field == "business_id"),
+                "{id:?}: {err}"
+            );
+        }
+        assert!(t.requests().is_empty());
+    }
+
+    /// A Graph error keeps its kind; a transient one is replayed, as for
+    /// every `GET`; so is a timeout.
+    #[tokio::test]
+    async fn parent_bsuid_account_errors_and_retries() {
+        let t = ScriptedTransport::new();
+        t.push_json(
+            400,
+            json!({"error": {"message": "Invalid OAuth access token.", "type": "OAuthException", "code": 190}}),
+        );
+        let err = client(&t)
+            .business("805021500648488")
+            .parent_bsuid_account()
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), meta_whatsapp_core::ErrorKind::Authentication);
+        assert_eq!(t.requests().len(), 1);
+
+        let t = ScriptedTransport::new();
+        t.push_json(
+            500,
+            json!({"error": {"message": "x", "code": 2, "is_transient": true}}),
+        );
+        t.push_error(|| meta_whatsapp_core::error::TransportError::Timeout);
+        t.push_json(200, parent_bsuid_account_example());
+        let retrying = Client::builder()
+            .transport(t.clone())
+            .access_token("TOKEN")
+            .retry(RetryPolicy {
+                max_retries: 2,
+                base_delay: std::time::Duration::ZERO,
+                max_delay: std::time::Duration::ZERO,
+            })
+            .build()
+            .unwrap();
+        let account = retrying
+            .business("805021500648488")
+            .parent_bsuid_account()
+            .await
+            .unwrap();
+        assert_eq!(account.parent_bsuid_account_id, "<PARENT_BSUID_ACCOUNT_ID>");
+        let reqs = t.requests();
+        assert_eq!(reqs.len(), 3);
+        for req in &reqs {
+            assert_eq!(req.method, Method::GET);
+            assert_eq!(
+                req.url.as_str(),
+                "https://api.facebook.com/805021500648488/parent-bsuid-accounts"
+            );
+            assert_eq!(req.bearer(), Some("TOKEN"));
+        }
+        assert_eq!(t.remaining(), 0);
+    }
+
+    /// The page documents both fields; a missing list is empty, a missing
+    /// account id a decode error (what Meta answers for a portfolio that is
+    /// not enrolled is not documented).
+    #[test]
+    fn parent_bsuid_account_parsing() {
+        let parsed: ParentBsuidAccount =
+            serde_json::from_value(json!({"parent_bsuid_account_id": "1"})).unwrap();
+        assert!(parsed.enrolled_business_portfolios.is_empty());
+        assert!(
+            serde_json::from_value::<ParentBsuidAccount>(
+                json!({"enrolled_business_portfolios": ["1"]})
+            )
+            .is_err()
+        );
+        let parsed: ParentBsuidAccount =
+            serde_json::from_value(parent_bsuid_account_example()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&parsed).unwrap(),
+            parent_bsuid_account_example()
+        );
     }
 }
