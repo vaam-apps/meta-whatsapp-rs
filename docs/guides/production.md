@@ -107,10 +107,19 @@ scheme, host and port: the `3xx` is an `Error::Http`), and follows one to
 another origin without it. Behind a Graph proxy (`ClientBuilder::endpoint`), the token goes
 to the proxy, the media host and that one URL, not to `graph.facebook.com`;
 if every request must leave through your proxy, configure it on the
-transport instead: `HTTPS_PROXY` keeps the stock transport's redirect
-rule; a proxied `reqwest::Client` passed to `ReqwestTransport::with_client`
-keeps its own, so build it with
-`.redirect(reqwest::redirect::Policy::none())` and `.referer(false)`.
+transport instead. `HTTPS_PROXY` keeps the stock transport's redirect
+rule. For a proxy set in code, build two proxied `reqwest::Client`s, both
+with `.referer(false)`, the second also with
+`.redirect(meta_whatsapp_adapters::http::credential_redirect_policy())`,
+and pass them to `ReqwestTransport::with_clients(plain, credentialed)`:
+the second sends every request that carries a credential. A single
+client given to `ReqwestTransport::with_client` sends every request, the
+token's included, with its own redirect policy, which the transport cannot
+change: build it with `credential_redirect_policy()` or
+`reqwest::redirect::Policy::none()`, never reqwest's default, which
+forwards the token on a redirect within an origin. A URL with a user name
+or password is refused before sending (`Error::Validation` on `url`): it
+would go out as a credential no rule checks.
 
 ## 3. Logs and observability
 

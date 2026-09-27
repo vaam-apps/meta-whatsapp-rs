@@ -369,11 +369,15 @@ before the transport sees it; the error names the host, the method and the
 rules, never the path, the query or the token. Inside the library, the
 only requests to an absolute URL are `Media::download_with_info` and
 `Business::parent_bsuid_account`; integrators reach the same check through
-`Client::request_url`, and cannot step around it: `GraphRequest::header`
-refuses `Authorization`, `Proxy-Authorization` and `Cookie` (any case,
-with or without `no_auth()`; a validation error on the name before any
-request), so `bearer()` and `oauth()`, which the check covers, are the
-only ways to attach a token. Pagination re-issues the original request
+`Client::request_url`, and cannot step around it with a header:
+`GraphRequest::header` refuses `Authorization`, `Proxy-Authorization` and
+`Cookie` (any case, with or without `no_auth()`; a validation error on the
+name before any request), and a URL with a user name or password is
+refused on send (reqwest would send them as `Authorization: Basic`, to
+any host), so `bearer()` and `oauth()`, which the check covers, are the
+only ways to attach an `Authorization` header. A secret an integrator puts
+in a query parameter or in another header goes where that URL goes: the
+check does not read them. Pagination re-issues the original request
 with `after=` rather than following `paging.next`.
 
 The check covers the URL the client hands to the transport, so a redirect
@@ -384,12 +388,19 @@ or port from the URL that answered it, so it would send the token to
 another path on `api.facebook.com`, past the second rule, and, after a hop
 to another origin, to any URL within that origin. The stock
 `ReqwestTransport` therefore sends a request that carries a credential
-header through a client that follows no hop keeping scheme, host and
-port (the 3xx is the response, an `Error::Http` in the client), and
-follows a hop to another origin without it, up to 10. A request without
-credentials follows reqwest's default. A `reqwest::Client` passed to
-`ReqwestTransport::with_client` keeps its own policy (its rustdoc says
-how to turn redirects off).
+(a credential header, or user info in its URL, which reqwest turns into
+one) through a client that follows no hop keeping scheme, host and port
+(the 3xx is the response, an `Error::Http` in the client), and follows a
+hop to another origin without it, up to 10. That policy is public,
+`meta_whatsapp_adapters::http::credential_redirect_policy()`. A request
+without credentials follows reqwest's default. Integrators who build
+their own `reqwest::Client`s pass two to `ReqwestTransport::with_clients`,
+the credentialed one built with that policy (or with no redirects). The
+single client given to `ReqwestTransport::with_client` sends every
+request, so its policy is the credentialed requests' too: the transport
+cannot change a built client's policy, nor stop reqwest following a
+redirect inside `execute`, so that client must be built with the policy
+or with no redirects (its rustdoc says so, and points to `with_clients`).
 
 **Decided 2026-09-27 (coordinator, owner's delegation)**, on the choices
 roadmap L10a's draft proposed:
@@ -398,7 +409,7 @@ roadmap L10a's draft proposed:
   one, the token goes to the proxy, the media host and the one Parent
   BSUID Accounts URL. A Graph proxy stands in for Graph, which serves
   neither. Swappable by setting the proxy on the transport
-  (`HTTPS_PROXY`, or a proxied client in `ReqwestTransport::with_client`,
+  (`HTTPS_PROXY`, or proxied clients in `ReqwestTransport::with_clients`,
   or another `HttpTransport`), which then sees every request. Roadmap
   L10a.
 - The business id in the rule and in `Business::parent_bsuid_account`

@@ -205,6 +205,21 @@ stored data, the owner's).
   business id is ASCII digits; an exact rule allows no query, fragment or
   user info; the account id is a `String`, required, and the portfolio
   list defaults to empty; the media host's rule is unchanged.
+- **`ReqwestTransport::with_clients(plain, credentialed)` and
+  `credential_redirect_policy()`** (`meta_whatsapp_adapters::http`,
+  additive; found reviewing L10a). For integrators who build their own
+  `reqwest::Client`s (a proxy set in code, mTLS, custom roots): the
+  credentialed client sends every request that carries a credential, the
+  plain one every other, as the stock transport does with its own two.
+  `credential_redirect_policy()` is the stock transport's policy for the
+  first (see Security, "Credentials no longer follow a redirect that
+  keeps them"); the rustdoc says the credentialed client must be built
+  with it or with `Policy::none()`, since the transport cannot check or
+  change a built client's policy. `with_client(client)` stays and sends
+  every request through that one client, so its rustdoc now says the same
+  of it and points to `with_clients`: reqwest follows a redirect inside
+  `execute`, before the transport sees a response, so the transport cannot
+  keep the token off a second hop that client's own policy follows.
 - **`StorageError::Busy`** (meta-whatsapp-core; the enum is
   `#[non_exhaustive]`, so this is additive): contention, reported by a
   storage adapter that gave up waiting for another writer (a lock wait
@@ -974,7 +989,10 @@ stored data, the owner's).
   accepts a name in any case instead of panicking; the stock
   `ReqwestTransport` returns the 3xx of a redirect that would carry a
   request's credentials (same scheme, host and port) instead of following
-  it.
+  it. A URL with a user name or password is refused on send
+  (`Error::Validation` on `url`), token or not, a Graph endpoint
+  configured with one included (`GraphEndpoint::custom` still accepts it;
+  every request through it fails).
 - **The service core's port contracts are right for any backend**
   (roadmap S2; breaking, pre-release, `meta-whatsapp-server-core` and
   `meta-whatsapp-server`). What Postgres guaranteed by accident is a
@@ -1805,7 +1823,9 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   another origin are followed without the credentials, up to 10, as
   before; requests without credentials are unchanged. A client given to
   `ReqwestTransport::with_client` keeps its own policy (its rustdoc says
-  how to turn redirects off). The `HttpTransport` rustdoc states the rule
+  to build it with `credential_redirect_policy()` or with no redirects;
+  `with_clients` takes a plain and a credentialed client, see Added). The
+  `HttpTransport` rustdoc states the rule
   for other adapters: follow no redirect for a request that carries a
   credential, or drop it on every hop. Tests:
   `a_redirect_within_the_origin_never_carries_credentials`,
@@ -1825,3 +1845,26 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   an uppercase or invalid name: any case is accepted and sent lowercase,
   and an invalid name is a validation error. Tests:
   `header_never_carries_a_credential`, `header_names_are_parsed`.
+- **User info in a URL is a credential too** (older than L10a; found
+  reviewing the fix above). reqwest takes a URL's user name and password
+  out of it and sends them as `Authorization: Basic`, a header the
+  transport never saw: the stock `ReqwestTransport` chose its client from
+  the request's own headers, so such a request went through the plain
+  client and, after a hop to another origin, reqwest put the header back
+  on every hop within it (a local test recorded the `Basic` value there).
+  The transport now chooses from the request reqwest built, so user info
+  takes the credentialed client like a header. And the client refuses
+  such a URL before sending (`Error::Validation` on `url`, the user info
+  never shown), with or without a token or `no_auth()`: with `no_auth()`
+  it was another way to send a credential to any host, which no rule
+  checked. `HttpRequest`'s `Debug` no longer prints user info. Tests:
+  `a_url_with_user_info_never_follows_a_redirect_with_it` and
+  `with_clients_never_sends_a_credential_to_a_second_hop`
+  (`meta-whatsapp-adapters/tests/reqwest_transport.rs`),
+  `a_url_with_user_info_is_refused` (`meta-whatsapp-client`),
+  `debug_never_prints_user_info` (`meta-whatsapp-core`); each fails on
+  the previous code. What the origin check sees is pinned by
+  `the_credential_redirect_policy_compares_origins_as_parsed` (the default
+  port spelled out, IPv6 literals, IDNs), and by
+  `a_redirect_to_the_same_origin_spelled_another_way_is_not_followed` and
+  `a_redirect_that_turns_a_post_into_a_get_keeps_the_rule`.

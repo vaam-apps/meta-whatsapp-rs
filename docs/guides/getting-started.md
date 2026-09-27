@@ -219,8 +219,9 @@ download URLs point (default port), and to one URL on
 to any other origin or URL, `*.whatsapp.net` and every other path on
 `api.facebook.com` included, is refused with `Error::Validation` on `url`
 before anything is sent. So is a credential set by hand
-(`.header("authorization", …)`, `Proxy-Authorization`, `Cookie`): a token
-goes through `.bearer(…)` or `.oauth(…)`, which the same check covers.
+(`.header("authorization", …)`, `Proxy-Authorization`, `Cookie`, or a user
+name or password in the URL): a token goes through `.bearer(…)` or
+`.oauth(…)`, which the same check covers.
 Redirects cannot widen this: the stock transport follows no redirect that
 would carry the token (one that keeps scheme, host and port), so a `3xx`
 from that URL to another path is an `Error::Http`, and a redirect to

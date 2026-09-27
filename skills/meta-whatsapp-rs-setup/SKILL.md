@@ -71,9 +71,14 @@ A Graph proxy or mock server: pass
 `.endpoint(..)`; the token then goes to the proxy, never to
 `graph.facebook.com`. Media downloads and the parent BSUID accounts call
 still go to Meta's own hosts: to route every request through a proxy, set
-it on the transport. `HTTPS_PROXY` keeps the stock transport as it is; a
-client you pass to `ReqwestTransport::with_client` keeps its own redirect
-and referer settings, so turn both off on it (its rustdoc says how).
+it on the transport. `HTTPS_PROXY` keeps the stock transport as it is. A
+proxy set in code: build two reqwest clients with it and pass them to
+`ReqwestTransport::with_clients`, whose rustdoc shows how (no referer on
+either; the second, which sends every request that carries the token,
+with `credential_redirect_policy()`). Never hand
+`ReqwestTransport::with_client` a client with reqwest's default redirect
+policy: that one client sends the token too, and would forward it on a
+redirect within an origin.
 
 ## Act as a merchant
 
@@ -129,8 +134,9 @@ decoding and the credential host allowlist. Mark a POST
   without it.
 - Never set a credential with `.header(..)`: the Authorization,
   Proxy-Authorization and Cookie headers are refused (`Error::Validation`
-  on the name), with or without `.no_auth()`. Use `.bearer(&token)` or
-  `.oauth(&token)`, which the same check covers.
+  on the name), with or without `.no_auth()`, and so is a URL with a user
+  name or password (`Error::Validation` on `url`). Use `.bearer(&token)`
+  or `.oauth(&token)`, which the same check covers.
 - An employee system user sees nothing until the WABA is assigned to it:
   Graph error `200`, `ErrorKind::Permission`, not an HTTP 403.
 - `ClientBuilder::build` fails without a transport (`Error::Config`);
