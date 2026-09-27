@@ -23,7 +23,7 @@ use crate::error::{ApiError, ErrorBody};
 use crate::keys::MintedKey;
 use crate::model::{
     AllowedTenants, ApiKeyRecord, BindOutcome, DeleteTenantOutcome, KeyKind, KeyOwner, KeyScope,
-    MAX_NAME_CHARS, NewApiKey, PageRequest, Scope, Tenant, TenantId, TenantStatus,
+    MAX_NAME_CHARS, NewApiKey, PageRequest, Scope, Tenant, TenantId, TenantStatus, WabaBinding,
 };
 use crate::state::AppState;
 use crate::store::RecordStore;
@@ -321,7 +321,18 @@ pub(crate) async fn delete_tenant(
             )
             .await?;
         for binding in &wabas.items {
-            let owned = OwnedWaba::for_admin(&state, &admin, binding).await?;
+            // The listing may be stale (each WABA before this one cost a
+            // call to Meta): a WABA unbound since, and maybe bound to
+            // another tenant, is skipped, never answered for; the next
+            // round lists what the tenant holds now.
+            let owned = match OwnedWaba::for_admin(&state, &admin, binding).await {
+                Ok(owned) => owned,
+                Err(error) if still_listed(&state, binding).await? => return Err(error),
+                Err(_) => continue,
+            };
+            if !owned.still_bound(&state).await? {
+                continue;
+            }
             let unsubscribed = owned
                 .client()
                 .waba(owned.waba_id().clone())
@@ -357,6 +368,17 @@ pub(crate) async fn delete_tenant(
     }
     tracing::warn!("tenant deletion kept finding WABAs; giving up");
     Err(ApiError::internal().retryable(true))
+}
+
+/// Whether `binding`, a listing's entry, is still its WABA's binding: read
+/// again when a tenant's deletion could not act on it, to tell a WABA that
+/// moved (skipped) from one that failed (answered).
+async fn still_listed(state: &AppState, binding: &WabaBinding) -> Result<bool, ApiError> {
+    Ok(state
+        .store()
+        .waba(&binding.waba_id)
+        .await?
+        .is_some_and(|now| now.epoch() == binding.epoch()))
 }
 
 // ─── Keys ────────────────────────────────────────────────────────────────

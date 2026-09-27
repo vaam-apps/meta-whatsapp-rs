@@ -51,8 +51,15 @@
 //! [`RecordStore::unbind_waba_if`], [`RecordStore::set_waba_status_if`]).
 //! And what a capability is made from is consistent: its token is read
 //! from the vault while its binding held (the binding is read again after
-//! the vault; moved in between, no capability is made, `503`), never the
-//! binding of one holder with the token of the next.
+//! the vault; moved in between, no capability is made, `503`, whatever the
+//! vault answered, no token included), never the binding of one holder
+//! with the token of the next. That rests on the port rule of
+//! [`crate::store`] (the vault is written for a WABA only by its current
+//! holder: an attach binds before it stores, an unbind deletes the token
+//! before the binding). Before a call that acts on the WABA as a whole with
+//! its token (unsubscribing the app), a caller asks
+//! [`OwnedWaba::still_bound`]: a capability made before a move never
+//! unsubscribes the new holder's app, but in the call's own window.
 //!
 //! **A capability works only with the [`Authorizer`] that made it.**
 //! [`Authorizer::new`] is public, so anyone can build one over records of
@@ -544,9 +551,11 @@ impl Authorizer {
             .await?
             .filter(|waba| waba.tenant_id == caller.tenant)
             .ok_or_else(ServiceError::not_found)?;
-        let token = self.tokens.vault.get_by_phone_number(&pn).await?;
+        // What the vault answers (a token, none, a failure) is this
+        // binding's only if the binding held throughout the read.
+        let token = self.tokens.vault.get_by_phone_number(&pn).await;
         self.still_bound(&waba).await?;
-        let token = usable(token, &binding.waba_id, self.clock.now())?;
+        let token = usable(token?, &binding.waba_id, self.clock.now())?;
         Ok(OwnedNumber {
             client: self.client.with_token(token.token),
             phone_number_id: pn,
@@ -577,7 +586,12 @@ impl Authorizer {
     }
 
     /// A WABA for an admin operation (deleting its tenant, unbinding it):
-    /// step 5 only, as the admin key may act on every tenant. An `admin`
+    /// step 5 only, as the admin key may act on every tenant. `binding` is
+    /// what the admin read (a tenant's listing, say), which may be stale:
+    /// it is read again after the vault ([`Self::open`]), and a WABA no
+    /// longer bound as `binding` says makes no capability (`503
+    /// storage_unavailable`, retryable; a caller walking a listing reads
+    /// the WABA's binding again to tell "moved" from a failure). An `admin`
     /// another [`Authorizer`] made is `403 forbidden`.
     pub async fn waba_for_admin(
         &self,
@@ -590,13 +604,19 @@ impl Authorizer {
 
     /// Step 5 for a WABA bound to a tenant (`binding`, as read): its token,
     /// and the version of the vault record it came from, read while
-    /// `binding` held ([`Self::still_bound`]).
+    /// `binding` held ([`Self::still_bound`]). What the vault answers is
+    /// `binding`'s only if it held throughout the read: moved, even no
+    /// token (a new holder bound, its token not stored yet) is the new
+    /// holder's state, not `binding`'s, and answers `503` as a moved WABA
+    /// does, never `number_not_connected` (on which the admin unbind would
+    /// delete the new holder's binding without a capability).
     async fn open(&self, binding: &WabaBinding) -> Result<OwnedWaba, ServiceError> {
         let waba_id = &binding.waba_id;
-        let Some((token, version)) = self.tokens.vault.get_versioned(waba_id).await? else {
+        let read = self.tokens.vault.get_versioned(waba_id).await;
+        self.still_bound(binding).await?;
+        let Some((token, version)) = read? else {
             return Err(ServiceError::new("number_not_connected"));
         };
-        self.still_bound(binding).await?;
         let token = usable(Some(token), waba_id, self.clock.now())?;
         Ok(OwnedWaba {
             client: self.client.with_token(token.token),
@@ -618,12 +638,20 @@ impl Authorizer {
     /// between. Moved: `503 storage_unavailable` (retryable), and a repeat
     /// acts on what is there now.
     async fn still_bound(&self, binding: &WabaBinding) -> Result<(), ServiceError> {
-        let now = self.records.waba(&binding.waba_id).await?;
-        if now.is_some_and(|now| now.epoch() == binding.epoch()) {
+        if self.holds(&binding.epoch()).await? {
             return Ok(());
         }
         tracing::info!("a WABA's binding moved while a capability was being made from it");
         Err(ServiceError::from(StorageError::Busy))
+    }
+
+    /// Whether `epoch` is still its WABA's binding, read now.
+    async fn holds(&self, epoch: &BindingEpoch) -> Result<bool, StorageError> {
+        Ok(self
+            .records
+            .waba(&epoch.waba_id)
+            .await?
+            .is_some_and(|now| now.epoch() == *epoch))
     }
 
     /// Store `token` in the vault, for an admin attaching a WABA: its
@@ -830,6 +858,20 @@ impl OwnedWaba {
         authz.graph_failed_at(&self.epoch, error).await
     }
 
+    /// Whether the WABA is still bound as it was when this was made (the
+    /// same [`BindingEpoch`]), read now: what a caller asks just before it
+    /// acts at Meta with this token on the WABA as a whole, unsubscribing
+    /// the app from its webhooks (roadmap S2, the security review's L1). A
+    /// WABA unbound since, and maybe bound to another tenant that
+    /// subscribed the app again, is `false`: the call would remove the new
+    /// holder's subscription. It narrows the window to the call itself,
+    /// which no read closes ([`Self::forget`] warns when it finds the WABA
+    /// moved). Through an `authz` that did not make it: `403 forbidden`.
+    pub async fn still_bound(&self, authz: &Authorizer) -> Result<bool, ServiceError> {
+        authz.check(&self.issuer, "OwnedWaba::still_bound")?;
+        Ok(authz.holds(&self.epoch).await?)
+    }
+
     /// Delete the WABA's token and its binding, and its numbers': the last
     /// step of a disconnection, once Meta unsubscribed the app. Only the
     /// token and the binding this was made from: the token first, if its
@@ -837,19 +879,33 @@ impl OwnedWaba {
     /// still the one this read. `true` when both went; `false` when either
     /// had moved (the WABA unbound and attached again since, a new token;
     /// or the record re-encrypted by a rotation), and what moved is left:
-    /// the caller may make a new capability and try again. Through an
-    /// `authz` that did not make it: `403 forbidden`, and nothing is
+    /// the caller may make a new capability and try again. When the
+    /// binding moved (the WABA unbound, maybe bound to another tenant), it
+    /// logs at `warn`, with the WABA's id only: Meta may have unsubscribed
+    /// the app with this token after the new holder subscribed it. Through
+    /// an `authz` that did not make it: `403 forbidden`, and nothing is
     /// deleted.
+    ///
+    /// The token goes before the binding, as in every unbind (the port
+    /// rule: [`crate::store`]): the binding first would leave, when the
+    /// token moved meanwhile (a rotation, a refresh), a token no binding
+    /// holds, which the next holder's capability could be made with
+    /// between its binding and its own token's store.
     pub async fn forget(self, authz: &Authorizer) -> Result<bool, ServiceError> {
         authz.check(&self.issuer, "OwnedWaba::forget")?;
-        if !authz
+        let forgotten = authz
             .tokens
             .delete_if_unchanged(&self.waba_id, self.token)
             .await?
-        {
-            return Ok(false);
+            && authz.records.unbind_waba_if(&self.epoch).await?;
+        if !forgotten && !authz.holds(&self.epoch).await.unwrap_or(true) {
+            tracing::warn!(
+                waba_id = self.waba_id.as_str(),
+                "a WABA was unbound, maybe bound to another tenant, while it was being \
+                 disconnected: the new holder's webhook subscription may have been removed"
+            );
         }
-        Ok(authz.records.unbind_waba_if(&self.epoch).await?)
+        Ok(forgotten)
     }
 }
 

@@ -42,6 +42,33 @@
 //!   from ([`RecordStore::unbind_waba_if`],
 //!   [`RecordStore::set_waba_status_if`]: a [`BindingEpoch`]), checked
 //!   atomically with the write.
+//!
+//! **The bindings and the token vault** (the library's `TokenVault`, on
+//! `KvStore`) are two stores no transaction spans. What keeps a WABA's
+//! binding and its token one holder's is an order every writer follows,
+//! the port rule the authorization rests on (`crate::authz`: a capability
+//! reads the binding, then the vault, then the binding again, and trusts
+//! the token only if the binding held throughout):
+//!
+//! - **the vault is written for a WABA only by its current holder**: a
+//!   token is stored, re-encrypted or refreshed only while its WABA is
+//!   bound to the tenant it belongs to;
+//! - **an attach binds before it stores** ([`RecordStore::bind_waba`],
+//!   then the vault): a store first would overwrite another tenant's token
+//!   before decision D4 refused the binding;
+//! - **every unbind deletes the token before the binding** (the vault,
+//!   then [`RecordStore::unbind_waba`] or [`RecordStore::unbind_waba_if`]):
+//!   a token never outlives its binding, so the next holder's binding never
+//!   meets the previous holder's token, not even between its binding and
+//!   its own token's store.
+//!
+//! A re-encryption (a vault key rotation, a read under a previous key) is
+//! a compare-and-swap on the record it read, so it never writes back a
+//! token that was replaced meanwhile. What the order does not cover: an
+//! attach whose binding is removed, and the WABA bound to another tenant,
+//! between its own binding and its store (two operator actions within one
+//! request), stores its token under the other tenant's binding; the
+//! service's attach does not check its binding again after the store.
 
 use std::time::Duration;
 
@@ -138,6 +165,8 @@ pub trait RecordStore: Send + Sync + 'static {
     /// Remove the binding of `waba_id` and its numbers, whoever holds it:
     /// the operator's unbind. `false` when it was not bound. A capability
     /// unbinds only the binding it was made from ([`Self::unbind_waba_if`]).
+    /// The caller deletes the WABA's token from the vault first (the port
+    /// rule: see the [module](self)).
     async fn unbind_waba(&self, waba_id: &WabaId) -> StoreResult<bool>;
 
     /// Remove the binding of `epoch.waba_id` and its numbers only if it is

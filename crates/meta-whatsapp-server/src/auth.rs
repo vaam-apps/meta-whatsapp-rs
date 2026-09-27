@@ -324,7 +324,18 @@ impl OwnedWaba {
             return Ok(());
         }
         tracing::info!("the WABA's token or binding changed while it was being forgotten");
-        Err(ApiError::from(ServiceError::from(StorageError::Busy)))
+        Err(moved())
+    }
+
+    /// Whether the WABA is still bound as it was when this was made, read
+    /// now ([`core_authz::OwnedWaba::still_bound`]): asked just before
+    /// unsubscribing the app with its token, which, after the WABA moved
+    /// to another tenant, would remove that tenant's subscription.
+    pub async fn still_bound(&self, state: &AppState) -> Result<bool, ApiError> {
+        self.0
+            .still_bound(state.authz())
+            .await
+            .map_err(ApiError::from)
     }
 
     /// Unbind a WABA as the operator (decision D4's admin unbind): with
@@ -340,6 +351,11 @@ impl OwnedWaba {
     ) -> Result<(), ApiError> {
         match Self::for_admin(state, admin, binding).await {
             Ok(owned) => {
+                // Moved since it was made: its token is not the new
+                // holder's to unsubscribe with. A repeat reads it anew.
+                if !owned.still_bound(state).await? {
+                    return Err(moved());
+                }
                 let unsubscribed = owned
                     .client()
                     .waba(owned.waba_id().clone())
@@ -400,6 +416,13 @@ impl FromRequestParts<AppState> for OwnedWaba {
         );
         Ok(Self(state.authz().owned_waba(&caller, waba_id).await?))
     }
+}
+
+/// The answer for a WABA whose binding moved while a request was acting
+/// on it: `503 storage_unavailable`, retryable (the repeat sees it as it
+/// is now).
+pub(crate) fn moved() -> ApiError {
+    ApiError::from(ServiceError::from(StorageError::Busy))
 }
 
 /// `api`, the error of a failed Graph call on an object named by id

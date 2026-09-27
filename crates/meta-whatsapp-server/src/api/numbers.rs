@@ -462,6 +462,12 @@ pub(crate) async fn disconnect_waba(
     State(state): State<AppState>,
     owned: OwnedWaba,
 ) -> Result<StatusCode, ApiError> {
+    // Moved since the capability was made (the WABA unbound, maybe bound to
+    // another tenant): its token must not unsubscribe the new holder's
+    // app. `503`, retryable: the repeat finds what the tenant holds now.
+    if !owned.still_bound(&state).await? {
+        return Err(crate::auth::moved());
+    }
     let unsubscribed = owned
         .client()
         .waba(owned.waba_id().clone())

@@ -635,9 +635,98 @@ pub async fn a_capability_made_while_its_waba_moves_is_refused(
     }
 }
 
+/// M1 (the security review of S2), before the new holder's token is
+/// stored: the WABA moves as the service moves one (the old token deleted,
+/// then the binding; bound to another tenant, whose attach has not stored
+/// its token yet) between a capability's read of the binding and its read
+/// of the vault, which then finds no token. That absence is the new
+/// holder's state: no capability, `503 storage_unavailable` (retryable), as
+/// for any move, never `409 number_not_connected` (on which the admin
+/// unbind deletes the WABA's binding without a capability). For an
+/// `OwnedWaba`, an `OwnedNumber` and an admin's `OwnedWaba` made from a
+/// binding read before the move. The new holder keeps its binding and its
+/// number's status. Decisive: `Authorizer::open` reading the binding again
+/// before it answers for the vault's read.
+pub async fn a_capability_made_before_the_new_token_is_stored_is_refused(
+    store: Arc<dyn Store>,
+    kv: Arc<dyn KvStore>,
+) {
+    let s = Arc::new(Setup::new(store.clone(), kv).await);
+    let moving = Arc::new(MovesAfterRead {
+        inner: store.clone(),
+        hook: std::sync::Mutex::new(None),
+        after_number: std::sync::Mutex::new(None),
+    });
+    let records: Arc<dyn RecordStore> = moving.clone();
+    let authz = Authorizer::new(
+        records,
+        s.vault.clone(),
+        Client::builder()
+            .transport(ScriptedTransport::new())
+            .build()
+            .unwrap(),
+    )
+    .unwrap();
+    let key = |owner: KeyOwner, scopes: Vec<Scope>| {
+        let store = store.clone();
+        async move {
+            let (key, _) = mint(store.as_ref(), owner, scopes, String::new(), None)
+                .await
+                .unwrap();
+            format!("Bearer {}", key.expose_key())
+        }
+    };
+    let tenant_key = key(
+        KeyOwner::Tenant(TenantId::parse(A).unwrap()),
+        vec![Scope::Numbers],
+    )
+    .await;
+    let caller = authz
+        .tenant_caller(Some(&tenant_key), None, Scope::Numbers)
+        .await
+        .unwrap();
+    let admin_key = key(KeyOwner::Admin, vec![]).await;
+    let admin = authz.admin_caller(Some(&admin_key)).await.unwrap();
+    // The old token first, then the binding (every unbind); bound to B,
+    // no token yet.
+    let move_to_b = |waba: &WabaId, pn: &PhoneNumberId| -> Hook {
+        let (s, waba, pn) = (s.clone(), waba.clone(), pn.clone());
+        Box::pin(async move {
+            s.vault.delete(&waba).await.unwrap();
+            s.attached_again(B, &waba, &pn, None).await;
+        })
+    };
+    for how in ["owned_waba", "owned_number", "waba_for_admin"] {
+        let case = format!("made-before-the-new-token-{how}");
+        let (waba, pn) = ids(&case);
+        s.attach(A, &waba, &pn, Some("TOKEN-OF-A")).await;
+        let made = match how {
+            "owned_waba" => {
+                moving.arm(move_to_b(&waba, &pn));
+                authz.owned_waba(&caller, waba.clone()).await.map(drop)
+            }
+            "owned_number" => {
+                moving.arm(move_to_b(&waba, &pn));
+                authz.owned_number(&caller, pn.clone()).await.map(drop)
+            }
+            _ => {
+                let listed = store.waba(&waba).await.unwrap().unwrap();
+                move_to_b(&waba, &pn).await;
+                authz.waba_for_admin(&admin, &listed).await.map(drop)
+            }
+        };
+        let refused = made.expect_err(&case);
+        assert_eq!(refused.code(), "storage_unavailable", "{case}");
+        assert_eq!(s.holder(&waba).await.as_deref(), Some(B), "{case}");
+        assert_eq!(s.token(&waba).await, None, "{case}");
+        assert_eq!(s.status(&pn).await, Some(NumberStatus::Connected), "{case}");
+    }
+}
+
 /// Everything above.
 pub async fn run(store: Arc<dyn Store>, kv: Arc<dyn KvStore>) {
     forget_leaves_a_waba_attached_again(store.clone(), kv.clone()).await;
     failed_leaves_a_waba_attached_again(store.clone(), kv.clone()).await;
+    a_capability_made_before_the_new_token_is_stored_is_refused(store.clone(), kv.clone()).await;
     a_capability_made_while_its_waba_moves_is_refused(store, kv).await;
 }
