@@ -49,6 +49,20 @@ impl ManualClock {
         *t += by;
     }
 
+    /// Move forward to `at`, or stay where it is when already there or
+    /// later: never back. Atomic, so tasks sharing the clock that each
+    /// wait until a deadline leave it at the latest one, not at the sum
+    /// of their waits.
+    pub fn advance_to(&self, at: OffsetDateTime) {
+        let mut t = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if at > *t {
+            *t = at;
+        }
+    }
+
     /// Jump to `at`.
     pub fn set(&self, at: OffsetDateTime) {
         *self
@@ -77,5 +91,15 @@ mod tests {
         let c = ManualClock::new(datetime!(2026-01-01 0:00 UTC));
         c.advance(Duration::from_secs(90));
         assert_eq!(c.now(), datetime!(2026-01-01 0:01:30 UTC));
+    }
+
+    #[test]
+    fn manual_clock_advances_to_a_later_time_only() {
+        let c = ManualClock::new(datetime!(2026-01-01 0:00 UTC));
+        c.advance_to(datetime!(2026-01-01 0:00:50 UTC));
+        c.advance_to(datetime!(2026-01-01 0:00:20 UTC));
+        assert_eq!(c.now(), datetime!(2026-01-01 0:00:50 UTC));
+        c.advance_to(datetime!(2026-01-01 0:01 UTC));
+        assert_eq!(c.now(), datetime!(2026-01-01 0:01 UTC));
     }
 }

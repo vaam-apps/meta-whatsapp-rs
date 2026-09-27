@@ -5,7 +5,7 @@ description: "Sending an approved WhatsApp template with meta-whatsapp-rs - Temp
 
 # meta-whatsapp-rs-send-templates
 
-> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 2f6e7150f3eadb9eb68a72586ac73c2615b09557 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/send.rs](examples/send.rs), compiled and tested
 by meta-whatsapp-rs's own gate.
@@ -115,7 +115,8 @@ the template.
 - No lookup of the approved definition, so no local check of parameter
   counts; cache your approved templates (`meta-whatsapp-rs-templates`) if you want
   one.
-- No campaign pacing or messaging-limit accounting.
+- No messaging-limit accounting. Campaign pacing (one template to many,
+  under the number's throughput): `Broadcast`, in `meta-whatsapp-rs-bot`.
 
 ## Related skills
 

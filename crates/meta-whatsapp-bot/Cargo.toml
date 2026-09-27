@@ -1,6 +1,6 @@
 [package]
 name = "meta-whatsapp-bot"
-description = "Bot framework over WhatsApp Cloud API webhooks: commands, guards, cooldowns, middleware, compile-time plugins and Markdown replies."
+description = "Bot framework over WhatsApp Cloud API webhooks: commands, guards, cooldowns, middleware, compile-time plugins, Markdown replies and paced broadcasts."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -18,9 +18,19 @@ meta-whatsapp-webhooks.workspace = true
 
 anyhow.workspace = true
 async-trait.workspace = true
+# `PacedGroup::set_picture` takes what `Group::set_picture` takes.
+bytes.workspace = true
+# The paced broadcast (`broadcast`): its workers run concurrently in the
+# caller's task (`join_all`), and a cancelled one stops waiting (`select`).
+futures.workspace = true
 hex.workspace = true
 pulldown-cmark.workspace = true
 sha2.workspace = true
+# The pacer's instants, from the `Clock` port.
+time.workspace = true
+# `SystemClock`'s sleep (`Timer`, as the client's retries sleep) and the
+# broadcast's cancel signal (`watch`, runtime-agnostic).
+tokio = { workspace = true, features = ["sync", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
@@ -29,9 +39,9 @@ meta-whatsapp-core = { workspace = true, features = ["testing"] }
 meta-whatsapp-adapters = { workspace = true, features = ["memory"] }
 pretty_assertions.workspace = true
 serde_json.workspace = true
-# `datetime!` for the tests' manual clocks.
-time.workspace = true
-tokio = { workspace = true, features = ["macros", "rt"] }
+# `test-util`: the pacing tests run on Tokio's paused clock, where concurrent
+# sleeps overlap as they do for real (a `ManualClock` adds them up).
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 
 [lints]
 workspace = true

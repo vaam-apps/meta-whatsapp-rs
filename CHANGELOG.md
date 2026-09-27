@@ -232,8 +232,85 @@ stored data, the owner's).
   `pulldown-cmark` 0.13 (MIT, no default features). Guide:
   [docs/guides/bots.md](docs/guides/bots.md); skill:
   `meta-whatsapp-rs-bot`. Not yet: subcommands and flags, rich replies
-  beyond text, paced broadcasts, scheduling and auto-delete (roadmap
-  B1b, B1c, B2–B4).
+  beyond text, scheduling and auto-delete (roadmap B1b, B1c, B3, B4);
+  paced broadcasts are the next entry.
+- **Paced broadcasts** in `meta-whatsapp-bot` (roadmap B2): a
+  `Broadcast` sends one message (`BroadcastBuilder::content`) or one per
+  recipient (`BroadcastBuilder::compose`) from one business number
+  through an `Outbound`, each send, retries included, after a slot of
+  the number's `Pacer`, up to 32 in flight (`BroadcastBuilder::concurrency`).
+  Each person once by default: a recipient listed again (the same phone
+  number by its digits, BSUID or group) is `SendOutcome::Duplicate`, not
+  sent to again (`BroadcastBuilder::dedupe(false)` sends the list as
+  given). `run` returns a `BroadcastReport` (per recipient, with its
+  `index`: `SendOutcome::Sent`, `SendOutcome::Failed`,
+  `SendOutcome::Skipped` (with the `RecipientReport::last_error` of a
+  retry that never came) or `SendOutcome::Duplicate`, the attempts; the
+  counts, `BroadcastProgress`; how the run ended, `BroadcastEnd`:
+  completed, cancelled, stopped by the policy, or stopped because the
+  rate limiter or the sink failed), or hands each line to a
+  `ReportSink` as it settles (`BroadcastBuilder::report_to`, a
+  `tokio::sync::mpsc::Sender` among them; a sink that fails stops the
+  run) so memory does not grow with the lines; a `BroadcastHandle` gives
+  `progress` and `cancel` (no send starts after it, the slots waited for
+  go back, sends in flight finish). The pacer is three traits with
+  defaults: `RateLimiter` (`TokenBucket`: per number, in this process,
+  evenly spaced so no one-second window holds more than the rate;
+  `Rate::DEFAULT` 80 a second, `Rate::HIGHER_THROUGHPUT` 1,000 and
+  `Rate::BUSINESS_APP` 20, from Meta's `throughput` page; per-number
+  rates, set while running too (`TokenBucket::set_rate`), a burst, and a
+  slow-down on throttling whose factor, spacing and recovery are
+  settings, `TokenBucket::adaptive(false)` turning it off; it takes a
+  `SlotRequest` with a cost, returns a `Reservation`, and takes an
+  unused one back with `RateLimiter::release`), `SlowDownRule` (which
+  errors slow a number down: `ThrottlingErrors`, the `RateLimited`
+  codes, `131048` and `131057`) and `Timer` (a `Clock` that can wait
+  until a deadline: `SystemClock` on Tokio, `ManualClock` moving at once
+  in tests, exact however many senders share it). Failed sends go to a
+  `BroadcastPolicy`, given a `SendFailure` (default `Backoff`, on
+  `ErrorKind`): the pair rate limit (`131056`) defers only that
+  recipient, on Meta's `4^X` schedule; throughput (`130429`) is
+  retried; a number in maintenance (`131057`, Meta's throughput upgrade,
+  up to a minute) is retried every 20 s (`Backoff::MAINTENANCE_RETRY`);
+  the per-user marketing limit (`131049`) is reported, never retried;
+  the kinds of `Backoff::STOPS` (token, permission, account,
+  classification limit, payment, the spam limit `131048`, registration,
+  marketing turned off) stop the run, and so do those of
+  `Backoff::CONTENT_STOPS` (the template not found, paused, disabled, or
+  its parameters wrong) when every recipient gets the same message; both
+  lists are settings (`Backoff::stops`, `Backoff::content_stops`), and
+  every delay is at most `Backoff::max_delay` (64 s). Whatever the
+  policy, a send is repeated only when `Error::may_resend` holds, the
+  client's rule: a timed-out send, or a `131000`, is never replayed;
+  `BroadcastBuilder::client` turns the client's own replays off
+  (`Client::with_retry`), so every retry is paced. The run keeps its own
+  time: a wall clock stepping back neither pauses the pacer nor puts off
+  a pending retry. `BotBuilder::pacer` puts a bot's outbound in a
+  `PacedOutbound`, so its replies, read receipts and typing indicators
+  share the number's budget and slow it down when throttled; a bot
+  built with `BotBuilder::client` retries there, each retry after a
+  slot, instead of in its client (`PacedOutbound::retry`); `Ctx::pacer`
+  gives handlers the pacer. `PacedGroups` and `PacedGroup` wrap the
+  client's group operations the same way, and `Pacer::acquire` paces any
+  other call. Zero where it means nothing is a `ConfigError` when given.
+  One budget per process: a shared `RateLimiter` across replicas is the
+  integrator's to plug in (none ships; roadmap B2b), and following a
+  throughput upgrade is B2a. No new port and no persistence: a run lives
+  in memory (durable, resumable jobs are B3). New dependencies of the
+  bot crate, all already in the workspace: `bytes`, `futures`, `time`,
+  and `tokio` (`sync`, `time`; `test-util` for its tests).
+- `Client::with_retry` (this client, with another `RetryPolicy`) and
+  `Client::retry_policy`: the policy moved from the client's shared
+  state to each `Client`, so a caller can turn replays off for its own
+  calls (the paced broadcast does). `with_token` keeps the policy.
+- `Error::may_resend` in `meta-whatsapp-core`: the library's one rule
+  for resending a failed send automatically, conservative (a throttling
+  code on any status, an HTTP 429, or `131057` on a 4xx only), which
+  the client's `RetryPolicy` and the bot's broadcast both follow;
+  `GraphApiError::MAINTENANCE_MODE` and `GraphApiError::is_maintenance`,
+  the one home of `131057`, which the bot's pacing reads too; and
+  `ManualClock::advance_to`, which moves a manual clock forward to a
+  time and never back.
 - `meta_whatsapp_client::messages::TEXT_BODY_MAX_CHARS` (4096, the text
   limit the client already checked) and `WebhookEvent::KINDS` (every
   value `WebhookEvent::kind` returns), for the bot framework. Both are
@@ -864,6 +941,12 @@ stored data, the owner's).
   `Authorizer` records `tenant` and `key_id` on the request's span); and
   `keys::MintedKey::generate` fails with the library's `CryptoError::Rng`
   instead of a `getrandom::Error`.
+- **The client replays a send refused with `131057`** (the account in
+  maintenance, Meta's throughput upgrade) within its retry budget, as
+  it does a throttled one: `RetryPolicy::should_retry` for a request
+  that is not idempotent is now `Error::may_resend`, which counts
+  `131057` on a 4xx as refused before any processing. Nothing else it
+  replays changed.
 - **The plans of 2026-09-26** (docs only; the owner's directive of that
   day, recorded in AGENTS.md § Decisions and design §10, now titled
   "Decisions", whose anchor moved to `#10-decisions`):

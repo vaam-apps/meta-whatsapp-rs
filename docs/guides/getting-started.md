@@ -162,10 +162,12 @@ unreadable response.
 - The client already retries **idempotent** requests (reads, deletes, POSTs
   that set a value) with jittered backoff: 3 retries, 250 ms base, 8 s cap
   (`RetryPolicy::default()`; `RetryPolicy::NONE` turns it off).
-- A **send** is replayed only when Meta proves it did nothing (throttling:
-  `RateLimited`, `PairRateLimited`, HTTP 429). A timeout or a 5xx on a send
-  is returned, never replayed: a duplicate order confirmation or OTP is worse
-  than an error. Do not wrap sends in your own blind retry loop either.
+- A **send** is replayed only when Meta proves it did nothing
+  (`Error::may_resend`: `RateLimited` or `PairRateLimited`, an HTTP 429,
+  or `131057`, the account in maintenance, on a 4xx). A timeout or a 5xx
+  (a throttling code excepted) on a send is returned, never replayed: a
+  duplicate order confirmation or OTP is worse than an error. Do not wrap sends in your own blind retry
+  loop either.
 - `err.is_retryable()` answers "could the same request succeed later", not
   "is it safe to send again". It is deliberately `false` for 131049
   (per-user marketing limit) and 131048 (spam rate limit).
