@@ -375,6 +375,9 @@ impl IdempotencyRecords for Moving {
 ///   own back, so merchant-b's binding is left with no token, never with
 ///   merchant-a's.
 ///
+/// A take-back is logged at `warn` with the WABA's id and whether it
+/// deleted anything, never a token.
+///
 /// Decisive: the binding read again after the store in
 /// `Authorizer::store_token` (without it, the last two cases answer
 /// `201` and subscribe the app with merchant-a's token, and the last one
@@ -436,6 +439,8 @@ pub async fn an_attach_whose_waba_moves_takes_back_its_token(
             "between_its_read_and_its_store" => moving.after_waba_read(2, move_to_b),
             _ => {}
         }
+        let captured = super::capture::Captured::default();
+        let logs = tracing::subscriber::set_default(super::capture::subscriber(&captured));
         let reply = h
             .call(
                 Call::new(Method::POST, "/v1/admin/tenants/merchant-a/wabas")
@@ -443,6 +448,37 @@ pub async fn an_attach_whose_waba_moves_takes_back_its_token(
                     .json(&json!({"waba_id": waba, "token": "TOKEN-OF-A"})),
             )
             .await;
+        drop(logs);
+        // The take-back's warning: the WABA's id and whether anything went,
+        // never a token.
+        let logs = captured.text();
+        for token in ["TOKEN-OF-A", "TOKEN-OF-B"] {
+            assert!(!logs.contains(token), "{case}: {token} logged");
+        }
+        let warned: Vec<serde_json::Value> = logs
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|event| {
+                event["fields"]["message"]
+                    .as_str()
+                    .is_some_and(|m| m.contains("the token this attach stored was taken back"))
+            })
+            .collect();
+        match case {
+            "after_its_store" | "between_its_read_and_its_store" => {
+                let [warning] = warned.as_slice() else {
+                    panic!("{case}: one warning: {logs}")
+                };
+                assert_eq!(warning["level"], "WARN", "{case}");
+                assert_eq!(warning["fields"]["waba_id"], waba, "{case}");
+                assert_eq!(
+                    warning["fields"]["taken_back"],
+                    case == "between_its_read_and_its_store",
+                    "{case}: only the attach's own write goes, never a newer one"
+                );
+            }
+            _ => assert!(warned.is_empty(), "{case}: {logs}"),
+        }
         assert!(
             !moving.armed() && !puts.armed(),
             "{case}: the move never ran: {}",

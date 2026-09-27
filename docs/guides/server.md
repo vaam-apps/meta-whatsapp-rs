@@ -211,9 +211,11 @@ refuses it, the WABA stays attached and the call answers Meta's error
 with `"step": "subscribe_app"` and `"resumable": true`; repeat it once
 fixed. A token Meta rejects at that point is `409 reconnect_required`
 (its numbers are marked so): repeat the attach with a valid token. An
-attach during which another operator unbinds the WABA and attaches it
-to another tenant answers `503 storage_unavailable` (retryable) and
-takes back the token it stored; repeated, it is refused as below. A
+attach during which another operator unbinds the WABA (and attaches it
+again, to another tenant or the same one) answers `503
+storage_unavailable` (retryable) and takes back the token it stored;
+repeat it, and it answers for the WABA as it is then (refused, as
+below, when another tenant holds it). A
 WABA bound to one tenant is refused to another (`409
 waba_owned_by_another_tenant`, decision D4, also for one of its
 numbers); `GET /v1/admin/wabas/{waba_id}` says who holds it, and
