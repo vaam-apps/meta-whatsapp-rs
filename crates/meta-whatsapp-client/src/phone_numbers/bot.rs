@@ -10,7 +10,9 @@
 //!
 //! The page has no response example (the tests use its schema's field
 //! names), and none of Meta's mirrored pages says where a bot id comes
-//! from.
+//! from. Its schema requires `id`, but its default fields (`prompts`,
+//! `commands`, `enable_welcome_message`) leave it out: when the answer has
+//! none, [`WabaBotInfo::id`] is the id asked for.
 
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::ids::WabaBotId;
@@ -41,7 +43,8 @@ impl Client {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct WabaBotInfo {
-    /// The bot id.
+    /// The bot id: Meta's, or the id asked for when the answer has none
+    /// (see the module docs).
     pub id: WabaBotId,
     /// Ice breakers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -52,6 +55,20 @@ pub struct WabaBotInfo {
     /// Whether the welcome message is on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enable_welcome_message: Option<bool>,
+}
+
+/// What Meta answers: `id` only when asked for (`fields`), in the page's
+/// list of defaults.
+#[derive(Deserialize)]
+struct WabaBotResponse {
+    #[serde(default)]
+    id: Option<WabaBotId>,
+    #[serde(default)]
+    prompts: Vec<String>,
+    #[serde(default)]
+    commands: Vec<BotCommand>,
+    #[serde(default)]
+    enable_welcome_message: Option<bool>,
 }
 
 impl WabaBot {
@@ -67,14 +84,21 @@ impl WabaBot {
 
     /// `GET /{WABA-Bot-ID}` with `fields` (empty = Meta's defaults:
     /// `prompts`, `commands`, `enable_welcome_message`; `id` is also
-    /// available).
+    /// available, and filled in with this bot's id when absent).
     pub async fn get(&self, fields: &[&str]) -> Result<WabaBotInfo> {
-        self.client
+        let raw: WabaBotResponse = self
+            .client
             .get_at(&[self.bot_id.as_str()])
             .query_opt("fields", fields_param(fields))
             .context("WhatsApp Business Bot")
             .send()
-            .await
+            .await?;
+        Ok(WabaBotInfo {
+            id: raw.id.unwrap_or_else(|| self.bot_id.clone()),
+            prompts: raw.prompts,
+            commands: raw.commands,
+            enable_welcome_message: raw.enable_welcome_message,
+        })
     }
 }
 
@@ -138,15 +162,31 @@ mod tests {
         assert_eq!(bot.enable_welcome_message, Some(true));
         assert_eq!(t.remaining(), 0);
 
-        // Meta's defaults: no `fields`; absent lists parse as empty.
-        t.push_json(200, json!({"id": "712345678901234"}));
-        let bare = client(&t)
+        // Meta's defaults: no `fields`, and an answer with only the default
+        // fields (no `id`): the id is the one asked for.
+        t.push_json(
+            200,
+            json!({"prompts": ["Book a flight"], "enable_welcome_message": false}),
+        );
+        let defaults = client(&t)
             .waba_bot("712345678901234")
             .get(&[])
             .await
             .unwrap();
         assert_eq!(t.last_request().unwrap().query("fields"), None);
-        assert!(bare.prompts.is_empty() && bare.commands.is_empty());
+        assert_eq!(defaults.id, WabaBotId::new("712345678901234"));
+        assert_eq!(defaults.prompts, vec!["Book a flight"]);
+        assert!(defaults.commands.is_empty(), "an absent list is empty");
+        assert_eq!(defaults.enable_welcome_message, Some(false));
+        // An id in the answer is Meta's.
+        t.push_json(200, json!({"id": "712345678901234"}));
+        let bare = client(&t)
+            .waba_bot("712345678901234")
+            .get(&["id"])
+            .await
+            .unwrap();
+        assert_eq!(bare.id, WabaBotId::new("712345678901234"));
+        assert!(bare.prompts.is_empty() && bare.enable_welcome_message.is_none());
         assert_eq!(t.remaining(), 0);
     }
 

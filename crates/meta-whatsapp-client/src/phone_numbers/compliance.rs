@@ -11,7 +11,8 @@
 //!   update takes, so [`BusinessComplianceInfo::entity_type`] stays a
 //!   string.
 //! - Emails must be well formed and phone numbers international, per the
-//!   page; Meta checks those, not this client.
+//!   page; Meta checks those, not this client. The emails' length ("under
+//!   128 characters") is checked here.
 
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
@@ -25,6 +26,8 @@ use crate::templates::macros::string_enum;
 pub const MIN_ENTITY_NAME_CHARS: usize = 2;
 /// Longest `entity_name`, in characters.
 pub const MAX_ENTITY_NAME_CHARS: usize = 128;
+/// An email must be "under 128 characters" (the update's validation rules).
+const EMAIL_CHARS_UNDER: usize = 128;
 
 string_enum! {
     /// The legal form of the business (`entity_type` of an update).
@@ -224,12 +227,16 @@ impl ComplianceInfoUpdate {
     }
 
     /// Check the page's validation rules that need no lookup: the name's
-    /// length, `entity_type_custom` exactly with `OTHER`, `is_registered`
-    /// only with `OTHER` or `PARTNERSHIP`, and the required contact fields
-    /// present.
+    /// length (as sent, and not blank), `entity_type_custom` exactly with
+    /// `OTHER`, `is_registered` only with `OTHER` or `PARTNERSHIP`, the
+    /// required contact fields present, and the emails under 128
+    /// characters. Whether an email or a phone number is well formed is
+    /// left to Meta.
     pub fn validate(&self) -> std::result::Result<(), ValidationError> {
-        let name_len = self.entity_name.trim().chars().count();
-        if !(MIN_ENTITY_NAME_CHARS..=MAX_ENTITY_NAME_CHARS).contains(&name_len) {
+        let name_len = self.entity_name.chars().count();
+        if !(MIN_ENTITY_NAME_CHARS..=MAX_ENTITY_NAME_CHARS).contains(&name_len)
+            || self.entity_name.trim().chars().count() < MIN_ENTITY_NAME_CHARS
+        {
             return Err(ValidationError::new(
                 "entity_name",
                 "must be 2-128 characters",
@@ -276,6 +283,14 @@ impl ComplianceInfoUpdate {
         required(
             "customer_care_details.email",
             self.customer_care_details.email.as_deref(),
+        )?;
+        email_length(
+            "grievance_officer_details.email",
+            self.grievance_officer_details.email.as_deref(),
+        )?;
+        email_length(
+            "customer_care_details.email",
+            self.customer_care_details.email.as_deref(),
         )
     }
 }
@@ -285,6 +300,14 @@ fn required(field: &str, value: Option<&str>) -> std::result::Result<(), Validat
         Ok(())
     } else {
         Err(ValidationError::new(field, "is required"))
+    }
+}
+
+fn email_length(field: &str, value: Option<&str>) -> std::result::Result<(), ValidationError> {
+    if value.is_some_and(|v| v.chars().count() >= EMAIL_CHARS_UNDER) {
+        Err(ValidationError::new(field, "must be under 128 characters"))
+    } else {
+        Ok(())
     }
 }
 
@@ -484,6 +507,26 @@ mod tests {
                 ),
                 "entity_name",
             ),
+            // The name is sent as given: 128 characters and a space are 129.
+            (
+                ComplianceInfoUpdate::new(
+                    format!("{} ", "L".repeat(128)),
+                    BusinessEntityType::PublicCompany,
+                    officer(),
+                    care(),
+                ),
+                "entity_name",
+            ),
+            // Long enough, but blank past one character.
+            (
+                ComplianceInfoUpdate::new(
+                    " L ",
+                    BusinessEntityType::PublicCompany,
+                    officer(),
+                    care(),
+                ),
+                "entity_name",
+            ),
             (base(BusinessEntityType::Custom), "entity_type_custom"),
             (
                 base(BusinessEntityType::Custom).entity_type_custom(" "),
@@ -525,6 +568,74 @@ mod tests {
             .validate()
             .is_ok()
         );
+    }
+
+    /// "Email addresses must be valid format and under 128 characters":
+    /// the length is checked here, 128 refused and 127 accepted.
+    #[tokio::test]
+    async fn set_checks_the_email_length_first() {
+        let t = ScriptedTransport::new();
+        let pn = client(&t).phone_number(ID);
+        let email = |chars: usize| format!("{}@x.example", "a".repeat(chars - "@x.example".len()));
+        assert_eq!(email(128).chars().count(), 128);
+        let update = |officer_email: String, care_email: String| {
+            ComplianceInfoUpdate::new(
+                "Lucky Shrub",
+                BusinessEntityType::PublicCompany,
+                GrievanceOfficer::new("Asha Rao", officer_email),
+                CustomerCare::new(care_email),
+            )
+        };
+        for (update, field) in [
+            (
+                update(email(128), email(127)),
+                "grievance_officer_details.email",
+            ),
+            (
+                update(email(127), email(128)),
+                "customer_care_details.email",
+            ),
+        ] {
+            let err = pn.set_business_compliance_info(&update).await.unwrap_err();
+            assert!(
+                matches!(&err, meta_whatsapp_core::Error::Validation(v) if v.field == field),
+                "{field}: {err:?}"
+            );
+        }
+        assert!(t.requests().is_empty(), "nothing is sent for invalid input");
+        assert!(update(email(127), email(127)).validate().is_ok());
+    }
+
+    /// What the rustdoc says: setting the information is replayed after a
+    /// timeout (the same body), unlike a non-idempotent `POST`.
+    #[tokio::test]
+    async fn set_is_replayed_after_a_timeout() {
+        let t = ScriptedTransport::new();
+        t.push_error(|| meta_whatsapp_core::error::TransportError::Timeout);
+        t.push_json(200, json!({"success": true}));
+        let c = Client::builder()
+            .transport(t.clone())
+            .access_token("TOKEN")
+            .retry(RetryPolicy {
+                max_retries: 1,
+                base_delay: std::time::Duration::ZERO,
+                max_delay: std::time::Duration::ZERO,
+            })
+            .build()
+            .unwrap();
+        c.phone_number(ID)
+            .set_business_compliance_info(&ComplianceInfoUpdate::new(
+                "Lucky Shrub Private Limited",
+                BusinessEntityType::PrivateCompany,
+                officer(),
+                care(),
+            ))
+            .await
+            .unwrap();
+        let reqs = t.requests();
+        assert_eq!(reqs.len(), 2, "setting a value is safe to replay");
+        assert_eq!(reqs[0].json(), reqs[1].json());
+        assert_eq!(t.remaining(), 0);
     }
 
     #[tokio::test]
