@@ -19,8 +19,10 @@
 //!
 //! Uploaded media ids live 30 days; ids from webhooks 7 days. A media URL
 //! from [`Media::url`] expires after 5 minutes and needs the access token,
-//! which this client only attaches to the Graph endpoint and
-//! `https://lookaside.fbsbx.com`, where Meta's media URLs point.
+//! which this client attaches, of the hosts a media URL may name, only to
+//! the Graph endpoint and `https://lookaside.fbsbx.com`, where Meta's media
+//! URLs point (the one other URL it sends the token to is not a media
+//! host's: see [`crate::waba::Business::parent_bsuid_account`]).
 //!
 //! # Upload and send
 //!
@@ -207,9 +209,10 @@ impl Media {
     /// media webhook that carried `url` and `sha256`).
     ///
     /// The token is only sent to the Graph endpoint or
-    /// `https://lookaside.fbsbx.com`; any other URL fails with a validation
-    /// error (field `url`) before a byte is sent. Not retried: fetch a fresh
-    /// URL and call again.
+    /// `https://lookaside.fbsbx.com` (or the one Parent BSUID Accounts URL
+    /// on `api.facebook.com`, which is no media URL); any other URL fails
+    /// with a validation error (field `url`) before a byte is sent. Not
+    /// retried: fetch a fresh URL and call again.
     pub async fn download_with_info(&self, info: MediaInfo) -> Result<MediaDownload> {
         let url = Url::parse(&info.url)
             .map_err(|e| ValidationError::new("url", format!("not an absolute URL: {e}")))?;
