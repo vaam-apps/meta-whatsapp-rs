@@ -588,8 +588,8 @@ impl Authorizer {
     /// A WABA for an admin operation (deleting its tenant, unbinding it):
     /// step 5 only, as the admin key may act on every tenant. `binding` is
     /// what the admin read (a tenant's listing, say), which may be stale:
-    /// it is read again after the vault ([`Self::open`]), and a WABA no
-    /// longer bound as `binding` says makes no capability (`503
+    /// it is read again after the vault, as for every capability, and a
+    /// WABA no longer bound as `binding` says makes no capability (`503
     /// storage_unavailable`, retryable; a caller walking a listing reads
     /// the WABA's binding again to tell "moved" from a failure). An `admin`
     /// another [`Authorizer`] made is `403 forbidden`.

@@ -511,11 +511,13 @@ async fn each_authorizer_accepts_its_own_capabilities() {
             assert_eq!(side.records.take_calls(), ["set_waba_status_if"]);
         }
         // The first forgets the token and the binding; the second, made
-        // from the same token, finds it gone and deletes nothing.
+        // from the same token, finds it gone and deletes nothing: it only
+        // reads the binding, to tell a binding that moved (which it warns
+        // of: S2's security review, L1) from a token that did.
         assert!(waba.forget(&side.authz).await.unwrap());
         assert_eq!(side.records.take_calls(), ["unbind_waba_if"]);
         assert!(!opened.forget(&side.authz).await.unwrap());
-        assert_eq!(side.records.take_calls(), Vec::<&str>::new());
+        assert_eq!(side.records.take_calls(), ["waba"]);
         // Forgotten: the vault holds no token for the WABA any more.
         let gone = side
             .authz
