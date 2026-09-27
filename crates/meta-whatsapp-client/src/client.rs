@@ -168,11 +168,14 @@ impl Client {
     }
 
     /// A request to an absolute URL (media download links). The token is
-    /// only attached for the configured Graph endpoint and
-    /// `https://lookaside.fbsbx.com` (where media download URLs point); any
-    /// other origin fails with a validation error (field `url`) before a
-    /// byte is sent. Call [`GraphRequest::no_auth`] on the returned request
-    /// for a URL that needs no token.
+    /// only attached for the configured Graph endpoint,
+    /// `https://lookaside.fbsbx.com` (where media download URLs point), and
+    /// `GET https://api.facebook.com/{business id}/parent-bsuid-accounts`
+    /// (the Parent BSUID Accounts API, see [`crate::waba::Business::parent_bsuid_account`]:
+    /// that exact path, no other on that host); anything else fails with a
+    /// validation error (field `url`) before a byte is sent. Call
+    /// [`GraphRequest::no_auth`] on the returned request for a URL that
+    /// needs no token.
     pub fn request_url(&self, method: Method, url: url::Url) -> GraphRequest {
         GraphRequest::new(self.clone(), method, url)
     }
