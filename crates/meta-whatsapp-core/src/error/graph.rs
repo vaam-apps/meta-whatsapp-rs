@@ -117,6 +117,20 @@ impl GraphApiError {
     pub fn is_retryable(&self) -> bool {
         self.is_transient == Some(true) || self.kind().is_retryable()
     }
+
+    /// `131057`: "Business Account is in maintenance mode", what every
+    /// request of a number gets while Meta upgrades its throughput, for up
+    /// to a minute (`throughput`). Its one home: [`Self::is_maintenance`],
+    /// [`Error::may_resend`](super::Error::may_resend) and the bot's
+    /// pacing all read it from here.
+    pub const MAINTENANCE_MODE: i64 = 131_057;
+
+    /// Whether this is [`Self::MAINTENANCE_MODE`], the number in
+    /// maintenance.
+    #[must_use]
+    pub fn is_maintenance(&self) -> bool {
+        self.code == Self::MAINTENANCE_MODE
+    }
 }
 
 /// What a Graph error code means for the caller.
@@ -465,6 +479,18 @@ impl ErrorKind {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn only_131057_is_maintenance() {
+        assert_eq!(GraphApiError::MAINTENANCE_MODE, 131_057);
+        assert!(
+            GraphApiError::new(131_057, "(#131057) Business Account is in maintenance mode")
+                .is_maintenance()
+        );
+        for code in [131_056, 131_058, 130_429, 131_000] {
+            assert!(!GraphApiError::new(code, "").is_maintenance(), "{code}");
+        }
+    }
 
     #[test]
     fn parses_documented_example() {

@@ -71,7 +71,7 @@ use async_trait::async_trait;
 use meta_whatsapp_client::RetryPolicy;
 use meta_whatsapp_client::messages::{OutboundMessage, SendResponse};
 use meta_whatsapp_core::clock::{Clock, ManualClock, SystemClock};
-use meta_whatsapp_core::error::ConfigError;
+use meta_whatsapp_core::error::{ConfigError, GraphApiError};
 use meta_whatsapp_core::ids::{MessageId, PhoneNumberId};
 use meta_whatsapp_core::{Error, ErrorKind, Result};
 use time::OffsetDateTime;
@@ -268,13 +268,10 @@ impl<T: SlowDownRule + ?Sized> SlowDownRule for Arc<T> {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ThrottlingErrors;
 
-/// `131057`: "Business Account is in maintenance mode", which Meta's
-/// throughput upgrade causes for up to a minute (`throughput`).
-pub(crate) const MAINTENANCE: i64 = 131_057;
-
-/// Whether `error` is Meta's `131057`.
+/// Whether `error` is (or wraps) Meta's `131057`, the number in
+/// maintenance ([`GraphApiError::MAINTENANCE_MODE`], core's one copy).
 pub(crate) fn in_maintenance(error: &Error) -> bool {
-    error.graph().is_some_and(|g| g.code == MAINTENANCE)
+    error.graph().is_some_and(GraphApiError::is_maintenance)
 }
 
 impl SlowDownRule for ThrottlingErrors {

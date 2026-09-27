@@ -282,17 +282,13 @@ impl Error {
     /// reconciled with the status webhooks), never replayed blindly.
     pub fn may_resend(&self) -> bool {
         let refused = match self {
-            Self::Api(e) => e.kind().is_rejected_before_processing() || e.code == MAINTENANCE_MODE,
+            Self::Api(e) => e.kind().is_rejected_before_processing() || e.is_maintenance(),
             Self::Http { status: 429, .. } => true,
             _ => false,
         };
         refused && self.is_retryable() && !self.may_have_been_sent()
     }
 }
-
-/// `131057`: "Business Account is in maintenance mode", what every request
-/// of a number gets while Meta upgrades its throughput (`throughput`).
-const MAINTENANCE_MODE: i64 = 131_057;
 
 /// Truncate a body for inclusion in an error message (512 bytes, lossy UTF-8).
 pub fn snippet(body: &[u8]) -> String {

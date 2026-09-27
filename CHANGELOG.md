@@ -306,7 +306,9 @@ stored data, the owner's).
 - `Error::may_resend` in `meta-whatsapp-core`: the library's one rule
   for resending a failed send automatically, conservative (a throttling
   code on any status, an HTTP 429, or `131057` on a 4xx only), which
-  the client's `RetryPolicy` and the bot's broadcast both follow; and
+  the client's `RetryPolicy` and the bot's broadcast both follow;
+  `GraphApiError::MAINTENANCE_MODE` and `GraphApiError::is_maintenance`,
+  the one home of `131057`, which the bot's pacing reads too; and
   `ManualClock::advance_to`, which moves a manual clock forward to a
   time and never back.
 - `meta_whatsapp_client::messages::TEXT_BODY_MAX_CHARS` (4096, the text
