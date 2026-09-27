@@ -5,7 +5,7 @@ description: "Understanding and handling meta-whatsapp-rs WebhookEvent values - 
 
 # meta-whatsapp-rs-webhook-events
 
-> **Verified against meta-whatsapp-rs 888dec677cf5a56db041e56986e6ef6ee2e52b0a (2026-09-27).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 046ab7c95db24d77bbc67d1a4952031f4f1e25d2 (2026-09-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/events.rs](examples/events.rs), compiled and
 tested by meta-whatsapp-rs's own gate with Meta-shaped payloads. Every variant and
@@ -151,7 +151,7 @@ pub fn quality(score: &TemplateQualityScore) -> QualityRating {
   (~~and handovers / standby~~: until PR #17). No Thread control API (`pass`, `release`, `take`).
 - It does not merge conversations when a BSUID changes. The inbox records `MessageEchoed` and
   `HistorySynced` (~~not~~: until a3582b8, 2026-09-24), calls, standby copies, handovers and BSUID
-  changes (~~not~~: until roadmap L7; `meta-whatsapp-rs-cms-inbox`), not `AppStateSynced` contacts.
+  changes (~~not~~: until PR #27; `meta-whatsapp-rs-cms-inbox`), not `AppStateSynced` contacts.
 
 ## Related skills
 

@@ -1,6 +1,6 @@
 # `ErrorKind` reference
 
-> **Verified against meta-whatsapp-rs fc63968e2a49b25e5b601175ff7f9061b32a96f4 (2026-09-27).** Source: `crates/meta-whatsapp-core/src/error/graph.rs`
+> **Verified against meta-whatsapp-rs 046ab7c95db24d77bbc67d1a4952031f4f1e25d2 (2026-09-27).** Source: `crates/meta-whatsapp-core/src/error/graph.rs`
 > (`ErrorKind::from_code`, `is_retryable`, `is_rejected_before_processing`) and
 > `crates/meta-whatsapp-core/src/error/mod.rs` (`Error::kind`: the local-refusal rule below;
 > `Error::may_resend`: the "Replay a send" column).
@@ -17,7 +17,7 @@ two local refusals (nothing was sent): the 24-hour one
 `ThreadOwnedElsewhere` — `Step` → its source's kind, everything else →
 `Unknown`.
 ~~`Validation` → `InvalidParameter`, without exception~~: true until fe49aa5
-(2026-09-24). Before roadmap L7 the inbox had no ownership refusal and
+(2026-09-24). Before PR #27 the inbox had no ownership refusal and
 `ErrorKind` no `ThreadOwnedElsewhere`.
 
 Each kind's stable name, `ErrorKind::as_str`, is its variant name in
