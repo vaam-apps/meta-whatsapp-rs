@@ -17,6 +17,7 @@ use bytes::Bytes;
 use futures::StreamExt;
 use http::Method;
 use meta_whatsapp_adapters::http::ReqwestTransport;
+use meta_whatsapp_adapters::http::credential_redirect_policy;
 use meta_whatsapp_core::error::TransportError;
 use meta_whatsapp_core::transport::{
     ByteStream, HttpRequest, HttpTransport, Multipart, RequestBody,
@@ -1033,5 +1034,194 @@ async fn a_credential_header_named_in_any_case_is_a_credential() {
             .unwrap();
         assert_eq!(response.status, StatusCode::FOUND);
         assert!(server.shared.recorded().is_empty());
+    }
+}
+
+/// `with_clients` sends a request with a credential through the
+/// credentialed client and any other through the plain one. With
+/// `credential_redirect_policy()` on the first, a transport built from
+/// reqwest's own clients (the plain one follows every redirect) never sends
+/// a credential past the URL asked for, within its origin or within
+/// another after a hop there, and still follows redirects without one.
+#[tokio::test]
+async fn with_clients_never_sends_a_credential_to_a_second_hop() {
+    let transport = || {
+        ReqwestTransport::with_clients(
+            reqwest::Client::new(),
+            reqwest::Client::builder()
+                .redirect(credential_redirect_policy())
+                .build()
+                .unwrap(),
+        )
+    };
+    for (name, value) in [
+        ("authorization", TOKEN),
+        ("proxy-authorization", "Basic cHJveHk6c2VjcmV0"),
+        ("cookie", "session=s3cr3t-value"),
+    ] {
+        let server = Server::start().await;
+        let request = with_header(
+            HttpRequest::new(Method::GET, server.url("/within")),
+            name,
+            value,
+        );
+        let response = within("redirected request", transport().send(request))
+            .await
+            .unwrap();
+        assert_eq!(response.status, StatusCode::FOUND, "{name}: not followed");
+        assert!(server.shared.recorded().is_empty(), "{name}");
+
+        let (origin, other) = (Server::start().await, Server::start().await);
+        let url = origin.url(&format!("/hop-within/{}", other.addr.port()));
+        let request = with_header(HttpRequest::new(Method::GET, url), name, value);
+        let response = within("redirected stream", transport().send_streaming(request))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status,
+            StatusCode::FOUND,
+            "{name}: the first hop only"
+        );
+        assert!(other.shared.recorded().is_empty(), "{name}: second hop");
+    }
+
+    // User info in the URL is a credential too.
+    let server = Server::start().await;
+    let url = with_user_info(server.url("/within"), "user", Some("s3cr3t-value"));
+    let response = within(
+        "redirected request",
+        transport().send(HttpRequest::new(Method::GET, url)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        response.status,
+        StatusCode::FOUND,
+        "user info: not followed"
+    );
+    assert!(server.shared.recorded().is_empty());
+
+    // Without a credential, the plain client follows.
+    let (origin, other) = (Server::start().await, Server::start().await);
+    let url = origin.url(&format!("/hop-within/{}", other.addr.port()));
+    let response = within(
+        "redirected request",
+        transport().send(HttpRequest::new(Method::GET, url)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status, StatusCode::OK, "followed");
+    assert_eq!(other.shared.recorded(), [None]);
+}
+
+/// `with_client` uses its one client for every request, those without a
+/// credential included: built with `credential_redirect_policy()`, it
+/// follows no redirect within an origin for anyone.
+#[tokio::test]
+async fn with_client_uses_its_client_for_every_request() {
+    let transport = ReqwestTransport::with_client(
+        reqwest::Client::builder()
+            .redirect(credential_redirect_policy())
+            .build()
+            .unwrap(),
+    );
+    let server = Server::start().await;
+    for request in [
+        with_header(
+            HttpRequest::new(Method::GET, server.url("/within")),
+            "authorization",
+            TOKEN,
+        ),
+        HttpRequest::new(Method::GET, server.url("/within")),
+    ] {
+        let response = within("redirected request", transport.send(request))
+            .await
+            .unwrap();
+        assert_eq!(response.status, StatusCode::FOUND);
+    }
+    assert!(server.shared.recorded().is_empty());
+}
+
+/// `credential_redirect_policy()` compares origins as reqwest does, after
+/// URL parsing: the default port spelled out or left out, an IPv6 literal
+/// in another form, an IDN in Unicode, punycode or full-width letters are
+/// the same origin (reqwest would keep the token: not followed), and a
+/// trailing dot or another port is another (followed, without it). A local
+/// proxy answers for every host, so none needs to resolve.
+#[tokio::test]
+async fn the_credential_redirect_policy_compares_origins_as_parsed() {
+    let proxy = Server::start().await;
+    let client = || {
+        reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{}", proxy.addr)).unwrap())
+            .redirect(credential_redirect_policy())
+            .build()
+            .unwrap()
+    };
+    let transport = ReqwestTransport::with_clients(client(), client());
+    let same_origin = [
+        ("http://probe.invalid/", "http://probe.invalid:80/record"),
+        ("http://probe.invalid:80/", "http://probe.invalid/record"),
+        ("http://probe.invalid/", "HTTP://PROBE.invalid/record"),
+        ("http://[::1]:9/", "http://[0:0:0:0:0:0:0:1]:9/record"),
+        (
+            "http://[::ffff:127.0.0.1]:9/",
+            "http://[::ffff:7f00:1]:9/record",
+        ),
+        (
+            "http://xn--bcher-kva.invalid/",
+            "http://B\u{dc}CHER.invalid/record",
+        ),
+        (
+            "http://b\u{fc}cher.invalid/",
+            "http://xn--bcher-kva.invalid/record",
+        ),
+        (
+            "http://probe.invalid/",
+            "http://\u{ff30}\u{ff32}\u{ff2f}\u{ff22}\u{ff25}.invalid/record",
+        ),
+    ];
+    for (from, to) in same_origin {
+        let request = with_header(
+            HttpRequest::new(
+                Method::GET,
+                redirect_url(&Url::parse(from).unwrap(), 302, to),
+            ),
+            "authorization",
+            TOKEN,
+        );
+        let response = within("redirected request", transport.send(request))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status,
+            StatusCode::FOUND,
+            "{from} -> {to}: not followed"
+        );
+        assert!(proxy.shared.recorded().is_empty(), "{from} -> {to}");
+    }
+    let other_origin = [
+        ("http://probe.invalid/", "http://probe.invalid./record"),
+        ("http://probe.invalid/", "http://probe.invalid:81/record"),
+        ("http://[::1]:9/", "http://[::2]:9/record"),
+    ];
+    for (i, (from, to)) in other_origin.into_iter().enumerate() {
+        let request = with_header(
+            HttpRequest::new(
+                Method::GET,
+                redirect_url(&Url::parse(from).unwrap(), 302, to),
+            ),
+            "authorization",
+            TOKEN,
+        );
+        let response = within("redirected request", transport.send(request))
+            .await
+            .unwrap();
+        assert_eq!(response.status, StatusCode::OK, "{from} -> {to}: followed");
+        assert_eq!(
+            proxy.shared.recorded(),
+            vec![None; i + 1],
+            "{from} -> {to}: without the token"
+        );
     }
 }
