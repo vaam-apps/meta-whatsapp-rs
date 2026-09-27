@@ -294,11 +294,13 @@ impl StoredBusinessToken {
 }
 
 /// Which write of a WABA's vault record a token was read from
-/// ([`TokenVault::get_versioned`], [`TokenVault::get_by_phone_number_versioned`]):
-/// what [`TokenVault::delete_if_unchanged`] compares, so that a delete
-/// never takes a record written after the read (the WABA connected again,
-/// a new token; or the record re-encrypted by a rotation). The store's
-/// version of the record: never reused for a key, even after a delete.
+/// ([`TokenVault::get_versioned`], [`TokenVault::get_by_phone_number_versioned`]),
+/// or a store wrote ([`TokenVault::store_versioned`]): what
+/// [`TokenVault::delete_if_unchanged`] compares, so that a delete never
+/// takes a record written after the read or the write (the WABA connected
+/// again, a new token; or the record re-encrypted by a rotation). The
+/// store's version of the record: never reused for a key, even after a
+/// delete.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TokenVersion(u64);
 
@@ -326,8 +328,12 @@ pub struct TokenVersion(u64);
 /// transaction spans both. The order that keeps a token its binding's
 /// (the rule `meta-whatsapp-server` states on its `RecordStore` port): a
 /// WABA's record is written ([`Self::store`], a re-encryption) only by the
-/// WABA's current holder; a connection binds before it stores; every
-/// disconnection deletes the token ([`Self::delete`],
+/// WABA's current holder; a connection binds, stores, then confirms: it
+/// stores with [`Self::store_versioned`], reads its binding again, and,
+/// when the binding moved meanwhile (the WABA unbound, maybe bound to
+/// another holder), takes back its own write with
+/// [`Self::delete_if_unchanged`], which never deletes a token stored
+/// after it; every disconnection deletes the token ([`Self::delete`],
 /// [`Self::delete_if_unchanged`]) before its binding. A re-encryption is a
 /// compare-and-swap on the record it read, so it never writes back a token
 /// replaced meanwhile.
@@ -459,6 +465,20 @@ impl TokenVault {
     /// Trusts `token.phone_number_ids`: see [`TokenVault`] on who may write
     /// the index.
     pub async fn store(&self, token: &StoredBusinessToken) -> Result<()> {
+        self.store_versioned(token).await.map(drop)
+    }
+
+    /// [`Self::store`], and the version of the record it wrote: pass it to
+    /// [`Self::delete_if_unchanged`] to take back this write, and never a
+    /// record written after it (another holder's token, stored since). What
+    /// a connection that finds, once it stored, that its WABA's binding
+    /// moved meanwhile does (see [`TokenVault`] on who may write a WABA's
+    /// record).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::store`].
+    pub async fn store_versioned(&self, token: &StoredBusinessToken) -> Result<TokenVersion> {
         if token.waba_id.as_str().is_empty() {
             return Err(ValidationError::new("waba_id", "required").into());
         }
@@ -470,7 +490,8 @@ impl TokenVault {
         let previous = self.read_record(&key).await.ok().flatten();
         let created_at = token.created_at.unwrap_or_else(|| self.clock.now());
         let record = self.seal(token, created_at)?;
-        self.kv
+        let written = self
+            .kv
             .put(&key, encode(&key, &record)?, Expiry::Never)
             .await?;
         for phone in &token.phone_number_ids {
@@ -491,7 +512,7 @@ impl TokenVault {
                 self.unlink_phone(phone, &token.waba_id).await?;
             }
         }
-        Ok(())
+        Ok(TokenVersion(written))
     }
 
     /// The token stored for `waba_id`, decrypted.
@@ -1945,6 +1966,48 @@ pub(crate) mod tests {
             TokenVersion(raw(&kv, "waba/W1").await.unwrap().version)
         );
         assert!(auto.delete_if_unchanged(&w1, resealed).await.unwrap());
+    }
+
+    /// `store_versioned` hands out the version of the record it wrote: the
+    /// one a read then sees, which a conditional delete takes back; once
+    /// another token is stored over it, that version deletes nothing and
+    /// the newer token stays, with its phone index. What a connection whose
+    /// WABA moved while it stored does with it (the service's attach).
+    /// Decisive: the version `store_versioned` returns (a stale one, the
+    /// previous record's, say, deletes nothing of its own write).
+    #[tokio::test]
+    async fn a_stored_version_takes_back_that_write_and_no_later_one() {
+        let kv = kv();
+        let v = vault(&kv, VaultKeys::new(key("k1", 7)));
+        let w1 = WabaId::new("W1");
+        let p1 = PhoneNumberId::new("106540352242922");
+        let first = v.store_versioned(&sample("W1")).await.unwrap();
+        let written = v.store_versioned(&sample("W1")).await.unwrap();
+        assert_ne!(first, written, "each write, its version");
+        let (_, read) = v.get_versioned(&w1).await.unwrap().unwrap();
+        assert_eq!(read, written, "the version a read sees");
+        assert_eq!(
+            written,
+            TokenVersion(raw(&kv, "waba/W1").await.unwrap().version)
+        );
+        assert!(!v.delete_if_unchanged(&w1, first).await.unwrap());
+        assert!(v.delete_if_unchanged(&w1, written).await.unwrap());
+        assert!(v.get(&w1).await.unwrap().is_none());
+        assert!(raw(&kv, "phone/106540352242922").await.is_none());
+
+        // Overwritten since (another holder connected): the newer stays.
+        let mine = v.store_versioned(&sample("W1")).await.unwrap();
+        let theirs = v
+            .store_versioned(
+                &StoredBusinessToken::new("W1", AccessToken::new("TOKEN-OF-THE-NEXT-HOLDER"))
+                    .phone_number_ids(["106540352242922"]),
+            )
+            .await
+            .unwrap();
+        assert_ne!(mine, theirs);
+        assert!(!v.delete_if_unchanged(&w1, mine).await.unwrap());
+        let kept = v.get_by_phone_number(&p1).await.unwrap().unwrap();
+        assert_eq!(kept.token.expose_secret(), "TOKEN-OF-THE-NEXT-HOLDER");
     }
 
     #[tokio::test]
