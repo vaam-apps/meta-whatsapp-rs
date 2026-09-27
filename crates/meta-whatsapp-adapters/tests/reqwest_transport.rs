@@ -68,6 +68,7 @@ impl Server {
             .route("/hop-within/{port}", get(hop_within))
             .route("/ping-pong/{port}", get(ping_pong))
             .route("/record", get(record).post(record))
+            .route("/redirect-to", get(redirect_to).post(redirect_to))
             .with_state(Arc::clone(&shared));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -252,6 +253,32 @@ async fn record(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> &'stat
         .map(|v| v.to_str().unwrap().to_owned());
     shared.recorded.lock().unwrap().push(authorization);
     "recorded"
+}
+
+/// `?to=<location>&status=<3xx>`: a redirect to `to`, verbatim (UTF-8 bytes
+/// included), with `status` (default `302`).
+async fn redirect_to(request: Request) -> Response {
+    let query = request.uri().query().unwrap_or_default();
+    let mut location = None;
+    let mut status = StatusCode::FOUND;
+    for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+        match &*key {
+            "to" => location = Some(value.into_owned()),
+            "status" => status = StatusCode::from_bytes(value.as_bytes()).unwrap(),
+            _ => {}
+        }
+    }
+    let location = axum::http::HeaderValue::from_bytes(location.unwrap().as_bytes()).unwrap();
+    (status, [(axum::http::header::LOCATION, location)]).into_response()
+}
+
+/// `/redirect-to` on `base` (a URL with no query), redirecting to `to`.
+fn redirect_url(base: &Url, status: u16, to: &str) -> Url {
+    let mut url = base.join("/redirect-to").unwrap();
+    url.query_pairs_mut()
+        .append_pair("status", &status.to_string())
+        .append_pair("to", to);
+    url
 }
 
 /// Answers a proxied (absolute-form) request with the host it was for.
@@ -816,4 +843,195 @@ async fn debug_does_not_expose_the_client() {
     assert_eq!(format!("{:?}", transport()), "ReqwestTransport { .. }");
     let custom = ReqwestTransport::with_client(reqwest::Client::new());
     assert_eq!(format!("{custom:?}"), "ReqwestTransport { .. }");
+}
+
+/// `url` with user info: reqwest sends it as `Authorization: Basic`.
+fn with_user_info(mut url: Url, user: &str, password: Option<&str>) -> Url {
+    url.set_username(user).unwrap();
+    url.set_password(password).unwrap();
+    url
+}
+
+/// A URL's user name and password are a credential too: reqwest takes them
+/// out of the URL and sends them as `Authorization: Basic`, a header it
+/// keeps on a redirect that keeps scheme, host and port and puts back on
+/// every hop, like one the caller set. So a request whose URL has user info
+/// follows no such redirect either: not within its origin, and not within
+/// another origin after a hop there.
+#[tokio::test]
+async fn a_url_with_user_info_never_follows_a_redirect_with_it() {
+    for (user, password, basic) in [
+        (
+            "user",
+            Some("s3cr3t-value"),
+            "Basic dXNlcjpzM2NyM3QtdmFsdWU=",
+        ),
+        ("user", None, "Basic dXNlcjo="),
+        ("", Some("s3cr3t-value"), "Basic OnMzY3IzdC12YWx1ZQ=="),
+    ] {
+        // The URL asked for gets it: the user info is sent, not dropped.
+        let server = Server::start().await;
+        let url = with_user_info(server.url("/record"), user, password);
+        let response = within(
+            "request",
+            transport().send(HttpRequest::new(Method::GET, url)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status, StatusCode::OK);
+        assert_eq!(server.shared.recorded(), [Some(basic.to_owned())]);
+
+        // A redirect within the origin is not followed, buffered or
+        // streamed.
+        let server = Server::start().await;
+        let url = || with_user_info(server.url("/within"), user, password);
+        let response = within(
+            "redirected request",
+            transport().send(HttpRequest::new(Method::GET, url())),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status, StatusCode::FOUND, "{basic}: not followed");
+        let response = within(
+            "redirected stream",
+            transport().send_streaming(HttpRequest::new(Method::GET, url())),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status, StatusCode::FOUND, "{basic}: not followed");
+        assert_eq!(
+            server.shared.recorded(),
+            [],
+            "{basic}: the target was asked"
+        );
+
+        // After a hop to another origin (followed, without it), a second
+        // hop within that origin is not.
+        let (origin, other) = (Server::start().await, Server::start().await);
+        let url = with_user_info(
+            origin.url(&format!("/hop-within/{}", other.addr.port())),
+            user,
+            password,
+        );
+        let response = within(
+            "redirected request",
+            transport().send(HttpRequest::new(Method::GET, url)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status, StatusCode::FOUND, "{basic}");
+        assert_eq!(response.headers["location"], "/record", "{basic}");
+        assert_eq!(
+            other.shared.recorded(),
+            [],
+            "{basic}: the other origin's redirect target was asked"
+        );
+    }
+}
+
+/// The origin check reads the URLs as reqwest does (parsed): a `Location`
+/// that spells the same host or port another way is the same origin, where
+/// reqwest would keep the token, so the hop is not followed.
+#[tokio::test]
+async fn a_redirect_to_the_same_origin_spelled_another_way_is_not_followed() {
+    let server = Server::start().await;
+    let port = server.addr.port();
+    for to in [
+        format!("http://2130706433:{port}/record"),
+        format!("http://0x7f.1:{port}/record"),
+        format!("http://127.1:{port}/record"),
+        format!("http://127.0.0.1:0{port}/record"),
+        format!("HTTP://127.0.0.1:{port}/record"),
+        format!("//127.0.0.1:{port}/record"),
+        format!("http://127.0.0.1:{port}/./x/../record"),
+    ] {
+        let request = with_header(
+            HttpRequest::new(Method::GET, redirect_url(&server.url("/"), 302, &to)),
+            "authorization",
+            TOKEN,
+        );
+        let response = within("redirected request", transport().send(request))
+            .await
+            .unwrap();
+        assert_eq!(response.status, StatusCode::FOUND, "{to}: not followed");
+        assert!(
+            server.shared.recorded().is_empty(),
+            "{to}: the target was asked"
+        );
+    }
+}
+
+/// A `303`, and a `301` or `302` answering a `POST`, turn the request into a
+/// `GET` without its body; the headers stay, so the same rule applies:
+/// within the origin the redirect is not followed, and after a hop to
+/// another origin (followed as a `GET`, without the token), a second hop
+/// within it is not.
+#[tokio::test]
+async fn a_redirect_that_turns_a_post_into_a_get_keeps_the_rule() {
+    for status in [303, 302, 301] {
+        let server = Server::start().await;
+        let mut request = with_header(
+            HttpRequest::new(
+                Method::POST,
+                redirect_url(&server.url("/"), status, "/record"),
+            ),
+            "authorization",
+            TOKEN,
+        );
+        request.body = RequestBody::json(r#"{"a":1}"#);
+        let response = within("redirected POST", transport().send(request))
+            .await
+            .unwrap();
+        assert_eq!(response.status.as_u16(), status, "not followed");
+        assert!(
+            server.shared.recorded().is_empty(),
+            "{status}: the target was asked"
+        );
+
+        let (origin, other) = (Server::start().await, Server::start().await);
+        let to = other.url("/within").to_string();
+        let mut request = with_header(
+            HttpRequest::new(Method::POST, redirect_url(&origin.url("/"), status, &to)),
+            "authorization",
+            TOKEN,
+        );
+        request.body = RequestBody::json(r#"{"a":1}"#);
+        let response = within("redirected POST", transport().send(request))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status,
+            StatusCode::FOUND,
+            "{status}: the first hop only"
+        );
+        assert_eq!(response.headers["location"], "/record", "{status}");
+        assert!(
+            other.shared.recorded().is_empty(),
+            "{status}: the target was asked"
+        );
+    }
+}
+
+/// A caller outside `meta-whatsapp-client` may build the header name in any
+/// case: `HeaderMap` keeps names lowercase, so it is the same credential.
+#[tokio::test]
+async fn a_credential_header_named_in_any_case_is_a_credential() {
+    for name in [
+        &b"AUTHORIZATION"[..],
+        b"Authorization",
+        b"Proxy-Authorization",
+        b"COOKIE",
+    ] {
+        let server = Server::start().await;
+        let mut request = HttpRequest::new(Method::GET, server.url("/within"));
+        request.headers.insert(
+            http::HeaderName::from_bytes(name).unwrap(),
+            "Bearer EAAG-token".parse().unwrap(),
+        );
+        let response = within("redirected request", transport().send(request))
+            .await
+            .unwrap();
+        assert_eq!(response.status, StatusCode::FOUND);
+        assert!(server.shared.recorded().is_empty());
+    }
 }

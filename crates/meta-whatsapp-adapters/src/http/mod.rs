@@ -34,9 +34,10 @@
 //!   rebuilds every hop from the request's original headers and drops
 //!   `Authorization`, `Proxy-Authorization` and `Cookie` only on a hop that
 //!   changes scheme, host or port from the URL that answered it; so a
-//!   request that carries one of them does not follow a hop that keeps
-//!   scheme, host and port: that 3xx is the response (a non-2xx, so an
-//!   error in `meta-whatsapp-client`). The client checked only the URL it
+//!   request that carries one of them (a user name or password in its URL
+//!   included: reqwest sends those as `Authorization: Basic`) does not
+//!   follow a hop that keeps scheme, host and port: that 3xx is the
+//!   response (a non-2xx, so an error in `meta-whatsapp-client`). The client checked only the URL it
 //!   asked for (its credential rules allow one path on `api.facebook.com`,
 //!   not the host), and a hop to another origin followed by one within it
 //!   would hand that origin the token. Hops that change origin are
@@ -69,7 +70,8 @@ use meta_whatsapp_core::transport::{
 /// connection pools are shared).
 #[derive(Clone)]
 pub struct ReqwestTransport {
-    /// Requests without credentials: reqwest's redirect policy.
+    /// Requests without credentials (reqwest's default redirect policy,
+    /// in the stock transport); it also builds every request.
     client: reqwest::Client,
     /// Requests with credentials ([`carries_credentials`]): the same
     /// settings, and [`credentialed_redirects`] (the same client as
@@ -116,21 +118,26 @@ impl ReqwestTransport {
         }
     }
 
-    /// The client for `request`: the credentialed one when it carries a
-    /// credential header.
-    fn client_for(&self, request: &HttpRequest) -> &reqwest::Client {
-        if carries_credentials(&request.headers) {
+    /// `request` as reqwest's, and the client that must send it: the
+    /// credentialed one when the request carries a credential. That is
+    /// read from the request reqwest built, not from ours: reqwest turns a
+    /// user name or password in the URL into `Authorization: Basic`.
+    fn prepare(
+        &self,
+        request: HttpRequest,
+    ) -> Result<(&reqwest::Client, reqwest::Request), TransportError> {
+        let request = self.build(request)?;
+        let client = if carries_credentials(request.headers()) {
             &self.credentialed
         } else {
             &self.client
-        }
+        };
+        Ok((client, request))
     }
 
-    /// `request` as reqwest's, built by the client that will send it.
-    fn prepare(
-        client: &reqwest::Client,
-        request: HttpRequest,
-    ) -> Result<reqwest::Request, TransportError> {
+    /// `request` as reqwest's. A built request does not depend on the
+    /// client that built it: either client can send it.
+    fn build(&self, request: HttpRequest) -> Result<reqwest::Request, TransportError> {
         let HttpRequest {
             method,
             url,
@@ -138,7 +145,7 @@ impl ReqwestTransport {
             body,
             timeout,
         } = request;
-        let mut builder = client.request(method, url);
+        let mut builder = self.client.request(method, url);
         if let Some(timeout) = timeout {
             builder = builder.timeout(timeout);
         }
@@ -359,8 +366,7 @@ fn map_error(error: reqwest::Error) -> TransportError {
 #[async_trait]
 impl HttpTransport for ReqwestTransport {
     async fn send(&self, request: HttpRequest) -> Result<HttpResponse, TransportError> {
-        let client = self.client_for(&request);
-        let request = Self::prepare(client, request)?;
+        let (client, request) = self.prepare(request)?;
         let mut response = client.execute(request).await.map_err(map_error)?;
         let status = response.status();
         let headers = std::mem::take(response.headers_mut());
@@ -376,8 +382,7 @@ impl HttpTransport for ReqwestTransport {
         &self,
         request: HttpRequest,
     ) -> Result<StreamingResponse, TransportError> {
-        let client = self.client_for(&request);
-        let request = Self::prepare(client, request)?;
+        let (client, request) = self.prepare(request)?;
         let mut response = client.execute(request).await.map_err(map_error)?;
         let status = response.status();
         let headers = std::mem::take(response.headers_mut());
