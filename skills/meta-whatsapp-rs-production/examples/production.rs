@@ -83,21 +83,24 @@ pub fn record_webhook(result: &meta_whatsapp_rs::Result<DeliveryReport>, events:
     }
 }
 
-/// Erasure step 4, Meta's contact book: each of the customer's BSUIDs,
-/// with the merchant's client (`with_token`) on one of their numbers (the
-/// book is the portfolio's). `Inbox::identities` also returns contact keys,
-/// phone numbers and parent BSUIDs, which the call refuses before any
-/// request: skip them, never abort the erasure. Returns the BSUIDs Meta
-/// failed on, to try again later.
+/// Erasure step 4, Meta's contact book: each BSUID among `identities`,
+/// the ones step 1 collected (`Inbox::identities` on each number). Not
+/// collected again here: step 2's `erase_all` removed the contacts and
+/// links that connect them, so the store no longer knows them. With the
+/// merchant's client (`with_token`) on one of their numbers (the book is
+/// the portfolio's). The identities also hold contact keys, phone numbers
+/// and parent BSUIDs, which the call refuses before any request: skip
+/// them, never abort the erasure. Returns the BSUIDs Meta failed on, to
+/// try again later.
 pub async fn delete_from_contact_book(
-    inbox: &Inbox,
     merchant: &Client,
-    contact: &str,
-) -> meta_whatsapp_rs::Result<Vec<UserId>> {
-    let number = merchant.phone_number(inbox.phone_number_id().clone());
+    phone_number_id: PhoneNumberId,
+    identities: &[String],
+) -> Vec<UserId> {
+    let number = merchant.phone_number(phone_number_id);
     let mut failed = Vec::new();
-    for id in inbox.identities(&inbox.key(contact)).await? {
-        let id = UserId::new(id);
+    for id in identities {
+        let id = UserId::new(id.as_str());
         if !id.is_bsuid() {
             continue; // a contact key, a phone number or a parent BSUID
         }
@@ -106,7 +109,7 @@ pub async fn delete_from_contact_book(
             failed.push(id); // the erasure goes on: steps 5 and 6 still run
         }
     }
-    Ok(failed) // no undo; a repeat answers `false`
+    failed // no undo; a repeat answers `false`
 }
 
 #[cfg(test)]
@@ -190,9 +193,14 @@ mod tests {
             .unwrap();
         let inbox = Inbox::new(merchant.clone(), NUMBER, store);
 
-        let failed = delete_from_contact_book(&inbox, &merchant, "16505551234")
-            .await
-            .unwrap();
+        // The procedure's order: step 1 collects every identity, step 2
+        // erases them (after which the store connects nothing to the
+        // phone number), then step 4 deletes with what step 1 collected.
+        let key = inbox.key("16505551234");
+        let identities: Vec<String> = inbox.identities(&key).await.unwrap().into_iter().collect();
+        inbox.erase_all(&identities).await.unwrap();
+        assert_eq!(inbox.identities(&key).await.unwrap().len(), 1);
+        let failed = delete_from_contact_book(&merchant, NUMBER.into(), &identities).await;
         assert_eq!(failed, [UserId::new("US.1")]); // Meta failed on it; the next one still went
         let requests = transport.requests();
         let asked: Vec<String> = requests.iter().map(|r| r.query("bsuid").unwrap()).collect();

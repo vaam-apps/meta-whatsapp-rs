@@ -416,7 +416,11 @@ The procedure, per erasure request:
    on one of their numbers. The book is the business portfolio's: one
    number of the portfolio the BSUID belongs to will do, and the entry
    goes for every number of that portfolio, unlike steps 1 and 2, which
-   stay on each number. The identities of step 1 mix contact keys, phone
+   stay on each number. Use the identities step 1 collected: step 2
+   removed the contacts and links that connect them, so
+   `Inbox::identities` now returns only the key it is given, and a loop
+   over that misses the customer's other BSUIDs (every one, from a phone
+   number's key) without an error. They mix contact keys, phone
    numbers, BSUIDs and parent BSUIDs, and the call refuses anything but
    a standard BSUID with `Error::Validation` (kind `InvalidParameter`),
    before any request: keep the BSUIDs with `UserId::is_bsuid`, skip the

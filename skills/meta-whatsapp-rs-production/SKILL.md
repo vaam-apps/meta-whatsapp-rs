@@ -116,7 +116,7 @@ rows live on until VACUUM, in the WAL, replicas, backups and, unless the applica
 1. collect every identity: `Inbox::identities` on each of the merchant's numbers, and yours;
 2. `Inbox::erase_all` on each, behind your ownership check (group messages keep their ids unless `ErasureMode::Delete`);
 3. delete your media copies, the service's outbox rows and your dead letters for them;
-4. delete the customer from Meta's contact book (`delete_contact_book_entry`, no undo), each BSUID only: skip what `UserId::is_bsuid` refuses, never abort ([references/contact-book.md](references/contact-book.md));
+4. delete the customer from Meta's contact book (`delete_contact_book_entry`, no undo), each BSUID of step 1's list only (step 2 leaves nothing to collect again): skip what `UserId::is_bsuid` refuses, never abort ([references/contact-book.md](references/contact-book.md));
 5. journal it (an HMAC of `phone_number_id|contact`, and the time), replayed after any restore;
 6. erase again after Meta's 7-day redelivery window; never purge the dedup markers to erase.
 

@@ -344,10 +344,11 @@ What the erasure does not reach, and what you do about it:
   (media you downloaded, section 4), logs, and Meta's side (the
   business's contact book: `PhoneNumber::delete_contact_book_entry` for
   each BSUID, through the merchant's client (`with_token`) on any number
-  of the portfolio the BSUID belongs to, and for every number of it; the
-  identities also hold phone numbers, contact keys and parent BSUIDs,
-  which it refuses, so skip what `UserId::is_bsuid` rejects rather than
-  abort; [production.md § 8](production.md#8-retention-and-erasure-on-postgres)
+  of the portfolio the BSUID belongs to, and for every number of it,
+  with the identities collected before the erasure (after it, the store
+  connects none of them); they also hold phone numbers, contact keys
+  and parent BSUIDs, which it refuses, so skip what `UserId::is_bsuid`
+  rejects rather than abort; [production.md § 8](production.md#8-retention-and-erasure-on-postgres)
   says what it still leaves; the WhatsApp Business app under
   coexistence).
 - **Afterwards**: what arrives after the erasure is recorded as any new
