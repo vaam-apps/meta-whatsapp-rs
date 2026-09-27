@@ -215,11 +215,12 @@ stored data, the owner's).
   first (see Security, "Credentials no longer follow a redirect that
   keeps them"); the rustdoc says the credentialed client must be built
   with it or with `Policy::none()`, since the transport cannot check or
-  change a built client's policy. `with_client(client)` stays and sends
-  every request through that one client, so its rustdoc now says the same
-  of it and points to `with_clients`: reqwest follows a redirect inside
-  `execute`, before the transport sees a response, so the transport cannot
-  keep the token off a second hop that client's own policy follows.
+  change a built client's policy. `with_client(client)` is **deprecated**:
+  it sends every request through that one client, and reqwest follows a
+  redirect inside `execute`, before the transport sees a response, so the
+  transport cannot keep the token off a second hop that client's own
+  policy follows. It still works; its rustdoc and the deprecation note
+  point to `with_clients`.
 - **`StorageError::Busy`** (meta-whatsapp-core; the enum is
   `#[non_exhaustive]`, so this is additive): contention, reported by a
   storage adapter that gave up waiting for another writer (a lock wait

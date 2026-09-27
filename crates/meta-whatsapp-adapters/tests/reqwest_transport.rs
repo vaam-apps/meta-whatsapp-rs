@@ -840,6 +840,7 @@ async fn proxy_env_vars_are_honoured() {
 }
 
 #[tokio::test]
+#[allow(deprecated)] // `with_client`: its `Debug` must stay opaque while it exists
 async fn debug_does_not_expose_the_client() {
     assert_eq!(format!("{:?}", transport()), "ReqwestTransport { .. }");
     let custom = ReqwestTransport::with_client(reqwest::Client::new());
@@ -1118,6 +1119,7 @@ async fn with_clients_never_sends_a_credential_to_a_second_hop() {
 /// credential included: built with `credential_redirect_policy()`, it
 /// follows no redirect within an origin for anyone.
 #[tokio::test]
+#[allow(deprecated)] // what `with_client` still does, while it exists
 async fn with_client_uses_its_client_for_every_request() {
     let transport = ReqwestTransport::with_client(
         reqwest::Client::builder()

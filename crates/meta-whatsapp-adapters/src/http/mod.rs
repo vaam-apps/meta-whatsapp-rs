@@ -162,6 +162,14 @@ impl ReqwestTransport {
     /// origin after a hop there (see the [module docs](crate::http)).
     /// Build it with `.referer(false)` too, see
     /// [`ReqwestTransport::with_clients`].
+    ///
+    /// Deprecated because nothing here can check the client's redirect
+    /// policy: a client built with reqwest's default one sends the token
+    /// on redirects. Use [`ReqwestTransport::with_clients`].
+    #[deprecated(
+        since = "0.1.0",
+        note = "cannot check the client's redirect policy, so credentials may follow a redirect; use `ReqwestTransport::with_clients` with `credential_redirect_policy()`"
+    )]
     pub fn with_client(client: reqwest::Client) -> Self {
         Self::with_clients(client.clone(), client)
     }
