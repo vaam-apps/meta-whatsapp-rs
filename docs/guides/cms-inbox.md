@@ -219,13 +219,15 @@ let older = messages.last().map(|m| (m.timestamp, m.id.clone()));
 ## 5. The 24-hour window in the UI
 
 Free-form replies are accepted only within 24 hours of the customer's last
-message. Show the state before the merchant types:
+message. Show the state before the merchant types: `inbox.check_reply(&key)`
+decides as `reply` will, and `inbox.window(&key)` gives the times.
 
-| `inbox.window(&key)` | Show |
+| `inbox.check_reply(&key)` | Show |
 | --- | --- |
-| `is_open(now)`, `closes_at()` in the future | the composer, and "reply window closes in 3 h" |
-| closed | no free text: a picker of approved templates |
-| no inbound message yet (`closes_at()` is `None`) | templates only |
+| `Ok(())`, with `inbox.window(&key).closes_at()` in the future | the composer, and "reply window closes in 3 h" |
+| `Ok(())`, the recorded window closed or never opened (a handover to your app the window check trusts, [below](#conversation-routing-who-owns-the-thread)) | the composer; Meta decides (131047 if its window is closed too) |
+| `CustomerServiceWindowClosed` | no free text: a picker of approved templates (also when no inbound message was ever recorded: `closes_at()` is `None`) |
+| `ThreadOwnedElsewhere` | "handled by another app": templates only |
 
 ```rust
 use meta_whatsapp_rs::client::messages::Text;
@@ -345,7 +347,8 @@ let escalation = inbox.with_reply_checks(ReplyChecks::ALL.thread_owner(false));
   (`ValidationError::thread_owned_elsewhere()`), whose `kind()` is
   `ErrorKind::ThreadOwnedElsewhere`: a kind of its own, although Meta
   documents no error code for a service message from a non-owner yet
-  (when it does, Meta's refusal gets the same kind). Branch on the kind,
+  (when it does, `ErrorKind::from_code` is to map that code to this
+  kind). Branch on the kind,
   or on `is_thread_owned_elsewhere` for the local refusal alone (it looks
   through `Error::Step`). An HTTP layer answers it like the window's
   refusal, `409` (the `cms_inbox` example does, and the service's code is

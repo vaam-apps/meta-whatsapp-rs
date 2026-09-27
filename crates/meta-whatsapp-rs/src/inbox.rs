@@ -2097,6 +2097,10 @@ impl Inbox {
     /// ([`ConversationStore::last_inbound_at`]) and the conversation's
     /// latest [window event](WindowEvent) (a call that reopens the window,
     /// a message of theirs seen in standby: see the [module docs](self)).
+    /// This is the window as recorded here; after a handover to this app,
+    /// [`Inbox::reply`] may let Meta decide beyond it
+    /// ([`ReplyChecks::trust_handover`]): [`Inbox::check_reply`] says what
+    /// `reply` will do.
     pub async fn window(&self, key: &ConversationKey) -> Result<CustomerServiceWindow> {
         self.check_key(key)?;
         let last = self.store.last_inbound_at(key).await?;
