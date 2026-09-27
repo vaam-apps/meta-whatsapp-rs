@@ -101,23 +101,33 @@ number.sync_smb_app_data(SmbSyncType::History).await?; // a second call: SyncNot
 
 ## Username, contact book, blue check
 
-- `set_username(name, None)` adopts or changes the number's business
-  username; the format is checked first (`validate_username`), and a
-  name in use on another number of the portfolio needs
-  `Some(&TransferAction::ForceTransfer)`. `username()`,
-  `username_suggestions()` (names WhatsApp reserved for you) and
-  `delete_username()` complete it.
-- `delete_contact_book_entry(&bsuid)` erases a user's entry from the
-  portfolio's contact book at Meta: no undo, and the library never calls
-  it for you (erasing a customer, `meta-whatsapp-rs-production`).
-- `official_business_account()` reads the blue check's status;
+```rust
+let number = client.phone_number(phone_number_id);
+match number.set_username(username, None).await {
+    // 147001–147005 are `ErrorKind::Unknown` for now: branch on the code
+    Err(e) if e.graph().map(|g| g.code) == Some(147005) && take_it_from_our_other_number => {
+        let transfer = Some(&TransferAction::ForceTransfer);
+        number.set_username(username, transfer).await
+    }
+    other => other, // `Reserved`: approved, visible once users have usernames
+}
+```
+
+- `set_username` checks the format first (`validate_username`); its
+  errors `147001`–`147005` are `ErrorKind::Unknown` for now (branch on
+  the `code` of `Error::graph`, never on the message). `username()`,
+  `username_suggestions()` (reserved for you), `delete_username()`.
+- `delete_contact_book_entry(&bsuid)` erases a user's entry in the
+  portfolio's contact book at Meta: no undo, never called for you (erasure: `meta-whatsapp-rs-production`).
+- `official_business_account()` reads the blue check;
   `request_official_business_account(&ObaApplication::new(url, country))`
-  applies: never replayed, and 30 days to wait after a rejection.
+  applies, never replayed after a timeout, only when Meta refused it
+  before processing it (`Error::may_resend`); 30 days after a rejection.
 - Also on the number: `set_search_visibility`, `set_security_notifications`,
-  `set_notify_user_change_number`, `business_compliance_info` and
-  `set_business_compliance_info` (India), and `health_status()` (on a
-  WABA too): a `HealthStatus` whose `entities` include the business
-  portfolio's own status.
+  `set_notify_user_change_number`, `business_compliance_info`,
+  `set_business_compliance_info` (India), `health_status()` (a WABA's
+  too; the portfolio's own: `health.entity(&HealthEntityType::Business)`);
+  bot details: `Client::waba_bot(bot_id).get(&[])`.
 
 ## Pitfalls
 
@@ -135,9 +145,9 @@ number.sync_smb_app_data(SmbSyncType::History).await?; // a second call: SyncNot
   attempt
   ([OPEN_QUESTIONS.md #4](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants),
   decided on 2026-09-26).
-- Not wrapped: payload-encryption settings, WABA creation, system users,
-  withdrawing an Official Business Account application (no documented
-  field).
+- Not wrapped: payload-encryption settings (roadmap L26), WABA creation,
+  system users, withdrawing an Official Business Account application (no
+  documented field).
 - Nothing stores the synced contacts (`smb_app_state_sync`); the inbox
   records the synced history and the app's echoes (`meta-whatsapp-rs-cms-inbox`).
   ~~The inbox does not record coexistence echoes or synced history~~:

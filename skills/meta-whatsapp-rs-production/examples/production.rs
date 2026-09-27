@@ -1,6 +1,7 @@
 //! Reference code for the `meta-whatsapp-rs-production` skill: secrets loaded once and
 //! checked at startup, logs without customer data, one tuned client per
-//! process, and the numbers worth a metric.
+//! process, the numbers worth a metric, and the contact book step of an
+//! erasure.
 //!
 //! meta-whatsapp-rs compiles this file and runs its tests in its own gate
 //! (`crates/meta-whatsapp-rs/tests/skills.rs`).
@@ -82,6 +83,32 @@ pub fn record_webhook(result: &meta_whatsapp_rs::Result<DeliveryReport>, events:
     }
 }
 
+/// Erasure step 4, Meta's contact book: each of the customer's BSUIDs,
+/// with the merchant's client (`with_token`) on one of their numbers (the
+/// book is the portfolio's). `Inbox::identities` also returns contact keys,
+/// phone numbers and parent BSUIDs, which the call refuses before any
+/// request: skip them, never abort the erasure. Returns the BSUIDs Meta
+/// failed on, to try again later.
+pub async fn delete_from_contact_book(
+    inbox: &Inbox,
+    merchant: &Client,
+    contact: &str,
+) -> meta_whatsapp_rs::Result<Vec<UserId>> {
+    let number = merchant.phone_number(inbox.phone_number_id().clone());
+    let mut failed = Vec::new();
+    for id in inbox.identities(&inbox.key(contact)).await? {
+        let id = UserId::new(id);
+        if !id.is_bsuid() {
+            continue; // a contact key, a phone number or a parent BSUID
+        }
+        if let Err(e) = number.delete_contact_book_entry(&id).await {
+            tracing::warn!(kind = ?e.kind(), "contact book entry kept"); // never log the BSUID
+            failed.push(id); // the erasure goes on: steps 5 and 6 still run
+        }
+    }
+    Ok(failed) // no undo; a repeat answers `false`
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,5 +137,74 @@ mod tests {
         assert_eq!(client.endpoint().version(), ApiVersion::new(25, 0));
         assert!(format!("{client:?}").contains("has_token: true"));
         assert!(!format!("{client:?}").contains("\"T\""));
+    }
+
+    #[tokio::test]
+    async fn the_contact_book_gets_the_bsuids_only_and_a_failure_stops_nothing() {
+        use std::sync::Arc;
+
+        use meta_whatsapp_rs::adapters::store::MemoryConversationStore;
+        use meta_whatsapp_rs::core::store::{IdentityLink, StoredContact};
+        use meta_whatsapp_rs::core::testing::ScriptedTransport;
+        use serde_json::json;
+        use time::OffsetDateTime;
+
+        const NUMBER: &str = "106540352242922";
+        const BSUID: &str = "US.13491208655302741918";
+        let store: Arc<dyn ConversationStore> = Arc::new(MemoryConversationStore::new());
+        // The address book ties their phone number, BSUID and parent BSUID;
+        // an earlier BSUID is linked to the current one.
+        store
+            .put_contact(StoredContact {
+                key: ConversationKey::new(NUMBER, "16505551234"),
+                full_name: None,
+                first_name: None,
+                phone_number: Some("16505551234".to_owned()),
+                user_id: Some(UserId::new(BSUID)),
+                parent_user_id: Some(UserId::new("US.ENT.11815799212886844830")),
+                username: None,
+                synced_at: OffsetDateTime::now_utc(),
+            })
+            .await
+            .unwrap();
+        store
+            .link_identity(IdentityLink::new(
+                NUMBER,
+                "US.1",
+                BSUID,
+                OffsetDateTime::now_utc(),
+            ))
+            .await
+            .unwrap();
+        let transport = ScriptedTransport::new();
+        transport.push_json(500, json!({"error": {"message": "x", "code": 1}}));
+        transport.push_json(
+            200,
+            json!({"messaging_product": "whatsapp", "success": true, "deleted": true}),
+        );
+        let merchant = Client::builder()
+            .transport(transport.clone())
+            .access_token("MERCHANT")
+            .retry(RetryPolicy::NONE)
+            .build()
+            .unwrap();
+        let inbox = Inbox::new(merchant.clone(), NUMBER, store);
+
+        let failed = delete_from_contact_book(&inbox, &merchant, "16505551234")
+            .await
+            .unwrap();
+        assert_eq!(failed, [UserId::new("US.1")]); // Meta failed on it; the next one still went
+        let requests = transport.requests();
+        let asked: Vec<String> = requests
+            .iter()
+            .map(|r| r.query("bsuid").unwrap())
+            .collect();
+        assert_eq!(asked, ["US.1", BSUID]); // not the phone number, not the parent BSUID
+        for request in &requests {
+            assert_eq!(request.method, "DELETE");
+            assert_eq!(request.path(), "/v25.0/106540352242922/contact_book");
+            assert_eq!(request.bearer(), Some("MERCHANT"));
+        }
+        assert_eq!(transport.remaining(), 0);
     }
 }

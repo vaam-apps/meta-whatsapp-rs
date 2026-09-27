@@ -251,7 +251,8 @@ notification queue on top must be idempotent itself: tag each message with
   `ConversationStore::erase` alone: every identity (`Inbox::identities`),
   `Inbox::erase_all` on each of the merchant's numbers, your own copies,
   outbox rows and dead letters, Meta's contact book
-  (`PhoneNumber::delete_contact_book_entry`), an
+  (`PhoneNumber::delete_contact_book_entry` for each BSUID, the others
+  skipped with `UserId::is_bsuid`), an
   erasure journal, and a second erasure after 7 days
   ([cms-inbox.md](cms-inbox.md#8-erasing-a-customer-and-retention)).
 - [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) read: its defaults (OTP
@@ -410,12 +411,25 @@ The procedure, per erasure request:
    caches), the service's outbox rows (roadmap M2f) and your dead
    letters (L21a) for that customer.
 4. Delete the customer from Meta's contact book:
-   `client.phone_number(pnid).delete_contact_book_entry(&bsuid)` for each
-   of their BSUIDs (the book is the business portfolio's, so one number
-   of the portfolio will do; parent BSUIDs are refused). It cannot be
-   undone, and it answers whether an entry existed.
+   `client.phone_number(pnid).delete_contact_book_entry(&bsuid)` for
+   each of their BSUIDs, with the merchant's own client (`with_token`)
+   on one of their numbers. The book is the business portfolio's: one
+   number of the portfolio the BSUID belongs to will do, and the entry
+   goes for every number of that portfolio, unlike steps 1 and 2, which
+   stay on each number. The identities of step 1 mix contact keys, phone
+   numbers, BSUIDs and parent BSUIDs, and the call refuses anything but
+   a standard BSUID with `Error::Validation` (kind `InvalidParameter`),
+   before any request: keep the BSUIDs with `UserId::is_bsuid`, skip the
+   rest, and never abort the procedure on one of them (note a failure
+   from Meta and try that BSUID again later; steps 5 and 6 still run).
+   It cannot be undone, and it answers whether an entry existed: `false`
+   when there was none, so a repeat is harmless. Meta may still show the
+   phone number: a business number that exchanged a message or call with
+   it in the last 30 days keeps getting it in its webhooks (the page's
+   rule is per number), and any new interaction records the entry again.
 5. Journal the erasure (above).
-6. Erase again after 7 days (steps 1 and 2).
+6. Erase again after 7 days (steps 1 and 2; step 4 again too if the
+   customer interacted since, a repeat that answers `false` otherwise).
 
 ## The dev container
 

@@ -160,6 +160,7 @@ impl UserId {
         })
     }
 }
+
 id_type!(
     /// A WhatsApp user's phone number as WhatsApp reports it (`wa_id`),
     /// digits only, no `+`. May be absent once users adopt usernames.

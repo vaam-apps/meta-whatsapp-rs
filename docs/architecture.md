@@ -272,7 +272,13 @@ Rules for every endpoint module:
    `GraphRequest::paginate`, which manages the cursors and refuses a query
    that already holds one (a `ValidationError`, the stream's single item).
    A list whose page documents no pagination (`waba.subscribed_apps`,
-   `templates.library`) takes no cursor and says so.
+   `templates.library`) takes no cursor and says so. The exception: a
+   list whose page documents no pagination and no `paging` object in its
+   response may return a `Vec<T>` instead (`authentication::previews`,
+   `Business::messaging_customer_bases`, `PhoneNumber::username_suggestions`,
+   `PhoneNumber::business_compliance_info`); a new one says so in its
+   rustdoc. If Meta documents paging for one later, it moves to `Page<T>`
+   (a breaking change).
 6. **Tests** use `meta_whatsapp_core::testing::ScriptedTransport`: assert method, path,
    query, auth header and exact JSON body; feed responses copied from the
    docs' examples. Every test that scripts N responses asserts
@@ -302,7 +308,9 @@ Rules for every endpoint module:
    `request_id`; the ids of an Embedded Signup session event
    (`ad_account_ids`, `page_ids`, `dataset_ids`, `catalog_ids`,
    `instagram_account_ids`, `session_id`), the launch's `solution_id` and
-   the token's `user_id`. Merchant-chosen ids (product retailer ids,
+   the token's `user_id`; and `HealthEntity::id`, on purpose: a health
+   status entity's id is a phone number, template, WABA, business or app
+   id depending on its `entity_type`, so no one newtype fits it. Merchant-chosen ids (product retailer ids,
    button ids) and our own (an OTP challenge id) are strings on purpose.
 10. **List queries are named `List*`** (`ListQrCodes`, `ListSignups`,
    `ListFlows`, `ListFlowAssets`, `ListAssignedUsers`, `ListClientWabas`,

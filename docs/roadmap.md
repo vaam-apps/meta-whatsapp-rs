@@ -45,7 +45,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | --- | --- |
 | 0 | this plan (parity, categories, roadmap, decisions) |
 | 1 | S1 (server core), B1 (bot framework), U4 (upstream issues) |
-| 2 | S2, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L25, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
+| 2 | S2, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L26, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
 | 3 | S5a–S5e, S6, S7, S9 |
 | 4 | S10 (waits on the owner's answer to D20 (a)), S11, S12; M2a–M2f |
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3f; B2–B4 |
@@ -603,7 +603,8 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     new `core::ids::WabaBotId`. Not offered, for want of a documented
     field: withdrawing an Official Business Account application. The
     username errors `147001`–`147005` are not classified in `ErrorKind`
-    yet.
+    yet. The number's settings it leaves (payload encryption,
+    `connection_status`, `webhook_url`) are L26.
 - [ ] **L10a. The parent BSUID accounts API, and the credential host
   allow list** (`meta-whatsapp-client`, `client::GraphRequest` and
   `client::waba`; row 152): the API is served from `api.facebook.com`,
@@ -862,6 +863,24 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** the pre-fill test's expected JSON is the helper's
     output, recorded with its date; a serializer that departs from it
     fails the test.
+- [ ] **L26. Number settings left** (`meta-whatsapp-client`,
+  `client::phone_numbers`; category 20, coverage row 10): what L9 left
+  of the number's settings. The payload-encryption settings of
+  `/{PHONE_NUMBER_ID}/settings` (`payload_encryption`: `status` and
+  `client_encryption_key` to set; `client_encryption_key_fingerprint`
+  and `cloud_encryption_key` read back,
+  `reference/whatsapp-business-phone-number/settings-api`), and the
+  number's own `POST` fields `connection_status` and `webhook_url`
+  (`whatsapp-business-account-phone-number-api`). The mirror documents
+  them by schema only, without an example: the bodies follow the
+  schemas, and the module docs name each gap. The encryption key goes
+  through the security review (`wa-security-reviewer`).
+  - **Kind:** additive.
+  - **After:** L9.
+  - **Decisive:** exact JSON per field from the schemas; dropping any one
+    field from its body fails its test; reading the settings parses a
+    `payload_encryption` answer carrying every field of the response
+    schema.
 
 ## 4. Service milestones
 

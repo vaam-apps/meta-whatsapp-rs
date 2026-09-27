@@ -74,13 +74,13 @@ A row it cannot back-fill, or that an older instance writes, gets its sender fro
 Erasing a customer is a procedure (`meta-whatsapp-rs-cms-inbox`): (1) collect every identity
 (`identities` on each of the merchant's numbers, and yours); (2) `erase_all(number, &ids)` on each,
 behind your ownership check (it deletes their records, contacts and links, the appends in flight
-included, and redacts their group messages, which keep their ids, a `wamid` encoding the phone
-number, or deletes them with `with_erasure_mode`); (3) delete your media copies, outbox rows and
-dead letters; (4) delete Meta's contact-book entry (`delete_contact_book_entry`); (5) journal it (an HMAC of
-`phone_number_id|contact`, and the time) and replay the journal after any restore; (6) erase again
-after Meta's 7-day redelivery window, keeping the dedup markers meanwhile. Deleted rows live on
-until VACUUM, in the WAL, replicas and backups; set `log_parameter_max_length` to 0 for the
-application's role, or Postgres statement logs keep message text.
+included, and redacts their group messages, which keep their ids, a `wamid` encoding the phone number,
+or deletes them with `with_erasure_mode`); (3) delete your media copies, outbox rows and dead letters;
+(4) delete Meta's contact-book entry, BSUIDs only (`UserId::is_bsuid`, `delete_contact_book_entry`);
+(5) journal it (an HMAC of `phone_number_id|contact`, and the time) and replay the journal after any
+restore; (6) erase again after Meta's 7-day redelivery window, keeping the dedup markers meanwhile.
+Deleted rows live on until VACUUM, in the WAL, replicas and backups; set `log_parameter_max_length` to
+0 for the application's role, or Postgres statement logs keep message text.
 
 ## Redis
 

@@ -1,13 +1,15 @@
 //! Reference code for the `meta-whatsapp-rs-phone-numbers` skill: registering a
 //! number, its two-step verification PIN, display name, business profile,
-//! conversational components, and the WABA's webhook subscription.
+//! conversational components, the WABA's webhook subscription, the
+//! business username and health status.
 //!
 //! meta-whatsapp-rs compiles this file and runs its tests in its own gate
 //! (`crates/meta-whatsapp-rs/tests/skills.rs`).
 
 use meta_whatsapp_rs::client::business_profile::{ProfileField, ProfileUpdate};
 use meta_whatsapp_rs::client::phone_numbers::{
-    BotCommand, ConversationalAutomationConfig, SmbSyncType, TwoStepPin,
+    BotCommand, BusinessUsernameStatus, ConversationalAutomationConfig, HealthEntityType,
+    HealthState, SmbSyncType, TransferAction, TwoStepPin,
 };
 use meta_whatsapp_rs::client::waba::CallbackOverride;
 use meta_whatsapp_rs::prelude::*;
@@ -123,6 +125,37 @@ pub async fn health(
     Ok(())
 }
 
+/// Adopt a business username. A name in use on another number of the same
+/// portfolio fails with `147005`; it moves here only when the merchant
+/// said so (`ForceTransfer` takes it off the other number).
+pub async fn adopt_username(
+    client: &Client,
+    phone_number_id: PhoneNumberId,
+    username: &str,
+    take_it_from_our_other_number: bool,
+) -> meta_whatsapp_rs::Result<BusinessUsernameStatus> {
+    let number = client.phone_number(phone_number_id);
+    match number.set_username(username, None).await {
+        // 147001–147005 are `ErrorKind::Unknown` for now: branch on the code
+        Err(e) if e.graph().map(|g| g.code) == Some(147005) && take_it_from_our_other_number => {
+            let transfer = Some(&TransferAction::ForceTransfer);
+            number.set_username(username, transfer).await
+        }
+        other => other, // `Reserved`: approved, visible once users have usernames
+    }
+}
+
+/// Whether the business portfolio itself may send: its `BUSINESS` entity in
+/// the number's health status (Meta documents no business reader).
+pub async fn business_can_send(
+    client: &Client,
+    phone_number_id: PhoneNumberId,
+) -> meta_whatsapp_rs::Result<Option<HealthState>> {
+    let health = client.phone_number(phone_number_id).health_status().await?;
+    let business = health.entity(&HealthEntityType::Business);
+    Ok(business.and_then(|b| b.can_send_message.clone())) // `Blocked`: read its `errors`
+}
+
 #[cfg(test)]
 mod tests {
     use meta_whatsapp_rs::core::testing::ScriptedTransport;
@@ -191,6 +224,61 @@ mod tests {
             .map(|r| r.json().unwrap()["sync_type"].clone())
             .collect();
         assert_eq!(kinds, [json!("smb_app_state_sync"), json!("history")]);
+        assert_eq!(transport.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_username_in_use_moves_only_when_asked() {
+        let transport = ScriptedTransport::new();
+        let in_use = json!({"error": {"message": "(#147005) Username transfer required",
+            "type": "OAuthException", "code": 147005, "fbtrace_id": "A"}});
+        transport.push_json(400, in_use.clone());
+        transport.push_json(200, json!({"status": "approved"}));
+        let status = adopt_username(&client(&transport), "106540352242922".into(), "lucky_shrub", true)
+            .await
+            .unwrap();
+        assert_eq!(status, BusinessUsernameStatus::Approved);
+        let bodies: Vec<_> = transport
+            .requests()
+            .iter()
+            .map(|r| r.json().unwrap())
+            .collect();
+        assert_eq!(bodies[0], json!({"username": "lucky_shrub"}));
+        assert_eq!(
+            bodies[1],
+            json!({"username": "lucky_shrub", "transfer_action": "force_transfer"})
+        );
+
+        transport.push_json(400, in_use);
+        let kept = adopt_username(&client(&transport), "106540352242922".into(), "lucky_shrub", false)
+            .await
+            .unwrap_err();
+        assert_eq!(kept.kind(), ErrorKind::Unknown);
+        assert_eq!(kept.graph().map(|g| g.code), Some(147005));
+        assert_eq!(transport.requests().len(), 3); // no transfer asked for
+        assert_eq!(transport.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn the_business_status_is_its_entity() {
+        // support/health-status, "Example response".
+        let transport = ScriptedTransport::new();
+        transport.push_json(
+            200,
+            json!({"health_status": {"can_send_message": "AVAILABLE", "entities": [
+                {"entity_type": "PHONE_NUMBER", "id": "106540352242922", "can_send_message": "AVAILABLE"},
+                {"entity_type": "WABA", "id": "102290129340398", "can_send_message": "AVAILABLE"},
+                {"entity_type": "BUSINESS", "id": "506914307656634", "can_send_message": "AVAILABLE"},
+                {"entity_type": "APP", "id": "634974688087057", "can_send_message": "AVAILABLE"}
+            ]}, "id": "106540352242922"}),
+        );
+        let state = business_can_send(&client(&transport), "106540352242922".into())
+            .await
+            .unwrap();
+        assert_eq!(state, Some(HealthState::Available));
+        let request = transport.last_request().unwrap();
+        assert_eq!(request.path(), "/v25.0/106540352242922");
+        assert_eq!(request.query("fields").as_deref(), Some("health_status"));
         assert_eq!(transport.remaining(), 0);
     }
 

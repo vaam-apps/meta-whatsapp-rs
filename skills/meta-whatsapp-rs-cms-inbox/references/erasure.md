@@ -22,9 +22,16 @@ BSUID after a number change. `erase` reaches one key; erase the person.
    service's outbox rows (roadmap M2f) and your dead letters (L21a).
 4. **Delete the customer from Meta's contact book**:
    `PhoneNumber::delete_contact_book_entry(&bsuid)` for each of their
-   BSUIDs, on any number of the portfolio (the book is the portfolio's;
-   parent BSUIDs are refused). It cannot be undone, and the library never
-   calls it for you.
+   BSUIDs, with the merchant's client (`with_token`) on any number of the
+   portfolio the BSUID belongs to. The book is the portfolio's, so the
+   entry goes for every number of it. The identities of step 1 also hold
+   phone numbers, contact keys and parent BSUIDs, which the call refuses
+   (`Error::Validation`, before any request): keep the BSUIDs with
+   `UserId::is_bsuid`, skip the rest, and never abort the procedure on
+   one (the `meta-whatsapp-rs-production` skill's example). It cannot be
+   undone, and the library never calls it for you; a repeat answers
+   `false`. A number that exchanged a message or call with the customer
+   in the last 30 days still gets their phone number in its webhooks.
 5. **Journal the erasure**, outside the database you back up: the time
    and an HMAC (a key of your own) of `phone_number_id|contact` for each
    identity. After any restore, HMAC the restored keys and erase the
