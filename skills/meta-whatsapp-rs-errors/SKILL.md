@@ -5,7 +5,7 @@ description: "Handling meta-whatsapp-rs errors correctly - the Error tree (Api, 
 
 # meta-whatsapp-rs-errors
 
-> **Verified against meta-whatsapp-rs 888dec677cf5a56db041e56986e6ef6ee2e52b0a (2026-09-27).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs fc63968e2a49b25e5b601175ff7f9061b32a96f4 (2026-09-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/handle.rs](examples/handle.rs), compiled and
 tested by meta-whatsapp-rs's own gate. Every code, its `ErrorKind` and what to do:

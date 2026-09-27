@@ -1,6 +1,6 @@
 # `ErrorKind` reference
 
-> **Verified against meta-whatsapp-rs 888dec677cf5a56db041e56986e6ef6ee2e52b0a (2026-09-27).** Source: `crates/meta-whatsapp-core/src/error/graph.rs`
+> **Verified against meta-whatsapp-rs fc63968e2a49b25e5b601175ff7f9061b32a96f4 (2026-09-27).** Source: `crates/meta-whatsapp-core/src/error/graph.rs`
 > (`ErrorKind::from_code`, `is_retryable`, `is_rejected_before_processing`) and
 > `crates/meta-whatsapp-core/src/error/mod.rs` (`Error::kind`: the local-refusal rule below;
 > `Error::may_resend`: the "Replay a send" column).
