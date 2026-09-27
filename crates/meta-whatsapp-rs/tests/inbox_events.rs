@@ -199,7 +199,14 @@ async fn control_taken_refuses_a_reply_locally(store: Arc<dyn ConversationStore>
 
     let refused = inbox.reply(&key, text("After the take")).await.unwrap_err();
     assert!(is_thread_owned_elsewhere(&refused), "{refused}");
+    assert_eq!(refused.kind(), ErrorKind::ThreadOwnedElsewhere);
     assert_eq!(transport.requests().len(), 1, "refused with zero requests");
+    let checked = inbox.check_reply(&key).await.unwrap_err();
+    assert_eq!(
+        checked.kind(),
+        ErrorKind::ThreadOwnedElsewhere,
+        "as reply decides"
+    );
 
     // A template needs no ownership, and sending one changes no owner
     // (`conversation-routing/thread-lifecycle`).
@@ -220,7 +227,7 @@ async fn control_taken_refuses_a_reply_locally(store: Arc<dyn ConversationStore>
     transport.push_json(200, accepted("wamid.OVERRIDE"));
     inbox
         .clone()
-        .with_reply_checks(ReplyChecks::all().thread_owner(false))
+        .with_reply_checks(ReplyChecks::ALL.thread_owner(false))
         .reply(&key, text("Escalation partner here"))
         .await
         .unwrap();
@@ -229,7 +236,7 @@ async fn control_taken_refuses_a_reply_locally(store: Arc<dyn ConversationStore>
 }
 
 /// After a `user_id_update`, `Inbox::identities` of the new BSUID holds the
-/// previous one.
+/// previous one, and the phone number (`wa_id`) the update carries.
 async fn a_bsuid_change_links_the_two(store: Arc<dyn ConversationStore>) {
     let clock = ManualClock::new(at(1_750_030_073));
     let transport = ScriptedTransport::new();
@@ -239,13 +246,30 @@ async fn a_bsuid_change_links_the_two(store: Arc<dyn ConversationStore>) {
     let current = inbox.key("US.20837465019283746501");
     assert_eq!(
         inbox.identities(&current).await.unwrap(),
-        BTreeSet::from([BSUID.to_owned(), "US.20837465019283746501".to_owned()])
+        BTreeSet::from([
+            PHONE.to_owned(),
+            BSUID.to_owned(),
+            "US.20837465019283746501".to_owned()
+        ])
     );
-    let links = store.identity_links(&current).await.unwrap();
-    assert_eq!(links.len(), 1);
+    let mut links: Vec<(String, OffsetDateTime)> = store
+        .identity_links(&current)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|l| {
+            assert_eq!(l.current, "US.20837465019283746501");
+            assert_eq!(l.phone_number_id.as_str(), PNID, "the business number's");
+            (l.previous, l.at)
+        })
+        .collect();
+    links.sort();
     assert_eq!(
-        (links[0].previous.as_str(), links[0].at),
-        (BSUID, at(1_750_030_073))
+        links,
+        [
+            (PHONE.to_owned(), at(1_750_030_073)),
+            (BSUID.to_owned(), at(1_750_030_073)),
+        ]
     );
 }
 
@@ -315,8 +339,106 @@ async fn a_standby_message_is_a_window_event(store: Arc<dyn ConversationStore>) 
     assert!(transport.requests().is_empty());
 }
 
+/// `conversation-routing/thread-control`, `control_passed` at 1750101000,
+/// with the `conversation_context` summary Meta sends an app that receives
+/// no standby copies (`conversation-routing/conversation-context`).
+const CONTROL_PASSED: &str = include_str!(
+    "../../meta-whatsapp-webhooks/tests/fixtures/pages/conversation-routing.thread-control__control_passed.json"
+);
+
+/// An app that receives handovers without standby copies: the customer's
+/// last message it saw is days old, then the thread is passed to it
+/// (`control_passed`). The window it recorded is closed, Meta's is open
+/// (a thread is passed only while active): the reply goes to Meta, until
+/// 24 hours after the handover. Without the trust
+/// (`ReplyChecks::trust_handover(false)`), it is refused locally.
+async fn a_handover_lets_meta_decide_the_window(store: Arc<dyn ConversationStore>) {
+    let clock = ManualClock::new(at(1_750_101_000 + 600));
+    let transport = ScriptedTransport::new();
+    let inbox = inbox(&store, &transport, &clock);
+    let key = inbox.key(PHONE);
+    deliver(&store, PHONE_TEXT).await; // 1749416383, a week before
+    assert!(!inbox.window_is_open(&key).await.unwrap());
+    let refused = inbox.reply(&key, text("Hello?")).await.unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::CustomerServiceWindowClosed);
+
+    deliver(&store, CONTROL_PASSED).await;
+    assert!(
+        !inbox.window_is_open(&key).await.unwrap(),
+        "the recorded window is still closed"
+    );
+    inbox.check_reply(&key).await.unwrap();
+    transport.push_json(200, accepted("wamid.HANDOVER"));
+    inbox
+        .reply(&key, text("Hi, I'm Ana from support"))
+        .await
+        .unwrap();
+    assert_eq!(transport.requests().len(), 1);
+
+    let strict = inbox
+        .clone()
+        .with_reply_checks(ReplyChecks::ALL.trust_handover(false));
+    let refused = strict.reply(&key, text("Hi again")).await.unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::CustomerServiceWindowClosed);
+    assert_eq!(
+        strict.check_reply(&key).await.unwrap_err().kind(),
+        ErrorKind::CustomerServiceWindowClosed
+    );
+    assert_eq!(transport.requests().len(), 1, "refused with zero requests");
+
+    // 24 hours after the handover, the recorded window decides again.
+    clock.set(at(1_750_101_000 + 86_400));
+    let refused = inbox.reply(&key, text("Still there?")).await.unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::CustomerServiceWindowClosed);
+    assert_eq!(transport.remaining(), 0);
+}
+
+/// After a message of the customer's newer than the handover, the
+/// recorded window applies again: open from that message, closed 24 hours
+/// after it, trust or no trust.
+async fn after_the_customers_next_message_the_window_decides(store: Arc<dyn ConversationStore>) {
+    let clock = ManualClock::new(at(1_750_101_000 + 600));
+    let transport = ScriptedTransport::new();
+    let inbox = inbox(&store, &transport, &clock);
+    let key = inbox.key(PHONE);
+    deliver(&store, PHONE_TEXT).await;
+    deliver(&store, CONTROL_PASSED).await;
+    let next = r#""timestamp": "1750101300""#;
+    let body = PHONE_TEXT
+        .replacen(r#""timestamp": "1749416383""#, next, 1)
+        .replacen("wamid.", "wamid.NEXT.", 1);
+    assert!(body.contains(next) && body.contains("wamid.NEXT."));
+    deliver(&store, &body).await;
+    assert_eq!(
+        inbox.window(&key).await.unwrap().closes_at(),
+        Some(at(1_750_101_300 + 86_400))
+    );
+    for checks in [ReplyChecks::ALL, ReplyChecks::ALL.trust_handover(false)] {
+        let inbox = inbox.clone().with_reply_checks(checks);
+        clock.set(at(1_750_101_300 + 86_400 - 1));
+        inbox.check_reply(&key).await.unwrap();
+        clock.set(at(1_750_101_300 + 86_400));
+        assert_eq!(
+            inbox.check_reply(&key).await.unwrap_err().kind(),
+            ErrorKind::CustomerServiceWindowClosed,
+            "{checks:?}"
+        );
+    }
+    assert!(transport.requests().is_empty());
+}
+
 fn memory() -> Arc<dyn ConversationStore> {
     Arc::new(MemoryConversationStore::new())
+}
+
+#[tokio::test]
+async fn memory_a_handover_lets_meta_decide_the_window() {
+    a_handover_lets_meta_decide_the_window(memory()).await;
+}
+
+#[tokio::test]
+async fn memory_after_the_customers_next_message_the_window_decides() {
+    after_the_customers_next_message_the_window_decides(memory()).await;
 }
 
 #[tokio::test]
@@ -350,6 +472,7 @@ mod rules {
     use meta_whatsapp_rs::core::store::{
         IdentityLink, StoredContact, ThreadOwnership, WindowEvent,
     };
+    use meta_whatsapp_rs::inbox::RecordingSwitches;
     use pretty_assertions::assert_eq;
     use serde_json::Value;
 
@@ -1039,7 +1162,7 @@ mod rules {
         // no later message is known; an idle thread is not refused.
         let store = memory();
         let only_owner = super::inbox(&store, &transport, &clock)
-            .with_reply_checks(ReplyChecks::all().window(false));
+            .with_reply_checks(ReplyChecks::ALL.window(false));
         deliver(&store, CONTROL_TAKEN).await;
         clock.set(at(1_750_101_000 + 86_400 - 1));
         assert_eq!(
@@ -1213,20 +1336,20 @@ mod rules {
 
         // Two days later the window is closed: `window(false)` lets Meta decide.
         clock.set(at(1_750_030_073 + 2 * 86_400));
-        let unchecked = inbox.clone().with_reply_checks(ReplyChecks::none());
-        assert_eq!(unchecked.reply_checks(), ReplyChecks::none());
+        let unchecked = inbox.clone().with_reply_checks(ReplyChecks::NONE);
+        assert_eq!(unchecked.reply_checks(), ReplyChecks::NONE);
         assert_eq!(inbox.reply_checks(), ReplyChecks::default());
         let refused = inbox.reply(&key, text("late")).await.unwrap_err();
         assert_eq!(refused.kind(), ErrorKind::CustomerServiceWindowClosed);
         let only_owner = inbox
             .clone()
-            .with_reply_checks(ReplyChecks::all().window(false));
+            .with_reply_checks(ReplyChecks::ALL.window(false));
         // The thread is idle by now: nothing refuses it.
         transport.push_json(200, accepted("wamid.LATE"));
         only_owner.reply(&key, text("late")).await.unwrap();
         assert_eq!(transport.requests().len(), 2);
-        assert!(ReplyChecks::all().checks_window() && ReplyChecks::all().checks_thread_owner());
-        assert!(!ReplyChecks::none().checks_window() && !ReplyChecks::none().checks_thread_owner());
+        assert!(ReplyChecks::ALL.checks_window() && ReplyChecks::ALL.checks_thread_owner());
+        assert!(!ReplyChecks::NONE.checks_window() && !ReplyChecks::NONE.checks_thread_owner());
     }
 
     /// `direct-send/send-utility-and-authentication-messages`: a `service`
@@ -1265,7 +1388,7 @@ mod rules {
         deliver(&store, &taken).await;
         let refused = inbox
             .clone()
-            .with_reply_checks(ReplyChecks::all().window(false))
+            .with_reply_checks(ReplyChecks::ALL.window(false))
             .send(&key, direct(DirectSendCategory::Service))
             .await
             .unwrap_err();
@@ -1283,6 +1406,334 @@ mod rules {
         }
         assert_eq!(transport.requests().len(), 3);
         assert_eq!(transport.remaining(), 0);
+    }
+
+    /// The trust in a handover is for a handover to this app only: not
+    /// after another app took the thread (with the ownership check off),
+    /// not after this app released it, and not with the window check off
+    /// (nothing to trust then: the reply goes anyway).
+    #[tokio::test]
+    async fn only_a_handover_to_this_app_is_trusted() {
+        let clock = ManualClock::new(at(1_750_101_000 + 600));
+        let transport = ScriptedTransport::new();
+        let only_window = ReplyChecks::ALL.thread_owner(false);
+
+        let store = memory();
+        let inbox = inbox(&store, &transport, &clock).with_reply_checks(only_window);
+        let key = inbox.key(PHONE);
+        deliver(&store, PHONE_TEXT).await;
+        deliver(&store, CONTROL_TAKEN).await;
+        let refused = inbox.reply(&key, text("hi")).await.unwrap_err();
+        assert_eq!(refused.kind(), ErrorKind::CustomerServiceWindowClosed);
+
+        let store = memory();
+        let inbox = super::inbox(&store, &transport, &clock);
+        deliver(&store, PHONE_TEXT).await;
+        deliver(&store, CONTROL_PASSED).await;
+        inbox.check_reply(&key).await.unwrap();
+        clock.set(at(1_750_101_000 + 700));
+        assert!(inbox.record_release(&key).await.unwrap());
+        let refused = inbox.reply(&key, text("hi")).await.unwrap_err();
+        assert_eq!(refused.kind(), ErrorKind::CustomerServiceWindowClosed);
+
+        // No inbound message ever recorded: the handover is trusted too.
+        let store = memory();
+        let inbox = super::inbox(&store, &transport, &clock);
+        deliver(&store, CONTROL_PASSED).await;
+        assert_eq!(inbox.window(&key).await.unwrap().closes_at(), None);
+        inbox.check_reply(&key).await.unwrap();
+        assert!(transport.requests().is_empty());
+    }
+
+    /// `check_reply` decides as `reply` does, sending nothing: the window,
+    /// then the owner (checked first), and the switches.
+    #[tokio::test]
+    async fn check_reply_decides_as_reply_does() {
+        let store = memory();
+        let clock = ManualClock::new(at(1_750_030_073 + 60));
+        let transport = ScriptedTransport::new();
+        let inbox = inbox(&store, &transport, &clock);
+        let key = inbox.key(BSUID);
+        let kind = |r: Result<(), meta_whatsapp_rs::Error>| r.err().map(|e| e.kind());
+        assert_eq!(
+            kind(inbox.check_reply(&key).await),
+            Some(ErrorKind::CustomerServiceWindowClosed)
+        );
+        deliver(&store, PERMISSION_REPLY).await; // 1750030073, links the phone
+        assert_eq!(kind(inbox.check_reply(&key).await), None);
+        deliver(&store, CONTROL_TAKEN).await; // 1750101000
+        clock.set(at(1_750_101_000 + 60));
+        assert_eq!(
+            kind(inbox.check_reply(&key).await),
+            Some(ErrorKind::ThreadOwnedElsewhere),
+            "the owner first, though the window is closed too"
+        );
+        let unchecked = inbox.clone().with_reply_checks(ReplyChecks::NONE);
+        assert_eq!(kind(unchecked.check_reply(&key).await), None);
+        assert!(
+            inbox
+                .check_reply(&ConversationKey::new("999", BSUID))
+                .await
+                .is_err()
+        );
+        assert!(transport.requests().is_empty());
+        assert!(ReplyChecks::ALL.trusts_handover());
+        assert!(!ReplyChecks::ALL.trust_handover(false).trusts_handover());
+        assert!(!ReplyChecks::NONE.trusts_handover());
+    }
+
+    /// This app's own `pass` and `take`, which no webhook reports to it.
+    #[tokio::test]
+    async fn record_thread_owner_records_this_apps_pass_and_take() {
+        let store = memory();
+        let clock = ManualClock::new(at(1_750_101_000));
+        let transport = ScriptedTransport::new();
+        let inbox = inbox(&store, &transport, &clock);
+        let key = inbox.key(BSUID);
+        deliver(&store, PERMISSION_REPLY).await;
+        clock.set(at(1_750_030_073 + 60));
+        assert!(
+            inbox
+                .record_thread_owner(&key, ThreadOwner::AnotherApp, Some("ai_agent".to_owned()))
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            owner_of(&store, BSUID).await.unwrap(),
+            ThreadOwnership {
+                owner: ThreadOwner::AnotherApp,
+                role: Some("ai_agent".to_owned()),
+                app_id: None,
+                since: at(1_750_030_073 + 60),
+            }
+        );
+        let refused = inbox.reply(&key, text("hi")).await.unwrap_err();
+        assert!(is_thread_owned_elsewhere(&refused), "{refused}");
+
+        clock.set(at(1_750_030_073 + 120));
+        inbox
+            .record_thread_owner(&key, ThreadOwner::ThisApp, Some("escalation".to_owned()))
+            .await
+            .unwrap();
+        transport.push_json(200, accepted("wamid.TAKEN"));
+        inbox.reply(&key, text("I'm taking over")).await.unwrap();
+        assert_eq!(transport.remaining(), 0);
+
+        let foreign = ConversationKey::new("999", BSUID);
+        assert!(
+            inbox
+                .record_thread_owner(&foreign, ThreadOwner::ThisApp, None)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .thread_owner(&ConversationKey::new("999", BSUID))
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    /// The idle timeout is a setting.
+    #[tokio::test]
+    async fn the_idle_timeout_is_a_setting() {
+        let store = memory();
+        let clock = ManualClock::new(at(1_750_101_000 + 3_599));
+        let transport = ScriptedTransport::new();
+        let hour = std::time::Duration::from_secs(3_600);
+        let inbox = inbox(&store, &transport, &clock).with_thread_idle_after(hour);
+        assert_eq!(inbox.thread_idle_after(), hour);
+        assert_eq!(
+            super::inbox(&store, &transport, &clock).thread_idle_after(),
+            Inbox::THREAD_IDLE_AFTER
+        );
+        let key = inbox.key(PHONE);
+        deliver(&store, CONTROL_TAKEN).await;
+        assert_eq!(
+            inbox.thread_owner(&key).await.unwrap().unwrap().owner,
+            ThreadOwner::AnotherApp
+        );
+        clock.set(at(1_750_101_000 + 3_600));
+        assert_eq!(
+            inbox.thread_owner(&key).await.unwrap().unwrap(),
+            ThreadOwnership {
+                owner: ThreadOwner::Idle,
+                role: None,
+                app_id: None,
+                since: at(1_750_101_000 + 3_600),
+            }
+        );
+    }
+
+    // ─── What the sink records ───────────────────────────────────────────
+
+    /// What each switch of `RecordingSwitches` records, on a fresh store:
+    /// `(call window events, standby window events and owner, handover
+    /// owner, identity links, the inbound message)`.
+    async fn recorded(switches: RecordingSwitches) -> (bool, bool, bool, bool, bool) {
+        let store = memory();
+        let sink = InboxSink::new(store.clone()).with_recording(switches);
+        assert_eq!(sink.recording(), switches);
+        let standby = fixture(
+            "pages/webhooks.reference.standby__inbound_message.json",
+            &[(r#""from": "16505551234""#, r#""from": "16315553601""#)],
+        );
+        // The handover first: no link leads its number elsewhere yet.
+        for body in [
+            CONTROL_TAKEN,
+            USER_CALL,
+            standby.as_str(),
+            USER_ID_UPDATE,
+            PERMISSION_REPLY,
+        ] {
+            for event in WebhookPayload::from_slice(body.as_bytes())
+                .unwrap()
+                .into_events()
+            {
+                sink.deliver(event).await.unwrap();
+            }
+        }
+        let standby_events = events_of(&store, "16315553601").await.len();
+        let standby_owner = owner_of(&store, "16315553601").await;
+        assert_eq!(standby_events == 1, standby_owner.is_some(), "one switch");
+        let links = links_of(&store, "US.20837465019283746501").await.len()
+            + links_of(&store, BSUID).await.len();
+        (
+            events_of(&store, BSUID).await.len() == 1,
+            standby_events == 1,
+            owner_of(&store, PHONE)
+                .await
+                .is_some_and(|o| o.owner == ThreadOwner::AnotherApp),
+            links > 0,
+            store
+                .messages(&ConversationKey::new(PNID, BSUID), None, 10)
+                .await
+                .unwrap()
+                .len()
+                == 1,
+        )
+    }
+
+    /// Each switch off records nothing of its kind, and everything else
+    /// still; messages are always recorded.
+    #[tokio::test]
+    async fn each_recording_switch_turns_off_its_kind_only() {
+        let all = RecordingSwitches::ALL;
+        assert_eq!(RecordingSwitches::default(), all);
+        assert_eq!(recorded(all).await, (true, true, true, true, true));
+        assert_eq!(
+            recorded(all.calls(false)).await,
+            (false, true, true, true, true)
+        );
+        assert_eq!(
+            recorded(all.standby(false)).await,
+            (true, false, true, true, true)
+        );
+        assert_eq!(
+            recorded(all.handovers(false)).await,
+            (true, true, false, true, true)
+        );
+        assert_eq!(
+            recorded(all.identity_links(false)).await,
+            (true, true, true, false, true)
+        );
+        assert_eq!(
+            recorded(RecordingSwitches::NONE).await,
+            (false, false, false, false, true)
+        );
+        let none = RecordingSwitches::NONE;
+        assert!(
+            !none.records_calls()
+                && !none.records_standby()
+                && !none.records_handovers()
+                && !none.records_identity_links()
+        );
+        assert!(
+            all.records_calls()
+                && all.records_standby()
+                && all.records_handovers()
+                && all.records_identity_links()
+        );
+    }
+
+    /// The public rules are the sink's: a call, a call status and a
+    /// handover's number map to the keys it records under.
+    #[tokio::test]
+    async fn the_public_rules_are_the_sinks() {
+        use meta_whatsapp_rs::inbox::{call_key, call_status_key, call_window, handover_key};
+        use meta_whatsapp_rs::webhooks::WebhookEvent;
+
+        let events = WebhookPayload::from_slice(USER_CALL.as_bytes())
+            .unwrap()
+            .into_events();
+        let WebhookEvent::CallUpdated {
+            phone_number_id,
+            display_phone_number,
+            contact,
+            call,
+            ..
+        } = &events[0]
+        else {
+            panic!("{:?}", events[0].kind())
+        };
+        assert_eq!(
+            call_window(call),
+            Some((WindowEventKind::CustomerCall, at(1_750_030_073)))
+        );
+        assert_eq!(
+            call_key(
+                phone_number_id,
+                display_phone_number,
+                contact.as_ref(),
+                call
+            ),
+            Some(ConversationKey::new(PNID, BSUID))
+        );
+        let accepted = fixture(
+            "pages/business-scoped-user-ids__business_initiated_calls_status_webhooks.json",
+            &[("RINGING", "ACCEPTED")],
+        );
+        let events = WebhookPayload::from_slice(accepted.as_bytes())
+            .unwrap()
+            .into_events();
+        let WebhookEvent::CallStatusUpdated {
+            phone_number_id,
+            display_phone_number,
+            contact,
+            status,
+            ..
+        } = &events[0]
+        else {
+            panic!("{:?}", events[0].kind())
+        };
+        assert_eq!(
+            call_status_key(
+                phone_number_id,
+                display_phone_number,
+                contact.as_ref(),
+                status
+            ),
+            Some(ConversationKey::new(PNID, BSUID))
+        );
+
+        let store = memory();
+        let number = meta_whatsapp_rs::core::ids::PhoneNumberId::new(PNID);
+        assert_eq!(
+            handover_key(store.as_ref(), &number, "+16505551234")
+                .await
+                .unwrap(),
+            Some(ConversationKey::new(PNID, PHONE))
+        );
+        deliver(&store, PERMISSION_REPLY).await; // links the phone to the BSUID
+        assert_eq!(
+            handover_key(store.as_ref(), &number, PHONE).await.unwrap(),
+            Some(ConversationKey::new(PNID, BSUID))
+        );
+        assert_eq!(
+            handover_key(store.as_ref(), &number, " + ").await.unwrap(),
+            None
+        );
     }
 
     // ─── Identity links ──────────────────────────────────────────────────
@@ -1393,6 +1844,26 @@ mod rules {
         ] {
             deliver(&store, &update(previous, current)).await;
         }
+        // The same rules for the phone number a `user_id_update` carries.
+        let with_phone = |phone: &str| {
+            change(
+                "user_id_update",
+                &json!({"messaging_product": "whatsapp",
+                    "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
+                    "user_id_update": [{"wa_id": phone,
+                        "user_id": {"previous": "US.9", "current": BSUID},
+                        "timestamp": "1750030073"}]}),
+            )
+        };
+        for phone in ["", "  ", "1650\u{0}5551234", BSUID] {
+            deliver(&store, &with_phone(phone)).await;
+        }
+        assert_eq!(
+            links_of(&store, BSUID).await,
+            [pair("US.9", BSUID)],
+            "the BSUIDs only"
+        );
+        let store = memory();
         let message = change(
             "messages",
             &json!({"messaging_product": "whatsapp",
@@ -1557,6 +2028,22 @@ mod live {
             return;
         };
         an_erasure_reaches_the_phone_keyed_thread(db.store.clone()).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn live_postgres_a_handover_lets_meta_decide_the_window() {
+        let Some(db) = TestDb::new().await else {
+            return;
+        };
+        a_handover_lets_meta_decide_the_window(db.store.clone()).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn live_postgres_after_the_customers_next_message_the_window_decides() {
+        let Some(db) = TestDb::new().await else {
+            return;
+        };
+        after_the_customers_next_message_the_window_decides(db.store.clone()).await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

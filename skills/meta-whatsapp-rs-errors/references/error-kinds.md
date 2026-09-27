@@ -8,12 +8,16 @@
 `err.kind()` classifies `Error::Api` by Graph error `code`. Other variants map
 to the closest kind: `Http` 5xx and `Transport` → `ServiceUnavailable`, `Http`
 429 → `RateLimited`, `Validation` → `InvalidParameter` — except the inbox's
-local 24-hour refusal (`ValidationError::customer_service_window_closed()`,
-field `customer_service_window`; nothing was sent) →
-`CustomerServiceWindowClosed`, like Meta's 131047 — `Step` → its source's
-kind, everything else → `Unknown`.
+two local refusals (nothing was sent): the 24-hour one
+(`ValidationError::customer_service_window_closed()`, field
+`customer_service_window`) → `CustomerServiceWindowClosed`, like Meta's
+131047, and the thread-ownership one
+(`ValidationError::thread_owned_elsewhere()`, field `thread_owner`) →
+`ThreadOwnedElsewhere` — `Step` → its source's kind, everything else →
+`Unknown`.
 ~~`Validation` → `InvalidParameter`, without exception~~: true until fe49aa5
-(2026-09-24).
+(2026-09-24). Before roadmap L7 the inbox had no ownership refusal and
+`ErrorKind` no `ThreadOwnedElsewhere`.
 
 Each kind's stable name, `ErrorKind::as_str`, is its variant name in
 `snake_case` (`SpamRateLimited` → `spam_rate_limited`); `ErrorKind::ALL`
@@ -36,6 +40,7 @@ a non-idempotent request.
 | `InvalidParameter` | 33, 100, 131008, 131009, 131021, 135000, 2494166–2494168, 2494176, 2494177, 2494179 | no | no | Fix the request; `GraphApiError::code` tells In-App Signup errors apart |
 | `UnsupportedMessageType` | 131051 | no | no | — |
 | `CustomerServiceWindowClosed` | 131047; also the inbox's local refusal (nothing sent) | no | no | >24 h since the user's last message: send a template |
+| `ThreadOwnedElsewhere` | none yet (Meta documents no code); the inbox's local refusal (nothing sent) | no | no | Another app owns the thread under Conversation Routing: send a template, or wait for the thread (`meta-whatsapp-rs-cms-inbox`) |
 | `EcosystemEngagementLimit` | 131049 | **no** | no | Per-user marketing limit; do not retry for at least 24 h |
 | `MarketingOptedOut` | 131050 | no | no | User stopped marketing: record the opt-out, never retry |
 | `MarketingNotAllowed` | 131055, 131063, 134100 | no | no | Not a marketing template on the MM API, or marketing disabled on this API |

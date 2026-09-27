@@ -141,10 +141,10 @@ cut between blocks. Text is left as written (`NoEscape`); `WordJoinerEscape` is 
 - **Plugins are compiled in**: ship one as a crate; `Bot::unload` runs
   every `on_unload`, then events fail with `SinkError::Closed`.
 - A menu tap sends `/name`: keep `/` among the prefixes.
-- `MarkRead::with_typing_indicator` shows "typing…" for every message;
-  replies are free-form, refused outside the 24-hour window.
-- Test a handler alone: `Ctx::new` plus `Ctx::with_invocation`
-  (`Invocation::new`), with an `Outbound` that records.
+- `MarkRead::with_typing_indicator` shows "typing…" for every message; replies are free-form,
+  refused outside the 24-hour window (via `Inbox::send`, also `ErrorKind::ThreadOwnedElsewhere`).
+- Test a handler alone: `Ctx::new` plus `Ctx::with_invocation` (`Invocation::new`), with an
+  `Outbound` that records.
 
 ## What meta-whatsapp-rs does not do
 

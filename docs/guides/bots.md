@@ -248,9 +248,12 @@ implementation too; handlers and plugins are registered by value.
 
 In the CMS, the merchant's inbox should show what the bot answered.
 Two pieces, both in the skill's example: an `Outbound` that sends through
-`Inbox::send` (which checks the 24-hour window and records the sent
-message), and a sink that records each event in the inbox before the
-bot handles it.
+`Inbox::send` (which checks the 24-hour window and, under Conversation
+Routing, who owns the thread: while another app does, a free-form reply
+is refused with `ErrorKind::ThreadOwnedElsewhere`, see
+[cms-inbox.md](cms-inbox.md#conversation-routing-who-owns-the-thread);
+and records the sent message), and a sink that records each event in the
+inbox before the bot handles it.
 
 ```rust
 #[async_trait]

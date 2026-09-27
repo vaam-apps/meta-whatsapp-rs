@@ -143,7 +143,8 @@ pub async fn publish_menu(
 }
 
 /// The bot's replies through the CMS inbox, so they land in its history
-/// (and its 24-hour window check applies); read receipts through the client.
+/// (and its local checks apply: the 24-hour window, and, under Conversation
+/// Routing, the thread's owner); read receipts through the client.
 #[derive(Debug, Clone)]
 pub struct InboxOutbound {
     pub inbox: Inbox,

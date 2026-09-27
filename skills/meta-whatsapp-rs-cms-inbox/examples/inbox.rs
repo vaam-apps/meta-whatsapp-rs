@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use meta_whatsapp_rs::client::embedded_signup::TokenVault;
 use meta_whatsapp_rs::client::messages::{MessageContent, OutboundMessage, Text};
-use meta_whatsapp_rs::core::store::{Erased, StoredMessage};
+use meta_whatsapp_rs::core::store::{Erased, StoredMessage, ThreadOwner};
 use meta_whatsapp_rs::inbox::{ReplyChecks, is_thread_owned_elsewhere};
 use meta_whatsapp_rs::prelude::*;
 
@@ -71,11 +71,13 @@ pub async fn reply_or_template(
     body: &str,
 ) -> meta_whatsapp_rs::Result<SendResponse> {
     let key = inbox.key(contact);
-    // `window_is_open` uses the inbox's own clock: the same check `reply` makes.
-    let content: MessageContent = if inbox.window_is_open(&key).await? {
-        Text::new(body).into()
-    } else {
-        TemplateMessage::new("reopen_conversation", "en_US").into() // an approved template
+    // `check_reply` makes `reply`'s own checks (its clock, its ReplyChecks) and sends nothing.
+    let content: MessageContent = match inbox.check_reply(&key).await {
+        Ok(()) => Text::new(body).into(),
+        Err(e) if e.kind() == ErrorKind::CustomerServiceWindowClosed => {
+            TemplateMessage::new("reopen_conversation", "en_US").into() // an approved template
+        }
+        Err(e) => return Err(e), // ThreadOwnedElsewhere: another app answers them now
     };
     // Recorded as `Accepted` once Meta accepts it; never retry an `Ok`.
     inbox.reply(&key, content).await
@@ -112,7 +114,24 @@ pub async fn reply_unless_handled_elsewhere(
 /// The designated escalation partner's inbox: its service message takes
 /// the thread (an implicit `take`), so the local ownership check is off.
 pub fn escalation_partner_inbox(inbox: Inbox) -> Inbox {
-    inbox.with_reply_checks(ReplyChecks::all().thread_owner(false))
+    inbox.with_reply_checks(ReplyChecks::ALL.thread_owner(false))
+}
+
+/// An app that receives standby copies knows the window after a handover:
+/// no need to let Meta decide it (`trust_handover`, on by default, is for
+/// an app that gets a `conversation_context` summary instead).
+pub fn standby_partner_inbox(inbox: Inbox) -> Inbox {
+    inbox.with_reply_checks(ReplyChecks::ALL.trust_handover(false))
+}
+
+/// Record your own `pass`: Meta tells only the new owner (`control_passed`).
+pub async fn passed_to_the_ai_agent(inbox: &Inbox, contact: &str) -> meta_whatsapp_rs::Result<()> {
+    let key = inbox.key(contact);
+    // After your thread control `pass` succeeded (the API is not wrapped yet: roadmap L15).
+    inbox
+        .record_thread_owner(&key, ThreadOwner::AnotherApp, Some("ai_agent".to_owned()))
+        .await?;
+    Ok(())
 }
 
 /// Erase a customer on the inbox's number: every key the store connects to
@@ -288,7 +307,9 @@ mod tests {
             .await
             .unwrap();
         assert!(refused.is_none());
-        assert_eq!(transport.remaining(), 1, "nothing sent for the refusal");
+        let refused = reply_or_template(&inbox, CUSTOMER, "Still there?").await;
+        assert_eq!(refused.unwrap_err().kind(), ErrorKind::ThreadOwnedElsewhere);
+        assert_eq!(transport.remaining(), 1, "nothing sent for the refusals");
         escalation_partner_inbox(inbox)
             .reply(
                 &ConversationKey::new(NUMBER, CUSTOMER),
@@ -296,6 +317,52 @@ mod tests {
             )
             .await
             .unwrap();
+        assert_eq!(transport.remaining(), 0);
+    }
+
+    /// Handed to this app (`control_passed`) without standby copies: the
+    /// window recorded here is days old, Meta's is open, so the reply goes
+    /// to Meta; an app with standby copies keeps the recorded window. Once
+    /// this app passes the thread on, its replies are refused.
+    #[tokio::test]
+    async fn a_handover_is_trusted_and_your_own_pass_is_recorded() {
+        let store: Arc<dyn ConversationStore> = Arc::new(MemoryConversationStore::new());
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        record_inbound_with_phone(&store, now - 3 * 86_400).await;
+        deliver(
+            &store,
+            &json!({"object": "whatsapp_business_account", "entry": [{"id": "102290129340398",
+            "changes": [{"field": "messaging_handovers", "value": {"messaging_product": "whatsapp",
+                "sender": {"phone_number": "16505551234"},
+                "recipient": {"phone_number_id": NUMBER, "display_phone_number": "15550783881"},
+                "type": "control_passed", "timestamp": (now - 60).to_string(),
+                "control_passed": {"previous_owner_role": "ai_agent", "new_owner_role": "escalation",
+                    "conversation_context": {"type": "summary", "summary": {"text": "Wants navy"}}}}}]}]}),
+        )
+        .await;
+        let transport = ScriptedTransport::new();
+        transport.push_json(200, json!({"messages": [{"id": "wamid.R1"}]}));
+        let client = Client::builder()
+            .transport(transport.clone())
+            .access_token("MERCHANT")
+            .build()
+            .unwrap();
+        let inbox = Inbox::new(client, NUMBER, store);
+        let sent = reply_unless_handled_elsewhere(&inbox, CUSTOMER, "Hi, I'm Ana")
+            .await
+            .unwrap();
+        assert!(sent.is_some(), "Meta decides the window after a handover");
+        let refused = standby_partner_inbox(inbox.clone())
+            .reply(&inbox.key(CUSTOMER), Text::new("Navy it is").into())
+            .await
+            .unwrap_err();
+        assert_eq!(refused.kind(), ErrorKind::CustomerServiceWindowClosed);
+
+        passed_to_the_ai_agent(&inbox, CUSTOMER).await.unwrap();
+        let after = reply_unless_handled_elsewhere(&inbox, CUSTOMER, "One more thing")
+            .await
+            .unwrap();
+        assert!(after.is_none(), "another app owns the thread now");
         assert_eq!(transport.remaining(), 0);
     }
 

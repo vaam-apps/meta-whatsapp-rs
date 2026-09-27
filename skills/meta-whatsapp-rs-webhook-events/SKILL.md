@@ -57,7 +57,9 @@ WebhookEvent::UserIdChanged { update, .. } => Action::CustomerRenamed {
 },
 ```
 
-Conversation Routing: track who owns each thread (a `StandbyObserved` copy is never answered):
+Conversation Routing without the CMS inbox: track who owns each thread (never answer a `StandbyObserved`
+copy). `InboxSink` (`meta-whatsapp-rs-cms-inbox`) records handovers, standby copies, calls and BSUID changes
+already: with it, read `Inbox::thread_owner`, `Inbox::window`, `Inbox::identities`; never track them twice.
 
 ```rust
 WebhookEvent::ThreadControlChanged {
@@ -87,7 +89,7 @@ tagged `"event"` with the same snake-case name as `event.kind()`.
 | `MessageReceived` | a customer wrote; opens the 24-hour window; `message.content` is `Text`, `Image`/`Document`/… (`MediaContent`), `Interactive` (button/list/Flow replies), `Button` (template quick reply), `Order`, `Location`, `Reaction`, … |
 | `StatusUpdated` | `sent`/`delivered`/`read`/`failed` of **your** messages, keyed by the wamid `send` returned; `errors` on failures; `pricing` |
 | `UserPreferenceChanged` | marketing stop/resume (`meta-whatsapp-rs-marketing`) |
-| `UserIdChanged` | a customer's BSUID changed: re-key what you stored |
+| `UserIdChanged` | a customer's BSUID changed: re-key what you stored (`InboxSink` links the two) |
 | `TemplateStatusUpdated`, `TemplateQualityUpdated`, `TemplateCategoryUpdated` | template review and health (`meta-whatsapp-rs-templates`) |
 | `AccountUpdated`, `PhoneNumberQualityUpdated`, `PhoneNumberNameUpdated`, `AccountAlert` | account restrictions, limits, names |
 | `MessageEchoed`, `HistorySynced`, `AppStateSynced` | coexistence (WhatsApp Business app) |
@@ -146,12 +148,10 @@ pub fn quality(score: &TemplateQualityScore) -> QualityRating {
 ## What meta-whatsapp-rs does not do
 
 - `message_echoes`, `consumer_profile` (undocumented) arrive as `Unknown`
-  (~~and handovers / standby~~: until PR #17). No Thread control API
-  (`pass`, `release`, `take`).
-- It does not merge conversations when a BSUID changes. The inbox records
-  `MessageEchoed` and `HistorySynced` (`meta-whatsapp-rs-cms-inbox`), but not the
-  contacts of `AppStateSynced`. ~~Nor does it record coexistence echoes
-  and history in the inbox~~: true until a3582b8 (2026-09-24).
+  (~~and handovers / standby~~: until PR #17). No Thread control API (`pass`, `release`, `take`).
+- It does not merge conversations when a BSUID changes. The inbox records `MessageEchoed` and
+  `HistorySynced` (~~not~~: until a3582b8, 2026-09-24), calls, standby copies, handovers and BSUID
+  changes (~~not~~: until roadmap L7; `meta-whatsapp-rs-cms-inbox`), not `AppStateSynced` contacts.
 
 ## Related skills
 

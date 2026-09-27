@@ -13,8 +13,8 @@ The full server (webhook endpoint, SSE, bearer-token tenants), exercised in-proc
 
 ## When to use
 
-Merchants connected their number (`meta-whatsapp-rs-embedded-signup`) and chat with their customers
-in your CMS. Module `meta_whatsapp_rs::inbox`; storage port `ConversationStore`.
+Merchants connected their number (`meta-whatsapp-rs-embedded-signup`) and chat with their customers in your
+CMS. Module `meta_whatsapp_rs::inbox`; storage port `ConversationStore`.
 
 ```text
 Meta ─webhook─► WebhookHandler ─► FanoutSink ─┬─► InboxSink ──► ConversationStore
@@ -22,9 +22,7 @@ Meta ─webhook─► WebhookHandler ─► FanoutSink ─┬─► InboxSink �
 merchant UI ─► Inbox::reply ─► client.with_token(merchant token) ─► Meta
 ```
 
-## Record: the webhook side
-
-From `cms_inbox.rs`:
+## Record: the webhook side (from `cms_inbox.rs`)
 
 ```rust
 let sink = FanoutSink::new()
@@ -32,18 +30,18 @@ let sink = FanoutSink::new()
     .with(BroadcastSink::from_sender(live.clone()));
 ```
 
-`InboxSink` records inbound messages and status updates; it is idempotent (a known message id is
-ignored; a status never moves a message backwards). Statuses and revokes only change a message of
-the business number they arrived on. Run `postgres::migrate(&pool)` at startup for
-`PostgresConversationStore` (`meta-whatsapp-rs-storage`). Subscribe to `calls` and `user_id_update` too,
-and under Conversation Routing to `messaging_handovers` and `standby` ([references/routing.md](references/routing.md)).
+`InboxSink` records inbound messages and status updates, idempotently (a known message id is ignored; a
+status never moves a message backwards), only on the business number they arrived on. Run
+`postgres::migrate(&pool)` at startup (`meta-whatsapp-rs-storage`). Subscribe to `calls`, `user_id_update`,
+and under Conversation Routing `messaging_handovers` and `standby`: these need `whatsapp_business_management`,
+and no callback override reroutes `standby` or `user_id_update` ([references/routing.md](references/routing.md)).
+To record a kind yourself, switch it off: `InboxSink::with_recording`.
 
-Coexistence (the merchant keeps the WhatsApp Business app): `MessageEchoed` (sent from the app) is
-outbound `Sent`, in the customer's BSUID (else phone) conversation; `HistorySynced` is recorded message by
-message, outbound when `from` is the business number (status from `history_context`), else inbound, opens
-no reply window, never unread (`append_synced`); a later media content fills its placeholder unless
-revoked (`fill_media_placeholder`). A declined sync (2593109) records nothing; a malformed item is
-skipped, logged by position.
+Coexistence (the merchant keeps the WhatsApp Business app): `MessageEchoed` (sent from the app) is outbound
+`Sent`, in the customer's BSUID (else phone) conversation; `HistorySynced` is recorded message by message,
+outbound when `from` is the business number (status from `history_context`), else inbound, opens no reply
+window, never unread (`append_synced`); a later media content fills its placeholder unless revoked
+(`fill_media_placeholder`). A declined sync (2593109) records nothing; a malformed item is skipped, logged.
 
 ## Read and reply: ownership first
 
@@ -62,8 +60,8 @@ Ok(Inbox::new(
 ))
 ```
 
-`owned_numbers` is **your** tenant → phone number table, for the tenant **your** authentication says
-is calling, never one the request names; the inbox only checks that a key belongs to its number.
+`owned_numbers` is **your** tenant → phone number table, for the tenant **your** authentication says is
+calling, never one the request names; the inbox only checks that a key belongs to its number.
 
 ```rust
 let key = inbox.key(contact); // the `contact` of a ConversationSummary: BSUID, wa_id or group id
@@ -78,20 +76,23 @@ inbox.mark_read(&key).await?; // your unread counter, not WhatsApp's blue ticks
 
 ```rust
 let key = inbox.key(contact);
-// `window_is_open` uses the inbox's own clock: the same check `reply` makes.
-let content: MessageContent = if inbox.window_is_open(&key).await? {
-    Text::new(body).into()
-} else {
-    TemplateMessage::new("reopen_conversation", "en_US").into() // an approved template
+// `check_reply` makes `reply`'s own checks (its clock, its ReplyChecks) and sends nothing.
+let content: MessageContent = match inbox.check_reply(&key).await {
+    Ok(()) => Text::new(body).into(),
+    Err(e) if e.kind() == ErrorKind::CustomerServiceWindowClosed => {
+        TemplateMessage::new("reopen_conversation", "en_US").into() // an approved template
+    }
+    Err(e) => return Err(e), // ThreadOwnedElsewhere: another app answers them now
 };
 // Recorded as `Accepted` once Meta accepts it; never retry an `Ok`.
 inbox.reply(&key, content).await
 ```
 
-`reply`/`send` refuse free-form content outside the window **before any request**, with
-`Error::Validation` whose `kind()` is `ErrorKind::CustomerServiceWindowClosed` — the same kind as
-Meta's 131047: branch on the kind. Templates and Direct Send `utility`/`authentication` are exempt (not `service`).
-The window counts the customer's calls and standby messages (window events: never history, never unread). Quoted replies:
+`reply`/`send` refuse free-form content outside the window **before any request**, with `Error::Validation`
+whose `kind()` is `ErrorKind::CustomerServiceWindowClosed`, Meta's 131047's: branch on the kind. Templates and
+Direct Send `utility`/`authentication` are exempt (not `service`). The window counts calls and standby messages
+(window events: never history, never unread); after a handover to this app the customer has not written
+since, Meta decides (`ReplyChecks::trust_handover`). `window_is_open` is the window alone. Quoted replies:
 
 ```rust
 let message = OutboundMessage::new(inbox.recipient(&key), Text::new(body)).reply_to(quoted);
@@ -101,23 +102,25 @@ inbox.send(&key, message).await // any other recipient is refused
 ## Another app owns the thread (Conversation Routing)
 
 `reply`/`send` refuse a service message, before any request, while another app owns the thread (after
-`control_taken` or a standby copy; templates need no ownership):
+`control_taken` or a standby copy; templates need no ownership): kind `ErrorKind::ThreadOwnedElsewhere`
+(answer it `409`, like the window's).
 
 ```rust
+use meta_whatsapp_rs::inbox::{ReplyChecks, is_thread_owned_elsewhere};
+
 Err(e) if is_thread_owned_elsewhere(&e) => Ok(None),
 ```
 
-The escalation partner turns it off: `ReplyChecks::all().thread_owner(false)`. Who owns the thread
-now (`inbox.thread_owner(&key)`), and why: [references/routing.md](references/routing.md).
+The escalation partner turns it off: `ReplyChecks::ALL.thread_owner(false)`. Your own `pass` or `take`:
+`inbox.record_thread_owner`. Who owns the thread, and why: [references/routing.md](references/routing.md).
 
 ## Conversation keys
 
-`ConversationKey { phone_number_id, contact }`: the contact is the group id for group messages, else the
-BSUID, else the `wa_id` (digits). A message with none is acknowledged and not recorded. A revoke of the
-same number and direction, whatever its conversation, marks the original `Deleted` and keeps its content
-(both decided); one that comes first leaves a history-only tombstone (`StoredMessage::REVOKED`) that keeps
-the content out. Replies to a `wa_id` go to `+<digits>`; a contact with a `.` is a BSUID. The rules are
-public: `meta_whatsapp_rs::inbox::conversation_key`, `meta_whatsapp_rs::inbox::preview`. A new BSUID
+`ConversationKey { phone_number_id, contact }`: the group id for group messages, else the BSUID, else the
+`wa_id` (digits); a message with none is not recorded. A revoke of the same number and direction, whatever its
+conversation, marks the original `Deleted` and keeps its content (both decided); one that comes first leaves a
+history-only tombstone (`StoredMessage::REVOKED`). Replies to a `wa_id` go to `+<digits>`; a `.` means a BSUID.
+Public rules: `meta_whatsapp_rs::inbox::conversation_key`, `meta_whatsapp_rs::inbox::preview`. A new BSUID
 (`WebhookEvent::UserIdChanged`) starts a new conversation; `InboxSink` links the two for erasures.
 
 ## Erasing a customer
@@ -131,30 +134,26 @@ inbox.erase_all(&ids).await // `Erased` holds counts only: log those, never the 
 ```
 
 Group messages are redacted in place (`ErasureMode::Delete` deletes them); `Inbox::erase` and
-`Inbox::identities` refuse another number's key. Procedure and limits:
-[references/erasure.md](references/erasure.md). History is kept unless the store has
-`with_retention` and you schedule `apply_retention`.
+`Inbox::identities` refuse another number's key. Procedure and limits: [references/erasure.md](references/erasure.md).
+History is kept unless the store has `with_retention` and you schedule `apply_retention`.
 
 ## Pitfalls
 
-- A reply that returned `Ok` is recorded; a failure to record it is logged, never returned (an error
-  would invite a second send). Never retry an `Ok`; treat a timeout as "may have been sent".
-- Your own replies are not broadcast: push them to the UI from the reply endpoint. Live events:
-  `meta-whatsapp-rs-live-updates` (allow-list filter).
-- **U+0000 is content**: recorded exactly, so render or strip it in your UI (SQL or a store of your
-  own: `meta-whatsapp-rs-storage`); the Postgres store refuses it in Meta-assigned ids.
+- A reply that returned `Ok` is recorded; a failure to record it is logged, never returned (an error would
+  invite a second send). Never retry an `Ok`; treat a timeout as "may have been sent".
+- Your own replies are not broadcast: push them to the UI yourself (`meta-whatsapp-rs-live-updates`).
+- **U+0000 is content**: recorded exactly, so render or strip it in your UI (SQL or your own store:
+  `meta-whatsapp-rs-storage`); the Postgres store refuses it in Meta-assigned ids.
 - On an older pin, what was fixed when: [references/history.md](references/history.md).
 
 ## What meta-whatsapp-rs does not do
 
 - Not recorded by `InboxSink`: synced contacts (`smb_app_state_sync`, L8), media bytes (rows keep the
   media id; download within 7 days), BSUID merges, `conversation_context`. No thread control API (L15).
-- Message ids are unique per store, not per business number (open question 33). No Redis
-  `ConversationStore`.
+- Message ids are unique per store, not per business number (open question 33). No Redis store.
 
 ## Related skills
 
 `meta-whatsapp-rs-embedded-signup`, `meta-whatsapp-rs-token-vault`, `meta-whatsapp-rs-webhook-endpoint`,
-`meta-whatsapp-rs-live-updates`, `meta-whatsapp-rs-send-templates` (the fallback),
-`meta-whatsapp-rs-storage`, `meta-whatsapp-rs-testing` (the window with a `ManualClock`),
-`meta-whatsapp-rs-groups-and-calling` (blocking a customer, groups, calls).
+`meta-whatsapp-rs-live-updates`, `meta-whatsapp-rs-send-templates` (the fallback), `meta-whatsapp-rs-storage`,
+`meta-whatsapp-rs-testing` (the window with a `ManualClock`), `meta-whatsapp-rs-groups-and-calling` (calls).

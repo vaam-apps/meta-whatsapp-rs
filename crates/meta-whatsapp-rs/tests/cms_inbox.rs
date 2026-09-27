@@ -565,6 +565,38 @@ async fn replies_are_refused_before_meta_when_they_cannot_go() {
     assert!(graph.requests().is_empty(), "nothing reached Meta");
 }
 
+/// Under Conversation Routing, after another app took the thread
+/// (`control_taken`, Meta's example), the inbox's local refusal answers
+/// `409 thread_owned_elsewhere`, like the window's, not `422`; nothing
+/// reaches Meta.
+#[tokio::test]
+async fn a_reply_to_a_thread_another_app_owns_is_a_409() {
+    let Harness { app, graph, .. } = harness().await;
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let message = json!({"object": "whatsapp_business_account", "entry": [{"id": WABA,
+        "changes": [{"field": "messages", "value": {"messaging_product": "whatsapp",
+            "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
+            "contacts": [{"profile": {"name": "Sheena Nelson"}, "wa_id": "16505551234"}],
+            "messages": [{"from": "16505551234", "id": "wamid.PHONE", "timestamp": now.to_string(),
+                "type": "text", "text": {"body": "a human, please"}}]}}]}]});
+    let taken = include_str!(
+        "../../meta-whatsapp-webhooks/tests/fixtures/pages/conversation-routing.thread-control__control_taken.json"
+    )
+    .replace("1750101000", &(now + 1).to_string());
+    for body in [serde_json::to_vec(&message).unwrap(), taken.into_bytes()] {
+        assert_eq!(call(&app, signed_webhook(body)).await.0, StatusCode::OK);
+    }
+    let (status, error) = call_json(&app, reply(PNID, "16505551234", "I can help")).await;
+    assert_eq!(
+        (status, error),
+        (
+            StatusCode::CONFLICT,
+            json!({"error": "thread_owned_elsewhere"})
+        )
+    );
+    assert!(graph.requests().is_empty(), "nothing reached Meta");
+}
+
 #[tokio::test]
 async fn inbox_routes_refuse_callers_without_a_tenant_token() {
     let Harness {

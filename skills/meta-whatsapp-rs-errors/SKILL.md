@@ -121,7 +121,9 @@ pub fn after_failed_send(e: &Error) -> Resend {
 - The inbox's local 24-hour refusal is `Error::Validation` whose kind is
   `ErrorKind::CustomerServiceWindowClosed`, the same as Meta's 131047.
   Branch on the kind, or on `ValidationError::is_customer_service_window_closed()`
-  to tell the local refusal apart — not on `v.field`.
+  to tell the local refusal apart — not on `v.field`. Its ownership refusal
+  (another app owns the thread) has a kind of its own,
+  `ErrorKind::ThreadOwnedElsewhere` (`ValidationError::is_thread_owned_elsewhere()`).
 - `EcosystemEngagementLimit` (131049) and `SpamRateLimited` (131048) are
   not retryable on purpose; `Registration` includes 133016 (a 72-hour
   lock), which is never retried.
