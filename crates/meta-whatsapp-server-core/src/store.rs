@@ -183,7 +183,10 @@ pub trait RecordStore: Send + Sync + 'static {
     /// is still `epoch`'s (as [`Self::unbind_waba_if`]), checked atomically
     /// with the update: a binding made since keeps its numbers' status.
     /// Whether it was `epoch`'s. What a capability's `failed` takes after
-    /// Meta's `190` (roadmap S2).
+    /// Meta's `190` (roadmap S2). A binding refreshed for its own tenant
+    /// ([`Self::bind_waba`] on a WABA the tenant holds: an operator
+    /// attaching it again with a new token) keeps its epoch, so a `190`
+    /// answered to a capability made before the refresh still marks it.
     async fn set_waba_status_if(
         &self,
         epoch: &BindingEpoch,

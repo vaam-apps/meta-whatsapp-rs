@@ -168,11 +168,19 @@ and `store-postgres`.
     types. SR-L2 and `failed`: a `BindingEpoch` and, for an `OwnedWaba`,
     the vault record's `TokenVersion` (the library's
     `TokenVault::get_versioned` and `delete_if_unchanged`, additive);
-    `RecordStore::unbind_waba_if` and `set_waba_status_if`. Left, and
+    `RecordStore::unbind_waba_if` and `set_waba_status_if`; and a
+    capability is made only from a token read while its binding held
+    (the binding read again after the vault, `503` when it moved: the
+    review found the old holder's binding paired with the new holder's
+    token). The review's races (`race_suite`, `racing_a_reattach`, two
+    purges at once) run on memory and live on Postgres. Left, and
     why: a binding refreshed for its own tenant (attached again without
-    an unbind) keeps its epoch, so a `190` answered to a capability made
-    before it still marks its numbers (the vault version covers
-    `forget` there, not `failed`); a disconnection racing a vault
+    an unbind, as the operator's reconnect or token rotation does) keeps
+    its epoch, so a `190` answered after the refresh to a capability
+    made before it marks its numbers again (the vault version covers
+    `forget` there, not `failed`; `attached_at` cannot move, the route
+    guard reads it; closing it takes a bind generation, a schema
+    change); a disconnection racing a vault
     rotation deletes nothing and answers `503` (retryable); the admin's
     unbind of a WABA without a usable token, and the admin's own `190`
     right after attaching, stay unconditioned (no capability was made

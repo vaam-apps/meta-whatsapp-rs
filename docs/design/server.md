@@ -1150,12 +1150,27 @@ it holds today, where it differs from the target above:
   (retryable) when they did not. `OwnedNumber::failed` and
   `OwnedWaba::failed` mark through `set_waba_status_if`. So a WABA
   unbound and attached again since (the same tenant or another, a new
-  token) keeps its binding, its token and its numbers' status. Not
-  covered: a binding refreshed for its own tenant without an unbind
-  keeps its epoch (a `190` answered to a capability made before it
-  still marks its numbers); the admin's unbind of a WABA without a
-  usable token, and the admin's own `190` right after attaching, are
-  not a capability's and stay unconditioned.
+  token) keeps its binding, its token and its numbers' status. What a
+  capability is made from is consistent: `Authorizer::open` and
+  `owned_number` read the WABA's binding again once its token is read,
+  and make the capability only while its epoch is unchanged (else `503
+  storage_unavailable`, retryable), so a WABA moved between the two
+  reads never pairs one holder's binding with the next holder's token
+  (the admin's tenant deletion makes its capabilities from bindings it
+  listed earlier, which widened that window). Not covered: a binding
+  refreshed for its own tenant without an unbind (the operator
+  attaching the WABA again with a new token, as a reconnect or a token
+  rotation does) keeps its epoch, so a `190` answered, after the
+  refresh, to a capability made before it (the old token revoked
+  meanwhile) marks the refreshed binding's numbers `reconnect_required`
+  again, until the next attach clears it. `attached_at` cannot carry
+  the refresh: the route guard and the API read it as when the binding
+  began, and moving it would send a tenant's in-flight events to nobody.
+  Closing it takes an epoch every `bind_waba` moves (a generation beside
+  `attached_at`, a new column on Postgres), left for a decision. The
+  admin's unbind of a WABA without a usable token, and the admin's own
+  `190` right after attaching, are not a capability's and stay
+  unconditioned.
 - **Conformance** is still the server's tests' (S3).
 
 ### 8.2 The backend bundle is the unit of swapping

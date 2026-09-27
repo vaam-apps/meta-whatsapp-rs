@@ -793,7 +793,9 @@ stored data, the owner's).
     `auth::OwnedWaba::forget` too, with `forget_or_busy` answering `503
     storage_unavailable` (retryable) for it on the tenant's disconnect
     and the admin unbind. `OwnedNumber` now reads its WABA's binding
-    too.
+    too, and both capabilities read it again once their token is read:
+    a WABA whose binding moved in between makes no capability, `503
+    storage_unavailable` (retryable).
 
   No change to the HTTP API: `openapi/v1.json` is byte-identical.
 - **meta-whatsapp-server's domain is a crate of its own,
@@ -1309,7 +1311,13 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
     from (its tenant and `attached_at`, a `BindingEpoch`) and, for an
     `OwnedWaba`, the version of its vault record: `forget` deletes that
     token and that binding only, each checked atomically by its store,
-    and `failed` marks that binding's numbers only. Not covered: a
-    binding refreshed for its own tenant without an unbind keeps its
-    epoch, so a `190` answered to a capability made before the refresh
-    still marks its numbers.
+    and `failed` marks that binding's numbers only. And a capability is
+    made only from a token read while its binding held: S2's review
+    found the binding and the token read apart, so a WABA moved to
+    another tenant between the two reads gave the old holder a
+    capability with the new holder's token (which it called Meta with,
+    and `forget` deleted); the binding is now read again after the
+    vault. Not covered: a binding refreshed for its own tenant without
+    an unbind (a reconnect, a token rotation) keeps its epoch, so a
+    `190` answered after the refresh to a capability made before it
+    marks its numbers again, until the next attach.

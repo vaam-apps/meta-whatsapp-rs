@@ -971,7 +971,8 @@ decisions and the delivery milestones, is
   housekeeping round; listings are in byte order; each `Backend`
   accessor hands out the same data on every call; and a capability
   (`OwnedNumber`, `OwnedWaba`) writes only to the binding (a
-  `BindingEpoch`) and the vault record it was made from.
+  `BindingEpoch`) and the vault record it was made from, and is made
+  only from a token read while that binding held.
 - **One multi-tenant deployment per Meta app** (the owner's decision D1):
   every merchant onboarded through the app delivers to its one callback
   URL. Tenants are the integrator's ids; a tenant owns WABAs, a WABA owns

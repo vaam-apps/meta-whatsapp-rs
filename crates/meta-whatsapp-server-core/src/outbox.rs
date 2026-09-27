@@ -238,7 +238,11 @@ pub trait Outbox: Send + Sync + 'static {
     /// binding (or its tenant) waits for the insert or comes before the
     /// check. Otherwise, a tenant without a guard included, the row is
     /// recorded operator-only (no tenant, in the operator-only stream).
-    /// This is a requirement of every backend, not a Postgres property.
+    /// This is a requirement of every backend, not a Postgres property. A
+    /// database that sees a conflict between two writes but not between a
+    /// read and a write (MongoDB's snapshot transactions) meets it by
+    /// writing the guarded binding's record in the insert's transaction, so
+    /// that an unbinding conflicts with the insert.
     ///
     /// **Once.** `None` when an event with the same dedup key is stored
     /// (nothing is written, no sequence drawn), unless `event` has a
