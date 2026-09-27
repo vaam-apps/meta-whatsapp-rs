@@ -829,14 +829,16 @@ mod tests {
     /// though the first never released it; and the first one's end (its
     /// release or drop) then leaves the second one's turn alone. Decisive:
     /// the lease's expiry in `try_exclusive`, and the grant compared on
-    /// drop.
+    /// drop. The short lease is half a second, so that the refusal right
+    /// after the first turn does not depend on the two calls running
+    /// within a few milliseconds of each other (it was 30 ms).
     #[tokio::test]
     async fn a_turn_ends_with_its_lease_and_never_ends_a_later_one() {
         let lock = MemoryLeaderLock::new();
-        let short = std::time::Duration::from_millis(30);
+        let short = std::time::Duration::from_millis(500);
         let stale = lock.try_exclusive("sweep", short).await.unwrap().unwrap();
         assert!(lock.try_exclusive("sweep", LEASE).await.unwrap().is_none());
-        tokio::time::sleep(short * 2).await;
+        tokio::time::sleep(short + std::time::Duration::from_millis(100)).await;
         let fresh = lock
             .try_exclusive("sweep", LEASE)
             .await
