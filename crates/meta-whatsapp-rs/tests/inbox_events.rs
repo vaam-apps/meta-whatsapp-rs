@@ -1462,19 +1462,37 @@ mod rules {
         deliver(&store, PERMISSION_REPLY).await; // 1750030073, links the phone
         assert_eq!(kind(inbox.check_reply(&key).await), None);
         deliver(&store, CONTROL_TAKEN).await; // 1750101000
-        clock.set(at(1_750_101_000 + 60));
+        // The window (from 1750030073) is closed by now, and the thread is
+        // not idle yet (24 hours after the handover): both refusals apply,
+        // and the owner's comes first.
+        clock.set(at(1_750_101_000 + 86_400 - 1));
+        assert!(!inbox.window_is_open(&key).await.unwrap());
+        assert_eq!(
+            inbox.thread_owner(&key).await.unwrap().unwrap().owner,
+            ThreadOwner::AnotherApp
+        );
         assert_eq!(
             kind(inbox.check_reply(&key).await),
             Some(ErrorKind::ThreadOwnedElsewhere),
             "the owner first, though the window is closed too"
         );
+        let only_window = inbox
+            .clone()
+            .with_reply_checks(ReplyChecks::ALL.thread_owner(false));
+        assert_eq!(
+            kind(only_window.check_reply(&key).await),
+            Some(ErrorKind::CustomerServiceWindowClosed)
+        );
         let unchecked = inbox.clone().with_reply_checks(ReplyChecks::NONE);
         assert_eq!(kind(unchecked.check_reply(&key).await), None);
+        // A key of another number is refused as such, before any check.
+        let foreign = inbox
+            .check_reply(&ConversationKey::new("999", BSUID))
+            .await
+            .unwrap_err();
         assert!(
-            inbox
-                .check_reply(&ConversationKey::new("999", BSUID))
-                .await
-                .is_err()
+            matches!(&foreign, meta_whatsapp_rs::Error::Validation(v) if v.field == "conversation"),
+            "{foreign}"
         );
         assert!(transport.requests().is_empty());
         assert!(ReplyChecks::ALL.trusts_handover());
@@ -1667,7 +1685,25 @@ mod rules {
             recorded(RecordingSwitches::NONE).await,
             (false, false, false, false, true)
         );
+        // And each switch turned on records its kind alone.
         let none = RecordingSwitches::NONE;
+        assert_eq!(
+            recorded(none.calls(true)).await,
+            (true, false, false, false, true)
+        );
+        assert_eq!(
+            recorded(none.standby(true)).await,
+            (false, true, false, false, true)
+        );
+        assert_eq!(
+            recorded(none.handovers(true)).await,
+            (false, false, true, false, true)
+        );
+        assert_eq!(
+            recorded(none.identity_links(true)).await,
+            (false, false, false, true, true)
+        );
+        assert_eq!(all.calls(false).calls(true), all);
         assert!(
             !none.records_calls()
                 && !none.records_standby()
