@@ -205,7 +205,8 @@ fn credentialed_redirects() -> reqwest::redirect::Policy {
     let default = reqwest::redirect::Policy::default();
     reqwest::redirect::Policy::custom(move |attempt| {
         let next = attempt.url();
-        let keeps_credentials = attempt.previous().last().is_some_and(|previous| {
+        // reqwest always lists the URL that answered; without it, stop.
+        let keeps_credentials = attempt.previous().last().is_none_or(|previous| {
             next.scheme() == previous.scheme()
                 && next.host_str() == previous.host_str()
                 && next.port_or_known_default() == previous.port_or_known_default()
