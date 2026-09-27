@@ -27,7 +27,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
   comments) are cited in the docs as SR-H1, SR-M3, SR-L2, so they never
   read as items.
 - The choices behind the items are recorded in
-  [design §10](design/server.md#10-decisions) (D26–D29 and the rows
+  [design §10](design/server.md#10-decisions) (D26–D35 and the rows
   updated on 2026-09-26) and in
   [OPEN_QUESTIONS.md](../OPEN_QUESTIONS.md), under the rule in AGENTS.md
   § Decisions. What stays the owner's is listed in
@@ -47,7 +47,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | 1 | S1 (server core), B1 (bot framework), U4 (upstream issues) |
 | 2 | S2, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L25, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
 | 3 | S5a–S5e, S6, S7, S9 |
-| 4 | S10 (waits on the owner's answer to D20 (a)), S11, S12; M2a–M2e |
+| 4 | S10 (waits on the owner's answer to D20 (a)), S11, S12; M2a–M2f |
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3f; B2–B4 |
 | 6 | M4; M5a–M5l |
 | 7 | S17, S18 (MongoDB) |
@@ -407,7 +407,7 @@ and `store-postgres`.
     replica set; removing the version check from compare-and-swap fails
     them.
 - [ ] **S18. `meta-whatsapp-server-store-mongodb`**, the whole bundle.
-  - **After:** S9, S17, M2a–M2e.
+  - **After:** S9, S17, M2a–M2f.
   - **Decisive:** the core conformance suite passes live; the service's
     M1–M2 acceptance tests pass on it.
 
@@ -466,7 +466,7 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     requests asserted; three suggestions become buttons and four a list
     (removing the count check fails the test); a `javascript:` image
     URL is never sent.
-- [ ] **B2. Paced broadcast** (`meta-whatsapp-bot`; rows 89, 92; D29): a
+- [x] **B2. Paced broadcast** (`meta-whatsapp-bot`; rows 89, 92; D29): a
   per-number rate under Meta's throughput (80 messages a second by
   default), progress, retries only when `Error::may_have_been_sent` is
   false, the pair and per-user marketing limits read from `ErrorKind`;
@@ -476,6 +476,45 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
   - **Decisive:** under a fake clock, 200 sends at a configured 20 a
     second never exceed it; a scripted timeout is never retried
     (removing the `may_have_been_sent` check fails the test).
+  - **Landed:** rows 89 and 92 done in the library (`Broadcast`,
+    `Pacer`, `TokenBucket`, `BroadcastPolicy`, `BotBuilder::pacer`,
+    `PacedGroups` and `PacedGroup` for group operations). Each person
+    once by default (`BroadcastBuilder::dedupe`); lines streamed to a
+    `ReportSink` for long lists; every retry paced
+    (`Client::with_retry`), and resent only when `Error::may_resend`
+    holds, the client's rule too. Swappable: the rate limiter
+    (`RateLimiter`), which errors slow a number down (`SlowDownRule`),
+    the clock (`Timer`), the failure policy (`BroadcastPolicy`) and the
+    report sink (`ReportSink`) are traits with defaults; a number's rate
+    changes while running (`TokenBucket::set_rate`). Not in it: acting
+    on Meta's throughput upgrade by itself (B2a), a limiter shared by
+    replicas (B2b; the trait allows one), Meta's daily messaging limit
+    (Meta's to enforce), and runs that survive a restart (B3).
+- [ ] **B2a. Throughput upgrades, followed** (`meta-whatsapp-bot`): an
+  opt-in listener that sets a number's rate to `Rate::HIGHER_THROUGHPUT`
+  (`TokenBucket::set_rate`) when its `phone_number_quality_update`
+  webhook says `THROUGHPUT_UPGRADE`
+  (`PhoneNumberQualityEvent::ThroughputUpgrade`, `throughput`: Meta
+  documents no other mapping from a level to a rate), off by default.
+  Companions: the bots guide, the bot skill's broadcast reference.
+  - **After:** B2.
+  - **Decisive:** delivering the `THROUGHPUT_UPGRADE` fixture moves that
+    number's sends from 12.5 ms to 1 ms apart on a `ManualClock`;
+    removing the `set_rate` call fails the test.
+- [ ] **B2b. A pacer shared by replicas** (`meta-whatsapp-bot`; for the
+  service's broadcasts, M5k): a `RateLimiter` keeping each number's rate
+  schedule (the generic cell rate algorithm's state) as a typed store on
+  `KvStore`, read and written with `compare_and_swap` (no new port), so
+  every replica books from one budget. A new store namespace,
+  `wa.bot.pacer` (the `wa.<module>[.<purpose>]` rule; ephemeral, like
+  `wa.bot.cooldown`), added to architecture.md § Stable identifiers with
+  its pin.
+  - **After:** B2.
+  - **Decisive:** two `Pacer`s on one `MemoryKvStore` at 20 a second
+    send 200 interleaved sends and never exceed 20 in any one-second
+    window; replacing the compare-and-swap by a plain put fails it. The
+    live runs on Redis and Postgres go through the store conformance
+    suite.
 - [ ] **B3. Durable scheduling** (`meta-whatsapp-bot`; row 90; D29): jobs
   as a typed store on `KvStore` (a bucketed due-time index, claims by
   compare-and-swap with a lease; no new port), send at a time, cancel,
@@ -485,7 +524,11 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
   - **Decisive:** two runners on one store send a due job once
     (replacing the compare-and-swap by a plain put fails it); a job
     scheduled before a restart is sent by a new runner on the same
-    store.
+    store; a resumed broadcast job never resends a recipient recorded as
+    sent (removing the per-recipient marker fails it); a `131049`
+    recorded from a status webhook (the job keeps each message's id)
+    makes a re-run within 24 hours skip that recipient and send everyone
+    else.
 - [ ] **B4. Retention and auto-delete** (`meta-whatsapp-bot`; row 91): by
   age and a cap per chat, through `ConversationStore`'s erasure.
   - **After:** B1, L5.
@@ -508,11 +551,13 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** a new process resumes from stored session info alone;
     sending a placeholder code to Meta fails the test's request
     assertion.
-- [ ] **L5. The `ConversationStore` port change** (`meta-whatsapp-core`,
+- [x] **L5. The `ConversationStore` port change** (`meta-whatsapp-core`,
   `meta-whatsapp-adapters`; D10; OPEN_QUESTIONS #32, #44; rows 69, 111):
   one change for everything the port gains before M2, so adapters change
-  once. Erasure of one contact on one number, purge by age, retention
-  set per store (D10); window events (the calls that reopen the window,
+  once. Erasure of a person on one number (their keys through
+  `identities`, identity links, their group messages redacted or
+  deleted: D30, D31), purge by age, retention set per store (D10);
+  window events (the calls that reopen the window,
   standby inbound messages) and thread-ownership records, for L7; a
   lookup by message id, scoped to the business number, for L8 and M2; the
   coexistence sync's contacts, for M3b. The lookup works with either
@@ -524,19 +569,38 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** new conformance cases for each part; memory and
     Postgres pass; a Postgres erase that leaves the message bodies fails
     live; the lookup case fails an adapter that finds a message of
-    another number.
+    another number; an erasure through `identities` of a BSUID leaves
+    nothing of the person's thread under their phone number, and the
+    live sweep of every table fails when the erasure's sender clause
+    (their group message) is removed.
+  - **Landed:** row 91 partial in the library (purge by age, retention
+    set per store, erasure of a person on one number; no cap per chat
+    and no bot that deletes on its own: B4). Rows 69, 111 and 139 stay
+    partial: the inbox records what the port now keeps (synced
+    contacts, window events, thread ownership, identity links) in L7
+    and L8, and there is no Redis or SQLite store (L8) nor thread
+    control API (L15). OPEN_QUESTIONS #33 stays open. The erasure's
+    defaults and stored names wait for the owner before the first
+    release ([§ Owner touchpoints](#owner-touchpoints)).
 - [ ] **L7. Window events and thread ownership in the inbox**
   (`meta_whatsapp_rs::inbox`; OPEN_QUESTIONS #32, #44; rows 119, 139):
   `InboxSink` records the calls that reopen the 24-hour window and
   standby messages as window events (never unread), and ownership from
   the handovers; `Inbox::reply` refuses locally when another app owns
-  the thread; a caller's explicit override of the local check.
+  the thread; a caller's explicit override of the local check. It also
+  records L5's identity links (`ConversationStore::link_identity`), so
+  that an erasure finds a person's other keys: from `user_id_update`
+  (`WebhookEvent::UserIdChanged`), from a number-change `system`
+  message, and a phone number to BSUID link when an inbound message
+  carries both `from` and `from_user_id` (a thread keyed by the `wa_id`
+  before BSUIDs is found only through one).
   - **Kind:** additive (on L5's port).
   - **After:** L5.
   - **Decisive:** after a scripted call, `Inbox::reply` sends a
     free-form reply it refused before; after `control_taken`, a reply is
-    refused locally with zero requests; each fails when its recording is
-    removed.
+    refused locally with zero requests; after a `user_id_update`,
+    `Inbox::identities` of the new BSUID holds the previous one; each
+    fails when its recording is removed.
 - [ ] **L8. Message and contact stores** (`meta-whatsapp-adapters`,
   features `redis` and a new `sqlite`; `meta_whatsapp_rs::inbox`; rows
   69, 111): a Redis `ConversationStore`, SQLite adapters for both ports,
@@ -740,16 +804,21 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   (`meta-whatsapp-webhooks`, `meta-whatsapp-adapters`; OPEN_QUESTIONS
   #30): sink errors classified transient or permanent (unclassified
   stays transient, today's behaviour); a permanent one written to a
-  dead-letter typed store on `KvStore` (bounded by count and age, reached
-  by L5's erasure, alerted, replayable) before the delivery is
-  acknowledged. Companion: architecture.md § Stable identifiers for the
-  dead-letter namespace.
+  dead-letter typed store on `KvStore` (bounded by count and age,
+  alerted, replayable) before the delivery is acknowledged. `KvStore`
+  has no scan, so L5's `ConversationStore::erase_all` cannot reach it:
+  the store keeps its own per-contact index and an `erase`, and a
+  facade-level eraser calls it beside the conversation store's.
+  Companion: architecture.md § Stable identifiers for the dead-letter
+  namespace.
   - **Kind:** additive.
   - **After:** L5.
   - **Decisive:** a batch with one permanently failing event delivers
     the others and dead-letters that one (removing the dead-letter write
-    makes the handler answer 500 again, and the test fails); an erasure
-    of the contact removes their dead-lettered events.
+    makes the handler answer 500 again, and the test fails); the
+    facade-level erasure of the contact removes their dead-lettered
+    events (removing the dead-letter store's `erase` from it fails the
+    test).
 - [ ] **L21b. Live events shared, not cloned** (`meta-whatsapp-webhooks`
   `sse`, `meta-whatsapp-adapters` `BroadcastSink`; OPEN_QUESTIONS #31):
   both over `Arc<WebhookEvent>`.
@@ -830,10 +899,14 @@ design's (§9).
 
 - [ ] **M2a. Inbox routes** (rows 91, 111, 119): conversation list,
   history, a reply checked against the window, all filtered by the
-  number's binding epoch; retention per store (D10).
+  number's binding epoch; retention per store (D10): the inbox store
+  built `with_retention` from a setting, and `apply_retention` run by
+  the service's housekeeping.
   - **After:** S7, L5, L7.
   - **Decisive:** M2.1; removing the binding-epoch filter shows a moved
-    number's history to its new tenant, and a test fails.
+    number's history to its new tenant, and a test fails; with a
+    retention set, housekeeping purges an inbox message older than it
+    (removing the `apply_retention` call fails the test).
 - [ ] **M2b. Live updates** (row 10): SSE through an `EventNotifier`
   port (Postgres `LISTEN/NOTIFY`, memory broadcast; resume by
   `Last-Event-ID`); `GET /v1/events/{id}`.
@@ -858,6 +931,22 @@ design's (§9).
   - **Decisive:** another tenant's received media id is `404` with zero
     requests (removing the "recorded on this tenant's number" lookup
     fails it); the live check's result is recorded in OPEN_QUESTIONS #43.
+- [ ] **M2f. Erasure in the service** (row 91; D10, D30, D31): an
+  admin- or tenant-scoped route that erases a customer on a number
+  through the library's `identities` and `erase_all`; deletes the
+  tenant's outbox rows for them, through an expand-only `contacts
+  TEXT[]` column on `wa_server_events` with a GIN index, filled at
+  insert; and writes an erasure-journal entry (an HMAC of
+  `phone_number_id|contact` and the time) and an audit event, neither
+  naming the customer in clear. Which requests to honour stays the
+  deployer's (D10, legal acts).
+  - **Kind:** additive (a new route; an expand-only column).
+  - **After:** M2a.
+  - **Decisive:** after the route, no row of the inbox tables nor of
+    `wa_server_events` mentions the customer (a sweep of every table,
+    as the library's live test does), and removing the outbox clause
+    fails it; the journal and the audit event hold no identity in
+    clear; a tenant's key cannot erase on another tenant's number.
 
 ### M3. Embedded Signup, OTP, coexistence
 
@@ -995,7 +1084,7 @@ or WABA fails the family's own cross-tenant test).
   - **After:** S7, L10b, L12.
   - **Decisive:** M5.1, M5.2.
 - [ ] **M5k. The bot and broadcast APIs** (rows 17, 85–92), over B1–B4.
-  - **After:** B1, B2, B3, B4.
+  - **After:** B1, B2, B2b (the replicas' shared budget), B3, B4.
   - **Decisive:** M5.1, M5.2; a broadcast over HTTP never exceeds its
     tenant's configured rate under a fake clock.
 - [ ] **M5l. Conversation routing** (row 139): the thread control API.
@@ -1051,3 +1140,12 @@ everything else goes into the parity-completion report.
 - **D21, D22 and D24**, confirmed before the first release: after it,
   D21's per-tenant sequences are a released contract, and D22's and
   D24's deletions cannot be undone.
+- **L5's erasure and its stored names**, confirmed before the first
+  release: D30's scope and D31's default for a person's group messages
+  (redacted, keeping their ids) decide what an erasure deletes for good
+  and what it leaves, D35 what a retention keeps, and the stable
+  identifiers L5 adds (D33's lock SQL, `wa_identity_links`,
+  `wa_messages.sender` and its rule, the `erased` kind, migration 4's
+  names: architecture.md § Stable identifiers) become permanent with
+  the release. Each ships swappable today; changing one after the
+  release is a data migration.

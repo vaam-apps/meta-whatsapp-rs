@@ -183,7 +183,9 @@ feature's `Bot` is an `EventSink` behind the same webhook handler, with
 prefixes and aliases, private/group/owner-only guards, a banned list,
 per-user cooldowns, middleware, one compiled-in plugin per feature, a
 generated `/help`, Meta's command menu, and Markdown replies converted to
-WhatsApp formatting. Guide: [docs/guides/bots.md](docs/guides/bots.md).
+WhatsApp formatting. Its `Broadcast` sends one message to many
+recipients, each person once, paced per number under Meta's throughput,
+with progress, a cancel and a report per recipient. Guide: [docs/guides/bots.md](docs/guides/bots.md).
 
 ### Run the examples
 
@@ -244,7 +246,7 @@ coding agents of those apps: the `meta-whatsapp-rs-server` skill.
 | `axum` | | `webhooks::router` (webhook endpoint) and `webhooks::sse` (live inbox stream) |
 | `typst` | | `meta_whatsapp_rs::typst`: invoice, receipt and voucher templates → PDF/PNG |
 | `flows-endpoint` | | WhatsApp Flows data-endpoint crypto (aws-lc-rs) |
-| `bot` | | `meta_whatsapp_rs::bot`: a bot framework (commands, guards, cooldowns, middleware, plugins, Markdown replies) |
+| `bot` | | `meta_whatsapp_rs::bot`: a bot framework (commands, guards, cooldowns, middleware, plugins, Markdown replies, paced broadcasts) |
 | `testing` | | `core::testing::ScriptedTransport` for your own tests (enable in `[dev-dependencies]`) |
 | `full` | | all of the above |
 
@@ -258,7 +260,7 @@ coding agents of those apps: the `meta-whatsapp-rs-server` skill.
 | `meta-whatsapp-webhooks` | Signature/verify-token checks, typed payloads, normalized events, dedup, axum router + SSE. |
 | `meta-whatsapp-adapters` | reqwest transport; memory, Postgres, Redis stores; channel/broadcast/fan-out sinks. |
 | `meta-whatsapp-typst` | Typst → PDF/PNG (invoices, receipts, vouchers) for document and image messages. |
-| `meta-whatsapp-bot` | Bot framework over webhooks: commands, guards, cooldowns, middleware, compile-time plugins, Markdown → WhatsApp formatting. |
+| `meta-whatsapp-bot` | Bot framework over webhooks: commands, guards, cooldowns, middleware, compile-time plugins, Markdown → WhatsApp formatting, paced broadcasts. |
 | `meta-whatsapp-server` | The HTTP service (a binary, not a dependency): tenants, keys, the `/v1` API over the facade. See [Not writing Rust? Run the service](#not-writing-rust-run-the-service). |
 | `meta-whatsapp-server-core` | The service's framework-free core (not a dependency either): its domain, authorization order, error model as data, and the storage ports its memory and Postgres backends implement. No axum, sqlx or utoipa. |
 

@@ -356,7 +356,7 @@ impl GraphRequest {
 
     /// Send, check the status, and return the raw 2xx response.
     pub async fn send_raw(mut self) -> Result<HttpResponse> {
-        let policy = self.client.shared.retry;
+        let policy = self.client.retry;
         let replayable = self.body.replayable();
         let mut attempt = 0u32;
         loop {
@@ -769,6 +769,36 @@ mod tests {
         let v: serde_json::Value = client(&t).post("1/messages").send().await.unwrap();
         assert_eq!(v, json!({"ok": true}));
         assert_eq!(t.requests().len(), 2);
+    }
+
+    /// `with_retry` changes the copy's policy only; `with_token` keeps it.
+    #[tokio::test]
+    async fn with_retry_replaces_the_policy_of_the_copy_only() {
+        let t = ScriptedTransport::new();
+        let base = client(&t);
+        let none = base
+            .clone()
+            .with_retry(RetryPolicy::NONE)
+            .with_token("OTHER".into());
+        assert_eq!(none.retry_policy(), RetryPolicy::NONE);
+        assert_eq!(base.retry_policy().max_retries, 2);
+
+        t.push_json(400, json!({"error": {"message": "rate", "code": 130429}}));
+        let err = none
+            .post("1/messages")
+            .send::<serde_json::Value>()
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), meta_whatsapp_core::ErrorKind::RateLimited);
+        assert_eq!(t.requests().len(), 1, "no replay under RetryPolicy::NONE");
+        assert_eq!(t.last_request().unwrap().bearer(), Some("OTHER"));
+
+        t.push_json(400, json!({"error": {"message": "rate", "code": 130429}}));
+        t.push_json(200, json!({"ok": true}));
+        let v: serde_json::Value = base.post("1/messages").send().await.unwrap();
+        assert_eq!(v, json!({"ok": true}));
+        assert_eq!(t.requests().len(), 3, "the original still replays");
+        assert_eq!(t.remaining(), 0);
     }
 
     #[tokio::test]

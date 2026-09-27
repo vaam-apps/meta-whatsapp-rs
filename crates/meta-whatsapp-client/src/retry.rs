@@ -4,11 +4,13 @@
 //!
 //! 1. *Could it succeed later?* — [`meta_whatsapp_core::Error::is_retryable`].
 //! 2. *Is it safe to send again?* — idempotent requests (GET, DELETE) always
-//!    are. A send (POST `/messages`) is only replayed when the error proves
-//!    Meta rejected it before doing anything (throttling:
-//!    [`meta_whatsapp_core::ErrorKind::is_rejected_before_processing`]). A timeout on a
-//!    send is **never** replayed: the message may already be on its way, and
-//!    a duplicate OTP or order confirmation is worse than a surfaced error.
+//!    are. A send (POST `/messages`) is only replayed when
+//!    [`meta_whatsapp_core::Error::may_resend`] holds: the error proves Meta
+//!    refused it before doing anything (throttling, an HTTP 429, the
+//!    account in maintenance). That is the library's one automatic resend
+//!    rule; the bot's broadcast follows it too. A timeout on a send is
+//!    **never** replayed: the message may already be on its way, and a
+//!    duplicate OTP or order confirmation is worse than a surfaced error.
 
 use std::time::Duration;
 
@@ -44,19 +46,15 @@ impl RetryPolicy {
     };
 
     /// Whether attempt number `attempt` (0-based, the one that just failed
-    /// with `error`) should be followed by another.
+    /// with `error`) should be followed by another: within the budget, and
+    /// retryable when `idempotent`, else only when
+    /// [`Error::may_resend`] holds (this policy can refuse more, never
+    /// less).
     pub fn should_retry(&self, attempt: u32, error: &Error, idempotent: bool) -> bool {
         if attempt >= self.max_retries || !error.is_retryable() {
             return false;
         }
-        if idempotent {
-            return true;
-        }
-        match error {
-            Error::Api(e) => e.kind().is_rejected_before_processing(),
-            Error::Http { status: 429, .. } => true,
-            _ => false,
-        }
+        idempotent || error.may_resend()
     }
 
     /// Delay before retry number `attempt + 1`. `retry_after` (from the
@@ -100,6 +98,20 @@ mod tests {
         // Meta hiccup: retryable, but a send may have gone out.
         assert!(p.should_retry(0, &api(131000), true));
         assert!(!p.should_retry(0, &api(131000), false));
+        // The account in maintenance (a throughput upgrade): every request
+        // is refused meanwhile, so a send is replayed.
+        assert!(p.should_retry(0, &api(131057), false));
+        // A connection that never opened: retried when idempotent, never
+        // for a send (`Error::may_resend`).
+        let refused = Error::Transport(TransportError::Connect(anyhow::anyhow!("refused")));
+        assert!(p.should_retry(0, &refused, true));
+        assert!(!p.should_retry(0, &refused, false));
+        // An HTTP 429 without a Graph body.
+        let too_many = Error::Http {
+            status: 429,
+            body_snippet: String::new(),
+        };
+        assert!(p.should_retry(0, &too_many, false));
         // Timeout on a send: never replayed.
         let timeout = Error::Transport(TransportError::Timeout);
         assert!(p.should_retry(0, &timeout, true));

@@ -17,6 +17,13 @@ use meta_whatsapp_core::ids::{MessageId, PhoneNumberId};
 /// number (look it up in the token vault by `from`), to record replies in
 /// the CMS inbox (`docs/guides/bots.md`), to queue sends, or to record them
 /// in a test. One shared by several bots: `BotBuilder::shared_outbound`.
+///
+/// Under a pacer (a `Broadcast`, a `PacedOutbound`), an outbound has a
+/// contract: it does not retry inside a call (each retry would go out
+/// without a slot; the caller retries, through the pacer), and its errors
+/// are truthful about `Error::may_have_been_sent` (a send that may have
+/// reached Meta fails with an error saying so, or it may be sent again).
+/// Over a client, `Client::with_retry(RetryPolicy::NONE)` keeps the first.
 #[async_trait]
 pub trait Outbound: Send + Sync + fmt::Debug + 'static {
     /// Send `message` from the business phone number `from`.
@@ -50,7 +57,10 @@ impl<T: Outbound + ?Sized> Outbound for Arc<T> {
 
 /// [`Outbound`] over the Cloud API: `client.messages(from).send(message)`,
 /// `mark_read` and `mark_read_with_typing_indicator`. Every check and retry
-/// rule of those calls applies (a timed-out send is never replayed).
+/// rule of those calls applies (a timed-out send is never replayed), with
+/// the client's `RetryPolicy`: `BroadcastBuilder::client` and
+/// `BotBuilder::pacer` give it `RetryPolicy::NONE` and retry through the
+/// pacer instead.
 #[derive(Debug, Clone)]
 pub struct ClientOutbound {
     client: Client,

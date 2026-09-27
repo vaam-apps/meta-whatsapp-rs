@@ -311,11 +311,23 @@ pub async fn filters(store: &dyn EventStore) {
     assert_eq!(page.high_water, 3);
 }
 
+/// The time between the older and the newer rows of the purge cases.
+const GAP: Duration = Duration::from_millis(400);
+
 /// Purge past `older_than`: the outbox takes no lock of its own (roadmap
 /// S2: housekeeping holds one turn per round), so it never waits for
 /// another replica's.
 pub async fn purge_now(store: &dyn EventStore, older_than: Duration) -> u64 {
     store.purge(older_than).await.unwrap()
+}
+
+/// A purge that keeps whatever was inserted from `newer` on and cuts what
+/// was inserted `gap` before it: its age limit is measured from `newer`,
+/// halfway into the gap, when the purge is called. (A fixed limit flaked on
+/// a loaded CI: a stall between the newer rows' insert and the purge aged
+/// them past the limit too.)
+pub async fn purge_before(store: &dyn EventStore, newer: std::time::Instant, gap: Duration) -> u64 {
+    store.purge(newer.elapsed() + gap / 2).await.unwrap()
 }
 
 /// A purge cuts each stream by its own events' age: an older tenant's
@@ -326,14 +338,15 @@ pub async fn purge_is_per_stream(store: &dyn EventStore) {
         .await
         .unwrap()
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    tokio::time::sleep(GAP).await;
+    let newer = std::time::Instant::now();
     let new = store
         .insert(&row(Some("suite-v"), "message_received", "97", None))
         .await
         .unwrap()
         .unwrap();
     assert_eq!((old, new), (1, 1));
-    assert!(purge_now(store, Duration::from_millis(200)).await >= 1);
+    assert!(purge_before(store, newer, GAP).await >= 1);
     let u = store.page(&query("suite-u", None, 10)).await.unwrap();
     assert!(u.events.is_empty());
     assert_eq!((u.purged_through, u.high_water), (1, 1));
@@ -412,7 +425,7 @@ pub async fn tenant_deleted(store: &dyn EventStore, tenants: &dyn Store) {
 /// A purge of an earlier occurrence of a keyless event leaves the key with
 /// the later occurrence that took it over: a redelivery within the later
 /// one's window is still a duplicate. It purges every stream's rows older
-/// than 200 ms: it runs last. Decisive: the earlier row giving the key up
+/// than half the gap before the later one: it runs last. Decisive: the earlier row giving the key up
 /// (else, in memory, purging it frees the key the later one holds).
 pub async fn purge_keeps_a_taken_key(store: &dyn EventStore) {
     use time::{Duration as Span, macros::datetime};
@@ -426,9 +439,10 @@ pub async fn purge_keeps_a_taken_key(store: &dyn EventStore) {
         ..row(Some("suite-k"), "error_reported", "56", Some(&key))
     };
     assert_eq!(store.insert(&at(Span::ZERO)).await.unwrap(), Some(1));
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    tokio::time::sleep(GAP).await;
+    let newer = std::time::Instant::now();
     assert_eq!(store.insert(&at(Span::HOUR)).await.unwrap(), Some(2));
-    assert!(purge_now(store, Duration::from_millis(200)).await >= 1);
+    assert!(purge_before(store, newer, GAP).await >= 1);
     let page = store.page(&query("suite-k", None, 10)).await.unwrap();
     let sequences: Vec<i64> = page.events.iter().map(|e| e.sequence).collect();
     assert_eq!(

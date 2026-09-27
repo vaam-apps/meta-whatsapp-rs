@@ -44,23 +44,19 @@ pub async fn notify_shipped(messages: &Messages, to: Recipient, order_no: &str) 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Resend {
     Never,          // nothing will change: fix the cause instead
-    Later,          // Meta refused it for now (throttling, template sync)
-    ReconcileFirst, // it may have been delivered: look for its status webhook
+    Later,          // Meta refused it before doing anything (throttling, maintenance)
+    ReconcileFirst, // not proven refused: look for its status webhook first
 }
 
-/// Resend only what Meta provably refused and may accept later.
+/// Resend automatically only what the library itself would replay.
 pub fn after_failed_send(e: &Error) -> Resend {
-    if matches!(e, Error::Validation(_)) {
-        return Resend::Never; // refused locally: nothing was sent
+    if e.may_resend() {
+        return Resend::Later; // the library's one rule for a blind resend
     }
-    if e.may_have_been_sent() {
-        return Resend::ReconcileFirst;
+    if e.may_have_been_sent() || e.is_retryable() {
+        return Resend::ReconcileFirst; // may be out, or a 131000 on a 400: check first
     }
-    if e.is_retryable() {
-        Resend::Later
-    } else {
-        Resend::Never // includes 131049, 131050 and 131048: never auto-retry
-    }
+    Resend::Never // a local refusal too; includes 131049, 131050 and 131048
 }
 
 #[cfg(test)]
@@ -138,10 +134,21 @@ mod tests {
             Error::from(e)
         };
         assert_eq!(after_failed_send(&refused(130429, 400)), Resend::Later);
+        assert_eq!(after_failed_send(&refused(131057, 400)), Resend::Later);
         assert_eq!(after_failed_send(&refused(131049, 400)), Resend::Never);
         assert_eq!(after_failed_send(&refused(131050, 400)), Resend::Never);
         assert_eq!(
             after_failed_send(&refused(131000, 500)),
+            Resend::ReconcileFirst
+        );
+        // Could succeed later and was not sent, yet not proven refused:
+        // checked first, as the library does.
+        assert_eq!(
+            after_failed_send(&refused(131000, 400)),
+            Resend::ReconcileFirst
+        );
+        assert_eq!(
+            after_failed_send(&refused(134101, 400)),
             Resend::ReconcileFirst
         );
         let timeout = Error::from(meta_whatsapp_rs::core::error::TransportError::Timeout);
@@ -150,5 +157,29 @@ mod tests {
             "to", "empty",
         ));
         assert_eq!(after_failed_send(&local), Resend::Never);
+        // One rule: `Later` exactly when the library would replay the send.
+        let errors = [
+            refused(130429, 400),
+            refused(130429, 503),
+            refused(131056, 400),
+            refused(131057, 400),
+            refused(131057, 503),
+            refused(131000, 400),
+            refused(131000, 500),
+            refused(134101, 400),
+            refused(131049, 400),
+            Error::Http {
+                status: 429,
+                body_snippet: String::new(),
+            },
+            Error::from(meta_whatsapp_rs::core::error::TransportError::Connect(
+                anyhow::anyhow!("refused"),
+            )),
+            timeout,
+            local,
+        ];
+        for e in &errors {
+            assert_eq!(after_failed_send(e) == Resend::Later, e.may_resend(), "{e}");
+        }
     }
 }

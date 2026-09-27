@@ -5,7 +5,7 @@ description: "Testing code that uses meta-whatsapp-rs without Meta, a network or
 
 # meta-whatsapp-rs-testing
 
-> **Verified against meta-whatsapp-rs 76be5e050afce413e4614c9559b109c7ba7cd986 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs fabab0ba46316335b638f505eb3f6ee20a5e1451 (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/integration.rs](examples/integration.rs) — four
 tests meta-whatsapp-rs runs in its own gate. Every other skill's `examples/*.rs` ends
@@ -96,8 +96,9 @@ body without a handler. To drive an axum app, see the tests of
 
 ## Time
 
-`ManualClock::new(at)` only moves on `advance(d)` or `set(at)`. Pass the
-same clock to everything that reads time: `MemoryKvStore::with_clock`,
+`ManualClock::new(at)` only moves on `advance(d)`, `advance_to(at)`
+(forward only) or `set(at)`. Pass the same clock to everything that reads
+time: `MemoryKvStore::with_clock`,
 `OtpService::new`, `Inbox::with_clock`, `InboxSink::with_clock` (it bounds
 synced history timestamps), `TokenVault::with_clock`:
 
@@ -113,8 +114,9 @@ let key = inbox.key(CUSTOMER);
 - **Assert `remaining() == 0`.** Without it a test passes when your code
   skipped a request you scripted.
 - Keep `RetryPolicy::NONE` unless the retry is what you test: the default
-  policy replays idempotent requests and throttled sends, consuming
-  scripted answers.
+  policy replays idempotent requests and the sends `Error::may_resend`
+  allows (throttled, or refused during maintenance), consuming scripted
+  answers.
 - A `MemoryKvStore` per test: shared stores leak dedup markers and OTP
   cooldowns between tests.
 - Postgres and Redis expire records by their own clock: a `ManualClock`

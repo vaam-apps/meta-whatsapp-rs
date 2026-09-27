@@ -111,7 +111,7 @@ async fn live_postgres_parallel_migrations_succeed() {
             .fetch_all(&first)
             .await
             .unwrap();
-    assert_eq!(library, [1, 2, 3]);
+    assert_eq!(library, [1, 2, 3, 4]);
     // And again, on a migrated database: a no-op. It also proves the lock
     // was released: a session of `first` still holding it would block this
     // forever. (Counting holders in pg_locks would race with other tests:
