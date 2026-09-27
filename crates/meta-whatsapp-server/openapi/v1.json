@@ -4903,6 +4903,7 @@
           "template_rejected",
           "idempotency_key_reused",
           "customer_service_window_closed",
+          "thread_owned_elsewhere",
           "marketing_opted_out",
           "blocked_by_business",
           "experiment_holdout",
