@@ -635,9 +635,10 @@ mod tests {
 
     /// The library lines of `file` (number, text), and the paths of the
     /// out-of-line test modules it declares. Left out: comment lines, and
-    /// everything from an inline `#[cfg(test)] mod … {` on (where this
-    /// workspace keeps its test modules: at the end). Everything else
-    /// after a `#[cfg(test)]` is kept.
+    /// everything from an inline `#[cfg(test)] mod … {` on (a test module
+    /// is last in its file: clippy's `items_after_test_module`, denied by
+    /// `just lint`, refuses an item after it). Everything else after a
+    /// `#[cfg(test)]` is kept.
     fn library_lines(
         file: &std::path::Path,
         text: &str,
