@@ -546,7 +546,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     control API (L15). OPEN_QUESTIONS #33 stays open. The erasure's
     defaults and stored names wait for the owner before the first
     release ([§ Owner touchpoints](#owner-touchpoints)).
-- [ ] **L7. Window events and thread ownership in the inbox**
+- [x] **L7. Window events and thread ownership in the inbox**
   (`meta_whatsapp_rs::inbox`; OPEN_QUESTIONS #32, #44; rows 119, 139):
   `InboxSink` records the calls that reopen the 24-hour window and
   standby messages as window events (never unread), and ownership from
@@ -565,6 +565,26 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     refused locally with zero requests; after a `user_id_update`,
     `Inbox::identities` of the new BSUID holds the previous one; each
     fails when its recording is removed.
+  - **Landed:** the decisive tests and the rules they rest on run on the
+    memory store and live on Postgres
+    (`crates/meta-whatsapp-rs/tests/inbox_events.rs`; `just test-live`
+    now runs the facade's `live_postgres_` tests). The override is per
+    inbox, `ReplyChecks` (the window check, its trust in a handover to
+    this app, and the ownership check, each on or off; per call through
+    a clone of the inbox). A handover is recorded under the conversation
+    its phone number leads to (the identity links, else a synced
+    contact's BSUID, else the phone number). The coordinator's rulings
+    on the review (2026-09-27): the ownership refusal has an `ErrorKind`
+    of its own, `ThreadOwnedElsewhere` (no Graph code yet), which the
+    service answers `409 thread_owned_elsewhere`; each recording is a
+    switch (`InboxSink::with_recording`), the rules are public
+    (`call_window`, `call_key`, `call_status_key`, `handover_key`) and
+    the idle timeout a setting (`Inbox::with_thread_idle_after`), rather
+    than a trait; after a handover to this app newer than the customer's
+    last recorded message, the window check lets Meta decide
+    (`ReplyChecks::trust_handover`, OPEN_QUESTIONS #44); a
+    `user_id_update`'s `wa_id` is linked too. Row 139 stays partial (the
+    thread control API, L15); `conversation_context` is not stored.
 - [ ] **L8. Message and contact stores** (`meta-whatsapp-adapters`,
   features `redis` and a new `sqlite`; `meta_whatsapp_rs::inbox`; rows
   69, 111): a Redis `ConversationStore`, SQLite adapters for both ports,
@@ -898,7 +918,13 @@ design's (§9).
   history, a reply checked against the window, all filtered by the
   number's binding epoch; retention per store (D10): the inbox store
   built `with_retention` from a setting, and `apply_retention` run by
-  the service's housekeeping.
+  the service's housekeeping. The reply goes through `Inbox::reply`, so
+  its ownership refusal (`ErrorKind::ThreadOwnedElsewhere`, L7) answers
+  `409 thread_owned_elsewhere` (already in the error table, §5.2), and
+  the service exposes `ReplyChecks` as a per-number setting (e.g. the
+  number of a tenant that is the account's escalation partner turns the
+  ownership check off; one that receives standby copies turns the
+  handover trust off).
   - **After:** S7, L5, L7.
   - **Decisive:** M2.1; removing the binding-epoch filter shows a moved
     number's history to its new tenant, and a test fails; with a
@@ -916,7 +942,10 @@ design's (§9).
 - [ ] **M2d. The reviewed event types** (rows 84, 137, 139; D25):
   `standby_observed`, `thread_control_changed` and
   `user_action_reported` made tenant-visible, with L7's inbox answer to
-  OPEN_QUESTIONS #44; the service's number events.
+  OPEN_QUESTIONS #44 (the inbox already records ownership and window
+  events from the first two; a tenant reading them through M2a's routes
+  sees the same `ReplyChecks` per-number setting and `409
+  thread_owned_elsewhere`); the service's number events.
   - **After:** S7, L7.
   - **Decisive:** M2.6; taking one of the three types out of
     `TENANT_EVENT_TYPES` fails it.

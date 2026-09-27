@@ -57,6 +57,22 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
   is to check its quality status.
 - `MarketingOptedOut` (131050): record the opt-out; never retry.
 - `CustomerServiceWindowClosed` (131047): send a template instead.
+- **A local refusal of a state Meta also refuses** stays a
+  `ValidationError` (never retryable, never sent: both true of it) with a
+  kind of its own, not `InvalidParameter`: a field constant, a
+  constructor and a predicate on `ValidationError`, an arm in
+  `Error::kind`, and a test in the style of
+  `a_local_window_refusal_has_the_same_kind_as_131047`. The two today:
+  `CUSTOMER_SERVICE_WINDOW` → `CustomerServiceWindowClosed` (Meta's
+  131047 too) and `THREAD_OWNER` → `ThreadOwnedElsewhere` (no Graph code
+  yet: when Meta documents one, `from_code` maps it there). A kind with no
+  Graph code goes in the service test's `local_only` list
+  (`crates/meta-whatsapp-server/tests/errors.rs`) instead of
+  `REPRESENTATIVE` (the test fails once `from_code` maps a code to a kind
+  still listed there: move it then), and the service's `classify` gives
+  it its code. A
+  helper that recognizes the refusal looks through `Step`
+  (`meta_whatsapp_rs::inbox::is_thread_owned_elsewhere`).
 - New leaf variants need a reason in `docs/architecture.md`. Prefer an
   existing leaf.
 - **Every new `Error` variant decides `Error::may_have_been_sent`** (the

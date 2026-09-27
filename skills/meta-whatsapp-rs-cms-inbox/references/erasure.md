@@ -11,8 +11,10 @@ BSUID after a number change. `erase` reaches one key; erase the person.
 1. **Collect every identity**: `Inbox::identities(&key)` on each of the
    merchant's numbers (the closure over the synced address book, where a
    contact's key, BSUID, parent BSUID and phone number are one person,
-   and the identity links), plus the ones you hold yourself (the phone
-   number the customer gave you, a BSUID in your CRM).
+   and the identity links `InboxSink` records: a phone number to the
+   BSUID a message carried with it, a BSUID change, a number change),
+   plus the ones you hold yourself (the phone number the customer gave
+   you, a BSUID in your CRM).
 2. **`Inbox::erase_all(&ids)` on each of those numbers**, behind your
    ownership check of the number: an `Inbox` is bound to one number, and
    `Inbox::erase` and `Inbox::identities` refuse another number's key

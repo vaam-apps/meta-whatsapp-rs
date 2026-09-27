@@ -110,6 +110,11 @@ pub const CODES: &[(&str, u16, &str)] = &[
         "More than 24 hours since the customer's last message: send a template.",
     ),
     (
+        "thread_owned_elsewhere",
+        409,
+        "Another app owns this conversation's thread: send a template, or wait for the thread.",
+    ),
+    (
         "marketing_opted_out",
         409,
         "The customer stopped marketing messages from this business.",
@@ -651,6 +656,9 @@ impl ServiceError {
             Error::Transport(_) => Self::new("service_unavailable"),
             Error::Validation(v) if v.is_customer_service_window_closed() => {
                 Self::new("customer_service_window_closed")
+            }
+            Error::Validation(v) if v.is_thread_owned_elsewhere() => {
+                Self::new("thread_owned_elsewhere")
             }
             // The library's reason may quote the value: only the field.
             Error::Validation(v) => Self::invalid(v.field.clone()),

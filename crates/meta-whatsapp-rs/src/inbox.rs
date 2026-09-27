@@ -26,8 +26,150 @@
 //! [`Error::kind`](meta_whatsapp_core::Error::kind) is `CustomerServiceWindowClosed`,
 //! like Meta's `131047`)
 //! instead of paying for a request Meta would reject. Templates and Direct
-//! Send (`category`) messages are exempt. Use [`Inbox::window`] to decide up
-//! front.
+//! Send `utility` and `authentication` messages (a `category` Meta sends as
+//! a template) are exempt; a Direct Send `service` message is not (Meta
+//! drops it outside the window). Use [`Inbox::window`] to decide up front.
+//!
+//! **Window events.** Meta also starts or refreshes the window when the
+//! customer calls the business number, answered or not, and when they
+//! accept the business's call (`calling/pricing`, "How calling changes the
+//! 24 hour customer service window"). [`InboxSink`] records these as
+//! [window events](WindowEvent), never as messages (they are in neither the
+//! history nor the unread count), and [`Inbox::window`] opens from the
+//! latest of the customer's last inbound message and the latest window
+//! event. Which webhooks count, each from Meta's calling pages:
+//!
+//! - a `calls[]` event with `direction` `USER_INITIATED` and `event`
+//!   `connect` (the customer calls: `calling/user-initiated-calls`),
+//!   `call_created` (a SIP call attempted: `calling/sip`) or `terminate`
+//!   (the call ended; answered or not, it was the customer's call):
+//!   [`WindowEventKind::CustomerCall`], at the event's `timestamp`, or a
+//!   terminate's `start_time` when it names one;
+//! - a call status `ACCEPTED` (`calling/business-initiated-calls`: "the
+//!   WhatsApp user accepts the call"): [`WindowEventKind::CallAccepted`], at
+//!   its `timestamp`;
+//! - a `terminate` with `direction` `BUSINESS_INITIATED` and a `start_time`,
+//!   "only present when the call was picked up by the other party" (a
+//!   standby partner sees only this webhook of the business's calls,
+//!   `conversation-routing/calling-webhooks`):
+//!   [`WindowEventKind::CallAccepted`], at its `start_time`.
+//!
+//! Nothing else: not a call status `RINGING` or `REJECTED`, not the
+//! business's own `connect` (sent before the customer answers), not a
+//! recording or transcript notice, and not an event without a `direction`
+//! (the user-initiated page's first `connect` example has none; the pages
+//! disagree on the SDP type that would tell). A call is keyed like a
+//! message: the customer's BSUID (`from_user_id`, `to_user_id`, the
+//! contact's `user_id`), else their phone number (the contact's `wa_id`,
+//! else whichever of `from` and `to` is not the business number). Every
+//! event of one call has the call's id, so the first one recorded is kept.
+//! A `terminate` recorded before its `connect` (webhooks arrive out of
+//! order) dates the call at `start_time` or at the end of an unanswered
+//! call, up to its ringing time after the call began: the local window then
+//! closes that much later than Meta's.
+//!
+//! **Conversation Routing** (`conversation-routing/*`). One responder owns a
+//! thread; the others may receive standby copies. No endpoint reports the
+//! owner, so the inbox keeps it from the signals Meta lists
+//! (`conversation-routing/thread-control`, "Tracking ownership"):
+//!
+//! - a handover (`ThreadControlChanged`): `control_passed` records
+//!   [`ThreadOwner::ThisApp`], `control_taken` [`ThreadOwner::AnotherApp`],
+//!   with the new owner's role and app when Meta names them, at the
+//!   handover's `timestamp`. A handover names the customer by
+//!   `sender.phone_number` only (Meta may omit it: then nothing is
+//!   recorded), so it is recorded under the conversation that phone number
+//!   leads to (see [`InboxSink`]);
+//! - a standby copy of a customer's message (`StandbyObserved`): a window
+//!   event ([`WindowEventKind::StandbyMessage`]: the customer wrote, but not
+//!   to this app, so it is neither history nor unread) and
+//!   [`ThreadOwner::AnotherApp`] since just before the message's time (1
+//!   ms: that app owned the thread when the message reached it), unless a
+//!   record of that second or later is stored. A handover is the stronger
+//!   signal: dated before the copy's second, the record never overrides a
+//!   handover of that second, in whichever order they are stored, and
+//!   also when two replicas race. Standby echoes and receipts record
+//!   nothing, and a group's copy records no owner (the routing pages
+//!   describe threads with one customer);
+//! - a message on the `messages` field after the stored record (one of a
+//!   standby copy's second included): this app received it, so it owns the
+//!   thread ([`Inbox::thread_owner`] derives it; nothing is written per
+//!   message). Not a customer's answer to a call permission request: it
+//!   reaches the Incoming Call primary and the standby partners on
+//!   `messages`, and "does not change thread ownership"
+//!   (`conversation-routing/calling-webhooks`);
+//! - this app's own `release`, `pass` or `take` (no webhook reports them
+//!   to this app): [`Inbox::record_release`], [`Inbox::record_thread_owner`];
+//! - 24 hours without the customer ([`Inbox::THREAD_IDLE_AFTER`], or
+//!   [`Inbox::with_thread_idle_after`]): the thread is idle again
+//!   ([`Inbox::thread_owner`] derives it).
+//!
+//! [`Inbox::reply`] and [`Inbox::send`] refuse a service message locally
+//! when another app owns the thread
+//! ([`ValidationError::thread_owned_elsewhere`], whose kind is
+//! `ThreadOwnedElsewhere`: [`is_thread_owned_elsewhere`]); templates, and
+//! Direct Send `utility` and `authentication` messages, need no ownership
+//! (`conversation-routing/thread-lifecycle`, "Sending without ownership").
+//! Ownership is advisory: Meta enforces it. [`ReplyChecks`] turns either
+//! local check off, per inbox ([`Inbox::with_reply_checks`]): the designated
+//! escalation partner, whose service message is an implicit `take`, turns
+//! the ownership check off. A thread with no ownership record (no routing)
+//! is never refused for ownership, nor is an idle one: Meta refuses a
+//! service message on an idle thread too, except from the escalation
+//! partner; a thread idle after 24 hours without the customer is usually
+//! outside the window too, which the window check refuses.
+//! [`Inbox::check_reply`] runs the checks without sending.
+//!
+//! **What the inbox cannot see.** The checks read what this app received.
+//!
+//! - An app that receives a handover without standby visibility (Meta
+//!   then sends the `control_passed` a `conversation_context` summary
+//!   instead: `conversation-routing/conversation-context`) never saw the
+//!   customer's messages to the previous owner, so its window can read
+//!   closed while Meta's is open: a thread is passed only while it is
+//!   active (`conversation-routing/thread-control`). The window check
+//!   trusts such a handover by default ([`ReplyChecks::trust_handover`]):
+//!   after a handover to this app newer than the customer's last inbound
+//!   message recorded here, the window is unknown, and the reply goes to
+//!   Meta (which answers `131047` if its window is closed), until the
+//!   customer's next message or 24 hours after the handover. Losing a
+//!   reply the customer waits for is worse than an occasional `131047`.
+//!   An app that receives standby copies knows the window: it may turn
+//!   the trust off.
+//! - An app that shares the number with a Meta Business Agent and no
+//!   routing configuration receives standby copies, yet its service
+//!   message makes it the active handler
+//!   (`conversation-routing/standby-partners`): turn the ownership check
+//!   off in its inbox.
+//!
+//! **Identity links.** A customer is stored under several keys (a thread
+//! under their phone number from before BSUIDs, live messages under their
+//! BSUID, a new BSUID after a number change). [`InboxSink`] records the
+//! links between them with [`ConversationStore::link_identity`], so that
+//! [`Inbox::identities`] and an erasure ([`Inbox::erase_all`]) reach every
+//! key:
+//!
+//! - an inbound message (on `messages` or in standby) carrying both `from`
+//!   and `from_user_id`: the phone number to the BSUID;
+//! - a BSUID change (`UserIdChanged`, field `user_id_update`): the previous
+//!   BSUID to the current one, and the phone number (`wa_id`, when Meta
+//!   shares it) to the current one;
+//! - a number change (a `system` message of type `user_changed_number` or
+//!   `user_changed_user_id`): the sender's identity (`from_user_id`, else
+//!   `from`) to the new one (`system.user_id`, else `system.wa_id`), and
+//!   the new phone number to the new BSUID when both are given.
+//!
+//! An empty value, a value with U+0000 and a link of a value to itself are
+//! never recorded, and a link is always of the business number the event
+//! arrived on. Parent BSUIDs are not linked: nothing is keyed by one.
+//!
+//! **Your own rules.** Each kind of record above (calls, standby copies,
+//! handovers, identity links) can be switched off in [`InboxSink`]
+//! ([`RecordingSwitches`]) and recorded your own way through the same
+//! [`ConversationStore`] methods, reusing the public rules ([`call_window`],
+//! [`call_key`], [`call_status_key`], [`handover_key`]); the idle timeout
+//! is a setting ([`Inbox::with_thread_idle_after`]) and each local check a
+//! switch ([`ReplyChecks`]).
 //!
 //! **Coexistence** (a merchant who keeps the WhatsApp Business app next to
 //! the API, `embedded-signup/onboarding-business-app-users`):
@@ -95,8 +237,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use meta_whatsapp_client::Client;
-use meta_whatsapp_client::messages::{MessageContent, OutboundMessage, SendResponse};
-use meta_whatsapp_core::Result;
+use meta_whatsapp_client::messages::{
+    DirectSendCategory, MessageContent, OutboundMessage, SendResponse,
+};
 use meta_whatsapp_core::clock::{Clock, SystemClock};
 use meta_whatsapp_core::error::{SinkError, StorageError, ValidationError};
 use meta_whatsapp_core::ids::{MessageId, PhoneNumberId, UserId, WaId};
@@ -104,16 +247,23 @@ use meta_whatsapp_core::recipient::Recipient;
 use meta_whatsapp_core::sink::EventSink;
 use meta_whatsapp_core::store::{
     ConversationKey, ConversationStore, ConversationSummary, CustomerServiceWindow, DeliveryStatus,
-    Direction, Erased, StoredMessage,
+    Direction, Erased, IdentityLink, StoredMessage, ThreadOwner, ThreadOwnership, WindowEvent,
+    WindowEventKind,
 };
+use meta_whatsapp_core::{Error, Result};
 use meta_whatsapp_webhooks::WebhookEvent;
+use meta_whatsapp_webhooks::fields::calls::{
+    Call, CallDirection, CallEventType, CallStatus, CallStatusValue,
+};
 use meta_whatsapp_webhooks::fields::coexistence::{
     HistoryMessage, HistoryMessageStatus, HistoryValue, MessageEcho, ThreadContext,
 };
 use meta_whatsapp_webhooks::fields::common::{Contact, Metadata};
 use meta_whatsapp_webhooks::fields::messages::{
-    InboundMessage, InteractiveReply, MessageContent as In,
+    InboundMessage, InteractiveReply, MessageContent as In, SystemMessageType,
 };
+use meta_whatsapp_webhooks::fields::routing::{HandoverType, MessagingHandoversValue, StandbyItem};
+use meta_whatsapp_webhooks::fields::users::UserIdUpdate;
 use serde_json::Value;
 use time::OffsetDateTime;
 
@@ -183,6 +333,46 @@ fn delivery(e: StorageError) -> SinkError {
 /// its recorded `media_placeholder`
 /// ([`ConversationStore::fill_media_placeholder`]).
 ///
+/// It also records the calls that reopen the window and the customer's
+/// messages seen in standby as [window events](WindowEvent)
+/// ([`ConversationStore::record_window_event`]), thread ownership under
+/// Conversation Routing ([`ConversationStore::set_thread_owner`]) and the
+/// links between a customer's identities
+/// ([`ConversationStore::link_identity`]); the [module docs](self) say
+/// which webhooks count.
+///
+/// **A handover's conversation.** A handover names the customer by phone
+/// number only. It is recorded under the key that number leads to, in this
+/// order:
+///
+/// 1. the identity links: from the phone number, the latest link whose
+///    `previous` it is (by `at`), then from that identity the same way,
+///    until no link leads further (at most 16 steps; a loop stops where it
+///    closes). A phone number whose inbound messages carried a BSUID leads
+///    to that BSUID, and a BSUID change on to the new one;
+/// 2. else the synced address book: the BSUID (`user_id`) of the contact
+///    [`ConversationStore::identities`] connects to the number whose
+///    `phone_number` it is, the latest synced if several;
+/// 3. else the phone number itself (a `wa_id` key).
+///
+/// A phone number recycled by the operator can lead to its earlier owner's
+/// conversation (as it can connect them in
+/// [`ConversationStore::identities`]); the local check that follows is
+/// advisory, and [`ReplyChecks`] turns it off. Mapping a handover costs up
+/// to [`MAX_LINK_STEPS`] identity link reads, and, when no link leads
+/// anywhere, one [`ConversationStore::identities`] read and one
+/// [`ConversationStore::contact`] read per identity, while the webhook
+/// request waits.
+///
+/// **Your own rules.** Each kind of record beyond messages can be turned
+/// off ([`InboxSink::with_recording`], [`RecordingSwitches`]): the sink
+/// then records nothing of that kind, and you record it yourself from the
+/// same events, in a sink of your own next to this one, through the same
+/// port methods. The rules are public, so a rule of your own can reuse
+/// the rest: [`call_window`], [`call_key`] and [`call_status_key`] for
+/// calls, [`handover_key`] for a handover's conversation,
+/// [`conversation_key`] for a message's.
+///
 /// Put a `meta_whatsapp_webhooks::DedupGuard` in front of the handler anyway — it
 /// saves the store the work — and fan this sink out next to a broadcast
 /// sink for live updates.
@@ -190,6 +380,123 @@ fn delivery(e: StorageError) -> SinkError {
 pub struct InboxSink {
     store: Arc<dyn ConversationStore>,
     clock: Arc<dyn Clock>,
+    recording: RecordingSwitches,
+}
+
+/// What [`InboxSink`] records besides messages, statuses and the
+/// coexistence feeds: every switch on by default
+/// ([`RecordingSwitches::ALL`]). A switch off means "record it yourself":
+/// the sink records nothing of that kind, and everything else as before.
+///
+/// - **calls** ([`RecordingSwitches::calls`]): the calls that reopen the
+///   customer service window ([`call_window`]), as window events
+///   ([`ConversationStore::record_window_event`]);
+/// - **standby** ([`RecordingSwitches::standby`]): a standby copy of a
+///   customer's message, as a window event and ownership by another app;
+/// - **handovers** ([`RecordingSwitches::handovers`]): `control_passed`
+///   and `control_taken` ([`ConversationStore::set_thread_owner`], under
+///   [`handover_key`]);
+/// - **identity links** ([`RecordingSwitches::identity_links`]): every
+///   [`ConversationStore::link_identity`] the sink makes (an inbound or
+///   standby message's phone number to its BSUID, a number change,
+///   `user_id_update`).
+///
+/// Turning the calls or standby switch off leaves [`Inbox::window`] to
+/// the window events you record; turning handovers or standby off leaves
+/// [`Inbox::thread_owner`] to the records you write. Unlike a
+/// `FilterSink` in front of the sink, a switch separates what one event
+/// carries: with identity links off, an inbound message is still
+/// recorded.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct RecordingSwitches {
+    /// One bit per kind (`CALLS` and the others).
+    on: u8,
+}
+
+impl fmt::Debug for RecordingSwitches {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RecordingSwitches")
+            .field("calls", &self.records_calls())
+            .field("standby", &self.records_standby())
+            .field("handovers", &self.records_handovers())
+            .field("identity_links", &self.records_identity_links())
+            .finish()
+    }
+}
+
+impl Default for RecordingSwitches {
+    fn default() -> Self {
+        Self::ALL
+    }
+}
+
+impl RecordingSwitches {
+    const CALLS: u8 = 1;
+    const STANDBY: u8 = 1 << 1;
+    const HANDOVERS: u8 = 1 << 2;
+    const IDENTITY_LINKS: u8 = 1 << 3;
+
+    /// Everything (the default).
+    pub const ALL: Self = Self {
+        on: Self::CALLS | Self::STANDBY | Self::HANDOVERS | Self::IDENTITY_LINKS,
+    };
+
+    /// Messages, statuses and the coexistence feeds only.
+    pub const NONE: Self = Self { on: 0 };
+
+    const fn set(self, kind: u8, on: bool) -> Self {
+        Self {
+            on: if on { self.on | kind } else { self.on & !kind },
+        }
+    }
+
+    const fn has(self, kind: u8) -> bool {
+        self.on & kind != 0
+    }
+
+    /// Record the calls that reopen the window, or not.
+    #[must_use]
+    pub const fn calls(self, on: bool) -> Self {
+        self.set(Self::CALLS, on)
+    }
+
+    /// Record standby copies of customers' messages, or not.
+    #[must_use]
+    pub const fn standby(self, on: bool) -> Self {
+        self.set(Self::STANDBY, on)
+    }
+
+    /// Record handovers, or not.
+    #[must_use]
+    pub const fn handovers(self, on: bool) -> Self {
+        self.set(Self::HANDOVERS, on)
+    }
+
+    /// Record identity links, or not.
+    #[must_use]
+    pub const fn identity_links(self, on: bool) -> Self {
+        self.set(Self::IDENTITY_LINKS, on)
+    }
+
+    /// Whether calls are recorded.
+    pub const fn records_calls(&self) -> bool {
+        self.has(Self::CALLS)
+    }
+
+    /// Whether standby copies are recorded.
+    pub const fn records_standby(&self) -> bool {
+        self.has(Self::STANDBY)
+    }
+
+    /// Whether handovers are recorded.
+    pub const fn records_handovers(&self) -> bool {
+        self.has(Self::HANDOVERS)
+    }
+
+    /// Whether identity links are recorded.
+    pub const fn records_identity_links(&self) -> bool {
+        self.has(Self::IDENTITY_LINKS)
+    }
 }
 
 /// How far past the sink's clock a synced message's device timestamp may
@@ -198,7 +505,9 @@ const DEVICE_CLOCK_SKEW: time::Duration = time::Duration::minutes(5);
 
 impl fmt::Debug for InboxSink {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("InboxSink").finish_non_exhaustive()
+        f.debug_struct("InboxSink")
+            .field("recording", &self.recording)
+            .finish_non_exhaustive()
     }
 }
 
@@ -405,6 +714,159 @@ fn bare_phone(phone: &str) -> Option<String> {
     (!bare.is_empty()).then(|| bare.to_owned())
 }
 
+/// Whether `id` can name someone in a record of the inbox's own making (a
+/// window event, an ownership record, an identity link): not empty (an
+/// empty value names no one, the rule of roadmap L5) and without U+0000
+/// (Meta never assigns one, and the Postgres store refuses it in an
+/// identifier, which would fail every redelivery).
+fn usable(id: &str) -> bool {
+    !id.trim().is_empty() && !id.contains('\0')
+}
+
+/// The conversation of a `calls[]` event on `phone_number_id`, whose
+/// display number is `business_number` (the webhook's
+/// `metadata.display_phone_number`): the customer's BSUID (`from_user_id`,
+/// `to_user_id`, then the `contact`'s `user_id`), else their phone number
+/// (the contact's `wa_id`, else whichever of `from` and `to` is not the
+/// business number: the calling pages disagree on which one the customer
+/// is). `None` when nothing usable names them. The key [`InboxSink`]
+/// records a call's window event under; public so that a rule of your own
+/// ([`RecordingSwitches::calls`]) can reuse it.
+pub fn call_key(
+    phone_number_id: &PhoneNumberId,
+    business_number: &str,
+    contact: Option<&Contact>,
+    call: &Call,
+) -> Option<ConversationKey> {
+    customer_on_call(
+        phone_number_id,
+        business_number,
+        contact,
+        [call.from_user_id.as_ref(), call.to_user_id.as_ref()],
+        [call.from.as_deref(), call.to.as_deref()],
+    )
+}
+
+/// The conversation of a call status (`statuses[]` of type `call`), as
+/// [`call_key`] does for a call: `recipient_user_id`, then the contact's
+/// `user_id`, else the contact's `wa_id`, then `recipient_id`, never the
+/// business number.
+pub fn call_status_key(
+    phone_number_id: &PhoneNumberId,
+    business_number: &str,
+    contact: Option<&Contact>,
+    status: &CallStatus,
+) -> Option<ConversationKey> {
+    customer_on_call(
+        phone_number_id,
+        business_number,
+        contact,
+        [status.recipient_user_id.as_ref(), None],
+        [status.recipient_id.as_deref(), None],
+    )
+}
+
+/// The customer on a call: their BSUID (the first of `bsuids`, then the
+/// contact's `user_id`), else their phone number (the contact's `wa_id`,
+/// then the first of `phones`), never the business's own number
+/// `business_number`.
+fn customer_on_call(
+    phone_number_id: &PhoneNumberId,
+    business_number: &str,
+    contact: Option<&Contact>,
+    bsuids: [Option<&UserId>; 2],
+    phones: [Option<&str>; 2],
+) -> Option<ConversationKey> {
+    let bsuid = bsuids
+        .into_iter()
+        .chain([contact.and_then(|c| c.user_id.as_ref())])
+        .flatten()
+        .map(UserId::as_str)
+        .find(|id| usable(id));
+    let who = match bsuid {
+        Some(user) => user.to_owned(),
+        None => [contact.and_then(|c| c.wa_id.as_ref()).map(WaId::as_str)]
+            .into_iter()
+            .chain(phones)
+            .flatten()
+            .filter_map(bare_phone)
+            .find(|phone| usable(phone) && !same_number(phone, business_number))?,
+    };
+    Some(ConversationKey::new(phone_number_id.clone(), who))
+}
+
+/// Whether a `calls[]` event opens the customer service window, and as what
+/// and when: the rule [`InboxSink`] records calls by (the
+/// [module docs](self) cite Meta's pages for each case). Public so that a
+/// rule of your own ([`RecordingSwitches::calls`]) can start from it. A
+/// call status opens it when it is `ACCEPTED`, at its `timestamp`
+/// ([`WindowEventKind::CallAccepted`]).
+pub fn call_window(call: &Call) -> Option<(WindowEventKind, OffsetDateTime)> {
+    let earliest =
+        |start: Option<OffsetDateTime>| start.map_or(call.timestamp, |s| s.min(call.timestamp));
+    match (call.direction.as_ref()?, &call.event) {
+        (CallDirection::UserInitiated, CallEventType::Connect | CallEventType::CallCreated) => {
+            Some((WindowEventKind::CustomerCall, call.timestamp))
+        }
+        (CallDirection::UserInitiated, CallEventType::Terminate) => {
+            Some((WindowEventKind::CustomerCall, earliest(call.start_time)))
+        }
+        (CallDirection::BusinessInitiated, CallEventType::Terminate) => call
+            .start_time
+            .map(|start| (WindowEventKind::CallAccepted, earliest(Some(start)))),
+        _ => None,
+    }
+}
+
+/// The new owner's role and app a handover names.
+fn handover_owner(
+    update: &MessagingHandoversValue,
+) -> (Option<String>, Option<meta_whatsapp_core::ids::AppId>) {
+    let handover = update.handover();
+    (
+        handover
+            .and_then(|h| h.new_owner_role.as_ref())
+            .map(|role| role.as_str().to_owned()),
+        handover.and_then(|h| h.new_owner_app_id.clone()),
+    )
+}
+
+/// How many identity links [`InboxSink`] (and [`handover_key`]) follows
+/// from a handover's phone number at most.
+pub const MAX_LINK_STEPS: usize = 16;
+
+/// How many of a conversation's latest messages [`Inbox::thread_owner`]
+/// reads for the latest one that claims the thread ([`claims_thread`]).
+const CLAIM_SCAN: usize = 20;
+
+/// Whether receiving `message` on the `messages` field means this app owns
+/// the thread (`conversation-routing/thread-control`, "Tracking
+/// ownership"): an inbound message recorded live (not a revoke's tombstone,
+/// a redacted message or a history placeholder, as for
+/// [`ConversationStore::last_inbound_at`]), except a customer's answer to a
+/// call permission request, which reaches the Incoming Call primary and the
+/// standby partners and "does not change thread ownership"
+/// (`conversation-routing/calling-webhooks`).
+fn claims_thread(message: &StoredMessage) -> bool {
+    let own_kind = [
+        StoredMessage::REVOKED,
+        StoredMessage::ERASED,
+        StoredMessage::MEDIA_PLACEHOLDER,
+    ]
+    .contains(&message.kind.as_str());
+    let permission_reply = message.payload["interactive"]["type"] == "call_permission_reply";
+    message.direction == Direction::Inbound && !own_kind && !permission_reply
+}
+
+/// How long before a standby copy's timestamp [`InboxSink`] dates the
+/// ownership by another app that the copy records: that app owned the
+/// thread before the customer's message reached it. Meta's timestamps are
+/// whole seconds, so a handover of the copy's second is always the later
+/// record ([`ConversationStore::set_thread_owner`] keeps it whichever
+/// replica writes last), and so is a message on `messages` of that second
+/// ([`Inbox::thread_owner`]: this app then).
+const STANDBY_OWNER_LEAD: time::Duration = time::Duration::milliseconds(1);
+
 /// The customer an echo went to: BSUID first, then phone number.
 fn echo_conversation_key(
     phone_number_id: &PhoneNumberId,
@@ -557,7 +1019,21 @@ impl InboxSink {
         Self {
             store,
             clock: Arc::new(SystemClock),
+            recording: RecordingSwitches::ALL,
         }
+    }
+
+    /// What to record besides messages ([`RecordingSwitches`]; everything
+    /// unless set). A switch off means you record that kind yourself.
+    #[must_use]
+    pub fn with_recording(mut self, recording: RecordingSwitches) -> Self {
+        self.recording = recording;
+        self
+    }
+
+    /// What this sink records besides messages.
+    pub fn recording(&self) -> RecordingSwitches {
+        self.recording
     }
 
     /// Use `clock` to bound synced device timestamps (tests): a synced
@@ -891,6 +1367,361 @@ impl InboxSink {
     }
 }
 
+/// Window events, thread ownership and identity links (roadmap L7).
+impl InboxSink {
+    /// Link `previous` to `current` on `phone_number_id`, at `at`, unless
+    /// either is unusable or they are the same.
+    async fn link(
+        &self,
+        phone_number_id: &PhoneNumberId,
+        previous: &str,
+        current: &str,
+        at: OffsetDateTime,
+    ) -> std::result::Result<(), SinkError> {
+        if !self.recording.records_identity_links()
+            || !usable(previous)
+            || !usable(current)
+            || previous == current
+        {
+            return Ok(());
+        }
+        self.store
+            .link_identity(IdentityLink::new(
+                phone_number_id.clone(),
+                previous,
+                current,
+                at,
+            ))
+            .await
+            .map_err(delivery)?;
+        Ok(())
+    }
+
+    /// The identity links an inbound message carries: its phone number to
+    /// its BSUID, and a number change's old identity to the new one.
+    async fn link_message(
+        &self,
+        phone_number_id: &PhoneNumberId,
+        message: &InboundMessage,
+    ) -> std::result::Result<(), SinkError> {
+        let at = message.timestamp;
+        let from = message.from.as_ref().map(WaId::as_str);
+        let from_user = message.from_user_id.as_ref().map(UserId::as_str);
+        if let (Some(phone), Some(user)) = (from, from_user) {
+            self.link(phone_number_id, phone, user, at).await?;
+        }
+        let In::System(system) = &message.content else {
+            return Ok(());
+        };
+        let changed = system.system_type.as_ref().is_some_and(|t| {
+            *t == SystemMessageType::UserChangedNumber || *t == SystemMessageType::UserChangedUserId
+        });
+        if !changed {
+            return Ok(());
+        }
+        let new_phone = system.wa_id.as_ref().map(WaId::as_str);
+        let new_user = system.user_id.as_ref().map(UserId::as_str);
+        let previous = from_user.filter(|id| usable(id)).or(from);
+        let current = new_user.filter(|id| usable(id)).or(new_phone);
+        if let (Some(previous), Some(current)) = (previous, current) {
+            self.link(phone_number_id, previous, current, at).await?;
+        }
+        if let (Some(phone), Some(user)) = (new_phone, new_user) {
+            self.link(phone_number_id, phone, user, at).await?;
+        }
+        Ok(())
+    }
+
+    /// A BSUID change (`user_id_update`): the previous BSUID to the current,
+    /// and the phone number (`wa_id`, when Meta shares it) to the current.
+    async fn link_user_id(
+        &self,
+        phone_number_id: &PhoneNumberId,
+        update: &UserIdUpdate,
+    ) -> std::result::Result<(), SinkError> {
+        let current = update.user_id.current.as_str();
+        self.link(
+            phone_number_id,
+            update.user_id.previous.as_str(),
+            current,
+            update.timestamp,
+        )
+        .await?;
+        if let Some(phone) = &update.wa_id {
+            self.link(phone_number_id, phone.as_str(), current, update.timestamp)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Record `event` unless its conversation or id is unusable.
+    async fn window_event(&self, event: WindowEvent) -> std::result::Result<(), SinkError> {
+        if !usable(&event.conversation.contact) || !usable(&event.id) {
+            tracing::warn!(
+                kind = %event.kind,
+                "window event without a usable customer or id; not recorded"
+            );
+            return Ok(());
+        }
+        self.store
+            .record_window_event(event)
+            .await
+            .map_err(delivery)?;
+        Ok(())
+    }
+
+    /// A `calls[]` event: a window event when it is the customer's call.
+    async fn record_call(
+        &self,
+        phone_number_id: &PhoneNumberId,
+        business_number: &str,
+        contact: Option<&Contact>,
+        call: &Call,
+    ) -> std::result::Result<(), SinkError> {
+        if !self.recording.records_calls() {
+            return Ok(());
+        }
+        let Some((kind, at)) = call_window(call) else {
+            return Ok(());
+        };
+        let Some(conversation) = call_key(phone_number_id, business_number, contact, call) else {
+            tracing::warn!(%kind, "call without a usable customer id; not recorded");
+            return Ok(());
+        };
+        self.window_event(WindowEvent {
+            conversation,
+            kind,
+            id: call.id.to_string(),
+            at,
+        })
+        .await
+    }
+
+    /// A call status: a window event when the customer accepted.
+    async fn record_call_status(
+        &self,
+        phone_number_id: &PhoneNumberId,
+        business_number: &str,
+        contact: Option<&Contact>,
+        status: &CallStatus,
+    ) -> std::result::Result<(), SinkError> {
+        if !self.recording.records_calls() || status.status != CallStatusValue::Accepted {
+            return Ok(());
+        }
+        let kind = WindowEventKind::CallAccepted;
+        let Some(conversation) = call_status_key(phone_number_id, business_number, contact, status)
+        else {
+            tracing::warn!(%kind, "call status without a usable customer id; not recorded");
+            return Ok(());
+        };
+        self.window_event(WindowEvent {
+            conversation,
+            kind,
+            id: status.id.to_string(),
+            at: status.timestamp,
+        })
+        .await
+    }
+
+    /// A standby copy of a customer's message: a window event, ownership by
+    /// another app, and the identity links it carries. A revoke is not a
+    /// message (as on the `messages` field).
+    async fn record_standby(
+        &self,
+        phone_number_id: &PhoneNumberId,
+        contact: Option<&Contact>,
+        message: &InboundMessage,
+    ) -> std::result::Result<(), SinkError> {
+        if matches!(message.content, In::Revoke(_)) {
+            return Ok(());
+        }
+        self.link_message(phone_number_id, message).await?;
+        if !self.recording.records_standby() {
+            return Ok(());
+        }
+        let Some(conversation) = conversation_key(phone_number_id, contact, message) else {
+            tracing::warn!("standby message without a usable sender id; not recorded");
+            return Ok(());
+        };
+        let group = message.group_id.is_some();
+        self.window_event(WindowEvent {
+            conversation: conversation.clone(),
+            kind: WindowEventKind::StandbyMessage,
+            id: message.id.to_string(),
+            at: message.timestamp,
+        })
+        .await?;
+        if group || !usable(&conversation.contact) {
+            return Ok(());
+        }
+        self.observed_in_standby(&conversation, message.timestamp)
+            .await
+    }
+
+    /// Another app owns `key`'s thread since just before `at` (a standby
+    /// copy: [`STANDBY_OWNER_LEAD`] before it), unless a record of that
+    /// second or later is stored. The stored owner's role and app stay
+    /// when it was another app already.
+    ///
+    /// The read and the write are two calls, so another replica can store
+    /// a handover of the same second between them. Dating the record
+    /// before the copy's second keeps the handover anyway:
+    /// [`ConversationStore::set_thread_owner`] refuses a record older than
+    /// the stored one, whichever replica writes last.
+    async fn observed_in_standby(
+        &self,
+        key: &ConversationKey,
+        at: OffsetDateTime,
+    ) -> std::result::Result<(), SinkError> {
+        let stored = self.store.thread_owner(key).await.map_err(delivery)?;
+        if stored.as_ref().is_some_and(|s| s.since >= at) {
+            return Ok(());
+        }
+        let (role, app_id) = match stored {
+            Some(s) if s.owner == ThreadOwner::AnotherApp => (s.role, s.app_id),
+            _ => (None, None),
+        };
+        self.store
+            .set_thread_owner(
+                key,
+                ThreadOwnership {
+                    owner: ThreadOwner::AnotherApp,
+                    role,
+                    app_id,
+                    since: at.saturating_sub(STANDBY_OWNER_LEAD),
+                },
+            )
+            .await
+            .map_err(delivery)?;
+        Ok(())
+    }
+
+    /// A handover: this app owns the thread (`control_passed`) or another
+    /// one does (`control_taken`), under the conversation its phone number
+    /// leads to.
+    async fn record_handover(
+        &self,
+        phone_number_id: &PhoneNumberId,
+        update: &MessagingHandoversValue,
+    ) -> std::result::Result<(), SinkError> {
+        if !self.recording.records_handovers() {
+            return Ok(());
+        }
+        let owner = match &update.handover_type {
+            HandoverType::ControlPassed => ThreadOwner::ThisApp,
+            HandoverType::ControlTaken => ThreadOwner::AnotherApp,
+            other => {
+                tracing::warn!(handover = %other, "handover of an unknown type; not recorded");
+                return Ok(());
+            }
+        };
+        let phone = update
+            .sender
+            .as_ref()
+            .and_then(|s| s.phone_number.as_ref())
+            .and_then(|p| handover_phone(p.as_str()));
+        let Some(phone) = phone else {
+            tracing::warn!("handover without the customer's phone number; not recorded");
+            return Ok(());
+        };
+        let key = follow_phone(self.store.as_ref(), phone_number_id, &phone)
+            .await
+            .map_err(delivery)?;
+        let (role, app_id) = handover_owner(update);
+        self.store
+            .set_thread_owner(
+                &key,
+                ThreadOwnership {
+                    owner,
+                    role,
+                    app_id,
+                    since: update.timestamp,
+                },
+            )
+            .await
+            .map_err(delivery)?;
+        Ok(())
+    }
+}
+
+/// A handover's `sender.phone_number` as a conversation contact: without
+/// `+` (the `wa_id` form), or `None` when nothing usable is left.
+fn handover_phone(phone: &str) -> Option<String> {
+    bare_phone(phone).filter(|p| usable(p))
+}
+
+/// The conversation the customer's phone number `phone` (a handover's
+/// `sender.phone_number`, with or without `+`) leads to on
+/// `phone_number_id`, in `store`: the key [`InboxSink`] records a
+/// handover under (its docs, "A handover's conversation", give the
+/// order: the identity links, else a synced contact's BSUID, else the
+/// phone number). `None` when `phone` names no one. Public so that a
+/// handover rule of your own ([`RecordingSwitches::handovers`]) can reuse
+/// the mapping. It reads the store: up to [`MAX_LINK_STEPS`] identity
+/// link reads, then, when no link leads anywhere, one
+/// [`ConversationStore::identities`] read and one
+/// [`ConversationStore::contact`] read per identity.
+pub async fn handover_key(
+    store: &dyn ConversationStore,
+    phone_number_id: &PhoneNumberId,
+    phone: &str,
+) -> Result<Option<ConversationKey>> {
+    let Some(phone) = handover_phone(phone) else {
+        return Ok(None);
+    };
+    Ok(Some(follow_phone(store, phone_number_id, &phone).await?))
+}
+
+/// [`handover_key`] of a usable, bare phone number.
+async fn follow_phone(
+    store: &dyn ConversationStore,
+    phone_number_id: &PhoneNumberId,
+    phone: &str,
+) -> std::result::Result<ConversationKey, StorageError> {
+    let key = |contact: &str| ConversationKey::new(phone_number_id.clone(), contact);
+    let mut current = phone.to_owned();
+    let mut seen = BTreeSet::from([current.clone()]);
+    for _ in 0..MAX_LINK_STEPS {
+        // Oldest first: the last one is the latest.
+        let next = store
+            .identity_links(&key(&current))
+            .await?
+            .into_iter()
+            .rev()
+            .find(|link| link.previous == current && usable(&link.current))
+            .map(|link| link.current);
+        match next {
+            Some(next) if seen.insert(next.clone()) => current = next,
+            _ => break,
+        }
+    }
+    if current != phone {
+        return Ok(key(&current));
+    }
+    let mut latest: Option<(OffsetDateTime, String)> = None;
+    for id in store.identities(&key(phone)).await? {
+        if id == phone || !usable(&id) {
+            continue;
+        }
+        let Some(contact) = store.contact(&key(&id)).await? else {
+            continue;
+        };
+        let theirs = contact
+            .phone_number
+            .as_deref()
+            .is_some_and(|number| same_number(number, phone));
+        let user = contact.user_id.as_ref().map(UserId::as_str);
+        if let Some(user) = user.filter(|u| theirs && usable(u))
+            && latest
+                .as_ref()
+                .is_none_or(|(at, _)| contact.synced_at > *at)
+        {
+            latest = Some((contact.synced_at, user.to_owned()));
+        }
+    }
+    Ok(latest.map_or_else(|| key(phone), |(_, user)| key(&user)))
+}
+
 /// Log a skipped history item by position and error category: serde's
 /// message would quote the offending value.
 fn unparsable(list: &'static str, index: usize, e: &serde_json::Error) {
@@ -913,7 +1744,8 @@ impl EventSink<WebhookEvent> for InboxSink {
             } => {
                 let record = inbound_record(&phone_number_id, contact.as_ref(), &message)
                     .map_err(serialization)?;
-                self.apply_live(message.message_type(), record).await
+                self.apply_live(message.message_type(), record).await?;
+                self.link_message(&phone_number_id, &message).await
             }
             WebhookEvent::MessageEchoed {
                 phone_number_id,
@@ -954,8 +1786,196 @@ impl EventSink<WebhookEvent> for InboxSink {
                     .map_err(delivery)?;
                 Ok(())
             }
+            other => self.record_routing(other).await,
+        }
+    }
+}
+
+impl InboxSink {
+    /// The events that are not messages: calls, standby copies, handovers
+    /// and BSUID changes (see the [module docs](self)); every other event
+    /// is ignored.
+    async fn record_routing(&self, event: WebhookEvent) -> std::result::Result<(), SinkError> {
+        match event {
+            WebhookEvent::StandbyObserved {
+                phone_number_id,
+                contact,
+                item,
+                ..
+            } => match item.as_ref() {
+                StandbyItem::Message(message) => {
+                    self.record_standby(&phone_number_id, contact.as_ref(), message)
+                        .await
+                }
+                // The owner's sends and their receipts: no window, and no
+                // owner of their own (see the module docs).
+                _ => Ok(()),
+            },
+            WebhookEvent::CallUpdated {
+                phone_number_id,
+                display_phone_number,
+                contact,
+                call,
+                ..
+            } => {
+                self.record_call(
+                    &phone_number_id,
+                    &display_phone_number,
+                    contact.as_ref(),
+                    &call,
+                )
+                .await
+            }
+            WebhookEvent::CallStatusUpdated {
+                phone_number_id,
+                display_phone_number,
+                contact,
+                status,
+                ..
+            } => {
+                self.record_call_status(
+                    &phone_number_id,
+                    &display_phone_number,
+                    contact.as_ref(),
+                    &status,
+                )
+                .await
+            }
+            WebhookEvent::ThreadControlChanged {
+                phone_number_id,
+                update,
+                ..
+            } => self.record_handover(&phone_number_id, &update).await,
+            WebhookEvent::UserIdChanged {
+                phone_number_id,
+                update,
+                ..
+            } => self.link_user_id(&phone_number_id, &update).await,
             _ => Ok(()),
         }
+    }
+}
+
+/// Whether `error` is [`Inbox::send`]'s local refusal because another app
+/// owns the thread ([`ValidationError::thread_owned_elsewhere`], whose
+/// [`Error::kind`] is [`ErrorKind::ThreadOwnedElsewhere`](meta_whatsapp_core::ErrorKind::ThreadOwnedElsewhere)), also when a
+/// multi-step flow wrapped it ([`Error::in_step`]). Nothing was sent: send
+/// a template instead (it needs no ownership), or wait for the thread to
+/// come back. To also match Meta's own refusal once it has a code of its
+/// own, branch on the kind.
+pub fn is_thread_owned_elsewhere(error: &Error) -> bool {
+    match error {
+        Error::Validation(v) => v.is_thread_owned_elsewhere(),
+        Error::Step { source, .. } => is_thread_owned_elsewhere(source),
+        _ => false,
+    }
+}
+
+/// The local checks [`Inbox::send`] (and [`Inbox::reply`]) make before any
+/// request: all on by default ([`ReplyChecks::ALL`]). Each only saves a
+/// request Meta would refuse, since Meta enforces both conditions itself,
+/// so turning one off never lets a message through that Meta would not
+/// take (`OPEN_QUESTIONS.md` #32, #44).
+///
+/// - **window**: free-form content outside the customer service window
+///   ([`Inbox::window`]) is refused
+///   ([`ValidationError::customer_service_window_closed`]). Turn it off to
+///   let Meta decide (its answer is `131047`).
+/// - **trust handover** (only while the window is checked): after a
+///   handover to this app (a stored [`ThreadOwner::ThisApp`] record: a
+///   `control_passed`, or [`Inbox::record_thread_owner`]) newer than the
+///   customer's last inbound message recorded here, the window is unknown
+///   rather than closed: an app that receives handovers without standby
+///   copies never saw the customer's messages to the previous owner
+///   (`conversation-routing/conversation-context`: the summary replaces
+///   them), and a thread is passed only while it is active
+///   (`conversation-routing/thread-control`, `thread-lifecycle`: idle
+///   after 24 hours of inactivity). So the reply goes to Meta, until the
+///   customer's next message, or 24 hours after the handover, whichever
+///   comes first; Meta answers `131047` if its window is closed. Turn it
+///   off in an app that does receive standby copies: its window is known.
+///   The store keeps no source for an ownership record, so this app's own
+///   [`Inbox::record_thread_owner`] with [`ThreadOwner::ThisApp`] (after a
+///   `take`) is trusted the same way, although Meta does not say a take
+///   needs an active thread: after taking a thread you know is idle (the
+///   customer silent for 24 hours, so their window is closed too), a reply
+///   still goes to Meta, which answers `131047`. Send a template there, or
+///   make that call through a clone with the trust off.
+/// - **thread owner**: a service message is refused while another app owns
+///   the thread ([`Inbox::thread_owner`];
+///   [`ValidationError::thread_owned_elsewhere`]). Turn it off in the
+///   designated escalation partner's inbox (its service message takes the
+///   thread), in an app sharing the number with a Meta Business Agent and
+///   no routing configuration (the same), or when you track ownership
+///   yourself.
+///
+/// Set per inbox with [`Inbox::with_reply_checks`]; for one call, use a
+/// clone (`inbox.clone().with_reply_checks(..)`: an `Inbox` is cheap to
+/// clone).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplyChecks {
+    window: bool,
+    trust_handover: bool,
+    thread_owner: bool,
+}
+
+impl Default for ReplyChecks {
+    fn default() -> Self {
+        Self::ALL
+    }
+}
+
+impl ReplyChecks {
+    /// Every check, trusting a handover (the default).
+    pub const ALL: Self = Self {
+        window: true,
+        trust_handover: true,
+        thread_owner: true,
+    };
+
+    /// No check: every message goes to Meta, which decides.
+    pub const NONE: Self = Self {
+        window: false,
+        trust_handover: false,
+        thread_owner: false,
+    };
+
+    /// Turn the customer service window check on or off.
+    #[must_use]
+    pub const fn window(mut self, on: bool) -> Self {
+        self.window = on;
+        self
+    }
+
+    /// Let a reply through the window check after a handover to this app
+    /// the customer has not written since (on), or apply the window as
+    /// recorded (off).
+    #[must_use]
+    pub const fn trust_handover(mut self, on: bool) -> Self {
+        self.trust_handover = on;
+        self
+    }
+
+    /// Turn the thread ownership check on or off.
+    #[must_use]
+    pub const fn thread_owner(mut self, on: bool) -> Self {
+        self.thread_owner = on;
+        self
+    }
+
+    /// Whether the window is checked.
+    pub const fn checks_window(&self) -> bool {
+        self.window
+    }
+
+    /// Whether the window check trusts a handover.
+    pub const fn trusts_handover(&self) -> bool {
+        self.trust_handover
+    }
+
+    /// Whether thread ownership is checked.
+    pub const fn checks_thread_owner(&self) -> bool {
+        self.thread_owner
     }
 }
 
@@ -970,17 +1990,27 @@ pub struct Inbox {
     phone_number_id: PhoneNumberId,
     store: Arc<dyn ConversationStore>,
     clock: Arc<dyn Clock>,
+    checks: ReplyChecks,
+    thread_idle_after: std::time::Duration,
 }
 
 impl fmt::Debug for Inbox {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Inbox")
             .field("phone_number_id", &self.phone_number_id)
+            .field("checks", &self.checks)
+            .field("thread_idle_after", &self.thread_idle_after)
             .finish_non_exhaustive()
     }
 }
 
 impl Inbox {
+    /// How long a thread keeps its owner without the customer, unless
+    /// [`Inbox::with_thread_idle_after`] says otherwise
+    /// (`conversation-routing/thread-lifecycle`: "24 hours of WhatsApp user
+    /// inactivity" return it to idle).
+    pub const THREAD_IDLE_AFTER: std::time::Duration = std::time::Duration::from_hours(24);
+
     /// Inbox of `phone_number_id`, replying through `client`.
     pub fn new(
         client: Client,
@@ -992,14 +2022,45 @@ impl Inbox {
             phone_number_id: phone_number_id.into(),
             store,
             clock: Arc::new(SystemClock),
+            checks: ReplyChecks::ALL,
+            thread_idle_after: Self::THREAD_IDLE_AFTER,
         }
     }
 
-    /// Use `clock` for the window check (tests).
+    /// Use `clock` for the window check and the thread's idle timeout
+    /// (tests).
     #[must_use]
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = clock;
         self
+    }
+
+    /// The local checks [`Inbox::send`] makes ([`ReplyChecks`]; all of them
+    /// unless set).
+    #[must_use]
+    pub fn with_reply_checks(mut self, checks: ReplyChecks) -> Self {
+        self.checks = checks;
+        self
+    }
+
+    /// The local checks this inbox makes.
+    pub fn reply_checks(&self) -> ReplyChecks {
+        self.checks
+    }
+
+    /// How long a thread keeps its owner without the customer before
+    /// [`Inbox::thread_owner`] reads it as idle ([`Inbox::THREAD_IDLE_AFTER`]
+    /// unless set): Meta's rule is 24 hours; set another to follow a change
+    /// Meta makes before this crate does.
+    #[must_use]
+    pub fn with_thread_idle_after(mut self, idle_after: std::time::Duration) -> Self {
+        self.thread_idle_after = idle_after;
+        self
+    }
+
+    /// How long a thread keeps its owner without the customer.
+    pub fn thread_idle_after(&self) -> std::time::Duration {
+        self.thread_idle_after
     }
 
     /// The business phone number this inbox serves.
@@ -1038,18 +2099,192 @@ impl Inbox {
         Ok(self.store.messages(key, before, limit).await?)
     }
 
-    /// The customer service window of a conversation.
+    /// The customer service window of a conversation: open for 24 hours
+    /// from the latest of the customer's last inbound message
+    /// ([`ConversationStore::last_inbound_at`]) and the conversation's
+    /// latest [window event](WindowEvent) (a call that reopens the window,
+    /// a message of theirs seen in standby: see the [module docs](self)).
+    /// This is the window as recorded here; after a handover to this app,
+    /// [`Inbox::reply`] may let Meta decide beyond it
+    /// ([`ReplyChecks::trust_handover`]): [`Inbox::check_reply`] says what
+    /// `reply` will do.
     pub async fn window(&self, key: &ConversationKey) -> Result<CustomerServiceWindow> {
         self.check_key(key)?;
         let last = self.store.last_inbound_at(key).await?;
-        Ok(CustomerServiceWindow::from_last_inbound(last))
+        self.window_from(key, last).await
     }
 
-    /// Whether a free-form reply is allowed now, by this inbox's own clock —
-    /// the same check [`Inbox::reply`] applies, so a UI deciding between
-    /// "reply" and "send a template" never disagrees with the refusal.
+    /// The window of `key`, whose last inbound message is `last`.
+    async fn window_from(
+        &self,
+        key: &ConversationKey,
+        last: Option<OffsetDateTime>,
+    ) -> Result<CustomerServiceWindow> {
+        let event = self
+            .store
+            .window_events(key, None, 1)
+            .await?
+            .into_iter()
+            .next()
+            .map(|e| e.at);
+        Ok(CustomerServiceWindow::from_last_inbound(last.max(event)))
+    }
+
+    /// Who owns the conversation's thread under Conversation Routing, as
+    /// far as the inbox knows now; `None` when nothing was ever recorded
+    /// for it (no routing). From the stored record
+    /// ([`ConversationStore::thread_owner`]: handovers, standby copies,
+    /// [`Inbox::record_release`]), then:
+    ///
+    /// - a message received on the `messages` field after the record (its
+    ///   timestamp strictly later than the record's `since`) means this app
+    ///   owns it ([`ThreadOwner::ThisApp`], since that message), except a
+    ///   customer's answer to a call permission request: Meta sends it to
+    ///   the Incoming Call primary and the standby partners, and it "does
+    ///   not change thread ownership" (`conversation-routing/calling-webhooks`).
+    ///   The conversation's latest 20 messages are read for it; when all
+    ///   of them are later than the record, the latest inbound message
+    ///   counts;
+    /// - 24 hours ([`Inbox::THREAD_IDLE_AFTER`], or
+    ///   [`Inbox::with_thread_idle_after`]) after the latest of that
+    ///   message and the record, by this inbox's clock, the thread is idle
+    ///   ([`ThreadOwner::Idle`], since then). The record's time counts as
+    ///   activity: a thread is active when it changes hands, and this
+    ///   errs toward the owner the record names.
+    ///
+    /// A key of another number is refused, reading nothing.
+    pub async fn thread_owner(&self, key: &ConversationKey) -> Result<Option<ThreadOwnership>> {
+        self.check_key(key)?;
+        let last = self.store.last_inbound_at(key).await?;
+        self.thread_owner_from(key, last).await
+    }
+
+    /// The thread owner of `key`, whose last inbound message is `last`.
+    async fn thread_owner_from(
+        &self,
+        key: &ConversationKey,
+        last: Option<OffsetDateTime>,
+    ) -> Result<Option<ThreadOwnership>> {
+        let Some(stored) = self.store.thread_owner(key).await? else {
+            return Ok(None);
+        };
+        let activity = last.map_or(stored.since, |at| at.max(stored.since));
+        let claimed = match last {
+            Some(at) if at > stored.since => self.claimed_after(key, stored.since, at).await?,
+            _ => None,
+        };
+        let mut owner = match claimed {
+            Some(at) => ThreadOwnership {
+                owner: ThreadOwner::ThisApp,
+                role: stored.role.filter(|_| stored.owner == ThreadOwner::ThisApp),
+                app_id: stored
+                    .app_id
+                    .filter(|_| stored.owner == ThreadOwner::ThisApp),
+                since: at,
+            },
+            _ => stored,
+        };
+        let idle = time::Duration::try_from(self.thread_idle_after).unwrap_or(time::Duration::MAX);
+        let idle_at = activity.saturating_add(idle);
+        if owner.owner != ThreadOwner::Idle && self.clock.now() >= idle_at {
+            owner = ThreadOwnership {
+                owner: ThreadOwner::Idle,
+                role: None,
+                app_id: None,
+                since: idle_at,
+            };
+        }
+        Ok(Some(owner))
+    }
+
+    /// The time of the latest message after `since` that routing delivered
+    /// to this app as the thread's owner ([`claims_thread`]), among the
+    /// conversation's latest [`CLAIM_SCAN`] messages; `last` (the latest
+    /// inbound message) when all of them are later than `since`.
+    async fn claimed_after(
+        &self,
+        key: &ConversationKey,
+        since: OffsetDateTime,
+        last: OffsetDateTime,
+    ) -> Result<Option<OffsetDateTime>> {
+        let latest = self.store.messages(key, None, CLAIM_SCAN).await?;
+        for message in &latest {
+            if message.timestamp <= since {
+                return Ok(None);
+            }
+            if claims_thread(message) {
+                return Ok(Some(message.timestamp));
+            }
+        }
+        Ok((latest.len() >= CLAIM_SCAN).then_some(last))
+    }
+
+    /// Record that this app released the conversation's thread (`release`,
+    /// `conversation-routing/thread-control`), which no webhook reports:
+    /// call it once your `release` request succeeded. The thread is
+    /// [`ThreadOwner::Idle`] from now (this inbox's clock) until the
+    /// customer's next message claims it. Returns whether it was stored
+    /// ([`ConversationStore::set_thread_owner`] keeps a later record). A
+    /// key of another number is refused before the store is called.
+    pub async fn record_release(&self, key: &ConversationKey) -> Result<bool> {
+        self.record_thread_owner(key, ThreadOwner::Idle, None).await
+    }
+
+    /// Record who owns the conversation's thread after a thread control
+    /// action of this app's own that no webhook reports to it
+    /// (`conversation-routing/thread-control`): after your `pass`,
+    /// [`ThreadOwner::AnotherApp`] with the target role (Meta sends
+    /// `control_passed` to the new owner only); after your `take` as the
+    /// escalation partner (or your service message, an implicit take),
+    /// [`ThreadOwner::ThisApp`] with the role `escalation` (Meta sends
+    /// `control_taken` to the previous owner only). Call it once the
+    /// request succeeded; the record is dated now (this inbox's clock).
+    /// A [`ThreadOwner::ThisApp`] record is trusted by the window check
+    /// like a `control_passed` ([`ReplyChecks::trust_handover`]: the store
+    /// cannot tell them apart): for 24 hours, until the customer writes,
+    /// [`Inbox::reply`] lets Meta decide the window, also after a take of
+    /// an idle thread, whose window is closed.
+    /// [`Inbox::record_release`] is its `release` case. Returns whether it
+    /// was stored ([`ConversationStore::set_thread_owner`] keeps a later
+    /// record). A key of another number is refused before the store is
+    /// called.
+    pub async fn record_thread_owner(
+        &self,
+        key: &ConversationKey,
+        owner: ThreadOwner,
+        role: Option<String>,
+    ) -> Result<bool> {
+        self.check_key(key)?;
+        let ownership = ThreadOwnership {
+            owner,
+            role,
+            app_id: None,
+            since: self.clock.now(),
+        };
+        Ok(self.store.set_thread_owner(key, ownership).await?)
+    }
+
+    /// Whether the customer service window is open now, by this inbox's own
+    /// clock: [`Inbox::window`] alone. [`Inbox::reply`] checks more (who
+    /// owns the thread, and a handover it trusts: [`ReplyChecks`]); to
+    /// decide between "reply" and "send a template" exactly as `reply`
+    /// will, use [`Inbox::check_reply`].
     pub async fn window_is_open(&self, key: &ConversationKey) -> Result<bool> {
         Ok(self.window(key).await?.is_open(self.clock.now()))
+    }
+
+    /// The local checks [`Inbox::reply`] makes for free-form content (a
+    /// service message), run now without sending anything: `Ok` when
+    /// `reply` would send it to Meta, else the refusal `reply` would
+    /// return ([`ErrorKind::ThreadOwnedElsewhere`](meta_whatsapp_core::ErrorKind::ThreadOwnedElsewhere) first, then
+    /// [`ErrorKind::CustomerServiceWindowClosed`](meta_whatsapp_core::ErrorKind::CustomerServiceWindowClosed)), with this inbox's
+    /// [`ReplyChecks`] and clock. A UI deciding between the composer, a
+    /// template picker and "handled elsewhere" never disagrees with the
+    /// refusal. A storage failure is an error of its own kind. A key of
+    /// another number is refused, reading nothing.
+    pub async fn check_reply(&self, key: &ConversationKey) -> Result<()> {
+        self.check_key(key)?;
+        self.local_checks(key, false).await
     }
 
     /// Reset the unread count (the merchant opened the conversation).
@@ -1092,10 +2327,17 @@ impl Inbox {
 
     /// Send `content` to the conversation's contact and record it.
     ///
-    /// Free-form content outside the 24-hour window is refused locally
-    /// ([`ValidationError::customer_service_window_closed`]); templates are
-    /// always allowed. The recorded row has status
-    /// [`DeliveryStatus::Accepted`] until status webhooks move it on.
+    /// Refused locally, before any request ([`ReplyChecks`] turns either
+    /// check off): free-form content outside the 24-hour window
+    /// ([`ValidationError::customer_service_window_closed`]; the window
+    /// counts calls and standby messages, [`Inbox::window`], and trusts a
+    /// handover to this app: [`ReplyChecks`]), and a service message while
+    /// another app owns the thread
+    /// ([`ValidationError::thread_owned_elsewhere`], [`Inbox::thread_owner`]).
+    /// [`Inbox::check_reply`] runs the same checks without sending.
+    /// Templates are always allowed. The recorded
+    /// row has status [`DeliveryStatus::Accepted`] until status webhooks
+    /// move it on.
     pub async fn reply(
         &self,
         key: &ConversationKey,
@@ -1115,6 +2357,17 @@ impl Inbox {
     /// reply, Direct Send `category`, callback data). The message must be
     /// addressed to [`Inbox::recipient`] of `key`; anything else is refused,
     /// so a conversation can't be used to message someone outside it.
+    ///
+    /// Both checks exempt templates and the Direct Send `utility` and
+    /// `authentication` categories, which Meta sends as templates (outside
+    /// the window, and `conversation-routing/thread-lifecycle`: marketing,
+    /// utility and authentication templates need no ownership), and leave
+    /// a category this crate does not know ([`DirectSendCategory::Other`])
+    /// to Meta. A `service` category is a service message: Meta drops it
+    /// outside the window
+    /// (`direct-send/send-utility-and-authentication-messages`), so both
+    /// checks apply. Ownership is checked first: while another app owns the
+    /// thread, the merchant should not answer in free text at all.
     pub async fn send(
         &self,
         key: &ConversationKey,
@@ -1128,11 +2381,20 @@ impl Inbox {
             )
             .into());
         }
-        let exempt =
-            matches!(message.content, MessageContent::Template(_)) || message.category.is_some();
-        if !exempt && !self.window(key).await?.is_open(self.clock.now()) {
-            return Err(ValidationError::customer_service_window_closed().into());
-        }
+        // Meta sends a Direct Send `utility` or `authentication` message as a
+        // template; `service` "follows the existing service-message flow"
+        // (`direct-send/send-utility-and-authentication-messages`), and a
+        // category this crate does not know is Meta's to judge.
+        let as_template = matches!(message.content, MessageContent::Template(_))
+            || matches!(
+                message.category,
+                Some(
+                    DirectSendCategory::Utility
+                        | DirectSendCategory::Authentication
+                        | DirectSendCategory::Other(_)
+                )
+            );
+        self.local_checks(key, as_template).await?;
         let response = self
             .client
             .messages(self.phone_number_id.clone())
@@ -1142,6 +2404,51 @@ impl Inbox {
             self.record_sent(key, &message, sent.id.clone()).await;
         }
         Ok(response)
+    }
+
+    /// The checks of [`ReplyChecks`] for a message to `key`, none for a
+    /// template (`as_template`): the refusal, or `Ok`.
+    async fn local_checks(&self, key: &ConversationKey, as_template: bool) -> Result<()> {
+        let check_window = self.checks.window && !as_template;
+        let check_owner = self.checks.thread_owner && !as_template;
+        if !check_window && !check_owner {
+            return Ok(());
+        }
+        let last = self.store.last_inbound_at(key).await?;
+        if check_owner {
+            let owner = self.thread_owner_from(key, last).await?;
+            if owner.is_some_and(|o| o.owner == ThreadOwner::AnotherApp) {
+                return Err(ValidationError::thread_owned_elsewhere().into());
+            }
+        }
+        if check_window
+            && !self.window_from(key, last).await?.is_open(self.clock.now())
+            && !(self.checks.trust_handover && self.handed_over_since(key, last).await?)
+        {
+            return Err(ValidationError::customer_service_window_closed().into());
+        }
+        Ok(())
+    }
+
+    /// Whether the thread of `key` was handed to this app after the
+    /// customer's last inbound message `last`, less than 24 hours
+    /// ([`CustomerServiceWindow::LENGTH`]) ago by this inbox's clock: the
+    /// stored record is [`ThreadOwner::ThisApp`] (a `control_passed`, or
+    /// [`Inbox::record_thread_owner`]) and newer than `last`. The window
+    /// is unknown then, not closed ([`ReplyChecks::trust_handover`]).
+    async fn handed_over_since(
+        &self,
+        key: &ConversationKey,
+        last: Option<OffsetDateTime>,
+    ) -> Result<bool> {
+        let Some(stored) = self.store.thread_owner(key).await? else {
+            return Ok(false);
+        };
+        let window =
+            time::Duration::try_from(CustomerServiceWindow::LENGTH).unwrap_or(time::Duration::MAX);
+        Ok(stored.owner == ThreadOwner::ThisApp
+            && last.is_none_or(|at| at < stored.since)
+            && self.clock.now() < stored.since.saturating_add(window))
     }
 
     /// Record a message Meta accepted. Never fails: the message is already
@@ -3240,6 +4547,9 @@ mod tests {
         reads: std::sync::atomic::AtomicUsize,
         /// Answer `append_synced` with one answer too few (a broken store).
         short: bool,
+        /// Answer `thread_owner` with `None`: the read of a replica that
+        /// ran before another replica's write landed (a race).
+        stale_owner: bool,
     }
 
     #[async_trait]
@@ -3355,6 +4665,9 @@ mod tests {
             key: &ConversationKey,
         ) -> std::result::Result<Option<meta_whatsapp_core::store::ThreadOwnership>, StorageError>
         {
+            if self.stale_owner {
+                return Ok(None);
+            }
             self.inner.thread_owner(key).await
         }
         async fn put_contact(
@@ -3588,5 +4901,73 @@ mod tests {
             let kind = event.kind();
             assert!(sink.deliver(event).await.is_err(), "{kind}");
         }
+    }
+
+    /// The helper recognizes the ownership refusal, also inside a step, and
+    /// nothing else.
+    #[test]
+    fn is_thread_owned_elsewhere_looks_through_steps() {
+        let refusal = || Error::from(ValidationError::thread_owned_elsewhere());
+        assert!(is_thread_owned_elsewhere(&refusal()));
+        assert!(is_thread_owned_elsewhere(
+            &refusal().in_step("reply").in_step("escalate")
+        ));
+        for other in [
+            Error::from(ValidationError::customer_service_window_closed()),
+            Error::from(ValidationError::new("to", "x")),
+            Error::from(meta_whatsapp_core::GraphApiError::new(131047, "x")).in_step("reply"),
+        ] {
+            assert!(!is_thread_owned_elsewhere(&other), "{other}");
+        }
+    }
+
+    /// Two replicas, one second: one records a `control_passed`, the other
+    /// a standby copy of that second whose read of the owner ran before the
+    /// handover's write and whose write lands after it. The handover still
+    /// wins, so the merchant can answer the customer who asked for them.
+    #[tokio::test]
+    async fn a_racing_standby_copy_never_overrides_a_handover_of_its_second() {
+        let shared = MemoryConversationStore::new();
+        let handover = change(
+            "messaging_handovers",
+            &json!({"messaging_product": "whatsapp", "sender": {"phone_number": "16505551234"},
+                "recipient": {"phone_number_id": PNID, "display_phone_number": "15550783881"},
+                "type": "control_passed", "timestamp": "1750101000",
+                "control_passed": {"previous_owner_role": "ai_agent", "new_owner_role": "escalation"}}),
+        );
+        let standby = change(
+            "standby",
+            &json!({"messaging_product": "whatsapp",
+                "metadata": {"display_phone_number": "15550783881", "phone_number_id": PNID},
+                "standby": {"messages": [{"from": "16505551234", "id": "wamid.S",
+                    "timestamp": "1750101000", "type": "text", "text": {"body": "a human, please"}}]}}),
+        );
+        deliver_all(&InboxSink::new(Arc::new(shared.clone())), handover).await;
+        let replica = Arc::new(CountingStore {
+            inner: shared.clone(),
+            stale_owner: true,
+            ..CountingStore::default()
+        });
+        deliver_all(&InboxSink::new(replica), standby).await;
+
+        let clock = ManualClock::new(datetime!(2025-06-16 19:11:00 UTC));
+        let t = ScriptedTransport::new();
+        let inbox = inbox(&t, Arc::new(shared), &clock);
+        let key = inbox.key("16505551234");
+        let owner = inbox.thread_owner(&key).await.unwrap().unwrap();
+        assert_eq!(
+            (owner.owner, owner.role.as_deref()),
+            (ThreadOwner::ThisApp, Some("escalation"))
+        );
+        assert!(
+            inbox.window_is_open(&key).await.unwrap(),
+            "the standby copy"
+        );
+        t.push_json(200, sent("wamid.R"));
+        inbox
+            .reply(&key, Text::new("Hi, I'm here").into())
+            .await
+            .unwrap();
+        assert_eq!(t.remaining(), 0);
     }
 }

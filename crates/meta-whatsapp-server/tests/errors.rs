@@ -9,9 +9,11 @@ use std::collections::{BTreeSet, HashMap};
 
 use common::{Call, Harness, Sample, sample_call, spec_operations};
 use meta_whatsapp_rs::ErrorKind;
+use meta_whatsapp_rs::core::error::ValidationError;
 use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode};
 use meta_whatsapp_server::error::{CODES, code_info, kind_code};
 use meta_whatsapp_server::model::Scope;
+use meta_whatsapp_server_core::error::ServiceError;
 use serde_json::{Value, json};
 
 /// docs/design/server.md, section 5.2, read from the document itself:
@@ -146,6 +148,63 @@ const REPRESENTATIVE: &[(ErrorKind, i64)] = &[
     (ErrorKind::Unknown, 999999999),
 ];
 
+/// The kinds no Graph code maps to yet, each with the library's local
+/// refusal of that kind (raised before any request). A kind leaves this
+/// list for [`REPRESENTATIVE`] when Meta documents a code for it.
+fn local_only() -> Vec<(ErrorKind, meta_whatsapp_rs::Error)> {
+    vec![(
+        ErrorKind::ThreadOwnedElsewhere,
+        ValidationError::thread_owned_elsewhere().into(),
+    )]
+}
+
+/// Every Graph code `ErrorKind::from_code` names is below this (the
+/// highest is `2593109` today); a code above it would escape the scan in
+/// [`a_local_only_kind_answers_its_code_and_status`].
+const GRAPH_CODES_BELOW: i64 = 10_000_000;
+
+/// A kind the library only raises locally answers its own code and status,
+/// not `invalid_request`: the inbox's ownership refusal is a state to
+/// change (`409`), like the window's. Decisive: the classify arm; and a
+/// Graph code mapped to a kind still listed here (its Graph path would go
+/// untested end to end).
+#[test]
+fn a_local_only_kind_answers_its_code_and_status() {
+    let design = design();
+    assert!(
+        REPRESENTATIVE
+            .iter()
+            .all(|(k, c)| *k == ErrorKind::Unknown || *c < GRAPH_CODES_BELOW),
+        "raise GRAPH_CODES_BELOW"
+    );
+    let local: Vec<ErrorKind> = local_only().into_iter().map(|(k, _)| k).collect();
+    if let Some(code) = (0..GRAPH_CODES_BELOW).find(|c| local.contains(&ErrorKind::from_code(*c))) {
+        panic!(
+            "Graph code {code} maps to {:?}: move the kind from local_only to REPRESENTATIVE",
+            ErrorKind::from_code(code)
+        );
+    }
+    for (kind, error) in local_only() {
+        assert!(
+            REPRESENTATIVE.iter().all(|(k, _)| *k != kind),
+            "{kind:?} has a Graph code: list it in REPRESENTATIVE instead"
+        );
+        assert_eq!(error.kind(), kind, "{error}");
+        let answered = ServiceError::from_library(&error);
+        assert_eq!(answered.code(), kind_code(kind), "{kind:?}");
+        assert_eq!(Some(&answered.status()), design.get(kind_code(kind)));
+        assert_eq!(answered.field(), None, "{kind:?}");
+        assert!(!answered.may_have_been_sent() && !answered.is_retryable());
+        // Through a step too.
+        let step = ServiceError::from_library(&error.in_step("reply"));
+        assert_eq!((step.code(), step.step()), (kind_code(kind), Some("reply")));
+    }
+    assert_eq!(
+        code_info("thread_owned_elsewhere").unwrap().0,
+        StatusCode::CONFLICT
+    );
+}
+
 const TENANT: &str = "merchant-42";
 const WABA: &str = "102290129340398";
 const PN: &str = "106540352242922";
@@ -170,10 +229,11 @@ fn graph_error(code: i64) -> Value {
 #[tokio::test]
 async fn each_kind_answers_its_code_and_no_meta_text() {
     let covered: Vec<ErrorKind> = REPRESENTATIVE.iter().map(|(k, _)| *k).collect();
+    let local: Vec<ErrorKind> = local_only().into_iter().map(|(k, _)| k).collect();
     for kind in ErrorKind::ALL {
         assert!(
-            covered.contains(kind),
-            "{kind:?} has no representative code here"
+            covered.contains(kind) || local.contains(kind),
+            "{kind:?} has no representative code here, nor a local error"
         );
     }
     for (kind, code) in REPRESENTATIVE {
