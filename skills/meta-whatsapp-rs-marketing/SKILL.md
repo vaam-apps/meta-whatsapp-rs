@@ -5,7 +5,7 @@ description: "WhatsApp marketing with meta-whatsapp-rs - collecting opt-ins with
 
 # meta-whatsapp-rs-marketing
 
-> **Verified against meta-whatsapp-rs b7211bc1f282f873b605e7a3a1126ce4e45e5677 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 35b6739412169ab3ab43bfcacea133295362cb9a (2026-09-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/marketing.rs](examples/marketing.rs), compiled
 and tested by meta-whatsapp-rs's own gate.
@@ -122,8 +122,11 @@ let delivered = analytics
 - Opt-in first: message only people who agreed; record how and when.
 - Marketing templates to US numbers (`+1` US area codes) are not
   delivered at the time of writing.
-- Messaging limits (unique users per rolling 24 h) and throughput
-  (80 msg/s by default; `130429`) are Meta's: pace campaigns in your queue.
+- Throughput (80 msg/s per number by default; `130429`): send a
+  campaign with the paced `Broadcast` (skill `meta-whatsapp-rs-bot`,
+  feature `bot`), which paces each number, sends each person once and
+  resends only what Meta refused. Messaging limits (unique users per
+  rolling 24 h) are Meta's to enforce: nothing here counts them.
 - A quick-reply "Stop promotions" arrives as an inbound `Button` message:
   treat it as an opt-out in your code.
 

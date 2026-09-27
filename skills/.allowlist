@@ -10,6 +10,7 @@ std
 tokio
 broadcast           # tokio::sync::broadcast (the SSE receiver)
 Receiver            # tokio::sync::broadcast::Receiver
+Sender              # tokio::sync::mpsc::Sender (a paced broadcast's ReportSink)
 serde
 Serialize           # serde::Serialize (Typst template input)
 serde_json

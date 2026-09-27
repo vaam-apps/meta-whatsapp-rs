@@ -1,6 +1,7 @@
 //! A bot framework over WhatsApp Cloud API webhooks: commands with
 //! prefixes, aliases, guards, cooldowns and a generated help, middleware,
-//! compile-time plugins, and Markdown replies in WhatsApp formatting.
+//! compile-time plugins, Markdown replies in WhatsApp formatting, and
+//! paced broadcasts ([`broadcast`], [`pacer`]).
 //!
 //! Each event goes through these steps, in this order:
 //!
@@ -33,6 +34,11 @@
 //! | how Markdown becomes messages | [`MarkdownRenderer`] | [`markdown::Renderer`] |
 //! | how Markdown text is escaped | [`markdown::Escape`] | [`markdown::NoEscape`] (text as written; [`markdown::WordJoinerEscape`] opt-in) |
 //! | how the help reads | [`HelpFormatter`] | [`CategoryHelp`] (name, description and category configurable) |
+//! | how fast each business number sends (broadcasts; replies, read receipts and typing indicators with [`BotBuilder::pacer`]; group operations through [`PacedGroups`]) | [`RateLimiter`] | [`TokenBucket`] (80 a second per number, in this process) |
+//! | which errors slow a number's pacer down (a broadcast's sends, a paced bot's replies) | [`SlowDownRule`] | [`ThrottlingErrors`] |
+//! | what "now" is for the pacer, and how it waits | [`Timer`] | `SystemClock` (Tokio's sleep) |
+//! | what a failed broadcast send becomes | [`BroadcastPolicy`] | [`Backoff`] |
+//! | where a broadcast's lines go when not kept in its report | [`ReportSink`] | none: kept in the [`BroadcastReport`] |
 //!
 //! Each of these traits also has an `Arc<T>` implementation, so one
 //! instance serves several bots (handlers and plugins are registered by
@@ -49,7 +55,8 @@
 //! Plugins are compiled in: there is no hot reload (see [`plugin`]).
 //! The async extension points ([`Outbound`], [`Middleware`], [`Plugin`],
 //! [`AccessPolicy`], [`Cooldowns`], [`Refusals`], [`ErrorHandler`],
-//! [`CommandHandler`]) are `#[async_trait]` traits; the attribute is
+//! [`CommandHandler`], [`RateLimiter`], [`Timer`], [`ReportSink`]) are `#[async_trait]`
+//! traits; the attribute is
 //! re-exported as [`async_trait`](macro@async_trait), so no second
 //! dependency is needed.
 //!
@@ -78,17 +85,23 @@
 //! # let _ = bot; Ok(()) }
 //! ```
 //!
-//! Not here (yet): paced broadcasts and scheduling.
+//! A [`Broadcast`] sends one message to many recipients from one number,
+//! paced by a [`Pacer`] shared with the bot, and reports on each (see
+//! [`broadcast`]). Not here (yet): scheduling, and broadcasts that survive
+//! a restart (roadmap B3).
 
 pub mod bot;
+pub mod broadcast;
 pub mod command;
 pub mod ctx;
 pub mod errors;
+pub mod groups;
 pub mod guard;
 pub mod help;
 pub mod markdown;
 pub mod middleware;
 pub mod outbound;
+pub mod pacer;
 pub mod parse;
 pub mod plugin;
 
@@ -97,9 +110,15 @@ pub mod plugin;
 /// `async-trait` crate.
 pub use async_trait::async_trait;
 pub use bot::{Bot, BotBuilder, PluginInfo};
+pub use broadcast::{
+    Backoff, Broadcast, BroadcastBuilder, BroadcastEnd, BroadcastHandle, BroadcastPolicy,
+    BroadcastProgress, BroadcastReport, FailureVerdict, RecipientReport, ReportSink, SendFailure,
+    SendOutcome,
+};
 pub use command::{Args, Command, CommandHandler, CommandInfo, Invocation, Scope, Trigger};
 pub use ctx::{BotSender, Chat, Ctx};
 pub use errors::{ErrorHandler, LogErrors, PropagateErrors};
+pub use groups::{PacedGroup, PacedGroups};
 pub use guard::{
     AccessList, AccessPolicy, COOLDOWN_NAMESPACE, COOLDOWN_NOTICE_NAMESPACE, CooldownKey,
     CooldownOutcome, Cooldowns, KvCooldowns, Refusal, Refusals, ReplyRefusals, SilentRefusals,
@@ -108,5 +127,9 @@ pub use help::{CategoryHelp, HelpFormatter, HelpSection};
 pub use markdown::MarkdownRenderer;
 pub use middleware::{Logging, MarkRead, Middleware, Next};
 pub use outbound::{ClientOutbound, Outbound};
+pub use pacer::{
+    PacedOutbound, Pacer, Rate, RateLimiter, Reservation, SlotRequest, SlowDownRule,
+    ThrottlingErrors, Timer, TokenBucket,
+};
 pub use parse::{CommandParser, ParsedCommand, PrefixParser};
 pub use plugin::{DEFAULT_CATEGORY, Listen, Plugin, Registrar};

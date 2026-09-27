@@ -139,8 +139,8 @@ failed sends, and the count of `Unknown` events.
 
 | Limit (Meta) | Value | In meta-whatsapp-rs |
 | --- | --- | --- |
-| messages per number | 80/s by default, up to 1,000 | `RateLimited` (130429), replayed within the retry budget |
-| same user | about one message per 6 s, short bursts borrowed from later | `PairRateLimited` (131056), replayed within the budget; Meta suggests backing off 4^n seconds after that |
+| messages per number | 80/s by default, up to 1,000; inbound messages count too | `RateLimited` (130429), replayed within the retry budget; a batch paced per number by the bot crate's `Broadcast` and `Pacer` ([bots.md](bots.md#9-paced-broadcasts)) |
+| same user | about one message per 6 s, short bursts borrowed from later | `PairRateLimited` (131056), replayed within the budget; Meta suggests backing off 4^n seconds after that, which the paced broadcast does for that recipient only |
 | templates to new users | portfolio messaging limit, 250 to unlimited per rolling 24 h | not tracked: count in your campaign queue |
 | management endpoints | 200 requests/hour per app per WABA (5,000 for active WABAs) | don't list templates or phone numbers per request: cache them |
 | number registration | 10 per 72 h | 133016 locks for 72 h, never retried |

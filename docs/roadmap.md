@@ -430,7 +430,7 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     requests asserted; three suggestions become buttons and four a list
     (removing the count check fails the test); a `javascript:` image
     URL is never sent.
-- [ ] **B2. Paced broadcast** (`meta-whatsapp-bot`; rows 89, 92; D29): a
+- [x] **B2. Paced broadcast** (`meta-whatsapp-bot`; rows 89, 92; D29): a
   per-number rate under Meta's throughput (80 messages a second by
   default), progress, retries only when `Error::may_have_been_sent` is
   false, the pair and per-user marketing limits read from `ErrorKind`;
@@ -440,6 +440,45 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
   - **Decisive:** under a fake clock, 200 sends at a configured 20 a
     second never exceed it; a scripted timeout is never retried
     (removing the `may_have_been_sent` check fails the test).
+  - **Landed:** rows 89 and 92 done in the library (`Broadcast`,
+    `Pacer`, `TokenBucket`, `BroadcastPolicy`, `BotBuilder::pacer`,
+    `PacedGroups` and `PacedGroup` for group operations). Each person
+    once by default (`BroadcastBuilder::dedupe`); lines streamed to a
+    `ReportSink` for long lists; every retry paced
+    (`Client::with_retry`), and resent only when `Error::may_resend`
+    holds, the client's rule too. Swappable: the rate limiter
+    (`RateLimiter`), which errors slow a number down (`SlowDownRule`),
+    the clock (`Timer`), the failure policy (`BroadcastPolicy`) and the
+    report sink (`ReportSink`) are traits with defaults; a number's rate
+    changes while running (`TokenBucket::set_rate`). Not in it: acting
+    on Meta's throughput upgrade by itself (B2a), a limiter shared by
+    replicas (B2b; the trait allows one), Meta's daily messaging limit
+    (Meta's to enforce), and runs that survive a restart (B3).
+- [ ] **B2a. Throughput upgrades, followed** (`meta-whatsapp-bot`): an
+  opt-in listener that sets a number's rate to `Rate::HIGHER_THROUGHPUT`
+  (`TokenBucket::set_rate`) when its `phone_number_quality_update`
+  webhook says `THROUGHPUT_UPGRADE`
+  (`PhoneNumberQualityEvent::ThroughputUpgrade`, `throughput`: Meta
+  documents no other mapping from a level to a rate), off by default.
+  Companions: the bots guide, the bot skill's broadcast reference.
+  - **After:** B2.
+  - **Decisive:** delivering the `THROUGHPUT_UPGRADE` fixture moves that
+    number's sends from 12.5 ms to 1 ms apart on a `ManualClock`;
+    removing the `set_rate` call fails the test.
+- [ ] **B2b. A pacer shared by replicas** (`meta-whatsapp-bot`; for the
+  service's broadcasts, M5k): a `RateLimiter` keeping each number's rate
+  schedule (the generic cell rate algorithm's state) as a typed store on
+  `KvStore`, read and written with `compare_and_swap` (no new port), so
+  every replica books from one budget. A new store namespace,
+  `wa.bot.pacer` (the `wa.<module>[.<purpose>]` rule; ephemeral, like
+  `wa.bot.cooldown`), added to architecture.md § Stable identifiers with
+  its pin.
+  - **After:** B2.
+  - **Decisive:** two `Pacer`s on one `MemoryKvStore` at 20 a second
+    send 200 interleaved sends and never exceed 20 in any one-second
+    window; replacing the compare-and-swap by a plain put fails it. The
+    live runs on Redis and Postgres go through the store conformance
+    suite.
 - [ ] **B3. Durable scheduling** (`meta-whatsapp-bot`; row 90; D29): jobs
   as a typed store on `KvStore` (a bucketed due-time index, claims by
   compare-and-swap with a lease; no new port), send at a time, cancel,
@@ -449,7 +488,11 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
   - **Decisive:** two runners on one store send a due job once
     (replacing the compare-and-swap by a plain put fails it); a job
     scheduled before a restart is sent by a new runner on the same
-    store.
+    store; a resumed broadcast job never resends a recipient recorded as
+    sent (removing the per-recipient marker fails it); a `131049`
+    recorded from a status webhook (the job keeps each message's id)
+    makes a re-run within 24 hours skip that recipient and send everyone
+    else.
 - [ ] **B4. Retention and auto-delete** (`meta-whatsapp-bot`; row 91): by
   age and a cap per chat, through `ConversationStore`'s erasure.
   - **After:** B1, L5.
@@ -1019,7 +1062,7 @@ or WABA fails the family's own cross-tenant test).
   - **After:** S7, L10b, L12.
   - **Decisive:** M5.1, M5.2.
 - [ ] **M5k. The bot and broadcast APIs** (rows 17, 85–92), over B1–B4.
-  - **After:** B1, B2, B3, B4.
+  - **After:** B1, B2, B2b (the replicas' shared budget), B3, B4.
   - **Decisive:** M5.1, M5.2; a broadcast over HTTP never exceeds its
     tenant's configured rate under a fake clock.
 - [ ] **M5l. Conversation routing** (row 139): the thread control API.

@@ -1,8 +1,9 @@
 # `ErrorKind` reference
 
-> **Verified against meta-whatsapp-rs 5597ced54ccd5e940a4b1bea920ae29037b6665a (2026-09-25).** Source: `crates/meta-whatsapp-core/src/error/graph.rs`
+> **Verified against meta-whatsapp-rs fabab0ba46316335b638f505eb3f6ee20a5e1451 (2026-09-26).** Source: `crates/meta-whatsapp-core/src/error/graph.rs`
 > (`ErrorKind::from_code`, `is_retryable`, `is_rejected_before_processing`) and
-> `crates/meta-whatsapp-core/src/error/mod.rs` (`Error::kind`: the local-refusal rule below).
+> `crates/meta-whatsapp-core/src/error/mod.rs` (`Error::kind`: the local-refusal rule below;
+> `Error::may_resend`: the "Replay a send" column).
 > `ErrorKind` is `#[non_exhaustive]`: always keep a `_ =>` arm.
 
 `err.kind()` classifies `Error::Api` by Graph error `code`. Other variants map
@@ -20,15 +21,16 @@ Each kind's stable name, `ErrorKind::as_str`, is its variant name in
 lists the kinds below in this order, `Unknown` last.
 
 "Auto-retry" = `ErrorKind::is_retryable()`. "Replay a send" =
-`is_rejected_before_processing()`: the only kinds for which the client replays
-a non-idempotent request.
+`Error::may_resend()`: `is_rejected_before_processing()` (on any status), plus
+`131057` on a 4xx or without a status; the only errors for which the client (and the bot's paced
+broadcast) replays a non-idempotent request.
 
 | Kind | Codes | Auto-retry | Replay a send | What to do |
 | --- | --- | --- | --- | --- |
 | `Authentication` | 0, 190 | no | no | Token expired/revoked: re-onboard the merchant (Embedded Signup) or rotate your system user token |
 | `Permission` | 3, 10, 200–299, 131005 | no | no | Permission not granted or removed; check the token's scopes/assets |
 | `RateLimited` | 4, 80007, 130429 | yes | yes | Back off; the client already retried |
-| `SpamRateLimited` | 131048 | **no** | no | Quality problem; retrying makes it worse |
+| `SpamRateLimited` | 131048 | **no** | no | Sending restricted for the number (quality): Meta's advice is to check its quality status in WhatsApp Manager |
 | `PairRateLimited` | 131056 | yes | yes | Too many messages to the same user; slow down for that user |
 | `ClassificationLimitReached` | 131064 | no | no | Template classification violations; fix categories |
 | `AccountRestricted` | 368, 131031 | no | no | Policy restriction on the account |
@@ -63,7 +65,7 @@ a non-idempotent request.
 | `NotFound` | 2494164 | no | no | e.g. unknown In-App Signup |
 | `FeatureNotAvailable` | 2494165 | no | no | e.g. In-App Signup not enabled on the WABA |
 | `Payment` | 131042, 134011 | no | no | Payment method / payments ToS |
-| `ServiceUnavailable` | 1, 2, 131000, 131016, 131057, 133004, 2494100 | yes | **no** | Meta-side; a send that got this may have gone out |
+| `ServiceUnavailable` | 1, 2, 131000, 131016, 131057, 133004, 2494100 | yes | **no**, but 131057 on a 4xx | Meta-side; a send that got this may have gone out, except 131057 (the account in maintenance during a throughput upgrade: every request refused) |
 | `Unknown` | anything else | no¹ | no | Read `err.graph()` |
 
 ¹ `GraphApiError::is_retryable()` is also `true` when Meta sets
