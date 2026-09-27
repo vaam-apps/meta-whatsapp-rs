@@ -234,9 +234,14 @@ mod tests {
             "type": "OAuthException", "code": 147005, "fbtrace_id": "A"}});
         transport.push_json(400, in_use.clone());
         transport.push_json(200, json!({"status": "approved"}));
-        let status = adopt_username(&client(&transport), "106540352242922".into(), "lucky_shrub", true)
-            .await
-            .unwrap();
+        let status = adopt_username(
+            &client(&transport),
+            "106540352242922".into(),
+            "lucky_shrub",
+            true,
+        )
+        .await
+        .unwrap();
         assert_eq!(status, BusinessUsernameStatus::Approved);
         let bodies: Vec<_> = transport
             .requests()
@@ -250,9 +255,14 @@ mod tests {
         );
 
         transport.push_json(400, in_use);
-        let kept = adopt_username(&client(&transport), "106540352242922".into(), "lucky_shrub", false)
-            .await
-            .unwrap_err();
+        let kept = adopt_username(
+            &client(&transport),
+            "106540352242922".into(),
+            "lucky_shrub",
+            false,
+        )
+        .await
+        .unwrap_err();
         assert_eq!(kept.kind(), ErrorKind::Unknown);
         assert_eq!(kept.graph().map(|g| g.code), Some(147005));
         assert_eq!(transport.requests().len(), 3); // no transfer asked for

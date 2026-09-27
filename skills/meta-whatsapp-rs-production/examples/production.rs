@@ -195,10 +195,7 @@ mod tests {
             .unwrap();
         assert_eq!(failed, [UserId::new("US.1")]); // Meta failed on it; the next one still went
         let requests = transport.requests();
-        let asked: Vec<String> = requests
-            .iter()
-            .map(|r| r.query("bsuid").unwrap())
-            .collect();
+        let asked: Vec<String> = requests.iter().map(|r| r.query("bsuid").unwrap()).collect();
         assert_eq!(asked, ["US.1", BSUID]); // not the phone number, not the parent BSUID
         for request in &requests {
             assert_eq!(request.method, "DELETE");
