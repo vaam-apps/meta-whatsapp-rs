@@ -10,7 +10,9 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures::Stream;
-use http::header::{AUTHORIZATION, HeaderName, HeaderValue, RETRY_AFTER, USER_AGENT};
+use http::header::{
+    AUTHORIZATION, COOKIE, HeaderName, HeaderValue, PROXY_AUTHORIZATION, RETRY_AFTER, USER_AGENT,
+};
 use http::{HeaderMap, Method};
 use meta_whatsapp_core::error::{GraphErrorEnvelope, TransportError, ValidationError, snippet};
 use meta_whatsapp_core::paging::Page;
@@ -256,11 +258,33 @@ impl GraphRequest {
         self
     }
 
-    /// Extra header. Invalid values are reported on send.
+    /// Extra header. An invalid name or value is reported on send, as a
+    /// [`ValidationError`] on `name`, before anything is sent.
+    ///
+    /// Credentials are refused the same way, whatever the name's case:
+    /// `Authorization`, `Proxy-Authorization` and `Cookie`. Attach a token
+    /// with [`Self::bearer`] or [`Self::oauth`] (or the client's own): the
+    /// credential rules check where those go, and a header would go
+    /// anywhere, [`Self::no_auth`] and plain `http` included.
     pub fn header(mut self, name: &'static str, value: impl AsRef<str>) -> Self {
+        let Ok(header) = HeaderName::from_bytes(name.as_bytes()) else {
+            self.fail(ValidationError::new(name, "invalid header name").into());
+            return self;
+        };
+        if CREDENTIAL_HEADERS.contains(&header) {
+            self.fail(
+                ValidationError::new(
+                    name,
+                    "credentials go through bearer() or oauth(), which the credential \
+                     rules check, never through header()",
+                )
+                .into(),
+            );
+            return self;
+        }
         match HeaderValue::from_str(value.as_ref()) {
             Ok(v) => {
-                self.headers.insert(HeaderName::from_static(name), v);
+                self.headers.insert(header, v);
             }
             Err(_) => self.fail(ValidationError::new(name, "invalid header value").into()),
         }
@@ -286,7 +310,7 @@ impl GraphRequest {
         self
     }
 
-    /// Send no `Authorization` header.
+    /// Send no `Authorization` header ([`Self::header`] cannot add one).
     pub fn no_auth(mut self) -> Self {
         self.auth = Auth::None;
         self
@@ -602,6 +626,10 @@ pub(crate) const PARENT_BSUID_ACCOUNTS_HOST: &str = "api.facebook.com";
 
 /// The edge of the Parent BSUID Accounts API, after the business id.
 pub(crate) const PARENT_BSUID_ACCOUNTS_EDGE: &str = "parent-bsuid-accounts";
+
+/// Headers that carry a credential, which [`GraphRequest::header`] refuses:
+/// a token goes only through the `Auth` the credential rules check.
+const CREDENTIAL_HEADERS: [HeaderName; 3] = [AUTHORIZATION, PROXY_AUTHORIZATION, COOKIE];
 
 /// One segment of a [`PathRule::Exact`] path.
 enum Segment {
@@ -1465,6 +1493,7 @@ mod credential_rule_tests {
             "https://api.facebook.com/1234567890/parent-bsuid-accounts#frag",
             "https://user@api.facebook.com/1234567890/parent-bsuid-accounts",
             "https://user:pw@api.facebook.com/1234567890/parent-bsuid-accounts",
+            "https://:pw@api.facebook.com/1234567890/parent-bsuid-accounts",
             // The right path on another host: look-alikes, subdomains,
             // suffixes, a trailing dot, the pre-correction host behind a
             // proxy is in `the_rule_ignores_the_configured_graph_endpoint`.
@@ -1632,6 +1661,122 @@ mod credential_rule_tests {
         );
         assert!(!err.to_string().contains("private-query"), "{err}");
         assert!(t.requests().is_empty());
+    }
+
+    /// The media host's rule is as it was before the rules became data: any
+    /// method, any path, https on the default port.
+    #[tokio::test]
+    async fn the_media_rule_is_unchanged() {
+        for method in [
+            Method::GET,
+            Method::HEAD,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+        ] {
+            let t = ScriptedTransport::new();
+            t.push_bytes(200, "image/jpeg", "jpg");
+            client(&t)
+                .request_url(
+                    method.clone(),
+                    Url::parse("https://lookaside.fbsbx.com/any/path?mid=1").unwrap(),
+                )
+                .send_raw()
+                .await
+                .unwrap_or_else(|e| panic!("{method}: {e}"));
+            let req = t.last_request().unwrap();
+            assert_eq!(req.method, method);
+            assert_eq!(req.bearer(), Some("TOKEN"), "{method}");
+            assert_eq!(t.remaining(), 0);
+        }
+    }
+
+    /// `header()` cannot attach a credential, in any case of the name, to
+    /// any URL, with the client's token, `no_auth()` or no token at all:
+    /// `bearer()` and `oauth()`, which the rules check, are the only ways.
+    /// The refusal is a validation error on the name, before any request,
+    /// that never shows the value.
+    #[tokio::test]
+    async fn header_never_carries_a_credential() {
+        const SENTINEL: &str = "EAAB-SENTINEL-header";
+        let names = [
+            "authorization",
+            "Authorization",
+            "AUTHORIZATION",
+            "proxy-authorization",
+            "Proxy-Authorization",
+            "cookie",
+            "Cookie",
+        ];
+        let urls = [
+            "https://evil.example/steal",
+            "http://evil.example/steal",
+            ALLOWED,
+            "https://graph.facebook.com/v25.0/me",
+        ];
+        let t = ScriptedTransport::new();
+        let with_token = client(&t);
+        let without_token = Client::builder()
+            .transport(t.clone())
+            .retry(RetryPolicy::NONE)
+            .build()
+            .unwrap();
+        for name in names {
+            for url in urls {
+                let url = Url::parse(url).unwrap();
+                for (how, req) in [
+                    (
+                        "no_auth",
+                        with_token.request_url(Method::GET, url.clone()).no_auth(),
+                    ),
+                    ("token", with_token.request_url(Method::GET, url.clone())),
+                    (
+                        "no token",
+                        without_token.request_url(Method::GET, url.clone()),
+                    ),
+                ] {
+                    let err = req
+                        .header(name, format!("Bearer {SENTINEL}"))
+                        .send_raw()
+                        .await
+                        .unwrap_err();
+                    assert!(
+                        matches!(&err, Error::Validation(v) if v.field == name),
+                        "{name} {url} ({how}): {err}"
+                    );
+                    let shown = format!("{err} {err:?} {err:#?}");
+                    assert!(!shown.contains("SENTINEL"), "{shown}");
+                }
+            }
+        }
+        assert!(t.requests().is_empty(), "a credential header was sent");
+    }
+
+    /// A header name is parsed, not trusted: any case is accepted (and sent
+    /// lowercase), and a name that is no header name is a validation error
+    /// on send, never a panic.
+    #[tokio::test]
+    async fn header_names_are_parsed() {
+        let t = ScriptedTransport::new();
+        t.push_json(200, json!({}));
+        let c = client(&t);
+        c.get("x")
+            .header("X-Custom-Header", "v1")
+            .send_raw()
+            .await
+            .unwrap();
+        let req = t.last_request().unwrap();
+        assert_eq!(req.header("x-custom-header"), Some("v1"));
+        assert_eq!(req.bearer(), Some("TOKEN"));
+        assert_eq!(t.remaining(), 0);
+        for bad in ["bad name", "", "x:y", "\u{e9}", "a\nb"] {
+            let err = c.get("x").header(bad, "v").send_raw().await.unwrap_err();
+            assert!(
+                matches!(&err, Error::Validation(v) if v.field == bad),
+                "{bad:?}: {err}"
+            );
+        }
+        assert_eq!(t.requests().len(), 1);
     }
 
     /// A `tracing` subscriber that renders every event and span field.
