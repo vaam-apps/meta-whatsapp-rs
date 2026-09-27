@@ -27,7 +27,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
   comments) are cited in the docs as SR-H1, SR-M3, SR-L2, so they never
   read as items.
 - The choices behind the items are recorded in
-  [design §10](design/server.md#10-decisions) (D26–D35 and the rows
+  [design §10](design/server.md#10-decisions) (D26–D36 and the rows
   updated on 2026-09-26) and in
   [OPEN_QUESTIONS.md](../OPEN_QUESTIONS.md), under the rule in AGENTS.md
   § Decisions. What stays the owner's is listed in
@@ -45,7 +45,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | --- | --- |
 | 0 | this plan (parity, categories, roadmap, decisions) |
 | 1 | S1 (server core), B1 (bot framework), U4 (upstream issues) |
-| 2 | S2, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L26, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
+| 2 | S2, S2b, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L26, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
 | 3 | S5a–S5e, S6, S7, S9 |
 | 4 | S10 (waits on the owner's answer to D20 (a)), S11, S12; M2a–M2f |
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3f; B2–B4 |
@@ -98,14 +98,16 @@ and `store-postgres`.
     (SR-L3), and the visibility pins are UI tests with the compiler's
     errors (SR-L1).
     SR-L2, and the same race in `failed`, wait for S2.
-- [ ] **S2. The port contracts, right for any backend**
+- [x] **S2. The port contracts, right for any backend**
   (`meta-whatsapp-server-core` and both in-tree backends): what Postgres
   guarantees by accident becomes a requirement of the ports, cheap now
   and costly once a third backend exists.
   - `Outbox::insert` must re-check the routing: when the event has a
     tenant, the row keeps it only if, atomically with the insert, the
-    binding it was routed by still names that tenant and began no later
-    than the event's time; otherwise the row is operator-only. A typed
+    binding it was routed by still names that tenant and began in a
+    second before the event's (its security review's L3: an event of
+    the binding's own second may be the previous holder's); otherwise
+    the row is operator-only. A typed
     `RouteGuard` on `NewEvent` carries what the check needs, so no
     backend redoes the routing rules from strings.
   - Referential rules: `bind_waba` to a missing tenant has its own
@@ -150,13 +152,125 @@ and `store-postgres`.
     another, whose call Meta then answers `190`, leaves the new
     binding's numbers `connected` in both cases (conditioning the update
     on the tenant alone fails the first, on nothing both).
+  - **Landed:** every bullet, in the core's ports and both in-tree
+    backends, with the decisive tests on memory and live on Postgres
+    (the store, events, backend and capability suites of the server's
+    `tests/common`). The route guard is `outbox::RouteGuard` (a
+    `GuardedBinding` and the event's date), set by `events::outbox_row`
+    from the routing's `Holder`; a tenant without a guard is
+    operator-only, and the memory outbox belongs to its `MemoryStore`
+    and checks under the store's lock. `BindOutcome::NoSuchTenant`;
+    `bind_waba` locks the tenant `FOR KEY SHARE` on Postgres. The purges
+    return a count and take no lock; `serve::round` takes one
+    `HOUSEKEEPING` turn, leased for `HOUSEKEEPING_LEASE` (5 minutes; on
+    Postgres the turn's session is ended past it, and the key is still
+    `HOUSEKEEPING_LOCK`). `Authorizer::with_clock`, which the service
+    hands the webhook pipeline's clock. `StorageError::Busy` in the
+    library (additive). `PhoneNumberId` and `WabaId` in the outbox
+    types. SR-L2 and `failed`: a `BindingEpoch` and, for an `OwnedWaba`,
+    the vault record's `TokenVersion` (the library's
+    `TokenVault::get_versioned` and `delete_if_unchanged`, additive);
+    `RecordStore::unbind_waba_if` and `set_waba_status_if`; and a
+    capability is made only from a token read while its binding held
+    (the binding read again after the vault, `503` when it moved: the
+    review found the old holder's binding paired with the new holder's
+    token). The review's races (`race_suite`, `racing_a_reattach`, two
+    purges at once) run on memory and live on Postgres. Its security
+    review's remediation: a capability answers for the vault's read
+    (a token, none, a failure) only once its binding is read again
+    (`Authorizer::open`: a move before the new holder's token is
+    stored is `503`, not `number_not_connected`, on which the admin
+    unbind deleted the new holder's binding); a tenant's deletion skips
+    a WABA that moved since its listing instead of answering `503`;
+    `OwnedWaba::still_bound` is asked before every `unsubscribe_app`
+    with a capability's token (the tenant's disconnection, the admin
+    unbind, a tenant's deletion), and `forget` warns when it finds the
+    binding moved (the Graph call's own window); the port rule is
+    written down (`server_core::store`: the vault is written for a WABA
+    only by its current holder, an attach binds, stores, then confirms,
+    every unbind deletes the token before the binding), and the attach
+    follows it (`Authorizer::store_token` reads the binding, stores with
+    the library's `TokenVault::store_versioned`, additive, and reads the
+    binding again: moved, it takes back exactly its own write with
+    `delete_if_unchanged` and answers `503`; the remediation found an
+    attach overwriting, with its token, the token of a tenant the WABA
+    moved to between its binding and its store); the vault's
+    conditional delete links again the numbers a record stored since
+    lists (L2); an event of its binding's own second is operator-only
+    (L3); a contact sync is dated when its webhook was triggered (M2's
+    first half); `StorageError::Busy`'s docs say a step storing after a
+    send is not repeated on it. Left, and why: a binding refreshed for
+    its own tenant (attached again without an unbind, as the operator's
+    reconnect or token rotation does) keeps its epoch, so a `190`
+    answered after the refresh to a capability made before it marks its
+    numbers again (the vault version covers `forget` there, not
+    `failed`; `attached_at` cannot move, the route guard reads it): S2b,
+    a bind generation; undated events (errors, history chunks, undated
+    group updates) of a WABA's previous holder, which Meta redelivers
+    for up to 7 days, reach its new holder after a move to another
+    tenant: S2b (D36); a skew margin around `attached_at`: S2b; the
+    attach's confirmation narrows a window it does not close: another
+    tenant's attach landing whole between an attach's read of its
+    binding and its store has its token overwritten, then taken back
+    with the first attach's (its binding left with no token until it
+    attaches again), and a capability of its own made in between
+    carries the first attach's token; closing it needs the vault record
+    to name the binding it was stored under, a change of the stored
+    format, which is the owner's (planned nowhere yet); a disconnection
+    racing a vault rotation deletes nothing and answers `503`
+    (retryable); the admin's unbind
+    of a WABA without a usable token, and the admin's own `190` right
+    after attaching, stay unconditioned (no capability was made from a
+    binding); the memory stores read the system clock, not the injected
+    one (one process).
+- [ ] **S2b. Undated events after a move, and the bind generation**
+  (`meta-whatsapp-server-core` and both in-tree backends; one PR with
+  both schema changes, on both backends, and an additive migration: a
+  new migration file, never an edit to one on `main`). S2's security
+  review (M2) and sabotage review (the same-tenant refresh). Rows 9 and
+  112: event routing (the service's side is partial until this lands,
+  as a previous holder's undated events reach a new holder after a
+  move), and the ports' contracts.
+  - Record when a WABA was last unbound from a different tenant: a
+    store field on both backends.
+  - A setting `undated_after_move`: `OperatorOnly { window }`, the
+    default, with a window of 7 days and an hour (Meta's retry window
+    plus the dedup margin); `CurrentHolder`, the behaviour before it.
+    Undated tenant-visible events within the window are operator-only.
+    A first onboarding (no previous tenant) is unaffected (design D36).
+  - A skew margin setting around `attached_at` for dated events,
+    applied only when a previous tenant exists (the second half of S2's
+    L3; S2 made an event of the binding's own second operator-only).
+  - The same-second rule, strict since S2 (an event of its binding's
+    own second is operator-only), relaxed to `<=` when the WABA has no
+    previous tenant: a first onboarding keeps the events of its first
+    second. It lands with the tombstone (the record of the last
+    unbinding from a different tenant), which is what tells the two
+    apart.
+  - A bind generation carried in `BindingEpoch` (a new column,
+    incremented on every attach, a same-tenant refresh included), so
+    that a capability made before a refresh is told apart from one made
+    after it; the route guard keeps comparing `attached_at`.
+  - **After:** S2.
+  - **Decisive:** after a move A→B, an undated `history_synced`
+    redelivered within the window reaches no tenant; with
+    `CurrentHolder` it reaches B; a WABA with no previous tenant still
+    gets its history; removing the check fails the first case; the
+    same for the security review's other undated cases (an error, an
+    undated group update); an event of its binding's first second
+    reaches the tenant of a first onboarding, and no tenant after a
+    move; a `190` from a capability made before a same-tenant refresh
+    does not mark the numbers `reconnect_required`.
 - [ ] **S3. Conformance into core** (`meta-whatsapp-server-core`,
   `meta_whatsapp_server_core::conformance`, a feature, like the
   library's `store::conformance`, run over a `&dyn Backend`): the store
   and events suites moved out of the server's tests, the cross-port
   invariants (deleting a tenant purges its stream; a binding changed
   during an insert leaves the row operator-only; per-tenant commit
-  order) and S2's rules. Row 112 (conformance in core).
+  order) and S2's rules, the `RouteGuard` cases among them (S2's
+  security review, L4: a third-party outbox that ignores the guard
+  fails open until then, and must fail the suite). Row 112 (conformance
+  in core).
   - **After:** S2.
   - **Decisive:** removing the memory backend's re-check fails the
     binding invariant; removing the stream purge from `delete_tenant`
@@ -925,7 +1039,7 @@ design's (§9).
   number of a tenant that is the account's escalation partner turns the
   ownership check off; one that receives standby copies turns the
   handover trust off).
-  - **After:** S7, L5, L7.
+  - **After:** S2b, S7, L5, L7.
   - **Decisive:** M2.1; removing the binding-epoch filter shows a moved
     number's history to its new tenant, and a test fails; with a
     retention set, housekeeping purges an inbox message older than it
@@ -1175,3 +1289,15 @@ everything else goes into the parity-completion report.
   names: architecture.md § Stable identifiers) become permanent with
   the release. Each ships swappable today; changing one after the
   release is a data migration.
+- **New stable identifiers**, confirmed before the first release: each
+  store namespace or stored name an item adds after the table in
+  architecture.md § Stable identifiers was last confirmed (B2b's planned
+  `wa.bot.pacer`, and those B3 and L21a add), for the same reason as
+  L5's.
+- **The token vault's stored format**, if S2's last attach window is to
+  close: a vault record naming the binding it was stored under would let
+  a take-back tell its own token from another tenant's stored in the
+  microseconds between an attach's binding check and its store
+  (design §8.1, S2's "Left"). The record's format is stored data under
+  `wa-rs/token-vault/v1`, so changing it is a data migration: the
+  owner's, and asked with the release questions, not before.

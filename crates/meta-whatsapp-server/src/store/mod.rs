@@ -20,8 +20,8 @@ pub use memory::{MemoryBackend, MemoryLeaderLock, MemoryStore};
 pub use meta_whatsapp_server_core::backend::{Backend, BackendKind};
 pub use meta_whatsapp_server_core::outbox::Outbox;
 pub use meta_whatsapp_server_core::store::{
-    HOUSEKEEPING, IdempotencyRecords, Janitor, LeaderLock, LeaderTurn, RecordStore, SchemaMigrator,
-    StoreResult, Turn, listing,
+    HOUSEKEEPING, HOUSEKEEPING_LEASE, IdempotencyRecords, Janitor, LeaderLock, LeaderTurn,
+    RecordStore, SchemaMigrator, StoreResult, Turn, listing,
 };
 pub use postgres::{
     HOUSEKEEPING_LOCK, MIGRATION_LOCK, MIGRATIONS_TABLE, PgBackend, PgJanitor, PgLeaderLock,

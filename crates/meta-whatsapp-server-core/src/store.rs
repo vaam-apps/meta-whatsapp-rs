@@ -13,6 +13,75 @@
 //! The ports are not independent of each other: a backend implements them
 //! over one database, and deleting a tenant ([`RecordStore::delete_tenant`])
 //! reaches its idempotency records and its event stream too.
+//!
+//! **What every backend guarantees**, whatever its database (Postgres gets
+//! some of these from foreign keys and row locks; a MongoDB or a
+//! CrateStack-models backend has to build them):
+//!
+//! - **Referential rules**: binding a WABA to a tenant that does not
+//!   exist answers [`BindOutcome::NoSuchTenant`], and a binding and a
+//!   deletion of one tenant serialize ([`RecordStore::bind_waba`],
+//!   [`RecordStore::delete_tenant`]): never a binding to a deleted tenant.
+//! - **The outbox checks the routing again**, atomically with the insert
+//!   ([`crate::outbox::Outbox::insert`]).
+//! - **One clock**: every time a port compares (an idempotency lease or
+//!   expiry, a key's last use, a purge's cutoff) is read from one clock
+//!   all replicas agree on: the database's where it has one (Postgres:
+//!   `now()`), else the service's `Clock` (the library's port), whose skew
+//!   between replicas stays below the shortest lease it measures
+//!   ([`HOUSEKEEPING_LEASE`], the idempotency lease).
+//! - **Contention is typed**: a backend that gives up waiting for another
+//!   writer reports `StorageError::Busy`, never an opaque backend error.
+//! - **Listings are in byte order** of their ids (Postgres: `COLLATE
+//!   "C"`), never a locale's collation: a page's cursor is an id, and two
+//!   backends must page the same records the same way.
+//! - **Purges take no lock of their own**, return how many rows went, and
+//!   are safe on two replicas at once; housekeeping runs them under one
+//!   [`LeaderLock`] turn per round.
+//! - **A capability's writes are conditioned** on the binding it was made
+//!   from ([`RecordStore::unbind_waba_if`],
+//!   [`RecordStore::set_waba_status_if`]: a [`BindingEpoch`]), checked
+//!   atomically with the write.
+//!
+//! **The bindings and the token vault** (the library's `TokenVault`, on
+//! `KvStore`) are two stores no transaction spans. What keeps a WABA's
+//! binding and its token one holder's is an order every writer follows,
+//! the port rule the authorization rests on (`crate::authz`: a capability
+//! reads the binding, then the vault, then the binding again, and trusts
+//! the token only if the binding held throughout):
+//!
+//! - **the vault is written for a WABA only by its current holder**: a
+//!   token is stored, re-encrypted or refreshed only while its WABA is
+//!   bound to the tenant it belongs to;
+//! - **an attach binds, stores, then confirms** ([`RecordStore::bind_waba`],
+//!   then the vault, then [`RecordStore::waba`] again:
+//!   `crate::authz::Authorizer::store_token`): a store first would
+//!   overwrite another tenant's token before decision D4 refused the
+//!   binding; and a binding that moved between the attach's own binding
+//!   and its store (unbound, maybe bound to another tenant) is found by
+//!   the confirmation, which takes back exactly the attach's own write
+//!   (the version it wrote, `TokenVault::delete_if_unchanged`: never a
+//!   token stored after it) and answers `503`;
+//! - **every unbind deletes the token before the binding** (the vault,
+//!   then [`RecordStore::unbind_waba`] or [`RecordStore::unbind_waba_if`]):
+//!   a token never outlives its binding, so the next holder's binding never
+//!   meets the previous holder's token, not even between its binding and
+//!   its own token's store.
+//!
+//! A re-encryption (a vault key rotation, a read under a previous key) is
+//! a compare-and-swap on the record it read, so it never writes back a
+//! token that was replaced meanwhile. What the order narrows and does not
+//! close: another tenant's attach whose binding and store both land
+//! between an attach's read of its binding and its own store (two
+//! operator actions within microseconds) has its token overwritten; the
+//! confirmation then takes the first attach's token back, which leaves the
+//! other tenant's binding with no token (`409 number_not_connected` until
+//! it attaches again), and a capability of the other tenant's made between
+//! that store and its take-back carries the first attach's token. A
+//! re-encryption of the attach's record in that window moves its version,
+//! and the take-back then deletes nothing. Closing it needs the vault
+//! record to name the binding it was stored under: a change of the stored
+//! format, which is the owner's (a data migration).
 
 use std::time::Duration;
 
@@ -21,9 +90,9 @@ use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 
 use crate::model::{
-    ApiKeyRecord, BindOutcome, DeleteTenantOutcome, IdempotencyClaim, IdempotencyKey, KeyScope,
-    Listing, NewApiKey, NumberBinding, NumberStatus, PageRequest, Tenant, TenantId, TenantStatus,
-    WabaBinding,
+    ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim, IdempotencyKey,
+    KeyScope, Listing, NewApiKey, NumberBinding, NumberStatus, PageRequest, Tenant, TenantId,
+    TenantStatus, WabaBinding,
 };
 
 /// Result of a store call. Every failure is the library's
@@ -44,7 +113,7 @@ pub trait RecordStore: Send + Sync + 'static {
     /// One tenant.
     async fn tenant(&self, id: &TenantId) -> StoreResult<Option<Tenant>>;
 
-    /// Tenants in id order.
+    /// Tenants in byte order of their ids.
     async fn tenants(&self, page: &PageRequest) -> StoreResult<Listing<Tenant>>;
 
     /// Change a tenant's name and status (`None` leaves it). `None` when
@@ -61,7 +130,11 @@ pub trait RecordStore: Send + Sync + 'static {
     /// purged, so a tenant created later with the same id polls none of
     /// them and its sequences go on after them; platform keys stop
     /// allowing it (a tenant created later with the same id is another
-    /// tenant for them).
+    /// tenant for them). Serialized with [`Self::bind_waba`] on the same
+    /// tenant: the check for WABAs and the deletion are one step that no
+    /// binding of this tenant lands in between (on a database without
+    /// foreign keys, both write the tenant's record, so that they
+    /// conflict).
     async fn delete_tenant(&self, id: &TenantId) -> StoreResult<DeleteTenantOutcome>;
 
     /// Store a new key; `None` when its id is taken (the caller draws a
@@ -71,7 +144,8 @@ pub trait RecordStore: Send + Sync + 'static {
     /// The key with this id, revoked or not.
     async fn key(&self, key_id: &str) -> StoreResult<Option<ApiKeyRecord>>;
 
-    /// The keys of `scope`, in id order, revoked ones included.
+    /// The keys of `scope`, in byte order of their ids, revoked ones
+    /// included.
     async fn keys(
         &self,
         scope: &KeyScope,
@@ -86,9 +160,16 @@ pub trait RecordStore: Send + Sync + 'static {
     async fn touch_key(&self, key_id: &str) -> StoreResult<()>;
 
     /// Bind `waba_id` and exactly `numbers` to `tenant`, in one step: when
-    /// the WABA or a number is bound to another tenant, nothing changes
-    /// (decision D4). Numbers the WABA had and `numbers` lacks are unbound;
-    /// the others become `connected`.
+    /// `tenant` does not exist ([`BindOutcome::NoSuchTenant`]), or the WABA
+    /// or a number is bound to another tenant
+    /// ([`BindOutcome::OwnedByAnotherTenant`], decision D4), nothing
+    /// changes. Numbers the WABA had and `numbers` lacks are unbound; the
+    /// others become `connected`. A WABA already bound to `tenant` keeps
+    /// its `attached_at`. Serialized with [`Self::delete_tenant`] of the
+    /// same tenant: a binding lands before the deletion (which then finds
+    /// the WABA) or after it (which then finds no tenant), never beside it.
+    /// The caller stores the WABA's token after, then reads the binding
+    /// again (the port rule: see the [module](self)).
     async fn bind_waba(
         &self,
         tenant: &TenantId,
@@ -96,9 +177,20 @@ pub trait RecordStore: Send + Sync + 'static {
         numbers: &[PhoneNumberId],
     ) -> StoreResult<BindOutcome>;
 
-    /// Remove the binding of `waba_id` and its numbers. `false` when it was
-    /// not bound.
+    /// Remove the binding of `waba_id` and its numbers, whoever holds it:
+    /// the operator's unbind. `false` when it was not bound. A capability
+    /// unbinds only the binding it was made from ([`Self::unbind_waba_if`]).
+    /// The caller deletes the WABA's token from the vault first (the port
+    /// rule: see the [module](self)).
     async fn unbind_waba(&self, waba_id: &WabaId) -> StoreResult<bool>;
+
+    /// Remove the binding of `epoch.waba_id` and its numbers only if it is
+    /// still `epoch`'s: bound to `epoch.tenant_id` since
+    /// `epoch.attached_at`, checked atomically with the removal. `false`,
+    /// removing nothing, once the WABA was unbound since (and bound again,
+    /// to any tenant), or when it is not bound. What `OwnedWaba::forget`
+    /// takes (roadmap S2: the core's security review, SR-L2).
+    async fn unbind_waba_if(&self, epoch: &BindingEpoch) -> StoreResult<bool>;
 
     /// The binding of a WABA.
     async fn waba(&self, waba_id: &WabaId) -> StoreResult<Option<WabaBinding>>;
@@ -106,29 +198,44 @@ pub trait RecordStore: Send + Sync + 'static {
     /// The binding of a phone number.
     async fn number(&self, phone_number_id: &PhoneNumberId) -> StoreResult<Option<NumberBinding>>;
 
-    /// Every tenant's WABAs, in id order (the vault cannot list its
-    /// records: key rotation walks these).
+    /// Every tenant's WABAs, in byte order of their ids (the vault cannot
+    /// list its records: key rotation walks these).
     async fn all_wabas(&self, page: &PageRequest) -> StoreResult<Listing<WabaBinding>>;
 
-    /// A tenant's WABAs, in id order.
+    /// A tenant's WABAs, in byte order of their ids.
     async fn wabas(
         &self,
         tenant: &TenantId,
         page: &PageRequest,
     ) -> StoreResult<Listing<WabaBinding>>;
 
-    /// A WABA's numbers, in id order (at most the 1,000 attach binds).
+    /// A WABA's numbers, in byte order of their ids (at most the 1,000
+    /// attach binds).
     async fn waba_numbers(&self, waba_id: &WabaId) -> StoreResult<Vec<NumberBinding>>;
 
-    /// A tenant's numbers, in id order.
+    /// A tenant's numbers, in byte order of their ids.
     async fn numbers(
         &self,
         tenant: &TenantId,
         page: &PageRequest,
     ) -> StoreResult<Listing<NumberBinding>>;
 
-    /// Set the status of every number of `waba_id`.
+    /// Set the status of every number of `waba_id`, whoever holds it.
     async fn set_waba_status(&self, waba_id: &WabaId, status: NumberStatus) -> StoreResult<()>;
+
+    /// Set the status of every number of `epoch.waba_id` only if the WABA
+    /// is still `epoch`'s (as [`Self::unbind_waba_if`]), checked atomically
+    /// with the update: a binding made since keeps its numbers' status.
+    /// Whether it was `epoch`'s. What a capability's `failed` takes after
+    /// Meta's `190` (roadmap S2). A binding refreshed for its own tenant
+    /// ([`Self::bind_waba`] on a WABA the tenant holds: an operator
+    /// attaching it again with a new token) keeps its epoch, so a `190`
+    /// answered to a capability made before the refresh still marks it.
+    async fn set_waba_status_if(
+        &self,
+        epoch: &BindingEpoch,
+        status: NumberStatus,
+    ) -> StoreResult<bool>;
 }
 
 /// The records of `Idempotency-Key`s (docs/design/server.md, section
@@ -142,7 +249,10 @@ pub trait IdempotencyRecords: Send + Sync + 'static {
     /// the claim id `claim`, a lease ending after `lease` and an expiry
     /// after `ttl`, and answer [`IdempotencyClaim::Claimed`]; else answer
     /// the record found. Atomic: of two requests racing for a key, one
-    /// claims it. Times are the store's clock (the database's).
+    /// claims it. Times (the lease, the expiry, and whether either ended)
+    /// are read from one clock all replicas agree on: the database's where
+    /// it has one, else the service's `Clock`, with its skew between
+    /// replicas below `lease` (see the [module](self)).
     async fn claim_idempotency_key(
         &self,
         tenant: &TenantId,
@@ -174,32 +284,51 @@ pub trait IdempotencyRecords: Send + Sync + 'static {
         claim: &str,
     ) -> StoreResult<bool>;
 
-    /// Delete the records past their expiry; how many went. One replica
-    /// at a time: `0` when another one is purging (the delete is safe to
-    /// repeat).
+    /// Delete the records past their expiry; how many went. It takes no
+    /// lock of its own (housekeeping runs it under a [`LeaderLock`] turn),
+    /// and is safe on two replicas at once: a record two purges both chose
+    /// goes once.
     async fn purge_idempotency_keys(&self) -> StoreResult<u64>;
 }
 
-/// The name of the lock housekeeping's purges run under
-/// ([`LeaderLock::try_exclusive`]): one replica at a time purges, the
-/// others skip that round (docs/design/server.md, section 2.4).
+/// The name of the lock a housekeeping round runs under
+/// ([`LeaderLock::try_exclusive`]): one turn per round, for all its purges;
+/// one replica at a time runs a round, the others skip it
+/// (docs/design/server.md, section 2.4).
 pub const HOUSEKEEPING: &str = "housekeeping";
 
+/// How long a housekeeping turn is leased for: below the interval between
+/// rounds (`crate::events::HOUSEKEEPING_INTERVAL`), so a replica that died
+/// holding it does not cost the next round, and above the clock skew the
+/// replicas' clock tolerates (see the [module](self)). A round that runs
+/// longer may overlap the next replica's, which the purges tolerate.
+pub const HOUSEKEEPING_LEASE: Duration = Duration::from_secs(300);
+
 /// Leader election for periodic work shared by the replicas of one
-/// deployment: of the replicas asking for `name` at once, one gets the
-/// turn, and the others skip the work this round. A backend backs it with
-/// its database (Postgres: an advisory lock); memory, with the process.
+/// deployment, as a **lease**: of the replicas asking for `name` at once,
+/// one gets the turn, and the others skip the work this round. The turn
+/// ends at its release, its drop, or its lease's expiry, whichever comes
+/// first, so a backend can back it with a session lock (Postgres: a
+/// transaction-scoped advisory lock, the transaction cut after the lease),
+/// a leased record (MongoDB, Redis: a document or key with an expiry, the
+/// database's clock), or the process (memory).
+///
+/// **Exclusion is best-effort**: past the lease (a holder paused, a clock
+/// skewed), two replicas may hold one name. Work done under a turn must
+/// tolerate overlapping with another replica's: housekeeping's purges are
+/// safe to run twice at once.
 #[async_trait]
 pub trait LeaderLock: Send + Sync + 'static {
-    /// The turn for `name`, or `None` when another holder has it. The turn
-    /// ends when it is released ([`LeaderTurn::release`]) or dropped.
-    async fn try_exclusive(&self, name: &str) -> StoreResult<Option<LeaderTurn>>;
+    /// The turn for `name`, leased for `lease`, or `None` when another
+    /// holder has it. The turn ends when it is released
+    /// ([`LeaderTurn::release`]), dropped, or when `lease` has passed.
+    async fn try_exclusive(&self, name: &str, lease: Duration) -> StoreResult<Option<LeaderTurn>>;
 }
 
-/// A turn a [`LeaderLock`] gave: held until released, or dropped (a
-/// holder cut before it released it, a task aborted at shutdown, still
-/// ends it, as its backend can: Postgres rolls the transaction holding the
-/// lock back).
+/// A turn a [`LeaderLock`] gave: held until released, dropped (a holder
+/// cut before it released it, a task aborted at shutdown), or its lease
+/// expired. A backend whose lease cannot end synchronously on drop (a
+/// leased record deleted over the network) lets the lease end it.
 pub struct LeaderTurn(Box<dyn Turn>);
 
 impl std::fmt::Debug for LeaderTurn {
@@ -221,7 +350,7 @@ impl LeaderTurn {
 }
 
 /// A backend's side of a [`LeaderTurn`]: what ends it. Dropping it
-/// without [`Turn::release`] must end it too.
+/// without [`Turn::release`] ends it too, or lets its lease end it.
 #[async_trait]
 pub trait Turn: Send {
     /// End the turn.
@@ -231,7 +360,8 @@ pub trait Turn: Send {
 /// The expired rows a backend's stores leave and nothing else deletes:
 /// on Postgres, the library's key/value rows (webhook dedup markers add
 /// one per event). Reads already ignore them: this bounds the tables.
-/// Housekeeping calls it under its [`LeaderLock`] turn.
+/// Housekeeping calls it under its [`LeaderLock`] turn; like the other
+/// purges, it takes no lock of its own and is safe twice at once.
 #[async_trait]
 pub trait Janitor: Send + Sync + 'static {
     /// Delete what expired; how many rows went.
@@ -247,8 +377,9 @@ pub trait SchemaMigrator: Send + Sync + 'static {
     async fn migrate(&self) -> StoreResult<()>;
 }
 
-/// `items` (one more than asked, when there is more) as a page: at most
-/// `limit` of them, and the last one's id when another page follows.
+/// `items` (one more than asked, when there is more, in byte order of
+/// their ids) as a page: at most `limit` of them, and the last one's id
+/// when another page follows.
 pub fn listing<T>(mut items: Vec<T>, limit: usize, id: impl Fn(&T) -> String) -> Listing<T> {
     let more = items.len() > limit;
     items.truncate(limit);

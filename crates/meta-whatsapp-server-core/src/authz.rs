@@ -37,6 +37,32 @@
 //! [`Authorizer`] handed to an API adapter therefore writes nothing
 //! without one; see [`Tokens`] for what does not compile.
 //!
+//! **A capability acts only on what it was made from** (roadmap S2, the
+//! core's security review SR-L2). An [`OwnedNumber`] and an [`OwnedWaba`]
+//! remember the WABA's binding they were made from (its tenant and when
+//! it began: a [`BindingEpoch`]), and an [`OwnedWaba`] the version of the
+//! vault record its token came from. [`OwnedWaba::forget`] deletes that
+//! token and that binding only, and [`OwnedNumber::failed`] and
+//! [`OwnedWaba::failed`] mark that binding's numbers only: a WABA
+//! unbound and attached again since (to the same tenant or another, with
+//! a new token) keeps its new binding, its new token and its numbers'
+//! status. Each condition is checked by the store atomically with its
+//! write (`TokenVault::delete_if_unchanged`,
+//! [`RecordStore::unbind_waba_if`], [`RecordStore::set_waba_status_if`]).
+//! And what a capability is made from is consistent: its token is read
+//! from the vault while its binding held (the binding is read again after
+//! the vault; moved in between, no capability is made, `503`, whatever the
+//! vault answered, no token included), never the binding of one holder
+//! with the token of the next. That rests on the port rule of
+//! [`crate::store`] (the vault is written for a WABA only by its current
+//! holder: an attach binds, stores, then confirms, taking back its own
+//! write when its binding moved meanwhile ([`Authorizer::store_token`]);
+//! an unbind deletes the token before the binding). Before a call that
+//! acts on the WABA as a whole with its token (unsubscribing the app), a
+//! caller asks [`OwnedWaba::still_bound`]: a capability made before a
+//! move never unsubscribes the new holder's app, but in the call's own
+//! window.
+//!
 //! **A capability works only with the [`Authorizer`] that made it.**
 //! [`Authorizer::new`] is public, so anyone can build one over records of
 //! their own (a key they wrote, a binding they invented) and have it make
@@ -61,8 +87,9 @@
 use std::sync::Arc;
 
 use meta_whatsapp_rs::Client;
-use meta_whatsapp_rs::client::embedded_signup::{StoredBusinessToken, TokenVault};
-use meta_whatsapp_rs::core::error::ConfigError;
+use meta_whatsapp_rs::client::embedded_signup::{StoredBusinessToken, TokenVault, TokenVersion};
+use meta_whatsapp_rs::core::clock::{Clock, SystemClock};
+use meta_whatsapp_rs::core::error::{ConfigError, StorageError};
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_rs::{Error, ErrorKind};
 use time::OffsetDateTime;
@@ -70,8 +97,8 @@ use time::OffsetDateTime;
 use crate::error::ServiceError;
 use crate::keys::PresentedKey;
 use crate::model::{
-    ApiKeyRecord, KeyOwner, MAX_PAGE_SIZE, NumberStatus, PageRequest, Scope, TenantId,
-    TenantStatus, WabaBinding,
+    ApiKeyRecord, BindingEpoch, KeyOwner, MAX_PAGE_SIZE, NumberStatus, PageRequest, Scope,
+    TenantId, TenantStatus, WabaBinding,
 };
 use crate::store::RecordStore;
 
@@ -88,13 +115,15 @@ use crate::store::RecordStore;
 /// use meta_whatsapp_rs::core::ids::WabaId;
 /// use meta_whatsapp_server_core::ServiceError;
 /// use meta_whatsapp_server_core::authz::{AdminCaller, Authorizer};
+/// use meta_whatsapp_server_core::model::TenantId;
 ///
 /// async fn attach(
 ///     authz: &Authorizer,
 ///     admin: &AdminCaller,
+///     tenant: &TenantId,
 ///     token: &StoredBusinessToken,
 /// ) -> Result<(), ServiceError> {
-///     authz.store_token(admin, token).await?;
+///     authz.store_token(admin, tenant, token).await?;
 ///     authz.rotate_vault(admin).await.map(drop)
 /// }
 ///
@@ -135,14 +164,25 @@ impl Tokens {
     }
 
     /// Store a token whose phone numbers were listed by Meta with it
-    /// (`TokenVault::store` trusts its input).
-    pub(crate) async fn store(&self, token: &StoredBusinessToken) -> Result<(), Error> {
-        self.vault.store(token).await
+    /// (`TokenVault::store` trusts its input): the version it wrote, which
+    /// [`Self::delete_if_unchanged`] takes back.
+    pub(crate) async fn store(&self, token: &StoredBusinessToken) -> Result<TokenVersion, Error> {
+        self.vault.store_versioned(token).await
     }
 
     /// Delete a WABA's token and its phone index.
     async fn delete(&self, waba_id: &WabaId) -> Result<bool, Error> {
         self.vault.delete(waba_id).await
+    }
+
+    /// Delete a WABA's token and its phone index, if its record is still
+    /// the one read at `version`.
+    async fn delete_if_unchanged(
+        &self,
+        waba_id: &WabaId,
+        version: TokenVersion,
+    ) -> Result<bool, Error> {
+        self.vault.delete_if_unchanged(waba_id, version).await
     }
 
     /// Re-encrypt every bound WABA's token (and its credit ledger) under
@@ -282,12 +322,15 @@ impl AdminCaller {
 /// Graph client: who a request is ([`Caller`], [`AdminCaller`]), and what
 /// it owns ([`OwnedNumber`], [`OwnedWaba`]: the only way to a stored
 /// token). It accepts only the capabilities it made itself (see the
-/// [module](self)).
+/// [module](self)). Whether a key or a stored token expired is read from
+/// its [`Clock`] ([`Self::with_clock`]; the system clock by default): the
+/// service's one clock, which every replica agrees on.
 pub struct Authorizer {
     records: Arc<dyn RecordStore>,
     tokens: Tokens,
     client: Client,
     issuer: Issuer,
+    clock: Arc<dyn Clock>,
 }
 
 impl std::fmt::Debug for Authorizer {
@@ -324,7 +367,18 @@ impl Authorizer {
             tokens: Tokens::new(vault),
             client,
             issuer: Issuer::new(),
+            clock: Arc::new(SystemClock),
         })
+    }
+
+    /// Read "now" from `clock`: whether a key ([`Self::authenticate`]) or
+    /// a stored token (steps 4 and 5) expired. The service passes the one
+    /// clock its other parts read (the webhook pipeline's), so that every
+    /// replica, and every part of one, agrees on it.
+    #[must_use]
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
     }
 
     /// Whether this [`Authorizer`] made the capability carrying `issuer`,
@@ -386,8 +440,7 @@ impl Authorizer {
             let _ = presented.matches(&[0; 32]);
             return Err(ServiceError::unauthenticated());
         };
-        if !presented.matches(&record.secret_sha256) || !record.is_usable(OffsetDateTime::now_utc())
-        {
+        if !presented.matches(&record.secret_sha256) || !record.is_usable(self.clock.now()) {
             return Err(ServiceError::unauthenticated());
         }
         tracing::Span::current().record("key_id", record.key_id.as_str());
@@ -495,13 +548,25 @@ impl Authorizer {
             }
             NumberStatus::Disconnected => return Err(ServiceError::new("number_not_connected")),
         }
-        let token = self.tokens.vault.get_by_phone_number(&pn).await?;
-        let token = usable(token, &binding.waba_id)?;
+        // The WABA's binding the number is held by: what `failed` marks,
+        // and nothing bound since.
+        let waba = self
+            .records
+            .waba(&binding.waba_id)
+            .await?
+            .filter(|waba| waba.tenant_id == caller.tenant)
+            .ok_or_else(ServiceError::not_found)?;
+        // What the vault answers (a token, none, a failure) is this
+        // binding's only if the binding held throughout the read.
+        let token = self.tokens.vault.get_by_phone_number(&pn).await;
+        self.still_bound(&waba).await?;
+        let token = usable(token?, &binding.waba_id, self.clock.now())?;
         Ok(OwnedNumber {
             client: self.client.with_token(token.token),
             phone_number_id: pn,
             waba_id: binding.waba_id,
             issuer: self.issuer.clone(),
+            epoch: waba.epoch(),
         })
     }
 
@@ -522,11 +587,16 @@ impl Authorizer {
             .filter(|binding| binding.tenant_id == caller.tenant)
             .ok_or_else(ServiceError::not_found)?;
         // Step 5.
-        self.open(binding.waba_id).await
+        self.open(&binding).await
     }
 
     /// A WABA for an admin operation (deleting its tenant, unbinding it):
-    /// step 5 only, as the admin key may act on every tenant. An `admin`
+    /// step 5 only, as the admin key may act on every tenant. `binding` is
+    /// what the admin read (a tenant's listing, say), which may be stale:
+    /// it is read again after the vault, as for every capability, and a
+    /// WABA no longer bound as `binding` says makes no capability (`503
+    /// storage_unavailable`, retryable; a caller walking a listing reads
+    /// the WABA's binding again to tell "moved" from a failure). An `admin`
     /// another [`Authorizer`] made is `403 forbidden`.
     pub async fn waba_for_admin(
         &self,
@@ -534,32 +604,109 @@ impl Authorizer {
         binding: &WabaBinding,
     ) -> Result<OwnedWaba, ServiceError> {
         self.check(&admin.issuer, "waba_for_admin")?;
-        self.open(binding.waba_id.clone()).await
+        self.open(binding).await
     }
 
-    /// Step 5 for a WABA bound to a tenant: its token.
-    async fn open(&self, waba_id: WabaId) -> Result<OwnedWaba, ServiceError> {
-        let token = self.tokens.vault.get(&waba_id).await?;
-        let token = usable(token, &waba_id)?;
+    /// Step 5 for a WABA bound to a tenant (`binding`, as read): its token,
+    /// and the version of the vault record it came from, read while
+    /// `binding` held ([`Self::still_bound`]). What the vault answers is
+    /// `binding`'s only if it held throughout the read: moved, even no
+    /// token (a new holder bound, its token not stored yet) is the new
+    /// holder's state, not `binding`'s, and answers `503` as a moved WABA
+    /// does, never `number_not_connected` (on which the admin unbind would
+    /// delete the new holder's binding without a capability).
+    async fn open(&self, binding: &WabaBinding) -> Result<OwnedWaba, ServiceError> {
+        let waba_id = &binding.waba_id;
+        let read = self.tokens.vault.get_versioned(waba_id).await;
+        self.still_bound(binding).await?;
+        let Some((token, version)) = read? else {
+            return Err(ServiceError::new("number_not_connected"));
+        };
+        let token = usable(Some(token), waba_id, self.clock.now())?;
         Ok(OwnedWaba {
             client: self.client.with_token(token.token),
-            waba_id,
+            waba_id: waba_id.clone(),
             issuer: self.issuer.clone(),
+            epoch: binding.epoch(),
+            token: version,
         })
     }
 
-    /// Store `token` in the vault, for an admin attaching a WABA: its
-    /// phone numbers must be the ones Meta listed with it
-    /// (`TokenVault::store` trusts its input), and the WABA bound to its
-    /// tenant first. An `admin` another [`Authorizer`] made is `403
-    /// forbidden`; the vault's failure is the library's error's code.
+    /// Whether the WABA is still bound as `binding` says, read again once
+    /// its token was read from the vault: a capability is made from a
+    /// binding and the token read while it held. A WABA unbound and
+    /// attached again between the two reads (to another tenant, with that
+    /// tenant's token) would otherwise pair this binding with the new
+    /// holder's token, which the capability would call Meta with and
+    /// [`OwnedWaba::forget`] would delete; a binding made since begins
+    /// later, so an unchanged [`BindingEpoch`] means no unbinding came in
+    /// between. Moved: `503 storage_unavailable` (retryable), and a repeat
+    /// acts on what is there now.
+    async fn still_bound(&self, binding: &WabaBinding) -> Result<(), ServiceError> {
+        if self.holds(&binding.epoch()).await? {
+            return Ok(());
+        }
+        tracing::info!("a WABA's binding moved while a capability was being made from it");
+        Err(ServiceError::from(StorageError::Busy))
+    }
+
+    /// Whether `epoch` is still its WABA's binding, read now.
+    async fn holds(&self, epoch: &BindingEpoch) -> Result<bool, StorageError> {
+        Ok(self
+            .records
+            .waba(&epoch.waba_id)
+            .await?
+            .is_some_and(|now| now.epoch() == *epoch))
+    }
+
+    /// Store `token` in the vault, for an admin attaching a WABA to
+    /// `tenant`: its phone numbers must be the ones Meta listed with it
+    /// (`TokenVault::store` trusts its input), and the WABA bound to
+    /// `tenant` first. An attach binds, stores, then confirms (the port
+    /// rule of [`crate::store`]): the WABA's binding is read (it must be
+    /// `tenant`'s, else the WABA moved since the attach bound it: nothing
+    /// is stored), the token stored, and the binding read again. Moved in
+    /// between (unbound, maybe bound to another tenant, whose token this
+    /// store may have overwritten or be overwritten by), the version this
+    /// store wrote is taken back (`TokenVault::delete_if_unchanged`, which
+    /// never deletes a token stored after it) and the answer is `503
+    /// storage_unavailable`, retryable: the repeat sees the WABA as it is
+    /// now (another tenant's: `waba_owned_by_another_tenant`). An `admin`
+    /// another [`Authorizer`] made is `403 forbidden`, and nothing is read
+    /// or stored; the vault's failure is the library's error's code.
     pub async fn store_token(
         &self,
         admin: &AdminCaller,
+        tenant: &TenantId,
         token: &StoredBusinessToken,
     ) -> Result<(), ServiceError> {
         self.check(&admin.issuer, "store_token")?;
-        Ok(self.tokens.store(token).await?)
+        let waba_id = &token.waba_id;
+        // The binding the attach made (or refreshed): `tenant`'s.
+        let Some(binding) = self
+            .records
+            .waba(waba_id)
+            .await?
+            .filter(|binding| &binding.tenant_id == tenant)
+        else {
+            tracing::info!("a WABA's binding moved before its token was stored: stored nothing");
+            return Err(ServiceError::from(StorageError::Busy));
+        };
+        let epoch = binding.epoch();
+        let written = self.tokens.store(token).await?;
+        if self.holds(&epoch).await? {
+            return Ok(());
+        }
+        // Moved while this stored: what it wrote may sit under another
+        // tenant's binding. Only that write goes, never a later one.
+        let taken_back = self.tokens.delete_if_unchanged(waba_id, written).await?;
+        tracing::warn!(
+            waba_id = waba_id.as_str(),
+            taken_back,
+            "a WABA was unbound, maybe bound to another tenant, while its token was being \
+             stored: the token this attach stored was taken back"
+        );
+        Err(ServiceError::from(StorageError::Busy))
     }
 
     /// Re-encrypt every bound WABA's token (and its credit ledger) under
@@ -604,7 +751,8 @@ impl Authorizer {
 
     /// The error of a failed Graph call made with `waba_id`'s stored
     /// token: a `190` (or `0`) marks the WABA's numbers
-    /// `reconnect_required`.
+    /// `reconnect_required`, whoever holds it (the admin's call, right
+    /// after it stored the token).
     async fn graph_failed(&self, waba_id: &WabaId, error: &Error) -> ServiceError {
         if error.kind() == ErrorKind::Authentication
             && let Err(storage) = self
@@ -616,19 +764,42 @@ impl Authorizer {
         }
         ServiceError::from_library(error)
     }
+
+    /// [`Self::graph_failed`] for a capability's call: a `190` (or `0`)
+    /// marks the numbers of the binding the capability was made from, and
+    /// nothing when the WABA was unbound (and attached again) since.
+    async fn graph_failed_at(&self, epoch: &BindingEpoch, error: &Error) -> ServiceError {
+        if error.kind() == ErrorKind::Authentication {
+            match self
+                .records
+                .set_waba_status_if(epoch, NumberStatus::ReconnectRequired)
+                .await
+            {
+                Ok(true) => {}
+                Ok(false) => tracing::info!(
+                    "Meta refused a token whose WABA was unbound since: marked nothing"
+                ),
+                Err(storage) => {
+                    tracing::warn!(error = %storage, "could not mark the numbers reconnect_required");
+                }
+            }
+        }
+        ServiceError::from_library(error)
+    }
 }
 
-/// Step 5 for one WABA: the token, or why there is none to use.
+/// Step 5 for one WABA: the token, or why there is none to use at `now`.
 fn usable(
     token: Option<StoredBusinessToken>,
     waba_id: &WabaId,
+    now: OffsetDateTime,
 ) -> Result<StoredBusinessToken, ServiceError> {
     let token = token.ok_or_else(|| ServiceError::new("number_not_connected"))?;
     if &token.waba_id != waba_id {
         tracing::warn!("the vault routes a bound number to another WABA");
         return Err(ServiceError::new("number_not_connected"));
     }
-    if token.is_expired(OffsetDateTime::now_utc()) {
+    if token.is_expired(now) {
         return Err(ServiceError::new("reconnect_required"));
     }
     Ok(token)
@@ -636,13 +807,15 @@ fn usable(
 
 /// A phone number the caller's tenant owns, with a client acting with its
 /// WABA's token. Only [`Authorizer::owned_number`] makes one, and only
-/// that [`Authorizer`] accepts it.
+/// that [`Authorizer`] accepts it. It remembers the WABA's binding it was
+/// made from ([`Self::failed`] marks only that one's numbers).
 #[derive(Clone)]
 pub struct OwnedNumber {
     phone_number_id: PhoneNumberId,
     waba_id: WabaId,
     client: Client,
     issuer: Issuer,
+    epoch: BindingEpoch,
 }
 
 impl std::fmt::Debug for OwnedNumber {
@@ -672,24 +845,31 @@ impl OwnedNumber {
 
     /// The error of a failed Graph call made with this number's token
     /// (through `authz`, which made it): a `190` (or `0`) marks the WABA's
-    /// numbers `reconnect_required`. Through an `authz` that did not make
-    /// it: `403 forbidden`, and nothing is marked.
+    /// numbers `reconnect_required`, if the WABA is still bound as it was
+    /// when this was made; a WABA unbound and attached again since (to
+    /// this tenant or another) keeps its numbers' status. Through an
+    /// `authz` that did not make it: `403 forbidden`, and nothing is
+    /// marked.
     pub async fn failed(&self, authz: &Authorizer, error: &Error) -> ServiceError {
         if let Err(refused) = authz.check(&self.issuer, "OwnedNumber::failed") {
             return refused;
         }
-        authz.graph_failed(&self.waba_id, error).await
+        authz.graph_failed_at(&self.epoch, error).await
     }
 }
 
 /// A WABA the caller's tenant owns (or an admin reaches), with a client
 /// acting with its token. Only [`Authorizer`] makes one, and only the
-/// [`Authorizer`] that made it accepts it.
+/// [`Authorizer`] that made it accepts it. It remembers the binding and
+/// the vault record it was made from: [`Self::forget`] and
+/// [`Self::failed`] act on those only.
 #[derive(Clone)]
 pub struct OwnedWaba {
     waba_id: WabaId,
     client: Client,
     issuer: Issuer,
+    epoch: BindingEpoch,
+    token: TokenVersion,
 }
 
 impl std::fmt::Debug for OwnedWaba {
@@ -716,18 +896,57 @@ impl OwnedWaba {
         if let Err(refused) = authz.check(&self.issuer, "OwnedWaba::failed") {
             return refused;
         }
-        authz.graph_failed(&self.waba_id, error).await
+        authz.graph_failed_at(&self.epoch, error).await
+    }
+
+    /// Whether the WABA is still bound as it was when this was made (the
+    /// same [`BindingEpoch`]), read now: what a caller asks just before it
+    /// acts at Meta with this token on the WABA as a whole, unsubscribing
+    /// the app from its webhooks (roadmap S2, the security review's L1). A
+    /// WABA unbound since, and maybe bound to another tenant that
+    /// subscribed the app again, is `false`: the call would remove the new
+    /// holder's subscription. It narrows the window to the call itself,
+    /// which no read closes ([`Self::forget`] warns when it finds the WABA
+    /// moved). Through an `authz` that did not make it: `403 forbidden`.
+    pub async fn still_bound(&self, authz: &Authorizer) -> Result<bool, ServiceError> {
+        authz.check(&self.issuer, "OwnedWaba::still_bound")?;
+        Ok(authz.holds(&self.epoch).await?)
     }
 
     /// Delete the WABA's token and its binding, and its numbers': the last
-    /// step of a disconnection, once Meta unsubscribed the app. Through an
-    /// `authz` that did not make it: `403 forbidden`, and nothing is
+    /// step of a disconnection, once Meta unsubscribed the app. Only the
+    /// token and the binding this was made from: the token first, if its
+    /// vault record is still the one this read, then the binding, if it is
+    /// still the one this read. `true` when both went; `false` when either
+    /// had moved (the WABA unbound and attached again since, a new token;
+    /// or the record re-encrypted by a rotation), and what moved is left:
+    /// the caller may make a new capability and try again. When the
+    /// binding moved (the WABA unbound, maybe bound to another tenant), it
+    /// logs at `warn`, with the WABA's id only: Meta may have unsubscribed
+    /// the app with this token after the new holder subscribed it. Through
+    /// an `authz` that did not make it: `403 forbidden`, and nothing is
     /// deleted.
-    pub async fn forget(self, authz: &Authorizer) -> Result<(), ServiceError> {
+    ///
+    /// The token goes before the binding, as in every unbind (the port
+    /// rule: [`crate::store`]): the binding first would leave, when the
+    /// token moved meanwhile (a rotation, a refresh), a token no binding
+    /// holds, which the next holder's capability could be made with
+    /// between its binding and its own token's store.
+    pub async fn forget(self, authz: &Authorizer) -> Result<bool, ServiceError> {
         authz.check(&self.issuer, "OwnedWaba::forget")?;
-        authz.tokens.delete(&self.waba_id).await?;
-        authz.records.unbind_waba(&self.waba_id).await?;
-        Ok(())
+        let forgotten = authz
+            .tokens
+            .delete_if_unchanged(&self.waba_id, self.token)
+            .await?
+            && authz.records.unbind_waba_if(&self.epoch).await?;
+        if !forgotten && !authz.holds(&self.epoch).await.unwrap_or(true) {
+            tracing::warn!(
+                waba_id = self.waba_id.as_str(),
+                "a WABA was unbound, maybe bound to another tenant, while it was being \
+                 disconnected: the new holder's webhook subscription may have been removed"
+            );
+        }
+        Ok(forgotten)
     }
 }
 

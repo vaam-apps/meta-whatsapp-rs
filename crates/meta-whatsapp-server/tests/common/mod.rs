@@ -4,9 +4,12 @@
 #![allow(dead_code)] // each test binary uses a different subset
 
 pub mod backend_suite;
+pub mod capability_suite;
 pub mod capture;
 pub mod events_suite;
 pub mod meta;
+pub mod moving;
+pub mod race_suite;
 pub mod scenarios;
 pub mod store_suite;
 
@@ -126,6 +129,9 @@ pub enum Fate {
     Fail,
     /// It never finishes: the request is cut there, as a crash would.
     Hang,
+    /// It fails with the typed contention error (`StorageError::Busy`), as
+    /// any backend reports a lock or write conflict it gave up on.
+    Busy,
 }
 
 /// Work run just before the next insert reaches the store.
@@ -210,6 +216,7 @@ impl EventStore for RecordingEvents {
                 )));
             }
             Fate::Hang => futures::future::pending::<()>().await,
+            Fate::Busy => return Err(StorageError::Busy),
         }
         let before = self.before.lock().unwrap().take();
         if let Some(work) = before {
@@ -224,7 +231,7 @@ impl EventStore for RecordingEvents {
         self.inner.page(query).await
     }
 
-    async fn purge(&self, older_than: std::time::Duration) -> Result<Option<u64>, StorageError> {
+    async fn purge(&self, older_than: std::time::Duration) -> Result<u64, StorageError> {
         self.inner.purge(older_than).await
     }
 }

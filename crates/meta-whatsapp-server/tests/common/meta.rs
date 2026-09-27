@@ -58,6 +58,15 @@ pub fn now() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
 }
 
+/// The date the fixtures below stamp on an event Meta sends now: the next
+/// second. The service routes an event to a tenant only when the WABA's
+/// binding began in a second before the event's (roadmap S2, the security
+/// review's L3: an event of the binding's own second is operator-only), and
+/// a test binds a WABA, then delivers, within a second.
+pub fn sent_now() -> i64 {
+    now() + 1
+}
+
 /// `value` with every `timestamp` (Meta's strings of Unix seconds) and
 /// every entry's `time` set to `at`: Meta's examples are dated 2025, and
 /// the service routes an event to a tenant only if it is not older than
@@ -83,9 +92,9 @@ pub fn dated(mut value: Value, at: i64) -> Value {
 }
 
 /// `payload` with every entry's id set to `waba` and every change's
-/// `metadata.phone_number_id` to `pn`, dated now ([`dated`]).
+/// `metadata.phone_number_id` to `pn`, dated [`sent_now`] ([`dated`]).
 pub fn with_ids(payload: Value, waba: &str, pn: &str) -> Value {
-    let mut payload = dated(payload, now());
+    let mut payload = dated(payload, sent_now());
     for entry in payload["entry"].as_array_mut().unwrap() {
         entry["id"] = json!(waba);
         for change in entry["changes"].as_array_mut().unwrap() {
@@ -104,9 +113,9 @@ pub fn text(waba: &str, pn: &str, wamid: &str) -> Value {
     payload
 }
 
-/// Meta's text example with its ids, dated now, as bytes.
+/// Meta's text example with its ids, dated [`sent_now`], as bytes.
 pub fn example_text() -> Vec<u8> {
-    serde_json::to_vec(&dated(fixture("messages/text.json"), now())).unwrap()
+    serde_json::to_vec(&dated(fixture("messages/text.json"), sent_now())).unwrap()
 }
 
 /// Meta's `sent` status example, for `pn` of `waba`.
@@ -129,7 +138,7 @@ pub fn unknown_field(waba: &str) -> Value {
         "object": "whatsapp_business_account",
         "entry": [{
             "id": waba,
-            "time": now(),
+            "time": sent_now(),
             "changes": [{
                 "field": "a_field_meta_adds_later",
                 "value": {"metadata": {"phone_number_id": EXAMPLE_PN}, "note": "anything"}

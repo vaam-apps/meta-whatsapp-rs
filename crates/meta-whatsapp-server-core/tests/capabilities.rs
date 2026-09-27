@@ -33,8 +33,9 @@ use meta_whatsapp_server_core::ServiceError;
 use meta_whatsapp_server_core::authz::{AdminCaller, Authorizer, Caller, OwnedNumber, OwnedWaba};
 use meta_whatsapp_server_core::keys::MintedKey;
 use meta_whatsapp_server_core::model::{
-    ApiKeyRecord, BindOutcome, DeleteTenantOutcome, KeyOwner, KeyScope, Listing, NewApiKey,
-    NumberBinding, NumberStatus, PageRequest, Scope, Tenant, TenantId, TenantStatus, WabaBinding,
+    ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, KeyOwner, KeyScope, Listing,
+    NewApiKey, NumberBinding, NumberStatus, PageRequest, Scope, Tenant, TenantId, TenantStatus,
+    WabaBinding,
 };
 use meta_whatsapp_server_core::store::{RecordStore, StoreResult};
 use time::OffsetDateTime;
@@ -313,6 +314,14 @@ impl RecordStore for Records {
         self.call("set_waba_status");
         Ok(())
     }
+    async fn unbind_waba_if(&self, _: &BindingEpoch) -> StoreResult<bool> {
+        self.call("unbind_waba_if");
+        Ok(true)
+    }
+    async fn set_waba_status_if(&self, _: &BindingEpoch, _: NumberStatus) -> StoreResult<bool> {
+        self.call("set_waba_status_if");
+        Ok(true)
+    }
 }
 
 /// A key of `owner`'s, with every scope a tenant route needs here.
@@ -369,7 +378,7 @@ impl Side {
         };
         let admin = side.admin().await;
         side.authz
-            .store_token(&admin, &stored(token))
+            .store_token(&admin, &victim(), &stored(token))
             .await
             .unwrap();
         side.records.take_calls();
@@ -489,20 +498,26 @@ async fn each_authorizer_accepts_its_own_capabilities() {
         assert_eq!((rotation.wabas, rotation.rotated), (1, 0));
         assert!(rotation.failed.is_empty());
         side.records.take_calls();
+        // Roadmap S2: a capability marks and forgets only the binding (and
+        // the token) it was made from, through the conditioned writes.
         let marked = number.failed(&side.authz, &refused_token()).await;
         assert_eq!(marked.code(), "reconnect_required");
-        assert_eq!(side.records.take_calls(), ["set_waba_status"]);
+        assert_eq!(side.records.take_calls(), ["set_waba_status_if"]);
         // An owned WABA, from `owned_waba` or an admin's opening (both
         // made by `open`), is accepted too: it marks, then it forgets.
         for owned in [&waba, &opened] {
             let marked = owned.failed(&side.authz, &refused_token()).await;
             assert_eq!(marked.code(), "reconnect_required");
-            assert_eq!(side.records.take_calls(), ["set_waba_status"]);
+            assert_eq!(side.records.take_calls(), ["set_waba_status_if"]);
         }
-        for owned in [waba, opened] {
-            owned.forget(&side.authz).await.unwrap();
-            assert_eq!(side.records.take_calls(), ["unbind_waba"]);
-        }
+        // The first forgets the token and the binding; the second, made
+        // from the same token, finds it gone and deletes nothing: it only
+        // reads the binding, to tell a binding that moved (which it warns
+        // of: S2's security review, L1) from a token that did.
+        assert!(waba.forget(&side.authz).await.unwrap());
+        assert_eq!(side.records.take_calls(), ["unbind_waba_if"]);
+        assert!(!opened.forget(&side.authz).await.unwrap());
+        assert_eq!(side.records.take_calls(), ["waba"]);
         // Forgotten: the vault holds no token for the WABA any more.
         let gone = side
             .authz
@@ -571,7 +586,7 @@ async fn store_token_refuses_another_authorizers_admin() {
     let before = Before::of(&service);
     let error = service
         .authz
-        .store_token(&foreign, &stored(FORGED_TOKEN))
+        .store_token(&foreign, &victim(), &stored(FORGED_TOKEN))
         .await
         .unwrap_err();
     assert_forbidden(&error, "store_token");
@@ -772,7 +787,7 @@ async fn a_refusal_is_logged_at_warn_without_secrets() {
     let guard = tracing::subscriber::set_default(logged.clone());
     let error = service
         .authz
-        .store_token(&admin, &stored(FORGED_TOKEN))
+        .store_token(&admin, &victim(), &stored(FORGED_TOKEN))
         .await
         .unwrap_err();
     drop(guard);

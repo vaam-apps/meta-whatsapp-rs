@@ -6,5 +6,5 @@ error[E0624]: method `store` is private
   |
  ::: src/authz.rs
   |
-  |     pub(crate) async fn store(&self, token: &StoredBusinessToken) -> Result<(), Error> {
-  |     ---------------------------------------------------------------------------------- private method defined here
+  |     pub(crate) async fn store(&self, token: &StoredBusinessToken) -> Result<TokenVersion, Error> {
+  |     -------------------------------------------------------------------------------------------- private method defined here

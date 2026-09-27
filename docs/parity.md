@@ -10,7 +10,8 @@ broadcast (B2) landed, against its code; rows 119 and 139 again when the
 inbox began recording window events, thread ownership and identity links
 (roadmap L7), against its code; rows 66, 129–133 and 151 again with the
 phone number calls (roadmap L9), against their code, and row 156 added
-for what L9 left (L26). Every cell about us was checked against the code: a cell that
+for what L9 left (L26); the service's cell of row 9 again with S2's
+security review, against its code. Every cell about us was checked against the code: a cell that
 says a thing is done names the symbol that does it, and what the service
 (`meta-whatsapp-server`) does is read from its routes, not from its
 design. The plan to close the gaps is [roadmap.md](roadmap.md); the Meta
@@ -19,13 +20,13 @@ per-feature list is [coverage.md](coverage.md).
 
 ## Where we stand
 
-**39 of the 132 counted rows are done on both sides.** Parity is not
+**38 of the 132 counted rows are done on both sides.** Parity is not
 reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
 | Library | 98 | 20 | 13 | 1 |
-| Service | 39 | 24 | 68 | 1 |
+| Service | 38 | 25 | 68 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
   over WhatsApp Web ("n/a — unofficial protocol"). The counted rows'
@@ -33,10 +34,10 @@ reached.
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
 - Each of the library's 33 partial or gap rows is cited by a
-  [roadmap](roadmap.md) item. Each of the service's 92 names, in its
+  [roadmap](roadmap.md) item. Each of the service's 93 names, in its
   status, the roadmap items that bring it; by family (a row can name
-  two): M2 8, M3 11, M4 2, M5 71, S 1 (the modular split), L 1 (L22a,
-  tooling), P 2 (payments).
+  two): M2 8, M3 11, M4 2, M5 71, S 2 (the modular split; S2b, undated
+  events after a move), L 1 (L22a, tooling), P 2 (payments).
 - The largest gaps: the service routes for the modules the design once
   left "on demand" (M5), the inbox, live events and onboarding over HTTP
   (M2, M3), and the rest of the bot framework (section G: its commands,
@@ -147,7 +148,7 @@ The owner's definition (2026-09-26):
 | 6 | Connection | Token expiry and refresh | — | — | `access-tokens` (business tokens need no re-authentication; no refresh call is documented) | expiry recorded (`client::embedded_signup::StoredBusinessToken::expires_at`); nothing refreshes it (OPEN_QUESTIONS #8, decided: re-onboard, surface the expiry early, L11e) | `409 reconnect_required` (`server_core::authz`, over HTTP `server::auth`); the expiry surfaced before it lapses in M3e | partial / partial (M3e) |
 | 7 | Connection | Webhook endpoint: the verify-token handshake, `X-Hub-Signature-256` | No | Yes (`client.webhook()`; an unsigned mode for development) | `webhooks/overview.md`, `webhooks/create-webhook-endpoint.md` | `webhooks::verify::verify_subscription`; `webhooks::SignatureVerifier` (several secrets, fail-closed, no unsigned mode); `webhooks::WebhookHandler::deliver`; the axum `webhooks::router` | `GET` and `POST /webhooks/meta` (`server::api::webhooks::verify`, `receive`): a missing or malformed signature header refused before the body is read, the signature checked against every app secret before parsing, 3 MiB | done / done |
 | 8 | Connection | Webhook deduplication | — | — | `webhooks/overview.md` (Meta retries a delivery) | `webhooks::dedup::DedupGuard` (a lease: pending, then done or released) | the library's lease, shared by every replica through the Postgres `KvStore` | done / done |
-| 9 | Accounts | Several numbers and accounts, routed by `phone_number_id` | Yes (one client per session) | Yes (one client per phone number id; a router reads the body) | `solution-providers/manage-accounts.md` | `client::Client::with_token`; `client::embedded_signup::TokenVault::get_by_phone_number`; every event carries its business number | tenants, keys and WABA bindings (`server::api::admin`); each webhook event routed to the tenant that owns its number or WABA (`server_core::events::route`, `owner`) | done / done |
+| 9 | Accounts | Several numbers and accounts, routed by `phone_number_id` | Yes (one client per session) | Yes (one client per phone number id; a router reads the body) | `solution-providers/manage-accounts.md` | `client::Client::with_token`; `client::embedded_signup::TokenVault::get_by_phone_number`; every event carries its business number | tenants, keys and WABA bindings (`server::api::admin`); each webhook event routed to the tenant that owns its number or WABA (`server_core::events::route`, `owner`), a dated event only when that binding began in a second before it; an undated event (an error, a history chunk, an undated group update) goes to whoever holds the binding when it arrives, so a previous holder's that Meta redelivers reach a new holder after a move (S2's security review, M2) | done / partial (S2b) |
 | 10 | Accounts | A live event stream for a UI | — | — | none (ours to build) | `webhooks::sse`; `adapters::sink::BroadcastSink` | polling: `GET /v1/events` (`server::api::events::list_events`); SSE and webhooks-out in M2 | done / partial (M2b, M2c) |
 
 ### B. Sending messages
@@ -294,7 +295,7 @@ The owner's definition (2026-09-26):
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 110 | Storage | Auth store | Yes (plain JSON in files, SQLite, Postgres, Redis, Convex) | No (a token only) | none (ours) | `client::embedded_signup::TokenVault` (AES-256-GCM, key rotation) on `core::store::KvStore`: `adapters::store::MemoryKvStore`, `PostgresKvStore`, `RedisKvStore` | Postgres and the vault; `POST /v1/admin/vault/rotate` (`server::api::admin::rotate_vault`) | done / done |
 | 111 | Storage | Message store: backends, history, chat list, a single-message lookup | Yes (memory, SQLite, Postgres, Redis, Convex) | Yes | none (ours) | `core::store::ConversationStore`: `adapters::store::MemoryConversationStore`, `PostgresConversationStore`; the lookup by message id, scoped to the business number (`core::store::ConversationStore::message`, L5); no Redis or SQLite store (L8); `inbox::Inbox::conversations`, `history` | the service records its tenants' inbox since M1c (`server::events::ServiceSink`); its read routes come in M2a | partial / partial (M2a) |
-| 112 | Storage | Pluggable stores with conformance tests | Yes (custom interfaces) | Yes | none (ours) | ports in `meta-whatsapp-core`; executable suites `adapters::store::conformance`, `conversation_conformance` | the core's ports (`server_core::store::RecordStore`, `IdempotencyRecords`, `LeaderLock`, `Janitor`, `SchemaMigrator`; `server_core::outbox::Outbox`), bundled per database as `server_core::backend::Backend` with the library's `KvStore` and `ConversationStore`, implemented in memory and on Postgres (`server::store::MemoryBackend`, `PgBackend`); their suites are still in the service's tests, not in core (S3), and the service is not yet composed from a bundle alone, so an integrator's backend needs an edit to `serve.rs` (S4) (design D26) | done / partial (S3, S4) |
+| 112 | Storage | Pluggable stores with conformance tests | Yes (custom interfaces) | Yes | none (ours) | ports in `meta-whatsapp-core`; executable suites `adapters::store::conformance`, `conversation_conformance` | the core's ports (`server_core::store::RecordStore`, `IdempotencyRecords`, `LeaderLock`, `Janitor`, `SchemaMigrator`; `server_core::outbox::Outbox`), bundled per database as `server_core::backend::Backend` with the library's `KvStore` and `ConversationStore`, implemented in memory and on Postgres (`server::store::MemoryBackend`, `PgBackend`), with the contracts any backend must meet since S2 (the outbox's `server_core::outbox::RouteGuard` checked with each insert, `server_core::model::BindOutcome::NoSuchTenant`, leased turns, typed contention, byte order); their suites are still in the service's tests, not in core (S3), and the service is not yet composed from a bundle alone, so an integrator's backend needs an edit to `serve.rs` (S4) (design D26) | done / partial (S3, S4) |
 | 113 | Errors | Typed errors with retry guidance | Yes | Yes | `support/error-codes.md` | `core::Error`, `Error::in_step`; `core::ErrorKind`, `ErrorKind::ALL`, `is_retryable` | the §5 error model as data on `ErrorKind::as_str` (`server_core::error`, over HTTP `server::error`) | done / done |
 | 114 | Ops | Logging without secrets or personal data; metrics | Partial (a custom logger) | Partial | none (ours) | `tracing`; secrets kept out of `Debug`; webhook log redaction (`webhooks::redact`) | request logs with the key id, Prometheus `/metrics` (`server::api::ops::metrics`) | done / done |
 | 115 | Ops | Runtimes and packaging | Yes (Node, Bun, Deno, Termux) | Yes | none | Rust with tokio; the crates are not published yet (publishing to crates.io is the owner's: roadmap § Owner touchpoints) | a binary today; the Docker image and the TypeScript client in M4 | n/a / gap (M4) |

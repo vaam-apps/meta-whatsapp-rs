@@ -9,9 +9,15 @@
 //! (or, untyped, whose raw `metadata` names one) belongs to the tenant that
 //! number is bound to, and only when the event's WABA, if it names one, is
 //! the number's WABA in the bindings; an event naming only a WABA belongs
-//! to the WABA's tenant. And only when Meta dated it no earlier than that
-//! WABA's binding began ([`meta_time`]): a WABA moved from one tenant to
-//! another does not bring the first one's retried events to the second.
+//! to the WABA's tenant. And, for an event Meta dated ([`meta_time`]), only
+//! when that WABA's binding began in a second before the event's: a WABA
+//! moved from one tenant to another does not bring the first one's dated
+//! events, which Meta retries for up to 7 days, to the second. An
+//! **undated** event (an error, a history chunk, a group update without a
+//! date) has no date to compare: it goes to whoever holds the binding when
+//! it arrives, so after a move to another tenant the previous holder's
+//! undated events that Meta redelivers reach the new holder, until roadmap
+//! S2b makes them operator-only for a window after a move.
 //! The outbox row carries that tenant only for the types in
 //! [`TENANT_EVENT_TYPES`]; `unknown`, `unparsed`, `partner_solution_updated`,
 //! the types not yet reviewed for tenants ([`OPERATOR_EVENT_TYPES`]), any
@@ -38,7 +44,9 @@ use time::OffsetDateTime;
 
 use crate::error::ServiceError;
 use crate::model::TenantId;
-use crate::outbox::{DedupWindow, EventQuery, NewEvent, Outbox, StoredEvent};
+use crate::outbox::{
+    DedupWindow, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard, StoredEvent,
+};
 use crate::store::{RecordStore, StoreResult};
 
 /// How long an event the library gives no dedup key (`error_reported`,
@@ -165,20 +173,39 @@ pub struct Route {
     pub tenant: Option<TenantId>,
     /// Why the row is operator-only (a fixed set, for the log): `unowned`
     /// (no binding holds its number or WABA, or a stale one), `before_binding`
-    /// (Meta dated it before its binding: a previous holder's), `stale`
+    /// (Meta dated it before its binding began, or in the second it began:
+    /// maybe a previous holder's), `stale`
     /// (Meta dated it before the dedup lease's memory: a replay), or `type`
     /// (a type no tenant receives). `None` for a tenant's row.
     pub operator_only: Option<&'static str>,
+    /// The binding the owner was found by, which the outbox checks again
+    /// before it keeps the row's tenant ([`crate::outbox::Outbox::insert`]);
+    /// `None` when nobody owns the event.
+    pub guard: Option<RouteGuard>,
+}
+
+/// Who holds an event ([`owner`]): the tenant, and the binding it was
+/// found by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Holder {
+    /// The tenant.
+    pub tenant: TenantId,
+    /// The binding, and the event's date, for the outbox's check.
+    pub guard: RouteGuard,
 }
 
 /// When Meta says the event happened: the message's, status's, call's…
-/// own time, else its entry's. `None` for events with no date of their
-/// own: history and contact syncs (they carry the past on purpose),
-/// errors, bodies that are not webhooks.
+/// own time, else its entry's; a contact sync's, when the webhook was
+/// triggered (`state_sync[].metadata.timestamp`). `None` for events with
+/// no date of their own: history syncs (they carry the past on purpose), a
+/// contact sync or a group update without a date, errors, bodies that are
+/// not webhooks. An undated event reaches whoever holds its binding when it
+/// arrives (see the [module](self)).
 pub fn meta_time(event: &WebhookEvent) -> Option<OffsetDateTime> {
     use WebhookEvent as E;
     match event {
         E::MessageReceived { message, .. } => Some(message.timestamp),
+        E::AppStateSynced { item, .. } => item.metadata.as_ref().and_then(|m| m.timestamp),
         E::StatusUpdated { status, .. } => Some(status.timestamp),
         E::MessageEchoed { echo, .. } => Some(echo.timestamp),
         E::CallUpdated { call, .. } => Some(call.timestamp),
@@ -213,9 +240,9 @@ pub fn meta_time(event: &WebhookEvent) -> Option<OffsetDateTime> {
         | E::TemplateCategoryUpdated { time, .. }
         | E::TemplateCategoryMisuseDetected { time, .. }
         | E::Unknown { time, .. } => *time,
-        // History and contact syncs import the past; errors and bodies
-        // that are not webhooks carry no date. A type a later library adds
-        // has none until listed here.
+        // History syncs import the past; errors and bodies that are not
+        // webhooks carry no date. A type a later library adds has none
+        // until listed here.
         _ => None,
     }
 }
@@ -237,16 +264,20 @@ pub fn event_number(event: &WebhookEvent) -> Option<PhoneNumberId> {
         .map(PhoneNumberId::new)
 }
 
-/// The tenant holding `event`'s number or WABA, by the bindings, and why
-/// nobody does (see [`Route::operator_only`]).
+/// The tenant holding `event`'s number or WABA, by the bindings, and the
+/// binding it holds it by ([`Holder::guard`]); or why nobody does (see
+/// [`Route::operator_only`]).
 ///
 /// - Number first: the event's number (or an untyped change's
 ///   `metadata.phone_number_id`), bound under the WABA the event names;
 ///   else, naming no number, its WABA.
-/// - Since before the event: Meta's date for it ([`meta_time`]) is not
-///   before the second the WABA's binding began. A WABA unbound from one
-///   tenant and bound to another does not bring the first one's events
-///   (Meta retries for up to 7 days) to the second.
+/// - Since before the event: Meta's date for it ([`meta_time`]) is in a
+///   later second than the one the WABA's binding began in (the event's
+///   own second is too close to tell: `crate::outbox::began_by`). A WABA
+///   unbound from one tenant and bound to another does not bring the first
+///   one's dated events (Meta retries for up to 7 days) to the second. An
+///   undated event is the current holder's: the previous holder's, after a
+///   move, reach the new one (roadmap S2b).
 ///
 /// # Errors
 ///
@@ -255,12 +286,13 @@ pub async fn owner(
     store: &dyn RecordStore,
     event: &WebhookEvent,
     not_before: OffsetDateTime,
-) -> StoreResult<Result<TenantId, &'static str>> {
+) -> StoreResult<Result<Holder, &'static str>> {
+    let dated = meta_time(event);
     // A replay: dated before what the dedup lease remembers.
-    if meta_time(event).is_some_and(|at| at < not_before) {
+    if dated.is_some_and(|at| at < not_before) {
         return Ok(Err("stale"));
     }
-    let binding = if let Some(pn) = event_number(event) {
+    let (binding, guarded) = if let Some(pn) = event_number(event) {
         let Some(number) = store.number(&pn).await? else {
             return Ok(Err("unowned"));
         };
@@ -269,20 +301,31 @@ pub async fn owner(
         if event.waba_id().is_some_and(|waba| *waba != number.waba_id) {
             return Ok(Err("unowned"));
         }
-        store.waba(&number.waba_id).await?
+        (
+            store.waba(&number.waba_id).await?,
+            GuardedBinding::Number {
+                phone_number_id: pn,
+                waba_id: number.waba_id,
+            },
+        )
     } else if let Some(waba) = event.waba_id() {
-        store.waba(waba).await?
+        (store.waba(waba).await?, GuardedBinding::Waba(waba.clone()))
     } else {
-        None
+        return Ok(Err("unowned"));
     };
     let Some(binding) = binding else {
         return Ok(Err("unowned"));
     };
-    if meta_time(event).is_some_and(|at| at.unix_timestamp() < binding.attached_at.unix_timestamp())
-    {
+    if !crate::outbox::began_by(binding.attached_at, dated) {
         return Ok(Err("before_binding"));
     }
-    Ok(Ok(binding.tenant_id))
+    Ok(Ok(Holder {
+        tenant: binding.tenant_id,
+        guard: RouteGuard {
+            binding: guarded,
+            not_after: dated,
+        },
+    }))
 }
 
 /// Where `event` goes: its owner, and the outbox row's tenant. An event
@@ -298,20 +341,23 @@ pub async fn route(
     not_before: OffsetDateTime,
 ) -> StoreResult<Route> {
     Ok(match owner(store, event, not_before).await? {
-        Ok(owner) if tenant_visible(event.kind()) => Route {
-            tenant: Some(owner.clone()),
-            owner: Some(owner),
+        Ok(Holder { tenant, guard }) if tenant_visible(event.kind()) => Route {
+            owner: Some(tenant.clone()),
+            tenant: Some(tenant),
             operator_only: None,
+            guard: Some(guard),
         },
-        Ok(owner) => Route {
-            owner: Some(owner),
+        Ok(Holder { tenant, guard }) => Route {
+            owner: Some(tenant),
             tenant: None,
             operator_only: Some("type"),
+            guard: Some(guard),
         },
         Err(reason) => Route {
             owner: None,
             tenant: None,
             operator_only: Some(reason),
+            guard: None,
         },
     })
 }
@@ -439,8 +485,12 @@ pub fn outbox_row(
     ids: &EventIdKey,
 ) -> Result<NewEvent, RowError> {
     let data = event_data(event).map_err(|e| RowError::Serialization(e.classify()))?;
-    let phone_number_id = event.phone_number_id().map(|pn| pn.as_str().to_owned());
-    let dedup_key = outbox_key(key, phone_number_id.as_deref(), &data);
+    let phone_number_id = event.phone_number_id().cloned();
+    let dedup_key = outbox_key(
+        key,
+        phone_number_id.as_ref().map(PhoneNumberId::as_str),
+        &data,
+    );
     let (id_of, dedup_window) = match key {
         EventKey::Library(_) => (dedup_key.clone(), None),
         EventKey::Delivery { .. } => (
@@ -456,10 +506,12 @@ pub fn outbox_row(
         id,
         dedup_key: Some(dedup_key),
         dedup_window,
-        meta_time: meta_time(event),
         tenant: route.tenant.clone(),
+        // The binding the tenant was found by: the outbox keeps the tenant
+        // only while it holds.
+        route_guard: route.tenant.as_ref().and(route.guard.clone()),
         phone_number_id,
-        waba_id: event.waba_id().map(|waba| waba.as_str().to_owned()),
+        waba_id: event.waba_id().cloned(),
         event_type: event.kind().to_owned(),
         data,
     })
@@ -504,17 +556,16 @@ pub async fn poll(outbox: &dyn Outbox, query: &EventQuery) -> Result<Polled, Ser
     })
 }
 
-/// One round of housekeeping: purge the outbox past `retention`. `None`
-/// when another replica holds the housekeeping lock.
+/// Housekeeping's outbox purge: the events past `retention`, how many
+/// went. It takes no lock: housekeeping runs it under its `LeaderLock`
+/// turn, and two at once are safe ([`Outbox::purge`]).
 ///
 /// # Errors
 ///
 /// The store failing.
-pub async fn purge_outbox(outbox: &dyn Outbox, retention: Duration) -> StoreResult<Option<u64>> {
+pub async fn purge_outbox(outbox: &dyn Outbox, retention: Duration) -> StoreResult<u64> {
     let purged = outbox.purge(retention).await?;
-    if let Some(purged) = purged
-        && purged > 0
-    {
+    if purged > 0 {
         tracing::info!(purged, "outbox events past retention purged");
     }
     Ok(purged)
@@ -635,6 +686,37 @@ mod tests {
             .unwrap()
             .remove("timestamp");
         assert_eq!(dated(&body), Some(1_671_000_000), "else the entry's");
+    }
+
+    /// Roadmap S2 (the security review's M2): a contact sync is dated when
+    /// Meta triggered its webhook (`state_sync[].metadata.timestamp`, Meta's
+    /// example's `1739321024`), so a previous holder's sync redelivered
+    /// after a move is compared with the new binding like any dated event;
+    /// without that date it stays undated. Decisive: the `AppStateSynced`
+    /// arm of `meta_time`.
+    #[test]
+    fn a_contact_sync_is_dated_when_its_webhook_was_triggered() {
+        use meta_whatsapp_rs::webhooks::WebhookPayload;
+        let dated = |body: &serde_json::Value| {
+            let events = WebhookPayload::from_slice(body.to_string().as_bytes())
+                .unwrap()
+                .into_events();
+            let [event] = events.as_slice() else {
+                panic!("{events:?}")
+            };
+            assert_eq!(event.kind(), "app_state_synced");
+            meta_time(event).map(OffsetDateTime::unix_timestamp)
+        };
+        let mut body: serde_json::Value = serde_json::from_str(include_str!(
+            "../../meta-whatsapp-webhooks/tests/fixtures/fields/smb_app_state_sync.json"
+        ))
+        .unwrap();
+        assert_eq!(dated(&body), Some(1_739_321_024));
+        body["entry"][0]["changes"][0]["value"]["state_sync"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("metadata");
+        assert_eq!(dated(&body), None, "undated without it");
     }
 
     /// The two lists split the library's kinds: none is both.

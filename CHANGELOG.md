@@ -187,6 +187,29 @@ stored data, the owner's).
 
 ### Added
 
+- **`StorageError::Busy`** (meta-whatsapp-core; the enum is
+  `#[non_exhaustive]`, so this is additive): contention, reported by a
+  storage adapter that gave up waiting for another writer (a lock wait
+  past its timeout, a write conflict, a transaction it had to abort) and
+  did nothing. `StorageError::is_busy` asks it; `Error::is_retryable` is
+  `true` for it (and stays `false` for every other storage error);
+  `may_have_been_sent` stays `false`. The service's Postgres backend
+  reports its lock timeouts, serialization failures and deadlocks this
+  way (roadmap S2).
+- **`TokenVault::get_versioned`, `get_by_phone_number_versioned` and
+  `delete_if_unchanged`**, with `TokenVersion` (meta-whatsapp-client,
+  additive): a token and the version of the vault record it was read from
+  (after a read-time re-encryption, the record's new version), and a
+  delete, by compare-and-swap, of that record only: a token stored since
+  (the WABA connected again) or a record re-encrypted since is never
+  deleted. The service's disconnection uses it (roadmap S2, SR-L2 below).
+  A record stored for the WABA while the delete unlinks its numbers
+  keeps the index entries of the numbers it lists: they are linked again
+  where none is (S2's security review, L2; the stored format is
+  unchanged). `TokenVault::store_versioned` (additive) is `store`, and
+  the version of the record it wrote: what a connection that finds its
+  binding moved while it stored takes back with `delete_if_unchanged`,
+  never deleting a token stored after it (the service's attach).
 - **Phone number calls of roadmap L9** (`meta_whatsapp_client::phone_numbers`,
   parity rows 66, 129–133 and 151; the service's side is M5c3):
   - the business username: `PhoneNumber::set_username` (with
@@ -927,6 +950,88 @@ stored data, the owner's).
 
 ### Changed
 
+- **The service core's port contracts are right for any backend**
+  (roadmap S2; breaking, pre-release, `meta-whatsapp-server-core` and
+  `meta-whatsapp-server`). What Postgres guaranteed by accident is a
+  requirement of the ports, which the memory backend now meets too, so a
+  MongoDB or a CrateStack-models backend cannot follow the traits' text
+  without it:
+  - **The outbox checks the routing again**: `NewEvent` has a
+    `route_guard: Option<RouteGuard>` (a `GuardedBinding`, the number
+    under its WABA or the WABA, and the event's date as `not_after`),
+    and `Outbox::insert` keeps a row's tenant only while that binding
+    still holds it, atomically with the insert; a tenant without a guard
+    is operator-only. `NewEvent::meta_time` is gone (the guard's
+    `not_after`). `events::owner` returns a `Holder` (the tenant and the
+    guard), `Route` has a `guard`, `outbox_row` sets it. The memory
+    outbox is always a `MemoryStore`'s (`MemoryStore::outbox`;
+    `MemoryEventStore::new` and its `Default` are gone), and checks under
+    the store's lock: before, a tenant deleted and created again during
+    an insert could receive the event on memory.
+  - **Referential rules**: `BindOutcome::NoSuchTenant` (a new variant):
+    `bind_waba` to a tenant that does not exist binds nothing (memory
+    bound it; Postgres failed with a foreign key's error, now `404
+    not_found` on the attach route, as for a tenant missing before), and
+    `bind_waba` and `delete_tenant` on one tenant serialize.
+  - **Purges take no lock**: `Outbox::purge` returns `u64` (not
+    `Option<u64>`), `events::purge_outbox` too, and
+    `purge_idempotency_keys` no longer answers `0` for "another replica
+    is purging"; the Postgres purges no longer take `HOUSEKEEPING_LOCK`
+    in their own transactions. A housekeeping round (`serve::round`,
+    new) takes one `LeaderLock` turn for its three purges. `LeaderLock`
+    is a lease: `try_exclusive(name, lease)` (was `try_exclusive(name)`),
+    ending at release, drop or expiry; `HOUSEKEEPING_LEASE` (5 minutes).
+    On Postgres the turn's transaction sets
+    `idle_in_transaction_session_timeout` to the lease; its key is still
+    `HOUSEKEEPING_LOCK`, so a replica of the previous release and one of
+    this take turns during a rolling deploy.
+  - **One clock**: the core's `Authorizer` reads key and token expiry
+    from an injected `Clock` (`Authorizer::with_clock`, the system clock
+    by default); `AppState` hands it the webhook pipeline's
+    (`Inbound::with_clock`), so a test moving that clock moves key expiry
+    too.
+  - **Typed contention**: the outbox reports a lock timeout as
+    `StorageError::Busy` (above); `outbox::OutboxBusy` is gone, and the
+    webhook pipeline answers `503` for `Busy` from any backend.
+  - `NewEvent`, `StoredEvent` and `EventQuery` carry `PhoneNumberId`
+    and `WabaId` (were `String`); listings are documented, and tested,
+    in byte order.
+  - **A capability acts only on what it was made from** (SR-L2, see
+    "Security"): `RecordStore` has `unbind_waba_if` and
+    `set_waba_status_if`, taking a `BindingEpoch` (`WabaBinding::epoch`);
+    `OwnedWaba::forget` returns `Result<bool, _>` (`false`: the token or
+    the binding moved, nothing more deleted), and the server's
+    `auth::OwnedWaba::forget` too, with `forget_or_busy` answering `503
+    storage_unavailable` (retryable) for it on the tenant's disconnect
+    and the admin unbind. `OwnedNumber` now reads its WABA's binding
+    too, and both capabilities read it again once their token is read:
+    a WABA whose binding moved in between makes no capability, `503
+    storage_unavailable` (retryable), whatever the vault answered (no
+    token included).
+  - **After S2's security review** (see "Security"): an event Meta dated
+    in the very second its WABA's binding began reaches no tenant, the
+    inbox included (`outbox::began_by` compares seconds strictly; on
+    Postgres the insert's re-check is `attached_at < to_timestamp(n)`):
+    a WABA's first second after an attach delivers to no tenant. A
+    contact sync (`app_state_synced`) is dated by its webhook's trigger
+    time (`events::meta_time`), so one dated before its binding began
+    is operator-only. `OwnedWaba::still_bound` (core, and the server's
+    wrapper): the tenant's disconnection and the admin unbind answer
+    `503 storage_unavailable` (retryable), and a tenant's deletion skips
+    the WABA, when it moved since its capability was made, instead of
+    unsubscribing the app with the old holder's token; a tenant's
+    deletion no longer answers `503` for a WABA that moved away since
+    its listing. `StorageError::Busy`'s docs say a step storing after a
+    send is not repeated on it. `Authorizer::store_token` takes the
+    tenant the attach bound the WABA to (`store_token(admin, tenant,
+    token)`) and follows the port rule: it reads the binding (another
+    tenant's: nothing stored, `503`), stores, and reads the binding
+    again; moved meanwhile, it takes back exactly its own write and
+    answers `503 storage_unavailable` (retryable), where it used to
+    leave its token under the other tenant's binding. The attach route's
+    other answers are unchanged.
+
+  No change to the HTTP API: `openapi/v1.json` is byte-identical.
 - **Breaking — one health status type** (roadmap L9):
   `meta_whatsapp_client::templates::HealthStatus` is now a re-export of
   `meta_whatsapp_client::common::HealthStatus`, shared with phone numbers
@@ -1560,12 +1665,79 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   - An admin unbind logged "unbinding a WABA without a usable token"
     before its admin was checked, so a refused one logged an unbinding it
     did not do. The line now follows the unbind.
-  - Not fixed here: **L2**, a race in `OwnedWaba::forget`. It deletes the
+  - **L2**, a race in `OwnedWaba::forget`, fixed later with roadmap S2
+    (it was left open when this review's fixes merged). It deleted the
     WABA's token and binding whatever they became since the WABA was
     opened: attached again in between (a new token, another tenant), the
-    new ones go. Conditioning both on what the capability was made from
-    is a port change, recorded in docs/roadmap.md, item S2. The same
-    race in `OwnedNumber::failed` and `OwnedWaba::failed`: a `190`
-    answered to a capability made before the WABA was attached again
-    marks the new binding's numbers `reconnect_required`. S2 conditions
-    that update on the binding too (its tenant and `attached_at`).
+    new ones went. The same race in `OwnedNumber::failed` and
+    `OwnedWaba::failed`: a `190` answered to a capability made before
+    the WABA was attached again marked the new binding's numbers
+    `reconnect_required`. A capability now keeps the binding it was made
+    from (its tenant and `attached_at`, a `BindingEpoch`) and, for an
+    `OwnedWaba`, the version of its vault record: `forget` deletes that
+    token and that binding only, each checked atomically by its store,
+    and `failed` marks that binding's numbers only. And a capability is
+    made only from a token read while its binding held: S2's review
+    found the binding and the token read apart, so a WABA moved to
+    another tenant between the two reads gave the old holder a
+    capability with the new holder's token (which it called Meta with,
+    and `forget` deleted); the binding is now read again after the
+    vault. Not covered: a binding refreshed for its own tenant without
+    an unbind (a reconnect, a token rotation) keeps its epoch, so a
+    `190` answered after the refresh to a capability made before it
+    marks its numbers again, until the next attach (roadmap S2b: a bind
+    generation).
+- The security review of roadmap S2 (the port contracts) found, and its
+  remediation did:
+  - **M1 — a capability's token was not tied to the binding it
+    recorded.** A WABA moved to another tenant between a capability's
+    read of the binding and its read of the vault gave the old holder a
+    capability with the new holder's token, which unsubscribed the new
+    holder's app, and whose `forget` deleted the new holder's token (a
+    tenant's deletion, making capabilities from a listing seconds old,
+    widened the window). The binding is read again after the vault,
+    before anything the vault answered is used: moved, no capability,
+    `503` (retryable), a missing token included, which the admin unbind
+    used to take for the old holder's and answer by deleting the new
+    holder's binding. A tenant's deletion skips a WABA that moved since
+    its listing. The rule that makes the re-read sound is written into
+    the `RecordStore` and `TokenVault` docs: the vault is written for a
+    WABA only by its current holder, an attach binds, stores, then
+    confirms, every unbind deletes the token before the binding.
+    `forget` keeps deleting the token before the binding (the review's
+    suggested reverse order would leave, when the token moved meanwhile,
+    a token no binding holds). Found in the remediation, and closed after its
+    review: an attach whose binding was removed, and the WABA bound to
+    another tenant, between its own binding and its store, stored its
+    token under the other tenant's binding (two operator actions within
+    one request), and subscribed the app with it. The attach now binds,
+    stores, then confirms (`Authorizer::store_token`, `503` and its own
+    write taken back when the binding moved). What remains, narrower:
+    another tenant's attach landing whole between an attach's read of
+    its binding and its store loses its token to that take-back (its
+    binding is left with no token until it attaches again), and a
+    capability of its own made in between carries the first attach's
+    token; closing it needs the vault record to name its binding, a
+    change of the stored format (the owner's).
+  - **M2 — undated events of a WABA's previous holder reach its new
+    holder** (it predates S2): errors, history chunks (message text) and
+    undated group updates that Meta redelivers, for up to 7 days after a
+    failed delivery, after the WABA moved to another tenant. Contact
+    syncs were dated all along (`state_sync[].metadata.timestamp`, "when
+    the webhook was triggered") and now are. The rest is roadmap S2b: a
+    setting `undated_after_move`, operator-only within 7 days and an
+    hour of a move by default (design D36). The docs that said a move
+    never brings the previous holder's events now say which do.
+  - **L1 — a stale capability's unsubscribe was not conditioned.**
+    `OwnedWaba::still_bound` is asked before every `unsubscribe_app` a
+    capability makes; the Graph call's own window remains, and `forget`
+    then logs at `warn` (the WABA's id, no token) that the new holder's
+    subscription may be gone.
+  - **L2 — a conditional vault delete unlinked a new record's numbers**
+    (see `TokenVault::delete_if_unchanged` above).
+  - **L3 — an event of the second its binding began went to the new
+    holder**: it goes to nobody now (see "Changed"); a skew margin after
+    a move is S2b's.
+  - **L4 — the route guard cannot be checked on a third-party
+    backend** until the conformance suites move into the core: roadmap
+    S3 includes the `RouteGuard` cases.

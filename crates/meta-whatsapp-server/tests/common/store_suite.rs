@@ -608,6 +608,188 @@ pub async fn idempotency(store: &dyn Store) {
     ));
 }
 
+/// Roadmap S2's referential rule: binding a WABA to a tenant that does not
+/// exist (never created, or deleted) answers `NoSuchTenant` and binds
+/// nothing, WABA or number. Decisive: the tenant check in each backend's
+/// `bind_waba` (memory bound it before S2; Postgres refused it with a
+/// foreign key's error).
+pub async fn binding_to_a_missing_tenant_binds_nothing(store: &dyn Store) {
+    let waba = WabaId::new("w-nobody");
+    for tenant in ["never-created", "deleted-before"] {
+        if tenant == "deleted-before" {
+            store.create_tenant(&id(tenant), "").await.unwrap().unwrap();
+            assert_eq!(
+                store.delete_tenant(&id(tenant)).await.unwrap(),
+                DeleteTenantOutcome::Deleted
+            );
+        }
+        assert_eq!(
+            store
+                .bind_waba(&id(tenant), &waba, &pns(&["n-nobody"]))
+                .await
+                .unwrap(),
+            BindOutcome::NoSuchTenant,
+            "{tenant}"
+        );
+        assert!(store.waba(&waba).await.unwrap().is_none(), "{tenant}");
+        assert!(
+            store
+                .number(&PhoneNumberId::new("n-nobody"))
+                .await
+                .unwrap()
+                .is_none(),
+            "{tenant}"
+        );
+    }
+}
+
+/// Roadmap S2: a binding and a deletion of one tenant serialize. Raced
+/// many times, each round ends in one of the two orders, never beside
+/// each other: bound, and the deletion refused (`HasWabas`); or deleted,
+/// and the binding refused (`NoSuchTenant`). Never a WABA bound to a
+/// deleted tenant. Decisive: the tenant check in `bind_waba` (without it
+/// a binding lands after the deletion).
+pub async fn a_binding_and_a_deletion_of_one_tenant_serialize(store: &dyn Store) {
+    for round in 0..20 {
+        let tenant = id(&format!("race-{round}"));
+        let waba = WabaId::new(format!("w-race-{round}"));
+        store.create_tenant(&tenant, "").await.unwrap().unwrap();
+        let numbers = pns(&[&format!("n-race-{round}")]);
+        let (bound, deleted) = tokio::join!(
+            store.bind_waba(&tenant, &waba, &numbers),
+            store.delete_tenant(&tenant),
+        );
+        let (bound, deleted) = (bound.unwrap(), deleted.unwrap());
+        let exists = store.tenant(&tenant).await.unwrap().is_some();
+        let binding = store.waba(&waba).await.unwrap();
+        match (&bound, &deleted) {
+            (BindOutcome::Bound, DeleteTenantOutcome::HasWabas) => {
+                assert!(exists, "round {round}: bound, yet the tenant is gone");
+                assert_eq!(binding.map(|b| b.tenant_id), Some(tenant.clone()));
+            }
+            (BindOutcome::NoSuchTenant, DeleteTenantOutcome::Deleted) => {
+                assert!(!exists, "round {round}");
+                assert!(binding.is_none(), "round {round}: a deleted tenant's WABA");
+            }
+            other => panic!("round {round}: {other:?}"),
+        }
+        let _ = store.unbind_waba(&waba).await.unwrap();
+        let _ = store.delete_tenant(&tenant).await.unwrap();
+    }
+}
+
+/// Every item of a listing, paged one at a time, following `next_after`.
+async fn walk<T, F, Fut>(list: F, id_of: impl Fn(&T) -> String) -> Vec<String>
+where
+    F: Fn(PageRequest) -> Fut,
+    Fut: std::future::Future<Output = meta_whatsapp_server::model::Listing<T>>,
+{
+    let mut seen = Vec::new();
+    let mut after = None;
+    loop {
+        let listing = list(page(after.as_deref(), 1)).await;
+        seen.extend(listing.items.iter().map(&id_of));
+        match listing.next_after {
+            Some(next) => after = Some(next),
+            None => return seen,
+        }
+    }
+}
+
+/// Roadmap S2: listings are in byte order of their ids, whatever a
+/// locale's collation says (which would put `a` before `B`, and ignore
+/// punctuation): tenants, keys, WABAs and numbers, paged one at a time.
+/// Decisive: `COLLATE "C"` on Postgres, the `String` order in memory.
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
+pub async fn listings_are_in_byte_order(store: &dyn Store) {
+    // Byte order: `-` < `.` < `0` < `:` < `A` < `_` < `a`.
+    let ids = [
+        "ord-_x", "ord-a", "ord-B", "ord-:1", "ord-0", "ord-.9", "ord--",
+    ];
+    let mut expected: Vec<String> = ids.iter().map(|s| (*s).to_owned()).collect();
+    expected.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+    assert_eq!(
+        expected,
+        [
+            "ord--", "ord-.9", "ord-0", "ord-:1", "ord-B", "ord-_x", "ord-a"
+        ]
+    );
+    let owner = id("ord-owner");
+    store.create_tenant(&owner, "").await.unwrap().unwrap();
+    for s in ids {
+        store.create_tenant(&id(s), "").await.unwrap().unwrap();
+        store
+            .insert_key(&key(s, KeyOwner::Tenant(owner.clone())))
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    // One WABA per id, and one number per id under a WABA of its own.
+    store
+        .bind_waba(&owner, &WabaId::new("ord-numbers"), &pns(&ids))
+        .await
+        .unwrap();
+    for s in ids {
+        let bound = store.bind_waba(&owner, &WabaId::new(s), &[]).await.unwrap();
+        assert_eq!(bound, BindOutcome::Bound);
+    }
+    let only_ord = |all: Vec<String>| -> Vec<String> {
+        all.into_iter()
+            .filter(|s| ids.contains(&s.as_str()))
+            .collect()
+    };
+    let tenants = walk(
+        |p| async move { store.tenants(&p).await.unwrap() },
+        |t: &meta_whatsapp_server::model::Tenant| t.id.as_str().to_owned(),
+    )
+    .await;
+    assert_eq!(only_ord(tenants), expected, "tenants");
+    let keys = walk(
+        |p| {
+            let scope = KeyScope::Tenant(owner.clone());
+            async move { store.keys(&scope, &p).await.unwrap() }
+        },
+        |k: &meta_whatsapp_server::model::ApiKeyRecord| k.key_id.clone(),
+    )
+    .await;
+    assert_eq!(keys, expected, "keys");
+    let wabas = walk(
+        |p| {
+            let owner = owner.clone();
+            async move { store.wabas(&owner, &p).await.unwrap() }
+        },
+        |w: &meta_whatsapp_server::model::WabaBinding| w.waba_id.as_str().to_owned(),
+    )
+    .await;
+    assert_eq!(only_ord(wabas.clone()), expected, "wabas");
+    let all = walk(
+        |p| async move { store.all_wabas(&p).await.unwrap() },
+        |w: &meta_whatsapp_server::model::WabaBinding| w.waba_id.as_str().to_owned(),
+    )
+    .await;
+    assert_eq!(only_ord(all), expected, "all_wabas");
+    let numbers = walk(
+        |p| {
+            let owner = owner.clone();
+            async move { store.numbers(&owner, &p).await.unwrap() }
+        },
+        |n: &meta_whatsapp_server::model::NumberBinding| n.phone_number_id.as_str().to_owned(),
+    )
+    .await;
+    assert_eq!(numbers, expected, "numbers");
+    let of_waba: Vec<String> = store
+        .waba_numbers(&WabaId::new("ord-numbers"))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|n| n.phone_number_id.into_inner())
+        .collect();
+    assert_eq!(of_waba, expected, "waba_numbers");
+    for s in ids.iter().copied().chain(["ord-numbers"]) {
+        let _ = store.unbind_waba(&WabaId::new(s)).await.unwrap();
+    }
+}
+
 pub async fn run(store: &dyn Store) {
     store.ping().await.unwrap();
     tenants(store).await;
@@ -615,4 +797,7 @@ pub async fn run(store: &dyn Store) {
     bindings(store).await;
     deleting_a_tenant_revokes_platform_allowances(store).await;
     idempotency(store).await;
+    binding_to_a_missing_tenant_binds_nothing(store).await;
+    a_binding_and_a_deletion_of_one_tenant_serialize(store).await;
+    listings_are_in_byte_order(store).await;
 }

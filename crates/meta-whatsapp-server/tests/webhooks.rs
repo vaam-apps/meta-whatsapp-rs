@@ -237,7 +237,7 @@ fn a_blank_or_missing_app_secret_builds_no_pipeline() {
             secrets,
             kv.clone(),
             Arc::new(meta_whatsapp_rs::adapters::store::MemoryConversationStore::new()),
-            Arc::new(meta_whatsapp_server::store::MemoryEventStore::new()),
+            meta_whatsapp_server::store::MemoryStore::new().outbox(),
         );
         assert!(built.is_err());
     }
@@ -556,6 +556,49 @@ async fn a_failure_after_the_inbox_is_redelivered_safely() {
     assert_eq!(inbox(&h, PN_A, "16505551234").await, 1, "one message");
 }
 
+/// Roadmap S2: contention is typed. An outbox that reports
+/// `StorageError::Busy` (whatever its database: a lock wait, a write
+/// conflict) makes the webhook path answer `503`, which Meta retries,
+/// counted as busy and not as a failed stage; the claim is released, and
+/// the redelivery records the row. Decisive: `is_busy` in the sink (the
+/// downcast to a Postgres-only error type it replaced answered `500` for
+/// any other backend's contention).
+#[tokio::test]
+async fn a_busy_outbox_is_503_whatever_the_backend() {
+    let h = two_tenants().await;
+    let body = example_text();
+    h.outbox.fates(&[common::Fate::Busy]);
+    let reply = h.webhook(&body).await;
+    assert_eq!(
+        reply.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        reply.text
+    );
+    assert!(h.outbox.rows().is_empty());
+    assert_eq!(
+        metric(&h, "wa_server_webhook_deliveries_total{outcome=\"busy\"}"),
+        1
+    );
+    assert_eq!(
+        metric(
+            &h,
+            "wa_server_webhook_sink_failures_total{stage=\"outbox_busy\"}"
+        ),
+        1
+    );
+    assert_eq!(
+        metric(
+            &h,
+            "wa_server_webhook_sink_failures_total{stage=\"outbox\"}"
+        ),
+        0
+    );
+    // Meta redelivers.
+    assert_eq!(h.webhook(&body).await.status, StatusCode::OK);
+    assert_eq!(polled(&h, A).await.len(), 1);
+}
+
 /// A batch: its events are recorded in order, one row each, with
 /// increasing sequences.
 #[tokio::test]
@@ -858,6 +901,36 @@ async fn an_event_dated_before_its_binding_is_nobodys() {
     assert_eq!(inbox(&h, PN_A, "16505551234").await, 1);
 }
 
+/// Roadmap S2, the security review's L3, through the whole pipeline on
+/// memory: an event Meta dated in the second its WABA's binding began may
+/// be the previous holder's, so it reaches neither the tenant's stream nor
+/// its inbox (the routing and the inbox follow the outbox's rule); dated
+/// the next second, it reaches both. Decisive: the strict comparison in
+/// the routing (`events::owner`, through `outbox::began_by`), which the
+/// inbox write follows (a routing of `<=` fills the inbox with an event
+/// the outbox keeps from the tenant).
+#[tokio::test]
+async fn an_event_of_its_bindings_own_second_reaches_no_tenant_nor_inbox() {
+    let h = two_tenants().await;
+    let began = h
+        .store
+        .waba(&meta_whatsapp_rs::core::ids::WabaId::new(WABA_A))
+        .await
+        .unwrap()
+        .unwrap()
+        .attached_at
+        .unix_timestamp();
+    let same = common::meta::dated(text(WABA_A, PN_A, "wamid.SAME-SECOND"), began);
+    assert_eq!(h.webhook(&bytes(&same)).await.status, StatusCode::OK);
+    assert_eq!(tenants_of(&h.outbox.rows()), [None]);
+    assert!(polled(&h, A).await.is_empty());
+    assert_eq!(inbox(&h, PN_A, "16505551234").await, 0, "no inbox write");
+    let next = common::meta::dated(text(WABA_A, PN_A, "wamid.NEXT-SECOND"), began + 1);
+    assert_eq!(h.webhook(&bytes(&next)).await.status, StatusCode::OK);
+    assert_eq!(polled(&h, A).await.len(), 1);
+    assert_eq!(inbox(&h, PN_A, "16505551234").await, 1);
+}
+
 /// `history` Meta's `messages` variant the library could not type (one
 /// malformed message): routed as a `history` of the number its raw
 /// `metadata` names.
@@ -983,9 +1056,15 @@ async fn an_event_dated_before_the_replay_window_is_nobodys() {
         (replay.owner, replay.tenant, replay.operator_only),
         (None, None, Some("stale"))
     );
-    let fresh = route(h.store.as_ref(), &event_at(now), not_before)
-        .await
-        .unwrap();
+    // Dated the second after the binding's (an event of its own second
+    // is operator-only: roadmap S2, L3).
+    let fresh = route(
+        h.store.as_ref(),
+        &event_at(now + Duration::SECOND),
+        not_before,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         fresh.tenant.map(|t| t.as_str().to_owned()),
         Some(A.to_owned())

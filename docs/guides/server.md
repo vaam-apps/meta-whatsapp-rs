@@ -210,10 +210,15 @@ the app comes last, once the WABA is bound and the token stored: if Meta
 refuses it, the WABA stays attached and the call answers Meta's error
 with `"step": "subscribe_app"` and `"resumable": true`; repeat it once
 fixed. A token Meta rejects at that point is `409 reconnect_required`
-(its numbers are marked so): repeat the attach with a valid token. A
-WABA bound to one tenant is refused to
-another (`409 waba_owned_by_another_tenant`, decision D4, also for one of
-its numbers); `GET /v1/admin/wabas/{waba_id}` says who holds it, and
+(its numbers are marked so): repeat the attach with a valid token. An
+attach during which another operator unbinds the WABA (and attaches it
+again, to another tenant or the same one) answers `503
+storage_unavailable` (retryable) and takes back the token it stored;
+repeat it, and it answers for the WABA as it is then (refused, as
+below, when another tenant holds it). A
+WABA bound to one tenant is refused to another (`409
+waba_owned_by_another_tenant`, decision D4, also for one of its
+numbers); `GET /v1/admin/wabas/{waba_id}` says who holds it, and
 `DELETE /v1/admin/wabas/{waba_id}/binding` frees it: the service
 unsubscribes the app with the stored token if it still works (Meta
 refusing does not stop it), then deletes the token and the bindings. That
@@ -525,8 +530,13 @@ tenant's deliveries: whoever holds it can forge any tenant's events.
   goes to the tenant that number is bound to (and only when Meta names the
   WABA the service bound it under); one naming only a WABA (template
   reviews, account and quality updates) to the WABA's tenant; and only
-  if Meta dated it no earlier than that WABA's attaching, so a WABA moved
-  to another tenant does not bring the first one's late events along.
+  if Meta dated it in a later second than the one the WABA was attached
+  in, so a WABA moved to another tenant does not bring the first one's
+  late dated events along (an event of the attaching's own second goes
+  to no tenant). Errors, history chunks and group updates without a date
+  go to whoever holds the number or WABA when they arrive: after a WABA
+  moved to another tenant, the first one's undated events that Meta
+  redelivers reach the second, for up to 7 days, until roadmap S2b.
   It is recorded in the inbox first, then in the event outbox.
 - **Operator-only events** are recorded without a tenant, never shown to
   one, logged with their size and digest and counted
@@ -537,8 +547,9 @@ tenant's deliveries: whoever holds it can forge any tenant's events.
   (today Conversation Routing's `standby_observed` and
   `thread_control_changed`, and `user_action_reported`, a marketing
   message's click, which M2 makes visible to their tenant),
-  events Meta dated before the WABA's attaching, and replays (dated more
-  than 7 days and an hour ago, what the dedup markers remember). A rising
+  events Meta dated before the WABA's attaching or in its second, and
+  replays (dated more than 7 days and an hour ago, what the dedup
+  markers remember). A rising
   count usually means a WABA is subscribed but not attached.
 - `200` once every event is recorded; `500` when recording failed: Meta
   retries the batch at once, then with decreasing frequency for up to 7

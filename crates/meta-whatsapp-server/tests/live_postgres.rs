@@ -67,6 +67,43 @@ async fn live_postgres_backend_hands_out_the_same_data_on_every_call() {
     common::backend_suite::run(&PgBackend::new(pool)).await;
 }
 
+/// Roadmap S2 (SR-L2, the `failed` race) on Postgres: a capability acts
+/// only on the binding and the vault record it was made from
+/// (`common::capability_suite`).
+#[tokio::test]
+async fn live_postgres_capabilities_act_only_on_what_they_were_made_from() {
+    use meta_whatsapp_rs::adapters::store::PostgresKvStore;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(5).await;
+    migrate(&pool).await.unwrap();
+    common::capability_suite::run(
+        std::sync::Arc::new(PgStore::new(pool.clone())),
+        std::sync::Arc::new(PostgresKvStore::new(pool)),
+    )
+    .await;
+}
+
+/// The attach's confirmation on Postgres (records and vault): an attach
+/// whose WABA moves to another tenant while it binds and stores leaves no
+/// token of its own under the other tenant's binding, and answers `503`
+/// (`common::moving::an_attach_whose_waba_moves_takes_back_its_token`).
+#[tokio::test]
+async fn live_postgres_an_attach_whose_waba_moves_takes_back_its_token() {
+    use meta_whatsapp_rs::adapters::store::PostgresKvStore;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(5).await;
+    migrate(&pool).await.unwrap();
+    common::moving::an_attach_whose_waba_moves_takes_back_its_token(
+        std::sync::Arc::new(PgStore::new(pool.clone())),
+        std::sync::Arc::new(PostgresKvStore::new(pool)),
+    )
+    .await;
+}
+
 /// Two instances starting at once on an empty database both migrate, and
 /// each migration is applied once.
 #[tokio::test]
@@ -531,14 +568,21 @@ async fn live_postgres_an_insert_in_flight_is_never_skipped() {
 }
 
 /// Housekeeping runs on one replica at a time: while another session holds
-/// its lock, a purge does nothing.
+/// its lock (`HOUSEKEEPING_LOCK`, a replica of the previous release
+/// included, whose purges took it themselves), a round purges nothing;
+/// once it is free, a round purges. Since roadmap S2 the purges take no
+/// lock of their own: the round's one `LeaderLock` turn is the lock.
+/// Decisive: the turn in `serve::round`.
 #[tokio::test]
 async fn live_postgres_one_replica_purges_at_a_time() {
+    use meta_whatsapp_server::serve::{Sweep, round};
+    use meta_whatsapp_server::store::{Backend as _, PgBackend};
     let Some(db) = TestDb::new().await else {
         return;
     };
     let pool = db.pool(4).await;
     migrate(&pool).await.unwrap();
+    let backend = PgBackend::new(pool.clone());
     let store = PgEventStore::new(pool.clone());
     store
         .insert(&common::events_suite::row(
@@ -549,6 +593,16 @@ async fn live_postgres_one_replica_purges_at_a_time() {
         ))
         .await
         .unwrap();
+    let sweep = Sweep {
+        leader: backend.leader_lock(),
+        janitor: backend.janitor(),
+    };
+    let stored = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM wa_server_events")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    };
     let mut held = pool.acquire().await.unwrap();
     sqlx::query("SELECT pg_advisory_lock($1)")
         .bind(HOUSEKEEPING_LOCK)
@@ -556,16 +610,34 @@ async fn live_postgres_one_replica_purges_at_a_time() {
         .await
         .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    assert_eq!(store.purge(std::time::Duration::ZERO).await.unwrap(), None);
+    let ran = round(
+        backend.outbox().as_ref(),
+        backend.idempotency().as_ref(),
+        Some(&sweep),
+        std::time::Duration::ZERO,
+    )
+    .await;
+    assert!(!ran, "a round ran under another replica's lock");
+    assert_eq!(stored().await, 1, "purged under another replica's lock");
     sqlx::query("SELECT pg_advisory_unlock($1)")
         .bind(HOUSEKEEPING_LOCK)
         .execute(&mut *held)
         .await
         .unwrap();
-    assert_eq!(
-        store.purge(std::time::Duration::ZERO).await.unwrap(),
-        Some(1)
-    );
+    // Other tests' rounds may hold the database's lock for a moment.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !round(
+        backend.outbox().as_ref(),
+        backend.idempotency().as_ref(),
+        Some(&sweep),
+        std::time::Duration::ZERO,
+    )
+    .await
+    {
+        assert!(std::time::Instant::now() < deadline, "never a turn");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(stored().await, 0, "the round purged");
 }
 
 /// Fix #1 of the M1c review, on Postgres: a tenant deleted and created
@@ -988,49 +1060,116 @@ async fn live_postgres_an_event_dated_before_its_tenant_was_bound_again_is_nobod
     }
 }
 
-/// The insert's `attached_at` re-check agrees with the routing to the
-/// second: an event Meta dated in the very second its WABA's binding began
-/// (half a second in) is the tenant's, through both. For an event naming a
-/// number, then one naming only its WABA. Decisive: the re-check's bound
-/// (`attached_at < to_timestamp(t + 1)`, not `<= to_timestamp(t)`).
+/// Roadmap S2, the security review's L3: an event Meta dated in the very
+/// second its WABA's binding began is nobody's, through the routing and
+/// through the insert's re-check, which agree to the second. Meta's dates
+/// are whole seconds, so an event of that second may be a previous
+/// holder's. (Until then it was the tenant's: `attached_at <
+/// to_timestamp(t + 1)`.) Through the routing: bound half a second into
+/// the event's second, the event is routed to nobody. Through the re-check:
+/// routed to tenant-a (bound for an hour), then, before the insert, bound
+/// again (tenant-a deleted and created again) half a second into the
+/// event's second, or at its very first instant: operator-only; half a
+/// second before it: tenant-a's. For an event naming a number, then one
+/// naming only its WABA; each case on a database of its own (a body is
+/// delivered once per database). Decisive: the routing's `began_by`, and
+/// the re-check's bound (`attached_at < to_timestamp(t)`) in each branch,
+/// both ways, and strict (`<=` keeps the first instant's row).
 #[tokio::test]
-async fn live_postgres_an_event_dated_in_its_binding_s_first_second_is_the_tenant_s() {
-    let Some(db) = TestDb::new().await else {
-        return;
-    };
+async fn live_postgres_an_event_dated_in_its_binding_s_first_second_is_nobodys() {
+    use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+    use meta_whatsapp_server::model::DeleteTenantOutcome;
     let second = common::meta::now() - 600;
-    for body in [
-        dated(text(EXAMPLE_WABA, EXAMPLE_PN, "wamid.SAME-SECOND"), second),
-        dated(template_approved(EXAMPLE_WABA), second),
+    // Bound again before the insert at this offset into the event's
+    // second, and whether tenant-a keeps the row; `None`: bound in the
+    // event's second before the routing.
+    for bound_again in [
+        None,
+        Some(("0.5 second", false)),
+        Some(("0 second", false)),
+        Some(("-0.5 second", true)),
     ] {
-        let h = harness(&db).await;
-        sqlx::query("DELETE FROM wa_server_events")
-            .execute(&db.pool(1).await)
-            .await
-            .unwrap();
-        let _ = h
-            .store
-            .create_tenant(&TenantId::parse("tenant-a").unwrap(), "")
-            .await
-            .unwrap();
-        h.connect("tenant-a", EXAMPLE_WABA, &[EXAMPLE_PN], "TOKEN-OF-A")
-            .await;
-        sqlx::query(
-            "UPDATE wa_server_wabas \
-             SET attached_at = to_timestamp($1::bigint) + interval '0.5 second'",
-        )
-        .bind(second)
-        .execute(&db.pool(1).await)
-        .await
-        .unwrap();
-        assert_eq!(h.webhook(&bytes(&body)).await.status, StatusCode::OK);
-        assert_eq!(routed_to(&h).as_deref(), Some("tenant-a"), "{body}");
-        let rows = outbox_rows(&db.pool(1).await).await;
-        assert_eq!(
-            rows,
-            [(Some("tenant-a".to_owned()), rows[0].1.clone())],
-            "{body}"
-        );
+        let Some(db) = TestDb::new().await else {
+            return;
+        };
+        let pool = db.pool(1).await;
+        for body in [
+            dated(text(EXAMPLE_WABA, EXAMPLE_PN, "wamid.SAME-SECOND"), second),
+            dated(template_approved(EXAMPLE_WABA), second),
+        ] {
+            let h = harness(&db).await;
+            sqlx::query("DELETE FROM wa_server_events")
+                .execute(&pool)
+                .await
+                .unwrap();
+            let tenant = TenantId::parse("tenant-a").unwrap();
+            let _ = h.store.create_tenant(&tenant, "").await.unwrap();
+            h.connect("tenant-a", EXAMPLE_WABA, &[EXAMPLE_PN], "TOKEN-OF-A")
+                .await;
+            let Some((offset, kept)) = bound_again else {
+                // Through the routing.
+                sqlx::query(
+                    "UPDATE wa_server_wabas \
+                     SET attached_at = to_timestamp($1::bigint) + interval '0.5 second'",
+                )
+                .bind(second)
+                .execute(&pool)
+                .await
+                .unwrap();
+                assert_eq!(h.webhook(&bytes(&body)).await.status, StatusCode::OK);
+                assert_eq!(routed_to(&h), None, "routed: {body}");
+                let rows = outbox_rows(&pool).await;
+                assert_eq!(rows, [(None, rows[0].1.clone())], "{body}");
+                continue;
+            };
+            // Through the re-check. The old tenant has held the WABA for an
+            // hour: routed to it.
+            sqlx::query("UPDATE wa_server_wabas SET attached_at = now() - interval '1 hour'")
+                .execute(&pool)
+                .await
+                .unwrap();
+            let (store, bound) = (h.store.clone(), pool.clone());
+            h.outbox.before_next_insert(Box::new(move || {
+                Box::pin(async move {
+                    assert!(store.unbind_waba(&WabaId::new(EXAMPLE_WABA)).await.unwrap());
+                    assert_eq!(
+                        store.delete_tenant(&tenant).await.unwrap(),
+                        DeleteTenantOutcome::Deleted
+                    );
+                    store.create_tenant(&tenant, "").await.unwrap().unwrap();
+                    store
+                        .bind_waba(
+                            &tenant,
+                            &WabaId::new(EXAMPLE_WABA),
+                            &[PhoneNumberId::new(EXAMPLE_PN)],
+                        )
+                        .await
+                        .unwrap();
+                    sqlx::query(
+                        "UPDATE wa_server_wabas \
+                         SET attached_at = to_timestamp($1::bigint) + $2::interval",
+                    )
+                    .bind(second)
+                    .bind(offset)
+                    .execute(&bound)
+                    .await
+                    .unwrap();
+                })
+            }));
+            assert_eq!(h.webhook(&bytes(&body)).await.status, StatusCode::OK);
+            assert_eq!(
+                routed_to(&h).as_deref(),
+                Some("tenant-a"),
+                "{offset}: {body}"
+            );
+            let rows = outbox_rows(&pool).await;
+            assert_eq!(rows.len(), 1, "{offset}: {rows:?}");
+            assert_eq!(
+                rows[0].0.as_deref(),
+                kept.then_some("tenant-a"),
+                "bound again {offset} into the event's second: {body}"
+            );
+        }
     }
 }
 
@@ -1040,7 +1179,8 @@ async fn live_postgres_an_event_dated_in_its_binding_s_first_second_is_the_tenan
 /// and created again) from the second after Meta dated it, is nobody's:
 /// that binding began after the event, as the routing counts it. For an
 /// event naming a number, then one naming only its WABA. Decisive: the
-/// re-check's bound is `to_timestamp(t + 1)` in each branch, no later.
+/// re-check's bound is no later than `to_timestamp(t + 1)` in each branch
+/// (the bound itself, `to_timestamp(t)`: the test above).
 #[tokio::test]
 async fn live_postgres_an_event_dated_the_second_before_its_binding_is_nobodys() {
     use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
@@ -1202,7 +1342,7 @@ async fn turn_of(
 ) -> meta_whatsapp_server::store::LeaderTurn {
     use meta_whatsapp_server::store::LeaderLock as _;
     for _ in 0..500 {
-        if let Some(turn) = lock.try_exclusive(name).await.unwrap() {
+        if let Some(turn) = lock.try_exclusive(name, LEASE).await.unwrap() {
             return turn;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -1210,12 +1350,16 @@ async fn turn_of(
     panic!("another holder kept {name} for 5 s");
 }
 
+/// A lease long enough for any test's turn.
+const LEASE: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// The leader lock on Postgres: one turn per name, whichever replica asks,
-/// until it is released or dropped; its housekeeping turn is the lock the
-/// purges take, so an outbox purge skips while it is held. The turns'
-/// rules run on a name of this test's own (no other test takes it, so
-/// every answer is certain); the housekeeping turn is held no longer than
-/// it takes to show a purge skipping. Decisive: the transaction-scoped
+/// until it is released or dropped; its housekeeping turn is
+/// `HOUSEKEEPING_LOCK` (what a replica of the previous release's purges
+/// take), so another session cannot take that key while it is held. The
+/// turns' rules run on a name of this test's own (no other test takes it,
+/// so every answer is certain); the housekeeping turn is held no longer
+/// than it takes to show the key taken. Decisive: the transaction-scoped
 /// advisory lock in `PgLeaderLock::try_exclusive` (a session lock would
 /// outlive its turn), and `lock_key`'s derivation.
 #[tokio::test]
@@ -1233,24 +1377,27 @@ async fn live_postgres_the_leader_lock_gives_one_turn_at_a_time() {
     );
     let name = format!("test-{}", common::unique());
     let turn = a
-        .try_exclusive(&name)
+        .try_exclusive(&name, LEASE)
         .await
         .unwrap()
         .expect("nobody holds it");
-    assert!(b.try_exclusive(&name).await.unwrap().is_none(), "one turn");
     assert!(
-        a.try_exclusive(&name).await.unwrap().is_none(),
+        b.try_exclusive(&name, LEASE).await.unwrap().is_none(),
+        "one turn"
+    );
+    assert!(
+        a.try_exclusive(&name, LEASE).await.unwrap().is_none(),
         "one turn, on the same replica too"
     );
     turn.release().await.unwrap();
-    let again = b.try_exclusive(&name).await.unwrap();
+    let again = b.try_exclusive(&name, LEASE).await.unwrap();
     assert!(again.is_some(), "released");
     drop(again);
     // Dropped: its transaction is rolled back as its connection goes back
     // to the pool, which ends the turn.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
-        if let Some(turn) = a.try_exclusive(&name).await.unwrap() {
+        if let Some(turn) = a.try_exclusive(&name, LEASE).await.unwrap() {
             turn.release().await.unwrap();
             break;
         }
@@ -1260,26 +1407,82 @@ async fn live_postgres_the_leader_lock_gives_one_turn_at_a_time() {
         );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    // The housekeeping turn is the purges' lock; other names are not.
+    // The housekeeping turn is `HOUSEKEEPING_LOCK`; other names are not.
     let housekeeping = turn_of(&a, HOUSEKEEPING).await;
-    assert!(b.try_exclusive(HOUSEKEEPING).await.unwrap().is_none());
-    let purged = PgEventStore::new(pool.clone())
-        .purge(std::time::Duration::ZERO)
+    assert!(
+        b.try_exclusive(HOUSEKEEPING, LEASE)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let mut session = pool.acquire().await.unwrap();
+    let taken: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+        .bind(HOUSEKEEPING_LOCK)
+        .fetch_one(&mut *session)
         .await
         .unwrap();
-    let other = b.try_exclusive(&name).await.unwrap();
+    let other = b.try_exclusive(&name, LEASE).await.unwrap();
     housekeeping.release().await.unwrap();
-    assert_eq!(purged, None, "the purges take the housekeeping lock");
+    assert!(!taken, "the housekeeping turn is HOUSEKEEPING_LOCK");
     assert!(other.is_some(), "each name its own lock");
 }
 
+/// A turn is a lease (roadmap S2): one its holder never releases (a
+/// replica paused, or its connection wedged) ends once the lease has
+/// passed, and another replica gets the name; the stale turn's release
+/// then reports that it had ended. Decisive: the
+/// `idle_in_transaction_session_timeout` of `PgLeaderLock::try_exclusive`
+/// (without it the turn is held until its connection dies).
+#[tokio::test]
+async fn live_postgres_a_leader_turn_ends_with_its_lease() {
+    use meta_whatsapp_server::store::{LeaderLock as _, PgLeaderLock};
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(2).await;
+    migrate(&pool).await.unwrap();
+    let (a, b) = (
+        PgLeaderLock::new(pool.clone()),
+        PgLeaderLock::new(db.pool(2).await),
+    );
+    let name = format!("test-{}", common::unique());
+    let lease = std::time::Duration::from_millis(300);
+    let stale = a
+        .try_exclusive(&name, lease)
+        .await
+        .unwrap()
+        .expect("nobody holds it");
+    assert!(
+        b.try_exclusive(&name, LEASE).await.unwrap().is_none(),
+        "within the lease"
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let fresh = loop {
+        if let Some(turn) = b.try_exclusive(&name, LEASE).await.unwrap() {
+            break turn;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the lease never ended"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    };
+    assert!(
+        stale.release().await.is_err(),
+        "the stale turn's session was ended"
+    );
+    assert!(
+        a.try_exclusive(&name, LEASE).await.unwrap().is_none(),
+        "the fresh turn holds"
+    );
+    fresh.release().await.unwrap();
+}
+
 /// Housekeeping on the Postgres backend sweeps the library's expired
-/// key/value rows under the housekeeping turn it takes right after its
-/// outbox purge released the same advisory lock (the purge neither blocks
-/// nor starves the sweep), and leaves a live row. Other tests' purges take
-/// that lock too: a round that finds it taken skips, and a later one
-/// sweeps. Decisive: the sweep in `serve::housekeeping`,
-/// `PgBackend::janitor`, and `PgJanitor::purge_expired`.
+/// key/value rows under the round's housekeeping turn, and leaves a live
+/// row. Other tests' rounds take that lock too: a round that finds it
+/// taken skips, and a later one sweeps. Decisive: the sweep in
+/// `serve::round`, `PgBackend::janitor`, and `PgJanitor::purge_expired`.
 #[tokio::test]
 async fn live_postgres_housekeeping_sweeps_expired_key_value_rows() {
     use meta_whatsapp_server::serve::{Sweep, housekeeping};
@@ -1338,4 +1541,170 @@ async fn live_postgres_housekeeping_sweeps_expired_key_value_rows() {
         .await
         .expect("stopped with the service")
         .unwrap();
+}
+
+/// Roadmap S2's atomic contracts on Postgres, raced on a multi-threaded
+/// runtime over one pool (`common::race_suite`,
+/// `common::capability_suite::racing_a_reattach`): an insert against its
+/// binding moving, a binding against its tenant's deletion, and each
+/// conditioned write against a re-attach.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_racing_the_atomic_contracts_breaks_none() {
+    use common::capability_suite::{Act, racing_a_reattach};
+    use common::race_suite::{
+        a_binding_racing_a_deletion_serializes,
+        an_insert_racing_a_move_never_reaches_the_new_holder,
+    };
+    use meta_whatsapp_rs::adapters::store::PostgresKvStore;
+    use std::sync::Arc;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(10).await;
+    migrate(&pool).await.unwrap();
+    let store = Arc::new(PgStore::new(pool.clone()));
+    let outbox = Arc::new(PgEventStore::new(pool.clone()));
+    let moves =
+        an_insert_racing_a_move_never_reaches_the_new_holder(store.clone(), outbox, 200).await;
+    eprintln!("postgres, insert against a move: {moves:?}");
+    let binds = a_binding_racing_a_deletion_serializes(store.clone(), 200).await;
+    eprintln!("postgres, bind against delete: {binds:?}");
+    let kv = Arc::new(PostgresKvStore::new(pool));
+    for act in [Act::Forget, Act::NumberFailed, Act::WabaFailed] {
+        racing_a_reattach(store.clone(), kv.clone(), act, 60).await;
+    }
+}
+
+/// Two outbox purges at once (a round that outlived its lease, and the
+/// next replica's): a row both chose is deleted once and counted once, and
+/// the stream's `purged_through` never moves back, though the purge with
+/// the older cutoff commits last. The first purge deletes all ten rows,
+/// then waits to mark the stream (another session holds its row); the
+/// second chooses the older five, which the first holds, and waits for it.
+/// Decisive: `GREATEST` in the purge's mark (without it the later commit
+/// sets the older cut), and the count of the rows deleted, not chosen.
+#[tokio::test]
+async fn live_postgres_two_purges_at_once_count_each_row_once() {
+    use std::time::Duration;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(6).await;
+    migrate(&pool).await.unwrap();
+    let store = std::sync::Arc::new(PgEventStore::new(pool.clone()));
+    common::events_suite::bind(&PgStore::new(pool.clone()), "overlap", "41").await;
+    let insert = || async {
+        store
+            .insert(&common::events_suite::row(
+                Some("overlap"),
+                "message_received",
+                "41",
+                None,
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+    };
+    for _ in 0..5 {
+        insert().await;
+    }
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    for _ in 0..5 {
+        insert().await;
+    }
+    let holder_pool = db.pool(1).await;
+    let mut holder = holder_pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM wa_server_event_streams WHERE stream = 'overlap' FOR UPDATE")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let purge = |older_than: Duration| {
+        let store = store.clone();
+        tokio::spawn(async move { store.purge(older_than).await })
+    };
+    let first = purge(Duration::ZERO);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!first.is_finished(), "the first purge did not wait to mark");
+    // Between the two batches: the older five.
+    let second = purge(Duration::from_secs(1));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!second.is_finished(), "the second purge did not wait");
+    holder.rollback().await.unwrap();
+    let first = first.await.unwrap().unwrap();
+    let second = second.await.unwrap().unwrap();
+    assert_eq!(
+        (first, second),
+        (10, 0),
+        "each row deleted and counted once"
+    );
+    let page = store
+        .page(&meta_whatsapp_server::store::events::EventQuery {
+            tenant: TenantId::parse("overlap").unwrap(),
+            after: None,
+            types: None,
+            phone_number_id: None,
+            limit: 100,
+            max_bytes: 1024 * 1024,
+        })
+        .await
+        .unwrap();
+    assert!(page.events.is_empty());
+    assert_eq!(
+        (page.purged_through, page.high_water),
+        (10, 10),
+        "the older cut, committed last, moved purged_through back"
+    );
+}
+
+/// A deadlock Postgres breaks by aborting an outbox insert is contention:
+/// the library's typed `StorageError::Busy` (the webhook pipeline answers
+/// Meta `503`, and Meta retries), never an opaque backend failure. The
+/// insert holds its guarded binding (the number's row, `FOR KEY SHARE`)
+/// and waits for its stream's row, which another session holds and which
+/// then waits for the number's row; the insert, waiting first, is the one
+/// Postgres aborts (40P01), and the other session goes on. Decisive:
+/// `40P01` in `busy_or_backend`.
+#[tokio::test]
+async fn live_postgres_a_deadlocked_insert_is_busy() {
+    use std::time::Duration;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(4).await;
+    migrate(&pool).await.unwrap();
+    let store = std::sync::Arc::new(PgEventStore::new(pool.clone()));
+    common::events_suite::bind(&PgStore::new(pool.clone()), "deadlock", "43").await;
+    let row = || common::events_suite::row(Some("deadlock"), "message_received", "43", None);
+    // The stream's row exists.
+    store.insert(&row()).await.unwrap().unwrap();
+    let holder_pool = db.pool(1).await;
+    let mut holder = holder_pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM wa_server_event_streams WHERE stream = 'deadlock' FOR UPDATE")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let inserted = {
+        let (store, event) = (store.clone(), row());
+        tokio::spawn(async move { store.insert(&event).await })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !inserted.is_finished(),
+        "the insert did not wait for its stream"
+    );
+    // The number's row, which the insert holds: a cycle.
+    let locked =
+        sqlx::query("SELECT 1 FROM wa_server_numbers WHERE phone_number_id = '43' FOR UPDATE")
+            .execute(&mut *holder)
+            .await;
+    let inserted = inserted.await.unwrap();
+    assert!(
+        locked.is_ok(),
+        "Postgres aborted the other session instead: {locked:?}"
+    );
+    holder.rollback().await.unwrap();
+    match inserted {
+        Err(error) => assert!(error.is_busy(), "a deadlock reported as {error}"),
+        Ok(sequence) => panic!("inserted {sequence:?} through a deadlock"),
+    }
 }

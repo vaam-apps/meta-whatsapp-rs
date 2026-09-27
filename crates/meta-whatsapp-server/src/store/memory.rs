@@ -1,7 +1,7 @@
 //! The memory backend ([`MemoryBackend`]): one process, emptied on
 //! restart. Only for `WA_SERVER_ENV=development` and tests.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 
 use async_trait::async_trait;
@@ -15,20 +15,32 @@ use super::{
     Outbox, RecordStore, SchemaMigrator, StoreResult, Turn, listing,
 };
 use crate::model::{
-    AllowedTenants, ApiKeyRecord, BindOutcome, DeleteTenantOutcome, IdempotencyClaim,
+    AllowedTenants, ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim,
     IdempotencyKey, IdempotencyRecord, IdempotencyState, KeyOwner, KeyScope, Listing, NewApiKey,
     NumberBinding, NumberStatus, PageRequest, Tenant, TenantId, TenantStatus, WabaBinding,
 };
 
 /// In-memory [`RecordStore`] and [`IdempotencyRecords`]. Its event outbox is [`MemoryStore::outbox`]: one
 /// process's database, so that deleting a tenant reaches its events as it
-/// does on Postgres. `Debug` shows how many records it holds, never what
+/// does on Postgres, and the outbox checks an insert's route against these
+/// bindings. `Debug` shows how many records it holds, never what
 /// they hold: idempotency keys name the caller's records, and a kept
 /// answer's body is the caller's data.
-#[derive(Default)]
 pub struct MemoryStore {
-    state: Mutex<State>,
+    /// One lock over every record: a binding and a deletion of one tenant
+    /// serialize on it, and the outbox's check holds it too.
+    state: Arc<Mutex<State>>,
     outbox: Arc<MemoryEventStore>,
+}
+
+impl Default for MemoryStore {
+    fn default() -> Self {
+        let state = Arc::new(Mutex::new(State::default()));
+        Self {
+            outbox: Arc::new(MemoryEventStore::of(state.clone())),
+            state,
+        }
+    }
 }
 
 impl std::fmt::Debug for MemoryStore {
@@ -59,15 +71,21 @@ impl std::fmt::Debug for MemoryStore {
     }
 }
 
-/// No `Debug`: [`MemoryStore`]'s shows counts only.
+/// No `Debug`: [`MemoryStore`]'s shows counts only. Maps keyed by id, in
+/// byte order (`String`'s `Ord`), which listings follow.
 #[derive(Default)]
-struct State {
+pub(super) struct State {
     tenants: BTreeMap<String, Tenant>,
     keys: BTreeMap<String, ApiKeyRecord>,
-    wabas: BTreeMap<String, WabaBinding>,
-    numbers: BTreeMap<String, NumberBinding>,
+    pub(super) wabas: BTreeMap<String, WabaBinding>,
+    pub(super) numbers: BTreeMap<String, NumberBinding>,
     /// Idempotency records by (tenant, key).
     idempotency: BTreeMap<(String, String), IdempotencyEntry>,
+}
+
+/// Lock `state`, a poisoned lock included (no invariant spans a panic).
+pub(super) fn lock_state(state: &Mutex<State>) -> MutexGuard<'_, State> {
+    state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// An idempotency record in memory. No `Debug`: its body is the caller's
@@ -103,7 +121,7 @@ impl MemoryStore {
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        lock_state(&self.state)
     }
 }
 
@@ -291,6 +309,11 @@ impl RecordStore for MemoryStore {
         numbers: &[PhoneNumberId],
     ) -> StoreResult<BindOutcome> {
         let mut state = self.lock();
+        // Under the lock `delete_tenant` takes: the tenant exists until
+        // this binding is made.
+        if !state.tenants.contains_key(tenant.as_str()) {
+            return Ok(BindOutcome::NoSuchTenant);
+        }
         if state
             .wabas
             .get(waba_id.as_str())
@@ -337,6 +360,16 @@ impl RecordStore for MemoryStore {
         let removed = state.wabas.remove(waba_id.as_str()).is_some();
         state.numbers.retain(|_, b| &b.waba_id != waba_id);
         Ok(removed)
+    }
+
+    async fn unbind_waba_if(&self, epoch: &BindingEpoch) -> StoreResult<bool> {
+        let mut state = self.lock();
+        if !holds(&state, epoch) {
+            return Ok(false);
+        }
+        state.wabas.remove(epoch.waba_id.as_str());
+        state.numbers.retain(|_, b| b.waba_id != epoch.waba_id);
+        Ok(true)
     }
 
     async fn waba(&self, waba_id: &WabaId) -> StoreResult<Option<WabaBinding>> {
@@ -402,6 +435,34 @@ impl RecordStore for MemoryStore {
         }
         Ok(())
     }
+
+    async fn set_waba_status_if(
+        &self,
+        epoch: &BindingEpoch,
+        status: NumberStatus,
+    ) -> StoreResult<bool> {
+        let now = OffsetDateTime::now_utc();
+        let mut state = self.lock();
+        if !holds(&state, epoch) {
+            return Ok(false);
+        }
+        for number in state.numbers.values_mut() {
+            if number.waba_id == epoch.waba_id {
+                number.status = status;
+                number.updated_at = now;
+            }
+        }
+        Ok(true)
+    }
+}
+
+/// Whether `epoch.waba_id` is still bound as `epoch` says: the same
+/// tenant, since the same instant.
+fn holds(state: &State, epoch: &BindingEpoch) -> bool {
+    state
+        .wabas
+        .get(epoch.waba_id.as_str())
+        .is_some_and(|w| w.tenant_id == epoch.tenant_id && w.attached_at == epoch.attached_at)
 }
 
 #[async_trait]
@@ -495,10 +556,21 @@ impl IdempotencyRecords for MemoryStore {
 }
 
 /// Leader election within one process: the memory backend's replicas are
-/// the tasks of one process. Cheap to clone; clones share their turns.
+/// the tasks of one process. A turn is a lease on the process's monotonic
+/// clock: it ends at its release, its drop, or `lease` after it was
+/// given, and a turn that ended never ends a later holder's. Cheap to
+/// clone; clones share their turns.
 #[derive(Debug, Default, Clone)]
 pub struct MemoryLeaderLock {
-    held: Arc<Mutex<BTreeSet<String>>>,
+    held: Arc<Mutex<Leases>>,
+}
+
+/// The turns held, by name: which grant holds each, and until when
+/// (`None`: a lease too long to represent, never).
+#[derive(Debug, Default)]
+struct Leases {
+    by_name: BTreeMap<String, (u64, Option<std::time::Instant>)>,
+    granted: u64,
 }
 
 impl MemoryLeaderLock {
@@ -510,34 +582,50 @@ impl MemoryLeaderLock {
 
 #[async_trait]
 impl LeaderLock for MemoryLeaderLock {
-    async fn try_exclusive(&self, name: &str) -> StoreResult<Option<LeaderTurn>> {
-        let taken = self
-            .held
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(name.to_owned());
-        Ok(taken.then(|| {
-            LeaderTurn::new(MemoryTurn {
-                held: self.held.clone(),
-                name: name.to_owned(),
-            })
-        }))
+    async fn try_exclusive(
+        &self,
+        name: &str,
+        lease: std::time::Duration,
+    ) -> StoreResult<Option<LeaderTurn>> {
+        let now = std::time::Instant::now();
+        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        if held
+            .by_name
+            .get(name)
+            .is_some_and(|(_, until)| until.is_none_or(|until| now < until))
+        {
+            return Ok(None);
+        }
+        held.granted = held.granted.wrapping_add(1);
+        let grant = held.granted;
+        held.by_name
+            .insert(name.to_owned(), (grant, now.checked_add(lease)));
+        Ok(Some(LeaderTurn::new(MemoryTurn {
+            held: self.held.clone(),
+            name: name.to_owned(),
+            grant,
+        })))
     }
 }
 
 /// A turn of [`MemoryLeaderLock`]: its name goes when it is released or
-/// dropped.
+/// dropped, unless its lease ended and another holder has it since.
 struct MemoryTurn {
-    held: Arc<Mutex<BTreeSet<String>>>,
+    held: Arc<Mutex<Leases>>,
     name: String,
+    grant: u64,
 }
 
 impl Drop for MemoryTurn {
     fn drop(&mut self) {
-        self.held
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&self.name);
+        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        if held
+            .by_name
+            .get(&self.name)
+            .is_some_and(|(grant, _)| *grant == self.grant)
+        {
+            held.by_name.remove(&self.name);
+        }
     }
 }
 
@@ -702,24 +790,66 @@ mod tests {
     #[tokio::test]
     async fn one_turn_per_name_until_released_or_dropped() {
         let lock = MemoryLeaderLock::new();
-        let turn = lock.try_exclusive("housekeeping").await.unwrap().unwrap();
-        assert!(lock.try_exclusive("housekeeping").await.unwrap().is_none());
+        let turn = lock
+            .try_exclusive("housekeeping", LEASE)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(
-            lock.clone()
-                .try_exclusive("housekeeping")
+            lock.try_exclusive("housekeeping", LEASE)
                 .await
                 .unwrap()
                 .is_none()
         );
-        let other = lock.try_exclusive("elsewhere").await.unwrap();
+        assert!(
+            lock.clone()
+                .try_exclusive("housekeeping", LEASE)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let other = lock.try_exclusive("elsewhere", LEASE).await.unwrap();
         assert!(other.is_some(), "each name its own");
         turn.release().await.unwrap();
-        let again = lock.try_exclusive("housekeeping").await.unwrap();
+        let again = lock.try_exclusive("housekeeping", LEASE).await.unwrap();
         assert!(again.is_some(), "released");
         drop(again);
         assert!(
-            lock.try_exclusive("housekeeping").await.unwrap().is_some(),
+            lock.try_exclusive("housekeeping", LEASE)
+                .await
+                .unwrap()
+                .is_some(),
             "dropped"
         );
+    }
+
+    const LEASE: std::time::Duration = std::time::Duration::from_secs(60);
+
+    /// A turn is a lease: past it, another holder gets the name even
+    /// though the first never released it; and the first one's end (its
+    /// release or drop) then leaves the second one's turn alone. Decisive:
+    /// the lease's expiry in `try_exclusive`, and the grant compared on
+    /// drop. The short lease is half a second, so that the refusal right
+    /// after the first turn does not depend on the two calls running
+    /// within a few milliseconds of each other (it was 30 ms).
+    #[tokio::test]
+    async fn a_turn_ends_with_its_lease_and_never_ends_a_later_one() {
+        let lock = MemoryLeaderLock::new();
+        let short = std::time::Duration::from_millis(500);
+        let stale = lock.try_exclusive("sweep", short).await.unwrap().unwrap();
+        assert!(lock.try_exclusive("sweep", LEASE).await.unwrap().is_none());
+        tokio::time::sleep(short + std::time::Duration::from_millis(100)).await;
+        let fresh = lock
+            .try_exclusive("sweep", LEASE)
+            .await
+            .unwrap()
+            .expect("the first lease ended");
+        stale.release().await.unwrap();
+        assert!(
+            lock.try_exclusive("sweep", LEASE).await.unwrap().is_none(),
+            "the stale turn's release ended the fresh one"
+        );
+        drop(fresh);
+        assert!(lock.try_exclusive("sweep", LEASE).await.unwrap().is_some());
     }
 }

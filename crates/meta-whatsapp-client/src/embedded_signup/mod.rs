@@ -300,7 +300,9 @@ pub use token::{
     BusinessToken, GranularScope, SignupCode, TokenDebug, TokenType, WHATSAPP_BUSINESS_MANAGEMENT,
     WHATSAPP_BUSINESS_MESSAGING,
 };
-pub use vault::{StoredBusinessToken, TOKEN_NAMESPACE, TokenVault, VaultKey, VaultKeys};
+pub use vault::{
+    StoredBusinessToken, TOKEN_NAMESPACE, TokenVault, TokenVersion, VaultKey, VaultKeys,
+};
 
 use std::future::Future;
 

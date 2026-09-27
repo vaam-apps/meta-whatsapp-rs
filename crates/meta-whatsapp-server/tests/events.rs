@@ -24,9 +24,22 @@ async fn harness() -> Harness {
     h
 }
 
-/// Insert `event` straight into the outbox; its sequence.
+/// Insert `event` straight into the outbox; its sequence. The outbox keeps
+/// a row's tenant only while the binding its guard names holds it (roadmap
+/// S2, memory included), so a tenant's row about a number is bound to that
+/// tenant first, as the routing would have found it: these tests poll, and
+/// write rows of two tenants about one number.
 async fn insert(h: &Harness, event: &NewEvent) -> i64 {
     use meta_whatsapp_server::store::Outbox as _;
+    if let (Some(tenant), Some(pn)) = (&event.tenant, &event.phone_number_id) {
+        let waba =
+            meta_whatsapp_rs::core::ids::WabaId::new(common::events_suite::waba_of(pn.as_str()));
+        let _ = h.store.unbind_waba(&waba).await.unwrap();
+        h.store
+            .bind_waba(tenant, &waba, std::slice::from_ref(pn))
+            .await
+            .unwrap();
+    }
     h.outbox.insert(event).await.unwrap().unwrap()
 }
 
@@ -238,7 +251,7 @@ async fn a_cursor_past_retention_is_410() {
     let purged = meta_whatsapp_server::events::purge_outbox(h.outbox.as_ref(), Duration::ZERO)
         .await
         .unwrap();
-    assert_eq!(purged, Some(2));
+    assert_eq!(purged, 2);
     for after in [0, first - 1, first, last - 1] {
         let reply = poll(&h, &key, &format!("?after={after}")).await;
         assert_eq!(

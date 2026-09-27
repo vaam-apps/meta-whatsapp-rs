@@ -68,7 +68,9 @@ impl EventsQuery {
             tenant,
             after: self.after,
             types: self.types,
-            phone_number_id: self.phone_number_id,
+            phone_number_id: self
+                .phone_number_id
+                .map(meta_whatsapp_rs::core::ids::PhoneNumberId::new),
             limit: self.limit,
             max_bytes: MAX_PAGE_DATA_BYTES,
         }
@@ -225,8 +227,12 @@ fn envelope(tenant: &TenantId, event: StoredEvent) -> Result<EventEnvelope, ApiE
         event_type: event.event_type,
         api_version: API_VERSION,
         tenant_id: tenant.as_str().to_owned(),
-        phone_number_id: event.phone_number_id,
-        waba_id: event.waba_id,
+        phone_number_id: event
+            .phone_number_id
+            .map(meta_whatsapp_rs::core::ids::PhoneNumberId::into_inner),
+        waba_id: event
+            .waba_id
+            .map(meta_whatsapp_rs::core::ids::WabaId::into_inner),
         received_at: rfc3339(event.created_at),
         truncated: false,
         data,

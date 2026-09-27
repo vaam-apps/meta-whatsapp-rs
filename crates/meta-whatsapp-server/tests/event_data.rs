@@ -163,12 +163,14 @@ fn every_library_event_type_is_classified() {
 
 /// Every event of Meta's examples is dated ([`meta_time`]: the routing
 /// refuses an event dated before its binding, security review M3), but
-/// for the kinds that carry no date of their own: history and contact
-/// syncs, errors. Each date is the one Meta's example says. A library
-/// change that loses a date fails here.
+/// for the kinds that carry no date of their own: history syncs, errors.
+/// A contact sync is dated when Meta triggered its webhook (roadmap S2,
+/// the security review's M2: `state_sync[].metadata.timestamp`). Each date
+/// is the one Meta's example says. A library change that loses a date
+/// fails here.
 #[test]
 fn every_dated_event_type_has_its_meta_time() {
-    const UNDATED: [&str; 3] = ["history_synced", "app_state_synced", "error_reported"];
+    const UNDATED: [&str; 2] = ["history_synced", "error_reported"];
     let mut dated = BTreeSet::new();
     let mut seen = BTreeSet::new();
     for fixture in fixtures() {
@@ -202,7 +204,9 @@ fn every_dated_event_type_has_its_meta_time() {
                 ["message", "echo", "status"]
                     .iter()
                     .find_map(|item| seconds(&data["item"][item]["timestamp"]))
-            });
+            })
+            // A contact sync: when its webhook was triggered.
+            .or_else(|| seconds(&data["item"]["metadata"]["timestamp"]));
             let expected = own.or_else(|| seconds(&data["time"]));
             assert_eq!(
                 time.map(time::OffsetDateTime::unix_timestamp),

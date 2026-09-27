@@ -69,7 +69,7 @@ pub use meta_whatsapp_server_core::events::{
     event_data, event_number, meta_time, outbox_key, outbox_row, owner, poll, purge_outbox, route,
     tenant_visible,
 };
-use meta_whatsapp_server_core::outbox::{Outbox, OutboxBusy};
+use meta_whatsapp_server_core::outbox::Outbox;
 use meta_whatsapp_server_core::store::RecordStore;
 use sha2::{Digest, Sha256};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -154,11 +154,19 @@ impl Inbound {
     }
 
     /// Read "now" from `clock` (the system clock by default): the replay
-    /// window and [`KEYLESS_DEDUP_WINDOW`] are measured on it.
+    /// window and [`KEYLESS_DEDUP_WINDOW`] are measured on it, and the
+    /// service's authorization (a key's or a stored token's expiry) too:
+    /// it is the service's one clock (`crate::state::AppState` hands it to
+    /// the core's `Authorizer`).
     #[must_use]
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = clock;
         self
+    }
+
+    /// The service's clock.
+    pub(crate) fn clock(&self) -> Arc<dyn Clock> {
+        self.clock.clone()
     }
 }
 
@@ -337,7 +345,8 @@ impl Events {
         .build();
         match handler.deliver(signature, &body).await {
             Ok(report) => Ok(report),
-            // The outbox waited too long for a lock (`OutboxBusy`).
+            // The outbox gave up waiting for another writer
+            // (`StorageError::Busy`).
             Err(meta_whatsapp_rs::Error::Sink(SinkError::Full)) => Err(Refused::Busy),
             Err(error) => Err(Refused::Handler(error)),
         }
@@ -454,8 +463,9 @@ impl ServiceSink {
                 .map_err(|e| self.failed("inbox", kind, e))?;
         }
         let inserted = self.outbox.insert(&row).await.map_err(|e| {
-            let busy = matches!(&e, StorageError::Backend(e) if e.is::<OutboxBusy>());
-            if busy {
+            // Contention, typed by the backend (the port's contract): Meta
+            // retries a `503`.
+            if e.is_busy() {
                 self.metrics.webhook_failure("outbox_busy");
                 SinkError::Full
             } else {

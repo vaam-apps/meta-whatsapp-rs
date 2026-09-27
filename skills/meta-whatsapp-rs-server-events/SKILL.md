@@ -5,7 +5,7 @@ description: "Receiving WhatsApp events through meta-whatsapp-server, the meta-w
 
 # meta-whatsapp-rs-server-events
 
-> **Verified against meta-whatsapp-rs ef0fe364e3a21a535238007db5276fe5ef6ce970 (2026-09-26).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 3b25f8d85e16ce447e42fbf62c67b833432ad9ca (2026-09-27).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/events.ts](examples/events.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md#receiving-metas-webhooks).
 
@@ -40,8 +40,8 @@ its keys: `meta-whatsapp-rs-server` first.
   redelivery, after it a new event (new `id`): errors can recur.
 - **Routed by ownership, as an allow-list**: an event about a business
   number goes to that number's tenant; one naming only a WABA (template
-  reviews, account updates) to the WABA's tenant; only if Meta dated it
-  after that WABA was attached. Inbox first, then the outbox you poll.
+  reviews, account updates) to the WABA's tenant; if dated, only after
+  the second it was attached in. Inbox first, then the outbox you poll.
 - **Operator-only**, never shown to a tenant: events of a number or WABA
   no tenant holds (or held then), replays over 7 days and an hour old,
   untyped fields, signed bodies that are not webhooks, partner solution
@@ -146,8 +146,8 @@ per filter set.
 
 - It pushes nothing to your backend yet: poll. Live streams (SSE),
   signed webhooks to your URL and one event by its id come with M2.
-- It never shows you another tenant's events, nor operator-only ones
-  (the operator reads those, outbox rows without a tenant).
+- It never shows you operator-only events, nor another tenant's (until
+  roadmap S2b, save undated ones redelivered after a WABA moved to you).
 - It does not resynchronise you after `cursor_expired`, and keeps events
   7 days by default (design D10, decided on 2026-09-26: set per store).
 - Meta's own retries, deduplication and signature are its business: you

@@ -47,6 +47,34 @@ pub enum StorageError {
     /// The backend (database, cache) failed.
     #[error("storage backend failure: {0}")]
     Backend(#[source] anyhow::Error),
+    /// Contention: the backend gave up waiting for another writer (a lock
+    /// wait past its timeout, a write conflict, a transaction it had to
+    /// abort) and did nothing. Trying again later may succeed
+    /// ([`crate::Error::is_retryable`]). An adapter reports its own
+    /// contention this way rather than as [`Self::Backend`], so that a
+    /// caller can tell "busy, come back" from "broken" without knowing the
+    /// adapter's error types.
+    ///
+    /// Retryable means the *storage call* may succeed later, not that the
+    /// operation around it may be repeated. Inside an
+    /// [`Error::Step`](crate::Error::Step) it stays retryable, and a step
+    /// that stores after a send has sent: repeating the whole operation on
+    /// `Busy` sends again. The library never returns a storage error after
+    /// a send (it logs it: [`crate::Error::may_have_been_sent`]), and sends
+    /// again automatically only when [`crate::Error::may_resend`] holds,
+    /// which is never for an error in a step. A flow of your own that
+    /// stores after a send must do the same: never repeat the send on
+    /// `Busy` unless the send provably did nothing.
+    #[error("storage backend busy: gave up waiting for another writer")]
+    Busy,
+}
+
+impl StorageError {
+    /// Whether this is contention ([`Self::Busy`]): nothing was done, and
+    /// trying again later may succeed.
+    pub fn is_busy(&self) -> bool {
+        matches!(self, Self::Busy)
+    }
 }
 
 /// An [`crate::sink::EventSink`] failed to accept an event.

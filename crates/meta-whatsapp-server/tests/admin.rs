@@ -989,6 +989,13 @@ impl meta_whatsapp_rs::core::store::KvStore for FailingDeletes {
         new: Option<Vec<u8>>,
         expiry: meta_whatsapp_rs::core::store::Expiry,
     ) -> Result<Option<u64>, meta_whatsapp_rs::core::error::StorageError> {
+        // A delete by compare-and-swap (the vault's conditional delete,
+        // roadmap S2) is a delete too.
+        if new.is_none() && self.failing.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(meta_whatsapp_rs::core::error::StorageError::Backend(
+                anyhow::anyhow!("the store is down"),
+            ));
+        }
         self.inner
             .compare_and_swap(key, expected, new, expiry)
             .await
@@ -1260,4 +1267,135 @@ async fn a_platform_key_does_not_follow_a_recreated_tenant_id() {
         (reply.status, reply.code().as_str()),
         (StatusCode::FORBIDDEN, "forbidden")
     );
+}
+
+/// A `KvStore` that, while `armed`, rewrites a record just before a delete
+/// by compare-and-swap takes it (as a vault rotation or a reconnect landing
+/// between a capability's read of the token and its delete would): the
+/// delete then finds another version and deletes nothing.
+#[derive(Debug)]
+struct RewritesBeforeDelete {
+    inner: meta_whatsapp_rs::adapters::store::MemoryKvStore,
+    armed: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl meta_whatsapp_rs::core::store::KvStore for RewritesBeforeDelete {
+    async fn get(
+        &self,
+        key: &meta_whatsapp_rs::core::store::StoreKey,
+    ) -> Result<
+        Option<meta_whatsapp_rs::core::store::Versioned>,
+        meta_whatsapp_rs::core::error::StorageError,
+    > {
+        self.inner.get(key).await
+    }
+    async fn put(
+        &self,
+        key: &meta_whatsapp_rs::core::store::StoreKey,
+        value: Vec<u8>,
+        expiry: meta_whatsapp_rs::core::store::Expiry,
+    ) -> Result<u64, meta_whatsapp_rs::core::error::StorageError> {
+        self.inner.put(key, value, expiry).await
+    }
+    async fn put_if_absent(
+        &self,
+        key: &meta_whatsapp_rs::core::store::StoreKey,
+        value: Vec<u8>,
+        expiry: meta_whatsapp_rs::core::store::Expiry,
+    ) -> Result<Option<u64>, meta_whatsapp_rs::core::error::StorageError> {
+        self.inner.put_if_absent(key, value, expiry).await
+    }
+    async fn compare_and_swap(
+        &self,
+        key: &meta_whatsapp_rs::core::store::StoreKey,
+        expected: u64,
+        new: Option<Vec<u8>>,
+        expiry: meta_whatsapp_rs::core::store::Expiry,
+    ) -> Result<Option<u64>, meta_whatsapp_rs::core::error::StorageError> {
+        if new.is_none()
+            && self.armed.load(std::sync::atomic::Ordering::SeqCst)
+            && let Some(current) = self.inner.get(key).await?
+        {
+            self.inner
+                .put(
+                    key,
+                    current.value,
+                    meta_whatsapp_rs::core::store::Expiry::Keep,
+                )
+                .await?;
+        }
+        self.inner
+            .compare_and_swap(key, expected, new, expiry)
+            .await
+    }
+    async fn delete(
+        &self,
+        key: &meta_whatsapp_rs::core::store::StoreKey,
+    ) -> Result<bool, meta_whatsapp_rs::core::error::StorageError> {
+        self.inner.delete(key).await
+    }
+}
+
+/// Roadmap S2: a disconnection whose token was rewritten between the
+/// capability's read of it and its delete deletes nothing (neither the
+/// token nor the binding) and answers `503 storage_unavailable`,
+/// retryable; the repeat, which reads the record as it is now,
+/// disconnects. For the tenant's disconnection, then the operator's
+/// unbind. Decisive: `OwnedWaba::forget_or_busy`'s answer when
+/// `OwnedWaba::forget` deleted nothing.
+#[tokio::test]
+async fn a_token_rewritten_while_it_is_forgotten_is_503_then_goes() {
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+
+    use meta_whatsapp_server::store::MemoryStore;
+
+    let kv = Arc::new(RewritesBeforeDelete {
+        inner: meta_whatsapp_rs::adapters::store::MemoryKvStore::new(),
+        armed: std::sync::atomic::AtomicBool::new(false),
+    });
+    let h = Harness::on(Arc::new(MemoryStore::new()), kv.clone());
+    let admin = h.admin_key().await;
+    h.tenant("merchant-a").await;
+    let key = h.tenant_key("merchant-a", &[Scope::Numbers]).await;
+    for (waba, pn, by_admin) in [
+        (WABA, "1972385232742141", false),
+        ("102290129340399", "1972385232742142", true),
+    ] {
+        h.connect("merchant-a", waba, &[pn], "TOKEN-OF-A").await;
+        let call = || {
+            if by_admin {
+                Call::new(Method::DELETE, format!("/v1/admin/wabas/{waba}/binding")).key(&admin)
+            } else {
+                Call::new(Method::DELETE, format!("/v1/wabas/{waba}")).key(&key)
+            }
+        };
+        h.graph.push_json(200, json!({"success": true}));
+        kv.armed.store(true, Ordering::SeqCst);
+        let busy = h.call(call()).await;
+        kv.armed.store(false, Ordering::SeqCst);
+        assert_eq!(
+            (busy.status, busy.code().as_str()),
+            (StatusCode::SERVICE_UNAVAILABLE, "storage_unavailable"),
+            "{waba}: {}",
+            busy.text
+        );
+        assert_eq!(busy.json()["error"]["retryable"], true, "{waba}");
+        assert!(
+            h.store.waba(&WabaId::new(waba)).await.unwrap().is_some(),
+            "{waba}: the binding went"
+        );
+        assert!(
+            h.vault.get(&WabaId::new(waba)).await.unwrap().is_some(),
+            "{waba}: the token went"
+        );
+
+        h.graph.push_json(200, json!({"success": true}));
+        let done = h.call(call()).await;
+        assert_eq!(done.status, StatusCode::NO_CONTENT, "{waba}: {}", done.text);
+        assert!(h.store.waba(&WabaId::new(waba)).await.unwrap().is_none());
+        assert!(h.vault.get(&WabaId::new(waba)).await.unwrap().is_none());
+    }
+    assert_eq!(h.graph.remaining(), 0);
 }
