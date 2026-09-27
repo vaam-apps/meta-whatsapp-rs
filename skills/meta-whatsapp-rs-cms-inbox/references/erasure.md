@@ -1,6 +1,6 @@
 # Erasing a customer from the inbox
 
-> **Verified against meta-whatsapp-rs 6120dd1fe5ba0dafcc60767c95c9b7eae3139493 (2026-09-27).** Source: the rustdoc of `ConversationStore::erase_all` and `ConversationStore::identities`, `docs/guides/cms-inbox.md` section 8 and `docs/guides/production.md` section 8.
+> **Verified against meta-whatsapp-rs 3573e219656d17a21ddbab4277b2b83c69b5c3f2 (2026-09-27).** Source: the rustdoc of `ConversationStore::erase_all` and `ConversationStore::identities`, `docs/guides/cms-inbox.md` section 8 and `docs/guides/production.md` section 8.
 
 A customer is stored under several keys on one number: a history thread
 under their phone number, live messages under their BSUID, an earlier
