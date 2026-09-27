@@ -211,10 +211,14 @@ Never `client.get(&format!("{id}/…"))`: the literal-path builders split on
 object with your token.
 
 The token is only ever attached to the configured Graph endpoint (scheme,
-host and port) and to `https://lookaside.fbsbx.com`, where Meta's media
-download URLs point (default port). `client.request_url(method, url)` to
-any other origin, `*.whatsapp.net` included, is refused with
-`Error::Validation` on `url` before anything is sent.
+host and port), to `https://lookaside.fbsbx.com`, where Meta's media
+download URLs point (default port), and to one URL on
+`https://api.facebook.com`, `GET /{business id}/parent-bsuid-accounts`
+(the Parent BSUID Accounts API, which Meta serves there:
+`client.business(id).parent_bsuid_account()`). `client.request_url(method, url)`
+to any other origin or URL, `*.whatsapp.net` and every other path on
+`api.facebook.com` included, is refused with `Error::Validation` on `url`
+before anything is sent.
 
 ## What meta-whatsapp-rs does not do
 

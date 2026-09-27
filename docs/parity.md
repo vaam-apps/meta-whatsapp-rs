@@ -11,7 +11,8 @@ inbox began recording window events, thread ownership and identity links
 (roadmap L7), against its code; rows 66, 129–133 and 151 again with the
 phone number calls (roadmap L9), against their code, and row 156 added
 for what L9 left (L26); the service's cell of row 9 again with S2's
-security review, against its code. Every cell about us was checked against the code: a cell that
+security review, against its code; row 152 again with the parent BSUID
+accounts API (roadmap L10a), against its code. Every cell about us was checked against the code: a cell that
 says a thing is done names the symbol that does it, and what the service
 (`meta-whatsapp-server`) does is read from its routes, not from its
 design. The plan to close the gaps is [roadmap.md](roadmap.md); the Meta
@@ -25,7 +26,7 @@ reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
-| Library | 98 | 20 | 13 | 1 |
+| Library | 99 | 20 | 12 | 1 |
 | Service | 38 | 25 | 68 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
@@ -33,7 +34,7 @@ reached.
   n/a column is a side that does not carry the capability at all: the
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
-- Each of the library's 33 partial or gap rows is cited by a
+- Each of the library's 32 partial or gap rows is cited by a
   [roadmap](roadmap.md) item. Each of the service's 93 names, in its
   status, the roadmap items that bring it; by family (a row can name
   two): M2 8, M3 11, M4 2, M5 71, S 2 (the modular split; S2b, undated
@@ -339,7 +340,7 @@ The owner's definition (2026-09-26):
 | 148 | History | Message history events (the delivery events of one history entry) | — | — | `reference/message-history/whatsapp-business-message-history-events-api.md` (where its id comes from is not in the mirror) | not wrapped | — | gap / gap (M5c4) |
 | 149 | Policy | Account, policy and security events (alerts, violations, reviews, capability, name, quality, security) | — | — | `webhooks/reference/account_alerts.md`, `webhooks/reference/account_update.md`, `webhooks/reference/account_review_update.md`, `webhooks/reference/business_capability_update.md`, `webhooks/reference/phone_number_name_update.md`, `webhooks/reference/security.md`; `policy-enforcement.md` | `webhooks::WebhookEvent::AccountAlert`, `AccountReviewUpdated`, `AccountUpdated`, `AccountSettingsUpdated`, `BusinessCapabilityUpdated`, `PhoneNumberNameUpdated`, `SecurityUpdated` | all seven are tenant event types | done / done |
 | 150 | Policy | Marketing opt-out (user preferences) | — | — | `webhooks/reference/user_preferences.md` | `webhooks::WebhookEvent::UserPreferenceChanged`; `core::ErrorKind::MarketingOptedOut` (131050) | `user_preference_changed` events; `409 marketing_opted_out` | done / done |
-| 152 | Accounts | Parent BSUID accounts: the portfolios that share parent BSUIDs | — | — | `business-scoped-user-ids` (§ Get parent BSUID account, served from `api.facebook.com`) | not wrapped; its host is outside the client's credential host allow list (`client::GraphRequest`), so wrapping it widens that list, a change for the security review (L10a) | — | gap / gap (M5c4) |
+| 152 | Accounts | Parent BSUID accounts: the portfolios that share parent BSUIDs | — | — | `business-scoped-user-ids` (§ Get parent BSUID account, served from `api.facebook.com`) | `client::waba::Business::parent_bsuid_account` (a `ParentBsuidAccount`): the one request the client's credential rules (`client::GraphRequest`) let take a token to `api.facebook.com`, `GET /{digits}/parent-bsuid-accounts` over https on the default port, with no version segment; every other path, method, scheme or port on that host is refused before any request (roadmap L10a) | — | done / gap (M5c4) |
 | 156 | Numbers | Payload encryption, connection status and webhook URL on a number | — | — | `reference/whatsapp-business-phone-number/settings-api.md` (`payload_encryption`: `status`, `client_encryption_key`, `client_encryption_key_fingerprint`, `cloud_encryption_key`); `reference/whatsapp-business-phone-number/whatsapp-business-account-phone-number-api.md` (`connection_status`, `webhook_url`) | not wrapped (L26) | — | gap / gap (M5c3) |
 
 ## Plan to parity

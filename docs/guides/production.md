@@ -93,12 +93,17 @@ runs it against real Postgres and Redis.
 in `Debug`; the value comes out only through `expose_secret()`. Call it at
 the boundary that needs it and nowhere near a log line.
 
-The client attaches a token to two origins only: the configured Graph
-endpoint (scheme, host and port) and `https://lookaside.fbsbx.com`, Meta's
-media download host. A request to any other URL with a token fails locally
-(`Error::Validation` on `url`). Behind a Graph proxy
-(`ClientBuilder::endpoint`), the token goes to the proxy and the media host,
-not to `graph.facebook.com`.
+The client attaches a token to the configured Graph endpoint (scheme, host
+and port), to `https://lookaside.fbsbx.com`, Meta's media download host,
+and to one URL on `api.facebook.com`: `GET
+https://api.facebook.com/{business id}/parent-bsuid-accounts`, the Parent
+BSUID Accounts API (no other path, method, scheme or port on that host). A
+request to any other URL with a token fails locally (`Error::Validation`
+on `url`). Behind a Graph proxy (`ClientBuilder::endpoint`), the token goes
+to the proxy, the media host and that one URL, not to `graph.facebook.com`;
+if every request must leave through your proxy, configure it on the
+transport instead (`ReqwestTransport::with_client` with a proxied
+`reqwest::Client`).
 
 ## 3. Logs and observability
 

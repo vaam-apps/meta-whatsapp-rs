@@ -5,7 +5,7 @@ description: "WhatsApp media with meta-whatsapp-rs - uploading files (supported 
 
 # meta-whatsapp-rs-media
 
-> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs b72ff6f8c95dcabfebc5a888c2f7ea43c5b5456b (2026-09-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/media.rs](examples/media.rs), compiled and
 tested by meta-whatsapp-rs's own gate.
@@ -90,7 +90,9 @@ files: `start_upload_session`, `upload_chunk`, `upload_session_status`.
   longer.
 - The token is only sent to the configured Graph endpoint and to
   `https://lookaside.fbsbx.com` on the default port (where Meta's media
-  URLs point). A download URL anywhere else, `*.whatsapp.net` included, is
+  URLs point); the one other exception, a single `GET` on
+  `api.facebook.com` (`Business::parent_bsuid_account`), is not a media
+  host. A download URL anywhere else, `*.whatsapp.net` included, is
   refused with `Error::Validation` on `url` before a byte is sent — do not
   "fix" that by fetching it yourself with the token.
 - Never publish downloaded bytes before the verified stream ended: the

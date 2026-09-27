@@ -10,7 +10,8 @@ the service's core was extracted (roadmap S1), categories 18 and 30
 again with the `ConversationStore` port change (roadmap L5), categories
 20, 21, 24 and 34 again with the phone number calls (roadmap L9),
 categories 33 and 40 when paced broadcast (B2) landed, category 19 again
-with S2's security review. The
+with S2's security review, category 24 again with the parent BSUID
+accounts API (roadmap L10a). The
 per-feature detail is in [coverage.md](coverage.md) (the linked rows);
 the capability-level comparison with Zaileys is in [parity.md](parity.md)
 (the rows named); the plan is [roadmap.md](roadmap.md).
@@ -19,7 +20,7 @@ the capability-level comparison with Zaileys is in [parity.md](parity.md)
 
 | 40 categories | done | partial | gap |
 | --- | --- | --- | --- |
-| Library | 18 | 19 | 3 |
+| Library | 19 | 18 | 3 |
 | Service | 1 | 24 | 15 |
 
 35 categories follow Meta's grouping, 2 are APIs Meta documents
@@ -69,7 +70,7 @@ by reference only (36, 37), and 3 are our own (38–40).
 | 21 | Conversational components (welcome message, ice breakers, commands) | `business-phone-numbers/conversational-components`; `reference/whatsapp-business-account/conversational-automation-api.md`, `reference/whatsapp-business-bot/bot-details-api.md` | read and configure; bot details by id (`GET /{WABA-Bot-ID}`) | the settings in M5c3, commands over the bot API in M5k | [10](coverage.md#row-10) | 85, 133 | partial / gap (M5c3, M5k) | dispatching commands is the bot framework's (category 40, parity row 85) |
 | 22 | Business profiles | `business-profiles`; `reference/whatsapp-business-phone-number/whatsapp-business-profile-api.md`, `reference/whatsapp-business-profile/whatsapp-business-profile-node-api.md` | the phone-number and profile-node APIs, the picture by upload handle | get and patch without the picture (M5c2) | [11](coverage.md#row-11), [33](coverage.md#row-33) | 64 | done / partial (M5c2) | — |
 | 23 | WhatsApp Business Accounts | `whatsapp-business-accounts.md`; `reference/whatsapp-business-account/whatsapp-business-account-api.md` and its neighbours, `reference/business/whatsapp-business-accounts-api.md` and its neighbours | details, update, phone numbers, subscribed apps with the override, assigned users, client and owned WABAs, customer bases | list WABAs, admin attach and unbind, disconnect; the rest in M5c4 | [12](coverage.md#row-12), [33](coverage.md#row-33) | 126, 127 | partial / partial (M5c4) | not wrapped: WABA creation, activities, schedules, the solutions list, system users and their tokens for client businesses |
-| 24 | Business-scoped user IDs and usernames | `business-scoped-user-ids` | send by BSUID or parent BSUID, identities on every event, `user_id_update`, request contact info, a BSUID-keyed inbox, deleting a contact book entry | BSUID recipients, `user_id_changed` events; request contact info in M5a, the contact book in M5c3, parent BSUID accounts in M5c4 | [9](coverage.md#row-9) | 29, 36, 73, 151, 152 | partial / partial (M5a, M5c3, M5c4) | not wrapped: the parent BSUID accounts API (served from `api.facebook.com`, L10a); the business username calls are category 20 |
+| 24 | Business-scoped user IDs and usernames | `business-scoped-user-ids` | send by BSUID or parent BSUID, identities on every event, `user_id_update`, request contact info, a BSUID-keyed inbox, deleting a contact book entry, the parent BSUID account (`Business::parent_bsuid_account`) | BSUID recipients, `user_id_changed` events; request contact info in M5a, the contact book in M5c3, parent BSUID accounts in M5c4 | [9](coverage.md#row-9) | 29, 36, 73, 151, 152 | done / partial (M5a, M5c3, M5c4) | the parent BSUID accounts API is served from `api.facebook.com`: its one URL there is the only one on that host the client's credential rules let carry a token (L10a); the business username calls are category 20 |
 | 25 | Block users | `block-users`; `reference/whatsapp-business-phone-number/block-api.md` | block, unblock, list (phone number or BSUID, partial failures) | M5g | [17](coverage.md#row-17) | 71 | done / gap (M5g) | — |
 | 26 | QR codes and short links | `qr-codes.md`; `reference/whatsapp-business-phone-number/whatsapp-business-qr-code-api.md`, `reference/whatsapp-business-phone-number/whatsapp-business-qr-code-management-api.md` | create, update, get, list, delete, image format | M5g | [16](coverage.md#row-16) | 106 | done / gap (M5g) | — |
 | 27 | Analytics | `analytics` | messaging, conversation, pricing, template, template-group, call and group analytics; template insights; click-tracking opt-out | groups' analytics in M5f, the rest in M5g | [15](coverage.md#row-15) | 81, 107 | done / gap (M5f, M5g) | — |

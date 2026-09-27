@@ -5,7 +5,7 @@ description: "Setting up meta-whatsapp-rs for WhatsApp - what to create on Meta'
 
 # meta-whatsapp-rs-setup
 
-> **Verified against meta-whatsapp-rs ef0fe364e3a21a535238007db5276fe5ef6ce970 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs b72ff6f8c95dcabfebc5a888c2f7ea43c5b5456b (2026-09-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/client.rs](examples/client.rs), compiled and
 tested by meta-whatsapp-rs's own gate.
@@ -69,7 +69,9 @@ Client::builder()
 A Graph proxy or mock server: pass
 `GraphEndpoint::custom(base_url, ApiVersion::DEFAULT)?` to the builder's
 `.endpoint(..)`; the token then goes to the proxy, never to
-`graph.facebook.com`.
+`graph.facebook.com`. Media downloads and the parent BSUID accounts call
+still go to Meta's own hosts: to route every request through a proxy, set
+it on the transport (`ReqwestTransport::with_client`, or `HTTPS_PROXY`).
 
 ## Act as a merchant
 
@@ -114,9 +116,12 @@ decoding and the credential host allowlist. Mark a POST
   `123/subscribed_apps` would address another Graph object with your
   token. `get_at` keeps it one segment (the test proves it).
 - The token is attached only to the configured Graph endpoint (scheme,
-  host and port) and `https://lookaside.fbsbx.com` (media downloads); any
-  other URL given to `client.request_url(method, url)` fails with
-  `Error::Validation` on `url` before a byte is sent.
+  host and port), `https://lookaside.fbsbx.com` (media downloads) and one
+  URL on `api.facebook.com`, `GET /{business id}/parent-bsuid-accounts`
+  (`Business::parent_bsuid_account`); any other URL given to
+  `client.request_url(method, url)`, another path or method on
+  `api.facebook.com` included, fails with `Error::Validation` on `url`
+  before a byte is sent.
 - An employee system user sees nothing until the WABA is assigned to it:
   Graph error `200`, `ErrorKind::Permission`, not an HTTP 403.
 - `ClientBuilder::build` fails without a transport (`Error::Config`);

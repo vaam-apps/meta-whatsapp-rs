@@ -337,19 +337,42 @@ replayed — a duplicate OTP or order confirmation is worse than an error.
 
 ### Credentials never leave Meta
 
-`GraphRequest` attaches a token to exactly two origins: the configured
-Graph endpoint (same scheme, host and port; `https://graph.facebook.com`
-unless `ClientBuilder::endpoint` names a proxy, in which case production
-Graph is just another host) and `https://lookaside.fbsbx.com` on the default
-port, where media download URLs point. Any other URL with a token (another
-Meta host such as `*.whatsapp.net` or `*.fbcdn.net`, a subdomain, a
-look-alike — the host is compared exactly after URL parsing, so suffixes,
-trailing dots and IDN homographs do not match —, another port, plain HTTP)
-fails with `ValidationError` on `url` before the transport sees it. Inside the
-library, the only request to an absolute URL is `Media::download_with_info`;
-integrators reach the same check through `Client::request_url`. Pagination
-re-issues the original request with `after=` rather than following
-`paging.next`.
+`GraphRequest` attaches a token to the configured Graph endpoint (same
+scheme, host and port; `https://graph.facebook.com` unless
+`ClientBuilder::endpoint` names a proxy, in which case production Graph is
+just another host) and to what its credential rules allow. The rules are
+data (`CREDENTIAL_RULES`, next to `GraphRequest`), one line per documented
+need; every line is `https` on the default port and an exact host, and
+adds a method and a path rule:
+
+| Rule | Why |
+| --- | --- |
+| `https://lookaside.fbsbx.com`, any method, any path | media download URLs point there, and Meta refuses a download without the token |
+| `GET https://api.facebook.com/{digits}/parent-bsuid-accounts`, nothing else on that host | the Parent BSUID Accounts API (`Business::parent_bsuid_account`) is served there, not on Graph, and takes no API version (`business-scoped-user-ids`, § Get parent BSUID account; the page's changelog entry of May 28, 2026 corrected its host from `graph.facebook.com`) |
+
+The second line's path is matched as it goes on the wire, after URL
+parsing (percent-encoding kept, so `%2F` is not a separator and `%31` not
+a digit; `.` and `..` resolved): exactly two segments, the first ASCII
+digits, the second the literal edge, and no query, fragment or user info.
+A version segment, a trailing segment or slash, another method, `http`,
+another port, or any other path on `api.facebook.com` is refused. Neither
+rule follows the configured endpoint: behind a proxy the token goes to the
+proxy and to these two, never to `graph.facebook.com` (an egress proxy
+that must see every request belongs in the `HttpTransport`). A new line
+widens where credentials go, so it goes through the security review.
+
+Any other URL with a token (another Meta host such as `*.whatsapp.net` or
+`*.fbcdn.net`, a subdomain, a look-alike — the host is compared exactly
+after URL parsing, so suffixes, trailing dots and IDN homographs do not
+match —, another port, plain HTTP) fails with `ValidationError` on `url`
+before the transport sees it; the error names the host, the method and the
+rules, never the path, the query or the token. Inside the library, the
+only requests to an absolute URL are `Media::download_with_info` and
+`Business::parent_bsuid_account`; integrators reach the same check through
+`Client::request_url`. Pagination re-issues the original request with
+`after=` rather than following `paging.next`. A redirect is the
+transport's: the stock reqwest transport drops `Authorization` when a
+redirect changes host, scheme or port, and keeps it on the same origin.
 
 ## Feature modules
 

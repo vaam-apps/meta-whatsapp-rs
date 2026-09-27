@@ -187,6 +187,19 @@ stored data, the owner's).
 
 ### Added
 
+- **The parent BSUID accounts API** (`meta_whatsapp_client::waba`,
+  roadmap L10a, parity row 152; the service's side is M5c4):
+  `Business::parent_bsuid_account` sends
+  `GET https://api.facebook.com/{BUSINESS_ID}/parent-bsuid-accounts` with
+  the client's token (behind a Graph proxy too) and returns a
+  `ParentBsuidAccount` (`parent_bsuid_account_id`, a string: core has no
+  id type for it; `enrolled_business_portfolios`, `BusinessId`s). A
+  business id that is not ASCII digits is refused before any request
+  (`Error::Validation` on `business_id`); replayed on transient errors as
+  every `GET` is. What Meta answers for a portfolio that is not enrolled
+  is not documented: without `parent_bsuid_account_id` it is a decode
+  error. The host is outside Graph: see Security, "Credential allow list
+  widened, for one URL".
 - **`StorageError::Busy`** (meta-whatsapp-core; the enum is
   `#[non_exhaustive]`, so this is additive): contention, reported by a
   storage adapter that gave up waiting for another writer (a lock wait
@@ -1741,3 +1754,25 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   - **L4 — the route guard cannot be checked on a third-party
     backend** until the conformance suites move into the core: roadmap
     S3 includes the `RouteGuard` cases.
+- **Credential allow list widened, for one URL (roadmap L10a).** Meta
+  serves the Parent BSUID Accounts API from `api.facebook.com`, without
+  an API version, not from Graph (`business-scoped-user-ids`; the page's
+  changelog entry of May 28, 2026 corrected the host from
+  `graph.facebook.com`). A token now reaches that host for
+  `GET https://api.facebook.com/{digits}/parent-bsuid-accounts` only:
+  https on the default port, the host compared exactly after URL
+  parsing, the path exactly two segments (ASCII digits, then the edge,
+  compared as sent: percent-encoding kept, `.` and `..` resolved), and
+  no query, fragment or user info. Any other path (a version segment, a
+  trailing segment or slash, another edge, an id that is not digits, a
+  percent-encoded `/`), any other method, `http` or another port on
+  that host is refused with `Error::Validation` on `url` before the
+  transport, and the error names the host and method, never the path,
+  the query or the token. The allow list is data now (`CREDENTIAL_RULES`
+  in the client's request module: the media host's line unchanged, this
+  one added), so the next exception is one reviewed line; neither line
+  follows a configured Graph proxy (`ClientBuilder::endpoint`): behind
+  one, the token goes to the proxy, the media host and this URL, never
+  to `graph.facebook.com`. A same-origin redirect from `api.facebook.com`
+  is the transport's to follow: the stock reqwest transport keeps
+  `Authorization` on it.

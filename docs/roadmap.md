@@ -739,7 +739,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     username errors `147001`–`147005` are not classified in `ErrorKind`
     yet. The number's settings it leaves (payload encryption,
     `connection_status`, `webhook_url`) are L26.
-- [ ] **L10a. The parent BSUID accounts API, and the credential host
+- [x] **L10a. The parent BSUID accounts API, and the credential host
   allow list** (`meta-whatsapp-client`, `client::GraphRequest` and
   `client::waba`; row 152): the API is served from `api.facebook.com`,
   outside the allow list, so the list widens to that host for that
@@ -750,6 +750,19 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     the token; any other path on that host is refused before a request
     (removing the path restriction fails the test); the allow list's
     existing tests pass unchanged.
+  - **Landed:** row 152 done in the library; the service's side stays
+    with M5c4. `Business::parent_bsuid_account` returns a
+    `ParentBsuidAccount` (the account id a string: core has no id type
+    for it). The allow list is data now, one rule per line next to
+    `GraphRequest`: the media host's rule as it was, and
+    `GET https://api.facebook.com/{digits}/parent-bsuid-accounts` with no
+    version, query, fragment or user info, nothing else on that host.
+    Neither rule follows a configured Graph proxy (the token goes to the
+    proxy, the media host and this URL); routing every request through a
+    proxy is the transport's. What Meta answers for a portfolio that is
+    not enrolled is not documented (a decode error without
+    `parent_bsuid_account_id`). A same-origin redirect from
+    `api.facebook.com` is the transport's to follow, with the header.
 - [ ] **L10b. WABAs, accounts, billing, history** (`meta-whatsapp-client`,
   `client::waba`; rows 90's Meta side, 127, 146–148): WABA creation
   (partner-initiated), system user tokens for client businesses,
