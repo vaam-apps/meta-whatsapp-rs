@@ -32,6 +32,15 @@ struct Shared {
     download_go: Notify,
     /// Server → test: "I have the first upload chunk".
     upload_first: Notify,
+    /// The `Authorization` header of every request `/record` answered
+    /// (`None` when there was none), in order.
+    recorded: std::sync::Mutex<Vec<Option<String>>>,
+}
+
+impl Shared {
+    fn recorded(&self) -> Vec<Option<String>> {
+        self.recorded.lock().unwrap().clone()
+    }
 }
 
 struct Server {
@@ -54,6 +63,11 @@ impl Server {
             .route("/loop", get(redirect_loop))
             .route("/headers", get(headers))
             .route("/echo-proxy", get(echo_proxy))
+            .route("/within", get(within_host))
+            .route("/within-post", post(within_host_post))
+            .route("/hop-within/{port}", get(hop_within))
+            .route("/ping-pong/{port}", get(ping_pong))
+            .route("/record", get(record).post(record))
             .with_state(Arc::clone(&shared));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -191,6 +205,53 @@ async fn headers(headers: HeaderMap) -> axum::Json<Value> {
         "authorization": header(&headers, "authorization"),
         "referer": header(&headers, "referer"),
     }))
+}
+
+/// Redirect to `/record` on this server (the same origin).
+async fn within_host() -> Response {
+    (StatusCode::FOUND, [("location", "/record")]).into_response()
+}
+
+/// `307` to `/record` on this server: the method and body are replayed.
+async fn within_host_post() -> Response {
+    (StatusCode::TEMPORARY_REDIRECT, [("location", "/record")]).into_response()
+}
+
+/// Redirect to `/within` on another local server, which redirects within
+/// itself.
+async fn hop_within(axum::extract::Path(port): axum::extract::Path<u16>) -> Response {
+    (
+        StatusCode::FOUND,
+        [("location", format!("http://127.0.0.1:{port}/within"))],
+    )
+        .into_response()
+}
+
+/// Redirect to `/ping-pong/{this server's port}` on the server at `port`,
+/// which answers the same: two origins redirecting to each other forever.
+async fn ping_pong(
+    axum::extract::Path(port): axum::extract::Path<u16>,
+    request: Request,
+) -> Response {
+    let host = request.headers()["host"].to_str().unwrap();
+    let own_port = host.rsplit(':').next().unwrap();
+    (
+        StatusCode::FOUND,
+        [(
+            "location",
+            format!("http://127.0.0.1:{port}/ping-pong/{own_port}?client_secret=s3cr3t-value"),
+        )],
+    )
+        .into_response()
+}
+
+/// Records the `Authorization` header it got, and answers 200.
+async fn record(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> &'static str {
+    let authorization = headers
+        .get("authorization")
+        .map(|v| v.to_str().unwrap().to_owned());
+    shared.recorded.lock().unwrap().push(authorization);
+    "recorded"
 }
 
 /// Answers a proxied (absolute-form) request with the host it was for.
@@ -531,6 +592,151 @@ async fn redirect_loop_errors_never_show_the_url() {
             !rendered.contains("s3cr3t-value")
                 && !rendered.contains("c0de-value")
                 && !rendered.contains("/loop"),
+            "the URL leaked into a redirect error: {rendered}"
+        );
+    }
+}
+
+const TOKEN: &str = "Bearer EAAG-token";
+
+/// `request` carrying `name: value`.
+fn with_header(mut request: HttpRequest, name: &'static str, value: &str) -> HttpRequest {
+    request.headers.insert(name, value.parse().unwrap());
+    request
+}
+
+/// reqwest sends a credential header again on a redirect to the same scheme,
+/// host and port. The client checked only the URL it asked for (roadmap
+/// L10a: one path on `api.facebook.com`), so a request with credentials
+/// does not follow such a redirect: the 3xx comes back as the response and
+/// the target is never asked. Without credentials the redirect is followed,
+/// as before.
+#[tokio::test]
+async fn a_redirect_within_the_origin_never_carries_credentials() {
+    for (name, value) in [
+        ("authorization", TOKEN),
+        ("authorization", "OAuth EAAG-token"),
+        ("proxy-authorization", "Basic cHJveHk6c2VjcmV0"),
+        ("cookie", "session=s3cr3t-value"),
+    ] {
+        let server = Server::start().await;
+        let request = with_header(
+            HttpRequest::new(Method::GET, server.url("/within")),
+            name,
+            value,
+        );
+        let response = within("redirected request", transport().send(request))
+            .await
+            .unwrap();
+        assert_eq!(
+            server.shared.recorded(),
+            [],
+            "{name}: the redirect target was asked"
+        );
+        assert_eq!(response.status, StatusCode::FOUND, "{name}: not followed");
+        assert_eq!(response.headers["location"], "/record", "{name}");
+
+        // The streaming path stops the same way.
+        let request = with_header(
+            HttpRequest::new(Method::GET, server.url("/within")),
+            name,
+            value,
+        );
+        let response = within("redirected stream", transport().send_streaming(request))
+            .await
+            .unwrap();
+        assert_eq!(response.status, StatusCode::FOUND, "{name}: not followed");
+        assert!(server.shared.recorded().is_empty(), "{name}");
+
+        // A 307 would replay the method and the body there too.
+        let mut request = with_header(
+            HttpRequest::new(Method::POST, server.url("/within-post")),
+            name,
+            value,
+        );
+        request.body = RequestBody::json(r#"{"a":1}"#);
+        let response = within("redirected POST", transport().send(request))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status,
+            StatusCode::TEMPORARY_REDIRECT,
+            "{name}: not followed"
+        );
+        assert!(server.shared.recorded().is_empty(), "{name}");
+    }
+
+    // Without credentials the same redirect is followed.
+    let server = Server::start().await;
+    let response = within(
+        "redirected request",
+        transport().send(HttpRequest::new(Method::GET, server.url("/within"))),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status, StatusCode::OK, "followed");
+    assert_eq!(&response.body[..], b"recorded");
+    assert_eq!(server.shared.recorded(), [None]);
+}
+
+/// reqwest puts the request's original headers back on every hop and drops
+/// the credentials only when that hop changes origin. After a redirect to
+/// another origin (followed, without the token), a second redirect within
+/// that origin would carry the token there: the transport stops at it.
+#[tokio::test]
+async fn a_second_redirect_within_another_origin_never_carries_the_token() {
+    let (origin, other) = (Server::start().await, Server::start().await);
+    let url = || origin.url(&format!("/hop-within/{}", other.addr.port()));
+    let request = with_header(HttpRequest::new(Method::GET, url()), "authorization", TOKEN);
+    let response = within("redirected request", transport().send(request))
+        .await
+        .unwrap();
+    assert_eq!(
+        other.shared.recorded(),
+        [],
+        "the other origin's redirect target was asked"
+    );
+    assert_eq!(
+        response.status,
+        StatusCode::FOUND,
+        "the first redirect is followed, the second is not"
+    );
+    assert_eq!(response.headers["location"], "/record");
+
+    // Without credentials the whole chain is followed.
+    let response = within(
+        "redirected request",
+        transport().send(HttpRequest::new(Method::GET, url())),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status, StatusCode::OK);
+    assert_eq!(other.shared.recorded(), [None]);
+}
+
+/// Redirects between two origins are followed without the credentials, and
+/// still bounded: a request with a token stops after reqwest's usual limit,
+/// with an error that shows no URL.
+#[tokio::test]
+async fn credentialed_redirects_between_origins_are_bounded() {
+    let (a, b) = (Server::start().await, Server::start().await);
+    let request = with_header(
+        HttpRequest::new(
+            Method::GET,
+            a.url(&format!("/ping-pong/{}?code=c0de-value", b.addr.port())),
+        ),
+        "authorization",
+        TOKEN,
+    );
+    let err = within("redirect ping-pong", transport().send(request))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TransportError::Backend(_)), "{err:?}");
+    for rendered in renderings(&err) {
+        assert!(
+            !rendered.contains("s3cr3t-value")
+                && !rendered.contains("c0de-value")
+                && !rendered.contains("/ping-pong"),
             "the URL leaked into a redirect error: {rendered}"
         );
     }

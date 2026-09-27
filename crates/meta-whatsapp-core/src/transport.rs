@@ -7,7 +7,9 @@
 //! `meta_whatsapp_core::testing::ScriptedTransport` (feature `testing`).
 //!
 //! The port is deliberately dumb: no retries, no auth, no JSON. Those live in
-//! the client, once, instead of in every adapter.
+//! the client, once, instead of in every adapter. One rule is the
+//! adapter's: a request's credentials never follow a redirect (see
+//! [`HttpTransport`]).
 
 use std::fmt;
 use std::pin::Pin;
@@ -270,6 +272,18 @@ impl StreamingResponse {
 }
 
 /// Sends HTTP requests. Implementations must be cheap to share (`Arc`).
+///
+/// **Redirects.** The client checks where a request's credentials may go
+/// (`Authorization`; see `meta-whatsapp-client`'s credential rules) for the
+/// URL it hands over, and only that URL: one of the rules allows a single
+/// path on a host, not the host. So an adapter that follows redirects must
+/// never send a request's `Authorization`, `Proxy-Authorization` or
+/// `Cookie` header to another URL: follow no redirect for a request that
+/// carries one, or drop them on every hop (not only on a hop that changes
+/// origin: a hop to another origin followed by one within it would hand
+/// that origin the token). A redirect not followed is returned as the 3xx
+/// response. `meta_whatsapp_adapters::http::ReqwestTransport` does the
+/// first for any hop that would keep them.
 #[async_trait]
 pub trait HttpTransport: Send + Sync + fmt::Debug + 'static {
     /// Send `request` and buffer the response.

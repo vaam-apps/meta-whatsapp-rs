@@ -28,12 +28,21 @@
 //!   URLs can carry secrets in the query (`client_secret`, `code` in the
 //!   token exchange). The URL is stripped before an error leaves this
 //!   module.
-//! - **Redirects** follow reqwest's default (up to 10); reqwest drops
-//!   `Authorization` when a redirect changes host, scheme or port. No
-//!   `Referer` is sent: reqwest's default would hand the previous URL,
-//!   query string included, to the redirect target. Pass a configured client
-//!   to [`ReqwestTransport::with_client`] for another policy (and turn
-//!   `referer` off there too).
+//! - **Redirects** are followed up to 10 hops, with no `Referer` (reqwest's
+//!   default would hand the previous URL, query string included, to the
+//!   redirect target), except where they would carry a credential. reqwest
+//!   rebuilds every hop from the request's original headers and drops
+//!   `Authorization`, `Proxy-Authorization` and `Cookie` only on a hop that
+//!   changes scheme, host or port from the URL that answered it; so a
+//!   request that carries one of them does not follow a hop that keeps
+//!   scheme, host and port: that 3xx is the response (a non-2xx, so an
+//!   error in `meta-whatsapp-client`). The client checked only the URL it
+//!   asked for (its credential rules allow one path on `api.facebook.com`,
+//!   not the host), and a hop to another origin followed by one within it
+//!   would hand that origin the token. Hops that change origin are
+//!   followed, without the credentials. A request without credentials
+//!   follows reqwest's default. A client passed to
+//!   [`ReqwestTransport::with_client`] keeps its own policy, see there.
 //! - **Proxies.** `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY`
 //!   (or their lower-case forms) are honoured, read once when the transport
 //!   is built. Operating-system proxy settings on macOS and Windows are not
@@ -49,18 +58,23 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::StreamExt;
-use http::HeaderValue;
-use http::header::{CONTENT_LENGTH, CONTENT_TYPE};
+use http::header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, PROXY_AUTHORIZATION};
+use http::{HeaderMap, HeaderName, HeaderValue};
 use meta_whatsapp_core::error::{ConfigError, TransportError};
 use meta_whatsapp_core::transport::{
     HttpRequest, HttpResponse, HttpTransport, Multipart, RequestBody, StreamingResponse,
 };
 
 /// `HttpTransport` backed by a `reqwest::Client`. Cheap to clone (the
-/// connection pool is shared).
+/// connection pools are shared).
 #[derive(Clone)]
 pub struct ReqwestTransport {
+    /// Requests without credentials: reqwest's redirect policy.
     client: reqwest::Client,
+    /// Requests with credentials ([`carries_credentials`]): the same
+    /// settings, and [`credentialed_redirects`] (the same client as
+    /// `client` when it came from [`ReqwestTransport::with_client`]).
+    credentialed: reqwest::Client,
 }
 
 impl fmt::Debug for ReqwestTransport {
@@ -84,14 +98,39 @@ impl ReqwestTransport {
     }
 
     /// Use an existing client as is (proxies, mTLS, custom roots, redirect
-    /// policy…). Its timeouts apply when a request has none. Its settings
-    /// are yours: reqwest sends a `Referer` on redirects unless you build it
-    /// with `.referer(false)`, which [`ReqwestTransport::builder`] does.
+    /// policy…), for every request. Its timeouts apply when a request has
+    /// none. Its settings are yours, two of them security settings that
+    /// [`ReqwestTransport::builder`] makes for you:
+    ///
+    /// - reqwest sends a `Referer` on redirects unless you build it with
+    ///   `.referer(false)`;
+    /// - reqwest's redirect policy sends `Authorization` again on a
+    ///   redirect that keeps scheme, host and port, to a URL the Graph
+    ///   client never checked (see the [module docs](crate::http)). Build it with
+    ///   `.redirect(reqwest::redirect::Policy::none())` unless you need
+    ///   redirects; a proxy from `HTTPS_PROXY` keeps the builder's policy.
     pub fn with_client(client: reqwest::Client) -> Self {
-        Self { client }
+        Self {
+            credentialed: client.clone(),
+            client,
+        }
     }
 
-    fn prepare(&self, request: HttpRequest) -> Result<reqwest::Request, TransportError> {
+    /// The client for `request`: the credentialed one when it carries a
+    /// credential header.
+    fn client_for(&self, request: &HttpRequest) -> &reqwest::Client {
+        if carries_credentials(&request.headers) {
+            &self.credentialed
+        } else {
+            &self.client
+        }
+    }
+
+    /// `request` as reqwest's, built by the client that will send it.
+    fn prepare(
+        client: &reqwest::Client,
+        request: HttpRequest,
+    ) -> Result<reqwest::Request, TransportError> {
         let HttpRequest {
             method,
             url,
@@ -99,7 +138,7 @@ impl ReqwestTransport {
             body,
             timeout,
         } = request;
-        let mut builder = self.client.request(method, url);
+        let mut builder = client.request(method, url);
         if let Some(timeout) = timeout {
             builder = builder.timeout(timeout);
         }
@@ -141,6 +180,42 @@ impl ReqwestTransport {
         };
         builder.build().map_err(map_error)
     }
+}
+
+/// The headers reqwest drops on a redirect that changes origin, and keeps
+/// on one that does not: the credentials (`Cookie2` and `WWW-Authenticate`,
+/// which it drops too, carry none of ours).
+const CREDENTIAL_HEADERS: [HeaderName; 3] = [AUTHORIZATION, PROXY_AUTHORIZATION, COOKIE];
+
+/// Whether a request carries a credential, so must not follow a redirect
+/// that keeps it ([`credentialed_redirects`]).
+fn carries_credentials(headers: &HeaderMap) -> bool {
+    CREDENTIAL_HEADERS
+        .iter()
+        .any(|name| headers.contains_key(name))
+}
+
+/// The redirect policy for a request with credentials. reqwest builds each
+/// hop from the request's original headers and drops the credentials only
+/// when the hop changes scheme, host or port from the URL that answered it
+/// (`previous().last()`), so a hop that keeps all three would carry them:
+/// it is not followed, and the 3xx is the response. Any other hop is
+/// followed, without them, up to reqwest's default limit.
+fn credentialed_redirects() -> reqwest::redirect::Policy {
+    let default = reqwest::redirect::Policy::default();
+    reqwest::redirect::Policy::custom(move |attempt| {
+        let next = attempt.url();
+        let keeps_credentials = attempt.previous().last().is_some_and(|previous| {
+            next.scheme() == previous.scheme()
+                && next.host_str() == previous.host_str()
+                && next.port_or_known_default() == previous.port_or_known_default()
+        });
+        if keeps_credentials {
+            attempt.stop()
+        } else {
+            default.redirect(attempt)
+        }
+    })
 }
 
 /// Builder for [`ReqwestTransport`].
@@ -209,10 +284,18 @@ impl ReqwestTransportBuilder {
     /// Build the transport. Fails only if the TLS backend cannot be
     /// initialised (e.g. no usable root certificates).
     pub fn build(self) -> Result<ReqwestTransport, ConfigError> {
+        Ok(ReqwestTransport {
+            client: self.client(reqwest::redirect::Policy::default())?,
+            credentialed: self.client(credentialed_redirects())?,
+        })
+    }
+
+    fn client(&self, redirects: reqwest::redirect::Policy) -> Result<reqwest::Client, ConfigError> {
         let mut builder = reqwest::Client::builder()
             // A Referer on a redirect would carry the previous URL's query
             // (`client_secret`, `code`) to whatever host it points at.
             .referer(false)
+            .redirect(redirects)
             .pool_idle_timeout(self.pool_idle_timeout)
             .pool_max_idle_per_host(self.pool_max_idle_per_host)
             .tcp_keepalive(self.tcp_keepalive);
@@ -222,10 +305,9 @@ impl ReqwestTransportBuilder {
         if let Some(t) = self.timeout {
             builder = builder.timeout(t);
         }
-        let client = builder
+        builder
             .build()
-            .map_err(|e| ConfigError::new(format!("could not build the HTTP client: {e}")))?;
-        Ok(ReqwestTransport { client })
+            .map_err(|e| ConfigError::new(format!("could not build the HTTP client: {e}")))
     }
 }
 
@@ -276,8 +358,9 @@ fn map_error(error: reqwest::Error) -> TransportError {
 #[async_trait]
 impl HttpTransport for ReqwestTransport {
     async fn send(&self, request: HttpRequest) -> Result<HttpResponse, TransportError> {
-        let request = self.prepare(request)?;
-        let mut response = self.client.execute(request).await.map_err(map_error)?;
+        let client = self.client_for(&request);
+        let request = Self::prepare(client, request)?;
+        let mut response = client.execute(request).await.map_err(map_error)?;
         let status = response.status();
         let headers = std::mem::take(response.headers_mut());
         let body = response.bytes().await.map_err(map_error)?;
@@ -292,8 +375,9 @@ impl HttpTransport for ReqwestTransport {
         &self,
         request: HttpRequest,
     ) -> Result<StreamingResponse, TransportError> {
-        let request = self.prepare(request)?;
-        let mut response = self.client.execute(request).await.map_err(map_error)?;
+        let client = self.client_for(&request);
+        let request = Self::prepare(client, request)?;
+        let mut response = client.execute(request).await.map_err(map_error)?;
         let status = response.status();
         let headers = std::mem::take(response.headers_mut());
         let body = response
