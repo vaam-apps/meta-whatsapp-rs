@@ -34,8 +34,9 @@ pub const MAX_USERNAME_CHARS: usize = 35;
 const MAX_BSUID_SUFFIX_CHARS: usize = 128;
 
 string_enum! {
-    /// Status of a business username (`status` of the username calls and
-    /// of the `business_username_updates` webhook).
+    /// Status of a business username (`status` of the username calls). The
+    /// `business_username_updates` webhook also reports `deleted`, typed by
+    /// `meta-whatsapp-webhooks`; here it would be `Other("deleted")`.
     pub enum UsernameStatus {
         /// Approved: visible to WhatsApp users once the usernames feature
         /// is available to them.
@@ -446,18 +447,38 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(
             200,
-            json!({"data": [{"username_suggestions": ["lucky_shrub", "luckyshrub.shop"]}]}),
+            json!({"data": [{"username_suggestions": ["lucky_shrub", "luckyshrub_store"]}]}),
         );
         let got = client(&t)
             .phone_number(ID)
             .username_suggestions()
             .await
             .unwrap();
-        assert_eq!(got, vec!["lucky_shrub", "luckyshrub.shop"]);
+        assert_eq!(got, vec!["lucky_shrub", "luckyshrub_store"]);
         let req = t.last_request().unwrap();
         assert_eq!(req.method, Method::GET);
         assert_eq!(req.path(), "/v25.0/106540352242922/username_suggestions");
         assert_eq!(req.url.query(), None);
+        assert_eq!(t.remaining(), 0);
+
+        // Every entry of `data` counts, in order (an empty one adds nothing).
+        t.push_json(
+            200,
+            json!({"data": [
+                {"username_suggestions": ["lucky_shrub"]},
+                {"username_suggestions": []},
+                {},
+                {"username_suggestions": ["luckyshrub_store", "lucky.shrub"]}
+            ]}),
+        );
+        assert_eq!(
+            client(&t)
+                .phone_number(ID)
+                .username_suggestions()
+                .await
+                .unwrap(),
+            vec!["lucky_shrub", "luckyshrub_store", "lucky.shrub"]
+        );
         assert_eq!(t.remaining(), 0);
 
         t.push_json(200, json!({"data": []}));
@@ -536,6 +557,42 @@ mod tests {
         assert_eq!(t.remaining(), 0);
     }
 
+    /// What the rustdoc says: a `DELETE`, so a timed-out deletion is sent
+    /// again, the same request, and the replay's answer is returned.
+    #[tokio::test]
+    async fn contact_book_deletion_is_replayed_after_a_timeout() {
+        let t = ScriptedTransport::new();
+        t.push_error(|| meta_whatsapp_core::error::TransportError::Timeout);
+        t.push_json(
+            200,
+            json!({"messaging_product": "whatsapp", "success": true, "deleted": false}),
+        );
+        let c = Client::builder()
+            .transport(t.clone())
+            .access_token("TOKEN")
+            .retry(RetryPolicy {
+                max_retries: 1,
+                base_delay: std::time::Duration::ZERO,
+                max_delay: std::time::Duration::ZERO,
+            })
+            .build()
+            .unwrap();
+        let deleted = c
+            .phone_number(ID)
+            .delete_contact_book_entry(&UserId::new(BSUID))
+            .await
+            .unwrap();
+        assert!(!deleted, "the replay's answer");
+        let reqs = t.requests();
+        assert_eq!(reqs.len(), 2);
+        for r in &reqs {
+            assert_eq!(r.method, Method::DELETE);
+            assert_eq!(r.path(), "/v25.0/106540352242922/contact_book");
+            assert_eq!(r.query("bsuid").as_deref(), Some(BSUID));
+        }
+        assert_eq!(t.remaining(), 0);
+    }
+
     #[tokio::test]
     async fn contact_book_deletion_refuses_other_ids_before_sending() {
         let t = ScriptedTransport::new();
@@ -565,11 +622,21 @@ mod tests {
     }
 
     /// Nothing in the library's own code calls the deletion or builds its
-    /// path: outside tests, `"contact_book"` is named once (in
-    /// `delete_contact_book_entry`), and no crate calls the method.
+    /// path: outside tests and comments, the word `contact_book` appears
+    /// exactly twice in the `src/` of every crate of the workspace, in this
+    /// method's signature and in its path segment. A call from anywhere
+    /// else (as a method, or as `PhoneNumber::delete_contact_book_entry`),
+    /// or a second path to the edge, fails it.
+    ///
+    /// Test code is left out: an inline `#[cfg(test)] mod … {` (from there
+    /// to the end of its file, where this workspace keeps them) and the
+    /// files of an out-of-line `#[cfg(test)] mod …;`. Everything else
+    /// after a `#[cfg(test)]` is scanned.
     #[test]
     fn only_its_own_call_names_the_contact_book() {
-        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        use std::path::{Path, PathBuf};
+
+        fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
             for entry in std::fs::read_dir(dir).unwrap() {
                 let path = entry.unwrap().path();
                 if path.is_dir() {
@@ -579,7 +646,48 @@ mod tests {
                 }
             }
         }
-        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+
+        /// The library lines of `file` (number, text), and the paths of
+        /// the out-of-line test modules it declares.
+        fn library_lines(file: &Path, text: &str) -> (Vec<(usize, String)>, Vec<PathBuf>) {
+            let lines: Vec<&str> = text.lines().collect();
+            // Where this file's `mod x;` children live.
+            let children = match file.file_name().and_then(|n| n.to_str()) {
+                Some("mod.rs" | "lib.rs" | "main.rs") => file.parent().unwrap().to_path_buf(),
+                _ => file.with_extension(""),
+            };
+            let (mut code, mut test_modules) = (Vec::new(), Vec::new());
+            let mut i = 0;
+            while i < lines.len() {
+                let line = lines[i].trim();
+                if line == "#[cfg(test)]" {
+                    // The item it gates, past any further attributes.
+                    let item = lines[i + 1..]
+                        .iter()
+                        .map(|l| l.trim())
+                        .find(|l| !l.starts_with("#["))
+                        .unwrap_or_default();
+                    let module = item
+                        .strip_prefix("pub(crate) mod ")
+                        .or_else(|| item.strip_prefix("mod "));
+                    match module.map(|m| m.strip_suffix(';')) {
+                        Some(Some(name)) => {
+                            test_modules.push(children.join(format!("{name}.rs")));
+                            test_modules.push(children.join(name));
+                        }
+                        Some(None) => break,
+                        None => {}
+                    }
+                }
+                if !line.starts_with("//") {
+                    code.push((i + 1, lines[i].to_owned()));
+                }
+                i += 1;
+            }
+            (code, test_modules)
+        }
+
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let mut files = Vec::new();
         for krate in std::fs::read_dir(&crates).unwrap() {
             let src = krate.unwrap().path().join("src");
@@ -588,21 +696,48 @@ mod tests {
             }
         }
         assert!(files.len() > 50, "walked the workspace's sources");
-        let (mut literals, mut calls) = (Vec::new(), Vec::new());
+        let mut scanned = Vec::new();
+        let mut test_modules = Vec::new();
         for file in &files {
             let text = std::fs::read_to_string(file).unwrap();
-            // Library code only: stop at the file's test module.
-            let code = text.split("#[cfg(test)]").next().unwrap_or_default();
-            for _ in code.matches("\"contact_book\"") {
-                literals.push(file.display().to_string());
-            }
-            for _ in code.matches(".delete_contact_book_entry(") {
-                calls.push(file.display().to_string());
+            let (code, tests) = library_lines(file, &text);
+            test_modules.extend(tests);
+            scanned.push((file.clone(), code));
+        }
+        scanned.retain(|(file, _)| !test_modules.iter().any(|t| file.starts_with(t)));
+        let mut hits = Vec::new();
+        for (file, code) in &scanned {
+            for (number, line) in code {
+                if line.contains("contact_book") {
+                    hits.push((file.clone(), *number, line.trim().to_owned()));
+                }
             }
         }
-        assert_eq!(literals.len(), 1, "{literals:?}");
-        assert!(literals[0].ends_with("username.rs"), "{literals:?}");
-        assert!(calls.is_empty(), "called from library code: {calls:?}");
+        let own = |needle: &str| {
+            hits.iter().any(|(file, _, line)| {
+                file.ends_with(Path::new("phone_numbers").join("username.rs"))
+                    && line.contains(needle)
+            })
+        };
+        assert_eq!(hits.len(), 2, "{hits:#?}");
+        assert!(own("pub async fn delete_contact_book_entry("), "{hits:#?}");
+        assert!(own("\"contact_book\"])"), "{hits:#?}");
+
+        // A file whose `#[cfg(test)] mod tests;` comes early is scanned to
+        // its end (`groups/mod.rs` declares it near the top), and the
+        // out-of-line test files are not scanned.
+        let groups = scanned
+            .iter()
+            .find(|(file, _)| file.ends_with(Path::new("groups").join("mod.rs")))
+            .map(|(_, code)| code.last().map_or(0, |(n, _)| *n))
+            .unwrap();
+        assert!(groups > 1000, "groups/mod.rs scanned to line {groups}");
+        assert!(
+            !scanned
+                .iter()
+                .any(|(file, _)| file.ends_with(Path::new("groups").join("tests.rs"))),
+            "test files are left out"
+        );
     }
 
     /// The contact book is only ever touched by its own explicit call:
