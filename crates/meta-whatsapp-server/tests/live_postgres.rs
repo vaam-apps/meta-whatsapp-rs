@@ -1041,49 +1041,114 @@ async fn live_postgres_an_event_dated_before_its_tenant_was_bound_again_is_nobod
     }
 }
 
-/// The insert's `attached_at` re-check agrees with the routing to the
-/// second: an event Meta dated in the very second its WABA's binding began
-/// (half a second in) is the tenant's, through both. For an event naming a
-/// number, then one naming only its WABA. Decisive: the re-check's bound
-/// (`attached_at < to_timestamp(t + 1)`, not `<= to_timestamp(t)`).
+/// Roadmap S2, the security review's L3: an event Meta dated in the very
+/// second its WABA's binding began is nobody's, through the routing and
+/// through the insert's re-check, which agree to the second. Meta's dates
+/// are whole seconds, so an event of that second may be a previous
+/// holder's. (Until then it was the tenant's: `attached_at <
+/// to_timestamp(t + 1)`.) Through the routing: bound half a second into
+/// the event's second, the event is routed to nobody. Through the re-check:
+/// routed to tenant-a (bound for an hour), then, before the insert, bound
+/// again (tenant-a deleted and created again) half a second into the
+/// event's second: operator-only; half a second before it: tenant-a's. For
+/// an event naming a number, then one naming only its WABA; each case on a
+/// database of its own (a body is delivered once per database). Decisive:
+/// the routing's `began_by`, and the re-check's bound (`attached_at <
+/// to_timestamp(t)`) in each branch, both ways.
 #[tokio::test]
-async fn live_postgres_an_event_dated_in_its_binding_s_first_second_is_the_tenant_s() {
-    let Some(db) = TestDb::new().await else {
-        return;
-    };
+async fn live_postgres_an_event_dated_in_its_binding_s_first_second_is_nobodys() {
+    use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+    use meta_whatsapp_server::model::DeleteTenantOutcome;
     let second = common::meta::now() - 600;
-    for body in [
-        dated(text(EXAMPLE_WABA, EXAMPLE_PN, "wamid.SAME-SECOND"), second),
-        dated(template_approved(EXAMPLE_WABA), second),
+    // Bound again before the insert at this offset into the event's
+    // second, and whether tenant-a keeps the row; `None`: bound in the
+    // event's second before the routing.
+    for bound_again in [
+        None,
+        Some(("0.5 second", false)),
+        Some(("-0.5 second", true)),
     ] {
-        let h = harness(&db).await;
-        sqlx::query("DELETE FROM wa_server_events")
-            .execute(&db.pool(1).await)
-            .await
-            .unwrap();
-        let _ = h
-            .store
-            .create_tenant(&TenantId::parse("tenant-a").unwrap(), "")
-            .await
-            .unwrap();
-        h.connect("tenant-a", EXAMPLE_WABA, &[EXAMPLE_PN], "TOKEN-OF-A")
-            .await;
-        sqlx::query(
-            "UPDATE wa_server_wabas \
-             SET attached_at = to_timestamp($1::bigint) + interval '0.5 second'",
-        )
-        .bind(second)
-        .execute(&db.pool(1).await)
-        .await
-        .unwrap();
-        assert_eq!(h.webhook(&bytes(&body)).await.status, StatusCode::OK);
-        assert_eq!(routed_to(&h).as_deref(), Some("tenant-a"), "{body}");
-        let rows = outbox_rows(&db.pool(1).await).await;
-        assert_eq!(
-            rows,
-            [(Some("tenant-a".to_owned()), rows[0].1.clone())],
-            "{body}"
-        );
+        let Some(db) = TestDb::new().await else {
+            return;
+        };
+        let pool = db.pool(1).await;
+        for body in [
+            dated(text(EXAMPLE_WABA, EXAMPLE_PN, "wamid.SAME-SECOND"), second),
+            dated(template_approved(EXAMPLE_WABA), second),
+        ] {
+            let h = harness(&db).await;
+            sqlx::query("DELETE FROM wa_server_events")
+                .execute(&pool)
+                .await
+                .unwrap();
+            let tenant = TenantId::parse("tenant-a").unwrap();
+            let _ = h.store.create_tenant(&tenant, "").await.unwrap();
+            h.connect("tenant-a", EXAMPLE_WABA, &[EXAMPLE_PN], "TOKEN-OF-A")
+                .await;
+            let Some((offset, kept)) = bound_again else {
+                // Through the routing.
+                sqlx::query(
+                    "UPDATE wa_server_wabas \
+                     SET attached_at = to_timestamp($1::bigint) + interval '0.5 second'",
+                )
+                .bind(second)
+                .execute(&pool)
+                .await
+                .unwrap();
+                assert_eq!(h.webhook(&bytes(&body)).await.status, StatusCode::OK);
+                assert_eq!(routed_to(&h), None, "routed: {body}");
+                let rows = outbox_rows(&pool).await;
+                assert_eq!(rows, [(None, rows[0].1.clone())], "{body}");
+                continue;
+            };
+            // Through the re-check. The old tenant has held the WABA for an
+            // hour: routed to it.
+            sqlx::query("UPDATE wa_server_wabas SET attached_at = now() - interval '1 hour'")
+                .execute(&pool)
+                .await
+                .unwrap();
+            let (store, bound) = (h.store.clone(), pool.clone());
+            h.outbox.before_next_insert(Box::new(move || {
+                Box::pin(async move {
+                    assert!(store.unbind_waba(&WabaId::new(EXAMPLE_WABA)).await.unwrap());
+                    assert_eq!(
+                        store.delete_tenant(&tenant).await.unwrap(),
+                        DeleteTenantOutcome::Deleted
+                    );
+                    store.create_tenant(&tenant, "").await.unwrap().unwrap();
+                    store
+                        .bind_waba(
+                            &tenant,
+                            &WabaId::new(EXAMPLE_WABA),
+                            &[PhoneNumberId::new(EXAMPLE_PN)],
+                        )
+                        .await
+                        .unwrap();
+                    sqlx::query(
+                        "UPDATE wa_server_wabas \
+                         SET attached_at = to_timestamp($1::bigint) + $2::interval",
+                    )
+                    .bind(second)
+                    .bind(offset)
+                    .execute(&bound)
+                    .await
+                    .unwrap();
+                })
+            }));
+            assert_eq!(h.webhook(&bytes(&body)).await.status, StatusCode::OK);
+            assert_eq!(
+                routed_to(&h).as_deref(),
+                Some("tenant-a"),
+                "{offset}: {body}"
+            );
+            let rows = outbox_rows(&pool).await;
+            assert_eq!(rows.len(), 1, "{offset}: {rows:?}");
+            assert_eq!(
+                rows[0].0.as_deref(),
+                kept.then_some("tenant-a"),
+                "bound again {offset} into the event's second: {body}"
+            );
+        }
     }
 }
 
@@ -1093,7 +1158,8 @@ async fn live_postgres_an_event_dated_in_its_binding_s_first_second_is_the_tenan
 /// and created again) from the second after Meta dated it, is nobody's:
 /// that binding began after the event, as the routing counts it. For an
 /// event naming a number, then one naming only its WABA. Decisive: the
-/// re-check's bound is `to_timestamp(t + 1)` in each branch, no later.
+/// re-check's bound is no later than `to_timestamp(t + 1)` in each branch
+/// (the bound itself, `to_timestamp(t)`: the test above).
 #[tokio::test]
 async fn live_postgres_an_event_dated_the_second_before_its_binding_is_nobodys() {
     use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};

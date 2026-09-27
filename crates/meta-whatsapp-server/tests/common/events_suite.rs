@@ -614,6 +614,64 @@ pub async fn a_binding_begun_after_the_event_fails_the_number_guard(store: &dyn 
     assert_eq!(ids, [kept.id], "a number's binding begun after the event");
 }
 
+/// Roadmap S2, the security review's L3, on every backend: a row keeps its
+/// tenant only when the guarded WABA's binding began in a second before
+/// the event's. Dated in the binding's own second (its first instant, and
+/// its last millisecond), through a number's guard and through the
+/// WABA's: operator-only; dated the next second: the tenant's. Meta's
+/// dates are whole seconds, so an event of the binding's own second may be
+/// a previous holder's. Decisive: the strict comparison in each backend's
+/// insert, in each branch (memory: `began_by`; Postgres: `attached_at <
+/// to_timestamp(n)`).
+pub async fn a_binding_of_the_events_own_second_fails_the_guard(
+    store: &dyn EventStore,
+    tenants: &dyn Store,
+) {
+    use time::{Duration as Span, OffsetDateTime};
+    let waba = WabaId::new(waba_of("38"));
+    let began = tenants.waba(&waba).await.unwrap().unwrap().attached_at;
+    let second = OffsetDateTime::from_unix_timestamp(began.unix_timestamp()).unwrap();
+    let guarded = |by_number: bool, not_after: OffsetDateTime| NewEvent {
+        route_guard: Some(RouteGuard {
+            binding: if by_number {
+                GuardedBinding::Number {
+                    phone_number_id: PhoneNumberId::new("38"),
+                    waba_id: waba.clone(),
+                }
+            } else {
+                GuardedBinding::Waba(waba.clone())
+            },
+            not_after: Some(not_after),
+        }),
+        ..row(Some("suite-e"), "message_received", "38", None)
+    };
+    let mut kept = Vec::new();
+    for by_number in [true, false] {
+        for same_second in [second, second + Span::milliseconds(999)] {
+            store
+                .insert(&guarded(by_number, same_second))
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        let next_second = guarded(by_number, second + Span::SECOND);
+        store.insert(&next_second).await.unwrap().unwrap();
+        kept.push(next_second.id);
+    }
+    let ids: Vec<String> = store
+        .page(&query("suite-e", None, 10))
+        .await
+        .unwrap()
+        .events
+        .into_iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(
+        ids, kept,
+        "only the rows dated after the binding's own second"
+    );
+}
+
 /// Everything above, in an order where the purge comes last. `tenants` is
 /// the service's store on the same backend (the tenants and bindings the
 /// rows name).
@@ -635,11 +693,13 @@ pub async fn run(store: &dyn EventStore, tenants: &dyn Store) {
         ("suite-g", "31"),
         ("suite-g", "32"),
         ("suite-n", "35"),
+        ("suite-e", "38"),
     ] {
         bind(tenants, tenant_id, pn).await;
     }
     the_route_guard_is_checked_with_the_insert(store, tenants).await;
     a_binding_begun_after_the_event_fails_the_number_guard(store).await;
+    a_binding_of_the_events_own_second_fails_the_guard(store, tenants).await;
     insert_and_page(store).await;
     page_budget(store).await;
     dedup(store).await;

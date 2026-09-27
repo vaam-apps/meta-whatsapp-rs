@@ -9,9 +9,15 @@
 //! (or, untyped, whose raw `metadata` names one) belongs to the tenant that
 //! number is bound to, and only when the event's WABA, if it names one, is
 //! the number's WABA in the bindings; an event naming only a WABA belongs
-//! to the WABA's tenant. And only when Meta dated it no earlier than that
-//! WABA's binding began ([`meta_time`]): a WABA moved from one tenant to
-//! another does not bring the first one's retried events to the second.
+//! to the WABA's tenant. And, for an event Meta dated ([`meta_time`]), only
+//! when that WABA's binding began in a second before the event's: a WABA
+//! moved from one tenant to another does not bring the first one's dated
+//! events, which Meta retries for up to 7 days, to the second. An
+//! **undated** event (an error, a history chunk, a group update without a
+//! date) has no date to compare: it goes to whoever holds the binding when
+//! it arrives, so after a move to another tenant the previous holder's
+//! undated events that Meta redelivers reach the new holder, until roadmap
+//! S2b makes them operator-only for a window after a move.
 //! The outbox row carries that tenant only for the types in
 //! [`TENANT_EVENT_TYPES`]; `unknown`, `unparsed`, `partner_solution_updated`,
 //! the types not yet reviewed for tenants ([`OPERATOR_EVENT_TYPES`]), any
@@ -167,7 +173,8 @@ pub struct Route {
     pub tenant: Option<TenantId>,
     /// Why the row is operator-only (a fixed set, for the log): `unowned`
     /// (no binding holds its number or WABA, or a stale one), `before_binding`
-    /// (Meta dated it before its binding: a previous holder's), `stale`
+    /// (Meta dated it before its binding began, or in the second it began:
+    /// maybe a previous holder's), `stale`
     /// (Meta dated it before the dedup lease's memory: a replay), or `type`
     /// (a type no tenant receives). `None` for a tenant's row.
     pub operator_only: Option<&'static str>,
@@ -188,13 +195,17 @@ pub struct Holder {
 }
 
 /// When Meta says the event happened: the message's, status's, call's…
-/// own time, else its entry's. `None` for events with no date of their
-/// own: history and contact syncs (they carry the past on purpose),
-/// errors, bodies that are not webhooks.
+/// own time, else its entry's; a contact sync's, when the webhook was
+/// triggered (`state_sync[].metadata.timestamp`). `None` for events with
+/// no date of their own: history syncs (they carry the past on purpose), a
+/// contact sync or a group update without a date, errors, bodies that are
+/// not webhooks. An undated event reaches whoever holds its binding when it
+/// arrives (see the [module](self)).
 pub fn meta_time(event: &WebhookEvent) -> Option<OffsetDateTime> {
     use WebhookEvent as E;
     match event {
         E::MessageReceived { message, .. } => Some(message.timestamp),
+        E::AppStateSynced { item, .. } => item.metadata.as_ref().and_then(|m| m.timestamp),
         E::StatusUpdated { status, .. } => Some(status.timestamp),
         E::MessageEchoed { echo, .. } => Some(echo.timestamp),
         E::CallUpdated { call, .. } => Some(call.timestamp),
@@ -229,9 +240,9 @@ pub fn meta_time(event: &WebhookEvent) -> Option<OffsetDateTime> {
         | E::TemplateCategoryUpdated { time, .. }
         | E::TemplateCategoryMisuseDetected { time, .. }
         | E::Unknown { time, .. } => *time,
-        // History and contact syncs import the past; errors and bodies
-        // that are not webhooks carry no date. A type a later library adds
-        // has none until listed here.
+        // History syncs import the past; errors and bodies that are not
+        // webhooks carry no date. A type a later library adds has none
+        // until listed here.
         _ => None,
     }
 }
@@ -260,10 +271,13 @@ pub fn event_number(event: &WebhookEvent) -> Option<PhoneNumberId> {
 /// - Number first: the event's number (or an untyped change's
 ///   `metadata.phone_number_id`), bound under the WABA the event names;
 ///   else, naming no number, its WABA.
-/// - Since before the event: Meta's date for it ([`meta_time`]) is not
-///   before the second the WABA's binding began. A WABA unbound from one
-///   tenant and bound to another does not bring the first one's events
-///   (Meta retries for up to 7 days) to the second.
+/// - Since before the event: Meta's date for it ([`meta_time`]) is in a
+///   later second than the one the WABA's binding began in (the event's
+///   own second is too close to tell: `crate::outbox::began_by`). A WABA
+///   unbound from one tenant and bound to another does not bring the first
+///   one's dated events (Meta retries for up to 7 days) to the second. An
+///   undated event is the current holder's: the previous holder's, after a
+///   move, reach the new one (roadmap S2b).
 ///
 /// # Errors
 ///
@@ -672,6 +686,37 @@ mod tests {
             .unwrap()
             .remove("timestamp");
         assert_eq!(dated(&body), Some(1_671_000_000), "else the entry's");
+    }
+
+    /// Roadmap S2 (the security review's M2): a contact sync is dated when
+    /// Meta triggered its webhook (`state_sync[].metadata.timestamp`, Meta's
+    /// example's `1739321024`), so a previous holder's sync redelivered
+    /// after a move is compared with the new binding like any dated event;
+    /// without that date it stays undated. Decisive: the `AppStateSynced`
+    /// arm of `meta_time`.
+    #[test]
+    fn a_contact_sync_is_dated_when_its_webhook_was_triggered() {
+        use meta_whatsapp_rs::webhooks::WebhookPayload;
+        let dated = |body: &serde_json::Value| {
+            let events = WebhookPayload::from_slice(body.to_string().as_bytes())
+                .unwrap()
+                .into_events();
+            let [event] = events.as_slice() else {
+                panic!("{events:?}")
+            };
+            assert_eq!(event.kind(), "app_state_synced");
+            meta_time(event).map(OffsetDateTime::unix_timestamp)
+        };
+        let mut body: serde_json::Value = serde_json::from_str(include_str!(
+            "../../meta-whatsapp-webhooks/tests/fixtures/fields/smb_app_state_sync.json"
+        ))
+        .unwrap();
+        assert_eq!(dated(&body), Some(1_739_321_024));
+        body["entry"][0]["changes"][0]["value"]["state_sync"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("metadata");
+        assert_eq!(dated(&body), None, "undated without it");
     }
 
     /// The two lists split the library's kinds: none is both.

@@ -16,8 +16,8 @@
 //!   it, and `next_after` never skips one that commits later.
 //! - **An insert checks the routing again** ([`RouteGuard`]): a row keeps
 //!   its tenant only while, atomically with the insert, the binding the
-//!   event was routed by still names that tenant and began no later than
-//!   the event's second. Between the routing (a read) and the insert, a
+//!   event was routed by still names that tenant and began in a second
+//!   before the event's. Between the routing (a read) and the insert, a
 //!   WABA can move to another tenant, or its tenant be deleted, created
 //!   again under the same id and bound again; the row is then
 //!   operator-only, never the new holder's.
@@ -87,10 +87,14 @@ impl std::fmt::Debug for NewEvent {
 ///   that WABA; for [`GuardedBinding::Waba`], the WABA is bound to the
 ///   tenant;
 /// - and, when the event is dated ([`Self::not_after`]), that WABA's
-///   binding began no later than the event's second (its `attached_at`,
-///   truncated to the second, is at most `not_after`'s): a binding made
-///   after Meta dated the event is another holder's, even under the same
-///   tenant id.
+///   binding began in a second before the event's (its `attached_at`,
+///   truncated to the second, is less than `not_after`'s): Meta dates in
+///   whole seconds, so an event of the second the binding began in may be
+///   the previous holder's, and a binding made after Meta dated the event
+///   is another holder's, even under the same tenant id (the security
+///   review of roadmap S2, L3). Such an event is operator-only, the first
+///   holder's included: a WABA's first second after an attach delivers to
+///   no tenant.
 ///
 /// Otherwise the row is recorded operator-only (no tenant).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,9 +102,14 @@ pub struct RouteGuard {
     /// The binding the event was routed by.
     pub binding: GuardedBinding,
     /// When Meta dated the event (`crate::events::meta_time`); `None` for
-    /// an undated event (an error, a sync), whose binding's start is not
-    /// checked: in the race of a tenant deleted, created again under the
-    /// same id and bound again, it reaches the new tenant.
+    /// an undated event (an error, a history chunk, a group update without
+    /// a date), whose binding's start is not checked: it reaches whoever
+    /// holds the binding when it arrives. After a WABA moved to another
+    /// tenant, that is the new holder, for the previous holder's undated
+    /// events that Meta redelivers within its 7-day retry window (and in
+    /// the race of a tenant deleted, created again under the same id and
+    /// bound again, the new tenant): an open gap until roadmap S2b, which
+    /// makes them operator-only for a window after a move.
     pub not_after: Option<OffsetDateTime>,
 }
 
@@ -130,12 +139,13 @@ impl GuardedBinding {
     }
 }
 
-/// Whether a binding that began at `attached_at` began no later than the
-/// second of `not_after` (`None`: undated, always): the rule of
+/// Whether a binding that began at `attached_at` began in a second before
+/// the second of `not_after` (`None`: undated, always): the rule of
 /// [`RouteGuard::not_after`], the same as the routing's
-/// (`crate::events::owner`), for a backend that compares in Rust.
+/// (`crate::events::owner`), for a backend that compares in Rust. A
+/// binding that began in the event's own second did not begin by it.
 pub fn began_by(attached_at: OffsetDateTime, not_after: Option<OffsetDateTime>) -> bool {
-    not_after.is_none_or(|at| attached_at.unix_timestamp() <= at.unix_timestamp())
+    not_after.is_none_or(|at| attached_at.unix_timestamp() < at.unix_timestamp())
 }
 
 /// A keyless event's dedup window, on the webhook pipeline's clock (both
@@ -275,16 +285,24 @@ pub trait Outbox: Send + Sync + 'static {
 mod tests {
     use super::*;
 
-    /// A binding that began in the event's second, or before it, is the
-    /// event's; one that began in the next second is not; an undated
-    /// event's is. Decisive: the comparison of seconds, both ways.
+    /// A binding that began in a second before the event's is the
+    /// event's; one that began in the event's own second (its first
+    /// instant included) or later is not: Meta's dates are whole seconds,
+    /// so an event of that second may be the previous holder's (the
+    /// security review of roadmap S2, L3; until then a binding of the
+    /// event's own second was the event's). An undated event's is.
+    /// Decisive: the strict comparison of seconds, both ways.
     #[test]
-    fn a_binding_began_by_the_events_second() {
+    fn a_binding_began_in_a_second_before_the_events() {
         let t = time::macros::datetime!(2026-09-26 12:00:00.5 UTC);
         let at = |secs: f64| t + time::Duration::seconds_f64(secs);
         assert!(began_by(at(-10.0), Some(t)));
-        assert!(began_by(at(0.4), Some(t)), "later in the same second");
-        assert!(began_by(at(-0.5), Some(t)), "the second's first instant");
+        assert!(began_by(at(-0.6), Some(t)), "the second before's end");
+        assert!(
+            !began_by(at(-0.5), Some(t)),
+            "the event's second's first instant"
+        );
+        assert!(!began_by(at(0.4), Some(t)), "later in the same second");
         assert!(!began_by(at(0.5), Some(t)), "the next second");
         assert!(began_by(at(3600.0), None), "undated");
     }

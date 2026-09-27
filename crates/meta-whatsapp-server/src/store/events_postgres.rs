@@ -20,14 +20,18 @@
 //! while the binding it was routed by ([`GuardedBinding`]: the number,
 //! under the WABA it was bound under; else the WABA) still names it and,
 //! for an event Meta dated ([`RouteGuard::not_after`]), that WABA's
-//! binding began no later than the event's second. It reads the binding
+//! binding began in a second before the event's (`attached_at <
+//! to_timestamp(n)`, `n` the event's Unix second). It reads the binding
 //! under a `FOR KEY SHARE` lock that holds off an unbinding (and so the
 //! tenant's deletion) until the insert commits. So an event routed just
 //! before its WABA moved to another tenant, or before its tenant was
 //! unbound, deleted, created again under the same id and bound again, is
 //! recorded operator-only, never shown to the new tenant; so is a row with
-//! a tenant and no guard. An undated event (an error, a sync) has only the
-//! tenant's id to go by: in that last race it reaches the new tenant.
+//! a tenant and no guard. An undated event (an error, a history chunk, a
+//! group update without a date) has only the binding's tenant to go by: it
+//! is the current holder's, so after a WABA moved to another tenant the
+//! previous holder's undated events Meta redelivers reach the new holder,
+//! as in that last race the new tenant (an open gap until roadmap S2b).
 //!
 //! **Keyless events hold their dedup key for an hour.** A row with a
 //! `dedup_until` gives its key up to a later occurrence received at or
@@ -178,7 +182,7 @@ impl Outbox for PgEventStore {
         // 1. The tenant, while the binding the event was routed by (its
         //    number, under the WABA it was bound under; else its WABA)
         //    still names it, and, for an event Meta dated, while that
-        //    WABA's binding began no later than the event's second: the
+        //    WABA's binding began in a second before the event's: the
         //    port's `RouteGuard`. Locked, so an unbinding waits for this
         //    commit (a number's WABA cannot go while the number is locked:
         //    deleting it deletes the number).
@@ -196,12 +200,12 @@ impl Outbox for PgEventStore {
                        SELECT 1 FROM wa_server_wabas nw \
                        WHERE nw.waba_id = n.waba_id AND nw.tenant_id = $3 \
                          AND ($9::bigint IS NULL \
-                              OR nw.attached_at < to_timestamp($9::bigint + 1))) \
+                              OR nw.attached_at < to_timestamp($9::bigint))) \
                    FOR KEY SHARE) \
                  ELSE ( \
                    SELECT w.tenant_id FROM wa_server_wabas w \
                    WHERE w.waba_id = $12 AND w.tenant_id = $3 \
-                     AND ($9::bigint IS NULL OR w.attached_at < to_timestamp($9::bigint + 1)) \
+                     AND ($9::bigint IS NULL OR w.attached_at < to_timestamp($9::bigint)) \
                    FOR KEY SHARE) \
                END AS tenant_id \
              ), fresh AS ( \

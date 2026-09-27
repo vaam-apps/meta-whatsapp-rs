@@ -100,8 +100,9 @@ pub async fn an_insert_racing_a_move_never_reaches_the_new_holder(
         )
     };
     // Every binding first, then one wait into the next second: a binding
-    // made again during a round begins in a later second than the event,
-    // which is dated in its first binding's second.
+    // made again during a round begins in the event's second or a later
+    // one, the event being dated in the second after its first binding's
+    // (a binding of the event's own second is not the event's: L3).
     let mut began = Vec::with_capacity(rounds);
     for round in 0..rounds {
         let (holder, waba, pn) = ids(round);
@@ -141,7 +142,7 @@ pub async fn an_insert_racing_a_move_never_reaches_the_new_holder(
             tenant: Some(tenant(&holder)),
             route_guard: Some(RouteGuard {
                 binding,
-                not_after: Some(began_at),
+                not_after: Some(began_at + time::Duration::SECOND),
             }),
             phone_number_id: Some(pn.clone()),
             waba_id: Some(waba.clone()),

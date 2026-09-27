@@ -1026,9 +1026,15 @@ async fn an_event_dated_before_the_replay_window_is_nobodys() {
         (replay.owner, replay.tenant, replay.operator_only),
         (None, None, Some("stale"))
     );
-    let fresh = route(h.store.as_ref(), &event_at(now), not_before)
-        .await
-        .unwrap();
+    // Dated the second after the binding's (an event of its own second
+    // is operator-only: roadmap S2, L3).
+    let fresh = route(
+        h.store.as_ref(),
+        &event_at(now + Duration::SECOND),
+        not_before,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         fresh.tenant.map(|t| t.as_str().to_owned()),
         Some(A.to_owned())
