@@ -127,8 +127,39 @@ id_type!(
     /// Business-scoped user id (BSUID), e.g. `US.13491208655302741918`, or a
     /// parent BSUID (`US.ENT.…`). Stable per business portfolio; survives a
     /// username change but not a phone number change.
+    ///
+    /// Anything can be wrapped, as with every id here: [`Self::is_bsuid`]
+    /// says whether a value has a standard BSUID's shape.
     UserId
 );
+
+/// Longest BSUID suffix, after the country code and the period
+/// (`business-scoped-user-ids`: "up to 128 alphanumeric characters").
+const MAX_BSUID_SUFFIX_CHARS: usize = 128;
+
+impl UserId {
+    /// Whether this is a standard BSUID, in the shape Meta documents
+    /// (`business-scoped-user-ids`): a two-letter uppercase ISO 3166
+    /// country code, a period, then 1 to 128 English letters or digits,
+    /// e.g. `US.13491208655302741918`.
+    ///
+    /// A parent BSUID (`US.ENT.11815799212886844830`) is not one: its
+    /// second period fails the shape, and the calls that refuse parent
+    /// BSUIDs (the contact book's deletion) rely on that. Nor is a phone
+    /// number, a group id or anything else a conversation is keyed by, so
+    /// this picks the BSUIDs out of a mixed list of identities
+    /// (`Inbox::identities` in the facade). It checks the shape only, not
+    /// that Meta issued the id.
+    pub fn is_bsuid(&self) -> bool {
+        self.0.split_once('.').is_some_and(|(country, rest)| {
+            country.len() == 2
+                && country.bytes().all(|b| b.is_ascii_uppercase())
+                && !rest.is_empty()
+                && rest.len() <= MAX_BSUID_SUFFIX_CHARS
+                && rest.bytes().all(|b| b.is_ascii_alphanumeric())
+        })
+    }
+}
 id_type!(
     /// A WhatsApp user's phone number as WhatsApp reports it (`wa_id`),
     /// digits only, no `+`. May be absent once users adopt usernames.
@@ -208,5 +239,34 @@ mod tests {
         assert_eq!(format!("{id:?}"), "WabaId(1234567890)");
         let back: WabaId = serde_json::from_str("\"1234567890\"").unwrap();
         assert_eq!(back, id);
+    }
+
+    /// `business-scoped-user-ids`: the page's own BSUID and parent BSUID
+    /// examples, then each rule of the shape broken once.
+    #[test]
+    fn a_bsuid_has_the_documented_shape_and_a_parent_bsuid_does_not() {
+        let longest = format!("BR.{}", "a1".repeat(64));
+        for good in ["US.13491208655302741918", "BR.a", "DE.abcXYZ019", &longest] {
+            assert!(UserId::new(good).is_bsuid(), "{good:?}");
+        }
+        let too_long = format!("US.{}", "1".repeat(129));
+        for bad in [
+            "US.ENT.11815799212886844830", // parent BSUID
+            "13491208655302741918",        // a phone number (`wa_id`)
+            "+16505551234",
+            "us.13491208655302741918", // country code in lower case
+            "USA.1",
+            "U.1",
+            "1S.1",
+            "US.",
+            ".1",
+            "US.1_2",
+            "US.12&bsuid=x",
+            "US.１２", // non-ASCII digits
+            "",
+            too_long.as_str(),
+        ] {
+            assert!(!UserId::new(bad).is_bsuid(), "{bad:?}");
+        }
     }
 }
