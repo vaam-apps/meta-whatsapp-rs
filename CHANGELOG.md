@@ -204,7 +204,10 @@ stored data, the owner's).
   A record stored for the WABA while the delete unlinks its numbers
   keeps the index entries of the numbers it lists: they are linked again
   where none is (S2's security review, L2; the stored format is
-  unchanged).
+  unchanged). `TokenVault::store_versioned` (additive) is `store`, and
+  the version of the record it wrote: what a connection that finds its
+  binding moved while it stored takes back with `delete_if_unchanged`,
+  never deleting a token stored after it (the service's attach).
 - **meta-whatsapp-bot**, a bot framework over Cloud API webhooks
   (roadmap B1), re-exported as `meta_whatsapp_rs::bot` behind the
   facade's new `bot` feature (off by default, in `full`). A `Bot` is an
@@ -892,7 +895,14 @@ stored data, the owner's).
     unsubscribing the app with the old holder's token; a tenant's
     deletion no longer answers `503` for a WABA that moved away since
     its listing. `StorageError::Busy`'s docs say a step storing after a
-    send is not repeated on it.
+    send is not repeated on it. `Authorizer::store_token` takes the
+    tenant the attach bound the WABA to (`store_token(admin, tenant,
+    token)`) and follows the port rule: it reads the binding (another
+    tenant's: nothing stored, `503`), stores, and reads the binding
+    again; moved meanwhile, it takes back exactly its own write and
+    answers `503 storage_unavailable` (retryable), where it used to
+    leave its token under the other tenant's binding. The attach route's
+    other answers are unchanged.
 
   No change to the HTTP API: `openapi/v1.json` is byte-identical.
 - **Breaking — the `ConversationStore` port change of roadmap L5**: the
@@ -1536,15 +1546,23 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
     holder's binding. A tenant's deletion skips a WABA that moved since
     its listing. The rule that makes the re-read sound is written into
     the `RecordStore` and `TokenVault` docs: the vault is written for a
-    WABA only by its current holder, an attach binds before it stores,
-    every unbind deletes the token before the binding. `forget` keeps
-    deleting the token before the binding (the review's suggested
-    reverse order would leave, when the token moved meanwhile, a token
-    no binding holds). Found in the remediation and not fixed: an
-    attach whose binding is removed, and the WABA bound to another
-    tenant, between its own binding and its store, stores its token
-    under the other tenant's binding (two operator actions within one
-    request; the attach reads no binding after its store).
+    WABA only by its current holder, an attach binds, stores, then
+    confirms, every unbind deletes the token before the binding.
+    `forget` keeps deleting the token before the binding (the review's
+    suggested reverse order would leave, when the token moved meanwhile,
+    a token no binding holds). Found in the remediation, and closed after its
+    review: an attach whose binding was removed, and the WABA bound to
+    another tenant, between its own binding and its store, stored its
+    token under the other tenant's binding (two operator actions within
+    one request), and subscribed the app with it. The attach now binds,
+    stores, then confirms (`Authorizer::store_token`, `503` and its own
+    write taken back when the binding moved). What remains, narrower:
+    another tenant's attach landing whole between an attach's read of
+    its binding and its store loses its token to that take-back (its
+    binding is left with no token until it attaches again), and a
+    capability of its own made in between carries the first attach's
+    token; closing it needs the vault record to name its binding, a
+    change of the stored format (the owner's).
   - **M2 — undated events of a WABA's previous holder reach its new
     holder** (it predates S2): errors, history chunks (message text) and
     undated group updates that Meta redelivers, for up to 7 days after a

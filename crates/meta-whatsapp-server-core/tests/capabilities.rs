@@ -378,7 +378,7 @@ impl Side {
         };
         let admin = side.admin().await;
         side.authz
-            .store_token(&admin, &stored(token))
+            .store_token(&admin, &victim(), &stored(token))
             .await
             .unwrap();
         side.records.take_calls();
@@ -586,7 +586,7 @@ async fn store_token_refuses_another_authorizers_admin() {
     let before = Before::of(&service);
     let error = service
         .authz
-        .store_token(&foreign, &stored(FORGED_TOKEN))
+        .store_token(&foreign, &victim(), &stored(FORGED_TOKEN))
         .await
         .unwrap_err();
     assert_forbidden(&error, "store_token");
@@ -787,7 +787,7 @@ async fn a_refusal_is_logged_at_warn_without_secrets() {
     let guard = tracing::subscriber::set_default(logged.clone());
     let error = service
         .authz
-        .store_token(&admin, &stored(FORGED_TOKEN))
+        .store_token(&admin, &victim(), &stored(FORGED_TOKEN))
         .await
         .unwrap_err();
     drop(guard);

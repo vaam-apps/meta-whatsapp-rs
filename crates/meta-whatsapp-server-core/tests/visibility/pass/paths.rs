@@ -34,7 +34,7 @@ async fn public(
     let _: &Client = number.client();
     let waba: OwnedWaba = authz.owned_waba(caller, waba_id.clone()).await?;
     let _: ServiceError = waba.failed(authz, error).await;
-    authz.store_token(admin, token).await?;
+    authz.store_token(admin, caller.tenant(), token).await?;
     authz.rotate_vault(admin).await?;
     let _: ServiceError = authz.graph_failed_for_admin(admin, waba_id, error).await;
     authz.forget_for_admin(admin, waba_id).await?;

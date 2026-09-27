@@ -1081,8 +1081,9 @@ decisions and the delivery milestones, is
   only from a token read while that binding held. That last guarantee
   rests on a rule between the bindings and the library's `TokenVault`,
   which no transaction spans: the vault is written for a WABA only by
-  its current holder, an attach binds before it stores, and every
-  unbind deletes the token before the binding.
+  its current holder, an attach binds, stores, then confirms (it reads
+  its binding again and, moved meanwhile, takes back exactly its own
+  write), and every unbind deletes the token before the binding.
 - **One multi-tenant deployment per Meta app** (the owner's decision D1):
   every merchant onboarded through the app delivers to its one callback
   URL. Tenants are the integrator's ids; a tenant owns WABAs, a WABA owns

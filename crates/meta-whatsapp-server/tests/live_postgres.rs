@@ -85,6 +85,25 @@ async fn live_postgres_capabilities_act_only_on_what_they_were_made_from() {
     .await;
 }
 
+/// The attach's confirmation on Postgres (records and vault): an attach
+/// whose WABA moves to another tenant while it binds and stores leaves no
+/// token of its own under the other tenant's binding, and answers `503`
+/// (`common::moving::an_attach_whose_waba_moves_takes_back_its_token`).
+#[tokio::test]
+async fn live_postgres_an_attach_whose_waba_moves_takes_back_its_token() {
+    use meta_whatsapp_rs::adapters::store::PostgresKvStore;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(5).await;
+    migrate(&pool).await.unwrap();
+    common::moving::an_attach_whose_waba_moves_takes_back_its_token(
+        std::sync::Arc::new(PgStore::new(pool.clone())),
+        std::sync::Arc::new(PostgresKvStore::new(pool)),
+    )
+    .await;
+}
+
 /// Two instances starting at once on an empty database both migrate, and
 /// each migration is applied once.
 #[tokio::test]

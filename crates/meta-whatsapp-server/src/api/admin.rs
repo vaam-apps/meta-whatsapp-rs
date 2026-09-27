@@ -1067,7 +1067,9 @@ pub(crate) async fn attach_waba(
         BindOutcome::NoSuchTenant => return Err(ApiError::not_found()),
     }
     let record = StoredBusinessToken::new(waba_id.clone(), token).phone_number_ids(numbers.clone());
-    state.authz().store_token(&admin, &record).await?;
+    // Binds, stores, then confirms (the port rule): a WABA moved between
+    // the binding and the store is `503`, the token this stored taken back.
+    state.authz().store_token(&admin, &tenant, &record).await?;
     audit(
         "waba_attached",
         &admin,

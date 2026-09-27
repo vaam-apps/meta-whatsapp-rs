@@ -210,10 +210,13 @@ the app comes last, once the WABA is bound and the token stored: if Meta
 refuses it, the WABA stays attached and the call answers Meta's error
 with `"step": "subscribe_app"` and `"resumable": true`; repeat it once
 fixed. A token Meta rejects at that point is `409 reconnect_required`
-(its numbers are marked so): repeat the attach with a valid token. A
-WABA bound to one tenant is refused to
-another (`409 waba_owned_by_another_tenant`, decision D4, also for one of
-its numbers); `GET /v1/admin/wabas/{waba_id}` says who holds it, and
+(its numbers are marked so): repeat the attach with a valid token. An
+attach during which another operator unbinds the WABA and attaches it
+to another tenant answers `503 storage_unavailable` (retryable) and
+takes back the token it stored; repeated, it is refused as below. A
+WABA bound to one tenant is refused to another (`409
+waba_owned_by_another_tenant`, decision D4, also for one of its
+numbers); `GET /v1/admin/wabas/{waba_id}` says who holds it, and
 `DELETE /v1/admin/wabas/{waba_id}/binding` frees it: the service
 unsubscribes the app with the stored token if it still works (Meta
 refusing does not stop it), then deletes the token and the bindings. That

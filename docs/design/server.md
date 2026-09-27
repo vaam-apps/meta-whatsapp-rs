@@ -1099,17 +1099,28 @@ it holds today, where it differs from the target above:
   - **The port rule between the bindings and the vault**, which no
     transaction spans (the `RecordStore` module's docs, and the
     library's `TokenVault`'s): the vault is written for a WABA only by
-    its current holder; an attach binds before it stores; every unbind
-    deletes the token before the binding. A capability reads the
-    binding, then the vault, then the binding again, and trusts what the
-    vault answered only if the binding held throughout: with the rule, no
-    token outlives its binding, so the next holder's binding never meets
-    the previous holder's token. Re-encryptions are compare-and-swaps.
-    Not covered: an attach whose binding is removed, and the WABA bound
-    to another tenant, between its own binding and its token's store
-    (two operator actions within one request) stores its token under the
-    other tenant's binding; the attach reads no binding after its
-    store.
+    its current holder; an attach binds, stores, then confirms
+    (`Authorizer::store_token`: it reads its binding, stores with
+    `TokenVault::store_versioned`, reads the binding again, and, when
+    the WABA moved meanwhile, takes back exactly its own write with
+    `delete_if_unchanged`, which never deletes a token stored after it,
+    and answers `503`); every unbind deletes the token before the
+    binding. A capability reads the binding, then the vault, then the
+    binding again, and trusts what the vault answered only if the
+    binding held throughout: with the rule, no token outlives its
+    binding, so the next holder's binding never meets the previous
+    holder's token. Re-encryptions are compare-and-swaps. What the
+    confirmation narrows and does not close: another tenant's attach
+    whose binding and store both land between an attach's read of its
+    binding and its own store (two operator actions within
+    microseconds) has its token overwritten, then taken back with the
+    first attach's, so its binding is left with no token (`409
+    number_not_connected` until it attaches again), and a capability of
+    its own made between that store and the take-back carries the first
+    attach's token; a re-encryption in that window leaves the take-back
+    nothing to delete. Closing it needs the vault record to name the
+    binding it was stored under, a change of the stored format (the
+    owner's).
 
   Their failures are the library's `StorageError`; no port names a
   driver's, a framework's or an API toolkit's type, and an HTTP method

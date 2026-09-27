@@ -55,11 +55,13 @@
 //! vault answered, no token included), never the binding of one holder
 //! with the token of the next. That rests on the port rule of
 //! [`crate::store`] (the vault is written for a WABA only by its current
-//! holder: an attach binds before it stores, an unbind deletes the token
-//! before the binding). Before a call that acts on the WABA as a whole with
-//! its token (unsubscribing the app), a caller asks
-//! [`OwnedWaba::still_bound`]: a capability made before a move never
-//! unsubscribes the new holder's app, but in the call's own window.
+//! holder: an attach binds, stores, then confirms, taking back its own
+//! write when its binding moved meanwhile ([`Authorizer::store_token`]);
+//! an unbind deletes the token before the binding). Before a call that
+//! acts on the WABA as a whole with its token (unsubscribing the app), a
+//! caller asks [`OwnedWaba::still_bound`]: a capability made before a
+//! move never unsubscribes the new holder's app, but in the call's own
+//! window.
 //!
 //! **A capability works only with the [`Authorizer`] that made it.**
 //! [`Authorizer::new`] is public, so anyone can build one over records of
@@ -113,13 +115,15 @@ use crate::store::RecordStore;
 /// use meta_whatsapp_rs::core::ids::WabaId;
 /// use meta_whatsapp_server_core::ServiceError;
 /// use meta_whatsapp_server_core::authz::{AdminCaller, Authorizer};
+/// use meta_whatsapp_server_core::model::TenantId;
 ///
 /// async fn attach(
 ///     authz: &Authorizer,
 ///     admin: &AdminCaller,
+///     tenant: &TenantId,
 ///     token: &StoredBusinessToken,
 /// ) -> Result<(), ServiceError> {
-///     authz.store_token(admin, token).await?;
+///     authz.store_token(admin, tenant, token).await?;
 ///     authz.rotate_vault(admin).await.map(drop)
 /// }
 ///
@@ -160,9 +164,10 @@ impl Tokens {
     }
 
     /// Store a token whose phone numbers were listed by Meta with it
-    /// (`TokenVault::store` trusts its input).
-    pub(crate) async fn store(&self, token: &StoredBusinessToken) -> Result<(), Error> {
-        self.vault.store(token).await
+    /// (`TokenVault::store` trusts its input): the version it wrote, which
+    /// [`Self::delete_if_unchanged`] takes back.
+    pub(crate) async fn store(&self, token: &StoredBusinessToken) -> Result<TokenVersion, Error> {
+        self.vault.store_versioned(token).await
     }
 
     /// Delete a WABA's token and its phone index.
@@ -654,18 +659,54 @@ impl Authorizer {
             .is_some_and(|now| now.epoch() == *epoch))
     }
 
-    /// Store `token` in the vault, for an admin attaching a WABA: its
-    /// phone numbers must be the ones Meta listed with it
-    /// (`TokenVault::store` trusts its input), and the WABA bound to its
-    /// tenant first. An `admin` another [`Authorizer`] made is `403
-    /// forbidden`; the vault's failure is the library's error's code.
+    /// Store `token` in the vault, for an admin attaching a WABA to
+    /// `tenant`: its phone numbers must be the ones Meta listed with it
+    /// (`TokenVault::store` trusts its input), and the WABA bound to
+    /// `tenant` first. An attach binds, stores, then confirms (the port
+    /// rule of [`crate::store`]): the WABA's binding is read (it must be
+    /// `tenant`'s, else the WABA moved since the attach bound it: nothing
+    /// is stored), the token stored, and the binding read again. Moved in
+    /// between (unbound, maybe bound to another tenant, whose token this
+    /// store may have overwritten or be overwritten by), the version this
+    /// store wrote is taken back (`TokenVault::delete_if_unchanged`, which
+    /// never deletes a token stored after it) and the answer is `503
+    /// storage_unavailable`, retryable: the repeat sees the WABA as it is
+    /// now (another tenant's: `waba_owned_by_another_tenant`). An `admin`
+    /// another [`Authorizer`] made is `403 forbidden`, and nothing is read
+    /// or stored; the vault's failure is the library's error's code.
     pub async fn store_token(
         &self,
         admin: &AdminCaller,
+        tenant: &TenantId,
         token: &StoredBusinessToken,
     ) -> Result<(), ServiceError> {
         self.check(&admin.issuer, "store_token")?;
-        Ok(self.tokens.store(token).await?)
+        let waba_id = &token.waba_id;
+        // The binding the attach made (or refreshed): `tenant`'s.
+        let Some(binding) = self
+            .records
+            .waba(waba_id)
+            .await?
+            .filter(|binding| &binding.tenant_id == tenant)
+        else {
+            tracing::info!("a WABA's binding moved before its token was stored: stored nothing");
+            return Err(ServiceError::from(StorageError::Busy));
+        };
+        let epoch = binding.epoch();
+        let written = self.tokens.store(token).await?;
+        if self.holds(&epoch).await? {
+            return Ok(());
+        }
+        // Moved while this stored: what it wrote may sit under another
+        // tenant's binding. Only that write goes, never a later one.
+        let taken_back = self.tokens.delete_if_unchanged(waba_id, written).await?;
+        tracing::warn!(
+            waba_id = waba_id.as_str(),
+            taken_back,
+            "a WABA was unbound, maybe bound to another tenant, while its token was being \
+             stored: the token this attach stored was taken back"
+        );
+        Err(ServiceError::from(StorageError::Busy))
     }
 
     /// Re-encrypt every bound WABA's token (and its credit ledger) under

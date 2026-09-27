@@ -187,8 +187,14 @@ and `store-postgres`.
     unbind, a tenant's deletion), and `forget` warns when it finds the
     binding moved (the Graph call's own window); the port rule is
     written down (`server_core::store`: the vault is written for a WABA
-    only by its current holder, an attach binds before it stores, every
-    unbind deletes the token before the binding); the vault's
+    only by its current holder, an attach binds, stores, then confirms,
+    every unbind deletes the token before the binding), and the attach
+    follows it (`Authorizer::store_token` reads the binding, stores with
+    the library's `TokenVault::store_versioned`, additive, and reads the
+    binding again: moved, it takes back exactly its own write with
+    `delete_if_unchanged` and answers `503`; the remediation found an
+    attach overwriting, with its token, the token of a tenant the WABA
+    moved to between its binding and its store); the vault's
     conditional delete links again the numbers a record stored since
     lists (L2); an event of its binding's own second is operator-only
     (L3); a contact sync is dated when its webhook was triggered (M2's
@@ -202,12 +208,16 @@ and `store-postgres`.
     a bind generation; undated events (errors, history chunks, undated
     group updates) of a WABA's previous holder, which Meta redelivers
     for up to 7 days, reach its new holder after a move to another
-    tenant: S2b (D36); a skew margin around `attached_at`: S2b; an
-    attach whose binding is removed, and the WABA bound to another
-    tenant, between its own binding and its token's store (two operator
-    actions within one request) stores its token under the other
-    tenant's binding, as the attach reads no binding after its store
-    (planned nowhere yet); a disconnection racing a vault rotation
+    tenant: S2b (D36); a skew margin around `attached_at`: S2b; the
+    attach's confirmation narrows a window it does not close: another
+    tenant's attach landing whole between an attach's read of its
+    binding and its store has its token overwritten, then taken back
+    with the first attach's (its binding left with no token until it
+    attaches again), and a capability of its own made in between
+    carries the first attach's token; closing it needs the vault record
+    to name the binding it was stored under, a change of the stored
+    format, which is the owner's (planned nowhere yet); a disconnection
+    racing a vault rotation
     deletes nothing and answers `503` (retryable); the admin's unbind
     of a WABA without a usable token, and the admin's own `190` right
     after attaching, stay unconditioned (no capability was made from a

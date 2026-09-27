@@ -274,3 +274,18 @@ async fn forgetting_a_waba_that_moved_warns_the_new_holder_may_have_lost_its_sub
         }
     }
 }
+
+/// The attach's confirmation, on memory: an attach whose WABA moves to
+/// another tenant right after its binding, right after its store, or
+/// between its read of its binding and its store, answers `503` and leaves
+/// no token of its own under the other tenant's binding
+/// (`common::moving::an_attach_whose_waba_moves_takes_back_its_token`;
+/// live on Postgres in `live_postgres.rs`).
+#[tokio::test]
+async fn an_attach_whose_waba_moves_takes_back_its_token() {
+    common::moving::an_attach_whose_waba_moves_takes_back_its_token(
+        Arc::new(MemoryStore::new()),
+        Arc::new(MemoryKvStore::new()),
+    )
+    .await;
+}

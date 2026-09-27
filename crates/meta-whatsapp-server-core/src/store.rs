@@ -53,9 +53,15 @@
 //! - **the vault is written for a WABA only by its current holder**: a
 //!   token is stored, re-encrypted or refreshed only while its WABA is
 //!   bound to the tenant it belongs to;
-//! - **an attach binds before it stores** ([`RecordStore::bind_waba`],
-//!   then the vault): a store first would overwrite another tenant's token
-//!   before decision D4 refused the binding;
+//! - **an attach binds, stores, then confirms** ([`RecordStore::bind_waba`],
+//!   then the vault, then [`RecordStore::waba`] again:
+//!   `crate::authz::Authorizer::store_token`): a store first would
+//!   overwrite another tenant's token before decision D4 refused the
+//!   binding; and a binding that moved between the attach's own binding
+//!   and its store (unbound, maybe bound to another tenant) is found by
+//!   the confirmation, which takes back exactly the attach's own write
+//!   (the version it wrote, `TokenVault::delete_if_unchanged`: never a
+//!   token stored after it) and answers `503`;
 //! - **every unbind deletes the token before the binding** (the vault,
 //!   then [`RecordStore::unbind_waba`] or [`RecordStore::unbind_waba_if`]):
 //!   a token never outlives its binding, so the next holder's binding never
@@ -64,11 +70,18 @@
 //!
 //! A re-encryption (a vault key rotation, a read under a previous key) is
 //! a compare-and-swap on the record it read, so it never writes back a
-//! token that was replaced meanwhile. What the order does not cover: an
-//! attach whose binding is removed, and the WABA bound to another tenant,
-//! between its own binding and its store (two operator actions within one
-//! request), stores its token under the other tenant's binding; the
-//! service's attach does not check its binding again after the store.
+//! token that was replaced meanwhile. What the order narrows and does not
+//! close: another tenant's attach whose binding and store both land
+//! between an attach's read of its binding and its own store (two
+//! operator actions within microseconds) has its token overwritten; the
+//! confirmation then takes the first attach's token back, which leaves the
+//! other tenant's binding with no token (`409 number_not_connected` until
+//! it attaches again), and a capability of the other tenant's made between
+//! that store and its take-back carries the first attach's token. A
+//! re-encryption of the attach's record in that window moves its version,
+//! and the take-back then deletes nothing. Closing it needs the vault
+//! record to name the binding it was stored under: a change of the stored
+//! format, which is the owner's (a data migration).
 
 use std::time::Duration;
 
@@ -155,6 +168,8 @@ pub trait RecordStore: Send + Sync + 'static {
     /// its `attached_at`. Serialized with [`Self::delete_tenant`] of the
     /// same tenant: a binding lands before the deletion (which then finds
     /// the WABA) or after it (which then finds no tenant), never beside it.
+    /// The caller stores the WABA's token after, then reads the binding
+    /// again (the port rule: see the [module](self)).
     async fn bind_waba(
         &self,
         tenant: &TenantId,
