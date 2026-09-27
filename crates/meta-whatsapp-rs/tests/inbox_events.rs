@@ -1570,19 +1570,32 @@ mod rules {
 
     /// What each switch of `RecordingSwitches` records, on a fresh store:
     /// `(call window events, standby window events and owner, handover
-    /// owner, identity links, the inbound message)`.
+    /// owner, identity links, the inbound message)`. Each kind is checked
+    /// on every path that records it: a call and a call status; a standby
+    /// copy's window event, owner and link (identity links, not standby).
     async fn recorded(switches: RecordingSwitches) -> (bool, bool, bool, bool, bool) {
         let store = memory();
         let sink = InboxSink::new(store.clone()).with_recording(switches);
         assert_eq!(sink.recording(), switches);
         let standby = fixture(
             "pages/webhooks.reference.standby__inbound_message.json",
-            &[(r#""from": "16505551234""#, r#""from": "16315553601""#)],
+            &[(
+                r#""from": "16505551234","#,
+                r#""from": "16315553601", "from_user_id": "US.STANDBY","#,
+            )],
+        );
+        let accepted = fixture(
+            "pages/business-scoped-user-ids__business_initiated_calls_status_webhooks.json",
+            &[
+                ("RINGING", "ACCEPTED"),
+                ("wacid.ABGGFjFVU2AfAgo6V-Hc5eCgK5Gh", "wacid.STATUS"),
+            ],
         );
         // The handover first: no link leads its number elsewhere yet.
         for body in [
             CONTROL_TAKEN,
             USER_CALL,
+            accepted.as_str(),
             standby.as_str(),
             USER_ID_UPDATE,
             PERMISSION_REPLY,
@@ -1594,18 +1607,30 @@ mod rules {
                 sink.deliver(event).await.unwrap();
             }
         }
-        let standby_events = events_of(&store, "16315553601").await.len();
-        let standby_owner = owner_of(&store, "16315553601").await;
+        let calls = events_of(&store, BSUID).await.len();
+        assert!(
+            calls == 0 || calls == 2,
+            "{calls}: one switch for both paths"
+        );
+        let standby_events = events_of(&store, "US.STANDBY").await.len();
+        let standby_owner = owner_of(&store, "US.STANDBY").await;
         assert_eq!(standby_events == 1, standby_owner.is_some(), "one switch");
-        let links = links_of(&store, "US.20837465019283746501").await.len()
-            + links_of(&store, BSUID).await.len();
+        let links = [
+            links_of(&store, "US.20837465019283746501").await.len(),
+            links_of(&store, BSUID).await.len(),
+            links_of(&store, "US.STANDBY").await.len(),
+        ];
+        assert!(
+            links == [0, 0, 0] || links == [2, 2, 1],
+            "{links:?}: one switch for every link"
+        );
         (
-            events_of(&store, BSUID).await.len() == 1,
+            calls == 2,
             standby_events == 1,
             owner_of(&store, PHONE)
                 .await
                 .is_some_and(|o| o.owner == ThreadOwner::AnotherApp),
-            links > 0,
+            links == [2, 2, 1],
             store
                 .messages(&ConversationKey::new(PNID, BSUID), None, 10)
                 .await
