@@ -1822,6 +1822,65 @@ pub(crate) mod tests {
         assert!(raw(&kv, "phone/P2").await.is_none(), "P2 stays unlinked");
     }
 
+    /// The re-link after a conditional delete never overwrites an entry
+    /// written meanwhile: a number the new record of the WABA lists, whose
+    /// entry now points to another WABA (whose record lists it too), stays
+    /// with that WABA. Decisive: `put_if_absent` in `relink_phones` (a
+    /// `put` points the number back at the deleted record's WABA).
+    #[tokio::test]
+    async fn a_relink_never_overwrites_a_newer_index_entry() {
+        let keys = || VaultKeys::new(key("k1", 7));
+        let scratch = kv();
+        let other = vault(&scratch, keys());
+        other
+            .store(
+                &StoredBusinessToken::new("W1", AccessToken::new("TOKEN-OF-B"))
+                    .phone_number_ids(["P1"]),
+            )
+            .await
+            .unwrap();
+        other
+            .store(
+                &StoredBusinessToken::new("W2", AccessToken::new("TOKEN-OF-W2"))
+                    .phone_number_ids(["P1"]),
+            )
+            .await
+            .unwrap();
+        // W1's new record, and W2's record with P1's entry pointing to it.
+        let mut writes = Vec::new();
+        for k in ["waba/W1", "waba/W2", "phone/P1"] {
+            writes.push((
+                StoreKey::new(TOKEN_NAMESPACE, k),
+                raw(&scratch, k).await.unwrap().value,
+            ));
+        }
+        let store = Arc::new(StoresAfterDelete {
+            inner: MemoryKvStore::new(),
+            key: StoreKey::new(TOKEN_NAMESPACE, "waba/W1"),
+            writes: Mutex::new(Vec::new()),
+        });
+        let kv: Arc<dyn KvStore> = store.clone();
+        let v = vault(&kv, keys());
+        let w1 = WabaId::new("W1");
+        v.store(
+            &StoredBusinessToken::new("W1", AccessToken::new("TOKEN-OF-A"))
+                .phone_number_ids(["P1"]),
+        )
+        .await
+        .unwrap();
+        let (_, version) = v.get_versioned(&w1).await.unwrap().unwrap();
+        *store.writes.lock().unwrap() = writes;
+
+        assert!(v.delete_if_unchanged(&w1, version).await.unwrap());
+        assert_eq!(raw_json(&kv, "phone/P1").await["waba_id"], "W2");
+        let found = v
+            .get_by_phone_number(&PhoneNumberId::new("P1"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.token.expose_secret(), "TOKEN-OF-W2");
+    }
+
     /// A conditional delete takes the token it read, and only that one: a
     /// token stored since (the WABA connected again), or the record
     /// re-encrypted since, stays, with its phone index; a missing record
