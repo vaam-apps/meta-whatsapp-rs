@@ -5,7 +5,7 @@ description: "Understanding and handling meta-whatsapp-rs WebhookEvent values - 
 
 # meta-whatsapp-rs-webhook-events
 
-> **Verified against meta-whatsapp-rs 76be5e050afce413e4614c9559b109c7ba7cd986 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 888dec677cf5a56db041e56986e6ef6ee2e52b0a (2026-09-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/events.rs](examples/events.rs), compiled and
 tested by meta-whatsapp-rs's own gate with Meta-shaped payloads. Every variant and

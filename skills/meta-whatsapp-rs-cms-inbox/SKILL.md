@@ -5,7 +5,7 @@ description: "The merchant-to-customer chat inbox of a multi-tenant CMS built on
 
 # meta-whatsapp-rs-cms-inbox
 
-> **Verified against meta-whatsapp-rs 97f0606fe4932c75fb6b2ba3c5d3668de6da7e5c (2026-09-27).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 888dec677cf5a56db041e56986e6ef6ee2e52b0a (2026-09-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/inbox.rs](examples/inbox.rs), compiled and tested by meta-whatsapp-rs's own gate.
 The full server (webhook endpoint, SSE, bearer-token tenants), exercised in-process by meta-whatsapp-rs's tests:
