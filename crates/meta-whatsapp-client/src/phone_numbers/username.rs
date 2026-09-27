@@ -621,78 +621,112 @@ mod tests {
         assert!(validate_bsuid(&UserId::new(format!("BR.{}", "a".repeat(128)))).is_ok());
     }
 
+    /// Every `.rs` file under `dir`.
+    fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                rust_files(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+
+    /// The library lines of `file` (number, text), and the paths of the
+    /// out-of-line test modules it declares. Left out: comment lines, and
+    /// everything from an inline `#[cfg(test)] mod … {` on (where this
+    /// workspace keeps its test modules: at the end). Everything else
+    /// after a `#[cfg(test)]` is kept.
+    fn library_lines(
+        file: &std::path::Path,
+        text: &str,
+    ) -> (Vec<(usize, String)>, Vec<std::path::PathBuf>) {
+        let lines: Vec<&str> = text.lines().collect();
+        // Where this file's `mod x;` children live.
+        let children = match file.file_name().and_then(|n| n.to_str()) {
+            Some("mod.rs" | "lib.rs" | "main.rs") => file.parent().unwrap().to_path_buf(),
+            _ => file.with_extension(""),
+        };
+        let (mut code, mut test_modules) = (Vec::new(), Vec::new());
+        for (i, raw) in lines.iter().enumerate() {
+            let line = raw.trim();
+            if line == "#[cfg(test)]" {
+                // The item it gates, past any further attributes.
+                let item = lines[i + 1..]
+                    .iter()
+                    .map(|l| l.trim())
+                    .find(|l| !l.starts_with("#["))
+                    .unwrap_or_default();
+                let module = item
+                    .strip_prefix("pub(crate) mod ")
+                    .or_else(|| item.strip_prefix("mod "));
+                match module.map(|m| m.strip_suffix(';')) {
+                    Some(Some(name)) => {
+                        test_modules.push(children.join(format!("{name}.rs")));
+                        test_modules.push(children.join(name));
+                    }
+                    Some(None) => break,
+                    None => {}
+                }
+            }
+            if !line.starts_with("//") {
+                code.push((i + 1, (*raw).to_owned()));
+            }
+        }
+        (code, test_modules)
+    }
+
+    /// What [`library_lines`] keeps, on a sample: code past an out-of-line
+    /// `mod tests;` and past a gated `impl`, not comments, and nothing from
+    /// an inline test module on; the declared test files, beside a
+    /// `mod.rs` and beside any other file.
+    #[test]
+    fn the_contact_book_scan_keeps_library_lines_only() {
+        use std::path::Path;
+        let sample = "fn a() {}\n\
+            #[cfg(test)]\n\
+            mod tests;\n\
+            fn b() {}\n\
+            // a comment\n\
+            #[cfg(test)]\n\
+            impl A {}\n\
+            fn c() {}\n\
+            #[cfg(test)]\n\
+            #[allow(unused)]\n\
+            mod inline {\n\
+            fn t() {}\n\
+            }\n";
+        let (code, tests) = library_lines(Path::new("src/m/mod.rs"), sample);
+        let kept: Vec<usize> = code.iter().map(|(n, _)| *n).collect();
+        assert_eq!(kept, [1, 2, 3, 4, 6, 7, 8]);
+        assert_eq!(
+            tests,
+            [
+                Path::new("src/m").join("tests.rs"),
+                Path::new("src/m").join("tests")
+            ]
+        );
+        let (_, tests) = library_lines(Path::new("src/m/otp.rs"), "#[cfg(test)]\nmod tests;\n");
+        assert_eq!(tests[0], Path::new("src/m/otp").join("tests.rs"));
+    }
+
     /// Nothing in the library's own code calls the deletion or builds its
-    /// path: outside tests and comments, the word `contact_book` appears
-    /// exactly twice in the `src/` of every crate of the workspace, in this
-    /// method's signature and in its path segment. A call from anywhere
-    /// else (as a method, or as `PhoneNumber::delete_contact_book_entry`),
-    /// or a second path to the edge, fails it.
-    ///
-    /// Test code is left out: an inline `#[cfg(test)] mod … {` (from there
-    /// to the end of its file, where this workspace keeps them) and the
-    /// files of an out-of-line `#[cfg(test)] mod …;`. Everything else
-    /// after a `#[cfg(test)]` is scanned.
+    /// path: outside tests and comments ([`library_lines`]), the word
+    /// `contact_book` appears exactly twice in the `src/` of every crate
+    /// of the workspace, in this method's signature and in its path
+    /// segment. A call from anywhere else (as a method, or as
+    /// `PhoneNumber::delete_contact_book_entry`), or a second path to the
+    /// edge, fails it.
     #[test]
     fn only_its_own_call_names_the_contact_book() {
-        use std::path::{Path, PathBuf};
-
-        fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-            for entry in std::fs::read_dir(dir).unwrap() {
-                let path = entry.unwrap().path();
-                if path.is_dir() {
-                    walk(&path, out);
-                } else if path.extension().is_some_and(|e| e == "rs") {
-                    out.push(path);
-                }
-            }
-        }
-
-        /// The library lines of `file` (number, text), and the paths of
-        /// the out-of-line test modules it declares.
-        fn library_lines(file: &Path, text: &str) -> (Vec<(usize, String)>, Vec<PathBuf>) {
-            let lines: Vec<&str> = text.lines().collect();
-            // Where this file's `mod x;` children live.
-            let children = match file.file_name().and_then(|n| n.to_str()) {
-                Some("mod.rs" | "lib.rs" | "main.rs") => file.parent().unwrap().to_path_buf(),
-                _ => file.with_extension(""),
-            };
-            let (mut code, mut test_modules) = (Vec::new(), Vec::new());
-            let mut i = 0;
-            while i < lines.len() {
-                let line = lines[i].trim();
-                if line == "#[cfg(test)]" {
-                    // The item it gates, past any further attributes.
-                    let item = lines[i + 1..]
-                        .iter()
-                        .map(|l| l.trim())
-                        .find(|l| !l.starts_with("#["))
-                        .unwrap_or_default();
-                    let module = item
-                        .strip_prefix("pub(crate) mod ")
-                        .or_else(|| item.strip_prefix("mod "));
-                    match module.map(|m| m.strip_suffix(';')) {
-                        Some(Some(name)) => {
-                            test_modules.push(children.join(format!("{name}.rs")));
-                            test_modules.push(children.join(name));
-                        }
-                        Some(None) => break,
-                        None => {}
-                    }
-                }
-                if !line.starts_with("//") {
-                    code.push((i + 1, lines[i].to_owned()));
-                }
-                i += 1;
-            }
-            (code, test_modules)
-        }
-
+        use std::path::Path;
         let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let mut files = Vec::new();
         for krate in std::fs::read_dir(&crates).unwrap() {
             let src = krate.unwrap().path().join("src");
             if src.is_dir() {
-                walk(&src, &mut files);
+                rust_files(&src, &mut files);
             }
         }
         assert!(files.len() > 50, "walked the workspace's sources");
@@ -722,22 +756,6 @@ mod tests {
         assert_eq!(hits.len(), 2, "{hits:#?}");
         assert!(own("pub async fn delete_contact_book_entry("), "{hits:#?}");
         assert!(own("\"contact_book\"])"), "{hits:#?}");
-
-        // A file whose `#[cfg(test)] mod tests;` comes early is scanned to
-        // its end (`groups/mod.rs` declares it near the top), and the
-        // out-of-line test files are not scanned.
-        let groups = scanned
-            .iter()
-            .find(|(file, _)| file.ends_with(Path::new("groups").join("mod.rs")))
-            .map(|(_, code)| code.last().map_or(0, |(n, _)| *n))
-            .unwrap();
-        assert!(groups > 1000, "groups/mod.rs scanned to line {groups}");
-        assert!(
-            !scanned
-                .iter()
-                .any(|(file, _)| file.ends_with(Path::new("groups").join("tests.rs"))),
-            "test files are left out"
-        );
     }
 
     /// The contact book is only ever touched by its own explicit call:
