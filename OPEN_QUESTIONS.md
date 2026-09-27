@@ -510,10 +510,11 @@ Found while writing the integrator guides and checking them against
     source for an ownership record, so the code also trusts this app's
     own `Inbox::record_thread_owner(.., ThreadOwner::ThisApp, ..)` after
     a `take`, which Meta does not restrict to an active thread (after a
-    take of an idle thread the reply meets Meta's 131047): an extension
-    of the implementation, documented in `ReplyChecks` and the guide, not
-    part of this decision; telling the two apart needs a source on
-    `ThreadOwnership`, a port change. Swappable by
+    take of an idle thread the reply meets Meta's 131047). Accepted as
+    part of this decision (same day, coordinator): both cases err towards
+    letting Meta decide, and the same switch turns both off; telling them
+    apart needs a source on `ThreadOwnership`, a port change that would
+    buy only a local refusal Meta makes anyway. Swappable by
     `ReplyChecks::trust_handover(false)` (an app with standby copies) or
     `ReplyChecks::window(false)`; the ownership refusal is its own
     `ErrorKind::ThreadOwnedElsewhere`, each recording a switch
