@@ -9,6 +9,7 @@ use serde::de::Deserializer;
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 
+use crate::common::HealthStatus;
 use crate::templates::macros::string_enum;
 
 /// Maximum length of a callback override URL (`webhooks/override`).
@@ -117,6 +118,10 @@ pub struct WabaInfo {
     /// Whether insights are enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_enabled_for_insights: Option<bool>,
+    /// Messaging health (`fields=health_status`, `support/health-status`);
+    /// also read by [`Waba::health_status`](super::Waba::health_status).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_status: Option<HealthStatus>,
 }
 
 /// `{id, name}` of a business.

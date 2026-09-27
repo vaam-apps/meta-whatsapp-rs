@@ -1,7 +1,11 @@
 //! One business phone number: details, request/verify code,
 //! register/deregister, two-step verification PIN, local storage and
 //! identity-check settings, display name change, per-number webhook
-//! override, conversational components, and the coexistence data sync.
+//! override, search visibility, security notifications and number-change
+//! notices, conversational components, the coexistence data sync, the
+//! business username and the contact book, the Official Business Account
+//! request and status, business compliance information (India), and
+//! health status; plus bot details ([`Client::waba_bot`]).
 //!
 //! Docs: `business-phone-numbers/phone-numbers`,
 //! `business-phone-numbers/registration`,
@@ -10,10 +14,22 @@
 //! `local-storage`, `webhooks/override`,
 //! `solution-providers/registering-phone-numbers`,
 //! `embedded-signup/onboarding-business-app-users` (`smb_app_data`),
+//! `business-scoped-user-ids` (§ Business usernames, § Contact book),
+//! `official-business-accounts`, `support/health-status`,
 //! `reference/whatsapp-business-phone-number/{whatsapp-business-account-phone-number-api,
 //! phone-number-registration, phone-number-deregister-api,
-//! phone-number-verification-request-code-api, verify-code-api, settings-api}`,
-//! `reference/whatsapp-business-account/conversational-automation-api`.
+//! phone-number-verification-request-code-api, verify-code-api, settings-api,
+//! whatsapp-business-account-official-business-account-status-api,
+//! business-compliance-information-api}`,
+//! `reference/whatsapp-business-account/conversational-automation-api`,
+//! `reference/whatsapp-business-bot/bot-details-api`.
+//!
+//! Meta paths: `GET`/`POST /{PHONE_NUMBER_ID}`, `POST …/request_code`,
+//! `…/verify_code`, `…/register`, `…/deregister`, `GET`/`POST …/settings`,
+//! `…/conversational_automation`, `…/smb_app_data`, `GET`/`POST`/`DELETE
+//! …/username`, `GET …/username_suggestions`, `DELETE …/contact_book`,
+//! `POST …/official_business_account`, `GET`/`POST
+//! …/business_compliance_info`, and `GET /{WABA-Bot-ID}`.
 //!
 //! Doc paths are relative to
 //! `https://developers.facebook.com/documentation/business-messaging/whatsapp/`
@@ -50,19 +66,65 @@
 //! - Identity change setting: guide example `enable_identity_key_check` vs
 //!   reference `enabled`; the example is used.
 //! - Local storage status casing: see [`StorageStatus`].
+//! - Search visibility, security notifications and number-change notices
+//!   are fields of the number's own `POST` in the reference
+//!   (`PhoneNumberStatusUpdateRequest`: `search_visibility`, and
+//!   `whatsapp_business_api_data.show_security_notifications` /
+//!   `notify_user_change_number`), not settings; the page has no example,
+//!   so the bodies follow its schema, one field per call.
+//! - Official Business Account status: the guide reads the number's
+//!   `official_business_account` field (with an example), the reference an
+//!   edge, `GET /{PHONE_NUMBER_ID}/official_business_account` (without
+//!   one); [`PhoneNumber::official_business_account`] follows the guide.
+//!   The guide's example answers `NOT_STARTED`, which the reference's list
+//!   of statuses lacks; [`ObaStatus`] has both.
+//! - Business compliance information: the update takes an uppercase
+//!   `entity_type` ([`BusinessEntityType`]), the read's schema a free
+//!   string ("e.g., Partnership, Private Limited Company"), kept as a
+//!   string in [`BusinessComplianceInfo::entity_type`].
+//!
+//! # Where the docs stop
+//!
+//! - Username errors `147001`–`147005` are not classified in
+//!   [`meta_whatsapp_core::ErrorKind`] yet (they are `Unknown`, with the
+//!   code in [`meta_whatsapp_core::Error::graph`]). The number's `POST`
+//!   also lists a `username` field, without an example; the documented
+//!   `/username` edge is used instead.
+//! - The Official Business Account reference says its endpoint also
+//!   withdraws or resubmits an application, but documents no field for
+//!   either: not offered.
+//! - The compliance and bot details pages have no example at all; their
+//!   types follow the schemas. No mirrored page says where a bot id
+//!   ([`meta_whatsapp_core::ids::WabaBotId`]) comes from.
+//! - `health_status` is documented on numbers, WABAs and templates only:
+//!   a business portfolio's status is its [`HealthEntityType::Business`]
+//!   entry in any of them ([`HealthStatus::entity`]).
 //!
 //! Calling settings share `/{PHONE_NUMBER_ID}/settings` but are typed in
 //! [`crate::calling`]; payload encryption is not wrapped yet.
 
 mod automation;
+mod bot;
+mod compliance;
+mod official;
 mod secrets;
 mod settings;
 mod types;
+mod username;
 
 pub use automation::{
     BotCommand, ConversationalAutomation, ConversationalAutomationConfig,
     MAX_COMMAND_DESCRIPTION_CHARS, MAX_COMMAND_NAME_CHARS, MAX_COMMANDS, MAX_PROMPT_CHARS,
     MAX_PROMPTS,
+};
+pub use bot::{WabaBot, WabaBotInfo};
+pub use compliance::{
+    BusinessComplianceInfo, BusinessEntityType, ComplianceInfoUpdate, CustomerCare,
+    GrievanceOfficer, MAX_ENTITY_NAME_CHARS, MIN_ENTITY_NAME_CHARS,
+};
+pub use official::{
+    MAX_SUPPORTING_LINKS, MIN_SUPPORTING_LINKS, ObaApplication, ObaApplicationResponse, ObaStatus,
+    OfficialBusinessAccount,
 };
 pub use secrets::{TwoStepPin, VerificationCode};
 pub use settings::{
@@ -70,9 +132,17 @@ pub use settings::{
 };
 pub use types::{
     AccountMode, CodeVerificationStatus, CreatedPhoneNumber, MessagingLimitTier, NameStatus,
-    PhoneNumberInfo, PhoneNumberStatus, PlatformType, QualityRating, Throughput,
+    PhoneNumberInfo, PhoneNumberStatus, PlatformType, QualityRating, SearchVisibility, Throughput,
     WebhookConfiguration,
 };
+pub use username::{
+    BusinessUsername, MAX_USERNAME_CHARS, MIN_USERNAME_CHARS, TransferAction, UsernameStatus,
+    validate_username,
+};
+
+/// Messaging health of a number: the same types WABAs and templates use
+/// (see [`crate::common`]).
+pub use crate::common::{HealthEntity, HealthEntityType, HealthError, HealthState, HealthStatus};
 
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
@@ -180,6 +250,32 @@ struct WebhookOverrideBody<'a> {
 struct SmbSyncBody {
     messaging_product: &'static str,
     sync_type: SmbSyncType,
+}
+
+#[derive(Serialize)]
+struct SearchVisibilityBody<'a> {
+    search_visibility: &'a SearchVisibility,
+}
+
+/// `whatsapp_business_api_data` of the number's `POST`
+/// (`WhatsAppBusinessApiData`). Its `pin` is not sent from here:
+/// [`PhoneNumber::set_two_step_pin`] sets the PIN.
+#[derive(Serialize)]
+struct BusinessApiDataBody {
+    whatsapp_business_api_data: BusinessApiData,
+}
+
+#[derive(Serialize)]
+struct BusinessApiData {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    show_security_notifications: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    notify_user_change_number: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct HealthEnvelope {
+    health_status: HealthStatus,
 }
 
 impl PhoneNumber {
@@ -350,6 +446,81 @@ impl PhoneNumber {
             .context("webhook override response")
             .send_success()
             .await
+    }
+
+    /// `POST /{PHONE_NUMBER_ID}` `{"search_visibility": …}`: show or hide
+    /// the number in WhatsApp's business search. A value is set, so the
+    /// request is replayed on transient errors.
+    pub async fn set_search_visibility(&self, visibility: &SearchVisibility) -> Result<()> {
+        self.post_on_number(
+            &SearchVisibilityBody {
+                search_visibility: visibility,
+            },
+            "search visibility response",
+        )
+        .await
+    }
+
+    /// `POST /{PHONE_NUMBER_ID}`
+    /// `{"whatsapp_business_api_data": {"show_security_notifications": …}}`:
+    /// whether to show security notifications (Meta's reference says no
+    /// more than that). A value is set, so the request is replayed on
+    /// transient errors.
+    pub async fn set_security_notifications(&self, show: bool) -> Result<()> {
+        self.post_on_number(
+            &BusinessApiDataBody {
+                whatsapp_business_api_data: BusinessApiData {
+                    show_security_notifications: Some(show),
+                    notify_user_change_number: None,
+                },
+            },
+            "security notifications response",
+        )
+        .await
+    }
+
+    /// `POST /{PHONE_NUMBER_ID}`
+    /// `{"whatsapp_business_api_data": {"notify_user_change_number": …}}`:
+    /// whether users are notified when the business changes its number
+    /// (Meta's reference says no more than that). A value is set, so the
+    /// request is replayed on transient errors.
+    pub async fn set_notify_user_change_number(&self, notify: bool) -> Result<()> {
+        self.post_on_number(
+            &BusinessApiDataBody {
+                whatsapp_business_api_data: BusinessApiData {
+                    show_security_notifications: None,
+                    notify_user_change_number: Some(notify),
+                },
+            },
+            "number change notice response",
+        )
+        .await
+    }
+
+    async fn post_on_number(&self, body: &impl Serialize, context: &'static str) -> Result<()> {
+        self.client
+            .post_at(&[self.phone_number_id.as_str()])
+            .json(body)
+            // Setting a value: replaying it cannot duplicate an effect.
+            .idempotent(true)
+            .context(context)
+            .send_success()
+            .await
+    }
+
+    /// `GET /{PHONE_NUMBER_ID}?fields=health_status`: whether messages can
+    /// be sent (and calls received over SIP) through this number, with the
+    /// status of the number, its WABA, its business portfolio and the app
+    /// (`support/health-status`).
+    pub async fn health_status(&self) -> Result<HealthStatus> {
+        let env: HealthEnvelope = self
+            .client
+            .get_at(&[self.phone_number_id.as_str()])
+            .query("fields", "health_status")
+            .context("phone number health status")
+            .send()
+            .await?;
+        Ok(env.health_status)
     }
 
     /// `GET /{PHONE_NUMBER_ID}/settings`.
@@ -694,6 +865,154 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn number_fields_are_posted_on_the_number_one_per_call() {
+        // reference/whatsapp-business-phone-number/whatsapp-business-account-phone-number-api,
+        // `PhoneNumberStatusUpdateRequest` (no example on the page).
+        let t = ScriptedTransport::new();
+        for _ in 0..5 {
+            t.push_json(200, json!({"success": true}));
+        }
+        let pn = client(&t).phone_number(ID);
+        pn.set_search_visibility(&SearchVisibility::Visible)
+            .await
+            .unwrap();
+        pn.set_search_visibility(&SearchVisibility::Hidden)
+            .await
+            .unwrap();
+        pn.set_security_notifications(true).await.unwrap();
+        pn.set_notify_user_change_number(true).await.unwrap();
+        pn.set_notify_user_change_number(false).await.unwrap();
+        let reqs = t.requests();
+        for r in &reqs {
+            assert_eq!(r.method, Method::POST);
+            assert_eq!(r.path(), "/v25.0/106540352242922");
+            assert_eq!(r.url.query(), None);
+            assert_eq!(r.bearer(), Some("TOKEN"));
+        }
+        assert_eq!(
+            reqs[0].json(),
+            Some(json!({"search_visibility": "VISIBLE"}))
+        );
+        assert_eq!(reqs[1].json(), Some(json!({"search_visibility": "HIDDEN"})));
+        assert_eq!(
+            reqs[2].json(),
+            Some(json!({"whatsapp_business_api_data": {"show_security_notifications": true}}))
+        );
+        assert_eq!(
+            reqs[3].json(),
+            Some(json!({"whatsapp_business_api_data": {"notify_user_change_number": true}}))
+        );
+        assert_eq!(
+            reqs[4].json(),
+            Some(json!({"whatsapp_business_api_data": {"notify_user_change_number": false}}))
+        );
+        assert_eq!(t.remaining(), 0);
+
+        t.push_json(200, json!({"success": false}));
+        assert!(pn.set_security_notifications(false).await.is_err());
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn number_fields_are_replayed_on_a_transient_error() {
+        let t = ScriptedTransport::new();
+        t.push_json(500, graph_error(2));
+        t.push_json(200, json!({"success": true}));
+        let c = Client::builder()
+            .transport(t.clone())
+            .access_token("TOKEN")
+            .retry(RetryPolicy {
+                max_retries: 1,
+                base_delay: std::time::Duration::ZERO,
+                max_delay: std::time::Duration::ZERO,
+            })
+            .build()
+            .unwrap();
+        c.phone_number(ID)
+            .set_search_visibility(&SearchVisibility::Hidden)
+            .await
+            .unwrap();
+        assert_eq!(t.requests().len(), 2, "setting a value is safe to replay");
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn health_status_parses_the_page_examples() {
+        // support/health-status, "Example response".
+        let t = ScriptedTransport::new();
+        t.push_json(
+            200,
+            json!({
+              "health_status": {
+                "can_send_message": "AVAILABLE",
+                "entities": [
+                  {"entity_type": "PHONE_NUMBER", "id": "106540352242922", "can_send_message": "AVAILABLE", "can_receive_call_sip": "AVAILABLE"},
+                  {"entity_type": "WABA", "id": "102290129340398", "can_send_message": "AVAILABLE"},
+                  {"entity_type": "BUSINESS", "id": "506914307656634", "can_send_message": "AVAILABLE"},
+                  {"entity_type": "APP", "id": "634974688087057", "can_send_message": "AVAILABLE", "can_receive_call_sip": "AVAILABLE"}
+                ]
+              },
+              "id": "106540352242922"
+            }),
+        );
+        // "Example limited response".
+        t.push_json(
+            200,
+            json!({
+              "health_status": {
+                "can_send_message": "LIMITED",
+                "entities": [
+                  {"entity_type": "PHONE_NUMBER", "id": "106540352242922", "can_send_message": "LIMITED", "can_receive_call_sip": "AVAILABLE",
+                   "additional_info": ["Your display name has not been approved yet. Your message limit will increase after the display name is approved."]},
+                  {"entity_type": "WABA", "id": "102290129340398", "can_send_message": "AVAILABLE"},
+                  {"entity_type": "BUSINESS", "id": "506914307656634", "can_send_message": "AVAILABLE"},
+                  {"entity_type": "APP", "id": "634974688087057", "can_send_message": "AVAILABLE", "can_receive_call_sip": "AVAILABLE"}
+                ]
+              },
+              "id": "105154286024403"
+            }),
+        );
+        let pn = client(&t).phone_number(ID);
+        let ok = pn.health_status().await.unwrap();
+        let req = t.last_request().unwrap();
+        assert_eq!(req.method, Method::GET);
+        assert_eq!(req.path(), "/v25.0/106540352242922");
+        assert_eq!(req.query("fields").as_deref(), Some("health_status"));
+        assert_eq!(req.url.query_pairs().count(), 1);
+        assert_eq!(req.bearer(), Some("TOKEN"));
+        assert_eq!(ok.can_send_message, Some(HealthState::Available));
+        assert_eq!(ok.entities.len(), 4);
+        let number = ok.entity(&HealthEntityType::PhoneNumber).unwrap();
+        assert_eq!(number.id, "106540352242922");
+        assert_eq!(number.can_receive_call_sip, Some(HealthState::Available));
+        assert_eq!(
+            ok.entity(&HealthEntityType::Business).unwrap().id,
+            "506914307656634"
+        );
+
+        let limited = pn.health_status().await.unwrap();
+        assert_eq!(limited.can_send_message, Some(HealthState::Limited));
+        let number = limited.entity(&HealthEntityType::PhoneNumber).unwrap();
+        assert_eq!(number.can_send_message, Some(HealthState::Limited));
+        assert_eq!(number.additional_info.len(), 1);
+        assert!(number.additional_info[0].starts_with("Your display name"));
+        assert!(number.errors.is_empty());
+        assert_eq!(t.remaining(), 0);
+
+        // As a field of `get`, too.
+        t.push_json(
+            200,
+            json!({"health_status": {"can_send_message": "BLOCKED"}, "id": ID}),
+        );
+        let info = pn.get(&["health_status"]).await.unwrap();
+        assert_eq!(
+            info.health_status.and_then(|h| h.can_send_message),
+            Some(HealthState::Blocked)
+        );
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[tokio::test]
     async fn local_storage_and_identity_settings_bodies() {
         let t = ScriptedTransport::new();
         for _ in 0..3 {
@@ -876,6 +1195,43 @@ mod tests {
                 .is_err()
         );
         assert_eq!(t.requests().len(), 1);
+    }
+
+    /// The new calls build their paths from segments too.
+    #[tokio::test]
+    async fn new_calls_keep_the_id_in_one_segment() {
+        let t = ScriptedTransport::new();
+        t.push_json(200, json!({"status": "approved"}));
+        t.push_json(
+            200,
+            json!({"messaging_product": "whatsapp", "success": true, "deleted": true}),
+        );
+        t.push_json(200, json!({"success": true}));
+        t.push_json(200, json!({"data": []}));
+        let pn = client(&t).phone_number("OTHER/contact_book");
+        pn.set_username("lucky_shrub", None).await.unwrap();
+        pn.delete_contact_book_entry(&meta_whatsapp_core::ids::UserId::new(
+            "US.13491208655302741918",
+        ))
+        .await
+        .unwrap();
+        pn.set_search_visibility(&SearchVisibility::Visible)
+            .await
+            .unwrap();
+        pn.business_compliance_info(&[]).await.unwrap();
+        let paths: Vec<String> = t.requests().iter().map(|r| r.path().to_owned()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "/v25.0/OTHER%2Fcontact_book/username",
+                "/v25.0/OTHER%2Fcontact_book/contact_book",
+                "/v25.0/OTHER%2Fcontact_book",
+                "/v25.0/OTHER%2Fcontact_book/business_compliance_info",
+            ]
+        );
+        assert!(client(&t).phone_number("..").health_status().await.is_err());
+        assert_eq!(t.requests().len(), 4);
+        assert_eq!(t.remaining(), 0);
     }
 
     /// An id from a database or a webhook must not be able to address a

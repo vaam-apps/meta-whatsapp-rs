@@ -1,10 +1,10 @@
-//! WhatsApp Business Account: details and update, phone numbers (list,
-//! create), webhook subscriptions (`subscribed_apps`, WABA-level callback
-//! override), assigned users; plus the business portfolio accessor
-//! ([`Client::business`]) for client/owned WABA lists and messaging customer
-//! bases.
+//! WhatsApp Business Account: details and update, health status, phone
+//! numbers (list, create), webhook subscriptions (`subscribed_apps`,
+//! WABA-level callback override), assigned users; plus the business
+//! portfolio accessor ([`Client::business`]) for client/owned WABA lists
+//! and messaging customer bases.
 //!
-//! Docs: `whatsapp-business-accounts`,
+//! Docs: `whatsapp-business-accounts`, `support/health-status`,
 //! `reference/whatsapp-business-account/{whatsapp-business-account-api,
 //! phone-number-management-api, subscribed-apps-api,
 //! assigned-users-management-api}`, `reference/business/{business-account-api,
@@ -57,12 +57,16 @@ pub use types::{
 
 pub(crate) use types::lenient_string;
 
+/// Messaging health of a WABA: the same type phone numbers and templates
+/// use (see [`crate::common`]).
+pub use crate::common::HealthStatus;
+
 use futures::Stream;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{BusinessId, WabaId};
 use meta_whatsapp_core::paging::Page;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::phone_numbers::{CreatedPhoneNumber, PhoneNumberInfo, fields_param};
 use crate::request::{paginate_or_error, reject_cursors};
@@ -214,6 +218,11 @@ struct SubscribeBody<'a> {
     verify_token: &'a str,
 }
 
+#[derive(Deserialize)]
+struct HealthEnvelope {
+    health_status: HealthStatus,
+}
+
 impl Waba {
     /// The id this API is scoped to.
     pub fn id(&self) -> &WabaId {
@@ -235,6 +244,23 @@ impl Waba {
             .context("WhatsApp Business Account")
             .send()
             .await
+    }
+
+    /// `GET /{WABA_ID}?fields=health_status`: whether messages can be sent
+    /// through this WABA, with the status of the WABA, its business
+    /// portfolio and the app (`support/health-status`). Meta documents no
+    /// `health_status` on the business node itself: its status is the
+    /// [`HealthEntityType::Business`](crate::common::HealthEntityType::Business)
+    /// entry here ([`HealthStatus::entity`]).
+    pub async fn health_status(&self) -> Result<HealthStatus> {
+        let env: HealthEnvelope = self
+            .client
+            .get_at(&[self.waba_id.as_str()])
+            .query("fields", "health_status")
+            .context("WABA health status")
+            .send()
+            .await?;
+        Ok(env.health_status)
     }
 
     /// `GET /{WABA_ID}?fields=owner_business_info`, decoded without quoting
@@ -496,6 +522,66 @@ mod tests {
             Some("account_review_status")
         );
         assert_eq!(req.bearer(), Some("TOKEN"));
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn health_status_reads_the_field() {
+        // support/health-status, "Example response", as a WABA answers it:
+        // the phone number entity is "only included if targeting a
+        // business phone number".
+        let t = ScriptedTransport::new();
+        t.push_json(
+            200,
+            json!({
+              "health_status": {
+                "can_send_message": "AVAILABLE",
+                "entities": [
+                  {"entity_type": "WABA", "id": "102290129340398", "can_send_message": "AVAILABLE"},
+                  {"entity_type": "BUSINESS", "id": "506914307656634", "can_send_message": "AVAILABLE"},
+                  {"entity_type": "APP", "id": "634974688087057", "can_send_message": "AVAILABLE", "can_receive_call_sip": "AVAILABLE"}
+                ]
+              },
+              "id": "102290129340398"
+            }),
+        );
+        let health = client(&t)
+            .waba("102290129340398")
+            .health_status()
+            .await
+            .unwrap();
+        let req = t.last_request().unwrap();
+        assert_eq!(req.method, Method::GET);
+        assert_eq!(req.path(), "/v25.0/102290129340398");
+        assert_eq!(req.query("fields").as_deref(), Some("health_status"));
+        assert_eq!(req.url.query_pairs().count(), 1);
+        assert_eq!(req.bearer(), Some("TOKEN"));
+        assert_eq!(
+            health.can_send_message,
+            Some(crate::common::HealthState::Available)
+        );
+        let business = health
+            .entity(&crate::common::HealthEntityType::Business)
+            .unwrap();
+        assert_eq!(business.id, "506914307656634");
+        assert_eq!(t.remaining(), 0);
+
+        // Through `get` too, as a field of the WABA.
+        t.push_json(
+            200,
+            json!({"health_status": {"can_send_message": "BLOCKED"}, "id": "1"}),
+        );
+        let info = client(&t).waba("1").get(&["health_status"]).await.unwrap();
+        assert_eq!(
+            info.health_status.and_then(|h| h.can_send_message),
+            Some(crate::common::HealthState::Blocked)
+        );
+        // No `health_status` in the answer: a decode error, not a status.
+        t.push_json(200, json!({"id": "1"}));
+        assert!(matches!(
+            client(&t).waba("1").health_status().await,
+            Err(meta_whatsapp_core::Error::Decode { .. })
+        ));
         assert_eq!(t.remaining(), 0);
     }
 

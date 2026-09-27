@@ -189,6 +189,13 @@ id_type!(
     /// item).
     VerificationSubmissionId
 );
+id_type!(
+    /// A WhatsApp Business Bot id (`GET /{WABA-Bot-ID}`,
+    /// `reference/whatsapp-business-bot/bot-details-api`): the node holding
+    /// a bot's prompts, commands and welcome message flag. Not a
+    /// [`WabaId`] nor a [`PhoneNumberId`].
+    WabaBotId
+);
 
 #[cfg(test)]
 mod tests {

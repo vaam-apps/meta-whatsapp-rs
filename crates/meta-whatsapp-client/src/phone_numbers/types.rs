@@ -2,13 +2,19 @@
 //!
 //! Every enum here has a catch-all: Meta adds values (messaging limit tiers
 //! are being reworked, v4 Embedded Signup added statuses), and a new value
-//! must never fail a whole `GET`. For the enums defined here it is a unit
-//! `Unknown`; [`QualityRating`] (shared, from `crate::common`) keeps the
-//! value in `Other(String)`, and its `Unknown` is Meta's documented
+//! must never fail a whole `GET`. For the older enums defined here it is a
+//! unit `Unknown`; [`QualityRating`] (shared, from `crate::common`) and the
+//! enums added since ([`SearchVisibility`], and those of the username,
+//! Official Business Account and compliance calls) keep the value in
+//! `Other(String)`, and `QualityRating::Unknown` is Meta's documented
 //! `UNKNOWN` (`OPEN_QUESTIONS.md` #27).
 
 use meta_whatsapp_core::ids::PhoneNumberId;
 use serde::{Deserialize, Serialize};
+
+use super::official::OfficialBusinessAccount;
+use crate::common::HealthStatus;
+use crate::templates::macros::string_enum;
 
 /// A WhatsApp Business phone number, as returned by `GET /{PHONE_NUMBER_ID}`
 /// and by the WABA's `phone_numbers` edge.
@@ -86,6 +92,15 @@ pub struct PhoneNumberInfo {
     /// Where webhooks for this number go (see `webhooks/override`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webhook_configuration: Option<WebhookConfiguration>,
+    /// Messaging health (`fields=health_status`, `support/health-status`);
+    /// also read by [`PhoneNumber::health_status`](super::PhoneNumber::health_status).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_status: Option<HealthStatus>,
+    /// Official Business Account status
+    /// (`fields=official_business_account`); also read by
+    /// [`PhoneNumber::official_business_account`](super::PhoneNumber::official_business_account).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub official_business_account: Option<OfficialBusinessAccount>,
 }
 
 /// Quality rating of a business phone number; the same type template
@@ -241,6 +256,18 @@ pub struct WebhookConfiguration {
     /// The app's callback URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub application: Option<String>,
+}
+
+string_enum! {
+    /// Whether the number shows up when WhatsApp users search for businesses
+    /// (`search_visibility` of `POST /{Phone-Number-ID}`,
+    /// `WAAPIBusinessGlobalSearchStateStatus`).
+    pub enum SearchVisibility {
+        /// Shown in search results.
+        Visible => "VISIBLE",
+        /// Hidden from search results.
+        Hidden => "HIDDEN",
+    }
 }
 
 /// `{"id": "..."}` returned when a phone number is created on a WABA.
