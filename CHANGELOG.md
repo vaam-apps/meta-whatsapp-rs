@@ -201,6 +201,10 @@ stored data, the owner's).
   delete, by compare-and-swap, of that record only: a token stored since
   (the WABA connected again) or a record re-encrypted since is never
   deleted. The service's disconnection uses it (roadmap S2, SR-L2 below).
+  A record stored for the WABA while the delete unlinks its numbers
+  keeps the index entries of the numbers it lists: they are linked again
+  where none is (S2's security review, L2; the stored format is
+  unchanged).
 - **meta-whatsapp-bot**, a bot framework over Cloud API webhooks
   (roadmap B1), re-exported as `meta_whatsapp_rs::bot` behind the
   facade's new `bot` feature (off by default, in `full`). A `Bot` is an
@@ -872,7 +876,23 @@ stored data, the owner's).
     and the admin unbind. `OwnedNumber` now reads its WABA's binding
     too, and both capabilities read it again once their token is read:
     a WABA whose binding moved in between makes no capability, `503
-    storage_unavailable` (retryable).
+    storage_unavailable` (retryable), whatever the vault answered (no
+    token included).
+  - **After S2's security review** (see "Security"): an event Meta dated
+    in the very second its WABA's binding began reaches no tenant, the
+    inbox included (`outbox::began_by` compares seconds strictly; on
+    Postgres the insert's re-check is `attached_at < to_timestamp(n)`):
+    a WABA's first second after an attach delivers to no tenant. A
+    contact sync (`app_state_synced`) is dated by its webhook's trigger
+    time (`events::meta_time`), so one dated before its binding began
+    is operator-only. `OwnedWaba::still_bound` (core, and the server's
+    wrapper): the tenant's disconnection and the admin unbind answer
+    `503 storage_unavailable` (retryable), and a tenant's deletion skips
+    the WABA, when it moved since its capability was made, instead of
+    unsubscribing the app with the old holder's token; a tenant's
+    deletion no longer answers `503` for a WABA that moved away since
+    its listing. `StorageError::Busy`'s docs say a step storing after a
+    send is not repeated on it.
 
   No change to the HTTP API: `openapi/v1.json` is byte-identical.
 - **Breaking — the `ConversationStore` port change of roadmap L5**: the
@@ -1499,4 +1519,51 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
     vault. Not covered: a binding refreshed for its own tenant without
     an unbind (a reconnect, a token rotation) keeps its epoch, so a
     `190` answered after the refresh to a capability made before it
-    marks its numbers again, until the next attach.
+    marks its numbers again, until the next attach (roadmap S2b: a bind
+    generation).
+- The security review of roadmap S2 (the port contracts) found, and its
+  remediation did:
+  - **M1 — a capability's token was not tied to the binding it
+    recorded.** A WABA moved to another tenant between a capability's
+    read of the binding and its read of the vault gave the old holder a
+    capability with the new holder's token, which unsubscribed the new
+    holder's app, and whose `forget` deleted the new holder's token (a
+    tenant's deletion, making capabilities from a listing seconds old,
+    widened the window). The binding is read again after the vault,
+    before anything the vault answered is used: moved, no capability,
+    `503` (retryable), a missing token included, which the admin unbind
+    used to take for the old holder's and answer by deleting the new
+    holder's binding. A tenant's deletion skips a WABA that moved since
+    its listing. The rule that makes the re-read sound is written into
+    the `RecordStore` and `TokenVault` docs: the vault is written for a
+    WABA only by its current holder, an attach binds before it stores,
+    every unbind deletes the token before the binding. `forget` keeps
+    deleting the token before the binding (the review's suggested
+    reverse order would leave, when the token moved meanwhile, a token
+    no binding holds). Found in the remediation and not fixed: an
+    attach whose binding is removed, and the WABA bound to another
+    tenant, between its own binding and its store, stores its token
+    under the other tenant's binding (two operator actions within one
+    request; the attach reads no binding after its store).
+  - **M2 — undated events of a WABA's previous holder reach its new
+    holder** (it predates S2): errors, history chunks (message text) and
+    undated group updates that Meta redelivers, for up to 7 days after a
+    failed delivery, after the WABA moved to another tenant. Contact
+    syncs were dated all along (`state_sync[].metadata.timestamp`, "when
+    the webhook was triggered") and now are. The rest is roadmap S2b: a
+    setting `undated_after_move`, operator-only within 7 days and an
+    hour of a move by default (design D36). The docs that said a move
+    never brings the previous holder's events now say which do.
+  - **L1 — a stale capability's unsubscribe was not conditioned.**
+    `OwnedWaba::still_bound` is asked before every `unsubscribe_app` a
+    capability makes; the Graph call's own window remains, and `forget`
+    then logs at `warn` (the WABA's id, no token) that the new holder's
+    subscription may be gone.
+  - **L2 — a conditional vault delete unlinked a new record's numbers**
+    (see `TokenVault::delete_if_unchanged` above).
+  - **L3 — an event of the second its binding began went to the new
+    holder**: it goes to nobody now (see "Changed"); a skew margin after
+    a move is S2b's.
+  - **L4 — the route guard cannot be checked on a third-party
+    backend** until the conformance suites move into the core: roadmap
+    S3 includes the `RouteGuard` cases.

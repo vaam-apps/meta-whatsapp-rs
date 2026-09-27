@@ -1078,7 +1078,11 @@ decisions and the delivery milestones, is
   accessor hands out the same data on every call; and a capability
   (`OwnedNumber`, `OwnedWaba`) writes only to the binding (a
   `BindingEpoch`) and the vault record it was made from, and is made
-  only from a token read while that binding held.
+  only from a token read while that binding held. That last guarantee
+  rests on a rule between the bindings and the library's `TokenVault`,
+  which no transaction spans: the vault is written for a WABA only by
+  its current holder, an attach binds before it stores, and every
+  unbind deletes the token before the binding.
 - **One multi-tenant deployment per Meta app** (the owner's decision D1):
   every merchant onboarded through the app delivers to its one callback
   URL. Tenants are the integrator's ids; a tenant owns WABAs, a WABA owns
