@@ -22,12 +22,18 @@ fn tenant(id: &str) -> TenantId {
     TenantId::parse(id).unwrap()
 }
 
-/// Nothing, a yield, or a sleep of 1 or 2 ms, by the round and the racer.
+/// When racer `racer` (0 or 1) of `round` starts: in a third of the
+/// rounds both start at once; in the others one of them (racer 0, then
+/// racer 1) starts 1, 2, 4 or 8 ms late, so that in some it starts once
+/// the other is done.
 pub async fn jitter(round: usize, racer: usize) {
-    match (round * 7 + racer * 3) % 4 {
-        0 => {}
-        1 => tokio::task::yield_now().await,
-        n => tokio::time::sleep(Duration::from_millis(n as u64 - 1)).await,
+    let late = match round % 3 {
+        0 => return,
+        1 => 0,
+        _ => 1,
+    };
+    if racer == late {
+        tokio::time::sleep(Duration::from_millis(1 << (round / 3 % 4))).await;
     }
 }
 

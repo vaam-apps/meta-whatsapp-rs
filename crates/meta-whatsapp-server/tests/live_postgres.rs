@@ -1568,3 +1568,56 @@ async fn live_postgres_two_purges_at_once_count_each_row_once() {
         "the older cut, committed last, moved purged_through back"
     );
 }
+
+/// A deadlock Postgres breaks by aborting an outbox insert is contention:
+/// the library's typed `StorageError::Busy` (the webhook pipeline answers
+/// Meta `503`, and Meta retries), never an opaque backend failure. The
+/// insert holds its guarded binding (the number's row, `FOR KEY SHARE`)
+/// and waits for its stream's row, which another session holds and which
+/// then waits for the number's row; the insert, waiting first, is the one
+/// Postgres aborts (40P01), and the other session goes on. Decisive:
+/// `40P01` in `busy_or_backend`.
+#[tokio::test]
+async fn live_postgres_a_deadlocked_insert_is_busy() {
+    use std::time::Duration;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(4).await;
+    migrate(&pool).await.unwrap();
+    let store = std::sync::Arc::new(PgEventStore::new(pool.clone()));
+    common::events_suite::bind(&PgStore::new(pool.clone()), "deadlock", "43").await;
+    let row = || common::events_suite::row(Some("deadlock"), "message_received", "43", None);
+    // The stream's row exists.
+    store.insert(&row()).await.unwrap().unwrap();
+    let holder_pool = db.pool(1).await;
+    let mut holder = holder_pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM wa_server_event_streams WHERE stream = 'deadlock' FOR UPDATE")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let inserted = {
+        let (store, event) = (store.clone(), row());
+        tokio::spawn(async move { store.insert(&event).await })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !inserted.is_finished(),
+        "the insert did not wait for its stream"
+    );
+    // The number's row, which the insert holds: a cycle.
+    let locked =
+        sqlx::query("SELECT 1 FROM wa_server_numbers WHERE phone_number_id = '43' FOR UPDATE")
+            .execute(&mut *holder)
+            .await;
+    let inserted = inserted.await.unwrap();
+    assert!(
+        locked.is_ok(),
+        "Postgres aborted the other session instead: {locked:?}"
+    );
+    holder.rollback().await.unwrap();
+    match inserted {
+        Err(error) => assert!(error.is_busy(), "a deadlock reported as {error}"),
+        Ok(sequence) => panic!("inserted {sequence:?} through a deadlock"),
+    }
+}

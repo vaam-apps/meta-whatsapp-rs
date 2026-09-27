@@ -447,7 +447,8 @@ pub async fn purge_keeps_a_taken_key(store: &dyn EventStore) {
 /// its row's tenant only while the binding its `RouteGuard` names still
 /// holds it, checked with the insert, else the row is operator-only (in
 /// no tenant's stream). A number's binding moved to another tenant, a
-/// WABA's, a binding that began after the event's second, a guard naming
+/// WABA's, a binding that began after the event's second (guarded by the
+/// WABA, and by the number), a guard naming
 /// another WABA than the number's, and a tenant with no guard: each
 /// operator-only; the same guards holding: the tenant's. Decisive: the
 /// check in each backend's insert (the memory one's `holds`).
@@ -495,6 +496,18 @@ pub async fn the_route_guard_is_checked_with_the_insert(
         }),
         ..row(Some("suite-g"), "template_status_updated", "31", None)
     };
+    // Not holding: the same, guarded by the number (its WABA's binding
+    // began after the event).
+    let number_dated_before = NewEvent {
+        route_guard: Some(RouteGuard {
+            binding: GuardedBinding::Number {
+                phone_number_id: PhoneNumberId::new("31"),
+                waba_id: WabaId::new(waba_of("31")),
+            },
+            not_after: Some(now - Span::HOUR),
+        }),
+        ..row(Some("suite-g"), "message_received", "31", None)
+    };
     // Not holding: the number under another WABA than its binding's (one
     // suite-g holds too: only the number's own binding refuses it).
     let other_waba = NewEvent {
@@ -512,7 +525,14 @@ pub async fn the_route_guard_is_checked_with_the_insert(
         route_guard: None,
         ..row(Some("suite-g"), "message_received", "31", None)
     };
-    for event in [&kept, &waba_kept, &dated_before, &other_waba, &unguarded] {
+    for event in [
+        &kept,
+        &waba_kept,
+        &dated_before,
+        &number_dated_before,
+        &other_waba,
+        &unguarded,
+    ] {
         store.insert(event).await.unwrap().unwrap();
     }
     assert_eq!(
