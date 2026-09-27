@@ -5,7 +5,7 @@ description: "Start here for meta-whatsapp-rs, the Rust toolkit for Meta's Whats
 
 # meta-whatsapp-rs
 
-> **Verified against meta-whatsapp-rs 34beecb2720bac099d769ba1b5e91072d2d5eb36 (2026-09-26).** On another revision, trust the code over this page (see "Versioning" below).
+> **Verified against meta-whatsapp-rs b7438e26d691338af798e102e24637744aabf31b (2026-09-27).** On another revision, trust the code over this page (see "Versioning" below).
 
 meta-whatsapp-rs is a Cargo workspace for Meta's WhatsApp Business Platform: a typed
 client for the Cloud API and the Business Management API (Graph API
@@ -80,7 +80,7 @@ the inbox. It leaves out `Result`: write `meta_whatsapp_rs::Result`.
 | Phone-number login with WhatsApp codes | `meta-whatsapp-rs-otp-login` |
 | Merchants connecting their own number (Tech Provider or Solution Partner) | `meta-whatsapp-rs-embedded-signup` |
 | Storing merchants' tokens, acting as a merchant | `meta-whatsapp-rs-token-vault` |
-| Registering numbers, PINs, business profile, subscriptions | `meta-whatsapp-rs-phone-numbers` |
+| Registering numbers, PINs, business profile, subscriptions, business username, contact book, blue check, health | `meta-whatsapp-rs-phone-numbers` |
 | The webhook endpoint Meta calls | `meta-whatsapp-rs-webhook-endpoint` |
 | What each webhook event means and what to do with it | `meta-whatsapp-rs-webhook-events` |
 | Fan-out, live views over SSE, background workers | `meta-whatsapp-rs-live-updates` |

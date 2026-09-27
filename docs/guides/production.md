@@ -250,7 +250,8 @@ notification queue on top must be idempotent itself: tag each message with
   [section 8](#8-retention-and-erasure-on-postgres) wired, not
   `ConversationStore::erase` alone: every identity (`Inbox::identities`),
   `Inbox::erase_all` on each of the merchant's numbers, your own copies,
-  outbox rows and dead letters, Meta's contact book (roadmap L9), an
+  outbox rows and dead letters, Meta's contact book
+  (`PhoneNumber::delete_contact_book_entry`), an
   erasure journal, and a second erasure after 7 days
   ([cms-inbox.md](cms-inbox.md#8-erasing-a-customer-and-retention)).
 - [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) read: its defaults (OTP
@@ -408,7 +409,11 @@ The procedure, per erasure request:
 3. Delete your own copies (downloaded media, exports, SSE clients'
    caches), the service's outbox rows (roadmap M2f) and your dead
    letters (L21a) for that customer.
-4. Delete the customer from Meta's contact book (roadmap L9).
+4. Delete the customer from Meta's contact book:
+   `client.phone_number(pnid).delete_contact_book_entry(&bsuid)` for each
+   of their BSUIDs (the book is the business portfolio's, so one number
+   of the portfolio will do; parent BSUIDs are refused). It cannot be
+   undone, and it answers whether an entry existed.
 5. Journal the erasure (above).
 6. Erase again after 7 days (steps 1 and 2).
 

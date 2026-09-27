@@ -535,7 +535,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** every adapter passes both conformance suites; a second
     `append` of one id on another number returns `false` on each, as the
     suite says today; the synced contacts are read back from the store.
-- [ ] **L9. Phone numbers** (`meta-whatsapp-client`,
+- [x] **L9. Phone numbers** (`meta-whatsapp-client`,
   `client::phone_numbers`; rows 66, 129–133, 151): the business
   username calls, deleting a contact book entry, search visibility,
   security notifications and number-change notices, the Official
@@ -547,6 +547,17 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** exact JSON per field from
     `reference/whatsapp-business-phone-number/*`; dropping any one field
     from its body fails its test.
+  - **Landed:** rows 66, 129–133 and 151 done in the library; the
+    service's side stays with M5c3. One `client::common::HealthStatus`
+    serves numbers, WABAs and templates (`templates::HealthStatus` is
+    that type now, its `can_send_message` typed); Meta documents no
+    `health_status` on the business node, so a business's status is the
+    `BUSINESS` entity of the others. The contact book deletion is an
+    explicit call nothing else in the library makes. Bot details take a
+    new `core::ids::WabaBotId`. Not offered, for want of a documented
+    field: withdrawing an Official Business Account application. The
+    username errors `147001`–`147005` are not classified in `ErrorKind`
+    yet.
 - [ ] **L10a. The parent BSUID accounts API, and the credential host
   allow list** (`meta-whatsapp-client`, `client::GraphRequest` and
   `client::waba`; row 152): the API is served from `api.facebook.com`,

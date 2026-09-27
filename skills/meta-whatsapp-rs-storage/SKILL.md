@@ -5,7 +5,7 @@ description: "Choosing and running meta-whatsapp-rs storage - the KvStore (token
 
 # meta-whatsapp-rs-storage
 
-> **Verified against meta-whatsapp-rs 952b20f619a2585e32774deda62c51b2597347aa (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs b7438e26d691338af798e102e24637744aabf31b (2026-09-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/stores.rs](examples/stores.rs), compiled by
 meta-whatsapp-rs's own gate; its tests run the conformance suites on the memory
@@ -76,7 +76,7 @@ Erasing a customer is a procedure (`meta-whatsapp-rs-cms-inbox`): (1) collect ev
 behind your ownership check (it deletes their records, contacts and links, the appends in flight
 included, and redacts their group messages, which keep their ids, a `wamid` encoding the phone
 number, or deletes them with `with_erasure_mode`); (3) delete your media copies, outbox rows and
-dead letters; (4) delete Meta's contact-book entry (roadmap L9); (5) journal it (an HMAC of
+dead letters; (4) delete Meta's contact-book entry (`delete_contact_book_entry`); (5) journal it (an HMAC of
 `phone_number_id|contact`, and the time) and replay the journal after any restore; (6) erase again
 after Meta's 7-day redelivery window, keeping the dedup markers meanwhile. Deleted rows live on
 until VACUUM, in the WAL, replicas and backups; set `log_parameter_max_length` to 0 for the

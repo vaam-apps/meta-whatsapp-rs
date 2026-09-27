@@ -185,6 +185,49 @@ stored data, the owner's).
 
 ### Added
 
+- **Phone number calls of roadmap L9** (`meta_whatsapp_client::phone_numbers`,
+  parity rows 66, 129–133 and 151; the service's side is M5c3):
+  - the business username: `PhoneNumber::set_username` (with
+    `TransferAction`; the documented format checked first by
+    `validate_username`; never replayed after a timeout), `username`,
+    `username_suggestions` (the reserved names, flattened) and
+    `delete_username`;
+  - `PhoneNumber::delete_contact_book_entry(&UserId)`: erases one entry
+    of the business portfolio's contact book at Meta, which cannot be
+    undone. An explicit call that nothing else in the library makes (a
+    test scans the sources for its path and its callers); malformed and
+    parent BSUIDs are refused before any request. Returns whether an
+    entry existed;
+  - fields of the number's own `POST`: `set_search_visibility`
+    (`SearchVisibility`), `set_security_notifications` and
+    `set_notify_user_change_number` (`whatsapp_business_api_data`), one
+    field per call, replayed on transient errors (a value is set);
+  - the Official Business Account: `official_business_account` (the
+    guide's field; `ObaStatus` has the guide's `NOT_STARTED` and the
+    reference's values) and `request_official_business_account`
+    (`ObaApplication`, 5 to 10 supporting links when given; an
+    application to Meta, explicit, never automatic, never replayed; a
+    `success: false` answer is an error);
+  - business compliance information (India): `business_compliance_info`
+    and `set_business_compliance_info` (`ComplianceInfoUpdate`,
+    `BusinessEntityType`, `GrievanceOfficer`, `CustomerCare`; the page's
+    rules checked first: the name's length, `entity_type_custom` exactly
+    with `OTHER`, `is_registered` only with `OTHER` or `PARTNERSHIP`, the
+    required contacts);
+  - health status: `PhoneNumber::health_status` and
+    `waba::Waba::health_status`, and `health_status` on `PhoneNumberInfo`
+    and `WabaInfo` (with `official_business_account` on `PhoneNumberInfo`),
+    all one `common::HealthStatus` (below, Changed). Meta documents no
+    `health_status` on the business node: `HealthStatus::entity` finds
+    the business's `BUSINESS` entry;
+  - bot details: `Client::waba_bot(id).get(fields)` (`WabaBot`,
+    `WabaBotInfo`), with a new id type, `meta_whatsapp_core::ids::WabaBotId`.
+
+  Pages without examples (the number's `POST` fields, compliance
+  information, bot details) are typed from their schemas, as the module
+  docs say. Not offered: withdrawing an Official Business Account
+  application (no documented field). The username errors
+  `147001`–`147005` are `ErrorKind::Unknown` for now.
 - **meta-whatsapp-bot**, a bot framework over Cloud API webhooks
   (roadmap B1), re-exported as `meta_whatsapp_rs::bot` behind the
   facade's new `bot` feature (off by default, in `full`). A `Bot` is an
@@ -723,6 +766,15 @@ stored data, the owner's).
 
 ### Changed
 
+- **Breaking — one health status type** (roadmap L9):
+  `meta_whatsapp_client::templates::HealthStatus` is now a re-export of
+  `meta_whatsapp_client::common::HealthStatus`, shared with phone numbers
+  and WABAs. Its `can_send_message` is a `HealthState` (`Available`,
+  `Limited`, `Blocked`, or `Other` with Meta's value) instead of a
+  `String` (compare with `HealthState::Available`, or read
+  `as_str()`), and it gains `entities` (each with `can_send_message`,
+  `can_receive_call_sip`, `errors` and `additional_info`). The struct is
+  `#[non_exhaustive]` now.
 - **Breaking — the `ConversationStore` port change of roadmap L5**: the
   port gains fourteen required methods and four provided ones, so a
   store of your own must implement them and pass

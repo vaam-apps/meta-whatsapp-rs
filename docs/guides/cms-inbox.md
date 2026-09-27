@@ -340,8 +340,9 @@ What the erasure does not reach, and what you do about it:
   (the service's event outbox and its 24-hour idempotency answers,
   roadmap M2f; a dead-letter store, L21a; SSE clients), your own copies
   (media you downloaded, section 4), logs, and Meta's side (the
-  business's contact book, roadmap L9; the WhatsApp Business app under
-  coexistence).
+  business's contact book: `PhoneNumber::delete_contact_book_entry` with
+  each BSUID, on any number of the portfolio; the WhatsApp Business app
+  under coexistence).
 - **Afterwards**: what arrives after the erasure is recorded as any new
   event: a new message, an echo, a history chunk or address book sync
   not delivered yet, a late revoke (its tombstone holds the BSUID and the
