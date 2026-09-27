@@ -54,6 +54,17 @@ pub enum StorageError {
     /// contention this way rather than as [`Self::Backend`], so that a
     /// caller can tell "busy, come back" from "broken" without knowing the
     /// adapter's error types.
+    ///
+    /// Retryable means the *storage call* may succeed later, not that the
+    /// operation around it may be repeated. Inside an
+    /// [`Error::Step`](crate::Error::Step) it stays retryable, and a step
+    /// that stores after a send has sent: repeating the whole operation on
+    /// `Busy` sends again. The library never returns a storage error after
+    /// a send (it logs it: [`crate::Error::may_have_been_sent`]), and sends
+    /// again automatically only when [`crate::Error::may_resend`] holds,
+    /// which is never for an error in a step. A flow of your own that
+    /// stores after a send must do the same: never repeat the send on
+    /// `Busy` unless the send provably did nothing.
     #[error("storage backend busy: gave up waiting for another writer")]
     Busy,
 }
