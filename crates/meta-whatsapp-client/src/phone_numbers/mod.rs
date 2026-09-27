@@ -136,8 +136,8 @@ pub use types::{
     WebhookConfiguration,
 };
 pub use username::{
-    BusinessUsername, MAX_USERNAME_CHARS, MIN_USERNAME_CHARS, TransferAction, UsernameStatus,
-    validate_username,
+    BusinessUsername, BusinessUsernameStatus, MAX_USERNAME_CHARS, MIN_USERNAME_CHARS,
+    TransferAction, validate_username,
 };
 
 /// Messaging health of a number: the same types WABAs and templates use

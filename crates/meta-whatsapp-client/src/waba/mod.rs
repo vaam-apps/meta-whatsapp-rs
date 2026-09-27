@@ -57,9 +57,9 @@ pub use types::{
 
 pub(crate) use types::lenient_string;
 
-/// Messaging health of a WABA: the same type phone numbers and templates
+/// Messaging health of a WABA: the same types phone numbers and templates
 /// use (see [`crate::common`]).
-pub use crate::common::HealthStatus;
+pub use crate::common::{HealthEntity, HealthEntityType, HealthError, HealthState, HealthStatus};
 
 use futures::Stream;
 use meta_whatsapp_core::Result;
@@ -250,7 +250,7 @@ impl Waba {
     /// through this WABA, with the status of the WABA, its business
     /// portfolio and the app (`support/health-status`). Meta documents no
     /// `health_status` on the business node itself: its status is the
-    /// [`HealthEntityType::Business`](crate::common::HealthEntityType::Business)
+    /// [`HealthEntityType::Business`]
     /// entry here ([`HealthStatus::entity`]).
     pub async fn health_status(&self) -> Result<HealthStatus> {
         let env: HealthEnvelope = self
@@ -556,13 +556,8 @@ mod tests {
         assert_eq!(req.query("fields").as_deref(), Some("health_status"));
         assert_eq!(req.url.query_pairs().count(), 1);
         assert_eq!(req.bearer(), Some("TOKEN"));
-        assert_eq!(
-            health.can_send_message,
-            Some(crate::common::HealthState::Available)
-        );
-        let business = health
-            .entity(&crate::common::HealthEntityType::Business)
-            .unwrap();
+        assert_eq!(health.can_send_message, Some(HealthState::Available));
+        let business = health.entity(&HealthEntityType::Business).unwrap();
         assert_eq!(business.id, "506914307656634");
         assert_eq!(t.remaining(), 0);
 
@@ -574,7 +569,7 @@ mod tests {
         let info = client(&t).waba("1").get(&["health_status"]).await.unwrap();
         assert_eq!(
             info.health_status.and_then(|h| h.can_send_message),
-            Some(crate::common::HealthState::Blocked)
+            Some(HealthState::Blocked)
         );
         // No `health_status` in the answer: a decode error, not a status.
         t.push_json(200, json!({"id": "1"}));

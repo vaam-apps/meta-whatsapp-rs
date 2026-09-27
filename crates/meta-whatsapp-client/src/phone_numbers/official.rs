@@ -210,7 +210,9 @@ impl PhoneNumber {
     ///
     /// This is an application to Meta for review, not a legal act. It is
     /// explicit and never automatic: this crate never calls it for you. It
-    /// is not replayed after a timeout (a `POST`): read
+    /// is never replayed after a timeout (a `POST`), only when Meta refused
+    /// it before processing it
+    /// ([`Error::may_resend`](meta_whatsapp_core::Error::may_resend)): read
     /// [`Self::official_business_account`] before applying again. Meta
     /// refuses a new request within 30 days of a rejection, and grants the
     /// status only to numbers that meet its criteria (a verified business

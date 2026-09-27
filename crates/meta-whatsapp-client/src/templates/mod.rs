@@ -72,10 +72,11 @@ pub use definition::{
     OtpButton, SupportedApp, TemplateComponent, TemplateDefinition, TemplateEdit,
 };
 pub use info::{
-    ComparisonMetric, ComparisonMetricKind, ComparisonValue, HealthStatus, LibraryBodyInputs,
-    LibraryButtonInput, LibraryButtonType, LibraryQuery, LibraryTemplate, LibraryTemplateRequest,
-    LibraryUrlInput, MigrationOptions, MigrationResult, QualityScore, TemplateCreated,
-    TemplateInfo, TemplateListQuery,
+    ComparisonMetric, ComparisonMetricKind, ComparisonValue, HealthEntity, HealthEntityType,
+    HealthError, HealthState, HealthStatus, LibraryBodyInputs, LibraryButtonInput,
+    LibraryButtonType, LibraryQuery, LibraryTemplate, LibraryTemplateRequest, LibraryUrlInput,
+    MigrationOptions, MigrationResult, QualityScore, TemplateCreated, TemplateInfo,
+    TemplateListQuery,
 };
 pub use send::{
     ButtonSubType, CarouselCardParameters, Currency, DateTime, DocumentMedia,
