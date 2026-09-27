@@ -761,8 +761,12 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     proxy, the media host and this URL); routing every request through a
     proxy is the transport's. What Meta answers for a portfolio that is
     not enrolled is not documented (a decode error without
-    `parent_bsuid_account_id`). A same-origin redirect from
-    `api.facebook.com` is the transport's to follow, with the header.
+    `parent_bsuid_account_id`). A redirect cannot carry the token past
+    the rule: the stock `ReqwestTransport` follows no redirect that
+    would keep a request's credentials (same scheme, host and port),
+    and the `HttpTransport` port states that rule; `GraphRequest::header`
+    refuses credential headers, so the rules cannot be stepped around
+    (both found in the L10a reviews, CHANGELOG § Security).
 - [ ] **L10b. WABAs, accounts, billing, history** (`meta-whatsapp-client`,
   `client::waba`; rows 90's Meta side, 127, 146–148): WABA creation
   (partner-initiated), system user tokens for client businesses,
@@ -1198,6 +1202,12 @@ or WABA fails the family's own cross-tenant test).
     messaging limit tier (dropping it from the fields Meta is asked for
     fails the test).
 - [ ] **M5c4. WABAs and accounts** (rows 126, 127, 140, 148, 152).
+  Row 152's call goes to `api.facebook.com`, not Graph: the service's
+  egress list ([design §6](design/server.md#6-security)) needs
+  `api.facebook.com:443`, and an egress rule is per host, so the path
+  restriction lives only in the client's credential rules (L10a). The
+  devcontainer firewall lacks that host too (left as is: a live call
+  from the sandbox fails until it is added).
   - **After:** S7, L10a, L10b, L16.
   - **Decisive:** M5.1, M5.2.
 - [ ] **M5d. Flows** (rows 61, 62): management and the data endpoint.

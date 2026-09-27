@@ -71,7 +71,9 @@ A Graph proxy or mock server: pass
 `.endpoint(..)`; the token then goes to the proxy, never to
 `graph.facebook.com`. Media downloads and the parent BSUID accounts call
 still go to Meta's own hosts: to route every request through a proxy, set
-it on the transport (`ReqwestTransport::with_client`, or `HTTPS_PROXY`).
+it on the transport. `HTTPS_PROXY` keeps the stock transport as it is; a
+client you pass to `ReqwestTransport::with_client` keeps its own redirect
+and referer settings, so turn both off on it (its rustdoc says how).
 
 ## Act as a merchant
 
@@ -121,7 +123,14 @@ decoding and the credential host allowlist. Mark a POST
   (`Business::parent_bsuid_account`); any other URL given to
   `client.request_url(method, url)`, another path or method on
   `api.facebook.com` included, fails with `Error::Validation` on `url`
-  before a byte is sent.
+  before a byte is sent. The check is on that URL: the stock transport
+  follows no redirect that would carry the token (same scheme, host and
+  port; the `3xx` comes back as `Error::Http`), and one to another origin
+  without it.
+- Never set a credential with `.header(..)`: the Authorization,
+  Proxy-Authorization and Cookie headers are refused (`Error::Validation`
+  on the name), with or without `.no_auth()`. Use `.bearer(&token)` or
+  `.oauth(&token)`, which the same check covers.
 - An employee system user sees nothing until the WABA is assigned to it:
   Graph error `200`, `ErrorKind::Permission`, not an HTTP 403.
 - `ClientBuilder::build` fails without a transport (`Error::Config`);

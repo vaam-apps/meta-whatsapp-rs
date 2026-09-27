@@ -99,11 +99,18 @@ and to one URL on `api.facebook.com`, the Parent BSUID Accounts API:
 `GET https://api.facebook.com/{business id}/parent-bsuid-accounts` (no
 other path, method, scheme or port on that host). A
 request to any other URL with a token fails locally (`Error::Validation`
-on `url`). Behind a Graph proxy (`ClientBuilder::endpoint`), the token goes
+on `url`), and so does a credential header set by hand
+(`GraphRequest::header` refuses `Authorization`, `Proxy-Authorization`
+and `Cookie`). The check covers the URL the client asked for; the stock
+transport follows no redirect that would carry the token (a hop that keeps
+scheme, host and port: the `3xx` is an `Error::Http`), and follows one to
+another origin without it. Behind a Graph proxy (`ClientBuilder::endpoint`), the token goes
 to the proxy, the media host and that one URL, not to `graph.facebook.com`;
 if every request must leave through your proxy, configure it on the
-transport instead (`ReqwestTransport::with_client` with a proxied
-`reqwest::Client`).
+transport instead: `HTTPS_PROXY` keeps the stock transport's redirect
+rule; a proxied `reqwest::Client` passed to `ReqwestTransport::with_client`
+keeps its own, so build it with
+`.redirect(reqwest::redirect::Policy::none())` and `.referer(false)`.
 
 ## 3. Logs and observability
 

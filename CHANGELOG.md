@@ -199,7 +199,12 @@ stored data, the owner's).
   every `GET` is. What Meta answers for a portfolio that is not enrolled
   is not documented: without `parent_bsuid_account_id` it is a decode
   error. The host is outside Graph: see Security, "Credential allow list
-  widened, for one URL".
+  widened, for one URL". Decided by the coordinator on 2026-09-27 (owner's
+  delegation; each with its swap in `docs/architecture.md` § Credentials
+  never leave Meta): the rules do not follow a configured Graph proxy; the
+  business id is ASCII digits; an exact rule allows no query, fragment or
+  user info; the account id is a `String`, required, and the portfolio
+  list defaults to empty; the media host's rule is unchanged.
 - **`StorageError::Busy`** (meta-whatsapp-core; the enum is
   `#[non_exhaustive]`, so this is additive): contention, reported by a
   storage adapter that gave up waiting for another writer (a lock wait
@@ -963,6 +968,13 @@ stored data, the owner's).
 
 ### Changed
 
+- **Credential headers and redirects** (see Security): `GraphRequest::header`
+  refuses `Authorization`, `Proxy-Authorization` and `Cookie`
+  (`Error::Validation` on the name; use `bearer()` or `oauth()`), and
+  accepts a name in any case instead of panicking; the stock
+  `ReqwestTransport` returns the 3xx of a redirect that would carry a
+  request's credentials (same scheme, host and port) instead of following
+  it.
 - **The service core's port contracts are right for any backend**
   (roadmap S2; breaking, pre-release, `meta-whatsapp-server-core` and
   `meta-whatsapp-server`). What Postgres guaranteed by accident is a
@@ -1773,6 +1785,43 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   one added), so the next exception is one reviewed line; neither line
   follows a configured Graph proxy (`ClientBuilder::endpoint`): behind
   one, the token goes to the proxy, the media host and this URL, never
-  to `graph.facebook.com`. A same-origin redirect from `api.facebook.com`
-  is the transport's to follow: the stock reqwest transport keeps
-  `Authorization` on it.
+  to `graph.facebook.com`. A redirect cannot carry the token past that
+  path: see the next entry.
+- **Credentials no longer follow a redirect that keeps them**
+  (`meta-whatsapp-adapters`, the `HttpTransport` port; found reviewing
+  L10a). reqwest (0.13, with tower-http's redirect service) rebuilds every
+  hop from the request's original headers and drops `Authorization`,
+  `Proxy-Authorization` and `Cookie` only on a hop that changes scheme,
+  host or port from the URL that answered it. So the stock
+  `ReqwestTransport` sent the token on a same-origin redirect: from the
+  one Parent BSUID Accounts URL to any other path on `api.facebook.com`,
+  past the rule above. Worse, and older than L10a: after a redirect from
+  any origin the client allows (Graph, the media host, a configured
+  proxy) to another origin, a second redirect within that other origin
+  carried the token there. A request that carries one of those headers
+  now goes through a second `reqwest::Client`, with the same settings,
+  whose redirect policy stops at any hop that keeps scheme, host and
+  port: that 3xx is the response (`Error::Http` in the client). Hops to
+  another origin are followed without the credentials, up to 10, as
+  before; requests without credentials are unchanged. A client given to
+  `ReqwestTransport::with_client` keeps its own policy (its rustdoc says
+  how to turn redirects off). The `HttpTransport` rustdoc states the rule
+  for other adapters: follow no redirect for a request that carries a
+  credential, or drop it on every hop. Tests:
+  `a_redirect_within_the_origin_never_carries_credentials`,
+  `a_second_redirect_within_another_origin_never_carries_the_token` and
+  `credentialed_redirects_between_origins_are_bounded`
+  (`meta-whatsapp-adapters/tests/reqwest_transport.rs`); the first two
+  fail on the previous transport.
+- **`GraphRequest::header` cannot attach a credential** (older than
+  L10a; found reviewing it). With `no_auth()`, or on a client without a
+  token, `.header("authorization", …)` sent a token to any URL, plain
+  `http` included, unchecked by the credential rules. `header()` now
+  refuses `Authorization`, `Proxy-Authorization` and `Cookie`, whatever
+  the name's case, with `Error::Validation` on the name before any
+  request (the value is never shown); `bearer()` and `oauth()`, which the
+  rules check, are the only ways to attach a token. The name is parsed
+  (`HeaderName::from_bytes`) instead of `from_static`, which panicked on
+  an uppercase or invalid name: any case is accepted and sent lowercase,
+  and an invalid name is a validation error. Tests:
+  `header_never_carries_a_credential`, `header_names_are_parsed`.

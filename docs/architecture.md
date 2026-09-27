@@ -369,10 +369,57 @@ before the transport sees it; the error names the host, the method and the
 rules, never the path, the query or the token. Inside the library, the
 only requests to an absolute URL are `Media::download_with_info` and
 `Business::parent_bsuid_account`; integrators reach the same check through
-`Client::request_url`. Pagination re-issues the original request with
-`after=` rather than following `paging.next`. A redirect is the
-transport's: the stock reqwest transport drops `Authorization` when a
-redirect changes host, scheme or port, and keeps it on the same origin.
+`Client::request_url`, and cannot step around it: `GraphRequest::header`
+refuses `Authorization`, `Proxy-Authorization` and `Cookie` (any case,
+with or without `no_auth()`; a validation error on the name before any
+request), so `bearer()` and `oauth()`, which the check covers, are the
+only ways to attach a token. Pagination re-issues the original request
+with `after=` rather than following `paging.next`.
+
+The check covers the URL the client hands to the transport, so a redirect
+must not carry the token further: that is the `HttpTransport` port's rule
+(its rustdoc). reqwest rebuilds every hop from the request's original
+headers and drops the credentials only on a hop that changes scheme, host
+or port from the URL that answered it, so it would send the token to
+another path on `api.facebook.com`, past the second rule, and, after a hop
+to another origin, to any URL within that origin. The stock
+`ReqwestTransport` therefore sends a request that carries a credential
+header through a client that follows no hop keeping scheme, host and
+port (the 3xx is the response, an `Error::Http` in the client), and
+follows a hop to another origin without it, up to 10. A request without
+credentials follows reqwest's default. A `reqwest::Client` passed to
+`ReqwestTransport::with_client` keeps its own policy (its rustdoc says
+how to turn redirects off).
+
+**Decided 2026-09-27 (coordinator, owner's delegation)**, on the choices
+roadmap L10a's draft proposed:
+
+- The rules do not follow a configured Graph endpoint or proxy: behind
+  one, the token goes to the proxy, the media host and the one Parent
+  BSUID Accounts URL. A Graph proxy stands in for Graph, which serves
+  neither. Swappable by setting the proxy on the transport
+  (`HTTPS_PROXY`, or a proxied client in `ReqwestTransport::with_client`,
+  or another `HttpTransport`), which then sees every request. Roadmap
+  L10a.
+- The business id in the rule and in `Business::parent_bsuid_account`
+  is ASCII digits: fail closed, since Meta documents no other shape and
+  every id its pages show is digits. Swappable only by a reviewed change
+  to the rule's line. Roadmap L10a.
+- An exact rule allows no query, fragment or user info: the one URL it
+  exists for has none. Swappable only by a reviewed change to
+  `PathRule::Exact`. Roadmap L10a.
+- `ParentBsuidAccount::parent_bsuid_account_id` is a `String`: core has
+  no id type for it. Swappable by a typed id in core, a change of the
+  field's type. Roadmap L10a.
+- `parent_bsuid_account_id` is required and `enrolled_business_portfolios`
+  defaults to empty: what Meta answers for a portfolio that is not
+  enrolled is not documented, so an answer without the id is a decode
+  error rather than a guess. Swappable by reading the same URL as JSON
+  (`client.request_url(Method::GET, url).send::<serde_json::Value>()`,
+  which the rule allows). Roadmap L10a.
+- The media host's rule is unchanged (any method, any path; pinned by
+  `the_media_rule_is_unchanged`): narrowing it to `GET` is a separate
+  change. No code.
 
 ## Feature modules
 
@@ -823,8 +870,9 @@ Logs carry sizes, digests and field names only — never payload values.
   which panics when both aws-lc-rs and ring are linked — pass your own
   connection with a provider installed at startup.
 - reqwest: errors never carry the request URL; redirects send no `Referer`
-  (it would carry the query to the redirect target); `HTTP(S)_PROXY` is
-  honoured.
+  (it would carry the query to the redirect target), and a request that
+  carries a credential header follows no redirect that would keep it (see
+  "Credentials never leave Meta"); `HTTP(S)_PROXY` is honoured.
 - Live tests are named `live_*`, read `META_WHATSAPP_RS_TEST_POSTGRES_URL` /
   `META_WHATSAPP_RS_TEST_REDIS_URL`, skip when unset, and **fail** when unset under
   `META_WHATSAPP_RS_REQUIRE_LIVE=1` (`just test-live` sets it). Every `KvStore`
