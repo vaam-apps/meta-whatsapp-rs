@@ -326,6 +326,17 @@ mod tests {
         assert!(!v.is_customer_service_window_closed());
         assert!(!ValidationError::customer_service_window_closed().is_thread_owned_elsewhere());
         assert!(!ValidationError::new("to", "x").is_thread_owned_elsewhere());
+        // The field exactly: a near miss is an input error.
+        for near in [
+            "thread",
+            "thread_owner_role",
+            "Thread_owner",
+            " thread_owner",
+        ] {
+            let v = ValidationError::new(near, "x");
+            assert!(!v.is_thread_owned_elsewhere(), "{near}");
+            assert_eq!(Error::from(v).kind(), ErrorKind::InvalidParameter, "{near}");
+        }
         // No Graph code maps to it yet (Meta documents none).
         for code in [100, 131047, 131026, 2494191] {
             assert_ne!(ErrorKind::from_code(code), ErrorKind::ThreadOwnedElsewhere);

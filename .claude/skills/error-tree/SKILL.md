@@ -57,7 +57,9 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
   yet: when Meta documents one, `from_code` maps it there). A kind with no
   Graph code goes in the service test's `local_only` list
   (`crates/meta-whatsapp-server/tests/errors.rs`) instead of
-  `REPRESENTATIVE`, and the service's `classify` gives it its code. A
+  `REPRESENTATIVE` (the test fails once `from_code` maps a code to a kind
+  still listed there: move it then), and the service's `classify` gives
+  it its code. A
   helper that recognizes the refusal looks through `Step`
   (`meta_whatsapp_rs::inbox::is_thread_owned_elsewhere`).
 - New leaf variants need a reason in `docs/architecture.md`. Prefer an

@@ -158,12 +158,32 @@ fn local_only() -> Vec<(ErrorKind, meta_whatsapp_rs::Error)> {
     )]
 }
 
+/// Every Graph code `ErrorKind::from_code` names is below this (the
+/// highest is `2593109` today); a code above it would escape the scan in
+/// [`a_local_only_kind_answers_its_code_and_status`].
+const GRAPH_CODES_BELOW: i64 = 10_000_000;
+
 /// A kind the library only raises locally answers its own code and status,
 /// not `invalid_request`: the inbox's ownership refusal is a state to
-/// change (`409`), like the window's. Decisive: the classify arm.
+/// change (`409`), like the window's. Decisive: the classify arm; and a
+/// Graph code mapped to a kind still listed here (its Graph path would go
+/// untested end to end).
 #[test]
 fn a_local_only_kind_answers_its_code_and_status() {
     let design = design();
+    assert!(
+        REPRESENTATIVE
+            .iter()
+            .all(|(k, c)| *k == ErrorKind::Unknown || *c < GRAPH_CODES_BELOW),
+        "raise GRAPH_CODES_BELOW"
+    );
+    let local: Vec<ErrorKind> = local_only().into_iter().map(|(k, _)| k).collect();
+    if let Some(code) = (0..GRAPH_CODES_BELOW).find(|c| local.contains(&ErrorKind::from_code(*c))) {
+        panic!(
+            "Graph code {code} maps to {:?}: move the kind from local_only to REPRESENTATIVE",
+            ErrorKind::from_code(code)
+        );
+    }
     for (kind, error) in local_only() {
         assert!(
             REPRESENTATIVE.iter().all(|(k, _)| *k != kind),
