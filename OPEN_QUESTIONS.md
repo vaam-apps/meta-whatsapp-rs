@@ -442,18 +442,11 @@ Found while writing the integrator guides and checking them against
     `ConversationStore`, a port change that is part of L5, and let the
     caller override the local check explicitly. Meta enforces the window
     either way; the local check only saves a request Meta would refuse.
-    Swappable by the override. Roadmap L5 (the port) and L7 (the
-    inbox).
-
-    **Implemented in roadmap L7** (the port in L5): `InboxSink` records
-    a `USER_INITIATED` call (`connect`, `call_created`, `terminate`), a
-    call status `ACCEPTED` and a picked-up `BUSINESS_INITIATED` call's
-    `terminate` as window events, and `Inbox::window` opens from the
-    latest of them and the last inbound message; the override is
-    `ReplyChecks::window(false)` (`Inbox::with_reply_checks`). A call
-    event without a `direction` is not recorded (the pages disagree on
-    the SDP type that would tell). The entry stays until nothing cites
-    it (see the header).
+    Swappable by the override (`ReplyChecks::window(false)`), and by
+    recording calls yourself (`RecordingSwitches::ALL.calls(false)`).
+    Roadmap L5 (the port) and L7 (the inbox), both landed; which call
+    webhooks count is in docs/guides/cms-inbox.md § 5. The entry stays
+    until nothing cites it (the header's rule).
 
 33. **Message ids are unique per store, not per business number.** The
     Postgres `messages.id` is the table's primary key on its own (and the
@@ -502,17 +495,23 @@ Found while writing the integrator guides and checking them against
     makes the two event types tenant-visible in M2d (design D25).
     Swappable by the override: ownership is advisory, Meta enforces it.
     Roadmap L5 (the port), L7 (the inbox) and M2d.
-
-    **Implemented in the library by roadmap L7**: standby inbound
-    messages are window events (never history, never unread) and set
-    another app as the owner; handovers set the owner under the
-    conversation their phone number leads to (the identity links, else a
-    synced contact's BSUID, else the phone number); `Inbox::thread_owner`
-    derives this app from a later message on `messages` and idle from 24
-    hours without the customer; `Inbox::record_release` records this
-    app's own `release`; `Inbox::send` refuses a service message locally
-    while another app owns the thread, and `ReplyChecks::thread_owner(false)`
-    is the override. The service's part stays M2d.
+    Amended 2026-09-27 (coordinator, owner's delegation), with L7's
+    review: after a handover to this app (a stored `control_passed`, or
+    `Inbox::record_thread_owner`) newer than the last inbound message
+    recorded for the conversation, the local window check treats the
+    window as unknown and lets Meta decide, until the next inbound
+    message or 24 hours after the handover, whichever comes first. An
+    app that receives handovers without standby copies never saw the
+    customer's messages to the previous owner
+    (`conversation-routing/conversation-context`), and a thread is passed
+    only while active (`conversation-routing/thread-control`, idle after
+    24 hours: `thread-lifecycle`); losing a reply the customer is waiting
+    for is worse than an occasional 131047 from Meta. Swappable by
+    `ReplyChecks::trust_handover(false)` (an app with standby copies) or
+    `ReplyChecks::window(false)`; the ownership refusal is its own
+    `ErrorKind::ThreadOwnedElsewhere`, each recording a switch
+    (`InboxSink::with_recording`) and the idle timeout a setting
+    (`Inbox::with_thread_idle_after`). Roadmap L7 (landed) and M2d.
 
 ## Service (meta-whatsapp-server)
 

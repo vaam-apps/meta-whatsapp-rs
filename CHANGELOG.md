@@ -179,7 +179,9 @@ stored data, the owner's).
   events shared as `Arc<WebhookEvent>` (L21b, breaking).
 - CMS inbox: #32, the calls that reopen the window recorded as window
   events (L5, L7); #44, standby messages as window events and thread
-  ownership tracked, each with an explicit override (L5, L7, M2d).
+  ownership tracked, each with an explicit override (L5, L7, M2d),
+  amended on 2026-09-27: after a handover to this app, the window check
+  lets Meta decide (`ReplyChecks::trust_handover`, L7).
 - Service: #43, media ids the service recorded as received exempted from
   the `phone_number_id` check (M2e).
 
@@ -201,29 +203,55 @@ stored data, the owner's).
     from standby copies; `Inbox::thread_owner` derives this app (a
     later message on `messages`) and idle (24 hours without the
     customer, `Inbox::THREAD_IDLE_AFTER`); `Inbox::record_release`
-    records this app's own `release`. `Inbox::send` refuses a service
-    message locally while another app owns the thread (a
-    `ValidationError` on field `inbox::THREAD_OWNER`,
-    `inbox::is_thread_owned_elsewhere`); templates and Direct Send
-    `utility` and `authentication` need no ownership. A standby copy's
+    records this app's own `release`, and `Inbox::record_thread_owner`
+    its own `pass` or `take` (no webhook reports either to it).
+    `Inbox::send` refuses a service message locally while another app
+    owns the thread (`ValidationError::thread_owned_elsewhere()`, kind
+    `ErrorKind::ThreadOwnedElsewhere`, below; the helper
+    `inbox::is_thread_owned_elsewhere` looks through `Error::Step`);
+    templates and Direct Send `utility` and `authentication` need no
+    ownership. A standby copy's
     record is dated 1 ms before the copy, so it never overrides a
     handover of its second, even when two replicas race; a customer's
     answer to a call permission request does not make this app the
     owner (`conversation-routing/calling-webhooks`: Meta sends it to the
     Incoming Call primary and the standby partners, and it "does not
     change thread ownership").
-  - `inbox::ReplyChecks` and `Inbox::with_reply_checks`: the caller's
-    explicit override of either local check (the window, the owner),
-    per inbox.
+  - `inbox::ReplyChecks` (`ReplyChecks::ALL`, `ReplyChecks::NONE`) and
+    `Inbox::with_reply_checks`: the caller's explicit override of each
+    local check (the window, its trust in a handover, the owner), per
+    inbox. The trust (`ReplyChecks::trust_handover`, on by default):
+    after a handover to this app newer than the customer's last
+    recorded message, the window check lets Meta decide, until that
+    message or 24 hours after the handover (an app without standby
+    copies never saw the customer's messages to the previous owner;
+    `OPEN_QUESTIONS.md` #44). `Inbox::check_reply` runs `reply`'s checks
+    without sending.
+  - Every recording is a switch, and the rules are public:
+    `InboxSink::with_recording(RecordingSwitches)` (calls, standby,
+    handovers, identity links; all on by default: a switch off means
+    you record that kind yourself), `inbox::call_window`,
+    `inbox::call_key`, `inbox::call_status_key`, `inbox::handover_key`
+    (with `inbox::MAX_LINK_STEPS`), and `Inbox::with_thread_idle_after`
+    for the idle timeout.
   - Identity links (`ConversationStore::link_identity`): a phone number
-    to the BSUID an inbound message carries with it, a previous BSUID to
-    the current one (`user_id_update`), a number change's old identity
-    to the new one (`system` messages); never an empty value, one with
-    U+0000, or a value to itself. `Inbox::identities`, and so an
-    erasure, now reach a customer's thread keyed by their phone number
-    from before BSUIDs.
+    to the BSUID an inbound message carries with it, a previous BSUID
+    and the update's `wa_id` to the current one (`user_id_update`), a
+    number change's old identity to the new one (`system` messages);
+    never an empty value, one with U+0000, or a value to itself, always
+    on the business number the event arrived on. `Inbox::identities`,
+    and so an erasure, now reach a customer's thread keyed by their
+    phone number from before BSUIDs.
+  - `ErrorKind::ThreadOwnedElsewhere` (`thread_owned_elsewhere`), with
+    `ValidationError::THREAD_OWNER`, `ValidationError::thread_owned_elsewhere`
+    and `ValidationError::is_thread_owned_elsewhere`: the inbox's
+    ownership refusal has a kind of its own, like the window's, though
+    no Graph code maps to it yet (Meta documents none). The service
+    answers it `409 thread_owned_elsewhere` (a new `ErrorCode` value in
+    `openapi/v1.json`, additive), and so does the `cms_inbox` example.
   - `just test-live` also runs the facade's live tests
-    (`crates/meta-whatsapp-rs/tests/inbox_events.rs` on Postgres).
+    (`crates/meta-whatsapp-rs/tests/inbox_events.rs` on Postgres),
+    filtered by `live_postgres_`.
 - **meta-whatsapp-bot**, a bot framework over Cloud API webhooks
   (roadmap B1), re-exported as `meta_whatsapp_rs::bot` behind the
   facade's new `bot` feature (off by default, in `full`). A `Bot` is an
@@ -763,10 +791,14 @@ stored data, the owner's).
 ### Changed
 
 - **The CMS inbox after roadmap L7**: after a customer's call,
-  `Inbox::reply` sends free text it refused before; under Conversation
-  Routing it refuses a service message while another app owns the thread
-  (turn the check off with `ReplyChecks` in the escalation partner's
-  inbox); `InboxSink` writes an identity link for every inbound message
+  `Inbox::reply` sends free text it refused before. **Behaviour change:
+  `Inbox::send` and `Inbox::reply` refuse a service message they sent
+  before** while another app owns the thread under Conversation Routing
+  (`ErrorKind::ThreadOwnedElsewhere`, nothing sent; turn the check off
+  with `ReplyChecks` in the escalation partner's inbox); a bot replying
+  through `Inbox::send` gets the same refusal. After a handover to this
+  app, the window check lets Meta decide
+  (`ReplyChecks::trust_handover`). `InboxSink` writes an identity link for every inbound message
   that carries both `from` and `from_user_id` (one more store write,
   none when the link is stored), and records `calls`, `standby`,
   `messaging_handovers` and `user_id_update` events it ignored before.
@@ -774,10 +806,9 @@ stored data, the owner's).
   window, as a message without a category (Meta drops it:
   `direct-send/send-utility-and-authentication-messages`); only
   `utility` and `authentication` skip the window check, and a category
-  the crate does not know is left to Meta by both checks. An app that
-  receives handovers without standby visibility turns the window check
-  off (`ReplyChecks`): it never saw the customer's messages to the
-  previous owner.
+  the crate does not know is left to Meta by both checks.
+  `Inbox::window_is_open` is the window alone; `Inbox::check_reply` is
+  what `reply` decides.
 
 - **Breaking — the `ConversationStore` port change of roadmap L5**: the
   port gains fourteen required methods and four provided ones, so a

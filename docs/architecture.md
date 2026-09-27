@@ -168,11 +168,18 @@ of the examples and the dev container (`WA_TENANTS`, `WA_OTP_NAMESPACE`,
   `SinkError::Delivery`, `Error::Other`.
 - Branch on `Error::kind()` → `ErrorKind` (classified from Graph error
   `code`, per Meta's guidance) and `Error::is_retryable()`. Never on message
-  text, HTTP status, or subcode. One local refusal has a Graph kind: the
-  inbox's closed-window refusal
+  text, HTTP status, or subcode. A `ValidationError` is `InvalidParameter`
+  (fix the input), except the inbox's two local refusals of a state that
+  must change first, each with a field constant, a constructor, a
+  predicate and a kind of its own: the closed window
   (`ValidationError::customer_service_window_closed()`) is
   `CustomerServiceWindowClosed`, like Meta's `131047`, so one condition has
-  one kind.
+  one kind; a thread another app owns under Conversation Routing
+  (`ValidationError::thread_owned_elsewhere()`) is `ThreadOwnedElsewhere`,
+  which no Graph code maps to yet (Meta documents none; `from_code` maps
+  one there when it does). `Error::kind` looks through `Step`, and so does
+  `meta_whatsapp_rs::inbox::is_thread_owned_elsewhere`. The service answers
+  both `409`.
 - Multi-step flows (Embedded Signup onboarding) wrap failures with
   `Error::in_step("stable_step_name")` so callers know how far they got.
 - **`Error::Credit(CreditError)`**, the one leaf added for a feature
@@ -816,7 +823,12 @@ and the thread's owner, and sends replies.
   (`calling/pricing`: the customer's call, answered or not, and the
   customer accepting the business's call) and the customer's messages
   seen in standby, which are never history nor unread
-  (`OPEN_QUESTIONS.md` #32, #44).
+  (`OPEN_QUESTIONS.md` #32, #44). After a handover to this app newer than
+  the customer's last recorded message, the window check lets Meta
+  decide until that message or 24 hours after the handover
+  (`ReplyChecks::trust_handover`): an app without standby copies never
+  saw the customer's messages to the previous owner.
+  `Inbox::check_reply` runs `reply`'s checks without sending.
 - Conversation Routing: `InboxSink` records ownership from the handovers
   (`control_passed`: this app; `control_taken`: another app) and from
   standby copies (another app); a handover names the customer by phone
@@ -826,19 +838,27 @@ and the thread's owner, and sends replies.
   `messages` means this app owns the thread (not a call permission
   reply, which Meta also sends to the Incoming Call primary and the
   standby partners), 24 hours without the customer mean it is idle;
-  `Inbox::record_release` records this app's own `release`, which no
-  webhook reports. `Inbox::send` refuses a
-  service message locally while another app owns the thread (field
-  `thread_owner`); templates and Direct Send `utility` and
+  `Inbox::record_release` and `Inbox::record_thread_owner` record this
+  app's own `release`, `pass` and `take`, which no webhook reports to it.
+  `Inbox::send` refuses a
+  service message locally while another app owns the thread
+  (`ValidationError::thread_owned_elsewhere()`, kind
+  `ThreadOwnedElsewhere`); templates and Direct Send `utility` and
   `authentication` need no ownership. Both local checks are advisory
-  (Meta enforces them) and `ReplyChecks` turns either off per inbox: the
-  escalation partner's, an app that receives handovers without standby
-  visibility (it never saw the customer's messages to the previous
-  owner, so its window can read closed while Meta's is open), and an app
+  (Meta enforces them) and `ReplyChecks` turns each off per inbox: the
+  escalation partner's ownership check, and the ownership check of an app
   sharing the number with a Meta Business Agent without routing.
+- Every rule is swappable: `InboxSink::with_recording` turns off the
+  recording of calls, standby copies, handovers or identity links (you
+  record that kind yourself, through the same port methods, reusing the
+  public rules `call_window`, `call_key`, `call_status_key`,
+  `handover_key`); `Inbox::with_thread_idle_after` sets the idle
+  timeout; `ReplyChecks` switches each local check (window, trusted
+  handover, owner).
 - Identity links: `InboxSink` links a phone number to the BSUID an
-  inbound message carries with it, a previous BSUID to the current one
-  (`user_id_update`), and a number change's old identity to the new one
+  inbound message carries with it, a previous BSUID and the update's
+  `wa_id` to the current one (`user_id_update`), and a number change's
+  old identity to the new one
   (a `system` message), so that `identities` and an erasure reach every
   key of a customer; never an empty value, one with U+0000, or a value
   to itself.
