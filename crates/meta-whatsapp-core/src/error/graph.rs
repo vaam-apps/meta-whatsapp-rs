@@ -169,6 +169,15 @@ pub enum ErrorKind {
     // ── Delivery to the user ──────────────────────────────────────────────
     /// `131047`: more than 24h since the user last messaged. Send a template.
     CustomerServiceWindowClosed,
+    /// No Graph code yet: another app owns the thread under Conversation
+    /// Routing, so a service message is refused (the inbox's local refusal,
+    /// [`ValidationError::thread_owned_elsewhere`](crate::error::ValidationError::thread_owned_elsewhere)).
+    /// Meta documents no code of
+    /// its own for it (`conversation-routing/thread-lifecycle`, "Sending
+    /// without ownership": "rejected with an API error"); when it does,
+    /// [`ErrorKind::from_code`] maps that code here. Send a template (it
+    /// needs no ownership), or wait for the thread to come back.
+    ThreadOwnedElsewhere,
     /// `131049`: not delivered "to maintain healthy ecosystem engagement"
     /// (per-user marketing limits). Do not retry for at least 24h.
     EcosystemEngagementLimit,
@@ -291,6 +300,7 @@ impl ErrorKind {
         Self::InvalidParameter,
         Self::UnsupportedMessageType,
         Self::CustomerServiceWindowClosed,
+        Self::ThreadOwnedElsewhere,
         Self::EcosystemEngagementLimit,
         Self::MarketingOptedOut,
         Self::MarketingNotAllowed,
@@ -342,6 +352,7 @@ impl ErrorKind {
             Self::InvalidParameter => "invalid_parameter",
             Self::UnsupportedMessageType => "unsupported_message_type",
             Self::CustomerServiceWindowClosed => "customer_service_window_closed",
+            Self::ThreadOwnedElsewhere => "thread_owned_elsewhere",
             Self::EcosystemEngagementLimit => "ecosystem_engagement_limit",
             Self::MarketingOptedOut => "marketing_opted_out",
             Self::MarketingNotAllowed => "marketing_not_allowed",
@@ -572,6 +583,7 @@ mod tests {
             ErrorKind::CustomerServiceWindowClosed,
             "customer_service_window_closed",
         ),
+        (ErrorKind::ThreadOwnedElsewhere, "thread_owned_elsewhere"),
         (
             ErrorKind::EcosystemEngagementLimit,
             "ecosystem_engagement_limit",

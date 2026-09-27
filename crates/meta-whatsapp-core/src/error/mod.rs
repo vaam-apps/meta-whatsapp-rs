@@ -176,6 +176,9 @@ impl Error {
             Self::Validation(v) if v.is_customer_service_window_closed() => {
                 ErrorKind::CustomerServiceWindowClosed
             }
+            // The inbox refuses a service message while another app owns
+            // the thread; a state to change, not an input to fix.
+            Self::Validation(v) if v.is_thread_owned_elsewhere() => ErrorKind::ThreadOwnedElsewhere,
             Self::Validation(_) => ErrorKind::InvalidParameter,
             Self::Credit(e) => e.kind(),
             Self::Step { source, .. } => source.kind(),
@@ -301,6 +304,32 @@ mod tests {
             Error::from(ValidationError::new("body", "x")).kind(),
             ErrorKind::InvalidParameter
         );
+    }
+
+    #[test]
+    fn a_local_ownership_refusal_has_a_kind_of_its_own() {
+        let local = Error::from(ValidationError::thread_owned_elsewhere());
+        assert_eq!(local.kind(), ErrorKind::ThreadOwnedElsewhere, "{local}");
+        assert_eq!(local.kind().as_str(), "thread_owned_elsewhere");
+        // Through a step too, and never retryable nor sent.
+        let step = Error::from(ValidationError::thread_owned_elsewhere()).in_step("reply");
+        assert_eq!(step.kind(), ErrorKind::ThreadOwnedElsewhere);
+        assert!(!local.is_retryable() && !local.may_have_been_sent());
+        // One definition: the field the constructor sets is the one kind()
+        // and the predicate recognise.
+        let Error::Validation(v) = &local else {
+            panic!("{local}")
+        };
+        assert_eq!(v.field, ValidationError::THREAD_OWNER);
+        assert_eq!(ValidationError::THREAD_OWNER, "thread_owner");
+        assert!(v.is_thread_owned_elsewhere());
+        assert!(!v.is_customer_service_window_closed());
+        assert!(!ValidationError::customer_service_window_closed().is_thread_owned_elsewhere());
+        assert!(!ValidationError::new("to", "x").is_thread_owned_elsewhere());
+        // No Graph code maps to it yet (Meta documents none).
+        for code in [100, 131047, 131026, 2494191] {
+            assert_ne!(ErrorKind::from_code(code), ErrorKind::ThreadOwnedElsewhere);
+        }
     }
 
     #[test]
