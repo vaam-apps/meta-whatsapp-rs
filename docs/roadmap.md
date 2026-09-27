@@ -217,8 +217,8 @@ and `store-postgres`.
     carries the first attach's token; closing it needs the vault record
     to name the binding it was stored under, a change of the stored
     format, which is the owner's (planned nowhere yet); a disconnection
-    racing a vault rotation
-    deletes nothing and answers `503` (retryable); the admin's unbind
+    racing a vault rotation deletes nothing and answers `503`
+    (retryable); the admin's unbind
     of a WABA without a usable token, and the admin's own `190` right
     after attaching, stay unconditioned (no capability was made from a
     binding); the memory stores read the system clock, not the injected
@@ -227,8 +227,10 @@ and `store-postgres`.
   (`meta-whatsapp-server-core` and both in-tree backends; one PR with
   both schema changes, on both backends, and an additive migration: a
   new migration file, never an edit to one on `main`). S2's security
-  review (M2) and sabotage review (the same-tenant refresh). Row 112
-  (the ports' contracts).
+  review (M2) and sabotage review (the same-tenant refresh). Rows 9 and
+  112: event routing (the service's side is partial until this lands,
+  as a previous holder's undated events reach a new holder after a
+  move), and the ports' contracts.
   - Record when a WABA was last unbound from a different tenant: a
     store field on both backends.
   - A setting `undated_after_move`: `OperatorOnly { window }`, the
@@ -239,6 +241,12 @@ and `store-postgres`.
   - A skew margin setting around `attached_at` for dated events,
     applied only when a previous tenant exists (the second half of S2's
     L3; S2 made an event of the binding's own second operator-only).
+  - The same-second rule, strict since S2 (an event of its binding's
+    own second is operator-only), relaxed to `<=` when the WABA has no
+    previous tenant: a first onboarding keeps the events of its first
+    second. It lands with the tombstone (the record of the last
+    unbinding from a different tenant), which is what tells the two
+    apart.
   - A bind generation carried in `BindingEpoch` (a new column,
     incremented on every attach, a same-tenant refresh included), so
     that a capability made before a refresh is told apart from one made
@@ -249,8 +257,10 @@ and `store-postgres`.
     `CurrentHolder` it reaches B; a WABA with no previous tenant still
     gets its history; removing the check fails the first case; the
     same for the security review's other undated cases (an error, an
-    undated group update); a `190` from a capability made before a
-    same-tenant refresh does not mark the numbers `reconnect_required`.
+    undated group update); an event of its binding's first second
+    reaches the tenant of a first onboarding, and no tenant after a
+    move; a `190` from a capability made before a same-tenant refresh
+    does not mark the numbers `reconnect_required`.
 - [ ] **S3. Conformance into core** (`meta-whatsapp-server-core`,
   `meta_whatsapp_server_core::conformance`, a feature, like the
   library's `store::conformance`, run over a `&dyn Backend`): the store

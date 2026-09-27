@@ -6,7 +6,8 @@ its code; the service's cells of rows 5, 6, 9, 33, 84, 91, 112 and 113
 again when its core was extracted (roadmap S1), against the core's
 code; rows 69, 91, 111 and 139 again with the `ConversationStore` port
 change (roadmap L5), against its code; rows 89 and 92 when paced
-broadcast (B2) landed, against its code. Every cell about us was checked against the code: a cell that
+broadcast (B2) landed, against its code; the service's cell of row 9
+again with S2's security review, against its code. Every cell about us was checked against the code: a cell that
 says a thing is done names the symbol that does it, and what the service
 (`meta-whatsapp-server`) does is read from its routes, not from its
 design. The plan to close the gaps is [roadmap.md](roadmap.md); the Meta
@@ -15,13 +16,13 @@ per-feature list is [coverage.md](coverage.md).
 
 ## Where we stand
 
-**39 of the 131 counted rows are done on both sides.** Parity is not
+**38 of the 131 counted rows are done on both sides.** Parity is not
 reached.
 
 | 131 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
 | Library | 91 | 24 | 15 | 1 |
-| Service | 39 | 24 | 67 | 1 |
+| Service | 38 | 25 | 67 | 1 |
 
 - The table has 155 rows. 24 of them are not counted: they work only
   over WhatsApp Web ("n/a — unofficial protocol"). The counted rows'
@@ -29,10 +30,10 @@ reached.
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
 - Each of the library's 39 partial or gap rows is cited by a
-  [roadmap](roadmap.md) item. Each of the service's 91 names, in its
+  [roadmap](roadmap.md) item. Each of the service's 92 names, in its
   status, the roadmap items that bring it; by family (a row can name
-  two): M2 8, M3 11, M4 2, M5 70, S 1 (the modular split), L 1 (L22a,
-  tooling), P 2 (payments).
+  two): M2 8, M3 11, M4 2, M5 70, S 2 (the modular split; S2b, undated
+  events after a move), L 1 (L22a, tooling), P 2 (payments).
 - The largest gaps: the service routes for the modules the design once
   left "on demand" (M5), the inbox, live events and onboarding over HTTP
   (M2, M3), and the rest of the bot framework (section G: its commands,
@@ -143,7 +144,7 @@ The owner's definition (2026-09-26):
 | 6 | Connection | Token expiry and refresh | — | — | `access-tokens` (business tokens need no re-authentication; no refresh call is documented) | expiry recorded (`client::embedded_signup::StoredBusinessToken::expires_at`); nothing refreshes it (OPEN_QUESTIONS #8, decided: re-onboard, surface the expiry early, L11e) | `409 reconnect_required` (`server_core::authz`, over HTTP `server::auth`); the expiry surfaced before it lapses in M3e | partial / partial (M3e) |
 | 7 | Connection | Webhook endpoint: the verify-token handshake, `X-Hub-Signature-256` | No | Yes (`client.webhook()`; an unsigned mode for development) | `webhooks/overview.md`, `webhooks/create-webhook-endpoint.md` | `webhooks::verify::verify_subscription`; `webhooks::SignatureVerifier` (several secrets, fail-closed, no unsigned mode); `webhooks::WebhookHandler::deliver`; the axum `webhooks::router` | `GET` and `POST /webhooks/meta` (`server::api::webhooks::verify`, `receive`): a missing or malformed signature header refused before the body is read, the signature checked against every app secret before parsing, 3 MiB | done / done |
 | 8 | Connection | Webhook deduplication | — | — | `webhooks/overview.md` (Meta retries a delivery) | `webhooks::dedup::DedupGuard` (a lease: pending, then done or released) | the library's lease, shared by every replica through the Postgres `KvStore` | done / done |
-| 9 | Accounts | Several numbers and accounts, routed by `phone_number_id` | Yes (one client per session) | Yes (one client per phone number id; a router reads the body) | `solution-providers/manage-accounts.md` | `client::Client::with_token`; `client::embedded_signup::TokenVault::get_by_phone_number`; every event carries its business number | tenants, keys and WABA bindings (`server::api::admin`); each webhook event routed to the tenant that owns its number or WABA (`server_core::events::route`, `owner`) | done / done |
+| 9 | Accounts | Several numbers and accounts, routed by `phone_number_id` | Yes (one client per session) | Yes (one client per phone number id; a router reads the body) | `solution-providers/manage-accounts.md` | `client::Client::with_token`; `client::embedded_signup::TokenVault::get_by_phone_number`; every event carries its business number | tenants, keys and WABA bindings (`server::api::admin`); each webhook event routed to the tenant that owns its number or WABA (`server_core::events::route`, `owner`), a dated event only when that binding began in a second before it; an undated event (an error, a history chunk, an undated group update) goes to whoever holds the binding when it arrives, so a previous holder's that Meta redelivers reach a new holder after a move (S2's security review, M2) | done / partial (S2b) |
 | 10 | Accounts | A live event stream for a UI | — | — | none (ours to build) | `webhooks::sse`; `adapters::sink::BroadcastSink` | polling: `GET /v1/events` (`server::api::events::list_events`); SSE and webhooks-out in M2 | done / partial (M2b, M2c) |
 
 ### B. Sending messages
