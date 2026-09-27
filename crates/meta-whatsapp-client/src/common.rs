@@ -132,9 +132,10 @@ string_enum! {
 /// ([`crate::phone_numbers::PhoneNumber::health_status`]),
 /// [`crate::waba::Waba::health_status`], or the `health_status` field of a
 /// template ([`crate::templates::TemplateInfo`]). Meta documents the field
-/// on those three nodes only; a business portfolio's status is read from
-/// its [`HealthEntityType::Business`] entry in any of them
-/// ([`Self::entity`]).
+/// on those three nodes only, and says the WABA, business and app entities
+/// are "always included" in each answer: so a business portfolio's status
+/// is its [`HealthEntityType::Business`] entry in any of them
+/// ([`Self::entity`]), and there is no business reader.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct HealthStatus {

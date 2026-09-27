@@ -542,7 +542,10 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   Business Account request and status, business compliance
   information, health status on numbers, WABAs and businesses, bot
   details.
-  - **Kind:** additive.
+  - **Kind:** additive, plus one breaking type change
+    (`templates::HealthStatus` became the shared
+    `client::common::HealthStatus`, its `can_send_message` typed; before
+    the first release, in the CHANGELOG).
   - **After:** nothing.
   - **Decisive:** exact JSON per field from
     `reference/whatsapp-business-phone-number/*`; dropping any one field

@@ -213,7 +213,7 @@ stored data, the owner's).
     `BusinessEntityType`, `GrievanceOfficer`, `CustomerCare`; the page's
     rules checked first: the name's length, `entity_type_custom` exactly
     with `OTHER`, `is_registered` only with `OTHER` or `PARTNERSHIP`, the
-    required contacts);
+    required contacts, the emails under 128 characters);
   - health status: `PhoneNumber::health_status` and
     `waba::Waba::health_status`, and `health_status` on `PhoneNumberInfo`
     and `WabaInfo` (with `official_business_account` on `PhoneNumberInfo`),

@@ -1,6 +1,6 @@
 # Erasing a customer from the inbox
 
-> **Verified against meta-whatsapp-rs 28f96ef018e733b0d04b9278b2653c26e34e18b8 (2026-09-26).** Source: the rustdoc of `ConversationStore::erase_all` and `ConversationStore::identities`, `docs/guides/cms-inbox.md` section 8 and `docs/guides/production.md` section 8.
+> **Verified against meta-whatsapp-rs 6120dd1fe5ba0dafcc60767c95c9b7eae3139493 (2026-09-27).** Source: the rustdoc of `ConversationStore::erase_all` and `ConversationStore::identities`, `docs/guides/cms-inbox.md` section 8 and `docs/guides/production.md` section 8.
 
 A customer is stored under several keys on one number: a history thread
 under their phone number, live messages under their BSUID, an earlier
@@ -20,7 +20,11 @@ BSUID after a number change. `erase` reaches one key; erase the person.
    trusts the number it is given.
 3. **Delete your own copies**: media you downloaded, exports, the
    service's outbox rows (roadmap M2f) and your dead letters (L21a).
-4. **Delete the customer from Meta's contact book** (roadmap L9).
+4. **Delete the customer from Meta's contact book**:
+   `PhoneNumber::delete_contact_book_entry(&bsuid)` for each of their
+   BSUIDs, on any number of the portfolio (the book is the portfolio's;
+   parent BSUIDs are refused). It cannot be undone, and the library never
+   calls it for you.
 5. **Journal the erasure**, outside the database you back up: the time
    and an HMAC (a key of your own) of `phone_number_id|contact` for each
    identity. After any restore, HMAC the restored keys and erase the
@@ -60,8 +64,8 @@ the same on every number.
   backups, statement logs (`log_parameter_max_length = 0` for the role).
 - The webhook dedup markers and OTP challenges (hashed, expiring), the
   service's outbox and idempotency answers, SSE clients, your copies,
-  logs, and Meta's side (the contact book, the WhatsApp Business app
-  under coexistence).
+  logs, and Meta's side (the contact book unless step 4 deletes the
+  entry, the WhatsApp Business app under coexistence).
 - Records created after the erasure: a new message, an echo, a history
   chunk or address book sync not delivered yet, a late revoke (its
   tombstone holds the BSUID). An erased tombstone frees its message id,
