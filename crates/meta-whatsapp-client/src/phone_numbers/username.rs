@@ -511,6 +511,34 @@ mod tests {
         assert_eq!(t.remaining(), 0);
     }
 
+    /// What the rustdoc says: a `DELETE`, replayed after a timeout, and
+    /// the replay's answer counts (here: nothing left to delete, an error).
+    #[tokio::test]
+    async fn delete_username_is_replayed_after_a_timeout() {
+        let t = ScriptedTransport::new();
+        t.push_error(|| meta_whatsapp_core::error::TransportError::Timeout);
+        t.push_json(200, json!({"success": false}));
+        let c = Client::builder()
+            .transport(t.clone())
+            .access_token("TOKEN")
+            .retry(RetryPolicy {
+                max_retries: 1,
+                base_delay: std::time::Duration::ZERO,
+                max_delay: std::time::Duration::ZERO,
+            })
+            .build()
+            .unwrap();
+        assert!(c.phone_number(ID).delete_username().await.is_err());
+        let reqs = t.requests();
+        assert_eq!(reqs.len(), 2);
+        assert!(
+            reqs.iter().all(
+                |r| r.method == Method::DELETE && r.path() == "/v25.0/106540352242922/username"
+            )
+        );
+        assert_eq!(t.remaining(), 0);
+    }
+
     #[tokio::test]
     async fn contact_book_deletion_is_a_delete_with_the_bsuid() {
         // business-scoped-user-ids, "Delete a contact book entry".
