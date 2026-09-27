@@ -1,6 +1,6 @@
 # Calls, standby and thread ownership in the inbox
 
-> **Verified against meta-whatsapp-rs 888dec677cf5a56db041e56986e6ef6ee2e52b0a (2026-09-27).** Source: the rustdoc of `meta_whatsapp_rs::inbox` (the module, `InboxSink`, `RecordingSwitches`, `Inbox::thread_owner`, `ReplyChecks`) and `docs/guides/cms-inbox.md` section 5.
+> **Verified against meta-whatsapp-rs f6504a4f72df91a43b446169aeb6f031abd60fa9 (2026-09-27).** Source: the rustdoc of `meta_whatsapp_rs::inbox` (the module, `InboxSink`, `RecordingSwitches`, `Inbox::thread_owner`, `ReplyChecks`) and `docs/guides/cms-inbox.md` section 5.
 
 What `InboxSink` records besides messages, and what `Inbox` does with it.
 
