@@ -32,7 +32,7 @@ crates/
   meta-whatsapp-adapters   port implementations: reqwest, memory/Postgres/Redis stores, sinks.
   meta-whatsapp-typst      Typst → PDF/PNG for document and image messages.
   meta-whatsapp-bot        bot framework over webhooks: commands, guards, cooldowns, middleware,
-                           compile-time plugins, Markdown → WhatsApp formatting.
+                           compile-time plugins, Markdown → WhatsApp formatting, paced broadcasts.
   meta-whatsapp-rs         facade: re-exports, prelude, `client(token)`, the CMS inbox,
                            feature flags, runnable examples. What integrators depend on.
   meta-whatsapp-server-core  the service's framework-free core: its domain, authorization,
@@ -180,6 +180,17 @@ of the examples and the dev container (`WA_TENANTS`, `WA_OTP_NAMESPACE`,
   one there when it does). `Error::kind` looks through `Step`, and so does
   `meta_whatsapp_rs::inbox::is_thread_owned_elsewhere`. The service answers
   both `409`.
+- Two questions about a failed send, two methods.
+  `Error::may_have_been_sent` says whether it may have reached Meta
+  (`false`: fix and resend; `true`: reconcile with the status webhooks
+  first). `Error::may_resend` is the one rule for resending it
+  *automatically*, with no person or reconciliation in between, and it
+  is conservative: only an error that proves Meta refused the request
+  before doing anything (a throttling code on any status, an HTTP 429,
+  `131057` on a 4xx). The client's `RetryPolicy` (for a request that is
+  not idempotent) and the bot's broadcast both follow it, and a policy of
+  theirs can only be stricter. A `131000` on a 400 is not resent
+  automatically, although `may_have_been_sent` is `false`.
 - Multi-step flows (Embedded Signup onboarding) wrap failures with
   `Error::in_step("stable_step_name")` so callers know how far they got.
 - **`Error::Credit(CreditError)`**, the one leaf added for a feature
@@ -1002,6 +1013,46 @@ for every event, after the ban and the match.
 - **Listeners** name what they get: received messages, one message
   `type`, an event kind (checked against `WebhookEvent::KINDS` at build),
   or everything.
+- **Paced broadcasts** (`broadcast`, `pacer`): a `Broadcast` sends one
+  message, or one per recipient, from one business number through an
+  `Outbound`, each send (retries included) after a slot of the number's
+  `Pacer`, up to a configurable number in flight; `run` returns a report
+  per recipient, and a `BroadcastHandle` gives progress and a cancel
+  (no send starts after it, and the slots waited for go back; sends in
+  flight finish). The pacer is a `RateLimiter` (default `TokenBucket`:
+  per number, in this process, evenly spaced at `Rate::DEFAULT`, 80 a
+  second, Meta's `throughput` default, with per-number rates settable
+  while running, a burst and a slow-down on throttling whose factor,
+  spacing and recovery are settings), a `SlowDownRule` (which errors slow
+  a number down, default `ThrottlingErrors`) and a `Timer` (a `Clock`
+  that can wait until a deadline: `SystemClock` on Tokio, `ManualClock`
+  in tests). A limiter reserves (takes a `SlotRequest`: number, now,
+  cost; returns a `Reservation` with the wait) rather than waits, and
+  can take an unused slot back, so a shared one, across replicas, is a
+  `RateLimiter` too; none ships (roadmap B2b), and each replica otherwise
+  has its own budget. Failed sends go to a `BroadcastPolicy` (default
+  `Backoff`, on `ErrorKind`: the pair limit defers one recipient on
+  Meta's `4^X` schedule, throughput retries, a number in maintenance
+  (`131057`) is retried every 20 s, the per-user marketing limit is
+  reported, number-wide kinds stop the run and so do a template's own
+  refusals when everyone gets the same message; every delay capped), but
+  a send is repeated only when `Error::may_resend` holds, whatever the
+  policy (enforced outside it; the client's rule too).
+  `BroadcastBuilder::client` turns the client's own replays off
+  (`Client::with_retry`), so every retry is paced. A person listed twice
+  is sent once (`BroadcastBuilder::dedupe`); each line can go to a
+  `ReportSink` as it settles instead of the report
+  (`BroadcastBuilder::report_to`), so memory does not grow with the
+  lines; the run keeps its own time, so a wall clock stepping back
+  neither pauses the pacer nor puts off a retry.
+  `BotBuilder::pacer` wraps a bot's outbound in a `PacedOutbound`, so its
+  replies, read receipts and typing indicators share the budget and slow
+  it down when throttled (a bot built on a client retries there, each
+  retry paced, instead of in the client); `Ctx::pacer` hands the pacer to
+  handlers; `PacedGroups` and `PacedGroup` wrap the client's group
+  operations the same way, and `Pacer::acquire` is the hook for any other
+  call. No new port and no persistence: a run lives in memory (durable
+  jobs are B3's typed store on `KvStore`).
 
 ## Typst (`meta-whatsapp-typst`)
 

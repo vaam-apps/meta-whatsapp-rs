@@ -39,11 +39,22 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
   `docs/design/server.md` section 5.2: add the code there too) is one,
   and its codes are a public contract (the OpenAPI document's
   `ErrorCode`, regenerate and commit it).
-- `is_retryable()` = could succeed later. **Safe to replay** is separate:
-  `ErrorKind::is_rejected_before_processing()` (throttling only). The client
-  never replays a non-idempotent request on a timeout.
+- `is_retryable()` = could succeed later. **Safe to resend automatically**
+  is separate, and there is one rule for it: `Error::may_resend()` —
+  a throttling kind (`ErrorKind::is_rejected_before_processing()`) on any
+  status, an HTTP 429, or `131057` (account in maintenance) on a 4xx;
+  it implies `!may_have_been_sent()`. The client's `RetryPolicy` (for a
+  request that is not idempotent) and the bot's broadcast both call it,
+  and a policy may only be stricter. Conservative on purpose: a `131000`
+  on a 400, a transient 4xx or a connect error is not resent, though
+  `may_have_been_sent()` is `false`. Widening it widens every automatic
+  resend at once: pin each case in
+  `may_resend_only_what_meta_provably_refused`. The client never replays
+  a non-idempotent request on a timeout.
 - Never retry `EcosystemEngagementLimit` (131049) or `SpamRateLimited`
-  (131048) automatically — Meta says it makes things worse.
+  (131048) automatically: for 131049 Meta says a resend within 24 hours
+  only gets another error; 131048 restricts the number, and Meta's advice
+  is to check its quality status.
 - `MarketingOptedOut` (131050): record the opt-out; never retry.
 - `CustomerServiceWindowClosed` (131047): send a template instead.
 - **A local refusal of a state Meta also refuses** stays a

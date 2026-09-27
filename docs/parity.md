@@ -5,7 +5,8 @@ Verified against `main` at b6fc893 (PR #20) on 2026-09-26; rows 17,
 its code; the service's cells of rows 5, 6, 9, 33, 84, 91, 112 and 113
 again when its core was extracted (roadmap S1), against the core's
 code; rows 69, 91, 111 and 139 again with the `ConversationStore` port
-change (roadmap L5), against its code; rows 119 and 139 again when the
+change (roadmap L5), against its code; rows 89 and 92 when paced
+broadcast (B2) landed, against its code; rows 119 and 139 again when the
 inbox began recording window events, thread ownership and identity links
 (roadmap L7), against its code. Every cell about us was checked against the code: a cell that
 says a thing is done names the symbol that does it, and what the service
@@ -21,7 +22,7 @@ reached.
 
 | 131 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
-| Library | 89 | 24 | 17 | 1 |
+| Library | 91 | 24 | 15 | 1 |
 | Service | 39 | 24 | 67 | 1 |
 
 - The table has 155 rows. 24 of them are not counted: they work only
@@ -29,7 +30,7 @@ reached.
   n/a column is a side that does not carry the capability at all: the
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
-- Each of the library's 41 partial or gap rows is cited by a
+- Each of the library's 39 partial or gap rows is cited by a
   [roadmap](roadmap.md) item. Each of the service's 91 names, in its
   status, the roadmap items that bring it; by family (a row can name
   two): M2 8, M3 11, M4 2, M5 70, S 1 (the modular split), L 1 (L22a,
@@ -37,9 +38,9 @@ reached.
 - The largest gaps: the service routes for the modules the design once
   left "on demand" (M5), the inbox, live events and onboarding over HTTP
   (M2, M3), and the rest of the bot framework (section G: its commands,
-  middleware, plugins, access lists and Markdown replies exist, B1;
-  subcommands and flags, rich replies beyond text, paced broadcast,
-  scheduling and auto-delete do not, B1b, B1c, B2–B4).
+  middleware, plugins, access lists and Markdown replies exist, B1, and
+  paced broadcast, B2; subcommands and flags, rich replies beyond text,
+  scheduling and auto-delete do not, B1b, B1c, B3, B4).
 
 ## What parity means
 
@@ -140,7 +141,7 @@ The owner's definition (2026-09-26):
 | 2 | Connection | Pairing-code login | Yes | No | none | — | — | n/a — unofficial protocol |
 | 3 | Connection | Saved session, logout, a budget of login attempts | Yes | No (the Cloud API is stateless HTTPS) | none | — | — | n/a — unofficial protocol |
 | 4 | Connection | Token authentication; checking the token and the number at start | No | Yes (checks the token and the phone number id when it connects) | `access-tokens`, `permissions.md` | `client::ClientBuilder::access_token`; token inspection `client::embedded_signup::EmbeddedSignup::debug_token`; `client::phone_numbers::PhoneNumber::get`. No single "check my credentials" call | incomplete configuration refuses the start (`server::config`); attaching a WABA checks it with Meta: `POST /v1/admin/tenants/{id}/wabas` (`server::api::admin::attach_waba`) | done / done |
-| 5 | Connection | Reconnect semantics on the Cloud API: back off when throttled, never replay a send that timed out | Yes (reconnects with growing delays) | Partial (waits after a rate limit) | `throughput.md` (error 130429), `support/error-codes.md` | `client::RetryPolicy` (jittered exponential backoff, `Retry-After` honoured, a send replayed only after a throttle); `core::ErrorKind::is_retryable` | `may_have_been_sent` on `502`/`504`; `Idempotency-Key` replays an answer, never a send (`server_core::idempotency`, over HTTP `server::idempotency`) | done / done |
+| 5 | Connection | Reconnect semantics on the Cloud API: back off when throttled, never replay a send that timed out | Yes (reconnects with growing delays) | Partial (waits after a rate limit) | `throughput.md` (error 130429), `support/error-codes.md` | `client::RetryPolicy` (jittered exponential backoff, `Retry-After` honoured, a send replayed only after a throttle or the account in maintenance, `core::Error::may_resend`); `core::ErrorKind::is_retryable` | `may_have_been_sent` on `502`/`504`; `Idempotency-Key` replays an answer, never a send (`server_core::idempotency`, over HTTP `server::idempotency`) | done / done |
 | 6 | Connection | Token expiry and refresh | — | — | `access-tokens` (business tokens need no re-authentication; no refresh call is documented) | expiry recorded (`client::embedded_signup::StoredBusinessToken::expires_at`); nothing refreshes it (OPEN_QUESTIONS #8, decided: re-onboard, surface the expiry early, L11e) | `409 reconnect_required` (`server_core::authz`, over HTTP `server::auth`); the expiry surfaced before it lapses in M3e | partial / partial (M3e) |
 | 7 | Connection | Webhook endpoint: the verify-token handshake, `X-Hub-Signature-256` | No | Yes (`client.webhook()`; an unsigned mode for development) | `webhooks/overview.md`, `webhooks/create-webhook-endpoint.md` | `webhooks::verify::verify_subscription`; `webhooks::SignatureVerifier` (several secrets, fail-closed, no unsigned mode); `webhooks::WebhookHandler::deliver`; the axum `webhooks::router` | `GET` and `POST /webhooks/meta` (`server::api::webhooks::verify`, `receive`): a missing or malformed signature header refused before the body is read, the signature checked against every app secret before parsing, 3 MiB | done / done |
 | 8 | Connection | Webhook deduplication | — | — | `webhooks/overview.md` (Meta retries a delivery) | `webhooks::dedup::DedupGuard` (a lease: pending, then done or released) | the library's lease, shared by every replica through the Postgres `KvStore` | done / done |
@@ -256,10 +257,10 @@ The owner's definition (2026-09-26):
 | 86 | Bots | Middleware: ordered, `next()`, short-circuit, wraps the handler | Yes | No | none (ours to build) | `Middleware` in `meta-whatsapp-bot`, run in registration order (`BotBuilder::middleware`, `Registrar::middleware`) with `Next::run`: one that does not call it stops the event, and what follows the call runs after the handler (`Logging` times it); built in: `Logging`, `MarkRead`. Unlike Zaileys', it runs for every event, after the ban and the command match and before the command's guards | gap (M5k) | done / gap (M5k) |
 | 87 | Bots | Plugins: setup and unload hooks; loaded from a folder with hot reload | Yes | No | none | compile-time plugins in `meta-whatsapp-bot`: `Plugin::setup` registers commands, middleware and listeners through a `Registrar`, `Plugin::on_unload` runs at `Bot::unload`, `Plugin::category` names the help section; added with `BotBuilder::plugin`. Loading from a folder and hot reload are not offered, by design (D28): dynamic loading of Rust code is neither idiomatic nor safe, so a plugin is a crate | gap (M5k) | done / gap (M5k) |
 | 88 | Bots | Sender allow and deny lists (owners, banned users) | Yes | Yes | none (ours; row 71 is Meta's block list) | in `meta-whatsapp-bot`: an `AccessPolicy` (the default `AccessList`: owners and bans by BSUID, `AccessList::owner`, `AccessList::ban`, or by phone number, `AccessList::owner_phone`, `AccessList::ban_phone`), set with `BotBuilder::access`; a banned sender's message stops before the command match and the middleware (`Refusal::Banned`), and owners pass `Command::owner_only` | gap (M5k) | done / gap (M5k) |
-| 89 | Bots | Broadcast with pacing (progress, retries) | Yes (5 a second by default) | No (throws) | limits to respect: `throughput.md` (80 messages a second per number by default), the pair limit (131056, `support/error-codes.md`), `templates/marketing-templates/per-user-limits.md`, `messaging-limits` | gap: `RetryPolicy` handles a throttle, nothing paces a batch (`meta-whatsapp-bot`, B2; design D29) | gap (M5k) | gap / gap (M5k) |
+| 89 | Bots | Broadcast with pacing (progress, retries) | Yes (5 a second by default) | No (throws) | limits to respect: `throughput.md` (80 messages a second per number by default), the pair limit (131056, `support/error-codes.md`), `templates/marketing-templates/per-user-limits.md`, `messaging-limits` | in `meta-whatsapp-bot`: `Broadcast` (one message, or one per recipient with `BroadcastBuilder::compose`), each send after a slot of the number's `Pacer`, a swappable `RateLimiter` (default `TokenBucket`: per number, in this process, evenly spaced at `Rate::DEFAULT`, 80 a second, other numbers at `Rate::HIGHER_THROUGHPUT` or any `Rate::per_second` with `TokenBucket::rate_for`; every one-second window of 10,000 sends checked under concurrency, a slow-down and its recovery); each person once by default (`BroadcastBuilder::dedupe`, `SendOutcome::Duplicate`); progress and cancel (`BroadcastHandle::progress`, `BroadcastHandle::cancel`, the slots waited for given back, `RateLimiter::release`); a report per recipient (`BroadcastReport`, `SendOutcome`, `RecipientReport::last_error`, `BroadcastEnd`), kept or streamed to a `ReportSink` as each settles (`BroadcastBuilder::report_to`); retries decided by a `BroadcastPolicy` on `ErrorKind` and the code (default `Backoff`: the pair limit defers only that recipient on Meta's 4^X schedule, throughput retries, a number in maintenance is retried every 20 s (`Backoff::MAINTENANCE_RETRY`), the per-user marketing limit is reported, number-wide kinds stop the run (`Backoff::STOPS`, the spam limit among them) and so do a template's own refusals when everyone gets the same message (`Backoff::CONTENT_STOPS`); every delay at most `Backoff::max_delay`), only when `Error::may_resend` holds (the client's rule too), and through the pacer only (`BroadcastBuilder::client` turns the client's replays off, `Client::with_retry`); throttling slows the number down (`SlowDownRule`, default `ThrottlingErrors`) and a number's rate changes while running (`TokenBucket::set_rate`). One budget per process unless a shared `RateLimiter` is plugged in (none ships: B2b); a run does not survive a restart (row 90, B3); Meta's daily messaging limit is not counted | gap (M5k) | done / gap (M5k) |
 | 90 | Bots | Scheduled messages: send at a time, cancel, survive restarts, retry | Yes | No (fails when due) | Meta's WABA campaign schedules, reference only (`reference/whatsapp-business-account/schedules-api.md`; its `audience_id` is explained nowhere in the mirror) | gap: durable jobs, a typed store on `KvStore` (`meta-whatsapp-bot`, B3; design D29); Meta's schedules API not wrapped (L10b) | gap (M5k) | gap / gap (M5k) |
 | 91 | Bots | Auto-delete stored messages (by age, a cap per chat) | Yes | No ("not yet" on the Cloud API) | none (local data) | partial: by age, `core::store::ConversationStore::purge_before` (one number or all) and `apply_retention` with a `core::store::Retention` set per store (`adapters::store::MemoryConversationStore::with_retention`, `PostgresConversationStore::with_retention`; design D10), and erasure of a person on one number, `core::store::ConversationStore::erase_all` over `core::store::ConversationStore::identities`, their group messages redacted or deleted (`core::store::ErasureMode`; L5); no cap per chat and no bot that deletes on its own (`meta-whatsapp-bot`, B4) | gap: the outbox purges after 7 days (`server_core::events::DEFAULT_OUTBOX_RETENTION`); the inbox keeps everything (retention per store: M2a; erasure of a customer: M2f; the bot's auto-delete over HTTP: M5k) | partial / gap (M2a, M2f, M5k) |
-| 92 | Bots | Throttling our own typing indicators and group operations | Yes | Yes, per the summary of its configuration page (doubtful for group operations, which Zaileys does not offer on the Cloud API; unverified) | none (ours) | gap (`meta-whatsapp-bot`, B2, with pacing) | gap (M5k) | gap / gap (M5k) |
+| 92 | Bots | Throttling our own typing indicators and group operations | Yes | Yes, per the summary of its configuration page (doubtful for group operations, which Zaileys does not offer on the Cloud API; unverified) | none (ours) | in `meta-whatsapp-bot`: `BotBuilder::pacer` puts the bot's outbound in a `PacedOutbound`, so every read receipt and typing indicator (`MarkRead`), reply and refusal waits for a slot of its number's `Pacer`, the budget its broadcasts share, and a throttled one slows the number down and is retried through the pacer (`PacedOutbound::retry`; `PacedOutbound` over a `ClientOutbound` does the same outside a bot, given a client with `RetryPolicy::NONE`); a handler reaches the pacer with `Ctx::pacer`; the client's group operations go through `PacedGroups` (`client.groups(number)`: create, list, pin, unpin) and `PacedGroup` (`client.group(id)`: info, settings, picture, delete, invite link, join requests, participants), each after a slot of the number; the paging streams are not wrapped (page by page instead). Meta documents no rate for group operations: pacing them in the number's budget is a choice | gap (M5k) | done / gap (M5k) |
 
 ### H. Templates, commerce, numbers
 
@@ -350,8 +351,8 @@ item, each naming its crate, what it comes after and its decisive test:
 - **The bot framework**, a new library crate `meta-whatsapp-bot`:
   commands, middleware, compile-time plugins and markdown replies (B1,
   done; rows 17, 85–88), subcommands and flags (B1b; row 85), rich
-  replies beyond text (B1c; row 17), then paced broadcast and durable
-  scheduling (B2, B3; rows 89, 90, 92; D29), then retention and
+  replies beyond text (B1c; row 17), paced broadcast (B2, done; rows
+  89, 92; D29), then durable scheduling (B3; row 90; D29), then retention and
   auto-delete after the `ConversationStore` port change (B4, after L5;
   row 91).
 - **Library gap batches** (L4–L25), by crate and topic: every library

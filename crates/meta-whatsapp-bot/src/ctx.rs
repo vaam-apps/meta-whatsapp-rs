@@ -19,6 +19,7 @@ use crate::command::{Args, CommandInfo, Invocation};
 use crate::help::{Catalog, HelpSection};
 use crate::markdown::MarkdownRenderer;
 use crate::outbound::Outbound;
+use crate::pacer::Pacer;
 use crate::parse::ParsedCommand;
 
 /// Who sent a message (or who an event is about).
@@ -148,6 +149,7 @@ pub struct Ctx {
     invocation: Option<Arc<Invocation>>,
     unknown: Option<Arc<ParsedCommand>>,
     outbound: Arc<dyn Outbound>,
+    pacer: Option<Pacer>,
     renderer: Arc<dyn MarkdownRenderer>,
     pub(crate) catalog: Arc<Catalog>,
     extensions: Extensions,
@@ -192,6 +194,7 @@ impl Ctx {
             invocation: None,
             unknown: None,
             outbound,
+            pacer: None,
             renderer,
             catalog: Arc::default(),
             extensions: Extensions::default(),
@@ -203,6 +206,15 @@ impl Ctx {
     #[must_use]
     pub fn with_invocation(mut self, invocation: Invocation) -> Self {
         self.invocation = Some(Arc::new(invocation));
+        self
+    }
+
+    /// This context, with the bot's `pacer` ([`Self::pacer`]): what the bot
+    /// sets when it has one (`BotBuilder::pacer`), for a handler under
+    /// test.
+    #[must_use]
+    pub fn with_pacer(mut self, pacer: Pacer) -> Self {
+        self.pacer = Some(pacer);
         self
     }
 
@@ -296,6 +308,16 @@ impl Ctx {
     /// The outbound this context sends through.
     pub fn outbound(&self) -> &Arc<dyn Outbound> {
         &self.outbound
+    }
+
+    /// The bot's pacer, when it has one (`BotBuilder::pacer`): to take a
+    /// slot of the number before a call the bot does not pace itself
+    /// (`Pacer::acquire`), or to wrap the client's group operations
+    /// (`PacedGroups::new(client.groups(number), pacer.clone())`). The
+    /// replies through [`Self::reply`] and [`Self::send`] are paced
+    /// already.
+    pub fn pacer(&self) -> Option<&Pacer> {
+        self.pacer.as_ref()
     }
 
     /// The Markdown renderer [`Self::reply_markdown`] uses.

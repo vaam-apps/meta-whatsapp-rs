@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
-use meta_whatsapp_client::Client;
 use meta_whatsapp_client::phone_numbers::{BotCommand, ConversationalAutomationConfig};
+use meta_whatsapp_client::{Client, RetryPolicy};
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::clock::Clock;
 use meta_whatsapp_core::error::{ConfigError, SinkError, ValidationError};
@@ -29,6 +29,7 @@ use crate::help::{Catalog, CategoryHelp, HelpFormatter, HelpSection};
 use crate::markdown::{MarkdownRenderer, Renderer, TEXT_MAX_CHARS, split};
 use crate::middleware::{Middleware, Next};
 use crate::outbound::{ClientOutbound, Outbound};
+use crate::pacer::{PacedOutbound, Pacer};
 use crate::parse::{CommandParser, ParsedCommand, PrefixParser};
 use crate::plugin::{DEFAULT_CATEGORY, Listen, Plugin, Registered, Registrar};
 
@@ -255,6 +256,7 @@ struct Inner {
     middleware: Vec<Arc<dyn Middleware>>,
     router: Router,
     outbound: Arc<dyn Outbound>,
+    pacer: Option<Pacer>,
     renderer: Arc<dyn MarkdownRenderer>,
     errors: Arc<dyn ErrorHandler>,
     help: Arc<dyn HelpFormatter>,
@@ -318,8 +320,11 @@ impl Bot {
         if self.is_unloaded() {
             return Err(SinkError::Closed.into());
         }
-        let ctx = Ctx::new(event, inner.outbound.clone(), inner.renderer.clone())
+        let mut ctx = Ctx::new(event, inner.outbound.clone(), inner.renderer.clone())
             .with_catalog(Arc::clone(&inner.router.catalog));
+        if let Some(pacer) = &inner.pacer {
+            ctx = ctx.with_pacer(pacer.clone());
+        }
         match inner.router.refuse_banned(&ctx).await {
             Ok(true) => return Ok(()),
             Ok(false) => {}
@@ -483,7 +488,8 @@ enum Step {
 /// the rest has a default, each behind the trait named on its setter.
 #[must_use]
 pub struct BotBuilder {
-    outbound: Option<Arc<dyn Outbound>>,
+    outbound: Option<Sender>,
+    pacer: Option<Pacer>,
     parser: Arc<dyn CommandParser>,
     access: Arc<dyn AccessPolicy>,
     cooldowns: Option<Arc<dyn Cooldowns>>,
@@ -494,6 +500,13 @@ pub struct BotBuilder {
     unknown: Option<Arc<dyn CommandHandler>>,
     captions: bool,
     steps: Vec<Step>,
+}
+
+/// What the bot sends through: a client (whose retries `BotBuilder::pacer`
+/// moves under the pacer), or an outbound as given.
+enum Sender {
+    Client(Client),
+    Outbound(Arc<dyn Outbound>),
 }
 
 impl fmt::Debug for BotBuilder {
@@ -518,6 +531,7 @@ impl BotBuilder {
     pub fn new() -> Self {
         Self {
             outbound: None,
+            pacer: None,
             parser: Arc::new(PrefixParser::default()),
             access: Arc::new(AccessList::new()),
             cooldowns: None,
@@ -531,21 +545,42 @@ impl BotBuilder {
         }
     }
 
-    /// Send through `outbound` ([`Outbound`]).
+    /// Send through `outbound` ([`Outbound`]). Under [`Self::pacer`], it
+    /// must not retry inside a call (see [`PacedOutbound`]).
     pub fn outbound(mut self, outbound: impl Outbound) -> Self {
-        self.outbound = Some(Arc::new(outbound));
+        self.outbound = Some(Sender::Outbound(Arc::new(outbound)));
         self
     }
 
     /// Send through an outbound shared with other bots or code.
     pub fn shared_outbound(mut self, outbound: Arc<dyn Outbound>) -> Self {
-        self.outbound = Some(outbound);
+        self.outbound = Some(Sender::Outbound(outbound));
         self
     }
 
-    /// Send with `client` ([`ClientOutbound`]).
-    pub fn client(self, client: Client) -> Self {
-        self.outbound(ClientOutbound::new(client))
+    /// Send with `client` ([`ClientOutbound`]). Under [`Self::pacer`], the
+    /// client's retries move under the pacer: the client gets
+    /// `RetryPolicy::NONE` and the [`PacedOutbound`] its policy, so each
+    /// retry waits for a slot of its own.
+    pub fn client(mut self, client: Client) -> Self {
+        self.outbound = Some(Sender::Client(client));
+        self
+    }
+
+    /// Pace everything the bot sends through `pacer`: its outbound is put
+    /// in a [`PacedOutbound`] at `build`, so each reply, refusal, read
+    /// receipt and typing indicator (`MarkRead`) first waits for a slot of
+    /// its business number, in the budget its broadcasts share (give them
+    /// the same `Pacer`). Off by default: a reply then waits only for
+    /// the client. A busy number delays replies by its queue (a
+    /// broadcast holds at most its concurrency in slots ahead). A reply
+    /// Meta refuses for going too fast slows the number down, and a bot
+    /// built with [`Self::client`] retries through the pacer (the client's
+    /// own retries would not wait for a slot). Handlers reach the pacer
+    /// with `Ctx::pacer`.
+    pub fn pacer(mut self, pacer: Pacer) -> Self {
+        self.pacer = Some(pacer);
+        self
     }
 
     /// Read commands with `parser` ([`CommandParser`]).
@@ -684,9 +719,23 @@ impl BotBuilder {
     /// plugins of one name, or no outbound is a `ConfigError`; a failed
     /// `setup` is its error in the step `"plugin_setup"`.
     pub async fn build(self) -> Result<Bot> {
-        let outbound = self
+        let sender = self
             .outbound
             .ok_or_else(|| ConfigError::new("a bot needs an outbound (`BotBuilder::client`)"))?;
+        let outbound: Arc<dyn Outbound> = match (sender, &self.pacer) {
+            (Sender::Client(client), Some(pacer)) => {
+                // The client's replays of a throttled reply would skip the
+                // pacer: they become the paced outbound's, one slot each.
+                let retry = client.retry_policy();
+                let unretried = ClientOutbound::new(client.with_retry(RetryPolicy::NONE));
+                Arc::new(PacedOutbound::new(unretried, pacer.clone()).retry(retry))
+            }
+            (Sender::Client(client), None) => Arc::new(ClientOutbound::new(client)),
+            (Sender::Outbound(outbound), Some(pacer)) => {
+                Arc::new(PacedOutbound::shared(outbound, pacer.clone()))
+            }
+            (Sender::Outbound(outbound), None) => outbound,
+        };
         let default_category = self.default_category;
         let mut registrar = Registrar::new(&default_category, None, false);
         let mut plugins: Vec<(PluginInfo, Arc<dyn Plugin>)> = Vec::new();
@@ -758,6 +807,7 @@ impl BotBuilder {
                 middleware: registrar.middleware,
                 router,
                 outbound,
+                pacer: self.pacer,
                 renderer: self.renderer,
                 errors: self.errors,
                 help: help.unwrap_or_else(|| Arc::new(CategoryHelp)),

@@ -152,8 +152,14 @@ client.marketing(phone_number_id).send(&to, &offer, &MarketingOptions::new()).aw
 - Order updates are utility templates on the Cloud API; add
   `.callback_data(format!("order:{id}"))` to find them again in status
   webhooks. Documents (invoices) are in [documents.md](documents.md).
-- Pace campaigns with your own queue: the library replays throttled sends
-  only within its retry budget, and never replays timeouts.
+- Send a campaign with the bot crate's paced broadcast (`Broadcast`,
+  feature `bot`; [bots.md](bots.md#9-paced-broadcasts)): it paces each
+  number under Meta's throughput, sends each person once, stops on a
+  refusal that holds for everyone (a paused template, when everyone gets
+  the same message: `BroadcastBuilder::content`), and resends only what
+  Meta provably refused (`Error::may_resend`). A client alone replays
+  what Meta refused only within its retry budget, and never replays
+  timeouts.
 
 ## 5. Opt-outs (131050) and per-user limits (131049)
 
@@ -230,6 +236,8 @@ client.commerce(phone_number_id).set_cart_enabled(true).await?;
 
 ## Not handled
 
-Consent registry, campaign scheduling and pacing, audience segmentation,
-catalog inventory management, conversion tracking through Meta's
-Conversions API, and payments ([coverage.md](../coverage.md)).
+Consent registry, campaign scheduling (pacing is the bot crate's paced
+broadcast, [bots.md](bots.md#9-paced-broadcasts); scheduled and
+restart-proof campaigns are [roadmap](../roadmap.md) B3), audience
+segmentation, catalog inventory management, conversion tracking through
+Meta's Conversions API, and payments ([coverage.md](../coverage.md)).

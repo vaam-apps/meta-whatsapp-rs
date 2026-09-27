@@ -189,9 +189,10 @@ impl Error {
     /// Whether repeating the *same* request later may succeed.
     ///
     /// This says nothing about whether it is *safe* to repeat: a transport
-    /// error on a send may mean the message went out. The client's retry
-    /// policy only replays non-idempotent requests on errors that prove the
-    /// request was not processed (throttling), see `meta_whatsapp_client::RetryPolicy`.
+    /// error on a send may mean the message went out. A send is repeated
+    /// automatically only when [`Error::may_resend`] holds (the client's
+    /// `RetryPolicy` for a request that is not idempotent, and the bot's
+    /// broadcast).
     pub fn is_retryable(&self) -> bool {
         match self {
             Self::Api(e) => e.is_retryable(),
@@ -255,6 +256,40 @@ impl Error {
             | Self::Sink(_)
             | Self::Webhook(_) => false,
         }
+    }
+
+    /// Whether a failed **send** may be sent again *automatically*,
+    /// without a person or a reconciliation deciding: the one rule the
+    /// client's retries of a request that is not idempotent and the bot's
+    /// broadcast follow. A retry policy can be stricter (refuse a resend
+    /// this allows); none may be looser.
+    ///
+    /// Conservative on purpose, since a duplicate message is worse than a
+    /// missing one: `true` only for an error that proves Meta refused the
+    /// request before doing anything, and is worth trying again:
+    ///
+    /// - a Graph throttling error ([`ErrorKind::is_rejected_before_processing`]:
+    ///   `130429` and the other `RateLimited` codes, the pair limit
+    ///   `131056`), on any status;
+    /// - an HTTP 429 without a Graph error body;
+    /// - `131057`, the account in maintenance, on a 4xx (or without a
+    ///   status): Meta's throughput upgrade makes the number unusable for
+    ///   up to a minute and every request gets it meanwhile (`throughput`).
+    ///
+    /// Everything else is `false`, even where
+    /// [`Self::may_have_been_sent`] is `false` too: a `131000` ("unknown
+    /// error") on a 400, a Graph error Meta marks `is_transient`, a
+    /// connection that never opened, an error wrapped in a
+    /// [`Error::Step`] (its earlier steps took effect). Those can be fixed
+    /// and sent again by code that checked first (a job queue that
+    /// reconciled with the status webhooks), never replayed blindly.
+    pub fn may_resend(&self) -> bool {
+        let refused = match self {
+            Self::Api(e) => e.kind().is_rejected_before_processing() || e.is_maintenance(),
+            Self::Http { status: 429, .. } => true,
+            _ => false,
+        };
+        refused && self.is_retryable() && !self.may_have_been_sent()
     }
 }
 
@@ -414,6 +449,84 @@ mod tests {
             (WebhookError::SignatureMismatch.into(), false),
         ] {
             assert_eq!(err.may_have_been_sent(), sent, "{err}");
+        }
+    }
+
+    /// The one automatic resend rule: throttling, an HTTP 429 and the
+    /// account in maintenance (on a 4xx) only. Every row pins an arm, and
+    /// every error it allows provably went nowhere.
+    #[test]
+    fn may_resend_only_what_meta_provably_refused() {
+        let api = |code: i64, status: Option<u16>| {
+            let mut g = GraphApiError::new(code, "x");
+            g.http_status = status;
+            Error::from(g)
+        };
+        let http = |status| Error::Http {
+            status,
+            body_snippet: String::new(),
+        };
+        let transient = {
+            let mut g = GraphApiError::new(100, "x");
+            g.http_status = Some(400);
+            g.is_transient = Some(true);
+            Error::from(g)
+        };
+        let decode = Error::decode("send", serde_json::from_str::<u8>("x").unwrap_err(), b"x");
+        let rows: Vec<(Error, bool)> = vec![
+            // Throttling, on any status.
+            (api(130_429, Some(400)), true),
+            (api(130_429, Some(503)), true),
+            (api(130_429, None), true),
+            (api(80_007, Some(400)), true),
+            (api(4, Some(400)), true),
+            (api(131_056, Some(400)), true),
+            (api(131_056, Some(500)), true),
+            (http(429), true),
+            // The account in maintenance: only when refused (4xx or no
+            // status).
+            (api(131_057, Some(400)), true),
+            (api(131_057, None), true),
+            (api(131_057, Some(503)), false),
+            // Retryable, and not sent by `may_have_been_sent`'s reading,
+            // yet never replayed blindly.
+            (api(131_000, Some(400)), false),
+            (api(131_000, None), false),
+            (api(131_016, Some(400)), false),
+            (transient, false),
+            (
+                Error::Transport(TransportError::Connect(anyhow::anyhow!("refused"))),
+                false,
+            ),
+            (api(130_429, Some(400)).in_step("send"), false),
+            // May have been sent.
+            (api(131_000, Some(500)), false),
+            (http(503), false),
+            (Error::Transport(TransportError::Timeout), false),
+            (
+                Error::Transport(TransportError::Backend(anyhow::anyhow!("reset"))),
+                false,
+            ),
+            (decode, false),
+            (Error::Other(anyhow::anyhow!("?")), false),
+            // Not retryable.
+            (api(131_049, Some(400)), false),
+            (api(131_048, Some(400)), false),
+            (api(131_050, Some(400)), false),
+            (api(190, Some(401)), false),
+            (http(400), false),
+            (ValidationError::new("to", "bad").into(), false),
+            (ConfigError::new("no transport").into(), false),
+            (
+                StorageError::Backend(anyhow::anyhow!("db down")).into(),
+                false,
+            ),
+        ];
+        for (err, resend) in &rows {
+            assert_eq!(err.may_resend(), *resend, "{err}");
+            if *resend {
+                assert!(err.is_retryable() && !err.may_have_been_sent(), "{err}");
+            }
         }
     }
 

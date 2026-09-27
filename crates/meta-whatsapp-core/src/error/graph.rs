@@ -117,6 +117,20 @@ impl GraphApiError {
     pub fn is_retryable(&self) -> bool {
         self.is_transient == Some(true) || self.kind().is_retryable()
     }
+
+    /// `131057`: "Business Account is in maintenance mode", what every
+    /// request of a number gets while Meta upgrades its throughput, for up
+    /// to a minute (`throughput`). Its one home: [`Self::is_maintenance`],
+    /// [`Error::may_resend`](super::Error::may_resend) and the bot's
+    /// pacing all read it from here.
+    pub const MAINTENANCE_MODE: i64 = 131_057;
+
+    /// Whether this is [`Self::MAINTENANCE_MODE`], the number in
+    /// maintenance.
+    #[must_use]
+    pub fn is_maintenance(&self) -> bool {
+        self.code == Self::MAINTENANCE_MODE
+    }
 }
 
 /// What a Graph error code means for the caller.
@@ -449,9 +463,11 @@ impl ErrorKind {
 
     /// Whether an automatic retry (with backoff) is reasonable.
     ///
-    /// Deliberately `false` for [`Self::EcosystemEngagementLimit`] and
-    /// [`Self::SpamRateLimited`]: Meta documents that retrying those makes
-    /// things worse.
+    /// Deliberately `false` for [`Self::EcosystemEngagementLimit`] (Meta:
+    /// resending within 24 hours only gets another error) and
+    /// [`Self::SpamRateLimited`] (a restriction on the number that time
+    /// alone does not lift: Meta's guidance is to check its quality
+    /// status in WhatsApp Manager).
     pub fn is_retryable(self) -> bool {
         matches!(
             self,
@@ -464,6 +480,7 @@ impl ErrorKind {
 
     /// Whether the error proves the request was rejected *before* any side
     /// effect, so replaying even a non-idempotent send cannot duplicate it.
+    /// The automatic resend rule built on it is `Error::may_resend`.
     pub fn is_rejected_before_processing(self) -> bool {
         matches!(self, Self::RateLimited | Self::PairRateLimited)
     }
@@ -473,6 +490,18 @@ impl ErrorKind {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn only_131057_is_maintenance() {
+        assert_eq!(GraphApiError::MAINTENANCE_MODE, 131_057);
+        assert!(
+            GraphApiError::new(131_057, "(#131057) Business Account is in maintenance mode")
+                .is_maintenance()
+        );
+        for code in [131_056, 131_058, 130_429, 131_000] {
+            assert!(!GraphApiError::new(code, "").is_maintenance(), "{code}");
+        }
+    }
 
     #[test]
     fn parses_documented_example() {
