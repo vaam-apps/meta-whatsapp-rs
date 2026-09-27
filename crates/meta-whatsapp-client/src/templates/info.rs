@@ -154,13 +154,11 @@ pub struct QualityScore {
     pub reasons: Option<Vec<String>>,
 }
 
-/// `health_status`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HealthStatus {
-    /// Whether messages can be sent (a string in the reference schema).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub can_send_message: Option<String>,
-}
+/// `health_status` of a template: the same types phone numbers and WABAs
+/// use (see [`crate::common`]). The reference schema types
+/// `can_send_message` as a plain string; `support/health-status` lists its
+/// values and the entities, errors and additional info this type carries.
+pub use crate::common::{HealthEntity, HealthEntityType, HealthError, HealthState, HealthStatus};
 
 /// Response of a template creation (`CreateTemplateResponse`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

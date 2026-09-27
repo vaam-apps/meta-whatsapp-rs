@@ -45,7 +45,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | --- | --- |
 | 0 | this plan (parity, categories, roadmap, decisions) |
 | 1 | S1 (server core), B1 (bot framework), U4 (upstream issues) |
-| 2 | S2, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L25, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
+| 2 | S2, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L26, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
 | 3 | S5a–S5e, S6, S7, S9 |
 | 4 | S10 (waits on the owner's answer to D20 (a)), S11, S12; M2a–M2f |
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3f; B2–B4 |
@@ -598,18 +598,33 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** every adapter passes both conformance suites; a second
     `append` of one id on another number returns `false` on each, as the
     suite says today; the synced contacts are read back from the store.
-- [ ] **L9. Phone numbers** (`meta-whatsapp-client`,
+- [x] **L9. Phone numbers** (`meta-whatsapp-client`,
   `client::phone_numbers`; rows 66, 129–133, 151): the business
   username calls, deleting a contact book entry, search visibility,
   security notifications and number-change notices, the Official
   Business Account request and status, business compliance
   information, health status on numbers, WABAs and businesses, bot
   details.
-  - **Kind:** additive.
+  - **Kind:** additive, plus one breaking type change
+    (`templates::HealthStatus` became the shared
+    `client::common::HealthStatus`, its `can_send_message` typed; before
+    the first release, in the CHANGELOG).
   - **After:** nothing.
   - **Decisive:** exact JSON per field from
     `reference/whatsapp-business-phone-number/*`; dropping any one field
     from its body fails its test.
+  - **Landed:** rows 66, 129–133 and 151 done in the library; the
+    service's side stays with M5c3. One `client::common::HealthStatus`
+    serves numbers, WABAs and templates (`templates::HealthStatus` is
+    that type now, its `can_send_message` typed); Meta documents no
+    `health_status` on the business node, so a business's status is the
+    `BUSINESS` entity of the others. The contact book deletion is an
+    explicit call nothing else in the library makes. Bot details take a
+    new `core::ids::WabaBotId`. Not offered, for want of a documented
+    field: withdrawing an Official Business Account application. The
+    username errors `147001`–`147005` are not classified in `ErrorKind`
+    yet. The number's settings it leaves (payload encryption,
+    `connection_status`, `webhook_url`) are L26.
 - [ ] **L10a. The parent BSUID accounts API, and the credential host
   allow list** (`meta-whatsapp-client`, `client::GraphRequest` and
   `client::waba`; row 152): the API is served from `api.facebook.com`,
@@ -868,6 +883,24 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** the pre-fill test's expected JSON is the helper's
     output, recorded with its date; a serializer that departs from it
     fails the test.
+- [ ] **L26. Number settings left** (`meta-whatsapp-client`,
+  `client::phone_numbers`; row 156, category 20, coverage row 10): what L9 left
+  of the number's settings. The payload-encryption settings of
+  `/{PHONE_NUMBER_ID}/settings` (`payload_encryption`: `status` and
+  `client_encryption_key` to set; `client_encryption_key_fingerprint`
+  and `cloud_encryption_key` read back,
+  `reference/whatsapp-business-phone-number/settings-api`), and the
+  number's own `POST` fields `connection_status` and `webhook_url`
+  (`whatsapp-business-account-phone-number-api`). The mirror documents
+  them by schema only, without an example: the bodies follow the
+  schemas, and the module docs name each gap. The encryption key goes
+  through the security review (`wa-security-reviewer`).
+  - **Kind:** additive.
+  - **After:** L9.
+  - **Decisive:** exact JSON per field from the schemas; dropping any one
+    field from its body fails its test; reading the settings parses a
+    `payload_encryption` answer carrying every field of the response
+    schema.
 
 ## 4. Service milestones
 
@@ -1028,8 +1061,8 @@ or WABA fails the family's own cross-tenant test).
   picture (through a resumable upload handle), the display name change.
   - **After:** M5c1.
   - **Decisive:** M5.1, M5.2.
-- [ ] **M5c3. Number settings** (rows 66, 109, 128, 129–133, 151): the
-  settings, the username, the messaging limit tier on
+- [ ] **M5c3. Number settings** (rows 66, 109, 128, 129–133, 151, 156):
+  the settings (payload encryption among them, after L26), the username, the messaging limit tier on
   `GET /v1/numbers/{pn}`, the Official Business Account, compliance
   information, health status, search visibility, notifications, the
   contact book, conversational components.

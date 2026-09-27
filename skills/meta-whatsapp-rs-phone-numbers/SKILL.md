@@ -1,11 +1,11 @@
 ---
 name: meta-whatsapp-rs-phone-numbers
-description: "Managing WhatsApp business phone numbers and their WABA with meta-whatsapp-rs - registering a number for Cloud API with its two-step verification PIN (TwoStepPin, the 10-per-72-hours limit), changing the PIN and the display name, the business profile (about, email, websites), conversational components (ice breakers, commands), subscribing the app to a WABA's webhooks and per-number callback overrides, number health, and the coexistence data sync. Load when registering or configuring a number, editing the WhatsApp business profile, checking a number's quality, or making sure webhooks arrive for a WABA."
+description: "Managing WhatsApp business phone numbers and their WABA with meta-whatsapp-rs - registering a number for Cloud API with its two-step verification PIN (TwoStepPin, the 10-per-72-hours limit), changing the PIN and the display name, the business profile (about, email, websites), conversational components (ice breakers, commands), subscribing the app to a WABA's webhooks and per-number callback overrides, number health (quality, health status), the coexistence data sync, the business username, deleting a contact book entry, the Official Business Account (blue check) and compliance information. Load when registering or configuring a number, editing the WhatsApp business profile, checking a number's quality or health, setting a business username, or making sure webhooks arrive for a WABA."
 ---
 
 # meta-whatsapp-rs-phone-numbers
 
-> **Verified against meta-whatsapp-rs 34beecb2720bac099d769ba1b5e91072d2d5eb36 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 8a157bb10a1677660c84555537cf35246da9562e (2026-09-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/numbers.rs](examples/numbers.rs), compiled and
 tested by meta-whatsapp-rs's own gate.
@@ -99,6 +99,36 @@ number
 number.sync_smb_app_data(SmbSyncType::History).await?; // a second call: SyncNotAllowed
 ```
 
+## Username, contact book, blue check
+
+```rust
+let number = client.phone_number(phone_number_id);
+match number.set_username(username, None).await {
+    // 147001–147005 are `ErrorKind::Unknown` for now: branch on the code
+    Err(e) if e.graph().map(|g| g.code) == Some(147005) && take_it_from_our_other_number => {
+        let transfer = Some(&TransferAction::ForceTransfer);
+        number.set_username(username, transfer).await
+    }
+    other => other, // `Reserved`: approved, visible once users have usernames
+}
+```
+
+- `set_username` checks the format first (`validate_username`); its
+  errors `147001`–`147005` are `ErrorKind::Unknown` for now (branch on
+  the `code` of `Error::graph`, never on the message). `username()`,
+  `username_suggestions()` (reserved for you), `delete_username()`.
+- `delete_contact_book_entry(&bsuid)` erases a user's entry in the
+  portfolio's contact book at Meta: no undo, never called for you (erasure: `meta-whatsapp-rs-production`).
+- `official_business_account()` reads the blue check;
+  `request_official_business_account(&ObaApplication::new(url, country))`
+  applies, never replayed after a timeout, only when Meta refused it
+  before processing it (`Error::may_resend`); 30 days after a rejection.
+- Also on the number: `set_search_visibility`, `set_security_notifications`,
+  `set_notify_user_change_number`, `business_compliance_info`,
+  `set_business_compliance_info` (India), `health_status()` (a WABA's
+  too; the portfolio's own: `health.entity(&HealthEntityType::Business)`);
+  bot details: `Client::waba_bot(bot_id).get(&[])`.
+
 ## Pitfalls
 
 - `register` and `deregister` share 10 requests per number per 72 hours;
@@ -115,7 +145,9 @@ number.sync_smb_app_data(SmbSyncType::History).await?; // a second call: SyncNot
   attempt
   ([OPEN_QUESTIONS.md #4](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants),
   decided on 2026-09-26).
-- Not wrapped: payload-encryption settings, WABA creation, system users.
+- Not wrapped: payload-encryption settings (roadmap L26), WABA creation,
+  system users, withdrawing an Official Business Account application (no
+  documented field).
 - Nothing stores the synced contacts (`smb_app_state_sync`); the inbox
   records the synced history and the app's echoes (`meta-whatsapp-rs-cms-inbox`).
   ~~The inbox does not record coexistence echoes or synced history~~:

@@ -65,7 +65,7 @@ those names any more. Remove them (`npx skills list` shows them;
 | --- | --- |
 | [`meta-whatsapp-rs-embedded-signup`](meta-whatsapp-rs-embedded-signup/) | the "Connect WhatsApp" flow and its callback; Solution Partner credit lines |
 | [`meta-whatsapp-rs-token-vault`](meta-whatsapp-rs-token-vault/) | merchants' tokens, key rotation, acting as a merchant |
-| [`meta-whatsapp-rs-phone-numbers`](meta-whatsapp-rs-phone-numbers/) | registration, PIN, business profile, webhook subscriptions |
+| [`meta-whatsapp-rs-phone-numbers`](meta-whatsapp-rs-phone-numbers/) | registration, PIN, business profile, webhook subscriptions, business username, contact book, blue check, health |
 
 **Webhooks and chat**
 

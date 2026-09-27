@@ -23,7 +23,10 @@
 //!   earlier than what it comes after; every parity row an item cites
 //!   exists and is open (partial or a gap) on some side while the item is
 //!   not ticked, and a library item (L, B) or a service item (M, S) that
-//!   is not ticked cites at least one row still open on its own side;
+//!   is not ticked and cites rows cites at least one still open on its own
+//!   side (an item that cites none, a refactoring such as S2 or a
+//!   follow-up such as B2a, is not checked here: that it has a row, when
+//!   it brings a capability, is the review's to see);
 //!   every library row that is partial or a gap is cited by an item, and
 //!   every item a service status names cites that row.
 //! - **`OPEN_QUESTIONS.md`**: entries numbered once, each decided or left

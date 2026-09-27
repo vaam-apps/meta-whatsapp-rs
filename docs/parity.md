@@ -8,7 +8,9 @@ code; rows 69, 91, 111 and 139 again with the `ConversationStore` port
 change (roadmap L5), against its code; rows 89 and 92 when paced
 broadcast (B2) landed, against its code; rows 119 and 139 again when the
 inbox began recording window events, thread ownership and identity links
-(roadmap L7), against its code. Every cell about us was checked against the code: a cell that
+(roadmap L7), against its code; rows 66, 129–133 and 151 again with the
+phone number calls (roadmap L9), against their code, and row 156 added
+for what L9 left (L26). Every cell about us was checked against the code: a cell that
 says a thing is done names the symbol that does it, and what the service
 (`meta-whatsapp-server`) does is read from its routes, not from its
 design. The plan to close the gaps is [roadmap.md](roadmap.md); the Meta
@@ -17,23 +19,23 @@ per-feature list is [coverage.md](coverage.md).
 
 ## Where we stand
 
-**39 of the 131 counted rows are done on both sides.** Parity is not
+**39 of the 132 counted rows are done on both sides.** Parity is not
 reached.
 
-| 131 counted rows | done | partial | gap | n/a (that side does not carry it) |
+| 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
-| Library | 91 | 24 | 15 | 1 |
-| Service | 39 | 24 | 67 | 1 |
+| Library | 98 | 20 | 13 | 1 |
+| Service | 39 | 24 | 68 | 1 |
 
-- The table has 155 rows. 24 of them are not counted: they work only
+- The table has 156 rows. 24 of them are not counted: they work only
   over WhatsApp Web ("n/a — unofficial protocol"). The counted rows'
   n/a column is a side that does not carry the capability at all: the
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
-- Each of the library's 39 partial or gap rows is cited by a
-  [roadmap](roadmap.md) item. Each of the service's 91 names, in its
+- Each of the library's 33 partial or gap rows is cited by a
+  [roadmap](roadmap.md) item. Each of the service's 92 names, in its
   status, the roadmap items that bring it; by family (a row can name
-  two): M2 8, M3 11, M4 2, M5 70, S 1 (the modular split), L 1 (L22a,
+  two): M2 8, M3 11, M4 2, M5 71, S 1 (the modular split), L 1 (L22a,
   tooling), P 2 (payments).
 - The largest gaps: the service routes for the modules the design once
   left "on demand" (M5), the inbox, live events and onboarding over HTTP
@@ -223,7 +225,7 @@ The owner's definition (2026-09-26):
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 64 | Profile | Own profile (on the Cloud API, the business profile: about, address, description, email, websites, vertical, picture) | Yes (name, about, picture) | Yes (business profile) | `business-profiles`; `reference/whatsapp-business-phone-number/whatsapp-business-profile-api.md`, `reference/whatsapp-business-profile/whatsapp-business-profile-node-api.md` | `client::business_profile::BusinessProfile::get`, `update`; the picture by upload handle (`ProfileUpdate::profile_picture_handle`) | `GET` and `PATCH /v1/numbers/{pn}/profile` (`server::api::numbers::get_profile`, `update_profile`), without the picture | done / partial (M5c2) |
 | 65 | Profile | Display name change | — | — | `display-names` | `client::phone_numbers::PhoneNumber::request_display_name_change` | not exposed | done / gap (M5c2) |
-| 66 | Profile | Business username: adopt or change it, read it, reserved names, delete it; changes by webhook | — | — | `business-scoped-user-ids` (§ Business usernames: `POST`, `GET` and `DELETE /{Phone-Number-ID}/username`, `username_suggestions`); `reference/whatsapp-business-phone-number/whatsapp-business-account-phone-number-api.md` | the webhook only: `webhooks::WebhookEvent::BusinessUsernameUpdated`; none of the calls | `business_username_updated` events; no setter | partial / partial (M5c3) |
+| 66 | Profile | Business username: adopt or change it, read it, reserved names, delete it; changes by webhook | — | — | `business-scoped-user-ids` (§ Business usernames: `POST`, `GET` and `DELETE /{Phone-Number-ID}/username`, `username_suggestions`); `reference/whatsapp-business-phone-number/whatsapp-business-account-phone-number-api.md` | `client::phone_numbers::PhoneNumber::set_username` (the format checked first, `transfer_action` typed), `username`, `username_suggestions`, `delete_username`; the webhook `webhooks::WebhookEvent::BusinessUsernameUpdated` | `business_username_updated` events; no setter | done / partial (M5c3) |
 | 67 | Chats | Archive, pin, mute, star, clear chats | Yes | No | none | the inbox tracks unread only (`inbox::Inbox::mark_read`) | — | n/a — unofficial protocol |
 | 68 | Contacts | Check that a number is on WhatsApp | Yes | No | none: the `contacts` check belonged to the retired On-Premises API (Meta's `changelog`) | — | — | n/a — unofficial protocol |
 | 69 | Contacts | Save, rename, look up contacts | Yes | No | the coexistence contacts sync (`webhooks/reference/smb_app_state_sync.md`) | typed `webhooks::WebhookEvent::AppStateSynced`; the port stores and pages them per number (`core::store::ConversationStore::put_contact`, `remove_contact`, `contacts`, `core::store::StoredContact`: L5), and `inbox::InboxSink` does not record them yet (coverage row 21; L8) | `app_state_synced` events; not stored (M3b) | partial / partial (M3b) |
@@ -233,7 +235,7 @@ The owner's definition (2026-09-26):
 | 73 | Contacts | LID and username lookups | Yes | No (null) | no lookup endpoint: identities arrive on webhooks, changes as `user_id_update` (`business-scoped-user-ids`) | the BSUID and username on every event; `webhooks::WebhookEvent::UserIdChanged` | `user_id_changed` events | done / done |
 | 74 | Calls | Incoming calls (accept, reject, terminate) | Yes | No | `calling/user-initiated-calls`; `reference/whatsapp-business-phone-number/calling-api.md` | `webhooks::WebhookEvent::CallUpdated`; `client::calling::Calling::pre_accept`, `accept`, `reject`, `terminate` | `call_updated` and `call_status_updated` events; the actions are not exposed | done / partial (M5e) |
 | 75 | Calls | Rejecting calls automatically, call restrictions | Yes (auto-reject with an allow list) | No | `calling/call-settings` | `client::calling::CallingSettings` (call hours, callback permission, voicemail, restrictions) | not exposed | done / gap (M5e) |
-| 151 | Contacts | Meta's contact book (a user's phone number kept with their BSUID across the portfolio): delete an entry | — | — | `business-scoped-user-ids` (§ Contact book: `DELETE /{Phone-Number-ID}/contact_book`) | not wrapped | — | gap / gap (M5c3) |
+| 151 | Contacts | Meta's contact book (a user's phone number kept with their BSUID across the portfolio): delete an entry | — | — | `business-scoped-user-ids` (§ Contact book: `DELETE /{Phone-Number-ID}/contact_book`) | `client::phone_numbers::PhoneNumber::delete_contact_book_entry`: an erasure at Meta, exposed as an explicit call that nothing else in the library makes (a test scans the sources); malformed and parent BSUIDs are refused before any request | — | done / gap (M5c3) |
 
 ### F. Groups and channels
 
@@ -314,11 +316,11 @@ The owner's definition (2026-09-26):
 | 126 | WABA | Details, subscribed apps and the callback override, assigned users, client and owned WABAs, customer bases | — | Partial (lists numbers) | `whatsapp-business-accounts.md`, `webhooks/override.md`; `reference/whatsapp-business-account/whatsapp-business-account-api.md`, `reference/whatsapp-business-account/subscribed-apps-api.md`, `reference/whatsapp-business-account/assigned-users-management-api.md`, `reference/business/client-whatsapp-business-accounts-api.md`, `reference/business/owned-whatsapp-business-accounts.md` | `client::waba::Waba`; `client::waba::Business` | `GET /v1/wabas`, disconnect (`server::api::numbers::list_wabas`, `disconnect_waba`); admin attach and unbind | done / partial (M5c4) |
 | 127 | WABA | Create a WABA, its activities, system users and their tokens for client businesses, a WABA's solutions | — | — | `reference/business/whatsapp-business-accounts-api.md` (`POST`), `solution-providers/partner-initiated-waba-creation.md`, `reference/whatsapp-business-account/whatsapp-business-account-activities-api.md`, `reference/whatsapp-business-account/whatsapp-business-account-solutions-list-api.md`, `solution-providers/manage-system-users.md`, `system_user_access_tokens` (`marketing-messages/onboard-business-customers.md`, `embedded-signup/hosted-es`) | not wrapped | — | gap / gap (M5c4) |
 | 128 | Numbers | Two-step PIN, data localization, identity-key check, per-number webhook override | — | — | `business-phone-numbers/two-step-verification`, `no-storage.md`, `local-storage`, `identity-change`; `reference/whatsapp-business-phone-number/settings-api.md` | `PhoneNumber::set_two_step_pin`, `enable_local_storage`, `set_identity_key_check`, `set_webhook_override` | the PIN in M3d; the rest not exposed (M5c3) | done / gap (M3d, M5c3) |
-| 129 | Numbers | Search visibility, security notifications, notifying users of a number change | — | — | `reference/whatsapp-business-phone-number/whatsapp-business-account-phone-number-api.md` (`search_visibility`, `show_security_notifications`, `notify_user_change_number`) | not wrapped | — | gap / gap (M5c3) |
-| 130 | Numbers | Official Business Account: request and status | — | — | `official-business-accounts.md`; `reference/whatsapp-business-phone-number/whatsapp-business-account-official-business-account-status-api.md` | only the flag `PhoneNumberInfo::is_official_business_account` | — | partial / gap (M5c3) |
-| 131 | Numbers | Business compliance information (India) | — | — | `reference/whatsapp-business-phone-number/business-compliance-information-api.md` | not wrapped | — | gap / gap (M5c3) |
-| 132 | Numbers | Health status of a number, a WABA or a business | — | — | `support/health-status.md` | typed on templates only (`client::templates::TemplateInfo`'s `health_status`) | — | partial / gap (M5c3) |
-| 133 | Bots | Conversational components (welcome message, ice breakers, commands); bot details | — | — | `business-phone-numbers/conversational-components`; `reference/whatsapp-business-account/conversational-automation-api.md`, `reference/whatsapp-business-bot/bot-details-api.md` | `PhoneNumber::conversational_automation`, `configure_conversational_automation`; `GET /{WABA-Bot-ID}` not wrapped | not exposed | partial / gap (M5c3) |
+| 129 | Numbers | Search visibility, security notifications, notifying users of a number change | — | — | `reference/whatsapp-business-phone-number/whatsapp-business-account-phone-number-api.md` (`search_visibility`, `show_security_notifications`, `notify_user_change_number`) | `client::phone_numbers::PhoneNumber::set_search_visibility`, `set_security_notifications`, `set_notify_user_change_number`: fields of the number's own `POST` (`whatsapp_business_api_data` for the last two), one per call; the page has no example, so the bodies follow its schema | — | done / gap (M5c3) |
+| 130 | Numbers | Official Business Account: request and status | — | — | `official-business-accounts.md`; `reference/whatsapp-business-phone-number/whatsapp-business-account-official-business-account-status-api.md` | `client::phone_numbers::PhoneNumber::official_business_account` (the guide's `official_business_account` field; the reference's edge of the same name has no example), `request_official_business_account` (an application to Meta, explicit, never automatic; never replayed after a timeout, only when Meta refused it before processing it, `Error::may_resend`); the flag `PhoneNumberInfo::is_official_business_account`. The reference says the endpoint also withdraws an application but documents no field for it: not offered | — | done / gap (M5c3) |
+| 131 | Numbers | Business compliance information (India) | — | — | `reference/whatsapp-business-phone-number/business-compliance-information-api.md` | `client::phone_numbers::PhoneNumber::business_compliance_info`, `set_business_compliance_info` (the page's validation rules checked first; it has no example, so the types follow its schemas) | — | done / gap (M5c3) |
+| 132 | Numbers | Health status of a number, a WABA or a business | — | — | `support/health-status.md` | one type, `client::common::HealthStatus` (entities, `can_send_message`, `can_receive_call_sip`, errors, additional info): `client::phone_numbers::PhoneNumber::health_status`, `client::waba::Waba::health_status`, and the `health_status` of `client::templates::TemplateInfo`. Meta documents the field on numbers, WABAs and templates only; a business portfolio's status is the `BUSINESS` entity each of them returns (`HealthStatus::entity`) | — | done / gap (M5c3) |
+| 133 | Bots | Conversational components (welcome message, ice breakers, commands); bot details | — | — | `business-phone-numbers/conversational-components`; `reference/whatsapp-business-account/conversational-automation-api.md`, `reference/whatsapp-business-bot/bot-details-api.md` | `PhoneNumber::conversational_automation`, `configure_conversational_automation`; bot details `client::phone_numbers::WabaBot::get` (`Client::waba_bot`; the page has no example, and no mirrored page says where a bot id comes from) | not exposed | done / gap (M5c3) |
 | 134 | Calling | Calling settings (hours, SIP, voicemail, icons), permissions, business-initiated calls | — | — | `calling`, `calling/call-settings`, `calling/business-initiated-calls`; `reference/whatsapp-business-phone-number/calling-api.md` | `client::calling::Calling::settings`, `update_settings`, `permissions`, `connect`; `client::calling::CallingSettings` (signalling only: WebRTC media is the integrator's stack) | not exposed | done / gap (M5e) |
 | 135 | Calling | Call recording and transcription | — | — | `calling/call-recording`, `calling/call-transcription` | the webhooks are typed (`call_recording_available`, `call_transcription_available` in `webhooks::fields`) and the files download through `Media::download` by the media id they carry; the per-call `recording` and `transcription` objects on connect and accept are not carried by `client::calling::ConnectCall` or `Calling::accept` | the call events only | partial / gap (M5e) |
 | 136 | Marketing | Marketing Messages API: send (product policy, activity sharing, bid multiplier), onboarding, the Cloud API marketing switch, partner onboarding to MM Lite | — | — | `marketing-messages/overview.md`, `marketing-messages/send-marketing-messages.md`, `marketing-messages/onboarding.md`; `reference/whatsapp-business-phone-number/marketing-messages-api-for-whatsapp.md`, `reference/business/whatsapp-business-partner-onboarding-to-mm-lite-api.md` | `client::marketing::Marketing::send`; `client::marketing::MarketingAccount::onboarding_status`, `set_cloud_api_marketing_disabled`; `client::marketing::MarketingBusiness::request_onboarding` | not exposed | done / gap (M5h) |
@@ -337,6 +339,7 @@ The owner's definition (2026-09-26):
 | 149 | Policy | Account, policy and security events (alerts, violations, reviews, capability, name, quality, security) | — | — | `webhooks/reference/account_alerts.md`, `webhooks/reference/account_update.md`, `webhooks/reference/account_review_update.md`, `webhooks/reference/business_capability_update.md`, `webhooks/reference/phone_number_name_update.md`, `webhooks/reference/security.md`; `policy-enforcement.md` | `webhooks::WebhookEvent::AccountAlert`, `AccountReviewUpdated`, `AccountUpdated`, `AccountSettingsUpdated`, `BusinessCapabilityUpdated`, `PhoneNumberNameUpdated`, `SecurityUpdated` | all seven are tenant event types | done / done |
 | 150 | Policy | Marketing opt-out (user preferences) | — | — | `webhooks/reference/user_preferences.md` | `webhooks::WebhookEvent::UserPreferenceChanged`; `core::ErrorKind::MarketingOptedOut` (131050) | `user_preference_changed` events; `409 marketing_opted_out` | done / done |
 | 152 | Accounts | Parent BSUID accounts: the portfolios that share parent BSUIDs | — | — | `business-scoped-user-ids` (§ Get parent BSUID account, served from `api.facebook.com`) | not wrapped; its host is outside the client's credential host allow list (`client::GraphRequest`), so wrapping it widens that list, a change for the security review (L10a) | — | gap / gap (M5c4) |
+| 156 | Numbers | Payload encryption, connection status and webhook URL on a number | — | — | `reference/whatsapp-business-phone-number/settings-api.md` (`payload_encryption`: `status`, `client_encryption_key`, `client_encryption_key_fingerprint`, `cloud_encryption_key`); `reference/whatsapp-business-phone-number/whatsapp-business-account-phone-number-api.md` (`connection_status`, `webhook_url`) | not wrapped (L26) | — | gap / gap (M5c3) |
 
 ## Plan to parity
 
@@ -355,7 +358,7 @@ item, each naming its crate, what it comes after and its decisive test:
   89, 92; D29), then durable scheduling (B3; row 90; D29), then retention and
   auto-delete after the `ConversationStore` port change (B4, after L5;
   row 91).
-- **Library gap batches** (L4–L25), by crate and topic: every library
+- **Library gap batches** (L4–L26), by crate and topic: every library
   partial or gap row not in the bot framework or payments.
 - **Service milestones**: M2a–M2f (inbox, SSE, webhooks-out, D25,
   erasure),

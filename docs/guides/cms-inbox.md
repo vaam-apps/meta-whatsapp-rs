@@ -498,7 +498,9 @@ other participants' history keeps its shape; the group's preview never
 keeps their text. `with_erasure_mode(ErasureMode::Delete)` on the store
 deletes them instead (design D31). An erasure never crosses numbers: a
 `wa_id` is the same on every number, and another number's records may
-be another business's customers.
+be another business's customers. Meta's contact book is the exception,
+outside the store: it is kept per business portfolio, so deleting an
+entry there reaches every number of the portfolio (below).
 
 What the erasure does not reach, and what you do about it:
 
@@ -524,7 +526,14 @@ What the erasure does not reach, and what you do about it:
   (the service's event outbox and its 24-hour idempotency answers,
   roadmap M2f; a dead-letter store, L21a; SSE clients), your own copies
   (media you downloaded, section 4), logs, and Meta's side (the
-  business's contact book, roadmap L9; the WhatsApp Business app under
+  business's contact book: `PhoneNumber::delete_contact_book_entry` for
+  each BSUID, through the merchant's client (`with_token`) on any number
+  of the portfolio the BSUID belongs to, and for every number of it,
+  with the identities collected before the erasure (after it, the store
+  connects none of them); they also hold phone numbers, contact keys
+  and parent BSUIDs, which it refuses, so skip what `UserId::is_bsuid`
+  rejects rather than abort; [production.md § 8](production.md#8-retention-and-erasure-on-postgres)
+  says what it still leaves; the WhatsApp Business app under
   coexistence).
 - **Afterwards**: what arrives after the erasure is recorded as any new
   event: a new message, an echo, a history chunk or address book sync

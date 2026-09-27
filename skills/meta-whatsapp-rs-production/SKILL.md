@@ -5,7 +5,7 @@ description: "Running meta-whatsapp-rs in production - the secrets (system user 
 
 # meta-whatsapp-rs-production
 
-> **Verified against meta-whatsapp-rs 28f96ef018e733b0d04b9278b2653c26e34e18b8 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 8a157bb10a1677660c84555537cf35246da9562e (2026-09-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/production.rs](examples/production.rs),
 compiled and tested by meta-whatsapp-rs's own gate. Longer walkthrough:
@@ -116,7 +116,7 @@ rows live on until VACUUM, in the WAL, replicas, backups and, unless the applica
 1. collect every identity: `Inbox::identities` on each of the merchant's numbers, and yours;
 2. `Inbox::erase_all` on each, behind your ownership check (group messages keep their ids unless `ErasureMode::Delete`);
 3. delete your media copies, the service's outbox rows and your dead letters for them;
-4. delete the customer from Meta's contact book (roadmap L9);
+4. delete the customer from Meta's contact book (`delete_contact_book_entry`, no undo), each BSUID of step 1's list only (step 2 leaves nothing to collect again): skip what `UserId::is_bsuid` refuses, never abort ([references/contact-book.md](references/contact-book.md));
 5. journal it (an HMAC of `phone_number_id|contact`, and the time), replayed after any restore;
 6. erase again after Meta's 7-day redelivery window; never purge the dedup markers to erase.
 

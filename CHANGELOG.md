@@ -187,6 +187,63 @@ stored data, the owner's).
 
 ### Added
 
+- **Phone number calls of roadmap L9** (`meta_whatsapp_client::phone_numbers`,
+  parity rows 66, 129–133 and 151; the service's side is M5c3):
+  - the business username: `PhoneNumber::set_username` (with
+    `TransferAction`, `NoTransfer` or `ForceTransfer`; the documented
+    format checked first by `validate_username`; never replayed after a
+    timeout), `username` (a `BusinessUsername`, its status a
+    `BusinessUsernameStatus`), `username_suggestions` (the reserved
+    names, flattened) and `delete_username`;
+  - `PhoneNumber::delete_contact_book_entry(&UserId)`: erases one entry
+    of the business portfolio's contact book at Meta, which cannot be
+    undone. An explicit call that nothing else in the library makes (a
+    facade test, `tests/contact_book.rs`, scans the library crates'
+    sources for its path and its callers, with an allow-list of callers
+    that starts empty; the service's crates are not scanned); anything
+    but a standard BSUID (`UserId::is_bsuid`), parent BSUIDs and phone
+    numbers included, is refused before any request. Returns whether an
+    entry existed;
+  - `UserId::is_bsuid` in `meta-whatsapp-core`: whether an id has the
+    standard BSUID shape Meta documents (a parent BSUID has not), the one
+    copy of that rule, so an erasure can pick the BSUIDs out of
+    `Inbox::identities` and skip the rest instead of stopping at the
+    first phone number;
+  - fields of the number's own `POST`: `set_search_visibility`
+    (`SearchVisibility`), `set_security_notifications` and
+    `set_notify_user_change_number` (`whatsapp_business_api_data`), one
+    field per call, replayed on transient errors (a value is set);
+  - the Official Business Account: `official_business_account` (the
+    guide's field; `ObaStatus` has the guide's `NOT_STARTED` and the
+    reference's values) and `request_official_business_account`
+    (`ObaApplication`, 5 to 10 supporting links when given; an
+    application to Meta, explicit, never automatic; never replayed after
+    a timeout, only when Meta refused it before processing it
+    (`Error::may_resend`); a `success: false` answer is an error);
+  - business compliance information (India): `business_compliance_info`
+    and `set_business_compliance_info` (`ComplianceInfoUpdate`,
+    `BusinessEntityType`, `GrievanceOfficer`, `CustomerCare`; the page's
+    rules checked first: the name's length, `entity_type_custom` exactly
+    with `OTHER`, `is_registered` only with `OTHER` or `PARTNERSHIP`, the
+    required contacts, the emails under 128 characters);
+  - health status: `PhoneNumber::health_status` and
+    `waba::Waba::health_status`, and `health_status` on `PhoneNumberInfo`
+    and `WabaInfo` (with `official_business_account` on `PhoneNumberInfo`),
+    all one `common::HealthStatus` (below, Changed), whose five types
+    (`HealthStatus`, `HealthEntity`, `HealthEntityType`, `HealthState`,
+    `HealthError`) `phone_numbers`, `waba` and `templates` all re-export.
+    Meta documents no `health_status` on the business node:
+    `HealthStatus::entity` finds the business's `BUSINESS` entry;
+  - bot details: `Client::waba_bot(id).get(fields)` (`WabaBot`,
+    `WabaBotInfo`), with a new id type, `meta_whatsapp_core::ids::WabaBotId`.
+
+  Pages without examples (the number's `POST` fields, compliance
+  information, bot details) are typed from their schemas, as the module
+  docs say. Not offered: withdrawing an Official Business Account
+  application (no documented field), and the payload-encryption settings
+  and the number's `connection_status` and `webhook_url` (roadmap L26).
+  The username errors `147001`–`147005` are `ErrorKind::Unknown` for
+  now.
 - **Window events, thread ownership and identity links in the CMS inbox**
   (roadmap L7; `OPEN_QUESTIONS.md` #32, #44), on L5's port:
   - `InboxSink` records the calls that reopen the 24-hour window
@@ -870,6 +927,15 @@ stored data, the owner's).
 
 ### Changed
 
+- **Breaking — one health status type** (roadmap L9):
+  `meta_whatsapp_client::templates::HealthStatus` is now a re-export of
+  `meta_whatsapp_client::common::HealthStatus`, shared with phone numbers
+  and WABAs. Its `can_send_message` is a `HealthState` (`Available`,
+  `Limited`, `Blocked`, or `Other` with Meta's value) instead of a
+  `String` (compare with `HealthState::Available`, or read
+  `as_str()`), and it gains `entities` (each with `can_send_message`,
+  `can_receive_call_sip`, `errors` and `additional_info`). The struct is
+  `#[non_exhaustive]` now.
 - **The CMS inbox after roadmap L7**: after a customer's call,
   `Inbox::reply` sends free text it refused before. **Behaviour change:
   `Inbox::send` and `Inbox::reply` refuse a service message they sent

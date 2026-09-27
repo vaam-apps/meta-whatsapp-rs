@@ -9,12 +9,14 @@
 //! | [`MediaSource`] | [`messages`](crate::messages), [`templates`](crate::templates) |
 //! | [`FlowAction`] | [`messages`](crate::messages), [`templates`](crate::templates) |
 //! | [`QualityRating`] | [`phone_numbers`](crate::phone_numbers), [`templates`](crate::templates) |
+//! | [`HealthStatus`] (and [`HealthEntity`], [`HealthError`], [`HealthState`], [`HealthEntityType`]) | [`phone_numbers`](crate::phone_numbers), [`templates`](crate::templates), [`waba`](crate::waba) |
 //!
 //! Doc paths: `messages/send-messages` ("Media caching"),
 //! `templates/template-media`, `flows/guides/sendingaflow`,
 //! `flows/guides/flows-templates`, `templates/template-quality`,
 //! `reference/whatsapp-business-account/phone-number-management-api`
-//! (`WhatsAppPhoneNumberQualityRating`), `business-phone-numbers/phone-numbers`.
+//! (`WhatsAppPhoneNumberQualityRating`), `business-phone-numbers/phone-numbers`,
+//! `support/health-status`.
 
 use meta_whatsapp_core::ids::MediaId;
 use serde::{Deserialize, Serialize};
@@ -121,6 +123,113 @@ string_enum! {
     }
 }
 
+/// `health_status` of a business phone number, a WABA or a message
+/// template (`support/health-status`): whether messaging (and receiving
+/// calls over SIP) will work through that node, given every node a request
+/// through it involves.
+///
+/// Read it with `PhoneNumber::health_status`
+/// ([`crate::phone_numbers::PhoneNumber::health_status`]),
+/// [`crate::waba::Waba::health_status`], or the `health_status` field of a
+/// template ([`crate::templates::TemplateInfo`]). Meta documents the field
+/// on those three nodes only, and says the WABA, business and app entities
+/// are "always included" in each answer: so a business portfolio's status
+/// is its [`HealthEntityType::Business`] entry in any of them
+/// ([`Self::entity`]), and there is no business reader.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct HealthStatus {
+    /// The overall messaging status: `BLOCKED` if any node is blocked,
+    /// else `LIMITED` if any is limited, else `AVAILABLE`. There is no
+    /// overall value for `can_receive_call_sip`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub can_send_message: Option<HealthState>,
+    /// One entry per node involved: the phone number (when the target is a
+    /// number), the template (when it is a template), and always the WABA,
+    /// the business portfolio and the app.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entities: Vec<HealthEntity>,
+}
+
+impl HealthStatus {
+    /// The first entity of this type, e.g. [`HealthEntityType::Business`]
+    /// for the business portfolio's own status.
+    pub fn entity(&self, entity_type: &HealthEntityType) -> Option<&HealthEntity> {
+        self.entities.iter().find(|e| &e.entity_type == entity_type)
+    }
+}
+
+/// One node of a [`HealthStatus`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct HealthEntity {
+    /// Which kind of node this is.
+    pub entity_type: HealthEntityType,
+    /// The node's id: a phone number, template, WABA, business portfolio
+    /// or app id, per [`Self::entity_type`]; kept as the raw string for
+    /// that reason.
+    pub id: String,
+    /// This node's messaging status.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub can_send_message: Option<HealthState>,
+    /// This node's ability to receive a call over SIP (phone numbers and
+    /// apps, in Meta's examples).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub can_receive_call_sip: Option<HealthState>,
+    /// Why a node is `LIMITED` (present with that status).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_info: Vec<String>,
+    /// Why a node is `BLOCKED`, with a possible solution (present with that
+    /// status).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<HealthError>,
+}
+
+/// One entry of [`HealthEntity::errors`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct HealthError {
+    /// Meta's error code, e.g. `141002` (template not approved).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<i64>,
+    /// What is wrong.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_description: Option<String>,
+    /// What to do about it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub possible_solution: Option<String>,
+}
+
+string_enum! {
+    /// A health status value (`can_send_message`, `can_receive_call_sip`).
+    pub enum HealthState {
+        /// Meets every requirement.
+        Available => "AVAILABLE",
+        /// Meets the requirements with limitations
+        /// ([`HealthEntity::additional_info`] says which).
+        Limited => "LIMITED",
+        /// Fails one or more requirements ([`HealthEntity::errors`] says
+        /// which).
+        Blocked => "BLOCKED",
+    }
+}
+
+string_enum! {
+    /// The kind of node a [`HealthEntity`] describes.
+    pub enum HealthEntityType {
+        /// A business phone number.
+        PhoneNumber => "PHONE_NUMBER",
+        /// A message template.
+        MessageTemplate => "MESSAGE_TEMPLATE",
+        /// A WhatsApp Business Account.
+        Waba => "WABA",
+        /// A business portfolio.
+        Business => "BUSINESS",
+        /// A Meta app.
+        App => "APP",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -144,6 +253,69 @@ mod tests {
             MediaSource::link("").validate("image").unwrap_err().field,
             "image.link"
         );
+    }
+
+    #[test]
+    fn health_status_parses_the_blocked_examples() {
+        // support/health-status, "Example blocked response" (a template).
+        let template: HealthStatus = serde_json::from_value(json!({
+            "can_send_message": "BLOCKED",
+            "entities": [
+              {"entity_type": "MESSAGE_TEMPLATE", "id": "2632273056924580", "can_send_message": "BLOCKED", "can_receive_call_sip": "AVAILABLE",
+               "errors": [{"error_code": 141002, "error_description": "Message templates can only be sent out if they are approved.", "possible_solution": "Edit or appeal the message template review decision."}]},
+              {"entity_type": "WABA", "id": "102290129340398", "can_send_message": "AVAILABLE"},
+              {"entity_type": "BUSINESS", "id": "506914307656634", "can_send_message": "AVAILABLE"},
+              {"entity_type": "APP", "id": "634974688087057", "can_send_message": "AVAILABLE", "can_receive_call_sip": "AVAILABLE"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(template.can_send_message, Some(HealthState::Blocked));
+        let entity = template.entity(&HealthEntityType::MessageTemplate).unwrap();
+        assert_eq!(entity.errors.len(), 1);
+        assert_eq!(entity.errors[0].error_code, Some(141_002));
+        assert_eq!(
+            entity.errors[0].possible_solution.as_deref(),
+            Some("Edit or appeal the message template review decision.")
+        );
+
+        // "Example blocked response for receiving calls over SIP".
+        let sip: HealthStatus = serde_json::from_value(json!({
+            "can_send_message": "BLOCKED",
+            "entities": [
+              {"entity_type": "PHONE_NUMBER", "id": "597727103418254", "can_send_message": "AVAILABLE", "can_receive_call_sip": "BLOCKED",
+               "errors": [{"error_code": 138024, "error_description": "WhatsApp Business calling cannot use SIP because it is not enabled", "possible_solution": "Configure SIP using {PHONE_NUMBER_ID}/settings API"}]},
+              {"entity_type": "WABA", "id": "102290129340398", "can_send_message": "AVAILABLE"},
+              {"entity_type": "BUSINESS", "id": "506914307656634", "can_send_message": "AVAILABLE"},
+              {"entity_type": "APP", "id": "634974688087057", "can_send_message": "AVAILABLE", "can_receive_call_sip": "BLOCKED",
+               "errors": [{"error_code": 138025, "error_description": "This app cannot use SIP for WhatsApp Business calling because it has not configured a SIP server for this business phone number", "possible_solution": "Configure SIP server using {PHONE_NUMBER_ID}/settings API"}]}
+            ]
+        }))
+        .unwrap();
+        let number = sip.entity(&HealthEntityType::PhoneNumber).unwrap();
+        assert_eq!(number.can_send_message, Some(HealthState::Available));
+        assert_eq!(number.can_receive_call_sip, Some(HealthState::Blocked));
+        assert_eq!(number.errors[0].error_code, Some(138_024));
+        let app = sip.entity(&HealthEntityType::App).unwrap();
+        assert_eq!(app.errors[0].error_code, Some(138_025));
+
+        // Values Meta adds later are kept, not refused.
+        let later: HealthStatus = serde_json::from_value(json!({
+            "can_send_message": "DEGRADED",
+            "entities": [{"entity_type": "SOLUTION", "id": "1", "brand_new": true}]
+        }))
+        .unwrap();
+        assert_eq!(
+            later.can_send_message,
+            Some(HealthState::Other("DEGRADED".into()))
+        );
+        assert_eq!(
+            later.entities[0].entity_type,
+            HealthEntityType::Other("SOLUTION".into())
+        );
+        // The template reference's minimal shape parses too.
+        let minimal: HealthStatus =
+            serde_json::from_value(json!({"can_send_message": "AVAILABLE"})).unwrap();
+        assert!(minimal.entities.is_empty());
     }
 
     #[test]
