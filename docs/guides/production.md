@@ -95,9 +95,9 @@ the boundary that needs it and nowhere near a log line.
 
 The client attaches a token to the configured Graph endpoint (scheme, host
 and port), to `https://lookaside.fbsbx.com`, Meta's media download host,
-and to one URL on `api.facebook.com`: `GET
-https://api.facebook.com/{business id}/parent-bsuid-accounts`, the Parent
-BSUID Accounts API (no other path, method, scheme or port on that host). A
+and to one URL on `api.facebook.com`, the Parent BSUID Accounts API:
+`GET https://api.facebook.com/{business id}/parent-bsuid-accounts` (no
+other path, method, scheme or port on that host). A
 request to any other URL with a token fails locally (`Error::Validation`
 on `url`). Behind a Graph proxy (`ClientBuilder::endpoint`), the token goes
 to the proxy, the media host and that one URL, not to `graph.facebook.com`;
