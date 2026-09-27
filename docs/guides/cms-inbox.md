@@ -374,7 +374,13 @@ let escalation = inbox.with_reply_checks(ReplyChecks::ALL.thread_owner(false));
   window check treats the window as unknown and lets Meta decide: the
   reply goes out, until the customer's next message or 24 hours after
   the handover, whichever comes first. Losing a reply the customer is
-  waiting for is worse than an occasional 131047 from Meta. An app that
+  waiting for is worse than an occasional 131047 from Meta. The store
+  keeps no source for the record, so your own
+  `record_thread_owner(&key, ThreadOwner::ThisApp, …)` after a `take` is
+  trusted the same way, although Meta does not say a take needs an
+  active thread: after taking a thread you know is idle (the customer
+  silent for 24 hours, so their window is closed too), send a template,
+  or check that reply with the trust off. An app that
   does receive standby copies knows the window and may turn the trust
   off: `ReplyChecks::ALL.trust_handover(false)`. `inbox.window(&key)`
   and `window_is_open` still show the recorded window;
@@ -405,6 +411,7 @@ setups. Each is a documented choice with its swap:
 | A handover follows the identity links and synced contacts of a phone number | a number recycled by the operator can lead to its earlier owner's conversation | `RecordingSwitches::ALL.handovers(false)` and your own mapping, or `ReplyChecks::ALL.thread_owner(false)` |
 | A standby copy means another app owns the thread | the Meta Business Agent setup above | `ReplyChecks::ALL.thread_owner(false)` |
 | A thread goes idle 24 hours after the customer's last message | Meta changes the timeout | `Inbox::with_thread_idle_after` |
+| A `ThisApp` record newer than the customer's last message lets Meta decide the window for 24 hours: a `control_passed`, and your own `record_thread_owner` too (the store keeps no source) | an app that receives standby copies (it knows the window); a take of an idle thread (Meta's window is closed: it answers 131047) | `ReplyChecks::ALL.trust_handover(false)` (for one call: a clone), or a template |
 
 ## 6. Read receipts and typing
 

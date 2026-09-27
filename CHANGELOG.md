@@ -225,8 +225,11 @@ stored data, the owner's).
     recorded message, the window check lets Meta decide, until that
     message or 24 hours after the handover (an app without standby
     copies never saw the customer's messages to the previous owner;
-    `OPEN_QUESTIONS.md` #44). `Inbox::check_reply` runs `reply`'s checks
-    without sending.
+    `OPEN_QUESTIONS.md` #44). This app's own
+    `Inbox::record_thread_owner(.., ThreadOwner::ThisApp, ..)` counts as
+    such a handover (the store keeps no source), also after a take of an
+    idle thread. `Inbox::check_reply` runs `reply`'s checks without
+    sending.
   - Every recording is a switch, and the rules are public:
     `InboxSink::with_recording(RecordingSwitches)` (calls, standby,
     handovers, identity links; all on by default: a switch off means

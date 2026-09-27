@@ -1894,6 +1894,13 @@ pub fn is_thread_owned_elsewhere(error: &Error) -> bool {
 ///   customer's next message, or 24 hours after the handover, whichever
 ///   comes first; Meta answers `131047` if its window is closed. Turn it
 ///   off in an app that does receive standby copies: its window is known.
+///   The store keeps no source for an ownership record, so this app's own
+///   [`Inbox::record_thread_owner`] with [`ThreadOwner::ThisApp`] (after a
+///   `take`) is trusted the same way, although Meta does not say a take
+///   needs an active thread: after taking a thread you know is idle (the
+///   customer silent for 24 hours, so their window is closed too), a reply
+///   still goes to Meta, which answers `131047`. Send a template there, or
+///   make that call through a clone with the trust off.
 /// - **thread owner**: a service message is refused while another app owns
 ///   the thread ([`Inbox::thread_owner`];
 ///   [`ValidationError::thread_owned_elsewhere`]). Turn it off in the
@@ -2232,6 +2239,11 @@ impl Inbox {
     /// [`ThreadOwner::ThisApp`] with the role `escalation` (Meta sends
     /// `control_taken` to the previous owner only). Call it once the
     /// request succeeded; the record is dated now (this inbox's clock).
+    /// A [`ThreadOwner::ThisApp`] record is trusted by the window check
+    /// like a `control_passed` ([`ReplyChecks::trust_handover`]: the store
+    /// cannot tell them apart): for 24 hours, until the customer writes,
+    /// [`Inbox::reply`] lets Meta decide the window, also after a take of
+    /// an idle thread, whose window is closed.
     /// [`Inbox::record_release`] is its `release` case. Returns whether it
     /// was stored ([`ConversationStore::set_thread_owner`] keeps a later
     /// record). A key of another number is refused before the store is

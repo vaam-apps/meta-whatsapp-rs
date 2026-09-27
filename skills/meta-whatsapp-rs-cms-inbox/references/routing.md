@@ -96,7 +96,10 @@ The checks read what your app received:
   the window check lets Meta decide (on by default:
   `ReplyChecks::trust_handover`), until the customer's next message or 24
   hours after the handover; Meta answers 131047 when its window is
-  closed. An app that does receive standby copies knows the window:
+  closed. Your own `record_thread_owner(&key, ThreadOwner::ThisApp, …)`
+  after a take is trusted the same way (the store keeps no source), though
+  a take needs no active thread: after taking one you know is idle, send
+  a template. An app that does receive standby copies knows the window:
 
 ```rust
 inbox.with_reply_checks(ReplyChecks::ALL.trust_handover(false))

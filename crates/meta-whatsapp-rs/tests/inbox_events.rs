@@ -1500,6 +1500,47 @@ mod rules {
         assert!(!ReplyChecks::NONE.trusts_handover());
     }
 
+    /// The store keeps no source for an ownership record, so this app's own
+    /// `record_thread_owner(ThisApp)` (after a `take`) is trusted like a
+    /// `control_passed` (`ReplyChecks`' docs say so): also on a thread whose
+    /// window closed days before, for 24 hours; with the trust off, the
+    /// recorded window decides.
+    #[tokio::test]
+    async fn a_take_you_record_is_trusted_like_a_handover() {
+        let store = memory();
+        let clock = ManualClock::new(at(1_749_416_383 + 3 * 86_400));
+        let transport = ScriptedTransport::new();
+        let inbox = inbox(&store, &transport, &clock);
+        let key = inbox.key(PHONE);
+        deliver(&store, PHONE_TEXT).await; // 1749416383, three days before
+        assert_eq!(
+            inbox.check_reply(&key).await.unwrap_err().kind(),
+            ErrorKind::CustomerServiceWindowClosed
+        );
+        assert!(
+            inbox
+                .record_thread_owner(&key, ThreadOwner::ThisApp, Some("escalation".to_owned()))
+                .await
+                .unwrap()
+        );
+        assert!(!inbox.window_is_open(&key).await.unwrap());
+        inbox.check_reply(&key).await.unwrap();
+        let strict = inbox
+            .clone()
+            .with_reply_checks(ReplyChecks::ALL.trust_handover(false));
+        assert_eq!(
+            strict.check_reply(&key).await.unwrap_err().kind(),
+            ErrorKind::CustomerServiceWindowClosed
+        );
+        clock.set(at(1_749_416_383 + 4 * 86_400));
+        assert_eq!(
+            inbox.check_reply(&key).await.unwrap_err().kind(),
+            ErrorKind::CustomerServiceWindowClosed,
+            "24 hours after the record"
+        );
+        assert!(transport.requests().is_empty());
+    }
+
     /// This app's own `pass` and `take`, which no webhook reports to it.
     #[tokio::test]
     async fn record_thread_owner_records_this_apps_pass_and_take() {

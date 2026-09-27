@@ -496,8 +496,8 @@ Found while writing the integrator guides and checking them against
     Swappable by the override: ownership is advisory, Meta enforces it.
     Roadmap L5 (the port), L7 (the inbox) and M2d.
     Amended 2026-09-27 (coordinator, owner's delegation), with L7's
-    review: after a handover to this app (a stored `control_passed`, or
-    `Inbox::record_thread_owner`) newer than the last inbound message
+    review: after a handover to this app (a stored `control_passed`)
+    newer than the last inbound message
     recorded for the conversation, the local window check treats the
     window as unknown and lets Meta decide, until the next inbound
     message or 24 hours after the handover, whichever comes first. An
@@ -506,7 +506,14 @@ Found while writing the integrator guides and checking them against
     (`conversation-routing/conversation-context`), and a thread is passed
     only while active (`conversation-routing/thread-control`, idle after
     24 hours: `thread-lifecycle`); losing a reply the customer is waiting
-    for is worse than an occasional 131047 from Meta. Swappable by
+    for is worse than an occasional 131047 from Meta. The store keeps no
+    source for an ownership record, so the code also trusts this app's
+    own `Inbox::record_thread_owner(.., ThreadOwner::ThisApp, ..)` after
+    a `take`, which Meta does not restrict to an active thread (after a
+    take of an idle thread the reply meets Meta's 131047): an extension
+    of the implementation, documented in `ReplyChecks` and the guide, not
+    part of this decision; telling the two apart needs a source on
+    `ThreadOwnership`, a port change. Swappable by
     `ReplyChecks::trust_handover(false)` (an app with standby copies) or
     `ReplyChecks::window(false)`; the ownership refusal is its own
     `ErrorKind::ThreadOwnedElsewhere`, each recording a switch
