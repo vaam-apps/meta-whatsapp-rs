@@ -401,6 +401,9 @@ enum ApiError {
     Reconnect,
     /// More than 24 hours since the customer's last message: send a template.
     WindowClosed,
+    /// Another app (the escalation partner, a Business AI) owns the thread
+    /// under Conversation Routing: send a template, or wait for the thread.
+    ThreadOwnedElsewhere,
     /// Rejected locally: a field and why.
     Invalid { field: String, reason: String },
     /// Meta, the network or a store failed.
@@ -414,6 +417,9 @@ impl From<Error> for ApiError {
             // 131047 share this kind: one arm for both, and before the
             // `Validation` arm, which the local refusal also is.
             e if e.kind() == ErrorKind::CustomerServiceWindowClosed => Self::WindowClosed,
+            // The same for the thread's owner: a state to change, not an
+            // input to fix.
+            e if e.kind() == ErrorKind::ThreadOwnedElsewhere => Self::ThreadOwnedElsewhere,
             Error::Validation(v) => Self::Invalid {
                 field: v.field,
                 reason: v.reason,
@@ -437,6 +443,10 @@ impl IntoResponse for ApiError {
             Self::WindowClosed => (
                 StatusCode::CONFLICT,
                 json!({"error": "customer_service_window_closed"}),
+            ),
+            Self::ThreadOwnedElsewhere => (
+                StatusCode::CONFLICT,
+                json!({"error": "thread_owned_elsewhere"}),
             ),
             Self::Invalid { field, reason } => (
                 StatusCode::UNPROCESSABLE_ENTITY,

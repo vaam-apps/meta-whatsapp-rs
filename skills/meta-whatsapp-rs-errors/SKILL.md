@@ -5,7 +5,7 @@ description: "Handling meta-whatsapp-rs errors correctly - the Error tree (Api, 
 
 # meta-whatsapp-rs-errors
 
-> **Verified against meta-whatsapp-rs fabab0ba46316335b638f505eb3f6ee20a5e1451 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs fc63968e2a49b25e5b601175ff7f9061b32a96f4 (2026-09-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/handle.rs](examples/handle.rs), compiled and
 tested by meta-whatsapp-rs's own gate. Every code, its `ErrorKind` and what to do:
@@ -122,7 +122,9 @@ pub fn after_failed_send(e: &Error) -> Resend {
 - The inbox's local 24-hour refusal is `Error::Validation` whose kind is
   `ErrorKind::CustomerServiceWindowClosed`, the same as Meta's 131047.
   Branch on the kind, or on `ValidationError::is_customer_service_window_closed()`
-  to tell the local refusal apart — not on `v.field`.
+  to tell the local refusal apart — not on `v.field`. Its ownership refusal
+  (another app owns the thread) has a kind of its own,
+  `ErrorKind::ThreadOwnedElsewhere` (`ValidationError::is_thread_owned_elsewhere()`).
 - `EcosystemEngagementLimit` (131049) and `SpamRateLimited` (131048) are
   not retryable on purpose; `Registration` includes 133016 (a 72-hour
   lock), which is never retried.

@@ -5,7 +5,7 @@ description: "Sending free-form WhatsApp messages with meta-whatsapp-rs - Outbou
 
 # meta-whatsapp-rs-send-messages
 
-> **Verified against meta-whatsapp-rs ef0fe364e3a21a535238007db5276fe5ef6ce970 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs a0361269ea95d7c4a6101622364f3c3ff160ddb4 (2026-09-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/send.rs](examples/send.rs), compiled and tested
 by meta-whatsapp-rs's own gate. Every constructor and content type:
@@ -126,9 +126,7 @@ late "typing…" after the answer looks broken).
 - Payment message types are not modelled: `MessageContent::Raw` is the
   escape hatch.
 - The 24-hour window is not tracked here; the CMS inbox tracks it from
-  recorded messages (`meta-whatsapp-rs-cms-inbox`,
-  [OPEN_QUESTIONS.md #32](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox),
-  decided on 2026-09-26: calls to be recorded too, roadmap L7).
+  recorded messages and calls (`meta-whatsapp-rs-cms-inbox`).
 
 ## Related skills
 

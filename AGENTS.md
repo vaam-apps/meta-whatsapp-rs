@@ -58,7 +58,7 @@ condition: every choice stays swappable. The rule:
 | `just ci` | **The gate.** CI runs exactly this. Nothing is "verified" until it exits 0 on the final head. |
 | `just lint` | `cargo fmt --check` + clippy (pedantic, `-D warnings`) |
 | `just test` | unit + in-process tests; `live_*` tests *skip* here |
-| `just test-live` | adapter and service (`meta-whatsapp-server`) tests against real Postgres + Redis, with `META_WHATSAPP_RS_REQUIRE_LIVE=1` so a missing service **fails** |
+| `just test-live` | adapter, facade (the inbox's `live_postgres_*` tests) and service (`meta-whatsapp-server`) tests against real Postgres + Redis, with `META_WHATSAPP_RS_REQUIRE_LIVE=1` so a missing service **fails** |
 | `just test-live-clean` | drops the `wa_test_*` databases and `wa_test_*` / `wa_server_test_*` schemas live runs left on the test Postgres, and their `wa-test:*` keys on the test Redis (killed runs; a panicking live test deletes its own); not during a live run |
 | `just doc` | rustdoc with `-D warnings` (broken intra-doc links fail) |
 | `just features` | each adapter feature compiled alone |

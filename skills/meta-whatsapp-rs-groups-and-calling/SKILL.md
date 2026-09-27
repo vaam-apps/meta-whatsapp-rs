@@ -5,7 +5,7 @@ description: "What a merchant inbox built on meta-whatsapp-rs needs beyond one-t
 
 # meta-whatsapp-rs-groups-and-calling
 
-> **Verified against meta-whatsapp-rs fabab0ba46316335b638f505eb3f6ee20a5e1451 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs fc63968e2a49b25e5b601175ff7f9061b32a96f4 (2026-09-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/groups_calls.rs](examples/groups_calls.rs),
 compiled and tested by meta-whatsapp-rs's own gate (Meta-shaped answers and
@@ -113,12 +113,10 @@ Calls arrive as `WebhookEvent::CallUpdated` and `CallStatusUpdated`
   or 5xx. Do not retry them yourself either.
 - `add_participants` is wrapped, but Meta's guide says participants join
   through invite links: expect a refusal unless Meta enabled it for you.
-- A call, answered or not, opens the 24-hour window on Meta's side, but
-  the inbox records no calls: `Inbox::reply` still refuses free-form text
-  unless the customer wrote in the last 24 hours
-  ([OPEN_QUESTIONS.md #32](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox),
-  decided on 2026-09-26: calls to be recorded as window events, roadmap
-  L7).
+- A call, answered or not, opens the 24-hour window on Meta's side;
+  `InboxSink` records it as a window event (a USER_INITIATED call, a
+  status `ACCEPTED`), so `Inbox::reply` sends free-form text after it
+  (`meta-whatsapp-rs-cms-inbox`). Subscribe to `calls`.
 
 ## What meta-whatsapp-rs does not do
 

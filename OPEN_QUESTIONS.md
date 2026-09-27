@@ -442,8 +442,11 @@ Found while writing the integrator guides and checking them against
     `ConversationStore`, a port change that is part of L5, and let the
     caller override the local check explicitly. Meta enforces the window
     either way; the local check only saves a request Meta would refuse.
-    Swappable by the override. Roadmap L5 (the port) and L7 (the
-    inbox).
+    Swappable by the override (`ReplyChecks::window(false)`), and by
+    recording calls yourself (`RecordingSwitches::ALL.calls(false)`).
+    Roadmap L5 (the port) and L7 (the inbox), both landed; which call
+    webhooks count is in docs/guides/cms-inbox.md § 5. The entry stays
+    until nothing cites it (the header's rule).
 
 33. **Message ids are unique per store, not per business number.** The
     Postgres `messages.id` is the table's primary key on its own (and the
@@ -492,6 +495,31 @@ Found while writing the integrator guides and checking them against
     makes the two event types tenant-visible in M2d (design D25).
     Swappable by the override: ownership is advisory, Meta enforces it.
     Roadmap L5 (the port), L7 (the inbox) and M2d.
+    Amended 2026-09-27 (coordinator, owner's delegation), with L7's
+    review: after a handover to this app (a stored `control_passed`)
+    newer than the last inbound message
+    recorded for the conversation, the local window check treats the
+    window as unknown and lets Meta decide, until the next inbound
+    message or 24 hours after the handover, whichever comes first. An
+    app that receives handovers without standby copies never saw the
+    customer's messages to the previous owner
+    (`conversation-routing/conversation-context`), and a thread is passed
+    only while active (`conversation-routing/thread-control`, idle after
+    24 hours: `thread-lifecycle`); losing a reply the customer is waiting
+    for is worse than an occasional 131047 from Meta. The store keeps no
+    source for an ownership record, so the code also trusts this app's
+    own `Inbox::record_thread_owner(.., ThreadOwner::ThisApp, ..)` after
+    a `take`, which Meta does not restrict to an active thread (after a
+    take of an idle thread the reply meets Meta's 131047). Accepted as
+    part of this decision (same day, coordinator): both cases err towards
+    letting Meta decide, and the same switch turns both off; telling them
+    apart needs a source on `ThreadOwnership`, a port change that would
+    buy only a local refusal Meta makes anyway. Swappable by
+    `ReplyChecks::trust_handover(false)` (an app with standby copies) or
+    `ReplyChecks::window(false)`; the ownership refusal is its own
+    `ErrorKind::ThreadOwnedElsewhere`, each recording a switch
+    (`InboxSink::with_recording`) and the idle timeout a setting
+    (`Inbox::with_thread_idle_after`). Roadmap L7 (landed) and M2d.
 
 ## Service (meta-whatsapp-server)
 

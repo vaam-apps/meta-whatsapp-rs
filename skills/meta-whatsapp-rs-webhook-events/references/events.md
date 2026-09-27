@@ -1,6 +1,6 @@
 # `WebhookEvent` reference
 
-> **Verified against meta-whatsapp-rs 76be5e050afce413e4614c9559b109c7ba7cd986 (2026-09-26).** Source: `crates/meta-whatsapp-webhooks/src/event.rs`,
+> **Verified against meta-whatsapp-rs 888dec677cf5a56db041e56986e6ef6ee2e52b0a (2026-09-27).** Source: `crates/meta-whatsapp-webhooks/src/event.rs`,
 > `crates/meta-whatsapp-webhooks/src/fields/*`. The enum is `#[non_exhaustive]`.
 
 Payload types live in `meta_whatsapp_rs::webhooks::fields` (flat re-exports of every
@@ -21,7 +21,7 @@ field module). Payloads are boxed.
 | `UserPreferenceChanged` (`user_preference_changed`) | `user_preferences` | `phone_number_id`, `display_phone_number`, `contact`, `preference: Box<UserPreference>` |
 | `UserIdChanged` (`user_id_changed`) | `user_id_update` | `phone_number_id`, `display_phone_number`, `contact`, `update: Box<UserIdUpdate>` |
 | `UserActionReported` (`user_action_reported`) | `messages` (`user_actions`) | `phone_number_id`, `display_phone_number`, `action: Box<UserAction>` (`action_type`, `timestamp`, `marketing_messages_link_click_data`: `click_component`, `product_id`, `click_id`, `tracking_token`). Meta names no user and no message: correlate by `click_id`, which is appended to the URL the user visits |
-| `ThreadControlChanged` (`thread_control_changed`) | `messaging_handovers` | `phone_number_id` (the handover's `recipient`), `display_phone_number`, `update: Box<MessagingHandoversValue>` (`handover_type`: `ControlPassed`/`ControlTaken`, `sender`, `timestamp`, `handover()` for the matching `Handover`: `previous_owner_role`/`new_owner_role` as `ThreadRole`, `metadata`, `conversation_context`). The user is `sender.phone_number` only, which Meta may omit, and never a BSUID: join it to your BSUID-keyed conversations yourself |
+| `ThreadControlChanged` (`thread_control_changed`) | `messaging_handovers` | `phone_number_id` (the handover's `recipient`), `display_phone_number`, `update: Box<MessagingHandoversValue>` (`handover_type`: `ControlPassed`/`ControlTaken`, `sender`, `timestamp`, `handover()` for the matching `Handover`: `previous_owner_role`/`new_owner_role` as `ThreadRole`, `metadata`, `conversation_context`). The user is `sender.phone_number` only, which Meta may omit, and never a BSUID: join it to your BSUID-keyed conversations yourself (`InboxSink` does, through its identity links: `meta_whatsapp_rs::inbox::handover_key`) |
 | `StandbyObserved` (`standby_observed`) | `standby` | `phone_number_id`, `display_phone_number`, `contact`, `item: Box<StandbyItem>` (`Message(InboundMessage)`, `Echo(StandbyEcho)`: the Send API body as JSON, with `to()`, `recipient()` (the BSUID, when the owner sent by BSUID) and `message_type()`, `Status(Status)`). Never reply to it |
 | `AutomaticEventDetected` (`automatic_event_detected`) | `automatic_events` | `phone_number_id`, `display_phone_number`, `detected: Box<AutomaticEvent>` |
 | `GroupUpdated` (`group_updated`) | `group_lifecycle_update`, `group_participants_update`, `group_settings_update`, `group_status_update` | `phone_number_id`, `display_phone_number`, `field`, `update: Box<GroupUpdate>` |

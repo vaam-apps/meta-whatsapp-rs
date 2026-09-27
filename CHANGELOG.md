@@ -179,7 +179,9 @@ stored data, the owner's).
   events shared as `Arc<WebhookEvent>` (L21b, breaking).
 - CMS inbox: #32, the calls that reopen the window recorded as window
   events (L5, L7); #44, standby messages as window events and thread
-  ownership tracked, each with an explicit override (L5, L7, M2d).
+  ownership tracked, each with an explicit override (L5, L7, M2d),
+  amended on 2026-09-27: after a handover to this app, the window check
+  lets Meta decide (`ReplyChecks::trust_handover`, L7).
 - Service: #43, media ids the service recorded as received exempted from
   the `phone_number_id` check (M2e).
 
@@ -208,6 +210,131 @@ stored data, the owner's).
   the version of the record it wrote: what a connection that finds its
   binding moved while it stored takes back with `delete_if_unchanged`,
   never deleting a token stored after it (the service's attach).
+- **Phone number calls of roadmap L9** (`meta_whatsapp_client::phone_numbers`,
+  parity rows 66, 129–133 and 151; the service's side is M5c3):
+  - the business username: `PhoneNumber::set_username` (with
+    `TransferAction`, `NoTransfer` or `ForceTransfer`; the documented
+    format checked first by `validate_username`; never replayed after a
+    timeout), `username` (a `BusinessUsername`, its status a
+    `BusinessUsernameStatus`), `username_suggestions` (the reserved
+    names, flattened) and `delete_username`;
+  - `PhoneNumber::delete_contact_book_entry(&UserId)`: erases one entry
+    of the business portfolio's contact book at Meta, which cannot be
+    undone. An explicit call that nothing else in the library makes (a
+    facade test, `tests/contact_book.rs`, scans the library crates'
+    sources for its path and its callers, with an allow-list of callers
+    that starts empty; the service's crates are not scanned); anything
+    but a standard BSUID (`UserId::is_bsuid`), parent BSUIDs and phone
+    numbers included, is refused before any request. Returns whether an
+    entry existed;
+  - `UserId::is_bsuid` in `meta-whatsapp-core`: whether an id has the
+    standard BSUID shape Meta documents (a parent BSUID has not), the one
+    copy of that rule, so an erasure can pick the BSUIDs out of
+    `Inbox::identities` and skip the rest instead of stopping at the
+    first phone number;
+  - fields of the number's own `POST`: `set_search_visibility`
+    (`SearchVisibility`), `set_security_notifications` and
+    `set_notify_user_change_number` (`whatsapp_business_api_data`), one
+    field per call, replayed on transient errors (a value is set);
+  - the Official Business Account: `official_business_account` (the
+    guide's field; `ObaStatus` has the guide's `NOT_STARTED` and the
+    reference's values) and `request_official_business_account`
+    (`ObaApplication`, 5 to 10 supporting links when given; an
+    application to Meta, explicit, never automatic; never replayed after
+    a timeout, only when Meta refused it before processing it
+    (`Error::may_resend`); a `success: false` answer is an error);
+  - business compliance information (India): `business_compliance_info`
+    and `set_business_compliance_info` (`ComplianceInfoUpdate`,
+    `BusinessEntityType`, `GrievanceOfficer`, `CustomerCare`; the page's
+    rules checked first: the name's length, `entity_type_custom` exactly
+    with `OTHER`, `is_registered` only with `OTHER` or `PARTNERSHIP`, the
+    required contacts, the emails under 128 characters);
+  - health status: `PhoneNumber::health_status` and
+    `waba::Waba::health_status`, and `health_status` on `PhoneNumberInfo`
+    and `WabaInfo` (with `official_business_account` on `PhoneNumberInfo`),
+    all one `common::HealthStatus` (below, Changed), whose five types
+    (`HealthStatus`, `HealthEntity`, `HealthEntityType`, `HealthState`,
+    `HealthError`) `phone_numbers`, `waba` and `templates` all re-export.
+    Meta documents no `health_status` on the business node:
+    `HealthStatus::entity` finds the business's `BUSINESS` entry;
+  - bot details: `Client::waba_bot(id).get(fields)` (`WabaBot`,
+    `WabaBotInfo`), with a new id type, `meta_whatsapp_core::ids::WabaBotId`.
+
+  Pages without examples (the number's `POST` fields, compliance
+  information, bot details) are typed from their schemas, as the module
+  docs say. Not offered: withdrawing an Official Business Account
+  application (no documented field), and the payload-encryption settings
+  and the number's `connection_status` and `webhook_url` (roadmap L26).
+  The username errors `147001`–`147005` are `ErrorKind::Unknown` for
+  now.
+- **Window events, thread ownership and identity links in the CMS inbox**
+  (roadmap L7; `OPEN_QUESTIONS.md` #32, #44), on L5's port:
+  - `InboxSink` records the calls that reopen the 24-hour window
+    (`calling/pricing`: a `USER_INITIATED` `connect`, `call_created` or
+    `terminate`; a call status `ACCEPTED`; a picked-up
+    `BUSINESS_INITIATED` call's `terminate`) and the customer's messages
+    seen in standby as window events, never as messages;
+    `Inbox::window` opens from the latest of them and the last inbound
+    message.
+  - Conversation Routing: `InboxSink` records ownership from the
+    handovers (`control_passed`, `control_taken`), under the
+    conversation the handover's phone number leads to (the identity
+    links, else a synced contact's BSUID, else the phone number), and
+    from standby copies; `Inbox::thread_owner` derives this app (a
+    later message on `messages`) and idle (24 hours without the
+    customer, `Inbox::THREAD_IDLE_AFTER`); `Inbox::record_release`
+    records this app's own `release`, and `Inbox::record_thread_owner`
+    its own `pass` or `take` (no webhook reports either to it).
+    `Inbox::send` refuses a service message locally while another app
+    owns the thread (`ValidationError::thread_owned_elsewhere()`, kind
+    `ErrorKind::ThreadOwnedElsewhere`, below; the helper
+    `inbox::is_thread_owned_elsewhere` looks through `Error::Step`);
+    templates and Direct Send `utility` and `authentication` need no
+    ownership. A standby copy's
+    record is dated 1 ms before the copy, so it never overrides a
+    handover of its second, even when two replicas race; a customer's
+    answer to a call permission request does not make this app the
+    owner (`conversation-routing/calling-webhooks`: Meta sends it to the
+    Incoming Call primary and the standby partners, and it "does not
+    change thread ownership").
+  - `inbox::ReplyChecks` (`ReplyChecks::ALL`, `ReplyChecks::NONE`) and
+    `Inbox::with_reply_checks`: the caller's explicit override of each
+    local check (the window, its trust in a handover, the owner), per
+    inbox. The trust (`ReplyChecks::trust_handover`, on by default):
+    after a handover to this app newer than the customer's last
+    recorded message, the window check lets Meta decide, until that
+    message or 24 hours after the handover (an app without standby
+    copies never saw the customer's messages to the previous owner;
+    `OPEN_QUESTIONS.md` #44). This app's own
+    `Inbox::record_thread_owner(.., ThreadOwner::ThisApp, ..)` counts as
+    such a handover (the store keeps no source), also after a take of an
+    idle thread. `Inbox::check_reply` runs `reply`'s checks without
+    sending.
+  - Every recording is a switch, and the rules are public:
+    `InboxSink::with_recording(RecordingSwitches)` (calls, standby,
+    handovers, identity links; all on by default: a switch off means
+    you record that kind yourself), `inbox::call_window`,
+    `inbox::call_key`, `inbox::call_status_key`, `inbox::handover_key`
+    (with `inbox::MAX_LINK_STEPS`), and `Inbox::with_thread_idle_after`
+    for the idle timeout.
+  - Identity links (`ConversationStore::link_identity`): a phone number
+    to the BSUID an inbound message carries with it, a previous BSUID
+    and the update's `wa_id` to the current one (`user_id_update`), a
+    number change's old identity to the new one (`system` messages);
+    never an empty value, one with U+0000, or a value to itself, always
+    on the business number the event arrived on. `Inbox::identities`,
+    and so an erasure, now reach a customer's thread keyed by their
+    phone number from before BSUIDs.
+  - `ErrorKind::ThreadOwnedElsewhere` (`thread_owned_elsewhere`), with
+    `ValidationError::THREAD_OWNER`, `ValidationError::thread_owned_elsewhere`
+    and `ValidationError::is_thread_owned_elsewhere`: the inbox's
+    ownership refusal has a kind of its own, like the window's, though
+    no Graph code maps to it yet (Meta documents none). The service
+    answers it `409 thread_owned_elsewhere` (a new `ErrorCode` value in
+    `openapi/v1.json`, additive), and so does the `cms_inbox` example.
+  - `just test-live` also runs the facade's live tests
+    (`crates/meta-whatsapp-rs/tests/inbox_events.rs` on Postgres),
+    filtered by `live_postgres_`.
 - **meta-whatsapp-bot**, a bot framework over Cloud API webhooks
   (roadmap B1), re-exported as `meta_whatsapp_rs::bot` behind the
   facade's new `bot` feature (off by default, in `full`). A `Bot` is an
@@ -905,6 +1032,35 @@ stored data, the owner's).
     other answers are unchanged.
 
   No change to the HTTP API: `openapi/v1.json` is byte-identical.
+- **Breaking — one health status type** (roadmap L9):
+  `meta_whatsapp_client::templates::HealthStatus` is now a re-export of
+  `meta_whatsapp_client::common::HealthStatus`, shared with phone numbers
+  and WABAs. Its `can_send_message` is a `HealthState` (`Available`,
+  `Limited`, `Blocked`, or `Other` with Meta's value) instead of a
+  `String` (compare with `HealthState::Available`, or read
+  `as_str()`), and it gains `entities` (each with `can_send_message`,
+  `can_receive_call_sip`, `errors` and `additional_info`). The struct is
+  `#[non_exhaustive]` now.
+- **The CMS inbox after roadmap L7**: after a customer's call,
+  `Inbox::reply` sends free text it refused before. **Behaviour change:
+  `Inbox::send` and `Inbox::reply` refuse a service message they sent
+  before** while another app owns the thread under Conversation Routing
+  (`ErrorKind::ThreadOwnedElsewhere`, nothing sent; turn the check off
+  with `ReplyChecks` in the escalation partner's inbox); a bot replying
+  through `Inbox::send` gets the same refusal. After a handover to this
+  app, the window check lets Meta decide
+  (`ReplyChecks::trust_handover`). `InboxSink` writes an identity link for every inbound message
+  that carries both `from` and `from_user_id` (one more store write,
+  none when the link is stored), and records `calls`, `standby`,
+  `messaging_handovers` and `user_id_update` events it ignored before.
+  `Inbox::send` now refuses a Direct Send `service` message outside the
+  window, as a message without a category (Meta drops it:
+  `direct-send/send-utility-and-authentication-messages`); only
+  `utility` and `authentication` skip the window check, and a category
+  the crate does not know is left to Meta by both checks.
+  `Inbox::window_is_open` is the window alone; `Inbox::check_reply` is
+  what `reply` decides.
+
 - **Breaking — the `ConversationStore` port change of roadmap L5**: the
   port gains fourteen required methods and four provided ones, so a
   store of your own must implement them and pass

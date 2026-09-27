@@ -134,6 +134,30 @@ impl ValidationError {
     pub fn is_customer_service_window_closed(&self) -> bool {
         self.field == Self::CUSTOMER_SERVICE_WINDOW
     }
+
+    /// The `field` of [`Self::thread_owned_elsewhere`]. Match on
+    /// [`Self::is_thread_owned_elsewhere`] (or on
+    /// [`Error::kind`](crate::Error::kind) being
+    /// [`ErrorKind::ThreadOwnedElsewhere`](crate::ErrorKind::ThreadOwnedElsewhere))
+    /// rather than comparing the string yourself.
+    pub const THREAD_OWNER: &'static str = "thread_owner";
+
+    /// A service message refused locally because another app owns the
+    /// thread under Conversation Routing (Meta would reject it too:
+    /// `conversation-routing/thread-lifecycle`, "Sending without
+    /// ownership"). Its [`Error::kind`](crate::Error::kind) is
+    /// [`ErrorKind::ThreadOwnedElsewhere`](crate::ErrorKind::ThreadOwnedElsewhere).
+    pub fn thread_owned_elsewhere() -> Self {
+        Self::new(
+            Self::THREAD_OWNER,
+            "another app owns this thread under Conversation Routing; a template needs no ownership",
+        )
+    }
+
+    /// Whether this is [`Self::thread_owned_elsewhere`].
+    pub fn is_thread_owned_elsewhere(&self) -> bool {
+        self.field == Self::THREAD_OWNER
+    }
 }
 
 /// A webhook request could not be accepted.

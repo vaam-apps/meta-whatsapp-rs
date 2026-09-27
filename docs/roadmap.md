@@ -45,7 +45,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | --- | --- |
 | 0 | this plan (parity, categories, roadmap, decisions) |
 | 1 | S1 (server core), B1 (bot framework), U4 (upstream issues) |
-| 2 | S2, S2b, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L25, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
+| 2 | S2, S2b, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L26, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
 | 3 | S5a–S5e, S6, S7, S9 |
 | 4 | S10 (waits on the owner's answer to D20 (a)), S11, S12; M2a–M2f |
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3f; B2–B4 |
@@ -660,7 +660,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     control API (L15). OPEN_QUESTIONS #33 stays open. The erasure's
     defaults and stored names wait for the owner before the first
     release ([§ Owner touchpoints](#owner-touchpoints)).
-- [ ] **L7. Window events and thread ownership in the inbox**
+- [x] **L7. Window events and thread ownership in the inbox**
   (`meta_whatsapp_rs::inbox`; OPEN_QUESTIONS #32, #44; rows 119, 139):
   `InboxSink` records the calls that reopen the 24-hour window and
   standby messages as window events (never unread), and ownership from
@@ -679,6 +679,26 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     refused locally with zero requests; after a `user_id_update`,
     `Inbox::identities` of the new BSUID holds the previous one; each
     fails when its recording is removed.
+  - **Landed:** the decisive tests and the rules they rest on run on the
+    memory store and live on Postgres
+    (`crates/meta-whatsapp-rs/tests/inbox_events.rs`; `just test-live`
+    now runs the facade's `live_postgres_` tests). The override is per
+    inbox, `ReplyChecks` (the window check, its trust in a handover to
+    this app, and the ownership check, each on or off; per call through
+    a clone of the inbox). A handover is recorded under the conversation
+    its phone number leads to (the identity links, else a synced
+    contact's BSUID, else the phone number). The coordinator's rulings
+    on the review (2026-09-27): the ownership refusal has an `ErrorKind`
+    of its own, `ThreadOwnedElsewhere` (no Graph code yet), which the
+    service answers `409 thread_owned_elsewhere`; each recording is a
+    switch (`InboxSink::with_recording`), the rules are public
+    (`call_window`, `call_key`, `call_status_key`, `handover_key`) and
+    the idle timeout a setting (`Inbox::with_thread_idle_after`), rather
+    than a trait; after a handover to this app newer than the customer's
+    last recorded message, the window check lets Meta decide
+    (`ReplyChecks::trust_handover`, OPEN_QUESTIONS #44); a
+    `user_id_update`'s `wa_id` is linked too. Row 139 stays partial (the
+    thread control API, L15); `conversation_context` is not stored.
 - [ ] **L8. Message and contact stores** (`meta-whatsapp-adapters`,
   features `redis` and a new `sqlite`; `meta_whatsapp_rs::inbox`; rows
   69, 111): a Redis `ConversationStore`, SQLite adapters for both ports,
@@ -692,18 +712,33 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** every adapter passes both conformance suites; a second
     `append` of one id on another number returns `false` on each, as the
     suite says today; the synced contacts are read back from the store.
-- [ ] **L9. Phone numbers** (`meta-whatsapp-client`,
+- [x] **L9. Phone numbers** (`meta-whatsapp-client`,
   `client::phone_numbers`; rows 66, 129–133, 151): the business
   username calls, deleting a contact book entry, search visibility,
   security notifications and number-change notices, the Official
   Business Account request and status, business compliance
   information, health status on numbers, WABAs and businesses, bot
   details.
-  - **Kind:** additive.
+  - **Kind:** additive, plus one breaking type change
+    (`templates::HealthStatus` became the shared
+    `client::common::HealthStatus`, its `can_send_message` typed; before
+    the first release, in the CHANGELOG).
   - **After:** nothing.
   - **Decisive:** exact JSON per field from
     `reference/whatsapp-business-phone-number/*`; dropping any one field
     from its body fails its test.
+  - **Landed:** rows 66, 129–133 and 151 done in the library; the
+    service's side stays with M5c3. One `client::common::HealthStatus`
+    serves numbers, WABAs and templates (`templates::HealthStatus` is
+    that type now, its `can_send_message` typed); Meta documents no
+    `health_status` on the business node, so a business's status is the
+    `BUSINESS` entity of the others. The contact book deletion is an
+    explicit call nothing else in the library makes. Bot details take a
+    new `core::ids::WabaBotId`. Not offered, for want of a documented
+    field: withdrawing an Official Business Account application. The
+    username errors `147001`–`147005` are not classified in `ErrorKind`
+    yet. The number's settings it leaves (payload encryption,
+    `connection_status`, `webhook_url`) are L26.
 - [ ] **L10a. The parent BSUID accounts API, and the credential host
   allow list** (`meta-whatsapp-client`, `client::GraphRequest` and
   `client::waba`; row 152): the API is served from `api.facebook.com`,
@@ -962,6 +997,24 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** the pre-fill test's expected JSON is the helper's
     output, recorded with its date; a serializer that departs from it
     fails the test.
+- [ ] **L26. Number settings left** (`meta-whatsapp-client`,
+  `client::phone_numbers`; row 156, category 20, coverage row 10): what L9 left
+  of the number's settings. The payload-encryption settings of
+  `/{PHONE_NUMBER_ID}/settings` (`payload_encryption`: `status` and
+  `client_encryption_key` to set; `client_encryption_key_fingerprint`
+  and `cloud_encryption_key` read back,
+  `reference/whatsapp-business-phone-number/settings-api`), and the
+  number's own `POST` fields `connection_status` and `webhook_url`
+  (`whatsapp-business-account-phone-number-api`). The mirror documents
+  them by schema only, without an example: the bodies follow the
+  schemas, and the module docs name each gap. The encryption key goes
+  through the security review (`wa-security-reviewer`).
+  - **Kind:** additive.
+  - **After:** L9.
+  - **Decisive:** exact JSON per field from the schemas; dropping any one
+    field from its body fails its test; reading the settings parses a
+    `payload_encryption` answer carrying every field of the response
+    schema.
 
 ## 4. Service milestones
 
@@ -979,7 +1032,13 @@ design's (§9).
   history, a reply checked against the window, all filtered by the
   number's binding epoch; retention per store (D10): the inbox store
   built `with_retention` from a setting, and `apply_retention` run by
-  the service's housekeeping.
+  the service's housekeeping. The reply goes through `Inbox::reply`, so
+  its ownership refusal (`ErrorKind::ThreadOwnedElsewhere`, L7) answers
+  `409 thread_owned_elsewhere` (already in the error table, §5.2), and
+  the service exposes `ReplyChecks` as a per-number setting (e.g. the
+  number of a tenant that is the account's escalation partner turns the
+  ownership check off; one that receives standby copies turns the
+  handover trust off).
   - **After:** S2b, S7, L5, L7.
   - **Decisive:** M2.1; removing the binding-epoch filter shows a moved
     number's history to its new tenant, and a test fails; with a
@@ -997,7 +1056,10 @@ design's (§9).
 - [ ] **M2d. The reviewed event types** (rows 84, 137, 139; D25):
   `standby_observed`, `thread_control_changed` and
   `user_action_reported` made tenant-visible, with L7's inbox answer to
-  OPEN_QUESTIONS #44; the service's number events.
+  OPEN_QUESTIONS #44 (the inbox already records ownership and window
+  events from the first two; a tenant reading them through M2a's routes
+  sees the same `ReplyChecks` per-number setting and `409
+  thread_owned_elsewhere`); the service's number events.
   - **After:** S7, L7.
   - **Decisive:** M2.6; taking one of the three types out of
     `TENANT_EVENT_TYPES` fails it.
@@ -1113,8 +1175,8 @@ or WABA fails the family's own cross-tenant test).
   picture (through a resumable upload handle), the display name change.
   - **After:** M5c1.
   - **Decisive:** M5.1, M5.2.
-- [ ] **M5c3. Number settings** (rows 66, 109, 128, 129–133, 151): the
-  settings, the username, the messaging limit tier on
+- [ ] **M5c3. Number settings** (rows 66, 109, 128, 129–133, 151, 156):
+  the settings (payload encryption among them, after L26), the username, the messaging limit tier on
   `GET /v1/numbers/{pn}`, the Official Business Account, compliance
   information, health status, search visibility, notifications, the
   contact book, conversational components.
@@ -1227,3 +1289,15 @@ everything else goes into the parity-completion report.
   names: architecture.md § Stable identifiers) become permanent with
   the release. Each ships swappable today; changing one after the
   release is a data migration.
+- **New stable identifiers**, confirmed before the first release: each
+  store namespace or stored name an item adds after the table in
+  architecture.md § Stable identifiers was last confirmed (B2b's planned
+  `wa.bot.pacer`, and those B3 and L21a add), for the same reason as
+  L5's.
+- **The token vault's stored format**, if S2's last attach window is to
+  close: a vault record naming the binding it was stored under would let
+  a take-back tell its own token from another tenant's stored in the
+  microseconds between an attach's binding check and its store
+  (design §8.1, S2's "Left"). The record's format is stored data under
+  `wa-rs/token-vault/v1`, so changing it is a data migration: the
+  owner's, and asked with the release questions, not before.

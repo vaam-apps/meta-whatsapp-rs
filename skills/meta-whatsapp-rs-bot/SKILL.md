@@ -5,7 +5,7 @@ description: "A WhatsApp bot on Cloud API webhooks with meta-whatsapp-rs (featur
 
 # meta-whatsapp-rs-bot
 
-> **Verified against meta-whatsapp-rs fabab0ba46316335b638f505eb3f6ee20a5e1451 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs fc63968e2a49b25e5b601175ff7f9061b32a96f4 (2026-09-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/bot.rs](examples/bot.rs), compiled and tested by the gate. All in
 `meta_whatsapp_rs::bot` (feature `bot`, off by default; `full` includes it), `async_trait` too.
@@ -142,9 +142,9 @@ cut between blocks. Text is left as written (`NoEscape`); `WordJoinerEscape` is 
 
 - **Plugins are compiled in** (ship one as a crate); `Bot::unload` runs every
   `on_unload`, then events fail with `SinkError::Closed`. A menu tap sends `/name`.
-- `MarkRead::with_typing_indicator` shows "typing…" for every message; replies are free-form,
-  refused outside the 24-hour window. Test a handler alone: `Ctx::new` plus
-  `Ctx::with_invocation` (`Invocation::new`), with an `Outbound` that records.
+- `MarkRead::with_typing_indicator` shows "typing…" for every message; replies are free-form, refused
+  outside the 24-hour window and, through `Inbox::send`, while another app owns the thread (`ErrorKind::ThreadOwnedElsewhere`).
+  Test a handler alone: `Ctx::new` plus `Ctx::with_invocation` (`Invocation::new`), with an `Outbound` that records.
 
 ## What meta-whatsapp-rs does not do
 

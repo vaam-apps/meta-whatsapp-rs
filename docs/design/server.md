@@ -131,11 +131,27 @@ Meta ─HTTPS─► ingress ─► GET|POST /webhooks/meta        Medusa / CMS �
 API call ─► key → tenant ─► tenant owns number/WABA? ─► TokenVault ─► client.with_token ─► meta-whatsapp-client
 ```
 
-Reused unchanged: `meta_whatsapp_rs::webhooks::router`, `DedupGuard`, `InboxSink`,
+Reused as the library ships them: `meta_whatsapp_rs::webhooks::router`, `DedupGuard`, `InboxSink`,
 `Inbox`, `TokenVault`, `EmbeddedSignup`, `SignupSessions`, `OtpService`, the
 endpoint modules, `meta_whatsapp_rs::typst::Renderer`, the Postgres stores. Not used:
 `meta_whatsapp_rs::webhooks::sse` and `BroadcastSink` (the service needs resume and
 cross-replica fan-out, [§4.5](#45-live-updates-sse)).
+
+`InboxSink` is the library's, with every recording switch on, so the
+service's conversation store records what the library records. Since
+roadmap L7 that is, besides messages, statuses and the coexistence
+feeds: the calls that reopen the window and the customer's standby
+messages (window events), thread ownership from handovers and standby
+copies, and identity links (an inbound message's phone number to its
+BSUID, a number change, `user_id_update`). Every event the service owns
+reaches `InboxSink`, the `standby_observed` and `thread_control_changed`
+types included, which stay operator-only in the outbox until M2d
+([D25](#10-decisions)): the store holds what the tenant's events do not
+show yet. A handover costs up to 16 `identity_links` reads, then, when no
+link leads anywhere, one `identities` read and one `contact` read per
+identity, all inside the webhook request. No
+test of the service depends on these records today: the M1 send route
+does not use `Inbox`; M2a's routes will.
 
 ### 2.2 Configuration and storage
 
@@ -563,8 +579,8 @@ Review results arrive as `template_status_updated` events.
 | --- | --- | --- |
 | `GET /v1/numbers/{pn}/conversations` | newest activity first | → page of `{contact, last_message_at, last_inbound_at, last_text, unread, window}` |
 | `GET /v1/numbers/{pn}/conversations/{contact}/messages` | history, newest first | → page of `{id, direction, kind, text, payload, status, timestamp, status_at, error}` |
-| `GET /v1/numbers/{pn}/conversations/{contact}/window` | the 24-hour window (calls unseen: OQ #32) | → `{open, closes_at}` (`null`: templates only) |
-| `POST /v1/numbers/{pn}/conversations/{contact}/messages` | reply as the merchant to the conversation's contact; free-form refused locally outside the window (`409`, nothing sent), templates exempt; recorded `accepted` | content → `202 {message_id}` |
+| `GET /v1/numbers/{pn}/conversations/{contact}/window` | the 24-hour window, counting the calls and standby messages that reopen it (library roadmap L7, OQ #32) | → `{open, closes_at}` (`null`: templates only) |
+| `POST /v1/numbers/{pn}/conversations/{contact}/messages` | reply as the merchant to the conversation's contact through `Inbox::reply`; free-form refused locally outside the window (`409 customer_service_window_closed`) or while another app owns the thread (`409 thread_owned_elsewhere`), nothing sent; templates exempt; recorded `accepted` | content → `202 {message_id}` |
 | `POST /v1/numbers/{pn}/conversations/{contact}/read` | reset unread; `notify_customer: true` also marks the latest inbound message read on Meta | → 204 |
 
 **Events and webhook endpoints** (scopes `events`, `webhooks`)
@@ -777,7 +793,7 @@ each new kind into `unknown` silently.
 | HTTP | Codes | Meaning |
 | --- | --- | --- |
 | 422 | `invalid_request` (local validation, with `field`), `invalid_parameter`, `unsupported_message_type`, `recipient_not_supported`, `undeliverable`, `template_parameter_mismatch`, `template_not_found`, `template_text_too_long`, `template_policy_violation`, `template_rejected`, `idempotency_key_reused` | fix the request; nothing was sent |
-| 409 | `customer_service_window_closed`, `marketing_opted_out`, `blocked_by_business`, `experiment_holdout`, `template_paused`, `template_disabled`, `template_syncing`, `template_unavailable`, `template_limit_reached`, `flow_unavailable`, `registration`, `two_step_verification`, `sync_not_allowed`, `duplicate_onboarding`, `number_not_connected`, `reconnect_required` (also Meta's `authentication` on a stored token: a merchant's, or an attached WABA's once stored), `waba_owned_by_another_tenant` (also a phone number another tenant holds), `tenant_exists`, `idempotency_in_progress`, `outcome_unknown` | a state must change first |
+| 409 | `customer_service_window_closed`, `thread_owned_elsewhere` (the inbox's local refusal while another app owns the thread; no Graph code yet), `marketing_opted_out`, `blocked_by_business`, `experiment_holdout`, `template_paused`, `template_disabled`, `template_syncing`, `template_unavailable`, `template_limit_reached`, `flow_unavailable`, `registration`, `two_step_verification`, `sync_not_allowed`, `duplicate_onboarding`, `number_not_connected`, `reconnect_required` (also Meta's `authentication` on a stored token: a merchant's, or an attached WABA's once stored), `waba_owned_by_another_tenant` (also a phone number another tenant holds), `tenant_exists`, `idempotency_in_progress`, `outcome_unknown` | a state must change first |
 | 403 | `permission`, `account_restricted`, `country_restricted`, `payment`, `feature_not_available`, `marketing_not_allowed`; `forbidden`, `tenant_suspended`, `stale_attempt` | not allowed, by Meta or the service |
 | 429 | `rate_limited`, `pair_rate_limited`, `spam_rate_limited`, `ecosystem_engagement_limit`, `classification_limit_reached`, `too_many_requests`, `too_many_streams` | `Retry-After` when known; `retryable` says whether waiting helps (false for 131048, 131049) |
 | 404, 410, 413 | `not_found`, `nothing_to_resume`; `cursor_expired`; `payload_too_large`, `media_too_large` | |
