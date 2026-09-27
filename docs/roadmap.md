@@ -864,7 +864,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     output, recorded with its date; a serializer that departs from it
     fails the test.
 - [ ] **L26. Number settings left** (`meta-whatsapp-client`,
-  `client::phone_numbers`; category 20, coverage row 10): what L9 left
+  `client::phone_numbers`; row 156, category 20, coverage row 10): what L9 left
   of the number's settings. The payload-encryption settings of
   `/{PHONE_NUMBER_ID}/settings` (`payload_encryption`: `status` and
   `client_encryption_key` to set; `client_encryption_key_fingerprint`
@@ -1032,8 +1032,8 @@ or WABA fails the family's own cross-tenant test).
   picture (through a resumable upload handle), the display name change.
   - **After:** M5c1.
   - **Decisive:** M5.1, M5.2.
-- [ ] **M5c3. Number settings** (rows 66, 109, 128, 129–133, 151): the
-  settings, the username, the messaging limit tier on
+- [ ] **M5c3. Number settings** (rows 66, 109, 128, 129–133, 151, 156):
+  the settings (payload encryption among them, after L26), the username, the messaging limit tier on
   `GET /v1/numbers/{pn}`, the Official Business Account, compliance
   information, health status, search visibility, notifications, the
   contact book, conversational components.

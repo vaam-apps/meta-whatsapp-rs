@@ -16,23 +16,23 @@ per-feature list is [coverage.md](coverage.md).
 
 ## Where we stand
 
-**39 of the 131 counted rows are done on both sides.** Parity is not
+**39 of the 132 counted rows are done on both sides.** Parity is not
 reached.
 
-| 131 counted rows | done | partial | gap | n/a (that side does not carry it) |
+| 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
-| Library | 98 | 20 | 12 | 1 |
-| Service | 39 | 24 | 67 | 1 |
+| Library | 98 | 20 | 13 | 1 |
+| Service | 39 | 24 | 68 | 1 |
 
-- The table has 155 rows. 24 of them are not counted: they work only
+- The table has 156 rows. 24 of them are not counted: they work only
   over WhatsApp Web ("n/a — unofficial protocol"). The counted rows'
   n/a column is a side that does not carry the capability at all: the
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
-- Each of the library's 32 partial or gap rows is cited by a
-  [roadmap](roadmap.md) item. Each of the service's 91 names, in its
+- Each of the library's 33 partial or gap rows is cited by a
+  [roadmap](roadmap.md) item. Each of the service's 92 names, in its
   status, the roadmap items that bring it; by family (a row can name
-  two): M2 8, M3 11, M4 2, M5 70, S 1 (the modular split), L 1 (L22a,
+  two): M2 8, M3 11, M4 2, M5 71, S 1 (the modular split), L 1 (L22a,
   tooling), P 2 (payments).
 - The largest gaps: the service routes for the modules the design once
   left "on demand" (M5), the inbox, live events and onboarding over HTTP
@@ -336,6 +336,7 @@ The owner's definition (2026-09-26):
 | 149 | Policy | Account, policy and security events (alerts, violations, reviews, capability, name, quality, security) | — | — | `webhooks/reference/account_alerts.md`, `webhooks/reference/account_update.md`, `webhooks/reference/account_review_update.md`, `webhooks/reference/business_capability_update.md`, `webhooks/reference/phone_number_name_update.md`, `webhooks/reference/security.md`; `policy-enforcement.md` | `webhooks::WebhookEvent::AccountAlert`, `AccountReviewUpdated`, `AccountUpdated`, `AccountSettingsUpdated`, `BusinessCapabilityUpdated`, `PhoneNumberNameUpdated`, `SecurityUpdated` | all seven are tenant event types | done / done |
 | 150 | Policy | Marketing opt-out (user preferences) | — | — | `webhooks/reference/user_preferences.md` | `webhooks::WebhookEvent::UserPreferenceChanged`; `core::ErrorKind::MarketingOptedOut` (131050) | `user_preference_changed` events; `409 marketing_opted_out` | done / done |
 | 152 | Accounts | Parent BSUID accounts: the portfolios that share parent BSUIDs | — | — | `business-scoped-user-ids` (§ Get parent BSUID account, served from `api.facebook.com`) | not wrapped; its host is outside the client's credential host allow list (`client::GraphRequest`), so wrapping it widens that list, a change for the security review (L10a) | — | gap / gap (M5c4) |
+| 156 | Numbers | Payload encryption, connection status and webhook URL on a number | — | — | `reference/whatsapp-business-phone-number/settings-api.md` (`payload_encryption`: `status`, `client_encryption_key`, `client_encryption_key_fingerprint`, `cloud_encryption_key`); `reference/whatsapp-business-phone-number/whatsapp-business-account-phone-number-api.md` (`connection_status`, `webhook_url`) | not wrapped (L26) | — | gap / gap (M5c3) |
 
 ## Plan to parity
 
