@@ -1225,3 +1225,39 @@ async fn the_credential_redirect_policy_compares_origins_as_parsed() {
         );
     }
 }
+
+/// Another scheme on the same host and port is another origin too: reqwest
+/// drops the token on that hop, so `credential_redirect_policy()` follows
+/// it. Through a local proxy that cannot tunnel `https`, following ends in
+/// an error, not in the 302 a check without the scheme would return.
+#[tokio::test]
+async fn a_hop_that_changes_only_the_scheme_is_followed() {
+    let proxy = Server::start().await;
+    let tunnelling = || {
+        reqwest::Client::builder()
+            .proxy(reqwest::Proxy::all(format!("http://{}", proxy.addr)).unwrap())
+            .redirect(credential_redirect_policy())
+            .build()
+            .unwrap()
+    };
+    let transport = ReqwestTransport::with_clients(tunnelling(), tunnelling());
+    let request = with_header(
+        HttpRequest::new(
+            Method::GET,
+            redirect_url(
+                &Url::parse("http://probe.invalid:443/").unwrap(),
+                302,
+                "https://probe.invalid:443/record",
+            ),
+        ),
+        "authorization",
+        TOKEN,
+    );
+    let result = within("redirected request", transport.send(request)).await;
+    assert!(
+        result.is_err(),
+        "http -> https on the same port: followed, got {:?}",
+        result.map(|r| r.status)
+    );
+    assert!(proxy.shared.recorded().is_empty());
+}
