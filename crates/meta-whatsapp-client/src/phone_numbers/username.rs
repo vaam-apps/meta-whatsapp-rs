@@ -219,6 +219,10 @@ impl PhoneNumber {
     /// `DELETE /{Phone-Number-ID}/username`: remove this number's business
     /// username. Meta answers `{"success": false}` when it did not delete
     /// one; that is an error here, like every `success` response.
+    ///
+    /// A `DELETE` is replayed on transient errors (the retry policy); a
+    /// replay after a lost answer may find nothing left to delete and fail
+    /// that way. Read [`Self::username`] to see where things stand.
     pub async fn delete_username(&self) -> Result<()> {
         self.client
             .delete_at(&[self.phone_number_id.as_str(), "username"])
@@ -245,7 +249,12 @@ impl PhoneNumber {
     /// Returns `true` if an entry existed and was deleted, `false` if there
     /// was none for `bsuid`. `bsuid` must be a BSUID of the same portfolio
     /// as this number, in the standard form (`US.13491208655302741918`);
-    /// parent BSUIDs are refused locally, before any request.
+    /// parent BSUIDs are refused locally, before any request. A
+    /// `{"success": false}` answer is an error.
+    ///
+    /// A `DELETE` is replayed on transient errors (the retry policy): the
+    /// entry is gone either way, but after a replay `false` may mean the
+    /// lost first attempt deleted it.
     pub async fn delete_contact_book_entry(&self, bsuid: &UserId) -> Result<bool> {
         validate_bsuid(bsuid)?;
         let context = "contact book deletion response";
