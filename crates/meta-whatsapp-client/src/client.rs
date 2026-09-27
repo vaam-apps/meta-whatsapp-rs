@@ -175,7 +175,9 @@ impl Client {
     /// that exact path, no other on that host); anything else fails with a
     /// validation error (field `url`) before a byte is sent. Call
     /// [`GraphRequest::no_auth`] on the returned request for a URL that
-    /// needs no token.
+    /// needs no token. A URL with a user name or password is refused the
+    /// same way, token or not: a transport would send them as a credential
+    /// (`Authorization: Basic`) that no rule checks.
     ///
     /// The check covers the URL given here, not where a redirect points:
     /// keeping the token off a redirect is the transport's

