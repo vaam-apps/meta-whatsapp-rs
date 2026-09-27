@@ -105,7 +105,9 @@ impl ReqwestTransport {
     /// sends every request that carries a credential (an `Authorization`,
     /// `Proxy-Authorization` or `Cookie` header, or a user name or password
     /// in its URL), `plain` every other. Their timeouts apply when a
-    /// request has none.
+    /// request has none. The choice reads the request, not the headers a
+    /// client adds to every request (`default_headers`): set no credential
+    /// there, `plain` would follow redirects with it.
     ///
     /// Their settings are yours, and two of them are security settings
     /// that [`ReqwestTransport::builder`] makes for you:
