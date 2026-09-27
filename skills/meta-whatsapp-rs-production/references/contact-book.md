@@ -1,6 +1,6 @@
 # Erasure step 4: Meta's contact book
 
-> **Verified against meta-whatsapp-rs 2bac4de8d1bd648d20955d48299a701b82191624 (2026-09-27).** Source: the rustdoc of `PhoneNumber::delete_contact_book_entry` and `UserId::is_bsuid`, and `docs/guides/production.md` section 8.
+> **Verified against meta-whatsapp-rs 8a157bb10a1677660c84555537cf35246da9562e (2026-09-27).** Source: the rustdoc of `PhoneNumber::delete_contact_book_entry` and `UserId::is_bsuid`, and `docs/guides/production.md` section 8.
 
 Meta keeps each user's phone number with their BSUID in the business
 portfolio's contact book, and uses it to put the phone number in the
