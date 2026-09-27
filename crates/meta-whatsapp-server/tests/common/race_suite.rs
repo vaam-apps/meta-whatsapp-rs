@@ -123,7 +123,7 @@ pub async fn an_insert_racing_a_move_never_reaches_the_new_holder(
     }
 
     let mut races = MoveRaces::default();
-    for round in 0..rounds {
+    for (round, began_at) in began.into_iter().enumerate() {
         let (holder, waba, pn) = ids(round);
         let recreated = round % 2 == 1;
         let binding = if (round / 2) % 2 == 0 {
@@ -141,7 +141,7 @@ pub async fn an_insert_racing_a_move_never_reaches_the_new_holder(
             tenant: Some(tenant(&holder)),
             route_guard: Some(RouteGuard {
                 binding,
-                not_after: Some(began[round]),
+                not_after: Some(began_at),
             }),
             phone_number_id: Some(pn.clone()),
             waba_id: Some(waba.clone()),

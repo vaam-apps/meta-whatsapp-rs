@@ -447,8 +447,7 @@ pub async fn purge_keeps_a_taken_key(store: &dyn EventStore) {
 /// its row's tenant only while the binding its `RouteGuard` names still
 /// holds it, checked with the insert, else the row is operator-only (in
 /// no tenant's stream). A number's binding moved to another tenant, a
-/// WABA's, a binding that began after the event's second (guarded by the
-/// WABA, and by the number), a guard naming
+/// WABA's, a binding that began after the event's second, a guard naming
 /// another WABA than the number's, and a tenant with no guard: each
 /// operator-only; the same guards holding: the tenant's. Decisive: the
 /// check in each backend's insert (the memory one's `holds`).
@@ -496,18 +495,6 @@ pub async fn the_route_guard_is_checked_with_the_insert(
         }),
         ..row(Some("suite-g"), "template_status_updated", "31", None)
     };
-    // Not holding: the same, guarded by the number (its WABA's binding
-    // began after the event).
-    let number_dated_before = NewEvent {
-        route_guard: Some(RouteGuard {
-            binding: GuardedBinding::Number {
-                phone_number_id: PhoneNumberId::new("31"),
-                waba_id: WabaId::new(waba_of("31")),
-            },
-            not_after: Some(now - Span::HOUR),
-        }),
-        ..row(Some("suite-g"), "message_received", "31", None)
-    };
     // Not holding: the number under another WABA than its binding's (one
     // suite-g holds too: only the number's own binding refuses it).
     let other_waba = NewEvent {
@@ -525,14 +512,7 @@ pub async fn the_route_guard_is_checked_with_the_insert(
         route_guard: None,
         ..row(Some("suite-g"), "message_received", "31", None)
     };
-    for event in [
-        &kept,
-        &waba_kept,
-        &dated_before,
-        &number_dated_before,
-        &other_waba,
-        &unguarded,
-    ] {
+    for event in [&kept, &waba_kept, &dated_before, &other_waba, &unguarded] {
         store.insert(event).await.unwrap().unwrap();
     }
     assert_eq!(
@@ -585,6 +565,41 @@ pub async fn the_route_guard_is_checked_with_the_insert(
     assert_eq!(polled("suite-h").await, [theirs.id]);
 }
 
+/// The route guard's date, checked through a number's guard too (on
+/// Postgres the number's branch of the insert has its own `attached_at`
+/// clause): a row guarded by the number whose WABA's binding began after
+/// Meta dated the event is operator-only; dated after the binding began,
+/// the tenant's. Decisive: the number branch's `attached_at` check in each
+/// backend's insert.
+pub async fn a_binding_begun_after_the_event_fails_the_number_guard(store: &dyn EventStore) {
+    use time::{Duration as Span, OffsetDateTime};
+    let guarded = |not_after: OffsetDateTime| NewEvent {
+        route_guard: Some(RouteGuard {
+            binding: GuardedBinding::Number {
+                phone_number_id: PhoneNumberId::new("35"),
+                waba_id: WabaId::new(waba_of("35")),
+            },
+            not_after: Some(not_after),
+        }),
+        ..row(Some("suite-n"), "message_received", "35", None)
+    };
+    let now = OffsetDateTime::now_utc();
+    let kept = guarded(now + Span::HOUR);
+    let dated_before = guarded(now - Span::HOUR);
+    for event in [&kept, &dated_before] {
+        store.insert(event).await.unwrap().unwrap();
+    }
+    let ids: Vec<String> = store
+        .page(&query("suite-n", None, 10))
+        .await
+        .unwrap()
+        .events
+        .into_iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(ids, [kept.id], "a number's binding begun after the event");
+}
+
 /// Everything above, in an order where the purge comes last. `tenants` is
 /// the service's store on the same backend (the tenants and bindings the
 /// rows name).
@@ -605,10 +620,12 @@ pub async fn run(store: &dyn EventStore, tenants: &dyn Store) {
         ("suite-v", "97"),
         ("suite-g", "31"),
         ("suite-g", "32"),
+        ("suite-n", "35"),
     ] {
         bind(tenants, tenant_id, pn).await;
     }
     the_route_guard_is_checked_with_the_insert(store, tenants).await;
+    a_binding_begun_after_the_event_fails_the_number_guard(store).await;
     insert_and_page(store).await;
     page_budget(store).await;
     dedup(store).await;
