@@ -33,7 +33,9 @@ pub async fn jitter(round: usize, racer: usize) {
         _ => 1,
     };
     if racer == late {
-        tokio::time::sleep(Duration::from_millis(1 << (round / 3 % 4))).await;
+        // The delay mixed from the round, so that no variant of the
+        // rounds (`round % 2`, `round / 2 % 2`) always draws the same one.
+        tokio::time::sleep(Duration::from_millis(1 << ((round / 3 + round / 2) % 4))).await;
     }
 }
 
