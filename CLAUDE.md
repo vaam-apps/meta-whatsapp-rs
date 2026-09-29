@@ -124,6 +124,11 @@ flowchart LR
   builds); `just lint`/`just deny` check it by manifest path.
 - `just features` checks each feature alone — a missing `#[cfg(feature)]`
   gate (including on an intra-doc link) hides behind `--all-features`.
+- `just meta-docs` is slow on purpose: one request every 15 s, over an
+  hour and a half for a full crawl (six unpaced workers drew HTTP 429 on
+  179 of ~390 pages). Do not lower `--delay-secs` to hurry it. A run that
+  stops on a persistent 429 exits non-zero with the rest listed in
+  `.meta-docs/README.md`; `just meta-docs --missing-only` resumes from it.
 - `just skills-check` needs full git history and `origin/main`; it fails
   in a shallow clone.
 - `just ci` needs **Node 24** (`tools/skills-ts/.nvmrc`): `just skills-ts`

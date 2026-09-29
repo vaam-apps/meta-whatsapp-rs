@@ -255,5 +255,11 @@ ci: lint check test skills-check skills-ts doc features deny test-live
 
 # Mirror Meta's WhatsApp docs as Markdown into .meta-docs/ (gitignored; the
 # docs are Meta's, never commit them). Agents grep this instead of guessing.
+# One request at a time, 15 s apart, backing off on HTTP 429: a full crawl
+# takes over an hour and a half. Flags (`just meta-docs --help`):
+# --delay-secs N, --missing-only (retry what .meta-docs/README.md lists as
+# unavailable), --force (refetch pages already mirrored), --out DIR.
+#
+# Mirror Meta's docs into .meta-docs/, one page every 15 s (--missing-only retries what its README lists)
 meta-docs *args:
     cargo run -q --manifest-path .xtask/Cargo.toml -- meta-docs {{args}}

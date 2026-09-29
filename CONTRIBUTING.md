@@ -36,6 +36,12 @@ commands passes. `just test` *skips* the live Postgres/Redis tests; only
 
 `just meta-docs` mirrors Meta's WhatsApp docs as Markdown into `.meta-docs/`
 (gitignored — the docs are Meta's copyrighted material; never commit them).
+It asks for one page at a time, 15 seconds apart (`--delay-secs N`), and
+waits out an HTTP 429 (Meta's `Retry-After`, or 60 s doubling to 30 min),
+so a first crawl of the ~390 pages takes over an hour and a half. It skips
+the pages already mirrored (`--force` refetches them), and
+`.meta-docs/README.md` lists the pages still missing after the last run:
+`just meta-docs --missing-only` retries just those.
 Every field name, enum value and limit in the code must come from those
 pages; copy their example payloads into tests.
 

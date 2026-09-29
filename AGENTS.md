@@ -65,7 +65,7 @@ condition: every choice stays swappable. The rule:
 | `just skills-check` | every consumer skill's `Verified against meta-whatsapp-rs <sha>` stamp is a commit in HEAD's history, directly or listed as `Squashed-commit:` by a squash commit on main (the rest of the skill checks run in `just test`: `crates/meta-whatsapp-rs/tests/skills.rs`) |
 | `just skills-ts` | the server skills' TypeScript examples type-check against types generated from `crates/meta-whatsapp-server/openapi/v1.json` (Node pinned in `tools/skills-ts/.nvmrc`; part of `just ci`) |
 | `just squash-body <pr>` | the body of a PR's squash commit: its commits as `Squashed-commit:` lines plus their co-authors (CONTRIBUTING.md § Merging) |
-| `just meta-docs` | mirror Meta's docs as Markdown into `.meta-docs/` (gitignored) |
+| `just meta-docs` | mirror Meta's docs as Markdown into `.meta-docs/` (gitignored): one request every 15 s (`--delay-secs`), backing off on HTTP 429, over an hour and a half; `--missing-only` retries just the pages its `README.md` lists as unavailable |
 
 Toolchain is pinned in `rust-toolchain.toml` (1.98.1, edition 2024); `just
 ci` also needs Node, the major version of `tools/skills-ts/.nvmrc` (24),
@@ -77,8 +77,10 @@ were set on purpose.
 
 Meta serves every doc page as Markdown: append `.md` to the URL, e.g.
 `https://developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/reference/messages/text.md`.
-`just meta-docs` mirrors all of them into `.meta-docs/` with the same paths.
-Before writing or reviewing an endpoint, **read its page there** and copy
+`just meta-docs` mirrors all of them into `.meta-docs/` with the same paths,
+slowly on purpose (Meta rate-limits a fast crawl); `.meta-docs/README.md`
+lists the pages still missing, and `just meta-docs --missing-only` retries
+them. Before writing or reviewing an endpoint, **read its page there** and copy
 request/response examples into tests. Never guess a field name. Never
 commit `.meta-docs/` — the docs are Meta's copyrighted material; write our
 own notes in our own words instead.
