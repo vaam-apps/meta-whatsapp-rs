@@ -16,6 +16,8 @@ publish = false
 
 [dependencies]
 anyhow = "1"
+# Retry-After as an HTTP-date. Already in the root workspace's graph (hyper).
+httpdate = "1"
 ureq = "3"
 
 # The root workspace's lints, restated (a separate workspace cannot inherit
