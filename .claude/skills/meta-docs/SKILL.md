@@ -20,9 +20,19 @@ entities; `cargo xtask meta-docs` strips and decodes it.
 ## Mirror everything once
 
 ```bash
-just meta-docs            # → .meta-docs/<path>.md, ~370 pages, gitignored
-just meta-docs --force    # refresh
+just meta-docs                  # → .meta-docs/<path>.md, ~390 pages, gitignored
+just meta-docs --missing-only   # retry only what .meta-docs/README.md lists
+just meta-docs --force          # refetch pages already mirrored too
 ```
+
+The crawl is sequential and paced, so a full one takes over an hour and a
+half: one request every 15 s (`--delay-secs N`). Meta rate-limits faster
+crawls: six parallel workers without a pause drew HTTP 429 on 179 of ~390
+pages. A 429 waits and asks again (Meta's `Retry-After`, or 60 s doubling
+to 30 min; never less than the delay); still refused after the 30-minute wait, the crawl stops, exits
+non-zero and lists the pages it did not reach as missing. Without
+`--force`, pages already mirrored are skipped, so a rerun fetches only the
+rest.
 
 Then grep, don't browse:
 
@@ -31,8 +41,9 @@ rg -l 'subscribed_apps' .meta-docs
 rg -n '"type": "button"' .meta-docs/webhooks/reference/messages/
 ```
 
-`.meta-docs/README.md` lists pages that could not be fetched (some are
-gated or empty).
+`.meta-docs/README.md` lists the pages still missing after the last run,
+rewritten by each run; some are gated or empty at Meta, and stay listed.
+`just meta-docs --missing-only` retries exactly that list.
 
 ## Where things are
 
