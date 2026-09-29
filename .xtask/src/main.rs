@@ -9,9 +9,10 @@
 //! The crawl is sequential: one request at a time, `--delay-secs` (15)
 //! apart. An HTTP 429 waits before asking for the same page again: as long
 //! as Meta's `Retry-After` says when it sends one, otherwise 60 s, doubled
-//! on each refusal up to 30 min. A page still refused after the 30 min wait,
-//! or a `Retry-After` longer than that, stops the crawl: the rate limit is
-//! Meta's for the whole client, not for one page. Six parallel workers
+//! on each refusal up to 30 min; never less than `--delay-secs`. A page
+//! still refused after the 30 min wait, or a `Retry-After` longer than
+//! that, stops the crawl: the rate limit is Meta's for the whole client,
+//! not for one page. Six parallel workers
 //! without a pause drew 429s on 179 of about 390 pages on 2026-09-24; one
 //! request every 15 s, backing off as above, drew none on 2026-09-26.
 //!
@@ -66,7 +67,7 @@ fn main() -> Result<()> {
         println!("{USAGE}");
         return Ok(());
     };
-    meta_docs(&options)
+    meta_docs(Http::new(), &options)
 }
 
 /// What `meta-docs` was asked to do.
@@ -141,12 +142,13 @@ impl Backoff {
 }
 
 /// `Retry-After`'s value as a wait from `now`: delay-seconds or an
-/// HTTP-date (RFC 9110 §10.2.3). A date already past is no wait; a value
-/// that is neither is `None`, and the backoff schedule applies.
+/// HTTP-date (RFC 9110 §10.2.3). A date already past is no wait, and
+/// delay-seconds too large for a `u64` the longest; a value that is
+/// neither is `None`, and the backoff schedule applies.
 fn retry_after(value: &str, now: SystemTime) -> Option<Duration> {
     let value = value.trim();
-    if let Ok(secs) = value.parse::<u64>() {
-        return Some(Duration::from_secs(secs));
+    if !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()) {
+        return Some(value.parse().map_or(Duration::MAX, Duration::from_secs));
     }
     let at = httpdate::parse_http_date(value).ok()?;
     Some(at.duration_since(now).unwrap_or(Duration::ZERO))
@@ -232,8 +234,8 @@ enum Outcome {
     RateLimited(String),
 }
 
-/// Sequential, paced GETs: `delay` between two requests, and `backoff`
-/// after a 429 in place of `delay`.
+/// Sequential, paced GETs: `delay` between two requests, and after a 429
+/// `backoff`'s wait in place of `delay` (never shorter than `delay`).
 struct Crawler<I> {
     io: I,
     delay: Duration,
@@ -279,17 +281,19 @@ impl<I: Io> Crawler<I> {
                     _ => format!("HTTP 429, still after {retry} retries"),
                 });
             };
-            let source = if after.is_some() {
-                "Retry-After"
-            } else {
-                "backoff"
+            // A Retry-After shorter than `delay` (0, or a date already past
+            // on a clock ahead of Meta's) must not send requests back to back.
+            pause = wait.max(self.delay);
+            let source = match after {
+                _ if pause > wait => "--delay-secs",
+                Some(_) => "Retry-After",
+                None => "backoff",
             };
             eprintln!(
                 "  HTTP 429 on {url}: waiting {} s ({source}, retry {})",
-                wait.as_secs(),
+                pause.as_secs(),
                 retry + 1
             );
-            pause = wait;
             retry += 1;
         }
     }
@@ -401,9 +405,12 @@ fn discover_pages<I: Io>(crawler: &mut Crawler<I>) -> Result<Vec<String>> {
     Ok(pages.into_iter().collect())
 }
 
-fn meta_docs(options: &Options) -> Result<()> {
+/// The whole `meta-docs` command over `io`: the pages to fetch (Meta's
+/// navigation, or the README's list with `--missing-only`), the crawl, then
+/// the README rewritten with what is still missing, stop or not.
+fn meta_docs(io: impl Io, options: &Options) -> Result<()> {
     let readme = options.out.join(README);
-    let mut crawler = Crawler::new(Http::new(), options.delay, BACKOFF);
+    let mut crawler = Crawler::new(io, options.delay, BACKOFF);
     let pages = if options.missing_only {
         let text = fs::read_to_string(&readme).with_context(|| {
             format!(
@@ -501,7 +508,14 @@ fn listed_page(item: &str) -> Option<String> {
         .trim_end_matches(':');
     let path = first.strip_prefix(HOST).unwrap_or(first);
     let path = path.strip_suffix(".md").unwrap_or(path);
-    let rel = path.strip_prefix(PREFIX).unwrap_or(path).trim_matches('/');
+    let rel = match path.strip_prefix(PREFIX) {
+        Some(below) if below.starts_with('/') => below,
+        // The section itself, or another one (`…/whatsapp-flows/…`), which
+        // [`discover`] does not collect either.
+        Some(_) => return None,
+        None => path,
+    }
+    .trim_matches('/');
     is_page(rel).then(|| format!("{PREFIX}/{rel}"))
 }
 
@@ -645,20 +659,60 @@ mod tests {
         Fetched::Body(format!("<html><pre>{body}</pre></html>"))
     }
 
-    /// An empty directory of its own under the system temp dir.
-    fn scratch(name: &str) -> PathBuf {
+    /// An empty directory of its own under the system temp dir, removed
+    /// when dropped, by a failing test too.
+    struct Scratch(PathBuf);
+
+    impl std::ops::Deref for Scratch {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn scratch(name: &str) -> Scratch {
         let dir = std::env::temp_dir().join(format!("xtask-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        dir
+        Scratch(dir)
+    }
+
+    /// So a test keeps the script [`meta_docs`] ran on, to read its log.
+    impl<T: Io> Io for &mut T {
+        fn get(&mut self, url: &str) -> Fetched {
+            (**self).get(url)
+        }
+
+        fn sleep(&mut self, wait: Duration) {
+            (**self).sleep(wait);
+        }
+    }
+
+    fn script(answers: impl IntoIterator<Item = Fetched>) -> Script {
+        Script {
+            answers: answers.into_iter().collect(),
+            log: Vec::new(),
+        }
     }
 
     fn crawler(answers: impl IntoIterator<Item = Fetched>) -> Crawler<Script> {
-        let io = Script {
-            answers: answers.into_iter().collect(),
-            log: Vec::new(),
-        };
-        Crawler::new(io, DEFAULT_DELAY, BACKOFF)
+        Crawler::new(script(answers), DEFAULT_DELAY, BACKOFF)
+    }
+
+    fn options(out: &Path, missing_only: bool) -> Options {
+        Options {
+            out: out.to_path_buf(),
+            force: false,
+            missing_only,
+            delay: DEFAULT_DELAY,
+        }
     }
 
     #[test]
@@ -685,6 +739,19 @@ mod tests {
         assert_eq!(BACKOFF.wait(0, Some(secs(1801))), None);
         // A short Retry-After does not buy retries past the schedule's.
         assert_eq!(BACKOFF.wait(6, Some(secs(1))), None);
+    }
+
+    #[test]
+    fn backoff_tries_a_reachable_cap_once() {
+        let short = Backoff {
+            first: secs(60),
+            cap: secs(240),
+        };
+        let waits: Vec<_> = (0..5).map(|retry| short.wait(retry, None)).collect();
+        assert_eq!(
+            waits,
+            [Some(secs(60)), Some(secs(120)), Some(secs(240)), None, None]
+        );
     }
 
     #[test]
@@ -722,7 +789,13 @@ mod tests {
             retry_after("Sat, 26 Sep 2026 09:00:00 GMT", now),
             Some(secs(0))
         );
-        for junk in ["", "soon", "-5", "1.5", "99999999999999999999999"] {
+        // Delay-seconds too large for a u64 is still delay-seconds (RFC
+        // 9110: `1*DIGIT`), longer than any wait: not a missing header.
+        assert_eq!(
+            retry_after("99999999999999999999999", now),
+            Some(Duration::MAX)
+        );
+        for junk in ["", "soon", "-5", "+5", "1.5", "5 s"] {
             assert_eq!(retry_after(junk, now), None, "{junk:?}");
         }
     }
@@ -732,7 +805,7 @@ mod tests {
         let mut c = crawler([
             md("a"),
             Fetched::RateLimited(None),
-            Fetched::RateLimited(Some(secs(7))),
+            Fetched::RateLimited(Some(secs(90))),
             md("b"),
             md("c"),
         ]);
@@ -747,7 +820,8 @@ mod tests {
                 Call::Get("u2".into()),
                 Call::Sleep(60),
                 Call::Get("u2".into()),
-                Call::Sleep(7),
+                // Meta's 90 s, not the schedule's 120 s for a second retry.
+                Call::Sleep(90),
                 Call::Get("u2".into()),
                 // The schedule starts over for the next page.
                 Call::Sleep(15),
@@ -755,6 +829,32 @@ mod tests {
             ]
         );
         assert!(c.io.answers.is_empty());
+    }
+
+    #[test]
+    fn a_short_retry_after_never_brings_requests_closer_than_the_delay() {
+        // Retry-After 0, or an HTTP-date already past (a clock a little
+        // ahead of Meta's): still `delay` apart, never back to back.
+        let mut c = crawler([
+            md("a"),
+            Fetched::RateLimited(Some(secs(0))),
+            Fetched::RateLimited(Some(secs(7))),
+            md("b"),
+        ]);
+        c.get("u1");
+        assert!(matches!(c.get("u2"), Outcome::Body(_)));
+        assert_eq!(
+            c.io.log,
+            [
+                Call::Get("u1".into()),
+                Call::Sleep(15),
+                Call::Get("u2".into()),
+                Call::Sleep(15),
+                Call::Get("u2".into()),
+                Call::Sleep(15),
+                Call::Get("u2".into()),
+            ]
+        );
     }
 
     #[test]
@@ -832,7 +932,6 @@ mod tests {
             }]
         );
         assert!(report.stopped.is_none());
-        fs::remove_dir_all(&out).unwrap();
     }
 
     #[test]
@@ -843,7 +942,6 @@ mod tests {
         let report = mirror(&mut c, &out, &[page("have")], true);
         assert_eq!((report.fetched, report.skipped), (1, 0));
         assert_eq!(fs::read_to_string(out.join("have.md")).unwrap(), "new");
-        fs::remove_dir_all(&out).unwrap();
     }
 
     #[test]
@@ -869,7 +967,144 @@ mod tests {
             report.missing[2].reason,
             "not fetched: the crawl stopped on HTTP 429"
         );
-        fs::remove_dir_all(&out).unwrap();
+    }
+
+    #[test]
+    fn missing_only_retries_the_listed_pages_and_lists_only_those_still_missing() {
+        let out = scratch("missing-only");
+        fs::write(out.join("have.md"), "fetched by hand").unwrap();
+        // The first crawler's format.
+        fs::write(
+            out.join(README),
+            format!(
+                "# Meta WhatsApp docs mirror\n\nUnavailable pages (3):\n\n\
+                 - {}: GET {HOST}/x.md: http status: 429\n\
+                 - {}: GET {HOST}/y.md: http status: 429\n\
+                 - {}: no markdown body (page gated or moved)\n\n",
+                page("now"),
+                page("have"),
+                page("gated"),
+            ),
+        )
+        .unwrap();
+        let mut io = script([Fetched::Body("no pre".into()), md("now here")]);
+        meta_docs(&mut io, &options(&out, true)).unwrap();
+        // No seed page, nothing already mirrored: the listed pages only.
+        assert_eq!(
+            io.log,
+            [
+                Call::Get(url("gated")),
+                Call::Sleep(15),
+                Call::Get(url("now"))
+            ]
+        );
+        assert!(io.answers.is_empty());
+        assert_eq!(fs::read_to_string(out.join("now.md")).unwrap(), "now here");
+        let readme = fs::read_to_string(out.join(README)).unwrap();
+        assert_eq!(parse_missing(&readme), Some(vec![page("gated")]));
+    }
+
+    #[test]
+    fn a_stopped_crawl_rewrites_the_readme_then_fails() {
+        let out = scratch("stopped");
+        let listed = ["p1", "p2"].map(|p| Missing {
+            path: page(p),
+            reason: "an earlier run's reason".into(),
+        });
+        fs::write(out.join(README), render_readme(&listed)).unwrap();
+        let mut io = script((0..7).map(|_| Fetched::RateLimited(None)));
+        let err = meta_docs(&mut io, &options(&out, true)).unwrap_err();
+        assert!(
+            format!("{err:#}").starts_with("stopped early (HTTP 429, still after 6 retries)"),
+            "{err:#}"
+        );
+        assert!(!io.log.contains(&Call::Get(url("p2"))));
+        let readme = fs::read_to_string(out.join(README)).unwrap();
+        assert_eq!(parse_missing(&readme), Some(vec![page("p1"), page("p2")]));
+        assert!(
+            readme.contains(&format!(
+                "- {}: not fetched: the crawl stopped on HTTP 429\n",
+                page("p2")
+            )),
+            "{readme}"
+        );
+    }
+
+    #[test]
+    fn a_full_crawl_follows_the_seeds_navigation_and_replaces_the_list() {
+        let out = scratch("full");
+        let stale = Missing {
+            path: page("stale"),
+            reason: "no longer linked".into(),
+        };
+        fs::write(out.join(README), render_readme(&[stale])).unwrap();
+        let mut io = script([
+            Fetched::Body(format!("<a href=\"{PREFIX}/a/\">a</a>")),
+            Fetched::Body(format!("<a href=\"{PREFIX}/b\">b</a>")),
+            md("page a"),
+            Fetched::Failed(anyhow!("HTTP 404 Not Found")),
+        ]);
+        meta_docs(&mut io, &options(&out, false)).unwrap();
+        assert_eq!(
+            io.log,
+            [
+                Call::Get(format!("{HOST}{PREFIX}/overview/")),
+                Call::Sleep(15),
+                Call::Get(format!("{HOST}{PREFIX}/flows/")),
+                Call::Sleep(15),
+                Call::Get(url("a")),
+                Call::Sleep(15),
+                Call::Get(url("b")),
+            ]
+        );
+        assert_eq!(fs::read_to_string(out.join("a.md")).unwrap(), "page a");
+        let readme = fs::read_to_string(out.join(README)).unwrap();
+        assert_eq!(parse_missing(&readme), Some(vec![page("b")]));
+    }
+
+    #[test]
+    fn a_full_crawl_without_the_seeds_navigation_fails_and_keeps_the_list() {
+        let seed = |s: &str| Call::Get(format!("{HOST}{PREFIX}{s}"));
+        let cases: [(Vec<Fetched>, Vec<Call>, &str); 3] = [
+            (
+                vec![Fetched::Failed(anyhow!("HTTP 404 Not Found"))],
+                vec![seed("/overview/")],
+                "fetching a seed page: HTTP 404 Not Found",
+            ),
+            (
+                // The first seed, refused through the whole schedule: the
+                // second is never asked for.
+                (0..7).map(|_| Fetched::RateLimited(None)).collect(),
+                (0..7).map(|_| seed("/overview/")).collect(),
+                "HTTP 429, still after 6 retries",
+            ),
+            (
+                vec![Fetched::Body("<p>moved</p>".into()), md("no links")],
+                vec![seed("/overview/"), seed("/flows/")],
+                "no pages discovered",
+            ),
+        ];
+        for (answers, gets, error) in cases {
+            let out = scratch("seeds");
+            let listed = render_readme(&[Missing {
+                path: page("kept"),
+                reason: "an earlier run's reason".into(),
+            }]);
+            fs::write(out.join(README), &listed).unwrap();
+            let mut io = script(answers);
+            let err = meta_docs(&mut io, &options(&out, false)).unwrap_err();
+            assert!(format!("{err:#}").contains(error), "{err:#}");
+            let got: Vec<_> = io
+                .log
+                .iter()
+                .filter(|call| matches!(call, Call::Get(_)))
+                .collect();
+            assert_eq!(got, gets.iter().collect::<Vec<_>>(), "{error}");
+            assert_eq!(io.log.len(), gets.len() * 2 - 1, "paced: {error}");
+            assert!(io.answers.is_empty(), "{error}");
+            // Nothing crawled, nothing learnt: the list stays as it was.
+            assert_eq!(fs::read_to_string(out.join(README)).unwrap(), listed);
+        }
     }
 
     #[test]
@@ -954,9 +1189,23 @@ mod tests {
     }
 
     #[test]
+    fn readme_parsing_refuses_what_is_not_a_page_below_the_prefix() {
+        let readme = "Unavailable pages (6):\n\n\
+            - ..\\..\\etc\\passwd: a Windows traversal, one segment on Unix\n\
+            - a?b=c: a query\n\
+            - ~/x: a home directory\n\
+            - /documentation/business-messaging/whatsapp: the section itself\n\
+            - /documentation/business-messaging/whatsapp-flows/x: another section\n\
+            - https://developers.facebook.com/documentation/business-messaging/whatsappx/y.md: again\n";
+        assert_eq!(parse_missing(readme), Some(vec![]));
+    }
+
+    #[test]
     fn readme_without_the_list_is_not_parsed() {
         assert_eq!(parse_missing("# Some other README\n\n- a/b: c\n"), None);
         assert_eq!(parse_missing(""), None);
+        // The header is the list's own, not any line about availability.
+        assert_eq!(parse_missing("Unavailable: none\n\n- a/b: c\n"), None);
     }
 
     #[test]

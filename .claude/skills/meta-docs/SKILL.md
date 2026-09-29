@@ -29,7 +29,7 @@ The crawl is sequential and paced, so a full one takes over an hour and a
 half: one request every 15 s (`--delay-secs N`). Meta rate-limits faster
 crawls: six parallel workers without a pause drew HTTP 429 on 179 of ~390
 pages. A 429 waits and asks again (Meta's `Retry-After`, or 60 s doubling
-to 30 min); still refused after the 30-minute wait, the crawl stops, exits
+to 30 min; never less than the delay); still refused after the 30-minute wait, the crawl stops, exits
 non-zero and lists the pages it did not reach as missing. Without
 `--force`, pages already mirrored are skipped, so a rerun fetches only the
 rest.
