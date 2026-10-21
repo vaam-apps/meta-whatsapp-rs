@@ -21,3 +21,8 @@
 # server skills' examples from the committed OpenAPI document.
 /tools/skills-ts/node_modules/
 /skills/meta-whatsapp-rs-server*/examples/*.d.ts
+
+# The docs site (docs/, VitePress): its packages and build output.
+/docs/node_modules/
+/docs/.vitepress/dist/
+/docs/.vitepress/cache/
