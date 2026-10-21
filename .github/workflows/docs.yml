@@ -54,7 +54,7 @@ jobs:
       - name: vitepress build
         working-directory: docs
         env:
-          DOCS_BASE: ${{ steps.pages.outputs.base_path && format('{0}/', steps.pages.outputs.base_path) || '' }}
+          DOCS_BASE: ${{ github.event_name != 'pull_request' && format('{0}/', steps.pages.outputs.base_path) || '' }}
         run: pnpm build
 
       - if: github.event_name != 'pull_request'
