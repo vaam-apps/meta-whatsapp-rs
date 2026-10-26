@@ -320,7 +320,10 @@ impl Templates {
     ///
     /// Sent to the client's Graph endpoint, like every other template call;
     /// Meta's page prints the request against `https://api.facebook.com/`
-    /// with no API version.
+    /// with no API version. Graph routes the edge too: on 2026-10-26 a
+    /// request for a template id that does not exist got the same answer
+    /// from both hosts, while an edge that does not exist got Graph's
+    /// `2500` "Unknown path components".
     pub async fn archive(&self, ids: &[TemplateId]) -> Result<ArchiveResult> {
         archive_ids(ids)?;
         self.client

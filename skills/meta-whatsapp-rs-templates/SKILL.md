@@ -114,8 +114,8 @@ Ok(templates.create_group(&group).await?.id) // keep it: there is no list call
   template cannot be sent and is deleted 28 days later; unarchiving
   within that window restores its previous status. Read
   `failed_templates` (id → reason) next to `archived_templates` /
-  `unarchived_templates`. Sent to the Graph endpoint, where Meta's page
-  prints `api.facebook.com`: not yet confirmed live (roadmap L23).
+  `unarchived_templates`. Sent to the Graph endpoint, which routes it
+  (Meta's page prints `api.facebook.com`; probed 2026-10-26, L23).
 - Groups gather templates for `Analytics::template_group`; a template is
   in at most one. Names are unique, at most 256 characters; descriptions
   at most 512. `get_group(&group_id)` returns the group, its WABA and the

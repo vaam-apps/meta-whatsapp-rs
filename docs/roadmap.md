@@ -1074,8 +1074,11 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     timeout. Archive and unarchive go to the Graph endpoint
     (`graph.facebook.com/v25.0`), but the only page that shows them
     prints `https://api.facebook.com/{WABA_ID}/…` with no version, and
-    no page shows them on Graph: not confirmed live, and moving them to
-    `api.facebook.com` would be a new credential rule (security review).
+    no page shows them on Graph. A probe on 2026-10-26 with a template
+    id that does not exist got the same answer from both hosts, where an
+    edge that does not exist gets Graph's `2500` "Unknown path
+    components": Graph routes them, and no new credential rule is
+    needed. A real archive has not been run live.
     **Left:** the list of a WABA's groups
     (`GET /{WABA_ID}/template_groups`) and the pages after the first of a
     group's templates: Meta's changelog names the list, but no page

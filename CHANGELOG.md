@@ -213,8 +213,11 @@ stored data, the owner's).
   template id that is not an integer is an `Error::Validation` before any
   request; the POSTs are not replayed on timeouts. Archive and
   unarchive are sent to the Graph endpoint, while Meta's page prints
-  them on `https://api.facebook.com/` with no version: not confirmed
-  live. Not wrapped, because
+  them on `https://api.facebook.com/` with no version; a probe on
+  2026-10-26 (a template id that does not exist) got the same answer
+  from both hosts, where an edge that does not exist gets Graph's
+  `2500` "Unknown path components", so Graph routes them. Not wrapped,
+  because
   no page documents them: the list of a WABA's groups
   (`GET /{WABA_ID}/template_groups`, in Meta's changelog only) and the
   pages after the first of a group's templates.
