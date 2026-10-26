@@ -754,8 +754,9 @@ stored data, the owner's).
   (checked locally; a key the library would drop is `422` on its path,
   while Meta's flat positional `body_text`, which the library writes as
   `[[..]]`, is sent; the shapes it cannot carry, payment buttons,
-  `app_deep_link`, `optimization_spec` and the pre-v21 one-tap button
-  fields, are refused; `template_rejected`, `template_limit_reached`),
+  `optimization_spec` and the pre-v21 one-tap button fields, are
+  refused, and so was a URL button's `app_deep_link` until roadmap L24
+  (see Changed); `template_rejected`, `template_limit_reached`),
   delete by name or name and id (an `audit` event, `templates_deleted`
   or `template_deleted`). Another tenant's media or template id is
   `404 not_found`, like a missing one; on those routes a `190` stays
@@ -1070,6 +1071,24 @@ stored data, the owner's).
   and `from_event` still take a `SignupCode` and set `Some`; only code
   reading or assigning the field changes (`request.code =
   Some(code)`).
+
+- **App deep links on template URL buttons** (`meta_whatsapp_client::templates`,
+  roadmap L24, parity row 155; breaking): `Button::Url` gains
+  `app_deep_link: Option<AppDeepLink>`, Meta's `app_deep_link` of
+  `marketing-messages/deep-links` (`meta_app_id`, a `u64` written as a
+  JSON number, `android_deep_link`, `android_fallback_playstore_url`),
+  with `Button::url_with_app_deep_link` to build one. Absent, no key is
+  sent. `TemplateDefinition::validate` refuses an empty deep link or
+  fallback URL (`Error::Validation` on
+  `….buttons[i].app_deep_link.<field>`). **Upgrade:** a `Button::Url { .. }`
+  struct literal needs `app_deep_link: None` (or use `Button::url`,
+  `url_with_example`), and a pattern naming every field needs it or
+  `..`; no construction in this repository's examples or skills used
+  one. The service (`POST /v1/wabas/{waba_id}/templates`) now passes a
+  definition carrying it to Meta unchanged instead of answering `422`
+  on `components[i].buttons[j].app_deep_link`; `openapi/v1.json` is
+  unchanged (the definition is Meta's JSON there).
+
 - **A closed customer service window, as Meta reports it** (docs only):
   the messages module, `ErrorKind::CustomerServiceWindowClosed`,
   `CustomerServiceWindow`, the bot's `Ctx::reply`, the `send_message`
