@@ -10,7 +10,7 @@ First feature set. See [docs/coverage.md](docs/coverage.md) for the full
 matrix, [docs/parity.md](docs/parity.md) and
 [docs/roadmap.md](docs/roadmap.md) for what is missing and the plan, and
 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for the decisions (all but one
-decided on 2026-09-26).
+decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
 ### Renamed
 
@@ -186,6 +186,25 @@ stored data, the owner's).
   the `phone_number_id` check (M2e).
 
 ### Added
+
+- **The Messaging Account a send bills** (`meta_whatsapp_client::messages`,
+  roadmap L16a, parity row 140): Meta's account model evolution is
+  generally available from H2 2026. A WABA's id now names its Messaging
+  Account (templates, billing, webhook subscriptions) and its numbers
+  move under a WhatsApp account (WAAC); one number can belong to several
+  Messaging Accounts. `OutboundMessage::messaging_account_id` (a
+  `WabaId`: a Messaging Account's id is a WABA id) sends
+  `messaging_account_id` in the body, which Meta requires when the
+  access token can send from several Messaging Accounts on the number,
+  from its phase 2 (H1 2027). An id that is not ASCII digits is refused before any request
+  (`Error::Validation` on `messaging_account_id`); unset, nothing is sent,
+  and Meta's deprecated alias `paid_messaging_account_id` is never sent.
+  **Breaking** for code that builds `OutboundMessage` as a struct literal
+  (its fields are public); the constructors are unchanged. The
+  `send_message` example reads `WA_MESSAGING_ACCOUNT_ID`. The service's
+  rule for a number under several Messaging Accounts is design D37 (one
+  binding per number; its sends will name it, M5c5); keying numbers by
+  Messaging Account is left to the owner (OPEN_QUESTIONS #46).
 
 - **The parent BSUID accounts API** (`meta_whatsapp_client::waba`,
   roadmap L10a, parity row 152; the service's side is M5c4):

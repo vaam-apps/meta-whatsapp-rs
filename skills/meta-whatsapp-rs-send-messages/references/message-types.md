@@ -32,7 +32,10 @@ All in `meta_whatsapp_rs::client::messages`. `recipient` is `impl Into<Recipient
 
 Builders on any message: `reply_to(message_id)`, `callback_data(s)`,
 `category(DirectSendCategory::{Utility, Authentication, Service})`,
-`ttl_seconds(n)` (Direct Send only), `direct_send_template_name(name)`.
+`ttl_seconds(n)` (Direct Send only), `direct_send_template_name(name)`,
+`messaging_account_id(id)` (the Messaging Account billed, when the access
+token can send from several on the number: Meta's account model
+evolution; digits only).
 Direct Send is a Meta beta; authentication-category Direct Send needs a phone
 number recipient.
 

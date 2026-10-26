@@ -15,6 +15,7 @@
 //! | `WA_TO` | yes | the recipient, E.164 with `+`, e.g. `+16505551234` |
 //! | `WA_TEMPLATE` | no | an approved template without variables (default `hello_world`, Meta's sample template) |
 //! | `WA_TEMPLATE_LANGUAGE` | no | the language it was approved in (default `en_US`) |
+//! | `WA_MESSAGING_ACCOUNT_ID` | no | the Messaging Account to bill, when your token can send from several on the number (Meta's account model evolution; a WABA id) |
 //!
 //! ```text
 //! WA_TOKEN=… WA_PHONE_NUMBER_ID=… WA_TO=+16505551234 \
@@ -47,7 +48,11 @@ async fn main() -> anyhow::Result<()> {
         env_or("WA_TEMPLATE", "hello_world"),
         env_or("WA_TEMPLATE_LANGUAGE", "en_US"),
     );
-    let sent = messages.send(&OutboundMessage::template(to, hello)).await?;
+    let mut template = OutboundMessage::template(to, hello);
+    if let Ok(id) = std::env::var("WA_MESSAGING_ACCOUNT_ID") {
+        template = template.messaging_account_id(id); // which account pays
+    }
+    let sent = messages.send(&template).await?;
     // A 200 means "accepted"; delivery arrives later as status webhooks
     // keyed by this id.
     println!("template accepted as {:?}", sent.message_id());

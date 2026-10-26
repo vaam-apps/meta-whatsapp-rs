@@ -124,6 +124,12 @@ late "typing…" after the answer looks broken).
   number there.
 - Direct Send (`category(DirectSendCategory::…)`, `ttl_seconds`) is a Meta
   beta; the rest of the builder works without it.
+- One number, several Messaging Accounts your access token can send
+  from (Meta's account model evolution: one per partner or billing
+  currency; their ids are WABA ids): name the one billed with
+  `OutboundMessage::messaging_account_id`. Optional today, but without
+  it Meta may bill another one or refuse the send; required in that
+  case from Meta's phase 2 (H1 2027).
 
 ## What meta-whatsapp-rs does not do
 
