@@ -570,9 +570,10 @@ PIN, `133005`).
 WABA is stored in the phone → WABA index, so onboarding a second number
 never unroutes the first. `resume(&waba_id, &request, &vault)` loads the
 stored token and reruns the steps after `store_token`, refusing a session that names
-another WABA or an unverified number; `request.code` is not used, but an
-`OnboardingRequest` cannot be built without one, so after a restart a
-caller passes a placeholder (`OPEN_QUESTIONS.md` #10). `SignupSessions::redeem(state, tenant)` checks the tenant
+another WABA or an unverified number; `request.code` is not used, so after
+a restart a caller builds the request with no code,
+`OnboardingRequest::for_resume(saved_session)` (`onboard` refuses a
+code-less request before any request). `SignupSessions::redeem(state, tenant)` checks the tenant
 inside the library, is single-use, and does not consume the state on a
 tenant mismatch. Each failure is
 `Error::in_step("exchange_code" | "debug_token" | "verify_assets" |

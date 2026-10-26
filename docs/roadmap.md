@@ -621,14 +621,32 @@ By crate and topic; each is one PR through the review pipeline, with
 JSON from Meta's pages. A batch whose pages are not in the mirror
 (parity.md's (nm)) starts by reading them.
 
-- [ ] **L4. A code-less `OnboardingRequest` for `resume`**
+- [x] **L4. A code-less `OnboardingRequest` for `resume`**
   (`meta-whatsapp-client`, `client::embedded_signup`; OPEN_QUESTIONS
   #10).
-  - **Kind:** additive.
+  - **Kind:** additive, plus one breaking type change (the public field
+    `OnboardingRequest::code` became an `Option<SignupCode>`; before the
+    first release, in the CHANGELOG).
   - **After:** nothing.
   - **Decisive:** a new process resumes from stored session info alone;
     sending a placeholder code to Meta fails the test's request
     assertion.
+  - **Landed:** `OnboardingRequest::for_resume(session)`, with no code;
+    `onboard` and `onboard_with_approval` refuse a code-less request
+    with a `ValidationError` on `code` before any request. The
+    decisive test is
+    `a_new_process_resumes_from_the_stored_session_info_alone`
+    (`embedded_signup::onboard`): a fresh client and vault on the first
+    process's store resume from the serialized `SessionInfo`, and its
+    two requests (subscribe, register) are asserted exactly, before the
+    error the same request gets from `onboard`; a `for_resume` that put
+    a placeholder code in would make that `onboard` send a third
+    request, the code exchange, and fail the request assertion.
+    `a_code_less_coexistence_resume_never_registers` pins the
+    coexistence refusal on that path (`finish_kind` set from what was
+    saved). The constructors are unchanged. OPEN_QUESTIONS #10 is
+    closed and deleted (CHANGELOG). No parity row changes: parity row
+    120 and coverage row 1 already counted `resume`.
 - [x] **L5. The `ConversationStore` port change** (`meta-whatsapp-core`,
   `meta-whatsapp-adapters`; D10; OPEN_QUESTIONS #32, #44; rows 69, 111):
   one change for everything the port gains before M2, so adapters change

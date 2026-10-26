@@ -28,7 +28,7 @@ the design, the code); then it is deleted. A section heading stays when
 its last entry goes, with a line saying so: guides and skills link to
 its anchor.
 
-On 2026-10-26, 31 entries are decided and 2 stay open: #33 and #46
+On 2026-10-26, 30 entries are decided and 2 stay open: #33 and #46
 (each a data migration).
 
 Numbers are permanent (the code, docs and skills cite them) and not in
@@ -122,14 +122,7 @@ of its own, after an HTML comment; keep that when you add one.
    operator's. The cadence goes into `docs/guides/production.md` with M3's
    rotation work. Roadmap M3a.
 
-10. **Resuming after a restart.** `resume` takes an `OnboardingRequest`
-    whose `code` it ignores; after a process restart you can't rebuild one
-    without a placeholder code. Option: a code-less
-    `OnboardingRequest::for_resume(session)`.
-
-    **Decided 2026-09-26 (coordinator, owner's delegation):** add a
-    code-less `OnboardingRequest::for_resume(session)`; the existing
-    constructor stays, so the change is additive. Roadmap L4.
+<!-- 11 follows 9 in this section: a list of its own. -->
 
 11. **App-only install / Hosted Embedded Signup.** Not integrated; the
     launch options cover the default and coexistence flows.

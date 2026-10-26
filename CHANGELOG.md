@@ -76,6 +76,10 @@ volumes (Claude config, shell history, cargo caches) start empty
 - #3 (Tech Provider or Solution Partner?): decided by the owner on
   2026-09-24, "support both, per deployment"; Solution Partner mode is
   below.
+- #10 (resuming after a restart needed a placeholder code): decided on
+  2026-09-26 under the owner's delegation, a code-less constructor;
+  landed with roadmap L4 as `OnboardingRequest::for_resume` (see Added),
+  and the entry is deleted from OPEN_QUESTIONS.md.
 - #17 (coexistence echoes and history not recorded by the inbox):
   resolved in a3582b8; what that needs a port change for is #35 (below).
 - #18 (Postgres and U+0000): decided by the owner on 2026-09-25, "store
@@ -146,7 +150,9 @@ stored data, the owner's).
   - #8, no refresh: the expiry is surfaced before it lapses (L11e, M3e);
   - #9, key custody stays the integrator's, rotation on demand, the
     cadence documented (M3a);
-  - #10, a code-less `OnboardingRequest` for `resume`, additive (L4);
+  - #10, a code-less `OnboardingRequest` for `resume`, additive (L4,
+    landed with one breaking type change, the field `code` now an
+    `Option`: see Added and "Open questions closed");
   - #11, hosted Embedded Signup integrated beside the code flow (L11a);
   - #12, the worked example's pre-fill shape kept, checked in Meta's
     Integration Helper (L25).
@@ -186,6 +192,20 @@ stored data, the owner's).
   the `phone_number_id` check (M2e).
 
 ### Added
+
+- **A code-less `OnboardingRequest` for `resume`**
+  (`meta_whatsapp_client::embedded_signup`, roadmap L4, decided as
+  OPEN_QUESTIONS #10, now closed): `OnboardingRequest::for_resume(session)`
+  builds the request `EmbeddedSignup::resume` takes from the session info
+  saved when onboarding failed after `store_token` (`SessionInfo` is
+  `Serialize`), with no authorization code, so a new process resumes
+  without the placeholder code it needed before. `onboard` and
+  `onboard_with_approval` refuse a request without a code with a
+  `ValidationError` on `code`, before any request and before the
+  approval runs. `OnboardingRequest::new` and `from_event` are
+  unchanged; the public field `OnboardingRequest::code` is now an
+  `Option<SignupCode>` (`Some` from those two constructors), which code
+  reading the field directly sees.
 
 - **`ErrorKind::SampleTemplateNotAllowed`** (`meta_whatsapp_core`, named
   `sample_template_not_allowed`): Graph's `131058`, "Hello World templates
@@ -1012,6 +1032,12 @@ stored data, the owner's).
 
 ### Changed
 
+- **Breaking — `OnboardingRequest::code` is an `Option<SignupCode>`**
+  (roadmap L4): `None` in a request built with the new
+  `OnboardingRequest::for_resume` (see Added). `OnboardingRequest::new`
+  and `from_event` still take a `SignupCode` and set `Some`; only code
+  reading or assigning the field changes (`request.code =
+  Some(code)`).
 - **App deep links on template URL buttons** (`meta_whatsapp_client::templates`,
   roadmap L24, parity row 155; breaking): `Button::Url` gains
   `app_deep_link: Option<AppDeepLink>`, Meta's `app_deep_link` of

@@ -128,9 +128,8 @@ pub async fn resume_after_restart(
     saved_session: SessionInfo, // persisted when onboarding failed (it is Serialize)
     corrected_pin: &str,
 ) -> meta_whatsapp_rs::Result<Onboarded> {
-    // `resume` ignores the code, but a request cannot be built without one
-    // (a code-less constructor is OPEN_QUESTIONS.md #10).
-    let request = OnboardingRequest::new(SignupCode::new("unused")?, saved_session)
+    // No code: `resume` needs none, and `onboard` refuses a code-less request.
+    let request = OnboardingRequest::for_resume(saved_session)
         .register_with_pin(TwoStepPin::new(corrected_pin)?);
     signup.es.resume(waba_id, &request, &signup.vault).await
 }
@@ -198,6 +197,32 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(done, Completion::Cancelled));
+    }
+
+    #[tokio::test]
+    async fn resuming_after_a_restart_needs_no_code() {
+        let signup = signup();
+        let session = SessionInfo::default();
+        // Nothing is stored for this WABA: refused before any request.
+        let unknown = WabaId::new("102290129340398");
+        let err = resume_after_restart(&signup, &unknown, session.clone(), "581063")
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Step {
+                step: steps::LOAD_TOKEN,
+                ..
+            }
+        ));
+        // The code-less request is for `resume` only: `onboard` refuses it.
+        let request = OnboardingRequest::for_resume(session);
+        let err = signup
+            .es
+            .onboard(&request, &signup.vault)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Validation(ref v) if v.field == "code"));
     }
 
     #[test]

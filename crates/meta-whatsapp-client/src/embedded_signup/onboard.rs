@@ -85,12 +85,19 @@ const PHONE_PAGE_SIZE: u32 = 100;
 
 /// What to onboard, and how.
 ///
+/// Built with [`Self::new`] or [`Self::from_event`] for
+/// [`EmbeddedSignup::onboard`], which exchanges the code, or with
+/// [`Self::for_resume`] for [`EmbeddedSignup::resume`], which needs none.
+///
 /// `Debug` never shows the code or the PIN.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct OnboardingRequest {
-    /// The exchangeable code from `FB.login`.
-    pub code: SignupCode,
+    /// The exchangeable code from `FB.login`. `None` in a request built
+    /// with [`Self::for_resume`]: [`EmbeddedSignup::resume`] does not use
+    /// it, and [`EmbeddedSignup::onboard`] refuses a request without one
+    /// before any request.
+    pub code: Option<SignupCode>,
     /// Asset ids from the `FINISH*` message event. Claims: the WABA and phone
     /// number are verified during onboarding; `business_id` is not used (the
     /// WABA's owner is read from Meta instead).
@@ -120,7 +127,29 @@ impl OnboardingRequest {
     /// number.
     pub fn new(code: SignupCode, session: SessionInfo) -> Self {
         Self {
-            code,
+            code: Some(code),
+            ..Self::for_resume(session)
+        }
+    }
+
+    /// Resume the onboarding of the assets in `session`, with no code:
+    /// the request [`EmbeddedSignup::resume`] takes after a process
+    /// restart, rebuilt from the session info you saved when onboarding
+    /// failed after `store_token` ([`SessionInfo`] is `Serialize`). With
+    /// [`SessionInfo::default()`], `resume` picks the first number stored
+    /// for the WABA (the onboarded one). Like [`Self::new`], it registers
+    /// nothing until [`Self::register_with_pin`], and its
+    /// [`finish_kind`](Self::finish_kind) is `None`: set it from what you
+    /// saved for a coexistence onboarding, so that registering its number
+    /// is refused locally.
+    ///
+    /// [`EmbeddedSignup::onboard`] and
+    /// [`EmbeddedSignup::onboard_with_approval`] refuse it with a
+    /// [`ValidationError`] on `code` before any request: they start with
+    /// the code exchange.
+    pub fn for_resume(session: SessionInfo) -> Self {
+        Self {
+            code: None,
             session,
             finish_kind: None,
             register: false,
@@ -313,7 +342,8 @@ impl EmbeddedSignup {
     /// this refuses before any request ([`CreditError::ApprovalRequired`]);
     /// use [`Self::onboard_with_approval`].
     ///
-    /// Input errors are reported before any request. Every later failure is
+    /// Input errors are reported before any request, among them a request
+    /// without a code ([`OnboardingRequest::for_resume`]). Every later failure is
     /// an [`Error::Step`] naming the step; see the [module docs](super) for
     /// what each step does and which can be repeated. **Do not retry a
     /// failed `onboard`**: the code is spent. After `store_token` succeeded,
@@ -414,6 +444,13 @@ impl EmbeddedSignup {
         Fut: Future<Output = Result<()>>,
     {
         request.validate()?;
+        let Some(code) = request.code.as_ref() else {
+            return Err(ValidationError::new(
+                "code",
+                "required to onboard (the first step exchanges it); a request built with OnboardingRequest::for_resume is for EmbeddedSignup::resume",
+            )
+            .into());
+        };
         let plan = self.credit_plan(request.currency.as_ref(), request.reshare_after_revocation)?;
         if plan.is_some() && approve.is_none() {
             return Err(CreditError::ApprovalRequired(
@@ -424,7 +461,7 @@ impl EmbeddedSignup {
         let mut done = Vec::with_capacity(9);
 
         let token = self
-            .exchange_code(&request.code)
+            .exchange_code(code)
             .await
             .map_err(|e| e.in_step(EXCHANGE_CODE))?;
         done.push(EXCHANGE_CODE);
@@ -530,7 +567,9 @@ impl EmbeddedSignup {
     /// Redo the repeatable tail of [`Self::onboard`] (subscribe, in
     /// Solution Partner mode the credit line steps, register) for a WABA
     /// whose token is already in `vault`, e.g. after `register_phone` failed
-    /// on a wrong PIN. `request.code` is not used.
+    /// on a wrong PIN. `request.code` is not used: after a process restart,
+    /// build the request with [`OnboardingRequest::for_resume`] from the
+    /// session info you saved (no code is needed, and none is sent).
     ///
     /// In Solution Partner mode, `share_credit_line` first checks whether
     /// the credit line already funds the WABA (a share that failed with a
@@ -1660,6 +1699,204 @@ mod tests {
                 .unwrap_err();
         assert_eq!(step(&err), LOAD_TOKEN);
         assert_eq!(h.t.requests().len(), sent, "nothing was sent");
+    }
+
+    /// Whether `r` carries an authorization code anywhere Meta would read
+    /// one: the code exchange's path, a `code` query parameter, a `code`
+    /// key in a JSON body.
+    fn carries_a_code(r: &meta_whatsapp_core::testing::RecordedRequest) -> bool {
+        r.path().ends_with("/oauth/access_token")
+            || r.query("code").is_some()
+            || r.json().is_some_and(|body| body.get("code").is_some())
+    }
+
+    /// Roadmap L4, the decisive test: a new process resumes from the
+    /// stored session info alone. Process 1 onboards until `store_token`,
+    /// then `register_phone` fails on the PIN; all it keeps is the WABA id
+    /// and the session info, serialized. Process 2 is a fresh client,
+    /// transport and vault on the same store: it rebuilds the request with
+    /// no code, resumes, and nothing it sends carries a code; the same
+    /// request passed to `onboard` is refused before any request. The
+    /// request assertions come first: a `for_resume` that put a
+    /// placeholder code in would send the code exchange from `onboard`,
+    /// and fail them.
+    #[tokio::test]
+    async fn a_new_process_resumes_from_the_stored_session_info_alone() {
+        let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
+        let (saved_waba, saved_session) = {
+            let first = harness_on(Arc::clone(&kv), RetryPolicy::NONE);
+            first.t.push_json(200, token_response(TOKEN));
+            first.t.push_json(200, debug_response(&[WABA]));
+            first.t.push_json(200, owner_response(WABA, BUSINESS));
+            first.t.push_json(200, phones_response(&[PHONE]));
+            first.t.push_json(200, success());
+            first.t.push_json(400, graph_error(133005));
+            let request = full_request();
+            let err = first.es.onboard(&request, &first.vault).await.unwrap_err();
+            assert_eq!(step(&err), REGISTER_PHONE);
+            assert_eq!(first.t.remaining(), 0);
+            // The detector below sees a code where one is sent: only in
+            // the code exchange, the first request.
+            let carrying: Vec<_> = first.t.requests().iter().map(carries_a_code).collect();
+            assert_eq!(carrying, [true, false, false, false, false, false]);
+            (
+                request.session.primary_waba_id().unwrap().to_string(),
+                serde_json::to_string(&request.session).unwrap(),
+            )
+        };
+
+        // A new process: nothing survives but the store and what was saved.
+        let second = harness_on(kv, RetryPolicy::NONE);
+        let session: SessionInfo = serde_json::from_str(&saved_session).unwrap();
+        let request = OnboardingRequest::for_resume(session)
+            .register_with_pin(TwoStepPin::new("000111").unwrap());
+        second.t.push_json(200, success());
+        second.t.push_json(200, success());
+        let done = second
+            .es
+            .resume(&WabaId::new(saved_waba), &request, &second.vault)
+            .await
+            .unwrap();
+        assert_eq!(
+            done.steps_completed,
+            vec![LOAD_TOKEN, VERIFY_ASSETS, SUBSCRIBE_APP, REGISTER_PHONE]
+        );
+        assert_eq!(done.waba_id.as_str(), WABA);
+        assert_eq!(
+            done.phone_number_id.as_ref().map(PhoneNumberId::as_str),
+            Some(PHONE)
+        );
+        assert_eq!(done.token.expose_secret(), TOKEN, "the stored token");
+
+        // The code-less request on the full path: refused locally.
+        let refused = second.es.onboard(&request, &second.vault).await;
+
+        let reqs = second.t.requests();
+        assert_eq!(reqs.len(), 2, "subscribe and register, nothing else");
+        // 1. subscribe, with the stored token, no body, no query.
+        assert_eq!(reqs[0].method, Method::POST);
+        assert_eq!(reqs[0].path(), format!("/v25.0/{WABA}/subscribed_apps"));
+        assert_eq!(reqs[0].url.query(), None);
+        assert_eq!(reqs[0].bearer(), Some(TOKEN));
+        assert_eq!(reqs[0].body, RecordedBody::Empty);
+        // 2. register, with the stored token and the corrected PIN.
+        assert_eq!(reqs[1].method, Method::POST);
+        assert_eq!(reqs[1].path(), format!("/v25.0/{PHONE}/register"));
+        assert_eq!(reqs[1].url.query(), None);
+        assert_eq!(reqs[1].bearer(), Some(TOKEN));
+        assert_eq!(
+            reqs[1].json(),
+            Some(json!({"messaging_product": "whatsapp", "pin": "000111"}))
+        );
+        for r in &reqs {
+            assert!(
+                !carries_a_code(r),
+                "a code was sent: {} {}",
+                r.method,
+                r.path()
+            );
+        }
+        assert_eq!(second.t.remaining(), 0);
+        assert!(request.code.is_none(), "a code-less request holds no code");
+        assert!(
+            matches!(&refused, Err(Error::Validation(v)) if v.field == "code"),
+            "{refused:?}"
+        );
+        let shown = format!("{request:?}");
+        assert!(
+            shown.contains("TwoStepPin([REDACTED])") && !shown.contains("000111"),
+            "{shown}"
+        );
+    }
+
+    /// A code-less request for a coexistence onboarding, its `finish_kind`
+    /// set from what was saved: `resume` refuses to register the number
+    /// (it is already registered with the WhatsApp Business app) before
+    /// any request, though the token is stored, and resumes the
+    /// subscription without registering.
+    #[tokio::test]
+    async fn a_code_less_coexistence_resume_never_registers() {
+        let h = harness();
+        script_success(&h.t, TOKEN, WABA, &[PHONE]);
+        h.es.onboard(&full_request(), &h.vault).await.unwrap();
+        let sent = h.t.requests().len();
+
+        let mut request = OnboardingRequest::for_resume(SessionInfo::default());
+        request.finish_kind = Some(FinishKind::WhatsappBusinessAppOnboarding);
+        let refused = request
+            .clone()
+            .register_with_pin(TwoStepPin::new("000111").unwrap());
+        let err =
+            h.es.resume(&WabaId::new(WABA), &refused, &h.vault)
+                .await
+                .unwrap_err();
+        assert!(
+            matches!(&err, Error::Validation(v) if v.field == "register"),
+            "{err:?}"
+        );
+        assert_eq!(h.t.requests().len(), sent, "nothing was sent");
+
+        h.t.push_json(200, success());
+        let done =
+            h.es.resume(&WabaId::new(WABA), &request, &h.vault)
+                .await
+                .unwrap();
+        assert_eq!(
+            done.steps_completed,
+            vec![LOAD_TOKEN, VERIFY_ASSETS, SUBSCRIBE_APP]
+        );
+        assert!(done.needs_coexistence_sync());
+        let reqs = h.t.requests();
+        assert_eq!(reqs.len(), sent + 1, "the subscription only");
+        assert_eq!(reqs[sent].method, Method::POST);
+        assert_eq!(reqs[sent].path(), format!("/v25.0/{WABA}/subscribed_apps"));
+        assert_eq!(reqs[sent].bearer(), Some(TOKEN));
+        assert_eq!(reqs[sent].body, RecordedBody::Empty);
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// A code-less request is refused by both onboarding entry points
+    /// before any request and before the approval runs; `Debug` shows no
+    /// code, and a request built with a code still shows it redacted.
+    #[tokio::test]
+    async fn a_code_less_request_never_reaches_the_code_exchange() {
+        let h = harness();
+        let request = OnboardingRequest::for_resume(SessionInfo {
+            waba_id: Some(WabaId::new(WABA)),
+            ..SessionInfo::default()
+        });
+        assert!(!request.register && request.pin.is_none());
+        assert_eq!(request.finish_kind, None);
+        let err = h.es.onboard(&request, &h.vault).await.unwrap_err();
+        assert!(
+            matches!(&err, Error::Validation(v) if v.field == "code"),
+            "{err:?}"
+        );
+        let approved = Arc::new(Mutex::new(false));
+        let seen = Arc::clone(&approved);
+        let err =
+            h.es.onboard_with_approval(&request, &h.vault, |_| async move {
+                *seen.lock().unwrap() = true;
+                Ok(())
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, Error::Validation(v) if v.field == "code"),
+            "{err:?}"
+        );
+        assert!(!*approved.lock().unwrap(), "the approval never ran");
+        assert!(h.t.requests().is_empty(), "nothing was sent");
+        assert!(raw(&h.kv, &format!("waba/{WABA}")).await.is_none());
+
+        assert!(format!("{request:?}").contains("code: None"));
+        let with_code =
+            OnboardingRequest::new(SignupCode::new(CODE).unwrap(), SessionInfo::default());
+        let shown = format!("{with_code:?}");
+        assert!(
+            shown.contains("SignupCode([REDACTED])") && !shown.contains(CODE),
+            "{shown}"
+        );
     }
 
     #[tokio::test]
