@@ -161,6 +161,7 @@ pub fn webhook_handler(
     let handler = WebhookHandler::builder(verifier, verify_token, Arc::new(bot))
         .dedup(DedupGuard::new(kv)) // Meta retries for 7 days: a retry must not run a command twice
         .build();
+    handler.check()?; // a blank verify token stops the boot, not Meta's verification
     Ok(handler)
 }
 
@@ -451,5 +452,30 @@ mod tests {
             clock.now() - OffsetDateTime::UNIX_EPOCH,
             time::Duration::microseconds(12_500)
         );
+    }
+
+    /// A blank verify token stops the boot: `webhook_handler` runs the check.
+    #[tokio::test]
+    async fn a_blank_verify_token_stops_the_boot() {
+        for (token, starts) in [("", false), (" \t", false), ("verify-token", true)] {
+            let t = ScriptedTransport::new();
+            let clock = ManualClock::new(OffsetDateTime::UNIX_EPOCH);
+            let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
+            let bot = build_bot(client(&t), kv.clone(), NUMBER.into(), pacer(&clock))
+                .await
+                .unwrap();
+            let handler = webhook_handler(
+                bot,
+                AppSecret::new("app-secret"),
+                VerifyToken::new(token),
+                kv,
+            );
+            if starts {
+                assert!(handler.is_ok(), "{token:?}");
+            } else {
+                assert!(matches!(handler, Err(Error::Config(_))), "{token:?}");
+            }
+            assert_eq!(t.remaining(), 0);
+        }
     }
 }

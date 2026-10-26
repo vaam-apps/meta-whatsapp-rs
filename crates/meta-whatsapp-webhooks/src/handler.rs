@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use meta_whatsapp_core::error::WebhookError;
+use meta_whatsapp_core::error::{ConfigError, WebhookError};
 use meta_whatsapp_core::secret::VerifyToken;
 use meta_whatsapp_core::sink::EventSink;
 use serde_json::Value;
@@ -22,7 +22,7 @@ use crate::event::WebhookEvent;
 use crate::payload::WebhookPayload;
 use crate::redact;
 use crate::signature::SignatureVerifier;
-use crate::verify::{VerificationQuery, verify_subscription};
+use crate::verify::{VerificationQuery, check_verify_token, verify_subscription};
 
 /// Default body size limit: 3 MiB (3 145 728 bytes).
 ///
@@ -60,7 +60,8 @@ pub struct WebhookHandler {
 }
 
 /// Builder for [`WebhookHandler`]. The required parts are the arguments of
-/// [`WebhookHandler::builder`], so `build` cannot fail.
+/// [`WebhookHandler::builder`], so `build` cannot fail; what it cannot
+/// refuse, a blank verify token, [`WebhookHandler::check`] reports.
 #[derive(Debug)]
 #[must_use]
 pub struct WebhookHandlerBuilder {
@@ -81,7 +82,7 @@ impl WebhookHandlerBuilder {
         self
     }
 
-    /// Finish.
+    /// Finish. Call [`WebhookHandler::check`] on the result at startup.
     pub fn build(self) -> WebhookHandler {
         self.handler
     }
@@ -103,6 +104,55 @@ impl WebhookHandler {
                 max_body_bytes: DEFAULT_MAX_BODY_BYTES,
             },
         }
+    }
+
+    /// Check what [`WebhookHandlerBuilder::build`] cannot refuse: today, a
+    /// blank verify token (empty, or nothing but whitespace). Run it at
+    /// startup, right after `build`, and stop there on an error; it is
+    /// the caller's to run, and nothing else runs it.
+    ///
+    /// Without it, a blank token surfaces only when Meta's verification
+    /// request arrives: [`WebhookHandler::verify`] then refuses every
+    /// request, so the dashboard cannot verify the callback URL.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use meta_whatsapp_core::error::SinkError;
+    /// # use meta_whatsapp_core::secret::{AppSecret, VerifyToken};
+    /// # use meta_whatsapp_core::sink::EventSink;
+    /// # use meta_whatsapp_webhooks::{SignatureVerifier, WebhookEvent, WebhookHandler};
+    /// # #[derive(Debug)]
+    /// # struct Discard;
+    /// # #[async_trait::async_trait]
+    /// # impl EventSink<WebhookEvent> for Discard {
+    /// #     async fn deliver(&self, _: WebhookEvent) -> Result<(), SinkError> { Ok(()) }
+    /// # }
+    /// # fn main() -> meta_whatsapp_core::Result<()> {
+    /// # let sink: Arc<dyn EventSink<WebhookEvent>> = Arc::new(Discard);
+    /// let handler = WebhookHandler::builder(
+    ///     SignatureVerifier::new(vec![AppSecret::new("app-secret")])?,
+    ///     VerifyToken::new(" "), // read from a variable set to a space
+    ///     sink.clone(),
+    /// )
+    /// .build();
+    /// assert!(handler.check().is_err()); // at startup: stop here
+    ///
+    /// let handler = WebhookHandler::builder(
+    ///     SignatureVerifier::new(vec![AppSecret::new("app-secret")])?,
+    ///     VerifyToken::new("vibecoding"),
+    ///     sink,
+    /// )
+    /// .build();
+    /// handler.check()?;
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError`] when the verify token is blank. Its text is fixed
+    /// and names no part of the token.
+    pub fn check(&self) -> Result<(), ConfigError> {
+        check_verify_token(&self.verify_token)
     }
 
     /// The configured body size limit.

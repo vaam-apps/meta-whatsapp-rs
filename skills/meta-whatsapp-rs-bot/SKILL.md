@@ -5,7 +5,7 @@ description: "A WhatsApp bot on Cloud API webhooks with meta-whatsapp-rs (featur
 
 # meta-whatsapp-rs-bot
 
-> **Verified against meta-whatsapp-rs fc63968e2a49b25e5b601175ff7f9061b32a96f4 (2026-09-27).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 466302772341211e6c7a56eafe289677ae1f2493 (2026-10-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/bot.rs](examples/bot.rs), compiled and tested by the gate. All in
 `meta_whatsapp_rs::bot` (feature `bot`, off by default; `full` includes it), `async_trait` too.
@@ -100,6 +100,7 @@ let verifier = SignatureVerifier::new(vec![app_secret])?;
 let handler = WebhookHandler::builder(verifier, verify_token, Arc::new(bot))
     .dedup(DedupGuard::new(kv)) // Meta retries for 7 days: a retry must not run a command twice
     .build();
+handler.check()?; // a blank verify token stops the boot, not Meta's verification
 ```
 
 `LogErrors` logs a failure (kinds only) and acknowledges it, since an error makes Meta
@@ -156,5 +157,4 @@ cut between blocks. Text is left as written (`NoEscape`); `WordJoinerEscape` is 
 ## Related skills
 
 `meta-whatsapp-rs-webhook-endpoint`, `meta-whatsapp-rs-interactive-messages`,
-`meta-whatsapp-rs-cms-inbox`, `meta-whatsapp-rs-phone-numbers` (command menu),
-`meta-whatsapp-rs-token-vault`, `meta-whatsapp-rs-testing`.
+`meta-whatsapp-rs-cms-inbox`, `meta-whatsapp-rs-phone-numbers` (command menu), `meta-whatsapp-rs-token-vault`, `meta-whatsapp-rs-testing`.

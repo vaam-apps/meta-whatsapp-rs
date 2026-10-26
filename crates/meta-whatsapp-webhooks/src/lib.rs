@@ -81,6 +81,7 @@
 //!     )
 //!     // In production, also: .dedup(DedupGuard::new(kv_store))
 //!     .build();
+//!     handler.check()?; // a blank verify token stops here, not at Meta's verification
 //!
 //!     let app = axum::Router::new().nest("/webhooks/whatsapp", router(Arc::new(handler)));
 //!     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;

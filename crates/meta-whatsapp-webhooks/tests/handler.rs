@@ -553,6 +553,93 @@ fn verify_uses_the_configured_token() {
     assert!(!format!("{h:?}").contains(SECRET));
 }
 
+fn with_verify_token(token: &str) -> WebhookHandler {
+    WebhookHandler::builder(
+        SignatureVerifier::new(vec![secret()]).unwrap(),
+        VerifyToken::new(token),
+        Arc::new(RecordingSink::default()),
+    )
+    .build()
+}
+
+/// Empty, ASCII whitespace and Unicode whitespace (`str::trim`'s set,
+/// the handshake's): each one blank.
+const BLANK_TOKENS: [&str; 6] = ["", " ", "   ", "\t", "\r\n", "\u{a0}\u{3000}"];
+
+#[test]
+fn check_reports_a_blank_verify_token() {
+    for token in BLANK_TOKENS {
+        let h = with_verify_token(token);
+        let Err(error) = h.check() else {
+            panic!("check passed a blank verify token: {token:?}");
+        };
+        // The check and the handshake agree on what is blank.
+        let q: VerificationQuery = serde_json::from_value(json!({
+            "hub.mode": "subscribe", "hub.verify_token": token, "hub.challenge": "42"
+        }))
+        .unwrap();
+        assert!(matches!(h.verify(&q), Err(Error::Config(_))), "{token:?}");
+        // Through `?` into the error tree, as a startup would use it.
+        assert!(matches!(Error::from(error), Error::Config(_)), "{token:?}");
+    }
+}
+
+#[test]
+fn check_passes_a_real_verify_token() {
+    for token in ["vibecoding", " padded ", "x"] {
+        assert_eq!(with_verify_token(token).check(), Ok(()), "{token:?}");
+    }
+    // The handshake still answers with it.
+    let h = with_verify_token("vibecoding");
+    let q: VerificationQuery = serde_json::from_value(json!({
+        "hub.mode": "subscribe", "hub.verify_token": "vibecoding", "hub.challenge": "42"
+    }))
+    .unwrap();
+    assert_eq!(h.check(), Ok(()));
+    assert_eq!(h.verify(&q).unwrap(), "42");
+}
+
+#[test]
+fn neither_the_builder_nor_the_handler_debug_shows_the_verify_token() {
+    let builder = WebhookHandler::builder(
+        SignatureVerifier::new(vec![secret()]).unwrap(),
+        VerifyToken::new("vibecoding"),
+        Arc::new(RecordingSink::default()),
+    );
+    let text = format!("{builder:?}");
+    assert!(!text.contains("vibecoding"), "{text}");
+    assert!(!text.contains(SECRET), "{text}");
+    let handler = builder.build();
+    assert_eq!(handler.check(), Ok(()));
+    assert!(!format!("{handler:?}").contains("vibecoding"));
+}
+
+#[test]
+fn the_check_error_carries_no_token_text() {
+    // One fixed text for every blank token: nothing of the token is in it.
+    let texts: Vec<(String, String)> = BLANK_TOKENS
+        .iter()
+        .map(|token| {
+            let error = with_verify_token(token).check().unwrap_err();
+            let tree = Error::from(error.clone());
+            (format!("{error} | {tree}"), format!("{error:?} | {tree:?}"))
+        })
+        .collect();
+    assert!(texts.iter().all(|t| *t == texts[0]), "{texts:#?}");
+    let (display, debug) = &texts[0];
+    assert_eq!(
+        display.split(" | ").next().unwrap(),
+        "configuration error: webhook verify token is blank (empty or whitespace); \
+         every verification request is refused"
+    );
+    for text in [display, debug] {
+        for c in ['\t', '\r', '\n', '\u{a0}', '\u{3000}'] {
+            assert!(!text.contains(c), "{c:?} in {text:?}");
+        }
+        assert!(!text.contains("  "), "{text:?}");
+    }
+}
+
 #[test]
 fn a_blank_verify_token_verifies_nothing() {
     let h = WebhookHandler::builder(

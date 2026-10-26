@@ -209,6 +209,7 @@ let verifier = SignatureVerifier::new(vec![app_secret])?;
 let handler = WebhookHandler::builder(verifier, verify_token, Arc::new(bot))
     .dedup(DedupGuard::new(kv)) // Meta retries for 7 days: a retry must not run a command twice
     .build();
+handler.check()?; // a blank verify token stops the boot, not Meta's verification
 ```
 
 Keep the `DedupGuard`: Meta retries for 7 days, and without it a retry

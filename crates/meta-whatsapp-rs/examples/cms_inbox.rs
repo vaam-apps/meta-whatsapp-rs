@@ -145,6 +145,7 @@ pub fn app(
     )
     .dedup(DedupGuard::new(kv)) // Meta retries for 7 days: record each event once
     .build();
+    handler.check()?; // a blank verify token stops the boot, not Meta's verification
     let webhook = meta_whatsapp_rs::webhooks::router(Arc::new(handler)); // GET verify, POST deliver
 
     let tenants = Arc::new(tenants);
