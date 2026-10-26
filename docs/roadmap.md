@@ -978,12 +978,27 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **After:** nothing.
   - **Decisive:** a numeric id holding `/` is refused before any
     request; a group id holding `/` stays one percent-encoded segment.
-- [ ] **L20d. A check for a blank verify token** (`meta-whatsapp-webhooks`,
+- [x] **L20d. A check for a blank verify token** (`meta-whatsapp-webhooks`,
   `WebhookHandlerBuilder`; OPEN_QUESTIONS #16).
   - **Kind:** additive (the builder stays infallible).
   - **After:** nothing.
   - **Decisive:** the check reports a handler built with a blank verify
     token and passes one built with a real token.
+  - **Landed:** `WebhookHandler::check(&self) -> Result<(), ConfigError>`,
+    run by the caller right after `build` (nothing else runs it). Blank
+    is what the handshake already refused: empty, or only whitespace
+    (`str::trim`'s Unicode set), one predicate shared with
+    `verify_subscription`, whose constant-time comparison is unchanged.
+    The error's text is fixed and names no part of the token. The
+    decisive tests are `check_reports_a_blank_verify_token` and
+    `check_passes_a_real_verify_token` (`tests/handler.rs`), with
+    `the_check_error_carries_no_token_text`; making `check` always pass
+    fails the first and the last. The `cms_inbox` example's `app` runs
+    it (`the_app_refuses_a_blank_verify_token_at_boot`); the service
+    does not, as its configuration already refuses a blank
+    `WA_VERIFY_TOKEN` with the same predicate before a handler exists.
+    OPEN_QUESTIONS #16 is closed and deleted (CHANGELOG). No parity row
+    changes: coverage row 2 already counted the verify token.
 - [ ] **L20e. Product-card carousel templates: two cards at creation**
   (`meta-whatsapp-client`, `client::templates`; OPEN_QUESTIONS #22).
   - **Kind:** breaking (creating one with 3–10 cards is refused).

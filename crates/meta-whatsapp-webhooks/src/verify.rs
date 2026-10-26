@@ -40,16 +40,13 @@ pub struct VerificationQuery {
 /// The blank check is fail-closed on purpose: a token read from an unset
 /// environment variable is `""`, and `""` equals the `hub.verify_token=`
 /// anyone can send, which would let a stranger (re)verify your callback.
+/// [`WebhookHandler::check`](crate::WebhookHandler::check) reports the
+/// same blank token at startup, before a request arrives.
 pub fn verify_subscription(
     query: &VerificationQuery,
     expected: &VerifyToken,
 ) -> meta_whatsapp_core::Result<String> {
-    if expected.expose_secret().trim().is_empty() {
-        return Err(ConfigError::new(
-            "webhook verify token is blank; refusing every verification request",
-        )
-        .into());
-    }
+    check_verify_token(expected)?;
     if query.mode.as_deref() != Some("subscribe") {
         return Err(
             WebhookError::InvalidVerificationRequest("hub.mode must be `subscribe`").into(),
@@ -65,6 +62,23 @@ pub fn verify_subscription(
         return Err(WebhookError::VerifyTokenMismatch.into());
     }
     Ok(challenge.clone())
+}
+
+/// Refuse a blank configured verify token: empty, or nothing but
+/// whitespace (Unicode `White_Space`, what [`str::trim`] strips). One
+/// predicate for [`verify_subscription`] and
+/// [`WebhookHandler::check`](crate::WebhookHandler::check), so the check at
+/// startup reports exactly the tokens the handshake refuses.
+///
+/// The error's text is fixed: nothing of the token reaches it.
+pub(crate) fn check_verify_token(token: &VerifyToken) -> Result<(), ConfigError> {
+    if token.expose_secret().trim().is_empty() {
+        return Err(ConfigError::new(
+            "webhook verify token is blank (empty or whitespace); \
+             every verification request is refused",
+        ));
+    }
+    Ok(())
 }
 
 /// Compare digests rather than the tokens themselves: `ct_eq` on slices of

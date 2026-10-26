@@ -158,8 +158,9 @@ does not use `Inbox`; M2a's routes will.
 Environment variables, with a `<NAME>_FILE` variant for every secret; an
 optional TOML file (`WA_SERVER_CONFIG`) for non-secrets. The list is in
 [§7.2](#72-environment). **The service refuses to start** on a blank or
-missing app secret or verify token (closing OQ #16 for itself), a missing
-vault key or a pepper under 32 bytes with Postgres, memory storage outside
+missing app secret or verify token (in its configuration, before any
+handler exists, with the blank test the library's `WebhookHandler::check`
+makes), a missing vault key or a pepper under 32 bytes with Postgres, memory storage outside
 `WA_SERVER_ENV=development`, identical public and internal binds, a
 plain-`http` `WA_GRAPH_ENDPOINT` outside development (every token
 travels to it), a vault key id used twice (`WA_VAULT_KEY_ID`'s and

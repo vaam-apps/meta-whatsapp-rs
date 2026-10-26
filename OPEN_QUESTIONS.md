@@ -28,7 +28,7 @@ the design, the code); then it is deleted. A section heading stays when
 its last entry goes, with a line saying so: guides and skills link to
 its anchor.
 
-On 2026-10-26, 30 entries are decided and 2 stay open: #33 and #46
+On 2026-10-26, 29 entries are decided and 2 stay open: #33 and #46
 (each a data migration).
 
 Numbers are permanent (the code, docs and skills cite them) and not in
@@ -180,15 +180,6 @@ of its own, after an HTML comment; keep that when you add one.
     **Decided 2026-09-26 (coordinator, owner's delegation):** keep 60 s:
     the sink path takes far less, and Meta's retry answers the `503`.
     Swappable by `with_lease`. No code.
-
-16. **Blank verify token** fails when a verification request arrives, not at
-    startup — failing early would change the handler builder's API.
-
-    **Decided 2026-09-26 (coordinator, owner's delegation):** keep the
-    builder infallible, and add a check that reports a blank verify token
-    when the handler is built, next to it (additive; the service already
-    refuses to start on one). Swappable: the check is the caller's to run.
-    Roadmap L20d.
 
 ## Storage
 

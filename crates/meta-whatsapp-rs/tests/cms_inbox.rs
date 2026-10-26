@@ -822,3 +822,36 @@ async fn invalid_replies_and_metas_window_refusal_map_to_stable_codes() {
         call_json(&app, get_a(&format!("/inbox/{PNID}/conversations/{BSUID}"))).await;
     assert_eq!(conversation["messages"].as_array().unwrap().len(), 1);
 }
+
+#[test]
+fn the_app_refuses_a_blank_verify_token_at_boot() {
+    // `app` runs `WebhookHandler::check`: a blank verify token stops the
+    // boot instead of answering 403 to Meta's verification later.
+    for token in ["", "  ", "\n"] {
+        let graph = ScriptedTransport::new();
+        let client = Client::builder()
+            .transport(graph.clone())
+            .retry(RetryPolicy::NONE)
+            .build()
+            .unwrap();
+        let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
+        let vault = TokenVault::new(
+            kv.clone(),
+            VaultKeys::new(VaultKey::generate("test").unwrap()),
+        )
+        .unwrap();
+        let Err(error) = cms_inbox::app(
+            client,
+            AppSecret::new(APP_SECRET),
+            VerifyToken::new(token),
+            kv,
+            Arc::new(MemoryConversationStore::new()),
+            vault,
+            tenants(),
+        ) else {
+            panic!("the app started with a blank verify token: {token:?}");
+        };
+        assert!(matches!(error, Error::Config(_)), "{token:?}: {error:?}");
+        assert_eq!(graph.remaining(), 0);
+    }
+}

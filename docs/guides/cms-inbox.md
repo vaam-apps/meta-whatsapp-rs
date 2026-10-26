@@ -132,6 +132,7 @@ let sink = FanoutSink::new()
 let handler = WebhookHandler::builder(verifier, verify_token, Arc::new(sink))
     .dedup(DedupGuard::new(kv.clone()))
     .build();
+handler.check()?; // a blank verify token stops the boot
 let webhook = meta_whatsapp_rs::webhooks::router(Arc::new(handler)); // public: Meta authenticates by signature
 ```
 

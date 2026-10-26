@@ -75,6 +75,7 @@
 //! )
 //! .dedup(DedupGuard::new(kv))
 //! .build();
+//! handler.check()?; // a blank verify token stops the boot
 //! // The axum the router is built with, re-exported: no axum dependency of your own.
 //! let router = meta_whatsapp_rs::webhooks::axum::Router::new().nest("/webhook", meta_whatsapp_rs::webhooks::router(Arc::new(handler)));
 //! # let _ = live; Ok(router) }
