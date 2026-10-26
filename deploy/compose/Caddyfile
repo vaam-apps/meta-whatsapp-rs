@@ -1,0 +1,17 @@
+# HTTPS for WA_DOMAIN (a certificate from Let's Encrypt, renewed by Caddy),
+# in front of the service's public listener only, which serves Meta's
+# callback (/webhooks/meta) and /livez. The internal listener (the /v1
+# API, the admin API) is never proxied: the service keeps it off the
+# internet by design.
+{$WA_DOMAIN} {
+	# The service answers 413 past 3 MiB itself; this only stops a client
+	# from streaming more than that into Caddy.
+	request_body {
+		max_size 4MiB
+	}
+	reverse_proxy server:8080 {
+		# Buffer the body before it reaches the service (a slow client stays
+		# here), passed on untouched: Meta's signature covers the raw bytes.
+		request_buffers 4MiB
+	}
+}

@@ -1,0 +1,12 @@
+# The build context is the repository root; send only what the build
+# reads (BuildKit picks this file up next to the Dockerfile).
+.git
+target
+.meta-docs
+docs/node_modules
+docs/.vitepress
+tools/skills-ts/node_modules
+**/.env
+**/.env.*
+deploy/compose/.env
+deploy/compose/certs
