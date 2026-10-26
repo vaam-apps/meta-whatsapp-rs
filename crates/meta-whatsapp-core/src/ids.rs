@@ -99,7 +99,10 @@ id_type!(
     TemplateId
 );
 id_type!(
-    /// Template group id (`template_group_ids` of template group analytics).
+    /// Template group id: the group `POST /{WABA_ID}/template_groups`
+    /// returns and `GET`, `POST` and `DELETE /{TEMPLATE_GROUP_ID}` address
+    /// (`templates/template-groups`), and the `template_group_ids` of
+    /// template group analytics.
     TemplateGroupId
 );
 id_type!(

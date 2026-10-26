@@ -6,7 +6,7 @@
 use futures::StreamExt;
 use http::Method;
 use meta_whatsapp_core::ErrorKind;
-use meta_whatsapp_core::ids::TemplateId;
+use meta_whatsapp_core::ids::{TemplateGroupId, TemplateId};
 use meta_whatsapp_core::testing::ScriptedTransport;
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
@@ -2108,4 +2108,545 @@ fn template_info_tolerates_nulls_empties_and_new_fields() {
     }))
     .unwrap();
     assert!(lib.industry.is_empty() && lib.buttons.is_empty());
+}
+
+// ------------------------------------------------- groups and archiving
+
+/// The field a local validation failure names; panics on any other error.
+fn invalid_field(e: meta_whatsapp_core::Error) -> String {
+    match e {
+        meta_whatsapp_core::Error::Validation(v) => v.field.clone(),
+        other => panic!("expected a validation error, got {other}"),
+    }
+}
+
+fn retrying_client(t: &ScriptedTransport) -> Client {
+    Client::builder()
+        .transport(t.clone())
+        .access_token("TOKEN")
+        .retry(RetryPolicy {
+            max_retries: 3,
+            base_delay: std::time::Duration::ZERO,
+            max_delay: std::time::Duration::ZERO,
+        })
+        .build()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn create_group_sends_the_documented_body() {
+    let t = ScriptedTransport::new();
+    // templates/template-groups § Create a template group, example response.
+    t.push_json(200, json!({"id": "9020555671393375"}));
+    let group = TemplateGroupCreate::new(
+        "Black Friday 2024",
+        ["278077987957091", "1945418102598215", "1035843174854974"],
+    )
+    .description("US-based Black Friday sale 2024 templates.");
+    let created = client(&t)
+        .templates("102290129340398")
+        .create_group(&group)
+        .await
+        .unwrap();
+    assert_eq!(created.id.as_str(), "9020555671393375");
+
+    let req = t.last_request().unwrap();
+    assert_eq!(req.method, Method::POST);
+    assert_eq!(req.path(), "/v25.0/102290129340398/template_groups");
+    assert_eq!(req.url.query(), None);
+    assert_eq!(req.bearer(), Some("TOKEN"));
+    // The example request, as JSON values: the ids are numbers.
+    let doc = json!({
+        "name": "Black Friday 2024",
+        "description": "US-based Black Friday sale 2024 templates.",
+        "whatsapp_business_templates": [278_077_987_957_091_u64, 1_945_418_102_598_215_u64, 1_035_843_174_854_974_u64]
+    });
+    assert_eq!(req.json(), Some(doc.clone()));
+    let parsed: TemplateGroupCreate = serde_json::from_value(doc).unwrap();
+    assert_eq!(parsed, group, "the example parses into the same value");
+    assert_eq!(t.remaining(), 0);
+}
+
+/// templates/template-groups § Get a template group, example response, with
+/// the page's `...` truncation marks between array items removed (they are
+/// not JSON).
+fn group_example() -> Value {
+    json!({
+      "name": "Black Friday 2024",
+      "description": "US-based Black Friday sale 2024 templates.",
+      "creation_time": "2025-01-06T23:05:12+0000",
+      "update_time": "2025-01-06T23:05:12+0000",
+      "whatsapp_business_account": {
+        "id": "102290129340398",
+        "name": "Lucky Shrub",
+        "currency": "USD",
+        "timezone_id": "1",
+        "message_template_namespace": "ba30dd89_2ebd_41e4_b805_f2c05ae04cc9"
+      },
+      "whatsapp_business_templates": {
+        "data": [
+          {
+            "name": "black_friday_2024_carousel_media_header_cards",
+            "parameter_format": "POSITIONAL",
+            "components": [
+              {
+                "type": "BODY",
+                "text": "Rare black succulents for sale! {{1}}, add...",
+                "example": {"body_text": [["Pablo"]]}
+              },
+              {
+                "type": "CAROUSEL",
+                "cards": [
+                  {
+                    "components": [
+                      {
+                        "type": "HEADER",
+                        "format": "IMAGE",
+                        "example": {"header_handle": ["https://scontent.whatsapp.net/v/t61.29..."]}
+                      },
+                      {"type": "BODY", "text": "Add a touch of..."},
+                      {
+                        "type": "BUTTONS",
+                        "buttons": [
+                          {"type": "QUICK_REPLY", "text": "Send me more like this!"},
+                          {
+                            "type": "URL",
+                            "text": "Shop",
+                            "url": "https://www.luckyshrub.com/rare-succulents/{{1}}",
+                            "example": ["BLUE_ELF"]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ],
+            "language": "en_US",
+            "status": "APPROVED",
+            "category": "MARKETING",
+            "id": "1945418102598215"
+          }
+        ],
+        "paging": {"cursors": {"before": "QVFIU...", "after": "QVFIU..."}}
+      },
+      "id": "9020555671393375"
+    })
+}
+
+#[tokio::test]
+async fn get_group_parses_the_documented_response() {
+    let t = ScriptedTransport::new();
+    t.push_json(200, group_example());
+    let group = client(&t)
+        .templates("102290129340398")
+        .get_group(&TemplateGroupId::new("9020555671393375"))
+        .await
+        .unwrap();
+    let req = t.last_request().unwrap();
+    assert_eq!(req.method, Method::GET);
+    assert_eq!(req.path(), "/v25.0/9020555671393375");
+    assert_eq!(req.url.query(), None);
+    assert_eq!(req.bearer(), Some("TOKEN"));
+    assert_eq!(req.json(), None);
+    assert_eq!(t.remaining(), 0);
+
+    assert_eq!(group.id.as_str(), "9020555671393375");
+    assert_eq!(group.name.as_deref(), Some("Black Friday 2024"));
+    assert_eq!(
+        group.description.as_deref(),
+        Some("US-based Black Friday sale 2024 templates.")
+    );
+    assert_eq!(
+        group.creation_time.as_deref(),
+        Some("2025-01-06T23:05:12+0000")
+    );
+    assert_eq!(
+        group.update_time.as_deref(),
+        Some("2025-01-06T23:05:12+0000")
+    );
+    let waba = group.whatsapp_business_account.as_ref().unwrap();
+    assert_eq!(waba.id.as_str(), "102290129340398");
+    assert_eq!(waba.name.as_deref(), Some("Lucky Shrub"));
+    assert_eq!(waba.currency.as_deref(), Some("USD"));
+    assert_eq!(waba.timezone_id.as_deref(), Some("1"));
+    assert_eq!(
+        waba.message_template_namespace.as_deref(),
+        Some("ba30dd89_2ebd_41e4_b805_f2c05ae04cc9")
+    );
+    let templates = group.whatsapp_business_templates.as_ref().unwrap();
+    assert_eq!(templates.data.len(), 1);
+    let template = &templates.data[0];
+    assert_eq!(template.id.as_str(), "1945418102598215");
+    assert_eq!(
+        template.name.as_deref(),
+        Some("black_friday_2024_carousel_media_header_cards")
+    );
+    assert_eq!(template.status, Some(TemplateStatus::Approved));
+    assert_eq!(template.category, Some(TemplateCategory::Marketing));
+    assert_eq!(template.components.len(), 2);
+    let cursors = templates
+        .paging
+        .as_ref()
+        .and_then(|p| p.cursors.as_ref())
+        .unwrap();
+    assert_eq!(cursors.after.as_deref(), Some("QVFIU..."));
+    assert_eq!(cursors.before.as_deref(), Some("QVFIU..."));
+    assert_eq!(
+        templates.next_cursor(),
+        None,
+        "no `next` link in the example"
+    );
+
+    // Only the id is required; a new field is ignored.
+    let bare: TemplateGroup = serde_json::from_value(json!({"id": "1", "new_field": 1})).unwrap();
+    assert_eq!(bare.name, None);
+    assert_eq!(bare.whatsapp_business_templates, None);
+}
+
+#[tokio::test]
+async fn update_group_sends_the_documented_body() {
+    let t = ScriptedTransport::new();
+    // templates/template-groups § Update a template group, example response.
+    t.push_json(200, json!({"success": true}));
+    t.push_json(200, json!({"success": true}));
+    let templates = client(&t).templates("102290129340398");
+    let group = TemplateGroupId::new("9020555671393375");
+
+    // The example request: adds two templates, removes a third.
+    let update = TemplateGroupUpdate::new()
+        .add_templates(["844006344365270", "1188657612184382"])
+        .remove_templates(["1035843174854974"]);
+    templates.update_group(&group, &update).await.unwrap();
+    let req = &t.requests()[0];
+    assert_eq!(req.method, Method::POST);
+    assert_eq!(req.path(), "/v25.0/9020555671393375");
+    assert_eq!(req.url.query(), None);
+    assert_eq!(req.bearer(), Some("TOKEN"));
+    let doc = json!({
+        "add_templates": [844_006_344_365_270_u64, 1_188_657_612_184_382_u64],
+        "remove_templates": [1_035_843_174_854_974_u64]
+    });
+    assert_eq!(req.json(), Some(doc.clone()));
+    let parsed: TemplateGroupUpdate = serde_json::from_value(doc).unwrap();
+    assert_eq!(parsed, update);
+
+    // The request syntax's other two fields, with the table's example values.
+    let rename = TemplateGroupUpdate::new()
+        .name("Black Friday 2024")
+        .description("US-based Black Friday sale 2024 templates.");
+    templates.update_group(&group, &rename).await.unwrap();
+    assert_eq!(
+        t.requests()[1].json(),
+        Some(json!({
+            "name": "Black Friday 2024",
+            "description": "US-based Black Friday sale 2024 templates."
+        }))
+    );
+    assert_eq!(t.remaining(), 0);
+}
+
+#[tokio::test]
+async fn delete_group_and_graph_errors() {
+    let t = ScriptedTransport::new();
+    // templates/template-groups § Delete a template group, example response.
+    t.push_json(200, json!({"success": true}));
+    let templates = client(&t).templates("102290129340398");
+    let group = TemplateGroupId::new("9020555671393375");
+    templates.delete_group(&group).await.unwrap();
+    let req = t.last_request().unwrap();
+    assert_eq!(req.method, Method::DELETE);
+    assert_eq!(req.path(), "/v25.0/9020555671393375");
+    assert_eq!(req.url.query(), None);
+    assert_eq!(req.bearer(), Some("TOKEN"));
+    assert_eq!(t.remaining(), 0);
+
+    // `{"success": false}` is an error, not a silent no-op.
+    t.push_json(200, json!({"success": false}));
+    assert!(templates.delete_group(&group).await.is_err());
+
+    // A Graph error (its shape only: the page documents no error example).
+    t.push_json(
+        400,
+        json!({"error": {
+            "message": "Invalid parameter", "type": "OAuthException", "code": 100,
+            "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+    );
+    let err = templates
+        .update_group(&group, &TemplateGroupUpdate::new().name("x"))
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::InvalidParameter);
+    assert_eq!(t.requests().len(), 3);
+    assert_eq!(t.remaining(), 0);
+}
+
+#[tokio::test]
+async fn archive_and_unarchive_send_the_documented_bodies() {
+    let t = ScriptedTransport::new();
+    // templates/template-archival example responses, with the page's
+    // `<TEMPLATE_ID_1>`/`<TEMPLATE_ID_2>` placeholders filled with template
+    // ids from `templates/template-management`.
+    t.push_json(
+        200,
+        json!({
+            "archived_templates": ["1387372356726668"],
+            "failed_templates": {
+                "1304694804498707": "Only approved or rejected templates can be archived"
+            }
+        }),
+    );
+    t.push_json(
+        200,
+        json!({
+            "unarchived_templates": ["1387372356726668"],
+            "failed_templates": {"1304694804498707": "Template is not archived"}
+        }),
+    );
+    let templates = client(&t).templates("102290129340398");
+    let ids = [
+        TemplateId::new("1387372356726668"),
+        TemplateId::new("1304694804498707"),
+    ];
+    let archived = templates.archive(&ids).await.unwrap();
+    assert_eq!(archived.archived_templates, [ids[0].clone()]);
+    assert_eq!(
+        archived.failed_templates.get(&ids[1]).map(String::as_str),
+        Some("Only approved or rejected templates can be archived")
+    );
+    let unarchived = templates.unarchive(&ids).await.unwrap();
+    assert_eq!(unarchived.unarchived_templates, [ids[0].clone()]);
+    assert_eq!(
+        unarchived.failed_templates.get(&ids[1]).map(String::as_str),
+        Some("Template is not archived")
+    );
+
+    let reqs = t.requests();
+    assert_eq!(reqs.len(), 2);
+    // The request syntax writes the ids as strings.
+    let body = json!({"hsm_ids": ["1387372356726668", "1304694804498707"]});
+    for (req, edge) in reqs.iter().zip(["archive", "unarchive"]) {
+        assert_eq!(req.method, Method::POST);
+        assert_eq!(
+            req.path(),
+            format!("/v25.0/102290129340398/message_templates/{edge}")
+        );
+        assert_eq!(req.url.query(), None);
+        assert_eq!(req.bearer(), Some("TOKEN"));
+        assert_eq!(req.json(), Some(body.clone()));
+    }
+    assert_eq!(t.remaining(), 0);
+
+    // Absent lists parse as empty.
+    let empty: ArchiveResult = serde_json::from_value(json!({})).unwrap();
+    assert_eq!(empty, ArchiveResult::default());
+}
+
+/// Shapes the archival page's examples do not show, which must not turn a
+/// call that took effect (and is never replayed) into an error: ids as
+/// numbers, `null`s, an empty failure map written as `[]`, a reason that
+/// is not a string, a new field.
+#[test]
+fn archive_results_tolerate_shapes_the_page_does_not_show() {
+    let archived: ArchiveResult = serde_json::from_value(json!({
+        "archived_templates": [1_387_372_356_726_668_u64, "1304694804498707"],
+        "failed_templates": [],
+        "new_field": true
+    }))
+    .unwrap();
+    assert_eq!(
+        archived.archived_templates,
+        [
+            TemplateId::new("1387372356726668"),
+            TemplateId::new("1304694804498707")
+        ]
+    );
+    assert!(archived.failed_templates.is_empty());
+
+    let unarchived: UnarchiveResult = serde_json::from_value(json!({
+        "unarchived_templates": null,
+        "failed_templates": {"1": {"code": 100}, "2": "Template is not archived"}
+    }))
+    .unwrap();
+    assert!(unarchived.unarchived_templates.is_empty());
+    assert_eq!(
+        unarchived
+            .failed_templates
+            .get(&TemplateId::new("1"))
+            .map(String::as_str),
+        Some(r#"{"code":100}"#)
+    );
+    assert_eq!(unarchived.failed_templates.len(), 2);
+    let none: UnarchiveResult = serde_json::from_value(json!({"failed_templates": null})).unwrap();
+    assert_eq!(none, UnarchiveResult::default());
+
+    // Not a shape to guess at: a list of failures is an error.
+    assert!(serde_json::from_value::<ArchiveResult>(json!({"failed_templates": ["1"]})).is_err());
+}
+
+#[tokio::test]
+async fn group_ids_are_checked_as_digits_before_any_request() {
+    let t = ScriptedTransport::new();
+    let templates = client(&t).templates("102290129340398");
+    let update = TemplateGroupUpdate::new().name("Black Friday 2024");
+    for bad in [
+        "",
+        "123/template_groups",
+        "..",
+        "9020555671393375?fields=x",
+        "12a",
+        " 1",
+        "+1",
+        "\u{0661}\u{0662}", // Arabic-Indic digits: not ASCII
+    ] {
+        let id = TemplateGroupId::new(bad);
+        let errors = [
+            templates.get_group(&id).await.map(|_| ()).unwrap_err(),
+            templates.update_group(&id, &update).await.unwrap_err(),
+            templates.delete_group(&id).await.unwrap_err(),
+        ];
+        for e in errors {
+            assert_eq!(invalid_field(e), "template_group_id", "{bad:?}");
+        }
+    }
+    assert!(t.requests().is_empty(), "refused before the transport");
+}
+
+#[tokio::test]
+async fn group_bodies_are_checked_before_any_request() {
+    let t = ScriptedTransport::new();
+    let templates = client(&t).templates("102290129340398");
+    let create = |name: &str, ids: &[&str]| TemplateGroupCreate::new(name, ids.iter().copied());
+
+    // templates/template-groups: name required, at most 256 characters;
+    // description at most 512; ids are integers.
+    for (group, field) in [
+        (create("", &["1"]), "name"),
+        (create("   ", &["1"]), "name"),
+        (create(&"é".repeat(257), &["1"]), "name"),
+        (
+            create("ok", &["1"]).description("d".repeat(513)),
+            "description",
+        ),
+        (
+            create("ok", &["1", "12a"]),
+            "whatsapp_business_templates[1]",
+        ),
+        (create("ok", &["+1"]), "whatsapp_business_templates[0]"),
+        (
+            create("ok", &["18446744073709551616"]), // u64::MAX + 1
+            "whatsapp_business_templates[0]",
+        ),
+    ] {
+        assert_eq!(
+            invalid_field(templates.create_group(&group).await.unwrap_err()),
+            field
+        );
+    }
+    // The limits themselves pass.
+    create(&"é".repeat(256), &["18446744073709551615"])
+        .description("é".repeat(512))
+        .validate()
+        .unwrap();
+    TemplateGroupUpdate::new()
+        .name("é".repeat(256))
+        .description("é".repeat(512))
+        .validate()
+        .unwrap();
+
+    let id = TemplateGroupId::new("9020555671393375");
+    for (update, field) in [
+        (TemplateGroupUpdate::new(), "update"),
+        (TemplateGroupUpdate::new().name(""), "name"),
+        (
+            TemplateGroupUpdate::new().description("d".repeat(513)),
+            "description",
+        ),
+        (
+            TemplateGroupUpdate::new().add_templates(["1", "x"]),
+            "add_templates[1]",
+        ),
+        (
+            TemplateGroupUpdate::new().remove_templates(["1/2"]),
+            "remove_templates[0]",
+        ),
+    ] {
+        assert_eq!(
+            invalid_field(templates.update_group(&id, &update).await.unwrap_err()),
+            field
+        );
+    }
+    // An empty description is sent: it may be how a description is cleared.
+    TemplateGroupUpdate::new()
+        .description("")
+        .validate()
+        .unwrap();
+    assert!(t.requests().is_empty(), "refused before the transport");
+}
+
+#[tokio::test]
+async fn archive_ids_are_checked_before_any_request() {
+    let t = ScriptedTransport::new();
+    let templates = client(&t).templates("102290129340398");
+    // templates/template-archival: "up to 100 template IDs per request".
+    let too_many: Vec<TemplateId> = (0..101).map(|i| TemplateId::new(i.to_string())).collect();
+    for ids in [&[][..], &too_many[..]] {
+        assert_eq!(
+            invalid_field(templates.archive(ids).await.unwrap_err()),
+            "hsm_ids"
+        );
+        assert_eq!(
+            invalid_field(templates.unarchive(ids).await.unwrap_err()),
+            "hsm_ids"
+        );
+    }
+    let bad = [TemplateId::new("1"), TemplateId::new("123/subscribed_apps")];
+    assert_eq!(
+        invalid_field(templates.archive(&bad).await.unwrap_err()),
+        "hsm_ids[1]"
+    );
+    assert_eq!(
+        invalid_field(templates.unarchive(&bad).await.unwrap_err()),
+        "hsm_ids[1]"
+    );
+    assert!(t.requests().is_empty(), "refused before the transport");
+
+    // 100 ids are allowed.
+    t.push_json(200, json!({"archived_templates": []}));
+    templates.archive(&too_many[..100]).await.unwrap();
+    assert_eq!(t.remaining(), 0);
+}
+
+#[tokio::test]
+async fn group_and_archive_posts_are_not_replayed() {
+    let t = ScriptedTransport::new();
+    for _ in 0..4 {
+        t.push_error(|| meta_whatsapp_core::error::TransportError::Timeout);
+    }
+    let templates = retrying_client(&t).templates("102290129340398");
+    let ids = [TemplateId::new("1387372356726668")];
+    let group = TemplateGroupId::new("9020555671393375");
+    assert!(
+        templates
+            .create_group(&TemplateGroupCreate::new("Black Friday 2024", ["1"]))
+            .await
+            .is_err()
+    );
+    assert!(
+        templates
+            .update_group(&group, &TemplateGroupUpdate::new().add_templates(["1"]))
+            .await
+            .is_err()
+    );
+    assert!(templates.archive(&ids).await.is_err());
+    assert!(templates.unarchive(&ids).await.is_err());
+    assert_eq!(t.requests().len(), 4, "a timed-out POST is not replayed");
+    assert_eq!(t.remaining(), 0);
+
+    // The same client does replay a read, so the policy above was live.
+    t.push_error(|| meta_whatsapp_core::error::TransportError::Timeout);
+    t.push_json(200, json!({"id": "9020555671393375"}));
+    templates.get_group(&group).await.unwrap();
+    assert_eq!(t.requests().len(), 6);
+    assert_eq!(t.remaining(), 0);
 }

@@ -1,11 +1,11 @@
 ---
 name: meta-whatsapp-rs-templates
-description: "Managing WhatsApp message templates with meta-whatsapp-rs - TemplateDefinition and TemplateComponent (header, body, footer, buttons, carousel, limited-time offer), categories (utility, marketing, authentication), positional vs named placeholders and their examples, media header handles, creating, listing (list_stream), editing, deleting, the template library, local validation, and following review with TemplateStatusUpdated webhooks. Load when creating or changing templates, syncing a template catalog, or reacting to a template being approved, rejected, paused or re-categorized."
+description: "Managing WhatsApp message templates with meta-whatsapp-rs - TemplateDefinition and TemplateComponent (header, body, footer, buttons, carousel, limited-time offer), categories (utility, marketing, authentication), positional vs named placeholders and their examples, media header handles, creating, listing (list_stream), editing, deleting, the template library, archiving and unarchiving, template groups, local validation, and following review with TemplateStatusUpdated webhooks. Load when creating or changing templates, syncing a template catalog, or reacting to a template being approved, rejected, paused or re-categorized."
 ---
 
 # meta-whatsapp-rs-templates
 
-> **Verified against meta-whatsapp-rs b7211bc1f282f873b605e7a3a1126ce4e45e5677 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 5cf4de929d82737255a73a899386b9d0d3af98fa (2026-10-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/manage.rs](examples/manage.rs), compiled and
 tested by meta-whatsapp-rs's own gate.
@@ -99,6 +99,32 @@ while let Some(template) = stream.next().await {
 - Also: `library` / `create_from_library` (Meta's pre-approved library),
   `migrate_from`, `compare`, `unpause`.
 
+## Archive, unarchive, group
+
+```rust
+let result = templates.archive(ids).await?; // 1 to 100 ids; never replayed
+Ok(result.failed_templates.into_iter().collect()) // a partial failure is no error
+
+let group = TemplateGroupCreate::new("Black Friday 2024", ids.iter().cloned())
+    .description("US-based Black Friday sale 2024 templates.");
+Ok(templates.create_group(&group).await?.id) // keep it: there is no list call
+```
+
+- `archive(&ids)` / `unarchive(&ids)`: each id digits only. An archived
+  template cannot be sent and is deleted 28 days later; unarchiving
+  within that window restores its previous status. Read
+  `failed_templates` (id → reason) next to `archived_templates` /
+  `unarchived_templates`. Sent to the Graph endpoint, which routes it
+  (Meta's page prints `api.facebook.com`; probed 2026-10-26, L23).
+- Groups gather templates for `Analytics::template_group`; a template is
+  in at most one. Names are unique, at most 256 characters; descriptions
+  at most 512. `get_group(&group_id)` returns the group, its WABA and the
+  first page of its templates; `update_group(&group_id, &update)` takes a
+  `TemplateGroupUpdate` (`name`, `description`, `add_templates`,
+  `remove_templates`; an empty one is refused); `delete_group(&group_id)`
+  keeps the templates. A group id that is not digits is a `Validation`
+  error before any request.
+
 ## Pitfalls
 
 - `create` validates locally (`TemplateDefinition::validate`): names,
@@ -116,9 +142,10 @@ while let Some(template) = stream.next().await {
 
 ## What meta-whatsapp-rs does not do
 
-- No archive/unarchive: Meta's template management page says the API
-  archives and unarchives in bulk, but no mirrored page shows the
-  endpoint (roadmap L23).
+- No list of a WABA's template groups, and no call for the pages after
+  the first of a group's templates: Meta's changelog names the list
+  endpoint, but no page documents it (roadmap L23). Keep the group ids
+  `create_group` returns.
 - It does not store which templates are approved: keep your own table,
   updated from the webhooks.
 - Product-card carousels: the code allows 2–10 cards where Meta's page

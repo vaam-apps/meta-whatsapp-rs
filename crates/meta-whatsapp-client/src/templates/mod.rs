@@ -1,6 +1,6 @@
 //! Message templates: management (list, get, create, edit, delete, library,
-//! migrate, compare, unpause) and the two builder families that must not be
-//! confused:
+//! migrate, compare, unpause, archive and unarchive in bulk, template groups)
+//! and the two builder families that must not be confused:
 //!
 //! - **Definitions** ([`TemplateDefinition`], [`TemplateComponent`],
 //!   [`Button`]): what a template *is*, sent to create or edit it, returned
@@ -16,7 +16,8 @@
 //! Docs: `templates/overview`, `templates/components`,
 //! `templates/template-management`, `templates/template-library`,
 //! `templates/template-migration`, `templates/template-comparison`,
-//! `templates/template-pausing`, `templates/time-to-live`,
+//! `templates/template-pausing`, `templates/template-archival`,
+//! `templates/template-groups`, `templates/time-to-live`,
 //! `templates/template-media`, `templates/tap-target-url-title-override`,
 //! `templates/marketing-templates/*`, `templates/utility-templates/*`,
 //! `catalogs/{catalog,mpm,spm}-template-messages`,
@@ -58,6 +59,7 @@
 //! ```
 
 mod definition;
+mod groups;
 mod info;
 pub(crate) mod macros;
 mod send;
@@ -72,6 +74,10 @@ pub use definition::{
     FooterComponent, HeaderComponent, HeaderExample, HeaderFormat, LimitedTimeOffer,
     NamedParameterExample, OtpButton, SupportedApp, TemplateComponent, TemplateDefinition,
     TemplateEdit,
+};
+pub use groups::{
+    ArchiveResult, TemplateGroup, TemplateGroupCreate, TemplateGroupCreated, TemplateGroupUpdate,
+    UnarchiveResult,
 };
 pub use info::{
     ComparisonMetric, ComparisonMetricKind, ComparisonValue, HealthEntity, HealthEntityType,

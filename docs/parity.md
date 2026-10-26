@@ -17,8 +17,10 @@ Messaging Account a send bills (roadmap L16a), against its code and
 Meta's account model evolution pages of 2026-10-26; the service's cell of
 row 112 again when the port suites moved into the core (roadmap S3),
 against its code; row 155 with app deep links on template URL buttons
-(roadmap L24), against its code and the service's test. Every cell about
-us was checked against the code: a cell that
+(roadmap L24), against its code and the service's test; rows 101 and 153
+with template archiving and template groups (roadmap L23), against its
+code and Meta's pages of 2026-10-26 (§ Sources). Every cell about us was
+checked against the code: a cell that
 says a thing is done names the symbol that does it, and what the service
 (`meta-whatsapp-server`) does is read from its routes, not from its
 design. The plan to close the gaps is [roadmap.md](roadmap.md); the Meta
@@ -32,7 +34,7 @@ reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
-| Library | 100 | 21 | 10 | 1 |
+| Library | 101 | 22 | 8 | 1 |
 | Service | 39 | 25 | 67 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
@@ -40,7 +42,7 @@ reached.
   n/a column is a side that does not carry the capability at all: the
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
-- Each of the library's 31 partial or gap rows is cited by a
+- Each of the library's 30 partial or gap rows is cited by a
   [roadmap](roadmap.md) item. Each of the service's 92 names, in its
   status, the roadmap items that bring it; by family (a row can name
   two): M2 8, M3 11, M4 2, M5 70, S 2 (the modular split; S2b, undated
@@ -137,7 +139,11 @@ The owner's definition (2026-09-26):
   2026-09-26. The rows that rested on the pages the first crawl missed
   were checked again against those pages that day: their key facts
   (limits, fields, endpoints) and every claim that something is absent,
-  not each sentence.
+  not each sentence. Rows 101 and 153 were rewritten on 2026-10-26
+  against `templates/template-archival` and `templates/template-groups`
+  as Meta served them that day, not against the mirror: the first now
+  shows the archive and unarchive endpoints, and the second, absent
+  from Meta's page list at the crawl, is in it now.
 - **Us**: the code at b6fc893; for rows 17, 19 and 84–88, the bot
   framework's (B1).
 
@@ -284,7 +290,7 @@ The owner's definition (2026-09-26):
 | 98 | Templates | Authentication templates (copy code, one-tap, zero-tap, previews, bulk upsert) and an OTP service | No | Partial (copy code sent by hand) | `templates/authentication-templates/authentication-templates.md` and its pages | `client::authentication::Authentication::create`, `previews`, `upsert`; `client::authentication::OtpService::issue`, `verify` | M3c (`/v1/otp/*`, `POST /v1/wabas/{waba_id}/templates/authentication`) | done / gap (M3c) |
 | 99 | Templates | Marketing and utility template kinds: coupon, limited-time offer, media-card and product-card carousels, location, call permission, catalog, MPM, SPM, product header | — | — | `templates/marketing-templates.md` and its pages, `templates/utility-templates/utility-templates.md` and its pages, `catalogs/product-card-carousel-template-messages` | `client::templates::TemplateComponent::limited_time_offer`, `carousel`, `header_location`, `header_product`, `call_permission_request`; `client::templates::Button::catalog`, `mpm`, `spm`; `client::templates::Parameter::coupon_code` | create and send take Meta's JSON (unverified per kind: no service test creates each one, M5b); what the library cannot carry is refused (coverage row 33) and counted in its own row: payment buttons (rows 38, 141), `optimization_spec` (row 137); `app_deep_link` is carried (row 155); the pre-v21 one-tap fields are superseded on the Graph API version we target | done / partial (M5b) |
 | 100 | Templates | Time to live, the tap-target title override | — | — | `templates/time-to-live.md`, `templates/tap-target-url-title-override.md` | `client::templates::TemplateDefinition::message_send_ttl_seconds`; `TemplateMessage::tap_target` | through Meta's JSON (unverified: no test covers these keys through the service) | done / partial (M5b) |
-| 101 | Templates | Archiving and unarchiving templates | — | — | `templates/template-management.md` (§ Archive and unarchive templates: the API archives and unarchives templates in bulk, and sends to `templates/template-archival.md` for the endpoints, which the mirrored page does not show); archival and unarchival arrive as `ARCHIVED` and `UNARCHIVED` in `webhooks/reference/message_template_status_update.md` | not wrapped (the endpoint is not in the mirror); the status events are typed (`webhooks::WebhookEvent::TemplateStatusUpdated`) | the status events only (`template_status_updated`) | gap / gap (M5b) |
+| 101 | Templates | Archiving and unarchiving templates | — | — | `templates/template-archival.md` (`POST /{WABA_ID}/message_templates/archive` and `…/unarchive`, up to 100 template ids each, answering with the ids done and a reason for each that failed; § Sources: read on 2026-10-26), `templates/template-management.md` (§ Archive and unarchive templates); archival and unarchival arrive as `ARCHIVED` and `UNARCHIVED` in `webhooks/reference/message_template_status_update.md` | `client::templates::Templates::archive`, `unarchive` (`ArchiveResult`, `UnarchiveResult`; 1 to 100 ids, each checked as digits before any request; not replayed on timeouts; sent to the Graph endpoint with its version, where the page prints `https://api.facebook.com/` with none; Graph routes the edge, probed on 2026-10-26 with a template id that does not exist; a real archive not yet run live); the status events are typed (`webhooks::WebhookEvent::TemplateStatusUpdated`) | the status events only (`template_status_updated`) | done / gap (M5b) |
 | 102 | Commerce | Commerce settings (cart, catalog visibility) | — | — | `catalogs/set-commerce-settings`; `reference/whatsapp-business-phone-number/commerce-settings-api.md` | `client::commerce::Commerce::settings`, `update_settings`, `set_cart_enabled`, `set_catalog_visible` | not exposed | done / gap (M5g) |
 | 103 | Commerce | List connected catalogs and their products | Yes | Yes (`commerce.catalogs()`, `commerce.products()`) | `catalogs/upload-inventory` sends integrators to Meta's Catalog API, outside the WhatsApp docs | gap: no catalog or product reads (inventory lives outside the WhatsApp API, coverage row 5) | gap | gap / gap (M5g) |
 | 104 | Commerce | Product messages (single, multi, catalog, product carousel) | Yes | Yes | `catalogs/single-product-messages`, `catalogs/multi-product-messages`, `catalogs/catalog-messages` | `OutboundMessage::product`, `product_list`, `catalog` | not in the send union | done / gap (M5a) |
@@ -293,7 +299,7 @@ The owner's definition (2026-09-26):
 | 107 | Analytics | Messaging, conversation, pricing, template, call and group analytics | No | Yes (conversations, messages) | `analytics` | `client::analytics::Analytics::messaging`, `conversation`, `pricing`, `calls`, `template`, `template_group`, `groups`; `enable_template_insights` | not exposed | done / gap (M5g) |
 | 108 | Numbers | Registration: request and verify a code, register, deregister, list numbers | No | Yes | `reference/whatsapp-business-phone-number/phone-number-registration.md`, `reference/whatsapp-business-phone-number/phone-number-verification-request-code-api.md`, `reference/whatsapp-business-phone-number/verify-code-api.md`, `reference/whatsapp-business-phone-number/phone-number-deregister-api.md`, `reference/whatsapp-business-account/phone-number-management-api.md` | `client::phone_numbers::PhoneNumber::request_code`, `verify_code`, `register`, `deregister`; `client::waba::Waba::phone_numbers` | `GET /v1/numbers`, `GET /v1/numbers/{pn}` (`server::api::numbers::list_numbers`, `get_number`); registration in M3 | done / partial (M3d) |
 | 109 | Numbers | Number health: quality rating, throughput, messaging limit tier | No | Yes (`info()`) | `reference/whatsapp-business-phone-number/whatsapp-business-account-phone-number-api.md`; `throughput.md` | `client::phone_numbers::PhoneNumberInfo` (`quality_rating`, `throughput`, `messaging_limit_tier`); `webhooks::WebhookEvent::PhoneNumberQualityUpdated` | `GET /v1/numbers/{pn}` reports the quality rating and throughput, not the messaging limit tier (`server::api::numbers::NUMBER_FIELDS`); `phone_number_quality_updated` events (limit changes included) | done / partial (M5c3) |
-| 153 | Templates | Template groups: create, read, update, delete | — | — | Meta's `changelog` lists `GET` and `POST /{WABA_ID}/template_groups`, `GET`, `POST` and `DELETE /{TEMPLATE_GROUP_ID}`; the guide it links, `templates/template-groups`, is not in Meta's page list, so not in the mirror | their analytics only (`Analytics::template_group`); management not wrapped | not exposed | gap / gap (M5b) |
+| 153 | Templates | Template groups: create, read, update, delete | — | — | `templates/template-groups.md` (`POST /{WABA_ID}/template_groups`; `GET`, `POST` and `DELETE /{TEMPLATE_GROUP_ID}`; § Sources: read on 2026-10-26); Meta's `changelog` (2025-02-14) also lists `GET /{WABA_ID}/template_groups`, which no page documents (its Graph API reference page shows no operation) | `client::templates::Templates::create_group`, `get_group`, `update_group`, `delete_group` (`TemplateGroupCreate`, `TemplateGroupUpdate`, `TemplateGroup`; a group id checked as digits, template ids as integers, names and descriptions against their limits, before any request; the POSTs not replayed on timeouts), and their analytics (`Analytics::template_group`); not wrapped, because no page documents them: the list of a WABA's groups, and the pages after the first of a group's templates | not exposed | partial / gap (M5b) |
 | 155 | Templates | Android app deep links on marketing templates' URL buttons | — | — | `marketing-messages/deep-links.md` (a URL button's `app_deep_link`: the Android deep link, a fallback URL, the Meta app id) | `client::templates::Button::Url` (its `app_deep_link`), `client::templates::AppDeepLink`, `client::templates::Button::url_with_app_deep_link`; both strings checked non-empty before any request; the page's example round-trips | passed through to Meta unchanged when a template is created (`POST /v1/wabas/{waba_id}/templates`; a test sends the page's example) | done / done |
 
 ### I. Data and production
