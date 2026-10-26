@@ -1,0 +1,22 @@
+# Behind Cloudflare's proxy: Cloudflare serves WA_DOMAIN on 443 with its own
+# certificate and forwards to this VM on WA_ORIGIN_PORT (an Origin Rule),
+# where Caddy presents a Cloudflare Origin CA certificate (SSL/TLS mode
+# "Full (strict)"). No certificate is requested from Let's Encrypt, and
+# nothing listens on 80 or 443. See README.md § Behind Cloudflare.
+{
+	auto_https off
+}
+
+{$WA_DOMAIN}:{$WA_ORIGIN_PORT} {
+	tls /certs/origin.pem /certs/origin-key.pem
+	# The service answers 413 past 3 MiB itself; this only stops a client
+	# from streaming more than that into Caddy.
+	request_body {
+		max_size 4MiB
+	}
+	reverse_proxy server:8080 {
+		# Buffer the body before it reaches the service, passed on untouched:
+		# Meta's signature covers the raw bytes.
+		request_buffers 4MiB
+	}
+}

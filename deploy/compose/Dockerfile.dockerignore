@@ -9,3 +9,4 @@ tools/skills-ts/node_modules
 **/.env
 **/.env.*
 deploy/compose/.env
+deploy/compose/certs

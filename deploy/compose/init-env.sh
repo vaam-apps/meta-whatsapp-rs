@@ -16,9 +16,19 @@ read -rp "Domain pointing at this VM (e.g. wa.example.com): " domain
 read -rsp "Meta app secret (App Dashboard > App settings > Basic): " app_secret
 echo
 [ -n "$app_secret" ] || { echo "the app secret is required" >&2; exit 1; }
+read -rp "Behind Cloudflare's proxy, without ports 80/443 (README § Behind Cloudflare)? [y/N] " cloudflare
+cloudflare_lines=""
+if [[ "$cloudflare" =~ ^[Yy] ]]; then
+    read -rp "Origin port Cloudflare forwards to [8443]: " origin_port
+    origin_port=${origin_port:-8443}
+    [[ "$origin_port" =~ ^[0-9]+$ ]] || { echo "the port must be a number" >&2; exit 1; }
+    cloudflare_lines="COMPOSE_FILE=compose.yaml:compose.cloudflare.yaml
+WA_ORIGIN_PORT=${origin_port}"
+fi
 
 umask 077
 cat > .env <<EOF
+${cloudflare_lines}
 WA_DOMAIN=${domain}
 WA_APP_SECRET=${app_secret}
 # Enter this value as the webhook's verify token in the App Dashboard.

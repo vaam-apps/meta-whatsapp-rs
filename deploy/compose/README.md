@@ -21,6 +21,10 @@ you (on the VM) ──────────► server :8081  /v1, /v1/events,
   ports 80 and 443 open to the internet: Caddy obtains the certificate from
   Let's Encrypt on first start and renews it.
 
+Without ports 80 and 443, use Cloudflare's proxy instead:
+[Behind Cloudflare](#behind-cloudflare-no-ports-80-or-443), then continue
+at step 2.
+
 ## 2. Start it
 
 ```bash
@@ -109,12 +113,52 @@ read on. `docker compose logs -f server` shows each delivery as it arrives. A
 status for a number no tenant holds (before step 3's attach) is kept for
 operators only and never appears in a tenant's events.
 
+## Behind Cloudflare (no ports 80 or 443)
+
+Cloudflare serves the domain on 443 with its own certificate and forwards
+to the VM on a port you choose (8443 here). Caddy presents a Cloudflare
+Origin CA certificate there, so nothing asks Let's Encrypt for one and
+nothing listens on 80 or 443. Meta sees an ordinary
+`https://<WA_DOMAIN>/webhooks/meta`.
+
+In the Cloudflare dashboard, for the zone:
+
+1. **DNS**: an `A` (or `AAAA`) record for the subdomain, pointing at the
+   VM, **proxied** (orange cloud).
+2. **SSL/TLS → Overview**: encryption mode **Full (strict)**.
+3. **SSL/TLS → Origin Server → Create certificate**: for the subdomain, in
+   PEM. Save the certificate as `deploy/compose/certs/origin.pem` and the
+   private key as `deploy/compose/certs/origin-key.pem` on the VM
+   (`chmod 600` the key; `certs/` is gitignored). Cloudflare shows the key
+   once.
+4. **Rules → Origin Rules → Create rule**: when the hostname equals the
+   subdomain, rewrite the **destination port** to 8443.
+5. **Security → WAF → Custom rules**, recommended: block requests to
+   `/webhooks/meta` that do not come from Meta's network, with the
+   expression
+   `(http.host eq "<subdomain>" and http.request.uri.path eq "/webhooks/meta" and ip.src.asnum ne 32934)`
+   and the action **Block**. This is the "admit only Meta" filter the
+   service guide asks for; the origin only ever sees Cloudflare's
+   addresses, so it has to live here.
+
+On the VM, admit the origin port from
+[Cloudflare's IP ranges](https://www.cloudflare.com/ips/) only (the VM's
+firewall or the provider's security group), then answer **y** to
+`init-env.sh`'s Cloudflare question, which writes
+`COMPOSE_FILE=compose.yaml:compose.cloudflare.yaml` and `WA_ORIGIN_PORT`
+into `.env`: every `docker compose` command then uses the override, and
+step 2 is unchanged. The challenge check of step 2 goes through
+Cloudflare, so it also proves the DNS record, the Origin Rule and the
+certificate.
+
 ## Before production
 
 - **Admit `/webhooks/meta` only from Meta.** Every delivery's signature is
   checked, but only after its body is read; the service guide asks the
   ingress to admit only Meta's webhook IP ranges or mutual TLS with Meta's
-  client certificate. This Caddyfile does neither.
+  client certificate. The default Caddyfile does neither; behind Cloudflare,
+  step 5 of [Behind Cloudflare](#behind-cloudflare-no-ports-80-or-443) does
+  it by Meta's network (AS32934).
 - Secrets travel as environment variables, which `docker inspect` shows to
   anyone with access to the Docker daemon. The service also reads
   `<NAME>_FILE` for each secret: move them to files (Docker secrets) there.

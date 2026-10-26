@@ -1,0 +1,21 @@
+# Override for a VM behind Cloudflare's proxy, with neither 80 nor 443
+# free: Caddy listens on WA_ORIGIN_PORT only (8443 by default) with a
+# Cloudflare Origin CA certificate from ./certs. Use it with the base file,
+# e.g. by adding to .env:
+#
+#   COMPOSE_FILE=compose.yaml:compose.cloudflare.yaml
+#   WA_ORIGIN_PORT=8443
+#
+# See README.md § Behind Cloudflare.
+
+services:
+  caddy:
+    environment:
+      WA_ORIGIN_PORT: ${WA_ORIGIN_PORT:-8443}
+    ports: !override
+      - "${WA_ORIGIN_PORT:-8443}:${WA_ORIGIN_PORT:-8443}"
+    volumes: !override
+      - ./Caddyfile.cloudflare:/etc/caddy/Caddyfile:ro
+      - ./certs:/certs:ro
+      - caddy_data:/data
+      - caddy_config:/config
