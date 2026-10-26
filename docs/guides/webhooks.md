@@ -55,6 +55,7 @@ let handler = WebhookHandler::builder(
 )
 .dedup(DedupGuard::new(kv.clone())) // a KvStore shared by every instance, section 4
 .build();
+handler.check()?; // a blank verify token stops the boot
 
 // The axum the router is built with, re-exported: no axum dependency of your own.
 let app = meta_whatsapp_rs::webhooks::axum::Router::new().nest("/webhooks/whatsapp", meta_whatsapp_rs::webhooks::router(Arc::new(handler)));
@@ -66,11 +67,12 @@ let app = meta_whatsapp_rs::webhooks::axum::Router::new().nest("/webhooks/whatsa
   with `.max_body_bytes(n)` on the builder, not with a layer in front.
 - The signature is over the **raw bytes**: nothing in front of this route
   may parse, decompress or re-serialize the body.
-- A blank app secret fails at startup. A blank verify token makes every
-  verification answer `403`, but only when one arrives
-  ([decided](../../OPEN_QUESTIONS.md#webhooks) 16: a build-time check
-  is to come, roadmap L20d): read both from
-  your secret store and check them at boot.
+- A blank app secret fails at startup (`SignatureVerifier::new`). The
+  builder cannot fail, so a blank verify token (empty or only
+  whitespace) would make every verification answer `403`, but only when
+  one arrives: `handler.check()` reports it at startup instead, as a
+  `ConfigError` whose text names no part of the token. It is yours to
+  call; nothing calls it for you. Read both from your secret store.
 
 | Outcome | Answer | Meta then |
 | --- | --- | --- |

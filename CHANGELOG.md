@@ -80,6 +80,11 @@ volumes (Claude config, shell history, cargo caches) start empty
   2026-09-26 under the owner's delegation, a code-less constructor;
   landed with roadmap L4 as `OnboardingRequest::for_resume` (see Added),
   and the entry is deleted from OPEN_QUESTIONS.md.
+- #16 (a blank verify token failed only when a verification request
+  arrived): decided on 2026-09-26 under the owner's delegation, an
+  additive check beside the infallible builder; landed with roadmap L20d
+  as `WebhookHandler::check` (see Added), and the entry is deleted from
+  OPEN_QUESTIONS.md.
 - #17 (coexistence echoes and history not recorded by the inbox):
   resolved in a3582b8; what that needs a port change for is #35 (below).
 - #18 (Postgres and U+0000): decided by the owner on 2026-09-25, "store
@@ -163,7 +168,8 @@ stored data, the owner's).
 - OTP: #13, the issue limit, cooldown and attempts kept (no code); #14,
   the pepper stays the integrator's, with no rotation (no code).
 - Webhooks: #15, the 60 s dedup lease kept (no code); #16, an additive
-  check for a blank verify token (L20d).
+  check for a blank verify token (L20d, landed: see Added and "Open
+  questions closed").
 - Storage: #19, `rediss://` with an explicit aws-lc-rs provider, never
   the process default (L21c).
 - Security: #20, ids checked against their documented shape, opaque ids
@@ -197,6 +203,23 @@ stored data, the owner's).
   the `phone_number_id` check (M2e).
 
 ### Added
+
+- **A check for a blank verify token** (`meta_whatsapp_webhooks`, roadmap
+  L20d, decided as OPEN_QUESTIONS #16, now closed):
+  `WebhookHandler::check()` returns a `ConfigError` when the handler's
+  verify token is blank (empty, or only whitespace: the test
+  `verify_subscription` already applied, now one shared predicate), so a
+  startup can stop on it instead of answering `403` to Meta's
+  verification later. The builder stays infallible and nothing runs the
+  check for you. The error's text is fixed and names no part of the
+  token; the handshake's constant-time comparison is unchanged, and its
+  blank-token error now carries the same text. The `cms_inbox` example's
+  `app` runs it, as do the webhooks guide, the CMS inbox guide, the
+  README, the `meta-whatsapp-rs-webhook-endpoint` skill (whose
+  example drops its own blank test for it) and the
+  `meta-whatsapp-rs-bot` skill and bots guide. The service does not need
+  it: its configuration refuses a blank `WA_VERIFY_TOKEN` before a
+  handler exists.
 
 - **Template archiving and template groups**
   (`meta_whatsapp_client::templates`, roadmap L23, partly; parity rows

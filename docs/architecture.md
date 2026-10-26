@@ -803,7 +803,10 @@ Logs carry sizes, digests and field names only — never payload values.
 - A body that verifies but fails to parse is acknowledged (so Meta stops
   retrying for 7 days) and surfaced as `WebhookEvent::Unparsed{raw}` +
   a `tracing::error!` carrying only size and digest. A bad signature is
-  rejected (401); blank app secrets and blank verify tokens fail closed.
+  rejected (401); blank app secrets and blank verify tokens fail closed
+  (a blank app secret at `SignatureVerifier::new`; a blank verify token
+  at each verification, and at startup when the caller runs
+  `WebhookHandler::check`, since the builder stays infallible).
   Default body limit: 3 MiB (Meta: payloads up to 3 MB).
 - `axum` feature: `router(handler)` with `GET` verify + `POST` receive
   (raw bytes, body limit), and an SSE helper that turns a broadcast

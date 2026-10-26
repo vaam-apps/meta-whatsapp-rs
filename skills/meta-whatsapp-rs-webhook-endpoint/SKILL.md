@@ -5,7 +5,7 @@ description: "The WhatsApp webhook endpoint with meta-whatsapp-rs - WebhookHandl
 
 # meta-whatsapp-rs-webhook-endpoint
 
-> **Verified against meta-whatsapp-rs 34beecb2720bac099d769ba1b5e91072d2d5eb36 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 366b2feefce74de16961e825ceb95383bbff347f (2026-10-26).** On another revision, trust the code over this page.
 
 Reference code: [examples/endpoint.rs](examples/endpoint.rs), compiled and
 tested by meta-whatsapp-rs's own gate (axum through `tower::ServiceExt::oneshot`,
@@ -33,14 +33,16 @@ let handler = WebhookHandler::builder(
 )
 .dedup(DedupGuard::new(kv)) // Meta retries for 7 days and sends to every subscribed app
 .build(); // body limit: 3 MiB (`.max_body_bytes(n)` to change)
+handler.check()?; // a blank verify token: refused here, not at Meta's verification
 ```
 
 Read the app secret and verify token from your secret store at startup and
-let a blank one stop the process: a blank verify token otherwise answers
-403 to every verification, but only when one arrives
-([OPEN_QUESTIONS.md #16](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#webhooks); decided on
-2026-09-26: an additive check at build time, roadmap L20d, not built yet).
-List the old app secret next to the new one while rotating, then drop it.
+let a blank one stop the process. `build` cannot fail, so a blank verify
+token (empty or only whitespace) would otherwise surface only when Meta's
+verification arrives, as a 403 to every one; `handler.check()` reports it
+at once, as a `ConfigError` whose text names no part of the token. Nothing
+runs it for you. List the old app secret next to the new one while
+rotating, then drop it.
 
 ## axum
 

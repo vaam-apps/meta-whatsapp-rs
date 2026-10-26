@@ -19,12 +19,6 @@ pub fn webhook_handler(
     kv: Arc<dyn KvStore>, // shared by every instance
     sink: Arc<dyn EventSink<WebhookEvent>>,
 ) -> meta_whatsapp_rs::Result<WebhookHandler> {
-    if verify_token.trim().is_empty() {
-        // A blank token would answer 403 to every verification, at runtime only.
-        return Err(
-            meta_whatsapp_rs::core::error::ConfigError::new("WA_VERIFY_TOKEN is blank").into(),
-        );
-    }
     let handler = WebhookHandler::builder(
         SignatureVerifier::new(app_secrets)?, // refuses an empty list or a blank secret
         VerifyToken::new(verify_token),
@@ -32,6 +26,7 @@ pub fn webhook_handler(
     )
     .dedup(DedupGuard::new(kv)) // Meta retries for 7 days and sends to every subscribed app
     .build(); // body limit: 3 MiB (`.max_body_bytes(n)` to change)
+    handler.check()?; // a blank verify token: refused here, not at Meta's verification
     Ok(handler)
 }
 
@@ -194,6 +189,17 @@ mod tests {
         let kv = Arc::new(MemoryKvStore::new());
         assert!(webhook_handler(vec![AppSecret::new(" ")], "t", kv.clone(), sink.clone()).is_err());
         assert!(webhook_handler(vec![], "t", kv.clone(), sink.clone()).is_err());
-        assert!(webhook_handler(vec![AppSecret::new(SECRET)], "", kv, sink).is_err());
+        for blank in ["", " ", "\t\n"] {
+            assert!(matches!(
+                webhook_handler(
+                    vec![AppSecret::new(SECRET)],
+                    blank,
+                    kv.clone(),
+                    sink.clone()
+                ),
+                Err(Error::Config(_))
+            ));
+        }
+        assert!(webhook_handler(vec![AppSecret::new(SECRET)], "t", kv, sink).is_ok());
     }
 }
