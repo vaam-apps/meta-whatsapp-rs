@@ -686,6 +686,73 @@ fn an_incomplete_app_deep_link_is_kept_verbatim() {
     assert_eq!(serde_json::to_value(&parsed).unwrap(), button);
 }
 
+/// The page documents the creation only, not how `GET` writes the deep
+/// link back, and Graph often writes ids as strings. A template whose deep
+/// link holds a `meta_app_id` that is not an unsigned integer (a string,
+/// a negative or a fractional number) still parses: that button is kept
+/// verbatim as `Button::Other` and written back unchanged, the rest of the
+/// template typed. A key Meta adds inside the object does not demote the
+/// button. Decisive: `Button`'s `Other` catch-all for the first part;
+/// `deny_unknown_fields` on `AppDeepLink` fails the last.
+#[test]
+fn a_fetched_app_deep_link_degrades_gracefully() {
+    let template = |app_deep_link: Value| {
+        json!({"id": "1627019861106475", "name": "summer_deals_deep_link_v1",
+        "status": "APPROVED", "category": "MARKETING", "language": "en_US",
+        "components": [
+            {"type": "BODY", "text": "Summer deals."},
+            {"type": "BUTTONS", "buttons": [
+                {"type": "URL", "text": "View Deals",
+                 "url": "https://www.luckyshrub.com/deals/summer/",
+                 "app_deep_link": app_deep_link}
+            ]}
+        ]})
+    };
+    for meta_app_id in [
+        json!("634974688087057"),
+        json!(-1),
+        json!(634_974_688_087_057.5),
+    ] {
+        let doc = template(json!({"meta_app_id": meta_app_id,
+            "android_deep_link": "luckyshrub://deals/summer/",
+            "android_fallback_playstore_url": "https://www.luckyshrub.com/deals/summer/"}));
+        let info: TemplateInfo = serde_json::from_value(doc.clone()).unwrap();
+        assert!(
+            matches!(&info.components[0], TemplateComponent::Body(_)),
+            "{meta_app_id}"
+        );
+        let TemplateComponent::Buttons { buttons } = &info.components[1] else {
+            panic!("{meta_app_id}: {:?}", info.components[1])
+        };
+        assert!(matches!(&buttons[..], [Button::Other(_)]), "{meta_app_id}");
+        assert_eq!(
+            serde_json::to_value(&info.components).unwrap(),
+            doc["components"],
+            "{meta_app_id}"
+        );
+    }
+    let extended = template(json!({"meta_app_id": 634_974_688_087_057_u64,
+        "android_deep_link": "luckyshrub://deals/summer/",
+        "android_fallback_playstore_url": "https://www.luckyshrub.com/deals/summer/",
+        "ios_deep_link": "luckyshrub://deals/summer/"}));
+    let info: TemplateInfo = serde_json::from_value(extended).unwrap();
+    let TemplateComponent::Buttons { buttons } = &info.components[1] else {
+        panic!("{:?}", info.components[1])
+    };
+    assert_eq!(
+        buttons[..],
+        [Button::url_with_app_deep_link(
+            "View Deals",
+            "https://www.luckyshrub.com/deals/summer/",
+            AppDeepLink::new(
+                634_974_688_087_057,
+                "luckyshrub://deals/summer/",
+                "https://www.luckyshrub.com/deals/summer/",
+            ),
+        )]
+    );
+}
+
 #[test]
 fn request_contact_info_button() {
     // business-scoped-user-ids#using-templates.

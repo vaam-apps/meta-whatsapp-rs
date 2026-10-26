@@ -412,6 +412,7 @@ async fn a_url_buttons_app_deep_link_reaches_meta() {
         .await;
     assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.text);
     let request = h.graph.last_request().unwrap();
+    assert_eq!(request.method, Method::POST);
     assert_eq!(request.path(), format!("/v25.0/{WABA}/message_templates"));
     let sent = request.json().unwrap();
     assert_eq!(
@@ -451,6 +452,26 @@ async fn a_url_buttons_app_deep_link_reaches_meta() {
         (
             StatusCode::UNPROCESSABLE_ENTITY,
             Some("components[2].buttons[0].app_deep_link.android_deep_lnk")
+        ),
+        "{}",
+        reply.text
+    );
+    assert_eq!(h.graph.requests().len(), before, "nothing reached Meta");
+    // A blank deep link is the library's validation error, on its path.
+    let mut blank = example.clone();
+    blank["components"][2]["buttons"][0]["app_deep_link"]["android_deep_link"] = json!(" ");
+    let reply = h
+        .call(
+            Call::new(Method::POST, format!("/v1/wabas/{WABA}/templates"))
+                .key(&key)
+                .json(&blank),
+        )
+        .await;
+    assert_eq!(
+        (reply.status, reply.json()["error"]["field"].as_str()),
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Some("components[2].buttons[0].app_deep_link.android_deep_link")
         ),
         "{}",
         reply.text
