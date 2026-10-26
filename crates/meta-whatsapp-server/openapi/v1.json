@@ -4901,6 +4901,7 @@
           "template_text_too_long",
           "template_policy_violation",
           "template_rejected",
+          "sample_template_not_allowed",
           "idempotency_key_reused",
           "customer_service_window_closed",
           "thread_owned_elsewhere",

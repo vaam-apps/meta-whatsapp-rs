@@ -62,6 +62,7 @@ broadcast) replays a non-idempotent request.
 | `TemplateUnavailable` | 134102 | no | no | Not eligible on the MM API; check onboarding status |
 | `TemplateLimitReached` | 2388019 | no | no | WABA template limit |
 | `TemplateRejected` | 2388039, 2388040, 2388047, 2388072, 2388073, 2388293, 2388299 | no | no | Creation rejected for content/format |
+| `SampleTemplateNotAllowed` | 131058 | no | no | Meta's `hello_world` sent from a number that is not one of Meta's public test numbers; send your own template |
 | `FlowUnavailable` | 132068, 132069 | no | no | Flow blocked or throttled |
 | `Registration` | 131037, 131045, 133000, 133006, 133010, 133015, 133016, 136024 | no | no | Number not registered/verified, display name, or 133016 = 72 h registration lock |
 | `TwoStepVerification` | 133005, 133008, 133009 | no | no | Wrong PIN, or too many guesses |

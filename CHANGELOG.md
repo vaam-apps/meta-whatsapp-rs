@@ -187,6 +187,14 @@ stored data, the owner's).
 
 ### Added
 
+- **`ErrorKind::SampleTemplateNotAllowed`** (`meta_whatsapp_core`, named
+  `sample_template_not_allowed`): Graph's `131058`, "Hello World templates
+  can only be sent from the Public Test Numbers", which Meta answers to
+  its sample template `hello_world` sent from any other number. It
+  classified as `Unknown` before. Not retryable; nothing was sent. The
+  service answers it as `422 sample_template_not_allowed` (design §5.2;
+  an addition to `openapi/v1.json`'s `ErrorCode`).
+
 - **The Messaging Account a send bills** (`meta_whatsapp_client::messages`,
   roadmap L16a, parity row 140): Meta's account model evolution is
   generally available from H2 2026. A WABA's id now names its Messaging
