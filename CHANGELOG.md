@@ -151,7 +151,8 @@ stored data, the owner's).
   - #9, key custody stays the integrator's, rotation on demand, the
     cadence documented (M3a);
   - #10, a code-less `OnboardingRequest` for `resume`, additive (L4,
-    landed: see Added and "Open questions closed");
+    landed with one breaking type change, the field `code` now an
+    `Option`: see Added and "Open questions closed");
   - #11, hosted Embedded Signup integrated beside the code flow (L11a);
   - #12, the worked example's pre-fill shape kept, checked in Meta's
     Integration Helper (L25).
@@ -1030,6 +1031,12 @@ stored data, the owner's).
 
 ### Changed
 
+- **Breaking — `OnboardingRequest::code` is an `Option<SignupCode>`**
+  (roadmap L4): `None` in a request built with the new
+  `OnboardingRequest::for_resume` (see Added). `OnboardingRequest::new`
+  and `from_event` still take a `SignupCode` and set `Some`; only code
+  reading or assigning the field changes (`request.code =
+  Some(code)`).
 - **A closed customer service window, as Meta reports it** (docs only):
   the messages module, `ErrorKind::CustomerServiceWindowClosed`,
   `CustomerServiceWindow`, the bot's `Ctx::reply`, the `send_message`

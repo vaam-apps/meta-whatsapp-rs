@@ -1391,7 +1391,7 @@ library changes from L7 on are the roadmap's too.
 | L1 | `ErrorKind::as_str()`, stable snake_case, pinned by a test (with `ErrorKind::ALL`) | done (M1a) | additive |
 | L2 | `OtpConfig::namespace` required | done (#4) | breaking |
 | L3 | Solution Partner credit-line step in onboarding | done (#5: `onboard_with_approval`, `offboard`, credit ledger) | additive |
-| L4 | a code-less `OnboardingRequest` for `resume` | done ([roadmap.md](../roadmap.md) L4: `OnboardingRequest::for_resume`) | additive |
+| L4 | a code-less `OnboardingRequest` for `resume` | done ([roadmap.md](../roadmap.md) L4: `OnboardingRequest::for_resume`) | additive, plus one breaking type change (`OnboardingRequest::code` became an `Option`) |
 | L5 | the `ConversationStore` port change: erasure and retention per store (D10), window events and thread ownership (OQ #32, #44), a lookup by message id, the coexistence contacts; one change so adapters change once | decided (2026-09-26): [roadmap.md](../roadmap.md) L5, before M2 | port change |
 | L6 | [architecture.md](../architecture.md): dependency rule for binaries, a "Service" section | done (M1a) | docs |
 
