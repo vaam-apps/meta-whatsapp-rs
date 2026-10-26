@@ -1,6 +1,6 @@
 ---
 name: meta-whatsapp-rs-templates
-description: "Managing WhatsApp message templates with meta-whatsapp-rs - TemplateDefinition and TemplateComponent (header, body, footer, buttons, carousel, limited-time offer), categories (utility, marketing, authentication), positional vs named placeholders and their examples, media header handles, creating, listing (list_stream), editing, deleting, the template library, local validation, and following review with TemplateStatusUpdated webhooks. Load when creating or changing templates, syncing a template catalog, or reacting to a template being approved, rejected, paused or re-categorized."
+description: "Managing WhatsApp message templates with meta-whatsapp-rs - TemplateDefinition and TemplateComponent (header, body, footer, buttons, carousel, limited-time offer), categories (utility, marketing, authentication), positional vs named placeholders and their examples, media header handles, creating, listing (list_stream), editing, deleting, the template library, archiving and unarchiving, template groups, local validation, and following review with TemplateStatusUpdated webhooks. Load when creating or changing templates, syncing a template catalog, or reacting to a template being approved, rejected, paused or re-categorized."
 ---
 
 # meta-whatsapp-rs-templates
@@ -99,6 +99,23 @@ while let Some(template) = stream.next().await {
 - Also: `library` / `create_from_library` (Meta's pre-approved library),
   `migrate_from`, `compare`, `unpause`.
 
+## Archive, unarchive, group
+
+- `archive(&ids)` / `unarchive(&ids)`: up to 100 template ids, each
+  digits only. An archived template cannot be sent and is deleted 28 days
+  later; unarchiving within that window restores its previous status.
+  A partial failure is not an error: read `failed_templates` (id →
+  reason) next to `archived_templates` / `unarchived_templates`. Not
+  replayed on timeouts.
+- Template groups gather templates for `Analytics::template_group`:
+  `create_group(&TemplateGroupCreate::new(name, ids))` (unique name, at
+  most 256 characters; `.description(..)`, at most 512),
+  `get_group(&group_id)` (the group, its WABA and the first page of its
+  templates), `update_group(&group_id, &update)` with a
+  `TemplateGroupUpdate` (`name`, `description`, `add_templates`,
+  `remove_templates`), `delete_group(&group_id)` (keeps the templates). A template is in at most one group. A group id
+  that is not digits is a `Validation` error before any request.
+
 ## Pitfalls
 
 - `create` validates locally (`TemplateDefinition::validate`): names,
@@ -116,9 +133,10 @@ while let Some(template) = stream.next().await {
 
 ## What meta-whatsapp-rs does not do
 
-- No archive/unarchive: Meta's template management page says the API
-  archives and unarchives in bulk, but no mirrored page shows the
-  endpoint (roadmap L23).
+- No list of a WABA's template groups, and no call for the pages after
+  the first of a group's templates: Meta's changelog names the list
+  endpoint, but no page documents it (roadmap L23). Keep the group ids
+  `create_group` returns.
 - It does not store which templates are approved: keep your own table,
   updated from the webhooks.
 - Product-card carousels: the code allows 2–10 cards where Meta's page

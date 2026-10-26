@@ -1056,6 +1056,27 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **After:** nothing.
   - **Decisive:** exact JSON; a group id is checked as digits before any
     request.
+  - **Partly landed** (left open, row 153 partial): row 101 done in the
+    library; row 153's create, get, update and delete. Meta's pages as
+    served on 2026-10-26 document both: `templates/template-archival` now
+    shows `POST /{WABA_ID}/message_templates/archive` and `…/unarchive`,
+    and `templates/template-groups` is in Meta's page list.
+    `Templates::archive` and `unarchive` send `{"hsm_ids": [..]}` (1 to
+    100 ids, each digits) and return `ArchiveResult` / `UnarchiveResult`
+    (the ids done, a reason for each that failed);
+    `Templates::create_group`, `get_group`, `update_group` and
+    `delete_group` take `TemplateGroupCreate` / `TemplateGroupUpdate`
+    (template ids written as JSON integers, as the page's examples do) and
+    return `TemplateGroup` with its WABA and the first page of its
+    templates. A group id that is not digits is a `Validation` error
+    before any request (`group_ids_are_checked_as_digits_before_any_request`
+    fails with the check removed); none of the POSTs is replayed on a
+    timeout. **Left:** the list of a WABA's groups
+    (`GET /{WABA_ID}/template_groups`) and the pages after the first of a
+    group's templates: Meta's changelog names the list, but no page
+    documents its parameters or response (its Graph API reference page
+    shows no operation), nor how to request a group's next page of
+    templates.
 - [x] **L24. App deep links on template URL buttons**
   (`meta-whatsapp-client`, `client::templates::Button`; row 155): the
   Android deep link, its fallback URL and the Meta app id of

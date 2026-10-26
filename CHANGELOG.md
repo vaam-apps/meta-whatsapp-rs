@@ -193,6 +193,27 @@ stored data, the owner's).
 
 ### Added
 
+- **Template archiving and template groups**
+  (`meta_whatsapp_client::templates`, roadmap L23, partly; parity rows
+  101 and 153): `Templates::archive` and `unarchive`
+  (`POST /{WABA_ID}/message_templates/archive` and `…/unarchive`,
+  `templates/template-archival`) take 1 to 100 template ids, each digits
+  only, and return `ArchiveResult` / `UnarchiveResult`, the ids done and
+  a reason for each that failed (a partial failure is not an error).
+  `Templates::create_group` (`POST /{WABA_ID}/template_groups`),
+  `get_group`, `update_group` and `delete_group`
+  (`GET`, `POST`, `DELETE /{TEMPLATE_GROUP_ID}`, `templates/template-groups`)
+  take `TemplateGroupCreate` / `TemplateGroupUpdate`, whose template ids
+  are written as JSON integers as Meta's examples are, and return
+  `TemplateGroupCreated` and `TemplateGroup` (with its WABA and the first
+  page of its templates). A group id that is not digits, a blank or
+  over-long name (256 characters), an over-long description (512) or a
+  template id that is not an integer is an `Error::Validation` before any
+  request; the POSTs are not replayed on timeouts. Not wrapped, because
+  no page documents them: the list of a WABA's groups
+  (`GET /{WABA_ID}/template_groups`, in Meta's changelog only) and the
+  pages after the first of a group's templates.
+
 - **A code-less `OnboardingRequest` for `resume`**
   (`meta_whatsapp_client::embedded_signup`, roadmap L4, decided as
   OPEN_QUESTIONS #10, now closed): `OnboardingRequest::for_resume(session)`
