@@ -6,14 +6,16 @@
 //! customer wrote to you in the last 24 hours); templates go through any
 //! time. The text is sent first and, when Meta answers that the window is
 //! closed, the program says so and carries on with the template — branching
-//! on [`ErrorKind`], never on the error text.
+//! on [`ErrorKind`], never on the error text. Meta may instead accept the
+//! text and drop it: "accepted" is not "delivered", and the reason, if
+//! any, arrives later as a `failed` status webhook.
 //!
 //! | Variable | Required | What |
 //! | --- | --- | --- |
 //! | `WA_TOKEN` | yes | a system user access token with `whatsapp_business_messaging` |
 //! | `WA_PHONE_NUMBER_ID` | yes | the business phone number **id** that sends (not the number) |
 //! | `WA_TO` | yes | the recipient, E.164 with `+`, e.g. `+16505551234` |
-//! | `WA_TEMPLATE` | no | an approved template without variables (default `hello_world`, Meta's sample template) |
+//! | `WA_TEMPLATE` | no | an approved template without variables (default `hello_world`, Meta's sample template, which Meta sends only from its public test numbers: from your own number it answers `131058`) |
 //! | `WA_TEMPLATE_LANGUAGE` | no | the language it was approved in (default `en_US`) |
 //! | `WA_MESSAGING_ACCOUNT_ID` | no | the Messaging Account to bill, when your token can send from several on the number (Meta's account model evolution; a WABA id) |
 //!

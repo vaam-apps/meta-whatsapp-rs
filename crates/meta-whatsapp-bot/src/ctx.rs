@@ -368,10 +368,11 @@ impl Ctx {
     /// `messages/contextual-replies`), to [`Self::reply_recipient`]. For
     /// another recipient or no quote, use [`Self::send`].
     ///
-    /// A reply is a free-form message: Meta accepts it only within 24
+    /// A reply is a free-form message: Meta delivers it only within 24
     /// hours of the user's last message (the customer service window),
-    /// else it fails with `ErrorKind::CustomerServiceWindowClosed`
-    /// (`131047`). The message being answered opens that window, but Meta
+    /// else it fails: with `ErrorKind::CustomerServiceWindowClosed`
+    /// (`131047`) as this call's error, or after an `Ok`, in the message's
+    /// `failed` status webhook. The message being answered opens that window, but Meta
     /// redelivers a webhook for up to 7 days after an outage: when a late
     /// command must not act, compare `ctx.message()`'s `timestamp` with
     /// the clock first, and reach the user later with a template.

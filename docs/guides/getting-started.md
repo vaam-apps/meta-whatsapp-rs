@@ -116,6 +116,15 @@ Run the full program with
   and failures arrive later as status webhooks keyed by the returned id.
 - Free-form messages (text, media, interactive) only reach a customer who
   wrote to you in the last 24 hours; templates reach anyone who opted in.
+  Outside those 24 hours Meta may refuse a free-form send at once
+  (`ErrorKind::CustomerServiceWindowClosed`, `131047`) or accept it and
+  never deliver it, reporting the failure later in the message's `failed`
+  status webhook (on 2026-10-26 a text sent outside the window was
+  accepted and not delivered). Check the window before sending (the CMS
+  inbox does) rather than trusting an `Ok`.
+- Meta's sample template `hello_world` is sent only from Meta's public
+  test numbers; from your own number Meta refuses it with `131058`. Test
+  with one of your own approved templates there.
 
 ## 4. Handle errors
 

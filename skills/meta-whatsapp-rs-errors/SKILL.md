@@ -119,6 +119,9 @@ pub fn after_failed_send(e: &Error) -> Resend {
 - `Error::Decode` from `Messages::send` means Meta answered 2xx: treat the
   message as sent. Its snippet is withheld (the response names the
   recipient); only the error category and position remain.
+- A free-form send outside the window can also be accepted (`Ok`) and
+  fail later, in its `failed` status webhook: `GraphApiError::kind`
+  classifies `Status::errors` the same way.
 - The inbox's local 24-hour refusal is `Error::Validation` whose kind is
   `ErrorKind::CustomerServiceWindowClosed`, the same as Meta's 131047.
   Branch on the kind, or on `ValidationError::is_customer_service_window_closed()`

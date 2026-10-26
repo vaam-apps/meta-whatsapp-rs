@@ -26,9 +26,15 @@
 //! (the message may already be on its way); only throttling errors, which
 //! prove Meta did not process the request, are retried.
 //!
-//! Outside the 24-hour customer service window only templates go through;
-//! anything else fails with [`ErrorKind::CustomerServiceWindowClosed`]
-//! (`131047`).
+//! Outside the 24-hour customer service window only templates go through.
+//! A free-form message sent there may fail as the send's error, `131047`
+//! ([`ErrorKind::CustomerServiceWindowClosed`]), or be accepted (`Ok`,
+//! with a message id) and never delivered, its failure reported later in
+//! the message's `failed` status webhook: on 2026-10-26 a text sent
+//! outside the window was accepted and not delivered, and the same text
+//! was delivered once the customer had written. So an `Ok` is not
+//! delivery, and checking the window before sending (the CMS inbox does,
+//! from the messages it recorded) is the only way to know in advance.
 //!
 //! [`ValidationError`]: meta_whatsapp_core::error::ValidationError
 //! [`ErrorKind::CustomerServiceWindowClosed`]: meta_whatsapp_core::ErrorKind::CustomerServiceWindowClosed

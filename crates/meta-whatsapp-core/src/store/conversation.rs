@@ -1133,8 +1133,10 @@ pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
 /// The 24-hour customer service window.
 ///
 /// Free-form (non-template) messages are only allowed within 24 hours of the
-/// user's last message; outside it Meta rejects them with `131047`. Check
-/// here first and send a template instead of paying for a failed request.
+/// user's last message. Outside it Meta fails them with `131047` as the
+/// send's error, or accepts the send and fails it later, in its `failed`
+/// status webhook. Check here first and send a template instead: an
+/// accepted send says nothing about delivery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CustomerServiceWindow {
     last_inbound_at: Option<OffsetDateTime>,
