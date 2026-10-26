@@ -470,6 +470,14 @@ pub enum WebhookEvent {
     },
 }
 
+// Live views share one `Arc<WebhookEvent>` across threads (the SSE helper,
+// `BroadcastSink<E: Send + Sync>`; roadmap L21b): a field that is not
+// `Sync` would break them, with or without the `axum` feature.
+const _: () = {
+    const fn shared_across_threads<T: Send + Sync + 'static>() {}
+    shared_across_threads::<WebhookEvent>();
+};
+
 impl WebhookEvent {
     /// Every value [`Self::kind`] returns, in the order of its variants: to
     /// check a kind named in configuration (a listener's, a filter's) when

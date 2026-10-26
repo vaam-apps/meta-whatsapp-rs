@@ -125,7 +125,7 @@ let conversations: Arc<dyn ConversationStore> = Arc::new(PostgresConversationSto
 ```rust
 use meta_whatsapp_rs::adapters::sink::{BroadcastSink, FanoutSink};
 
-let (live, _) = tokio::sync::broadcast::channel::<WebhookEvent>(1024);
+let (live, _) = tokio::sync::broadcast::channel::<Arc<WebhookEvent>>(1024); // one shared copy per event
 let sink = FanoutSink::new()
     .with(InboxSink::new(conversations.clone()))       // persists; its failure → 500 → Meta retries
     .with(BroadcastSink::from_sender(live.clone()));   // live view; best effort, never fails
@@ -446,11 +446,10 @@ events.addEventListener('lagged', () => reloadHistory()); // the browser fell be
 - The filter must be an **allow-list**. `Unknown` and `Unparsed` events have
   no phone number id and carry raw bodies of any tenant: a filter such as
   `e.phone_number_id().is_none_or(…)` leaks them.
-- Each open stream's receiver clones every event before the filter drops
-  it, multi-megabyte history syncs included: fine for a handful of open
-  inboxes, a cost to measure with many
-  ([decided](../../OPEN_QUESTIONS.md#webhooks-and-live-updates) 31: shared
-  events instead of clones, roadmap L21b, not built yet).
+- Every open stream receives the same `Arc` of an event, not a copy
+  (since roadmap L21b), so a multi-megabyte history sync is held once
+  however many inboxes are open. Each stream still runs its filter on
+  every merchant's events.
 - The two sinks run concurrently: a live event can reach the browser before
   the store has it. Render the event itself; it carries the whole message.
 - The broadcast channel lives in one process. With several instances, a

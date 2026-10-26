@@ -1,22 +1,55 @@
 //! The port contracts that hold only when a backend makes two calls
-//! atomic (roadmap S2), raced for real: each round starts two tasks on a
-//! multi-threaded runtime, one of them a little late by a round-dependent
-//! jitter, so that the rounds meet at different points. Run on memory
-//! (`tests/store.rs`) and live on Postgres (`tests/live_postgres.rs`).
+//! atomic (roadmap S2), raced for real: each round starts two tasks, one
+//! of them a little late by a round-dependent jitter, so that the rounds
+//! meet at different points. On a multi-threaded runtime the tasks run in
+//! parallel; on a current-thread one they interleave at awaits only.
+//! Formerly the service's `tests/common/race_suite.rs`.
 //!
 //! A race test proves what it saw, not every interleaving: the decisive
-//! tests of each lock are the deterministic ones (the insert in flight
-//! holding off an unbinding, `live_postgres.rs`). These check that no
-//! interleaving the rounds hit breaks an invariant, and that none fails.
+//! tests of each lock are the deterministic ones (the guard's cases in
+//! [`super::invariants`]; on Postgres, the service's insert in flight
+//! holding off an unbinding). These check that no interleaving the rounds
+//! hit breaks an invariant, and that none fails.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
-use meta_whatsapp_server::model::{BindOutcome, DeleteTenantOutcome, TenantId};
-use meta_whatsapp_server::store::events::{EventQuery, GuardedBinding, NewEvent, RouteGuard};
-use meta_whatsapp_server::store::{Outbox as EventStore, Store};
 use time::OffsetDateTime;
+
+use super::capabilities::{Act, racing_a_reattach};
+use crate::backend::Backend;
+use crate::model::{BindOutcome, DeleteTenantOutcome, TenantId};
+use crate::outbox::{EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard};
+
+/// The rounds [`run`] races an insert against a move, and a binding
+/// against a deletion.
+pub const ROUNDS: usize = 200;
+
+/// The rounds [`run`] races each capability's conditioned write against a
+/// re-attach.
+pub const REATTACH_ROUNDS: usize = 60;
+
+/// What [`run`]'s races saw: how their rounds ended (a race that never
+/// meets proves less; print it).
+#[derive(Debug, Default)]
+pub struct Report {
+    /// An insert against its binding moving.
+    pub moves: MoveRaces,
+    /// A binding against its tenant's deletion.
+    pub binds: BindRaces,
+}
+
+/// Every race, on `backend`: [`ROUNDS`] rounds of an insert against a
+/// move and of a binding against a deletion, then [`REATTACH_ROUNDS`] of
+/// each capability's conditioned write against a re-attach.
+pub async fn run(backend: &dyn Backend) -> Report {
+    let moves = an_insert_racing_a_move_never_reaches_the_new_holder(backend, ROUNDS).await;
+    let binds = a_binding_racing_a_deletion_serializes(backend, ROUNDS).await;
+    for act in [Act::Forget, Act::NumberFailed, Act::WabaFailed] {
+        racing_a_reattach(backend, act, REATTACH_ROUNDS).await;
+    }
+    Report { moves, binds }
+}
 
 fn tenant(id: &str) -> TenantId {
     TenantId::parse(id).unwrap()
@@ -40,7 +73,7 @@ pub async fn jitter(round: usize, racer: usize) {
 }
 
 /// The ids of every event of `tenant_id`'s stream.
-async fn polled(outbox: &dyn EventStore, tenant_id: &str) -> Vec<String> {
+async fn polled(outbox: &dyn Outbox, tenant_id: &str) -> Vec<String> {
     outbox
         .page(&EventQuery {
             tenant: tenant(tenant_id),
@@ -85,10 +118,10 @@ pub struct MoveRaces {
 /// re-check, and on Postgres its locks.
 #[allow(clippy::too_many_lines)] // one scenario, read top to bottom
 pub async fn an_insert_racing_a_move_never_reaches_the_new_holder(
-    store: Arc<dyn Store>,
-    outbox: Arc<dyn EventStore>,
+    backend: &dyn Backend,
     rounds: usize,
 ) -> MoveRaces {
+    let (store, outbox) = (backend.records(), backend.outbox());
     let run = super::unique();
     let other = format!("race-h-{run}");
     store.create_tenant(&tenant(&other), "").await.unwrap();
@@ -243,9 +276,10 @@ pub struct BindRaces {
 /// deleted tenant. Decisive (on Postgres): the tenant's row locks in both
 /// calls (`FOR KEY SHARE` and `FOR UPDATE`).
 pub async fn a_binding_racing_a_deletion_serializes(
-    store: Arc<dyn Store>,
+    backend: &dyn Backend,
     rounds: usize,
 ) -> BindRaces {
+    let store = backend.records();
     let run = super::unique();
     let mut races = BindRaces::default();
     for round in 0..rounds {

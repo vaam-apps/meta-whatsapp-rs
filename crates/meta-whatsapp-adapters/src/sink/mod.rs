@@ -5,7 +5,7 @@
 //! | Sink | Delivers to | When it fails |
 //! | --- | --- | --- |
 //! | [`ChannelSink`] | a worker, through a bounded tokio `mpsc` channel | receiver dropped ([`Closed`](meta_whatsapp_core::error::SinkError::Closed)); full in [`ChannelMode::TryOrFail`] ([`Full`](meta_whatsapp_core::error::SinkError::Full)) |
-//! | [`BroadcastSink`] | every live [`BroadcastSubscription`] (SSE, WebSocket) | never: no subscriber is not an error |
+//! | [`BroadcastSink`] | every live [`BroadcastSubscription`] (SSE, WebSocket), each event one shared `Arc` | never: no subscriber is not an error |
 //! | [`FanoutSink`] | several sinks | tries all, returns the first error |
 //! | [`FilterSink`] | an inner sink, for events matching a predicate | when the inner sink fails |
 //! | [`FnSink`] | an async closure | when the closure fails |

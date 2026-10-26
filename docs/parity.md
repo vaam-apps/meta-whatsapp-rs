@@ -14,11 +14,13 @@ for what L9 left (L26); the service's cell of row 9 again with S2's
 security review, against its code; row 152 again with the parent BSUID
 accounts API (roadmap L10a), against its code; row 140 again with the
 Messaging Account a send bills (roadmap L16a), against its code and
-Meta's account model evolution pages of 2026-10-26; row 155 with app
-deep links on template URL buttons (roadmap L24), against its code and
-the service's test; rows 101 and 153 with template archiving and
-template groups (roadmap L23), against its code and Meta's pages of
-2026-10-26 (§ Sources). Every cell about us was checked against the code: a cell that
+Meta's account model evolution pages of 2026-10-26; the service's cell of
+row 112 again when the port suites moved into the core (roadmap S3),
+against its code; row 155 with app deep links on template URL buttons
+(roadmap L24), against its code and the service's test; rows 101 and 153
+with template archiving and template groups (roadmap L23), against its
+code and Meta's pages of 2026-10-26 (§ Sources). Every cell about us was
+checked against the code: a cell that
 says a thing is done names the symbol that does it, and what the service
 (`meta-whatsapp-server`) does is read from its routes, not from its
 design. The plan to close the gaps is [roadmap.md](roadmap.md); the Meta
@@ -306,7 +308,7 @@ The owner's definition (2026-09-26):
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 110 | Storage | Auth store | Yes (plain JSON in files, SQLite, Postgres, Redis, Convex) | No (a token only) | none (ours) | `client::embedded_signup::TokenVault` (AES-256-GCM, key rotation) on `core::store::KvStore`: `adapters::store::MemoryKvStore`, `PostgresKvStore`, `RedisKvStore` | Postgres and the vault; `POST /v1/admin/vault/rotate` (`server::api::admin::rotate_vault`) | done / done |
 | 111 | Storage | Message store: backends, history, chat list, a single-message lookup | Yes (memory, SQLite, Postgres, Redis, Convex) | Yes | none (ours) | `core::store::ConversationStore`: `adapters::store::MemoryConversationStore`, `PostgresConversationStore`; the lookup by message id, scoped to the business number (`core::store::ConversationStore::message`, L5); no Redis or SQLite store (L8); `inbox::Inbox::conversations`, `history` | the service records its tenants' inbox since M1c (`server::events::ServiceSink`); its read routes come in M2a | partial / partial (M2a) |
-| 112 | Storage | Pluggable stores with conformance tests | Yes (custom interfaces) | Yes | none (ours) | ports in `meta-whatsapp-core`; executable suites `adapters::store::conformance`, `conversation_conformance` | the core's ports (`server_core::store::RecordStore`, `IdempotencyRecords`, `LeaderLock`, `Janitor`, `SchemaMigrator`; `server_core::outbox::Outbox`), bundled per database as `server_core::backend::Backend` with the library's `KvStore` and `ConversationStore`, implemented in memory and on Postgres (`server::store::MemoryBackend`, `PgBackend`), with the contracts any backend must meet since S2 (the outbox's `server_core::outbox::RouteGuard` checked with each insert, `server_core::model::BindOutcome::NoSuchTenant`, leased turns, typed contention, byte order); their suites are still in the service's tests, not in core (S3), and the service is not yet composed from a bundle alone, so an integrator's backend needs an edit to `serve.rs` (S4) (design D26) | done / partial (S3, S4) |
+| 112 | Storage | Pluggable stores with conformance tests | Yes (custom interfaces) | Yes | none (ours) | ports in `meta-whatsapp-core`; executable suites `adapters::store::conformance`, `conversation_conformance` | the core's ports (`server_core::store::RecordStore`, `IdempotencyRecords`, `LeaderLock`, `Janitor`, `SchemaMigrator`; `server_core::outbox::Outbox`), bundled per database as `server_core::backend::Backend` with the library's `KvStore` and `ConversationStore`, implemented in memory and on Postgres (`server::store::MemoryBackend`, `PgBackend`), with the contracts any backend must meet since S2 (the outbox's `server_core::outbox::RouteGuard` checked with each insert, `server_core::model::BindOutcome::NoSuchTenant`, leased turns, typed contention, byte order); and since S3 their executable suites in core, which both backends pass (`server_core::conformance::run`, feature `conformance`, over a factory of empty `Backend`s: `records`, `outbox`, the cross-port `invariants` with the `RouteGuard` cases, `capabilities`, `races`), so a backend of an integrator's runs the same suites; the service is not yet composed from a bundle alone, so that backend needs an edit to `serve.rs` (S4) (design D26) | done / partial (S4) |
 | 113 | Errors | Typed errors with retry guidance | Yes | Yes | `support/error-codes.md` | `core::Error`, `Error::in_step`; `core::ErrorKind`, `ErrorKind::ALL`, `is_retryable` | the §5 error model as data on `ErrorKind::as_str` (`server_core::error`, over HTTP `server::error`) | done / done |
 | 114 | Ops | Logging without secrets or personal data; metrics | Partial (a custom logger) | Partial | none (ours) | `tracing`; secrets kept out of `Debug`; webhook log redaction (`webhooks::redact`) | request logs with the key id, Prometheus `/metrics` (`server::api::ops::metrics`) | done / done |
 | 115 | Ops | Runtimes and packaging | Yes (Node, Bun, Deno, Termux) | Yes | none | Rust with tokio; the crates are not published yet (publishing to crates.io is the owner's: roadmap § Owner touchpoints) | a binary today; the Docker image and the TypeScript client in M4 | n/a / gap (M4) |

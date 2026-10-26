@@ -6,6 +6,8 @@
 //! meta-whatsapp-rs compiles this file and runs its tests in its own gate
 //! (`crates/meta-whatsapp-rs/tests/skills.rs`).
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use meta_whatsapp_rs::adapters::sink::{BroadcastSink, ChannelMode, FanoutSink, channel};
 use meta_whatsapp_rs::core::error::SinkError;
@@ -32,7 +34,7 @@ impl EventSink<WebhookEvent> for Deliveries {
 
 /// Fan out: durable first, live view, slow work queued.
 pub fn sinks(
-    live: broadcast::Sender<WebhookEvent>,
+    live: broadcast::Sender<Arc<WebhookEvent>>, // one `Arc` per event, shared by every subscriber
 ) -> (FanoutSink<WebhookEvent>, mpsc::Receiver<WebhookEvent>) {
     let (worker, jobs) = channel::<WebhookEvent>(1024);
     let sink = FanoutSink::new()
@@ -53,7 +55,7 @@ pub async fn worker(mut jobs: mpsc::Receiver<WebhookEvent>) {
 /// Live events of one business number as Server-Sent Events (feature
 /// `axum`). Behind YOUR auth, after checking the caller owns the number.
 pub fn live_view(
-    live: &broadcast::Sender<WebhookEvent>,
+    live: &broadcast::Sender<Arc<WebhookEvent>>,
     owned_number: PhoneNumberId,
 ) -> impl meta_whatsapp_rs::webhooks::axum::response::IntoResponse {
     // An allow-list: `Unknown` and `Unparsed` events carry no number and may
@@ -99,7 +101,7 @@ mod tests {
 
     #[tokio::test]
     async fn nobody_watching_is_not_an_error() {
-        let (live, watching) = broadcast::channel::<WebhookEvent>(4);
+        let (live, watching) = broadcast::channel::<Arc<WebhookEvent>>(4);
         drop(watching);
         let sink = BroadcastSink::from_sender(live);
         assert!(sink.deliver(text_event("1")).await.is_ok());

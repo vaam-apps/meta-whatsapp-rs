@@ -109,8 +109,9 @@ struct AppState {
     client: Client,
     vault: TokenVault,
     conversations: Arc<dyn ConversationStore>,
-    /// Every webhook event, for the SSE route to filter.
-    live: broadcast::Sender<WebhookEvent>,
+    /// Every webhook event, for the SSE route to filter; each SSE client
+    /// receives the same `Arc` of an event, not a copy.
+    live: broadcast::Sender<Arc<WebhookEvent>>,
     tenants: Arc<Tenants>,
 }
 

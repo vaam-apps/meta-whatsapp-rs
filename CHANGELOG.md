@@ -86,6 +86,10 @@ volumes (Claude config, shell history, cargo caches) start empty
   raw bytes". This reverts fd4667e's provisional replacement of U+0000
   with U+FFFD in `InboxSink` and `Inbox::send`: message content keeps it,
   and the Postgres store holds it (below, Changed).
+- #31 (every SSE subscriber cloned every event): decided on 2026-09-26
+  under the owner's delegation, broadcast `Arc<WebhookEvent>`; landed
+  with roadmap L21b (see Changed, breaking), and the entry is deleted
+  from OPEN_QUESTIONS.md.
 - #34 (should `OtpConfig::namespace` be required?): decided yes by the
   maintainer, done in d67b3ac.
 - #35 (synced coexistence history went through `append` like live
@@ -182,7 +186,8 @@ stored data, the owner's).
   sqlx re-exports kept (no code).
 - Webhooks and live updates: #30, a permanently failing event is
   dead-lettered, the rest of the batch delivered (L21a); #31, live
-  events shared as `Arc<WebhookEvent>` (L21b, breaking).
+  events shared as `Arc<WebhookEvent>` (L21b, breaking; landed: see
+  Changed and "Open questions closed").
 - CMS inbox: #32, the calls that reopen the window recorded as window
   events (L5, L7); #44, standby messages as window events and thread
   ownership tracked, each with an explicit override (L5, L7, M2d),
@@ -235,6 +240,39 @@ stored data, the owner's).
   unchanged; the public field `OnboardingRequest::code` is now an
   `Option<SignupCode>` (`Some` from those two constructors), which code
   reading the field directly sees.
+
+- **The service core's conformance suites** (roadmap S3, parity row
+  112; `meta-whatsapp-server-core`, feature `conformance`, and
+  `meta-whatsapp-server`'s tests): `meta_whatsapp_server_core::conformance`
+  is the executable definition of the ports' contracts, run over a
+  `Backend`, as `meta_whatsapp_adapters::store::conformance` is for a
+  `KvStore`. `conformance::run(fresh)` takes a factory of empty
+  backends and runs each suite on one of its own: `records` (tenants,
+  keys, bindings, idempotency keys, S2's referential rules, byte
+  order), `outbox` (streams, pages, dedup and its window, filters,
+  purges), `invariants` (what crosses ports: every accessor hands out
+  the same data, deleting a tenant purges its stream, the `RouteGuard`
+  cases, and a new case: each tenant's inserts, from eight writers at
+  once, commit in sequence order for a poller following `next_after`),
+  `capabilities` (SR-L2, the `failed` race, M1, through the core's
+  `Authorizer`) and `races` (S2's races, with a `races::Report` of how
+  their rounds ended). Each case is public, takes a `&dyn Backend`, and
+  panics on a broken contract. The suites moved out of the service's
+  `tests/common/` (`store_suite`, `events_suite`, `backend_suite`,
+  `capability_suite`, `race_suite`), whose bodies they keep; the memory
+  backend runs the whole of it in `tests/store.rs`, the Postgres one in
+  `tests/live_postgres.rs` (`live_postgres_backend_passes_the_conformance_suite`,
+  a schema per suite). Three tests show what it refuses: a backend whose
+  `kv()` is a new store on each call fails the same-data case and the
+  whole suite; an outbox that ignores the route guard fails the guard's
+  cases and `invariants::run`, which closes S2's security review's L4
+  (a third-party outbox that ignores the guard failed open, and no
+  suite could tell); and an outbox that drops the guard's date, drops
+  it for a number's guard, or reads it a second late fails the whole
+  suite on the guard case of its own. The feature brings
+  the library's `testing` feature (`ScriptedTransport`, for the
+  capabilities' Graph client) and tokio's macros; `just features`
+  checks the crate with it alone.
 
 - **`ErrorKind::SampleTemplateNotAllowed`** (`meta_whatsapp_core`, named
   `sample_template_not_allowed`): Graph's `131058`, "Hello World templates
@@ -1060,6 +1098,42 @@ stored data, the owner's).
   Use v4, which needs no `version`.
 
 ### Changed
+
+- **Breaking — live events are shared as `Arc<WebhookEvent>`, not cloned
+  per subscriber** (`meta_whatsapp_webhooks::sse`,
+  `meta_whatsapp_adapters::sink::BroadcastSink`; roadmap L21b, decided as
+  OPEN_QUESTIONS #31, now closed). A tokio broadcast receiver clones what
+  it receives, so every open SSE stream copied every merchant's events,
+  multi-megabyte `HistorySynced` bodies included, before its filter
+  dropped them. `BroadcastSink<E>` now wraps each delivered event in one
+  `Arc` and publishes `Arc<E>`, so every subscriber gets the same
+  allocation: `from_sender` takes a `broadcast::Sender<Arc<E>>`,
+  `receiver` returns a `broadcast::Receiver<Arc<E>>`, and a
+  `BroadcastSubscription<E>` yields `Result<Arc<E>, Lagged>`. `sse` takes
+  a `broadcast::Receiver<Arc<WebhookEvent>>`; its filter is still a
+  `Fn(&WebhookEvent) -> bool`, and what goes on the wire is unchanged.
+  `BroadcastSink<E>` still implements `EventSink<E>` (the port is
+  unchanged), and its bound is now `E: Send + Sync + 'static` instead of
+  `E: Clone + Send + 'static`: `E` need not be `Clone` any more, but
+  must be `Sync`. Upgrading:
+  - a channel you create for the sink and `sse`:
+    `broadcast::channel::<WebhookEvent>(n)` becomes
+    `broadcast::channel::<Arc<WebhookEvent>>(n)` (where the type was
+    inferred, nothing changes), and a field or argument typed
+    `broadcast::Sender<WebhookEvent>` or `broadcast::Receiver<WebhookEvent>`
+    becomes `broadcast::Sender<Arc<WebhookEvent>>` or
+    `broadcast::Receiver<Arc<WebhookEvent>>`;
+  - code reading a subscription or a receiver gets an `Arc<E>`: method
+    calls and field reads go through `Deref` unchanged, and `&event`
+    still passes where a `&E` is expected, but a `match` on the event
+    matches `&*event` (patterns do not go through `Deref`); a value you
+    need owned is `Arc::unwrap_or_clone(event)` or `(*event).clone()`,
+    and serializing it with serde goes through the event,
+    `serde_json::to_string(&*event)` (serde implements `Serialize` for
+    `Arc` only when your build enables its `rc` feature);
+  - a test sending on that channel itself sends `Arc::new(event)`, and
+    compares what it receives as `*received == expected` (or with
+    `Arc::new(expected)`).
 
 - **Breaking — `OnboardingRequest::code` is an `Option<SignupCode>`**
   (roadmap L4): `None` in a request built with the new
@@ -1897,7 +1971,8 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
     a move is S2b's.
   - **L4 — the route guard cannot be checked on a third-party
     backend** until the conformance suites move into the core: roadmap
-    S3 includes the `RouteGuard` cases.
+    S3 includes the `RouteGuard` cases (since landed: "The service
+    core's conformance suites", under "Added").
 - **Credential allow list widened, for one URL (roadmap L10a).** Meta
   serves the Parent BSUID Accounts API from `api.facebook.com`, without
   an API version, not from Graph (`business-scoped-user-ids`; the page's
