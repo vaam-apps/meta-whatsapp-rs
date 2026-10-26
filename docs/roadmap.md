@@ -1031,8 +1031,15 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     receivers) and `ten_sse_subscribers_share_one_allocation_per_event`
     (`webhooks::server`, on the stream `sse` is built on), with
     `sse_filters_see_the_shared_event` checking that the public `sse`
-    hands each of ten filters the sent allocation; a subscription or a
-    stream that clones the event per subscriber fails each of them.
+    hands each of ten filters the sent allocation. A subscription that
+    clones the event per subscriber fails the first; a stream that
+    clones it fails the second, and the third too when the copy comes
+    before the filter. `sse_body_is_byte_exact` (`tests/router.rs`)
+    pins the wire output, the same bytes as before L21b. Not pinned: a
+    copy inside `sse`'s encoding step, after the filter, which only an
+    allocation counter would see (`unsafe_code` is forbidden, so a
+    counting allocator would need a new dev-dependency).
+    `WebhookEvent` is asserted `Send + Sync` at compile time.
     OPEN_QUESTIONS #31 is closed and deleted (CHANGELOG). No parity row
     changes: parity row 10 already counted `webhooks::sse` and
     `BroadcastSink` as done.

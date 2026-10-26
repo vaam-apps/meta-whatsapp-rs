@@ -163,7 +163,8 @@ fn status_for(error: &Error) -> StatusCode {
 /// stream receives the same allocation of an event, a reference count
 /// rather than a copy, so a multi-megabyte `HistorySynced` body is held
 /// once however many inboxes are open. Each stream still runs `filter`
-/// on every event of every merchant on the channel.
+/// on every event of every merchant on the channel, and each stream that
+/// accepts an event encodes its own frame of it.
 ///
 /// Each event that passes `filter` (typically "same phone number id as the
 /// merchant watching") is sent as `event: whatsapp` with the event's JSON as

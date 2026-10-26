@@ -338,3 +338,40 @@ async fn sse_streams_filtered_events_and_reports_lag() {
     );
     assert!(!text.contains("security_updated"), "filtered out: {text}");
 }
+
+/// The whole SSE body, byte for byte, for a lag, a filtered-out event and
+/// an accepted one, then the close: what goes on the wire did not change
+/// when the channel started carrying `Arc<WebhookEvent>` (roadmap L21b).
+#[tokio::test]
+async fn sse_body_is_byte_exact() {
+    let (tx, rx) = tokio::sync::broadcast::channel(4);
+    let wanted = Arc::new(common::events("messages/text.json").remove(0));
+    let other = Arc::new(common::events("fields/security.json").remove(0));
+
+    // 6 sends into capacity 4: 2 missed, then `other` twice (filtered
+    // out), then `wanted` twice; the stream ends when the channel closes.
+    for _ in 0..4 {
+        tx.send(Arc::clone(&other)).unwrap();
+    }
+    tx.send(Arc::clone(&wanted)).unwrap();
+    tx.send(Arc::clone(&wanted)).unwrap();
+    drop(tx);
+
+    let response =
+        axum::response::IntoResponse::into_response(sse(rx, |e| e.phone_number_id().is_some()));
+    let body = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        response.into_body().collect(),
+    )
+    .await
+    .expect("the SSE stream ends when the channel closes")
+    .unwrap()
+    .to_bytes();
+    let json = serde_json::to_string(&*wanted).unwrap();
+    assert_eq!(
+        std::str::from_utf8(&body).unwrap(),
+        format!(
+            "event: lagged\ndata: 2\n\nevent: whatsapp\ndata: {json}\n\nevent: whatsapp\ndata: {json}\n\n"
+        )
+    );
+}

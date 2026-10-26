@@ -1058,15 +1058,20 @@ stored data, the owner's).
     `broadcast::channel::<WebhookEvent>(n)` becomes
     `broadcast::channel::<Arc<WebhookEvent>>(n)` (where the type was
     inferred, nothing changes), and a field or argument typed
-    `broadcast::Sender<WebhookEvent>` becomes
-    `broadcast::Sender<Arc<WebhookEvent>>`;
+    `broadcast::Sender<WebhookEvent>` or `broadcast::Receiver<WebhookEvent>`
+    becomes `broadcast::Sender<Arc<WebhookEvent>>` or
+    `broadcast::Receiver<Arc<WebhookEvent>>`;
   - code reading a subscription or a receiver gets an `Arc<E>`: method
-    calls and field reads go through `Deref` unchanged, a value you
+    calls and field reads go through `Deref` unchanged, and `&event`
+    still passes where a `&E` is expected, but a `match` on the event
+    matches `&*event` (patterns do not go through `Deref`); a value you
     need owned is `Arc::unwrap_or_clone(event)` or `(*event).clone()`,
     and serializing it with serde goes through the event,
     `serde_json::to_string(&*event)` (serde implements `Serialize` for
     `Arc` only when your build enables its `rc` feature);
-  - a test sending on that channel itself sends `Arc::new(event)`.
+  - a test sending on that channel itself sends `Arc::new(event)`, and
+    compares what it receives as `*received == expected` (or with
+    `Arc::new(expected)`).
 
 - **Breaking — `OnboardingRequest::code` is an `Option<SignupCode>`**
   (roadmap L4): `None` in a request built with the new
