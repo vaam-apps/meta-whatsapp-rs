@@ -429,9 +429,8 @@ yet, refused on the key named:
 - in a send's `template`, the payment buttons' `order_details` and
   `payment_request` (India and Brazil payments are out of scope,
   docs/coverage.md row 32);
-- in a definition, `optimization_spec` and a URL button's
-  `app_deep_link` (Marketing Messages API bidding and app deep links),
-  and `package_name` and `signature_hash` on a one-tap or zero-tap
+- in a definition, `optimization_spec` (Marketing Messages API
+  bidding), and `package_name` and `signature_hash` on a one-tap or zero-tap
   button itself, which Meta accepts on Graph API v20.0 and older only:
   write them in the button's `supported_apps`;
 - a template as `GET` answers it, which is not a definition: its `id`,

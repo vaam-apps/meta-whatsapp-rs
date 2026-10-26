@@ -22,6 +22,7 @@
 //! `catalogs/{catalog,mpm,spm}-template-messages`,
 //! `catalogs/product-card-carousel-template-messages`,
 //! `flows/guides/flows-templates`, `calling/call-button-messages-deep-links`,
+//! `marketing-messages/deep-links`,
 //! `reference/whatsapp-business-account/message-template-api`.
 //!
 //! Doc paths are relative to
@@ -67,9 +68,10 @@ pub(crate) mod validate;
 mod tests;
 
 pub use definition::{
-    BodyComponent, BodyExample, Button, CarouselCard, FlowAction, FlowButton, FooterComponent,
-    HeaderComponent, HeaderExample, HeaderFormat, LimitedTimeOffer, NamedParameterExample,
-    OtpButton, SupportedApp, TemplateComponent, TemplateDefinition, TemplateEdit,
+    AppDeepLink, BodyComponent, BodyExample, Button, CarouselCard, FlowAction, FlowButton,
+    FooterComponent, HeaderComponent, HeaderExample, HeaderFormat, LimitedTimeOffer,
+    NamedParameterExample, OtpButton, SupportedApp, TemplateComponent, TemplateDefinition,
+    TemplateEdit,
 };
 pub use info::{
     ComparisonMetric, ComparisonMetricKind, ComparisonValue, HealthEntity, HealthEntityType,

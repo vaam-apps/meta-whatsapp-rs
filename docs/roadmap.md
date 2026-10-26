@@ -1038,7 +1038,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **After:** nothing.
   - **Decisive:** exact JSON; a group id is checked as digits before any
     request.
-- [ ] **L24. App deep links on template URL buttons**
+- [x] **L24. App deep links on template URL buttons**
   (`meta-whatsapp-client`, `client::templates::Button`; row 155): the
   Android deep link, its fallback URL and the Meta app id of
   `marketing-messages/deep-links`, which the service refuses today
@@ -1048,6 +1048,17 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** the page's request example round-trips byte for byte
     (as JSON values); dropping the field makes the service's
     lost-key check refuse it again.
+  - **Landed:** row 155 done on both sides. `Button::Url` gains
+    `app_deep_link: Option<AppDeepLink>` (`meta_app_id` a `u64`, a JSON
+    number on the wire; the two strings checked non-empty), and
+    `Button::url_with_app_deep_link` builds one. The page's example
+    round-trips (enum values in the module's upper case, the deep link
+    object as it stands); with the field's serialization skipped the
+    service answers `422` on `components[2].buttons[0].app_deep_link`
+    again and the round-trip, create and service tests fail. Not
+    checked locally: the marketing category, which the page uses but
+    does not state as a rule, and any length or URI syntax (none
+    documented).
 - [ ] **L25. The launch option shape, checked in Meta's Integration
   Helper** (`client::embedded_signup`, OPEN_QUESTIONS #12): a
   verification before production relies on pre-fill; if the helper
@@ -1218,11 +1229,11 @@ or WABA fails the family's own cross-tenant test).
   - **After:** S7.
   - **Decisive:** M5.1, M5.2; each type's documented example is sent
     byte for byte; one left out of the send union fails its test.
-- [ ] **M5b. Templates** (rows 95, 96, 99, 100, 101, 153, 155): edit,
+- [ ] **M5b. Templates** (rows 95, 96, 99, 100, 101, 153): edit,
   library, migrate, compare, unpause, archive and unarchive, template
-  groups, app deep links, each kind of row 99 created through the
-  service.
-  - **After:** S7, L23, L24.
+  groups, each kind of row 99 created through the service (app deep
+  links pass through since L24).
+  - **After:** S7, L23.
   - **Decisive:** M5.1, M5.2; creating each kind of row 99 from Meta's
     example passes with no key dropped.
 - [ ] **M5c1. Media: resumable upload and conversion** (rows 47, 48):

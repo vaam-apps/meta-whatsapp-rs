@@ -14,7 +14,9 @@ for what L9 left (L26); the service's cell of row 9 again with S2's
 security review, against its code; row 152 again with the parent BSUID
 accounts API (roadmap L10a), against its code; row 140 again with the
 Messaging Account a send bills (roadmap L16a), against its code and
-Meta's account model evolution pages of 2026-10-26. Every cell about us was checked against the code: a cell that
+Meta's account model evolution pages of 2026-10-26; row 155 with app
+deep links on template URL buttons (roadmap L24), against its code and
+the service's test. Every cell about us was checked against the code: a cell that
 says a thing is done names the symbol that does it, and what the service
 (`meta-whatsapp-server`) does is read from its routes, not from its
 design. The plan to close the gaps is [roadmap.md](roadmap.md); the Meta
@@ -23,23 +25,23 @@ per-feature list is [coverage.md](coverage.md).
 
 ## Where we stand
 
-**38 of the 132 counted rows are done on both sides.** Parity is not
+**39 of the 132 counted rows are done on both sides.** Parity is not
 reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
-| Library | 99 | 21 | 11 | 1 |
-| Service | 38 | 25 | 68 | 1 |
+| Library | 100 | 21 | 10 | 1 |
+| Service | 39 | 25 | 67 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
   over WhatsApp Web ("n/a — unofficial protocol"). The counted rows'
   n/a column is a side that does not carry the capability at all: the
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
-- Each of the library's 32 partial or gap rows is cited by a
-  [roadmap](roadmap.md) item. Each of the service's 93 names, in its
+- Each of the library's 31 partial or gap rows is cited by a
+  [roadmap](roadmap.md) item. Each of the service's 92 names, in its
   status, the roadmap items that bring it; by family (a row can name
-  two): M2 8, M3 11, M4 2, M5 71, S 2 (the modular split; S2b, undated
+  two): M2 8, M3 11, M4 2, M5 70, S 2 (the modular split; S2b, undated
   events after a move), L 1 (L22a, tooling), P 2 (payments).
 - The largest gaps: the service routes for the modules the design once
   left "on demand" (M5), the inbox, live events and onboarding over HTTP
@@ -278,7 +280,7 @@ The owner's definition (2026-09-26):
 | 96 | Templates | Template library, migration, comparison, unpausing | — | — | `templates/template-library.md`, `templates/template-migration.md`, `templates/template-comparison.md`, `templates/template-pausing.md` | `Templates::library`, `create_from_library`, `migrate_from`, `compare`, `unpause` | not exposed | done / gap (M5b) |
 | 97 | Templates | Review, quality, category and component events | No | Yes (status only) | `webhooks/reference/message_template_status_update.md`, `webhooks/reference/message_template_quality_update.md`, `webhooks/reference/template_category_update.md`, `webhooks/reference/message_template_components_update.md` | `webhooks::WebhookEvent::TemplateStatusUpdated`, `TemplateQualityUpdated`, `TemplateCategoryUpdated`, `TemplateComponentsUpdated`, `TemplateCategoryMisuseDetected` | the five `template_*` event types | done / done |
 | 98 | Templates | Authentication templates (copy code, one-tap, zero-tap, previews, bulk upsert) and an OTP service | No | Partial (copy code sent by hand) | `templates/authentication-templates/authentication-templates.md` and its pages | `client::authentication::Authentication::create`, `previews`, `upsert`; `client::authentication::OtpService::issue`, `verify` | M3c (`/v1/otp/*`, `POST /v1/wabas/{waba_id}/templates/authentication`) | done / gap (M3c) |
-| 99 | Templates | Marketing and utility template kinds: coupon, limited-time offer, media-card and product-card carousels, location, call permission, catalog, MPM, SPM, product header | — | — | `templates/marketing-templates.md` and its pages, `templates/utility-templates/utility-templates.md` and its pages, `catalogs/product-card-carousel-template-messages` | `client::templates::TemplateComponent::limited_time_offer`, `carousel`, `header_location`, `header_product`, `call_permission_request`; `client::templates::Button::catalog`, `mpm`, `spm`; `client::templates::Parameter::coupon_code` | create and send take Meta's JSON (unverified per kind: no service test creates each one, M5b); what the library cannot carry is refused (coverage row 33) and counted in its own row: payment buttons (rows 38, 141), `app_deep_link` (row 155), `optimization_spec` (row 137); the pre-v21 one-tap fields are superseded on the Graph API version we target | done / partial (M5b) |
+| 99 | Templates | Marketing and utility template kinds: coupon, limited-time offer, media-card and product-card carousels, location, call permission, catalog, MPM, SPM, product header | — | — | `templates/marketing-templates.md` and its pages, `templates/utility-templates/utility-templates.md` and its pages, `catalogs/product-card-carousel-template-messages` | `client::templates::TemplateComponent::limited_time_offer`, `carousel`, `header_location`, `header_product`, `call_permission_request`; `client::templates::Button::catalog`, `mpm`, `spm`; `client::templates::Parameter::coupon_code` | create and send take Meta's JSON (unverified per kind: no service test creates each one, M5b); what the library cannot carry is refused (coverage row 33) and counted in its own row: payment buttons (rows 38, 141), `optimization_spec` (row 137); `app_deep_link` is carried (row 155); the pre-v21 one-tap fields are superseded on the Graph API version we target | done / partial (M5b) |
 | 100 | Templates | Time to live, the tap-target title override | — | — | `templates/time-to-live.md`, `templates/tap-target-url-title-override.md` | `client::templates::TemplateDefinition::message_send_ttl_seconds`; `TemplateMessage::tap_target` | through Meta's JSON (unverified: no test covers these keys through the service) | done / partial (M5b) |
 | 101 | Templates | Archiving and unarchiving templates | — | — | `templates/template-management.md` (§ Archive and unarchive templates: the API archives and unarchives templates in bulk, and sends to `templates/template-archival.md` for the endpoints, which the mirrored page does not show); archival and unarchival arrive as `ARCHIVED` and `UNARCHIVED` in `webhooks/reference/message_template_status_update.md` | not wrapped (the endpoint is not in the mirror); the status events are typed (`webhooks::WebhookEvent::TemplateStatusUpdated`) | the status events only (`template_status_updated`) | gap / gap (M5b) |
 | 102 | Commerce | Commerce settings (cart, catalog visibility) | — | — | `catalogs/set-commerce-settings`; `reference/whatsapp-business-phone-number/commerce-settings-api.md` | `client::commerce::Commerce::settings`, `update_settings`, `set_cart_enabled`, `set_catalog_visible` | not exposed | done / gap (M5g) |
@@ -290,7 +292,7 @@ The owner's definition (2026-09-26):
 | 108 | Numbers | Registration: request and verify a code, register, deregister, list numbers | No | Yes | `reference/whatsapp-business-phone-number/phone-number-registration.md`, `reference/whatsapp-business-phone-number/phone-number-verification-request-code-api.md`, `reference/whatsapp-business-phone-number/verify-code-api.md`, `reference/whatsapp-business-phone-number/phone-number-deregister-api.md`, `reference/whatsapp-business-account/phone-number-management-api.md` | `client::phone_numbers::PhoneNumber::request_code`, `verify_code`, `register`, `deregister`; `client::waba::Waba::phone_numbers` | `GET /v1/numbers`, `GET /v1/numbers/{pn}` (`server::api::numbers::list_numbers`, `get_number`); registration in M3 | done / partial (M3d) |
 | 109 | Numbers | Number health: quality rating, throughput, messaging limit tier | No | Yes (`info()`) | `reference/whatsapp-business-phone-number/whatsapp-business-account-phone-number-api.md`; `throughput.md` | `client::phone_numbers::PhoneNumberInfo` (`quality_rating`, `throughput`, `messaging_limit_tier`); `webhooks::WebhookEvent::PhoneNumberQualityUpdated` | `GET /v1/numbers/{pn}` reports the quality rating and throughput, not the messaging limit tier (`server::api::numbers::NUMBER_FIELDS`); `phone_number_quality_updated` events (limit changes included) | done / partial (M5c3) |
 | 153 | Templates | Template groups: create, read, update, delete | — | — | Meta's `changelog` lists `GET` and `POST /{WABA_ID}/template_groups`, `GET`, `POST` and `DELETE /{TEMPLATE_GROUP_ID}`; the guide it links, `templates/template-groups`, is not in Meta's page list, so not in the mirror | their analytics only (`Analytics::template_group`); management not wrapped | not exposed | gap / gap (M5b) |
-| 155 | Templates | Android app deep links on marketing templates' URL buttons | — | — | `marketing-messages/deep-links.md` (a URL button's `app_deep_link`: the Android deep link, a fallback URL, the Meta app id) | not carried: `client::templates::Button::Url` has no `app_deep_link` | refused when a template is created, `422` on the key (coverage row 33) | gap / gap (M5b) |
+| 155 | Templates | Android app deep links on marketing templates' URL buttons | — | — | `marketing-messages/deep-links.md` (a URL button's `app_deep_link`: the Android deep link, a fallback URL, the Meta app id) | `client::templates::Button::Url` (its `app_deep_link`), `client::templates::AppDeepLink`, `client::templates::Button::url_with_app_deep_link`; both strings checked non-empty before any request; the page's example round-trips | passed through to Meta unchanged when a template is created (`POST /v1/wabas/{waba_id}/templates`; a test sends the page's example) | done / done |
 
 ### I. Data and production
 

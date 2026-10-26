@@ -15,8 +15,8 @@ use std::collections::BTreeSet;
 use meta_whatsapp_core::error::ValidationError;
 
 use super::definition::{
-    Button, CarouselCard, FlowAction, FlowButton, HeaderComponent, HeaderFormat, OtpButton,
-    SupportedApp, TemplateComponent, TemplateDefinition, TemplateEdit,
+    AppDeepLink, Button, CarouselCard, FlowAction, FlowButton, HeaderComponent, HeaderFormat,
+    OtpButton, SupportedApp, TemplateComponent, TemplateDefinition, TemplateEdit,
 };
 use super::types::{ParameterFormat, TemplateCategory};
 
@@ -690,11 +690,15 @@ fn button(b: &Button, ctx: &Ctx<'_>, field: &str) -> Check {
             text: t,
             url,
             example,
+            app_deep_link,
         } => {
             // `templates/components#url-buttons`: label 25, URL 2000, one
             // variable appended to the end, example required with a variable.
             text(t, 25, &f("text"))?;
             text(url, 2000, &f("url"))?;
+            if let Some(link) = app_deep_link {
+                app_deep_link_fields(link, &f("app_deep_link"))?;
+            }
             let found = parse_placeholders(url, &f("url"))?;
             if found.is_empty() {
                 return Ok(());
@@ -781,6 +785,26 @@ fn button(b: &Button, ctx: &Ctx<'_>, field: &str) -> Check {
         }
         _ => Ok(()),
     }
+}
+
+/// `marketing-messages/deep-links`: `android_deep_link` and
+/// `android_fallback_playstore_url` are required strings (the API table).
+/// No length limit, URI syntax or `meta_app_id` range is documented, so
+/// none is checked; neither is the marketing category the page's templates
+/// use, which it does not state as a rule.
+fn app_deep_link_fields(link: &AppDeepLink, field: &str) -> Check {
+    for (name, value) in [
+        ("android_deep_link", &link.android_deep_link),
+        (
+            "android_fallback_playstore_url",
+            &link.android_fallback_playstore_url,
+        ),
+    ] {
+        if value.trim().is_empty() {
+            return Err(err(format!("{field}.{name}"), "must not be empty"));
+        }
+    }
+    Ok(())
 }
 
 /// OTP button limits, from the copy-code, one-tap and zero-tap pages under
@@ -1225,6 +1249,61 @@ mod tests {
                 TemplateComponent::buttons([no_example])
             ])),
             "components[1].buttons[0].example"
+        );
+    }
+
+    /// `marketing-messages/deep-links`: both strings are required.
+    /// Decisive: each emptiness check, and that a deep link URL button is
+    /// checked before the no-placeholder early return.
+    #[test]
+    fn app_deep_link_strings_are_required() {
+        let link = || {
+            AppDeepLink::new(
+                634_974_688_087_057,
+                "luckyshrub://deals/summer/",
+                "https://x.com/",
+            )
+        };
+        let with = |link: AppDeepLink| {
+            def(vec![
+                TemplateComponent::body("b"),
+                TemplateComponent::buttons([Button::url_with_app_deep_link(
+                    "View Deals",
+                    "https://x.com/deals/",
+                    link,
+                )]),
+            ])
+        };
+        assert!(definition(&with(link())).is_ok());
+        for (name, blank) in [
+            (
+                "android_deep_link",
+                AppDeepLink {
+                    android_deep_link: " ".into(),
+                    ..link()
+                },
+            ),
+            (
+                "android_fallback_playstore_url",
+                AppDeepLink {
+                    android_fallback_playstore_url: String::new(),
+                    ..link()
+                },
+            ),
+        ] {
+            assert_eq!(
+                field_of(&with(blank)),
+                format!("components[1].buttons[0].app_deep_link.{name}")
+            );
+        }
+        // The button's own limits still apply.
+        let long_label = Button::url_with_app_deep_link("x".repeat(26), "https://x.com/", link());
+        assert_eq!(
+            field_of(&def(vec![
+                TemplateComponent::body("b"),
+                TemplateComponent::buttons([long_label])
+            ])),
+            "components[1].buttons[0].text"
         );
     }
 
