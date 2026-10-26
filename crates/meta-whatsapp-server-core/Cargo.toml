@@ -14,6 +14,16 @@ publish = false
 [lib]
 name = "meta_whatsapp_server_core"
 
+[features]
+# `meta_whatsapp_server_core::conformance`: the executable definition of the
+# ports' contracts, which every backend runs over its `Backend` (the
+# service's memory and Postgres ones in its tests; yours in your own), as
+# the library's `meta_whatsapp_adapters::store::conformance` is for a
+# `KvStore`. Test code: it panics on a broken contract, and brings the
+# library's `ScriptedTransport` (the capabilities' Graph client) and
+# tokio's `join!`.
+conformance = ["meta-whatsapp-rs/testing", "tokio/macros"]
+
 [dependencies]
 # The library, through the facade and without its adapters: no HTTP
 # framework (axum), no database driver (sqlx), no HTTP client (reqwest)

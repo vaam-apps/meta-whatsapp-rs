@@ -18,6 +18,7 @@
 //! | [`idempotency`] | `Idempotency-Key`: claim, settle, replay |
 //! | [`ratelimit`] | per-tenant token buckets by route class, transfer slots |
 //! | [`store`], [`outbox`], [`backend`] | the ports, and the bundle a backend gives |
+//! | `conformance` (feature `conformance`) | the ports' contracts as executable suites, run over a [`backend::Backend`]: every backend's tests run them |
 //!
 //! # Ports
 //!
@@ -37,10 +38,14 @@
 //! guarantees, whatever its database (the routing checked again with each
 //! outbox insert, the referential rules, one clock, typed contention,
 //! purges without locks, byte order), is [`store`]'s module
-//! documentation.
+//! documentation; the suites of feature `conformance`
+//! (`meta_whatsapp_server_core::conformance::run`) check it, over a
+//! backend's bundle.
 
 pub mod authz;
 pub mod backend;
+#[cfg(feature = "conformance")]
+pub mod conformance;
 pub mod error;
 pub mod events;
 pub mod idempotency;
