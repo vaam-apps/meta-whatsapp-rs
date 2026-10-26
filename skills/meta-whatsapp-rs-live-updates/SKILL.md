@@ -68,8 +68,9 @@ let only_this_number = move |e: &WebhookEvent| e.phone_number_id() == Some(&owne
 meta_whatsapp_rs::webhooks::sse(live.subscribe(), only_this_number) // `event: whatsapp`; `event: lagged` → reload
 ```
 
-`sse` takes a tokio `broadcast::Receiver<WebhookEvent>`: `tx.subscribe()`
-or `BroadcastSink::receiver()`. Each event goes out as `event: whatsapp`
+`sse` takes a tokio `broadcast::Receiver<Arc<WebhookEvent>>`: `tx.subscribe()`
+or `BroadcastSink::receiver()` (whose channel carries `Arc<WebhookEvent>`:
+`BroadcastSink::from_sender` takes that sender). Each event goes out as `event: whatsapp`
 with the event JSON; when the receiver falls behind, `event: lagged` with
 the count arrives — reload history from your store. Mount it **behind
 your own auth, after checking the caller owns the number**. A browser's
@@ -92,11 +93,11 @@ while let Some(event) = jobs.recv().await {
   `ChannelSink` queue lives in memory and dies with the process.
 - A sink error that can never succeed blocks its whole batch until Meta
   drops it after 7 days: turn permanent failures into logged successes.
-- **SSE cost**: a broadcast receiver clones every event before the filter
-  sees it, so each open stream copies every merchant's events (including
-  multi-megabyte `HistorySynced` bodies). Fine for a handful of open
-  inboxes; see OPEN_QUESTIONS.md #31 before hundreds (decided on
-  2026-09-26: shared events instead of clones, roadmap L21b).
+- **SSE cost**: every open stream gets the same `Arc` of an event, not a
+  copy (~~a clone per stream~~ until roadmap L21b), so a multi-megabyte
+  `HistorySynced` body is held once. Each stream still runs its filter on
+  every merchant's events, and the channel holds up to its capacity of
+  them.
 - The broadcast channel is per process: with several instances, relay
   events yourself (Postgres `LISTEN/NOTIFY`, Redis pub/sub) or pin a
   merchant's traffic to one instance.
@@ -106,7 +107,7 @@ while let Some(event) = jobs.recv().await {
 - No dead-letter store yet for events a sink cannot take
   ([OPEN_QUESTIONS.md #30](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#webhooks-and-live-updates),
   decided on 2026-09-26, roadmap L21a), no cross-instance relay, no
-  per-number channels (#31).
+  per-number channels (one channel, every stream filters it).
 - No durable queue: use your own outbox table inside a sink.
 
 ## Related skills

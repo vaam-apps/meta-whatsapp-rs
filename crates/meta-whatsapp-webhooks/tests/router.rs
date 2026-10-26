@@ -295,14 +295,14 @@ async fn post_of_signed_garbage_is_200() {
 #[tokio::test]
 async fn sse_streams_filtered_events_and_reports_lag() {
     let (tx, rx) = tokio::sync::broadcast::channel(2);
-    let wanted = common::events("messages/text.json").remove(0);
-    let other = common::events("fields/security.json").remove(0);
+    let wanted = Arc::new(common::events("messages/text.json").remove(0));
+    let other = Arc::new(common::events("fields/security.json").remove(0));
 
     // Overflow the channel before the stream reads: 4 sends into capacity 2.
     for _ in 0..3 {
-        tx.send(other.clone()).unwrap();
+        tx.send(Arc::clone(&other)).unwrap();
     }
-    tx.send(wanted.clone()).unwrap();
+    tx.send(Arc::clone(&wanted)).unwrap();
     drop(tx);
 
     let response =
@@ -331,7 +331,7 @@ async fn sse_streams_filtered_events_and_reports_lag() {
         .await
         .expect("the SSE stream ends when the channel closes");
     assert!(text.contains("event: lagged\ndata: 2\n"), "{text}");
-    let json = serde_json::to_string(&wanted).unwrap();
+    let json = serde_json::to_string(&*wanted).unwrap();
     assert!(
         text.contains(&format!("event: whatsapp\ndata: {json}\n")),
         "{text}"

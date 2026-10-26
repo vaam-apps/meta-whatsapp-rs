@@ -86,6 +86,10 @@ volumes (Claude config, shell history, cargo caches) start empty
   raw bytes". This reverts fd4667e's provisional replacement of U+0000
   with U+FFFD in `InboxSink` and `Inbox::send`: message content keeps it,
   and the Postgres store holds it (below, Changed).
+- #31 (every SSE subscriber cloned every event): decided on 2026-09-26
+  under the owner's delegation, broadcast `Arc<WebhookEvent>`; landed
+  with roadmap L21b (see Changed, breaking), and the entry is deleted
+  from OPEN_QUESTIONS.md.
 - #34 (should `OtpConfig::namespace` be required?): decided yes by the
   maintainer, done in d67b3ac.
 - #35 (synced coexistence history went through `append` like live
@@ -182,7 +186,8 @@ stored data, the owner's).
   sqlx re-exports kept (no code).
 - Webhooks and live updates: #30, a permanently failing event is
   dead-lettered, the rest of the batch delivered (L21a); #31, live
-  events shared as `Arc<WebhookEvent>` (L21b, breaking).
+  events shared as `Arc<WebhookEvent>` (L21b, breaking; landed: see
+  Changed and "Open questions closed").
 - CMS inbox: #32, the calls that reopen the window recorded as window
   events (L5, L7); #44, standby messages as window events and thread
   ownership tracked, each with an explicit override (L5, L7, M2d),
@@ -1031,6 +1036,37 @@ stored data, the owner's).
   Use v4, which needs no `version`.
 
 ### Changed
+
+- **Breaking — live events are shared as `Arc<WebhookEvent>`, not cloned
+  per subscriber** (`meta_whatsapp_webhooks::sse`,
+  `meta_whatsapp_adapters::sink::BroadcastSink`; roadmap L21b, decided as
+  OPEN_QUESTIONS #31, now closed). A tokio broadcast receiver clones what
+  it receives, so every open SSE stream copied every merchant's events,
+  multi-megabyte `HistorySynced` bodies included, before its filter
+  dropped them. `BroadcastSink<E>` now wraps each delivered event in one
+  `Arc` and publishes `Arc<E>`, so every subscriber gets the same
+  allocation: `from_sender` takes a `broadcast::Sender<Arc<E>>`,
+  `receiver` returns a `broadcast::Receiver<Arc<E>>`, and a
+  `BroadcastSubscription<E>` yields `Result<Arc<E>, Lagged>`. `sse` takes
+  a `broadcast::Receiver<Arc<WebhookEvent>>`; its filter is still a
+  `Fn(&WebhookEvent) -> bool`, and what goes on the wire is unchanged.
+  `BroadcastSink<E>` still implements `EventSink<E>` (the port is
+  unchanged), and its bound is now `E: Send + Sync + 'static` instead of
+  `E: Clone + Send + 'static`: `E` need not be `Clone` any more, but
+  must be `Sync`. Upgrading:
+  - a channel you create for the sink and `sse`:
+    `broadcast::channel::<WebhookEvent>(n)` becomes
+    `broadcast::channel::<Arc<WebhookEvent>>(n)` (where the type was
+    inferred, nothing changes), and a field or argument typed
+    `broadcast::Sender<WebhookEvent>` becomes
+    `broadcast::Sender<Arc<WebhookEvent>>`;
+  - code reading a subscription or a receiver gets an `Arc<E>`: method
+    calls and field reads go through `Deref` unchanged, a value you
+    need owned is `Arc::unwrap_or_clone(event)` or `(*event).clone()`,
+    and serializing it with serde goes through the event,
+    `serde_json::to_string(&*event)` (serde implements `Serialize` for
+    `Arc` only when your build enables its `rc` feature);
+  - a test sending on that channel itself sends `Arc::new(event)`.
 
 - **Breaking — `OnboardingRequest::code` is an `Option<SignupCode>`**
   (roadmap L4): `None` in a request built with the new

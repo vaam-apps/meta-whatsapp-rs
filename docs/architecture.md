@@ -812,8 +812,10 @@ Logs carry sizes, digests and field names only — never payload values.
   present and well-formed (`sha256=` + 64 hex; no secret or body needed)
   before reading the body, so an unsigned request is a `401` without being
   buffered; `SIGNATURE_HEADER` is defined outside the `axum` feature for
-  framework-free integrations. Every SSE subscriber's broadcast receiver
-  clones every event before its filter runs (`OPEN_QUESTIONS.md` #31).
+  framework-free integrations. The SSE helper reads a
+  `broadcast::Receiver<Arc<WebhookEvent>>`: every subscriber gets the
+  same allocation of an event, never a copy of its own (roadmap L21b),
+  and its filter runs on that shared event.
 
 ## Adapters (`meta-whatsapp-adapters`)
 
@@ -848,7 +850,10 @@ Logs carry sizes, digests and field names only — never payload values.
   issue logs, dedup markers), and Redis evicts silently.
 - `sink::{ChannelSink, BroadcastSink, FanoutSink, FilterSink, FnSink,
   TracingSink}` — feature `sinks`, generic over the event type, `Debug`
-  redacted. (The inbox sink needs webhook event types, so it lives in the
+  redacted. `BroadcastSink<E>` is still an `EventSink<E>` (the port is
+  unchanged) but wraps each event in one `Arc` and publishes
+  `Arc<E>` on its tokio channel, so its subscribers and the SSE helper
+  share that allocation. (The inbox sink needs webhook event types, so it lives in the
   facade: `meta_whatsapp_rs::inbox::InboxSink`.)
 - Postgres: one table-wide version sequence (versions never reused, even
   after purge); deleted keys leave marker rows purged after 10 minutes;

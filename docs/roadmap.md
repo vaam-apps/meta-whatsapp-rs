@@ -1010,7 +1010,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     facade-level erasure of the contact removes their dead-lettered
     events (removing the dead-letter store's `erase` from it fails the
     test).
-- [ ] **L21b. Live events shared, not cloned** (`meta-whatsapp-webhooks`
+- [x] **L21b. Live events shared, not cloned** (`meta-whatsapp-webhooks`
   `sse`, `meta-whatsapp-adapters` `BroadcastSink`; OPEN_QUESTIONS #31):
   both over `Arc<WebhookEvent>`.
   - **Kind:** breaking (their types change).
@@ -1018,6 +1018,24 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** ten subscribers share one allocation per event
     (`Arc::ptr_eq` across them); reverting to a clone per subscriber
     fails it.
+  - **Landed:** `BroadcastSink<E>` wraps each delivered event in one
+    `Arc` and publishes `Arc<E>` (`from_sender`, `receiver` and
+    `BroadcastSubscription` carry `Arc<E>`; `E` need not be `Clone`,
+    but must be `Sync`); `sse` reads a
+    `broadcast::Receiver<Arc<WebhookEvent>>`, its filter still a
+    `Fn(&WebhookEvent) -> bool`. The `EventSink` port is unchanged:
+    the sink still takes an owned `E` and does the wrapping. The
+    decisive tests are
+    `ten_subscribers_share_one_allocation_per_event`
+    (`adapters::sink::broadcast`: ten subscriptions and ten raw
+    receivers) and `ten_sse_subscribers_share_one_allocation_per_event`
+    (`webhooks::server`, on the stream `sse` is built on), with
+    `sse_filters_see_the_shared_event` checking that the public `sse`
+    hands each of ten filters the sent allocation; a subscription or a
+    stream that clones the event per subscriber fails each of them.
+    OPEN_QUESTIONS #31 is closed and deleted (CHANGELOG). No parity row
+    changes: parity row 10 already counted `webhooks::sse` and
+    `BroadcastSink` as done.
 - [ ] **L21c. `rediss://`** (`meta-whatsapp-adapters`, feature `redis`;
   OPEN_QUESTIONS #19): an explicit aws-lc-rs provider handed to the
   connection, never the process default; if redis-rs cannot take one,

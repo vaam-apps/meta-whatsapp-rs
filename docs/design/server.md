@@ -687,7 +687,9 @@ For backends such as Medusa that prefer not to hold a stream open.
   8,000-byte payload limit). New rows are
   read once and shared (`Arc`) into channels per (tenant, number), created
   with their first subscriber: a stream never receives, or clones, another
-  tenant's events, so OQ #31's cost does not arise.
+  tenant's events, nor filters them (the library's `sse` shares one
+  `Arc` per event since roadmap L21b, but every stream filters every
+  event of its channel).
 - Limits: 20 streams per tenant, 1,000 per replica. Operator-only rows are
   never streamed. `EventSource` cannot send `Authorization`: browsers go
   through the CMS (D3).
