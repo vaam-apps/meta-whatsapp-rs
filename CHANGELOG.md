@@ -199,7 +199,9 @@ stored data, the owner's).
   (`POST /{WABA_ID}/message_templates/archive` and `…/unarchive`,
   `templates/template-archival`) take 1 to 100 template ids, each digits
   only, and return `ArchiveResult` / `UnarchiveResult`, the ids done and
-  a reason for each that failed (a partial failure is not an error).
+  a reason for each that failed (a partial failure is not an error;
+  ids written as numbers, `null`, and no failures written as `[]` parse
+  too, so a call that took effect is not reported as an error).
   `Templates::create_group` (`POST /{WABA_ID}/template_groups`),
   `get_group`, `update_group` and `delete_group`
   (`GET`, `POST`, `DELETE /{TEMPLATE_GROUP_ID}`, `templates/template-groups`)
