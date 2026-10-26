@@ -114,7 +114,9 @@ late "typing…" after the answer looks broken).
 - **Outside the 24-hour customer service window** (no message from the
   customer in the last 24 hours) free-form messages fail with
   `ErrorKind::CustomerServiceWindowClosed` (131047): send a template
-  (`meta-whatsapp-rs-send-templates`).
+  (`meta-whatsapp-rs-send-templates`). Meta may also accept such a send
+  and fail it later, in its `failed` status webhook, so an `Ok` is no
+  proof of delivery: check the window first (the CMS inbox does).
 - **Never drop the `+`**: Meta prepends your business number's country
   code to a number without it, so the message reaches someone else.
 - A reaction cannot be a quoted reply (refused locally, field `context`);

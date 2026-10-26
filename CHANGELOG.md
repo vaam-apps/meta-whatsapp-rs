@@ -1003,6 +1003,18 @@ stored data, the owner's).
 
 ### Changed
 
+- **A closed customer service window, as Meta reports it** (docs only):
+  the messages module, `ErrorKind::CustomerServiceWindowClosed`,
+  `CustomerServiceWindow`, the bot's `Ctx::reply`, the `send_message`
+  example, the getting-started guide and the send-messages and errors
+  skills said a free-form send outside the 24-hour window fails with
+  `131047`. Meta may also accept it (`Ok`, a message id) and never deliver
+  it, the failure reported later in its `failed` status webhook (a live
+  send on 2026-10-26 was accepted and not delivered): they now say both,
+  and that an `Ok` is not delivery. Also documented: Meta
+  sends its sample template `hello_world` only from its public test
+  numbers (`131058` from any other).
+
 - **Credential headers and redirects** (see Security): `GraphRequest::header`
   refuses `Authorization`, `Proxy-Authorization` and `Cookie`
   (`Error::Validation` on the name; use `bearer()` or `oauth()`), and

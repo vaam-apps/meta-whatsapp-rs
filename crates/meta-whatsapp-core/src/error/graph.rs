@@ -182,6 +182,10 @@ pub enum ErrorKind {
 
     // ── Delivery to the user ──────────────────────────────────────────────
     /// `131047`: more than 24h since the user last messaged. Send a template.
+    ///
+    /// A free-form send outside the window can also be accepted and fail
+    /// later, in its `failed` status webhook: classify a status's errors
+    /// with [`GraphApiError::kind`] too.
     CustomerServiceWindowClosed,
     /// No Graph code yet: another app owns the thread under Conversation
     /// Routing, so a service message is refused (the inbox's local refusal,
