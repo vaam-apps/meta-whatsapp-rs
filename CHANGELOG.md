@@ -209,7 +209,10 @@ stored data, the owner's).
   page of its templates). A group id that is not digits, a blank or
   over-long name (256 characters), an over-long description (512) or a
   template id that is not an integer is an `Error::Validation` before any
-  request; the POSTs are not replayed on timeouts. Not wrapped, because
+  request; the POSTs are not replayed on timeouts. Archive and
+  unarchive are sent to the Graph endpoint, while Meta's page prints
+  them on `https://api.facebook.com/` with no version: not confirmed
+  live. Not wrapped, because
   no page documents them: the list of a WABA's groups
   (`GET /{WABA_ID}/template_groups`, in Meta's changelog only) and the
   pages after the first of a group's templates.

@@ -1071,7 +1071,12 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     templates. A group id that is not digits is a `Validation` error
     before any request (`group_ids_are_checked_as_digits_before_any_request`
     fails with the check removed); none of the POSTs is replayed on a
-    timeout. **Left:** the list of a WABA's groups
+    timeout. Archive and unarchive go to the Graph endpoint
+    (`graph.facebook.com/v25.0`), but the only page that shows them
+    prints `https://api.facebook.com/{WABA_ID}/…` with no version, and
+    no page shows them on Graph: not confirmed live, and moving them to
+    `api.facebook.com` would be a new credential rule (security review).
+    **Left:** the list of a WABA's groups
     (`GET /{WABA_ID}/template_groups`) and the pages after the first of a
     group's templates: Meta's changelog names the list, but no page
     documents its parameters or response (its Graph API reference page

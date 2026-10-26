@@ -2442,6 +2442,48 @@ async fn archive_and_unarchive_send_the_documented_bodies() {
     assert_eq!(empty, ArchiveResult::default());
 }
 
+/// Shapes the archival page's examples do not show, which must not turn a
+/// call that took effect (and is never replayed) into an error: ids as
+/// numbers, `null`s, an empty failure map written as `[]`, a reason that
+/// is not a string, a new field.
+#[test]
+fn archive_results_tolerate_shapes_the_page_does_not_show() {
+    let archived: ArchiveResult = serde_json::from_value(json!({
+        "archived_templates": [1_387_372_356_726_668_u64, "1304694804498707"],
+        "failed_templates": [],
+        "new_field": true
+    }))
+    .unwrap();
+    assert_eq!(
+        archived.archived_templates,
+        [
+            TemplateId::new("1387372356726668"),
+            TemplateId::new("1304694804498707")
+        ]
+    );
+    assert!(archived.failed_templates.is_empty());
+
+    let unarchived: UnarchiveResult = serde_json::from_value(json!({
+        "unarchived_templates": null,
+        "failed_templates": {"1": {"code": 100}, "2": "Template is not archived"}
+    }))
+    .unwrap();
+    assert!(unarchived.unarchived_templates.is_empty());
+    assert_eq!(
+        unarchived
+            .failed_templates
+            .get(&TemplateId::new("1"))
+            .map(String::as_str),
+        Some(r#"{"code":100}"#)
+    );
+    assert_eq!(unarchived.failed_templates.len(), 2);
+    let none: UnarchiveResult = serde_json::from_value(json!({"failed_templates": null})).unwrap();
+    assert_eq!(none, UnarchiveResult::default());
+
+    // Not a shape to guess at: a list of failures is an error.
+    assert!(serde_json::from_value::<ArchiveResult>(json!({"failed_templates": ["1"]})).is_err());
+}
+
 #[tokio::test]
 async fn group_ids_are_checked_as_digits_before_any_request() {
     let t = ScriptedTransport::new();
@@ -2503,7 +2545,12 @@ async fn group_bodies_are_checked_before_any_request() {
     }
     // The limits themselves pass.
     create(&"é".repeat(256), &["18446744073709551615"])
-        .description("d".repeat(512))
+        .description("é".repeat(512))
+        .validate()
+        .unwrap();
+    TemplateGroupUpdate::new()
+        .name("é".repeat(256))
+        .description("é".repeat(512))
         .validate()
         .unwrap();
 

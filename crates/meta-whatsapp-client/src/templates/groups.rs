@@ -222,25 +222,32 @@ pub struct TemplateGroup {
 /// Meta answers with the templates it archived and, for each one it did
 /// not, why (`"Only approved or rejected templates can be archived"`): a
 /// partial failure is not an error, so check `failed_templates`.
+///
+/// The page's example writes the ids as strings and the failures as an
+/// object. Parsing also takes, without failing a call that already took
+/// effect, what its example does not show: ids as numbers, a list or
+/// failure map that is `null`, and an empty failure map written as `[]`;
+/// a reason that is not a string is kept as its JSON text.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArchiveResult {
     /// Ids of the templates archived.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient::ids")]
     pub archived_templates: Vec<TemplateId>,
     /// Template id → why it was not archived.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient::reasons")]
     pub failed_templates: BTreeMap<TemplateId, String>,
 }
 
 /// Response of `POST /{WABA_ID}/message_templates/unarchive`; partial
-/// failures as in [`ArchiveResult`] (`"Template is not archived"`).
+/// failures (`"Template is not archived"`) and parsing as in
+/// [`ArchiveResult`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UnarchiveResult {
     /// Ids of the templates unarchived.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient::ids")]
     pub unarchived_templates: Vec<TemplateId>,
     /// Template id → why it was not unarchived.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient::reasons")]
     pub failed_templates: BTreeMap<TemplateId, String>,
 }
 
@@ -442,18 +449,72 @@ mod numeric_ids {
     pub(super) fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<Vec<TemplateId>, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Raw {
-            Number(u64),
-            Text(String),
-        }
-        Ok(Vec::<Raw>::deserialize(deserializer)?
+        Ok(Vec::<RawId>::deserialize(deserializer)?
             .into_iter()
-            .map(|raw| match raw {
-                Raw::Number(n) => TemplateId::new(n.to_string()),
-                Raw::Text(s) => TemplateId::new(s),
-            })
+            .map(RawId::into_id)
             .collect())
+    }
+
+    /// A template id written as a JSON number or string.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    pub(super) enum RawId {
+        Number(u64),
+        Text(String),
+    }
+
+    impl RawId {
+        pub(super) fn into_id(self) -> TemplateId {
+            match self {
+                Self::Number(n) => TemplateId::new(n.to_string()),
+                Self::Text(s) => TemplateId::new(s),
+            }
+        }
+    }
+}
+
+/// The archive responses' parsing, see [`ArchiveResult`].
+mod lenient {
+    use std::collections::BTreeMap;
+
+    use meta_whatsapp_core::ids::TemplateId;
+    use serde::Deserialize;
+    use serde::de::{Deserializer, Error as _};
+    use serde_json::Value;
+
+    use super::numeric_ids::RawId;
+
+    /// Ids as strings or numbers; `null` is no id.
+    pub(super) fn ids<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<TemplateId>, D::Error> {
+        Ok(Option::<Vec<RawId>>::deserialize(deserializer)?
+            .unwrap_or_default()
+            .into_iter()
+            .map(RawId::into_id)
+            .collect())
+    }
+
+    /// Id → reason; `null` and `[]` are no failure.
+    pub(super) fn reasons<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<BTreeMap<TemplateId, String>, D::Error> {
+        match Value::deserialize(deserializer)? {
+            Value::Null => Ok(BTreeMap::new()),
+            Value::Array(items) if items.is_empty() => Ok(BTreeMap::new()),
+            Value::Object(map) => Ok(map
+                .into_iter()
+                .map(|(id, reason)| {
+                    let reason = match reason {
+                        Value::String(s) => s,
+                        other => other.to_string(),
+                    };
+                    (TemplateId::new(id), reason)
+                })
+                .collect()),
+            other => Err(D::Error::custom(format!(
+                "failed_templates: expected an object of id to reason, got {other}"
+            ))),
+        }
     }
 }

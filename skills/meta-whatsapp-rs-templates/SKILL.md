@@ -101,20 +101,29 @@ while let Some(template) = stream.next().await {
 
 ## Archive, unarchive, group
 
-- `archive(&ids)` / `unarchive(&ids)`: up to 100 template ids, each
-  digits only. An archived template cannot be sent and is deleted 28 days
-  later; unarchiving within that window restores its previous status.
-  A partial failure is not an error: read `failed_templates` (id →
-  reason) next to `archived_templates` / `unarchived_templates`. Not
-  replayed on timeouts.
-- Template groups gather templates for `Analytics::template_group`:
-  `create_group(&TemplateGroupCreate::new(name, ids))` (unique name, at
-  most 256 characters; `.description(..)`, at most 512),
-  `get_group(&group_id)` (the group, its WABA and the first page of its
-  templates), `update_group(&group_id, &update)` with a
+```rust
+let result = templates.archive(ids).await?; // 1 to 100 ids; never replayed
+Ok(result.failed_templates.into_iter().collect()) // a partial failure is no error
+
+let group = TemplateGroupCreate::new("Black Friday 2024", ids.iter().cloned())
+    .description("US-based Black Friday sale 2024 templates.");
+Ok(templates.create_group(&group).await?.id) // keep it: there is no list call
+```
+
+- `archive(&ids)` / `unarchive(&ids)`: each id digits only. An archived
+  template cannot be sent and is deleted 28 days later; unarchiving
+  within that window restores its previous status. Read
+  `failed_templates` (id → reason) next to `archived_templates` /
+  `unarchived_templates`. Sent to the Graph endpoint, where Meta's page
+  prints `api.facebook.com`: not yet confirmed live (roadmap L23).
+- Groups gather templates for `Analytics::template_group`; a template is
+  in at most one. Names are unique, at most 256 characters; descriptions
+  at most 512. `get_group(&group_id)` returns the group, its WABA and the
+  first page of its templates; `update_group(&group_id, &update)` takes a
   `TemplateGroupUpdate` (`name`, `description`, `add_templates`,
-  `remove_templates`), `delete_group(&group_id)` (keeps the templates). A template is in at most one group. A group id
-  that is not digits is a `Validation` error before any request.
+  `remove_templates`; an empty one is refused); `delete_group(&group_id)`
+  keeps the templates. A group id that is not digits is a `Validation`
+  error before any request.
 
 ## Pitfalls
 

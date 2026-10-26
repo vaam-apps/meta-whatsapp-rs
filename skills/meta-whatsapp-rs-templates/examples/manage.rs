@@ -1,6 +1,7 @@
 //! Reference code for the `meta-whatsapp-rs-templates` skill: template definitions
 //! (what a template *is*), creating, listing, editing and deleting them,
-//! and following their review with webhooks.
+//! archiving them and grouping them, and following their review with
+//! webhooks.
 //!
 //! meta-whatsapp-rs compiles this file and runs its tests in its own gate
 //! (`crates/meta-whatsapp-rs/tests/skills.rs`).
@@ -8,9 +9,10 @@
 use futures::StreamExt;
 use meta_whatsapp_rs::client::templates::{
     Button, ParameterFormat, TemplateCategory, TemplateComponent, TemplateCreated,
-    TemplateDefinition, TemplateEdit, TemplateInfo, TemplateListQuery, TemplateStatus, Templates,
+    TemplateDefinition, TemplateEdit, TemplateGroupCreate, TemplateInfo, TemplateListQuery,
+    TemplateStatus, Templates,
 };
-use meta_whatsapp_rs::core::ids::{TemplateId, UploadHandle};
+use meta_whatsapp_rs::core::ids::{TemplateGroupId, TemplateId, UploadHandle};
 use meta_whatsapp_rs::prelude::*;
 use meta_whatsapp_rs::webhooks::fields::TemplateStatusEvent;
 
@@ -63,6 +65,25 @@ pub async fn reword(templates: &Templates, id: &TemplateId) -> meta_whatsapp_rs:
         ["Pablo", "860198"],
     )]);
     templates.edit(id, &edit).await // approved templates: 10 edits in 30 days
+}
+
+/// Archive in bulk; returns the ids Meta refused, with its reason.
+pub async fn archive_unused(
+    templates: &Templates,
+    ids: &[TemplateId],
+) -> meta_whatsapp_rs::Result<Vec<(TemplateId, String)>> {
+    let result = templates.archive(ids).await?; // 1 to 100 ids; never replayed
+    Ok(result.failed_templates.into_iter().collect()) // a partial failure is no error
+}
+
+/// Group templates to read their analytics as a set.
+pub async fn black_friday_group(
+    templates: &Templates,
+    ids: &[TemplateId],
+) -> meta_whatsapp_rs::Result<TemplateGroupId> {
+    let group = TemplateGroupCreate::new("Black Friday 2024", ids.iter().cloned())
+        .description("US-based Black Friday sale 2024 templates.");
+    Ok(templates.create_group(&group).await?.id) // keep it: there is no list call
 }
 
 /// Approval is asynchronous: react to the webhook instead of polling.
@@ -146,6 +167,51 @@ mod tests {
         let requests = transport.requests();
         assert_eq!(requests[0].query("status").as_deref(), Some("APPROVED"));
         assert_eq!(requests[1].query("after").as_deref(), Some("C1"));
+        assert_eq!(transport.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn archive_reports_what_failed() {
+        let transport = ScriptedTransport::new();
+        transport.push_json(
+            200,
+            json!({
+                "archived_templates": ["1387372356726668"],
+                "failed_templates": {
+                    "1304694804498707": "Only approved or rejected templates can be archived"
+                }
+            }),
+        );
+        let ids = ["1387372356726668".into(), "1304694804498707".into()];
+        let failed = archive_unused(&templates(&transport), &ids).await.unwrap();
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].0.as_str(), "1304694804498707");
+        let request = transport.last_request().unwrap();
+        assert_eq!(
+            request.path(),
+            "/v25.0/102290129340398/message_templates/archive"
+        );
+        assert_eq!(
+            request.json(),
+            Some(json!({"hsm_ids": ["1387372356726668", "1304694804498707"]}))
+        );
+        assert_eq!(transport.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn groups_write_template_ids_as_integers() {
+        let transport = ScriptedTransport::new();
+        transport.push_json(200, json!({"id": "9020555671393375"}));
+        let ids = ["278077987957091".into(), "1945418102598215".into()];
+        let id = black_friday_group(&templates(&transport), &ids)
+            .await
+            .unwrap();
+        assert_eq!(id.as_str(), "9020555671393375");
+        let body = transport.last_request().unwrap().json().unwrap();
+        assert_eq!(
+            body["whatsapp_business_templates"],
+            json!([278_077_987_957_091_u64, 1_945_418_102_598_215_u64])
+        );
         assert_eq!(transport.remaining(), 0);
     }
 
