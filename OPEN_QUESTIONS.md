@@ -28,7 +28,7 @@ the design, the code); then it is deleted. A section heading stays when
 its last entry goes, with a line saying so: guides and skills link to
 its anchor.
 
-On 2026-10-26, 30 entries are decided and 2 stay open: #33 and #46
+On 2026-10-26, 29 entries are decided and 2 stay open: #33 and #46
 (each a data migration).
 
 Numbers are permanent (the code, docs and skills cite them) and not in
@@ -390,25 +390,6 @@ Found by the security review of 8ee6fab.
     reaches it" could not hold). Swappable: the sink classifies its own
     errors, and the store is a typed store like the others. Roadmap
     L21a.
-
-31. **SSE fan-out cost.** `webhooks::sse` reads a
-    `broadcast::Receiver<WebhookEvent>`, and a broadcast receiver clones
-    every event it receives: each open inbox copies every merchant's
-    events before its filter drops them, including multi-megabyte
-    `HistorySynced` bodies, so one coexistence history sync costs its size
-    times the number of open inboxes. (The rustdoc of `sse` said rejected
-    events "cost nothing"; it now says each one costs a clone.) Options:
-    broadcast `Arc<WebhookEvent>` (changes `sse`'s and `BroadcastSink`'s
-    types), or one channel per phone number id, created with its first
-    subscriber.
-    Today: a clone per event per subscriber, fine for a handful of open
-    inboxes.
-
-    **Decided 2026-09-26 (coordinator, owner's delegation):** broadcast
-    `Arc<WebhookEvent>`, which changes the types of `sse` and
-    `BroadcastSink` before the first release; the service's per-number
-    channels (design §4.5) stay its own. Swappable: the sink is one of
-    several. Roadmap L21b.
 
 ## CMS inbox
 

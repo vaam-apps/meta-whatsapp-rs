@@ -64,7 +64,7 @@
 //! use meta_whatsapp_rs::adapters::sink::{BroadcastSink, FanoutSink};
 //! use meta_whatsapp_rs::prelude::*;
 //!
-//! let (live, _) = tokio::sync::broadcast::channel::<WebhookEvent>(256);
+//! let (live, _) = tokio::sync::broadcast::channel::<Arc<WebhookEvent>>(256); // one shared copy per event
 //! let sink = FanoutSink::new()
 //!     .with(InboxSink::new(conversations.clone())) // history, per conversation
 //!     .with(BroadcastSink::from_sender(live.clone())); // live, for SSE

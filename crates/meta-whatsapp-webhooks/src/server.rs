@@ -27,7 +27,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use futures::Stream;
+use futures::{Stream, StreamExt as _};
 use meta_whatsapp_core::Error;
 use meta_whatsapp_core::error::WebhookError;
 use tokio::sync::broadcast;
@@ -156,11 +156,15 @@ fn status_for(error: &Error) -> StatusCode {
 /// no phone number id and carry raw bodies that can belong to any tenant on
 /// the app, so a filter such as `|e| e.phone_number_id().is_none_or(…)`
 /// leaks them to everyone. The filter runs before an event is serialized,
-/// so a rejected event is never encoded — but it is not free: a broadcast
-/// receiver clones every event sent on the channel, so each open stream
-/// copies every event of every merchant (multi-megabyte `HistorySynced`
-/// bodies included) before `filter` drops it. Fine for a handful of open
-/// inboxes; with many, measure (`OPEN_QUESTIONS.md` #31).
+/// so a rejected event is never encoded.
+///
+/// The channel carries `Arc<WebhookEvent>` (what
+/// `meta_whatsapp_adapters::sink::BroadcastSink` publishes): every open
+/// stream receives the same allocation of an event, a reference count
+/// rather than a copy, so a multi-megabyte `HistorySynced` body is held
+/// once however many inboxes are open. Each stream still runs `filter`
+/// on every event of every merchant on the channel, and each stream that
+/// accepts an event encodes its own frame of it.
 ///
 /// Each event that passes `filter` (typically "same phone number id as the
 /// merchant watching") is sent as `event: whatsapp` with the event's JSON as
@@ -169,40 +173,138 @@ fn status_for(error: &Error) -> StatusCode {
 /// continues, so the client knows to reload history. The stream ends when
 /// the channel closes. Keep-alive comments are on.
 pub fn sse<F>(
-    receiver: broadcast::Receiver<WebhookEvent>,
+    receiver: broadcast::Receiver<Arc<WebhookEvent>>,
     filter: F,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>>
 where
     F: Fn(&WebhookEvent) -> bool + Send + Sync + 'static,
 {
-    let stream = futures::stream::unfold((receiver, filter), |(mut receiver, filter)| async move {
-        loop {
-            let event = match receiver.recv().await {
-                Ok(event) if filter(&event) => {
-                    match Event::default().event("whatsapp").json_data(&event) {
-                        Ok(sse_event) => sse_event,
-                        Err(error) => {
-                            tracing::error!(%error, kind = event.kind(), "could not encode event for SSE");
-                            continue;
-                        }
-                    }
+    let stream = live(receiver, filter).filter_map(|item| {
+        futures::future::ready(match item {
+            Live::Event(event) => match Event::default().event("whatsapp").json_data(&*event) {
+                Ok(sse_event) => Some(Ok(sse_event)),
+                Err(error) => {
+                    tracing::error!(%error, kind = event.kind(), "could not encode event for SSE");
+                    None
                 }
-                Ok(_) => continue,
-                Err(RecvError::Lagged(missed)) => {
-                    Event::default().event("lagged").data(missed.to_string())
-                }
-                Err(RecvError::Closed) => return None,
-            };
-            return Some((Ok(event), (receiver, filter)));
-        }
+            },
+            Live::Lagged(missed) => Some(Ok(Event::default()
+                .event("lagged")
+                .data(missed.to_string()))),
+        })
     });
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
+/// What [`sse`] reads from its receiver, before encoding.
+#[derive(Debug)]
+enum Live {
+    /// An event `filter` accepted: the channel's own `Arc`, shared with
+    /// every other subscriber.
+    Event(Arc<WebhookEvent>),
+    /// The receiver fell behind and missed this many events.
+    Lagged(u64),
+}
+
+/// The events of `receiver` that pass `filter`, and the lags; ends when
+/// the channel closes.
+fn live<F>(receiver: broadcast::Receiver<Arc<WebhookEvent>>, filter: F) -> impl Stream<Item = Live>
+where
+    F: Fn(&WebhookEvent) -> bool + Send + Sync + 'static,
+{
+    futures::stream::unfold((receiver, filter), |(mut receiver, filter)| async move {
+        loop {
+            let item = match receiver.recv().await {
+                Ok(event) if filter(&event) => Live::Event(event),
+                Ok(_) => continue,
+                Err(RecvError::Lagged(missed)) => Live::Lagged(missed),
+                Err(RecvError::Closed) => return None,
+            };
+            return Some((item, (receiver, filter)));
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
+    use crate::payload::WebhookPayload;
     use meta_whatsapp_core::error::{SinkError, ValidationError};
+
+    fn text_event() -> WebhookEvent {
+        let body = include_bytes!("../tests/fixtures/messages/text.json");
+        WebhookPayload::from_slice(body)
+            .unwrap()
+            .into_events()
+            .remove(0)
+    }
+
+    /// Roadmap L21b's decisive test, on the stream `sse` is built on: ten
+    /// subscribers receive one allocation of an event. A stream that
+    /// copied the event per subscriber (the behaviour before L21b) gives
+    /// each its own and fails `Arc::ptr_eq`.
+    #[tokio::test]
+    async fn ten_sse_subscribers_share_one_allocation_per_event() {
+        let (tx, _) = broadcast::channel(4);
+        let mut streams: Vec<_> = (0..10)
+            .map(|_| Box::pin(live(tx.subscribe(), |e| e.phone_number_id().is_some())))
+            .collect();
+        let sent = Arc::new(text_event());
+        tx.send(Arc::clone(&sent)).unwrap();
+
+        let mut received = Vec::new();
+        for stream in &mut streams {
+            match stream.next().await {
+                Some(Live::Event(event)) => received.push(event),
+                other => panic!("expected the event, got {other:?}"),
+            }
+        }
+        assert_eq!(received.len(), 10);
+        for (i, event) in received.iter().enumerate() {
+            assert!(
+                Arc::ptr_eq(&received[0], event) && Arc::ptr_eq(&sent, event),
+                "subscriber {i} got its own copy of the event, not the shared allocation"
+            );
+        }
+    }
+
+    /// The same through the public `sse`: every stream's filter is handed
+    /// the one allocation that was sent.
+    #[tokio::test]
+    async fn sse_filters_see_the_shared_event() {
+        let (tx, _) = broadcast::channel(4);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let mut bodies: Vec<_> = (0..10)
+            .map(|_| {
+                let seen = Arc::clone(&seen);
+                let filter = move |e: &WebhookEvent| {
+                    seen.lock().unwrap().push(std::ptr::from_ref(e).addr());
+                    true
+                };
+                sse(tx.subscribe(), filter)
+                    .into_response()
+                    .into_body()
+                    .into_data_stream()
+            })
+            .collect();
+        let sent = Arc::new(text_event());
+        tx.send(Arc::clone(&sent)).unwrap();
+
+        for body in &mut bodies {
+            let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), body.next())
+                .await
+                .expect("an SSE frame")
+                .unwrap()
+                .unwrap();
+            assert!(chunk.starts_with(b"event: whatsapp\n"));
+        }
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 10);
+        let shared = Arc::as_ptr(&sent).addr();
+        assert!(seen.iter().all(|&at| at == shared), "{seen:?} vs {shared}");
+    }
 
     #[test]
     fn errors_map_to_the_documented_statuses() {
