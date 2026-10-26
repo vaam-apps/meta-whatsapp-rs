@@ -28,7 +28,7 @@ the design, the code); then it is deleted. A section heading stays when
 its last entry goes, with a line saying so: guides and skills link to
 its anchor.
 
-On 2026-10-26, 29 entries are decided and 2 stay open: #33 and #46
+On 2026-10-26, 28 entries are decided and 2 stay open: #33 and #46
 (each a data migration).
 
 Numbers are permanent (the code, docs and skills cite them) and not in
