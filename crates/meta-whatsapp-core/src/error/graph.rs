@@ -244,6 +244,12 @@ pub enum ErrorKind {
     /// `2388039`, `2388040`, `2388047`, `2388072`, `2388073`, `2388293`,
     /// `2388299`: template creation rejected for its content/format.
     TemplateRejected,
+    /// `131058`: Meta's sample template `hello_world` is sent only from
+    /// Meta's public test numbers ("Hello World templates can only be sent
+    /// from the Public Test Numbers", Graph's answer to a send from a
+    /// production number on 2026-10-26). Send one of your own approved
+    /// templates; retrying never helps.
+    SampleTemplateNotAllowed,
 
     // ── Flows ─────────────────────────────────────────────────────────────
     /// `132068` (blocked), `132069` (throttled).
@@ -338,6 +344,7 @@ impl ErrorKind {
         Self::TemplateUnavailable,
         Self::TemplateLimitReached,
         Self::TemplateRejected,
+        Self::SampleTemplateNotAllowed,
         Self::FlowUnavailable,
         Self::Registration,
         Self::TwoStepVerification,
@@ -390,6 +397,7 @@ impl ErrorKind {
             Self::TemplateUnavailable => "template_unavailable",
             Self::TemplateLimitReached => "template_limit_reached",
             Self::TemplateRejected => "template_rejected",
+            Self::SampleTemplateNotAllowed => "sample_template_not_allowed",
             Self::FlowUnavailable => "flow_unavailable",
             Self::Registration => "registration",
             Self::TwoStepVerification => "two_step_verification",
@@ -450,6 +458,7 @@ impl ErrorKind {
             2388039 | 2388040 | 2388047 | 2388072 | 2388073 | 2388293 | 2388299 => {
                 Self::TemplateRejected
             }
+            131058 => Self::SampleTemplateNotAllowed,
             132068 | 132069 => Self::FlowUnavailable,
             131037 | 131045 | 133000 | 133006 | 133010 | 133015 | 133016 | 136024 => {
                 Self::Registration
@@ -534,6 +543,24 @@ mod tests {
         );
         assert_eq!(e.error_type.as_deref(), Some("OAuthException"));
         assert!(e.to_string().contains("#130429"));
+    }
+
+    /// Graph's answer to `hello_world` sent from a production number
+    /// (2026-10-26): its code and message as the library reported them;
+    /// the rest of the envelope was not recorded, so only those two are
+    /// taken from it.
+    #[test]
+    fn a_sample_template_from_a_production_number_has_its_own_kind() {
+        let body = r#"{"error": {
+            "message": "(#131058) Hello World templates can only be sent from the Public Test Numbers",
+            "code": 131058
+        }}"#;
+        let env: GraphErrorEnvelope = serde_json::from_str(body).unwrap();
+        let e = env.error;
+        assert_eq!(e.kind(), ErrorKind::SampleTemplateNotAllowed);
+        assert_eq!(e.kind().as_str(), "sample_template_not_allowed");
+        assert!(!e.is_retryable());
+        assert!(!e.kind().is_rejected_before_processing());
     }
 
     #[test]
@@ -645,6 +672,10 @@ mod tests {
         (ErrorKind::TemplateUnavailable, "template_unavailable"),
         (ErrorKind::TemplateLimitReached, "template_limit_reached"),
         (ErrorKind::TemplateRejected, "template_rejected"),
+        (
+            ErrorKind::SampleTemplateNotAllowed,
+            "sample_template_not_allowed",
+        ),
         (ErrorKind::FlowUnavailable, "flow_unavailable"),
         (ErrorKind::Registration, "registration"),
         (ErrorKind::TwoStepVerification, "two_step_verification"),
@@ -684,7 +715,7 @@ mod tests {
         }
         // Every kind `from_code` returns is listed (a spot check that the
         // classification and the list agree).
-        for code in [0, 3, 4, 100, 131047, 132001, 133005, 2494164, 1, 7] {
+        for code in [0, 3, 4, 100, 131047, 131058, 132001, 133005, 2494164, 1, 7] {
             assert!(
                 ErrorKind::ALL.contains(&ErrorKind::from_code(code)),
                 "{code}"

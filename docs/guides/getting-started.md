@@ -123,8 +123,9 @@ Run the full program with
   accepted and not delivered). Check the window before sending (the CMS
   inbox does) rather than trusting an `Ok`.
 - Meta's sample template `hello_world` is sent only from Meta's public
-  test numbers; from your own number Meta refuses it with `131058`. Test
-  with one of your own approved templates there.
+  test numbers; from your own number Meta refuses it with `131058`
+  (`ErrorKind::SampleTemplateNotAllowed`). Test with one of your own
+  approved templates there.
 
 ## 4. Handle errors
 

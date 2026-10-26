@@ -99,6 +99,11 @@ pub const CODES: &[(&str, u16, &str)] = &[
         "Meta rejected the template's content or format.",
     ),
     (
+        "sample_template_not_allowed",
+        422,
+        "Meta sends its sample template only from its public test numbers: send one of your own templates.",
+    ),
+    (
         "idempotency_key_reused",
         422,
         "This Idempotency-Key was used with another request.",

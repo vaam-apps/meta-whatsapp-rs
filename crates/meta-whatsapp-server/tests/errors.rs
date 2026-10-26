@@ -134,6 +134,7 @@ const REPRESENTATIVE: &[(ErrorKind, i64)] = &[
     (ErrorKind::TemplateDisabled, 132016),
     (ErrorKind::TemplateSyncing, 134101),
     (ErrorKind::TemplateUnavailable, 134102),
+    (ErrorKind::SampleTemplateNotAllowed, 131058),
     (ErrorKind::TemplateLimitReached, 2388019),
     (ErrorKind::TemplateRejected, 2388039),
     (ErrorKind::FlowUnavailable, 132068),
