@@ -9,7 +9,8 @@
 //! `templates/marketing-templates/*`, `templates/utility-templates/*`,
 //! `templates/authentication-templates/*`, `catalogs/*-template-messages`,
 //! `calling/call-button-messages-deep-links`, `business-scoped-user-ids`
-//! (request-contact-info button).
+//! (request-contact-info button), `marketing-messages/deep-links` (a URL
+//! button's Android app deep link).
 //!
 //! ## Wire shape and leniency
 //!
@@ -604,11 +605,17 @@ pub enum Button {
     Url {
         /// Label, at most 25 characters.
         text: String,
-        /// At most 2000 characters.
+        /// At most 2000 characters. With an [`app_deep_link`](AppDeepLink),
+        /// the URL devices other than Android open.
         url: String,
         /// Example for the placeholder, required when `url` has one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         example: Option<Vec<String>>,
+        /// Android app deep link (`marketing-messages/deep-links`): on
+        /// Android, the WhatsApp client opens this instead of `url`.
+        /// Marketing templates. Absent: no `app_deep_link` key is sent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_deep_link: Option<AppDeepLink>,
     },
     /// Calls `phone_number`.
     #[serde(alias = "phone_number")]
@@ -685,6 +692,7 @@ impl Button {
             text: text.into(),
             url: url.into(),
             example: None,
+            app_deep_link: None,
         }
     }
 
@@ -698,6 +706,22 @@ impl Button {
             text: text.into(),
             url: url.into(),
             example: Some(vec![example.into()]),
+            app_deep_link: None,
+        }
+    }
+
+    /// URL button without a placeholder that opens an Android app on
+    /// Android (`marketing-messages/deep-links`); other devices open `url`.
+    pub fn url_with_app_deep_link(
+        text: impl Into<String>,
+        url: impl Into<String>,
+        app_deep_link: AppDeepLink,
+    ) -> Self {
+        Self::Url {
+            text: text.into(),
+            url: url.into(),
+            example: None,
+            app_deep_link: Some(app_deep_link),
         }
     }
 
@@ -739,6 +763,39 @@ impl Button {
     /// Request-contact-info button (label is fixed by Meta).
     pub fn request_contact_info() -> Self {
         Self::RequestContactInfo { text: None }
+    }
+}
+
+/// The `app_deep_link` of a URL button (`marketing-messages/deep-links`):
+/// on Android, the WhatsApp client opens `android_deep_link` in your app,
+/// and `android_fallback_playstore_url` in the browser when it cannot load
+/// the deep link; other devices open the button's `url`. Every field is
+/// required when the object is sent (the page's API table; WhatsApp
+/// Manager's form treats the fallback as optional and uses the website
+/// URL).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppDeepLink {
+    /// Your Meta app id. A JSON number on the wire, as in the page's
+    /// example (not the string [`meta_whatsapp_core::ids::AppId`]).
+    pub meta_app_id: u64,
+    /// The Android deep link URI, e.g. `luckyshrub://deals/summer/`.
+    pub android_deep_link: String,
+    /// The URL opened in the browser when the deep link cannot be loaded.
+    pub android_fallback_playstore_url: String,
+}
+
+impl AppDeepLink {
+    /// Build one.
+    pub fn new(
+        meta_app_id: u64,
+        android_deep_link: impl Into<String>,
+        android_fallback_playstore_url: impl Into<String>,
+    ) -> Self {
+        Self {
+            meta_app_id,
+            android_deep_link: android_deep_link.into(),
+            android_fallback_playstore_url: android_fallback_playstore_url.into(),
+        }
     }
 }
 

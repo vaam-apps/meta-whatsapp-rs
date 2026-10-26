@@ -373,6 +373,113 @@ async fn the_documented_flat_body_text_reaches_meta() {
     assert_eq!(h.graph.remaining(), 0);
 }
 
+/// marketing-messages/deep-links, the request example (verbatim): a URL
+/// button's `app_deep_link` reaches Meta unchanged, `meta_app_id` a JSON
+/// number; the rest of the body is the library's spelling of the same
+/// definition (enum values upper-cased). Decisive: the field on the
+/// library's `Button::Url` (roadmap L24); without it the lost-key check
+/// answers `422` on `components[2].buttons[0].app_deep_link`, as it did
+/// before.
+#[tokio::test]
+async fn a_url_buttons_app_deep_link_reaches_meta() {
+    let (h, key) = connected().await;
+    let example: Value = serde_json::from_str(
+        r#"{
+  "name": "summer_deals_deep_link_v1",
+  "language": "en_US",
+  "category": "marketing",
+  "components": [
+    { "type": "header", "format": "text", "text": "Sizzling Summer Deals at Lucky Shrub" },
+    { "type": "body", "text": "Beat the heat with our sizzling summer deals on succulents! At Lucky Shrub, we're passionate about bringing a touch of greenery to your life. Our succulents are not only low-maintenance and easy to care for, but they also add a pop of color and style to any room. Use the button below to see our Summer Steals!" },
+    { "type": "buttons", "buttons": [ {
+        "type": "url", "text": "View Deals", "url": "https://www.luckyshrub.com/deals/summer/",
+        "app_deep_link": { "meta_app_id": 634974688087057, "android_deep_link": "luckyshrub://deals/summer/", "android_fallback_playstore_url": "https://www.luckyshrub.com/deals/summer/" }
+    } ] }
+  ]
+}"#,
+    )
+    .unwrap();
+    h.graph.push_json(
+        200,
+        json!({"id": "1627019861106477", "status": "PENDING", "category": "MARKETING"}),
+    );
+    let reply = h
+        .call(
+            Call::new(Method::POST, format!("/v1/wabas/{WABA}/templates"))
+                .key(&key)
+                .json(&example),
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.text);
+    let request = h.graph.last_request().unwrap();
+    assert_eq!(request.method, Method::POST);
+    assert_eq!(request.path(), format!("/v25.0/{WABA}/message_templates"));
+    let sent = request.json().unwrap();
+    assert_eq!(
+        sent["components"][2]["buttons"][0]["app_deep_link"],
+        example["components"][2]["buttons"][0]["app_deep_link"]
+    );
+    assert_eq!(
+        sent,
+        json!({
+          "name": "summer_deals_deep_link_v1",
+          "language": "en_US",
+          "category": "MARKETING",
+          "components": [
+            { "type": "HEADER", "format": "TEXT", "text": "Sizzling Summer Deals at Lucky Shrub" },
+            { "type": "BODY", "text": example["components"][1]["text"] },
+            { "type": "BUTTONS", "buttons": [ {
+                "type": "URL", "text": "View Deals", "url": "https://www.luckyshrub.com/deals/summer/",
+                "app_deep_link": { "meta_app_id": 634_974_688_087_057_u64, "android_deep_link": "luckyshrub://deals/summer/", "android_fallback_playstore_url": "https://www.luckyshrub.com/deals/summer/" }
+            } ] }
+          ]
+        })
+    );
+    // A misspelled key inside the deep link is still
+    // refused, never dropped.
+    let before = h.graph.requests().len();
+    let mut extra = example.clone();
+    extra["components"][2]["buttons"][0]["app_deep_link"]["android_deep_lnk"] = json!("x://y");
+    let reply = h
+        .call(
+            Call::new(Method::POST, format!("/v1/wabas/{WABA}/templates"))
+                .key(&key)
+                .json(&extra),
+        )
+        .await;
+    assert_eq!(
+        (reply.status, reply.json()["error"]["field"].as_str()),
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Some("components[2].buttons[0].app_deep_link.android_deep_lnk")
+        ),
+        "{}",
+        reply.text
+    );
+    assert_eq!(h.graph.requests().len(), before, "nothing reached Meta");
+    // A blank deep link is the library's validation error, on its path.
+    let mut blank = example.clone();
+    blank["components"][2]["buttons"][0]["app_deep_link"]["android_deep_link"] = json!(" ");
+    let reply = h
+        .call(
+            Call::new(Method::POST, format!("/v1/wabas/{WABA}/templates"))
+                .key(&key)
+                .json(&blank),
+        )
+        .await;
+    assert_eq!(
+        (reply.status, reply.json()["error"]["field"].as_str()),
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Some("components[2].buttons[0].app_deep_link.android_deep_link")
+        ),
+        "{}",
+        reply.text
+    );
+    assert_eq!(h.graph.requests().len(), before, "nothing reached Meta");
+    assert_eq!(h.graph.remaining(), 0);
+}
+
 /// A creation with an `Idempotency-Key` never creates twice.
 #[tokio::test]
 async fn a_creation_key_replays() {

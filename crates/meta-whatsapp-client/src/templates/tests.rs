@@ -615,6 +615,144 @@ fn voice_call_button_components() {
     def.validate().unwrap();
 }
 
+/// marketing-messages/deep-links, the request example, verbatim (parsed
+/// from the page's text: a `json!` literal would need a suffix on
+/// `meta_app_id`).
+fn deep_link_example() -> Value {
+    serde_json::from_str(
+        r#"{
+  "name": "summer_deals_deep_link_v1",
+  "language": "en_US",
+  "category": "marketing",
+  "components": [
+    { "type": "header", "format": "text", "text": "Sizzling Summer Deals at Lucky Shrub" },
+    { "type": "body", "text": "Beat the heat with our sizzling summer deals on succulents! At Lucky Shrub, we're passionate about bringing a touch of greenery to your life. Our succulents are not only low-maintenance and easy to care for, but they also add a pop of color and style to any room. Use the button below to see our Summer Steals!" },
+    { "type": "buttons", "buttons": [ {
+        "type": "url", "text": "View Deals", "url": "https://www.luckyshrub.com/deals/summer/",
+        "app_deep_link": { "meta_app_id": 634974688087057, "android_deep_link": "luckyshrub://deals/summer/", "android_fallback_playstore_url": "https://www.luckyshrub.com/deals/summer/" }
+    } ] }
+  ]
+}"#,
+    )
+    .unwrap()
+}
+
+fn deep_link_definition() -> TemplateDefinition {
+    TemplateDefinition::new("summer_deals_deep_link_v1", "en_US", TemplateCategory::Marketing)
+        .component(TemplateComponent::header_text("Sizzling Summer Deals at Lucky Shrub"))
+        .component(TemplateComponent::body(
+            "Beat the heat with our sizzling summer deals on succulents! At Lucky Shrub, we're passionate about bringing a touch of greenery to your life. Our succulents are not only low-maintenance and easy to care for, but they also add a pop of color and style to any room. Use the button below to see our Summer Steals!",
+        ))
+        .component(TemplateComponent::buttons([Button::url_with_app_deep_link(
+            "View Deals",
+            "https://www.luckyshrub.com/deals/summer/",
+            AppDeepLink::new(
+                634_974_688_087_057,
+                "luckyshrub://deals/summer/",
+                "https://www.luckyshrub.com/deals/summer/",
+            ),
+        )]))
+}
+
+/// The page's example parses, writes back the same JSON value (the
+/// module's one normalization: enum values upper-cased), and equals the
+/// definition built with the constructors. The `app_deep_link` object is
+/// compared as it stands, `meta_app_id` a JSON number. Decisive: the
+/// field on `Button::Url`; without it (or with its serialization
+/// skipped) the object is lost and this fails.
+#[test]
+fn app_deep_link_example_round_trips() {
+    let doc = deep_link_example();
+    let parsed: TemplateDefinition = serde_json::from_value(doc.clone()).unwrap();
+    let written = serde_json::to_value(&parsed).unwrap();
+    assert_eq!(normalize(written.clone()), normalize(doc.clone()));
+    assert_eq!(
+        written["components"][2]["buttons"][0]["app_deep_link"],
+        doc["components"][2]["buttons"][0]["app_deep_link"]
+    );
+    assert!(written["components"][2]["buttons"][0]["app_deep_link"]["meta_app_id"].is_u64());
+    assert_definition(&deep_link_definition(), doc);
+}
+
+/// A deep link object Meta returns without one of the fields the page
+/// requires does not fail parsing: the button is kept verbatim as
+/// `Button::Other` and written back unchanged.
+#[test]
+fn an_incomplete_app_deep_link_is_kept_verbatim() {
+    let button = json!({"type": "URL", "text": "View Deals", "url": "https://x.com/",
+        "app_deep_link": {"meta_app_id": 634974688087057_u64, "android_deep_link": "luckyshrub://x"}});
+    let parsed: Button = serde_json::from_value(button.clone()).unwrap();
+    assert!(matches!(parsed, Button::Other(_)));
+    assert_eq!(serde_json::to_value(&parsed).unwrap(), button);
+}
+
+/// The page documents the creation only, not how `GET` writes the deep
+/// link back, and Graph often writes ids as strings. A template whose deep
+/// link holds a `meta_app_id` that is not an unsigned integer (a string,
+/// a negative or a fractional number) still parses: that button is kept
+/// verbatim as `Button::Other` and written back unchanged, the rest of the
+/// template typed. A key Meta adds inside the object does not demote the
+/// button. Decisive: `Button`'s `Other` catch-all for the first part;
+/// `deny_unknown_fields` on `AppDeepLink` fails the last.
+#[test]
+fn a_fetched_app_deep_link_degrades_gracefully() {
+    let template = |app_deep_link: Value| {
+        json!({"id": "1627019861106475", "name": "summer_deals_deep_link_v1",
+        "status": "APPROVED", "category": "MARKETING", "language": "en_US",
+        "components": [
+            {"type": "BODY", "text": "Summer deals."},
+            {"type": "BUTTONS", "buttons": [
+                {"type": "URL", "text": "View Deals",
+                 "url": "https://www.luckyshrub.com/deals/summer/",
+                 "app_deep_link": app_deep_link}
+            ]}
+        ]})
+    };
+    for meta_app_id in [
+        json!("634974688087057"),
+        json!(-1),
+        json!(634_974_688_087_057.5),
+    ] {
+        let doc = template(json!({"meta_app_id": meta_app_id,
+            "android_deep_link": "luckyshrub://deals/summer/",
+            "android_fallback_playstore_url": "https://www.luckyshrub.com/deals/summer/"}));
+        let info: TemplateInfo = serde_json::from_value(doc.clone()).unwrap();
+        assert!(
+            matches!(&info.components[0], TemplateComponent::Body(_)),
+            "{meta_app_id}"
+        );
+        let TemplateComponent::Buttons { buttons } = &info.components[1] else {
+            panic!("{meta_app_id}: {:?}", info.components[1])
+        };
+        assert!(matches!(&buttons[..], [Button::Other(_)]), "{meta_app_id}");
+        assert_eq!(
+            serde_json::to_value(&info.components).unwrap(),
+            doc["components"],
+            "{meta_app_id}"
+        );
+    }
+    let extended = template(json!({"meta_app_id": 634_974_688_087_057_u64,
+        "android_deep_link": "luckyshrub://deals/summer/",
+        "android_fallback_playstore_url": "https://www.luckyshrub.com/deals/summer/",
+        "ios_deep_link": "luckyshrub://deals/summer/"}));
+    let info: TemplateInfo = serde_json::from_value(extended).unwrap();
+    let TemplateComponent::Buttons { buttons } = &info.components[1] else {
+        panic!("{:?}", info.components[1])
+    };
+    assert_eq!(
+        buttons[..],
+        [Button::url_with_app_deep_link(
+            "View Deals",
+            "https://www.luckyshrub.com/deals/summer/",
+            AppDeepLink::new(
+                634_974_688_087_057,
+                "luckyshrub://deals/summer/",
+                "https://www.luckyshrub.com/deals/summer/",
+            ),
+        )]
+    );
+}
+
 #[test]
 fn request_contact_info_button() {
     // business-scoped-user-ids#using-templates.
@@ -1481,6 +1619,58 @@ async fn create_posts_the_definition_and_parses_the_response() {
                 {"type": "BUTTONS", "buttons": [{"type": "URL", "text": "View deals", "url": "https://www.luckyshrub.com/deals"}]}
             ]
         }))
+    );
+    assert_eq!(t.remaining(), 0);
+}
+
+/// marketing-messages/deep-links: the create request carries the page's
+/// body, `app_deep_link` untouched; a URL button without one sends no
+/// `app_deep_link` key.
+#[tokio::test]
+async fn create_sends_the_app_deep_link() {
+    let t = ScriptedTransport::new();
+    // custom-marketing-templates example response.
+    t.push_json(
+        200,
+        json!({"id": "1627019861106475", "status": "PENDING", "category": "MARKETING"}),
+    );
+    t.push_json(
+        200,
+        json!({"id": "1627019861106476", "status": "PENDING", "category": "MARKETING"}),
+    );
+    let templates = client(&t).templates("102290129340398");
+    templates.create(&deep_link_definition()).await.unwrap();
+    let req = t.last_request().unwrap();
+    assert_eq!(req.method, Method::POST);
+    assert_eq!(req.path(), "/v25.0/102290129340398/message_templates");
+    assert_eq!(req.bearer(), Some("TOKEN"));
+    assert_eq!(
+        req.json(),
+        Some(json!({
+          "name": "summer_deals_deep_link_v1",
+          "language": "en_US",
+          "category": "MARKETING",
+          "components": [
+            { "type": "HEADER", "format": "TEXT", "text": "Sizzling Summer Deals at Lucky Shrub" },
+            { "type": "BODY", "text": "Beat the heat with our sizzling summer deals on succulents! At Lucky Shrub, we're passionate about bringing a touch of greenery to your life. Our succulents are not only low-maintenance and easy to care for, but they also add a pop of color and style to any room. Use the button below to see our Summer Steals!" },
+            { "type": "BUTTONS", "buttons": [ {
+                "type": "URL", "text": "View Deals", "url": "https://www.luckyshrub.com/deals/summer/",
+                "app_deep_link": { "meta_app_id": 634974688087057_u64, "android_deep_link": "luckyshrub://deals/summer/", "android_fallback_playstore_url": "https://www.luckyshrub.com/deals/summer/" }
+            } ] }
+          ]
+        }))
+    );
+    let plain = TemplateDefinition::new("summer_deals", "en_US", TemplateCategory::Marketing)
+        .component(TemplateComponent::body("Summer deals."))
+        .component(TemplateComponent::buttons([Button::url(
+            "View Deals",
+            "https://www.luckyshrub.com/deals/summer/",
+        )]));
+    templates.create(&plain).await.unwrap();
+    let body = t.last_request().unwrap().json().unwrap();
+    assert_eq!(
+        body["components"][1]["buttons"][0],
+        json!({"type": "URL", "text": "View Deals", "url": "https://www.luckyshrub.com/deals/summer/"})
     );
     assert_eq!(t.remaining(), 0);
 }
