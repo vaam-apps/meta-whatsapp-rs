@@ -1,0 +1,65 @@
+# meta-whatsapp-server behind Caddy (automatic HTTPS), with Postgres.
+# A test deployment for one VM; see README.md. Run from this directory:
+#
+#   ./init-env.sh          # writes .env (secrets, domain), once
+#   docker compose up -d --build
+
+name: meta-whatsapp
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: wa
+      POSTGRES_DB: wa
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./init-env.sh first}
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wa -d wa"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  server:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile
+    image: meta-whatsapp-server:local
+    environment:
+      DATABASE_URL: postgres://wa:${POSTGRES_PASSWORD}@db:5432/wa
+      WA_APP_SECRET: ${WA_APP_SECRET:?set WA_APP_SECRET in .env}
+      WA_VERIFY_TOKEN: ${WA_VERIFY_TOKEN:?set WA_VERIFY_TOKEN in .env}
+      WA_VAULT_KEY: ${WA_VAULT_KEY:?set WA_VAULT_KEY in .env}
+      WA_OTP_PEPPER: ${WA_OTP_PEPPER:?set WA_OTP_PEPPER in .env}
+      RUST_LOG: ${RUST_LOG:-info}
+    depends_on:
+      db:
+        condition: service_healthy
+    # The internal listener (admin API, /livez, /readyz, /metrics) on the
+    # host's loopback only: reach it with `curl http://127.0.0.1:8081/…`
+    # on the VM, or an SSH tunnel. Never publish it.
+    ports:
+      - "127.0.0.1:8081:8081"
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    environment:
+      WA_DOMAIN: ${WA_DOMAIN:?set WA_DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - server
+    restart: unless-stopped
+
+volumes:
+  db:
+  caddy_data:
+  caddy_config:
