@@ -8,8 +8,8 @@ image (roadmap M4) and not a production setup: read
 [docs/guides/server.md](../../docs/guides/server.md).
 
 ```text
-Meta ─ HTTPS ─► Caddy :443 ─► server :8080  /webhooks/meta, /v1 (tenant API)
-you (on the VM) ──────────► server :8081  /v1/admin, /livez  (127.0.0.1 only)
+Meta ─ HTTPS ─► Caddy :443 ─► server :8080  /webhooks/meta (public listener)
+you (on the VM) ──────────► server :8081  /v1, /v1/events, /v1/admin  (127.0.0.1 only)
                                │
                                └─► Postgres (volume `db`)
 ```
@@ -93,17 +93,21 @@ app (App Dashboard, Publish) once its settings let you.
 
 ## 5. Read the statuses
 
-From anywhere, with the tenant key:
+The `/v1` API is on the internal listener, which the service keeps off the
+internet: read it on the VM, or from your machine through an SSH tunnel
+(`ssh -N -L 8081:127.0.0.1:8081 <vm>`), with the tenant key:
 
 ```bash
-curl -sS "https://$WA_DOMAIN/v1/events?types=status_updated" \
+curl -sS "http://127.0.0.1:8081/v1/events?types=status_updated" \
   -H "Authorization: Bearer $TENANT_KEY"
 ```
 
 Each `status_updated` event's `data.status` carries the `wamid` a send
 returned (`id`), the state (`sent`, `delivered`, `read`, `failed`) and, when
 it failed, Meta's `errors`. Pass the answer's `next_after` as `after=` to
-read on. `docker compose logs -f server` shows each delivery as it arrives.
+read on. `docker compose logs -f server` shows each delivery as it arrives. A
+status for a number no tenant holds (before step 3's attach) is kept for
+operators only and never appears in a tenant's events.
 
 ## Before production
 

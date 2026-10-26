@@ -37,9 +37,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    # The internal listener (admin API, /livez, /readyz, /metrics) on the
-    # host's loopback only: reach it with `curl http://127.0.0.1:8081/…`
-    # on the VM, or an SSH tunnel. Never publish it.
+    # The internal listener (the /v1 API with /v1/events, the admin API,
+    # /livez, /readyz, /metrics) on the host's loopback only: reach it with
+    # `curl http://127.0.0.1:8081/…` on the VM, or through an SSH tunnel.
+    # Never publish it.
     ports:
       - "127.0.0.1:8081:8081"
     restart: unless-stopped
