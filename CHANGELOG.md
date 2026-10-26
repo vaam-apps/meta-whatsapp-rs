@@ -1038,6 +1038,7 @@ stored data, the owner's).
   and `from_event` still take a `SignupCode` and set `Some`; only code
   reading or assigning the field changes (`request.code =
   Some(code)`).
+
 - **App deep links on template URL buttons** (`meta_whatsapp_client::templates`,
   roadmap L24, parity row 155; breaking): `Button::Url` gains
   `app_deep_link: Option<AppDeepLink>`, Meta's `app_deep_link` of
