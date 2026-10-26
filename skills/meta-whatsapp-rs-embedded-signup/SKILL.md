@@ -115,8 +115,10 @@ first; one Meta never lists, staff clear: `clear_pending_share`). Refuse
 others' WABAs in `onboard_with_approval`; revoke at once on every
 `PartnerRemoved`; `reshare_after_revocation` is business-wide: gate it.
 
+After a restart: `for_resume`, no code (~~a placeholder~~ until 2026-10-26).
+
 ```rust
-let request = OnboardingRequest::new(SignupCode::new("unused")?, saved_session)
+let request = OnboardingRequest::for_resume(saved_session)
     .register_with_pin(TwoStepPin::new(corrected_pin)?);
 signup.es.resume(waba_id, &request, &signup.vault).await
 ```
@@ -148,9 +150,7 @@ a malformed post spent the attempt. Check everything local first.
 
 - ~~Only the Tech Provider flow~~ (before 581f9b1). No pre-verified
   number pools or multi-WABA onboarding; no token refresh (an expired
-  token means running the flow again), no PIN policy, no code-less
-  `OnboardingRequest` for `resume` after a restart (hence the placeholder
-  code above) ([OPEN_QUESTIONS.md #4–#12](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants), all decided: roadmap L4, L11a–L11e, L25).
+  token means running the flow again), no PIN policy ([OPEN_QUESTIONS.md #4–#9, #11 and #12](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants), all decided: roadmap L11a–L11e, L25).
 - No tenant model: which of your merchants owns a WABA is your table.
 
 ## Related skills

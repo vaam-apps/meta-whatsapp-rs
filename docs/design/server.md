@@ -708,7 +708,8 @@ Kept from the `embedded_signup` example: the tenant comes from the
 credential, never the body (`SignupSessions::redeem` does not burn the state
 on a mismatch); inputs are parsed before `redeem`; `onboard` is never
 retried; a failure after the token is stored saves a resumable attempt
-(session info only; `resume` uses a placeholder code until L4); errors carry
+(session info only; `resume` rebuilds the request with
+`OnboardingRequest::for_resume`, no code, since L4); errors carry
 step, kind and `resumable`, never Meta's text; the page gets only the app
 id, configuration id, Graph API version and `LaunchOptions`.
 The service launches **Embedded Signup v4 only**: Meta retires v2 and v3,
@@ -1390,7 +1391,7 @@ library changes from L7 on are the roadmap's too.
 | L1 | `ErrorKind::as_str()`, stable snake_case, pinned by a test (with `ErrorKind::ALL`) | done (M1a) | additive |
 | L2 | `OtpConfig::namespace` required | done (#4) | breaking |
 | L3 | Solution Partner credit-line step in onboarding | done (#5: `onboard_with_approval`, `offboard`, credit ledger) | additive |
-| L4 | a code-less `OnboardingRequest` for `resume` (OQ #10) | decided (OQ #10, 2026-09-26): [roadmap.md](../roadmap.md) L4 | additive |
+| L4 | a code-less `OnboardingRequest` for `resume` | done ([roadmap.md](../roadmap.md) L4: `OnboardingRequest::for_resume`) | additive, plus one breaking type change (`OnboardingRequest::code` became an `Option`) |
 | L5 | the `ConversationStore` port change: erasure and retention per store (D10), window events and thread ownership (OQ #32, #44), a lookup by message id, the coexistence contacts; one change so adapters change once | decided (2026-09-26): [roadmap.md](../roadmap.md) L5, before M2 | port change |
 | L6 | [architecture.md](../architecture.md): dependency rule for binaries, a "Service" section | done (M1a) | docs |
 
@@ -1551,11 +1552,11 @@ delegation, each with its roadmap item: #5 (multi-WABA signups: opt-in,
 L11b and M3f), #8 (no token refresh: the service reports
 `reconnect_required`, and the expiry is surfaced before it lapses, L11e
 and M3e), #9 (vault key custody and cadence: rotation is one call, the
-cadence documented with M3a), #10 (a code-less resume, L4), #13 (the OTP
-issue limit, kept), #26 (the In-App Signup terms: an explicit, audited
-operator action, M5i), #30 (dead-lettering a permanently failing event,
-L21a), #32 (calls reopen the inbox's window, L5 and L7), #45 (the
-max-price agreement: an explicit, audited operator action, M5h). Until
+cadence documented with M3a), #13 (the OTP issue limit, kept), #26 (the
+In-App Signup terms: an explicit, audited operator action, M5i), #30
+(dead-lettering a permanently failing event, L21a), #32 (calls reopen
+the inbox's window, L5 and L7), #45 (the max-price agreement: an
+explicit, audited operator action, M5h). Until
 an item lands, the service keeps the library's behaviour and makes it
 visible to callers. #33 (message ids unique per store) stays open: its
 alternative is a primary-key migration of stored messages, which is the

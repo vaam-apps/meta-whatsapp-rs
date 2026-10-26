@@ -115,7 +115,9 @@
 //! two-step verification, a callback override that fails verification, a
 //! credit line Meta refuses, a Meta hiccup) would otherwise lose the token
 //! and send the merchant through the whole flow again. Fix the cause and
-//! call [`EmbeddedSignup::resume`] with the same request: it loads the
+//! call [`EmbeddedSignup::resume`] with the same request (after a process
+//! restart, one rebuilt with no code by [`OnboardingRequest::for_resume`]
+//! from the session info you saved): it loads the
 //! stored token (`load_token`), checks the request against what onboarding
 //! verified (`verify_assets`), and redoes only the steps after
 //! `store_token`.
