@@ -260,12 +260,20 @@ before any request: call
 `es.resume_with_approval(&waba_id, &request, &vault, |verified| …)` once,
 with the same tenant check as at onboarding.
 
-After a restart you no longer have the `OnboardingRequest`; rebuild one with
-a placeholder code (ignored by `resume`) and an empty `SessionInfo`:
-`OnboardingRequest::new(SignupCode::new("unused")?, SessionInfo::default()).register_with_pin(pin)`.
-With no number named, `resume` registers the first number stored for the
-WABA (the onboarded one); without `register_with_pin` it only subscribes.
-A code-less constructor is [decided](../../OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants) (10) and not built yet (roadmap L4).
+After a restart you no longer have the `OnboardingRequest`; rebuild one
+with no code from the session info you saved when onboarding failed
+(`SessionInfo` is `Serialize`), or from an empty one:
+`OnboardingRequest::for_resume(saved_session).register_with_pin(pin)`.
+`resume` needs no code and sends none; `onboard` and
+`onboard_with_approval` refuse a code-less request with a
+`ValidationError` on `code` before any request, since their first step
+exchanges it. With no number named, `resume` registers the first number
+stored for the WABA (the onboarded one); without `register_with_pin` it
+only subscribes. A coexistence onboarding's request has `finish_kind` set
+from the event; `for_resume` leaves it `None`, so set it from what you saved
+if you want registering such a number refused locally.
+(Until roadmap L4, the request needed a placeholder code that `resume`
+ignored.)
 
 ## 7. The token vault
 
@@ -718,7 +726,6 @@ share, and to keep marking a business on offboarding, all above):
 | 7 | Coexistence sync | flagged by `needs_coexistence_sync()`, not triggered | automatic after a coexistence onboarding, with an option to turn it off (roadmap L11d) |
 | 8 | Token expiry and refresh | expiry recorded, nothing refreshes | no refresh; the expiry surfaced before it lapses (roadmap L11e) |
 | 9 | Vault key custody and rotation cadence | you supply keys; rotation supported, not scheduled | custody yours; rotation on demand, at least yearly |
-| 10 | Resuming after a restart | needs a placeholder code (above) | a code-less constructor (roadmap L4) |
 | 11 | App-only install, Hosted Embedded Signup | not integrated | integrate both, opt-in (roadmap L11a) |
 | 12 | Pre-fill shape | follows Meta's worked example; confirm in the Integration Helper | keep the worked example's shape |
 
