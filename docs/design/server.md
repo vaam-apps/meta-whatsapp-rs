@@ -688,7 +688,9 @@ For backends such as Medusa that prefer not to hold a stream open.
   8,000-byte payload limit). New rows are
   read once and shared (`Arc`) into channels per (tenant, number), created
   with their first subscriber: a stream never receives, or clones, another
-  tenant's events, so OQ #31's cost does not arise.
+  tenant's events, nor filters them (the library's `sse` shares one
+  `Arc` per event since roadmap L21b, but every stream filters every
+  event of its channel).
 - Limits: 20 streams per tenant, 1,000 per replica. Operator-only rows are
   never streamed. `EventSource` cannot send `Authorization`: browsers go
   through the CMS (D3).
@@ -1070,7 +1072,7 @@ database's where it has one, else the service's `Clock`); contention is
 a typed error; a bundle's accessors return the same data on every call;
 listings are in byte order.
 
-**As built (roadmap S1, S2).** `crates/meta-whatsapp-server-core` exists,
+**As built (roadmap S1, S2, S3).** `crates/meta-whatsapp-server-core` exists,
 with the model, the keys, event routing and polling, the idempotency
 engine, the rate limiter, the error model and authorization; the
 operations (messages, media, templates, numbers, admin, the webhook
@@ -1243,7 +1245,24 @@ it holds today, where it differs from the target above:
   Postgres): roadmap S2b. The admin's unbind of a WABA without a usable
   token, and the admin's own `190` right after attaching, are not a
   capability's and stay unconditioned.
-- **Conformance** is still the server's tests' (S3).
+- **Conformance** is the core's (S3): `meta_whatsapp_server_core::conformance`,
+  behind the feature `conformance`, runs over a `Backend`, one empty
+  backend per suite from a factory (`conformance::run`). Its suites are
+  `records` (the record and idempotency ports, the referential rules,
+  byte order), `outbox` (streams, pages, dedup, purges), `invariants`
+  (what crosses ports: every accessor hands out the same data, deleting
+  a tenant purges its stream, the `RouteGuard` cases, each tenant's
+  inserts commit in sequence order), `capabilities` (SR-L2, the
+  `failed` race, M1) and `races` (S2's races). The memory backend runs
+  it in the service's `tests/store.rs`, the Postgres one live in
+  `tests/live_postgres.rs`; the service's tests also show what it
+  refuses: a backend whose `kv()` is a new store on each call, an
+  outbox that ignores the route guard (S2's security review, L4), and
+  outboxes that bend the guard's date (L3), each through
+  `conformance::run` or `invariants::run`, not only the case. The
+  Postgres-only tests (locks held across sessions, two purges at once,
+  a deadlocked insert) stay in the service's tests: they reach into
+  Postgres's own SQL.
 
 ### 8.2 The backend bundle is the unit of swapping
 
