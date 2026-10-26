@@ -1252,8 +1252,10 @@ it holds today, where it differs from the target above:
   `failed` race, M1) and `races` (S2's races). The memory backend runs
   it in the service's `tests/store.rs`, the Postgres one live in
   `tests/live_postgres.rs`; the service's tests also show what it
-  refuses: a backend whose `kv()` is a new store on each call, and an
-  outbox that ignores the route guard (S2's security review, L4). The
+  refuses: a backend whose `kv()` is a new store on each call, an
+  outbox that ignores the route guard (S2's security review, L4), and
+  outboxes that bend the guard's date (L3), each through
+  `conformance::run` or `invariants::run`, not only the case. The
   Postgres-only tests (locks held across sessions, two purges at once,
   a deadlocked insert) stay in the service's tests: they reach into
   Postgres's own SQL.

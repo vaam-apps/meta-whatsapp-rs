@@ -208,11 +208,14 @@ stored data, the owner's).
   `capability_suite`, `race_suite`), whose bodies they keep; the memory
   backend runs the whole of it in `tests/store.rs`, the Postgres one in
   `tests/live_postgres.rs` (`live_postgres_backend_passes_the_conformance_suite`,
-  a schema per suite). Two tests show what it refuses: a backend whose
-  `kv()` is a new store on each call fails the same-data case, and an
-  outbox that ignores the route guard fails the guard's cases, which
-  closes S2's security review's L4 (a third-party outbox that ignores
-  the guard failed open, and no suite could tell). The feature brings
+  a schema per suite). Three tests show what it refuses: a backend whose
+  `kv()` is a new store on each call fails the same-data case and the
+  whole suite; an outbox that ignores the route guard fails the guard's
+  cases and `invariants::run`, which closes S2's security review's L4
+  (a third-party outbox that ignores the guard failed open, and no
+  suite could tell); and an outbox that drops the guard's date, drops
+  it for a number's guard, or reads it a second late fails the whole
+  suite on the guard case of its own. The feature brings
   the library's `testing` feature (`ScriptedTransport`, for the
   capabilities' Graph client) and tokio's macros; `just features`
   checks the crate with it alone.

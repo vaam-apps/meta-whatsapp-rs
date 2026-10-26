@@ -297,12 +297,23 @@ and `store-postgres`.
     `invariants::deleting_a_tenant_purges_its_stream`; with a `kv()`
     made anew per call, `invariants::every_accessor_hands_out_the_same_data`.
     Kept as tests: a backend whose `kv()` is new on each call fails the
-    same-data case, and an outbox that ignores the route guard fails
-    the guard's cases (L4). The Postgres-only tests (locks across
+    same-data case and the whole suite, an outbox that ignores the route
+    guard fails the guard's cases and `invariants::run` (L4), and three
+    outboxes that bend the guard's date (dropped, dropped for a number's
+    guard, read a second late) each fail the whole suite on the case of
+    their own, so that a guard case taken out of `run` fails a test. Its
+    sabotage review ran the live half on a Postgres 16 of its own: it
+    passes, and there removing the `purged_through` update from
+    `delete_tenant` fails `deleting_a_tenant_purges_its_stream`, a
+    sequence drawn in a transaction of its own fails the commit-order
+    case (on memory too: a row stored after an await), and dropping the
+    WABA from a number's guard, or reading a guard's date a second late,
+    fails the guard's cases. The Postgres-only tests (locks across
     sessions, two purges at once, a deadlocked insert) stay in the
-    server's tests. Left: the branch that landed it had no Postgres, so
-    the live half was compiled there, not run; its first run is
-    `just test-live`'s.
+    server's tests. Left: a case taken out of `run` other than the
+    same-data and guard cases (the deletion's purge, commit order, the
+    records', outbox's, capabilities' and races' cases) fails no test,
+    as no permanent backend breaks only it.
 - [ ] **S4. Composed only through the bundle** (`meta-whatsapp-server`,
   `meta-whatsapp-server-core`): `serve_with(config, Arc<dyn Backend>)`;
   `AppState::from_backend(Arc<dyn Backend>, …)` building the inbound

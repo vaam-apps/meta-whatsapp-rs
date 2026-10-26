@@ -447,8 +447,10 @@ pub async fn a_binding_of_the_events_own_second_fails_the_guard(backend: &dyn Ba
 /// which stays), on every backend. Decisive (on Postgres): the tenant's
 /// stream row, locked from the drawing of its sequence to the commit
 /// (without it, a sequence drawn before another's commit can commit after
-/// a poll moved past it). On memory, one lock over the records and the
-/// outbox meets it by construction: nothing there to remove.
+/// a poll moved past it: drawing the sequence in a transaction of its own
+/// fails this case). On memory, one lock over the records and the outbox
+/// meets it by construction; a memory outbox that drew the sequence under
+/// its lock and stored the row after an await would fail it.
 pub async fn a_tenants_inserts_commit_in_sequence_order(backend: &dyn Backend) {
     const WRITERS: usize = 8;
     const EACH: usize = 40;
@@ -510,12 +512,15 @@ pub async fn a_tenants_inserts_commit_in_sequence_order(backend: &dyn Backend) {
     assert_eq!(seen_ids, written, "an event was skipped");
 }
 
-/// Every case above, on `backend`, empty.
+/// Every case above, on `backend`, empty. The guard's cases come right
+/// after the same-data case: an outbox that ignores the guard, and only
+/// that, fails here on the guard rather than on what it lacks besides (a
+/// stream its records' deletion does not purge, say).
 pub async fn run(backend: &dyn Backend) {
     every_accessor_hands_out_the_same_data(backend).await;
-    deleting_a_tenant_purges_its_stream(backend).await;
     the_route_guard_is_checked_with_the_insert(backend).await;
     a_binding_begun_after_the_event_fails_the_number_guard(backend).await;
     a_binding_of_the_events_own_second_fails_the_guard(backend).await;
+    deleting_a_tenant_purges_its_stream(backend).await;
     a_tenants_inserts_commit_in_sequence_order(backend).await;
 }

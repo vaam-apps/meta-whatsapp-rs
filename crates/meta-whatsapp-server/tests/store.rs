@@ -1,7 +1,9 @@
 //! The core's conformance suites (`meta_whatsapp_server_core::conformance`)
 //! on the memory backend (Postgres: `live_postgres.rs`), and what they
 //! refuse: a backend whose `kv()` is a new store on each call, and an
-//! outbox that ignores the route guard (S2's security review, L4).
+//! outbox that ignores the route guard or bends its date (S2's security
+//! review, L4 and L3), each refused by `conformance::run` itself, not only
+//! by the case that catches it.
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test crate: a panic is the report
 
 use std::panic::AssertUnwindSafe;
@@ -12,7 +14,9 @@ use async_trait::async_trait;
 use futures::FutureExt as _;
 use meta_whatsapp_rs::adapters::store::MemoryKvStore;
 use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
-use meta_whatsapp_server::store::events::{EventPage, EventQuery, NewEvent, StoredEvent};
+use meta_whatsapp_server::store::events::{
+    EventPage, EventQuery, GuardedBinding, NewEvent, RouteGuard, StoredEvent,
+};
 use meta_whatsapp_server::store::{
     Backend, BackendKind, IdempotencyRecords, Janitor, LeaderLock, MemoryBackend, Outbox,
     RecordStore, SchemaMigrator, StoreResult,
@@ -86,9 +90,21 @@ async fn failure(case: impl Future<Output = ()>) -> Option<String> {
     )
 }
 
+/// `conformance::run` over the backends `fresh` makes: the message it
+/// panicked with; `None` when it passed.
+async fn whole_suite_failure<F>(fresh: F) -> Option<String>
+where
+    F: AsyncFn() -> Arc<dyn Backend>,
+{
+    failure(async {
+        conformance::run(fresh).await;
+    })
+    .await
+}
+
 /// Roadmap S3's decisive case for the bundle: a `Backend` whose `kv()`
 /// returns a new store on each call fails the same-data case, at the
-/// read through the second handle.
+/// read through the second handle, and so the whole suite.
 #[tokio::test]
 async fn a_backend_whose_kv_is_new_on_each_call_fails_the_same_data_case() {
     let backend = Altered {
@@ -103,6 +119,20 @@ async fn a_backend_whose_kv_is_new_on_each_call_fails_the_same_data_case() {
             .as_deref()
             .is_some_and(|m| m.contains("written through another kv() handle")),
         "{failed:?}"
+    );
+    let failed = whole_suite_failure(async || {
+        Arc::new(Altered {
+            inner: MemoryBackend::new(),
+            fresh_kv: true,
+            outbox: None,
+        }) as Arc<dyn Backend>
+    })
+    .await;
+    assert!(
+        failed
+            .as_deref()
+            .is_some_and(|m| m.contains("written through another kv() handle")),
+        "the whole suite: {failed:?}"
     );
     // The control: the same kind of backend, with its own kv(), passes.
     let backend = Altered {
@@ -191,6 +221,16 @@ async fn an_outbox_that_ignores_the_route_guard_fails_the_suite() {
         "{failed:?}"
     );
     let failed = failure(
+        conformance::invariants::a_binding_begun_after_the_event_fails_the_number_guard(&backend),
+    )
+    .await;
+    assert!(
+        failed
+            .as_deref()
+            .is_some_and(|m| m.contains("a number's binding begun after the event")),
+        "{failed:?}"
+    );
+    let failed = failure(
         conformance::invariants::a_binding_of_the_events_own_second_fails_the_guard(&backend),
     )
     .await;
@@ -200,4 +240,110 @@ async fn an_outbox_that_ignores_the_route_guard_fails_the_suite() {
             .is_some_and(|m| m.contains("only the rows dated after the binding's own second")),
         "{failed:?}"
     );
+    // And the suite of what crosses ports, as a backend runs it: on the
+    // guard, not on what this outbox lacks besides (it purges nothing).
+    let backend = Altered {
+        inner: MemoryBackend::new(),
+        fresh_kv: false,
+        outbox: Some(Arc::new(IgnoresTheGuard::default())),
+    };
+    let failed = failure(conformance::invariants::run(&backend)).await;
+    assert!(
+        failed
+            .as_deref()
+            .is_some_and(|m| m.contains("only the rows whose guard held")),
+        "invariants::run: {failed:?}"
+    );
+}
+
+/// The memory backend's own outbox, handed each event with its route
+/// guard rewritten: an outbox that checks a guard, but not quite the one
+/// it was given.
+struct RewritesTheGuard {
+    inner: Arc<dyn Outbox>,
+    rewrite: Rewrite,
+}
+
+/// How [`RewritesTheGuard`] bends a guard.
+type Rewrite = fn(RouteGuard) -> RouteGuard;
+
+#[async_trait]
+impl Outbox for RewritesTheGuard {
+    async fn insert(&self, event: &NewEvent) -> StoreResult<Option<i64>> {
+        let event = NewEvent {
+            route_guard: event.route_guard.clone().map(self.rewrite),
+            ..event.clone()
+        };
+        self.inner.insert(&event).await
+    }
+
+    async fn page(&self, query: &EventQuery) -> StoreResult<EventPage> {
+        self.inner.page(query).await
+    }
+
+    async fn purge(&self, older_than: Duration) -> StoreResult<u64> {
+        self.inner.purge(older_than).await
+    }
+}
+
+/// Each `RouteGuard` case is in `conformance::run`, not only callable: an
+/// outbox that drops every guard's date fails the guard's first case
+/// (its row dated before the binding began), one that drops a number
+/// guard's date fails the number guard's case, and one that reads the date
+/// a second late fails the binding's own second (L3). Each passes every
+/// suite before `invariants`, and each fails the whole suite. Decisive:
+/// removing a guard case from `invariants::run`.
+#[tokio::test]
+async fn an_outbox_that_bends_the_guards_date_fails_the_whole_suite() {
+    let bent: [(&str, Rewrite, &str); 3] = [
+        (
+            "every guard's date dropped",
+            |guard| RouteGuard {
+                not_after: None,
+                ..guard
+            },
+            "only the rows whose guard held",
+        ),
+        (
+            "a number guard's date dropped",
+            |guard| {
+                if matches!(guard.binding, GuardedBinding::Number { .. }) {
+                    RouteGuard {
+                        not_after: None,
+                        ..guard
+                    }
+                } else {
+                    guard
+                }
+            },
+            "a number's binding begun after the event",
+        ),
+        (
+            "the date read a second late",
+            |guard| RouteGuard {
+                not_after: guard.not_after.map(|at| at + time::Duration::SECOND),
+                ..guard
+            },
+            "only the rows dated after the binding's own second",
+        ),
+    ];
+    for (how, rewrite, expected) in bent {
+        let failed = whole_suite_failure(async || {
+            let inner = MemoryBackend::new();
+            let outbox: Arc<dyn Outbox> = Arc::new(RewritesTheGuard {
+                inner: inner.outbox(),
+                rewrite,
+            });
+            Arc::new(Altered {
+                inner,
+                fresh_kv: false,
+                outbox: Some(outbox),
+            }) as Arc<dyn Backend>
+        })
+        .await;
+        assert!(
+            failed.as_deref().is_some_and(|m| m.contains(expected)),
+            "{how}: {failed:?}"
+        );
+    }
 }
