@@ -27,6 +27,8 @@ use meta_whatsapp_server::store::{
     HOUSEKEEPING_LOCK, MIGRATION_LOCK, MIGRATIONS_TABLE, Outbox as EventStore, PgEventStore,
     PgStore, migrate,
 };
+use meta_whatsapp_server_core::conformance;
+use meta_whatsapp_server_core::conformance::outbox as outbox_suite;
 
 /// An instance of the service on the test database: everything on
 /// Postgres.
@@ -36,53 +38,28 @@ async fn harness(db: &TestDb) -> Harness {
     Harness::with(Stores::postgres(&pool))
 }
 
-#[tokio::test]
-async fn live_postgres_store_passes_the_suite() {
-    let Some(db) = TestDb::new().await else {
+/// Roadmap S3: the core's conformance suites
+/// (`meta_whatsapp_server_core::conformance`) on Postgres, each suite on a
+/// schema of its own (dropped when the test ends), raced on four threads
+/// over a pool of ten.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_backend_passes_the_conformance_suite() {
+    use meta_whatsapp_server::store::{Backend, PgBackend};
+    use std::sync::{Arc, Mutex};
+    if common::postgres_url().is_none() {
         return;
-    };
-    let pool = db.pool(5).await;
-    migrate(&pool).await.unwrap();
-    common::store_suite::run(&PgStore::new(pool)).await;
-}
-
-#[tokio::test]
-async fn live_postgres_event_store_passes_the_suite() {
-    let Some(db) = TestDb::new().await else {
-        return;
-    };
-    let pool = db.pool(5).await;
-    migrate(&pool).await.unwrap();
-    common::events_suite::run(&PgEventStore::new(pool.clone()), &PgStore::new(pool)).await;
-}
-
-#[tokio::test]
-async fn live_postgres_backend_hands_out_the_same_data_on_every_call() {
-    use meta_whatsapp_server::store::PgBackend;
-    let Some(db) = TestDb::new().await else {
-        return;
-    };
-    let pool = db.pool(5).await;
-    migrate(&pool).await.unwrap();
-    common::backend_suite::run(&PgBackend::new(pool)).await;
-}
-
-/// Roadmap S2 (SR-L2, the `failed` race) on Postgres: a capability acts
-/// only on the binding and the vault record it was made from
-/// (`common::capability_suite`).
-#[tokio::test]
-async fn live_postgres_capabilities_act_only_on_what_they_were_made_from() {
-    use meta_whatsapp_rs::adapters::store::PostgresKvStore;
-    let Some(db) = TestDb::new().await else {
-        return;
-    };
-    let pool = db.pool(5).await;
-    migrate(&pool).await.unwrap();
-    common::capability_suite::run(
-        std::sync::Arc::new(PgStore::new(pool.clone())),
-        std::sync::Arc::new(PostgresKvStore::new(pool)),
-    )
+    }
+    // Every suite's schema, kept until the test ends.
+    let schemas: Mutex<Vec<TestDb>> = Mutex::new(Vec::new());
+    let report = conformance::run(async || {
+        let db = TestDb::new().await.expect("the database was configured");
+        let pool = db.pool(10).await;
+        migrate(&pool).await.unwrap();
+        schemas.lock().unwrap().push(db);
+        Arc::new(PgBackend::new(pool)) as Arc<dyn Backend>
+    })
     .await;
+    eprintln!("postgres, the races: {report:?}");
 }
 
 /// The attach's confirmation on Postgres (records and vault): an attach
@@ -414,7 +391,7 @@ async fn live_postgres_polling_during_concurrent_inserts_misses_nothing() {
     let pool = db.pool(12).await;
     migrate(&pool).await.unwrap();
     let h = Harness::with(Stores::postgres(&pool));
-    common::events_suite::bind(h.store.as_ref(), "tenant-a", "1").await;
+    outbox_suite::bind(h.store.as_ref(), "tenant-a", "1").await;
     let key = h.tenant_key("tenant-a", &[Scope::Events]).await;
     let writers: Vec<_> = (0..8)
         .map(|w| {
@@ -424,7 +401,7 @@ async fn live_postgres_polling_during_concurrent_inserts_misses_nothing() {
                 for i in 0..40 {
                     let row = NewEvent {
                         id: format!("evt_w{w}_{i}_{}", common::unique()),
-                        ..common::events_suite::row(Some("tenant-a"), "message_received", "1", None)
+                        ..outbox_suite::row(Some("tenant-a"), "message_received", "1", None)
                     };
                     store.insert(&row).await.unwrap().unwrap();
                     ids.push(row.id);
@@ -486,8 +463,8 @@ async fn live_postgres_an_insert_in_flight_is_never_skipped() {
     let pool = db.pool(6).await;
     migrate(&pool).await.unwrap();
     let h = Harness::with(Stores::postgres(&pool));
-    common::events_suite::bind(h.store.as_ref(), "tenant-a", "1").await;
-    common::events_suite::bind(h.store.as_ref(), "tenant-b", "2").await;
+    outbox_suite::bind(h.store.as_ref(), "tenant-a", "1").await;
+    outbox_suite::bind(h.store.as_ref(), "tenant-b", "2").await;
     let key = h.tenant_key("tenant-a", &[Scope::Events]).await;
     let events_after = |after: Option<i64>| {
         let path = after.map_or_else(
@@ -512,7 +489,7 @@ async fn live_postgres_an_insert_in_flight_is_never_skipped() {
     // Another replica's insert, in flight: sequence drawn (the stream's
     // row locked), row written, not committed (what the store's insert
     // does, stopped before its commit).
-    let first = common::events_suite::row(Some("tenant-a"), "message_received", "1", None);
+    let first = outbox_suite::row(Some("tenant-a"), "message_received", "1", None);
     let mut in_flight = pool.begin().await.unwrap();
     let drawn: i64 = sqlx::query_scalar(
         "INSERT INTO wa_server_event_streams AS s (stream, last_sequence) \
@@ -536,7 +513,7 @@ async fn live_postgres_an_insert_in_flight_is_never_skipped() {
     .await
     .unwrap();
     // A later insert of the same tenant through the store waits.
-    let second = common::events_suite::row(Some("tenant-a"), "message_received", "1", None);
+    let second = outbox_suite::row(Some("tenant-a"), "message_received", "1", None);
     let later = {
         let store = PgEventStore::new(pool.clone());
         let second = second.clone();
@@ -545,7 +522,7 @@ async fn live_postgres_an_insert_in_flight_is_never_skipped() {
     // Another tenant's does not.
     let other = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        PgEventStore::new(pool.clone()).insert(&common::events_suite::row(
+        PgEventStore::new(pool.clone()).insert(&outbox_suite::row(
             Some("tenant-b"),
             "message_received",
             "2",
@@ -585,12 +562,7 @@ async fn live_postgres_one_replica_purges_at_a_time() {
     let backend = PgBackend::new(pool.clone());
     let store = PgEventStore::new(pool.clone());
     store
-        .insert(&common::events_suite::row(
-            None,
-            "message_received",
-            "1",
-            None,
-        ))
+        .insert(&outbox_suite::row(None, "message_received", "1", None))
         .await
         .unwrap();
     let sweep = Sweep {
@@ -1543,38 +1515,6 @@ async fn live_postgres_housekeeping_sweeps_expired_key_value_rows() {
         .unwrap();
 }
 
-/// Roadmap S2's atomic contracts on Postgres, raced on a multi-threaded
-/// runtime over one pool (`common::race_suite`,
-/// `common::capability_suite::racing_a_reattach`): an insert against its
-/// binding moving, a binding against its tenant's deletion, and each
-/// conditioned write against a re-attach.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn live_postgres_racing_the_atomic_contracts_breaks_none() {
-    use common::capability_suite::{Act, racing_a_reattach};
-    use common::race_suite::{
-        a_binding_racing_a_deletion_serializes,
-        an_insert_racing_a_move_never_reaches_the_new_holder,
-    };
-    use meta_whatsapp_rs::adapters::store::PostgresKvStore;
-    use std::sync::Arc;
-    let Some(db) = TestDb::new().await else {
-        return;
-    };
-    let pool = db.pool(10).await;
-    migrate(&pool).await.unwrap();
-    let store = Arc::new(PgStore::new(pool.clone()));
-    let outbox = Arc::new(PgEventStore::new(pool.clone()));
-    let moves =
-        an_insert_racing_a_move_never_reaches_the_new_holder(store.clone(), outbox, 200).await;
-    eprintln!("postgres, insert against a move: {moves:?}");
-    let binds = a_binding_racing_a_deletion_serializes(store.clone(), 200).await;
-    eprintln!("postgres, bind against delete: {binds:?}");
-    let kv = Arc::new(PostgresKvStore::new(pool));
-    for act in [Act::Forget, Act::NumberFailed, Act::WabaFailed] {
-        racing_a_reattach(store.clone(), kv.clone(), act, 60).await;
-    }
-}
-
 /// Two outbox purges at once (a round that outlived its lease, and the
 /// next replica's): a row both chose is deleted once and counted once, and
 /// the stream's `purged_through` never moves back, though the purge with
@@ -1592,10 +1532,10 @@ async fn live_postgres_two_purges_at_once_count_each_row_once() {
     let pool = db.pool(6).await;
     migrate(&pool).await.unwrap();
     let store = std::sync::Arc::new(PgEventStore::new(pool.clone()));
-    common::events_suite::bind(&PgStore::new(pool.clone()), "overlap", "41").await;
+    outbox_suite::bind(&PgStore::new(pool.clone()), "overlap", "41").await;
     let insert = || async {
         store
-            .insert(&common::events_suite::row(
+            .insert(&outbox_suite::row(
                 Some("overlap"),
                 "message_received",
                 "41",
@@ -1673,8 +1613,8 @@ async fn live_postgres_a_deadlocked_insert_is_busy() {
     let pool = db.pool(4).await;
     migrate(&pool).await.unwrap();
     let store = std::sync::Arc::new(PgEventStore::new(pool.clone()));
-    common::events_suite::bind(&PgStore::new(pool.clone()), "deadlock", "43").await;
-    let row = || common::events_suite::row(Some("deadlock"), "message_received", "43", None);
+    outbox_suite::bind(&PgStore::new(pool.clone()), "deadlock", "43").await;
+    let row = || outbox_suite::row(Some("deadlock"), "message_received", "43", None);
     // The stream's row exists.
     store.insert(&row()).await.unwrap().unwrap();
     let holder_pool = db.pool(1).await;

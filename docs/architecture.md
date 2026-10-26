@@ -1228,6 +1228,10 @@ decisions and the delivery milestones, is
   its current holder, an attach binds, stores, then confirms (it reads
   its binding again and, moved meanwhile, takes back exactly its own
   write), and every unbind deletes the token before the binding.
+  These contracts are executable (roadmap S3):
+  `meta_whatsapp_server_core::conformance` (feature `conformance`) runs
+  them over a `Backend`, and both in-tree backends pass it in the
+  service's tests (Postgres live), as a new backend must.
 - **One multi-tenant deployment per Meta app** (the owner's decision D1):
   every merchant onboarded through the app delivers to its one callback
   URL. Tenants are the integrator's ids; a tenant owns WABAs, a WABA owns

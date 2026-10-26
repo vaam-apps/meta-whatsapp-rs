@@ -7,11 +7,11 @@ mod common;
 
 use std::time::Duration;
 
-use common::events_suite::row;
 use common::{Call, Harness, Reply};
 use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
 use meta_whatsapp_server::model::{AllowedTenants, Scope, TenantId};
 use meta_whatsapp_server::store::events::NewEvent;
+use meta_whatsapp_server_core::conformance::outbox::{row, waba_of};
 use serde_json::Value;
 
 const A: &str = "tenant-a";
@@ -32,8 +32,7 @@ async fn harness() -> Harness {
 async fn insert(h: &Harness, event: &NewEvent) -> i64 {
     use meta_whatsapp_server::store::Outbox as _;
     if let (Some(tenant), Some(pn)) = (&event.tenant, &event.phone_number_id) {
-        let waba =
-            meta_whatsapp_rs::core::ids::WabaId::new(common::events_suite::waba_of(pn.as_str()));
+        let waba = meta_whatsapp_rs::core::ids::WabaId::new(waba_of(pn.as_str()));
         let _ = h.store.unbind_waba(&waba).await.unwrap();
         h.store
             .bind_waba(tenant, &waba, std::slice::from_ref(pn))

@@ -1,13 +1,19 @@
-//! What every `Store` must do, run on memory (`tests/store.rs`) and on
-//! Postgres (`tests/live_postgres.rs`).
+//! [`RecordStore`] and [`IdempotencyRecords`] (formerly the service's
+//! `tests/common/store_suite.rs`): tenants, keys, bindings, idempotency
+//! keys, the referential rules and byte order. On an empty backend: the
+//! listings are compared whole.
+//!
+//! [`RecordStore`]: crate::store::RecordStore
+//! [`IdempotencyRecords`]: crate::store::IdempotencyRecords
 
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
-use meta_whatsapp_server::model::{
+use time::{Duration, OffsetDateTime};
+
+use crate::backend::Backend;
+use crate::model::{
     AllowedTenants, BindOutcome, DeleteTenantOutcome, KeyOwner, KeyScope, NewApiKey, NumberStatus,
     PageRequest, Scope, TenantId, TenantStatus,
 };
-use meta_whatsapp_server::store::Store;
-use time::{Duration, OffsetDateTime};
 
 fn id(s: &str) -> TenantId {
     TenantId::parse(s).unwrap()
@@ -36,7 +42,9 @@ fn key(key_id: &str, owner: KeyOwner) -> NewApiKey {
 }
 
 /// Tenants: create once, read, page, update, suspend, delete with keys.
-pub async fn tenants(store: &dyn Store) {
+pub async fn tenants(backend: &dyn Backend) {
+    let records = backend.records();
+    let store = records.as_ref();
     let a = id("tenant-a");
     let created = store.create_tenant(&a, "A").await.unwrap().unwrap();
     assert_eq!(created.id, a);
@@ -118,7 +126,9 @@ pub async fn tenants(store: &dyn Store) {
 }
 
 /// Keys: stored as given, unique ids, listed by scope, revoked once.
-pub async fn keys(store: &dyn Store) {
+pub async fn keys(backend: &dyn Backend) {
+    let records = backend.records();
+    let store = records.as_ref();
     let t = id("keys-tenant");
     store.create_tenant(&t, "").await.unwrap().unwrap();
     let expires = OffsetDateTime::now_utc() + Duration::days(1);
@@ -217,7 +227,9 @@ pub async fn keys(store: &dyn Store) {
 /// Bindings: bound once, refused to another tenant (D4), refreshed,
 /// unbound, statuses.
 #[allow(clippy::too_many_lines)] // one scenario, read top to bottom
-pub async fn bindings(store: &dyn Store) {
+pub async fn bindings(backend: &dyn Backend) {
+    let records = backend.records();
+    let store = records.as_ref();
     let a = id("bind-a");
     let b = id("bind-b");
     store.create_tenant(&a, "").await.unwrap().unwrap();
@@ -380,7 +392,9 @@ pub async fn bindings(store: &dyn Store) {
 /// Deleting a tenant takes it out of every platform key's allowed tenants
 /// (security review M4): a tenant created later with the same id is not
 /// theirs. A key allowed every tenant stays so.
-pub async fn deleting_a_tenant_revokes_platform_allowances(store: &dyn Store) {
+pub async fn deleting_a_tenant_revokes_platform_allowances(backend: &dyn Backend) {
+    let records = backend.records();
+    let store = records.as_ref();
     for t in ["gone", "stays"] {
         store.create_tenant(&id(t), "").await.unwrap().unwrap();
     }
@@ -416,17 +430,18 @@ pub async fn deleting_a_tenant_revokes_platform_allowances(store: &dyn Store) {
     }
 }
 
-/// Every case.
 /// Idempotency keys: claimed once, found by a repeat, completed with the
 /// answer byte for byte, released, scoped to their tenant, leased,
 /// expired, purged, and gone with their tenant.
 #[allow(clippy::too_many_lines)] // one scenario, read top to bottom
-pub async fn idempotency(store: &dyn Store) {
+pub async fn idempotency(backend: &dyn Backend) {
     use std::time::Duration as StdDuration;
 
-    use meta_whatsapp_server::model::{
-        IdempotencyClaim, IdempotencyKey, IdempotencyRecord, IdempotencyState,
-    };
+    use crate::model::{IdempotencyClaim, IdempotencyKey, IdempotencyRecord, IdempotencyState};
+    let records = backend.records();
+    let store = records.as_ref();
+    let claims = backend.idempotency();
+    let idempotency = claims.as_ref();
     let a = id("idem-a");
     let b = id("idem-b");
     for t in [&a, &b] {
@@ -438,7 +453,7 @@ pub async fn idempotency(store: &dyn Store) {
     let claim = |tenant, fingerprint: [u8; 32], claim_id: &'static str, lease, ttl| {
         let key = key.clone();
         async move {
-            store
+            idempotency
                 .claim_idempotency_key(tenant, &key, &fingerprint, claim_id, lease, ttl)
                 .await
                 .unwrap()
@@ -465,15 +480,20 @@ pub async fn idempotency(store: &dyn Store) {
     );
     // Only the holder settles it.
     assert!(
-        !store
+        !idempotency
             .complete_idempotency_key(&a, &key, "c2", 202, b"{}")
             .await
             .unwrap()
     );
-    assert!(!store.release_idempotency_key(&a, &key, "c3").await.unwrap());
+    assert!(
+        !idempotency
+            .release_idempotency_key(&a, &key, "c3")
+            .await
+            .unwrap()
+    );
     let body = br#"{"message_id": "wamid.X", "contacts": []}"#;
     assert!(
-        store
+        idempotency
             .complete_idempotency_key(&a, &key, "c1", 202, body)
             .await
             .unwrap()
@@ -489,7 +509,12 @@ pub async fn idempotency(store: &dyn Store) {
         })
     );
     // Released: free again.
-    assert!(store.release_idempotency_key(&b, &key, "c3").await.unwrap());
+    assert!(
+        idempotency
+            .release_idempotency_key(&b, &key, "c3")
+            .await
+            .unwrap()
+    );
     assert_eq!(
         claim(&b, [9; 32], "c5", minute, hour).await,
         IdempotencyClaim::Claimed
@@ -497,7 +522,7 @@ pub async fn idempotency(store: &dyn Store) {
     // A lease that ran out: the outcome is unknown.
     let leased = IdempotencyKey::parse("leased").unwrap();
     assert_eq!(
-        store
+        idempotency
             .claim_idempotency_key(
                 &a,
                 &leased,
@@ -512,7 +537,7 @@ pub async fn idempotency(store: &dyn Store) {
     );
     tokio::time::sleep(StdDuration::from_millis(50)).await;
     assert_eq!(
-        store
+        idempotency
             .claim_idempotency_key(&a, &leased, &[1; 32], "c7", minute, hour)
             .await
             .unwrap(),
@@ -527,7 +552,7 @@ pub async fn idempotency(store: &dyn Store) {
     let short = IdempotencyKey::parse("short").unwrap();
     let old = IdempotencyKey::parse("old").unwrap();
     for (k, c) in [(&short, "c8"), (&old, "c9")] {
-        store
+        idempotency
             .claim_idempotency_key(
                 &a,
                 k,
@@ -540,25 +565,25 @@ pub async fn idempotency(store: &dyn Store) {
             .unwrap();
     }
     assert!(
-        store
+        idempotency
             .complete_idempotency_key(&a, &short, "c8", 504, b"{}")
             .await
             .unwrap()
     );
     tokio::time::sleep(StdDuration::from_millis(60)).await;
     assert_eq!(
-        store
+        idempotency
             .claim_idempotency_key(&a, &short, &[3; 32], "c10", minute, hour)
             .await
             .unwrap(),
         IdempotencyClaim::Claimed
     );
     assert!(
-        store.purge_idempotency_keys().await.unwrap() >= 1,
+        idempotency.purge_idempotency_keys().await.unwrap() >= 1,
         "`old` expired"
     );
     assert_eq!(
-        store
+        idempotency
             .claim_idempotency_key(&a, &old, &[3; 32], "c11", minute, hour)
             .await
             .unwrap(),
@@ -579,7 +604,7 @@ pub async fn idempotency(store: &dyn Store) {
     // tenant created again under the same id (ids are the integrator's)
     // never gets the deleted one's answers.
     assert!(
-        store
+        idempotency
             .complete_idempotency_key(&b, &key, "c5", 202, body)
             .await
             .unwrap()
@@ -613,7 +638,9 @@ pub async fn idempotency(store: &dyn Store) {
 /// nothing, WABA or number. Decisive: the tenant check in each backend's
 /// `bind_waba` (memory bound it before S2; Postgres refused it with a
 /// foreign key's error).
-pub async fn binding_to_a_missing_tenant_binds_nothing(store: &dyn Store) {
+pub async fn binding_to_a_missing_tenant_binds_nothing(backend: &dyn Backend) {
+    let records = backend.records();
+    let store = records.as_ref();
     let waba = WabaId::new("w-nobody");
     for tenant in ["never-created", "deleted-before"] {
         if tenant == "deleted-before" {
@@ -649,7 +676,9 @@ pub async fn binding_to_a_missing_tenant_binds_nothing(store: &dyn Store) {
 /// and the binding refused (`NoSuchTenant`). Never a WABA bound to a
 /// deleted tenant. Decisive: the tenant check in `bind_waba` (without it
 /// a binding lands after the deletion).
-pub async fn a_binding_and_a_deletion_of_one_tenant_serialize(store: &dyn Store) {
+pub async fn a_binding_and_a_deletion_of_one_tenant_serialize(backend: &dyn Backend) {
+    let records = backend.records();
+    let store = records.as_ref();
     for round in 0..20 {
         let tenant = id(&format!("race-{round}"));
         let waba = WabaId::new(format!("w-race-{round}"));
@@ -682,7 +711,7 @@ pub async fn a_binding_and_a_deletion_of_one_tenant_serialize(store: &dyn Store)
 async fn walk<T, F, Fut>(list: F, id_of: impl Fn(&T) -> String) -> Vec<String>
 where
     F: Fn(PageRequest) -> Fut,
-    Fut: std::future::Future<Output = meta_whatsapp_server::model::Listing<T>>,
+    Fut: std::future::Future<Output = crate::model::Listing<T>>,
 {
     let mut seen = Vec::new();
     let mut after = None;
@@ -701,7 +730,9 @@ where
 /// punctuation): tenants, keys, WABAs and numbers, paged one at a time.
 /// Decisive: `COLLATE "C"` on Postgres, the `String` order in memory.
 #[allow(clippy::too_many_lines)] // one scenario, read top to bottom
-pub async fn listings_are_in_byte_order(store: &dyn Store) {
+pub async fn listings_are_in_byte_order(backend: &dyn Backend) {
+    let records = backend.records();
+    let store = records.as_ref();
     // Byte order: `-` < `.` < `0` < `:` < `A` < `_` < `a`.
     let ids = [
         "ord-_x", "ord-a", "ord-B", "ord-:1", "ord-0", "ord-.9", "ord--",
@@ -740,7 +771,7 @@ pub async fn listings_are_in_byte_order(store: &dyn Store) {
     };
     let tenants = walk(
         |p| async move { store.tenants(&p).await.unwrap() },
-        |t: &meta_whatsapp_server::model::Tenant| t.id.as_str().to_owned(),
+        |t: &crate::model::Tenant| t.id.as_str().to_owned(),
     )
     .await;
     assert_eq!(only_ord(tenants), expected, "tenants");
@@ -749,7 +780,7 @@ pub async fn listings_are_in_byte_order(store: &dyn Store) {
             let scope = KeyScope::Tenant(owner.clone());
             async move { store.keys(&scope, &p).await.unwrap() }
         },
-        |k: &meta_whatsapp_server::model::ApiKeyRecord| k.key_id.clone(),
+        |k: &crate::model::ApiKeyRecord| k.key_id.clone(),
     )
     .await;
     assert_eq!(keys, expected, "keys");
@@ -758,13 +789,13 @@ pub async fn listings_are_in_byte_order(store: &dyn Store) {
             let owner = owner.clone();
             async move { store.wabas(&owner, &p).await.unwrap() }
         },
-        |w: &meta_whatsapp_server::model::WabaBinding| w.waba_id.as_str().to_owned(),
+        |w: &crate::model::WabaBinding| w.waba_id.as_str().to_owned(),
     )
     .await;
     assert_eq!(only_ord(wabas.clone()), expected, "wabas");
     let all = walk(
         |p| async move { store.all_wabas(&p).await.unwrap() },
-        |w: &meta_whatsapp_server::model::WabaBinding| w.waba_id.as_str().to_owned(),
+        |w: &crate::model::WabaBinding| w.waba_id.as_str().to_owned(),
     )
     .await;
     assert_eq!(only_ord(all), expected, "all_wabas");
@@ -773,7 +804,7 @@ pub async fn listings_are_in_byte_order(store: &dyn Store) {
             let owner = owner.clone();
             async move { store.numbers(&owner, &p).await.unwrap() }
         },
-        |n: &meta_whatsapp_server::model::NumberBinding| n.phone_number_id.as_str().to_owned(),
+        |n: &crate::model::NumberBinding| n.phone_number_id.as_str().to_owned(),
     )
     .await;
     assert_eq!(numbers, expected, "numbers");
@@ -790,14 +821,15 @@ pub async fn listings_are_in_byte_order(store: &dyn Store) {
     }
 }
 
-pub async fn run(store: &dyn Store) {
-    store.ping().await.unwrap();
-    tenants(store).await;
-    keys(store).await;
-    bindings(store).await;
-    deleting_a_tenant_revokes_platform_allowances(store).await;
-    idempotency(store).await;
-    binding_to_a_missing_tenant_binds_nothing(store).await;
-    a_binding_and_a_deletion_of_one_tenant_serialize(store).await;
-    listings_are_in_byte_order(store).await;
+/// Every case above, on `backend`, empty.
+pub async fn run(backend: &dyn Backend) {
+    backend.records().ping().await.unwrap();
+    tenants(backend).await;
+    keys(backend).await;
+    bindings(backend).await;
+    deleting_a_tenant_revokes_platform_allowances(backend).await;
+    idempotency(backend).await;
+    binding_to_a_missing_tenant_binds_nothing(backend).await;
+    a_binding_and_a_deletion_of_one_tenant_serialize(backend).await;
+    listings_are_in_byte_order(backend).await;
 }
