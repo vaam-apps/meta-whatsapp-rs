@@ -67,7 +67,11 @@ let hello = TemplateMessage::new(
     env_or("WA_TEMPLATE", "hello_world"),
     env_or("WA_TEMPLATE_LANGUAGE", "en_US"),
 );
-let sent = messages.send(&OutboundMessage::template(to, hello)).await?;
+let mut template = OutboundMessage::template(to, hello);
+if let Ok(id) = std::env::var("WA_MESSAGING_ACCOUNT_ID") {
+    template = template.messaging_account_id(id); // which account pays
+}
+let sent = messages.send(&template).await?;
 ```
 
 [`invoice_document.rs`](crates/meta-whatsapp-rs/examples/invoice_document.rs) renders

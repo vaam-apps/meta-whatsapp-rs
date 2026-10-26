@@ -131,6 +131,81 @@ async fn send_posts_the_body_to_the_messages_edge_with_bearer_auth() {
     assert_eq!(t.remaining(), 0);
 }
 
+/// `account-model-evolution/messaging`, "Example syntax": the Messaging
+/// Account to bill rides in the body, next to the message, on the same
+/// `/{phone_number_id}/messages` edge. The page's placeholders are filled
+/// with sample ids from Meta's other pages.
+#[tokio::test]
+async fn messaging_account_id_is_sent_in_the_body() {
+    let t = ScriptedTransport::new();
+    t.push_json(200, text_response());
+    client(&t)
+        .messages("106540352242922")
+        .send(
+            &OutboundMessage::template(
+                phone(),
+                TemplateMessage::new("order_confirmation", "en_US"),
+            )
+            .messaging_account_id("102290129340398"),
+        )
+        .await
+        .unwrap();
+    let req = t.last_request().unwrap();
+    assert_eq!(req.method, Method::POST);
+    assert_eq!(req.path(), "/v25.0/106540352242922/messages");
+    assert_eq!(req.bearer(), Some("TOKEN"));
+    assert_eq!(req.url.query(), None);
+    assert_eq!(
+        req.json().unwrap(),
+        json!({
+          "messaging_product": "whatsapp",
+          "recipient_type": "individual",
+          "to": "+16505551234",
+          "messaging_account_id": "102290129340398",
+          "type": "template",
+          "template": {
+            "name": "order_confirmation",
+            "language": { "code": "en_US" }
+          }
+        })
+    );
+    assert_eq!(t.remaining(), 0);
+}
+
+#[test]
+fn messaging_account_id_is_optional_and_checked_before_sending() {
+    // Unset: neither the key nor Meta's deprecated alias goes out.
+    let wire = serde_json::to_value(OutboundMessage::text(phone(), "hi")).unwrap();
+    assert!(wire.get("messaging_account_id").is_none());
+    assert!(wire.get("paid_messaging_account_id").is_none());
+    // A Graph object id is digits; anything else fails locally.
+    for bad in ["", "+16505551234", "1022 9012", "WABA-1", "١٢٣"] {
+        assert_eq!(
+            invalid(&OutboundMessage::text(phone(), "hi").messaging_account_id(bad)),
+            "messaging_account_id",
+            "{bad:?}"
+        );
+    }
+    assert!(
+        OutboundMessage::text(phone(), "hi")
+            .messaging_account_id("102290129340398")
+            .validate()
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_messaging_account_id_never_reaches_the_transport() {
+    let t = ScriptedTransport::new();
+    let err = client(&t)
+        .messages("1")
+        .send(&OutboundMessage::text(phone(), "hi").messaging_account_id("+49"))
+        .await
+        .unwrap_err();
+    assert!(matches!(&err, Error::Validation(v) if v.field == "messaging_account_id"));
+    assert!(t.requests().is_empty());
+}
+
 #[tokio::test]
 async fn invalid_messages_never_reach_the_transport() {
     let t = ScriptedTransport::new();
@@ -2137,7 +2212,8 @@ fn raw_types_cannot_shadow_envelope_fields() {
             .callback_data("cb")
             .category(DirectSendCategory::Utility)
             .ttl_seconds(60)
-            .direct_send_template_name("n");
+            .direct_send_template_name("n")
+            .messaging_account_id("102290129340398");
         m.recipient = Recipient::PhoneAndUser {
             phone: PHONE.into(),
             user: UserId::new(BSUID),
@@ -2151,11 +2227,14 @@ fn raw_types_cannot_shadow_envelope_fields() {
         .keys()
         .filter(|k| *k != "order_status")
         .collect();
-    assert_eq!(keys.len(), 10, "{keys:?}");
+    assert_eq!(keys.len(), 11, "{keys:?}");
     for reserved in keys {
         assert_eq!(invalid(&full(reserved)), "type", "{reserved}");
         assert_eq!(invalid(&raw(reserved)), "type", "{reserved}");
     }
+    // Never emitted, but Meta reads it as the Messaging Account to bill
+    // (its deprecated alias): a Raw type of that name would set it.
+    assert_eq!(invalid(&raw("paid_messaging_account_id")), "type");
     assert_eq!(invalid(&raw("")), "type");
     assert!(full("order_status").validate().is_ok());
     assert_no_duplicate_keys(&serde_json::to_vec(&full("order_status")).unwrap());

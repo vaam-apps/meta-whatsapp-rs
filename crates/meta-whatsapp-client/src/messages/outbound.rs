@@ -1,7 +1,7 @@
 //! The send request envelope: [`OutboundMessage`] and [`MessageContent`].
 
 use meta_whatsapp_core::error::ValidationError;
-use meta_whatsapp_core::ids::{CatalogId, GroupId, MediaId, MessageId};
+use meta_whatsapp_core::ids::{CatalogId, GroupId, MediaId, MessageId, WabaId};
 use meta_whatsapp_core::recipient::Recipient;
 use serde::Serialize;
 use serde::ser::{SerializeMap, Serializer};
@@ -28,7 +28,8 @@ use crate::templates::TemplateMessage;
 /// Build one with a constructor ([`OutboundMessage::text`], …) or
 /// [`OutboundMessage::new`] with any [`MessageContent`], then chain
 /// [`reply_to`](Self::reply_to), [`callback_data`](Self::callback_data),
-/// [`category`](Self::category). Limits are checked by
+/// [`category`](Self::category),
+/// [`messaging_account_id`](Self::messaging_account_id). Limits are checked by
 /// [`validate`](Self::validate), which `send` calls before any request.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutboundMessage {
@@ -46,6 +47,9 @@ pub struct OutboundMessage {
     /// Direct Send only: business-named template
     /// (`direct-send/business-named-templates`).
     pub direct_send_config: Option<DirectSendConfig>,
+    /// The Messaging Account to bill (`account-model-evolution/messaging`).
+    /// See [`messaging_account_id`](Self::messaging_account_id).
+    pub messaging_account_id: Option<WabaId>,
     /// What is sent.
     pub content: MessageContent,
 }
@@ -154,6 +158,8 @@ const ENVELOPE_KEYS: &[&str] = &[
     "category",
     "ttl_seconds",
     "direct_send_config",
+    "messaging_account_id",
+    "paid_messaging_account_id",
 ];
 
 impl MessageContent {
@@ -287,6 +293,8 @@ impl Serialize for OutboundMessage {
             ttl_seconds: Option<u32>,
             #[serde(skip_serializing_if = "Option::is_none")]
             direct_send_config: Option<&'a DirectSendConfig>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            messaging_account_id: Option<&'a WabaId>,
         }
         Wire {
             messaging_product: "whatsapp",
@@ -297,6 +305,7 @@ impl Serialize for OutboundMessage {
             category: self.category.as_ref(),
             ttl_seconds: self.ttl_seconds,
             direct_send_config: self.direct_send_config.as_ref(),
+            messaging_account_id: self.messaging_account_id.as_ref(),
         }
         .serialize(serializer)
     }
@@ -312,6 +321,7 @@ impl OutboundMessage {
             category: None,
             ttl_seconds: None,
             direct_send_config: None,
+            messaging_account_id: None,
             content: content.into(),
         }
     }
@@ -562,6 +572,28 @@ impl OutboundMessage {
         self
     }
 
+    /// Bill `id`, a Messaging Account, for this message
+    /// (`messaging_account_id`, `account-model-evolution/messaging`).
+    ///
+    /// Under Meta's account model evolution a business phone number can
+    /// belong to several Messaging Accounts (one per partner, or one per
+    /// billing currency). A Messaging Account's id is a WABA id (an
+    /// existing WABA kept its id; Embedded Signup returns a new one in the
+    /// WABA id field), which is why this takes a [`WabaId`]. When the
+    /// access token you send with can send from more than one of them on
+    /// the sending number, this names the one charged and credited with
+    /// the analytics. Without it Meta resolves the account from the token,
+    /// which is not guaranteed in that case (the message may be billed to
+    /// another account, or refused), so Meta asks for it whenever that can
+    /// happen. Required for that case from the Graph API version of Meta's
+    /// phase 2 (H1 2027) and on every version from phase 3 (H1 2028).
+    /// Meta's deprecated alias `paid_messaging_account_id` is never sent.
+    #[must_use]
+    pub fn messaging_account_id(mut self, id: impl Into<WabaId>) -> Self {
+        self.messaging_account_id = Some(id.into());
+        self
+    }
+
     /// Check every limit Meta documents for this message, without sending
     /// it. [`super::Messages::send`] calls this first.
     ///
@@ -589,6 +621,9 @@ impl OutboundMessage {
                 "recipient_type",
                 "pin and unpin can only be sent to a group",
             ));
+        }
+        if let Some(id) = &self.messaging_account_id {
+            validate_messaging_account_id(id)?;
         }
         self.validate_direct_send()?;
         let direct_send = matches!(
@@ -660,6 +695,22 @@ impl OutboundMessage {
         }
         Ok(())
     }
+}
+
+/// `account-model-evolution/messaging`: a Messaging Account keeps its
+/// WhatsApp Business Account's id, a Graph object id: digits only. Checked
+/// here so a stray value (a phone number with `+`, a name) fails before
+/// the send instead of being billed to whatever Meta resolves.
+fn validate_messaging_account_id(id: &WabaId) -> Check {
+    let field = "messaging_account_id";
+    validate::non_empty(field, id.as_str())?;
+    if !id.as_str().bytes().all(|b| b.is_ascii_digit()) {
+        return Err(ValidationError::new(
+            field,
+            "must be a Messaging Account id: digits only",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_recipient(recipient: &Recipient) -> Check {

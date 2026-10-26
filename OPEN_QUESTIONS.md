@@ -28,8 +28,8 @@ the design, the code); then it is deleted. A section heading stays when
 its last entry goes, with a line saying so: guides and skills link to
 its anchor.
 
-On 2026-09-26, 31 entries are decided and 1 stays open: #33 (a data
-migration).
+On 2026-10-26, 31 entries are decided and 2 stay open: #33 and #46
+(each a data migration).
 
 Numbers are permanent (the code, docs and skills cite them) and not in
 order within a section. Markdown renders a list with its first item's
@@ -523,7 +523,8 @@ Found while writing the integrator guides and checking them against
 
 ## Service (meta-whatsapp-server)
 
-Found in the review of milestone M1b (43).
+Found in the review of milestone M1b (43), and with Meta's account
+model evolution (46).
 
 43. **Media received by webhook, and the `phone_number_id` check.** The
     service's media routes ask Meta with `phone_number_id={pn}`, so that
@@ -551,3 +552,35 @@ Found in the review of milestone M1b (43).
     tenant's own events carried; the live check with a real received media
     id still says which behaviour Meta has. Swappable: the exemption is
     one lookup. Roadmap M2e.
+
+<!-- 46 follows 43 in this section: a list of its own. -->
+
+46. **A number under several Messaging Accounts.** Meta's account model
+    evolution (`account-model-evolution`, phase 1 from H2 2026) splits a
+    WABA in two: the Messaging Account keeps the WABA's id and holds its
+    templates, billing and webhook subscriptions; a new WhatsApp account
+    (WAAC) holds the phone number. One number can then belong to
+    several Messaging Accounts: one per partner, or one per billing
+    currency (`account-model-evolution/messaging`). The service binds a
+    WABA id, today a Messaging Account id, to one tenant, and stores
+    each number under exactly one binding (`wa_server_numbers` is keyed
+    by `phone_number_id` alone). Two Messaging Accounts of one deployment
+    that share a number cannot both hold it: attaching the second moves
+    the number to it when the same tenant holds the first, and is refused
+    when another tenant does (design D4).
+    Options: keep one Messaging Account per number in a deployment (as
+    built; design D37 records it, and from M5c5 its sends carry the
+    binding's id), or key numbers by `(waba_id, phone_number_id)`, so one
+    number can serve several bindings, each with its own billing, and
+    route an inbound event by the Messaging Account its webhook names (a
+    primary-key migration of stored data, and a routing rule for events
+    Meta has not documented yet: its phase 2, H1 2027, adds a
+    `whatsapp_account` webhook topic).
+
+    **Left open on 2026-10-26:** the alternative to today's rule is a
+    primary-key migration of stored data, which the owner's delegation
+    leaves to the owner, and its routing depends on webhooks Meta has not
+    published. Today's rule stays (design D37), with its cost: Meta keeps
+    templates per Messaging Account, so after a same-tenant move the
+    number's sends find only the new account's templates. Roadmap L16b
+    reads the phase 2 webhooks either way.

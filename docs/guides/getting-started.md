@@ -98,6 +98,16 @@ Run the full program with
 - `messages(…)` takes the **phone number id**, not the phone number. Ids are
   distinct types (`PhoneNumberId`, `WabaId`, …) built from `&str`/`String`,
   so a WABA id cannot be passed where a phone number id is expected.
+- Meta's [account model evolution](https://developers.facebook.com/documentation/business-messaging/whatsapp/account-model-evolution)
+  (phase 1 from H2 2026) splits a WABA in two: a **Messaging Account**
+  keeps the WABA id and holds templates, billing and webhook
+  subscriptions, and a new **WhatsApp account** (WAAC) holds the phone number. Your
+  ids and calls keep working. When one number belongs to several
+  Messaging Accounts your access token can send from (one per partner,
+  or per billing currency), name the one billed with
+  `OutboundMessage::messaging_account_id`: without it Meta may bill
+  another one or refuse the send, and it is required in that case from
+  phase 2 (H1 2027).
 - Always write the `+`. Meta reads a number without it as local to *your
   business number's* country, so the message reaches someone else.
   A `&str` is not a `Recipient`: build one with `Recipient::phone`,

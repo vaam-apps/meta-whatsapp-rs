@@ -861,11 +861,54 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Kind:** additive.
   - **After:** nothing.
   - **Decisive:** exact JSON from `conversation-routing/thread-control`.
-- [ ] **L16. Account model evolution** (`meta-whatsapp-client`, beta;
-  row 140).
-  - **Kind:** additive.
+- [x] **L16a. The Messaging Account a send bills**
+  (`meta-whatsapp-client`, `client::messages`; row 140). Meta's account
+  model evolution (`account-model-evolution`) is generally available
+  from H2 2026, not a beta: a WABA's id now names its Messaging Account
+  (templates, billing, webhook subscriptions), and its numbers move
+  under a new WhatsApp account (WAAC) whose id Meta exposes
+  only in phase 2 (H1 2027). Existing ids and calls keep working. A
+  number can belong to several Messaging Accounts (one per partner, or
+  per billing currency); a send whose access token can send from more
+  than one of them names the one billed with
+  `messaging_account_id` (`account-model-evolution/messaging`): optional
+  now, required in that case on phase 2's Graph API version and on
+  every version from phase 3 (H1 2028). Meta's alias
+  `paid_messaging_account_id` is deprecated (migrate by 2026-12-31).
+  - **Kind:** breaking (a new field on `OutboundMessage`, whose fields
+    are public; built with its constructors, nothing changes).
   - **After:** nothing.
-  - **Decisive:** exact JSON from `reference/whatsapp-account-number/*`.
+  - **Decisive:** the page's request example, with the docs' sample
+    ids, as exact JSON on `/{phone_number_id}/messages`; a message
+    without the option sends neither key; an id that is not digits
+    never reaches the transport.
+  - **Landed:** `OutboundMessage::messaging_account_id`, a `WabaId`
+    (the id the Messaging Account kept), checked as digits by
+    `OutboundMessage::validate`; the alias is never sent, and a
+    `MessageContent::Raw` type named like either key is refused. The
+    `send_message` example sends it from `WA_MESSAGING_ACCOUNT_ID`.
+    Listing the Messaging Accounts a business shares with a partner is
+    the client WABAs call,
+    `client::waba::Business::client_whatsapp_business_accounts`,
+    unchanged.
+- [ ] **L16b. WhatsApp accounts (WAAC) and Messaging Accounts
+  as their own objects** (`meta-whatsapp-client`, `meta-whatsapp-webhooks`;
+  row 140): phase 2's endpoints for managing WAACs and Messaging
+  Accounts, the WAAC id returned next to a phone number id (Embedded
+  Signup's result among them), its `whatsapp_account` webhook topic, and
+  the WAAC ids that replace phone number ids in paths from phase 3;
+  and the Messaging Account's own reads published today
+  (`account-model-evolution/messaging`: its `primary_funding_id`, which
+  says whether it can pay), with Meta's Template Migration API.
+  Meta has not published phase 2's reference yet; the mirror's
+  `reference/whatsapp-account-number/*` is read again when it is.
+  - **Kind:** additive (a new id type, new calls, a new webhook field
+    parsed into its own event, `Unknown` until then).
+  - **After:** nothing; the reference must exist first (phase 2, H1
+    2027).
+  - **Decisive:** exact JSON from the published reference; a
+    `whatsapp_account` webhook parses into its event, and one with an
+    unknown shape into `Unknown { raw }`.
 - [ ] **L17. Catalog and product reads** (`meta-whatsapp-client`,
   `client::commerce`; row 103), against Meta's Catalog API, whose docs
   sit outside the WhatsApp docs (not mirrored: read them first).
@@ -1208,8 +1251,21 @@ or WABA fails the family's own cross-tenant test).
   restriction lives only in the client's credential rules (L10a). The
   devcontainer firewall lacks that host too (left as is: a live call
   from the sandbox fails until it is added).
-  - **After:** S7, L10a, L10b, L16.
+  - **After:** S7, L10a, L10b, L16b.
   - **Decisive:** M5.1, M5.2.
+- [ ] **M5c5. Messaging Accounts in the service** (row 140; design
+  D37): a send from a bound number names its binding's WABA id as
+  `messaging_account_id`, behind the setting `send_messaging_account_id`
+  (on by default), and the guide says how a number shared by several
+  Messaging Accounts is held (one binding; the latest same-tenant attach
+  is the one billed; another tenant's is refused). Several bindings per
+  number wait for the owner's answer to OPEN_QUESTIONS #46.
+  - **After:** S7, L16a.
+  - **Decisive:** every send route's body carries the binding's id (the
+    setting off: none); after a same-tenant attach of a second WABA
+    holding the number, the sends name the second; another tenant's
+    attach of it stays `409 waba_owned_by_another_tenant`; a send body
+    naming `messaging_account_id` itself stays refused.
 - [ ] **M5d. Flows** (rows 61, 62): management and the data endpoint.
   - **After:** S7.
   - **Decisive:** M5.1, M5.2; the data endpoint answers a request
@@ -1317,6 +1373,12 @@ everything else goes into the parity-completion report.
   architecture.md § Stable identifiers was last confirmed (B2b's planned
   `wa.bot.pacer`, and those B3 and L21a add), for the same reason as
   L5's.
+- **OPEN_QUESTIONS #46**, a number under several Messaging Accounts
+  (Meta's account model evolution): keying the service's numbers by
+  `(waba_id, phone_number_id)` is a primary-key migration of stored
+  data. Until the owner answers, one binding holds a number (design
+  D37, M5c5). Asked with the release questions, or when Meta publishes
+  phase 2's webhooks (L16b), whichever comes first.
 - **The token vault's stored format**, if S2's last attach window is to
   close: a vault record naming the binding it was stored under would let
   a take-back tell its own token from another tenant's stored in the
