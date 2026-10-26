@@ -993,10 +993,15 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     decisive tests are `check_reports_a_blank_verify_token` and
     `check_passes_a_real_verify_token` (`tests/handler.rs`), with
     `the_check_error_carries_no_token_text`; making `check` always pass
-    fails the first and the last. The `cms_inbox` example's `app` runs
-    it (`the_app_refuses_a_blank_verify_token_at_boot`); the service
-    does not, as its configuration already refuses a blank
-    `WA_VERIFY_TOKEN` with the same predicate before a handler exists.
+    fails the first and the last, and the doctest on `check`. The
+    `cms_inbox` example's `app` runs it
+    (`the_app_refuses_a_blank_verify_token_at_boot`), as do the
+    webhook-endpoint and bot skills' examples
+    (`blank_secrets_fail_at_startup`,
+    `a_blank_verify_token_stops_the_boot`); the service does not, as its
+    configuration already refuses a blank `WA_VERIFY_TOKEN` before a
+    handler exists, with its own test of the same shape (`str::trim`,
+    then empty).
     OPEN_QUESTIONS #16 is closed and deleted (CHANGELOG). No parity row
     changes: coverage row 2 already counted the verify token.
 - [ ] **L20e. Product-card carousel templates: two cards at creation**

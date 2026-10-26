@@ -100,6 +100,7 @@ let verifier = SignatureVerifier::new(vec![app_secret])?;
 let handler = WebhookHandler::builder(verifier, verify_token, Arc::new(bot))
     .dedup(DedupGuard::new(kv)) // Meta retries for 7 days: a retry must not run a command twice
     .build();
+handler.check()?; // a blank verify token stops the boot, not Meta's verification
 ```
 
 `LogErrors` logs a failure (kinds only) and acknowledges it, since an error makes Meta
@@ -156,5 +157,4 @@ cut between blocks. Text is left as written (`NoEscape`); `WordJoinerEscape` is 
 ## Related skills
 
 `meta-whatsapp-rs-webhook-endpoint`, `meta-whatsapp-rs-interactive-messages`,
-`meta-whatsapp-rs-cms-inbox`, `meta-whatsapp-rs-phone-numbers` (command menu),
-`meta-whatsapp-rs-token-vault`, `meta-whatsapp-rs-testing`.
+`meta-whatsapp-rs-cms-inbox`, `meta-whatsapp-rs-phone-numbers` (command menu), `meta-whatsapp-rs-token-vault`, `meta-whatsapp-rs-testing`.

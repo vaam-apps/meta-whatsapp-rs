@@ -117,17 +117,33 @@ impl WebhookHandler {
     ///
     /// ```
     /// # use std::sync::Arc;
+    /// # use meta_whatsapp_core::error::SinkError;
     /// # use meta_whatsapp_core::secret::{AppSecret, VerifyToken};
     /// # use meta_whatsapp_core::sink::EventSink;
     /// # use meta_whatsapp_webhooks::{SignatureVerifier, WebhookEvent, WebhookHandler};
-    /// # fn demo(sink: Arc<dyn EventSink<WebhookEvent>>) -> meta_whatsapp_core::Result<()> {
+    /// # #[derive(Debug)]
+    /// # struct Discard;
+    /// # #[async_trait::async_trait]
+    /// # impl EventSink<WebhookEvent> for Discard {
+    /// #     async fn deliver(&self, _: WebhookEvent) -> Result<(), SinkError> { Ok(()) }
+    /// # }
+    /// # fn main() -> meta_whatsapp_core::Result<()> {
+    /// # let sink: Arc<dyn EventSink<WebhookEvent>> = Arc::new(Discard);
     /// let handler = WebhookHandler::builder(
     ///     SignatureVerifier::new(vec![AppSecret::new("app-secret")])?,
     ///     VerifyToken::new(" "), // read from a variable set to a space
+    ///     sink.clone(),
+    /// )
+    /// .build();
+    /// assert!(handler.check().is_err()); // at startup: stop here
+    ///
+    /// let handler = WebhookHandler::builder(
+    ///     SignatureVerifier::new(vec![AppSecret::new("app-secret")])?,
+    ///     VerifyToken::new("vibecoding"),
     ///     sink,
     /// )
     /// .build();
-    /// assert!(handler.check().is_err());
+    /// handler.check()?;
     /// # Ok(()) }
     /// ```
     ///

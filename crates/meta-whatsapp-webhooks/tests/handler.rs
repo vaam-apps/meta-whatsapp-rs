@@ -600,6 +600,21 @@ fn check_passes_a_real_verify_token() {
 }
 
 #[test]
+fn neither_the_builder_nor_the_handler_debug_shows_the_verify_token() {
+    let builder = WebhookHandler::builder(
+        SignatureVerifier::new(vec![secret()]).unwrap(),
+        VerifyToken::new("vibecoding"),
+        Arc::new(RecordingSink::default()),
+    );
+    let text = format!("{builder:?}");
+    assert!(!text.contains("vibecoding"), "{text}");
+    assert!(!text.contains(SECRET), "{text}");
+    let handler = builder.build();
+    assert_eq!(handler.check(), Ok(()));
+    assert!(!format!("{handler:?}").contains("vibecoding"));
+}
+
+#[test]
 fn the_check_error_carries_no_token_text() {
     // One fixed text for every blank token: nothing of the token is in it.
     let texts: Vec<(String, String)> = BLANK_TOKENS

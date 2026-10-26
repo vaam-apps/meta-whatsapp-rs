@@ -210,8 +210,9 @@ stored data, the owner's).
   token; the handshake's constant-time comparison is unchanged, and its
   blank-token error now carries the same text. The `cms_inbox` example's
   `app` runs it, as do the webhooks guide, the CMS inbox guide, the
-  README and the `meta-whatsapp-rs-webhook-endpoint` skill (whose
-  example drops its own blank test for it). The service does not need
+  README, the `meta-whatsapp-rs-webhook-endpoint` skill (whose
+  example drops its own blank test for it) and the
+  `meta-whatsapp-rs-bot` skill and bots guide. The service does not need
   it: its configuration refuses a blank `WA_VERIFY_TOKEN` before a
   handler exists.
 
