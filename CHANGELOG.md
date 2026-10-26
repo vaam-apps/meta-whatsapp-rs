@@ -212,6 +212,39 @@ stored data, the owner's).
   `Option<SignupCode>` (`Some` from those two constructors), which code
   reading the field directly sees.
 
+- **The service core's conformance suites** (roadmap S3, parity row
+  112; `meta-whatsapp-server-core`, feature `conformance`, and
+  `meta-whatsapp-server`'s tests): `meta_whatsapp_server_core::conformance`
+  is the executable definition of the ports' contracts, run over a
+  `Backend`, as `meta_whatsapp_adapters::store::conformance` is for a
+  `KvStore`. `conformance::run(fresh)` takes a factory of empty
+  backends and runs each suite on one of its own: `records` (tenants,
+  keys, bindings, idempotency keys, S2's referential rules, byte
+  order), `outbox` (streams, pages, dedup and its window, filters,
+  purges), `invariants` (what crosses ports: every accessor hands out
+  the same data, deleting a tenant purges its stream, the `RouteGuard`
+  cases, and a new case: each tenant's inserts, from eight writers at
+  once, commit in sequence order for a poller following `next_after`),
+  `capabilities` (SR-L2, the `failed` race, M1, through the core's
+  `Authorizer`) and `races` (S2's races, with a `races::Report` of how
+  their rounds ended). Each case is public, takes a `&dyn Backend`, and
+  panics on a broken contract. The suites moved out of the service's
+  `tests/common/` (`store_suite`, `events_suite`, `backend_suite`,
+  `capability_suite`, `race_suite`), whose bodies they keep; the memory
+  backend runs the whole of it in `tests/store.rs`, the Postgres one in
+  `tests/live_postgres.rs` (`live_postgres_backend_passes_the_conformance_suite`,
+  a schema per suite). Three tests show what it refuses: a backend whose
+  `kv()` is a new store on each call fails the same-data case and the
+  whole suite; an outbox that ignores the route guard fails the guard's
+  cases and `invariants::run`, which closes S2's security review's L4
+  (a third-party outbox that ignores the guard failed open, and no
+  suite could tell); and an outbox that drops the guard's date, drops
+  it for a number's guard, or reads it a second late fails the whole
+  suite on the guard case of its own. The feature brings
+  the library's `testing` feature (`ScriptedTransport`, for the
+  capabilities' Graph client) and tokio's macros; `just features`
+  checks the crate with it alone.
+
 - **`ErrorKind::SampleTemplateNotAllowed`** (`meta_whatsapp_core`, named
   `sample_template_not_allowed`): Graph's `131058`, "Hello World templates
   can only be sent from the Public Test Numbers", which Meta answers to
@@ -1909,7 +1942,8 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
     a move is S2b's.
   - **L4 — the route guard cannot be checked on a third-party
     backend** until the conformance suites move into the core: roadmap
-    S3 includes the `RouteGuard` cases.
+    S3 includes the `RouteGuard` cases (since landed: "The service
+    core's conformance suites", under "Added").
 - **Credential allow list widened, for one URL (roadmap L10a).** Meta
   serves the Parent BSUID Accounts API from `api.facebook.com`, without
   an API version, not from Graph (`business-scoped-user-ids`; the page's

@@ -1,8 +1,9 @@
 //! Roadmap S2 (the core's security review, SR-L2, and the same race in
-//! `failed`): a capability acts only on the WABA's binding and the vault
-//! record it was made from. Run on memory (`tests/store.rs`) and on
-//! Postgres (`tests/live_postgres.rs`), through the core's `Authorizer`
-//! over the backend's records and a vault on its key/value store.
+//! `failed`; S2's security review, M1): a capability acts only on the
+//! WABA's binding and the vault record it was made from, through the
+//! core's [`Authorizer`] over the backend's records and a vault on its
+//! key/value store. Formerly the service's
+//! `tests/common/capability_suite.rs`.
 
 use std::sync::Arc;
 
@@ -15,28 +16,57 @@ use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_rs::core::secret::AccessToken;
 use meta_whatsapp_rs::core::store::KvStore;
 use meta_whatsapp_rs::core::testing::ScriptedTransport;
-use meta_whatsapp_server::api::admin::mint;
-use meta_whatsapp_server::auth::{Authorizer, Caller};
-use meta_whatsapp_server::model::{
+use time::OffsetDateTime;
+
+use crate::authz::{Authorizer, Caller};
+use crate::backend::Backend;
+use crate::keys::MintedKey;
+use crate::model::{
     ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, KeyOwner, KeyScope, Listing,
     NewApiKey, NumberBinding, NumberStatus, PageRequest, Scope, Tenant, TenantId, TenantStatus,
     WabaBinding,
 };
-use meta_whatsapp_server::store::{RecordStore, Store, StoreResult};
+use crate::store::{RecordStore, StoreResult};
+
+/// A new API key of `owner`'s, stored in `store`, as the service's admin
+/// API mints one (`meta_whatsapp_server::api::admin::mint`).
+async fn mint(
+    store: &dyn RecordStore,
+    owner: KeyOwner,
+    scopes: Vec<Scope>,
+    name: String,
+    expires_at: Option<OffsetDateTime>,
+) -> Result<(MintedKey, ApiKeyRecord), &'static str> {
+    for _ in 0..3 {
+        let minted = MintedKey::generate().map_err(|_| "no randomness")?;
+        let new = NewApiKey {
+            key_id: minted.key_id().to_owned(),
+            secret_sha256: minted.digest(),
+            owner: owner.clone(),
+            scopes: scopes.clone(),
+            name: name.clone(),
+            expires_at,
+        };
+        if let Some(record) = store.insert_key(&new).await.map_err(|_| "storage")? {
+            return Ok((minted, record));
+        }
+    }
+    Err("three key id collisions")
+}
 
 /// The tenant the capabilities are made for, and the one a WABA moves to.
 const A: &str = "cap-a";
 const B: &str = "cap-b";
 
 struct Setup {
-    store: Arc<dyn Store>,
+    store: Arc<dyn RecordStore>,
     vault: TokenVault,
     authz: Authorizer,
     caller: Caller,
 }
 
 impl Setup {
-    async fn new(store: Arc<dyn Store>, kv: Arc<dyn KvStore>) -> Self {
+    async fn new(store: Arc<dyn RecordStore>, kv: Arc<dyn KvStore>) -> Self {
         for tenant in [A, B] {
             let _ = store
                 .create_tenant(&TenantId::parse(tenant).unwrap(), "")
@@ -49,7 +79,7 @@ impl Setup {
             .transport(ScriptedTransport::new())
             .build()
             .unwrap();
-        let records: Arc<dyn RecordStore> = store.clone();
+        let records = store.clone();
         let authz = Authorizer::new(records, vault.clone(), client).unwrap();
         let (key, _) = mint(
             store.as_ref(),
@@ -88,7 +118,7 @@ impl Setup {
             )
             .await
             .unwrap();
-        assert_eq!(bound, meta_whatsapp_server::model::BindOutcome::Bound);
+        assert_eq!(bound, BindOutcome::Bound);
         if let Some(token) = token {
             self.vault
                 .store(
@@ -168,7 +198,8 @@ fn ids(case: &str) -> (WabaId, PhoneNumberId) {
 /// (`TokenVault::delete_if_unchanged`, and `forget` stopping when it
 /// deleted nothing) for the first and the third, the binding's epoch
 /// (`RecordStore::unbind_waba_if`) for the second.
-pub async fn forget_leaves_a_waba_attached_again(store: Arc<dyn Store>, kv: Arc<dyn KvStore>) {
+pub async fn forget_leaves_a_waba_attached_again(backend: &dyn Backend) {
+    let (store, kv) = (backend.records(), backend.kv());
     let s = Setup::new(store, kv).await;
     for target in [A, B] {
         for new_token in [Some("TOKEN-NEW"), None] {
@@ -233,7 +264,8 @@ pub async fn forget_leaves_a_waba_attached_again(store: Arc<dyn Store>, kv: Arc<
 /// `reconnect_required`. Decisive: the binding's epoch in
 /// `RecordStore::set_waba_status_if` (conditioning on the tenant alone
 /// fails the same-tenant case, on nothing both).
-pub async fn failed_leaves_a_waba_attached_again(store: Arc<dyn Store>, kv: Arc<dyn KvStore>) {
+pub async fn failed_leaves_a_waba_attached_again(backend: &dyn Backend) {
+    let (store, kv) = (backend.records(), backend.kv());
     let s = Setup::new(store, kv).await;
     for through_number in [true, false] {
         for target in [A, B] {
@@ -299,12 +331,8 @@ pub enum Act {
 /// Never the new binding's. Decisive (as far as the rounds meet): the
 /// conditions of `delete_if_unchanged`, `unbind_waba_if` and
 /// `set_waba_status_if`.
-pub async fn racing_a_reattach(
-    store: Arc<dyn Store>,
-    kv: Arc<dyn KvStore>,
-    act: Act,
-    rounds: usize,
-) {
+pub async fn racing_a_reattach(backend: &dyn Backend, act: Act, rounds: usize) {
+    let (store, kv) = (backend.records(), backend.kv());
     let s = Arc::new(Setup::new(store, kv).await);
     for round in 0..rounds {
         let target = if round % 2 == 0 { A } else { B };
@@ -316,7 +344,7 @@ pub async fn racing_a_reattach(
                 let owned = s.authz.owned_waba(&s.caller, waba.clone()).await.unwrap();
                 let s = s.clone();
                 tokio::spawn(async move {
-                    super::race_suite::jitter(round, 0).await;
+                    super::races::jitter(round, 0).await;
                     owned
                         .forget(&s.authz)
                         .await
@@ -328,7 +356,7 @@ pub async fn racing_a_reattach(
                 let owned = s.authz.owned_number(&s.caller, pn.clone()).await.unwrap();
                 let s = s.clone();
                 tokio::spawn(async move {
-                    super::race_suite::jitter(round, 0).await;
+                    super::races::jitter(round, 0).await;
                     let failed = owned.failed(&s.authz, &refused_token()).await;
                     assert_eq!(failed.code(), "reconnect_required");
                     Ok(())
@@ -338,7 +366,7 @@ pub async fn racing_a_reattach(
                 let owned = s.authz.owned_waba(&s.caller, waba.clone()).await.unwrap();
                 let s = s.clone();
                 tokio::spawn(async move {
-                    super::race_suite::jitter(round, 0).await;
+                    super::races::jitter(round, 0).await;
                     let failed = owned.failed(&s.authz, &refused_token()).await;
                     assert_eq!(failed.code(), "reconnect_required");
                     Ok(())
@@ -348,7 +376,7 @@ pub async fn racing_a_reattach(
         let attached = {
             let (s, waba, pn) = (s.clone(), waba.clone(), pn.clone());
             tokio::spawn(async move {
-                super::race_suite::jitter(round, 1).await;
+                super::races::jitter(round, 1).await;
                 // `forget` may have unbound it first.
                 let _ = s.store.unbind_waba(&waba).await.unwrap();
                 s.attach(target, &waba, &pn, Some("TOKEN-NEW")).await;
@@ -383,7 +411,7 @@ type Hook = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 /// binding it reads (`waba`): the binding moves between a capability's
 /// read of it and its read of the vault.
 struct MovesAfterRead {
-    inner: Arc<dyn Store>,
+    inner: Arc<dyn RecordStore>,
     hook: std::sync::Mutex<Option<Hook>>,
     /// Run after the next number read instead (`number`).
     after_number: std::sync::Mutex<Option<Hook>>,
@@ -521,10 +549,8 @@ impl RecordStore for MovesAfterRead {
 /// `Authorizer::open` and `Authorizer::owned_number`, and the tenant
 /// filter on `owned_number`'s WABA read.
 #[allow(clippy::too_many_lines)] // one scenario per capability, read top to bottom
-pub async fn a_capability_made_while_its_waba_moves_is_refused(
-    store: Arc<dyn Store>,
-    kv: Arc<dyn KvStore>,
-) {
+pub async fn a_capability_made_while_its_waba_moves_is_refused(backend: &dyn Backend) {
+    let (store, kv) = (backend.records(), backend.kv());
     let s = Arc::new(Setup::new(store.clone(), kv).await);
     let moving = Arc::new(MovesAfterRead {
         inner: store.clone(),
@@ -647,10 +673,8 @@ pub async fn a_capability_made_while_its_waba_moves_is_refused(
 /// binding read before the move. The new holder keeps its binding and its
 /// number's status. Decisive: `Authorizer::open` reading the binding again
 /// before it answers for the vault's read.
-pub async fn a_capability_made_before_the_new_token_is_stored_is_refused(
-    store: Arc<dyn Store>,
-    kv: Arc<dyn KvStore>,
-) {
+pub async fn a_capability_made_before_the_new_token_is_stored_is_refused(backend: &dyn Backend) {
+    let (store, kv) = (backend.records(), backend.kv());
     let s = Arc::new(Setup::new(store.clone(), kv).await);
     let moving = Arc::new(MovesAfterRead {
         inner: store.clone(),
@@ -733,10 +757,8 @@ pub async fn a_capability_made_before_the_new_token_is_stored_is_refused(
 /// The new holder keeps its binding and its token. Decisive: the binding
 /// read again before the vault's answer is used, whatever it is, in
 /// `Authorizer::open` and in `Authorizer::owned_number`.
-pub async fn a_vault_failure_while_its_waba_moves_is_answered_as_the_move(
-    store: Arc<dyn Store>,
-    kv: Arc<dyn KvStore>,
-) {
+pub async fn a_vault_failure_while_its_waba_moves_is_answered_as_the_move(backend: &dyn Backend) {
+    let (store, kv) = (backend.records(), backend.kv());
     let s = Arc::new(Setup::new(store.clone(), kv.clone()).await);
     // Another replica's vault: the same store, a key this one lacks.
     let other = TokenVault::new(kv, VaultKeys::new(VaultKey::generate("rolled").unwrap())).unwrap();
@@ -820,11 +842,12 @@ pub async fn a_vault_failure_while_its_waba_moves_is_answered_as_the_move(
     }
 }
 
-/// Everything above.
-pub async fn run(store: Arc<dyn Store>, kv: Arc<dyn KvStore>) {
-    forget_leaves_a_waba_attached_again(store.clone(), kv.clone()).await;
-    failed_leaves_a_waba_attached_again(store.clone(), kv.clone()).await;
-    a_capability_made_before_the_new_token_is_stored_is_refused(store.clone(), kv.clone()).await;
-    a_vault_failure_while_its_waba_moves_is_answered_as_the_move(store.clone(), kv.clone()).await;
-    a_capability_made_while_its_waba_moves_is_refused(store, kv).await;
+/// Every case above but the race ([`racing_a_reattach`], which
+/// [`super::races::run`] runs), on `backend`.
+pub async fn run(backend: &dyn Backend) {
+    forget_leaves_a_waba_attached_again(backend).await;
+    failed_leaves_a_waba_attached_again(backend).await;
+    a_capability_made_before_the_new_token_is_stored_is_refused(backend).await;
+    a_vault_failure_while_its_waba_moves_is_answered_as_the_move(backend).await;
+    a_capability_made_while_its_waba_moves_is_refused(backend).await;
 }

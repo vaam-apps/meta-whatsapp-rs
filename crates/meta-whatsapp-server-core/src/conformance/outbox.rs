@@ -1,14 +1,21 @@
-//! What every `EventStore` must do, run on memory (`tests/store.rs`) and on
-//! Postgres (`tests/live_postgres.rs`).
+//! [`Outbox`] (formerly the service's `tests/common/events_suite.rs`):
+//! each tenant's own stream of sequences, pages and their byte budget,
+//! dedup and its window, filters, purges. Every row with a tenant is
+//! guarded by its number's binding, bound first ([`bind`]): an outbox
+//! keeps a row's tenant only while that binding holds it. What crosses
+//! into the records (the guard's cases, a tenant's deletion) is
+//! [`super::invariants`].
 
 use std::time::Duration;
 
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
-use meta_whatsapp_server::model::TenantId;
-use meta_whatsapp_server::store::events::{
-    DedupWindow, EventQuery, GuardedBinding, NewEvent, RouteGuard,
+
+use crate::backend::Backend;
+use crate::model::TenantId;
+use crate::outbox::{
+    DedupWindow, EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard,
 };
-use meta_whatsapp_server::store::{Outbox as EventStore, Store};
+use crate::store::RecordStore;
 
 fn tenant(id: &str) -> TenantId {
     TenantId::parse(id).unwrap()
@@ -24,7 +31,7 @@ pub fn waba_of(pn: &str) -> String {
 /// when it does not exist. Every outbox keeps a row's tenant only while
 /// the binding the row's guard names still holds it (and only for a tenant
 /// that exists): [`row`] guards a tenant's row by its number.
-pub async fn bind(store: &dyn Store, tenant_id: &str, pn: &str) {
+pub async fn bind(store: &dyn RecordStore, tenant_id: &str, pn: &str) {
     let tenant = tenant(tenant_id);
     store.create_tenant(&tenant, "").await.unwrap();
     store
@@ -63,7 +70,8 @@ pub fn row(tenant_id: Option<&str>, event_type: &str, pn: &str, dedup: Option<&s
     }
 }
 
-fn query(tenant_id: &str, after: Option<i64>, limit: usize) -> EventQuery {
+/// A query of `tenant_id`'s stream after `after`, at most `limit` events.
+pub(super) fn query(tenant_id: &str, after: Option<i64>, limit: usize) -> EventQuery {
     EventQuery {
         tenant: tenant(tenant_id),
         after,
@@ -78,7 +86,13 @@ fn query(tenant_id: &str, after: Option<i64>, limit: usize) -> EventQuery {
 /// tenants and operator-only rows get; a page holds only its tenant's rows,
 /// in order, at most the limit, `more` when more follow; data comes back as
 /// written.
-pub async fn insert_and_page(store: &dyn EventStore) {
+pub async fn insert_and_page(backend: &dyn Backend) {
+    let outbox = backend.outbox();
+    let store = outbox.as_ref();
+    let records = backend.records();
+    bind(records.as_ref(), "suite-a", "11").await;
+    bind(records.as_ref(), "suite-a", "12").await;
+    bind(records.as_ref(), "suite-b", "21").await;
     let first = store
         .insert(&row(Some("suite-a"), "message_received", "11", None))
         .await
@@ -147,7 +161,11 @@ pub async fn insert_and_page(store: &dyn EventStore) {
 
 /// The store cuts a page to its byte budget: the events whose data fits,
 /// always the first, `more` after the cut.
-pub async fn page_budget(store: &dyn EventStore) {
+pub async fn page_budget(backend: &dyn Backend) {
+    let outbox = backend.outbox();
+    let store = outbox.as_ref();
+    let records = backend.records();
+    bind(records.as_ref(), "suite-s", "91").await;
     let sized = |len: usize| NewEvent {
         data: format!("{{\"pad\":\"{}\"}}", "x".repeat(len - 10)),
         ..row(Some("suite-s"), "history_synced", "91", None)
@@ -159,7 +177,7 @@ pub async fn page_budget(store: &dyn EventStore) {
         max_bytes,
         ..query("suite-s", after, 100)
     };
-    let cut = |page: &meta_whatsapp_server::store::events::EventPage| {
+    let cut = |page: &EventPage| {
         (
             page.events.iter().map(|e| e.sequence).collect::<Vec<_>>(),
             page.more,
@@ -180,7 +198,11 @@ pub async fn page_budget(store: &dyn EventStore) {
 
 /// A dedup key is stored once: the second insert writes nothing and draws
 /// no sequence.
-pub async fn dedup(store: &dyn EventStore) {
+pub async fn dedup(backend: &dyn Backend) {
+    let outbox = backend.outbox();
+    let store = outbox.as_ref();
+    let records = backend.records();
+    bind(records.as_ref(), "suite-d", "41").await;
     let key = format!("key-{}", super::unique());
     let first = store
         .insert(&row(Some("suite-d"), "message_received", "41", Some(&key)))
@@ -213,8 +235,12 @@ pub async fn dedup(store: &dyn EventStore) {
 /// under its own id while the earlier row keeps its sequence and id. A
 /// row with no window (a library key) holds its key for good. Decisive:
 /// the release of an ended window's key, and its bound.
-pub async fn dedup_window(store: &dyn EventStore) {
+pub async fn dedup_window(backend: &dyn Backend) {
     use time::{Duration, macros::datetime};
+    let outbox = backend.outbox();
+    let store = outbox.as_ref();
+    let records = backend.records();
+    bind(records.as_ref(), "suite-w", "51").await;
     let key = format!("keyless-{}", super::unique());
     // Far from the store's own clock, either way: only the window counts.
     let t0 = datetime!(2031-01-01 0:00 UTC);
@@ -266,7 +292,12 @@ pub async fn dedup_window(store: &dyn EventStore) {
 }
 
 /// `types` and `phone_number_id` narrow a page.
-pub async fn filters(store: &dyn EventStore) {
+pub async fn filters(backend: &dyn Backend) {
+    let outbox = backend.outbox();
+    let store = outbox.as_ref();
+    let records = backend.records();
+    bind(records.as_ref(), "suite-f", "61").await;
+    bind(records.as_ref(), "suite-f", "62").await;
     store
         .insert(&row(Some("suite-f"), "message_received", "61", None))
         .await
@@ -317,7 +348,7 @@ const GAP: Duration = Duration::from_millis(400);
 /// Purge past `older_than`: the outbox takes no lock of its own (roadmap
 /// S2: housekeeping holds one turn per round), so it never waits for
 /// another replica's.
-pub async fn purge_now(store: &dyn EventStore, older_than: Duration) -> u64 {
+async fn purge_now(store: &dyn Outbox, older_than: Duration) -> u64 {
     store.purge(older_than).await.unwrap()
 }
 
@@ -326,13 +357,18 @@ pub async fn purge_now(store: &dyn EventStore, older_than: Duration) -> u64 {
 /// halfway into the gap, when the purge is called. (A fixed limit flaked on
 /// a loaded CI: a stall between the newer rows' insert and the purge aged
 /// them past the limit too.)
-pub async fn purge_before(store: &dyn EventStore, newer: std::time::Instant, gap: Duration) -> u64 {
+async fn purge_before(store: &dyn Outbox, newer: std::time::Instant, gap: Duration) -> u64 {
     store.purge(newer.elapsed() + gap / 2).await.unwrap()
 }
 
 /// A purge cuts each stream by its own events' age: an older tenant's
 /// events go, a newer one's stay, and each stream records its own cut.
-pub async fn purge_is_per_stream(store: &dyn EventStore) {
+pub async fn purge_is_per_stream(backend: &dyn Backend) {
+    let outbox = backend.outbox();
+    let store = outbox.as_ref();
+    let records = backend.records();
+    bind(records.as_ref(), "suite-u", "96").await;
+    bind(records.as_ref(), "suite-v", "97").await;
     let old = store
         .insert(&row(Some("suite-u"), "message_received", "96", None))
         .await
@@ -358,7 +394,11 @@ pub async fn purge_is_per_stream(store: &dyn EventStore) {
 /// A purge removes a prefix of each stream and records it: the stream's
 /// `purged_through` moves, its high water stays, later inserts go on after
 /// it.
-pub async fn purge(store: &dyn EventStore) {
+pub async fn purge(backend: &dyn Backend) {
+    let outbox = backend.outbox();
+    let store = outbox.as_ref();
+    let records = backend.records();
+    bind(records.as_ref(), "suite-p", "71").await;
     let last = store
         .insert(&row(Some("suite-p"), "message_received", "71", None))
         .await
@@ -386,49 +426,17 @@ pub async fn purge(store: &dyn EventStore) {
     assert_eq!(sequences, [next]);
 }
 
-/// A deleted tenant's rows go with it: a tenant created later with the
-/// same id polls none of them, its stream records them purged (so an old
-/// cursor is expired) and its sequences go on after them. Deleting the
-/// tenant in `tenants` does it (the store of the same database).
-pub async fn tenant_deleted(store: &dyn EventStore, tenants: &dyn Store) {
-    for _ in 0..2 {
-        store
-            .insert(&row(Some("suite-t"), "message_received", "81", None))
-            .await
-            .unwrap()
-            .unwrap();
-    }
-    let id = tenant("suite-t");
-    tenants
-        .unbind_waba(&WabaId::new(waba_of("81")))
-        .await
-        .unwrap();
-    assert_eq!(
-        tenants.delete_tenant(&id).await.unwrap(),
-        meta_whatsapp_server::model::DeleteTenantOutcome::Deleted
-    );
-    bind(tenants, "suite-t", "81").await;
-    let page = store.page(&query("suite-t", None, 10)).await.unwrap();
-    assert!(page.events.is_empty(), "{:?}", page.events);
-    assert_eq!((page.purged_through, page.high_water), (2, 2));
-    let new = store
-        .insert(&row(Some("suite-t"), "message_received", "81", None))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(new, 3, "after the deleted tenant's");
-    let page = store.page(&query("suite-t", Some(2), 10)).await.unwrap();
-    let sequences: Vec<i64> = page.events.iter().map(|e| e.sequence).collect();
-    assert_eq!(sequences, [3]);
-}
-
 /// A purge of an earlier occurrence of a keyless event leaves the key with
 /// the later occurrence that took it over: a redelivery within the later
 /// one's window is still a duplicate. It purges every stream's rows older
 /// than half the gap before the later one: it runs last. Decisive: the earlier row giving the key up
 /// (else, in memory, purging it frees the key the later one holds).
-pub async fn purge_keeps_a_taken_key(store: &dyn EventStore) {
+pub async fn purge_keeps_a_taken_key(backend: &dyn Backend) {
     use time::{Duration as Span, macros::datetime};
+    let outbox = backend.outbox();
+    let store = outbox.as_ref();
+    let records = backend.records();
+    bind(records.as_ref(), "suite-k", "56").await;
     let key = format!("keyless-purged-{}", super::unique());
     let t0 = datetime!(2031-06-01 0:00 UTC);
     let at = |offset: Span| NewEvent {
@@ -457,256 +465,15 @@ pub async fn purge_keeps_a_taken_key(store: &dyn EventStore) {
     );
 }
 
-/// Roadmap S2, the port's requirement on every backend: an insert keeps
-/// its row's tenant only while the binding its `RouteGuard` names still
-/// holds it, checked with the insert, else the row is operator-only (in
-/// no tenant's stream). A number's binding moved to another tenant, a
-/// WABA's, a binding that began after the event's second, a guard naming
-/// another WABA than the number's, and a tenant with no guard: each
-/// operator-only; the same guards holding: the tenant's. Decisive: the
-/// check in each backend's insert (the memory one's `holds`).
-pub async fn the_route_guard_is_checked_with_the_insert(
-    store: &dyn EventStore,
-    tenants: &dyn Store,
-) {
-    use time::{Duration as Span, OffsetDateTime};
-    let polled = |tenant_id: &'static str| async move {
-        store
-            .page(&query(tenant_id, None, 100))
-            .await
-            .unwrap()
-            .events
-            .into_iter()
-            .map(|e| e.id)
-            .collect::<Vec<_>>()
-    };
-    let now = OffsetDateTime::now_utc();
-    // Holding: the number's guard, then the WABA's, dated after the
-    // binding began (and undated, above in `row`).
-    let kept = NewEvent {
-        route_guard: Some(RouteGuard {
-            binding: GuardedBinding::Number {
-                phone_number_id: PhoneNumberId::new("31"),
-                waba_id: WabaId::new(waba_of("31")),
-            },
-            not_after: Some(now + Span::HOUR),
-        }),
-        ..row(Some("suite-g"), "message_received", "31", None)
-    };
-    let waba_kept = NewEvent {
-        route_guard: Some(RouteGuard {
-            binding: GuardedBinding::Waba(WabaId::new(waba_of("31"))),
-            not_after: Some(now + Span::HOUR),
-        }),
-        ..row(Some("suite-g"), "template_status_updated", "31", None)
-    };
-    // Not holding: a binding that began after Meta dated the event (an
-    // hour before now: the binding is from this test's start).
-    let dated_before = NewEvent {
-        route_guard: Some(RouteGuard {
-            binding: GuardedBinding::Waba(WabaId::new(waba_of("31"))),
-            not_after: Some(now - Span::HOUR),
-        }),
-        ..row(Some("suite-g"), "template_status_updated", "31", None)
-    };
-    // Not holding: the number under another WABA than its binding's (one
-    // suite-g holds too: only the number's own binding refuses it).
-    let other_waba = NewEvent {
-        route_guard: Some(RouteGuard {
-            binding: GuardedBinding::Number {
-                phone_number_id: PhoneNumberId::new("31"),
-                waba_id: WabaId::new(waba_of("32")),
-            },
-            not_after: None,
-        }),
-        ..row(Some("suite-g"), "message_received", "31", None)
-    };
-    // Not holding: no guard at all.
-    let unguarded = NewEvent {
-        route_guard: None,
-        ..row(Some("suite-g"), "message_received", "31", None)
-    };
-    for event in [&kept, &waba_kept, &dated_before, &other_waba, &unguarded] {
-        store.insert(event).await.unwrap().unwrap();
-    }
-    assert_eq!(
-        polled("suite-g").await,
-        [kept.id.clone(), waba_kept.id.clone()],
-        "only the rows whose guard held"
-    );
-    // The WABA and its number move to suite-h between the routing (to
-    // suite-g) and the insert: operator-only, neither tenant's.
-    let waba = WabaId::new(waba_of("31"));
-    assert!(tenants.unbind_waba(&waba).await.unwrap());
-    tenants
-        .create_tenant(&TenantId::parse("suite-h").unwrap(), "")
-        .await
-        .unwrap();
-    assert_eq!(
-        tenants
-            .bind_waba(
-                &TenantId::parse("suite-h").unwrap(),
-                &waba,
-                &[PhoneNumberId::new("31")]
-            )
-            .await
-            .unwrap(),
-        meta_whatsapp_server::model::BindOutcome::Bound
-    );
-    let moved = row(Some("suite-g"), "message_received", "31", None);
-    let waba_moved = NewEvent {
-        route_guard: Some(RouteGuard {
-            binding: GuardedBinding::Waba(waba.clone()),
-            not_after: None,
-        }),
-        ..row(Some("suite-g"), "template_status_updated", "31", None)
-    };
-    for event in [&moved, &waba_moved] {
-        store.insert(event).await.unwrap().unwrap();
-    }
-    assert_eq!(
-        polled("suite-g").await,
-        [kept.id.clone(), waba_kept.id.clone()],
-        "suite-g lost the binding before the insert"
-    );
-    assert!(
-        polled("suite-h").await.is_empty(),
-        "suite-h got suite-g's events"
-    );
-    // The new holder's own row, guarded by its binding: its.
-    let theirs = row(Some("suite-h"), "message_received", "31", None);
-    store.insert(&theirs).await.unwrap().unwrap();
-    assert_eq!(polled("suite-h").await, [theirs.id]);
-}
-
-/// The route guard's date, checked through a number's guard too (on
-/// Postgres the number's branch of the insert has its own `attached_at`
-/// clause): a row guarded by the number whose WABA's binding began after
-/// Meta dated the event is operator-only; dated after the binding began,
-/// the tenant's. Decisive: the number branch's `attached_at` check in each
-/// backend's insert.
-pub async fn a_binding_begun_after_the_event_fails_the_number_guard(store: &dyn EventStore) {
-    use time::{Duration as Span, OffsetDateTime};
-    let guarded = |not_after: OffsetDateTime| NewEvent {
-        route_guard: Some(RouteGuard {
-            binding: GuardedBinding::Number {
-                phone_number_id: PhoneNumberId::new("35"),
-                waba_id: WabaId::new(waba_of("35")),
-            },
-            not_after: Some(not_after),
-        }),
-        ..row(Some("suite-n"), "message_received", "35", None)
-    };
-    let now = OffsetDateTime::now_utc();
-    let kept = guarded(now + Span::HOUR);
-    let dated_before = guarded(now - Span::HOUR);
-    for event in [&kept, &dated_before] {
-        store.insert(event).await.unwrap().unwrap();
-    }
-    let ids: Vec<String> = store
-        .page(&query("suite-n", None, 10))
-        .await
-        .unwrap()
-        .events
-        .into_iter()
-        .map(|e| e.id)
-        .collect();
-    assert_eq!(ids, [kept.id], "a number's binding begun after the event");
-}
-
-/// Roadmap S2, the security review's L3, on every backend: a row keeps its
-/// tenant only when the guarded WABA's binding began in a second before
-/// the event's. Dated in the binding's own second (its first instant, and
-/// its last millisecond), through a number's guard and through the
-/// WABA's: operator-only; dated the next second: the tenant's. Meta's
-/// dates are whole seconds, so an event of the binding's own second may be
-/// a previous holder's. Decisive: the strict comparison in each backend's
-/// insert, in each branch (memory: `began_by`; Postgres: `attached_at <
-/// to_timestamp(n)`).
-pub async fn a_binding_of_the_events_own_second_fails_the_guard(
-    store: &dyn EventStore,
-    tenants: &dyn Store,
-) {
-    use time::{Duration as Span, OffsetDateTime};
-    let waba = WabaId::new(waba_of("38"));
-    let began = tenants.waba(&waba).await.unwrap().unwrap().attached_at;
-    let second = OffsetDateTime::from_unix_timestamp(began.unix_timestamp()).unwrap();
-    let guarded = |by_number: bool, not_after: OffsetDateTime| NewEvent {
-        route_guard: Some(RouteGuard {
-            binding: if by_number {
-                GuardedBinding::Number {
-                    phone_number_id: PhoneNumberId::new("38"),
-                    waba_id: waba.clone(),
-                }
-            } else {
-                GuardedBinding::Waba(waba.clone())
-            },
-            not_after: Some(not_after),
-        }),
-        ..row(Some("suite-e"), "message_received", "38", None)
-    };
-    let mut kept = Vec::new();
-    for by_number in [true, false] {
-        for same_second in [second, second + Span::milliseconds(999)] {
-            store
-                .insert(&guarded(by_number, same_second))
-                .await
-                .unwrap()
-                .unwrap();
-        }
-        let next_second = guarded(by_number, second + Span::SECOND);
-        store.insert(&next_second).await.unwrap().unwrap();
-        kept.push(next_second.id);
-    }
-    let ids: Vec<String> = store
-        .page(&query("suite-e", None, 10))
-        .await
-        .unwrap()
-        .events
-        .into_iter()
-        .map(|e| e.id)
-        .collect();
-    assert_eq!(
-        ids, kept,
-        "only the rows dated after the binding's own second"
-    );
-}
-
-/// Everything above, in an order where the purge comes last. `tenants` is
-/// the service's store on the same backend (the tenants and bindings the
-/// rows name).
-pub async fn run(store: &dyn EventStore, tenants: &dyn Store) {
-    for (tenant_id, pn) in [
-        ("suite-a", "11"),
-        ("suite-a", "12"),
-        ("suite-b", "21"),
-        ("suite-d", "41"),
-        ("suite-w", "51"),
-        ("suite-k", "56"),
-        ("suite-f", "61"),
-        ("suite-f", "62"),
-        ("suite-p", "71"),
-        ("suite-t", "81"),
-        ("suite-s", "91"),
-        ("suite-u", "96"),
-        ("suite-v", "97"),
-        ("suite-g", "31"),
-        ("suite-g", "32"),
-        ("suite-n", "35"),
-        ("suite-e", "38"),
-    ] {
-        bind(tenants, tenant_id, pn).await;
-    }
-    the_route_guard_is_checked_with_the_insert(store, tenants).await;
-    a_binding_begun_after_the_event_fails_the_number_guard(store).await;
-    a_binding_of_the_events_own_second_fails_the_guard(store, tenants).await;
-    insert_and_page(store).await;
-    page_budget(store).await;
-    dedup(store).await;
-    dedup_window(store).await;
-    filters(store).await;
-    tenant_deleted(store, tenants).await;
-    purge_is_per_stream(store).await;
-    purge(store).await;
-    purge_keeps_a_taken_key(store).await;
+/// Every case above, on `backend`, empty, the purges last: they cut every
+/// stream's older rows, not only their own case's.
+pub async fn run(backend: &dyn Backend) {
+    insert_and_page(backend).await;
+    page_budget(backend).await;
+    dedup(backend).await;
+    dedup_window(backend).await;
+    filters(backend).await;
+    purge_is_per_stream(backend).await;
+    purge(backend).await;
+    purge_keeps_a_taken_key(backend).await;
 }

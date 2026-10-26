@@ -62,6 +62,9 @@ utoipa-axum.workspace = true
 
 [dev-dependencies]
 meta-whatsapp-rs = { workspace = true, features = ["reqwest", "memory", "postgres", "axum", "testing"] }
+# tests/store.rs and tests/live_postgres.rs: both backends pass the core's
+# conformance suites (`meta_whatsapp_server_core::conformance`).
+meta-whatsapp-server-core = { workspace = true, features = ["conformance"] }
 http-body-util.workspace = true
 pretty_assertions.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync", "test-util"] }

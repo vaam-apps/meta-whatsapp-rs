@@ -3,15 +3,10 @@
 //! `ScriptedTransport`.
 #![allow(dead_code)] // each test binary uses a different subset
 
-pub mod backend_suite;
-pub mod capability_suite;
 pub mod capture;
-pub mod events_suite;
 pub mod meta;
 pub mod moving;
-pub mod race_suite;
 pub mod scenarios;
-pub mod store_suite;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

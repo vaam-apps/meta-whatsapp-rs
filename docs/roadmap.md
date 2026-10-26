@@ -261,7 +261,7 @@ and `store-postgres`.
     reaches the tenant of a first onboarding, and no tenant after a
     move; a `190` from a capability made before a same-tenant refresh
     does not mark the numbers `reconnect_required`.
-- [ ] **S3. Conformance into core** (`meta-whatsapp-server-core`,
+- [x] **S3. Conformance into core** (`meta-whatsapp-server-core`,
   `meta_whatsapp_server_core::conformance`, a feature, like the
   library's `store::conformance`, run over a `&dyn Backend`): the store
   and events suites moved out of the server's tests, the cross-port
@@ -276,6 +276,44 @@ and `store-postgres`.
     binding invariant; removing the stream purge from `delete_tenant`
     fails on memory and, live, on Postgres; a `Backend` whose `kv()`
     returns a new store on each call fails the same-data case.
+  - **Landed:** `meta_whatsapp_server_core::conformance` behind the
+    feature `conformance`: `conformance::run` takes a factory of empty
+    backends and runs, each on a backend of its own, `records` (the
+    server's store suite: tenants, keys, bindings, idempotency, S2's
+    referential rules, byte order), `outbox` (its events suite's
+    single-port cases), `invariants` (what crosses ports: its backend
+    suite's same-data case, deleting a tenant purges its stream, the
+    three `RouteGuard` cases, and each tenant's inserts committed in
+    sequence order under eight concurrent writers, a case new on every
+    backend, which was a Postgres-only HTTP test), `capabilities` (its
+    capability suite, through the core's `Authorizer`) and `races` (its
+    race suite and `racing_a_reattach`). The server's
+    `tests/common/*_suite.rs` are gone; `tests/store.rs` runs the whole
+    of it on memory, and `tests/live_postgres.rs` live on Postgres
+    (`live_postgres_backend_passes_the_conformance_suite`, a schema per
+    suite). The decisive cases, by mutation on memory: without the
+    memory outbox's re-check, `invariants::the_route_guard_is_checked_with_the_insert`
+    fails; without `forget_tenant` in `MemoryStore::delete_tenant`,
+    `invariants::deleting_a_tenant_purges_its_stream`; with a `kv()`
+    made anew per call, `invariants::every_accessor_hands_out_the_same_data`.
+    Kept as tests: a backend whose `kv()` is new on each call fails the
+    same-data case and the whole suite, an outbox that ignores the route
+    guard fails the guard's cases and `invariants::run` (L4), and three
+    outboxes that bend the guard's date (dropped, dropped for a number's
+    guard, read a second late) each fail the whole suite on the case of
+    their own, so that a guard case taken out of `run` fails a test. Its
+    sabotage review ran the live half on a Postgres 16 of its own: it
+    passes, and there removing the `purged_through` update from
+    `delete_tenant` fails `deleting_a_tenant_purges_its_stream`, a
+    sequence drawn in a transaction of its own fails the commit-order
+    case (on memory too: a row stored after an await), and dropping the
+    WABA from a number's guard, or reading a guard's date a second late,
+    fails the guard's cases. The Postgres-only tests (locks across
+    sessions, two purges at once, a deadlocked insert) stay in the
+    server's tests. Left: a case taken out of `run` other than the
+    same-data and guard cases (the deletion's purge, commit order, the
+    records', outbox's, capabilities' and races' cases) fails no test,
+    as no permanent backend breaks only it.
 - [ ] **S4. Composed only through the bundle** (`meta-whatsapp-server`,
   `meta-whatsapp-server-core`): `serve_with(config, Arc<dyn Backend>)`;
   `AppState::from_backend(Arc<dyn Backend>, …)` building the inbound
