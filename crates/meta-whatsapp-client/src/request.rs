@@ -490,7 +490,9 @@ impl GraphRequest {
     /// Re-issues *this* request with an `after` parameter rather than
     /// following the absolute `paging.next` URL, so credentials are never
     /// sent anywhere but the configured endpoint. Only for GET requests
-    /// (anything else yields one validation error).
+    /// (anything else yields one validation error). A page that does not
+    /// decode is reported without its body or serde's message: Meta's
+    /// paging links can carry the access token.
     pub fn paginate<T>(self) -> impl Stream<Item = Result<T>> + Send + 'static
     where
         T: DeserializeOwned + Send + 'static,
@@ -532,7 +534,10 @@ impl GraphRequest {
                 if let Some(after) = &st.after {
                     req = req.query("after", after);
                 }
-                match req.send::<Page<serde_json::Value>>().await {
+                match req
+                    .send_withheld::<Page<serde_json::Value>>(PAGING_WITHHELD)
+                    .await
+                {
                     Ok(page) => {
                         let next = page.next_cursor().map(str::to_owned);
                         // Stop on the last page, and on any cursor already
@@ -847,6 +852,11 @@ pub(crate) fn withheld_decode_error(context: &'static str, why: impl fmt::Displa
 
 /// The body snippet of a decode error for a response that names people.
 const RECIPIENT_WITHHELD: &[u8] = b"(withheld: the response names the recipient)";
+
+/// The body snippet of a decode error for a response that can carry
+/// `paging` links: Meta's `next` and `previous` URLs can embed the access
+/// token the request was sent with.
+pub(crate) const PAGING_WITHHELD: &[u8] = b"(withheld: paging links can carry the access token)";
 
 fn withheld_decode_error_as(
     context: &'static str,

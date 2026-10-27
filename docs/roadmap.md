@@ -1099,13 +1099,43 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** exact JSON from the published reference; a
     `whatsapp_account` webhook parses into its event, and one with an
     unknown shape into `Unknown { raw }`.
-- [ ] **L17. Catalog and product reads** (`meta-whatsapp-client`,
+- [x] **L17. Catalog and product reads** (`meta-whatsapp-client`,
   `client::commerce`; row 103), against Meta's Catalog API, whose docs
   sit outside the WhatsApp docs (not mirrored: read them first).
   - **Kind:** additive.
   - **After:** nothing.
   - **Decisive:** a paged product list follows its cursors to the end
     with no repeat.
+  - **Landed:** row 103 done in the library; the service's side stays a
+    gap (M5g). `Waba::product_catalogs` reads the catalog connected to a
+    WABA (`GET /{WABA_ID}/product_catalogs`); `Client::catalog` gives a
+    `Catalog` (`get`, `products`/`products_stream`,
+    `product_sets`/`product_sets_stream`), `Client::product_set` a
+    `ProductSet` (`get`, `products`/`products_stream`) and
+    `Client::product` a `Product` (`get`). The lists take their cursors
+    in `ListProducts`, `ListSetProducts` and `ListProductSets`, next to
+    the edges' documented filters (a JSON `filter` rule,
+    `return_only_approved_products`, `error_priority`, `error_type`,
+    `bulk_pagination`, `summary`; for sets `ancestor_id`,
+    `has_children`, `parent_id`, `retailer_id`); the streams follow
+    `paging.cursors.after` until a page comes without `next`. Every id
+    in a path is checked as digits before any request. The decisive
+    test (`products_stream_follows_three_pages_to_the_end_with_no_repeat`)
+    walks three pages, asserting each request's query and `after`, five
+    distinct products and no fourth request after the page without
+    `next`; reusing the first cursor, dropping `after` or following
+    `cursors.after` past the last page each fail it. Read from Meta's
+    Marketing API reference (`product-catalog`, its `products` and
+    `product_sets` edges, `product-set` and its `products` edge) and
+    the Graph API reference (`product-item`,
+    `whatsapp-business-account/product_catalogs`, `results`) on
+    2026-10-27. Not wrapped: every catalog write (creating, updating or
+    deleting catalogs, products and sets, and connecting a catalog to a
+    WABA); a product's `catalog_id`, `image_height`, `image_width`,
+    `override_country` and `override_language` parameters, which the
+    reference names without saying what they do. `ProductItemId` and
+    `ProductSetId` are `meta_whatsapp_core::ids` newtypes, re-exported
+    by `client::commerce`.
 - [ ] **L18. A typed Flow JSON builder** (`meta-whatsapp-client`,
   `client::flows`; row 63).
   - **Kind:** additive.

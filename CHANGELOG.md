@@ -209,6 +209,38 @@ stored data, the owner's).
 
 ### Added
 
+- **Catalog and product reads** (`meta_whatsapp_client::commerce`,
+  roadmap L17, parity row 103), through Meta's Catalog API, whose pages
+  sit outside the WhatsApp docs (read on 2026-10-27).
+  `Waba::product_catalogs(fields)` reads the catalog connected to a WABA
+  (`GET /{WABA_ID}/product_catalogs`). `Client::catalog(id)` gives a
+  `Catalog`: `get(fields)` (`GET /{product_catalog_id}`, a
+  `CatalogInfo`), `products(&ListProducts)` and
+  `product_sets(&ListProductSets)`, one `Page` each, and their
+  `products_stream` and `product_sets_stream`, which follow
+  `paging.cursors.after` until a page comes without `next` (an empty
+  page with `next` is crossed) and refuse a query that carries a cursor.
+  `Client::product_set(id)` gives a `ProductSet` (`get`, a
+  `ProductSetInfo`; `products(&ListSetProducts)` and `products_stream`),
+  and `Client::product(id)` a `Product` (`get`, a `ProductInfo`).
+  `ListProducts` and `ListSetProducts` share `ProductFilters` (`fields`,
+  a JSON `filter` rule sent JSON-encoded, `error_priority`,
+  `error_type`, `bulk_pagination`, `summary`, `limit`);
+  `ListProducts` adds `return_only_approved_products`, and
+  `ListProductSets` takes `ancestor_id`, `has_children`, `parent_id`
+  and `retailer_id`. `ProductInfo` types the fields a WhatsApp
+  integrator needs (`retailer_id`, `name`, `price` and `sale_price` as
+  Meta's strings, `availability`, `condition`, `review_status`,
+  `visibility`, `errors`, …) and keeps any other field requested in
+  `other`; its enums keep unknown values in `Other`. Every id in a path
+  (catalog, product set, product item, WABA, and the `ancestor_id` and
+  `parent_id` filters) is checked as digits before any request. New ids
+  `meta_whatsapp_core::ids::ProductItemId` and `ProductSetId`
+  (re-exported by `commerce`). A read whose body does not decode keeps
+  the body out of the error, as does a page any stream fetches
+  (`GraphRequest::paginate`): Meta's `paging.next` links can carry
+  the access token. Catalog writes, and connecting a catalog to a
+  WABA, are not wrapped.
 - **Payload encryption, connection status and webhook URL on a number**
   (`meta_whatsapp_client::phone_numbers`, roadmap L26, parity row 156):
   `PhoneNumber::enable_payload_encryption(&ClientEncryptionKey)` sends
