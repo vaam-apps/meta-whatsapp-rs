@@ -270,6 +270,39 @@ string_enum! {
     }
 }
 
+string_enum! {
+    /// `connection_status` of `POST /{Phone-Number-ID}`
+    /// (`WhatsAppBusinessAccountToNumberStatus`, "Connection status between
+    /// WhatsApp Business Account and phone number"). The reference lists
+    /// the values and says nothing of which ones a business may set, or
+    /// what setting one does. Reading a number's status is
+    /// [`PhoneNumberInfo::status`], a different, older list.
+    pub enum ConnectionStatus {
+        /// `CONNECTED`.
+        Connected => "CONNECTED",
+        /// `DISCONNECTED`.
+        Disconnected => "DISCONNECTED",
+        /// `PENDING`.
+        Pending => "PENDING",
+        /// `FLAGGED`.
+        Flagged => "FLAGGED",
+        /// `RESTRICTED`.
+        Restricted => "RESTRICTED",
+        /// `RATE_LIMITED`.
+        RateLimited => "RATE_LIMITED",
+        /// `MESSAGING_LIMIT_TIER_0`.
+        MessagingLimitTier0 => "MESSAGING_LIMIT_TIER_0",
+        /// `MESSAGING_LIMIT_TIER_1`.
+        MessagingLimitTier1 => "MESSAGING_LIMIT_TIER_1",
+        /// `MESSAGING_LIMIT_TIER_2`.
+        MessagingLimitTier2 => "MESSAGING_LIMIT_TIER_2",
+        /// `MESSAGING_LIMIT_TIER_3`.
+        MessagingLimitTier3 => "MESSAGING_LIMIT_TIER_3",
+        /// `MESSAGING_LIMIT_TIER_4`.
+        MessagingLimitTier4 => "MESSAGING_LIMIT_TIER_4",
+    }
+}
+
 /// `{"id": "..."}` returned when a phone number is created on a WABA.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[non_exhaustive]
@@ -347,6 +380,50 @@ mod tests {
                 .and_then(|w| w.application)
                 .as_deref(),
             Some("https://example.com/webhook")
+        );
+    }
+
+    #[test]
+    fn connection_status_writes_every_documented_value() {
+        // reference/whatsapp-business-phone-number/whatsapp-business-account-phone-number-api,
+        // `WhatsAppBusinessAccountToNumberStatus`.
+        let all = [
+            (ConnectionStatus::Connected, "CONNECTED"),
+            (ConnectionStatus::Disconnected, "DISCONNECTED"),
+            (ConnectionStatus::Pending, "PENDING"),
+            (ConnectionStatus::Flagged, "FLAGGED"),
+            (ConnectionStatus::Restricted, "RESTRICTED"),
+            (ConnectionStatus::RateLimited, "RATE_LIMITED"),
+            (
+                ConnectionStatus::MessagingLimitTier0,
+                "MESSAGING_LIMIT_TIER_0",
+            ),
+            (
+                ConnectionStatus::MessagingLimitTier1,
+                "MESSAGING_LIMIT_TIER_1",
+            ),
+            (
+                ConnectionStatus::MessagingLimitTier2,
+                "MESSAGING_LIMIT_TIER_2",
+            ),
+            (
+                ConnectionStatus::MessagingLimitTier3,
+                "MESSAGING_LIMIT_TIER_3",
+            ),
+            (
+                ConnectionStatus::MessagingLimitTier4,
+                "MESSAGING_LIMIT_TIER_4",
+            ),
+        ];
+        for (status, wire) in all {
+            assert_eq!(serde_json::to_value(&status).unwrap(), wire);
+            let back: ConnectionStatus = serde_json::from_value(wire.into()).unwrap();
+            assert_eq!(back, status);
+        }
+        let other: ConnectionStatus = serde_json::from_str("\"MESSAGING_LIMIT_TIER_5\"").unwrap();
+        assert_eq!(
+            other,
+            ConnectionStatus::Other("MESSAGING_LIMIT_TIER_5".into())
         );
     }
 

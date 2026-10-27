@@ -209,6 +209,41 @@ stored data, the owner's).
 
 ### Added
 
+- **Payload encryption, connection status and webhook URL on a number**
+  (`meta_whatsapp_client::phone_numbers`, roadmap L26, parity row 156):
+  `PhoneNumber::enable_payload_encryption(&ClientEncryptionKey)` sends
+  `{"payload_encryption": {"status": "enabled", "client_encryption_key":
+  …}}` to `POST /{PHONE_NUMBER_ID}/settings`, and
+  `disable_payload_encryption()` the status alone; `settings()` now
+  reads the `payload_encryption` answer as a `PayloadEncryption`
+  (`status`, an `Option<PayloadEncryptionStatus>`, so that an answer
+  without it still parses, local storage included;
+  `client_encryption_key_fingerprint`; `cloud_encryption_key`, a
+  `CloudEncryptionKey`), and a `settings()` answer that fails to decode
+  gives an `Error::Decode` whose body snippet and message are withheld.
+  `ClientEncryptionKey::new` refuses an empty or non-base64 key (the
+  standard alphabet, strictly), and an obvious private key (a PEM
+  `PRIVATE KEY` block, or DER opening with a private key's version
+  `INTEGER`: PKCS#1, PKCS#8, SEC1), with an `Error::Validation` that
+  does not echo it; the key has no `Display` or `Serialize`, and its
+  `Debug`, like `CloudEncryptionKey`'s (which has no `Display` either),
+  shows only a length. `set_connection_status(&ConnectionStatus)` (the
+  schema's eleven values, unknown ones kept in `Other`) and
+  `set_webhook_url(url)` (an absolute `https` URI without user info or
+  a fragment, with no whitespace or control character, sent exactly as
+  given; checked before any request) post the number's own
+  `connection_status` and `webhook_url` fields, one per call. These
+  four setters are **not replayed after a timeout** (or any error that
+  may have reached Meta), unlike the other values set on a number: only
+  what Meta provably refused (`Error::may_resend`: a throttle,
+  maintenance) is retried; after an `Err`, read `settings()` back before
+  enabling or disabling encryption again.
+  Meta documents all of them by schema only, without an example: the
+  bodies follow the schemas, and the module docs list what the pages
+  leave out (the key's format, how the fingerprint is computed, what the
+  cloud key is, which connection statuses a business may set and to
+  what effect, how `webhook_url` relates to the callback override).
+
 - **A check for a blank verify token** (`meta_whatsapp_webhooks`, roadmap
   L20d, decided as OPEN_QUESTIONS #16, now closed):
   `WebhookHandler::check()` returns a `ConfigError` when the handler's
@@ -439,8 +474,9 @@ stored data, the owner's).
   Pages without examples (the number's `POST` fields, compliance
   information, bot details) are typed from their schemas, as the module
   docs say. Not offered: withdrawing an Official Business Account
-  application (no documented field), and the payload-encryption settings
-  and the number's `connection_status` and `webhook_url` (roadmap L26).
+  application (no documented field), and, until roadmap L26 (above), the
+  payload-encryption settings and the number's `connection_status` and
+  `webhook_url`.
   The username errors `147001`–`147005` are `ErrorKind::Unknown` for
   now.
 - **Window events, thread ownership and identity links in the CMS inbox**
@@ -1149,6 +1185,19 @@ stored data, the owner's).
   template with two cards, then send it with as many as you need, up
   to 10. Templates already created are untouched: sending or editing
   one with 3–10 cards is checked as before.
+
+- **Breaking — `PhoneNumberSettings::payload_encryption` is typed**
+  (`meta_whatsapp_client::phone_numbers`, roadmap L26): an
+  `Option<PayloadEncryption>` instead of an `Option<serde_json::Value>`
+  (see Added). Code that read the raw JSON reads the fields instead
+  (`status`, `client_encryption_key_fingerprint`,
+  `cloud_encryption_key`); serializing `PhoneNumberSettings` writes the
+  same keys as before. Every field of `PayloadEncryption` is optional,
+  `status` too although the schema requires it, so any object Meta
+  sends there still parses; a `payload_encryption` that is not an
+  object, or a field of the wrong JSON type, now fails `settings()`
+  where the raw JSON did not. No code in this repository read the
+  field.
 
 - **Breaking (the service's crates) — the service is composed from a
   `Backend` alone** (roadmap S4, parity row 112; `meta-whatsapp-server`

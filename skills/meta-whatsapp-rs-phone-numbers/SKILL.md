@@ -5,7 +5,7 @@ description: "Managing WhatsApp business phone numbers and their WABA with meta-
 
 # meta-whatsapp-rs-phone-numbers
 
-> **Verified against meta-whatsapp-rs 8a157bb10a1677660c84555537cf35246da9562e (2026-09-27).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 01d7f4ff63d16d81b1a10711b9a1db517ab2aa91 (2026-10-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/numbers.rs](examples/numbers.rs), compiled and
 tested by meta-whatsapp-rs's own gate.
@@ -113,9 +113,8 @@ match number.set_username(username, None).await {
 }
 ```
 
-- `set_username` checks the format first (`validate_username`); its
-  errors `147001`–`147005` are `ErrorKind::Unknown` for now (branch on
-  the `code` of `Error::graph`, never on the message). `username()`,
+- `set_username` checks the format first (`validate_username`); branch on
+  the `code` of `Error::graph` (never the message). `username()`,
   `username_suggestions()` (reserved for you), `delete_username()`.
 - `delete_contact_book_entry(&bsuid)` erases a user's entry in the
   portfolio's contact book at Meta: no undo, never called for you (erasure: `meta-whatsapp-rs-production`).
@@ -125,9 +124,12 @@ match number.set_username(username, None).await {
   before processing it (`Error::may_resend`); 30 days after a rejection.
 - Also on the number: `set_search_visibility`, `set_security_notifications`,
   `set_notify_user_change_number`, `business_compliance_info`,
-  `set_business_compliance_info` (India), `health_status()` (a WABA's
-  too; the portfolio's own: `health.entity(&HealthEntityType::Business)`);
-  bot details: `Client::waba_bot(bot_id).get(&[])`.
+  `set_business_compliance_info` (India), `health_status()` (a WABA's too; the
+  portfolio's own: `health.entity(&HealthEntityType::Business)`); bot details: `Client::waba_bot(bot_id).get(&[])`.
+- Schema only at Meta, and never replayed after a timeout (check before resending):
+  `set_connection_status`, `set_webhook_url` (`https`, sent as given; its link to the override is undocumented),
+  `enable_payload_encryption(&ClientEncryptionKey::new(key)?)` (a base64 public key; a private one is refused),
+  `disable_payload_encryption()`; `settings()` reads back `status` and `client_encryption_key_fingerprint`.
 
 ## Pitfalls
 
@@ -145,13 +147,11 @@ match number.set_username(username, None).await {
   attempt
   ([OPEN_QUESTIONS.md #4](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants),
   decided on 2026-09-26).
-- Not wrapped: payload-encryption settings (roadmap L26), WABA creation,
-  system users, withdrawing an Official Business Account application (no
-  documented field).
+- Not wrapped: WABA creation, system users, withdrawing an Official
+  Business Account application (no documented field).
 - Nothing stores the synced contacts (`smb_app_state_sync`); the inbox
   records the synced history and the app's echoes (`meta-whatsapp-rs-cms-inbox`).
-  ~~The inbox does not record coexistence echoes or synced history~~:
-  true until a3582b8 (2026-09-24).
+  ~~The inbox does not record coexistence echoes or synced history~~: true until a3582b8 (2026-09-24).
 
 ## Related skills
 
