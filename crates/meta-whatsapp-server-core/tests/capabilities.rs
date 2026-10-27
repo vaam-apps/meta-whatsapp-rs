@@ -19,6 +19,7 @@
 #[path = "capabilities/support.rs"]
 mod support;
 
+use meta_whatsapp_server_core::admin::Admin;
 use support::*;
 
 /// The control: each `Authorizer` accepts what it made, and the service
@@ -287,4 +288,23 @@ fn a_client_carrying_a_token_is_refused() {
         !error.to_string().contains("EAAG-default-token"),
         "the refusal never quotes the token: {error}"
     );
+}
+
+/// The admin services (roadmap S5a) open only for an `AdminCaller` their
+/// own `Authorizer` made: `Admin::new` with the forger's is `403
+/// forbidden`, and the service's records and vault are neither read nor
+/// written. The control: the service's own admin opens them. Decisive:
+/// `Admin::new`'s `admit_admin`, the only check most of the services
+/// pass (creating a tenant, minting a key, revoking one, reading a
+/// binding reach no capability method that would ask it again).
+#[tokio::test]
+async fn the_admin_services_refuse_another_authorizers_admin() {
+    let (service, forger) = service_and_forger().await;
+    let foreign = forger.admin().await;
+    let before = Before::of(&service);
+    let error = Admin::new(&service.authz, &foreign).unwrap_err();
+    assert_forbidden(&error, "Admin::new");
+    before.unchanged(&service, "Admin::new").await;
+    let own = service.admin().await;
+    assert!(Admin::new(&service.authz, &own).is_ok());
 }

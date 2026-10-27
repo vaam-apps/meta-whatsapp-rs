@@ -389,7 +389,7 @@ and `store-postgres`.
     `DATABASE_URL` until the configuration picks among the backends
     compiled in (design §8.3: S7 composes them by Cargo features, and
     S18 is the first to need the choice).
-- [ ] **S5a. Admin services into core** (`meta-whatsapp-server-core`;
+- [x] **S5a. Admin services into core** (`meta-whatsapp-server-core`;
   S5a–S5e move the operation services out of the axum handlers,
   returning domain values and `ServiceError`, so both API adapters stay
   thin; hardest logic first): deleting a tenant (the offboarding loop),
@@ -401,6 +401,75 @@ and `store-postgres`.
     tenant holds is refused with nothing stored, subscribed or shared;
     the admin routes' tests pass unchanged; `openapi/v1.json`
     byte-identical.
+  - **Landed:** `meta_whatsapp_server_core::admin`: every `/v1/admin`
+    operation is a method of `admin::Admin`, which `Admin::new(&Authorizer,
+    &AdminCaller)` opens only once the `Authorizer` admits the admin
+    (`403 forbidden` for another's, nothing read), over that
+    `Authorizer`'s records, vault and tokenless client (the records
+    through a crate-private `Authorizer::records`, so no adapter reaches
+    them, and what a service writes is what the order reads; the core's
+    UI case `authorizer_records` pins it, E0624, and fails with the
+    method made `pub`). The
+    operations take the request's values as it carried them (ids,
+    labels, an RFC 3339 expiry, `admin::TenantsInput`, `admin::KeyRequest`),
+    validate them in the order and on the fields the handlers did, and
+    answer domain values (`Tenant`, `Listing`, `admin::Minted`,
+    `admin::Attached`, `admin::HeldWaba`, `VaultRotation`) or a
+    `ServiceError`: the tenant CRUD, the tenant's deletion (five rounds,
+    a moved WABA skipped), the key mints, listings and revocations,
+    the attach (D4 on the claimed id before Meta, the listing capped at
+    `admin::MAX_WABA_NUMBERS`, bind, `Authorizer::store_token`, subscribe
+    with `step` and `resumable`), the binding's read, the unbind
+    (`Admin::unbind_waba`, and `Admin::unbind` on a binding as read) and
+    the vault's rotation. Their audit events are the core's
+    (`server_core::audit`, target `audit`, the same fields; the server's
+    `telemetry::audit`, `tenant_audit` and `Subject` re-export them), and
+    a failed Graph call is told to an `observe::Observer`, which the
+    server's `Metrics` implements (`wa_server_graph_errors_total`, the
+    same codes as before, the attach's listing counted before its `422`
+    remap). `admin::mint`, `admin::MintError`, `admin::allowed_tenants`
+    and `admin::is_valid_name` need no capability: the command line's
+    bootstrap uses them on the database directly (and the server's
+    `api::admin::mint`, `MintError` and `MAX_WABA_NUMBERS` re-export
+    them); `OwnedWaba::forget_or_busy` is the core's too. The handlers
+    parse, call and map; `auth::OwnedWaba::unbind_for_admin` calls
+    `Admin::unbind`. Decisive: `conformance::admin` (in `conformance::run`)
+    attaches a WABA through the service, then has another tenant attach
+    it, with a `ScriptedTransport` and no HTTP layer: refused `409
+    waba_owned_by_another_tenant` before Meta is asked (no request
+    sent), and, for a WABA its holder binds while Meta lists its numbers,
+    by the binding's own D4 (the listing the only request: no
+    subscription); either way the vault's record is the holder's at the
+    same version, the bindings and numbers unchanged, and the claimant
+    holds nothing. It runs on a memory backend of its own in the core's
+    `tests/admin.rs`, on the service's `MemoryBackend` (`tests/store.rs`)
+    and live on Postgres (`tests/live_postgres.rs`). By mutation, each
+    fails it on the core's backend and on memory: the check before Meta
+    skipped, or moved after the vault store (`502 service_unavailable`:
+    a listing sent); the bind moved after the store, alone or with the
+    check (the holder's own attach answers `503`: the store's
+    confirmation finds no binding); the bind's refusal ignored (`503`,
+    the store's confirmation the only guard left; also live on
+    Postgres), a mutation the admin routes' HTTP tests do not catch;
+    both checks skipped. The admin routes' tests pass unchanged, and
+    `openapi/v1.json` is byte-identical (the handlers' documentation and
+    annotations untouched). Left: the server's source scan of error
+    codes counts fewer (16, its floor lowered from 20; the core's raised
+    to 30); an expiry is compared with the system clock, not the
+    `Authorizer`'s, as before; the command line's key listing and
+    revocation (any kind of key, every page) stay its own, as no route
+    does either; the log lines that moved carry the core's module as
+    their target (a `RUST_LOG` directive naming the crate still matches
+    them, one naming the server's module does not: CHANGELOG). The
+    sabotage review pinned by test what no test held and a mutation
+    showed: each admin change's own audit event, its fields, and none
+    on a refusal or a failure (the service's `tests/admin_audit.rs`);
+    Meta's failures counted by code, the attach's listing among them
+    (`the_admin_operations_count_metas_failures`); `Admin::new` refusing
+    another `Authorizer`'s admin with nothing read (the core's
+    `tests/capabilities.rs`); a platform key's scopes; a missing
+    tenant's key listing, and its attach answered `404` before Meta is
+    asked.
 - [ ] **S5b. Idempotency and messages into core**
   (`meta-whatsapp-server-core`): `idempotency::run` answering a status,
   a body and whether it replayed; sending (the accepted message, not an

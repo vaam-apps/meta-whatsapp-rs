@@ -795,6 +795,7 @@ mod tests {
     #[test]
     fn every_code_the_source_names_exists() {
         let sources = [
+            include_str!("admin.rs"),
             include_str!("authz.rs"),
             include_str!("error.rs"),
             include_str!("events.rs"),
@@ -815,7 +816,7 @@ mod tests {
                 }
             }
         }
-        assert!(named >= 15, "{named}");
+        assert!(named >= 30, "{named}");
     }
 
     /// The fallback for a code missing from the table is the table's own

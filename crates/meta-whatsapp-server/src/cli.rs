@@ -32,7 +32,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::api::admin::{TenantsSpec, allowed_tenants, mint};
+use meta_whatsapp_server_core::admin::{TenantsInput, allowed_tenants, is_valid_name, mint};
+
 use crate::api::common::rfc3339;
 use crate::config::{self, Config, Env, MigrateMode, ProcessEnv, Storage};
 use crate::model::{
@@ -243,9 +244,9 @@ async fn admin_on(command: AdminCommand, store: &dyn RecordStore) -> anyhow::Res
             check_name(&name)?;
             let expires_at = expiry(expires_at.as_deref())?;
             let spec = if tenants.trim() == "*" {
-                TenantsSpec::All("*".to_owned())
+                TenantsInput::All("*".to_owned())
             } else {
-                TenantsSpec::Only(tenants.split(',').map(|t| t.trim().to_owned()).collect())
+                TenantsInput::Only(tenants.split(',').map(|t| t.trim().to_owned()).collect())
             };
             let allowed = allowed_tenants(spec)
                 .map_err(|_| anyhow::anyhow!("--tenants: `*` or comma-separated tenant ids"))?;
@@ -354,7 +355,7 @@ fn key_line(key: &ApiKeyRecord) -> String {
 
 fn check_name(name: &str) -> anyhow::Result<()> {
     anyhow::ensure!(
-        name.chars().count() <= MAX_NAME_CHARS && !name.chars().any(char::is_control),
+        is_valid_name(name),
         "--name: at most {MAX_NAME_CHARS} characters, no control characters"
     );
     Ok(())
