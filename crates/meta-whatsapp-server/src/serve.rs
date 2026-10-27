@@ -532,6 +532,7 @@ mod tests {
     /// review A3).
     #[tokio::test]
     async fn serve_stops_when_either_listener_stops() {
+        let _ports = crate::LOOPBACK_PORTS.lock().await;
         for (which, panics) in [("internal", false), ("public", true), ("internal", true)] {
             let state = AppState::for_tests();
             let (stop, _) = watch::channel(false);
@@ -574,6 +575,7 @@ mod tests {
     /// `Ok` once they drained.
     #[tokio::test]
     async fn serve_stops_both_listeners_on_the_signal() {
+        let _ports = crate::LOOPBACK_PORTS.lock().await;
         let state = AppState::for_tests();
         let (stop, _) = watch::channel(false);
         let (public, public_addr) = listening(&state, &stop).await;
@@ -610,6 +612,10 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn sigterm_is_caught_before_the_signal_is_awaited() {
+        // `kill` is a child process: between its fork and its exec it holds
+        // a copy of every socket open here, so a listener another test just
+        // closed would still accept.
+        let _ports = crate::LOOPBACK_PORTS.lock().await;
         let signal = shutdown_signal();
         let sent = std::process::Command::new("kill")
             .args(["-TERM", &std::process::id().to_string()])
@@ -641,6 +647,7 @@ mod tests {
     /// `supervise` did).
     #[tokio::test]
     async fn the_stop_signal_is_made_before_the_listeners_are_bound() {
+        let _ports = crate::LOOPBACK_PORTS.lock().await;
         let free = || {
             std::net::TcpListener::bind("127.0.0.1:0")
                 .unwrap()
