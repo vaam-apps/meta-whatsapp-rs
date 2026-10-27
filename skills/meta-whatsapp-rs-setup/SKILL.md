@@ -5,7 +5,7 @@ description: "Setting up meta-whatsapp-rs for WhatsApp - what to create on Meta'
 
 # meta-whatsapp-rs-setup
 
-> **Verified against meta-whatsapp-rs ecb4b40e5a4a442311d9097407d42c981330c154 (2026-09-27).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs df598e6647242d4f471579d7f84df12c3032c651 (2026-10-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/client.rs](examples/client.rs), compiled and
 tested by meta-whatsapp-rs's own gate.

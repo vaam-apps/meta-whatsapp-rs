@@ -5,7 +5,7 @@ description: "WhatsApp marketing with meta-whatsapp-rs - collecting opt-ins with
 
 # meta-whatsapp-rs-marketing
 
-> **Verified against meta-whatsapp-rs 35b6739412169ab3ab43bfcacea133295362cb9a (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs df598e6647242d4f471579d7f84df12c3032c651 (2026-10-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/marketing.rs](examples/marketing.rs), compiled
 and tested by meta-whatsapp-rs's own gate.

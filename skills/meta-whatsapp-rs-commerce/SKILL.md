@@ -5,7 +5,7 @@ description: "WhatsApp commerce with meta-whatsapp-rs - commerce settings (cart,
 
 # meta-whatsapp-rs-commerce
 
-> **Verified against meta-whatsapp-rs d39fa40097af625cb867f424d9af11340fe567a0 (2026-10-27).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs df598e6647242d4f471579d7f84df12c3032c651 (2026-10-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/commerce.rs](examples/commerce.rs), compiled and
 tested by meta-whatsapp-rs's own gate.

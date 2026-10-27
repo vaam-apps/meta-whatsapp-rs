@@ -5,7 +5,7 @@ description: "Interactive WhatsApp messages with meta-whatsapp-rs - reply button
 
 # meta-whatsapp-rs-interactive-messages
 
-> **Verified against meta-whatsapp-rs 7068cff7122c08d40e5b7c23f4077d2689bf46ee (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs df598e6647242d4f471579d7f84df12c3032c651 (2026-10-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/interactive.rs](examples/interactive.rs),
 compiled and tested by meta-whatsapp-rs's own gate.
