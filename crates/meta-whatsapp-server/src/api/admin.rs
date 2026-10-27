@@ -2,50 +2,35 @@
 //! tenants, their keys, platform keys, attaching the platform's own WABAs
 //! and unbinding a WABA (decision D4).
 
-use std::collections::BTreeSet;
+//!
+//! Each handler is an adapter over the core's services
+//! ([`meta_whatsapp_server_core::admin::Admin`], roadmap S5a): it reads
+//! the request, calls the operation, and answers its value or its error.
+//! The validation, the order of D4's checks, the audit events and what
+//! the metrics are told are the core's.
 
-use futures::{StreamExt, TryStreamExt};
-use meta_whatsapp_rs::ErrorKind;
-use meta_whatsapp_rs::client::embedded_signup::{StoredBusinessToken, steps};
-use meta_whatsapp_rs::client::waba::PhoneNumbersQuery;
-use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+use meta_whatsapp_rs::core::ids::PhoneNumberId;
 use meta_whatsapp_rs::core::secret::AccessToken;
 use meta_whatsapp_rs::webhooks::axum::Json;
 use meta_whatsapp_rs::webhooks::axum::extract::{Path, State};
 use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
+use meta_whatsapp_server_core::admin::{self as core_admin, Admin, KeyRequest, TenantsInput};
+pub use meta_whatsapp_server_core::admin::{MAX_WABA_NUMBERS, MintError, mint};
 use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
 use utoipa::ToSchema;
 
-use super::common::{ApiJson, PageParams, PageQuery, json, next_cursor, parse_rfc3339, rfc3339};
-use crate::auth::{AdminCaller, OwnedWaba, VaultRotation, graph_failed_for_admin};
+use super::common::{ApiJson, PageParams, PageQuery, json, next_cursor, rfc3339};
+use crate::auth::{AdminCaller, VaultRotation};
 use crate::error::{ApiError, ErrorBody};
-use crate::keys::MintedKey;
 use crate::model::{
-    AllowedTenants, ApiKeyRecord, BindOutcome, DeleteTenantOutcome, KeyKind, KeyOwner, KeyScope,
-    MAX_NAME_CHARS, NewApiKey, PageRequest, Scope, Tenant, TenantId, TenantStatus, WabaBinding,
+    AllowedTenants, ApiKeyRecord, KeyKind, KeyOwner, Listing, Scope, Tenant, TenantStatus,
 };
 use crate::state::AppState;
-use crate::store::RecordStore;
-use crate::telemetry::{self, Subject};
 
-/// Log an operator's change (see [`crate::telemetry::audit`]).
-fn audit(action: &'static str, admin: &AdminCaller, subject: Subject<'_>) {
-    telemetry::audit(action, admin.key_id(), &subject);
-}
-
-fn tenant_subject(tenant: &TenantId) -> Subject<'_> {
-    Subject {
-        tenant: Some(tenant.as_str()),
-        ..Subject::default()
-    }
-}
-
-fn key_subject(key_id: &str) -> Subject<'_> {
-    Subject {
-        key_id: Some(key_id),
-        ..Subject::default()
-    }
+/// The core's admin operations for `admin`, on `state`'s records and
+/// vault, telling its metrics of failed Graph calls.
+fn operations<'a>(state: &'a AppState, admin: &'a AdminCaller) -> Result<Admin<'a>, ApiError> {
+    Ok(Admin::new(state.authz(), admin)?.observed_by(state.metrics()))
 }
 
 // ─── Tenants ─────────────────────────────────────────────────────────────
@@ -125,24 +110,22 @@ pub struct UpdateTenant {
     pub status: Option<TenantStatusName>,
 }
 
-fn tenant_id(field: &'static str, id: &str) -> Result<TenantId, ApiError> {
-    TenantId::parse(id).ok_or_else(|| ApiError::invalid(field))
-}
-
-fn name(value: Option<String>) -> Result<Option<String>, ApiError> {
-    match value {
-        Some(name)
-            if name.chars().count() > MAX_NAME_CHARS || name.chars().any(char::is_control) =>
-        {
-            Err(ApiError::invalid("name"))
+impl From<TenantStatusName> for TenantStatus {
+    fn from(status: TenantStatusName) -> Self {
+        match status {
+            TenantStatusName::Active => TenantStatus::Active,
+            TenantStatusName::Suspended => TenantStatus::Suspended,
         }
-        other => Ok(other),
     }
 }
 
-/// A path's tenant id: an invalid one names no tenant.
-fn path_tenant(id: &str) -> Result<TenantId, ApiError> {
-    TenantId::parse(id).ok_or_else(ApiError::not_found)
+/// A page of tenants, as answered.
+fn tenant_list(listing: Listing<Tenant>) -> TenantList {
+    let next_cursor = next_cursor(&listing);
+    TenantList {
+        data: listing.items.into_iter().map(TenantView::from).collect(),
+        next_cursor,
+    }
 }
 
 /// Create a tenant.
@@ -165,16 +148,10 @@ pub(crate) async fn create_tenant(
     admin: AdminCaller,
     ApiJson(body): ApiJson<CreateTenant>,
 ) -> Result<(StatusCode, Json<TenantView>), ApiError> {
-    let id = tenant_id("id", &body.id)?;
-    let name = name(body.name)?.unwrap_or_default();
-    match state.store().create_tenant(&id, &name).await? {
-        Some(tenant) => {
-            audit("tenant_created", &admin, tenant_subject(&tenant.id));
-            Ok(json(StatusCode::CREATED, TenantView::from(tenant)))
-        }
-        // Taken (docs/design/server.md, section 5.2).
-        None => Err(ApiError::new("tenant_exists")),
-    }
+    let tenant = operations(&state, &admin)?
+        .create_tenant(&body.id, body.name)
+        .await?;
+    Ok(json(StatusCode::CREATED, TenantView::from(tenant)))
 }
 
 /// List tenants.
@@ -195,15 +172,11 @@ pub(crate) async fn create_tenant(
 )]
 pub(crate) async fn list_tenants(
     State(state): State<AppState>,
-    _admin: AdminCaller,
+    admin: AdminCaller,
     PageQuery(page): PageQuery,
 ) -> Result<Json<TenantList>, ApiError> {
-    let listing = state.store().tenants(&page).await?;
-    let next_cursor = next_cursor(&listing);
-    Ok(Json(TenantList {
-        data: listing.items.into_iter().map(TenantView::from).collect(),
-        next_cursor,
-    }))
+    let listing = operations(&state, &admin)?.tenants(&page).await?;
+    Ok(Json(tenant_list(listing)))
 }
 
 /// One tenant.
@@ -222,15 +195,10 @@ pub(crate) async fn list_tenants(
 )]
 pub(crate) async fn get_tenant(
     State(state): State<AppState>,
-    _admin: AdminCaller,
+    admin: AdminCaller,
     Path(id): Path<String>,
 ) -> Result<Json<TenantView>, ApiError> {
-    let id = path_tenant(&id)?;
-    let tenant = state
-        .store()
-        .tenant(&id)
-        .await?
-        .ok_or_else(ApiError::not_found)?;
+    let tenant = operations(&state, &admin)?.tenant(&id).await?;
     Ok(Json(tenant.into()))
 }
 
@@ -256,23 +224,9 @@ pub(crate) async fn update_tenant(
     Path(id): Path<String>,
     ApiJson(body): ApiJson<UpdateTenant>,
 ) -> Result<Json<TenantView>, ApiError> {
-    let id = path_tenant(&id)?;
-    let name = name(body.name)?;
-    let status = body.status.map(|s| match s {
-        TenantStatusName::Active => TenantStatus::Active,
-        TenantStatusName::Suspended => TenantStatus::Suspended,
-    });
-    let tenant = state
-        .store()
-        .update_tenant(&id, name.as_deref(), status)
-        .await?
-        .ok_or_else(ApiError::not_found)?;
-    let action = match status {
-        Some(TenantStatus::Suspended) => "tenant_suspended",
-        Some(TenantStatus::Active) => "tenant_activated",
-        None => "tenant_renamed",
-    };
-    audit(action, &admin, tenant_subject(&id));
+    let tenant = operations(&state, &admin)?
+        .update_tenant(&id, body.name, body.status.map(TenantStatus::from))
+        .await?;
     Ok(Json(tenant.into()))
 }
 
@@ -304,81 +258,8 @@ pub(crate) async fn delete_tenant(
     admin: AdminCaller,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    let id = path_tenant(&id)?;
-    // A WABA attached while this runs is disconnected by the next round.
-    for _ in 0..5 {
-        if state.store().tenant(&id).await?.is_none() {
-            return Err(ApiError::not_found());
-        }
-        let wabas = state
-            .store()
-            .wabas(
-                &id,
-                &PageRequest {
-                    after: None,
-                    limit: crate::model::MAX_PAGE_SIZE,
-                },
-            )
-            .await?;
-        for binding in &wabas.items {
-            // The listing may be stale (each WABA before this one cost a
-            // call to Meta): a WABA unbound since, and maybe bound to
-            // another tenant, is skipped, never answered for; the next
-            // round lists what the tenant holds now.
-            let owned = match OwnedWaba::for_admin(&state, &admin, binding).await {
-                Ok(owned) => owned,
-                Err(error) if still_listed(&state, binding).await? => return Err(error),
-                Err(_) => continue,
-            };
-            if !owned.still_bound(&state).await? {
-                continue;
-            }
-            let unsubscribed = owned
-                .client()
-                .waba(owned.waba_id().clone())
-                .unsubscribe_app()
-                .await;
-            if let Err(error) = unsubscribed {
-                return Err(owned.failed(&state, &error).await.with_details(&error));
-            }
-            if !owned.forget(&state).await? {
-                // Attached again (or its token rotated) meanwhile: the
-                // next round sees it as it is now.
-                continue;
-            }
-            let waba_id = binding.waba_id.as_str();
-            audit(
-                "waba_disconnected",
-                &admin,
-                Subject {
-                    tenant: Some(id.as_str()),
-                    waba_id: Some(waba_id),
-                    ..Subject::default()
-                },
-            );
-        }
-        match state.store().delete_tenant(&id).await? {
-            DeleteTenantOutcome::Deleted => {
-                audit("tenant_deleted", &admin, tenant_subject(&id));
-                return Ok(StatusCode::NO_CONTENT);
-            }
-            DeleteTenantOutcome::NotFound => return Err(ApiError::not_found()),
-            DeleteTenantOutcome::HasWabas => {}
-        }
-    }
-    tracing::warn!("tenant deletion kept finding WABAs; giving up");
-    Err(ApiError::internal().retryable(true))
-}
-
-/// Whether `binding`, a listing's entry, is still its WABA's binding: read
-/// again when a tenant's deletion could not act on it, to tell a WABA that
-/// moved (skipped) from one that failed (answered).
-async fn still_listed(state: &AppState, binding: &WabaBinding) -> Result<bool, ApiError> {
-    Ok(state
-        .store()
-        .waba(&binding.waba_id)
-        .await?
-        .is_some_and(|now| now.epoch() == binding.epoch()))
+    operations(&state, &admin)?.delete_tenant(&id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ─── Keys ────────────────────────────────────────────────────────────────
@@ -608,77 +489,38 @@ pub struct MintPlatformKey {
     pub expires_at: Option<String>,
 }
 
-/// Why a key could not be minted.
-#[derive(Debug, thiserror::Error)]
-pub enum MintError {
-    /// The operating system's random number generator failed.
-    #[error("the random number generator failed")]
-    Random,
-    /// Three drawn key ids were all taken.
-    #[error("no free key id after three draws")]
-    Collision,
-    /// The store failed.
-    #[error(transparent)]
-    Storage(#[from] meta_whatsapp_rs::core::error::StorageError),
-}
-
 impl From<MintError> for ApiError {
     fn from(error: MintError) -> Self {
-        match error {
-            MintError::Random | MintError::Collision => ApiError::internal(),
-            MintError::Storage(storage) => storage.into(),
-        }
+        meta_whatsapp_server_core::ServiceError::from(error).into()
     }
 }
 
-/// Mint and store a key for `owner`. The admin API and the CLI's
-/// bootstrap both use it. Returns the key (to show once) and its record.
-pub async fn mint(
-    store: &dyn RecordStore,
-    owner: KeyOwner,
-    scopes: Vec<Scope>,
-    name: String,
-    expires_at: Option<OffsetDateTime>,
-) -> Result<(MintedKey, ApiKeyRecord), MintError> {
-    // 96 random bits: a collision is not expected, but never fatal.
-    for _ in 0..3 {
-        let minted = MintedKey::generate().map_err(|_| MintError::Random)?;
-        let new = NewApiKey {
-            key_id: minted.key_id().to_owned(),
-            secret_sha256: minted.digest(),
-            owner: owner.clone(),
-            scopes: scopes.clone(),
-            name: name.clone(),
-            expires_at,
-        };
-        if let Some(record) = store.insert_key(&new).await? {
-            return Ok((minted, record));
-        }
+/// A key request's fields, for the core.
+fn key_request(
+    scopes: Vec<ScopeName>,
+    name: Option<String>,
+    expires_at: Option<String>,
+) -> KeyRequest {
+    KeyRequest {
+        scopes: scopes.into_iter().map(Scope::from).collect(),
+        name,
+        expires_at,
     }
-    Err(MintError::Collision)
 }
 
-fn scopes(names: Vec<ScopeName>) -> Result<Vec<Scope>, ApiError> {
-    let set: BTreeSet<Scope> = names.into_iter().map(Scope::from).collect();
-    if set.is_empty() {
-        return Err(ApiError::invalid("scopes"));
+/// A page of keys, as answered.
+fn key_list(listing: Listing<ApiKeyRecord>) -> KeyList {
+    let next_cursor = next_cursor(&listing);
+    KeyList {
+        data: listing.items.into_iter().map(KeyView::from).collect(),
+        next_cursor,
     }
-    Ok(set.into_iter().collect())
 }
 
-fn expiry(value: Option<String>) -> Result<Option<OffsetDateTime>, ApiError> {
-    let Some(value) = value else { return Ok(None) };
-    let at = parse_rfc3339("expires_at", &value)?;
-    if at <= OffsetDateTime::now_utc() {
-        return Err(ApiError::invalid("expires_at"));
-    }
-    Ok(Some(at))
-}
-
-fn minted_view(minted: &MintedKey, record: ApiKeyRecord) -> MintedKeyView {
+fn minted_view(minted: core_admin::Minted) -> MintedKeyView {
     MintedKeyView {
-        key: minted.expose_key().to_owned(),
-        api_key: record.into(),
+        key: minted.key.expose_key().to_owned(),
+        api_key: minted.record.into(),
     }
 }
 
@@ -704,31 +546,11 @@ pub(crate) async fn mint_tenant_key(
     Path(id): Path<String>,
     ApiJson(body): ApiJson<MintTenantKey>,
 ) -> Result<(StatusCode, Json<MintedKeyView>), ApiError> {
-    let id = path_tenant(&id)?;
-    let scopes = scopes(body.scopes)?;
-    let name = name(body.name)?.unwrap_or_default();
-    let expires_at = expiry(body.expires_at)?;
-    if state.store().tenant(&id).await?.is_none() {
-        return Err(ApiError::not_found());
-    }
-    let (minted, record) = mint(
-        state.store(),
-        KeyOwner::Tenant(id.clone()),
-        scopes,
-        name,
-        expires_at,
-    )
-    .await?;
-    audit(
-        "tenant_key_minted",
-        &admin,
-        Subject {
-            tenant: Some(id.as_str()),
-            key_id: Some(minted.key_id()),
-            ..Subject::default()
-        },
-    );
-    Ok(json(StatusCode::CREATED, minted_view(&minted, record)))
+    let request = key_request(body.scopes, body.name, body.expires_at);
+    let minted = operations(&state, &admin)?
+        .mint_tenant_key(&id, request)
+        .await?;
+    Ok(json(StatusCode::CREATED, minted_view(minted)))
 }
 
 /// List a tenant's keys, revoked ones included.
@@ -750,28 +572,12 @@ pub(crate) async fn mint_tenant_key(
 )]
 pub(crate) async fn list_tenant_keys(
     State(state): State<AppState>,
-    _admin: AdminCaller,
+    admin: AdminCaller,
     Path(id): Path<String>,
     PageQuery(page): PageQuery,
 ) -> Result<Json<KeyList>, ApiError> {
-    let id = path_tenant(&id)?;
-    if state.store().tenant(&id).await?.is_none() {
-        return Err(ApiError::not_found());
-    }
-    key_list(state.store(), &KeyScope::Tenant(id), &page).await
-}
-
-async fn key_list(
-    store: &dyn RecordStore,
-    scope: &KeyScope,
-    page: &PageRequest,
-) -> Result<Json<KeyList>, ApiError> {
-    let listing = store.keys(scope, page).await?;
-    let next_cursor = next_cursor(&listing);
-    Ok(Json(KeyList {
-        data: listing.items.into_iter().map(KeyView::from).collect(),
-        next_cursor,
-    }))
+    let listing = operations(&state, &admin)?.tenant_keys(&id, &page).await?;
+    Ok(Json(key_list(listing)))
 }
 
 /// Revoke a tenant's key. Effective at once, on every replica (keys are
@@ -797,25 +603,10 @@ pub(crate) async fn revoke_tenant_key(
     admin: AdminCaller,
     Path((id, key_id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    let id = path_tenant(&id)?;
-    if state
-        .store()
-        .revoke_key(&KeyScope::Tenant(id.clone()), &key_id)
-        .await?
-    {
-        audit(
-            "tenant_key_revoked",
-            &admin,
-            Subject {
-                tenant: Some(id.as_str()),
-                key_id: Some(&key_id),
-                ..Subject::default()
-            },
-        );
-        Ok(StatusCode::NO_CONTENT)
-    } else {
-        Err(ApiError::not_found())
-    }
+    operations(&state, &admin)?
+        .revoke_tenant_key(&id, &key_id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Mint a platform key.
@@ -837,37 +628,18 @@ pub(crate) async fn mint_platform_key(
     admin: AdminCaller,
     ApiJson(body): ApiJson<MintPlatformKey>,
 ) -> Result<(StatusCode, Json<MintedKeyView>), ApiError> {
-    let allowed = allowed_tenants(body.tenants)?;
-    let scopes = scopes(body.scopes)?;
-    let name = name(body.name)?.unwrap_or_default();
-    let expires_at = expiry(body.expires_at)?;
-    let (minted, record) = mint(
-        state.store(),
-        KeyOwner::Platform(allowed),
-        scopes,
-        name,
-        expires_at,
-    )
-    .await?;
-    audit("platform_key_minted", &admin, key_subject(minted.key_id()));
-    Ok(json(StatusCode::CREATED, minted_view(&minted, record)))
+    let request = key_request(body.scopes, body.name, body.expires_at);
+    let minted = operations(&state, &admin)?
+        .mint_platform_key(body.tenants.into(), request)
+        .await?;
+    Ok(json(StatusCode::CREATED, minted_view(minted)))
 }
 
-/// Validate a platform key's tenants: `"*"`, or a non-empty list of tenant
-/// ids (which need not exist yet).
-pub(crate) fn allowed_tenants(spec: TenantsSpec) -> Result<AllowedTenants, ApiError> {
-    match spec {
-        TenantsSpec::All(star) if star == "*" => Ok(AllowedTenants::All),
-        TenantsSpec::All(_) => Err(ApiError::invalid("tenants")),
-        TenantsSpec::Only(list) => {
-            let set = list
-                .iter()
-                .map(|t| TenantId::parse(t).ok_or_else(|| ApiError::invalid("tenants")))
-                .collect::<Result<BTreeSet<_>, _>>()?;
-            if set.is_empty() {
-                return Err(ApiError::invalid("tenants"));
-            }
-            Ok(AllowedTenants::Only(set.into_iter().collect()))
+impl From<TenantsSpec> for TenantsInput {
+    fn from(spec: TenantsSpec) -> Self {
+        match spec {
+            TenantsSpec::All(text) => Self::All(text),
+            TenantsSpec::Only(list) => Self::Only(list),
         }
     }
 }
@@ -889,10 +661,11 @@ pub(crate) fn allowed_tenants(spec: TenantsSpec) -> Result<AllowedTenants, ApiEr
 )]
 pub(crate) async fn list_platform_keys(
     State(state): State<AppState>,
-    _admin: AdminCaller,
+    admin: AdminCaller,
     PageQuery(page): PageQuery,
 ) -> Result<Json<KeyList>, ApiError> {
-    key_list(state.store(), &KeyScope::Platform, &page).await
+    let listing = operations(&state, &admin)?.platform_keys(&page).await?;
+    Ok(Json(key_list(listing)))
 }
 
 /// Revoke a platform key.
@@ -914,16 +687,10 @@ pub(crate) async fn revoke_platform_key(
     admin: AdminCaller,
     Path(key_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    if state
-        .store()
-        .revoke_key(&KeyScope::Platform, &key_id)
-        .await?
-    {
-        audit("platform_key_revoked", &admin, key_subject(&key_id));
-        Ok(StatusCode::NO_CONTENT)
-    } else {
-        Err(ApiError::not_found())
-    }
+    operations(&state, &admin)?
+        .revoke_platform_key(&key_id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ─── WABAs ───────────────────────────────────────────────────────────────
@@ -950,27 +717,6 @@ pub struct AttachedWaba {
     pub tenant_id: String,
     /// Every number Meta listed on it, now bound to the tenant.
     pub phone_number_ids: Vec<String>,
-}
-
-/// Longest WABA id accepted in a body.
-const MAX_ID_LEN: usize = 64;
-
-/// Most numbers attach binds for one WABA (Meta allows far fewer): past
-/// it the listing is refused as `upstream` rather than followed for ever.
-pub const MAX_WABA_NUMBERS: usize = 1000;
-
-/// A Meta id from a body: digits only, as Meta writes them (D4 compares
-/// the exact string, so `0102…` and `102…` must not both pass).
-fn graph_id(field: &'static str, id: &str) -> Result<String, ApiError> {
-    let valid = !id.is_empty()
-        && id.len() <= MAX_ID_LEN
-        && id.bytes().all(|b| b.is_ascii_digit())
-        && !id.starts_with('0');
-    if valid {
-        Ok(id.to_owned())
-    } else {
-        Err(ApiError::invalid(field))
-    }
 }
 
 /// Attach one of the platform's own WABAs to a tenant: list its numbers
@@ -1007,101 +753,19 @@ pub(crate) async fn attach_waba(
     Path(id): Path<String>,
     ApiJson(body): ApiJson<AttachWaba>,
 ) -> Result<(StatusCode, Json<AttachedWaba>), ApiError> {
-    let tenant = path_tenant(&id)?;
-    let waba_id = WabaId::new(graph_id("waba_id", &body.waba_id)?);
-    if body.token.trim().is_empty() {
-        return Err(ApiError::invalid("token"));
-    }
-    let token = AccessToken::new(body.token);
-    if state.store().tenant(&tenant).await?.is_none() {
-        return Err(ApiError::not_found());
-    }
-    // D4 on the claimed id, before Meta is asked anything.
-    if state
-        .store()
-        .waba(&waba_id)
-        .await?
-        .is_some_and(|w| w.tenant_id != tenant)
-    {
-        return Err(ApiError::new("waba_owned_by_another_tenant"));
-    }
-    let waba = state
-        .client()
-        .with_token(token.clone())
-        .waba(waba_id.clone());
-    let meta_failed = |error: &meta_whatsapp_rs::Error| {
-        let api = ApiError::from_library(error).with_details(error);
-        state.metrics().graph_error(api.code());
-        // The token is the request's: Meta refusing it is the caller's
-        // input to fix, not a stored token to reconnect.
-        if error.kind() == ErrorKind::Authentication {
-            api.as_invalid("token")
-        } else {
-            api
-        }
-    };
-    // Every number Meta lists on the WABA, with the given token; a listing
-    // that never ends (a cursor per page, from a stub or a fault) stops.
-    let numbers: Vec<PhoneNumberId> = waba
-        .phone_numbers_stream(&PhoneNumbersQuery::new())
-        .take(MAX_WABA_NUMBERS + 1)
-        .map_ok(|n| n.id)
-        .try_collect()
-        .await
-        .map_err(|error| meta_failed(&error))?;
-    if numbers.len() > MAX_WABA_NUMBERS {
-        tracing::warn!(
-            max = MAX_WABA_NUMBERS,
-            "Meta listed more numbers on a WABA than attach binds"
-        );
-        return Err(ApiError::new("upstream"));
-    }
-    // D4 again, atomically with the binding. Binding before storing: a
-    // store first would overwrite the owner's token before D4 refused.
-    match state.store().bind_waba(&tenant, &waba_id, &numbers).await? {
-        BindOutcome::Bound => {}
-        BindOutcome::OwnedByAnotherTenant => {
-            return Err(ApiError::new("waba_owned_by_another_tenant"));
-        }
-        // Deleted since it was read above.
-        BindOutcome::NoSuchTenant => return Err(ApiError::not_found()),
-    }
-    let record = StoredBusinessToken::new(waba_id.clone(), token).phone_number_ids(numbers.clone());
-    // Binds, stores, then confirms (the port rule): a WABA moved between
-    // the binding and the store is `503`, the token this stored taken back.
-    state.authz().store_token(&admin, &tenant, &record).await?;
-    audit(
-        "waba_attached",
-        &admin,
-        Subject {
-            tenant: Some(tenant.as_str()),
-            waba_id: Some(waba_id.as_str()),
-            ..Subject::default()
-        },
-    );
-    // Subscribe the app to the WABA's webhooks, as onboarding does after
-    // storing the token: a WABA the app is not subscribed to delivers no
-    // webhook, and disconnecting unsubscribes it (docs/design/server.md,
-    // section 3.4), so attaching again must subscribe again. Safe to
-    // repeat: after a refusal the WABA stays attached, and repeating the
-    // attach finishes it, which the answer says (`step`, `resumable`).
-    // The token is stored by now: Meta refusing it is a stored token's
-    // `190`, `409 reconnect_required` with the WABA's numbers marked so,
-    // as on every route, not the `422` of a token refused before anything
-    // was bound.
-    if let Err(error) = waba.subscribe_app(None).await {
-        let error = error.in_step(steps::SUBSCRIBE_APP);
-        return Err(graph_failed_for_admin(&state, &admin, &waba_id, &error)
-            .await
-            .with_details(&error)
-            .resumable(true));
-    }
+    let attached = operations(&state, &admin)?
+        .attach_waba(&id, &body.waba_id, AccessToken::new(body.token))
+        .await?;
     Ok(json(
         StatusCode::CREATED,
         AttachedWaba {
-            waba_id: waba_id.into_inner(),
-            tenant_id: tenant.as_str().to_owned(),
-            phone_number_ids: numbers.into_iter().map(PhoneNumberId::into_inner).collect(),
+            waba_id: attached.waba_id.into_inner(),
+            tenant_id: attached.tenant_id.as_str().to_owned(),
+            phone_number_ids: attached
+                .phone_number_ids
+                .into_iter()
+                .map(PhoneNumberId::into_inner)
+                .collect(),
         },
     ))
 }
@@ -1138,16 +802,11 @@ pub struct WabaBindingView {
 )]
 pub(crate) async fn get_waba(
     State(state): State<AppState>,
-    _admin: AdminCaller,
+    admin: AdminCaller,
     Path(waba_id): Path<String>,
 ) -> Result<Json<WabaBindingView>, ApiError> {
-    let waba_id = WabaId::new(waba_id);
-    let binding = state
-        .store()
-        .waba(&waba_id)
-        .await?
-        .ok_or_else(ApiError::not_found)?;
-    let numbers = state.store().waba_numbers(&waba_id).await?;
+    let core_admin::HeldWaba { binding, numbers } =
+        operations(&state, &admin)?.waba(&waba_id).await?;
     Ok(Json(WabaBindingView {
         waba_id: binding.waba_id.into_inner(),
         tenant_id: binding.tenant_id.as_str().to_owned(),
@@ -1178,21 +837,7 @@ pub(crate) async fn unbind_waba(
     admin: AdminCaller,
     Path(waba_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    let binding = state
-        .store()
-        .waba(&WabaId::new(waba_id))
-        .await?
-        .ok_or_else(ApiError::not_found)?;
-    OwnedWaba::unbind_for_admin(&state, &admin, &binding).await?;
-    audit(
-        "waba_unbound",
-        &admin,
-        Subject {
-            tenant: Some(binding.tenant_id.as_str()),
-            waba_id: Some(binding.waba_id.as_str()),
-            ..Subject::default()
-        },
-    );
+    operations(&state, &admin)?.unbind_waba(&waba_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1224,7 +869,6 @@ pub(crate) async fn rotate_vault(
     State(state): State<AppState>,
     admin: AdminCaller,
 ) -> Result<Json<VaultRotation>, ApiError> {
-    let report = state.authz().rotate_vault(&admin).await?;
-    audit("vault_rotated", &admin, Subject::default());
+    let report = operations(&state, &admin)?.rotate_vault().await?;
     Ok(Json(report.into()))
 }

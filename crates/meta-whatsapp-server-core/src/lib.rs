@@ -11,9 +11,11 @@
 //! | Module | What |
 //! | --- | --- |
 //! | [`model`] | tenants, API keys, bindings, idempotency records: the validated domain types |
+//! | [`admin`] | the admin operations as services: tenants, keys, platform keys, attaching a WABA (decision D4), reading and unbinding a binding, the vault's rotation |
 //! | [`keys`] | the API key format, digests, constant-time comparison |
 //! | [`error`] | the error model as data: codes, statuses as numbers, `retryable`, `may_have_been_sent`, Meta's `details` |
 //! | [`authz`] | the authorization order: key, tenant, scope, ownership, vault |
+//! | [`audit`], [`observe`] | the audit events (target `audit`); what an operation reports to the adapter's metrics |
 //! | [`events`] | routing Meta's webhook events to tenants, their outbox keys and ids, polling |
 //! | [`idempotency`] | `Idempotency-Key`: claim, settle, replay |
 //! | [`ratelimit`] | per-tenant token buckets by route class, transfer slots |
@@ -43,6 +45,8 @@
 //! (`meta_whatsapp_server_core::conformance::run`) check it, over a
 //! backend's bundle.
 
+pub mod admin;
+pub mod audit;
 pub mod authz;
 pub mod backend;
 #[cfg(feature = "conformance")]
@@ -53,6 +57,7 @@ pub mod housekeeping;
 pub mod idempotency;
 pub mod keys;
 pub mod model;
+pub mod observe;
 pub mod outbox;
 pub mod ratelimit;
 pub mod store;

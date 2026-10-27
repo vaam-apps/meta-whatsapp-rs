@@ -32,6 +32,8 @@ conformance = ["meta-whatsapp-rs/testing", "tokio/macros"]
 meta-whatsapp-rs.workspace = true
 
 async-trait.workspace = true
+# Attaching a WABA follows Meta's listing of its numbers, a stream.
+futures.workspace = true
 # Random API keys and idempotency claim ids.
 getrandom.workspace = true
 # Event ids and outbox keys, in hex.

@@ -420,6 +420,14 @@ impl Authorizer {
         &self.client
     }
 
+    /// The records this order reads: what the core's services
+    /// ([`crate::admin`]) write through, so that what they write and what
+    /// the order reads are one store. Crate-private: an adapter reaches the
+    /// records only through the services.
+    pub(crate) fn records(&self) -> &dyn RecordStore {
+        self.records.as_ref()
+    }
+
     /// Step 1: the key in `authorization` (the `Authorization` header's
     /// value: `Bearer wak_…`), if it exists, its secret matches (in
     /// constant time), and it is neither revoked nor expired. Records the
@@ -947,6 +955,17 @@ impl OwnedWaba {
             );
         }
         Ok(forgotten)
+    }
+
+    /// [`Self::forget`], answering `503 storage_unavailable` (retryable)
+    /// when the WABA's token or binding moved since this was made: a
+    /// repeat of the request acts on what is there now.
+    pub async fn forget_or_busy(self, authz: &Authorizer) -> Result<(), ServiceError> {
+        if self.forget(authz).await? {
+            return Ok(());
+        }
+        tracing::info!("the WABA's token or binding changed while it was being forgotten");
+        Err(ServiceError::from(StorageError::Busy))
     }
 }
 

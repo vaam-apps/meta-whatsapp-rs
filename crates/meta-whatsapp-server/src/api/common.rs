@@ -211,11 +211,6 @@ pub(crate) fn rfc3339(at: OffsetDateTime) -> String {
         .unwrap_or_default()
 }
 
-/// Parse an RFC 3339 time from the request's `field`.
-pub(crate) fn parse_rfc3339(field: &'static str, value: &str) -> Result<OffsetDateTime, ApiError> {
-    OffsetDateTime::parse(value, &Rfc3339).map_err(|_| ApiError::invalid(field))
-}
-
 /// `(StatusCode, Json)` shorthand.
 pub(crate) fn json<T: serde::Serialize>(status: StatusCode, body: T) -> (StatusCode, Json<T>) {
     (status, Json(body))
