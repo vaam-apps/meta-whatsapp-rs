@@ -42,6 +42,7 @@ use meta_whatsapp_rs::webhooks::axum::http::{HeaderName, HeaderValue, header};
 use meta_whatsapp_rs::webhooks::axum::middleware::Next;
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 use meta_whatsapp_server_core::ServiceError;
+use meta_whatsapp_server_core::admin::Admin;
 use meta_whatsapp_server_core::authz as core_authz;
 pub use meta_whatsapp_server_core::authz::{AdminCaller, Authorizer, Caller, Tokens};
 
@@ -320,13 +321,13 @@ impl OwnedWaba {
 
     /// [`Self::forget`], answering `503 storage_unavailable` (retryable)
     /// when the WABA's token or binding moved since this was made: a
-    /// repeat of the request acts on what is there now.
+    /// repeat of the request acts on what is there now
+    /// ([`core_authz::OwnedWaba::forget_or_busy`]).
     pub async fn forget_or_busy(self, state: &AppState) -> Result<(), ApiError> {
-        if self.forget(state).await? {
-            return Ok(());
-        }
-        tracing::info!("the WABA's token or binding changed while it was being forgotten");
-        Err(moved())
+        self.0
+            .forget_or_busy(state.authz())
+            .await
+            .map_err(ApiError::from)
     }
 
     /// Whether the WABA is still bound as it was when this was made, read
@@ -345,51 +346,18 @@ impl OwnedWaba {
     /// (Meta refusing does not stop it); then delete the token, then the
     /// bindings, as a disconnection does. A token no tenant can reach
     /// serves nothing and widens what a database and vault key compromise
-    /// exposes.
+    /// exposes. The core's [`Admin::unbind`]: an `admin` another
+    /// [`Authorizer`] made is `403 forbidden`, and nothing is unbound.
     pub async fn unbind_for_admin(
         state: &AppState,
         admin: &AdminCaller,
         binding: &WabaBinding,
     ) -> Result<(), ApiError> {
-        match Self::for_admin(state, admin, binding).await {
-            Ok(owned) => {
-                // Moved since it was made: its token is not the new
-                // holder's to unsubscribe with. A repeat reads it anew.
-                if !owned.still_bound(state).await? {
-                    return Err(moved());
-                }
-                let unsubscribed = owned
-                    .client()
-                    .waba(owned.waba_id().clone())
-                    .unsubscribe_app()
-                    .await;
-                if let Err(error) = unsubscribed {
-                    let api = owned.failed(state, &error).await;
-                    tracing::warn!(
-                        code = api.code(),
-                        "unbinding a WABA Meta did not unsubscribe the app from"
-                    );
-                }
-                owned.forget_or_busy(state).await
-            }
-            // Storage down: nothing can be deleted either.
-            Err(error) if error.code() == "storage_unavailable" => Err(error),
-            // No token, an expired one, or one that no longer decrypts.
-            Err(unusable) => {
-                state
-                    .authz()
-                    .forget_for_admin(admin, &binding.waba_id)
-                    .await
-                    .map_err(ApiError::from)?;
-                // Only once the admin was accepted and the WABA unbound:
-                // a refused admin unbinds nothing.
-                tracing::info!(
-                    code = unusable.code(),
-                    "unbound a WABA without a usable token: the app stays subscribed"
-                );
-                Ok(())
-            }
-        }
+        Admin::new(state.authz(), admin)?
+            .observed_by(state.metrics())
+            .unbind(binding)
+            .await
+            .map_err(ApiError::from)
     }
 
     /// A WABA for an admin operation (deleting its tenant): step 5 only, as
@@ -435,23 +403,6 @@ pub(crate) fn moved() -> ApiError {
 /// its code and `details`.
 fn object_failed(api: ApiError, error: &Error) -> ApiError {
     ApiError::from(core_authz::object_failed(api.into_service_error(), error))
-}
-
-/// The API error of a failed Graph call an admin made with a token of its
-/// own on `waba_id`, once stored: a `190` (or `0`) marks the WABA's
-/// numbers `reconnect_required`
-/// ([`Authorizer::graph_failed_for_admin`]); a Graph error is counted.
-pub(crate) async fn graph_failed_for_admin(
-    state: &AppState,
-    admin: &AdminCaller,
-    waba_id: &WabaId,
-    error: &Error,
-) -> ApiError {
-    let api = state
-        .authz()
-        .graph_failed_for_admin(admin, waba_id, error)
-        .await;
-    counted(state, api, error)
 }
 
 /// `api`, the error of a failed Graph call, over HTTP; a Graph error is

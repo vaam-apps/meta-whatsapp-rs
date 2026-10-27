@@ -217,6 +217,38 @@ stored data, the owner's).
 
 ### Added
 
+- **Catalog and product reads** (`meta_whatsapp_client::commerce`,
+  roadmap L17, parity row 103), through Meta's Catalog API, whose pages
+  sit outside the WhatsApp docs (read on 2026-10-27).
+  `Waba::product_catalogs(fields)` reads the catalog connected to a WABA
+  (`GET /{WABA_ID}/product_catalogs`). `Client::catalog(id)` gives a
+  `Catalog`: `get(fields)` (`GET /{product_catalog_id}`, a
+  `CatalogInfo`), `products(&ListProducts)` and
+  `product_sets(&ListProductSets)`, one `Page` each, and their
+  `products_stream` and `product_sets_stream`, which follow
+  `paging.cursors.after` until a page comes without `next` (an empty
+  page with `next` is crossed) and refuse a query that carries a cursor.
+  `Client::product_set(id)` gives a `ProductSet` (`get`, a
+  `ProductSetInfo`; `products(&ListSetProducts)` and `products_stream`),
+  and `Client::product(id)` a `Product` (`get`, a `ProductInfo`).
+  `ListProducts` and `ListSetProducts` share `ProductFilters` (`fields`,
+  a JSON `filter` rule sent JSON-encoded, `error_priority`,
+  `error_type`, `bulk_pagination`, `summary`, `limit`);
+  `ListProducts` adds `return_only_approved_products`, and
+  `ListProductSets` takes `ancestor_id`, `has_children`, `parent_id`
+  and `retailer_id`. `ProductInfo` types the fields a WhatsApp
+  integrator needs (`retailer_id`, `name`, `price` and `sale_price` as
+  Meta's strings, `availability`, `condition`, `review_status`,
+  `visibility`, `errors`, …) and keeps any other field requested in
+  `other`; its enums keep unknown values in `Other`. Every id in a path
+  (catalog, product set, product item, WABA, and the `ancestor_id` and
+  `parent_id` filters) is checked as digits before any request. New ids
+  `meta_whatsapp_core::ids::ProductItemId` and `ProductSetId`
+  (re-exported by `commerce`). A read whose body does not decode keeps
+  the body out of the error, as does a page any stream fetches
+  (`GraphRequest::paginate`): Meta's `paging.next` links can carry
+  the access token. Catalog writes, and connecting a catalog to a
+  WABA, are not wrapped.
 - **Payload encryption, connection status and webhook URL on a number**
   (`meta_whatsapp_client::phone_numbers`, roadmap L26, parity row 156):
   `PhoneNumber::enable_payload_encryption(&ClientEncryptionKey)` sends
@@ -1325,6 +1357,48 @@ stored data, the owner's).
   Arc::new(backend))`, or run the whole command line on it with
   `cli::run_with(cli, &factory)`, `factory` a `serve::BackendFactory`
   of yours.
+- **The admin operations are the service core's** (roadmap S5a;
+  `meta-whatsapp-server-core` and `meta-whatsapp-server`, both `publish =
+  false`), so another API adapter calls the same services the axum one
+  does. `meta_whatsapp_server_core::admin::Admin`, opened with
+  `Admin::new(&authorizer, &admin_caller)` (refused, `403 forbidden`,
+  for an `AdminCaller` another `Authorizer` made), runs every
+  `/v1/admin` operation over that `Authorizer`'s records, vault and
+  Graph client, taking the request's values as it carried them and
+  answering domain values (`Tenant`, `Listing`, `admin::Minted`,
+  `admin::Attached`, `admin::HeldWaba`, `VaultRotation`) or a
+  `ServiceError`: tenants, their deletion, keys, platform keys,
+  attaching a WABA (decision D4, the listing capped at
+  `admin::MAX_WABA_NUMBERS`, bind, store, subscribe), reading and
+  unbinding a binding, the vault's rotation. Audit events come from the
+  core (`meta_whatsapp_server_core::audit`: target `audit`, the same
+  fields), and failed Graph calls are reported to an
+  `observe::Observer`, which the server's `metrics::Metrics`
+  implements. `admin::mint`, `admin::MintError`, `admin::allowed_tenants`
+  and `admin::is_valid_name` (no capability: the command line's
+  bootstrap) and `authz::OwnedWaba::forget_or_busy` are new in the core;
+  the server's `api::admin::{mint, MintError, MAX_WABA_NUMBERS}` and
+  `telemetry::{audit, tenant_audit, Subject}` are now re-exports of
+  them, with the same signatures. The conformance suite gains `admin`
+  (in `conformance::run`): with no HTTP layer, attaching a WABA another
+  tenant holds is refused with nothing stored, subscribed or shared, on
+  every backend that runs the suite. No change to the HTTP API: every
+  status, body and audit event is as before, and `openapi/v1.json` is
+  byte-identical. **Upgrade** (log filters): the lines that moved with
+  the logic now carry the core's module as their target, not the
+  server's: `meta_whatsapp_server_core::admin` for "tenant deletion kept
+  finding WABAs", "Meta listed more numbers on a WABA than attach
+  binds", "unbinding a WABA Meta did not unsubscribe the app from" and
+  "unbound a WABA without a usable token", and
+  `meta_whatsapp_server_core::authz` for "the WABA's token or binding
+  changed while it was being forgotten" (on a tenant's own disconnection
+  too). A `RUST_LOG` directive `meta_whatsapp_server=…` still matches
+  them (`EnvFilter` matches a target by its text's prefix), but one
+  naming the old module (`meta_whatsapp_server::api::admin`,
+  `meta_whatsapp_server::auth`) no longer does: name
+  `meta_whatsapp_server_core::admin` or `::authz` instead. A JSON log's
+  `target` changes the same way; the audit events keep the target
+  `audit`.
 - **Breaking — live events are shared as `Arc<WebhookEvent>`, not cloned
   per subscriber** (`meta_whatsapp_webhooks::sse`,
   `meta_whatsapp_adapters::sink::BroadcastSink`; roadmap L21b, decided as

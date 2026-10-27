@@ -1072,13 +1072,14 @@ database's where it has one, else the service's `Clock`); contention is
 a typed error; a bundle's accessors return the same data on every call;
 listings are in byte order.
 
-**As built (roadmap S1, S2, S3, S4).** `crates/meta-whatsapp-server-core`
+**As built (roadmap S1, S2, S3, S4, S5a).** `crates/meta-whatsapp-server-core`
 exists, with the model, the keys, event routing and polling, the
-idempotency engine, the rate limiter, the error model, authorization
-and housekeeping (over a `Backend`, since S4); the operations
-(messages, media, templates, numbers, admin, the webhook pipeline) are
-still the axum crate's handlers (roadmap S5a–S5e). What it holds today,
-where it differs from the target above:
+idempotency engine, the rate limiter, the error model, authorization,
+housekeeping (over a `Backend`, since S4) and the admin operations
+(since S5a); the other operations (messages, media, templates,
+numbers, the webhook pipeline) are still the axum crate's handlers
+(roadmap S5b–S5e). What it holds today, where it differs from the
+target above:
 
 - **The ports** are `RecordStore`, `IdempotencyRecords`, `Outbox`,
   `LeaderLock`, `Janitor` and `SchemaMigrator`, and their contracts carry
@@ -1197,6 +1198,36 @@ where it differs from the target above:
   ([architecture.md](../architecture.md#stable-identifiers)): replicas
   of two releases must take the same ones, and do. Memory leases on the
   process's monotonic clock.
+- **The admin operations are services** (S5a):
+  `meta_whatsapp_server_core::admin::Admin`, opened with
+  `Admin::new(&Authorizer, &AdminCaller)` only once that `Authorizer`
+  admits the admin (another's is `403 forbidden`, nothing read), acts on
+  that `Authorizer`'s records, vault and tokenless client, so a service
+  writes the records the order reads and reaches the vault only through
+  the capability methods. Each operation takes the request's values as
+  it carried them (ids, labels, an RFC 3339 expiry; `TenantsInput`,
+  `KeyRequest`), validates them in the order, and on the fields, of
+  §4.2's answers, and answers a domain value (`Tenant`, a `Listing`,
+  `Minted`, `Attached`, `HeldWaba`, `VaultRotation`) or a
+  `ServiceError`: the tenants (create, list, read, rename or suspend,
+  delete with its WABAs disconnected first, a moved WABA skipped, five
+  rounds), the tenant and platform keys (mint, list, revoke), attaching
+  a WABA (D4 on the claimed id before Meta is asked; the numbers Meta
+  lists with the given token, at most 1,000; bind, D4 again atomically;
+  `Authorizer::store_token`; subscribe, `step: subscribe_app` and
+  `resumable` on failure, its `190` marking the numbers), a binding's
+  read, the admin unbind (unsubscribe at best with a usable token, then
+  forget; without one, `forget_for_admin`) and the vault's rotation.
+  The operator's changes are audited by the core (`audit`, target
+  `audit`, fields unchanged), and failed Graph calls are told to an
+  `observe::Observer` (the server's `Metrics`: the graph error counter),
+  the core naming no metrics library. What the command line does on the
+  database directly, without an admin key (`mint`, `allowed_tenants`,
+  `is_valid_name`), takes no capability. The axum handlers read the
+  request, call the operation and render its answer; the conformance
+  suite `admin` holds the services to D4 over a backend's bundle, with
+  no HTTP layer (a WABA another tenant holds is refused with nothing
+  stored, subscribed or shared), on memory and, live, on Postgres.
 - **`ServiceError`** is the §5 error model as data: a code of `CODES`
   (§5.2), its status as a number, `retryable`, `may_have_been_sent`, the
   field for `invalid`, the step and `resumable` of a multi-step call, and
@@ -1227,7 +1258,8 @@ where it differs from the target above:
   server's extractors and every handler, which only the routers reach,
   behind their guards. The `Authorizer` also refuses a Graph client
   built with a token (SR-L4), and what must not compile outside the
-  service's crates (the vault's methods, a capability of one's own; in
+  service's crates (the vault's methods, a capability of one's own, the
+  `Authorizer`'s records, since S5a; in
   the server `AppState::store` and `authz`, the handlers and
   `idempotency::run`) is pinned by UI tests with the compiler's errors.
   Deleting an opened WABA's token and binding, and marking its numbers
@@ -1282,7 +1314,10 @@ where it differs from the target above:
   (what crosses ports: every accessor hands out the same data, deleting
   a tenant purges its stream, the `RouteGuard` cases, each tenant's
   inserts commit in sequence order), `capabilities` (SR-L2, the
-  `failed` race, M1) and `races` (S2's races). The memory backend runs
+  `failed` race, M1), `races` (S2's races) and `admin` (S5a: the admin
+  services' D4 refusal, with nothing stored, subscribed or shared; the
+  core's own `tests/admin.rs` runs it on a memory backend of its own,
+  with no server crate). The memory backend runs
   it in the service's `tests/store.rs`, the Postgres one live in
   `tests/live_postgres.rs`; the service's tests also show what it
   refuses: a backend whose `kv()` is a new store on each call, an

@@ -1,11 +1,11 @@
 ---
 name: meta-whatsapp-rs-commerce
-description: "WhatsApp commerce with meta-whatsapp-rs - commerce settings (cart, catalog visibility), single-product, multi-product (up to 30 products) and catalog messages from a Meta catalog, catalog, multi-product and product-card carousel templates (two cards at creation, up to 10 at send) to reach customers outside the 24-hour window, and carts coming back as order webhooks (OrderContent, product_items) to re-check and fulfil. Load when showing products or a catalog in WhatsApp, enabling the cart, handling orders placed in WhatsApp, or sending product templates."
+description: "WhatsApp commerce with meta-whatsapp-rs - commerce settings (cart, catalog visibility), reading the WABA's connected catalog and its products page by page (Waba::product_catalogs, Catalog::products_stream), single-product, multi-product (up to 30 products) and catalog messages from a Meta catalog, catalog, multi-product and product-card carousel templates (two cards at creation, up to 10 at send) to reach customers outside the 24-hour window, and carts coming back as order webhooks (OrderContent, product_items) to re-check and fulfil. Load when listing a catalog's products, showing products or a catalog in WhatsApp, enabling the cart, handling orders placed in WhatsApp, or sending product templates."
 ---
 
 # meta-whatsapp-rs-commerce
 
-> **Verified against meta-whatsapp-rs df598e6647242d4f471579d7f84df12c3032c651 (2026-10-27).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 2dc6902062b755968e3863bd01230eba4b8a3f65 (2026-10-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/commerce.rs](examples/commerce.rs), compiled and
 tested by meta-whatsapp-rs's own gate.
@@ -15,7 +15,7 @@ tested by meta-whatsapp-rs's own gate.
 A shop whose catalog is connected to its WhatsApp Business Account:
 showing products, letting customers build a cart in WhatsApp, receiving
 the order. Upload and manage the catalog itself in Meta's Commerce Manager
-or Catalog API — not through meta-whatsapp-rs.
+or Catalog API — meta-whatsapp-rs only reads it.
 
 ## Commerce settings
 
@@ -28,6 +28,23 @@ commerce.set_cart_enabled(true).await // Meta's default
 `commerce.settings()` reads them; `update_settings(&update)` with a
 `CommerceSettingsUpdate` sets both at once. Hiding the catalog makes
 existing catalog links show an "invalid catalog link" warning.
+
+## Reading the catalog
+
+```rust
+let catalogs = client.waba(waba_id).product_catalogs(&[]).await?;
+let Some(catalog) = catalogs.data.into_iter().next() else {
+    return Ok(Vec::new()); // no catalog connected yet
+};
+```
+
+`client.catalog(catalog.id).products_stream(&query)` follows Meta's
+cursors to the last page; `products(&query)` returns one `Page`, whose
+`next_cursor()` is the next query's `after`. `ListProducts` carries
+`return_only_approved_products`, and in `common` (`ProductFilters`)
+`fields`, a JSON `filter` and `limit`; `product_sets_stream`,
+`client.product_set(id)` and `client.product(id)` read the rest. A
+product's `retailer_id` is the SKU messages address.
 
 ## Product messages (inside the 24-hour window)
 

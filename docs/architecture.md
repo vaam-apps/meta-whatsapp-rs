@@ -1214,9 +1214,12 @@ decisions and the delivery milestones, is
     from outside its own code calls `Authorizer::admit` or
     `admit_admin` before acting on it, as the service's extractors do:
     design §8.1), event
-    routing and polling, the idempotency engine, the rate limiter, and
-    the error model as data (`ServiceError`: a code of `CODES`, its status
-    as a number, `retryable`, `may_have_been_sent`). It depends on the
+    routing and polling, the idempotency engine, the rate limiter, the
+    error model as data (`ServiceError`: a code of `CODES`, its status
+    as a number, `retryable`, `may_have_been_sent`), and, since roadmap
+    S5a, the admin operations as services (`admin::Admin`, opened with
+    an `AdminCaller` its `Authorizer` admits: an API adapter parses,
+    calls and renders; the others follow in S5b–S5e). It depends on the
     facade without its adapters' features: no axum, no sqlx, no utoipa
     (the `http` crate is in its graph only through the library, whose
     `HttpTransport` port and client speak it; no `http` type crosses the

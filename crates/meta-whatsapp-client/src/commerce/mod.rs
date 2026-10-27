@@ -1,16 +1,27 @@
-//! Commerce settings of a business phone number: whether the shopping cart
-//! is enabled and whether the catalog storefront is visible.
+//! Commerce: the settings of a business phone number (whether the shopping
+//! cart is enabled and whether the catalog storefront is visible), and
+//! reads of the catalog behind them.
+//!
+//! - [`Commerce`] ([`Client::commerce`]): the phone number's commerce
+//!   settings.
+//! - Catalog reads, through Meta's Catalog API: the catalog connected to a
+//!   WABA ([`crate::waba::Waba::product_catalogs`]), a catalog
+//!   ([`Catalog`], [`Client::catalog`]) with its products and product sets
+//!   paged by cursor, a product set ([`ProductSet`],
+//!   [`Client::product_set`]) with its products, and one product
+//!   ([`Product`], [`Client::product`]). Their docs sit outside the
+//!   WhatsApp docs; the submodule's documentation lists them.
 //!
 //! Docs:
 //! - `catalogs/set-commerce-settings` — enable/disable cart, show/hide
 //!   catalog, get settings.
 //! - `reference/whatsapp-business-phone-number/commerce-settings-api` —
 //!   `GET`/`POST /{phone-number-id}/whatsapp_commerce_settings`.
-//! - `catalogs/catalogs-overview`, `catalogs/upload-inventory` — context
-//!   only. They document no WhatsApp Graph endpoint: a catalog is created in
-//!   Commerce Manager or through Meta's Commerce API (outside the WhatsApp
-//!   docs) and connected to the WABA in WhatsApp Manager, so there is nothing
-//!   to wrap here. Product, catalog and carousel *messages* belong to
+//! - `catalogs/catalogs-overview`, `catalogs/upload-inventory` — context.
+//!   A catalog is created and filled in Commerce Manager or through Meta's
+//!   Catalog API, and connected to the WABA in WhatsApp Manager; one
+//!   catalog serves a whole WhatsApp account hierarchy. Writing catalogs is
+//!   not wrapped. Product, catalog and carousel *messages* belong to
 //!   `crate::messages`.
 //!
 //! Doc paths are relative to
@@ -22,6 +33,15 @@ use meta_whatsapp_core::{Error, Result};
 use serde::Deserialize;
 
 use crate::Client;
+
+mod catalog;
+
+pub use catalog::{
+    Catalog, CatalogInfo, ListProductSets, ListProducts, ListSetProducts, Product,
+    ProductAvailability, ProductCondition, ProductError, ProductErrorPriority, ProductFilters,
+    ProductInfo, ProductReviewStatus, ProductSet, ProductSetInfo, ProductVisibility,
+};
+pub use meta_whatsapp_core::ids::{ProductItemId, ProductSetId};
 
 /// Entry point, see [`Client::commerce`].
 #[derive(Debug, Clone)]

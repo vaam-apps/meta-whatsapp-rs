@@ -406,7 +406,9 @@ mod tests {
                 }
             }
         }
-        assert!(named >= 20, "{named}");
+        // The admin operations name theirs in the core since roadmap S5a
+        // (its own `every_code_the_source_names_exists` reads them).
+        assert!(named >= 16, "{named}");
     }
 
     #[test]

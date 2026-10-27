@@ -254,6 +254,26 @@ async fn keys_are_shown_once_stored_as_digests_and_revoked_at_once() {
     assert_eq!(no_tenant.status, StatusCode::NOT_FOUND);
 }
 
+/// No such tenant (or an id that names none): its keys are not listed,
+/// `404 not_found`, not an empty page. Decisive: the tenant's read in
+/// `Admin::tenant_keys`.
+#[tokio::test]
+async fn a_missing_tenants_keys_are_not_found() {
+    let h = Harness::new();
+    let admin = h.admin_key().await;
+    for path in [
+        "/v1/admin/tenants/nobody/keys",
+        "/v1/admin/tenants/has%20space/keys",
+    ] {
+        let listed = h.call(Call::get(path).key(&admin)).await;
+        assert_eq!(
+            (listed.status, listed.code().as_str()),
+            (StatusCode::NOT_FOUND, "not_found"),
+            "{path}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn platform_keys_name_their_tenants() {
     let h = Harness::new();
@@ -270,6 +290,8 @@ async fn platform_keys_name_their_tenants() {
     assert_eq!(minted.status, StatusCode::CREATED, "{}", minted.text);
     let key = minted.json()["key"].as_str().unwrap().to_owned();
     assert_eq!(minted.json()["api_key"]["tenants"], json!(["merchant-42"]));
+    // Its scopes are the request's, and only those.
+    assert_eq!(minted.json()["api_key"]["scopes"], json!(["numbers"]));
     assert_eq!(
         h.call(Call::get("/v1/numbers").key(&key).tenant("merchant-42"))
             .await
@@ -291,6 +313,7 @@ async fn platform_keys_name_their_tenants() {
         ))
         .await;
     assert_eq!(any.json()["api_key"]["tenants"], "*");
+    assert_eq!(any.json()["api_key"]["scopes"], json!(["numbers"]));
     let listed = h
         .call(Call::get("/v1/admin/platform-keys").key(&admin))
         .await
@@ -411,6 +434,21 @@ async fn attaching_a_waba_binds_what_meta_lists_and_stores_the_token() {
     let wabas = h.call(Call::get("/v1/wabas").key(&key)).await.json();
     assert_eq!(wabas["data"][0]["waba_id"], WABA);
     assert!(wabas["data"][0]["attached_at"].is_string());
+
+    // No such tenant: `404`, before Meta is asked anything (its token is
+    // not spent on a WABA nobody would hold).
+    let reply = h
+        .call(post(
+            "/v1/admin/tenants/nobody/wabas",
+            &admin,
+            &json!({"waba_id": "102290129340399", "token": SYSTEM_TOKEN}),
+        ))
+        .await;
+    assert_eq!(
+        (reply.status, reply.code().as_str()),
+        (StatusCode::NOT_FOUND, "not_found")
+    );
+    assert_eq!(h.graph.requests().len(), 2, "Meta was asked");
 }
 
 /// D4: a WABA bound to one tenant is refused to another, before Meta is
@@ -1578,5 +1616,84 @@ async fn a_token_rewritten_while_it_is_forgotten_is_503_then_goes() {
                 .is_none()
         );
     }
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// The admin operations count Meta's failures in
+/// `wa_server_graph_errors_total`, by the error's code, as every route
+/// does (roadmap S5a: through the core's `observe::Observer`, which the
+/// server's `Metrics` implements): the attach's listing refused (Meta's
+/// `reconnect_required`, counted before the `422` on `token`), its
+/// subscription refused (`permission`), a tenant's deletion whose
+/// unsubscription failed (`service_unavailable`) and an unbind Meta
+/// refused (`reconnect_required` again). Decisive: each `Observer` call
+/// in `server_core::admin` (the listing's and `Admin::counted`), and the
+/// handlers' `observed_by(state.metrics())`.
+#[tokio::test]
+async fn the_admin_operations_count_metas_failures() {
+    let h = Harness::new();
+    let admin = h.admin_key().await;
+    h.tenant("merchant-a").await;
+    let counted = |code: &str| {
+        let metrics = h.state.metrics().render();
+        let line = format!("wa_server_graph_errors_total{{code=\"{code}\"}} ");
+        metrics
+            .lines()
+            .find_map(|l| l.strip_prefix(line.as_str()))
+            .map_or(0, |n| n.parse::<u64>().unwrap())
+    };
+    let attach = |waba: &str| {
+        post(
+            "/v1/admin/tenants/merchant-a/wabas",
+            &admin,
+            &json!({"waba_id": waba, "token": SYSTEM_TOKEN}),
+        )
+    };
+    let refused_token = json!({"error": {"message": "Invalid OAuth access token",
+        "type": "OAuthException", "code": 190, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}});
+
+    // The listing refused: the request's token, counted as Meta's code.
+    h.graph.push_json(401, refused_token.clone());
+    let reply = h.call(attach("102290129340400")).await;
+    assert_eq!(
+        reply.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        reply.text
+    );
+    assert_eq!(counted("reconnect_required"), 1);
+    assert_eq!(counted("invalid_request"), 0, "counted after the remap");
+
+    // The subscription refused, once the token is stored.
+    h.graph.push_json(200, phone_numbers_page());
+    h.graph.push_json(
+        403,
+        json!({"error": {"message": "(#200) Permissions error", "type": "OAuthException",
+                         "code": 200, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+    );
+    let reply = h.call(attach(WABA)).await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN, "{}", reply.text);
+    assert_eq!(counted("permission"), 1);
+
+    // A tenant's deletion: Meta fails to unsubscribe the app.
+    h.graph.push_json(
+        500,
+        json!({"error": {"message": "An unexpected error occurred. Please retry your request",
+                         "type": "GraphMethodException", "code": 2, "is_transient": true,
+                         "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+    );
+    let reply = h
+        .call(Call::new(Method::DELETE, "/v1/admin/tenants/merchant-a").key(&admin))
+        .await;
+    assert_eq!(reply.status, StatusCode::BAD_GATEWAY, "{}", reply.text);
+    assert_eq!(counted("service_unavailable"), 1);
+
+    // The unbind: Meta refuses the stored token, the unbind goes on.
+    h.graph.push_json(401, refused_token);
+    let reply = h
+        .call(Call::new(Method::DELETE, format!("/v1/admin/wabas/{WABA}/binding")).key(&admin))
+        .await;
+    assert_eq!(reply.status, StatusCode::NO_CONTENT, "{}", reply.text);
+    assert_eq!(counted("reconnect_required"), 2);
     assert_eq!(h.graph.remaining(), 0);
 }

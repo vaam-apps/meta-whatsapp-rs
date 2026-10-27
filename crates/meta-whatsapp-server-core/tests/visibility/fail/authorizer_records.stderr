@@ -1,0 +1,10 @@
+error[E0624]: method `records` is private
+ --> tests/visibility/fail/authorizer_records.rs:7:19
+  |
+7 |     let _ = authz.records();
+  |                   ^^^^^^^ private method
+  |
+ ::: src/authz.rs
+  |
+  |     pub(crate) fn records(&self) -> &dyn RecordStore {
+  |     ------------------------------------------------ private method defined here

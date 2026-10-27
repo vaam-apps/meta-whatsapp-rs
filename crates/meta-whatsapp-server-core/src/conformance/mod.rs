@@ -31,6 +31,7 @@
 //! | [`invariants`] | what crosses ports, which a backend made of loose stores loses: every accessor hands out the same data; deleting a tenant purges its stream; the routing checked again with each insert (the [`RouteGuard`] cases: a binding moved before the insert, begun after the event, of the event's own second); each tenant's inserts commit in sequence order |
 //! | [`capabilities`] | through the core's [`Authorizer`]: a capability acts only on the binding and the vault record it was made from (roadmap S2, SR-L2, the `failed` race, M1) |
 //! | [`races`] | the atomic contracts raced on two tasks: an insert against its binding moving, a binding against its tenant's deletion, each conditioned write against a re-attach |
+//! | [`admin`] | the core's admin services over the bundle, with no HTTP layer (roadmap S5a): attaching a WABA another tenant holds is refused with nothing stored, subscribed or shared, whether its holder is seen before Meta is asked or only by the binding's own check |
 //!
 //! Every case panics on a broken contract, with what broke: this is test
 //! code.
@@ -47,6 +48,7 @@
     clippy::too_many_lines
 )] // test code: a panic is the report; its scenarios read top to bottom
 
+pub mod admin;
 pub mod capabilities;
 pub mod invariants;
 pub mod outbox;
@@ -81,6 +83,10 @@ where
 
     let backend = fresh().await;
     let report = races::run(backend.as_ref()).await;
+    backend.close().await;
+
+    let backend = fresh().await;
+    admin::run(backend.as_ref()).await;
     backend.close().await;
     report
 }

@@ -4,7 +4,9 @@
 //! portfolio accessor ([`Client::business`]) for client/owned WABA lists,
 //! messaging customer bases and the parent BSUID account
 //! ([`Business::parent_bsuid_account`], served from `api.facebook.com`,
-//! not Graph).
+//! not Graph). The catalog connected to a WABA is read by
+//! [`Waba::product_catalogs`], defined with the other catalog reads in
+//! [`crate::commerce`].
 //!
 //! Docs: `whatsapp-business-accounts`, `support/health-status`,
 //! `reference/whatsapp-business-account/{whatsapp-business-account-api,
