@@ -282,7 +282,7 @@ mod tests {
             json!({"official_business_account": {"oba_status": "NOT_STARTED"}, "id": ID}),
         );
         let status = client(&t)
-            .phone_number(ID)
+            .phone_number(PhoneNumberId::new(ID).unwrap())
             .official_business_account()
             .await
             .unwrap();
@@ -312,11 +312,11 @@ mod tests {
             json!({"official_business_account": {"oba_status": "ON_HOLD"}, "id": ID}),
         );
         t.push_json(200, json!({"id": ID}));
-        let pn = client(&t).phone_number(ID);
+        let pn = client(&t).phone_number(PhoneNumberId::new(ID).unwrap());
         let a = pn.official_business_account().await.unwrap();
         assert_eq!(a.oba_status, Some(ObaStatus::UnderReview));
         assert_eq!(a.status_message.as_deref(), Some("In review"));
-        assert_eq!(a.id, Some(PhoneNumberId::new(ID)));
+        assert_eq!(a.id, Some(PhoneNumberId::new(ID).unwrap()));
         let b = pn.official_business_account().await.unwrap();
         assert_eq!(b.oba_status, Some(ObaStatus::Other("ON_HOLD".into())));
         // No `official_business_account` in the answer: a decode error, not
@@ -347,7 +347,7 @@ mod tests {
             .supporting_links(links())
             .additional_supporting_information("Founded in 1999.");
         let resp = client(&t)
-            .phone_number(ID)
+            .phone_number(PhoneNumberId::new(ID).unwrap())
             .request_official_business_account(&application)
             .await
             .unwrap();
@@ -388,7 +388,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"success": true, "message": "ok"}));
         client(&t)
-            .phone_number(ID)
+            .phone_number(PhoneNumberId::new(ID).unwrap())
             .request_official_business_account(&ObaApplication::new(
                 "https://www.luckyshrub.example",
                 "US",
@@ -407,7 +407,7 @@ mod tests {
         t.push_json(200, json!({"success": false, "message": "not eligible"}));
         assert!(
             client(&t)
-                .phone_number(ID)
+                .phone_number(PhoneNumberId::new(ID).unwrap())
                 .request_official_business_account(&ObaApplication::new(
                     "https://www.luckyshrub.example",
                     "US",
@@ -421,7 +421,7 @@ mod tests {
     #[tokio::test]
     async fn request_is_validated_first_and_never_replayed() {
         let t = ScriptedTransport::new();
-        let pn = client(&t).phone_number(ID);
+        let pn = client(&t).phone_number(PhoneNumberId::new(ID).unwrap());
         for (application, field) in [
             (ObaApplication::new(" ", "US"), "business_website_url"),
             (
@@ -467,7 +467,7 @@ mod tests {
             .build()
             .unwrap();
         assert!(
-            c.phone_number(ID)
+            c.phone_number(PhoneNumberId::new(ID).unwrap())
                 .request_official_business_account(&ObaApplication::new("https://x.example", "US"))
                 .await
                 .is_err()

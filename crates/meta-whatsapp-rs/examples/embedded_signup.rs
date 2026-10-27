@@ -91,6 +91,7 @@ use meta_whatsapp_rs::client::embedded_signup::{
 };
 use meta_whatsapp_rs::client::phone_numbers::TwoStepPin;
 use meta_whatsapp_rs::core::config::ApiVersion;
+use meta_whatsapp_rs::core::ids::AppId;
 use meta_whatsapp_rs::prelude::*;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -591,12 +592,8 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
-    let app_id = env("WA_APP_ID")?;
-    // It is written into a script: digits only.
-    anyhow::ensure!(
-        !app_id.is_empty() && app_id.bytes().all(|b| b.is_ascii_digit()),
-        "WA_APP_ID must be the numeric app id"
-    );
+    // It is written into a script: digits only, which `AppId` checks.
+    let app_id = AppId::new(env("WA_APP_ID")?).context("WA_APP_ID must be the numeric app id")?;
     let credentials = AppCredentials::new(app_id, env("WA_APP_SECRET")?);
     // No tenants, no signup: the routes are never served unauthenticated.
     let tenants = Tenants::from_json(&env("WA_TENANTS")?)?;

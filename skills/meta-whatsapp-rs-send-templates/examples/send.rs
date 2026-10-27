@@ -70,7 +70,8 @@ mod tests {
 
     #[test]
     fn positional_template_body() {
-        let value = serde_json::to_value(order_update("1037543291543636".into())).unwrap();
+        let value =
+            serde_json::to_value(order_update(MediaId::new("1037543291543636").unwrap())).unwrap();
         assert_eq!(
             value,
             json!({
@@ -104,7 +105,11 @@ mod tests {
         let long =
             TemplateMessage::new("autumn_offer", "en_US").copy_code_button(0, "X".repeat(21));
         assert!(long.validate().is_err());
-        assert!(carousel(["1".into(), "2".into()]).validate().is_ok());
+        assert!(
+            carousel([MediaId::new("1").unwrap(), MediaId::new("2").unwrap()])
+                .validate()
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -117,7 +122,7 @@ mod tests {
             .build()
             .unwrap();
         send(
-            &client.messages("106540352242922"),
+            &client.messages(PhoneNumberId::new("106540352242922").unwrap()),
             Recipient::phone("+16505551234"),
             welcome(),
         )

@@ -94,7 +94,8 @@ fn inbox(
         .retry(RetryPolicy::NONE)
         .build()
         .unwrap();
-    Inbox::new(client, PNID, store.clone()).with_clock(Arc::new(clock.clone()))
+    Inbox::new(client, PhoneNumberId::new(PNID).unwrap(), store.clone())
+        .with_clock(Arc::new(clock.clone()))
 }
 
 /// The text reply of these tests.
@@ -502,7 +503,11 @@ mod rules {
 
     async fn events_of(store: &Arc<dyn ConversationStore>, contact: &str) -> Vec<WindowEvent> {
         store
-            .window_events(&ConversationKey::new(PNID, contact), None, 10)
+            .window_events(
+                &ConversationKey::new(PhoneNumberId::new(PNID).unwrap(), contact),
+                None,
+                10,
+            )
             .await
             .unwrap()
     }
@@ -517,7 +522,10 @@ mod rules {
 
     async fn links_of(store: &Arc<dyn ConversationStore>, contact: &str) -> Vec<(String, String)> {
         store
-            .identity_links(&ConversationKey::new(PNID, contact))
+            .identity_links(&ConversationKey::new(
+                PhoneNumberId::new(PNID).unwrap(),
+                contact,
+            ))
             .await
             .unwrap()
             .into_iter()
@@ -534,7 +542,10 @@ mod rules {
         contact: &str,
     ) -> Option<ThreadOwnership> {
         store
-            .thread_owner(&ConversationKey::new(PNID, contact))
+            .thread_owner(&ConversationKey::new(
+                PhoneNumberId::new(PNID).unwrap(),
+                contact,
+            ))
             .await
             .unwrap()
     }
@@ -620,7 +631,11 @@ mod rules {
         )
         .await;
         let events = store
-            .window_events(&ConversationKey::new("105615555715855", BSUID), None, 10)
+            .window_events(
+                &ConversationKey::new(PhoneNumberId::new("105615555715855").unwrap(), BSUID),
+                None,
+                10,
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -646,7 +661,11 @@ mod rules {
         assert_eq!(every_event(&store).await, 0);
         assert!(
             store
-                .window_events(&ConversationKey::new("436666719526789", BSUID), None, 10)
+                .window_events(
+                    &ConversationKey::new(PhoneNumberId::new("436666719526789").unwrap(), BSUID),
+                    None,
+                    10
+                )
                 .await
                 .unwrap()
                 .is_empty()
@@ -671,7 +690,11 @@ mod rules {
         )
         .await;
         let events = store
-            .window_events(&ConversationKey::new("105615555715855", BSUID), None, 10)
+            .window_events(
+                &ConversationKey::new(PhoneNumberId::new("105615555715855").unwrap(), BSUID),
+                None,
+                10,
+            )
             .await
             .unwrap();
         assert_eq!((events.len(), events[0].at), (1, at(1_671_644_824)));
@@ -970,7 +993,12 @@ mod rules {
     async fn a_handover_follows_the_links_to_the_current_bsuid() {
         let store = memory();
         let link = |previous: &str, current: &str, unix: i64| {
-            IdentityLink::new(PNID, previous, current, at(unix))
+            IdentityLink::new(
+                PhoneNumberId::new(PNID).unwrap(),
+                previous,
+                current,
+                at(unix),
+            )
         };
         for l in [
             link(PHONE, "US.1", 100),
@@ -1017,7 +1045,7 @@ mod rules {
     async fn a_handover_finds_the_bsuid_of_a_synced_contact() {
         let store = memory();
         let contact = |key: &str, phone: &str, user: &str, unix: i64| StoredContact {
-            key: ConversationKey::new(PNID, key),
+            key: ConversationKey::new(PhoneNumberId::new(PNID).unwrap(), key),
             full_name: None,
             first_name: None,
             phone_number: Some(phone.to_owned()),
@@ -1056,7 +1084,12 @@ mod rules {
             .await
             .unwrap();
         store
-            .link_identity(IdentityLink::new(PNID, "US.OLD", BSUID, at(150)))
+            .link_identity(IdentityLink::new(
+                PhoneNumberId::new(PNID).unwrap(),
+                "US.OLD",
+                BSUID,
+                at(150),
+            ))
             .await
             .unwrap();
         deliver(&store, CONTROL_TAKEN).await;
@@ -1289,7 +1322,7 @@ mod rules {
                 since: at(1_750_101_060),
             }
         );
-        let foreign = ConversationKey::new("999", PHONE);
+        let foreign = ConversationKey::new(PhoneNumberId::new("999").unwrap(), PHONE);
         assert!(inbox.record_release(&foreign).await.is_err());
         assert!(inbox.thread_owner(&foreign).await.is_err());
         assert_eq!(owner_of_number(&store, "999").await, None);
@@ -1300,7 +1333,10 @@ mod rules {
         number: &str,
     ) -> Option<ThreadOwnership> {
         store
-            .thread_owner(&ConversationKey::new(number, PHONE))
+            .thread_owner(&ConversationKey::new(
+                PhoneNumberId::new(number).unwrap(),
+                PHONE,
+            ))
             .await
             .unwrap()
     }
@@ -1487,7 +1523,10 @@ mod rules {
         assert_eq!(kind(unchecked.check_reply(&key).await), None);
         // A key of another number is refused as such, before any check.
         let foreign = inbox
-            .check_reply(&ConversationKey::new("999", BSUID))
+            .check_reply(&ConversationKey::new(
+                PhoneNumberId::new("999").unwrap(),
+                BSUID,
+            ))
             .await
             .unwrap_err();
         assert!(
@@ -1578,7 +1617,7 @@ mod rules {
         inbox.reply(&key, text("I'm taking over")).await.unwrap();
         assert_eq!(transport.remaining(), 0);
 
-        let foreign = ConversationKey::new("999", BSUID);
+        let foreign = ConversationKey::new(PhoneNumberId::new("999").unwrap(), BSUID);
         assert!(
             inbox
                 .record_thread_owner(&foreign, ThreadOwner::ThisApp, None)
@@ -1587,7 +1626,10 @@ mod rules {
         );
         assert_eq!(
             store
-                .thread_owner(&ConversationKey::new("999", BSUID))
+                .thread_owner(&ConversationKey::new(
+                    PhoneNumberId::new("999").unwrap(),
+                    BSUID
+                ))
                 .await
                 .unwrap(),
             None
@@ -1691,7 +1733,11 @@ mod rules {
                 .is_some_and(|o| o.owner == ThreadOwner::AnotherApp),
             links == [2, 2, 1],
             store
-                .messages(&ConversationKey::new(PNID, BSUID), None, 10)
+                .messages(
+                    &ConversationKey::new(PhoneNumberId::new(PNID).unwrap(), BSUID),
+                    None,
+                    10,
+                )
                 .await
                 .unwrap()
                 .len()
@@ -1790,7 +1836,10 @@ mod rules {
                 contact.as_ref(),
                 call
             ),
-            Some(ConversationKey::new(PNID, BSUID))
+            Some(ConversationKey::new(
+                PhoneNumberId::new(PNID).unwrap(),
+                BSUID
+            ))
         );
         let accepted = fixture(
             "pages/business-scoped-user-ids__business_initiated_calls_status_webhooks.json",
@@ -1816,21 +1865,30 @@ mod rules {
                 contact.as_ref(),
                 status
             ),
-            Some(ConversationKey::new(PNID, BSUID))
+            Some(ConversationKey::new(
+                PhoneNumberId::new(PNID).unwrap(),
+                BSUID
+            ))
         );
 
         let store = memory();
-        let number = meta_whatsapp_rs::core::ids::PhoneNumberId::new(PNID);
+        let number = meta_whatsapp_rs::core::ids::PhoneNumberId::new(PNID).unwrap();
         assert_eq!(
             handover_key(store.as_ref(), &number, "+16505551234")
                 .await
                 .unwrap(),
-            Some(ConversationKey::new(PNID, PHONE))
+            Some(ConversationKey::new(
+                PhoneNumberId::new(PNID).unwrap(),
+                PHONE
+            ))
         );
         deliver(&store, PERMISSION_REPLY).await; // links the phone to the BSUID
         assert_eq!(
             handover_key(store.as_ref(), &number, PHONE).await.unwrap(),
-            Some(ConversationKey::new(PNID, BSUID))
+            Some(ConversationKey::new(
+                PhoneNumberId::new(PNID).unwrap(),
+                BSUID
+            ))
         );
         assert_eq!(
             handover_key(store.as_ref(), &number, " + ").await.unwrap(),

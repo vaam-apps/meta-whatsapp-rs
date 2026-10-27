@@ -201,7 +201,7 @@ mod tests {
             json!({"data": [{"is_cart_enabled": true, "is_catalog_visible": true, "id": "727705352028726"}]}),
         );
         let s = client(&t)
-            .commerce("106850078877666")
+            .commerce(PhoneNumberId::new("106850078877666").unwrap())
             .settings()
             .await
             .unwrap();
@@ -228,7 +228,11 @@ mod tests {
     async fn empty_data_is_a_decode_error_not_a_default() {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"data": []}));
-        let err = client(&t).commerce("1").settings().await.unwrap_err();
+        let err = client(&t)
+            .commerce(PhoneNumberId::new("1").unwrap())
+            .settings()
+            .await
+            .unwrap_err();
         assert!(matches!(err, Error::Decode { .. }), "{err:?}");
         assert_eq!(t.remaining(), 0);
     }
@@ -238,7 +242,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"success": true}));
         client(&t)
-            .commerce("106850078877666")
+            .commerce(PhoneNumberId::new("106850078877666").unwrap())
             .set_cart_enabled(true)
             .await
             .unwrap();
@@ -258,7 +262,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"success": true}));
         client(&t)
-            .commerce("106850078877666")
+            .commerce(PhoneNumberId::new("106850078877666").unwrap())
             .set_catalog_visible(false)
             .await
             .unwrap();
@@ -277,7 +281,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"success": true}));
         client(&t)
-            .commerce("1")
+            .commerce(PhoneNumberId::new("1").unwrap())
             .update_settings(&CommerceSettingsUpdate {
                 is_cart_enabled: Some(false),
                 is_catalog_visible: Some(true),
@@ -305,7 +309,10 @@ mod tests {
             })
             .build()
             .unwrap();
-        c.commerce("1").set_cart_enabled(true).await.unwrap();
+        c.commerce(PhoneNumberId::new("1").unwrap())
+            .set_cart_enabled(true)
+            .await
+            .unwrap();
         assert_eq!(t.requests().len(), 2);
         assert_eq!(t.remaining(), 0);
     }
@@ -318,7 +325,7 @@ mod tests {
             json!({"error": {"message": "(#200) Permissions error", "type": "OAuthException", "code": 200}}),
         );
         let err = client(&t)
-            .commerce("1")
+            .commerce(PhoneNumberId::new("1").unwrap())
             .set_cart_enabled(true)
             .await
             .unwrap_err();

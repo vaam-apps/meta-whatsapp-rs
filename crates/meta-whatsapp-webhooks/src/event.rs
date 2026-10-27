@@ -840,7 +840,7 @@ fn unparsed_account_update_waba(raw: &Value, entry: WabaId) -> WabaId {
         .and_then(|info| info.get("waba_id"))
         .and_then(Value::as_str)
         .filter(|id| !id.trim().is_empty())
-        .map_or(entry, WabaId::new)
+        .map_or(entry, WabaId::new_unchecked)
 }
 
 /// The fields of [`WebhookEvent::AccountUpdated`], as a variant
@@ -884,7 +884,7 @@ where
             .and_then(|i| i.waba_id.clone())
             .filter(|id| !id.as_str().trim().is_empty())
     } else {
-        account_update_waba(&stored.update, WabaId::new(entry_id.clone()))
+        account_update_waba(&stored.update, WabaId::new_unchecked(entry_id.clone()))
     };
     Ok((waba_id, entry_id, stored.time, stored.update))
 }
@@ -897,7 +897,7 @@ struct Ctx {
 
 impl Ctx {
     fn waba(&self) -> WabaId {
-        WabaId::new(self.entry_id.clone())
+        WabaId::new_unchecked(self.entry_id.clone())
     }
 
     /// Every change yields at least one event: list-bearing values with no
@@ -1220,7 +1220,7 @@ impl Ctx {
             }
             ChangeValue::PartnerSolutions(update) => {
                 out.push(WebhookEvent::PartnerSolutionUpdated {
-                    business_id: BusinessId::new(self.entry_id.clone()),
+                    business_id: BusinessId::new_unchecked(self.entry_id.clone()),
                     time,
                     update,
                 });
@@ -1347,7 +1347,7 @@ mod tests {
         };
         assert_eq!(serde_json::to_value(&e).unwrap()["event"], e.kind());
         let e = WebhookEvent::Unknown {
-            waba_id: "1".into(),
+            waba_id: WabaId::new("1").unwrap(),
             field: "f".into(),
             time: None,
             raw: json!({}),
@@ -1385,7 +1385,7 @@ mod tests {
                 error: "e".into(),
             },
             WebhookEvent::Unknown {
-                waba_id: "1".into(),
+                waba_id: WabaId::new("1").unwrap(),
                 field: "f".into(),
                 time: None,
                 raw: json!({}),

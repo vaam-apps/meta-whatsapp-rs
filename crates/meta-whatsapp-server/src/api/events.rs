@@ -9,6 +9,7 @@
 //! [`crate::events::poll`]; this module parses the query and shapes the
 //! envelope.
 
+use meta_whatsapp_rs::core::ids::PhoneNumberId;
 use meta_whatsapp_rs::webhooks::axum::Json;
 use meta_whatsapp_rs::webhooks::axum::extract::{FromRequestParts, Query, State};
 use meta_whatsapp_rs::webhooks::axum::http::request::Parts;
@@ -57,7 +58,7 @@ pub struct EventsParams {
 pub struct EventsQuery {
     after: Option<i64>,
     types: Option<Vec<String>>,
-    phone_number_id: Option<String>,
+    phone_number_id: Option<PhoneNumberId>,
     limit: usize,
 }
 
@@ -68,9 +69,7 @@ impl EventsQuery {
             tenant,
             after: self.after,
             types: self.types,
-            phone_number_id: self
-                .phone_number_id
-                .map(meta_whatsapp_rs::core::ids::PhoneNumberId::new),
+            phone_number_id: self.phone_number_id,
             limit: self.limit,
             max_bytes: MAX_PAGE_DATA_BYTES,
         }
@@ -110,13 +109,10 @@ fn parse_query(pairs: &[(String, String)]) -> Result<EventsQuery, ApiError> {
                 }
             }
             "phone_number_id" => {
-                let valid = !value.is_empty()
-                    && value.len() <= 64
-                    && value.bytes().all(|b| b.is_ascii_digit());
-                if !valid {
-                    return Err(ApiError::invalid("phone_number_id"));
-                }
-                query.phone_number_id = Some(value.clone());
+                // The library's numeric id shape: 1 to 64 ASCII digits.
+                let number = PhoneNumberId::new(value.as_str())
+                    .map_err(|_| ApiError::invalid("phone_number_id"))?;
+                query.phone_number_id = Some(number);
             }
             "limit" => {
                 query.limit = value
@@ -349,7 +345,10 @@ mod tests {
             ok.types.as_deref(),
             Some(&["message_received".to_owned(), "status_updated".to_owned()][..])
         );
-        assert_eq!(ok.phone_number_id.as_deref(), Some("106540352242922"));
+        assert_eq!(
+            ok.phone_number_id.as_ref().map(PhoneNumberId::as_str),
+            Some("106540352242922")
+        );
         assert_eq!(ok.limit, 100);
         let default = parse_query(&[]).unwrap();
         assert_eq!(

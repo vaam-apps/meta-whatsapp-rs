@@ -124,12 +124,13 @@ pub async fn an_insert_racing_a_move_never_reaches_the_new_holder(
     let (store, outbox) = (backend.records(), backend.outbox());
     let run = super::unique();
     let other = format!("race-h-{run}");
+    let digits = super::unique_digits();
     store.create_tenant(&tenant(&other), "").await.unwrap();
     let ids = |round: usize| {
         (
             format!("race-g-{run}-{round}"),
-            WabaId::new(format!("race-w-{run}-{round}")),
-            PhoneNumberId::new(format!("race-p-{run}-{round}")),
+            WabaId::new(format!("{digits}{round:06}1")).unwrap(),
+            PhoneNumberId::new(format!("{digits}{round:06}2")).unwrap(),
         )
     };
     // Every binding first, then one wait into the next second: a binding
@@ -282,10 +283,11 @@ pub async fn a_binding_racing_a_deletion_serializes(
     let store = backend.records();
     let run = super::unique();
     let mut races = BindRaces::default();
+    let digits = super::unique_digits();
     for round in 0..rounds {
         let id = tenant(&format!("bd-{run}-{round}"));
-        let waba = WabaId::new(format!("bd-w-{run}-{round}"));
-        let pn = PhoneNumberId::new(format!("bd-p-{run}-{round}"));
+        let waba = WabaId::new(format!("{digits}{round:06}1")).unwrap();
+        let pn = PhoneNumberId::new(format!("{digits}{round:06}2")).unwrap();
         store.create_tenant(&id, "").await.unwrap().unwrap();
         let bound = {
             let (store, id, waba, pn) = (store.clone(), id.clone(), waba.clone(), pn.clone());

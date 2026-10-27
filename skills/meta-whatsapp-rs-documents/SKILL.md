@@ -5,7 +5,7 @@ description: "Invoices, receipts and vouchers for WhatsApp with meta-whatsapp-rs
 
 # meta-whatsapp-rs-documents
 
-> **Verified against meta-whatsapp-rs 6d04f3da9c504cffac32f7dbe05869adcaf1957e (2026-09-25).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs df598e6647242d4f471579d7f84df12c3032c651 (2026-10-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/documents.rs](examples/documents.rs), compiled
 and tested by meta-whatsapp-rs's own gate (it renders a real receipt PDF). Runnable

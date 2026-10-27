@@ -120,8 +120,9 @@ fn event_row(row: &PgRow) -> StoreResult<Option<StoredEvent>> {
         sequence,
         id: get::<Option<String>>(row, "id")?.ok_or_else(|| corrupt("id"))?,
         tenant,
-        phone_number_id: get::<Option<String>>(row, "phone_number_id")?.map(PhoneNumberId::new),
-        waba_id: get::<Option<String>>(row, "waba_id")?.map(WabaId::new),
+        phone_number_id: get::<Option<String>>(row, "phone_number_id")?
+            .map(PhoneNumberId::new_unchecked),
+        waba_id: get::<Option<String>>(row, "waba_id")?.map(WabaId::new_unchecked),
         event_type: get::<Option<String>>(row, "event_type")?
             .ok_or_else(|| corrupt("event_type"))?,
         data: get::<Option<String>>(row, "data")?.ok_or_else(|| corrupt("data"))?,

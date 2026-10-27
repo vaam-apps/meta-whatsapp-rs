@@ -77,7 +77,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use utoipa::ToSchema;
 
-use super::common::graph_id;
+use super::common::typed_graph_id;
 use crate::auth::{Caller, OwnedNumber};
 use crate::error::{ApiError, ErrorBody};
 use crate::idempotency::{self, Fingerprint, KeyHeader, Success};
@@ -654,7 +654,7 @@ pub(crate) async fn download_media(
     Path((_, media_id)): Path<(String, String)>,
     query: DownloadQuery,
 ) -> Result<Response, ApiError> {
-    graph_id("media_id", &media_id)?;
+    let id: MediaId = typed_graph_id("media_id", &media_id)?;
     // A whole file is held in memory, a stream holds two connections:
     // take a slot of the tenant's share first.
     let permit = if query.stream {
@@ -669,7 +669,7 @@ pub(crate) async fn download_media(
         .client()
         .media(owned.phone_number_id().clone())
         .restrict_to_phone_number();
-    let info = match media.url(&MediaId::new(media_id.as_str())).await {
+    let info = match media.url(&id).await {
         // A media node, the one asked for.
         Ok(info) if info.id.as_str() == media_id => info,
         Ok(_) => return Err(ApiError::not_found()),
@@ -848,12 +848,11 @@ pub(crate) async fn delete_media(
     owned: OwnedNumber,
     Path((_, media_id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    graph_id("media_id", &media_id)?;
+    let id: MediaId = typed_graph_id("media_id", &media_id)?;
     let media = owned
         .client()
         .media(owned.phone_number_id().clone())
         .restrict_to_phone_number();
-    let id = MediaId::new(media_id.as_str());
     // `DELETE /{id}` deletes whatever node the id names (a flow, a QR
     // code) that the token reaches: look it up first, as this number's
     // media, and delete only that.

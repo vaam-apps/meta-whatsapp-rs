@@ -196,7 +196,7 @@ impl Outbound for Timed {
 async fn two_hundred_sends_at_twenty_a_second_never_exceed_twenty_in_any_second() {
     let clock = ManualClock::new(T0);
     let outbound = Timed::new(&clock);
-    let broadcast = Broadcast::builder(NUMBER)
+    let broadcast = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to((0..200).map(phone))
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
@@ -264,7 +264,7 @@ async fn a_timed_out_send_is_never_resent_whatever_the_policy() {
     t.push_json(200, send_response());
     let clock = ManualClock::new(T0);
     let recipients = [phone(1), phone(2), phone(3)];
-    let report = Broadcast::builder(NUMBER)
+    let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to(recipients.clone())
         .content(Text::new("Your order has shipped"))
         .client(client(&t))
@@ -301,7 +301,7 @@ async fn a_refusal_that_is_not_retryable_is_not_resent_whatever_the_policy() {
     let clock = ManualClock::new(T0);
     let outbound = Timed::new(&clock);
     outbound.fail(&phone(1), || graph(131049));
-    let report = Broadcast::builder(NUMBER)
+    let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to([phone(1)])
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
@@ -330,7 +330,7 @@ async fn a_throttled_send_is_resent_under_the_same_policy() {
     );
     t.push_json(200, send_response());
     let clock = ManualClock::new(T0);
-    let report = Broadcast::builder(NUMBER)
+    let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to([phone(1)])
         .content(Text::new("Hello"))
         .client(client(&t))
@@ -368,7 +368,7 @@ async fn a_broadcast_retries_through_its_pacer_not_the_clients_replays() {
         meta_whatsapp_client::RetryPolicy::NONE
     );
     let clock = ManualClock::new(T0);
-    let report = Broadcast::builder(NUMBER)
+    let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to([phone(1)])
         .content(Text::new("Hello"))
         .client(default_retries)
@@ -406,7 +406,7 @@ async fn a_pair_rate_limit_defers_only_that_recipient() {
         inner: meta_whatsapp_bot::ClientOutbound::new(client(&t)),
         starts: Arc::default(),
     };
-    let report = Broadcast::builder(NUMBER)
+    let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to([phone(1), phone(2), phone(3)])
         .content(Text::new("Your order has shipped"))
         .outbound(outbound.clone())
@@ -505,7 +505,7 @@ async fn a_pair_limit_that_persists_gives_up_after_the_attempts() {
     for _ in 0..3 {
         outbound.fail(&phone(1), || graph(131056));
     }
-    let report = Broadcast::builder(NUMBER)
+    let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to([phone(1)])
         .content(Text::new("Hi"))
         .outbound(outbound.clone())
@@ -539,7 +539,7 @@ async fn the_per_user_marketing_limit_is_reported_and_not_retried() {
     );
     t.push_json(200, send_response());
     let clock = ManualClock::new(T0);
-    let report = Broadcast::builder(NUMBER)
+    let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to([phone(1), phone(2), phone(3)])
         .content(Text::new("Spring sale"))
         .client(client(&t))
@@ -573,7 +573,7 @@ async fn a_throughput_error_slows_the_pacer_down_and_is_retried() {
     let clock = ManualClock::new(T0);
     let outbound = Timed::new(&clock);
     outbound.fail(&phone(2), || graph(130429));
-    let report = Broadcast::builder(NUMBER)
+    let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to((1..=5).map(phone))
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
@@ -612,7 +612,7 @@ async fn a_spam_limit_stops_the_run_and_slows_the_pacer() {
     let outbound = Timed::new(&clock);
     outbound.fail(&phone(2), || graph(131048));
     let shared = pacer(&clock, 20);
-    let report = Broadcast::builder(NUMBER)
+    let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to((1..=4).map(phone))
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
@@ -636,7 +636,7 @@ async fn a_spam_limit_stops_the_run_and_slows_the_pacer() {
     assert_eq!(error.kind(), ErrorKind::SpamRateLimited);
     assert_eq!(report.progress().skipped, 2);
     // The number's next sends go at half the rate: 100 ms apart.
-    let from = PhoneNumberId::new(NUMBER);
+    let from = PhoneNumberId::new(NUMBER).unwrap();
     shared.acquire(&from).await.unwrap();
     let before = at(&clock);
     shared.acquire(&from).await.unwrap();
@@ -650,7 +650,7 @@ async fn an_account_wide_error_stops_the_run() {
     let clock = ManualClock::new(T0);
     let outbound = Timed::new(&clock);
     outbound.fail(&phone(2), || graph(190));
-    let broadcast = Broadcast::builder(NUMBER)
+    let broadcast = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to((1..=5).map(phone))
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
@@ -693,7 +693,7 @@ async fn an_account_wide_error_stops_the_run() {
 async fn cancelling_stops_further_sends() {
     let clock = ManualClock::new(T0);
     let outbound = Timed::new(&clock);
-    let broadcast = Broadcast::builder(NUMBER)
+    let broadcast = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to((0..10).map(phone))
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
@@ -725,7 +725,7 @@ async fn cancelling_stops_further_sends() {
 async fn a_cancel_that_leaves_nobody_unsent_is_a_completed_run() {
     let clock = ManualClock::new(T0);
     let outbound = Timed::new(&clock);
-    let broadcast = Broadcast::builder(NUMBER)
+    let broadcast = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to((0..3).map(phone))
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
@@ -767,7 +767,7 @@ impl Timer for Frozen {
 async fn cancelling_ends_a_wait_for_the_next_slot() {
     let clock = ManualClock::new(T0);
     let outbound = Timed::new(&clock);
-    let broadcast = Broadcast::builder(NUMBER)
+    let broadcast = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to((0..3).map(phone))
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
@@ -826,7 +826,7 @@ async fn a_slot_reached_after_a_cancel_sends_nothing() {
     let clock = ManualClock::new(T0);
     let outbound = Timed::new(&clock);
     let handle_slot = Arc::new(OnceLock::new());
-    let broadcast = Broadcast::builder(NUMBER)
+    let broadcast = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to((0..3).map(phone))
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
@@ -858,7 +858,7 @@ async fn compose_builds_each_recipients_message() {
     t.push_json(200, send_response());
     t.push_json(200, send_response());
     let clock = ManualClock::new(T0);
-    let report = Broadcast::builder(NUMBER)
+    let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to([phone(1), Recipient::user("US.13491208655302741918")])
         .compose(|to: &Recipient| {
             let data = match to {
@@ -908,7 +908,7 @@ async fn compose_builds_each_recipients_message() {
 async fn a_message_composed_for_someone_else_is_not_sent() {
     let clock = ManualClock::new(T0);
     let outbound = Timed::new(&clock);
-    let report = Broadcast::builder(NUMBER)
+    let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to([phone(1), phone(2), phone(3)])
         .compose(|to: &Recipient| match to {
             Recipient::Phone(p) if p.ends_with('1') => Ok(OutboundMessage::text(phone(9), "x")),
@@ -939,19 +939,19 @@ async fn build_refuses_missing_settings_and_an_empty_list_completes() {
     let clock = ManualClock::new(T0);
     let outbound = Timed::new(&clock);
     let cases = [
-        Broadcast::builder(NUMBER)
+        Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
             .content(Text::new("x"))
             .pacer(pacer(&clock, 20))
             .build(),
-        Broadcast::builder(NUMBER)
+        Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
             .content(Text::new("x"))
             .outbound(outbound.clone())
             .build(),
-        Broadcast::builder(NUMBER)
+        Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
             .outbound(outbound.clone())
             .pacer(pacer(&clock, 20))
             .build(),
-        Broadcast::builder(NUMBER)
+        Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
             .content(Text::new("x"))
             .outbound(outbound.clone())
             .pacer(pacer(&clock, 20))
@@ -961,7 +961,7 @@ async fn build_refuses_missing_settings_and_an_empty_list_completes() {
     for case in cases {
         assert!(matches!(case, Err(Error::Config(_))), "{case:?}");
     }
-    let report = Broadcast::builder(NUMBER)
+    let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .content(Text::new("x"))
         .outbound(outbound.clone())
         .pacer(pacer(&clock, 20))
@@ -978,7 +978,7 @@ async fn build_refuses_missing_settings_and_an_empty_list_completes() {
 #[test]
 fn the_run_is_send() {
     fn send<T: Send>(_: &T) {}
-    let broadcast = Broadcast::builder(NUMBER)
+    let broadcast = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .content(Text::new("x"))
         .outbound(Recording::default())
         .pacer(Pacer::default())
@@ -1011,7 +1011,7 @@ async fn retries_go_in_the_order_they_fall_due() {
     let outbound = Timed::new(&clock);
     outbound.fail(&phone(1), || graph(130429)); // again at 10 s
     outbound.fail(&phone(2), || graph(131056)); // again 1 s after 50 ms
-    let report = Broadcast::builder(NUMBER)
+    let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to([phone(1), phone(2)])
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
@@ -1046,7 +1046,7 @@ async fn a_due_retry_goes_before_the_recipients_not_sent_yet() {
     let clock = ManualClock::new(T0);
     let outbound = Timed::new(&clock);
     outbound.fail(&phone(0), || graph(131056));
-    let report = Broadcast::builder(NUMBER)
+    let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to((0..100).map(phone))
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
@@ -1093,7 +1093,7 @@ impl RateLimiter for Unreachable {
 async fn a_failing_rate_limiter_stops_the_run_before_any_send() {
     let clock = ManualClock::new(T0);
     let outbound = Timed::new(&clock);
-    let report = Broadcast::builder(NUMBER)
+    let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to((0..3).map(phone))
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
@@ -1134,7 +1134,7 @@ async fn a_paced_outbound_sends_nothing_when_its_limiter_fails() {
         outbound.clone(),
         Pacer::new(Unreachable).with_timer(clock.clone()),
     );
-    let from = PhoneNumberId::new(NUMBER);
+    let from = PhoneNumberId::new(NUMBER).unwrap();
     let sent = paced
         .send(&from, &OutboundMessage::text(phone(1), "Hello"))
         .await;
@@ -1174,7 +1174,7 @@ fn listed_twice() -> Vec<Recipient> {
 async fn each_person_is_sent_once_by_default() {
     let clock = ManualClock::new(T0);
     let outbound = Timed::new(&clock);
-    let broadcast = Broadcast::builder(NUMBER)
+    let broadcast = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to(listed_twice())
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
@@ -1234,7 +1234,7 @@ async fn each_person_is_sent_once_by_default() {
 async fn dedupe_off_sends_every_listing() {
     let clock = ManualClock::new(T0);
     let outbound = Timed::new(&clock);
-    let report = Broadcast::builder(NUMBER)
+    let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to(listed_twice())
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
@@ -1258,7 +1258,7 @@ async fn lines_stream_to_a_channel_as_they_settle() {
     let outbound = Timed::new(&clock);
     outbound.fail(&phone(2), || graph(131049));
     let (lines, mut read) = tokio::sync::mpsc::channel(2);
-    let broadcast = Broadcast::builder(NUMBER)
+    let broadcast = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to([phone(1), phone(2), phone(1), phone(3), phone(4)])
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
@@ -1322,7 +1322,7 @@ async fn a_sink_that_fails_stops_the_run() {
     let outbound = Timed::new(&clock);
     let (lines, read) = tokio::sync::mpsc::channel(8);
     drop(read);
-    let report = Broadcast::builder(NUMBER)
+    let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to((0..3).map(phone))
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
@@ -1350,7 +1350,7 @@ async fn a_cancelled_run_streams_the_skipped_lines_last() {
     let clock = ManualClock::new(T0);
     let outbound = Timed::new(&clock);
     let (lines, mut read) = tokio::sync::mpsc::channel(16);
-    let broadcast = Broadcast::builder(NUMBER)
+    let broadcast = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to((0..5).map(phone))
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
@@ -1483,7 +1483,7 @@ async fn a_default_clients_replays_never_run_under_a_broadcast() {
     t.push_json(200, send_response());
     let clock = ManualClock::new(T0);
     let timer = Watching::new(&clock, &t);
-    let report = Broadcast::builder(NUMBER)
+    let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to([phone(1)])
         .content(Text::new("Hello"))
         .client(default_client(&t))
@@ -1513,7 +1513,7 @@ async fn an_unknown_error_is_not_resent_whatever_the_policy() {
         meta_error(131000, "Message failed to send due to an unknown error."),
     );
     let clock = ManualClock::new(T0);
-    let report = Broadcast::builder(NUMBER)
+    let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to([phone(1)])
         .content(Text::new("Hello"))
         .client(client(&t))
@@ -1542,7 +1542,7 @@ async fn a_paused_template_stops_a_broadcast_of_one_message_only() {
     let clock = ManualClock::new(T0);
     let outbound = Timed::new(&clock);
     outbound.fail(&phone(2), || graph(132015));
-    let report = Broadcast::builder(NUMBER)
+    let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to((1..=4).map(phone))
         .content(template())
         .outbound(outbound.clone())
@@ -1563,7 +1563,7 @@ async fn a_paused_template_stops_a_broadcast_of_one_message_only() {
     let clock = ManualClock::new(T0);
     let outbound = Timed::new(&clock);
     outbound.fail(&phone(2), || graph(132015));
-    let report = Broadcast::builder(NUMBER)
+    let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to((1..=4).map(phone))
         .compose(move |to: &Recipient| Ok(OutboundMessage::template(to.clone(), template())))
         .outbound(outbound.clone())
@@ -1588,7 +1588,7 @@ async fn a_recipient_skipped_while_waiting_to_retry_keeps_its_last_error() {
         let outbound = Timed::new(&clock);
         outbound.fail(&phone(1), || graph(131056));
         let (lines, mut read) = tokio::sync::mpsc::channel(8);
-        let mut builder = Broadcast::builder(NUMBER)
+        let mut builder = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
             .to([phone(1), phone(2)])
             .content(Text::new("Spring sale"))
             .outbound(outbound.clone())
@@ -1632,7 +1632,7 @@ async fn a_cancel_gives_the_waiting_slots_back() {
     let clock = ManualClock::new(T0);
     let outbound = Timed::new(&clock);
     let bucket = Arc::new(TokenBucket::new(Rate::per_second(10).unwrap()));
-    let broadcast = Broadcast::builder(NUMBER)
+    let broadcast = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to((0..10).map(phone))
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
@@ -1655,7 +1655,10 @@ async fn a_cancel_gives_the_waiting_slots_back() {
     assert_eq!(report.ended, BroadcastEnd::Cancelled);
     assert_eq!(outbound.sends().len(), 1, "only the first slot was due");
     // Only that slot stays booked: the next one is 100 ms after it.
-    let next = bucket.reserve(&SlotRequest::new(NUMBER, T0)).await.unwrap();
+    let next = bucket
+        .reserve(&SlotRequest::new(PhoneNumberId::new(NUMBER).unwrap(), T0))
+        .await
+        .unwrap();
     assert_eq!(next.wait, Duration::from_millis(100));
 }
 
@@ -1701,11 +1704,17 @@ async fn a_paced_bots_throttled_reply_slows_the_number_and_retries_through_the_p
     // The number now sends at half its rate: 200 ms apart.
     let later = clock.now() + time::Duration::seconds(5);
     bucket
-        .reserve(&SlotRequest::new(NUMBER, later))
+        .reserve(&SlotRequest::new(
+            PhoneNumberId::new(NUMBER).unwrap(),
+            later,
+        ))
         .await
         .unwrap();
     let second = bucket
-        .reserve(&SlotRequest::new(NUMBER, later))
+        .reserve(&SlotRequest::new(
+            PhoneNumberId::new(NUMBER).unwrap(),
+            later,
+        ))
         .await
         .unwrap();
     assert_eq!(second.wait, Duration::from_millis(200));
@@ -1727,7 +1736,7 @@ async fn a_handler_reaches_the_bots_pacer() {
                     let seen = Arc::clone(&seen);
                     async move {
                         if let Some(pacer) = ctx.pacer() {
-                            pacer.acquire(&PhoneNumberId::new(NUMBER)).await?;
+                            pacer.acquire(&PhoneNumberId::new(NUMBER).unwrap()).await?;
                         }
                         *seen.lock().unwrap() = Some(ctx.pacer().is_some());
                         Ok(())
@@ -1788,7 +1797,7 @@ async fn a_retry_cancelled_while_waiting_for_its_slot_keeps_its_last_error() {
         at: T0 + time::Duration::seconds(2),
         handle: Arc::clone(&handle),
     };
-    let broadcast = Broadcast::builder(NUMBER)
+    let broadcast = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to([phone(1), phone(2)])
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())

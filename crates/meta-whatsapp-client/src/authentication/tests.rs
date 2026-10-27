@@ -202,7 +202,7 @@ async fn create_posts_an_authentication_template() {
             .security_recommendation(true)
             .code_expiration_minutes(5);
     let created = client(&t)
-        .authentication("102290129340398")
+        .authentication(WabaId::new("102290129340398").unwrap())
         .create(&template)
         .await
         .unwrap();
@@ -243,7 +243,7 @@ async fn previews_match_the_docs() {
         ]}),
     );
     let previews = client(&t)
-        .authentication("102290129340398")
+        .authentication(WabaId::new("102290129340398").unwrap())
         .previews(&PreviewQuery {
             languages: vec!["en_US".into(), "es_ES".into()],
             add_security_recommendation: Some(true),
@@ -280,7 +280,13 @@ async fn previews_match_the_docs() {
         code_expiration_minutes: Some(91),
         ..PreviewQuery::default()
     };
-    assert!(client(&t).authentication("1").previews(&bad).await.is_err());
+    assert!(
+        client(&t)
+            .authentication(WabaId::new("1").unwrap())
+            .previews(&bad)
+            .await
+            .is_err()
+    );
     assert_eq!(t.requests().len(), 1);
 }
 
@@ -295,7 +301,7 @@ async fn upsert_matches_the_docs() {
     ]});
     t.push_json(200, response.clone());
     t.push_json(200, response);
-    let auth = client(&t).authentication("102290129340398");
+    let auth = client(&t).authentication(WabaId::new("102290129340398").unwrap());
 
     // bulk-management, copy code example.
     let copy = AuthenticationUpsert::from_template(

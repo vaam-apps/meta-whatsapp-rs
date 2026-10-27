@@ -5,7 +5,7 @@ description: "Managing WhatsApp business phone numbers and their WABA with meta-
 
 # meta-whatsapp-rs-phone-numbers
 
-> **Verified against meta-whatsapp-rs 01d7f4ff63d16d81b1a10711b9a1db517ab2aa91 (2026-10-27).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs df598e6647242d4f471579d7f84df12c3032c651 (2026-10-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/numbers.rs](examples/numbers.rs), compiled and
 tested by meta-whatsapp-rs's own gate.
@@ -138,8 +138,8 @@ match number.set_username(username, None).await {
   72 hours. Neither is replayed; never loop on them.
 - `sync_smb_app_data` is never replayed either: after a timeout, look at
   the `history` / `smb_app_state_sync` webhooks instead of asking again.
-- Ids are path segments: a phone number id containing `/` cannot address
-  another object (the client percent-encodes it).
+- `PhoneNumberId::new` refuses anything but digits; one parsed from Meta is
+  kept as sent and stays one percent-encoded path segment.
 
 ## What meta-whatsapp-rs does not do
 

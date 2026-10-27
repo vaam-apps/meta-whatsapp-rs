@@ -146,7 +146,7 @@ mod tests {
         transport.push_json(200, json!({"id": "1234567890"}));
         let link = opt_in_link(
             &client(&transport),
-            "102290129340398".into(),
+            WabaId::new("102290129340398").unwrap(),
             "+15551234567",
             false,
         )
@@ -170,8 +170,8 @@ mod tests {
         let offer = TemplateMessage::new("autumn_sale", "en_US");
         send_offer(
             &client(&transport),
-            "102290129340398".into(),
-            "106540352242922".into(),
+            WabaId::new("102290129340398").unwrap(),
+            PhoneNumberId::new("106540352242922").unwrap(),
             Recipient::phone("+16505551234"),
             offer,
         )

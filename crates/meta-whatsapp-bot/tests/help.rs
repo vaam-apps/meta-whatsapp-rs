@@ -10,6 +10,7 @@ use meta_whatsapp_bot::{
     Bot, CategoryHelp, Command, Ctx, HelpFormatter, HelpSection, Plugin, Registrar,
 };
 use meta_whatsapp_core::Error;
+use meta_whatsapp_core::ids::PhoneNumberId;
 use meta_whatsapp_core::testing::ScriptedTransport;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -148,7 +149,9 @@ async fn the_command_menu_syncs_the_visible_commands() {
     let t = ScriptedTransport::new();
     t.push_json(200, json!({"success": true}));
     let bot = bot(&t).await;
-    bot.sync_command_menu(&client(&t), NUMBER).await.unwrap();
+    bot.sync_command_menu(&client(&t), PhoneNumberId::new(NUMBER).unwrap())
+        .await
+        .unwrap();
     let request = t.last_request().unwrap();
     assert_eq!(request.method.as_str(), "POST");
     assert_eq!(
@@ -180,7 +183,7 @@ async fn a_menu_the_client_would_refuse_fails_before_any_request() {
         let t = t.clone();
         async move {
             let err = bot
-                .sync_command_menu(&client(&t), NUMBER)
+                .sync_command_menu(&client(&t), PhoneNumberId::new(NUMBER).unwrap())
                 .await
                 .unwrap_err();
             match err {
@@ -245,7 +248,9 @@ async fn a_menu_the_parser_cannot_read_fails() {
     );
     let t = ScriptedTransport::new();
     assert!(matches!(
-        bang_only.sync_command_menu(&client(&t), NUMBER).await,
+        bang_only
+            .sync_command_menu(&client(&t), PhoneNumberId::new(NUMBER).unwrap())
+            .await,
         Err(Error::Validation(_))
     ));
     assert!(t.requests().is_empty());

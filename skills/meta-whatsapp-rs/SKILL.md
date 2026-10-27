@@ -5,7 +5,7 @@ description: "Start here for meta-whatsapp-rs, the Rust toolkit for Meta's Whats
 
 # meta-whatsapp-rs
 
-> **Verified against meta-whatsapp-rs 3573e219656d17a21ddbab4277b2b83c69b5c3f2 (2026-09-27).** On another revision, trust the code over this page (see "Versioning" below).
+> **Verified against meta-whatsapp-rs df598e6647242d4f471579d7f84df12c3032c651 (2026-10-27).** On another revision, trust the code over this page (see "Versioning" below).
 
 meta-whatsapp-rs is a Cargo workspace for Meta's WhatsApp Business Platform: a typed
 client for the Cloud API and the Business Management API (Graph API
@@ -108,7 +108,7 @@ From the runnable example
 
 ```rust
 let client = meta_whatsapp_rs::client(env("WA_TOKEN")?)?;
-let messages = client.messages(env("WA_PHONE_NUMBER_ID")?);
+let messages = client.messages(PhoneNumberId::new(env("WA_PHONE_NUMBER_ID")?)?);
 let to = Recipient::phone(env("WA_TO")?); // E.164, with `+`
 
 // Free-form: delivered only inside the 24-hour customer service window.

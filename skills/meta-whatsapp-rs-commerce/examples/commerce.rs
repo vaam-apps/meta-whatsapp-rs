@@ -151,7 +151,7 @@ mod tests {
             .build()
             .unwrap();
         show_products(
-            &client.messages("106540352242922"),
+            &client.messages(PhoneNumberId::new("106540352242922").unwrap()),
             Recipient::phone("+16505551234"),
             "194836987003835".into(),
         )
@@ -191,7 +191,7 @@ mod tests {
             .access_token("TOKEN")
             .build()
             .unwrap();
-        let products = approved_products(&client, "102290129340398".into())
+        let products = approved_products(&client, WabaId::new("102290129340398").unwrap())
             .await
             .unwrap();
         let skus: Vec<_> = products.iter().map(|p| p.retailer_id.as_deref()).collect();

@@ -45,7 +45,7 @@
 //! use meta_whatsapp_client::templates::TemplateMessage;
 //! use meta_whatsapp_core::recipient::Recipient;
 //!
-//! let messages = client.messages("106540352242922");
+//! let messages = client.messages(meta_whatsapp_core::ids::PhoneNumberId::new("106540352242922")?);
 //!
 //! // Text, as a reply to the user's message. Address users by BSUID when
 //! // that is all a webhook gave you.
@@ -76,10 +76,10 @@
 //!     "Your workshop is at 9am tomorrow.",
 //!     [ReplyButton::new("change", "Change"), ReplyButton::new("cancel", "Cancel")],
 //! )
-//! .header(Header::image_id("2762702990552401"))
+//! .header(Header::image_id(meta_whatsapp_core::ids::MediaId::new("2762702990552401")?))
 //! .footer("Lucky Shrub");
 //! client
-//!     .messages("106540352242922")
+//!     .messages(meta_whatsapp_core::ids::PhoneNumberId::new("106540352242922")?)
 //!     .send(&OutboundMessage::new(Recipient::phone("+16505551234"), buttons))
 //!     .await?;
 //! # Ok(()) }
@@ -96,7 +96,7 @@
 //!     .token("session-42")
 //!     .navigate("WELCOME", Some(serde_json::json!({"customer": "Pablo"})));
 //! client
-//!     .messages("106540352242922")
+//!     .messages(meta_whatsapp_core::ids::PhoneNumberId::new("106540352242922")?)
 //!     .send(&OutboundMessage::flow(Recipient::phone("+16505551234"), "Book a slot", params))
 //!     .await?;
 //! # Ok(()) }
@@ -119,7 +119,7 @@
 //!         ProductSection::new("Pots", ["SKU-POT-S"]),
 //!     ],
 //! );
-//! client.messages("106540352242922").send(&msg).await?;
+//! client.messages(meta_whatsapp_core::ids::PhoneNumberId::new("106540352242922")?).send(&msg).await?;
 //! # Ok(()) }
 //! ```
 //!

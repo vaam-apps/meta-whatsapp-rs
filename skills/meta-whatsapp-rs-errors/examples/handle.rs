@@ -83,7 +83,7 @@ mod tests {
             })
             .build()
             .unwrap();
-        client.messages("106540352242922")
+        client.messages(PhoneNumberId::new("106540352242922").unwrap())
     }
 
     fn to() -> Recipient {

@@ -176,7 +176,8 @@ pub async fn inbox_for(
     merchant_id: &str, // from your session
     phone_number_id: &str, // from the path
 ) -> meta_whatsapp_rs::Result<Access> {
-    let number = PhoneNumberId::new(phone_number_id);
+    // A phone number id is digits (`PhoneNumberId::new` checks): no tenant owns anything else.
+    let Ok(number) = PhoneNumberId::new(phone_number_id) else { return Ok(Access::Forbidden) };
     if !merchant_owns_number(merchant_id, &number).await { // your tenant ↔ phone number table
         return Ok(Access::Forbidden);
     }

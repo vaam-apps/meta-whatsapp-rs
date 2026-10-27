@@ -284,8 +284,8 @@ async fn the_api_is_served_over_a_backend_defined_outside_the_server_crate() {
     records
         .bind_waba(
             &tenant,
-            &WabaId::new(EXAMPLE_WABA),
-            &[PhoneNumberId::new(EXAMPLE_PN)],
+            &WabaId::new(EXAMPLE_WABA).unwrap(),
+            &[PhoneNumberId::new(EXAMPLE_PN).unwrap()],
         )
         .await
         .unwrap();
@@ -313,8 +313,11 @@ async fn the_api_is_served_over_a_backend_defined_outside_the_server_crate() {
     TokenVault::new(backend.kv(), VaultKeys::new(key("k0", PREVIOUS_VAULT_KEY)))
         .unwrap()
         .store(
-            &StoredBusinessToken::new(EXAMPLE_WABA, AccessToken::new("TOKEN-OF-A"))
-                .phone_number_ids(vec![PhoneNumberId::new(EXAMPLE_PN)]),
+            &StoredBusinessToken::new(
+                WabaId::new(EXAMPLE_WABA).unwrap(),
+                AccessToken::new("TOKEN-OF-A"),
+            )
+            .phone_number_ids(vec![PhoneNumberId::new(EXAMPLE_PN).unwrap()]),
         )
         .await
         .unwrap();
@@ -385,7 +388,7 @@ async fn the_api_is_served_over_a_backend_defined_outside_the_server_crate() {
     );
     let token = TokenVault::new(backend.kv(), VaultKeys::new(key("k1", ACTIVE_VAULT_KEY)))
         .unwrap()
-        .get(&WabaId::new(EXAMPLE_WABA))
+        .get(&WabaId::new(EXAMPLE_WABA).unwrap())
         .await
         .unwrap()
         .expect("re-encrypted in the bundle's key/value store");
@@ -416,7 +419,11 @@ async fn the_api_is_served_over_a_backend_defined_outside_the_server_crate() {
     );
     let inbox = backend
         .conversations()
-        .messages(&ConversationKey::new(EXAMPLE_PN, "16505551234"), None, 10)
+        .messages(
+            &ConversationKey::new(PhoneNumberId::new(EXAMPLE_PN).unwrap(), "16505551234"),
+            None,
+            10,
+        )
         .await
         .unwrap();
     assert_eq!(inbox.len(), 1, "the inbox is another store's");

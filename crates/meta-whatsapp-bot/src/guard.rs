@@ -438,7 +438,7 @@ mod tests {
 
     #[test]
     fn the_cooldown_key_is_pinned_and_hashed() {
-        let pn = PhoneNumberId::new("106540352242922");
+        let pn = PhoneNumberId::new("106540352242922").unwrap();
         let key = CooldownKey::new(&pn, "imagine", "16505551234").store_key();
         // `\x77` is `w`: a search-and-replace of the library's name cannot
         // rewrite this pin along with the constant.

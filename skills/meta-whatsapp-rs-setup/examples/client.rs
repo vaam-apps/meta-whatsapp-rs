@@ -95,7 +95,7 @@ mod tests {
         let sent = send_as_merchant(
             &platform,
             AccessToken::new("MERCHANT-TOKEN"),
-            PhoneNumberId::new("106540352242922"),
+            PhoneNumberId::new("106540352242922").unwrap(),
             Recipient::phone("+16505551234"),
         )
         .await
@@ -118,8 +118,11 @@ mod tests {
             .access_token("TOKEN")
             .build()
             .unwrap();
-        // An id read from a database or a webhook cannot address another object.
-        unwrapped(&client, &WabaId::new("123/subscribed_apps"))
+        // An id read from a database or a webhook cannot address another
+        // object. `WabaId::new` refuses this one; read back unchecked, as a
+        // webhook's is, it still stays one segment.
+        assert!(WabaId::new("123/subscribed_apps").is_err());
+        unwrapped(&client, &WabaId::new_unchecked("123/subscribed_apps"))
             .await
             .unwrap();
         let request = transport.last_request().unwrap();

@@ -8,7 +8,7 @@
 //!     .transport(transport)
 //!     .access_token("EAAJB...")
 //!     .build()?;
-//! // client.messages("<PHONE_NUMBER_ID>").send(...).await?;
+//! // client.messages(PhoneNumberId::new("<PHONE_NUMBER_ID>")?).send(...).await?;
 //! # Ok(()) }
 //! ```
 //!

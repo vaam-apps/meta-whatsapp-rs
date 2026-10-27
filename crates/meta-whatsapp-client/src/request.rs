@@ -2051,3 +2051,148 @@ mod credential_rule_tests {
         }
     }
 }
+
+/// Roadmap L20c: ids checked against their documented shape
+/// (`meta_whatsapp_core::ids`). A numeric id is refused when it is built;
+/// an opaque one stays one percent-encoded path segment.
+#[cfg(test)]
+mod id_shape_tests {
+    use meta_whatsapp_core::ids::{
+        AppId, BusinessId, GroupId, MediaId, PhoneNumberId, TemplateId, WabaId,
+    };
+    use meta_whatsapp_core::recipient::Recipient;
+    use meta_whatsapp_core::testing::ScriptedTransport;
+    use serde_json::json;
+
+    use super::*;
+    use crate::messages::OutboundMessage;
+    use crate::retry::RetryPolicy;
+
+    /// An id that would turn a call on its object into a call on the
+    /// WABA's subscriptions, if it became two path segments.
+    const HOSTILE: &str = "123/subscribed_apps";
+
+    fn client(t: &ScriptedTransport) -> Client {
+        Client::builder()
+            .transport(t.clone())
+            .access_token("TOKEN")
+            .retry(RetryPolicy::NONE)
+            .build()
+            .unwrap()
+    }
+
+    /// Decisive: a numeric id holding `/` is refused before any request.
+    /// Each numeric id type is built from [`HOSTILE`] with its checked
+    /// constructor, and only if that let it through, used in a call whose
+    /// path it names. Every response is scripted, so an id the check let
+    /// through would be sent, and recorded: none is.
+    #[tokio::test]
+    async fn a_numeric_id_holding_a_slash_is_refused_before_any_request() {
+        let t = ScriptedTransport::new();
+        for _ in 0..6 {
+            t.push_json(200, json!({"success": true, "id": "1", "name": "n"}));
+        }
+        let c = client(&t);
+        let pn = || PhoneNumberId::new("106540352242922");
+        let text = OutboundMessage::text(Recipient::phone("+16505551234"), "hi");
+        let outcomes: [(&str, Result<()>); 6] = [
+            (
+                "phone_number_id",
+                async {
+                    c.messages(PhoneNumberId::new(HOSTILE)?).send(&text).await?;
+                    Ok(())
+                }
+                .await,
+            ),
+            (
+                "waba_id",
+                async { c.waba(WabaId::new(HOSTILE)?).subscribe_app(None).await }.await,
+            ),
+            (
+                "business_id",
+                async {
+                    c.business(BusinessId::new(HOSTILE)?).get(&["id"]).await?;
+                    Ok(())
+                }
+                .await,
+            ),
+            (
+                "media_id",
+                async { c.media(pn()?).delete(&MediaId::new(HOSTILE)?).await }.await,
+            ),
+            (
+                "template_id",
+                async {
+                    c.templates(WabaId::new("102290129340398")?)
+                        .get_fields(&TemplateId::new(HOSTILE)?, &["name"])
+                        .await?;
+                    Ok(())
+                }
+                .await,
+            ),
+            (
+                "app_id",
+                async {
+                    c.media(pn()?)
+                        .start_upload_session(&AppId::new(HOSTILE)?, "a.png", 1, "image/png")
+                        .await?;
+                    Ok(())
+                }
+                .await,
+            ),
+        ];
+        let sent: Vec<String> = t.requests().iter().map(|r| r.path().to_owned()).collect();
+        assert!(
+            sent.is_empty(),
+            "a numeric id holding `/` was sent: {sent:?}"
+        );
+        for (field, outcome) in outcomes {
+            let err = outcome.unwrap_err();
+            assert!(
+                matches!(&err, Error::Validation(v) if v.field == field),
+                "{field}: {err}"
+            );
+        }
+    }
+
+    /// Decisive: a group id holding `/` (an opaque id: a standard-base64
+    /// one may) is built as it is, and stays one percent-encoded segment:
+    /// this `DELETE` cannot land on the group's participants, nor on any
+    /// other object.
+    #[tokio::test]
+    async fn a_group_id_holding_a_slash_stays_one_encoded_segment() {
+        let t = ScriptedTransport::new();
+        t.push_json(200, json!({"success": true}));
+        t.push_json(200, json!({"success": true}));
+        let c = client(&t);
+        let group = GroupId::new("Y2FwaV9ncm91cDox/participants");
+        c.group(group.clone()).delete().await.unwrap();
+        c.groups(PhoneNumberId::new("106540352242922").unwrap())
+            .group(group)
+            .delete()
+            .await
+            .unwrap();
+        for req in t.requests() {
+            assert_eq!(req.method, Method::DELETE);
+            assert_eq!(req.path(), "/v25.0/Y2FwaV9ncm91cDox%2Fparticipants");
+            assert_eq!(req.url.query(), None);
+        }
+        assert_eq!(t.remaining(), 0);
+    }
+
+    /// A numeric id from Meta keeps its shape, whatever it is: parsing never
+    /// fails on it, and used in a path it is still one encoded segment.
+    #[tokio::test]
+    async fn a_numeric_id_meta_sent_is_kept_and_stays_one_segment() {
+        let id: WabaId = serde_json::from_value(json!(HOSTILE)).unwrap();
+        assert_eq!(id.as_str(), HOSTILE);
+        let t = ScriptedTransport::new();
+        t.push_json(200, json!({"success": true}));
+        client(&t).waba(id).subscribe_app(None).await.unwrap();
+        assert_eq!(
+            t.last_request().unwrap().path(),
+            "/v25.0/123%2Fsubscribed_apps/subscribed_apps"
+        );
+        assert_eq!(t.remaining(), 0);
+    }
+}

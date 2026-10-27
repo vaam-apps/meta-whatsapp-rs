@@ -48,7 +48,7 @@
 //! use meta_whatsapp_core::recipient::Recipient;
 //!
 //! let sent = client
-//!     .marketing("<PHONE_NUMBER_ID>")
+//!     .marketing(meta_whatsapp_core::ids::PhoneNumberId::new("<PHONE_NUMBER_ID>")?)
 //!     .send(
 //!         &Recipient::phone("+16505551234"),
 //!         &TemplateMessage::new("seasonal_sale_promo", "en"),

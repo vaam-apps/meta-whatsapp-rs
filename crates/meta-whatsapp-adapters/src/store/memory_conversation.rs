@@ -866,7 +866,7 @@ mod tests {
         store
             .append(StoredMessage {
                 id: MessageId::new("wamid.1"),
-                conversation: ConversationKey::new("pn", "US.1"),
+                conversation: ConversationKey::new(PhoneNumberId::new("1").unwrap(), "US.1"),
                 direction: Direction::Inbound,
                 kind: "text".to_owned(),
                 text: Some("my card number is 4111".to_owned()),
@@ -893,7 +893,7 @@ mod tests {
         let now = time::macros::datetime!(2026-09-24 12:00 UTC);
         let message = |id: &str, at: OffsetDateTime| StoredMessage {
             id: MessageId::new(id),
-            conversation: ConversationKey::new("pn", "US.1"),
+            conversation: ConversationKey::new(PhoneNumberId::new("1").unwrap(), "US.1"),
             direction: Direction::Inbound,
             kind: "text".to_owned(),
             text: Some(id.to_owned()),
@@ -910,10 +910,14 @@ mod tests {
         assert_eq!(keep.retention(), Retention::Keep);
         assert!(keep.apply_retention(now).await.unwrap().is_empty());
         assert_eq!(
-            keep.messages(&ConversationKey::new("pn", "US.1"), None, 10)
-                .await
-                .unwrap()
-                .len(),
+            keep.messages(
+                &ConversationKey::new(PhoneNumberId::new("1").unwrap(), "US.1"),
+                None,
+                10
+            )
+            .await
+            .unwrap()
+            .len(),
             2
         );
 
@@ -927,7 +931,11 @@ mod tests {
             }
         );
         let left = keep
-            .messages(&ConversationKey::new("pn", "US.1"), None, 10)
+            .messages(
+                &ConversationKey::new(PhoneNumberId::new("1").unwrap(), "US.1"),
+                None,
+                10,
+            )
             .await
             .unwrap();
         assert_eq!(

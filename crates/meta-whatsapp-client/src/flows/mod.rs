@@ -36,7 +36,7 @@
 //!   "label":"Complete","on-click-action":{"name":"complete","payload":{}}}]}}]}"#;
 //!
 //! let created = client
-//!     .flows("<WABA_ID>")
+//!     .flows(meta_whatsapp_core::ids::WabaId::new("<WABA_ID>")?)
 //!     .create(&CreateFlow::new("My first flow", [FlowCategory::Other]))
 //!     .await?;
 //! let flow = client.flow(created.id);
@@ -68,7 +68,7 @@
 //!
 //! let key = FlowEndpointKey::from_pem(pem)?; // once, at startup
 //! client
-//!     .business_encryption("<PHONE_NUMBER_ID>")
+//!     .business_encryption(meta_whatsapp_core::ids::PhoneNumberId::new("<PHONE_NUMBER_ID>")?)
 //!     .set_public_key(&key.public_key_pem()?)
 //!     .await?;
 //!

@@ -32,7 +32,8 @@
 //! .security_recommendation(true)
 //! .code_expiration_minutes(10) // keep equal to OtpConfig::ttl
 //! .message_send_ttl_seconds(600);
-//! let created = client.authentication("<WABA_ID>").create(&template).await?;
+//! let waba_id = meta_whatsapp_core::ids::WabaId::new("<WABA_ID>")?; // digits only
+//! let created = client.authentication(waba_id).create(&template).await?;
 //! # let _ = created; Ok(()) }
 //! ```
 //!
@@ -52,7 +53,7 @@
 //!
 //! let otp = OtpService::new(
 //!     client,
-//!     "<PHONE_NUMBER_ID>",
+//!     meta_whatsapp_core::ids::PhoneNumberId::new("<PHONE_NUMBER_ID>")?,
 //!     OtpTemplate::new("login_code", "en_US"),
 //!     kv,
 //!     Arc::new(SystemClock),

@@ -114,7 +114,7 @@ mod tests {
             .retry(RetryPolicy::NONE)
             .build()
             .unwrap();
-        client.templates("102290129340398")
+        client.templates(WabaId::new("102290129340398").unwrap())
     }
 
     #[tokio::test]
@@ -182,7 +182,10 @@ mod tests {
                 }
             }),
         );
-        let ids = ["1387372356726668".into(), "1304694804498707".into()];
+        let ids = [
+            TemplateId::new("1387372356726668").unwrap(),
+            TemplateId::new("1304694804498707").unwrap(),
+        ];
         let failed = archive_unused(&templates(&transport), &ids).await.unwrap();
         assert_eq!(failed.len(), 1);
         assert_eq!(failed[0].0.as_str(), "1304694804498707");
@@ -202,7 +205,10 @@ mod tests {
     async fn groups_write_template_ids_as_integers() {
         let transport = ScriptedTransport::new();
         transport.push_json(200, json!({"id": "9020555671393375"}));
-        let ids = ["278077987957091".into(), "1945418102598215".into()];
+        let ids = [
+            TemplateId::new("278077987957091").unwrap(),
+            TemplateId::new("1945418102598215").unwrap(),
+        ];
         let id = black_friday_group(&templates(&transport), &ids)
             .await
             .unwrap();
@@ -231,7 +237,7 @@ mod tests {
         let events = payload.unwrap().into_events();
         assert_eq!(
             on_review(&events[0]),
-            Some(("1689556908129832".into(), true))
+            Some((TemplateId::new("1689556908129832").unwrap(), true))
         );
     }
 }

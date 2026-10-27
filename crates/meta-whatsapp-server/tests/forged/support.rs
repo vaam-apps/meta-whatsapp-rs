@@ -41,7 +41,7 @@ pub async fn service() -> Harness {
     h.store
         .bind_waba(
             &TenantId::parse(VICTIM).unwrap(),
-            &WabaId::new(TOKENLESS_WABA),
+            &WabaId::new(TOKENLESS_WABA).unwrap(),
             &[],
         )
         .await

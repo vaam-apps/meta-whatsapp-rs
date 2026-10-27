@@ -235,7 +235,7 @@ fn key_row(row: &PgRow) -> StoreResult<ApiKeyRecord> {
 
 fn waba_row(row: &PgRow) -> StoreResult<WabaBinding> {
     Ok(WabaBinding {
-        waba_id: WabaId::new(get::<String>(row, "waba_id")?),
+        waba_id: WabaId::new_unchecked(get::<String>(row, "waba_id")?),
         tenant_id: tenant_id(&get::<String>(row, "tenant_id")?, "tenant_id")?,
         credit_allocation_id: get(row, "credit_allocation_id")?,
         attached_at: get(row, "attached_at")?,
@@ -244,8 +244,8 @@ fn waba_row(row: &PgRow) -> StoreResult<WabaBinding> {
 
 fn number_row(row: &PgRow) -> StoreResult<NumberBinding> {
     Ok(NumberBinding {
-        phone_number_id: PhoneNumberId::new(get::<String>(row, "phone_number_id")?),
-        waba_id: WabaId::new(get::<String>(row, "waba_id")?),
+        phone_number_id: PhoneNumberId::new_unchecked(get::<String>(row, "phone_number_id")?),
+        waba_id: WabaId::new_unchecked(get::<String>(row, "waba_id")?),
         tenant_id: tenant_id(&get::<String>(row, "tenant_id")?, "tenant_id")?,
         status: NumberStatus::parse(&get::<String>(row, "status")?)
             .ok_or_else(|| corrupt("status"))?,

@@ -153,7 +153,7 @@ impl TokenDebug {
         self.target_ids(WHATSAPP_BUSINESS_MANAGEMENT)
             .unwrap_or_default()
             .iter()
-            .map(|id| WabaId::new(id.as_str()))
+            .map(|id| WabaId::new_unchecked(id.as_str()))
             .collect()
     }
 
@@ -213,8 +213,8 @@ mod tests {
         assert_eq!(
             d.waba_ids(),
             vec![
-                WabaId::new("102289599326934"),
-                WabaId::new("101569239400667")
+                WabaId::new("102289599326934").unwrap(),
+                WabaId::new("101569239400667").unwrap()
             ]
         );
         assert!(d.has_scope(WHATSAPP_BUSINESS_MESSAGING));
@@ -247,6 +247,24 @@ mod tests {
         assert_eq!(d.target_ids(WHATSAPP_BUSINESS_MANAGEMENT), None);
         assert!(d.waba_ids().is_empty());
         assert_eq!(d.expires_at_time(), None, "0 means never");
+    }
+
+    /// Roadmap L20c: the WABAs `debug_token` names are kept as Meta sent
+    /// them, whatever their shape (`WabaId::new` would refuse these): a
+    /// new id format must not drop a grant.
+    #[test]
+    fn waba_ids_are_kept_as_sent() {
+        let d: DebugEnvelope = serde_json::from_value(serde_json::json!({"data": {
+            "is_valid": true,
+            "scopes": ["whatsapp_business_management"],
+            "granular_scopes": [{"scope": "whatsapp_business_management",
+                                 "target_ids": ["WABA-1/x", "102289599326934"]}]
+        }}))
+        .unwrap();
+        let ids = d.data.waba_ids();
+        let ids: Vec<&str> = ids.iter().map(WabaId::as_str).collect();
+        assert_eq!(ids, ["WABA-1/x", "102289599326934"]);
+        assert!(WabaId::new("WABA-1/x").is_err());
     }
 
     #[test]

@@ -32,7 +32,7 @@
 //! let system = client.with_token(AccessToken::new("<SYSTEM_USER_TOKEN>"));
 //! let business = client.with_token(business_token);
 //! let line = CreditLineId::new("1972385232742146");
-//! let waba = WabaId::new("102290129340398");
+//! let waba = WabaId::new("102290129340398")?;
 //!
 //! let shared = system
 //!     .credit_lines()
@@ -881,14 +881,14 @@ mod tests {
         );
         let lines = system(&t);
         let page = lines
-            .list(&BusinessId::new("102289599326934"), &[])
+            .list(&BusinessId::new("102289599326934").unwrap(), &[])
             .await
             .unwrap();
         assert_eq!(page.data[0].id, line());
         assert_eq!(page.data[0].legal_entity_name, None);
         let page = lines
             .list(
-                &BusinessId::new("105954558954427"),
+                &BusinessId::new("105954558954427").unwrap(),
                 &["id", "legal_entity_name"],
             )
             .await
@@ -919,7 +919,7 @@ mod tests {
         );
         t.push_json(200, json!({"data": [{"id": "2"}]}));
         let ids: Vec<String> = system(&t)
-            .list_stream(&BusinessId::new("B"), &[])
+            .list_stream(&BusinessId::new("100").unwrap(), &[])
             .map(|c| c.unwrap().id.into_inner())
             .collect()
             .await;
@@ -936,11 +936,11 @@ mod tests {
             json!({"allocation_config_id": "58501441721238", "waba_id": "102290129340398"}),
         );
         let done = system(&t)
-            .share_and_attach(&line(), &WabaId::new(WABA), &WabaCurrency::Usd)
+            .share_and_attach(&line(), &WabaId::new(WABA).unwrap(), &WabaCurrency::Usd)
             .await
             .unwrap();
         assert_eq!(done.allocation_config_id.as_str(), ALLOCATION);
-        assert_eq!(done.waba_id, Some(WabaId::new(WABA)));
+        assert_eq!(done.waba_id, Some(WabaId::new(WABA).unwrap()));
         let req = t.last_request().unwrap();
         assert_eq!(req.method, Method::POST);
         assert_eq!(
@@ -970,7 +970,7 @@ mod tests {
         let shared = system(&t)
             .share(
                 &CreditLineId::new("5985499441566032"),
-                &BusinessId::new(CUSTOMER),
+                &BusinessId::new(CUSTOMER).unwrap(),
             )
             .await
             .unwrap();
@@ -979,13 +979,13 @@ mod tests {
             .credit_lines()
             .attach(
                 &CreditLineId::new("5985499441566032"),
-                &WabaId::new(WABA),
+                &WabaId::new(WABA).unwrap(),
                 &WabaCurrency::Usd,
             )
             .await
             .unwrap();
         assert_eq!(attached.allocation_config_id.as_str(), ALLOCATION);
-        assert_eq!(attached.waba_id, Some(WabaId::new(WABA)));
+        assert_eq!(attached.waba_id, Some(WabaId::new(WABA).unwrap()));
 
         let reqs = t.requests();
         assert_eq!(reqs[0].method, Method::POST);
@@ -1019,7 +1019,7 @@ mod tests {
             json!({"success": false, "allocation_config_id": "58501441721238"}),
         );
         let err = system(&t)
-            .share(&line(), &BusinessId::new(CUSTOMER))
+            .share(&line(), &BusinessId::new(CUSTOMER).unwrap())
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Http { status: 200, .. }), "{err}");
@@ -1042,7 +1042,7 @@ mod tests {
             .unwrap();
         let err = retrying
             .credit_lines()
-            .share_and_attach(&line(), &WabaId::new(WABA), &WabaCurrency::Eur)
+            .share_and_attach(&line(), &WabaId::new(WABA).unwrap(), &WabaCurrency::Eur)
             .await
             .unwrap_err();
         assert!(err.may_have_been_sent());
@@ -1067,7 +1067,7 @@ mod tests {
             .unwrap();
         let funding = client(&t, "BUSINESS_TOKEN")
             .credit_lines()
-            .primary_funding(&WabaId::new(WABA))
+            .primary_funding(&WabaId::new(WABA).unwrap())
             .await
             .unwrap();
         assert!(is_shared(&allocation, &funding));
@@ -1101,7 +1101,7 @@ mod tests {
             request_status: None,
         };
         let funding = |id: Option<&str>| WabaFunding {
-            id: WabaId::new(WABA),
+            id: WabaId::new(WABA).unwrap(),
             primary_funding_id: id.map(FundingId::new),
         };
         assert!(is_shared(&allocation(Some("1")), &funding(Some("1"))));
@@ -1136,7 +1136,7 @@ mod tests {
         );
         t.push_json(200, json!({"data": []}));
         let lines = system(&t);
-        let business = BusinessId::new("1972385232742147");
+        let business = BusinessId::new("1972385232742147").unwrap();
         let one = lines.allocations_for(&line(), &business).await.unwrap();
         assert_eq!(one.len(), 1);
         assert_eq!(one[0].id, Some(AllocationConfigId::new("1972385232742140")));
@@ -1247,7 +1247,7 @@ mod tests {
         t.push_json(200, json!({"success": true}));
         t.push_json(200, status(CUSTOMER, true));
         let report = system(&t)
-            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER))
+            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER).unwrap())
             .await
             .unwrap();
         assert_eq!(
@@ -1255,7 +1255,7 @@ mod tests {
             [AllocationConfigId::new("A1"), AllocationConfigId::new("A2")]
         );
         assert_eq!(report.already_revoked, [AllocationConfigId::new("GONE")]);
-        assert_eq!(report.business_id, Some(BusinessId::new(CUSTOMER)));
+        assert_eq!(report.business_id, Some(BusinessId::new(CUSTOMER).unwrap()));
         let reqs = t.requests();
         assert_eq!(reqs.len(), 8);
         assert_eq!(
@@ -1277,7 +1277,7 @@ mod tests {
         // Nothing shared: nothing deleted.
         t.push_json(200, json!({"data": []}));
         let report = system(&t)
-            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER))
+            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER).unwrap())
             .await
             .unwrap();
         assert_eq!(report.all().count(), 0);
@@ -1298,7 +1298,7 @@ mod tests {
         t.push_json(200, json!({"success": true}));
         t.push_json(200, status(CUSTOMER, true));
         let err = system(&t)
-            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER))
+            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER).unwrap())
             .await
             .unwrap_err();
         let incomplete = incomplete(&err);
@@ -1352,7 +1352,7 @@ mod tests {
         t.push_json(200, json!({"success": true}));
         t.push_json(200, status(CUSTOMER, false));
         let err = system(&t)
-            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER))
+            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER).unwrap())
             .await
             .unwrap_err();
         assert_eq!(
@@ -1390,7 +1390,7 @@ mod tests {
         t.push_json(200, json!({"success": true}));
         t.push_json(200, status(CUSTOMER, false));
         let err = system(&t)
-            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER))
+            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER).unwrap())
             .await
             .unwrap_err();
         let report = incomplete(&err);
@@ -1410,7 +1410,7 @@ mod tests {
         t.push_error(|| TransportError::Timeout);
         t.push_json(200, status(CUSTOMER, true));
         let report = system(&t)
-            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER))
+            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER).unwrap())
             .await
             .unwrap();
         assert_eq!(report.already_revoked, [AllocationConfigId::new("A4")]);
@@ -1442,7 +1442,7 @@ mod tests {
         );
         t.push_json(200, status(CUSTOMER, false));
         let err = system(&t)
-            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER))
+            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER).unwrap())
             .await
             .unwrap_err();
         let report = incomplete(&err);
@@ -1464,7 +1464,7 @@ mod tests {
         t.push_error(|| TransportError::Timeout);
         t.push_json(200, status(CUSTOMER, false));
         let err = system(&t)
-            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER))
+            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER).unwrap())
             .await
             .unwrap_err();
         let report = incomplete(&err);
@@ -1485,7 +1485,7 @@ mod tests {
         );
         t.push_json(200, status(CUSTOMER, false));
         let err = system(&t)
-            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER))
+            .revoke_for_business(&line(), &BusinessId::new(CUSTOMER).unwrap())
             .await
             .unwrap_err();
         assert!(!incomplete(&err).deletes_sent);
@@ -1506,7 +1506,7 @@ mod tests {
             );
         }
         let err = system(&t)
-            .allocations_for(&line(), &BusinessId::new(CUSTOMER))
+            .allocations_for(&line(), &BusinessId::new(CUSTOMER).unwrap())
             .await
             .unwrap_err();
         assert!(
@@ -1531,7 +1531,7 @@ mod tests {
                    "paging": {"cursors": {"after": "c2"}}}),
         );
         let records = system(&t)
-            .allocations_for(&line(), &BusinessId::new(CUSTOMER))
+            .allocations_for(&line(), &BusinessId::new(CUSTOMER).unwrap())
             .await
             .unwrap();
         assert_eq!(records.len(), 2);
@@ -1548,7 +1548,7 @@ mod tests {
         t.push_json(200, looping.clone());
         t.push_json(200, looping);
         let err = system(&t)
-            .allocations_for(&line(), &BusinessId::new(CUSTOMER))
+            .allocations_for(&line(), &BusinessId::new(CUSTOMER).unwrap())
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Validation(_)), "{err}");
@@ -1576,7 +1576,7 @@ mod tests {
         assert!(matches!(err, Error::Decode { .. }), "{err}");
         assert!(!format!("{err} {err:?}").contains("Wind"), "{err:?}");
         let err = lines
-            .allocations_for(&line(), &BusinessId::new(CUSTOMER))
+            .allocations_for(&line(), &BusinessId::new(CUSTOMER).unwrap())
             .await
             .unwrap_err();
         assert!(!format!("{err} {err:?}").contains("Wind"), "{err:?}");
@@ -1591,7 +1591,7 @@ mod tests {
             json!({"error": {"message": "(#200) Permissions error", "type": "OAuthException", "code": 200, "fbtrace_id": "A"}}),
         );
         let err = system(&t)
-            .share_and_attach(&line(), &WabaId::new(WABA), &WabaCurrency::Inr)
+            .share_and_attach(&line(), &WabaId::new(WABA).unwrap(), &WabaCurrency::Inr)
             .await
             .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Permission);
@@ -1606,7 +1606,7 @@ mod tests {
         let err = lines
             .share_and_attach(
                 &line(),
-                &WabaId::new(WABA),
+                &WabaId::new(WABA).unwrap(),
                 &WabaCurrency::Other("usd".into()),
             )
             .await
@@ -1616,7 +1616,7 @@ mod tests {
             "{err}"
         );
         let err = lines
-            .attach(&line(), &WabaId::new(" "), &WabaCurrency::Usd)
+            .attach(&line(), &WabaId::new_unchecked(" "), &WabaCurrency::Usd)
             .await
             .unwrap_err();
         assert!(
@@ -1624,7 +1624,7 @@ mod tests {
             "{err}"
         );
         let err = lines
-            .share(&line(), &BusinessId::new(""))
+            .share(&line(), &BusinessId::new_unchecked(""))
             .await
             .unwrap_err();
         assert!(
@@ -1632,7 +1632,7 @@ mod tests {
             "{err}"
         );
         let err = lines
-            .allocations_for(&line(), &BusinessId::new(""))
+            .allocations_for(&line(), &BusinessId::new_unchecked(""))
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Validation(_)));
@@ -1674,7 +1674,7 @@ mod tests {
         lines
             .share_and_attach(
                 &CreditLineId::new("OTHER/whatsapp_credit_sharing"),
-                &WabaId::new(WABA),
+                &WabaId::new(WABA).unwrap(),
                 &WabaCurrency::Usd,
             )
             .await

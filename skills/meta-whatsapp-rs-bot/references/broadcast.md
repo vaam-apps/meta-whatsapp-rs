@@ -1,6 +1,6 @@
 # Paced broadcasts
 
-> **Verified against meta-whatsapp-rs fabab0ba46316335b638f505eb3f6ee20a5e1451 (2026-09-26).** Also checked against Meta's
+> **Verified against meta-whatsapp-rs df598e6647242d4f471579d7f84df12c3032c651 (2026-10-27).** Also checked against Meta's
 > `throughput`, `about-the-platform` (pair rate limits), `support/error-codes`,
 > `templates/marketing-templates/per-user-limits` and `messaging-limits` pages
 > as mirrored on 2026-09-24.
@@ -129,7 +129,7 @@ Tokio's paused clock.
 
 ```rust
 fn pacer(clock: &ManualClock) -> Pacer {
-    shared_pacer("999".into()).with_timer(clock.clone())
+    shared_pacer(PhoneNumberId::new("999").unwrap()).with_timer(clock.clone())
 }
 ```
 

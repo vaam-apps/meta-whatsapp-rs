@@ -253,7 +253,10 @@ async fn inbox(
     tenant: &Tenant,
     phone_number_id: String,
 ) -> Result<Inbox, ApiError> {
-    let number = PhoneNumberId::new(phone_number_id);
+    // A phone number id is digits; no tenant owns anything else.
+    let Ok(number) = PhoneNumberId::new(phone_number_id) else {
+        return Err(ApiError::Forbidden);
+    };
     // Your own table says which numbers this tenant owns; ask it before
     // touching the vault, whose tokens belong to every merchant.
     if !state.tenants.owns(tenant, &number) {
@@ -292,7 +295,8 @@ pub struct Tenants {
 const MIN_TOKEN_LEN: usize = 32;
 
 impl Tenants {
-    /// Add `tenant`, authenticated by `token` and owning `phone_number_ids`.
+    /// Add `tenant`, authenticated by `token` and owning `phone_number_ids`
+    /// (each a numeric phone number id: anything else is refused).
     pub fn tenant<I>(
         mut self,
         tenant: &str,
@@ -301,7 +305,7 @@ impl Tenants {
     ) -> anyhow::Result<Self>
     where
         I: IntoIterator,
-        I::Item: Into<PhoneNumberId>,
+        I::Item: AsRef<str>,
     {
         anyhow::ensure!(!tenant.is_empty(), "a tenant id is empty");
         anyhow::ensure!(
@@ -314,12 +318,14 @@ impl Tenants {
             !self.tokens.iter().any(|(known, _)| *known == digest),
             "tenant {tenant}: another tenant has the same bearer token"
         );
+        let numbers = phone_number_ids
+            .into_iter()
+            .map(|id| PhoneNumberId::new(id.as_ref()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| anyhow::anyhow!("tenant {tenant}: {e}"))?;
         let tenant = Tenant(tenant.to_owned());
         self.tokens.push((digest, tenant.clone()));
-        self.numbers
-            .entry(tenant)
-            .or_default()
-            .extend(phone_number_ids.into_iter().map(Into::into));
+        self.numbers.entry(tenant).or_default().extend(numbers);
         Ok(self)
     }
 
@@ -556,10 +562,11 @@ async fn connect_merchant_from_env(vault: &TokenVault) -> anyhow::Result<()> {
     ) else {
         return Ok(());
     };
+    let waba_id = WabaId::new(waba_id)?;
+    let number = PhoneNumberId::new(phone_number_id.as_str())?;
     vault
         .store(
-            &StoredBusinessToken::new(waba_id, AccessToken::new(token))
-                .phone_number_ids([phone_number_id.clone()]),
+            &StoredBusinessToken::new(waba_id, AccessToken::new(token)).phone_number_ids([number]),
         )
         .await?;
     println!("connected {phone_number_id} from the environment");

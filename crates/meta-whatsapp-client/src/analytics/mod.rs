@@ -370,7 +370,7 @@ impl Analytics {
             .context("enable template insights response")
             .send()
             .await?;
-        Ok(WabaId::new(resp.id))
+        Ok(WabaId::new_unchecked(resp.id))
     }
 
     /// Opt a template out of (`true`) or back into button click tracking:

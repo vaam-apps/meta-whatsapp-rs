@@ -759,13 +759,13 @@ fn live_postgres_cli_vault_rotate_fails_when_a_record_does() {
             ("202", VaultKey::from_base64("kx", LOST).unwrap()),
         ] {
             store
-                .bind_waba(&tenant, &WabaId::new(waba), &[])
+                .bind_waba(&tenant, &WabaId::new(waba).unwrap(), &[])
                 .await
                 .unwrap();
             TokenVault::new(kv.clone(), VaultKeys::new(key))
                 .unwrap()
                 .store(&StoredBusinessToken::new(
-                    waba,
+                    WabaId::new(waba).unwrap(),
                     AccessToken::new(format!("TOKEN-{waba}")),
                 ))
                 .await
@@ -801,7 +801,7 @@ fn live_postgres_cli_vault_rotate_fails_when_a_record_does() {
     )
     .unwrap();
     let token = runtime
-        .block_on(active_only.get(&WabaId::new("201")))
+        .block_on(active_only.get(&WabaId::new("201").unwrap()))
         .unwrap()
         .unwrap();
     assert_eq!(token.token.expose_secret(), "TOKEN-201");

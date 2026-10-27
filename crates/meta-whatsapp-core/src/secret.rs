@@ -134,7 +134,10 @@ mod tests {
 
     #[test]
     fn app_token_format() {
-        let t = AccessToken::app_token(&"123".into(), &AppSecret::new("s3cr3t"));
+        let t = AccessToken::app_token(
+            &crate::ids::AppId::new("123").unwrap(),
+            &AppSecret::new("s3cr3t"),
+        );
         assert_eq!(t.expose_secret(), "123|s3cr3t");
     }
 }

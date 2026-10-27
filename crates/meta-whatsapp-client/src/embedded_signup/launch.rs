@@ -619,7 +619,7 @@ mod tests {
         business.timezone = Some("UTC-07:00".into());
         let v = LaunchOptions::new("31602279155865")
             .business(business)
-            .pre_verified_phone_ids(["106540352242922"])
+            .pre_verified_phone_ids([PhoneNumberId::new("106540352242922").unwrap()])
             .phone_profile(PhoneProfilePrefill::new(
                 "Wind & Wool",
                 "APPAREL",
@@ -671,9 +671,11 @@ mod tests {
         // pre-filled-data, "Existing business portfolio …" and the
         // whatsAppBusinessAccount example.
         let v = LaunchOptions::new("31602279155865")
-            .business(BusinessPrefill::existing("2729063490586005"))
-            .pre_verified_phone_ids(["106540352242922"])
-            .waba_ids(["432428883295692"])
+            .business(BusinessPrefill::existing(
+                BusinessId::new("2729063490586005").unwrap(),
+            ))
+            .pre_verified_phone_ids([PhoneNumberId::new("106540352242922").unwrap()])
+            .waba_ids([WabaId::new("432428883295692").unwrap()])
             .to_json()
             .unwrap();
         assert_eq!(
@@ -796,7 +798,7 @@ mod tests {
             "extras.setup.phone.category"
         );
         assert_eq!(
-            field(LaunchOptions::new("c").pre_verified_phone_ids(Vec::<String>::new())),
+            field(LaunchOptions::new("c").pre_verified_phone_ids(Vec::<PhoneNumberId>::new())),
             "extras.setup.preVerifiedPhone.ids"
         );
     }

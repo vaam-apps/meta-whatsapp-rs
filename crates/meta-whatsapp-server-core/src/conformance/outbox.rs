@@ -37,8 +37,8 @@ pub async fn bind(store: &dyn RecordStore, tenant_id: &str, pn: &str) {
     store
         .bind_waba(
             &tenant,
-            &WabaId::new(waba_of(pn)),
-            &[PhoneNumberId::new(pn)],
+            &WabaId::new(waba_of(pn)).unwrap(),
+            &[PhoneNumberId::new(pn).unwrap()],
         )
         .await
         .unwrap();
@@ -56,13 +56,13 @@ pub fn row(tenant_id: Option<&str>, event_type: &str, pn: &str, dedup: Option<&s
         tenant: tenant_id.map(tenant),
         route_guard: tenant_id.map(|_| RouteGuard {
             binding: GuardedBinding::Number {
-                phone_number_id: PhoneNumberId::new(pn),
-                waba_id: WabaId::new(waba_of(pn)),
+                phone_number_id: PhoneNumberId::new(pn).unwrap(),
+                waba_id: WabaId::new(waba_of(pn)).unwrap(),
             },
             not_after: None,
         }),
-        phone_number_id: Some(PhoneNumberId::new(pn)),
-        waba_id: Some(WabaId::new(waba_of(pn))),
+        phone_number_id: Some(PhoneNumberId::new(pn).unwrap()),
+        waba_id: Some(WabaId::new(waba_of(pn)).unwrap()),
         event_type: event_type.to_owned(),
         // U+0000 in a message text: `json` keeps it, `jsonb` would refuse
         // it.
@@ -123,8 +123,8 @@ pub async fn insert_and_page(backend: &dyn Backend) {
     assert_eq!(got.id, written.id);
     assert_eq!(got.data, written.data, "data as written, U+0000 included");
     assert_eq!(got.event_type, "status_updated");
-    assert_eq!(got.phone_number_id, Some(PhoneNumberId::new("12")));
-    assert_eq!(got.waba_id, Some(WabaId::new(waba_of("12"))));
+    assert_eq!(got.phone_number_id, Some(PhoneNumberId::new("12").unwrap()));
+    assert_eq!(got.waba_id, Some(WabaId::new(waba_of("12")).unwrap()));
     assert_eq!(got.tenant, Some(tenant("suite-a")));
     // Another tenant's inserts move nothing of suite-a's.
     store
@@ -320,14 +320,14 @@ pub async fn filters(backend: &dyn Backend) {
         .map(|e| e.phone_number_id.as_ref().unwrap().as_str())
         .collect();
     assert_eq!(pns, ["61", "62"]);
-    q.phone_number_id = Some(PhoneNumberId::new("62"));
+    q.phone_number_id = Some(PhoneNumberId::new("62").unwrap());
     let page = store.page(&q).await.unwrap();
     assert_eq!(page.events.len(), 1);
     q.types = Some(vec![
         "status_updated".to_owned(),
         "message_received".to_owned(),
     ]);
-    q.phone_number_id = Some(PhoneNumberId::new("61"));
+    q.phone_number_id = Some(PhoneNumberId::new("61").unwrap());
     let page = store.page(&q).await.unwrap();
     assert_eq!(page.events.len(), 2);
     // The stream's bounds are the stream's, whatever the filter: a page

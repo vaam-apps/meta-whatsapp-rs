@@ -103,11 +103,11 @@ fn tenant(id: &str) -> TenantId {
 }
 
 fn waba(id: &str) -> WabaId {
-    WabaId::new(id)
+    WabaId::new(id).unwrap()
 }
 
 fn pn(id: &str) -> PhoneNumberId {
-    PhoneNumberId::new(id)
+    PhoneNumberId::new(id).unwrap()
 }
 
 /// What the claimant could have changed, read before and after its

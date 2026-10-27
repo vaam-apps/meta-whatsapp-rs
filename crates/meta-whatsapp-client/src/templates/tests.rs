@@ -6,6 +6,7 @@
 use futures::StreamExt;
 use http::Method;
 use meta_whatsapp_core::ErrorKind;
+use meta_whatsapp_core::ids::{MediaId, PhoneNumberId};
 use meta_whatsapp_core::ids::{TemplateGroupId, TemplateId};
 use meta_whatsapp_core::recipient::Recipient;
 use meta_whatsapp_core::testing::ScriptedTransport;
@@ -899,7 +900,9 @@ fn marketing_send_with_image_header() {
         ]
     }});
     let m = TemplateMessage::new("welcome_discount_template", "en_US")
-        .header(Parameter::image_id("1339522734477770"))
+        .header(Parameter::image_id(
+            MediaId::new("1339522734477770").unwrap(),
+        ))
         .body([
             Parameter::named("first_name", "Jessica"),
             Parameter::named("discount_code", "WELCOME25"),
@@ -944,7 +947,10 @@ fn media_parameters_currency_and_date_time() {
 
 #[test]
 fn document_parameter_with_filename() {
-    let p = Parameter::document_id("1602186516975000", Some("receipt.pdf".into()));
+    let p = Parameter::document_id(
+        MediaId::new("1602186516975000").unwrap(),
+        Some("receipt.pdf".into()),
+    );
     let v = serde_json::to_value(&p).unwrap();
     assert_eq!(
         v,
@@ -981,7 +987,7 @@ fn media_card_carousel_send() {
         CarouselCardParameters::new(
             i,
             [
-                SendComponent::header(Parameter::image_id(media)),
+                SendComponent::header(Parameter::image_id(MediaId::new(media).unwrap())),
                 SendComponent::quick_reply_button(0, payload),
                 SendComponent::url_button(1, suffix),
             ],
@@ -1007,7 +1013,14 @@ fn send_carousels_take_at_most_ten_cards() {
     // up to 10 cards.
     let cards = |n: u32| {
         TemplateMessage::new("carousel_template_media_cards_v1", "en_US").carousel((0..n).map(
-            |i| CarouselCardParameters::new(i, [SendComponent::header(Parameter::image_id("1"))]),
+            |i| {
+                CarouselCardParameters::new(
+                    i,
+                    [SendComponent::header(Parameter::image_id(
+                        MediaId::new("1").unwrap(),
+                    ))],
+                )
+            },
         ))
     };
     cards(10).validate().unwrap();
@@ -1068,7 +1081,9 @@ fn limited_time_offer_send() {
         ]
     }});
     let m = TemplateMessage::new("limited_time_offer_caribbean_pkg_2023", "en_US")
-        .header(Parameter::image_id("1602186516975000"))
+        .header(Parameter::image_id(
+            MediaId::new("1602186516975000").unwrap(),
+        ))
         .body([Parameter::text("Pablo"), Parameter::text("CARIBE25")])
         .limited_time_offer(1_209_600_000)
         .copy_code_button(0, "CARIBE25")
@@ -1402,7 +1417,7 @@ async fn list_parses_the_documented_response() {
     let t = ScriptedTransport::new();
     t.push_json(200, management_list_example());
     let page = client(&t)
-        .templates("102290129340398")
+        .templates(WabaId::new("102290129340398").unwrap())
         .list(&TemplateListQuery::new())
         .await
         .unwrap();
@@ -1415,7 +1430,7 @@ async fn list_parses_the_documented_response() {
 
     assert_eq!(page.data.len(), 2);
     let first = &page.data[0];
-    assert_eq!(first.id, TemplateId::new("1387372356726668"));
+    assert_eq!(first.id, TemplateId::new("1387372356726668").unwrap());
     assert_eq!(first.status, Some(TemplateStatus::Approved));
     assert_eq!(first.category, Some(TemplateCategory::Utility));
     assert_eq!(first.parameter_format, Some(ParameterFormat::Named));
@@ -1446,7 +1461,7 @@ async fn list_sends_the_documented_filters() {
         .status(TemplateStatus::Approved)
         .name("reservation_confirmation");
     let page = client(&t)
-        .templates("102290129340398")
+        .templates(WabaId::new("102290129340398").unwrap())
         .list(&q)
         .await
         .unwrap();
@@ -1468,7 +1483,7 @@ async fn list_sends_the_callers_cursors() {
     let t = ScriptedTransport::new();
     t.push_json(200, json!({"data": []}));
     t.push_json(200, json!({"data": []}));
-    let templates = client(&t).templates("102290129340398");
+    let templates = client(&t).templates(WabaId::new("102290129340398").unwrap());
     let next = TemplateListQuery {
         after: Some("QVFIU...".into()),
         ..TemplateListQuery::new().limit(5)
@@ -1499,7 +1514,7 @@ async fn list_stream_follows_cursors_and_limit_zero_is_refused() {
         200,
         json!({"data": [{"id": "3"}], "paging": {"cursors": {"after": "c2"}}}),
     );
-    let templates = client(&t).templates("102290129340398");
+    let templates = client(&t).templates(WabaId::new("102290129340398").unwrap());
     let q = TemplateListQuery::new().limit(2);
     let ids: Vec<String> = templates
         .list_stream(&q)
@@ -1544,9 +1559,9 @@ async fn get_status_and_quality_score() {
         200,
         json!({"quality_score": {"score": "GREEN", "date": 1758754645}, "id": "1387372356726668"}),
     );
-    let templates = client(&t).templates("102290129340398");
+    let templates = client(&t).templates(WabaId::new("102290129340398").unwrap());
     let s = templates
-        .get_fields(&TemplateId::new("1259544702043867"), &["status"])
+        .get_fields(&TemplateId::new("1259544702043867").unwrap(), &["status"])
         .await
         .unwrap();
     assert_eq!(s.status, Some(TemplateStatus::Approved));
@@ -1556,7 +1571,10 @@ async fn get_status_and_quality_score() {
     assert_eq!(req.query("fields").as_deref(), Some("status"));
 
     let q = templates
-        .get_fields(&TemplateId::new("1105258428396250"), &["quality_score"])
+        .get_fields(
+            &TemplateId::new("1105258428396250").unwrap(),
+            &["quality_score"],
+        )
         .await
         .unwrap();
     let score = q.quality_score.unwrap();
@@ -1576,8 +1594,8 @@ async fn get_maps_template_not_found() {
         "code": 803, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
     );
     let err = client(&t)
-        .templates("1")
-        .get(&TemplateId::new("42"))
+        .templates(WabaId::new("1").unwrap())
+        .get(&TemplateId::new("42").unwrap())
         .await
         .unwrap_err();
     assert_eq!(err.graph().map(|g| g.code), Some(803));
@@ -1604,11 +1622,11 @@ async fn create_posts_the_definition_and_parses_the_response() {
         "https://www.luckyshrub.com/deals",
     )]));
     let created = client(&t)
-        .templates("102290129340398")
+        .templates(WabaId::new("102290129340398").unwrap())
         .create(&def)
         .await
         .unwrap();
-    assert_eq!(created.id, TemplateId::new("1627019861106475"));
+    assert_eq!(created.id, TemplateId::new("1627019861106475").unwrap());
     assert_eq!(created.status, Some(TemplateStatus::Pending));
     assert_eq!(created.category, Some(TemplateCategory::Marketing));
     let req = t.last_request().unwrap();
@@ -1646,7 +1664,7 @@ async fn create_sends_the_app_deep_link() {
         200,
         json!({"id": "1627019861106476", "status": "PENDING", "category": "MARKETING"}),
     );
-    let templates = client(&t).templates("102290129340398");
+    let templates = client(&t).templates(WabaId::new("102290129340398").unwrap());
     templates.create(&deep_link_definition()).await.unwrap();
     let req = t.last_request().unwrap();
     assert_eq!(req.method, Method::POST);
@@ -1688,7 +1706,11 @@ async fn invalid_definitions_never_reach_meta() {
     let t = ScriptedTransport::new();
     let def = TemplateDefinition::new("Bad Name", "en_US", TemplateCategory::Marketing)
         .component(TemplateComponent::body("x"));
-    let err = client(&t).templates("1").create(&def).await.unwrap_err();
+    let err = client(&t)
+        .templates(WabaId::new("1").unwrap())
+        .create(&def)
+        .await
+        .unwrap_err();
     assert_eq!(err.kind(), ErrorKind::InvalidParameter);
     assert!(matches!(err, meta_whatsapp_core::Error::Validation(ref v) if v.field == "name"));
     assert!(t.requests().is_empty());
@@ -1730,7 +1752,7 @@ async fn a_product_card_carousel_is_created_with_exactly_two_cards() {
     for n in [0, 1, 3, 10, 11] {
         let t = ScriptedTransport::new();
         let err = client(&t)
-            .templates("102290129340398")
+            .templates(WabaId::new("102290129340398").unwrap())
             .create(&product_card_definition(n))
             .await
             .unwrap_err();
@@ -1746,11 +1768,11 @@ async fn a_product_card_carousel_is_created_with_exactly_two_cards() {
     let t = ScriptedTransport::new();
     t.push_json(200, created_response());
     let created = client(&t)
-        .templates("102290129340398")
+        .templates(WabaId::new("102290129340398").unwrap())
         .create(&product_card_definition(2))
         .await
         .unwrap();
-    assert_eq!(created.id, TemplateId::new("1627019861106475"));
+    assert_eq!(created.id, TemplateId::new("1627019861106475").unwrap());
     let req = t.last_request().unwrap();
     assert_eq!(req.method, Method::POST);
     assert_eq!(req.path(), "/v25.0/102290129340398/message_templates");
@@ -1879,7 +1901,7 @@ async fn a_product_header_on_any_card_makes_a_product_card_carousel() {
     for (case, cards, field, reason) in cases {
         let t = ScriptedTransport::new();
         let err = client(&t)
-            .templates("102290129340398")
+            .templates(WabaId::new("102290129340398").unwrap())
             .create(&definition(cards))
             .await
             .unwrap_err();
@@ -1909,11 +1931,11 @@ async fn a_media_card_carousel_with_three_cards_is_created() {
     let t = ScriptedTransport::new();
     t.push_json(200, created_response());
     let created = client(&t)
-        .templates("102290129340398")
+        .templates(WabaId::new("102290129340398").unwrap())
         .create(&def)
         .await
         .unwrap();
-    assert_eq!(created.id, TemplateId::new("1627019861106475"));
+    assert_eq!(created.id, TemplateId::new("1627019861106475").unwrap());
     let req = t.last_request().unwrap();
     assert_eq!(req.method, Method::POST);
     assert_eq!(req.path(), "/v25.0/102290129340398/message_templates");
@@ -1991,7 +2013,7 @@ async fn a_product_card_carousel_send_takes_up_to_ten_cards() {
           "messages": [{"id": "wamid.HBgLMTY0NjcwNDM1OTUVAgARGBI1RjQyNUE3NEYxMzAzMzQ5MkEA"}]
         }),
     );
-    let messages = client(&t).messages("179776755229976");
+    let messages = client(&t).messages(PhoneNumberId::new("179776755229976").unwrap());
     let (ten, body) = product_card_send(10);
     messages.send(&ten).await.unwrap();
     let req = t.last_request().unwrap();
@@ -2020,7 +2042,11 @@ async fn create_surfaces_graph_errors() {
         "type": "OAuthException", "code": 100, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}));
     let def = TemplateDefinition::new("ok_name", "en_US", TemplateCategory::Utility)
         .component(TemplateComponent::body("Hello there."));
-    let err = client(&t).templates("1").create(&def).await.unwrap_err();
+    let err = client(&t)
+        .templates(WabaId::new("1").unwrap())
+        .create(&def)
+        .await
+        .unwrap_err();
     assert_eq!(err.kind(), ErrorKind::InvalidParameter);
     assert_eq!(t.requests().len(), 1, "a create is not replayed");
 }
@@ -2030,11 +2056,11 @@ async fn edit_category_and_components() {
     let t = ScriptedTransport::new();
     t.push_json(200, json!({"success": true}));
     t.push_json(200, json!({"success": true}));
-    let templates = client(&t).templates("102290129340398");
+    let templates = client(&t).templates(WabaId::new("102290129340398").unwrap());
     // templates/template-management#edit-template-category.
     templates
         .edit(
-            &TemplateId::new("1252715608684590"),
+            &TemplateId::new("1252715608684590").unwrap(),
             &TemplateEdit::category(TemplateCategory::Marketing),
         )
         .await
@@ -2057,7 +2083,7 @@ async fn edit_category_and_components() {
     ]});
     let edit: TemplateEdit = serde_json::from_value(doc.clone()).unwrap();
     templates
-        .edit(&TemplateId::new("564750795574598"), &edit)
+        .edit(&TemplateId::new("564750795574598").unwrap(), &edit)
         .await
         .unwrap();
     let req = &t.requests()[1];
@@ -2067,7 +2093,7 @@ async fn edit_category_and_components() {
 
     assert!(
         templates
-            .edit(&TemplateId::new("1"), &TemplateEdit::default())
+            .edit(&TemplateId::new("1").unwrap(), &TemplateEdit::default())
             .await
             .is_err()
     );
@@ -2080,19 +2106,22 @@ async fn delete_by_name_id_and_ids() {
     for _ in 0..3 {
         t.push_json(200, json!({"success": true}));
     }
-    let templates = client(&t).templates("102290129340398");
+    let templates = client(&t).templates(WabaId::new("102290129340398").unwrap());
     templates
         .delete_by_name("order_confirmation")
         .await
         .unwrap();
     templates
-        .delete_by_id("order_confirmation", &TemplateId::new("1407680676729941"))
+        .delete_by_id(
+            "order_confirmation",
+            &TemplateId::new("1407680676729941").unwrap(),
+        )
         .await
         .unwrap();
     templates
         .delete_by_ids(&[
-            TemplateId::new("1387372356726668"),
-            TemplateId::new("1304694804498707"),
+            TemplateId::new("1387372356726668").unwrap(),
+            TemplateId::new("1304694804498707").unwrap(),
         ])
         .await
         .unwrap();
@@ -2111,7 +2140,9 @@ async fn delete_by_name_id_and_ids() {
     );
     assert_eq!(t.remaining(), 0);
 
-    let too_many: Vec<TemplateId> = (0..101).map(|i| TemplateId::new(i.to_string())).collect();
+    let too_many: Vec<TemplateId> = (0..101)
+        .map(|i| TemplateId::new(i.to_string()).unwrap())
+        .collect();
     assert!(templates.delete_by_ids(&too_many).await.is_err());
     assert!(templates.delete_by_ids(&[]).await.is_err());
     assert_eq!(t.requests().len(), 3);
@@ -2158,7 +2189,7 @@ async fn library_browse_and_create() {
         200,
         json!({"id": "954638012257287", "status": "APPROVED", "category": "UTILITY"}),
     );
-    let templates = client(&t).templates("102290129340398");
+    let templates = client(&t).templates(WabaId::new("102290129340398").unwrap());
     let page = templates
         .library(&LibraryQuery {
             search: Some("payments".into()),
@@ -2226,9 +2257,9 @@ async fn migrate_between_wabas() {
         }),
     );
     let result = client(&t)
-        .templates("104996122399160")
+        .templates(WabaId::new("104996122399160").unwrap())
         .migrate_from(
-            &"102290129340398".into(),
+            &WabaId::new("102290129340398").unwrap(),
             &MigrationOptions {
                 page_number: Some(0),
                 ..MigrationOptions::default()
@@ -2250,7 +2281,7 @@ async fn migrate_between_wabas() {
     assert_eq!(
         result
             .failed_templates
-            .get(&TemplateId::new("259672276895259"))
+            .get(&TemplateId::new("259672276895259").unwrap())
             .map(String::as_str),
         Some("Formatting error - dangling parameter")
     );
@@ -2262,8 +2293,8 @@ async fn migrate_between_wabas() {
     };
     assert!(
         client(&t)
-            .templates("1")
-            .migrate_from(&"2".into(), &big)
+            .templates(WabaId::new("1").unwrap())
+            .migrate_from(&WabaId::new("2").unwrap(), &big)
             .await
             .is_err()
     );
@@ -2282,10 +2313,10 @@ async fn compare_two_templates() {
         {"key": "1533406637136032", "value": "UNKNOWN_BLOCK_REASON"}]}
     ]}));
     let metrics = client(&t)
-        .templates("102290129340398")
+        .templates(WabaId::new("102290129340398").unwrap())
         .compare(
-            &TemplateId::new("5289179717853347"),
-            &TemplateId::new("1533406637136032"),
+            &TemplateId::new("5289179717853347").unwrap(),
+            &TemplateId::new("1533406637136032").unwrap(),
             1_674_844_791_182,
             1_674_845_395_982,
         )
@@ -2314,8 +2345,8 @@ async fn unpause_posts_to_the_template() {
     let t = ScriptedTransport::new();
     t.push_json(200, json!({"success": true}));
     let v = client(&t)
-        .templates("1")
-        .unpause(&TemplateId::new("1105258428396250"))
+        .templates(WabaId::new("1").unwrap())
+        .unpause(&TemplateId::new("1105258428396250").unwrap())
         .await
         .unwrap();
     assert_eq!(v, json!({"success": true}));
@@ -2333,8 +2364,8 @@ async fn ids_cannot_escape_their_path_segment() {
     for _ in 0..6 {
         t.push_json(200, json!({"id": "1", "success": true, "data": []}));
     }
-    let hostile = TemplateId::new("123/subscribed_apps");
-    let templates = client(&t).templates("456/phone_numbers");
+    let hostile = TemplateId::new_unchecked("123/subscribed_apps");
+    let templates = client(&t).templates(WabaId::new_unchecked("456/phone_numbers"));
     let _ = templates.get(&hostile).await.unwrap();
     let _ = templates.get_fields(&hostile, &["status"]).await.unwrap();
     templates
@@ -2343,7 +2374,7 @@ async fn ids_cannot_escape_their_path_segment() {
         .unwrap();
     let _ = templates.unpause(&hostile).await.unwrap();
     let _ = templates
-        .compare(&hostile, &TemplateId::new("1"), 1, 2)
+        .compare(&hostile, &TemplateId::new("1").unwrap(), 1, 2)
         .await
         .unwrap();
     templates.delete_by_name("x").await.unwrap();
@@ -2363,13 +2394,13 @@ async fn ids_cannot_escape_their_path_segment() {
 
     // `..` would be resolved away by URL normalization: refused locally.
     let e = client(&t)
-        .templates("..")
+        .templates(WabaId::new_unchecked(".."))
         .list(&TemplateListQuery::new())
         .await
         .unwrap_err();
     assert!(matches!(e, meta_whatsapp_core::Error::Validation(_)), "{e}");
     let e = client(&t)
-        .authentication("..")
+        .authentication(WabaId::new_unchecked(".."))
         .previews(&crate::authentication::PreviewQuery::default())
         .await
         .unwrap_err();
@@ -2380,10 +2411,13 @@ async fn ids_cannot_escape_their_path_segment() {
 #[test]
 fn id_lists_quote_non_numeric_ids() {
     assert_eq!(
-        id_list(&[TemplateId::new("12"), TemplateId::new("34")]),
+        id_list(&[
+            TemplateId::new("12").unwrap(),
+            TemplateId::new("34").unwrap()
+        ]),
         "[12,34]"
     );
-    assert_eq!(id_list(&[TemplateId::new("a\"b")]), r#"["a\"b"]"#);
+    assert_eq!(id_list(&[TemplateId::new_unchecked("a\"b")]), r#"["a\"b"]"#);
 }
 
 #[test]
@@ -2465,11 +2499,12 @@ async fn create_group_sends_the_documented_body() {
     t.push_json(200, json!({"id": "9020555671393375"}));
     let group = TemplateGroupCreate::new(
         "Black Friday 2024",
-        ["278077987957091", "1945418102598215", "1035843174854974"],
+        ["278077987957091", "1945418102598215", "1035843174854974"]
+            .map(|id| TemplateId::new(id).unwrap()),
     )
     .description("US-based Black Friday sale 2024 templates.");
     let created = client(&t)
-        .templates("102290129340398")
+        .templates(WabaId::new("102290129340398").unwrap())
         .create_group(&group)
         .await
         .unwrap();
@@ -2564,7 +2599,7 @@ async fn get_group_parses_the_documented_response() {
     let t = ScriptedTransport::new();
     t.push_json(200, group_example());
     let group = client(&t)
-        .templates("102290129340398")
+        .templates(WabaId::new("102290129340398").unwrap())
         .get_group(&TemplateGroupId::new("9020555671393375"))
         .await
         .unwrap();
@@ -2635,13 +2670,16 @@ async fn update_group_sends_the_documented_body() {
     // templates/template-groups § Update a template group, example response.
     t.push_json(200, json!({"success": true}));
     t.push_json(200, json!({"success": true}));
-    let templates = client(&t).templates("102290129340398");
+    let templates = client(&t).templates(WabaId::new("102290129340398").unwrap());
     let group = TemplateGroupId::new("9020555671393375");
 
     // The example request: adds two templates, removes a third.
     let update = TemplateGroupUpdate::new()
-        .add_templates(["844006344365270", "1188657612184382"])
-        .remove_templates(["1035843174854974"]);
+        .add_templates([
+            TemplateId::new("844006344365270").unwrap(),
+            TemplateId::new("1188657612184382").unwrap(),
+        ])
+        .remove_templates([TemplateId::new("1035843174854974").unwrap()]);
     templates.update_group(&group, &update).await.unwrap();
     let req = &t.requests()[0];
     assert_eq!(req.method, Method::POST);
@@ -2676,7 +2714,7 @@ async fn delete_group_and_graph_errors() {
     let t = ScriptedTransport::new();
     // templates/template-groups § Delete a template group, example response.
     t.push_json(200, json!({"success": true}));
-    let templates = client(&t).templates("102290129340398");
+    let templates = client(&t).templates(WabaId::new("102290129340398").unwrap());
     let group = TemplateGroupId::new("9020555671393375");
     templates.delete_group(&group).await.unwrap();
     let req = t.last_request().unwrap();
@@ -2706,6 +2744,35 @@ async fn delete_group_and_graph_errors() {
     assert_eq!(t.remaining(), 0);
 }
 
+/// Roadmap L20c: the template ids an archive or unarchive answer names are
+/// kept as Meta sent them, whatever their shape (`TemplateId::new` would
+/// refuse these): a new id format must not blank an id in a call that
+/// already took effect.
+#[test]
+fn archive_answers_keep_template_ids_as_sent() {
+    let archived: ArchiveResult = serde_json::from_value(json!({
+        "archived_templates": ["HSM-1/x", 1387372356726668_u64],
+        "failed_templates": {"<TEMPLATE_ID>": "Only approved or rejected templates can be archived"}
+    }))
+    .unwrap();
+    let ids: Vec<&str> = archived
+        .archived_templates
+        .iter()
+        .map(TemplateId::as_str)
+        .collect();
+    assert_eq!(ids, ["HSM-1/x", "1387372356726668"]);
+    let failed: Vec<&str> = archived
+        .failed_templates
+        .keys()
+        .map(TemplateId::as_str)
+        .collect();
+    assert_eq!(failed, ["<TEMPLATE_ID>"]);
+    let unarchived: UnarchiveResult =
+        serde_json::from_value(json!({"unarchived_templates": ["HSM-1/x"]})).unwrap();
+    assert_eq!(unarchived.unarchived_templates[0].as_str(), "HSM-1/x");
+    assert!(TemplateId::new("HSM-1/x").is_err());
+}
+
 #[tokio::test]
 async fn archive_and_unarchive_send_the_documented_bodies() {
     let t = ScriptedTransport::new();
@@ -2728,10 +2795,10 @@ async fn archive_and_unarchive_send_the_documented_bodies() {
             "failed_templates": {"1304694804498707": "Template is not archived"}
         }),
     );
-    let templates = client(&t).templates("102290129340398");
+    let templates = client(&t).templates(WabaId::new("102290129340398").unwrap());
     let ids = [
-        TemplateId::new("1387372356726668"),
-        TemplateId::new("1304694804498707"),
+        TemplateId::new("1387372356726668").unwrap(),
+        TemplateId::new("1304694804498707").unwrap(),
     ];
     let archived = templates.archive(&ids).await.unwrap();
     assert_eq!(archived.archived_templates, [ids[0].clone()]);
@@ -2782,8 +2849,8 @@ fn archive_results_tolerate_shapes_the_page_does_not_show() {
     assert_eq!(
         archived.archived_templates,
         [
-            TemplateId::new("1387372356726668"),
-            TemplateId::new("1304694804498707")
+            TemplateId::new("1387372356726668").unwrap(),
+            TemplateId::new("1304694804498707").unwrap()
         ]
     );
     assert!(archived.failed_templates.is_empty());
@@ -2797,7 +2864,7 @@ fn archive_results_tolerate_shapes_the_page_does_not_show() {
     assert_eq!(
         unarchived
             .failed_templates
-            .get(&TemplateId::new("1"))
+            .get(&TemplateId::new("1").unwrap())
             .map(String::as_str),
         Some(r#"{"code":100}"#)
     );
@@ -2812,7 +2879,7 @@ fn archive_results_tolerate_shapes_the_page_does_not_show() {
 #[tokio::test]
 async fn group_ids_are_checked_as_digits_before_any_request() {
     let t = ScriptedTransport::new();
-    let templates = client(&t).templates("102290129340398");
+    let templates = client(&t).templates(WabaId::new("102290129340398").unwrap());
     let update = TemplateGroupUpdate::new().name("Black Friday 2024");
     for bad in [
         "",
@@ -2840,8 +2907,12 @@ async fn group_ids_are_checked_as_digits_before_any_request() {
 #[tokio::test]
 async fn group_bodies_are_checked_before_any_request() {
     let t = ScriptedTransport::new();
-    let templates = client(&t).templates("102290129340398");
-    let create = |name: &str, ids: &[&str]| TemplateGroupCreate::new(name, ids.iter().copied());
+    let templates = client(&t).templates(WabaId::new("102290129340398").unwrap());
+    // Ids built unchecked, as a deserialized one may be: the request-time
+    // check still refuses them.
+    let create = |name: &str, ids: &[&str]| {
+        TemplateGroupCreate::new(name, ids.iter().map(|id| TemplateId::new_unchecked(*id)))
+    };
 
     // templates/template-groups: name required, at most 256 characters;
     // description at most 512; ids are integers.
@@ -2888,11 +2959,11 @@ async fn group_bodies_are_checked_before_any_request() {
             "description",
         ),
         (
-            TemplateGroupUpdate::new().add_templates(["1", "x"]),
+            TemplateGroupUpdate::new().add_templates(["1", "x"].map(TemplateId::new_unchecked)),
             "add_templates[1]",
         ),
         (
-            TemplateGroupUpdate::new().remove_templates(["1/2"]),
+            TemplateGroupUpdate::new().remove_templates([TemplateId::new_unchecked("1/2")]),
             "remove_templates[0]",
         ),
     ] {
@@ -2912,9 +2983,11 @@ async fn group_bodies_are_checked_before_any_request() {
 #[tokio::test]
 async fn archive_ids_are_checked_before_any_request() {
     let t = ScriptedTransport::new();
-    let templates = client(&t).templates("102290129340398");
+    let templates = client(&t).templates(WabaId::new("102290129340398").unwrap());
     // templates/template-archival: "up to 100 template IDs per request".
-    let too_many: Vec<TemplateId> = (0..101).map(|i| TemplateId::new(i.to_string())).collect();
+    let too_many: Vec<TemplateId> = (0..101)
+        .map(|i| TemplateId::new(i.to_string()).unwrap())
+        .collect();
     for ids in [&[][..], &too_many[..]] {
         assert_eq!(
             invalid_field(templates.archive(ids).await.unwrap_err()),
@@ -2925,7 +2998,10 @@ async fn archive_ids_are_checked_before_any_request() {
             "hsm_ids"
         );
     }
-    let bad = [TemplateId::new("1"), TemplateId::new("123/subscribed_apps")];
+    let bad = [
+        TemplateId::new("1").unwrap(),
+        TemplateId::new_unchecked("123/subscribed_apps"),
+    ];
     assert_eq!(
         invalid_field(templates.archive(&bad).await.unwrap_err()),
         "hsm_ids[1]"
@@ -2948,18 +3024,24 @@ async fn group_and_archive_posts_are_not_replayed() {
     for _ in 0..4 {
         t.push_error(|| meta_whatsapp_core::error::TransportError::Timeout);
     }
-    let templates = retrying_client(&t).templates("102290129340398");
-    let ids = [TemplateId::new("1387372356726668")];
+    let templates = retrying_client(&t).templates(WabaId::new("102290129340398").unwrap());
+    let ids = [TemplateId::new("1387372356726668").unwrap()];
     let group = TemplateGroupId::new("9020555671393375");
     assert!(
         templates
-            .create_group(&TemplateGroupCreate::new("Black Friday 2024", ["1"]))
+            .create_group(&TemplateGroupCreate::new(
+                "Black Friday 2024",
+                [TemplateId::new("1").unwrap()],
+            ))
             .await
             .is_err()
     );
     assert!(
         templates
-            .update_group(&group, &TemplateGroupUpdate::new().add_templates(["1"]))
+            .update_group(
+                &group,
+                &TemplateGroupUpdate::new().add_templates([TemplateId::new("1").unwrap()])
+            )
             .await
             .is_err()
     );

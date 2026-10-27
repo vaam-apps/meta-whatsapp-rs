@@ -168,6 +168,27 @@ async fn envelopes_bsuids_templates_and_reactions_are_metas_objects() {
     assert_eq!(h.graph.remaining(), 0);
 }
 
+/// Roadmap L20c: a message's media `id` is a body value, never a Graph
+/// path segment, so it reaches Meta as given, for Meta to judge, as it
+/// did before ids were checked (v1's answer unchanged). Decisive: checking
+/// it as a numeric id refuses this send with a `422`.
+#[tokio::test]
+async fn a_media_id_in_a_body_reaches_meta_as_given() {
+    let (h, key) = connected().await;
+    h.graph.push_json(200, accepted());
+    let image = json!({"to": {"phone": TO}, "type": "image", "image": {"id": "MEDIA_ID/1"}});
+    let reply = h.call(send(&key, &image)).await;
+    assert_eq!(reply.status, StatusCode::ACCEPTED, "{}", reply.text);
+    let request = h.graph.last_request().unwrap();
+    assert_eq!(request.path(), format!("/v25.0/{PN}/messages"));
+    assert_eq!(
+        request.json().unwrap(),
+        json!({"messaging_product": "whatsapp", "recipient_type": "individual", "to": TO,
+               "type": "image", "image": {"id": "MEDIA_ID/1"}})
+    );
+    assert_eq!(h.graph.remaining(), 0);
+}
+
 /// M1.4: a phone number without its `+` is refused before any request
 /// (Meta would read it as local to the sender's country), and its
 /// `Idempotency-Key` stays free. Decisive: the `+` check.

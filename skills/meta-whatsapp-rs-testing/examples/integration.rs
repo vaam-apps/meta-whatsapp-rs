@@ -65,7 +65,7 @@ mod tests {
 
         let to = Recipient::user(CUSTOMER);
         client
-            .messages(NUMBER)
+            .messages(PhoneNumberId::new(NUMBER).unwrap())
             .send(&OutboundMessage::text(to, "Your order has shipped."))
             .await
             .unwrap();
@@ -95,7 +95,7 @@ mod tests {
             400,
             json!({"error": {"message": "(#131047) Re-engagement message", "code": 131047}}),
         );
-        let messages = scripted_client(&transport).messages(NUMBER);
+        let messages = scripted_client(&transport).messages(PhoneNumberId::new(NUMBER).unwrap());
         let text = OutboundMessage::text(Recipient::user(CUSTOMER), "Hi");
 
         let timeout = messages.send(&text).await.unwrap_err();
@@ -141,8 +141,8 @@ mod tests {
         let store = Arc::new(MemoryConversationStore::new());
         let sent_at = OffsetDateTime::from_unix_timestamp(1_749_416_383).unwrap();
         let event = WebhookEvent::MessageReceived {
-            waba_id: "102290129340398".into(),
-            phone_number_id: NUMBER.into(),
+            waba_id: WabaId::new("102290129340398").unwrap(),
+            phone_number_id: PhoneNumberId::new(NUMBER).unwrap(),
             display_phone_number: "15550783881".into(),
             contact: None,
             message: Box::new(
@@ -158,7 +158,12 @@ mod tests {
 
         let transport = ScriptedTransport::new(); // nothing scripted: no request may leave
         let clock = Arc::new(ManualClock::new(sent_at + Duration::from_hours(25)));
-        let inbox = Inbox::new(scripted_client(&transport), NUMBER, store).with_clock(clock);
+        let inbox = Inbox::new(
+            scripted_client(&transport),
+            PhoneNumberId::new(NUMBER).unwrap(),
+            store,
+        )
+        .with_clock(clock);
         let key = inbox.key(CUSTOMER);
 
         let refused = inbox

@@ -9,6 +9,7 @@
 
 mod common;
 
+use meta_whatsapp_rs::core::ids::PhoneNumberId;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::Poll;
@@ -73,7 +74,11 @@ fn events_of(body: &[u8]) -> Vec<WebhookEvent> {
 /// The messages the inbox holds for a contact of `pn`.
 async fn inbox(h: &Harness, pn: &str, contact: &str) -> usize {
     h.conversations
-        .messages(&ConversationKey::new(pn, contact), None, 100)
+        .messages(
+            &ConversationKey::new(PhoneNumberId::new(pn).unwrap(), contact),
+            None,
+            100,
+        )
         .await
         .unwrap()
         .len()
@@ -880,7 +885,7 @@ async fn an_event_dated_before_its_binding_is_nobodys() {
     h.connect(A, WABA_A, &[PN_A], "TOKEN-OF-A").await;
     assert!(
         h.store
-            .unbind_waba(&meta_whatsapp_rs::core::ids::WabaId::new(WABA_A))
+            .unbind_waba(&meta_whatsapp_rs::core::ids::WabaId::new(WABA_A).unwrap())
             .await
             .unwrap()
     );
@@ -911,7 +916,7 @@ async fn an_event_of_its_bindings_own_second_reaches_no_tenant_nor_inbox() {
     let h = two_tenants().await;
     let began = h
         .store
-        .waba(&meta_whatsapp_rs::core::ids::WabaId::new(WABA_A))
+        .waba(&meta_whatsapp_rs::core::ids::WabaId::new(WABA_A).unwrap())
         .await
         .unwrap()
         .unwrap()

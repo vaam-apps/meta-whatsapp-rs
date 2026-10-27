@@ -66,7 +66,7 @@ async fn messaging_matches_docs_example() {
         }),
     );
     let a = client(&t)
-        .analytics(WABA)
+        .analytics(WabaId::new(WABA).unwrap())
         .messaging(&MessagingAnalyticsQuery::new(
             at(1543543200),
             at(1544148000),
@@ -100,7 +100,7 @@ async fn messaging_filters_are_encoded_and_missing_object_is_none() {
     let t = ScriptedTransport::new();
     t.push_json(200, json!({"id": WABA}));
     let a = client(&t)
-        .analytics(WABA)
+        .analytics(WabaId::new(WABA).unwrap())
         .messaging(&MessagingAnalyticsQuery {
             phone_numbers: vec!["16505550111".into()],
             product_types: vec![
@@ -124,7 +124,7 @@ async fn messaging_filters_are_encoded_and_missing_object_is_none() {
 #[tokio::test]
 async fn country_codes_must_be_two_letters() {
     let t = ScriptedTransport::new();
-    let api = client(&t).analytics(WABA);
+    let api = client(&t).analytics(WabaId::new(WABA).unwrap());
     let err = api
         .messaging(&MessagingAnalyticsQuery {
             country_codes: vec!["US".into(), "USA".into()],
@@ -170,7 +170,7 @@ async fn conversation_matches_docs_example_with_breakdowns() {
         }),
     );
     let a = client(&t)
-        .analytics(WABA)
+        .analytics(WabaId::new(WABA).unwrap())
         .conversation(&ConversationAnalyticsQuery {
             dimensions: vec![
                 D::ConversationCategory,
@@ -224,7 +224,7 @@ async fn conversation_every_filter_and_unwrapped_example() {
         ]}]}),
     );
     let a = client(&t)
-        .analytics(WABA)
+        .analytics(WabaId::new(WABA).unwrap())
         .conversation(&ConversationAnalyticsQuery {
             phone_numbers: vec!["19195552584".into()],
             metric_types: vec![ConversationMetric::Cost, ConversationMetric::Conversation],
@@ -268,7 +268,7 @@ async fn pricing_matches_docs_example() {
         ]}]}}),
     );
     let a = client(&t)
-        .analytics(WABA)
+        .analytics(WabaId::new(WABA).unwrap())
         .pricing(&PricingAnalyticsQuery {
             country_codes: vec!["US".into(), "IN".into()],
             dimensions: vec![D::PricingCategory, D::PricingType, D::Tier, D::Country],
@@ -308,7 +308,7 @@ async fn pricing_filters_are_encoded() {
     let t = ScriptedTransport::new();
     t.push_json(200, json!({"pricing_analytics": {"data": []}}));
     let a = client(&t)
-        .analytics(WABA)
+        .analytics(WabaId::new(WABA).unwrap())
         .pricing(&PricingAnalyticsQuery {
             phone_numbers: vec!["15550783881".into()],
             metric_types: vec![PricingMetric::Cost, PricingMetric::Volume],
@@ -351,7 +351,7 @@ async fn calls_match_docs_example() {
         }),
     );
     let a = client(&t)
-        .analytics(WABA)
+        .analytics(WabaId::new(WABA).unwrap())
         .calls(&CallAnalyticsQuery {
             directions: vec![CallDirection::UserInitiated],
             ..CallAnalyticsQuery::new(at(1759302000), at(1767168000), Granularity::Daily)
@@ -381,7 +381,7 @@ async fn call_dimensions_are_lowercase_and_metrics_upper() {
         json!({"call_analytics": {"directions": ["USER_INITIATED", "BUSINESS_INITIATED"], "data_points": [{"start": 1, "end": 2, "direction": "BUSINESS_INITIATED", "country": "US", "phone_number": "15550783881"}]}}),
     );
     let a = client(&t)
-        .analytics(WABA)
+        .analytics(WabaId::new(WABA).unwrap())
         .calls(&CallAnalyticsQuery {
             phone_numbers: vec!["15550783881".into()],
             country_codes: vec!["US".into(), "BR".into()],
@@ -463,13 +463,16 @@ async fn template_matches_docs_example() {
     let t = ScriptedTransport::new();
     t.push_json(200, template_docs_response());
     let page = client(&t)
-        .analytics("109259195336416")
+        .analytics(WabaId::new("109259195336416").unwrap())
         .template(&TemplateAnalyticsQuery {
             metric_types: vec![M::Cost, M::Clicked, M::Delivered, M::Read, M::Sent],
             ..TemplateAnalyticsQuery::new(
                 at(1718064000),
                 at(1718122745),
-                vec!["1421988012088524".into(), "2632273056924580".into()],
+                vec![
+                    TemplateId::new("1421988012088524").unwrap(),
+                    TemplateId::new("2632273056924580").unwrap(),
+                ],
             )
         })
         .await
@@ -496,7 +499,10 @@ async fn template_matches_docs_example() {
     assert_eq!(set.granularity, Some(Granularity::Daily));
     assert_eq!(set.product_type.as_deref(), Some("cloud_api"));
     let second = &set.data_points[1];
-    assert_eq!(second.template_id, TemplateId::new("2632273056924580"));
+    assert_eq!(
+        second.template_id,
+        TemplateId::new("2632273056924580").unwrap()
+    );
     assert_eq!(second.start, AnalyticsTime::Timestamp(at(1718064000)));
     assert_eq!(second.read, Some(1));
     assert_eq!(
@@ -527,14 +533,14 @@ async fn template_with_waba_timezone_sends_dates_and_product_type() {
         json!({"data": [{"waba_timezone": "America/Los_Angeles", "granularity": "DAILY", "product_type": "marketing_messages_api_for_whatsapp", "data_points": [{"template_id": "1", "start": "2024-06-11", "end": "2024-06-12", "sent": 4}]}]}),
     );
     let page = client(&t)
-        .analytics(WABA)
+        .analytics(WabaId::new(WABA).unwrap())
         .template(&TemplateAnalyticsQuery {
             product_type: Some(TemplateProductType::MarketingMessagesApiForWhatsapp),
             use_waba_timezone: Some(true),
             ..TemplateAnalyticsQuery::new(
                 date!(2024 - 06 - 11),
                 date!(2024 - 06 - 12),
-                vec!["1".into()],
+                vec![TemplateId::new("1").unwrap()],
             )
         })
         .await
@@ -560,9 +566,11 @@ async fn template_with_waba_timezone_sends_dates_and_product_type() {
 #[tokio::test]
 async fn template_ids_must_be_1_to_10() {
     let t = ScriptedTransport::new();
-    let api = client(&t).analytics(WABA);
+    let api = client(&t).analytics(WabaId::new(WABA).unwrap());
     for n in [0, 11] {
-        let ids = (0..n).map(|i| TemplateId::new(i.to_string())).collect();
+        let ids = (0..n)
+            .map(|i| TemplateId::new(i.to_string()).unwrap())
+            .collect();
         let q = TemplateAnalyticsQuery::new(at(1), at(2), ids);
         let err = api.template(&q).await.unwrap_err();
         assert_eq!(validation_field(&err), "template_ids", "{n}");
@@ -575,7 +583,9 @@ async fn template_ids_must_be_1_to_10() {
     }
     assert!(t.requests().is_empty());
     t.push_json(200, json!({"data": []}));
-    let ten = (0..10).map(|i| TemplateId::new(i.to_string())).collect();
+    let ten = (0..10)
+        .map(|i| TemplateId::new(i.to_string()).unwrap())
+        .collect();
     api.template(&TemplateAnalyticsQuery::new(at(1), at(2), ten))
         .await
         .unwrap();
@@ -585,11 +595,15 @@ async fn template_ids_must_be_1_to_10() {
 #[tokio::test]
 async fn waba_timezone_requires_date_bounds() {
     let t = ScriptedTransport::new();
-    let api = client(&t).analytics(WABA);
+    let api = client(&t).analytics(WabaId::new(WABA).unwrap());
     let err = api
         .template(&TemplateAnalyticsQuery {
             use_waba_timezone: Some(true),
-            ..TemplateAnalyticsQuery::new(at(1), date!(2024 - 06 - 12), vec!["1".into()])
+            ..TemplateAnalyticsQuery::new(
+                at(1),
+                date!(2024 - 06 - 12),
+                vec![TemplateId::new("1").unwrap()],
+            )
         })
         .await
         .unwrap_err();
@@ -617,8 +631,12 @@ async fn template_stream_follows_cursors() {
         json!({"data": [{"granularity": "DAILY", "data_points": []}]}),
     );
     let sets: Vec<TemplateAnalytics> = client(&t)
-        .analytics(WABA)
-        .template_stream(&TemplateAnalyticsQuery::new(at(1), at(2), vec!["1".into()]))
+        .analytics(WabaId::new(WABA).unwrap())
+        .template_stream(&TemplateAnalyticsQuery::new(
+            at(1),
+            at(2),
+            vec![TemplateId::new("1").unwrap()],
+        ))
         .map(Result::unwrap)
         .collect()
         .await;
@@ -638,10 +656,10 @@ async fn analytics_lists_take_cursors_in_their_query() {
     for _ in 0..3 {
         t.push_json(200, json!({"data": []}));
     }
-    let api = client(&t).analytics(WABA);
+    let api = client(&t).analytics(WabaId::new(WABA).unwrap());
     let template = TemplateAnalyticsQuery {
         after: Some("MjQZD".into()),
-        ..TemplateAnalyticsQuery::new(at(1), at(2), vec!["1".into()])
+        ..TemplateAnalyticsQuery::new(at(1), at(2), vec![TemplateId::new("1").unwrap()])
     };
     let group_of_templates = TemplateGroupAnalyticsQuery {
         before: Some("MAZDZD".into()),
@@ -694,7 +712,7 @@ async fn groups_stream_follows_cursors() {
         json!({"data": [{"granularity": "DAILY", "data_points": []}]}),
     );
     let sets: Vec<GroupAnalytics> = client(&t)
-        .analytics(WABA)
+        .analytics(WabaId::new(WABA).unwrap())
         .groups_stream(&GroupAnalyticsQuery::new(
             at(1),
             at(2),
@@ -732,7 +750,7 @@ async fn template_group_matches_docs_example() {
         }),
     );
     let page = client(&t)
-        .analytics(WABA)
+        .analytics(WabaId::new(WABA).unwrap())
         .template_group(&TemplateGroupAnalyticsQuery {
             metric_types: vec![M::Sent, M::Delivered, M::Read],
             ..TemplateGroupAnalyticsQuery::new(
@@ -768,7 +786,7 @@ async fn template_group_matches_docs_example() {
 #[tokio::test]
 async fn template_group_ids_must_be_1_to_10() {
     let t = ScriptedTransport::new();
-    let api = client(&t).analytics(WABA);
+    let api = client(&t).analytics(WabaId::new(WABA).unwrap());
     for n in [0, 11] {
         let ids = (0..n)
             .map(|i| TemplateGroupId::new(i.to_string()))
@@ -814,7 +832,7 @@ async fn groups_match_docs_example() {
         }),
     );
     let page = client(&t)
-        .analytics(WABA)
+        .analytics(WabaId::new(WABA).unwrap())
         .groups(&GroupAnalyticsQuery::new(
             at(1764662400),
             at(1764921600),
@@ -860,7 +878,7 @@ async fn groups_match_docs_example() {
 #[tokio::test]
 async fn group_analytics_needs_one_group_and_a_metric() {
     let t = ScriptedTransport::new();
-    let api = client(&t).analytics(WABA);
+    let api = client(&t).analytics(WabaId::new(WABA).unwrap());
     for ids in [vec![], vec!["G1".into(), "G2".into()]] {
         let q = GroupAnalyticsQuery::new(at(1), at(2), ids, vec![GroupMetric::Sent]);
         let err = api.groups(&q).await.unwrap_err();
@@ -886,6 +904,27 @@ async fn group_analytics_needs_one_group_and_a_metric() {
 
 // ── Switches ────────────────────────────────────────────────────────────
 
+/// Roadmap L20c: the WABA id Meta echoes is kept as sent, whatever its
+/// shape (`WabaId::new` would refuse this one): a new id format must not
+/// turn a confirmation that took effect into an error.
+#[tokio::test]
+async fn enable_template_insights_keeps_the_id_meta_echoes() {
+    let t = ScriptedTransport::new();
+    t.push_json(200, json!({"id": "WABA-1/x"}));
+    let id = Client::builder()
+        .transport(t.clone())
+        .access_token("TOKEN")
+        .build()
+        .unwrap()
+        .analytics(WabaId::new(WABA).unwrap())
+        .enable_template_insights()
+        .await
+        .unwrap();
+    assert_eq!(id.as_str(), "WABA-1/x");
+    assert!(WabaId::new("WABA-1/x").is_err());
+    assert_eq!(t.remaining(), 0);
+}
+
 #[tokio::test]
 async fn enable_template_insights_matches_docs_and_is_idempotent() {
     let t = ScriptedTransport::new();
@@ -902,8 +941,12 @@ async fn enable_template_insights_matches_docs_and_is_idempotent() {
         })
         .build()
         .unwrap();
-    let id = c.analytics(WABA).enable_template_insights().await.unwrap();
-    assert_eq!(id, WabaId::new("102290129340398"));
+    let id = c
+        .analytics(WabaId::new(WABA).unwrap())
+        .enable_template_insights()
+        .await
+        .unwrap();
+    assert_eq!(id, WabaId::new("102290129340398").unwrap());
     let reqs = t.requests();
     assert_eq!(reqs.len(), 2);
     assert_eq!(reqs[1].method, Method::POST);
@@ -921,8 +964,12 @@ async fn set_button_click_tracking_matches_docs() {
     let t = ScriptedTransport::new();
     t.push_json(200, json!({"success": true}));
     client(&t)
-        .analytics(WABA)
-        .set_button_click_tracking(&TemplateId::new("245435364965041"), true, "marketing")
+        .analytics(WabaId::new(WABA).unwrap())
+        .set_button_click_tracking(
+            &TemplateId::new("245435364965041").unwrap(),
+            true,
+            "marketing",
+        )
         .await
         .unwrap();
     let req = t.last_request().unwrap();
@@ -939,25 +986,29 @@ async fn set_button_click_tracking_matches_docs() {
 #[tokio::test]
 async fn button_click_tracking_validates_template_and_category() {
     let t = ScriptedTransport::new();
-    let api = client(&t).analytics(WABA);
+    let api = client(&t).analytics(WabaId::new(WABA).unwrap());
     for bad in ["", ".."] {
         let err = api
-            .set_button_click_tracking(&TemplateId::new(bad), true, "marketing")
+            .set_button_click_tracking(&TemplateId::new_unchecked(bad), true, "marketing")
             .await
             .unwrap_err();
         assert_eq!(validation_field(&err), "path", "{bad:?}");
     }
     let err = api
-        .set_button_click_tracking(&TemplateId::new("1"), false, " ")
+        .set_button_click_tracking(&TemplateId::new("1").unwrap(), false, " ")
         .await
         .unwrap_err();
     assert_eq!(validation_field(&err), "category");
     assert!(t.requests().is_empty());
     // An id with `/` stays one segment: it cannot reach another edge.
     t.push_json(200, json!({"success": true}));
-    api.set_button_click_tracking(&TemplateId::new("245/subscribed_apps"), true, "marketing")
-        .await
-        .unwrap();
+    api.set_button_click_tracking(
+        &TemplateId::new_unchecked("245/subscribed_apps"),
+        true,
+        "marketing",
+    )
+    .await
+    .unwrap();
     assert_eq!(
         t.last_request().unwrap().path(),
         "/v25.0/245%2Fsubscribed_apps"
@@ -973,7 +1024,7 @@ async fn cost_not_available_error_is_decoded() {
         json!({"error": {"message": "Cost not available", "type": "OAuthException", "code": 100, "error_user_title": "Cost not available"}}),
     );
     let err = client(&t)
-        .analytics(WABA)
+        .analytics(WabaId::new(WABA).unwrap())
         .conversation(&ConversationAnalyticsQuery {
             metric_types: vec![ConversationMetric::Cost],
             ..ConversationAnalyticsQuery::new(at(1), at(2), Granularity::Daily)

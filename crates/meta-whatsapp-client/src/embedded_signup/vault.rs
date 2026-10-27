@@ -1092,10 +1092,13 @@ pub(crate) mod tests {
     }
 
     fn sample(waba: &str) -> StoredBusinessToken {
-        StoredBusinessToken::new(waba, AccessToken::new(format!("{TOKEN}-{waba}")))
-            .business_id("2729063490586005")
-            .phone_number_ids(["106540352242922"])
-            .expires_at(datetime!(2026-11-23 12:00 UTC))
+        StoredBusinessToken::new(
+            WabaId::new(waba).unwrap(),
+            AccessToken::new(format!("{TOKEN}-{waba}")),
+        )
+        .business_id(BusinessId::new("2729063490586005").unwrap())
+        .phone_number_ids([PhoneNumberId::new("106540352242922").unwrap()])
+        .expires_at(datetime!(2026-11-23 12:00 UTC))
     }
 
     async fn raw(kv: &Arc<dyn KvStore>, k: &str) -> Option<Versioned> {
@@ -1120,25 +1123,28 @@ pub(crate) mod tests {
     async fn round_trip_encrypts_at_rest() {
         let kv = kv();
         let v = vault(&kv, VaultKeys::new(key("k1", 7)));
-        v.store(&sample("W1")).await.unwrap();
+        v.store(&sample("101")).await.unwrap();
 
-        let got = v.get(&WabaId::new("W1")).await.unwrap().unwrap();
-        assert_eq!(got.token.expose_secret(), format!("{TOKEN}-W1"));
-        assert_eq!(got.business_id, Some(BusinessId::new("2729063490586005")));
+        let got = v.get(&WabaId::new("101").unwrap()).await.unwrap().unwrap();
+        assert_eq!(got.token.expose_secret(), format!("{TOKEN}-101"));
+        assert_eq!(
+            got.business_id,
+            Some(BusinessId::new("2729063490586005").unwrap())
+        );
         assert_eq!(
             got.phone_number_ids,
-            vec![PhoneNumberId::new("106540352242922")]
+            vec![PhoneNumberId::new("106540352242922").unwrap()]
         );
         assert_eq!(got.created_at, Some(datetime!(2026-09-24 12:00 UTC)));
         assert_eq!(got.expires_at, Some(datetime!(2026-11-23 12:00 UTC)));
 
-        let bytes = raw(&kv, "waba/W1").await.unwrap().value;
+        let bytes = raw(&kv, "waba/101").await.unwrap().value;
         let text = String::from_utf8(bytes).unwrap();
         assert!(!text.contains(TOKEN), "token stored in the clear: {text}");
         let rec: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(rec["kid"], "k1");
         assert_eq!(rec["v"], 1);
-        assert_eq!(rec["waba_id"], "W1");
+        assert_eq!(rec["waba_id"], "101");
         assert_eq!(rec["business_id"], "2729063490586005");
         assert_eq!(
             rec["phone_number_ids"],
@@ -1156,7 +1162,7 @@ pub(crate) mod tests {
         let dbg = format!("{got:?} {v:?}");
         assert!(!dbg.contains(TOKEN), "{dbg}");
         assert_eq!(
-            v.get(&WabaId::new("nope"))
+            v.get(&WabaId::new("999").unwrap())
                 .await
                 .unwrap()
                 .map(|t| t.waba_id),
@@ -1171,8 +1177,8 @@ pub(crate) mod tests {
     async fn the_token_record_keeps_its_pre_solution_partner_shape() {
         let kv = kv();
         let v = vault(&kv, VaultKeys::new(key("k1", 7)));
-        v.store(&sample("W2")).await.unwrap();
-        let rec = raw_json(&kv, "waba/W2").await;
+        v.store(&sample("102")).await.unwrap();
+        let rec = raw_json(&kv, "waba/102").await;
         let mut fields: Vec<&str> = rec
             .as_object()
             .unwrap()
@@ -1195,17 +1201,20 @@ pub(crate) mod tests {
             ]
         );
         let sealed = v
-            .open(&WabaId::new("W2"), &serde_json::from_value(rec).unwrap())
+            .open(
+                &WabaId::new("102").unwrap(),
+                &serde_json::from_value(rec).unwrap(),
+            )
             .unwrap();
         assert_eq!(
             sealed.business_id,
-            Some(BusinessId::new("2729063490586005"))
+            Some(BusinessId::new("2729063490586005").unwrap())
         );
 
         // A sealed payload of the pre-Solution-Partner shape opens.
         let k = key("k1", 7);
         let plaintext = serde_json::to_vec(&serde_json::json!({
-            "access_token": TOKEN, "waba_id": "W3", "business_id": null,
+            "access_token": TOKEN, "waba_id": "103", "business_id": null,
             "phone_number_ids": [], "created_at": 1790251200, "expires_at": null
         }))
         .unwrap();
@@ -1217,16 +1226,16 @@ pub(crate) mod tests {
                 &Nonce::from(nonce),
                 Payload {
                     msg: &plaintext,
-                    aad: &aad(&WabaId::new("W3"), "k1"),
+                    aad: &aad(&WabaId::new("103").unwrap(), "k1"),
                 },
             )
             .unwrap();
         let record = serde_json::json!({
             "v": 1, "kid": "k1", "nonce": B64.encode(nonce), "ciphertext": B64.encode(ciphertext),
-            "waba_id": "W3", "phone_number_ids": [], "created_at": 1790251200
+            "waba_id": "103", "phone_number_ids": [], "created_at": 1790251200
         });
-        put_json(&kv, "waba/W3", &record).await;
-        let old = v.get(&WabaId::new("W3")).await.unwrap().unwrap();
+        put_json(&kv, "waba/103", &record).await;
+        let old = v.get(&WabaId::new("103").unwrap()).await.unwrap().unwrap();
         assert_eq!(old.token.expose_secret(), TOKEN);
         assert_eq!(old.business_id, None);
     }
@@ -1235,7 +1244,9 @@ pub(crate) mod tests {
     /// (b805dac: `sample("W1")` under `key("k1", 7)`, bytes captured from
     /// that build), so a change to the record format, the sealed payload or
     /// the AAD that would strand stored tokens fails here. The fixture above
-    /// seals with today's code and cannot catch that.
+    /// seals with today's code and cannot catch that. Its WABA id, `W1`,
+    /// predates the numeric id check (roadmap L20c): a stored record keeps
+    /// opening, read back with `WabaId::new_unchecked`.
     #[tokio::test]
     async fn a_record_written_before_solution_partner_mode_still_opens() {
         const B805DAC_RECORD: &str = r#"{"v":1,"kid":"k1","nonce":"yjeUqJLkV07hoZVu","ciphertext":"FZCl/j7gKKrv9admo8XlB0Jds7ooceKrFI4SIHOEec3+9m1GTwPglmmmh/UXCWBtVEvbGeBqnXZasSWTTCN+ocJrFXji1Hhhz5owLB5KfRc9+m1P/zxWCkiGVFVPZBorFt4K48bE5X8+vIIZdnEx8Odk6tpsCQFN4sJ8PAA1t5XaUbM9GOBev/Ju557PfGTT4MlNsz7EqA23me/ifd2TFX8YVitV+MGYh7d3iZWYkr1Ty2SK3rjA89KsA7oT56tox3MtbAnJe7OUha2wjGUrOZZIfNR95w0TfMkrUtTk+OUcP/+1QPR8JrFL7oa30y0=","waba_id":"W1","business_id":"2729063490586005","phone_number_ids":["106540352242922"],"created_at":1790251200,"expires_at":1795435200}"#;
@@ -1254,17 +1265,20 @@ pub(crate) mod tests {
         )
         .await;
         let v = vault(&kv, VaultKeys::new(key("k1", 7)));
-        let got = v.get(&WabaId::new("W1")).await.unwrap().unwrap();
+        let got = v.get(&WabaId::new_unchecked("W1")).await.unwrap().unwrap();
         assert_eq!(got.token.expose_secret(), format!("{TOKEN}-W1"));
-        assert_eq!(got.business_id, Some(BusinessId::new("2729063490586005")));
+        assert_eq!(
+            got.business_id,
+            Some(BusinessId::new("2729063490586005").unwrap())
+        );
         assert_eq!(
             got.phone_number_ids,
-            [PhoneNumberId::new("106540352242922")]
+            [PhoneNumberId::new("106540352242922").unwrap()]
         );
         assert_eq!(got.created_at, Some(datetime!(2026-09-24 12:00 UTC)));
         assert_eq!(got.expires_at, Some(datetime!(2026-11-23 12:00 UTC)));
         let by_phone = v
-            .get_by_phone_number(&PhoneNumberId::new("106540352242922"))
+            .get_by_phone_number(&PhoneNumberId::new("106540352242922").unwrap())
             .await
             .unwrap()
             .unwrap();
@@ -1283,21 +1297,27 @@ pub(crate) mod tests {
         let rec = Arc::new(RecordingKv::default());
         let kv: Arc<dyn KvStore> = rec.clone();
         let old = vault(&kv, VaultKeys::new(key("old", 1)));
-        old.store(&sample("W1").phone_number_ids(["P1", "P2"]))
+        old.store(&sample("101").phone_number_ids([
+            PhoneNumberId::new("201").unwrap(),
+            PhoneNumberId::new("202").unwrap(),
+        ]))
+        .await
+        .unwrap();
+        old.store(&sample("101").phone_number_ids([PhoneNumberId::new("201").unwrap()]))
             .await
             .unwrap();
-        old.store(&sample("W1").phone_number_ids(["P1"]))
-            .await
-            .unwrap();
-        old.store(&sample("W2")).await.unwrap();
+        old.store(&sample("102")).await.unwrap();
         let new = vault(
             &kv,
             VaultKeys::new(key("new", 2)).with_previous(key("old", 1)),
         );
-        new.get(&WabaId::new("W1")).await.unwrap().unwrap();
-        assert!(new.rotate(&WabaId::new("W2")).await.unwrap());
-        assert_eq!(raw_json(&kv, "waba/W1").await["kid"], "new");
-        for waba in ["W1", "W2"] {
+        new.get(&WabaId::new("101").unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(new.rotate(&WabaId::new("102").unwrap()).await.unwrap());
+        assert_eq!(raw_json(&kv, "waba/101").await["kid"], "new");
+        for waba in ["101", "102"] {
             rec.assert_never_wrote(&format!("{TOKEN}-{waba}"));
         }
         // The common prefix alone, too: no partial leak.
@@ -1309,7 +1329,7 @@ pub(crate) mod tests {
         let kv = kv();
         let v = vault(&kv, VaultKeys::new(key("k1", 7)));
         let mut nonces = HashSet::new();
-        for waba in ["W1", "W1", "W1", "W2"] {
+        for waba in ["101", "101", "101", "102"] {
             v.store(&sample(waba)).await.unwrap();
             let rec = raw_json(&kv, &format!("waba/{waba}")).await;
             assert!(
@@ -1323,17 +1343,17 @@ pub(crate) mod tests {
     async fn wrong_key_fails_and_unknown_key_id_is_reported() {
         let kv = kv();
         vault(&kv, VaultKeys::new(key("k1", 7)))
-            .store(&sample("W1"))
+            .store(&sample("101"))
             .await
             .unwrap();
         let wrong = vault(&kv, VaultKeys::new(key("k1", 8)));
         assert!(matches!(
-            wrong.get(&WabaId::new("W1")).await,
+            wrong.get(&WabaId::new("101").unwrap()).await,
             Err(Error::Crypto(CryptoError::Decrypt))
         ));
         let other = vault(&kv, VaultKeys::new(key("k2", 7)));
         assert!(matches!(
-            other.get(&WabaId::new("W1")).await,
+            other.get(&WabaId::new("101").unwrap()).await,
             Err(Error::Crypto(CryptoError::InvalidKey(_)))
         ));
     }
@@ -1342,8 +1362,8 @@ pub(crate) mod tests {
     async fn tampering_is_detected() {
         let kv = kv();
         let v = vault(&kv, VaultKeys::new(key("k1", 7)));
-        v.store(&sample("W1")).await.unwrap();
-        let original = raw_json(&kv, "waba/W1").await;
+        v.store(&sample("101")).await.unwrap();
+        let original = raw_json(&kv, "waba/101").await;
 
         let mut ct = B64
             .decode(original["ciphertext"].as_str().unwrap())
@@ -1351,9 +1371,9 @@ pub(crate) mod tests {
         ct[3] ^= 0x01;
         let mut rec = original.clone();
         rec["ciphertext"] = B64.encode(&ct).into();
-        put_json(&kv, "waba/W1", &rec).await;
+        put_json(&kv, "waba/101", &rec).await;
         assert!(matches!(
-            v.get(&WabaId::new("W1")).await,
+            v.get(&WabaId::new("101").unwrap()).await,
             Err(Error::Crypto(CryptoError::Decrypt))
         ));
 
@@ -1361,9 +1381,9 @@ pub(crate) mod tests {
         nonce[0] ^= 0x80;
         let mut rec = original.clone();
         rec["nonce"] = B64.encode(&nonce).into();
-        put_json(&kv, "waba/W1", &rec).await;
+        put_json(&kv, "waba/101", &rec).await;
         assert!(matches!(
-            v.get(&WabaId::new("W1")).await,
+            v.get(&WabaId::new("101").unwrap()).await,
             Err(Error::Crypto(CryptoError::Decrypt))
         ));
 
@@ -1374,80 +1394,83 @@ pub(crate) mod tests {
         );
         let mut rec = original.clone();
         rec["kid"] = "k2".into();
-        put_json(&kv, "waba/W1", &rec).await;
+        put_json(&kv, "waba/101", &rec).await;
         assert!(matches!(
-            v2.get(&WabaId::new("W1")).await,
+            v2.get(&WabaId::new("101").unwrap()).await,
             Err(Error::Crypto(CryptoError::Decrypt))
         ));
 
         let mut rec = original.clone();
         rec["nonce"] = "not base64!".into();
-        put_json(&kv, "waba/W1", &rec).await;
+        put_json(&kv, "waba/101", &rec).await;
         assert!(matches!(
-            v.get(&WabaId::new("W1")).await,
+            v.get(&WabaId::new("101").unwrap()).await,
             Err(Error::Crypto(CryptoError::Malformed(_)))
         ));
 
         let mut rec = original.clone();
         rec["v"] = 2.into();
-        put_json(&kv, "waba/W1", &rec).await;
+        put_json(&kv, "waba/101", &rec).await;
         assert!(matches!(
-            v.get(&WabaId::new("W1")).await,
+            v.get(&WabaId::new("101").unwrap()).await,
             Err(Error::Crypto(CryptoError::Malformed(_)))
         ));
 
-        put_json(&kv, "waba/W1", &serde_json::json!({"oops": true})).await;
+        put_json(&kv, "waba/101", &serde_json::json!({"oops": true})).await;
         assert!(matches!(
-            v.get(&WabaId::new("W1")).await,
+            v.get(&WabaId::new("101").unwrap()).await,
             Err(Error::Storage(StorageError::Corrupt { .. }))
         ));
 
         // The untouched record still opens.
-        put_json(&kv, "waba/W1", &original).await;
-        assert!(v.get(&WabaId::new("W1")).await.unwrap().is_some());
+        put_json(&kv, "waba/101", &original).await;
+        assert!(v.get(&WabaId::new("101").unwrap()).await.unwrap().is_some());
     }
 
     #[tokio::test]
     async fn clear_metadata_edits_do_not_change_what_is_returned() {
         let kv = kv();
         let v = vault(&kv, VaultKeys::new(key("k1", 7)));
-        v.store(&sample("W1")).await.unwrap();
-        let mut rec = raw_json(&kv, "waba/W1").await;
+        v.store(&sample("101")).await.unwrap();
+        let mut rec = raw_json(&kv, "waba/101").await;
         rec["phone_number_ids"] = serde_json::json!(["999"]);
         rec["business_id"] = "evil".into();
-        put_json(&kv, "waba/W1", &rec).await;
-        let got = v.get(&WabaId::new("W1")).await.unwrap().unwrap();
+        put_json(&kv, "waba/101", &rec).await;
+        let got = v.get(&WabaId::new("101").unwrap()).await.unwrap().unwrap();
         assert_eq!(
             got.phone_number_ids,
-            vec![PhoneNumberId::new("106540352242922")]
+            vec![PhoneNumberId::new("106540352242922").unwrap()]
         );
-        assert_eq!(got.business_id, Some(BusinessId::new("2729063490586005")));
+        assert_eq!(
+            got.business_id,
+            Some(BusinessId::new("2729063490586005").unwrap())
+        );
     }
 
     #[tokio::test]
     async fn swapping_two_tenants_records_fails_to_decrypt_both_ways() {
         let kv = kv();
         let v = vault(&kv, VaultKeys::new(key("k1", 7)));
-        v.store(&sample("W1").phone_number_ids(["P1"]))
+        v.store(&sample("101").phone_number_ids([PhoneNumberId::new("201").unwrap()]))
             .await
             .unwrap();
-        v.store(&sample("W2").phone_number_ids(["P2"]))
+        v.store(&sample("102").phone_number_ids([PhoneNumberId::new("202").unwrap()]))
             .await
             .unwrap();
-        let a = raw_json(&kv, "waba/W1").await;
-        let b = raw_json(&kv, "waba/W2").await;
+        let a = raw_json(&kv, "waba/101").await;
+        let b = raw_json(&kv, "waba/102").await;
         // An attacker with write access swaps the records, and even fixes up
         // the clear waba_id so the JSON looks consistent.
         let mut a_as_b = a.clone();
-        a_as_b["waba_id"] = "W2".into();
+        a_as_b["waba_id"] = "102".into();
         let mut b_as_a = b.clone();
-        b_as_a["waba_id"] = "W1".into();
-        put_json(&kv, "waba/W2", &a_as_b).await;
-        put_json(&kv, "waba/W1", &b_as_a).await;
-        for w in ["W1", "W2"] {
+        b_as_a["waba_id"] = "101".into();
+        put_json(&kv, "waba/102", &a_as_b).await;
+        put_json(&kv, "waba/101", &b_as_a).await;
+        for w in ["101", "102"] {
             assert!(
                 matches!(
-                    v.get(&WabaId::new(w)).await,
+                    v.get(&WabaId::new(w).unwrap()).await,
                     Err(Error::Crypto(CryptoError::Decrypt))
                 ),
                 "{w} must not open with the other tenant's record"
@@ -1456,15 +1479,15 @@ pub(crate) mod tests {
         // Routing by phone number fails closed too: P2's traffic never gets
         // W1's token.
         assert!(
-            v.get_by_phone_number(&PhoneNumberId::new("P2"))
+            v.get_by_phone_number(&PhoneNumberId::new("202").unwrap())
                 .await
                 .is_err()
         );
         // Swapping back restores both.
-        put_json(&kv, "waba/W1", &a).await;
-        put_json(&kv, "waba/W2", &b).await;
-        for w in ["W1", "W2"] {
-            let t = v.get(&WabaId::new(w)).await.unwrap().unwrap();
+        put_json(&kv, "waba/101", &a).await;
+        put_json(&kv, "waba/102", &b).await;
+        for w in ["101", "102"] {
+            let t = v.get(&WabaId::new(w).unwrap()).await.unwrap().unwrap();
             assert_eq!(t.token.expose_secret(), format!("{TOKEN}-{w}"));
         }
     }
@@ -1478,7 +1501,7 @@ pub(crate) mod tests {
         let k = key("k1", 7);
         let sealed = Sealed {
             access_token: TOKEN.to_owned(),
-            waba_id: WabaId::new("W2"),
+            waba_id: WabaId::new("102").unwrap(),
             business_id: None,
             phone_number_ids: Vec::new(),
             created_at: datetime!(2026-09-24 12:00 UTC),
@@ -1493,24 +1516,24 @@ pub(crate) mod tests {
                 &Nonce::from(nonce),
                 Payload {
                     msg: &plaintext,
-                    aad: &aad(&WabaId::new("W1"), "k1"),
+                    aad: &aad(&WabaId::new("101").unwrap(), "k1"),
                 },
             )
             .unwrap();
         let record = serde_json::json!({
             "v": 1, "kid": "k1", "nonce": B64.encode(nonce), "ciphertext": B64.encode(ciphertext),
-            "waba_id": "W2", "phone_number_ids": [], "created_at": 1790251200
+            "waba_id": "102", "phone_number_ids": [], "created_at": 1790251200
         });
-        put_json(&kv, "waba/W2", &record).await;
+        put_json(&kv, "waba/102", &record).await;
         assert!(matches!(
-            v.get(&WabaId::new("W2")).await,
+            v.get(&WabaId::new("102").unwrap()).await,
             Err(Error::Crypto(CryptoError::Decrypt))
         ));
         // Same record under the WABA the AAD names: the sealed id check
         // rejects it instead.
-        put_json(&kv, "waba/W1", &record).await;
+        put_json(&kv, "waba/101", &record).await;
         assert!(matches!(
-            v.get(&WabaId::new("W1")).await,
+            v.get(&WabaId::new("101").unwrap()).await,
             Err(Error::Crypto(CryptoError::Decrypt))
         ));
     }
@@ -1519,11 +1542,11 @@ pub(crate) mod tests {
     async fn rotation_on_read_and_explicit() {
         let kv = kv();
         vault(&kv, VaultKeys::new(key("old", 1)))
-            .store(&sample("W1"))
+            .store(&sample("101"))
             .await
             .unwrap();
         vault(&kv, VaultKeys::new(key("old", 1)))
-            .store(&sample("W2"))
+            .store(&sample("102"))
             .await
             .unwrap();
 
@@ -1533,29 +1556,40 @@ pub(crate) mod tests {
             VaultKeys::new(key("new", 2)).with_previous(key("old", 1)),
         )
         .rotate_on_read(false);
-        let got = manual.get(&WabaId::new("W1")).await.unwrap().unwrap();
-        assert_eq!(got.token.expose_secret(), format!("{TOKEN}-W1"));
-        assert_eq!(raw_json(&kv, "waba/W1").await["kid"], "old", "no rewrite");
-        assert!(manual.rotate(&WabaId::new("W1")).await.unwrap());
-        assert_eq!(raw_json(&kv, "waba/W1").await["kid"], "new");
+        let got = manual
+            .get(&WabaId::new("101").unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.token.expose_secret(), format!("{TOKEN}-101"));
+        assert_eq!(raw_json(&kv, "waba/101").await["kid"], "old", "no rewrite");
+        assert!(manual.rotate(&WabaId::new("101").unwrap()).await.unwrap());
+        assert_eq!(raw_json(&kv, "waba/101").await["kid"], "new");
         assert!(
-            !manual.rotate(&WabaId::new("W1")).await.unwrap(),
+            !manual.rotate(&WabaId::new("101").unwrap()).await.unwrap(),
             "already current"
         );
-        assert!(!manual.rotate(&WabaId::new("missing")).await.unwrap());
+        assert!(!manual.rotate(&WabaId::new("998").unwrap()).await.unwrap());
 
         // Read-time rotation.
         let auto = vault(
             &kv,
             VaultKeys::new(key("new", 2)).with_previous(key("old", 1)),
         );
-        auto.get(&WabaId::new("W2")).await.unwrap().unwrap();
-        assert_eq!(raw_json(&kv, "waba/W2").await["kid"], "new");
+        auto.get(&WabaId::new("102").unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(raw_json(&kv, "waba/102").await["kid"], "new");
 
         // The old key can now be dropped.
         let only_new = vault(&kv, VaultKeys::new(key("new", 2)));
-        for w in ["W1", "W2"] {
-            let t = only_new.get(&WabaId::new(w)).await.unwrap().unwrap();
+        for w in ["101", "102"] {
+            let t = only_new
+                .get(&WabaId::new(w).unwrap())
+                .await
+                .unwrap()
+                .unwrap();
             assert_eq!(t.token.expose_secret(), format!("{TOKEN}-{w}"));
             assert_eq!(
                 t.created_at,
@@ -1565,7 +1599,7 @@ pub(crate) mod tests {
         }
         // And the old key alone no longer opens them.
         let only_old = vault(&kv, VaultKeys::new(key("old", 1)));
-        assert!(only_old.get(&WabaId::new("W1")).await.is_err());
+        assert!(only_old.get(&WabaId::new("101").unwrap()).await.is_err());
     }
 
     /// A store whose next read of one key lets a concurrent writer replace
@@ -1631,14 +1665,14 @@ pub(crate) mod tests {
         let scratch = kv();
         vault(&scratch, VaultKeys::new(key("new", 2)))
             .store(&StoredBusinessToken::new(
-                "W1",
+                WabaId::new("101").unwrap(),
                 AccessToken::new("NEW_TOKEN"),
             ))
             .await
             .unwrap();
-        let replacement = raw(&scratch, "waba/W1").await.unwrap().value;
+        let replacement = raw(&scratch, "waba/101").await.unwrap().value;
 
-        let wabakey = StoreKey::new(TOKEN_NAMESPACE, "waba/W1");
+        let wabakey = StoreKey::new(TOKEN_NAMESPACE, "waba/101");
         let store = Arc::new(Interleaved {
             inner: MemoryKvStore::new(),
             key: wabakey.clone(),
@@ -1646,7 +1680,7 @@ pub(crate) mod tests {
         });
         let kv: Arc<dyn KvStore> = store.clone();
         vault(&kv, VaultKeys::new(key("old", 1)))
-            .store(&sample("W1"))
+            .store(&sample("101"))
             .await
             .unwrap();
         *store.concurrent_write.lock().unwrap() = Some(replacement);
@@ -1657,22 +1691,37 @@ pub(crate) mod tests {
             &kv,
             VaultKeys::new(key("new", 2)).with_previous(key("old", 1)),
         );
-        let seen = rotating.get(&WabaId::new("W1")).await.unwrap().unwrap();
-        assert_eq!(seen.token.expose_secret(), format!("{TOKEN}-W1"));
+        let seen = rotating
+            .get(&WabaId::new("101").unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(seen.token.expose_secret(), format!("{TOKEN}-101"));
         // The concurrent write wins: the stale token is not resurrected.
-        let now = rotating.get(&WabaId::new("W1")).await.unwrap().unwrap();
+        let now = rotating
+            .get(&WabaId::new("101").unwrap())
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(now.token.expose_secret(), "NEW_TOKEN");
         // Same for an explicit rotation.
         let reread = vault(&kv, VaultKeys::new(key("old", 1)));
-        reread.store(&sample("W1")).await.unwrap();
+        reread.store(&sample("101")).await.unwrap();
         vault(&scratch, VaultKeys::new(key("new", 2)))
-            .store(&StoredBusinessToken::new("W1", AccessToken::new("NEWER")))
+            .store(&StoredBusinessToken::new(
+                WabaId::new("101").unwrap(),
+                AccessToken::new("NEWER"),
+            ))
             .await
             .unwrap();
         *store.concurrent_write.lock().unwrap() =
-            Some(raw(&scratch, "waba/W1").await.unwrap().value);
-        assert!(!rotating.rotate(&WabaId::new("W1")).await.unwrap());
-        let now = rotating.get(&WabaId::new("W1")).await.unwrap().unwrap();
+            Some(raw(&scratch, "waba/101").await.unwrap().value);
+        assert!(!rotating.rotate(&WabaId::new("101").unwrap()).await.unwrap());
+        let now = rotating
+            .get(&WabaId::new("101").unwrap())
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(now.token.expose_secret(), "NEWER");
     }
 
@@ -1680,51 +1729,54 @@ pub(crate) mod tests {
     async fn phone_index_follows_the_records() {
         let kv = kv();
         let v = vault(&kv, VaultKeys::new(key("k1", 7)));
-        let p1 = PhoneNumberId::new("P1");
-        let p2 = PhoneNumberId::new("P2");
-        v.store(&sample("W1").phone_number_ids(["P1", "P2"]))
-            .await
-            .unwrap();
+        let p1 = PhoneNumberId::new("201").unwrap();
+        let p2 = PhoneNumberId::new("202").unwrap();
+        v.store(&sample("101").phone_number_ids([
+            PhoneNumberId::new("201").unwrap(),
+            PhoneNumberId::new("202").unwrap(),
+        ]))
+        .await
+        .unwrap();
         assert_eq!(
             v.get_by_phone_number(&p2).await.unwrap().unwrap().waba_id,
-            WabaId::new("W1")
+            WabaId::new("101").unwrap()
         );
 
         // P2 moves out of W1: its index entry goes away.
-        v.store(&sample("W1").phone_number_ids(["P1"]))
+        v.store(&sample("101").phone_number_ids([PhoneNumberId::new("201").unwrap()]))
             .await
             .unwrap();
         assert!(v.get_by_phone_number(&p2).await.unwrap().is_none());
-        assert!(raw(&kv, "phone/P2").await.is_none());
+        assert!(raw(&kv, "phone/202").await.is_none());
 
         // P1 moves to W2: W1's later cleanup must not remove W2's link.
-        v.store(&sample("W2").phone_number_ids(["P1"]))
+        v.store(&sample("102").phone_number_ids([PhoneNumberId::new("201").unwrap()]))
             .await
             .unwrap();
         assert_eq!(
             v.get_by_phone_number(&p1).await.unwrap().unwrap().waba_id,
-            WabaId::new("W2")
+            WabaId::new("102").unwrap()
         );
-        assert!(v.delete(&WabaId::new("W1")).await.unwrap());
+        assert!(v.delete(&WabaId::new("101").unwrap()).await.unwrap());
         assert_eq!(
             v.get_by_phone_number(&p1).await.unwrap().unwrap().waba_id,
-            WabaId::new("W2")
+            WabaId::new("102").unwrap()
         );
 
         // A forged index entry pointing at a WABA that does not list the
         // number yields nothing.
-        put_json(&kv, "phone/P9", &serde_json::json!({"waba_id": "W2"})).await;
+        put_json(&kv, "phone/209", &serde_json::json!({"waba_id": "102"})).await;
         assert!(
-            v.get_by_phone_number(&PhoneNumberId::new("P9"))
+            v.get_by_phone_number(&PhoneNumberId::new("209").unwrap())
                 .await
                 .unwrap()
                 .is_none()
         );
 
-        assert!(v.delete(&WabaId::new("W2")).await.unwrap());
+        assert!(v.delete(&WabaId::new("102").unwrap()).await.unwrap());
         assert!(v.get_by_phone_number(&p1).await.unwrap().is_none());
-        assert!(raw(&kv, "phone/P1").await.is_none());
-        assert!(!v.delete(&WabaId::new("W2")).await.unwrap());
+        assert!(raw(&kv, "phone/201").await.is_none());
+        assert!(!v.delete(&WabaId::new("102").unwrap()).await.unwrap());
     }
 
     /// A store where, right after a compare-and-swap deletes `key`, a
@@ -1799,33 +1851,39 @@ pub(crate) mod tests {
         let scratch = kv();
         vault(&scratch, keys())
             .store(
-                &StoredBusinessToken::new("W1", AccessToken::new("TOKEN-OF-B"))
-                    .phone_number_ids(["P1"]),
+                &StoredBusinessToken::new(
+                    WabaId::new("101").unwrap(),
+                    AccessToken::new("TOKEN-OF-B"),
+                )
+                .phone_number_ids([PhoneNumberId::new("201").unwrap()]),
             )
             .await
             .unwrap();
         let writes = vec![
             (
-                StoreKey::new(TOKEN_NAMESPACE, "waba/W1"),
-                raw(&scratch, "waba/W1").await.unwrap().value,
+                StoreKey::new(TOKEN_NAMESPACE, "waba/101"),
+                raw(&scratch, "waba/101").await.unwrap().value,
             ),
             (
-                StoreKey::new(TOKEN_NAMESPACE, "phone/P1"),
-                raw(&scratch, "phone/P1").await.unwrap().value,
+                StoreKey::new(TOKEN_NAMESPACE, "phone/201"),
+                raw(&scratch, "phone/201").await.unwrap().value,
             ),
         ];
 
         let store = Arc::new(StoresAfterDelete {
             inner: MemoryKvStore::new(),
-            key: StoreKey::new(TOKEN_NAMESPACE, "waba/W1"),
+            key: StoreKey::new(TOKEN_NAMESPACE, "waba/101"),
             writes: Mutex::new(Vec::new()),
         });
         let kv: Arc<dyn KvStore> = store.clone();
         let v = vault(&kv, keys());
-        let w1 = WabaId::new("W1");
+        let w1 = WabaId::new("101").unwrap();
         v.store(
-            &StoredBusinessToken::new("W1", AccessToken::new("TOKEN-OF-A"))
-                .phone_number_ids(["P1", "P2"]),
+            &StoredBusinessToken::new(WabaId::new("101").unwrap(), AccessToken::new("TOKEN-OF-A"))
+                .phone_number_ids([
+                    PhoneNumberId::new("201").unwrap(),
+                    PhoneNumberId::new("202").unwrap(),
+                ]),
         )
         .await
         .unwrap();
@@ -1835,12 +1893,12 @@ pub(crate) mod tests {
         assert!(v.delete_if_unchanged(&w1, version).await.unwrap());
         assert!(store.writes.lock().unwrap().is_empty(), "the writer ran");
         let found = v
-            .get_by_phone_number(&PhoneNumberId::new("P1"))
+            .get_by_phone_number(&PhoneNumberId::new("201").unwrap())
             .await
             .unwrap()
-            .expect("P1 routes to the new record");
+            .expect("201 routes to the new record");
         assert_eq!(found.token.expose_secret(), "TOKEN-OF-B");
-        assert!(raw(&kv, "phone/P2").await.is_none(), "P2 stays unlinked");
+        assert!(raw(&kv, "phone/202").await.is_none(), "202 stays unlinked");
     }
 
     /// The re-link after a conditional delete never overwrites an entry
@@ -1855,21 +1913,27 @@ pub(crate) mod tests {
         let other = vault(&scratch, keys());
         other
             .store(
-                &StoredBusinessToken::new("W1", AccessToken::new("TOKEN-OF-B"))
-                    .phone_number_ids(["P1"]),
+                &StoredBusinessToken::new(
+                    WabaId::new("101").unwrap(),
+                    AccessToken::new("TOKEN-OF-B"),
+                )
+                .phone_number_ids([PhoneNumberId::new("201").unwrap()]),
             )
             .await
             .unwrap();
         other
             .store(
-                &StoredBusinessToken::new("W2", AccessToken::new("TOKEN-OF-W2"))
-                    .phone_number_ids(["P1"]),
+                &StoredBusinessToken::new(
+                    WabaId::new("102").unwrap(),
+                    AccessToken::new("TOKEN-OF-102"),
+                )
+                .phone_number_ids([PhoneNumberId::new("201").unwrap()]),
             )
             .await
             .unwrap();
         // W1's new record, and W2's record with P1's entry pointing to it.
         let mut writes = Vec::new();
-        for k in ["waba/W1", "waba/W2", "phone/P1"] {
+        for k in ["waba/101", "waba/102", "phone/201"] {
             writes.push((
                 StoreKey::new(TOKEN_NAMESPACE, k),
                 raw(&scratch, k).await.unwrap().value,
@@ -1877,15 +1941,15 @@ pub(crate) mod tests {
         }
         let store = Arc::new(StoresAfterDelete {
             inner: MemoryKvStore::new(),
-            key: StoreKey::new(TOKEN_NAMESPACE, "waba/W1"),
+            key: StoreKey::new(TOKEN_NAMESPACE, "waba/101"),
             writes: Mutex::new(Vec::new()),
         });
         let kv: Arc<dyn KvStore> = store.clone();
         let v = vault(&kv, keys());
-        let w1 = WabaId::new("W1");
+        let w1 = WabaId::new("101").unwrap();
         v.store(
-            &StoredBusinessToken::new("W1", AccessToken::new("TOKEN-OF-A"))
-                .phone_number_ids(["P1"]),
+            &StoredBusinessToken::new(WabaId::new("101").unwrap(), AccessToken::new("TOKEN-OF-A"))
+                .phone_number_ids([PhoneNumberId::new("201").unwrap()]),
         )
         .await
         .unwrap();
@@ -1893,13 +1957,13 @@ pub(crate) mod tests {
         *store.writes.lock().unwrap() = writes;
 
         assert!(v.delete_if_unchanged(&w1, version).await.unwrap());
-        assert_eq!(raw_json(&kv, "phone/P1").await["waba_id"], "W2");
+        assert_eq!(raw_json(&kv, "phone/201").await["waba_id"], "102");
         let found = v
-            .get_by_phone_number(&PhoneNumberId::new("P1"))
+            .get_by_phone_number(&PhoneNumberId::new("201").unwrap())
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(found.token.expose_secret(), "TOKEN-OF-W2");
+        assert_eq!(found.token.expose_secret(), "TOKEN-OF-102");
     }
 
     /// A conditional delete takes the token it read, and only that one: a
@@ -1913,18 +1977,18 @@ pub(crate) mod tests {
     async fn a_conditional_delete_takes_only_the_token_it_read() {
         let kv = kv();
         let v = vault(&kv, VaultKeys::new(key("k1", 7)));
-        let w1 = WabaId::new("W1");
-        let p1 = PhoneNumberId::new("106540352242922");
-        v.store(&sample("W1")).await.unwrap();
+        let w1 = WabaId::new("101").unwrap();
+        let p1 = PhoneNumberId::new("106540352242922").unwrap();
+        v.store(&sample("101")).await.unwrap();
         let (read, version) = v.get_versioned(&w1).await.unwrap().unwrap();
-        assert_eq!(read.token.expose_secret(), format!("{TOKEN}-W1"));
+        assert_eq!(read.token.expose_secret(), format!("{TOKEN}-101"));
         let (_, by_phone) = v.get_by_phone_number_versioned(&p1).await.unwrap().unwrap();
         assert_eq!(by_phone, version, "the same record, by its number");
 
         // Stored again since: another token, another version.
         v.store(
-            &StoredBusinessToken::new("W1", AccessToken::new("RECONNECTED"))
-                .phone_number_ids(["106540352242922"]),
+            &StoredBusinessToken::new(WabaId::new("101").unwrap(), AccessToken::new("RECONNECTED"))
+                .phone_number_ids([PhoneNumberId::new("106540352242922").unwrap()]),
         )
         .await
         .unwrap();
@@ -1952,7 +2016,7 @@ pub(crate) mod tests {
 
         // A read that re-encrypts hands out the new version.
         vault(&kv, VaultKeys::new(key("k1", 7)))
-            .store(&sample("W1"))
+            .store(&sample("101"))
             .await
             .unwrap();
         let auto = vault(
@@ -1960,10 +2024,10 @@ pub(crate) mod tests {
             VaultKeys::new(key("k2", 8)).with_previous(key("k1", 7)),
         );
         let (_, resealed) = auto.get_versioned(&w1).await.unwrap().unwrap();
-        assert_eq!(raw_json(&kv, "waba/W1").await["kid"], "k2");
+        assert_eq!(raw_json(&kv, "waba/101").await["kid"], "k2");
         assert_eq!(
             resealed,
-            TokenVersion(raw(&kv, "waba/W1").await.unwrap().version)
+            TokenVersion(raw(&kv, "waba/101").await.unwrap().version)
         );
         assert!(auto.delete_if_unchanged(&w1, resealed).await.unwrap());
     }
@@ -1979,16 +2043,16 @@ pub(crate) mod tests {
     async fn a_stored_version_takes_back_that_write_and_no_later_one() {
         let kv = kv();
         let v = vault(&kv, VaultKeys::new(key("k1", 7)));
-        let w1 = WabaId::new("W1");
-        let p1 = PhoneNumberId::new("106540352242922");
-        let first = v.store_versioned(&sample("W1")).await.unwrap();
-        let written = v.store_versioned(&sample("W1")).await.unwrap();
+        let w1 = WabaId::new("101").unwrap();
+        let p1 = PhoneNumberId::new("106540352242922").unwrap();
+        let first = v.store_versioned(&sample("101")).await.unwrap();
+        let written = v.store_versioned(&sample("101")).await.unwrap();
         assert_ne!(first, written, "each write, its version");
         let (_, read) = v.get_versioned(&w1).await.unwrap().unwrap();
         assert_eq!(read, written, "the version a read sees");
         assert_eq!(
             written,
-            TokenVersion(raw(&kv, "waba/W1").await.unwrap().version)
+            TokenVersion(raw(&kv, "waba/101").await.unwrap().version)
         );
         assert!(!v.delete_if_unchanged(&w1, first).await.unwrap());
         assert!(v.delete_if_unchanged(&w1, written).await.unwrap());
@@ -1996,11 +2060,14 @@ pub(crate) mod tests {
         assert!(raw(&kv, "phone/106540352242922").await.is_none());
 
         // Overwritten since (another holder connected): the newer stays.
-        let mine = v.store_versioned(&sample("W1")).await.unwrap();
+        let mine = v.store_versioned(&sample("101")).await.unwrap();
         let theirs = v
             .store_versioned(
-                &StoredBusinessToken::new("W1", AccessToken::new("TOKEN-OF-THE-NEXT-HOLDER"))
-                    .phone_number_ids(["106540352242922"]),
+                &StoredBusinessToken::new(
+                    WabaId::new("101").unwrap(),
+                    AccessToken::new("TOKEN-OF-THE-NEXT-HOLDER"),
+                )
+                .phone_number_ids([PhoneNumberId::new("106540352242922").unwrap()]),
             )
             .await
             .unwrap();
@@ -2015,14 +2082,20 @@ pub(crate) mod tests {
         let kv = kv();
         let v = vault(&kv, VaultKeys::new(key("k1", 7)));
         assert!(
-            v.store(&StoredBusinessToken::new("W", AccessToken::new("")))
-                .await
-                .is_err()
+            v.store(&StoredBusinessToken::new(
+                WabaId::new("100").unwrap(),
+                AccessToken::new("")
+            ))
+            .await
+            .is_err()
         );
         assert!(
-            v.store(&StoredBusinessToken::new("", AccessToken::new("t")))
-                .await
-                .is_err()
+            v.store(&StoredBusinessToken::new(
+                WabaId::new_unchecked(""),
+                AccessToken::new("t")
+            ))
+            .await
+            .is_err()
         );
     }
 
@@ -2064,8 +2137,17 @@ pub(crate) mod tests {
 
     #[test]
     fn associated_data_is_unambiguous() {
-        assert_ne!(aad(&WabaId::new("a"), "bc"), aad(&WabaId::new("ab"), "c"));
-        assert_ne!(aad(&WabaId::new("W1"), "k"), aad(&WabaId::new("W2"), "k"));
-        assert_ne!(aad(&WabaId::new("W1"), "k1"), aad(&WabaId::new("W1"), "k2"));
+        assert_ne!(
+            aad(&WabaId::new("1").unwrap(), "23"),
+            aad(&WabaId::new("12").unwrap(), "3")
+        );
+        assert_ne!(
+            aad(&WabaId::new("101").unwrap(), "k"),
+            aad(&WabaId::new("102").unwrap(), "k")
+        );
+        assert_ne!(
+            aad(&WabaId::new("101").unwrap(), "k1"),
+            aad(&WabaId::new("101").unwrap(), "k2")
+        );
     }
 }

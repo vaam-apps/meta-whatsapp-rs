@@ -5,7 +5,7 @@ description: "Setting up meta-whatsapp-rs for WhatsApp - what to create on Meta'
 
 # meta-whatsapp-rs-setup
 
-> **Verified against meta-whatsapp-rs ecb4b40e5a4a442311d9097407d42c981330c154 (2026-09-27).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs df598e6647242d4f471579d7f84df12c3032c651 (2026-10-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/client.rs](examples/client.rs), compiled and
 tested by meta-whatsapp-rs's own gate.
@@ -98,9 +98,9 @@ Endpoint families hang off the client, scoped by id: `messages(pnid)`,
 `media(pnid)`, `templates(waba)`, `authentication(waba)`,
 `embedded_signup(app)`, `waba(waba)`, `phone_number(pnid)`,
 `marketing(pnid)`, `signups(waba)`, `commerce(pnid)`, `flows(waba)`, …
-Ids are distinct newtypes (`PhoneNumberId`, `WabaId`, `MessageId`, …)
-built from `&str` or `String`: a WABA id cannot go where a phone number id
-is expected. `messages()` takes the phone number **id**, not the number.
+Ids are distinct newtypes: a WABA id cannot go where a phone number id is
+expected; numeric ones (`PhoneNumberId::new(…)?`, `WabaId`, `MediaId`, …)
+refuse non-digits. `messages()` takes the phone number **id**, not the number.
 
 ## An endpoint meta-whatsapp-rs does not wrap
 

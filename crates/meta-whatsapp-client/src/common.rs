@@ -239,7 +239,8 @@ mod tests {
     #[test]
     fn media_source_is_an_id_or_a_link_object() {
         assert_eq!(
-            serde_json::to_value(MediaSource::id("1479537139650973")).unwrap(),
+            serde_json::to_value(MediaSource::id(MediaId::new("1479537139650973").unwrap()))
+                .unwrap(),
             json!({"id": "1479537139650973"})
         );
         assert_eq!(
@@ -247,8 +248,12 @@ mod tests {
             json!({"link": "https://shop.example/a.png"})
         );
         let back: MediaSource = serde_json::from_value(json!({"id": "7"})).unwrap();
-        assert_eq!(back, MediaSource::Id(MediaId::new("7")));
-        assert!(MediaSource::id("").validate("image").is_err());
+        assert_eq!(back, MediaSource::Id(MediaId::new("7").unwrap()));
+        assert!(
+            MediaSource::id(MediaId::new_unchecked(""))
+                .validate("image")
+                .is_err()
+        );
         assert_eq!(
             MediaSource::link("").validate("image").unwrap_err().field,
             "image.link"

@@ -103,7 +103,7 @@ pub fn with_clock(
 ) -> meta_whatsapp_rs::Result<OtpService> {
     OtpService::new(
         otp_client,
-        "106540352242922",
+        PhoneNumberId::new("106540352242922")?,
         OtpTemplate::new("login_code", "en_US"),
         kv,
         clock,
@@ -217,7 +217,13 @@ mod tests {
     fn a_blank_namespace_is_a_config_error() {
         let (_, client) = scripted();
         let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
-        let built = otp_service(client, "106540352242922".into(), kv, vec![7; 32], " ");
+        let built = otp_service(
+            client,
+            PhoneNumberId::new("106540352242922").unwrap(),
+            kv,
+            vec![7; 32],
+            " ",
+        );
         assert!(matches!(built, Err(Error::Config(_))));
         assert!(eight_digit_config("tenant-42").validate().is_ok());
         assert_eq!(eight_digit_config("tenant-42").namespace, "tenant-42");

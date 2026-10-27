@@ -58,7 +58,7 @@ async fn create_matches_docs_request_and_schema_response() {
         json!({"messaging_product": "whatsapp", "request_id": "req-1"}),
     );
     let created = client(&t)
-        .groups("12784358810")
+        .groups(PhoneNumberId::new("12784358810").unwrap())
         .create(&CreateGroup {
             subject: "New Purchase Inquiry".into(),
             description: Some("Jim, an existing client, would like to learn about new car purchase options for current year models.".into()),
@@ -89,7 +89,7 @@ async fn create_minimal_is_not_replayed() {
     let t = ScriptedTransport::new();
     t.push_error(|| TransportError::Timeout);
     let err = retrying(&t)
-        .groups("1")
+        .groups(PhoneNumberId::new("1").unwrap())
         .create(&CreateGroup::new("Watch Enthusiasts"))
         .await
         .unwrap_err();
@@ -137,7 +137,7 @@ async fn list_unnests_data_groups_into_a_page() {
         }),
     );
     let page = client(&t)
-        .groups("12784358810")
+        .groups(PhoneNumberId::new("12784358810").unwrap())
         .list(&ListGroups {
             limit: Some(10),
             after: Some("A".into()),
@@ -171,7 +171,7 @@ async fn list_stream_walks_nested_pages_on_the_configured_host() {
     t.push_json(200, groups_page(Some("c1"), &["G1", "G2"]));
     t.push_json(200, groups_page(None, &["G3"]));
     let ids: Vec<String> = client(&t)
-        .groups("1")
+        .groups(PhoneNumberId::new("1").unwrap())
         .list_stream(&ListGroups {
             limit: Some(2),
             ..ListGroups::default()
@@ -198,7 +198,7 @@ async fn list_stream_surfaces_errors_and_stops() {
         json!({"error": {"message": "Invalid cursor", "code": 131059}}),
     );
     let items: Vec<Result<GroupSummary>> = client(&t)
-        .groups("1")
+        .groups(PhoneNumberId::new("1").unwrap())
         .list_stream(&ListGroups::default())
         .collect()
         .await;
@@ -214,7 +214,7 @@ async fn list_stream_surfaces_errors_and_stops() {
 #[tokio::test]
 async fn list_limit_outside_1_to_1024_and_stream_cursors_are_rejected() {
     let t = ScriptedTransport::new();
-    let groups = client(&t).groups("1");
+    let groups = client(&t).groups(PhoneNumberId::new("1").unwrap());
     for bad in [0, 1025] {
         let q = ListGroups {
             limit: Some(bad),
@@ -478,7 +478,7 @@ async fn group_id_cannot_leave_its_path_segment() {
     }
     // The group id of a pin travels in the body (`to`), not the path.
     let err = client(&t)
-        .groups("1")
+        .groups(PhoneNumberId::new("1").unwrap())
         .unpin_message(&GroupId::new(""), &MessageId::new("wamid.1"))
         .await
         .unwrap_err();
@@ -839,7 +839,7 @@ async fn pin_matches_docs_request_and_response() {
         }),
     );
     let resp = client(&t)
-        .groups("756079150920219")
+        .groups(PhoneNumberId::new("756079150920219").unwrap())
         .pin_message(&GroupId::new(GROUP), &MessageId::new("wamid.HBgLM..."), 4)
         .await
         .unwrap();
@@ -870,7 +870,7 @@ async fn unpin_omits_expiration_days() {
         json!({"messaging_product": "whatsapp", "messages": [{"id": "wamid.2"}]}),
     );
     client(&t)
-        .groups("1")
+        .groups(PhoneNumberId::new("1").unwrap())
         .unpin_message(&GroupId::new(GROUP), &MessageId::new("wamid.HBgLM..."))
         .await
         .unwrap();
@@ -890,7 +890,7 @@ async fn unpin_omits_expiration_days() {
 #[tokio::test]
 async fn pin_duration_must_be_1_to_30_days() {
     let t = ScriptedTransport::new();
-    let groups = client(&t).groups("1");
+    let groups = client(&t).groups(PhoneNumberId::new("1").unwrap());
     for bad in [0, 31] {
         let err = groups
             .pin_message(&GroupId::new(GROUP), &MessageId::new("wamid.1"), bad)
@@ -917,7 +917,7 @@ async fn pin_duration_must_be_1_to_30_days() {
 #[tokio::test]
 async fn subject_and_description_limits() {
     let t = ScriptedTransport::new();
-    let groups = client(&t).groups("1");
+    let groups = client(&t).groups(PhoneNumberId::new("1").unwrap());
     let g = client(&t).group(GROUP);
     for bad in ["", "   ", &"s".repeat(129)] {
         let err = groups.create(&CreateGroup::new(bad)).await.unwrap_err();

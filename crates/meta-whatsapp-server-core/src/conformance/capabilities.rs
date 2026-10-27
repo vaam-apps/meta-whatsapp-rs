@@ -156,11 +156,13 @@ fn refused_token() -> meta_whatsapp_rs::Error {
     meta_whatsapp_rs::Error::Api(Box::new(graph))
 }
 
-/// A WABA and a number of this case's own.
-fn ids(case: &str) -> (WabaId, PhoneNumberId) {
+/// A WABA and a number of this case's own (`_case` names it for the
+/// reader; the ids are digits, unique to the call).
+fn ids(_case: &str) -> (WabaId, PhoneNumberId) {
+    let digits = super::unique_digits();
     (
-        WabaId::new(format!("cap-waba-{case}")),
-        PhoneNumberId::new(format!("cap-pn-{case}")),
+        WabaId::new(format!("{digits}1")).unwrap(),
+        PhoneNumberId::new(format!("{digits}2")).unwrap(),
     )
 }
 

@@ -15,6 +15,7 @@
 #[path = "../examples/embedded_signup.rs"]
 mod example;
 
+use meta_whatsapp_rs::core::ids::AppId;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -75,7 +76,7 @@ fn harness() -> Harness {
         .tenant("merchant-b", TENANT_B_BEARER)
         .unwrap();
     let signup = example::Signup::new(
-        client.embedded_signup(AppCredentials::new(APP_ID, APP_SECRET)),
+        client.embedded_signup(AppCredentials::new(AppId::new(APP_ID).unwrap(), APP_SECRET)),
         kv,
         vault.clone(),
         CONFIG_ID,
@@ -289,14 +290,14 @@ async fn a_finished_signup_is_onboarded_for_the_merchant_who_started_it() {
 
     // The token is in the vault, routed by the number: what `cms_inbox` uses.
     let stored = vault
-        .get_by_phone_number(&PhoneNumberId::new(PHONE))
+        .get_by_phone_number(&PhoneNumberId::new(PHONE).unwrap())
         .await
         .unwrap()
         .unwrap();
     assert_eq!(stored.token.expose_secret(), TOKEN);
     assert_eq!(
         signup.merchants.lock().unwrap().get("merchant-a"),
-        Some(&WabaId::new(WABA))
+        Some(&WabaId::new(WABA).unwrap())
     );
 
     // The state was single use.

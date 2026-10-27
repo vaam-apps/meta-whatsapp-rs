@@ -1758,6 +1758,7 @@ async fn keep_pending(vault: &TokenVault, waba: &WabaId) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use meta_whatsapp_core::ids::AppId;
     use std::sync::Arc;
 
     use http::Method;
@@ -1835,7 +1836,8 @@ mod tests {
         )
         .unwrap()
         .with_clock(clock.clone());
-        let es = client.embedded_signup(AppCredentials::new(APP_ID, APP_SECRET));
+        let es =
+            client.embedded_signup(AppCredentials::new(AppId::new(APP_ID).unwrap(), APP_SECRET));
         let es = match partner {
             Some(p) => es.solution_partner(p),
             None => es,
@@ -2035,7 +2037,7 @@ mod tests {
             .build()
             .unwrap();
             client
-                .embedded_signup(AppCredentials::new(APP_ID, APP_SECRET))
+                .embedded_signup(AppCredentials::new(AppId::new(APP_ID).unwrap(), APP_SECRET))
                 .solution_partner(partner(method))
         };
         let h = Harness {
@@ -2109,7 +2111,7 @@ mod tests {
     }
 
     fn waba() -> WabaId {
-        WabaId::new(WABA)
+        WabaId::new(WABA).unwrap()
     }
 
     fn success() -> serde_json::Value {
@@ -2350,15 +2352,15 @@ mod tests {
             credit.allocation_config_id,
             Some(AllocationConfigId::new(ALLOCATION))
         );
-        assert_eq!(credit.business_id, Some(BusinessId::new(BUSINESS)));
+        assert_eq!(credit.business_id, Some(BusinessId::new(BUSINESS).unwrap()));
         assert_eq!(credit.currency, Some(WabaCurrency::Eur));
         assert_eq!(credit.shared_at, Some(datetime!(2026-09-24 12:00 UTC)));
         let stored = h.vault.get(&waba()).await.unwrap().unwrap();
-        assert_eq!(stored.business_id, Some(BusinessId::new(BUSINESS)));
+        assert_eq!(stored.business_id, Some(BusinessId::new(BUSINESS).unwrap()));
         assert_eq!(stored.token.expose_secret(), TOKEN);
         assert!(
             h.vault
-                .get_by_phone_number(&PhoneNumberId::new(PHONE))
+                .get_by_phone_number(&PhoneNumberId::new(PHONE).unwrap())
                 .await
                 .unwrap()
                 .is_some()
@@ -2556,10 +2558,13 @@ mod tests {
         assert_eq!(verified.waba_id, waba());
         assert_eq!(
             verified.business_id,
-            Some(BusinessId::new(BUSINESS)),
+            Some(BusinessId::new(BUSINESS).unwrap()),
             "Meta's owner, not the browser's claim"
         );
-        assert_eq!(verified.phone_number_id, Some(PhoneNumberId::new(PHONE)));
+        assert_eq!(
+            verified.phone_number_id,
+            Some(PhoneNumberId::new(PHONE).unwrap())
+        );
 
         // Approved: the flow goes on, and says it asked.
         script_until_subscribe(&h.t, owner());
@@ -2944,7 +2949,7 @@ mod tests {
         assert_eq!(report.revoked, [AllocationConfigId::new(ALLOCATION)]);
         let marker = h
             .vault
-            .revoked_business(&BusinessId::new(BUSINESS))
+            .revoked_business(&BusinessId::new(BUSINESS).unwrap())
             .await
             .unwrap()
             .unwrap();
@@ -3009,7 +3014,7 @@ mod tests {
         assert_eq!(h.t.remaining(), 0);
         assert!(
             h.vault
-                .revoked_business(&BusinessId::new(BUSINESS))
+                .revoked_business(&BusinessId::new(BUSINESS).unwrap())
                 .await
                 .unwrap()
                 .is_none()
@@ -3135,7 +3140,7 @@ mod tests {
         // fail; revocation never asks.
         let report = revoked(&h).await;
         assert_eq!(report.revoked, [AllocationConfigId::new(ALLOCATION)]);
-        assert_eq!(report.business_id, Some(BusinessId::new(BUSINESS)));
+        assert_eq!(report.business_id, Some(BusinessId::new(BUSINESS).unwrap()));
         let reqs = h.t.requests();
         let revocation = &reqs[before..];
         assert_eq!(revocation.len(), 4);
@@ -3174,7 +3179,7 @@ mod tests {
             Err(Error::Validation(_))
         ));
         assert!(matches!(
-            h.es.revoke_credit_line(&WabaId::new("UNKNOWN"), None, &h.vault)
+            h.es.revoke_credit_line(&WabaId::new("999").unwrap(), None, &h.vault)
                 .await,
             Err(Error::Validation(v)) if v.field == "business_id"
         ));
@@ -3193,7 +3198,7 @@ mod tests {
         h.t.push_json(200, success());
         h.t.push_json(200, deleted());
         let report =
-            h.es.revoke_credit_line(&waba(), Some(&BusinessId::new(BUSINESS)), &h.vault)
+            h.es.revoke_credit_line(&waba(), Some(&BusinessId::new(BUSINESS).unwrap()), &h.vault)
                 .await
                 .unwrap();
         assert_eq!(report.revoked, [AllocationConfigId::new(ALLOCATION)]);
@@ -3202,14 +3207,14 @@ mod tests {
         assert_eq!(h.t.remaining(), 0);
         assert!(
             h.vault
-                .revoked_business(&BusinessId::new(BUSINESS))
+                .revoked_business(&BusinessId::new(BUSINESS).unwrap())
                 .await
                 .unwrap()
                 .is_some()
         );
         assert_eq!(
             h.vault.credit(&waba()).await.unwrap().unwrap().business_id,
-            Some(BusinessId::new(BUSINESS)),
+            Some(BusinessId::new(BUSINESS).unwrap()),
             "the business is recorded for the WABA, and rotated with it"
         );
 
@@ -3218,14 +3223,14 @@ mod tests {
         let h = harness(CreditSharing::ShareAndAttach);
         h.t.push_json(200, nothing_shared());
         let report =
-            h.es.revoke_credit_line(&waba(), Some(&BusinessId::new(BUSINESS)), &h.vault)
+            h.es.revoke_credit_line(&waba(), Some(&BusinessId::new(BUSINESS).unwrap()), &h.vault)
                 .await
                 .unwrap();
         assert_eq!(report.all().count(), 0);
         assert_eq!(h.t.requests().len(), 1, "one lookup, no DELETE");
         assert!(
             h.vault
-                .revoked_business(&BusinessId::new(BUSINESS))
+                .revoked_business(&BusinessId::new(BUSINESS).unwrap())
                 .await
                 .unwrap()
                 .is_none(),
@@ -3240,7 +3245,7 @@ mod tests {
         let err =
             h.es.revoke_credit_line(
                 &waba(),
-                Some(&BusinessId::new("2949482758682047")),
+                Some(&BusinessId::new("2949482758682047").unwrap()),
                 &h.vault,
             )
             .await
@@ -3293,7 +3298,7 @@ mod tests {
         );
         assert_eq!(
             h.vault
-                .revoked_business(&BusinessId::new(BUSINESS))
+                .revoked_business(&BusinessId::new(BUSINESS).unwrap())
                 .await
                 .unwrap()
                 .unwrap()
@@ -3355,7 +3360,7 @@ mod tests {
         assert!(h.vault.get(&waba()).await.unwrap().is_none());
         assert!(
             h.vault
-                .get_by_phone_number(&PhoneNumberId::new(PHONE))
+                .get_by_phone_number(&PhoneNumberId::new(PHONE).unwrap())
                 .await
                 .unwrap()
                 .is_none()
@@ -3369,7 +3374,7 @@ mod tests {
         h.t.push_json(200, shared_record(ALLOCATION));
         h.t.push_json(200, deleted());
         let removed =
-            h.es.revoke_credit_line(&waba(), Some(&BusinessId::new(BUSINESS)), &h.vault)
+            h.es.revoke_credit_line(&waba(), Some(&BusinessId::new(BUSINESS).unwrap()), &h.vault)
                 .await
                 .unwrap();
         assert_eq!(
@@ -3385,13 +3390,13 @@ mod tests {
         h.t.push_json(200, active());
         h.t.push_json(200, success());
         h.t.push_json(200, deleted());
-        h.es.revoke_credit_line(&waba(), Some(&BusinessId::new(BUSINESS)), &h.vault)
+        h.es.revoke_credit_line(&waba(), Some(&BusinessId::new(BUSINESS).unwrap()), &h.vault)
             .await
             .unwrap();
         h.t.push_json(200, shared_record(ALLOCATION));
         h.t.push_json(200, deleted());
         let off =
-            h.es.offboard(&waba(), Some(&BusinessId::new(BUSINESS)), &h.vault)
+            h.es.offboard(&waba(), Some(&BusinessId::new(BUSINESS).unwrap()), &h.vault)
                 .await
                 .unwrap();
         assert_eq!(
@@ -3416,7 +3421,10 @@ mod tests {
         // A Tech Provider only deletes.
         let tp = harness_with(None);
         tp.vault
-            .store(&StoredBusinessToken::new(WABA, AccessToken::new(TOKEN)))
+            .store(&StoredBusinessToken::new(
+                WabaId::new(WABA).unwrap(),
+                AccessToken::new(TOKEN),
+            ))
             .await
             .unwrap();
         let off = tp.es.offboard(&waba(), None, &tp.vault).await.unwrap();
@@ -3457,7 +3465,7 @@ mod tests {
         );
         assert!(
             h.vault
-                .revoked_business(&BusinessId::new(BUSINESS))
+                .revoked_business(&BusinessId::new(BUSINESS).unwrap())
                 .await
                 .unwrap()
                 .is_some()
@@ -3486,7 +3494,8 @@ mod tests {
             VaultKeys::new(VaultKey::new("gone", SecretBytes::new([9; 32])).unwrap()),
         )
         .unwrap();
-        let foreign = StoredBusinessToken::new(WABA, AccessToken::new(TOKEN)).business_id("X");
+        let foreign = StoredBusinessToken::new(WabaId::new(WABA).unwrap(), AccessToken::new(TOKEN))
+            .business_id(BusinessId::new("998").unwrap());
         other.store(&foreign).await.unwrap();
         let bytes = other
             .kv()
@@ -3512,7 +3521,7 @@ mod tests {
             .unwrap();
         assert!(h.vault.get(&waba()).await.is_err(), "vacuous otherwise");
         let report = revoked(&h).await;
-        assert_eq!(report.business_id, Some(BusinessId::new(BUSINESS)));
+        assert_eq!(report.business_id, Some(BusinessId::new(BUSINESS).unwrap()));
         assert_eq!(report.revoked, [AllocationConfigId::new(ALLOCATION)]);
         assert_eq!(h.t.remaining(), 0);
 
@@ -3618,7 +3627,7 @@ mod tests {
         assert!(reqs.iter().all(|r| !r.path().ends_with("/register")));
         let marker = h
             .vault
-            .revoked_business(&BusinessId::new(BUSINESS))
+            .revoked_business(&BusinessId::new(BUSINESS).unwrap())
             .await
             .unwrap()
             .unwrap();
@@ -3691,7 +3700,7 @@ mod tests {
         assert!(reqs.iter().all(|r| !r.path().ends_with("/register")));
         let marker = h
             .vault
-            .revoked_business(&BusinessId::new(BUSINESS))
+            .revoked_business(&BusinessId::new(BUSINESS).unwrap())
             .await
             .unwrap()
             .unwrap();
@@ -3860,7 +3869,7 @@ mod tests {
         );
         assert_eq!(
             h.vault
-                .revoked_business(&BusinessId::new(BUSINESS))
+                .revoked_business(&BusinessId::new(BUSINESS).unwrap())
                 .await
                 .unwrap()
                 .unwrap()
@@ -4126,7 +4135,7 @@ mod tests {
             },
         );
         let report =
-            h.es.revoke_credit_line(&waba(), Some(&BusinessId::new(BUSINESS)), &h.vault)
+            h.es.revoke_credit_line(&waba(), Some(&BusinessId::new(BUSINESS).unwrap()), &h.vault)
                 .await
                 .unwrap();
         assert_eq!(report.revoked, [AllocationConfigId::new(ALLOCATION)]);
@@ -4180,7 +4189,7 @@ mod tests {
         );
         assert!(
             rotated
-                .revoked_business(&BusinessId::new(BUSINESS))
+                .revoked_business(&BusinessId::new(BUSINESS).unwrap())
                 .await
                 .unwrap()
                 .is_none(),
@@ -4263,7 +4272,7 @@ mod tests {
         );
         let marker = h
             .vault
-            .revoked_business(&BusinessId::new(BUSINESS))
+            .revoked_business(&BusinessId::new(BUSINESS).unwrap())
             .await
             .unwrap()
             .expect("the marker stays");
@@ -4323,7 +4332,7 @@ mod tests {
         );
         assert!(
             h.vault
-                .revoked_business(&BusinessId::new(BUSINESS))
+                .revoked_business(&BusinessId::new(BUSINESS).unwrap())
                 .await
                 .unwrap()
                 .is_some()
@@ -4356,7 +4365,7 @@ mod tests {
         .unwrap_err();
         assert!(
             h.vault
-                .revoked_business(&BusinessId::new(BUSINESS))
+                .revoked_business(&BusinessId::new(BUSINESS).unwrap())
                 .await
                 .unwrap()
                 .is_some()
@@ -4386,7 +4395,7 @@ mod tests {
         );
         assert!(
             h.vault
-                .revoked_business(&BusinessId::new(BUSINESS))
+                .revoked_business(&BusinessId::new(BUSINESS).unwrap())
                 .await
                 .unwrap()
                 .is_some(),
@@ -4449,7 +4458,7 @@ mod tests {
         assert_eq!(credit.pending_share, None);
         assert!(
             h.vault
-                .revoked_business(&BusinessId::new(BUSINESS))
+                .revoked_business(&BusinessId::new(BUSINESS).unwrap())
                 .await
                 .unwrap()
                 .is_none(),
@@ -4545,9 +4554,9 @@ mod tests {
         // A token stored in Tech Provider mode.
         h.vault
             .store(
-                &StoredBusinessToken::new(WABA, AccessToken::new(TOKEN))
-                    .business_id(BUSINESS)
-                    .phone_number_ids([PHONE]),
+                &StoredBusinessToken::new(WabaId::new(WABA).unwrap(), AccessToken::new(TOKEN))
+                    .business_id(BusinessId::new(BUSINESS).unwrap())
+                    .phone_number_ids([PhoneNumberId::new(PHONE).unwrap()]),
             )
             .await
             .unwrap();
@@ -4593,8 +4602,14 @@ mod tests {
             ]
         );
         let verified = seen.lock().unwrap().take().unwrap();
-        assert_eq!(verified.business_id, Some(BusinessId::new(BUSINESS)));
-        assert_eq!(verified.phone_number_id, Some(PhoneNumberId::new(PHONE)));
+        assert_eq!(
+            verified.business_id,
+            Some(BusinessId::new(BUSINESS).unwrap())
+        );
+        assert_eq!(
+            verified.phone_number_id,
+            Some(PhoneNumberId::new(PHONE).unwrap())
+        );
         let credit = h.vault.credit(&waba()).await.unwrap().unwrap();
         assert_eq!(credit.approved_at, Some(datetime!(2026-09-24 12:00 UTC)));
         assert_eq!(h.t.remaining(), 0);
@@ -4659,9 +4674,9 @@ mod tests {
         let request = request().currency(WabaCurrency::Usd);
         h.vault
             .store(
-                &StoredBusinessToken::new(WABA, AccessToken::new(TOKEN))
-                    .business_id(BUSINESS)
-                    .phone_number_ids([PHONE]),
+                &StoredBusinessToken::new(WabaId::new(WABA).unwrap(), AccessToken::new(TOKEN))
+                    .business_id(BusinessId::new(BUSINESS).unwrap())
+                    .phone_number_ids([PhoneNumberId::new(PHONE).unwrap()]),
             )
             .await
             .unwrap();
@@ -4671,7 +4686,7 @@ mod tests {
             .await
             .unwrap();
         let credit = h.vault.credit(&waba()).await.unwrap().unwrap();
-        assert_eq!(credit.business_id, Some(BusinessId::new(BUSINESS)));
+        assert_eq!(credit.business_id, Some(BusinessId::new(BUSINESS).unwrap()));
         assert_eq!(credit.approved_at, None, "vacuous otherwise");
         let before = h.t.requests().len();
         let err = h.es.resume(&waba(), &request, &h.vault).await.unwrap_err();
@@ -4686,9 +4701,10 @@ mod tests {
         // Tech Provider onboarding after an offboard, `TokenVault::store`).
         let h = harness(CreditSharing::ShareAndAttach);
         onboarded(&h).await;
-        let mut again = StoredBusinessToken::new(WABA, AccessToken::new(TOKEN))
-            .business_id(BUSINESS)
-            .phone_number_ids([PHONE]);
+        let mut again =
+            StoredBusinessToken::new(WabaId::new(WABA).unwrap(), AccessToken::new(TOKEN))
+                .business_id(BusinessId::new(BUSINESS).unwrap())
+                .phone_number_ids([PhoneNumberId::new(PHONE).unwrap()]);
         again.created_at = Some(datetime!(2026-09-25 09:00 UTC));
         h.vault.store(&again).await.unwrap();
         let before = h.t.requests().len();
@@ -4756,7 +4772,7 @@ mod tests {
         assert!(off.token_deleted);
         assert!(
             h.vault
-                .revoked_business(&BusinessId::new(BUSINESS))
+                .revoked_business(&BusinessId::new(BUSINESS).unwrap())
                 .await
                 .unwrap()
                 .is_some(),
@@ -4854,13 +4870,13 @@ mod tests {
         h.t.push_json(200, success());
         h.t.push_json(200, deleted());
         let report =
-            h.es.revoke_credit_line(&waba(), Some(&BusinessId::new(BUSINESS)), &h.vault)
+            h.es.revoke_credit_line(&waba(), Some(&BusinessId::new(BUSINESS).unwrap()), &h.vault)
                 .await
                 .unwrap();
         assert_eq!(report.revoked, [AllocationConfigId::new(ALLOCATION)]);
         assert_eq!(
             h.vault
-                .revoked_business(&BusinessId::new(BUSINESS))
+                .revoked_business(&BusinessId::new(BUSINESS).unwrap())
                 .await
                 .unwrap()
                 .expect("marked after the lookup")
@@ -4869,7 +4885,7 @@ mod tests {
         );
         assert_eq!(
             h.vault.credit(&waba()).await.unwrap().unwrap().business_id,
-            Some(BusinessId::new(BUSINESS)),
+            Some(BusinessId::new(BUSINESS).unwrap()),
             "recorded, so rotate reaches the marker"
         );
         assert_eq!(h.t.remaining(), 0);
@@ -4938,21 +4954,21 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(report.revoked, [AllocationConfigId::new(ALLOCATION)]);
-        assert_eq!(report.business_id, Some(BusinessId::new(BUSINESS)));
+        assert_eq!(report.business_id, Some(BusinessId::new(BUSINESS).unwrap()));
         let reqs = h.t.requests();
         assert_status(&reqs[0], ALLOCATION);
         assert_lookup(&reqs[1]);
         assert_eq!(deletes(&reqs), [format!("/v25.0/{ALLOCATION}")]);
         assert!(
             h.vault
-                .revoked_business(&BusinessId::new(BUSINESS))
+                .revoked_business(&BusinessId::new(BUSINESS).unwrap())
                 .await
                 .unwrap()
                 .is_some()
         );
         assert_eq!(
             h.vault.credit(&waba()).await.unwrap().unwrap().business_id,
-            Some(BusinessId::new(BUSINESS))
+            Some(BusinessId::new(BUSINESS).unwrap())
         );
         assert_eq!(h.t.remaining(), 0);
 
@@ -4977,7 +4993,7 @@ mod tests {
         h.vault.put_credit(&credit, None).await.unwrap();
         h.t.push_json(200, active());
         let err =
-            h.es.revoke_credit_line(&waba(), Some(&BusinessId::new("OTHER")), &h.vault)
+            h.es.revoke_credit_line(&waba(), Some(&BusinessId::new("997").unwrap()), &h.vault)
                 .await
                 .unwrap_err();
         assert!(
@@ -4989,11 +5005,14 @@ mod tests {
         // Nothing recorded at all, nothing given: refused, nothing sent.
         let h = harness(CreditSharing::ShareAndAttach);
         h.vault
-            .store(&StoredBusinessToken::new("BARE", AccessToken::new(TOKEN)))
+            .store(&StoredBusinessToken::new(
+                WabaId::new("995").unwrap(),
+                AccessToken::new(TOKEN),
+            ))
             .await
             .unwrap();
         assert!(matches!(
-            h.es.revoke_credit_line(&WabaId::new("BARE"), None, &h.vault).await,
+            h.es.revoke_credit_line(&WabaId::new("995").unwrap(), None, &h.vault).await,
             Err(Error::Validation(v)) if v.field == "business_id"
         ));
         assert!(h.t.requests().is_empty());
@@ -5020,13 +5039,13 @@ mod tests {
         h.t.push_json(200, success());
         h.t.push_json(200, json!({"request_status": "DELETED"}));
         let report =
-            h.es.revoke_credit_line(&waba(), Some(&BusinessId::new(BUSINESS)), &h.vault)
+            h.es.revoke_credit_line(&waba(), Some(&BusinessId::new(BUSINESS).unwrap()), &h.vault)
                 .await
                 .unwrap();
         assert_eq!(report.revoked, [AllocationConfigId::new(ALLOCATION)]);
         assert!(
             h.vault
-                .revoked_business(&BusinessId::new(BUSINESS))
+                .revoked_business(&BusinessId::new(BUSINESS).unwrap())
                 .await
                 .unwrap()
                 .is_none(),
@@ -5041,7 +5060,7 @@ mod tests {
         h.t.push_json(500, failure.clone());
         h.t.push_json(500, failure);
         let err =
-            h.es.revoke_credit_line(&waba(), Some(&BusinessId::new(BUSINESS)), &h.vault)
+            h.es.revoke_credit_line(&waba(), Some(&BusinessId::new(BUSINESS).unwrap()), &h.vault)
                 .await
                 .unwrap_err();
         assert!(
@@ -5051,7 +5070,7 @@ mod tests {
         assert!(err.is_retryable(), "{err}");
         assert!(
             h.vault
-                .revoked_business(&BusinessId::new(BUSINESS))
+                .revoked_business(&BusinessId::new(BUSINESS).unwrap())
                 .await
                 .unwrap()
                 .is_none()
@@ -5332,7 +5351,10 @@ mod tests {
     async fn offboarding_what_was_never_shared_deletes_the_token() {
         let h = harness(CreditSharing::ShareAndAttach);
         h.vault
-            .store(&StoredBusinessToken::new(WABA, AccessToken::new(TOKEN)))
+            .store(&StoredBusinessToken::new(
+                WabaId::new(WABA).unwrap(),
+                AccessToken::new(TOKEN),
+            ))
             .await
             .unwrap();
         let off = h.es.offboard(&waba(), None, &h.vault).await.unwrap();
@@ -5342,7 +5364,10 @@ mod tests {
 
         // An approval alone is not a share.
         h.vault
-            .store(&StoredBusinessToken::new(WABA, AccessToken::new(TOKEN)))
+            .store(&StoredBusinessToken::new(
+                WabaId::new(WABA).unwrap(),
+                AccessToken::new(TOKEN),
+            ))
             .await
             .unwrap();
         h.vault.record_approval(&waba(), None).await.unwrap();
@@ -5355,7 +5380,10 @@ mod tests {
 
         // A share posted whose outcome is unknown, no business to revoke by.
         h.vault
-            .store(&StoredBusinessToken::new(WABA, AccessToken::new(TOKEN)))
+            .store(&StoredBusinessToken::new(
+                WabaId::new(WABA).unwrap(),
+                AccessToken::new(TOKEN),
+            ))
             .await
             .unwrap();
         let mut credit = h.vault.credit(&waba()).await.unwrap().unwrap();
@@ -5382,13 +5410,13 @@ mod tests {
         h.t.push_json(200, success());
         h.t.push_json(200, deleted());
         let report =
-            h.es.revoke_business_credit_line(&BusinessId::new(BUSINESS), &h.vault)
+            h.es.revoke_business_credit_line(&BusinessId::new(BUSINESS).unwrap(), &h.vault)
                 .await
                 .unwrap();
         assert_eq!(report.revoked, [AllocationConfigId::new(ALLOCATION)]);
         assert!(
             h.vault
-                .revoked_business(&BusinessId::new(BUSINESS))
+                .revoked_business(&BusinessId::new(BUSINESS).unwrap())
                 .await
                 .unwrap()
                 .is_some()
@@ -5398,19 +5426,19 @@ mod tests {
         let h = harness(CreditSharing::ShareAndAttach);
         h.t.push_json(200, nothing_shared());
         let report =
-            h.es.revoke_business_credit_line(&BusinessId::new(BUSINESS), &h.vault)
+            h.es.revoke_business_credit_line(&BusinessId::new(BUSINESS).unwrap(), &h.vault)
                 .await
                 .unwrap();
         assert_eq!(report.all().count(), 0);
         assert!(
             h.vault
-                .revoked_business(&BusinessId::new(BUSINESS))
+                .revoked_business(&BusinessId::new(BUSINESS).unwrap())
                 .await
                 .unwrap()
                 .is_none()
         );
         assert!(
-            h.es.revoke_business_credit_line(&BusinessId::new(" "), &h.vault)
+            h.es.revoke_business_credit_line(&BusinessId::new_unchecked(" "), &h.vault)
                 .await
                 .is_err()
         );
@@ -5428,7 +5456,10 @@ mod tests {
         // Onboarded in Tech Provider mode: a token naming its business, no
         // share in the ledger.
         h.vault
-            .store(&StoredBusinessToken::new(WABA, AccessToken::new(TOKEN)).business_id(BUSINESS))
+            .store(
+                &StoredBusinessToken::new(WabaId::new(WABA).unwrap(), AccessToken::new(TOKEN))
+                    .business_id(BusinessId::new(BUSINESS).unwrap()),
+            )
             .await
             .unwrap();
         h.t.push_json(200, nothing_shared());
@@ -5437,7 +5468,7 @@ mod tests {
         assert_eq!(off.credit.map(|r| r.all().count()), Some(0));
         assert!(
             h.vault
-                .revoked_business(&BusinessId::new(BUSINESS))
+                .revoked_business(&BusinessId::new(BUSINESS).unwrap())
                 .await
                 .unwrap()
                 .is_some(),
@@ -5682,7 +5713,7 @@ mod tests {
         assert_eq!(
             out,
             PendingShareClearance::NotCleared(SharesFound {
-                business_id: BusinessId::new(BUSINESS),
+                business_id: BusinessId::new(BUSINESS).unwrap(),
                 funding: Some(AllocationConfigId::new(ALLOCATION)),
                 active: vec![AllocationConfigId::new(ALLOCATION)],
                 unknown_status: Vec::new(),
@@ -5751,7 +5782,7 @@ mod tests {
         assert_eq!(
             out,
             PendingShareClearance::NotCleared(SharesFound {
-                business_id: BusinessId::new(BUSINESS),
+                business_id: BusinessId::new(BUSINESS).unwrap(),
                 funding: None,
                 active: vec![AllocationConfigId::new("OTHER_WABA_RECORD")],
                 unknown_status: Vec::new(),
@@ -5785,7 +5816,7 @@ mod tests {
         assert_eq!(
             found,
             &SharesFound {
-                business_id: BusinessId::new(BUSINESS),
+                business_id: BusinessId::new(BUSINESS).unwrap(),
                 funding: None,
                 active: Vec::new(),
                 unknown_status: vec![(AllocationConfigId::new("ODD"), "PENDING_REVIEW".to_owned())],
@@ -6114,7 +6145,7 @@ mod tests {
         let (_, version) = h.vault.credit_versioned(&waba()).await.unwrap().unwrap();
         let shown = FundingId::new("CRED_OF_THE_LOST_SHARE");
         let refused = SharesFound {
-            business_id: BusinessId::new(BUSINESS),
+            business_id: BusinessId::new(BUSINESS).unwrap(),
             funding: None,
             active: Vec::new(),
             unknown_status: Vec::new(),
@@ -6199,7 +6230,7 @@ mod tests {
             assert_eq!(
                 out,
                 PendingShareClearance::NotCleared(SharesFound {
-                    business_id: BusinessId::new(BUSINESS),
+                    business_id: BusinessId::new(BUSINESS).unwrap(),
                     funding: None,
                     active: Vec::new(),
                     unknown_status: Vec::new(),
@@ -6247,8 +6278,8 @@ mod tests {
         let sent = h.t.requests().len();
         h.vault
             .store(
-                &StoredBusinessToken::new(WABA, AccessToken::new(TOKEN))
-                    .business_id("ANOTHER_OWNER"),
+                &StoredBusinessToken::new(WabaId::new(WABA).unwrap(), AccessToken::new(TOKEN))
+                    .business_id(BusinessId::new("996").unwrap()),
             )
             .await
             .unwrap();
@@ -6265,7 +6296,10 @@ mod tests {
 
         let h = harness(CreditSharing::ShareAndAttach);
         h.vault
-            .store(&StoredBusinessToken::new(WABA, AccessToken::new(TOKEN)))
+            .store(&StoredBusinessToken::new(
+                WabaId::new(WABA).unwrap(),
+                AccessToken::new(TOKEN),
+            ))
             .await
             .unwrap();
         let at = datetime!(2026-09-24 12:00 UTC);

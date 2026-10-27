@@ -71,8 +71,8 @@ impl HttpTransport for BindsWhileListing {
                 .unwrap()
                 .bind_waba(
                     &TenantId::parse("merchant-b").unwrap(),
-                    &WabaId::new(RACED_WABA),
-                    &[PhoneNumberId::new(RACED_NUMBER)],
+                    &WabaId::new(RACED_WABA).unwrap(),
+                    &[PhoneNumberId::new(RACED_NUMBER).unwrap()],
                 )
                 .await
                 .unwrap();

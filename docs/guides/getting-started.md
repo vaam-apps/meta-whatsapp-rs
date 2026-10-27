@@ -80,7 +80,7 @@ anyhow = "1"
 use meta_whatsapp_rs::prelude::*;
 
 let client = meta_whatsapp_rs::client(std::env::var("WA_TOKEN")?)?;
-let messages = client.messages(std::env::var("WA_PHONE_NUMBER_ID")?);
+let messages = client.messages(PhoneNumberId::new(std::env::var("WA_PHONE_NUMBER_ID")?)?);
 let to = Recipient::phone("+16505551234"); // E.164, with the `+`
 
 let hello = TemplateMessage::new("hello_world", "en_US");
@@ -96,8 +96,12 @@ Run the full program with
   and the default retry policy. Build **one** at startup and clone it:
   cloning is cheap and shares the connection pool.
 - `messages(…)` takes the **phone number id**, not the phone number. Ids are
-  distinct types (`PhoneNumberId`, `WabaId`, …) built from `&str`/`String`,
-  so a WABA id cannot be passed where a phone number id is expected.
+  distinct types (`PhoneNumberId`, `WabaId`, …), so a WABA id cannot be
+  passed where a phone number id is expected. The numeric ones
+  (`PhoneNumberId`, `WabaId`, `BusinessId`, `AppId`, `MediaId`,
+  `TemplateId`, `ProductItemId`, `ProductSetId`) are built with `new`,
+  which refuses anything but digits (`PhoneNumberId::new(id)?` or
+  `id.parse::<PhoneNumberId>()?`).
 - Meta's [account model evolution](https://developers.facebook.com/documentation/business-messaging/whatsapp/account-model-evolution)
   (phase 1 from H2 2026) splits a WABA in two: a **Messaging Account**
   keeps the WABA id and holds templates, billing and webhook

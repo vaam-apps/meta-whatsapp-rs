@@ -257,6 +257,29 @@ Rules for every endpoint module:
    for literal paths only). It owns auth, retries, error decoding, the
    credential host allowlist, and segment-safe paths (an id containing `/`,
    `?` or `#` stays inside its segment; empty, `.` and `..` are refused).
+   Ids have one of two shapes (`meta_whatsapp_core::ids`, roadmap L20c).
+   The ids Meta documents as numeric strings (`AppId`, `BusinessId`,
+   `WabaId`, `PhoneNumberId`, `MediaId`, `TemplateId`, `ProductItemId`,
+   `ProductSetId`) refuse anything
+   but 1 to 64 ASCII digits when built (`new`, `FromStr`, `TryFrom`: a
+   `ValidationError` on the type's `FIELD`), so a numeric id cannot carry
+   a `/` into a path. Every other id is opaque (any string: BSUIDs, group
+   ids, message ids, …) and relies on the whole-segment encoding alone:
+   Meta documents no shape that would not refuse a legitimate one (a
+   standard-base64 group id may hold `/`). Some opaque ids are digits in
+   Meta's examples (Flow, catalog and template group ids, credit lines,
+   allocation configurations, verification submissions, bot ids), but
+   no page states their shape, so they stay opaque until one does (the
+   follow-up in roadmap L20c). Deserializing never checks, so
+   a response or webhook never fails on an id's shape; `new_unchecked`
+   does the same for Meta's values that arrive as plain strings and for
+   rows read back from a store, and is never for untrusted input (a form,
+   a URL, a request body: use `new`). What stays unverified: whether
+   Graph decodes `%2F` before routing. If it does, a caller who controls
+   an opaque id (or one built unchecked) could reach another edge of an
+   object the token can access; the endpoint modules' own checks (digits
+   where a page asks for them) narrow that, and refusing `/` in opaque
+   ids outright is the swap, at the cost of a legitimate id.
 2. **Requests are typed structs with `Serialize`, responses typed with
    `Deserialize`.** Unknown response fields are ignored (never
    `deny_unknown_fields`); enums Meta may extend get a catch-all variant

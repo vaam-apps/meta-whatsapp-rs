@@ -277,6 +277,76 @@ fn an_unparsed_account_update_is_keyed_by_its_waba_info() {
     );
 }
 
+/// Roadmap L20c: an id Meta sends is kept as sent, whatever its shape (the
+/// numeric id types' checked constructors would refuse every one here):
+/// the entry id, as the WABA of a change or the business portfolio of a
+/// `partner_solutions` one; an `account_update`'s `waba_info.waba_id`,
+/// whether the value parses or not; and the entry id of an event stored
+/// before `entry_id` existed. A new id format must never fail or blank a
+/// parse.
+#[test]
+fn ids_meta_sends_are_kept_as_sent_whatever_their_shape() {
+    const ENTRY: &str = "ENTRY-1/x";
+    const WABA: &str = "WABA-2/x";
+    let first = |field: &str, value: serde_json::Value| {
+        let body = json!({"object": "whatsapp_business_account", "entry": [{
+            "id": ENTRY, "time": 1748477359, "changes": [{"field": field, "value": value}]
+        }]});
+        let mut events = WebhookPayload::from_slice(body.to_string().as_bytes())
+            .unwrap()
+            .into_events();
+        assert_eq!(events.len(), 1, "{events:?}");
+        events.remove(0)
+    };
+    assert!(WabaId::new(ENTRY).is_err() && BusinessId::new(ENTRY).is_err());
+
+    let unknown = first("a_field_meta_adds_later", json!({"x": 1}));
+    assert!(
+        matches!(unknown, WebhookEvent::Unknown { .. }),
+        "{unknown:?}"
+    );
+    assert_eq!(unknown.waba_id().map(WabaId::as_str), Some(ENTRY));
+
+    let partner = first(
+        "partner_solutions",
+        json!({"event": "SOLUTION_CREATED", "solution_id": "774485461512159", "solution_status": "INITIATED"}),
+    );
+    let WebhookEvent::PartnerSolutionUpdated { business_id, .. } = &partner else {
+        panic!("{partner:?}")
+    };
+    assert_eq!(business_id.as_str(), ENTRY);
+
+    let parsed = first(
+        "account_update",
+        json!({"event": "PARTNER_REMOVED", "waba_info": {"waba_id": WABA, "owner_business_id": "2329417887457253"}}),
+    );
+    assert!(
+        matches!(parsed, WebhookEvent::AccountUpdated { .. }),
+        "{parsed:?}"
+    );
+    assert_eq!(parsed.waba_id().map(WabaId::as_str), Some(WABA));
+    // `restriction_info` is not a list: the typed value does not parse.
+    let unparsed = first(
+        "account_update",
+        json!({"event": "PARTNER_REMOVED", "restriction_info": 5, "waba_info": {"waba_id": WABA}}),
+    );
+    assert!(
+        matches!(
+            unparsed,
+            WebhookEvent::Unknown {
+                parse_error: Some(_),
+                ..
+            }
+        ),
+        "{unparsed:?}"
+    );
+    assert_eq!(unparsed.waba_id().map(WabaId::as_str), Some(WABA));
+
+    let old = json!({"event": "account_updated", "waba_id": ENTRY, "update": {"event": "ACCOUNT_DELETED"}});
+    let back: WebhookEvent = serde_json::from_value(old).unwrap();
+    assert_eq!(back.waba_id().map(WabaId::as_str), Some(ENTRY));
+}
+
 /// An `account_update` stored by a revision whose `waba_id` was the entry
 /// id (and that had no `entry_id`) reads back keyed by its WABA, never by
 /// the business portfolio the entry id is for `PARTNER_*` updates.
@@ -429,8 +499,8 @@ fn account_update_every_example() {
     assert_eq!(
         info.solution_partner_business_ids,
         [
-            BusinessId::new("2949482758682047"),
-            BusinessId::new("520744086200222")
+            BusinessId::new("2949482758682047").unwrap(),
+            BusinessId::new("520744086200222").unwrap()
         ]
     );
 

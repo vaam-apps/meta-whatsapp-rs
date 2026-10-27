@@ -514,7 +514,7 @@ mod tests {
             json!({"account_review_status": "APPROVED", "id": "1111111111111"}),
         );
         let w = client(&t)
-            .waba("106526625562206")
+            .waba(WabaId::new("106526625562206").unwrap())
             .get(&["account_review_status"])
             .await
             .unwrap();
@@ -551,7 +551,7 @@ mod tests {
             }),
         );
         let health = client(&t)
-            .waba("102290129340398")
+            .waba(WabaId::new("102290129340398").unwrap())
             .health_status()
             .await
             .unwrap();
@@ -571,7 +571,11 @@ mod tests {
             200,
             json!({"health_status": {"can_send_message": "BLOCKED"}, "id": "1"}),
         );
-        let info = client(&t).waba("1").get(&["health_status"]).await.unwrap();
+        let info = client(&t)
+            .waba(WabaId::new("1").unwrap())
+            .get(&["health_status"])
+            .await
+            .unwrap();
         assert_eq!(
             info.health_status.and_then(|h| h.can_send_message),
             Some(HealthState::Blocked)
@@ -579,7 +583,10 @@ mod tests {
         // No `health_status` in the answer: a decode error, not a status.
         t.push_json(200, json!({"id": "1"}));
         assert!(matches!(
-            client(&t).waba("1").health_status().await,
+            client(&t)
+                .waba(WabaId::new("1").unwrap())
+                .health_status()
+                .await,
             Err(meta_whatsapp_core::Error::Decode { .. })
         ));
         assert_eq!(t.remaining(), 0);
@@ -588,7 +595,7 @@ mod tests {
     #[tokio::test]
     async fn update_requires_a_field_and_posts_json() {
         let t = ScriptedTransport::new();
-        let w = client(&t).waba("1");
+        let w = client(&t).waba(WabaId::new("1").unwrap());
         assert!(w.update(&WabaUpdate::new()).await.is_err());
         assert!(t.requests().is_empty());
         t.push_json(200, json!({"success": true}));
@@ -619,7 +626,7 @@ mod tests {
             }),
         );
         let page = client(&t)
-            .waba("102290129340398")
+            .waba(WabaId::new("102290129340398").unwrap())
             .phone_numbers(
                 &PhoneNumbersQuery::new()
                     .filter(Filter::account_mode("SANDBOX"))
@@ -656,7 +663,7 @@ mod tests {
         );
         t.push_json(200, json!({"data": [{"id": "2"}]}));
         let ids: Vec<String> = client(&t)
-            .waba("W")
+            .waba(WabaId::new("102290129340398").unwrap())
             .phone_numbers_stream(&PhoneNumbersQuery::new())
             .map(|r| r.unwrap().id.into_inner())
             .collect()
@@ -666,7 +673,7 @@ mod tests {
         assert_eq!(t.remaining(), 0);
 
         let errs: Vec<_> = client(&t)
-            .waba("W")
+            .waba(WabaId::new("102290129340398").unwrap())
             .phone_numbers_stream(&PhoneNumbersQuery::new().limit(101))
             .collect()
             .await;
@@ -686,22 +693,29 @@ mod tests {
         t.push_json(200, json!({"data": []}));
         t.push_json(200, json!({"data": []}));
         t.push_json(200, json!({"data": []}));
-        let w = client(&t).waba("W");
+        let w = client(&t).waba(WabaId::new("102290129340398").unwrap());
         w.phone_numbers(&PhoneNumbersQuery::new().after("QVFIU"))
             .await
             .unwrap();
         w.phone_numbers(&PhoneNumbersQuery::new().before("QVFIB"))
             .await
             .unwrap();
-        w.assigned_users(&ListAssignedUsers::new("B").limit(100).after("MjQZD"))
-            .await
-            .unwrap();
+        w.assigned_users(
+            &ListAssignedUsers::new(BusinessId::new("2729063490586005").unwrap())
+                .limit(100)
+                .after("MjQZD"),
+        )
+        .await
+        .unwrap();
         let reqs = t.requests();
         assert_eq!(reqs[0].query("after").as_deref(), Some("QVFIU"));
         assert_eq!(reqs[0].query("before"), None);
         assert_eq!(reqs[1].query("before").as_deref(), Some("QVFIB"));
-        assert_eq!(reqs[2].path(), "/v25.0/W/assigned_users");
-        assert_eq!(reqs[2].query("business").as_deref(), Some("B"));
+        assert_eq!(reqs[2].path(), "/v25.0/102290129340398/assigned_users");
+        assert_eq!(
+            reqs[2].query("business").as_deref(),
+            Some("2729063490586005")
+        );
         assert_eq!(reqs[2].query("limit").as_deref(), Some("100"));
         assert_eq!(reqs[2].query("after").as_deref(), Some("MjQZD"));
         assert_eq!(t.remaining(), 0);
@@ -715,7 +729,9 @@ mod tests {
             "{refused:?}"
         );
         let refused: Vec<_> = w
-            .assigned_users_stream(&ListAssignedUsers::new("B").before("x"))
+            .assigned_users_stream(
+                &ListAssignedUsers::new(BusinessId::new("2729063490586005").unwrap()).before("x"),
+            )
             .collect()
             .await;
         assert!(
@@ -724,7 +740,10 @@ mod tests {
         );
         for limit in [0, 101] {
             let err = w
-                .assigned_users(&ListAssignedUsers::new("B").limit(limit))
+                .assigned_users(
+                    &ListAssignedUsers::new(BusinessId::new("2729063490586005").unwrap())
+                        .limit(limit),
+                )
                 .await
                 .unwrap_err();
             assert!(
@@ -742,22 +761,27 @@ mod tests {
             200,
             json!({"data": [{"id": "1", "name": "Anna Flex", "tasks": ["MANAGE"]}],
                 "paging": {"cursors": {"before": "MAZDZD", "after": "MjQZD"},
-                    "next": "https://graph.facebook.com/v25.0/W/assigned_users?after=MjQZD"}}),
+                    "next": "https://graph.facebook.com/v25.0/102290129340398/assigned_users?after=MjQZD"}}),
         );
         t.push_json(
             200,
             json!({"data": [{"id": "2", "name": "Jasper Brown", "tasks": ["DEVELOP"]}]}),
         );
         let users: Vec<String> = client(&t)
-            .waba("W")
-            .assigned_users_stream(&ListAssignedUsers::new("B"))
+            .waba(WabaId::new("102290129340398").unwrap())
+            .assigned_users_stream(&ListAssignedUsers::new(
+                BusinessId::new("2729063490586005").unwrap(),
+            ))
             .map(|u| u.unwrap().id)
             .collect()
             .await;
         assert_eq!(users, ["1", "2"]);
         let second = &t.requests()[1];
         assert_eq!(second.query("after").as_deref(), Some("MjQZD"));
-        assert_eq!(second.query("business").as_deref(), Some("B"));
+        assert_eq!(
+            second.query("business").as_deref(),
+            Some("2729063490586005")
+        );
         assert_eq!(t.remaining(), 0);
     }
 
@@ -767,7 +791,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"id": "110200345501442"}));
         let created = client(&t)
-            .waba("102290129340398")
+            .waba(WabaId::new("102290129340398").unwrap())
             .create_phone_number(&NewPhoneNumber::new("1", "14195551518", "Lucky Shrub"))
             .await
             .unwrap();
@@ -782,7 +806,7 @@ mod tests {
         assert_eq!(t.remaining(), 0);
         assert!(
             client(&t)
-                .waba("1")
+                .waba(WabaId::new("1").unwrap())
                 .create_phone_number(&NewPhoneNumber::new("1", " ", "x"))
                 .await
                 .is_err()
@@ -794,7 +818,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"success": true}));
         t.push_json(200, json!({"success": true}));
-        let w = client(&t).waba("102290129340398");
+        let w = client(&t).waba(WabaId::new("102290129340398").unwrap());
         w.subscribe_app(None).await.unwrap();
         // webhooks/override, "Set WABA alternate callback".
         w.subscribe_app(Some(&CallbackOverride::new(
@@ -835,7 +859,10 @@ mod tests {
             })
             .build()
             .unwrap();
-        c.waba("1").subscribe_app(None).await.unwrap();
+        c.waba(WabaId::new("1").unwrap())
+            .subscribe_app(None)
+            .await
+            .unwrap();
         assert_eq!(t.requests().len(), 2);
         assert_eq!(t.remaining(), 0);
     }
@@ -857,7 +884,11 @@ mod tests {
               }]
             }),
         );
-        let page = client(&t).waba("W").subscribed_apps().await.unwrap();
+        let page = client(&t)
+            .waba(WabaId::new("102290129340398").unwrap())
+            .subscribed_apps()
+            .await
+            .unwrap();
         let app = &page.data[0];
         assert_eq!(app.whatsapp_business_api_data.id, "670843887433847");
         assert_eq!(
@@ -866,7 +897,7 @@ mod tests {
         );
         let req = t.last_request().unwrap();
         assert_eq!(req.method, Method::GET);
-        assert_eq!(req.path(), "/v25.0/W/subscribed_apps");
+        assert_eq!(req.path(), "/v25.0/102290129340398/subscribed_apps");
         assert_eq!(t.remaining(), 0);
     }
 
@@ -875,7 +906,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"success": true}));
         client(&t)
-            .waba("102289599326934")
+            .waba(WabaId::new("102289599326934").unwrap())
             .unsubscribe_app()
             .await
             .unwrap();
@@ -892,7 +923,11 @@ mod tests {
             403,
             json!({"error": {"message": "Your app doesn't have permission", "type": "OAuthException", "code": 200, "error_subcode": 1349174}}),
         );
-        let err = client(&t).waba("1").subscribe_app(None).await.unwrap_err();
+        let err = client(&t)
+            .waba(WabaId::new("1").unwrap())
+            .subscribe_app(None)
+            .await
+            .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Permission);
         assert_eq!(t.remaining(), 0);
     }
@@ -910,9 +945,11 @@ mod tests {
         );
         t.push_json(200, json!({"success": true}));
         t.push_json(200, json!({"success": true}));
-        let w = client(&t).waba("W");
+        let w = client(&t).waba(WabaId::new("102290129340398").unwrap());
         let users = w
-            .assigned_users(&ListAssignedUsers::new("B"))
+            .assigned_users(&ListAssignedUsers::new(
+                BusinessId::new("2729063490586005").unwrap(),
+            ))
             .await
             .unwrap();
         assert_eq!(users.data[0].tasks, vec![WabaTask::Manage]);
@@ -921,8 +958,11 @@ mod tests {
             .unwrap();
         w.remove_user("1972555232742222").await.unwrap();
         let reqs = t.requests();
-        assert_eq!(reqs[0].path(), "/v25.0/W/assigned_users");
-        assert_eq!(reqs[0].query("business").as_deref(), Some("B"));
+        assert_eq!(reqs[0].path(), "/v25.0/102290129340398/assigned_users");
+        assert_eq!(
+            reqs[0].query("business").as_deref(),
+            Some("2729063490586005")
+        );
         assert_eq!(reqs[0].query("after"), None);
         assert_eq!(reqs[1].method, Method::POST);
         assert_eq!(reqs[1].query("user").as_deref(), Some("1972555232742222"));
@@ -946,39 +986,47 @@ mod tests {
         }
         t.push_json(200, json!({"data": []}));
         let c = client(&t);
-        c.waba("OTHER/subscribed_apps")
+        c.waba(WabaId::new_unchecked("OTHER/subscribed_apps"))
             .subscribe_app(None)
             .await
             .unwrap();
-        c.waba("123?fields=x").unsubscribe_app().await.unwrap();
-        c.waba("W/assigned_users").remove_user("1").await.unwrap();
-        c.waba("W/../OTHER")
+        c.waba(WabaId::new_unchecked("123?fields=x"))
+            .unsubscribe_app()
+            .await
+            .unwrap();
+        c.waba(WabaId::new_unchecked("102290129340398/assigned_users"))
+            .remove_user("1")
+            .await
+            .unwrap();
+        c.waba(WabaId::new_unchecked("102290129340398/../OTHER"))
             .update(&WabaUpdate::new().name("n"))
             .await
             .unwrap();
-        c.business("B/owned_whatsapp_business_accounts")
-            .client_whatsapp_business_accounts(&WabaListQuery::new())
-            .await
-            .unwrap();
+        c.business(BusinessId::new_unchecked(
+            "2729063490586005/owned_whatsapp_business_accounts",
+        ))
+        .client_whatsapp_business_accounts(&WabaListQuery::new())
+        .await
+        .unwrap();
         let paths: Vec<String> = t.requests().iter().map(|r| r.path().to_owned()).collect();
         assert_eq!(
             paths,
             vec![
                 "/v25.0/OTHER%2Fsubscribed_apps/subscribed_apps",
                 "/v25.0/123%3Ffields=x/subscribed_apps",
-                "/v25.0/W%2Fassigned_users/assigned_users",
-                "/v25.0/W%2F..%2FOTHER",
-                "/v25.0/B%2Fowned_whatsapp_business_accounts/client_whatsapp_business_accounts",
+                "/v25.0/102290129340398%2Fassigned_users/assigned_users",
+                "/v25.0/102290129340398%2F..%2FOTHER",
+                "/v25.0/2729063490586005%2Fowned_whatsapp_business_accounts/client_whatsapp_business_accounts",
             ]
         );
         for id in ["..", "."] {
             assert!(matches!(
-                c.waba(id).subscribe_app(None).await,
+                c.waba(WabaId::new_unchecked(id)).subscribe_app(None).await,
                 Err(meta_whatsapp_core::Error::Validation(_))
             ));
-            assert!(c.waba(id).get(&[]).await.is_err());
+            assert!(c.waba(WabaId::new_unchecked(id)).get(&[]).await.is_err());
             let streamed: Vec<_> = c
-                .waba(id)
+                .waba(WabaId::new_unchecked(id))
                 .phone_numbers_stream(&PhoneNumbersQuery::new())
                 .take(3)
                 .collect()
@@ -988,7 +1036,12 @@ mod tests {
                 streamed[0],
                 Err(meta_whatsapp_core::Error::Validation(_))
             ));
-            assert!(c.business(id).get(&[]).await.is_err());
+            assert!(
+                c.business(BusinessId::new_unchecked(id))
+                    .get(&[])
+                    .await
+                    .is_err()
+            );
         }
         assert_eq!(t.requests().len(), 5, "invalid ids never reach the wire");
         assert_eq!(t.remaining(), 0);

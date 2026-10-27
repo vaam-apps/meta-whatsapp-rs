@@ -46,7 +46,7 @@ fn info_json(url: &str, sha256: &str, file_size: &serde_json::Value) -> serde_js
 }
 
 fn media_id() -> MediaId {
-    MediaId::new("1037543291543636")
+    MediaId::new("1037543291543636").unwrap()
 }
 
 fn stream(chunks: &[&'static [u8]]) -> ByteStream {
@@ -74,7 +74,7 @@ async fn upload_sends_the_documented_multipart_fields() {
     // business-phone-numbers/media, "Example response".
     t.push_json(200, json!({"id": "1037543291543636"}));
     let id = client(&t)
-        .media(PNID)
+        .media(PhoneNumberId::new(PNID).unwrap())
         .upload(
             Bytes::from_static(b"\x00\x00mp4"),
             "video/mp4",
@@ -105,7 +105,7 @@ async fn upload_sends_the_documented_multipart_fields() {
 #[tokio::test]
 async fn upload_rejects_unsupported_types_and_oversized_files_locally() {
     let t = ScriptedTransport::new();
-    let media = client(&t).media(PNID);
+    let media = client(&t).media(PhoneNumberId::new(PNID).unwrap());
     let err = media
         .upload(vec![0u8; 10], "image/gif", "a.gif")
         .await
@@ -154,7 +154,7 @@ async fn upload_is_not_replayed_after_a_timeout() {
         .build()
         .unwrap();
     assert!(
-        c.media(PNID)
+        c.media(PhoneNumberId::new(PNID).unwrap())
             .upload(vec![1u8], "image/png", "a.png")
             .await
             .is_err()
@@ -169,7 +169,7 @@ async fn url_parses_the_documented_response_and_scopes_on_request() {
     let t = ScriptedTransport::new();
     t.push_json(200, info_json(LOOKASIDE, &sha_hex(b"x"), &json!("1234")));
     t.push_json(200, info_json(LOOKASIDE, &sha_hex(b"x"), &json!(1234)));
-    let media = client(&t).media(PNID);
+    let media = client(&t).media(PhoneNumberId::new(PNID).unwrap());
     let info = media.url(&media_id()).await.unwrap();
     assert_eq!(info.file_size, Some(1234), "string form, as documented");
     assert_eq!(info.url, LOOKASIDE);
@@ -201,7 +201,7 @@ async fn delete_uses_the_media_id_path_and_optional_scope() {
     let t = ScriptedTransport::new();
     t.push_json(200, json!({"success": true}));
     t.push_json(200, json!({"success": true}));
-    let media = client(&t).media(PNID);
+    let media = client(&t).media(PhoneNumberId::new(PNID).unwrap());
     media.delete(&media_id()).await.unwrap();
     media
         .clone()
@@ -220,20 +220,25 @@ async fn delete_uses_the_media_id_path_and_optional_scope() {
 #[tokio::test]
 async fn ids_cannot_escape_their_path_segment() {
     // A crafted media id must not turn `DELETE /{media-id}` into
-    // `DELETE /{waba}/subscribed_apps` with the business token.
+    // `DELETE /{waba}/subscribed_apps` with the business token. The checked
+    // constructors refuse such ids (roadmap L20c); built unchecked, as a
+    // deserialized id may be, each stays one percent-encoded segment.
     let t = ScriptedTransport::new();
     t.push_json(200, json!({"id": "1"}));
     t.push_json(200, json!({"success": true}));
     t.push_json(200, info_json(LOOKASIDE, &sha_hex(b"x"), &json!(1)));
     client(&t)
-        .media("123/subscribed_apps")
+        .media(PhoneNumberId::new_unchecked("123/subscribed_apps"))
         .upload(vec![1u8], "image/png", "a.png")
         .await
         .unwrap();
-    let media = client(&t).media(PNID);
-    let crafted = MediaId::new("123/subscribed_apps");
+    let media = client(&t).media(PhoneNumberId::new(PNID).unwrap());
+    let crafted = MediaId::new_unchecked("123/subscribed_apps");
     media.delete(&crafted).await.unwrap();
-    media.url(&MediaId::new("1?fields=x")).await.unwrap();
+    media
+        .url(&MediaId::new_unchecked("1?fields=x"))
+        .await
+        .unwrap();
     let reqs = t.requests();
     assert_eq!(reqs[0].path(), "/v25.0/123%2Fsubscribed_apps/media");
     assert_eq!(
@@ -246,10 +251,10 @@ async fn ids_cannot_escape_their_path_segment() {
 
     // Segments URL normalization would drop or pop never leave the client.
     let t = ScriptedTransport::new();
-    let media = client(&t).media(PNID);
+    let media = client(&t).media(PhoneNumberId::new(PNID).unwrap());
     for bad in ["", "..", "."] {
         let err = client(&t)
-            .media(bad)
+            .media(PhoneNumberId::new_unchecked(bad))
             .upload(vec![1u8], "image/png", "a.png")
             .await
             .unwrap_err();
@@ -257,7 +262,7 @@ async fn ids_cannot_escape_their_path_segment() {
             matches!(&err, Error::Validation(v) if v.field == "path"),
             "{bad:?}: {err}"
         );
-        let id = MediaId::new(bad);
+        let id = MediaId::new_unchecked(bad);
         for err in [
             media.delete(&id).await.unwrap_err(),
             media.url(&id).await.unwrap_err(),
@@ -280,7 +285,11 @@ async fn download_streams_from_the_cdn_with_the_token_and_verifies() {
     let t = ScriptedTransport::new();
     t.push_json(200, info_json(LOOKASIDE, &sha_hex(body), &json!("13")));
     t.push_bytes(200, "image/jpeg", Bytes::from_static(body));
-    let dl = client(&t).media(PNID).download(&media_id()).await.unwrap();
+    let dl = client(&t)
+        .media(PhoneNumberId::new(PNID).unwrap())
+        .download(&media_id())
+        .await
+        .unwrap();
     let mut verified = dl.verified().unwrap();
     let mut got = Vec::new();
     while let Some(chunk) = verified.body.next().await {
@@ -299,7 +308,11 @@ async fn tampered_media_fails_at_the_end_of_the_stream() {
     let t = ScriptedTransport::new();
     t.push_json(200, info_json(LOOKASIDE, &sha_hex(b"original"), &json!(8)));
     t.push_bytes(200, "image/jpeg", Bytes::from_static(b"tampered"));
-    let dl = client(&t).media(PNID).download(&media_id()).await.unwrap();
+    let dl = client(&t)
+        .media(PhoneNumberId::new(PNID).unwrap())
+        .download(&media_id())
+        .await
+        .unwrap();
     let mut body = dl.verified().unwrap().body;
     // The bytes still arrive (they are streamed), then the verdict.
     assert_eq!(&body.next().await.unwrap().unwrap()[..], b"tampered");
@@ -451,7 +464,7 @@ async fn download_urls_on_foreign_hosts_are_refused() {
         // Would be served if the token were (wrongly) sent there.
         t.push_bytes(200, "image/jpeg", Bytes::from_static(b"x"));
         let err = client(&t)
-            .media(PNID)
+            .media(PhoneNumberId::new(PNID).unwrap())
             .download(&media_id())
             .await
             .unwrap_err();
@@ -468,7 +481,7 @@ async fn download_urls_on_foreign_hosts_are_refused() {
     let t = ScriptedTransport::new();
     t.push_json(200, info_json("not a url", &sha_hex(b"x"), &json!(1)));
     let err = client(&t)
-        .media(PNID)
+        .media(PhoneNumberId::new(PNID).unwrap())
         .download(&media_id())
         .await
         .unwrap_err();
@@ -487,7 +500,7 @@ async fn an_expired_download_url_surfaces_the_http_error() {
         json!({"error": {"message": "(#100) Media not found", "code": 100}}),
     );
     let err = client(&t)
-        .media(PNID)
+        .media(PhoneNumberId::new(PNID).unwrap())
         .download(&media_id())
         .await
         .unwrap_err();
@@ -502,7 +515,7 @@ async fn download_bytes_verifies_and_caps_the_size() {
     t.push_json(200, info_json(LOOKASIDE, &sha_hex(body), &json!("10")));
     t.push_bytes(200, "image/jpeg", Bytes::from_static(body));
     let got = client(&t)
-        .media(PNID)
+        .media(PhoneNumberId::new(PNID).unwrap())
         .download_bytes(&media_id(), 10)
         .await
         .unwrap();
@@ -514,7 +527,7 @@ async fn download_bytes_verifies_and_caps_the_size() {
     let t = ScriptedTransport::new();
     t.push_json(200, info_json(LOOKASIDE, &sha_hex(body), &json!("10")));
     let err = client(&t)
-        .media(PNID)
+        .media(PhoneNumberId::new(PNID).unwrap())
         .download_bytes(&media_id(), 9)
         .await
         .unwrap_err();
@@ -529,7 +542,7 @@ async fn download_bytes_verifies_and_caps_the_size() {
     t.push_json(200, info_json(LOOKASIDE, &sha_hex(body), &json!("3")));
     t.push_bytes(200, "image/jpeg", Bytes::from_static(body));
     let err = client(&t)
-        .media(PNID)
+        .media(PhoneNumberId::new(PNID).unwrap())
         .download_bytes(&media_id(), 9)
         .await
         .unwrap_err();
@@ -543,7 +556,7 @@ async fn download_bytes_verifies_and_caps_the_size() {
     t.push_json(200, info_json(LOOKASIDE, &sha_hex(b"other"), &json!("10")));
     t.push_bytes(200, "image/jpeg", Bytes::from_static(body));
     let err = client(&t)
-        .media(PNID)
+        .media(PhoneNumberId::new(PNID).unwrap())
         .download_bytes(&media_id(), 100)
         .await
         .unwrap_err();
@@ -564,9 +577,14 @@ async fn resumable_upload_follows_the_graph_guide() {
         200,
         json!({"id": "upload:MTphdHRhY2htZW50OjZiMDI1ZWI3", "file_offset": "0"}),
     );
-    let media = client(&t).media(PNID);
+    let media = client(&t).media(PhoneNumberId::new(PNID).unwrap());
     let session = media
-        .start_upload_session(&AppId::new("634974688087057"), "offer.png", 12, "image/png")
+        .start_upload_session(
+            &AppId::new("634974688087057").unwrap(),
+            "offer.png",
+            12,
+            "image/png",
+        )
         .await
         .unwrap();
     assert_eq!(session.as_str(), "upload:MTphdHRhY2htZW50OjZiMDI1ZWI3");
@@ -614,7 +632,7 @@ async fn resuming_sends_the_offset_and_session_query_stays_a_query() {
     let t = ScriptedTransport::new();
     t.push_json(200, json!({"id": "upload:abc", "file_offset": 1024}));
     t.push_json(200, json!({"h": "4::aW..."}));
-    let media = client(&t).media(PNID);
+    let media = client(&t).media(PhoneNumberId::new(PNID).unwrap());
     // A session id carrying a query part is used as the guide's curl would.
     let session = UploadSessionId::new("upload:abc?sig=ARZ-1_x");
     let offset = media.upload_session_status(&session).await.unwrap();
@@ -638,7 +656,7 @@ async fn session_ids_stay_one_segment_and_must_be_upload_sessions() {
     // after it is still the query the guide's curl would send.
     let t = ScriptedTransport::new();
     t.push_json(200, json!({"id": "upload:abc", "file_offset": "0"}));
-    let media = client(&t).media(PNID);
+    let media = client(&t).media(PhoneNumberId::new(PNID).unwrap());
     let crafted = UploadSessionId::new("upload:abc/../../123/subscribed_apps?sig=1");
     assert_eq!(media.upload_session_status(&crafted).await.unwrap(), 0);
     let r = t.last_request().unwrap();
@@ -652,7 +670,7 @@ async fn session_ids_stay_one_segment_and_must_be_upload_sessions() {
     // Anything but an `upload:` session would aim the token at another
     // object (`GET /123456` is someone's WABA).
     let t = ScriptedTransport::new();
-    let media = client(&t).media(PNID);
+    let media = client(&t).media(PhoneNumberId::new(PNID).unwrap());
     for bad in [
         "",
         "123456",
@@ -681,8 +699,8 @@ async fn resumable_upload_convenience_and_its_failure_steps() {
     let t = ScriptedTransport::new();
     t.push_json(200, json!({"id": "upload:s1"}));
     t.push_json(200, json!({"h": "4::aW..."}));
-    let media = client(&t).media(PNID);
-    let app = AppId::new("1");
+    let media = client(&t).media(PhoneNumberId::new(PNID).unwrap());
+    let app = AppId::new("1").unwrap();
     let h = media
         .resumable_upload(&app, "a.pdf", "application/pdf", vec![1u8, 2, 3])
         .await
@@ -731,8 +749,8 @@ async fn resumable_upload_convenience_and_its_failure_steps() {
 #[tokio::test]
 async fn resumable_upload_validates_locally_and_needs_a_token() {
     let t = ScriptedTransport::new();
-    let media = client(&t).media(PNID);
-    let app = AppId::new("1");
+    let media = client(&t).media(PhoneNumberId::new(PNID).unwrap());
+    let app = AppId::new("1").unwrap();
     for (name, ty, field) in [
         ("a.gif", "image/gif", "file_type"),
         ("a.webp", "image/webp", "file_type"),
@@ -748,7 +766,7 @@ async fn resumable_upload_validates_locally_and_needs_a_token() {
         );
     }
     let err = media
-        .start_upload_session(&AppId::new(".."), "a.png", 1, "image/png")
+        .start_upload_session(&AppId::new_unchecked(".."), "a.png", 1, "image/png")
         .await
         .unwrap_err();
     assert!(
@@ -760,7 +778,7 @@ async fn resumable_upload_validates_locally_and_needs_a_token() {
     // An app id smuggling a path stays one segment.
     t.push_json(200, json!({"id": "upload:s"}));
     media
-        .start_upload_session(&AppId::new("1/uploads"), "a.png", 1, "image/png")
+        .start_upload_session(&AppId::new_unchecked("1/uploads"), "a.png", 1, "image/png")
         .await
         .unwrap();
     assert_eq!(
@@ -775,7 +793,7 @@ async fn resumable_upload_validates_locally_and_needs_a_token() {
         .transport(t.clone())
         .build()
         .unwrap()
-        .media(PNID);
+        .media(PhoneNumberId::new(PNID).unwrap());
     let session = UploadSessionId::new("upload:x");
     for err in [
         tokenless

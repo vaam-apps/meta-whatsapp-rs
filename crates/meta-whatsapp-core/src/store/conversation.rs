@@ -1218,7 +1218,7 @@ mod tests {
     fn inbound(payload: serde_json::Value) -> StoredMessage {
         StoredMessage {
             id: MessageId::new("wamid.1"),
-            conversation: ConversationKey::new("pn", "HBgGROUP"),
+            conversation: ConversationKey::new(PhoneNumberId::new("1").unwrap(), "HBgGROUP"),
             direction: Direction::Inbound,
             kind: "text".to_owned(),
             text: Some("hello".to_owned()),
@@ -1301,7 +1301,7 @@ mod tests {
     fn debug_shows_no_personal_data() {
         let at = datetime!(2026-09-24 12:00 UTC);
         let contact = StoredContact {
-            key: ConversationKey::new("106540352242922", "US.1349"),
+            key: ConversationKey::new(PhoneNumberId::new("106540352242922").unwrap(), "US.1349"),
             full_name: Some("Pablo Morales".to_owned()),
             first_name: None,
             phone_number: Some("16505551234".to_owned()),
@@ -1311,12 +1311,20 @@ mod tests {
             synced_at: at,
         };
         let event = WindowEvent {
-            conversation: ConversationKey::new("106540352242922", "US.1349"),
+            conversation: ConversationKey::new(
+                PhoneNumberId::new("106540352242922").unwrap(),
+                "US.1349",
+            ),
             kind: WindowEventKind::CustomerCall,
             id: "wacid.HBgLMTY1MDU1NTEyMzQVAgASGBQ".to_owned(),
             at,
         };
-        let link = IdentityLink::new("106540352242922", "US.1349", "US.2468", at);
+        let link = IdentityLink::new(
+            PhoneNumberId::new("106540352242922").unwrap(),
+            "US.1349",
+            "US.2468",
+            at,
+        );
         assert_eq!(
             format!("{contact:?}"),
             "StoredContact { phone_number_id: PhoneNumberId(106540352242922), \

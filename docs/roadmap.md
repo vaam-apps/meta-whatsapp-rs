@@ -1135,7 +1135,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     `override_country` and `override_language` parameters, which the
     reference names without saying what they do. `ProductItemId` and
     `ProductSetId` are `meta_whatsapp_core::ids` newtypes, re-exported
-    by `client::commerce`.
+    by `client::commerce` (numeric since L20c).
 - [ ] **L18. A typed Flow JSON builder** (`meta-whatsapp-client`,
   `client::flows`; row 63).
   - **Kind:** additive.
@@ -1172,7 +1172,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** a source scan over the crates fails on a response or
     webhook struct, or an open enum, without the attribute; removing it
     from one type fails the scan.
-- [ ] **L20c. Ids checked against their documented shape**
+- [x] **L20c. Ids checked against their documented shape**
   (`meta-whatsapp-core` ids and `client::GraphRequest`; OPEN_QUESTIONS
   #20): digits for numeric ids; whole-segment percent-encoding kept for
   opaque ones (BSUIDs, group ids).
@@ -1180,6 +1180,63 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **After:** nothing.
   - **Decisive:** a numeric id holding `/` is refused before any
     request; a group id holding `/` stays one percent-encoded segment.
+  - **Landed:** `AppId`, `BusinessId`, `WabaId`, `PhoneNumberId`,
+    `MediaId`, `TemplateId`, and L17's `ProductItemId` and
+    `ProductSetId` (the ids Meta documents as numeric strings, the last
+    two in the Catalog API's field tables) refuse anything but 1 to 64 ASCII digits when built
+    (`new` returns a `Result`, `FromStr` and `TryFrom` replace the
+    infallible conversions; `ids::is_numeric_id`, `MAX_NUMERIC_ID_LEN`,
+    64 being the service's existing cap), a `ValidationError` on the
+    type's `FIELD`; every other id stays opaque. `Deserialize` does not
+    check, so parsing never fails on an id's shape, and `new_unchecked`
+    wraps Meta's plain-string values (webhook entry ids, `debug_token`
+    targets) and stored rows the same way; such an id is still one
+    encoded segment. The decisive tests, in `client/src/request.rs`
+    (`id_shape_tests`), are
+    `a_numeric_id_holding_a_slash_is_refused_before_any_request` (each
+    of the six types built from `123/subscribed_apps` and, only if that
+    succeeds, used in a call its path names, every response scripted:
+    nothing is sent) and
+    `a_group_id_holding_a_slash_stays_one_encoded_segment` (both group
+    accessors: `DELETE /v25.0/Y2FwaV9ncm91cDox%2Fparticipants`), with
+    `a_numeric_id_meta_sent_is_kept_and_stays_one_segment`, and in core
+    `ids::tests::a_numeric_id_is_one_to_sixty_four_ascii_digits` and
+    `a_numeric_id_from_meta_is_deserialized_as_sent`; the first checks
+    all eight types, and is the decisive one for the two product ids,
+    whose paths `commerce::catalog` also checks as digits at request
+    time (`ids_that_are_not_digits_are_refused_before_any_request`,
+    with ids built unchecked). Making the check always pass sends all
+    six requests (the test lists their paths);
+    splitting a segment on `/` in `GraphEndpoint::url_segments` fails
+    the group test and the Meta-sent one. The endpoint modules keep
+    their request-time checks (empty, `.`, `..`; digits where a page
+    asks), now tested with ids built unchecked. Stored data is
+    untouched: the vault's and the ledger's pinned records, written
+    under the WABA id `W1`, still open. The service's `graph_id` runs
+    `is_numeric_id` plus its own no-leading-`0` rule (D4); a
+    non-numeric `{pn}` or `{waba_id}` is `404 not_found` as before
+    (`tests/authz.rs`, `a_path_id_that_is_not_numeric_is_not_found`, on
+    every such route), a body's media `id` reaches Meta as given
+    (`tests/messages.rs`, `a_media_id_in_a_body_reaches_meta_as_given`),
+    and `openapi/v1.json` is unchanged. Each place an id Meta sent is
+    wrapped unchecked has a test that an id of another shape is kept as
+    sent (webhooks' `ids_meta_sends_are_kept_as_sent_whatever_their_shape`,
+    and the client's `debug_token` targets, template insights, archive
+    answers and voicemail media id; the service core's untyped-change
+    number): checking any of them fails its test. OPEN_QUESTIONS #20 is closed and
+    deleted (CHANGELOG); what stays unverified for opaque ids (whether
+    Graph decodes `%2F`) is in architecture.md's endpoint rule 1. No
+    parity row changes: none cited L20c.
+  - **Follow-up:** the ids left opaque although Meta's examples show
+    them as digits (`FlowId`, `CatalogId`, `TemplateGroupId`,
+    `CreditLineId`, `AllocationConfigId`, `VerificationSubmissionId`,
+    `WabaBotId`, among others): no page states their shape, so the rule
+    OPEN_QUESTIONS #20 decided (the shape Meta documents) keeps them
+    opaque (a template group id is still checked as digits when its
+    request is built, by `client::templates`). Each moves to
+    `numeric_id_type!` once a reference page states digits for it (a
+    breaking change to its constructor, as here), with that page's
+    example as its test.
 - [x] **L20d. A check for a blank verify token** (`meta-whatsapp-webhooks`,
   `WebhookHandlerBuilder`; OPEN_QUESTIONS #16).
   - **Kind:** additive (the builder stays infallible).

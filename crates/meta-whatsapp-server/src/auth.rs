@@ -270,7 +270,9 @@ impl FromRequestParts<AppState> for OwnedNumber {
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
         let caller = Caller::from_request_parts(parts, state).await?;
         let params = path_params(parts, state).await?;
-        let pn = PhoneNumberId::new(params.get("pn").cloned().ok_or_else(ApiError::internal)?);
+        let pn = params.get("pn").cloned().ok_or_else(ApiError::internal)?;
+        // Only a numeric id can be bound (step 4): anything else does not exist.
+        let pn = PhoneNumberId::new(pn).map_err(|_| ApiError::not_found())?;
         Ok(Self(state.authz().owned_number(&caller, pn).await?))
     }
 }
@@ -376,12 +378,12 @@ impl FromRequestParts<AppState> for OwnedWaba {
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
         let caller = Caller::from_request_parts(parts, state).await?;
         let params = path_params(parts, state).await?;
-        let waba_id = WabaId::new(
-            params
-                .get("waba_id")
-                .cloned()
-                .ok_or_else(ApiError::internal)?,
-        );
+        let waba_id = params
+            .get("waba_id")
+            .cloned()
+            .ok_or_else(ApiError::internal)?;
+        // Only a numeric id can be bound (step 4): anything else does not exist.
+        let waba_id = WabaId::new(waba_id).map_err(|_| ApiError::not_found())?;
         Ok(Self(state.authz().owned_waba(&caller, waba_id).await?))
     }
 }

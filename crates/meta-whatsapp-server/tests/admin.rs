@@ -404,7 +404,7 @@ async fn attaching_a_waba_binds_what_meta_lists_and_stores_the_token() {
     let tenant = TenantId::parse("platform-store").unwrap();
     assert_eq!(
         h.store
-            .waba(&WabaId::new(WABA))
+            .waba(&WabaId::new(WABA).unwrap())
             .await
             .unwrap()
             .unwrap()
@@ -414,14 +414,14 @@ async fn attaching_a_waba_binds_what_meta_lists_and_stores_the_token() {
     for pn in ["1972385232742141", "1972385232742142"] {
         let token = h
             .vault
-            .get_by_phone_number(&PhoneNumberId::new(pn))
+            .get_by_phone_number(&PhoneNumberId::new(pn).unwrap())
             .await
             .unwrap()
             .unwrap();
         assert_eq!(token.token.expose_secret(), SYSTEM_TOKEN);
         assert_eq!(
             h.store
-                .number(&PhoneNumberId::new(pn))
+                .number(&PhoneNumberId::new(pn).unwrap())
                 .await
                 .unwrap()
                 .unwrap()
@@ -473,7 +473,12 @@ async fn a_waba_of_another_tenant_is_refused_until_the_admin_unbinds_it() {
         (StatusCode::CONFLICT, "waba_owned_by_another_tenant")
     );
     assert!(h.graph.requests().is_empty(), "refused before asking Meta");
-    let kept = h.vault.get(&WabaId::new(WABA)).await.unwrap().unwrap();
+    let kept = h
+        .vault
+        .get(&WabaId::new(WABA).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(
         kept.token.expose_secret(),
         "TOKEN-OF-A",
@@ -481,7 +486,7 @@ async fn a_waba_of_another_tenant_is_refused_until_the_admin_unbinds_it() {
     );
     assert_eq!(
         h.store
-            .waba(&WabaId::new(WABA))
+            .waba(&WabaId::new(WABA).unwrap())
             .await
             .unwrap()
             .unwrap()
@@ -510,10 +515,16 @@ async fn a_waba_of_another_tenant_is_refused_until_the_admin_unbinds_it() {
     assert_eq!(unsubscribe.method, Method::DELETE);
     assert_eq!(unsubscribe.path(), format!("/v25.0/{WABA}/subscribed_apps"));
     assert_eq!(unsubscribe.bearer(), Some("TOKEN-OF-A"));
-    assert!(h.vault.get(&WabaId::new(WABA)).await.unwrap().is_none());
+    assert!(
+        h.vault
+            .get(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert!(
         h.store
-            .number(&PhoneNumberId::new("1972385232742141"))
+            .number(&PhoneNumberId::new("1972385232742141").unwrap())
             .await
             .unwrap()
             .is_none()
@@ -563,8 +574,20 @@ async fn a_token_meta_refuses_binds_nothing() {
         (reply.status, reply.code().as_str()),
         (StatusCode::FORBIDDEN, "permission")
     );
-    assert!(h.store.waba(&WabaId::new(WABA)).await.unwrap().is_none());
-    assert!(h.vault.get(&WabaId::new(WABA)).await.unwrap().is_none());
+    assert!(
+        h.store
+            .waba(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        h.vault
+            .get(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(h.graph.remaining(), 0);
     for (body, field) in [
         (json!({"waba_id": "", "token": SYSTEM_TOKEN}), "waba_id"),
@@ -625,7 +648,13 @@ async fn deleting_a_tenant_disconnects_its_wabas_first() {
             .unwrap()
             .is_some()
     );
-    assert!(h.vault.get(&WabaId::new(WABA)).await.unwrap().is_some());
+    assert!(
+        h.vault
+            .get(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .is_some()
+    );
     assert_eq!(
         h.call(Call::get("/v1/numbers").key(&key)).await.status,
         StatusCode::OK
@@ -642,8 +671,20 @@ async fn deleting_a_tenant_disconnects_its_wabas_first() {
     assert_eq!(unsubscribe.path(), format!("/v25.0/{WABA}/subscribed_apps"));
     assert_eq!(unsubscribe.bearer(), Some("TOKEN-OF-A"));
     assert_eq!(h.graph.remaining(), 0);
-    assert!(h.vault.get(&WabaId::new(WABA)).await.unwrap().is_none());
-    assert!(h.store.waba(&WabaId::new(WABA)).await.unwrap().is_none());
+    assert!(
+        h.vault
+            .get(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        h.store
+            .waba(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
         h.call(Call::get("/v1/numbers").key(&key)).await.status,
         StatusCode::UNAUTHORIZED
@@ -660,7 +701,7 @@ async fn a_waba_without_a_token_blocks_deletion_until_unbound() {
     h.store
         .bind_waba(
             &TenantId::parse("merchant-a").unwrap(),
-            &WabaId::new(WABA),
+            &WabaId::new(WABA).unwrap(),
             &[],
         )
         .await
@@ -720,8 +761,20 @@ async fn a_refused_subscription_is_reported_and_a_repeat_finishes_it() {
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[1].method, Method::POST);
     assert_eq!(requests[1].path(), format!("/v25.0/{WABA}/subscribed_apps"));
-    assert!(h.store.waba(&WabaId::new(WABA)).await.unwrap().is_some());
-    assert!(h.vault.get(&WabaId::new(WABA)).await.unwrap().is_some());
+    assert!(
+        h.store
+            .waba(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        h.vault
+            .get(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .is_some()
+    );
 
     h.graph.push_json(200, phone_numbers_page());
     h.graph.push_json(200, json!({"success": true}));
@@ -771,9 +824,25 @@ async fn a_token_meta_rejects_once_stored_is_reconnect_required_and_resumable() 
     assert_eq!(body["error"]["graph"]["code"], 190);
     assert!(!reply.text.contains(SYSTEM_TOKEN));
     // Attached, the token stored, its numbers marked.
-    assert!(h.store.waba(&WabaId::new(WABA)).await.unwrap().is_some());
-    assert!(h.vault.get(&WabaId::new(WABA)).await.unwrap().is_some());
-    let numbers = h.store.waba_numbers(&WabaId::new(WABA)).await.unwrap();
+    assert!(
+        h.store
+            .waba(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        h.vault
+            .get(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let numbers = h
+        .store
+        .waba_numbers(&WabaId::new(WABA).unwrap())
+        .await
+        .unwrap();
     assert_eq!(numbers.len(), 2);
     assert!(
         numbers
@@ -787,12 +856,21 @@ async fn a_token_meta_rejects_once_stored_is_reconnect_required_and_resumable() 
     h.graph.push_json(200, json!({"success": true}));
     let again = h.call(attach("EAAG-a-new-system-user-token")).await;
     assert_eq!(again.status, StatusCode::CREATED, "{}", again.text);
-    let numbers = h.store.waba_numbers(&WabaId::new(WABA)).await.unwrap();
+    let numbers = h
+        .store
+        .waba_numbers(&WabaId::new(WABA).unwrap())
+        .await
+        .unwrap();
     assert!(
         numbers.iter().all(|n| n.status == NumberStatus::Connected),
         "{numbers:?}"
     );
-    let stored = h.vault.get(&WabaId::new(WABA)).await.unwrap().unwrap();
+    let stored = h
+        .vault
+        .get(&WabaId::new(WABA).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(stored.token.expose_secret(), "EAAG-a-new-system-user-token");
     assert_eq!(h.graph.remaining(), 0);
 }
@@ -826,8 +904,20 @@ async fn a_token_meta_rejects_is_invalid_input() {
     assert_eq!(body["error"]["field"], "token");
     assert_eq!(body["error"]["graph"]["code"], 190);
     assert!(!reply.text.contains(SYSTEM_TOKEN));
-    assert!(h.store.waba(&WabaId::new(WABA)).await.unwrap().is_none());
-    assert!(h.vault.get(&WabaId::new(WABA)).await.unwrap().is_none());
+    assert!(
+        h.store
+            .waba(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        h.vault
+            .get(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(h.graph.remaining(), 0);
 }
 
@@ -873,8 +963,20 @@ async fn a_listing_past_a_thousand_numbers_is_refused() {
             .all(|r| r.path() == format!("/v25.0/{WABA}/phone_numbers")),
         "nothing subscribed"
     );
-    assert!(h.store.waba(&WabaId::new(WABA)).await.unwrap().is_none());
-    assert!(h.vault.get(&WabaId::new(WABA)).await.unwrap().is_none());
+    assert!(
+        h.store
+            .waba(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        h.vault
+            .get(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     for n in 0..10 {
         h.graph.push_json(200, page(n, n == 9));
@@ -909,15 +1011,27 @@ async fn unbinding_deletes_the_token_even_when_meta_refuses() {
         .call(Call::new(Method::DELETE, format!("/v1/admin/wabas/{WABA}/binding")).key(&admin))
         .await;
     assert_eq!(unbound.status, StatusCode::NO_CONTENT, "{}", unbound.text);
-    assert!(h.vault.get(&WabaId::new(WABA)).await.unwrap().is_none());
     assert!(
         h.vault
-            .get_by_phone_number(&PhoneNumberId::new("1972385232742141"))
+            .get(&WabaId::new(WABA).unwrap())
             .await
             .unwrap()
             .is_none()
     );
-    assert!(h.store.waba(&WabaId::new(WABA)).await.unwrap().is_none());
+    assert!(
+        h.vault
+            .get_by_phone_number(&PhoneNumberId::new("1972385232742141").unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        h.store
+            .waba(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(h.graph.remaining(), 0);
 }
 
@@ -947,7 +1061,7 @@ async fn unbinding_deletes_an_unusable_token_too() {
     )
     .unwrap();
     for ((waba, pn), vault, expires) in [(expired, &h.vault, true), (undecryptable, &lost, false)] {
-        let (waba, pn) = (WabaId::new(waba), PhoneNumberId::new(pn));
+        let (waba, pn) = (WabaId::new(waba).unwrap(), PhoneNumberId::new(pn).unwrap());
         h.store
             .bind_waba(&tenant, &waba, std::slice::from_ref(&pn))
             .await
@@ -960,9 +1074,19 @@ async fn unbinding_deletes_an_unusable_token_too() {
         vault.store(&token).await.unwrap();
     }
     // Unusable indeed: expired, and not readable with the service's key.
-    let token = h.vault.get(&WabaId::new(expired.0)).await.unwrap().unwrap();
+    let token = h
+        .vault
+        .get(&WabaId::new(expired.0).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
     assert!(token.is_expired(time::OffsetDateTime::now_utc()));
-    assert!(h.vault.get(&WabaId::new(undecryptable.0)).await.is_err());
+    assert!(
+        h.vault
+            .get(&WabaId::new(undecryptable.0).unwrap())
+            .await
+            .is_err()
+    );
 
     for (waba, pn) in [expired, undecryptable] {
         let unbound = h
@@ -971,17 +1095,25 @@ async fn unbinding_deletes_an_unusable_token_too() {
         assert_eq!(unbound.status, StatusCode::NO_CONTENT, "{}", unbound.text);
         // Gone: no record left, readable or not, and no phone index entry.
         assert!(
-            matches!(h.vault.get(&WabaId::new(waba)).await, Ok(None)),
+            matches!(h.vault.get(&WabaId::new(waba).unwrap()).await, Ok(None)),
             "{waba}: the vault entry was kept"
         );
         assert!(
             matches!(
-                h.vault.get_by_phone_number(&PhoneNumberId::new(pn)).await,
+                h.vault
+                    .get_by_phone_number(&PhoneNumberId::new(pn).unwrap())
+                    .await,
                 Ok(None)
             ),
             "{waba}: the phone index was kept"
         );
-        assert!(h.store.waba(&WabaId::new(waba)).await.unwrap().is_none());
+        assert!(
+            h.store
+                .waba(&WabaId::new(waba).unwrap())
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
     assert!(h.graph.requests().is_empty());
 }
@@ -1080,13 +1212,16 @@ async fn a_token_that_cannot_be_deleted_keeps_the_binding_for_a_retry() {
     h.connect("merchant-a", usable, &["1972385232742141"], "TOKEN-OF-A")
         .await;
     h.store
-        .bind_waba(&tenant, &WabaId::new(expired), &[])
+        .bind_waba(&tenant, &WabaId::new(expired).unwrap(), &[])
         .await
         .unwrap();
     h.vault
         .store(
-            &StoredBusinessToken::new(expired, AccessToken::new("TOKEN-OF-A"))
-                .expires_at(time::OffsetDateTime::now_utc() - time::Duration::hours(1)),
+            &StoredBusinessToken::new(
+                WabaId::new(expired).unwrap(),
+                AccessToken::new("TOKEN-OF-A"),
+            )
+            .expires_at(time::OffsetDateTime::now_utc() - time::Duration::hours(1)),
         )
         .await
         .unwrap();
@@ -1105,10 +1240,20 @@ async fn a_token_that_cannot_be_deleted_keeps_the_binding_for_a_retry() {
             "{waba}"
         );
         assert!(
-            h.store.waba(&WabaId::new(waba)).await.unwrap().is_some(),
+            h.store
+                .waba(&WabaId::new(waba).unwrap())
+                .await
+                .unwrap()
+                .is_some(),
             "{waba}: the binding went before the token"
         );
-        assert!(h.vault.get(&WabaId::new(waba)).await.unwrap().is_some());
+        assert!(
+            h.vault
+                .get(&WabaId::new(waba).unwrap())
+                .await
+                .unwrap()
+                .is_some()
+        );
 
         kv.failing.store(false, Ordering::SeqCst);
         if waba == usable {
@@ -1121,8 +1266,20 @@ async fn a_token_that_cannot_be_deleted_keeps_the_binding_for_a_retry() {
             "{waba}: {}",
             unbound.text
         );
-        assert!(h.store.waba(&WabaId::new(waba)).await.unwrap().is_none());
-        assert!(h.vault.get(&WabaId::new(waba)).await.unwrap().is_none());
+        assert!(
+            h.store
+                .waba(&WabaId::new(waba).unwrap())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            h.vault
+                .get(&WabaId::new(waba).unwrap())
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
     assert_eq!(h.graph.remaining(), 0);
 }
@@ -1156,12 +1313,12 @@ async fn rotating_the_vault_key_walks_every_page_of_bindings() {
     for i in 0..wabas {
         let waba = format!("{}", 300_000 + i);
         store
-            .bind_waba(&tenant, &WabaId::new(waba.as_str()), &[])
+            .bind_waba(&tenant, &WabaId::new(waba.as_str()).unwrap(), &[])
             .await
             .unwrap();
         sealing
             .store(&StoredBusinessToken::new(
-                waba.as_str(),
+                WabaId::new(waba.as_str()).unwrap(),
                 AccessToken::new(format!("TOKEN-{waba}")),
             ))
             .await
@@ -1178,7 +1335,7 @@ async fn rotating_the_vault_key_walks_every_page_of_bindings() {
     let new_only = TokenVault::new(kv, VaultKeys::new(new())).unwrap();
     let last = format!("{}", 300_000 + wabas - 1);
     let token = new_only
-        .get(&WabaId::new(last.as_str()))
+        .get(&WabaId::new(last.as_str()).unwrap())
         .await
         .unwrap()
         .unwrap();
@@ -1220,12 +1377,12 @@ async fn rotating_the_vault_key_rewrites_every_bound_token() {
     let lost = TokenVault::new(kv.clone(), VaultKeys::new(key("k0", 9))).unwrap();
     for (waba, vault) in [("201", &old), ("202", &old), ("203", &lost)] {
         store
-            .bind_waba(&tenant, &WabaId::new(waba), &[])
+            .bind_waba(&tenant, &WabaId::new(waba).unwrap(), &[])
             .await
             .unwrap();
         vault
             .store(&StoredBusinessToken::new(
-                waba,
+                WabaId::new(waba).unwrap(),
                 AccessToken::new(format!("TOKEN-{waba}")),
             ))
             .await
@@ -1244,7 +1401,11 @@ async fn rotating_the_vault_key_rewrites_every_bound_token() {
     // The previous key can go: both records open with the new key alone.
     let new_only = TokenVault::new(kv.clone(), VaultKeys::new(key("k2", 2))).unwrap();
     for waba in ["201", "202"] {
-        let token = new_only.get(&WabaId::new(waba)).await.unwrap().unwrap();
+        let token = new_only
+            .get(&WabaId::new(waba).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(token.token.expose_secret(), format!("TOKEN-{waba}"));
     }
     // Again: nothing left to rewrite.
@@ -1421,19 +1582,39 @@ async fn a_token_rewritten_while_it_is_forgotten_is_503_then_goes() {
         );
         assert_eq!(busy.json()["error"]["retryable"], true, "{waba}");
         assert!(
-            h.store.waba(&WabaId::new(waba)).await.unwrap().is_some(),
+            h.store
+                .waba(&WabaId::new(waba).unwrap())
+                .await
+                .unwrap()
+                .is_some(),
             "{waba}: the binding went"
         );
         assert!(
-            h.vault.get(&WabaId::new(waba)).await.unwrap().is_some(),
+            h.vault
+                .get(&WabaId::new(waba).unwrap())
+                .await
+                .unwrap()
+                .is_some(),
             "{waba}: the token went"
         );
 
         h.graph.push_json(200, json!({"success": true}));
         let done = h.call(call()).await;
         assert_eq!(done.status, StatusCode::NO_CONTENT, "{waba}: {}", done.text);
-        assert!(h.store.waba(&WabaId::new(waba)).await.unwrap().is_none());
-        assert!(h.vault.get(&WabaId::new(waba)).await.unwrap().is_none());
+        assert!(
+            h.store
+                .waba(&WabaId::new(waba).unwrap())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            h.vault
+                .get(&WabaId::new(waba).unwrap())
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
     assert_eq!(h.graph.remaining(), 0);
 }

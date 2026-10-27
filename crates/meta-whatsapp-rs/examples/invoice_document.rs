@@ -34,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
     let client = meta_whatsapp_rs::client(env("WA_TOKEN")?)?;
-    let phone_number_id = PhoneNumberId::new(env("WA_PHONE_NUMBER_ID")?);
+    let phone_number_id = PhoneNumberId::new(env("WA_PHONE_NUMBER_ID")?)?;
     let to = Recipient::phone(env("WA_TO")?);
 
     let invoice = sample_invoice();

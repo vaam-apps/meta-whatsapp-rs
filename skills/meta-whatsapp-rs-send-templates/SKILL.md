@@ -5,7 +5,7 @@ description: "Sending an approved WhatsApp template with meta-whatsapp-rs - Temp
 
 # meta-whatsapp-rs-send-templates
 
-> **Verified against meta-whatsapp-rs 2f6e7150f3eadb9eb68a72586ac73c2615b09557 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs df598e6647242d4f471579d7f84df12c3032c651 (2026-10-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/send.rs](examples/send.rs), compiled and tested
 by meta-whatsapp-rs's own gate.

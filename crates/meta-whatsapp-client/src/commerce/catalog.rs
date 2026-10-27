@@ -717,6 +717,7 @@ mod tests {
 
     use futures::StreamExt;
     use http::Method;
+    use meta_whatsapp_core::ids::WabaId;
     use meta_whatsapp_core::testing::{RecordedRequest, ScriptedTransport};
     use meta_whatsapp_core::{Error, ErrorKind};
     use pretty_assertions::assert_eq;
@@ -948,7 +949,7 @@ mod tests {
             ])
         );
         assert_eq!(page.data.len(), 2);
-        assert_eq!(page.data[0].id, ProductItemId::new("1234"));
+        assert_eq!(page.data[0].id, ProductItemId::new("1234").unwrap());
         assert_eq!(
             page.data[0].name.as_deref(),
             Some("Awesome Mens Shoes in Black")
@@ -1083,7 +1084,7 @@ mod tests {
             }),
         );
         let p = client(&t)
-            .product("5678")
+            .product(ProductItemId::new("5678").unwrap())
             .get(&["retailer_id", "name", "availability", "price", "videos"])
             .await
             .unwrap();
@@ -1094,7 +1095,7 @@ mod tests {
             pairs(&req),
             owned(&[("fields", "retailer_id,name,availability,price,videos")])
         );
-        assert_eq!(p.id, ProductItemId::new("5678"));
+        assert_eq!(p.id, ProductItemId::new("5678").unwrap());
         assert_eq!(p.retailer_id.as_deref(), Some("SKU-1"));
         assert_eq!(p.availability, Some(ProductAvailability::InStock));
         assert_eq!(p.condition, Some(ProductCondition::UsedLikeNew));
@@ -1121,7 +1122,11 @@ mod tests {
             200,
             json!({"id": "1", "name": "n", "retailer_id": "r", "availability": "back_soon", "review_status": ""}),
         );
-        let p = client(&t).product("1").get(&[]).await.unwrap();
+        let p = client(&t)
+            .product(ProductItemId::new("1").unwrap())
+            .get(&[])
+            .await
+            .unwrap();
         assert_eq!(t.last_request().unwrap().url.query(), None);
         assert_eq!(
             p.availability,
@@ -1139,7 +1144,11 @@ mod tests {
         // graph-api/reference/whatsapp-business-account/product_catalogs:
         // the example response is an empty `data` list.
         t.push_json(200, json!({"data": []}));
-        let page = client(&t).waba(WABA).product_catalogs(&[]).await.unwrap();
+        let page = client(&t)
+            .waba(WabaId::new(WABA).unwrap())
+            .product_catalogs(&[])
+            .await
+            .unwrap();
         assert!(page.data.is_empty());
         let req = t.last_request().unwrap();
         assert_eq!(req.method, Method::GET);
@@ -1159,7 +1168,7 @@ mod tests {
             json!({"data": [{"id": CATALOG, "name": "Shop", "product_count": 316, "vertical": "commerce"}]}),
         );
         let page = client(&t)
-            .waba(WABA)
+            .waba(WabaId::new(WABA).unwrap())
             .product_catalogs(&["id", "name", "product_count", "vertical"])
             .await
             .unwrap();
@@ -1261,7 +1270,7 @@ mod tests {
             .catalog(CATALOG)
             .product_sets_stream(&ListProductSets {
                 fields: vec!["name".into(), "filter".into(), "product_count".into()],
-                parent_id: Some(ProductSetId::new("0")),
+                parent_id: Some(ProductSetId::new("0").unwrap()),
                 has_children: Some(false),
                 retailer_id: Some("shirts".into()),
                 summary: true,
@@ -1303,7 +1312,7 @@ mod tests {
         let page = client(&t)
             .catalog(CATALOG)
             .product_sets(&ListProductSets {
-                ancestor_id: Some(ProductSetId::new("2001")),
+                ancestor_id: Some(ProductSetId::new("2001").unwrap()),
                 after: Some("A".into()),
                 before: Some("B".into()),
                 ..ListProductSets::default()
@@ -1336,7 +1345,7 @@ mod tests {
         );
         t.push_json(200, products_page(&[("1001", "SKU-1")], "a1", true));
         t.push_json(200, products_page(&[("1002", "SKU-2")], "a2", false));
-        let set = client(&t).product_set("2001");
+        let set = client(&t).product_set(ProductSetId::new("2001").unwrap());
         let info = set
             .get(&[
                 "name",
@@ -1347,7 +1356,7 @@ mod tests {
             ])
             .await
             .unwrap();
-        assert_eq!(info.id, ProductSetId::new("2001"));
+        assert_eq!(info.id, ProductSetId::new("2001").unwrap());
         assert_eq!(
             info.product_catalog.as_ref().map(|c| c.id.as_str()),
             Some(CATALOG)
@@ -1381,7 +1390,7 @@ mod tests {
     async fn product_set_products_page_and_stream_refusal() {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"data": []}));
-        let set = client(&t).product_set("2001");
+        let set = client(&t).product_set(ProductSetId::new("2001").unwrap());
         set.products(&ListSetProducts {
             after: Some("A".into()),
             before: Some("B".into()),
@@ -1505,7 +1514,7 @@ mod tests {
         assert_eq!(items.len(), 1);
         errors.push(items.into_iter().next().unwrap().unwrap_err());
         errors.push(
-            c.product_set("2001")
+            c.product_set(ProductSetId::new("2001").unwrap())
                 .products(&ListSetProducts::default())
                 .await
                 .unwrap_err(),
@@ -1516,7 +1525,12 @@ mod tests {
                 .await
                 .unwrap_err(),
         );
-        errors.push(c.waba(WABA).product_catalogs(&[]).await.unwrap_err());
+        errors.push(
+            c.waba(WabaId::new(WABA).unwrap())
+                .product_catalogs(&[])
+                .await
+                .unwrap_err(),
+        );
         for err in &errors {
             assert!(matches!(err, Error::Decode { .. }), "{err:?}");
             let shown = format!("{err:?} {err}");
@@ -1621,6 +1635,11 @@ mod tests {
 
     // ── Local id checks ───────────────────────────────────────────────────
 
+    /// The path check, for ids that skipped the checked constructors
+    /// (`new_unchecked`, or deserialized from a response): `CatalogId` is
+    /// opaque, and a numeric id Meta sent is kept as sent, so every path id
+    /// is still checked here. The checked constructors refuse the same
+    /// values on their own.
     #[tokio::test]
     async fn ids_that_are_not_digits_are_refused_before_any_request() {
         let t = ScriptedTransport::new();
@@ -1662,10 +1681,14 @@ mod tests {
                 validation_field(items[0].as_ref().unwrap_err()),
                 "catalog_id"
             );
-            let err = c.product_set(bad).get(&[]).await.unwrap_err();
+            let err = c
+                .product_set(ProductSetId::new_unchecked(bad))
+                .get(&[])
+                .await
+                .unwrap_err();
             assert_eq!(validation_field(&err), "product_set_id", "{bad:?}");
             let items: Vec<Result<ProductInfo>> = c
-                .product_set(bad)
+                .product_set(ProductSetId::new_unchecked(bad))
                 .products_stream(&ListSetProducts::default())
                 .collect()
                 .await;
@@ -1673,24 +1696,34 @@ mod tests {
                 validation_field(items[0].as_ref().unwrap_err()),
                 "product_set_id"
             );
-            let err = c.product(bad).get(&[]).await.unwrap_err();
+            let err = c
+                .product(ProductItemId::new_unchecked(bad))
+                .get(&[])
+                .await
+                .unwrap_err();
             assert_eq!(validation_field(&err), "product_item_id", "{bad:?}");
-            let err = c.waba(bad).product_catalogs(&[]).await.unwrap_err();
+            let err = c
+                .waba(WabaId::new_unchecked(bad))
+                .product_catalogs(&[])
+                .await
+                .unwrap_err();
             assert_eq!(validation_field(&err), "waba_id", "{bad:?}");
+            assert!(ProductSetId::new(bad).is_err(), "{bad:?}");
+            assert!(ProductItemId::new(bad).is_err(), "{bad:?}");
         }
         let catalog = c.catalog(CATALOG);
         for (field, query) in [
             (
                 "ancestor_id",
                 ListProductSets {
-                    ancestor_id: Some(ProductSetId::new("1/x")),
+                    ancestor_id: Some(ProductSetId::new_unchecked("1/x")),
                     ..ListProductSets::default()
                 },
             ),
             (
                 "parent_id",
                 ListProductSets {
-                    parent_id: Some(ProductSetId::new("root")),
+                    parent_id: Some(ProductSetId::new_unchecked("root")),
                     ..ListProductSets::default()
                 },
             ),
@@ -1704,10 +1737,10 @@ mod tests {
     #[test]
     fn ids_are_transparent_in_json_and_readable_in_debug() {
         let id: ProductItemId = serde_json::from_value(json!("5678")).unwrap();
-        assert_eq!(id, ProductItemId::from("5678"));
+        assert_eq!(id, ProductItemId::new("5678").unwrap());
         assert_eq!(format!("{id:?}"), "ProductItemId(5678)");
         assert_eq!(
-            serde_json::to_value(ProductSetId::new("1")).unwrap(),
+            serde_json::to_value(ProductSetId::new("1").unwrap()).unwrap(),
             json!("1")
         );
     }

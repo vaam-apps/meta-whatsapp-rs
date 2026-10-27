@@ -49,7 +49,7 @@
 //!         "https://shop.example/track/{{1}}",
 //!         "860198",
 //!     )]));
-//! let created = client.templates("<WABA_ID>").create(&definition).await?;
+//! let created = client.templates(meta_whatsapp_core::ids::WabaId::new("<WABA_ID>")?).create(&definition).await?;
 //!
 //! // Later, once approved, the invocation for a send request:
 //! let message = TemplateMessage::new("order_update", "en_US")

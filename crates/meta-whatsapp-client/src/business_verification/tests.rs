@@ -40,11 +40,11 @@ fn system(t: &ScriptedTransport) -> BusinessVerification {
 }
 
 fn partner() -> BusinessId {
-    BusinessId::new(PARTNER)
+    BusinessId::new(PARTNER).unwrap()
 }
 
 fn customer() -> BusinessId {
-    BusinessId::new(CUSTOMER)
+    BusinessId::new(CUSTOMER).unwrap()
 }
 
 fn documents() -> Vec<VerificationDocument> {
@@ -323,12 +323,12 @@ async fn submit_validates_before_sending() {
     let docs = documents();
 
     let err = api
-        .submit(&BusinessId::new(" "), &customer(), &docs)
+        .submit(&BusinessId::new_unchecked(" "), &customer(), &docs)
         .await
         .unwrap_err();
     assert_eq!(validation_field(&err), "business_id");
     let err = api
-        .submit(&partner(), &BusinessId::new(""), &docs)
+        .submit(&partner(), &BusinessId::new_unchecked(""), &docs)
         .await
         .unwrap_err();
     assert_eq!(validation_field(&err), "end_business_id");
@@ -355,16 +355,16 @@ async fn ids_stay_one_segment() {
     t.push_json(200, json!({"data": []}));
     t.push_json(200, json!({"id": "1/x", "verification_status": "verified"}));
     let api = system(&t);
-    api.submit(&BusinessId::new("1/x"), &customer(), &documents())
+    api.submit(&BusinessId::new_unchecked("1/x"), &customer(), &documents())
         .await
         .unwrap();
     api.submissions(
-        &BusinessId::new("1/self_certify_whatsapp_business"),
+        &BusinessId::new_unchecked("1/self_certify_whatsapp_business"),
         &ListVerificationSubmissions::new(),
     )
     .await
     .unwrap();
-    api.status(&BusinessId::new("1/x")).await.unwrap();
+    api.status(&BusinessId::new_unchecked("1/x")).await.unwrap();
     let paths: Vec<String> = t.requests().iter().map(|r| r.path().to_owned()).collect();
     assert_eq!(
         paths,
@@ -560,7 +560,7 @@ async fn submissions_for_one_customer_with_the_system_token() {
     let page = system(&t)
         .submissions(
             &partner(),
-            &ListVerificationSubmissions::new().end_business_id(CUSTOMER),
+            &ListVerificationSubmissions::new().end_business_id(BusinessId::new(CUSTOMER).unwrap()),
         )
         .await
         .unwrap();
@@ -620,7 +620,7 @@ async fn submissions_for_every_customer_and_cursors() {
     api.submissions(
         &partner(),
         &ListVerificationSubmissions::new()
-            .end_business_id(CUSTOMER)
+            .end_business_id(BusinessId::new(CUSTOMER).unwrap())
             .after("QVFIUjAFTER")
             .before("QVFIUjBEFORE"),
     )
@@ -639,14 +639,17 @@ async fn submissions_validate_ids() {
     let t = ScriptedTransport::new();
     let api = system(&t);
     let err = api
-        .submissions(&BusinessId::new(""), &ListVerificationSubmissions::new())
+        .submissions(
+            &BusinessId::new_unchecked(""),
+            &ListVerificationSubmissions::new(),
+        )
         .await
         .unwrap_err();
     assert_eq!(validation_field(&err), "business_id");
     let err = api
         .submissions(
             &partner(),
-            &ListVerificationSubmissions::new().end_business_id(" "),
+            &ListVerificationSubmissions::new().end_business_id(BusinessId::new_unchecked(" ")),
         )
         .await
         .unwrap_err();
@@ -666,7 +669,7 @@ async fn submissions_stream_follows_cursors_and_refuses_the_callers() {
     let items: Vec<VerificationSubmission> = api
         .submissions_stream(
             &partner(),
-            &ListVerificationSubmissions::new().end_business_id(CUSTOMER),
+            &ListVerificationSubmissions::new().end_business_id(BusinessId::new(CUSTOMER).unwrap()),
         )
         .map(Result::unwrap)
         .collect()
@@ -693,7 +696,10 @@ async fn submissions_stream_follows_cursors_and_refuses_the_callers() {
         assert_eq!(err.kind(), ErrorKind::InvalidParameter);
     }
     let items: Vec<_> = api
-        .submissions_stream(&BusinessId::new(""), &ListVerificationSubmissions::new())
+        .submissions_stream(
+            &BusinessId::new_unchecked(""),
+            &ListVerificationSubmissions::new(),
+        )
         .collect()
         .await;
     assert!(matches!(&items[..], [Err(_)]), "{items:?}");
@@ -736,7 +742,10 @@ async fn status_reads_the_customer_business_with_its_business_token() {
 async fn status_validates_and_maps_errors() {
     let t = ScriptedTransport::new();
     let api = client(&t, BUSINESS_TOKEN).business_verification();
-    let err = api.status(&BusinessId::new(" ")).await.unwrap_err();
+    let err = api
+        .status(&BusinessId::new_unchecked(" "))
+        .await
+        .unwrap_err();
     assert_eq!(validation_field(&err), "business_id");
     assert!(t.requests().is_empty());
 
