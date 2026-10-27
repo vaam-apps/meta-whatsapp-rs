@@ -1792,6 +1792,115 @@ fn a_product_card_carousel_edit_keeps_two_to_ten_cards() {
     );
 }
 
+/// Which carousels the two-card rule covers: one where any card, not only
+/// the first, carries a `PRODUCT` header, in whatever case the wire spells
+/// it. Mixed, headerless and unknown-format carousels are refused by the
+/// other card checks. Every one is refused before any request.
+#[tokio::test]
+async fn a_product_header_on_any_card_makes_a_product_card_carousel() {
+    // catalogs/product-card-carousel-template-messages, example request's
+    // card, with its header format as given.
+    let product = |format: &str| {
+        json!({"components": [
+            {"type": "header", "format": format},
+            {"type": "buttons", "buttons": [{"type": "spm", "text": "View"}]}
+        ]})
+    };
+    // templates/marketing-templates/media-card-carousel-templates, example
+    // request's card.
+    let image = json!({"components": [
+        {"type": "header", "format": "image", "example": {"header_handle": ["4::an..."]}},
+        {"type": "buttons", "buttons": [{"type": "quick_reply", "text": "Send me more like this!"}]}
+    ]});
+    let headerless = json!({"components": [
+        {"type": "buttons", "buttons": [{"type": "spm", "text": "View"}]}
+    ]});
+    let definition = |cards: Vec<Value>| -> TemplateDefinition {
+        serde_json::from_value(json!({
+          "name": "carousel_template_product_cards_v1",
+          "language": "en_US",
+          "category": "marketing",
+          "components": [
+            {"type": "body", "text": "Rare succulents for sale! {{1}}, add these unique plants to your collection.",
+             "example": {"body_text": "Pablo"}},
+            {"type": "carousel", "cards": cards}
+          ]
+        }))
+        .unwrap()
+    };
+    let cases: Vec<(&str, Vec<Value>, &str, Option<&str>)> = vec![
+        (
+            "three lower-case product cards",
+            vec![product("product"), product("product"), product("product")],
+            "components[1].cards",
+            Some("exactly 2"),
+        ),
+        (
+            "three mixed-case product cards",
+            vec![product("Product"), product("pRoDuCt"), product("PRODUCT")],
+            "components[1].cards",
+            Some("exactly 2"),
+        ),
+        (
+            "one product card",
+            vec![product("product")],
+            "components[1].cards",
+            Some("exactly 2"),
+        ),
+        (
+            "three cards, only the last a product card",
+            vec![image.clone(), image.clone(), product("product")],
+            "components[1].cards",
+            Some("exactly 2"),
+        ),
+        (
+            "two cards, one product and one image",
+            vec![product("product"), image.clone()],
+            "components[1].cards[1]",
+            None,
+        ),
+        (
+            "three cards without headers",
+            vec![headerless.clone(), headerless.clone(), headerless],
+            "components[1].cards[0]",
+            None,
+        ),
+        (
+            "three cards of an unknown header format",
+            vec![
+                product("product_set"),
+                product("product_set"),
+                product("product_set"),
+            ],
+            "components[1].cards[0].components",
+            None,
+        ),
+    ];
+    for (case, cards, field, reason) in cases {
+        let t = ScriptedTransport::new();
+        let err = client(&t)
+            .templates("102290129340398")
+            .create(&definition(cards))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidParameter, "{case}");
+        let meta_whatsapp_core::Error::Validation(v) = &err else {
+            panic!("{case}: {err}");
+        };
+        assert_eq!(v.field, field, "{case}: {}", v.reason);
+        if let Some(reason) = reason {
+            assert!(v.reason.contains(reason), "{case}: {}", v.reason);
+        }
+        assert!(t.requests().is_empty(), "{case}: nothing is sent");
+    }
+    // The page's own two lower-case product cards pass.
+    assert!(
+        definition(vec![product("product"), product("product")])
+            .validate()
+            .is_ok()
+    );
+}
+
 #[tokio::test]
 async fn a_media_card_carousel_with_three_cards_is_created() {
     // templates/marketing-templates/media-card-carousel-templates: "minimum
