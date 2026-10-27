@@ -1065,8 +1065,8 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     WABA); a product's `catalog_id`, `image_height`, `image_width`,
     `override_country` and `override_language` parameters, which the
     reference names without saying what they do. `ProductItemId` and
-    `ProductSetId` live in `client::commerce` until core has id types
-    for them.
+    `ProductSetId` are `meta_whatsapp_core::ids` newtypes, re-exported
+    by `client::commerce`.
 - [ ] **L18. A typed Flow JSON builder** (`meta-whatsapp-client`,
   `client::flows`; row 63).
   - **Kind:** additive.

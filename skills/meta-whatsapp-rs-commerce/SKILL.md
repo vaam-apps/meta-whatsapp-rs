@@ -5,7 +5,7 @@ description: "WhatsApp commerce with meta-whatsapp-rs - commerce settings (cart,
 
 # meta-whatsapp-rs-commerce
 
-> **Verified against meta-whatsapp-rs 27d98a74cbe5a2a6c62707ba05e98dc75d40e06a (2026-10-27).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 2dc6902062b755968e3863bd01230eba4b8a3f65 (2026-10-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/commerce.rs](examples/commerce.rs), compiled and
 tested by meta-whatsapp-rs's own gate.
@@ -41,9 +41,10 @@ let Some(catalog) = catalogs.data.into_iter().next() else {
 `client.catalog(catalog.id).products_stream(&query)` follows Meta's
 cursors to the last page; `products(&query)` returns one `Page`, whose
 `next_cursor()` is the next query's `after`. `ListProducts` carries
-`fields`, a JSON `filter`, `return_only_approved_products` and `limit`;
-`product_sets_stream`, `client.product_set(id)` and `client.product(id)`
-read the rest. A product's `retailer_id` is the SKU messages address.
+`return_only_approved_products`, and in `common` (`ProductFilters`)
+`fields`, a JSON `filter` and `limit`; `product_sets_stream`,
+`client.product_set(id)` and `client.product(id)` read the rest. A
+product's `retailer_id` is the SKU messages address.
 
 ## Product messages (inside the 24-hour window)
 

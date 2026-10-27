@@ -234,9 +234,13 @@ stored data, the owner's).
   `visibility`, `errors`, …) and keeps any other field requested in
   `other`; its enums keep unknown values in `Other`. Every id in a path
   (catalog, product set, product item, WABA, and the `ancestor_id` and
-  `parent_id` filters) is checked as digits before any request. New id
-  types `commerce::ProductItemId` and `commerce::ProductSetId`. Catalog
-  writes, and connecting a catalog to a WABA, are not wrapped.
+  `parent_id` filters) is checked as digits before any request. New ids
+  `meta_whatsapp_core::ids::ProductItemId` and `ProductSetId`
+  (re-exported by `commerce`). A read whose body does not decode keeps
+  the body out of the error, as does a page any stream fetches
+  (`GraphRequest::paginate`): Meta's `paging.next` links can carry
+  the access token. Catalog writes, and connecting a catalog to a
+  WABA, are not wrapped.
 - **Payload encryption, connection status and webhook URL on a number**
   (`meta_whatsapp_client::phone_numbers`, roadmap L26, parity row 156):
   `PhoneNumber::enable_payload_encryption(&ClientEncryptionKey)` sends
