@@ -1073,7 +1073,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** a source scan over the crates fails on a response or
     webhook struct, or an open enum, without the attribute; removing it
     from one type fails the scan.
-- [ ] **L20c. Ids checked against their documented shape**
+- [x] **L20c. Ids checked against their documented shape**
   (`meta-whatsapp-core` ids and `client::GraphRequest`; OPEN_QUESTIONS
   #20): digits for numeric ids; whole-segment percent-encoding kept for
   opaque ones (BSUIDs, group ids).
@@ -1081,6 +1081,40 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **After:** nothing.
   - **Decisive:** a numeric id holding `/` is refused before any
     request; a group id holding `/` stays one percent-encoded segment.
+  - **Landed:** `AppId`, `BusinessId`, `WabaId`, `PhoneNumberId`,
+    `MediaId` and `TemplateId` (the ids Meta documents as numeric
+    strings) refuse anything but 1 to 64 ASCII digits when built
+    (`new` returns a `Result`, `FromStr` and `TryFrom` replace the
+    infallible conversions; `ids::is_numeric_id`, `MAX_NUMERIC_ID_LEN`,
+    64 being the service's existing cap), a `ValidationError` on the
+    type's `FIELD`; every other id stays opaque. `Deserialize` does not
+    check, so parsing never fails on an id's shape, and `new_unchecked`
+    wraps Meta's plain-string values (webhook entry ids, `debug_token`
+    targets) and stored rows the same way; such an id is still one
+    encoded segment. The decisive tests, in `client/src/request.rs`
+    (`id_shape_tests`), are
+    `a_numeric_id_holding_a_slash_is_refused_before_any_request` (each
+    of the six types built from `123/subscribed_apps` and, only if that
+    succeeds, used in a call its path names, every response scripted:
+    nothing is sent) and
+    `a_group_id_holding_a_slash_stays_one_encoded_segment` (both group
+    accessors: `DELETE /v25.0/Y2FwaV9ncm91cDox%2Fparticipants`), with
+    `a_numeric_id_meta_sent_is_kept_and_stays_one_segment`, and in core
+    `ids::tests::a_numeric_id_is_one_to_sixty_four_ascii_digits` and
+    `a_numeric_id_from_meta_is_deserialized_as_sent`. Making the check
+    always pass sends all six requests (the test lists their paths);
+    splitting a segment on `/` in `GraphEndpoint::url_segments` fails
+    the group test and the Meta-sent one. The endpoint modules keep
+    their request-time checks (empty, `.`, `..`; digits where a page
+    asks), now tested with ids built unchecked. Stored data is
+    untouched: the vault's and the ledger's pinned records, written
+    under the WABA id `W1`, still open. The service's `graph_id` runs
+    `is_numeric_id` plus its own no-leading-`0` rule (D4); a
+    non-numeric `{pn}` or `{waba_id}` is `404 not_found` as before, and
+    `openapi/v1.json` is unchanged. OPEN_QUESTIONS #20 is closed and
+    deleted (CHANGELOG); what stays unverified for opaque ids (whether
+    Graph decodes `%2F`) is in architecture.md's endpoint rule 1. No
+    parity row changes: none cited L20c.
 - [x] **L20d. A check for a blank verify token** (`meta-whatsapp-webhooks`,
   `WebhookHandlerBuilder`; OPEN_QUESTIONS #16).
   - **Kind:** additive (the builder stays infallible).

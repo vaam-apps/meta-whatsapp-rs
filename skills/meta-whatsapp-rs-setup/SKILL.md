@@ -98,9 +98,9 @@ Endpoint families hang off the client, scoped by id: `messages(pnid)`,
 `media(pnid)`, `templates(waba)`, `authentication(waba)`,
 `embedded_signup(app)`, `waba(waba)`, `phone_number(pnid)`,
 `marketing(pnid)`, `signups(waba)`, `commerce(pnid)`, `flows(waba)`, …
-Ids are distinct newtypes (`PhoneNumberId`, `WabaId`, `MessageId`, …)
-built from `&str` or `String`: a WABA id cannot go where a phone number id
-is expected. `messages()` takes the phone number **id**, not the number.
+Ids are distinct newtypes: a WABA id cannot go where a phone number id is
+expected; numeric ones (`PhoneNumberId::new(…)?`, `WabaId`, `MediaId`, …)
+refuse non-digits. `messages()` takes the phone number **id**, not the number.
 
 ## An endpoint meta-whatsapp-rs does not wrap
 

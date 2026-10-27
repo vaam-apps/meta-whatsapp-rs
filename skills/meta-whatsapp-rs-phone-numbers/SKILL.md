@@ -138,8 +138,8 @@ match number.set_username(username, None).await {
   72 hours. Neither is replayed; never loop on them.
 - `sync_smb_app_data` is never replayed either: after a timeout, look at
   the `history` / `smb_app_state_sync` webhooks instead of asking again.
-- Ids are path segments: a phone number id containing `/` cannot address
-  another object (the client percent-encodes it).
+- `PhoneNumberId::new` refuses anything but digits; one parsed from Meta is
+  kept as sent and stays one percent-encoded path segment.
 
 ## What meta-whatsapp-rs does not do
 

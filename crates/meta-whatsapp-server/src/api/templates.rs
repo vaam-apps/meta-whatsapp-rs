@@ -634,13 +634,13 @@ pub(crate) async fn delete_templates(
         Some(id) => {
             // One of the WABA's own, or nothing is deleted: Meta's page
             // does not say it checks an `hsm_id` against the WABA.
-            if in_waba(&state, &owned, &deletion.name, &id, &["name"])
+            if in_waba(&state, &owned, &deletion.name, id, &["name"])
                 .await?
                 .is_none()
             {
                 return Err(ApiError::not_found());
             }
-            templates.delete_by_id(&deletion.name, &id).await
+            templates.delete_by_id(&deletion.name, id).await
         }
         None => templates.delete_by_name(&deletion.name).await,
     };

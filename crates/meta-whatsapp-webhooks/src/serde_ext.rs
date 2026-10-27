@@ -136,6 +136,16 @@ mod tests {
         assert!(serde_json::from_str::<T>(r#"{"a":true}"#).is_err());
     }
 
+    /// A numeric id of a shape Meta never documented still parses, as sent
+    /// (roadmap L20c: only the checked constructors refuse it).
+    #[test]
+    fn an_id_of_an_unexpected_shape_is_kept_as_sent() {
+        let t: T = serde_json::from_str(r#"{"a":"HSM-1/x","b":"<TEMPLATE_ID>"}"#).unwrap();
+        assert_eq!(t.a.as_str(), "HSM-1/x");
+        assert_eq!(t.b.as_ref().map(TemplateId::as_str), Some("<TEMPLATE_ID>"));
+        assert!(TemplateId::new("HSM-1/x").is_err());
+    }
+
     #[test]
     fn id_errors_name_the_type_not_the_value() {
         let e = serde_json::from_str::<T>(r#"{"a":{"name":"Jane Doe"}}"#)

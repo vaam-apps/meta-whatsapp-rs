@@ -8,7 +8,7 @@
 //! # Two shapes
 //!
 //! Each id is checked against the shape Meta documents for it, where Meta
-//! documents one (OPEN_QUESTIONS #20, roadmap L20c):
+//! documents one (roadmap L20c):
 //!
 //! - **Numeric ids** ([`AppId`], [`BusinessId`], [`WabaId`],
 //!   [`PhoneNumberId`], [`MediaId`], [`TemplateId`]): Meta's ids for these
