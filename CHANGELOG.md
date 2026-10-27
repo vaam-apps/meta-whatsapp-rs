@@ -1289,7 +1289,21 @@ stored data, the owner's).
   tenant holds is refused with nothing stored, subscribed or shared, on
   every backend that runs the suite. No change to the HTTP API: every
   status, body and audit event is as before, and `openapi/v1.json` is
-  byte-identical.
+  byte-identical. **Upgrade** (log filters): the lines that moved with
+  the logic now carry the core's module as their target, not the
+  server's: `meta_whatsapp_server_core::admin` for "tenant deletion kept
+  finding WABAs", "Meta listed more numbers on a WABA than attach
+  binds", "unbinding a WABA Meta did not unsubscribe the app from" and
+  "unbound a WABA without a usable token", and
+  `meta_whatsapp_server_core::authz` for "the WABA's token or binding
+  changed while it was being forgotten" (on a tenant's own disconnection
+  too). A `RUST_LOG` directive `meta_whatsapp_server=…` still matches
+  them (`EnvFilter` matches a target by its text's prefix), but one
+  naming the old module (`meta_whatsapp_server::api::admin`,
+  `meta_whatsapp_server::auth`) no longer does: name
+  `meta_whatsapp_server_core::admin` or `::authz` instead. A JSON log's
+  `target` changes the same way; the audit events keep the target
+  `audit`.
 - **Breaking — live events are shared as `Arc<WebhookEvent>`, not cloned
   per subscriber** (`meta_whatsapp_webhooks::sse`,
   `meta_whatsapp_adapters::sink::BroadcastSink`; roadmap L21b, decided as

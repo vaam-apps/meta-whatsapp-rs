@@ -458,7 +458,18 @@ and `store-postgres`.
     to 30); an expiry is compared with the system clock, not the
     `Authorizer`'s, as before; the command line's key listing and
     revocation (any kind of key, every page) stay its own, as no route
-    does either.
+    does either; the log lines that moved carry the core's module as
+    their target (a `RUST_LOG` directive naming the crate still matches
+    them, one naming the server's module does not: CHANGELOG). The
+    sabotage review pinned by test what no test held and a mutation
+    showed: each admin change's own audit event, its fields, and none
+    on a refusal or a failure (the service's `tests/admin_audit.rs`);
+    Meta's failures counted by code, the attach's listing among them
+    (`the_admin_operations_count_metas_failures`); `Admin::new` refusing
+    another `Authorizer`'s admin with nothing read (the core's
+    `tests/capabilities.rs`); a platform key's scopes; a missing
+    tenant's key listing, and its attach answered `404` before Meta is
+    asked.
 - [ ] **S5b. Idempotency and messages into core**
   (`meta-whatsapp-server-core`): `idempotency::run` answering a status,
   a body and whether it replayed; sending (the accepted message, not an
