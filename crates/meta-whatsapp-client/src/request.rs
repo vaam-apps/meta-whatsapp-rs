@@ -440,9 +440,19 @@ impl GraphRequest {
     /// responses): a decode failure carries neither the body nor serde's
     /// message, see [`decode_json_private`].
     pub(crate) async fn send_private<T: DeserializeOwned>(self) -> Result<T> {
+        self.send_withheld(RECIPIENT_WITHHELD).await
+    }
+
+    /// [`Self::send`] for a response that carries something else that must
+    /// stay out of errors (key material): as [`Self::send_private`], with
+    /// `placeholder` as the body snippet, see [`decode_json_withheld`].
+    pub(crate) async fn send_withheld<T: DeserializeOwned>(
+        self,
+        placeholder: &'static [u8],
+    ) -> Result<T> {
         let context = self.context;
         let resp = self.send_raw().await?;
-        decode_json_private(context, &resp.body)
+        decode_json_withheld(context, &resp.body, placeholder)
     }
 
     /// Send and require `{"success": true}`.
@@ -832,10 +842,21 @@ pub(crate) fn decode_json<T: DeserializeOwned>(context: &'static str, body: &[u8
 /// A decode error for a response that names people: `why` replaces serde's
 /// message, and the body snippet is a placeholder.
 pub(crate) fn withheld_decode_error(context: &'static str, why: impl fmt::Display) -> Error {
+    withheld_decode_error_as(context, why, RECIPIENT_WITHHELD)
+}
+
+/// The body snippet of a decode error for a response that names people.
+const RECIPIENT_WITHHELD: &[u8] = b"(withheld: the response names the recipient)";
+
+fn withheld_decode_error_as(
+    context: &'static str,
+    why: impl fmt::Display,
+    placeholder: &'static [u8],
+) -> Error {
     Error::decode(
         context,
         <serde_json::Error as serde::de::Error>::custom(why),
-        b"(withheld: the response names the recipient)",
+        placeholder,
     )
 }
 
@@ -847,8 +868,19 @@ pub(crate) fn decode_json_private<T: DeserializeOwned>(
     context: &'static str,
     body: &[u8],
 ) -> Result<T> {
+    decode_json_withheld(context, body, RECIPIENT_WITHHELD)
+}
+
+/// [`decode_json_private`] with `placeholder` as the body snippet, for a
+/// body that carries something else that must stay out of errors (the
+/// number's settings carry Meta's `cloud_encryption_key`).
+pub(crate) fn decode_json_withheld<T: DeserializeOwned>(
+    context: &'static str,
+    body: &[u8],
+    placeholder: &'static [u8],
+) -> Result<T> {
     serde_json::from_slice(body).map_err(|e| {
-        withheld_decode_error(
+        withheld_decode_error_as(
             context,
             format_args!(
                 "{:?} error at line {} column {} (details withheld)",
@@ -856,6 +888,7 @@ pub(crate) fn decode_json_private<T: DeserializeOwned>(
                 e.line(),
                 e.column()
             ),
+            placeholder,
         )
     })
 }

@@ -107,26 +107,35 @@
 //!   schemas ([`PhoneNumber::enable_payload_encryption`],
 //!   [`PhoneNumber::disable_payload_encryption`], [`PayloadEncryption`]).
 //!   Not documented: the key's type, size and what the base64 wraps
-//!   ([`ClientEncryptionKey`] checks only that it is base64), how the
-//!   `client_encryption_key_fingerprint` is computed, what the
-//!   `cloud_encryption_key` is for and whether it is public (kept out of
-//!   `Debug` in case it is not), which payloads are encrypted and how,
-//!   whether turning it off may carry a key (none is sent), whether
+//!   ([`ClientEncryptionKey`] checks only that it is base64 and not an
+//!   obvious private key), how the `client_encryption_key_fingerprint` is
+//!   computed, what the `cloud_encryption_key` is for and whether it is
+//!   public ([`CloudEncryptionKey`], kept out of `Debug` and out of
+//!   decode errors in case it is not), which payloads are encrypted and
+//!   how, whether turning it off may carry a key (none is sent), whether
 //!   enabling twice issues a new cloud key, and the errors of either call.
+//!   Since a replay could rotate keys, neither call is replayed after a
+//!   timeout (only what Meta provably refused,
+//!   [`Error::may_resend`](meta_whatsapp_core::Error::may_resend)).
 //! - `connection_status` ([`PhoneNumber::set_connection_status`]): the
 //!   schema lists eleven values ([`ConnectionStatus`]) and describes none
 //!   of them; which ones a business may set, what setting one does, and
-//!   the permission it needs are not documented.
+//!   the permission it needs are not documented. It is treated as a state
+//!   change: not replayed after a timeout.
 //! - `webhook_url` ([`PhoneNumber::set_webhook_url`]): "Webhook URL for
 //!   receiving message notifications", a `uri`, is all the reference says.
 //!   Its relation to the per-number override (`webhook_configuration`,
 //!   [`PhoneNumber::set_webhook_override`], documented with examples in
 //!   `webhooks/override`), its length limit, whether the page's general
 //!   "callback URI verification … for external URLs" applies to it, and
-//!   how to clear it are not documented. The URL is
-//!   checked to be an absolute URI, as the schema's format says, and not
-//!   required to be `https`: the override is not either, and the page says
-//!   internal URLs are allowed for development.
+//!   how to clear it are not documented. The URL is checked before any
+//!   request: an absolute `https` URI (the schema's format; webhooks are
+//!   delivered over TLS), without user info or a fragment, and exactly as
+//!   given (no whitespace or control character anywhere, nothing trimmed:
+//!   what is checked is what is sent). No length limit is documented, so
+//!   none is checked. [`CallbackOverride`] checks only its documented
+//!   length (1–200 characters), not its scheme: the two differ until a
+//!   follow-up aligns them. Not replayed after a timeout either.
 //! - The number's `POST` also lists `whatsapp_business_api_data.pin` and
 //!   `username`; they are not sent from here, since
 //!   [`PhoneNumber::set_two_step_pin`] and [`PhoneNumber::set_username`]
@@ -161,8 +170,8 @@ pub use official::{
 };
 pub use secrets::{TwoStepPin, VerificationCode};
 pub use settings::{
-    ClientEncryptionKey, DataLocalizationRegion, PayloadEncryption, PayloadEncryptionStatus,
-    PhoneNumberSettings, StorageConfiguration, StorageStatus,
+    ClientEncryptionKey, CloudEncryptionKey, DataLocalizationRegion, PayloadEncryption,
+    PayloadEncryptionStatus, PhoneNumberSettings, StorageConfiguration, StorageStatus,
 };
 pub use types::{
     AccountMode, CodeVerificationStatus, ConnectionStatus, CreatedPhoneNumber, MessagingLimitTier,
@@ -300,6 +309,35 @@ struct ConnectionStatusBody<'a> {
 #[derive(Serialize)]
 struct WebhookUrlBody<'a> {
     webhook_url: &'a str,
+}
+
+/// [`PhoneNumber::set_webhook_url`]'s check: an absolute `https` URI, no
+/// user info, no fragment, and no whitespace or control character
+/// anywhere, so the string sent is the string checked (the URL parser
+/// would otherwise trim or drop some of them).
+fn check_webhook_url(webhook_url: &str) -> Result<()> {
+    let invalid = |reason: &'static str| -> Result<()> {
+        Err(ValidationError::new("webhook_url", reason).into())
+    };
+    if webhook_url
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control())
+    {
+        return invalid("must not contain whitespace or control characters");
+    }
+    let Ok(url) = url::Url::parse(webhook_url) else {
+        return invalid("must be an absolute URI");
+    };
+    if url.scheme() != "https" {
+        return invalid("must be an `https` URI");
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return invalid("must not carry user info");
+    }
+    if url.fragment().is_some() {
+        return invalid("must not carry a fragment");
+    }
+    Ok(())
 }
 
 /// `whatsapp_business_api_data` of the number's `POST`
@@ -547,10 +585,18 @@ impl PhoneNumber {
     /// number" (`PhoneNumberStatusUpdateRequest`). The reference documents
     /// the values and nothing else: which ones a business may set and what
     /// setting one does are not documented (module docs, § Where the docs
-    /// stop). A value is set, so the request is replayed on transient
-    /// errors.
+    /// stop).
+    ///
+    /// Since what it does is undocumented, it is treated as a state change:
+    /// never replayed after a timeout or another error that may have
+    /// reached Meta, only after one Meta provably refused (a throttle,
+    /// maintenance:
+    /// [`Error::may_resend`](meta_whatsapp_core::Error::may_resend)).
+    /// After an `Err`, find out whether it took effect before sending it
+    /// again.
     pub async fn set_connection_status(&self, status: &ConnectionStatus) -> Result<()> {
-        self.post_on_number(
+        self.post_once(
+            &[self.phone_number_id.as_str()],
             &ConnectionStatusBody {
                 connection_status: status,
             },
@@ -565,15 +611,41 @@ impl PhoneNumber {
     /// documented per-number callback override, with its verify token, use
     /// [`Self::set_webhook_override`]; how the two relate is not documented.
     ///
-    /// `webhook_url` must parse as an absolute URI (a [`ValidationError`]
-    /// naming `webhook_url` otherwise, before any request); `https` is not
-    /// required, as for the override. A value is set, so the request is
-    /// replayed on transient errors.
+    /// `webhook_url` must be an absolute `https` URI without user info
+    /// (`user:pass@`) or a fragment, with no whitespace or control
+    /// character anywhere: it is sent exactly as given, never trimmed. A
+    /// [`ValidationError`] naming `webhook_url` otherwise, before any
+    /// request. No length limit is documented, so none is checked.
+    ///
+    /// Not replayed after a timeout or another error that may have reached
+    /// Meta, only after one Meta provably refused
+    /// ([`Error::may_resend`](meta_whatsapp_core::Error::may_resend)):
+    /// what setting it does is undocumented.
     pub async fn set_webhook_url(&self, webhook_url: &str) -> Result<()> {
-        if url::Url::parse(webhook_url).is_err() {
-            return Err(ValidationError::new("webhook_url", "must be an absolute URI").into());
-        }
-        self.post_on_number(&WebhookUrlBody { webhook_url }, "webhook URL response")
+        check_webhook_url(webhook_url)?;
+        self.post_once(
+            &[self.phone_number_id.as_str()],
+            &WebhookUrlBody { webhook_url },
+            "webhook URL response",
+        )
+        .await
+    }
+
+    /// A `POST` that changes state Meta does not document: replayed only
+    /// when Meta provably refused it
+    /// ([`Error::may_resend`](meta_whatsapp_core::Error::may_resend)).
+    async fn post_once(
+        &self,
+        segments: &[&str],
+        body: &impl Serialize,
+        context: &'static str,
+    ) -> Result<()> {
+        self.client
+            .post_at(segments)
+            .json(body)
+            .idempotent(false)
+            .context(context)
+            .send_success()
             .await
     }
 
@@ -606,11 +678,16 @@ impl PhoneNumber {
     /// `GET /{PHONE_NUMBER_ID}/settings`: local storage and payload
     /// encryption typed ([`PhoneNumberSettings`]), calling raw (typed by
     /// [`crate::calling::Calling::settings`]).
+    ///
+    /// A body that fails to decode gives an
+    /// [`Error::Decode`](meta_whatsapp_core::Error::Decode) whose snippet
+    /// and message are withheld: the answer may carry Meta's
+    /// `cloud_encryption_key`.
     pub async fn settings(&self) -> Result<PhoneNumberSettings> {
         self.client
             .get_at(&[self.phone_number_id.as_str(), "settings"])
             .context("phone number settings")
-            .send()
+            .send_withheld(b"(withheld: the settings may carry key material)")
             .await
     }
 
@@ -660,17 +737,27 @@ impl PhoneNumber {
     /// fingerprint and Meta's `cloud_encryption_key`.
     ///
     /// The key is validated when built ([`ClientEncryptionKey::new`]) and
-    /// only goes into the request body, never into the URL. Replayed on
-    /// transient errors, like every settings call here: the same key is
-    /// set again. Whether Meta issues a new cloud key each time is not
-    /// documented.
+    /// only goes into the request body, never into the URL.
+    ///
+    /// Not replayed after a timeout or another error that may have reached
+    /// Meta, unlike the other settings calls here: whether enabling again
+    /// issues a new cloud key is not documented. Only an error Meta
+    /// provably refused (a throttle, maintenance:
+    /// [`Error::may_resend`](meta_whatsapp_core::Error::may_resend))
+    /// is retried. After an `Err`, call [`Self::settings`] and compare its
+    /// `status` and `client_encryption_key_fingerprint` with what you sent
+    /// before trying again.
     pub async fn enable_payload_encryption(&self, key: &ClientEncryptionKey) -> Result<()> {
-        self.post_settings(&PayloadEncryptionSettingsRequest {
-            payload_encryption: PayloadEncryptionRequest {
-                status: PayloadEncryptionStatus::Enabled,
-                client_encryption_key: Some(key.as_str()),
+        self.post_once(
+            &[self.phone_number_id.as_str(), "settings"],
+            &PayloadEncryptionSettingsRequest {
+                payload_encryption: PayloadEncryptionRequest {
+                    status: PayloadEncryptionStatus::Enabled,
+                    client_encryption_key: Some(key.as_str()),
+                },
             },
-        })
+            "payload encryption response",
+        )
         .await
     }
 
@@ -678,13 +765,21 @@ impl PhoneNumber {
     /// `{"payload_encryption": {"status": "disabled"}}`: turn payload
     /// encryption off. The schema makes the key optional ("required when
     /// enabling encryption"), so none is sent.
+    ///
+    /// Not replayed after a timeout, as for
+    /// [`Self::enable_payload_encryption`]: after an `Err`, call
+    /// [`Self::settings`] and check its `status` before trying again.
     pub async fn disable_payload_encryption(&self) -> Result<()> {
-        self.post_settings(&PayloadEncryptionSettingsRequest {
-            payload_encryption: PayloadEncryptionRequest {
-                status: PayloadEncryptionStatus::Disabled,
-                client_encryption_key: None,
+        self.post_once(
+            &[self.phone_number_id.as_str(), "settings"],
+            &PayloadEncryptionSettingsRequest {
+                payload_encryption: PayloadEncryptionRequest {
+                    status: PayloadEncryptionStatus::Disabled,
+                    client_encryption_key: None,
+                },
             },
-        })
+            "payload encryption response",
+        )
         .await
     }
 
@@ -1274,13 +1369,15 @@ mod tests {
         assert_eq!(req.url.query(), None);
         assert_eq!(req.bearer(), Some("TOKEN"));
         let pe = s.payload_encryption.clone().unwrap();
-        assert_eq!(pe.status, PayloadEncryptionStatus::Enabled);
+        assert_eq!(pe.status, Some(PayloadEncryptionStatus::Enabled));
         assert_eq!(
             pe.client_encryption_key_fingerprint.as_deref(),
             Some("3b:5f:0c:9a")
         );
         assert_eq!(
-            pe.cloud_encryption_key.as_deref(),
+            pe.cloud_encryption_key
+                .as_ref()
+                .map(CloudEncryptionKey::as_str),
             Some("Q0xPVUQtS0VZLUJBU0U2NA==")
         );
         assert!(!format!("{s:?}").contains("Q0xPVUQtS0VZLUJBU0U2NA=="));
@@ -1298,9 +1395,58 @@ mod tests {
         );
         let off = client(&t).phone_number(ID).settings().await.unwrap();
         let pe = off.payload_encryption.unwrap();
-        assert_eq!(pe.status, PayloadEncryptionStatus::Disabled);
+        assert_eq!(pe.status, Some(PayloadEncryptionStatus::Disabled));
         assert_eq!(pe.client_encryption_key_fingerprint, None);
         assert_eq!(pe.cloud_encryption_key, None);
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn settings_survive_a_payload_encryption_answer_without_status() {
+        // The schema requires `status`; an answer without it must not fail
+        // the whole read, local storage included.
+        let t = ScriptedTransport::new();
+        t.push_json(
+            200,
+            json!({
+              "payload_encryption": {},
+              "storage_configuration": {
+                "status": "IN_COUNTRY_STORAGE_ENABLED",
+                "data_localization_region": "BR"
+              }
+            }),
+        );
+        t.push_json(
+            200,
+            json!({
+              "payload_encryption": {"client_encryption_key_fingerprint": "3b:5f"},
+              "storage_configuration": {"status": "default"}
+            }),
+        );
+        let pn = client(&t).phone_number(ID);
+        let s = pn.settings().await.unwrap();
+        let pe = s.payload_encryption.unwrap();
+        assert_eq!(pe.status, None);
+        assert_eq!(pe.client_encryption_key_fingerprint, None);
+        assert_eq!(pe.cloud_encryption_key, None);
+        let sc = s.storage_configuration.unwrap();
+        assert_eq!(sc.status, StorageStatus::InCountryStorageEnabled);
+        assert_eq!(
+            sc.data_localization_region,
+            Some(DataLocalizationRegion::Br)
+        );
+
+        let s = pn.settings().await.unwrap();
+        let pe = s.payload_encryption.unwrap();
+        assert_eq!(pe.status, None);
+        assert_eq!(
+            pe.client_encryption_key_fingerprint.as_deref(),
+            Some("3b:5f")
+        );
+        assert_eq!(
+            s.storage_configuration.unwrap().status,
+            StorageStatus::Default
+        );
         assert_eq!(t.remaining(), 0);
     }
 
@@ -1357,15 +1503,124 @@ mod tests {
         );
         assert_eq!(t.remaining(), 0);
 
-        for bad in ["", " ", "hooks.shop.example/whatsapp", "/whatsapp"] {
+        for (bad, reason) in [
+            ("", "absolute URI"),
+            ("hooks.shop.example/whatsapp", "absolute URI"),
+            ("/whatsapp", "absolute URI"),
+            ("http://hooks.shop.example/whatsapp", "`https`"),
+            ("javascript:alert(1)", "`https`"),
+            ("localhost:8080/hook", "`https`"),
+            ("https://user:pass@hooks.shop.example/whatsapp", "user info"),
+            ("https://user@hooks.shop.example/whatsapp", "user info"),
+            ("https://hooks.shop.example/whatsapp#frag", "fragment"),
+            ("https://hooks.shop.example/whatsapp#", "fragment"),
+            (" ", "whitespace"),
+            (" https://hooks.shop.example/whatsapp", "whitespace"),
+            ("https://hooks.shop.example/whatsapp ", "whitespace"),
+            ("https://hooks.shop.example/whatsapp\n", "whitespace"),
+            ("https://hooks.shop.exa\tmple/whatsapp", "whitespace"),
+            ("https://hooks.shop.example/what sapp", "whitespace"),
+            ("https://hooks.shop.example/\u{7f}", "control"),
+        ] {
             let err = pn.set_webhook_url(bad).await.unwrap_err();
             assert!(
                 matches!(err, meta_whatsapp_core::Error::Validation(_)),
                 "{bad:?}"
             );
-            assert!(err.to_string().contains("`webhook_url`"), "{err}");
+            let text = err.to_string();
+            assert!(text.contains("`webhook_url`"), "{text}");
+            assert!(text.contains(reason), "{bad:?}: {text}");
         }
         assert_eq!(t.requests().len(), 1, "no request for an invalid URL");
+    }
+
+    fn retrying_client(t: &ScriptedTransport) -> Client {
+        Client::builder()
+            .transport(t.clone())
+            .access_token("TOKEN")
+            .retry(RetryPolicy {
+                max_retries: 3,
+                base_delay: std::time::Duration::ZERO,
+                max_delay: std::time::Duration::ZERO,
+            })
+            .build()
+            .unwrap()
+    }
+
+    /// The four setters whose effect Meta does not document are state
+    /// changes: a timeout is never replayed (the second, scripted success
+    /// stays unused), but a throttle Meta provably refused is.
+    #[tokio::test]
+    async fn undocumented_state_changes_are_not_replayed_after_a_timeout() {
+        let key = ClientEncryptionKey::new(CLIENT_KEY).unwrap();
+        for call in 0..4 {
+            let t = ScriptedTransport::new();
+            t.push_error(|| meta_whatsapp_core::error::TransportError::Timeout);
+            t.push_json(200, json!({"success": true}));
+            let c = retrying_client(&t);
+            let pn = c.phone_number(ID);
+            let err = match call {
+                0 => pn.enable_payload_encryption(&key).await,
+                1 => pn.disable_payload_encryption().await,
+                2 => pn.set_connection_status(&ConnectionStatus::Connected).await,
+                _ => pn.set_webhook_url("https://x.example/hook").await,
+            }
+            .unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    meta_whatsapp_core::Error::Transport(
+                        meta_whatsapp_core::error::TransportError::Timeout
+                    )
+                ),
+                "call {call}: {err:?}"
+            );
+            assert_eq!(t.requests().len(), 1, "call {call}");
+            assert_eq!(t.remaining(), 1, "call {call}");
+
+            let t = ScriptedTransport::new();
+            t.push_json(400, graph_error(130_429));
+            t.push_json(200, json!({"success": true}));
+            let c = retrying_client(&t);
+            let pn = c.phone_number(ID);
+            match call {
+                0 => pn.enable_payload_encryption(&key).await,
+                1 => pn.disable_payload_encryption().await,
+                2 => pn.set_connection_status(&ConnectionStatus::Connected).await,
+                _ => pn.set_webhook_url("https://x.example/hook").await,
+            }
+            .unwrap();
+            assert_eq!(t.requests().len(), 2, "call {call}: a throttle is resent");
+            assert_eq!(t.remaining(), 0);
+        }
+    }
+
+    /// A settings answer that fails to decode keeps the body, which may
+    /// carry Meta's cloud key, out of the error.
+    #[tokio::test]
+    async fn settings_decode_errors_withhold_the_body() {
+        let secret = "Q0xPVUQtS0VZLVNFQ1JFVA==";
+        let t = ScriptedTransport::new();
+        t.push_json(
+            200,
+            json!({
+              "payload_encryption": {"status": "enabled", "cloud_encryption_key": secret},
+              "storage_configuration": {"status": 7, "data_localization_region": secret}
+            }),
+        );
+        t.push_json(
+            200,
+            json!({"payload_encryption": {"cloud_encryption_key": [secret]}}),
+        );
+        let pn = client(&t).phone_number(ID);
+        for _ in 0..2 {
+            let err = pn.settings().await.unwrap_err();
+            assert!(matches!(err, meta_whatsapp_core::Error::Decode { .. }));
+            let text = format!("{err} {err:?}");
+            assert!(!text.contains(secret), "{text}");
+            assert!(!text.contains("Q0xPVUQ"), "{text}");
+        }
+        assert_eq!(t.remaining(), 0);
     }
 
     #[tokio::test]
