@@ -1238,6 +1238,13 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     key's format, the fingerprint's algorithm, what the cloud key is,
     which connection statuses a business may set and to what effect,
     how `webhook_url` relates to the override).
+    **Left:** `StorageConfiguration::status` (from L9) is still required
+    and `StorageStatus` has no catch-all, so a `storage_configuration`
+    answer without a status, or with a status Meta adds, fails the whole
+    `settings()` read, as `payload_encryption` did before this item
+    made its status optional (L20a's catch-all pass covers the enum);
+    and `CallbackOverride` does not check its URI's scheme, where
+    `set_webhook_url` requires `https`.
 
 ## 4. Service milestones
 
