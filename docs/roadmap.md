@@ -407,7 +407,9 @@ and `store-postgres`.
     (`403 forbidden` for another's, nothing read), over that
     `Authorizer`'s records, vault and tokenless client (the records
     through a crate-private `Authorizer::records`, so no adapter reaches
-    them, and what a service writes is what the order reads). The
+    them, and what a service writes is what the order reads; the core's
+    UI case `authorizer_records` pins it, E0624, and fails with the
+    method made `pub`). The
     operations take the request's values as it carried them (ids,
     labels, an RFC 3339 expiry, `admin::TenantsInput`, `admin::KeyRequest`),
     validate them in the order and on the fields the handlers did, and

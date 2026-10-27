@@ -1258,7 +1258,8 @@ target above:
   server's extractors and every handler, which only the routers reach,
   behind their guards. The `Authorizer` also refuses a Graph client
   built with a token (SR-L4), and what must not compile outside the
-  service's crates (the vault's methods, a capability of one's own; in
+  service's crates (the vault's methods, a capability of one's own, the
+  `Authorizer`'s records, since S5a; in
   the server `AppState::store` and `authz`, the handlers and
   `idempotency::run`) is pinned by UI tests with the compiler's errors.
   Deleting an opened WABA's token and binding, and marking its numbers
