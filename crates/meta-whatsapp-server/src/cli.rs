@@ -15,8 +15,14 @@
 //! The admin commands need only `DATABASE_URL` (they migrate first unless
 //! `WA_SERVER_MIGRATE=skip`) and print the new key once, alone on
 //! standard output.
+//!
+//! Every command that stores opens its backend through one
+//! [`BackendFactory`]: [`run`] with the in-tree ones
+//! ([`BuiltinBackends`]: Postgres, memory), [`run_with`] with an
+//! integrator's, whose binary is then this command line on their backend.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
@@ -33,7 +39,8 @@ use crate::model::{
     AllowedTenants, ApiKeyRecord, KeyOwner, KeyScope, MAX_NAME_CHARS, MAX_PAGE_SIZE, PageRequest,
     Scope, TenantId,
 };
-use crate::store::{PgStore, RecordStore, migrate};
+use crate::serve::{BackendFactory, BuiltinBackends};
+use crate::store::{Backend, RecordStore};
 use crate::{api, serve, telemetry};
 
 /// The meta-whatsapp-rs HTTP service.
@@ -118,19 +125,33 @@ pub enum AdminCommand {
     },
 }
 
-/// Run `cli`.
+/// Run `cli` on the in-tree backends ([`BuiltinBackends`]).
+///
+/// # Errors
+///
+/// As [`run_with`].
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
+    run_with(cli, &BuiltinBackends).await
+}
+
+/// Run `cli`, every command that stores on the backend `backends` opens.
+///
+/// # Errors
+///
+/// The command's: a refused configuration, a backend that fails to open
+/// or migrate, a failed step.
+pub async fn run_with(cli: Cli, backends: &dyn BackendFactory) -> anyhow::Result<()> {
     match cli.command {
         Command::Serve => {
             let config = Config::from_process_env().context("refusing to start")?;
             telemetry::init(config.log_format, &config.log_filter);
-            serve::serve(config).await
+            serve::serve_from(config, backends).await
         }
         Command::Migrate => {
             init_cli_logs();
             let (url, _) = config::database(&ProcessEnv).context("refusing to migrate")?;
-            let pool = serve::connect(&url).await?;
-            migrate(&pool).await.context("migrations failed")?;
+            let backend = serve::open(backends, &Storage::Postgres(url), MigrateMode::Auto).await?;
+            backend.close().await;
             eprintln!("migrations applied");
             Ok(())
         }
@@ -141,7 +162,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Healthcheck => healthcheck(&ProcessEnv).await,
         Command::Admin(command) => {
             init_cli_logs();
-            admin(command, &ProcessEnv).await
+            admin(command, &ProcessEnv, backends).await
         }
         Command::Vault(VaultCommand::Rotate) => {
             init_cli_logs();
@@ -154,9 +175,11 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                 "refusing to rotate: memory storage is per process, and this command cannot reach \
                  the running service's (use POST /v1/admin/vault/rotate, or set DATABASE_URL)"
             );
-            let backend = serve::backends(&config).await?;
+            let backend = serve::open(backends, &config.storage, config.migrate).await?;
             let vault = serve::vault(backend.kv(), config.vault_keys)?;
-            let report = crate::auth::rotate_vault(backend.records().as_ref(), &vault).await?;
+            let report = crate::auth::rotate_vault(backend.records().as_ref(), &vault).await;
+            backend.close().await;
+            let report = report?;
             println!(
                 "{} WABAs walked, {} records re-encrypted, {} failed{}",
                 report.wabas,
@@ -181,23 +204,33 @@ fn init_cli_logs() {
     telemetry::init(config::LogFormat::Text, "warn");
 }
 
-async fn admin_store(env: &dyn Env) -> anyhow::Result<PgStore> {
+/// The backend on `DATABASE_URL`, migrated unless `WA_SERVER_MIGRATE=skip`.
+async fn admin_backend(
+    env: &dyn Env,
+    backends: &dyn BackendFactory,
+) -> anyhow::Result<Arc<dyn Backend>> {
     let (url, mode) = config::database(env).context("the admin commands need DATABASE_URL")?;
-    let pool = serve::connect(&url).await?;
-    if mode == MigrateMode::Auto {
-        migrate(&pool).await.context("migrations failed")?;
-    }
-    Ok(PgStore::new(pool))
+    serve::open(backends, &Storage::Postgres(url), mode).await
 }
 
-async fn admin(command: AdminCommand, env: &dyn Env) -> anyhow::Result<()> {
-    let store = admin_store(env).await?;
+async fn admin(
+    command: AdminCommand,
+    env: &dyn Env,
+    backends: &dyn BackendFactory,
+) -> anyhow::Result<()> {
+    let backend = admin_backend(env, backends).await?;
+    let done = admin_on(command, backend.records().as_ref()).await;
+    backend.close().await;
+    done
+}
+
+async fn admin_on(command: AdminCommand, store: &dyn RecordStore) -> anyhow::Result<()> {
     match command {
         AdminCommand::CreateAdminKey { name, expires_at } => {
             check_name(&name)?;
             let expires_at = expiry(expires_at.as_deref())?;
             let (minted, record) =
-                mint(&store, KeyOwner::Admin, Vec::new(), name, expires_at).await?;
+                mint(store, KeyOwner::Admin, Vec::new(), name, expires_at).await?;
             eprintln!("admin key {} created; it is shown once:", record.key_id);
             println!("{}", minted.expose_key());
         }
@@ -217,14 +250,8 @@ async fn admin(command: AdminCommand, env: &dyn Env) -> anyhow::Result<()> {
             let allowed = allowed_tenants(spec)
                 .map_err(|_| anyhow::anyhow!("--tenants: `*` or comma-separated tenant ids"))?;
             let scopes = parse_scopes(&scopes)?;
-            let (minted, record) = mint(
-                &store,
-                KeyOwner::Platform(allowed),
-                scopes,
-                name,
-                expires_at,
-            )
-            .await?;
+            let (minted, record) =
+                mint(store, KeyOwner::Platform(allowed), scopes, name, expires_at).await?;
             eprintln!("platform key {} created; it is shown once:", record.key_id);
             println!("{}", minted.expose_key());
         }

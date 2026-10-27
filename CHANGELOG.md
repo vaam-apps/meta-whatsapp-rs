@@ -1199,6 +1199,69 @@ stored data, the owner's).
   where the raw JSON did not. No code in this repository read the
   field.
 
+- **Breaking (the service's crates) — the service is composed from a
+  `Backend` alone** (roadmap S4, parity row 112; `meta-whatsapp-server`
+  and `meta-whatsapp-server-core`, both `publish = false`), so a backend
+  an integrator brings is served as the in-tree ones are, with no change
+  to the server. `state::AppState::from_backend(Arc<dyn Backend>,
+  VaultKeys, Client, Inbound, Metrics, Settings)` is the state's only
+  constructor: it builds the token vault on the bundle's `KvStore` and
+  the webhook pipeline on its `KvStore`, `ConversationStore`, `Outbox`
+  and records. `AppState::new` and `with_settings` are gone (they took a
+  store, a vault and a pipeline each on a store of the caller's choice),
+  `from_backend` no longer takes a `&dyn Backend`, a `TokenVault` and a
+  `VerifyToken`, and `events::Inbound::new` takes the app secrets and the
+  verify token, no store (`with_clock` is unchanged). `serve::serve_with(config,
+  Arc<dyn Backend>)` and `serve::serve_until` (the same, until a
+  shutdown future of the caller's) migrate the backend unless
+  `WA_SERVER_MIGRATE=skip`, serve, run housekeeping and close it;
+  `serve::serve_from(config, factory)` opens the backend a factory
+  gives for `config.storage` first, and `serve::serve(config)` is it
+  with the in-tree factory. Housekeeping moved to the core:
+  `meta_whatsapp_server_core::housekeeping::run(backend, retention,
+  every, stop)` and `round(&dyn Backend, retention)` replace
+  `serve::housekeeping` and `serve::round`, which took the outbox, the
+  idempotency records and an optional `serve::Sweep` (gone; a round
+  always takes the backend's leader lock, as `serve` always did).
+  `serve::backends(config)` is replaced by `serve::BackendFactory` (the
+  in-tree `serve::BuiltinBackends`: Postgres, memory) and
+  `serve::open(factory, storage, migrate)`; the command line opens every
+  backend through one (`cli::run` with the in-tree one, `cli::run_with`
+  with an integrator's), and the `migrate`, `admin …` and `vault rotate`
+  commands close it when done. The `memory storage: everything is lost
+  on restart` warning is logged for any process-local backend, after the
+  vault and Graph endpoint warnings, as before. No change to the HTTP
+  API: `openapi/v1.json` is byte-identical. The server's
+  `tests/composed.rs` serves the API over a `Backend` defined in the
+  test, and UI tests (`tests/visibility/fail/app_state_from_loose_ports.rs`,
+  `app_state_new.rs`, `inbound_stores.rs`, `app_state_backend.rs`) pin
+  that loose ports do not compose a state and that the state's backend
+  is crate-private. Housekeeping's `run` takes a zero interval as one
+  millisecond (`tokio::time::interval` panicked on it), and once its
+  `stop` completed it starts no round, even with a tick due. The review
+  fixed a race older than S4: `serve` registered its `SIGTERM` and
+  `SIGINT` handlers only once both listeners were spawned, so a
+  `SIGTERM` that came as they started answering ended the process with
+  signal 15 rather than shutting it down; the handlers are now
+  registered before the listeners are bound. **Upgrade** (code calling
+  the service's crates): wrap your stores in a `Backend` (or use
+  `store::MemoryBackend`, `PgBackend`) and build the state with
+  `AppState::from_backend(Arc::new(backend), vault_keys, client,
+  Inbound::new(app_secrets, verify_token)?, Metrics::new(), settings)`,
+  passing the `VaultKeys` where a `TokenVault` was (the vault is built
+  on `backend.kv()`) and `Settings::default()` where `new` was called;
+  `serve::backends(&config)` is `serve::open(&BuiltinBackends,
+  &config.storage, config.migrate)`; `serve::housekeeping(outbox,
+  idempotency, Some(sweep), retention, every, stop)` is
+  `housekeeping::run(backend, retention, every, stop)` and
+  `serve::round(outbox, idempotency, Some(&sweep), retention)` is
+  `housekeeping::round(&*backend, retention)`. A round without a sweep
+  (`None`: no leader lock) has no replacement: a round always takes the
+  backend's `LeaderLock` (in one process, `MemoryLeaderLock`). To serve
+  a backend of your own, call `serve::serve_with(config,
+  Arc::new(backend))`, or run the whole command line on it with
+  `cli::run_with(cli, &factory)`, `factory` a `serve::BackendFactory`
+  of yours.
 - **Breaking — live events are shared as `Arc<WebhookEvent>`, not cloned
   per subscriber** (`meta_whatsapp_webhooks::sse`,
   `meta_whatsapp_adapters::sink::BroadcastSink`; roadmap L21b, decided as

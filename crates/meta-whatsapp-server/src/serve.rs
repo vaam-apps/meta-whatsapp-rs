@@ -1,11 +1,25 @@
 //! `meta-whatsapp-server serve` and the pieces the other commands share:
-//! storage, migrations, the vault and the Graph client.
+//! the backend (opened by a [`BackendFactory`]), migrations, the vault and
+//! the Graph client.
+//!
+//! **The service is composed from one [`Backend`] alone.** [`serve_with`]
+//! takes the bundle and nothing else of storage: the state
+//! ([`AppState::from_backend`]) builds the vault and the webhook pipeline
+//! on it, housekeeping runs over it
+//! ([`meta_whatsapp_server_core::housekeeping`]), and it is closed once
+//! the listeners stopped. So a backend an integrator brings (their own
+//! [`Backend`], passing `meta_whatsapp_server_core::conformance`) is
+//! served without a change here: hand it to [`serve_with`], or run the
+//! whole command line on it with a [`BackendFactory`] of theirs
+//! ([`crate::cli::run_with`]). [`BuiltinBackends`] opens the in-tree
+//! ones, Postgres and memory.
 
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
+use async_trait::async_trait;
 use meta_whatsapp_rs::Client;
 use meta_whatsapp_rs::adapters::store::postgres::sqlx::PgPool;
 use meta_whatsapp_rs::adapters::store::postgres::sqlx::postgres::{
@@ -13,20 +27,18 @@ use meta_whatsapp_rs::adapters::store::postgres::sqlx::postgres::{
 };
 use meta_whatsapp_rs::client::embedded_signup::{TokenVault, VaultKeys};
 use meta_whatsapp_rs::core::store::KvStore;
+use meta_whatsapp_server_core::housekeeping;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::api::admin::mint;
 use crate::config::{Config, DatabaseUrl, MigrateMode, Storage};
-use crate::events::{HOUSEKEEPING_INTERVAL, Inbound, purge_outbox};
+use crate::events::{HOUSEKEEPING_INTERVAL, Inbound};
 use crate::metrics::Metrics;
 use crate::model::KeyOwner;
 use crate::state::AppState;
-use crate::store::{
-    Backend, HOUSEKEEPING, HOUSEKEEPING_LEASE, IdempotencyRecords, Janitor, LeaderLock,
-    MemoryBackend, Outbox, PgBackend,
-};
+use crate::store::{Backend, MemoryBackend, PgBackend};
 use crate::{api, listen};
 
 /// Connections per replica.
@@ -62,27 +74,56 @@ fn redacted(error: &meta_whatsapp_rs::adapters::store::postgres::sqlx::Error) ->
     }
 }
 
-/// Open the storage `config` names, migrating it unless
-/// `WA_SERVER_MIGRATE=skip`: every port over one database (a
-/// [`Backend`]).
-pub async fn backends(config: &Config) -> anyhow::Result<Arc<dyn Backend>> {
-    match &config.storage {
-        Storage::Postgres(url) => {
-            let backend = PgBackend::new(connect(url).await?);
-            if config.migrate == MigrateMode::Auto {
-                backend
-                    .migrator()
-                    .migrate()
-                    .await
-                    .context("migrations failed")?;
-            }
-            Ok(Arc::new(backend))
-        }
-        Storage::Memory => {
-            tracing::warn!("memory storage: everything is lost on restart (development only)");
-            Ok(Arc::new(MemoryBackend::new()))
-        }
+/// What opens the storage a configuration names, for every command that
+/// stores (`serve`, `migrate`, `admin …`, `vault rotate`): the one place a
+/// [`Backend`] is chosen. [`BuiltinBackends`] opens the in-tree ones; an
+/// integrator with a backend of their own implements this and runs the
+/// command line with [`crate::cli::run_with`].
+#[async_trait]
+pub trait BackendFactory: Send + Sync {
+    /// The backend on `storage` (`DATABASE_URL`, or memory storage in
+    /// development), connected, not migrated ([`open`] migrates). Its
+    /// errors name settings, never their values (a URL may hold a
+    /// password).
+    async fn open(&self, storage: &Storage) -> anyhow::Result<Arc<dyn Backend>>;
+}
+
+/// The in-tree backends: [`PgBackend`] for a database URL, on a pool of
+/// ten connections ([`connect`]), and [`MemoryBackend`] for memory
+/// storage.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BuiltinBackends;
+
+#[async_trait]
+impl BackendFactory for BuiltinBackends {
+    async fn open(&self, storage: &Storage) -> anyhow::Result<Arc<dyn Backend>> {
+        Ok(match storage {
+            Storage::Postgres(url) => Arc::new(PgBackend::new(connect(url).await?)),
+            Storage::Memory => Arc::new(MemoryBackend::new()),
+        })
     }
+}
+
+/// `factory`'s backend on `storage`, migrated unless `migrate` is
+/// [`MigrateMode::Skip`].
+///
+/// # Errors
+///
+/// The factory's, or the migrations failing.
+pub async fn open(
+    factory: &dyn BackendFactory,
+    storage: &Storage,
+    migrate: MigrateMode,
+) -> anyhow::Result<Arc<dyn Backend>> {
+    let backend = factory.open(storage).await?;
+    if migrate == MigrateMode::Auto {
+        backend
+            .migrator()
+            .migrate()
+            .await
+            .context("migrations failed")?;
+    }
+    Ok(backend)
 }
 
 /// The Graph client: production transport, no default token, the
@@ -98,8 +139,65 @@ pub fn vault(kv: Arc<dyn KvStore>, keys: VaultKeys) -> anyhow::Result<TokenVault
     Ok(TokenVault::new(kv, keys)?)
 }
 
-/// Run the service until `SIGTERM` or `SIGINT`.
+/// Run the service until `SIGTERM` or `SIGINT`, on the backend `config`
+/// names, opened by the in-tree [`BuiltinBackends`] ([`serve_from`]).
+///
+/// # Errors
+///
+/// As [`serve_from`].
 pub async fn serve(config: Config) -> anyhow::Result<()> {
+    serve_from(config, &BuiltinBackends).await
+}
+
+/// Run the service until `SIGTERM` or `SIGINT`, on the backend `factory`
+/// opens for `config.storage`: [`serve_with`] once it is open (the
+/// warnings about the configuration come first, as the backend may take
+/// a while to answer).
+///
+/// # Errors
+///
+/// As [`serve_with`], or the backend failing to open.
+pub async fn serve_from(config: Config, factory: &dyn BackendFactory) -> anyhow::Result<()> {
+    warn_about(&config);
+    let backend = factory.open(&config.storage).await?;
+    run(config, backend, shutdown_signal).await
+}
+
+/// Run the service on `backend` until `SIGTERM` or `SIGINT`
+/// ([`serve_until`]). `config.storage` is not read: `backend` is the
+/// storage.
+///
+/// # Errors
+///
+/// As [`serve_until`].
+pub async fn serve_with(config: Config, backend: Arc<dyn Backend>) -> anyhow::Result<()> {
+    warn_about(&config);
+    run(config, backend, shutdown_signal).await
+}
+
+/// Run the service on `backend`, and on nothing else of storage, until
+/// `signal` completes: migrate it unless `WA_SERVER_MIGRATE=skip`, compose
+/// the state from it ([`AppState::from_backend`]), mint a one-time admin
+/// key when it is process-local (the command line cannot reach it), serve
+/// both listeners, run housekeeping over it
+/// ([`meta_whatsapp_server_core::housekeeping::run`]), and close it once
+/// the listeners stopped ([`supervise`]). `config.storage` is not read.
+///
+/// # Errors
+///
+/// The migrations, the state's composition or a listener failing (see
+/// [`supervise`]).
+pub async fn serve_until(
+    config: Config,
+    backend: Arc<dyn Backend>,
+    signal: impl Future<Output = ()>,
+) -> anyhow::Result<()> {
+    warn_about(&config);
+    run(config, backend, move || signal).await
+}
+
+/// The settings an operator must not miss in production.
+fn warn_about(config: &Config) {
     if config.vault_key_is_throwaway {
         tracing::warn!("WA_VAULT_KEY is not set: throwaway vault key (development only)");
     }
@@ -109,7 +207,26 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
             "WA_GRAPH_ENDPOINT is set: Graph calls, and the tokens they carry, go to this host, not graph.facebook.com"
         );
     }
-    let backend = backends(&config).await?;
+}
+
+/// [`serve_until`] once the configuration's warnings are out, stopping on
+/// the future `signal` makes: made before the listeners are bound, so
+/// that [`shutdown_signal`]'s handlers are in place once they answer.
+async fn run<S: Future<Output = ()>>(
+    config: Config,
+    backend: Arc<dyn Backend>,
+    signal: impl FnOnce() -> S,
+) -> anyhow::Result<()> {
+    if backend.kind().is_process_local() {
+        tracing::warn!("memory storage: everything is lost on restart (development only)");
+    }
+    if config.migrate == MigrateMode::Auto {
+        backend
+            .migrator()
+            .migrate()
+            .await
+            .context("migrations failed")?;
+    }
     let client = graph_client(&config)?;
     let Config {
         vault_keys,
@@ -122,22 +239,16 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         settings,
         ..
     } = config;
-    let vault = vault(backend.kv(), vault_keys)?;
-    let inbound = Inbound::new(
-        app_secrets,
-        backend.kv(),
-        backend.conversations(),
-        backend.outbox(),
-    )?;
+    let inbound = Inbound::new(app_secrets, verify_token)?;
     let state = AppState::from_backend(
-        backend.as_ref(),
-        vault,
+        backend,
+        vault_keys,
         client,
-        verify_token,
-        Metrics::new(),
         inbound,
+        Metrics::new(),
         settings,
     )?;
+    let backend = state.backend().clone();
     if backend.kind().is_process_local() {
         // Memory storage exists in development only (the configuration
         // refuses it elsewhere), and the CLI cannot reach it: the first
@@ -159,6 +270,10 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         );
     }
 
+    // `SIGTERM` and `SIGINT` are caught from here: one that comes once the
+    // listeners answer stops the service as any other does, rather than
+    // ending the process before `supervise` waits for it.
+    let signal = signal();
     let public = TcpListener::bind(public_bind)
         .await
         .with_context(|| format!("cannot listen on WA_SERVER_PUBLIC_BIND {public_bind}"))?;
@@ -168,13 +283,8 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     tracing::info!(%public_bind, %internal_bind, "listening");
 
     let (stop, stopped) = watch::channel(false);
-    let housekeeping = tokio::spawn(housekeeping(
-        backend.outbox(),
-        backend.idempotency(),
-        Some(Sweep {
-            leader: backend.leader_lock(),
-            janitor: backend.janitor(),
-        }),
+    let housekeeping = tokio::spawn(housekeeping::run(
+        backend.clone(),
         outbox_retention,
         HOUSEKEEPING_INTERVAL,
         stop_signal(stopped.clone()),
@@ -196,7 +306,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         &stop,
         public_task,
         internal_task,
-        shutdown_signal(),
+        signal,
         shutdown_grace,
     )
     .await;
@@ -205,98 +315,12 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     served
 }
 
-/// What housekeeping shares with the other replicas: whose turn a round
-/// is (the backend's [`LeaderLock`]), and the expired rows nothing else
-/// deletes (its [`Janitor`]: on Postgres, the library's key/value rows).
-pub struct Sweep {
-    /// Whose turn it is.
-    pub leader: Arc<dyn LeaderLock>,
-    /// What it sweeps.
-    pub janitor: Arc<dyn Janitor>,
-}
-
-/// Housekeeping, every `every` until `stop` (docs/design/server.md,
-/// section 2.4): one round at a time ([`round`]).
-pub async fn housekeeping(
-    events: Arc<dyn Outbox>,
-    store: Arc<dyn IdempotencyRecords>,
-    sweep: Option<Sweep>,
-    retention: Duration,
-    every: Duration,
-    stop: impl Future<Output = ()>,
-) {
-    let mut ticks = tokio::time::interval(every);
-    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut stop = std::pin::pin!(stop);
-    loop {
-        tokio::select! {
-            () = &mut stop => return,
-            _ = ticks.tick() => {}
-        }
-        round(events.as_ref(), store.as_ref(), sweep.as_ref(), retention).await;
-    }
-}
-
-/// One round of housekeeping, under one [`LeaderLock`] turn of
-/// [`HOUSEKEEPING`], leased for [`HOUSEKEEPING_LEASE`]: purge the outbox
-/// past `retention`, then `store`'s expired idempotency records (already
-/// ignored: this bounds the table), then, with a `sweep`, the expired rows
-/// nothing else deletes (on Postgres, the library's dead key/value rows:
-/// webhook dedup markers add one per event). One replica at a time runs a
-/// round: one that does not get the turn skips it. The purges take no lock
-/// of their own and tolerate a round overlapping another (a lease that
-/// ended while its round ran). Without a `sweep` (one process, no leader
-/// lock) the purges run without a turn. A failure is logged and retried
-/// next round; `false` when the round was skipped.
-pub async fn round(
-    events: &dyn Outbox,
-    store: &dyn IdempotencyRecords,
-    sweep: Option<&Sweep>,
-    retention: Duration,
-) -> bool {
-    let turn = match sweep {
-        None => None,
-        Some(sweep) => match sweep
-            .leader
-            .try_exclusive(HOUSEKEEPING, HOUSEKEEPING_LEASE)
-            .await
-        {
-            Ok(Some(turn)) => Some(turn),
-            // Another replica's round.
-            Ok(None) => return false,
-            Err(error) => {
-                tracing::warn!(error = %error, "taking the housekeeping turn failed");
-                return false;
-            }
-        },
-    };
-    if let Err(error) = purge_outbox(events, retention).await {
-        tracing::warn!(error = %error, "purging the outbox failed");
-    }
-    match store.purge_idempotency_keys().await {
-        Ok(0) => {}
-        Ok(purged) => tracing::debug!(purged, "expired idempotency records purged"),
-        Err(error) => tracing::warn!(error = %error, "purging idempotency records failed"),
-    }
-    if let Some(sweep) = sweep
-        && let Err(error) = sweep.janitor.purge_expired().await
-    {
-        tracing::warn!(error = %error, "purging expired key/value rows failed");
-    }
-    if let Some(turn) = turn
-        && let Err(error) = turn.release().await
-    {
-        tracing::warn!(error = %error, "ending the housekeeping turn failed");
-    }
-    true
-}
-
 /// Completes once `stop` says so: the shutdown future of a listener.
 async fn stop_signal(mut stop: watch::Receiver<bool>) {
     let _ = stop.wait_for(|stop| *stop).await;
 }
 
-/// The second half of [`serve`]: serve until `signal`, or until either
+/// The second half of [`serve_until`]: serve until `signal`, or until either
 /// listener stops on its own (its task failing or panicking), which stops
 /// the process too rather than leaving it up half served (the orchestrator
 /// then restarts it). Then fail `/readyz`, tell the listeners through
@@ -406,26 +430,39 @@ pub async fn first_to_stop(
     }
 }
 
-/// `SIGTERM` or `SIGINT`.
-async fn shutdown_signal() {
-    let interrupt = tokio::signal::ctrl_c();
+/// Completes on `SIGTERM` or `SIGINT`, caught from this call on (not from
+/// the future's first poll): one that comes before the future is awaited
+/// is kept, and completes it at once. Without a `SIGINT` handler it
+/// completes at once (as `tokio::signal::ctrl_c` failing did); without a
+/// `SIGTERM` one it waits for `SIGINT` alone. Called in a runtime.
+fn shutdown_signal() -> impl Future<Output = ()> + Send + 'static {
     #[cfg(unix)]
     {
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut terminate) => {
-                tokio::select! {
-                    _ = interrupt => {}
-                    _ = terminate.recv() => {}
+        use tokio::signal::unix::{SignalKind, signal};
+        let interrupt = signal(SignalKind::interrupt());
+        let terminate = signal(SignalKind::terminate());
+        async move {
+            let Ok(mut interrupt) = interrupt else {
+                return;
+            };
+            match terminate {
+                Ok(mut terminate) => {
+                    tokio::select! {
+                        _ = interrupt.recv() => {}
+                        _ = terminate.recv() => {}
+                    }
                 }
-            }
-            Err(_) => {
-                let _ = interrupt.await;
+                Err(_) => {
+                    let _ = interrupt.recv().await;
+                }
             }
         }
     }
     #[cfg(not(unix))]
     {
-        let _ = interrupt.await;
+        async {
+            let _ = tokio::signal::ctrl_c().await;
+        }
     }
 }
 
@@ -495,6 +532,7 @@ mod tests {
     /// review A3).
     #[tokio::test]
     async fn serve_stops_when_either_listener_stops() {
+        let _ports = crate::LOOPBACK_PORTS.lock().await;
         for (which, panics) in [("internal", false), ("public", true), ("internal", true)] {
             let state = AppState::for_tests();
             let (stop, _) = watch::channel(false);
@@ -537,6 +575,7 @@ mod tests {
     /// `Ok` once they drained.
     #[tokio::test]
     async fn serve_stops_both_listeners_on_the_signal() {
+        let _ports = crate::LOOPBACK_PORTS.lock().await;
         let state = AppState::for_tests();
         let (stop, _) = watch::channel(false);
         let (public, public_addr) = listening(&state, &stop).await;
@@ -561,264 +600,95 @@ mod tests {
         }
     }
 
-    /// Housekeeping purges the outbox past retention, round after round,
-    /// and the expired idempotency records (M1b's purge, in the same loop),
-    /// and stops with the service. Decisive: each purge in the loop.
+    /// `SIGTERM` is caught from the moment [`shutdown_signal`] is called,
+    /// before its future is first polled: `run` calls it before binding
+    /// the listeners, so a `SIGTERM` that comes once they answer, before
+    /// `supervise` awaits the signal, stops the service cleanly instead of
+    /// ending the process (`signal 15`, as
+    /// `binary::development_on_memory_prints_a_one_time_admin_key` saw on
+    /// a loaded machine). Decisive: the handlers registered in the future
+    /// (an `async fn`, as before): the `SIGTERM` below then ends this test
+    /// process.
+    #[cfg(unix)]
     #[tokio::test]
-    async fn housekeeping_purges_past_retention_until_stopped() {
-        use crate::model::{IdempotencyClaim, IdempotencyKey, TenantId};
-        use crate::store::events::{EventQuery, GuardedBinding, NewEvent, RouteGuard};
-        use crate::store::{MemoryStore, Outbox as EventStore, RecordStore};
-        use meta_whatsapp_rs::core::ids::WabaId;
-        // An idempotency record expired before the first round.
-        let records = Arc::new(MemoryStore::new());
-        // The store's own outbox: it checks a row's route in its bindings.
-        let events: Arc<dyn EventStore> = records.outbox();
-        let tenant = TenantId::parse("tenant-a").unwrap();
-        records.create_tenant(&tenant, "").await.unwrap().unwrap();
-        let waba = WabaId::new("102290129340398");
-        records.bind_waba(&tenant, &waba, &[]).await.unwrap();
-        let brief = Duration::from_millis(1);
-        let claimed = records
-            .claim_idempotency_key(
-                &tenant,
-                &IdempotencyKey::parse("order:1234:shipped").unwrap(),
-                &[7; 32],
-                "claim",
-                brief,
-                brief,
-            )
-            .await
+    async fn sigterm_is_caught_before_the_signal_is_awaited() {
+        // `kill` is a child process: between its fork and its exec it holds
+        // a copy of every socket open here, so a listener another test just
+        // closed would still accept.
+        let _ports = crate::LOOPBACK_PORTS.lock().await;
+        let signal = shutdown_signal();
+        let sent = std::process::Command::new("kill")
+            .args(["-TERM", &std::process::id().to_string()])
+            .status()
             .unwrap();
-        assert_eq!(claimed, IdempotencyClaim::Claimed);
-        tokio::time::sleep(Duration::from_millis(5)).await;
-        let row = |id: &str| NewEvent {
-            id: id.to_owned(),
-            dedup_key: None,
-            dedup_window: None,
-            tenant: crate::model::TenantId::parse("tenant-a"),
-            route_guard: Some(RouteGuard {
-                binding: GuardedBinding::Waba(waba.clone()),
-                not_after: None,
-            }),
-            phone_number_id: None,
-            waba_id: None,
-            event_type: "message_received".to_owned(),
-            data: "{}".to_owned(),
-        };
-        let first = events.insert(&row("evt_1")).await.unwrap().unwrap();
-        let (stop, stopped) = watch::channel(false);
-        let task = tokio::spawn(housekeeping(
-            events.clone(),
-            records.clone(),
-            None,
-            Duration::from_millis(1),
-            Duration::from_millis(20),
-            stop_signal(stopped),
-        ));
-        let query = EventQuery {
-            tenant: crate::model::TenantId::parse("tenant-a").unwrap(),
-            after: None,
-            types: None,
-            phone_number_id: None,
-            limit: 10,
-            max_bytes: crate::events::MAX_PAGE_DATA_BYTES,
-        };
-        let purged_through = |events: Arc<dyn EventStore>, query: EventQuery| async move {
-            events.page(&query).await.unwrap().purged_through
-        };
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        while purged_through(events.clone(), query.clone()).await < first {
-            assert!(tokio::time::Instant::now() < deadline, "never purged");
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        // A later event goes in a later round.
-        let second = events.insert(&row("evt_2")).await.unwrap().unwrap();
-        while purged_through(events.clone(), query.clone()).await < second {
-            assert!(tokio::time::Instant::now() < deadline, "no second round");
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        // The first round, done before the second's outbox purge, took the
-        // expired record: nothing is left to purge.
-        assert_eq!(
-            records.purge_idempotency_keys().await.unwrap(),
-            0,
-            "the expired idempotency record was never purged"
-        );
-        stop.send(true).unwrap();
-        tokio::time::timeout(Duration::from_secs(5), task)
+        assert!(sent.success());
+        tokio::time::timeout(Duration::from_secs(10), signal)
             .await
-            .expect("stopped with the service")
-            .unwrap();
+            .expect("the SIGTERM sent before the signal was awaited was lost");
     }
 
-    /// A janitor counting its sweeps.
-    #[derive(Debug, Default)]
-    struct Counting(std::sync::atomic::AtomicUsize);
+    /// A development configuration's variables, listening on `public`
+    /// and `internal`.
+    struct Vars(std::collections::HashMap<&'static str, String>);
 
-    impl Counting {
-        fn sweeps(&self) -> usize {
-            self.0.load(std::sync::atomic::Ordering::SeqCst)
+    impl crate::config::Env for Vars {
+        fn var(&self, name: &str) -> Result<Option<String>, crate::config::NotUnicode> {
+            Ok(self.0.get(name).cloned())
+        }
+        fn read_file(&self, _: &str) -> std::io::Result<String> {
+            Err(std::io::Error::from(std::io::ErrorKind::NotFound))
         }
     }
 
-    #[async_trait::async_trait]
-    impl Janitor for Counting {
-        async fn purge_expired(&self) -> crate::store::StoreResult<u64> {
-            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(0)
-        }
-    }
-
-    /// A round runs under one housekeeping turn, all its purges (roadmap
-    /// S2): a replica finding the turn taken purges nothing this round (no
-    /// outbox event, no idempotency record, no sweep), and the turn is free
-    /// again after a round. Decisive: the turn in `round`, and each purge
-    /// under it.
+    /// `run` makes its stop signal before it binds either listener, so
+    /// that [`shutdown_signal`]'s handlers are in place before anything
+    /// answers (see the test above). Decisive: making it after the
+    /// listeners are bound (as awaiting `shutdown_signal()` in
+    /// `supervise` did).
     #[tokio::test]
-    #[allow(clippy::too_many_lines)] // one scenario, read top to bottom
-    async fn a_round_runs_under_one_housekeeping_turn() {
-        use crate::model::{IdempotencyKey, TenantId};
-        use crate::store::events::{EventQuery, GuardedBinding, NewEvent, RouteGuard};
-        use crate::store::{MemoryLeaderLock, MemoryStore, Outbox as _, RecordStore as _};
-        use meta_whatsapp_rs::core::ids::WabaId;
-        let leader = MemoryLeaderLock::new();
-        let janitor = Arc::new(Counting::default());
-        let sweep = Sweep {
-            leader: Arc::new(leader.clone()),
-            janitor: janitor.clone(),
-        };
-        let records = MemoryStore::new();
-        let outbox = records.outbox();
-        let tenant = TenantId::parse("tenant-a").unwrap();
-        records.create_tenant(&tenant, "").await.unwrap().unwrap();
-        let waba = WabaId::new("102290129340398");
-        records.bind_waba(&tenant, &waba, &[]).await.unwrap();
-        let brief = Duration::from_millis(1);
-        let expired_record = |key: &'static str| {
-            let records = &records;
-            let tenant = &tenant;
-            async move {
-                records
-                    .claim_idempotency_key(
-                        tenant,
-                        &IdempotencyKey::parse(key).unwrap(),
-                        &[7; 32],
-                        "claim",
-                        brief,
-                        brief,
-                    )
-                    .await
-                    .unwrap();
-            }
-        };
-        // An event and an idempotency record, both past their time when
-        // the rounds run.
-        let sequence = outbox
-            .insert(&NewEvent {
-                id: "evt_round".to_owned(),
-                dedup_key: None,
-                dedup_window: None,
-                tenant: Some(tenant.clone()),
-                route_guard: Some(RouteGuard {
-                    binding: GuardedBinding::Waba(waba.clone()),
-                    not_after: None,
-                }),
-                phone_number_id: None,
-                waba_id: Some(waba),
-                event_type: "message_received".to_owned(),
-                data: "{}".to_owned(),
-            })
-            .await
-            .unwrap()
-            .unwrap();
-        expired_record("first").await;
-        tokio::time::sleep(Duration::from_millis(5)).await;
-        let page = || {
-            let outbox = &outbox;
-            let tenant = tenant.clone();
-            async move {
-                outbox
-                    .page(&EventQuery {
-                        tenant,
-                        after: None,
-                        types: None,
-                        phone_number_id: None,
-                        limit: 10,
-                        max_bytes: crate::events::MAX_PAGE_DATA_BYTES,
-                    })
-                    .await
-                    .unwrap()
-            }
-        };
-
-        let held = leader
-            .try_exclusive(HOUSEKEEPING, HOUSEKEEPING_LEASE)
-            .await
-            .unwrap()
-            .unwrap();
-        let ran = round(outbox.as_ref(), &records, Some(&sweep), Duration::ZERO).await;
-        assert!(!ran, "a round ran during another replica's turn");
-        assert_eq!(janitor.sweeps(), 0, "swept outside the turn");
-        assert_eq!(page().await.events.len(), 1, "purged outside the turn");
-        assert_eq!(
-            records.purge_idempotency_keys().await.unwrap(),
-            1,
-            "the idempotency records were purged outside the turn"
-        );
-
-        held.release().await.unwrap();
-        expired_record("second").await;
-        tokio::time::sleep(Duration::from_millis(5)).await;
-        assert!(round(outbox.as_ref(), &records, Some(&sweep), Duration::ZERO).await);
-        assert_eq!(janitor.sweeps(), 1, "the round swept");
-        let after = page().await;
-        assert!(after.events.is_empty(), "the round purged the outbox");
-        assert_eq!(after.purged_through, sequence);
-        assert_eq!(
-            records.purge_idempotency_keys().await.unwrap(),
-            0,
-            "the round purged the idempotency records"
-        );
-        assert!(
-            leader
-                .try_exclusive(HOUSEKEEPING, HOUSEKEEPING_LEASE)
-                .await
+    async fn the_stop_signal_is_made_before_the_listeners_are_bound() {
+        let _ports = crate::LOOPBACK_PORTS.lock().await;
+        let free = || {
+            std::net::TcpListener::bind("127.0.0.1:0")
                 .unwrap()
-                .is_some(),
-            "the round released its turn"
-        );
-    }
-
-    /// Housekeeping sweeps the expired rows round after round, after an
-    /// outbox purge that ran. Decisive: the sweep in the loop.
-    #[tokio::test]
-    async fn housekeeping_sweeps_the_expired_rows() {
-        use crate::store::{MemoryLeaderLock, MemoryStore};
-        let janitor = Arc::new(Counting::default());
-        let (stop, stopped) = watch::channel(false);
-        let records = MemoryStore::new();
-        let task = tokio::spawn(housekeeping(
-            records.outbox(),
-            Arc::new(records),
-            Some(Sweep {
-                leader: Arc::new(MemoryLeaderLock::new()),
-                janitor: janitor.clone(),
-            }),
-            Duration::from_secs(60),
-            Duration::from_millis(20),
-            stop_signal(stopped),
-        ));
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        while janitor.sweeps() < 2 {
-            assert!(tokio::time::Instant::now() < deadline, "never swept twice");
+                .local_addr()
+                .unwrap()
+        };
+        let (public, internal) = (free(), free());
+        let config = Config::from_env(&Vars(std::collections::HashMap::from([
+            ("WA_SERVER_ENV", "development".to_owned()),
+            ("WA_APP_SECRET", "app-secret-for-unit-tests".to_owned()),
+            ("WA_VERIFY_TOKEN", "verify-token-for-unit-tests".to_owned()),
+            ("WA_SERVER_PUBLIC_BIND", public.to_string()),
+            ("WA_SERVER_INTERNAL_BIND", internal.to_string()),
+        ])))
+        .unwrap();
+        let unbound = Arc::new(std::sync::Mutex::new(None));
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let made = unbound.clone();
+        let served = tokio::spawn(run(config, Arc::new(MemoryBackend::new()), move || {
+            let refused = |addr| std::net::TcpStream::connect(addr).is_err();
+            *made.lock().unwrap() = Some(refused(public) && refused(internal));
+            async move {
+                let _ = stopped.await;
+            }
+        }));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while tokio::net::TcpStream::connect(internal).await.is_err() {
+            assert!(tokio::time::Instant::now() < deadline, "never listened");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        stop.send(true).unwrap();
-        tokio::time::timeout(Duration::from_secs(5), task)
+        stop.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), served)
             .await
-            .expect("stopped with the service")
+            .expect("stopped on the signal")
+            .unwrap()
             .unwrap();
+        assert_eq!(
+            *unbound.lock().unwrap(),
+            Some(true),
+            "the stop signal was made once a listener was bound"
+        );
     }
 
     /// The signal stops serving while both listeners run.

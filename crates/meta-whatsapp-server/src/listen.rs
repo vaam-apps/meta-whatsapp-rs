@@ -156,6 +156,7 @@ mod tests {
     /// timeout on the connection builder.
     #[tokio::test]
     async fn a_slow_request_head_is_cut_off() {
+        let _ports = crate::LOOPBACK_PORTS.lock().await;
         let (addr, _stop) = start(Limits {
             header_read_timeout: Duration::from_millis(300),
             max_connections: 8,
@@ -190,6 +191,7 @@ mod tests {
     /// permit taken before each accept.
     #[tokio::test]
     async fn connections_past_the_cap_wait() {
+        let _ports = crate::LOOPBACK_PORTS.lock().await;
         let (addr, _stop) = start(Limits {
             header_read_timeout: Duration::from_secs(30),
             max_connections: 2,
@@ -221,6 +223,7 @@ mod tests {
     /// After the shutdown signal, no connection is accepted.
     #[tokio::test]
     async fn nothing_is_accepted_after_shutdown() {
+        let _ports = crate::LOOPBACK_PORTS.lock().await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let router = Router::new().route("/", get(|| async { "ok" }));

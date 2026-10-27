@@ -40,3 +40,12 @@ pub mod store;
 pub mod telemetry;
 
 pub use meta_whatsapp_server_core::{keys, model};
+
+/// Held by every unit test that binds a loopback port, and by the one that
+/// starts a child process: some assert that a port they closed refuses
+/// connections, and run at once another test's bind (on port 0, or on a
+/// port it freed for `run`) can be handed that port, or a child forked in
+/// the meantime can still hold its listener, before the refusal is
+/// checked.
+#[cfg(test)]
+pub(crate) static LOOPBACK_PORTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());

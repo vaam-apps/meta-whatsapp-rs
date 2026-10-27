@@ -549,11 +549,11 @@ async fn live_postgres_an_insert_in_flight_is_never_skipped() {
 /// included, whose purges took it themselves), a round purges nothing;
 /// once it is free, a round purges. Since roadmap S2 the purges take no
 /// lock of their own: the round's one `LeaderLock` turn is the lock.
-/// Decisive: the turn in `serve::round`.
+/// Decisive: the turn in the core's `housekeeping::round`.
 #[tokio::test]
 async fn live_postgres_one_replica_purges_at_a_time() {
-    use meta_whatsapp_server::serve::{Sweep, round};
-    use meta_whatsapp_server::store::{Backend as _, PgBackend};
+    use meta_whatsapp_server::store::PgBackend;
+    use meta_whatsapp_server_core::housekeeping::round;
     let Some(db) = TestDb::new().await else {
         return;
     };
@@ -565,10 +565,6 @@ async fn live_postgres_one_replica_purges_at_a_time() {
         .insert(&outbox_suite::row(None, "message_received", "1", None))
         .await
         .unwrap();
-    let sweep = Sweep {
-        leader: backend.leader_lock(),
-        janitor: backend.janitor(),
-    };
     let stored = || async {
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM wa_server_events")
             .fetch_one(&pool)
@@ -582,13 +578,7 @@ async fn live_postgres_one_replica_purges_at_a_time() {
         .await
         .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    let ran = round(
-        backend.outbox().as_ref(),
-        backend.idempotency().as_ref(),
-        Some(&sweep),
-        std::time::Duration::ZERO,
-    )
-    .await;
+    let ran = round(&backend, std::time::Duration::ZERO).await;
     assert!(!ran, "a round ran under another replica's lock");
     assert_eq!(stored().await, 1, "purged under another replica's lock");
     sqlx::query("SELECT pg_advisory_unlock($1)")
@@ -598,14 +588,7 @@ async fn live_postgres_one_replica_purges_at_a_time() {
         .unwrap();
     // Other tests' rounds may hold the database's lock for a moment.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while !round(
-        backend.outbox().as_ref(),
-        backend.idempotency().as_ref(),
-        Some(&sweep),
-        std::time::Duration::ZERO,
-    )
-    .await
-    {
+    while !round(&backend, std::time::Duration::ZERO).await {
         assert!(std::time::Instant::now() < deadline, "never a turn");
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
@@ -1454,11 +1437,12 @@ async fn live_postgres_a_leader_turn_ends_with_its_lease() {
 /// key/value rows under the round's housekeeping turn, and leaves a live
 /// row. Other tests' rounds take that lock too: a round that finds it
 /// taken skips, and a later one sweeps. Decisive: the sweep in
-/// `serve::round`, `PgBackend::janitor`, and `PgJanitor::purge_expired`.
+/// the core's `housekeeping::round`, `PgBackend::janitor`, and
+/// `PgJanitor::purge_expired`.
 #[tokio::test]
 async fn live_postgres_housekeeping_sweeps_expired_key_value_rows() {
-    use meta_whatsapp_server::serve::{Sweep, housekeeping};
-    use meta_whatsapp_server::store::{Backend as _, PgBackend};
+    use meta_whatsapp_server::store::PgBackend;
+    use meta_whatsapp_server_core::housekeeping;
     let Some(db) = TestDb::new().await else {
         return;
     };
@@ -1485,15 +1469,10 @@ async fn live_postgres_housekeeping_sweeps_expired_key_value_rows() {
         .unwrap()
     };
     assert_eq!(keys().await, ["expired", "live"]);
-    let backend = PgBackend::new(pool.clone());
+    let backend = std::sync::Arc::new(PgBackend::new(pool.clone()));
     let (stop, mut stopped) = tokio::sync::watch::channel(false);
-    let task = tokio::spawn(housekeeping(
-        backend.outbox(),
-        backend.idempotency(),
-        Some(Sweep {
-            leader: backend.leader_lock(),
-            janitor: backend.janitor(),
-        }),
+    let task = tokio::spawn(housekeeping::run(
+        backend,
         meta_whatsapp_server::events::DEFAULT_OUTBOX_RETENTION,
         std::time::Duration::from_millis(50),
         async move {

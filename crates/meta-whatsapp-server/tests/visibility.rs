@@ -1,6 +1,9 @@
 //! What must not compile outside this crate, each with the compiler's
 //! error code and text (`tests/visibility/fail/*.stderr`): `AppState`'s
-//! records and authorization order are crate-private. So are the
+//! records, the backend it was composed from and its authorization order
+//! are crate-private, and it is composed from a `Backend` alone (roadmap
+//! S4: `app_state_from_loose_ports.rs`, `app_state_new.rs`, and
+//! `inbound_stores.rs` for the webhook pipeline). So are the
 //! handlers, which act on the capability they are given without asking
 //! the authorizer again (`api_*.rs`: the security review of 3237040
 //! called two of them with a forged one), and `idempotency::run`, which
