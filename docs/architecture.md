@@ -259,7 +259,8 @@ Rules for every endpoint module:
    `?` or `#` stays inside its segment; empty, `.` and `..` are refused).
    Ids have one of two shapes (`meta_whatsapp_core::ids`, roadmap L20c).
    The ids Meta documents as numeric strings (`AppId`, `BusinessId`,
-   `WabaId`, `PhoneNumberId`, `MediaId`, `TemplateId`) refuse anything
+   `WabaId`, `PhoneNumberId`, `MediaId`, `TemplateId`, `ProductItemId`,
+   `ProductSetId`) refuse anything
    but 1 to 64 ASCII digits when built (`new`, `FromStr`, `TryFrom`: a
    `ValidationError` on the type's `FIELD`), so a numeric id cannot carry
    a `/` into a path. Every other id is opaque (any string: BSUIDs, group

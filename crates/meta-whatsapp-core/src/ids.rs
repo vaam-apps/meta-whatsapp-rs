@@ -11,9 +11,11 @@
 //! documents one (roadmap L20c):
 //!
 //! - **Numeric ids** ([`AppId`], [`BusinessId`], [`WabaId`],
-//!   [`PhoneNumberId`], [`MediaId`], [`TemplateId`]): Meta's ids for these
-//!   objects are numeric strings (the WABA reference's own error example:
-//!   "must be a valid numeric string"). Their constructors
+//!   [`PhoneNumberId`], [`MediaId`], [`TemplateId`], [`ProductItemId`],
+//!   [`ProductSetId`]): Meta's ids for these objects are numeric strings
+//!   (the WABA reference's own error example: "must be a valid numeric
+//!   string"; the Catalog API's field tables for products and product
+//!   sets). Their constructors
 //!   ([`WabaId::new`], [`FromStr`](std::str::FromStr), [`TryFrom`]) refuse
 //!   anything but 1 to [`MAX_NUMERIC_ID_LEN`] ASCII digits with a
 //!   [`ValidationError`] on the id's field (`waba_id`, `phone_number_id`,
@@ -264,17 +266,20 @@ id_type!(
     /// Commerce catalog id.
     CatalogId
 );
-id_type!(
-    /// A product item id (`{product-item-id}` in Meta's Catalog API): one
-    /// product, or one variant of a product, in a catalog. Not its
-    /// `retailer_id` (the business's own SKU, which product messages
-    /// address).
-    ProductItemId
+numeric_id_type!(
+    /// A product item id (`{product-item-id}` in Meta's Catalog API, a
+    /// "numeric string" in its field tables): one product, or one variant
+    /// of a product, in a catalog. Not its `retailer_id` (the business's
+    /// own SKU, which product messages address).
+    ProductItemId,
+    "product_item_id"
 );
-id_type!(
-    /// A product set id (`{product_set_id}` in Meta's Catalog API): a
-    /// filtered group of a catalog's products.
-    ProductSetId
+numeric_id_type!(
+    /// A product set id (`{product_set_id}` in Meta's Catalog API, a
+    /// "numeric string" in its field tables): a filtered group of a
+    /// catalog's products.
+    ProductSetId,
+    "product_set_id"
 );
 id_type!(
     /// Business-scoped user id (BSUID), e.g. `US.13491208655302741918`, or a
@@ -455,6 +460,8 @@ mod tests {
         check::<PhoneNumberId>("phone_number_id");
         check::<MediaId>("media_id");
         check::<TemplateId>("template_id");
+        check::<ProductItemId>("product_item_id");
+        check::<ProductSetId>("product_set_id");
         assert_eq!(WabaId::new("1/2").unwrap_err().field, WabaId::FIELD);
         assert!(is_numeric_id("1") && !is_numeric_id("1/2"));
     }
@@ -469,6 +476,8 @@ mod tests {
             assert_eq!(waba.as_str(), sent);
             let media: MediaId = serde_json::from_str(&json).unwrap();
             assert_eq!(media.as_str(), sent);
+            let product: ProductItemId = serde_json::from_str(&json).unwrap();
+            assert_eq!(product.as_str(), sent);
         }
     }
 

@@ -1135,7 +1135,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     `override_country` and `override_language` parameters, which the
     reference names without saying what they do. `ProductItemId` and
     `ProductSetId` are `meta_whatsapp_core::ids` newtypes, re-exported
-    by `client::commerce`.
+    by `client::commerce` (numeric since L20c).
 - [ ] **L18. A typed Flow JSON builder** (`meta-whatsapp-client`,
   `client::flows`; row 63).
   - **Kind:** additive.
@@ -1181,8 +1181,9 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** a numeric id holding `/` is refused before any
     request; a group id holding `/` stays one percent-encoded segment.
   - **Landed:** `AppId`, `BusinessId`, `WabaId`, `PhoneNumberId`,
-    `MediaId` and `TemplateId` (the ids Meta documents as numeric
-    strings) refuse anything but 1 to 64 ASCII digits when built
+    `MediaId`, `TemplateId`, and L17's `ProductItemId` and
+    `ProductSetId` (the ids Meta documents as numeric strings, the last
+    two in the Catalog API's field tables) refuse anything but 1 to 64 ASCII digits when built
     (`new` returns a `Result`, `FromStr` and `TryFrom` replace the
     infallible conversions; `ids::is_numeric_id`, `MAX_NUMERIC_ID_LEN`,
     64 being the service's existing cap), a `ValidationError` on the
@@ -1200,8 +1201,12 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     accessors: `DELETE /v25.0/Y2FwaV9ncm91cDox%2Fparticipants`), with
     `a_numeric_id_meta_sent_is_kept_and_stays_one_segment`, and in core
     `ids::tests::a_numeric_id_is_one_to_sixty_four_ascii_digits` and
-    `a_numeric_id_from_meta_is_deserialized_as_sent`. Making the check
-    always pass sends all six requests (the test lists their paths);
+    `a_numeric_id_from_meta_is_deserialized_as_sent`; the first checks
+    all eight types, and is the decisive one for the two product ids,
+    whose paths `commerce::catalog` also checks as digits at request
+    time (`ids_that_are_not_digits_are_refused_before_any_request`,
+    with ids built unchecked). Making the check always pass sends all
+    six requests (the test lists their paths);
     splitting a segment on `/` in `GraphEndpoint::url_segments` fails
     the group test and the Meta-sent one. The endpoint modules keep
     their request-time checks (empty, `.`, `..`; digits where a page

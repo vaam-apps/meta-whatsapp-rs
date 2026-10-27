@@ -47,9 +47,6 @@ use crate::store::RecordStore;
 /// it the listing is refused as `upstream` rather than followed for ever.
 pub const MAX_WABA_NUMBERS: usize = 1000;
 
-/// Longest WABA id accepted from a request.
-const MAX_ID_LEN: usize = 64;
-
 /// Rounds a tenant's deletion takes before it gives up: a WABA attached
 /// while one runs is disconnected by the next.
 const DELETE_ROUNDS: usize = 5;
@@ -180,19 +177,22 @@ pub fn allowed_tenants(spec: TenantsInput) -> Result<AllowedTenants, ServiceErro
     }
 }
 
-/// A Meta id from a request: digits only, as Meta writes them (D4 compares
-/// the exact string, so `0102…` and `102…` must not both pass); else `422
-/// invalid_request` on `field`.
-fn graph_id(field: &'static str, id: &str) -> Result<String, ServiceError> {
-    let valid = !id.is_empty()
-        && id.len() <= MAX_ID_LEN
-        && id.bytes().all(|b| b.is_ascii_digit())
-        && !id.starts_with('0');
-    if valid {
-        Ok(id.to_owned())
-    } else {
-        Err(ServiceError::invalid(field))
+/// A WABA id from a request: Meta's digits ([`WabaId::new`]: 1 to
+/// [`MAX_NUMERIC_ID_LEN`](meta_whatsapp_rs::core::ids::MAX_NUMERIC_ID_LEN)
+/// ASCII digits), not starting with `0` (D4 compares the exact string, so
+/// `0102…` and `102…` must not both pass); else `422 invalid_request` on
+/// `waba_id`.
+fn requested_waba_id(id: &str) -> Result<WabaId, ServiceError> {
+    if id.starts_with('0') {
+        return Err(ServiceError::invalid(WabaId::FIELD));
     }
+    WabaId::new(id).map_err(|_| ServiceError::invalid(WabaId::FIELD))
+}
+
+/// A WABA id from a path: only a numeric one can be bound, so any other
+/// is `404 not_found`, before anything is read.
+fn path_waba_id(id: &str) -> Result<WabaId, ServiceError> {
+    WabaId::new(id).map_err(|_| ServiceError::not_found())
 }
 
 // ─── Minting ─────────────────────────────────────────────────────────────
@@ -664,7 +664,7 @@ impl<'a> Admin<'a> {
         token: AccessToken,
     ) -> Result<Attached, ServiceError> {
         let tenant = named_tenant(tenant)?;
-        let waba_id = WabaId::new(graph_id("waba_id", waba_id)?);
+        let waba_id = requested_waba_id(waba_id)?;
         if token.expose_secret().trim().is_empty() {
             return Err(ServiceError::invalid("token"));
         }
@@ -776,9 +776,10 @@ impl<'a> Admin<'a> {
     ///
     /// # Errors
     ///
-    /// `404 not_found` (not bound); the store's failure.
+    /// `404 not_found` (not bound, or not a numeric id: refused before
+    /// anything is read); the store's failure.
     pub async fn waba(&self, waba_id: &str) -> Result<HeldWaba, ServiceError> {
-        let waba_id = WabaId::new(waba_id);
+        let waba_id = path_waba_id(waba_id)?;
         let binding = self
             .records()
             .waba(&waba_id)
@@ -795,11 +796,12 @@ impl<'a> Admin<'a> {
     ///
     /// # Errors
     ///
-    /// `404 not_found` (not bound); as [`Self::unbind`].
+    /// `404 not_found` (not bound, or not a numeric id: refused before
+    /// anything is read); as [`Self::unbind`].
     pub async fn unbind_waba(&self, waba_id: &str) -> Result<(), ServiceError> {
         let binding = self
             .records()
-            .waba(&WabaId::new(waba_id))
+            .waba(&path_waba_id(waba_id)?)
             .await?
             .ok_or_else(ServiceError::not_found)?;
         self.unbind(&binding).await?;
@@ -905,12 +907,12 @@ fn key_subject(key_id: &str) -> Subject<'_> {
 mod tests {
     use super::*;
 
-    /// A Meta id is 1 to 64 digits, not starting with `0`. Decisive: each
-    /// clause, the length cap included.
+    /// A WABA id from a request is 1 to 64 digits, not starting with `0`.
+    /// Decisive: each clause, the length cap included.
     #[test]
     fn a_waba_id_is_metas_digits() {
-        assert!(graph_id("waba_id", "1").is_ok());
-        assert!(graph_id("waba_id", &"9".repeat(64)).is_ok());
+        assert_eq!(requested_waba_id("1").unwrap().as_str(), "1");
+        assert!(requested_waba_id(&"9".repeat(64)).is_ok());
         for bad in [
             String::new(),
             "9".repeat(65),
@@ -918,7 +920,7 @@ mod tests {
             "12a".to_owned(),
             " 1".to_owned(),
         ] {
-            let refused = graph_id("waba_id", &bad).unwrap_err();
+            let refused = requested_waba_id(&bad).unwrap_err();
             assert_eq!(refused.field(), Some("waba_id"), "{bad:?}");
         }
     }

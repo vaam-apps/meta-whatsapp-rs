@@ -244,7 +244,8 @@ stored data, the owner's).
   (catalog, product set, product item, WABA, and the `ancestor_id` and
   `parent_id` filters) is checked as digits before any request. New ids
   `meta_whatsapp_core::ids::ProductItemId` and `ProductSetId`
-  (re-exported by `commerce`). A read whose body does not decode keeps
+  (re-exported by `commerce`), numeric ids checked when built (see
+  Changed: numeric ids, L20c). A read whose body does not decode keeps
   the body out of the error, as does a page any stream fetches
   (`GraphRequest::paginate`): Meta's `paging.next` links can carry
   the access token. Catalog writes, and connecting a catalog to a
@@ -1206,12 +1207,14 @@ stored data, the owner's).
 - **Breaking — numeric ids are checked when they are built**
   (`meta_whatsapp_core::ids`, roadmap L20c, decided as OPEN_QUESTIONS
   #20, now closed). `AppId`, `BusinessId`, `WabaId`, `PhoneNumberId`,
-  `MediaId` and `TemplateId` are the ids Meta documents as numeric
-  strings; their `new` now returns `Result<Self, ValidationError>` and
+  `MediaId`, `TemplateId`, `ProductItemId` and `ProductSetId` are the
+  ids Meta documents as numeric strings (the last two in the Catalog
+  API's field tables); their `new` now returns `Result<Self, ValidationError>` and
   refuses anything but 1 to 64 ASCII digits (`ids::MAX_NUMERIC_ID_LEN`,
   `ids::is_numeric_id`; 64 is the service's existing cap, Meta states
   none), with the error on the type's `FIELD` (`app_id`, `business_id`,
-  `waba_id`, `phone_number_id`, `media_id`, `template_id`) and the
+  `waba_id`, `phone_number_id`, `media_id`, `template_id`,
+  `product_item_id`, `product_set_id`) and the
   refused value not repeated. `FromStr` fails with the same
   `ValidationError` (it was `Infallible`), and `TryFrom<&str>` and
   `TryFrom<String>` replace `From`. So an id holding `/`, `?`, `#` or
@@ -1235,8 +1238,10 @@ stored data, the owner's).
   recorded in roadmap L20c). Upgrading: build a numeric id
   with `WabaId::new("102290129340398")?` (or `"…".parse::<WabaId>()?`)
   where a string was passed: `client.messages`, `media`, `waba`,
-  `business`, `templates`, `flows`, `marketing`, `signups` and every
-  other family that takes one, `AppCredentials::new`,
+  `business`, `templates`, `flows`, `marketing`, `signups`, `product`,
+  `product_set` and every other family that takes one,
+  `ListProductSets`'s `ancestor_id` and `parent_id`,
+  `AppCredentials::new`,
   `OtpService::new`, `ConversationKey::new`, `IdentityLink::new`,
   `StoredBusinessToken::new` and its `business_id` and
   `phone_number_ids`, `LaunchOptions::pre_verified_phone_ids` and

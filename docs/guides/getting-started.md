@@ -99,8 +99,9 @@ Run the full program with
   distinct types (`PhoneNumberId`, `WabaId`, …), so a WABA id cannot be
   passed where a phone number id is expected. The numeric ones
   (`PhoneNumberId`, `WabaId`, `BusinessId`, `AppId`, `MediaId`,
-  `TemplateId`) are built with `new`, which refuses anything but digits
-  (`PhoneNumberId::new(id)?` or `id.parse::<PhoneNumberId>()?`).
+  `TemplateId`, `ProductItemId`, `ProductSetId`) are built with `new`,
+  which refuses anything but digits (`PhoneNumberId::new(id)?` or
+  `id.parse::<PhoneNumberId>()?`).
 - Meta's [account model evolution](https://developers.facebook.com/documentation/business-messaging/whatsapp/account-model-evolution)
   (phase 1 from H2 2026) splits a WABA in two: a **Messaging Account**
   keeps the WABA id and holds templates, billing and webhook
