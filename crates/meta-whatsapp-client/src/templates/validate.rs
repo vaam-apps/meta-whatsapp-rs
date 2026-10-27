@@ -11,6 +11,7 @@
 //! "characters" without defining them.
 
 use std::collections::BTreeSet;
+use std::ops::RangeInclusive;
 
 use meta_whatsapp_core::error::ValidationError;
 
@@ -117,6 +118,7 @@ pub(crate) fn definition(d: &TemplateDefinition) -> Check {
         &d.components,
         Some(&d.category),
         Some(&format),
+        Phase::Create,
         "components",
     )
 }
@@ -137,6 +139,7 @@ pub(crate) fn edit(e: &TemplateEdit) -> Check {
             list,
             e.category.as_ref(),
             e.parameter_format.as_ref(),
+            Phase::Edit,
             "components",
         )?;
     }
@@ -154,10 +157,19 @@ struct Counts {
     cpr: usize,
 }
 
+/// Whether the components create a template or replace an existing
+/// one's: some limits are stated for creation only.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    Create,
+    Edit,
+}
+
 /// What the rest of the template changes about a component's limits.
 struct Ctx<'a> {
     category: Option<&'a TemplateCategory>,
     format: Option<&'a ParameterFormat>,
+    phase: Phase,
     auth: bool,
     lto: bool,
     product_header: bool,
@@ -167,6 +179,7 @@ fn components(
     list: &[TemplateComponent],
     category: Option<&TemplateCategory>,
     format: Option<&ParameterFormat>,
+    phase: Phase,
     path: &str,
 ) -> Check {
     let mut n = Counts::default();
@@ -263,6 +276,7 @@ fn components(
     let ctx = Ctx {
         category,
         format,
+        phase,
         auth,
         lto: n.lto == 1,
         product_header,
@@ -922,15 +936,40 @@ fn flow_button(flow: &FlowButton, field: &str) -> Check {
     Ok(())
 }
 
+/// Cards in a carousel template: media cards "minimum 2, maximum 10"
+/// (`templates/marketing-templates/media-card-carousel-templates`; a send
+/// must then carry exactly that many).
+const CAROUSEL_CARDS: RangeInclusive<usize> = 2..=10;
+
+/// Cards a product-card carousel template is created with
+/// (`catalogs/product-card-carousel-template-messages`: "Define only two
+/// product cards when you create the template. An approved template with
+/// two product cards can be used to send up to 10 cards in a template
+/// message."). The send side's bound of 10 is in `send.rs`.
+const PRODUCT_CARDS_AT_CREATION: usize = 2;
+
 /// Carousels: `templates/marketing-templates/media-card-carousel-templates`
 /// and `catalogs/product-card-carousel-template-messages`.
 fn carousel(cards: &[CarouselCard], ctx: &Ctx<'_>, field: &str) -> Check {
-    // Media cards: "minimum 2, maximum 10", and a send must carry exactly
-    // that many. Product cards: "Define only two product cards when you
-    // create the template" (a send may then carry up to 10). That reads as
-    // guidance rather than a stated rejection, so product carousels get the
-    // same 2–10 bound here instead of an exact 2.
-    if !(2..=10).contains(&cards.len()) {
+    // A product-card carousel is one whose cards carry a PRODUCT header
+    // (the shape check below then makes every card carry one). The page
+    // states the two cards for creation only, so an edit keeps the
+    // general 2–10 bound.
+    let product = cards.iter().any(|card| {
+        card.components
+            .iter()
+            .any(|c| matches!(c, TemplateComponent::Header(h) if h.format == HeaderFormat::Product))
+    });
+    if product && ctx.phase == Phase::Create && cards.len() != PRODUCT_CARDS_AT_CREATION {
+        return Err(err(
+            format!("{field}.cards"),
+            format!(
+                "a product-card carousel template is created with exactly \
+                 {PRODUCT_CARDS_AT_CREATION} cards (once approved, a send may carry up to 10)"
+            ),
+        ));
+    }
+    if !CAROUSEL_CARDS.contains(&cards.len()) {
         return Err(err(
             format!("{field}.cards"),
             "a carousel needs 2 to 10 cards",

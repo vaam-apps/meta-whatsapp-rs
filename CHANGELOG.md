@@ -91,6 +91,11 @@ volumes (Claude config, shell history, cargo caches) start empty
   raw bytes". This reverts fd4667e's provisional replacement of U+0000
   with U+FFFD in `InboxSink` and `Inbox::send`: message content keeps it,
   and the Postgres store holds it (below, Changed).
+- #22 (product-card carousel templates were created with 2–10 cards
+  where Meta's page says to define two): decided on 2026-09-26 under the
+  owner's delegation, exactly two at creation; landed with roadmap L20e
+  (see Changed, breaking), and the entry is deleted from
+  OPEN_QUESTIONS.md.
 - #31 (every SSE subscriber cloned every event): decided on 2026-09-26
   under the owner's delegation, broadcast `Arc<WebhookEvent>`; landed
   with roadmap L21b (see Changed, breaking), and the entry is deleted
@@ -177,7 +182,7 @@ stored data, the owner's).
   kept until typst upgrades (no other code).
 - Product details:
   - #22, product-card carousel templates created with exactly two cards
-    (L20e);
+    (L20e, landed: see Changed and "Open questions closed");
   - #23, `add_participants` kept, with its warning (no code);
   - #24, `set_button_click_tracking` stays in analytics (no code);
   - #25, rendering keeps failing until `with_today` is set (no code);
@@ -1121,6 +1126,24 @@ stored data, the owner's).
   Use v4, which needs no `version`.
 
 ### Changed
+
+- **Breaking — a product-card carousel template is created with exactly
+  two cards** (`meta_whatsapp_client::templates`, roadmap L20e, decided
+  as OPEN_QUESTIONS #22, now closed). Meta's page
+  (`catalogs/product-card-carousel-template-messages`) says: "Define only
+  two product cards when you create the template. An approved template
+  with two product cards can be used to send up to 10 cards in a
+  template message." `TemplateDefinition::validate`, and so
+  `Templates::create`, now refuse a carousel whose cards carry a
+  `PRODUCT` header unless it has exactly two cards, with an
+  `Error::Validation` on `components[<i>].cards` before any request;
+  until now they accepted 2–10. Media-card carousels keep their 2–10;
+  `TemplateEdit::validate` (an edit of an existing template's
+  components, for which the page states no count) keeps 2–10 for both
+  kinds; a send (`TemplateMessage::carousel`) still takes up to 10
+  cards of either kind. Upgrading: create a product-card carousel
+  template with two cards, then send it with as many as you need, up
+  to 10.
 
 - **Breaking — live events are shared as `Arc<WebhookEvent>`, not cloned
   per subscriber** (`meta_whatsapp_webhooks::sse`,

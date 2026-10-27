@@ -132,6 +132,10 @@ Ok(templates.create_group(&group).await?.id) // keep it: there is no list call
   format**. Positional placeholders read `{{1}}, {{2}}, …` in order;
   every placeholder needs an example; `{{first_name}}` without
   `ParameterFormat::Named` is a `Validation` error (the test proves it).
+- A product-card carousel (cards with `TemplateComponent::header_product()`)
+  is created with exactly two cards, as Meta's page says; other counts are a
+  `Validation` error. Once approved, a send carries up to 10. Media-card
+  carousels take 2–10.
 - A template exists per **language**: create each language you send in.
 - At most 100 creations per WABA per hour; the WABA total is limited too
   (`ErrorKind::TemplateLimitReached`, 2388019). Content rejections are
@@ -148,10 +152,6 @@ Ok(templates.create_group(&group).await?.id) // keep it: there is no list call
   `create_group` returns.
 - It does not store which templates are approved: keep your own table,
   updated from the webhooks.
-- Product-card carousels: the code allows 2–10 cards where Meta's page
-  says "exactly two"
-  ([OPEN_QUESTIONS.md #22](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#product-details),
-  decided on 2026-09-26: creation will check exactly two, roadmap L20e).
 
 ## Related skills
 

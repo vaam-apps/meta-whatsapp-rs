@@ -7,12 +7,14 @@ use futures::StreamExt;
 use http::Method;
 use meta_whatsapp_core::ErrorKind;
 use meta_whatsapp_core::ids::{TemplateGroupId, TemplateId};
+use meta_whatsapp_core::recipient::Recipient;
 use meta_whatsapp_core::testing::ScriptedTransport;
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
 
 use super::*;
 use crate::RetryPolicy;
+use crate::messages::OutboundMessage;
 
 fn client(t: &ScriptedTransport) -> Client {
     Client::builder()
@@ -283,9 +285,9 @@ fn location_header_utility_template() {
     assert_definition(&def, doc);
 }
 
-#[test]
-fn media_card_carousel_template() {
-    // templates/marketing-templates/media-card-carousel-templates, example request.
+/// templates/marketing-templates/media-card-carousel-templates, example
+/// request (three cards): our definition and the page's body.
+fn media_card_example() -> (TemplateDefinition, Value) {
     let card = |example: &str, url: &str| {
         json!({"components": [
             {"type": "header", "format": "image", "example": {"header_handle": ["4::an..."]}},
@@ -331,6 +333,12 @@ fn media_card_carousel_template() {
             card("BUDDHA", "https://www.luckyshrub.com/rare-succulents{{1}}"),
             card("BLACK_PRINCE", "https://www.luckyshrub.com/rare-succulents{{1}}"),
         ]));
+    (def, doc)
+}
+
+#[test]
+fn media_card_carousel_template() {
+    let (def, doc) = media_card_example();
     assert_definition(&def, doc);
 }
 
@@ -1684,6 +1692,214 @@ async fn invalid_definitions_never_reach_meta() {
     assert_eq!(err.kind(), ErrorKind::InvalidParameter);
     assert!(matches!(err, meta_whatsapp_core::Error::Validation(ref v) if v.field == "name"));
     assert!(t.requests().is_empty());
+}
+
+// ------------------------------------------- carousel card counts (L20e)
+
+/// catalogs/product-card-carousel-template-messages, "Request syntax":
+/// "Define only two product cards when you create the template. An
+/// approved template with two product cards can be used to send up to 10
+/// cards in a template message."
+fn product_card_definition(cards: usize) -> TemplateDefinition {
+    let card = || {
+        CarouselCard::new([
+            TemplateComponent::header_product(),
+            TemplateComponent::buttons([Button::spm("View")]),
+        ])
+    };
+    TemplateDefinition::new(
+        "carousel_template_product_cards_v1",
+        "en_US",
+        TemplateCategory::Marketing,
+    )
+    .component(TemplateComponent::body_positional(
+        "Rare succulents for sale! {{1}}, add these unique plants to your collection.",
+        ["Pablo"],
+    ))
+    .component(TemplateComponent::carousel((0..cards).map(|_| card())))
+}
+
+/// custom-marketing-templates, example response (the product-card page
+/// prints none).
+fn created_response() -> Value {
+    json!({"id": "1627019861106475", "status": "PENDING", "category": "MARKETING"})
+}
+
+#[tokio::test]
+async fn a_product_card_carousel_is_created_with_exactly_two_cards() {
+    for n in [0, 1, 3, 10, 11] {
+        let t = ScriptedTransport::new();
+        let err = client(&t)
+            .templates("102290129340398")
+            .create(&product_card_definition(n))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidParameter, "{n} cards");
+        assert!(
+            matches!(err, meta_whatsapp_core::Error::Validation(ref v) if v.field == "components[1].cards"),
+            "{n} cards: {err}"
+        );
+        assert!(t.requests().is_empty(), "{n} cards: nothing is sent");
+        assert_eq!(t.remaining(), 0);
+    }
+
+    let t = ScriptedTransport::new();
+    t.push_json(200, created_response());
+    let created = client(&t)
+        .templates("102290129340398")
+        .create(&product_card_definition(2))
+        .await
+        .unwrap();
+    assert_eq!(created.id, TemplateId::new("1627019861106475"));
+    let req = t.last_request().unwrap();
+    assert_eq!(req.method, Method::POST);
+    assert_eq!(req.path(), "/v25.0/102290129340398/message_templates");
+    assert_eq!(req.bearer(), Some("TOKEN"));
+    let card = json!({"components": [
+        {"type": "HEADER", "format": "PRODUCT"},
+        {"type": "BUTTONS", "buttons": [{"type": "SPM", "text": "View"}]}
+    ]});
+    assert_eq!(
+        req.json(),
+        Some(json!({
+            "name": "carousel_template_product_cards_v1",
+            "language": "en_US",
+            "category": "MARKETING",
+            "components": [
+                {"type": "BODY", "text": "Rare succulents for sale! {{1}}, add these unique plants to your collection.",
+                 "example": {"body_text": [["Pablo"]]}},
+                {"type": "CAROUSEL", "cards": [card, card]}
+            ]
+        }))
+    );
+    assert_eq!(t.requests().len(), 1);
+    assert_eq!(t.remaining(), 0);
+}
+
+/// The two-card rule is stated for creation: replacing an existing
+/// template's components keeps the general 2–10 bound.
+#[test]
+fn a_product_card_carousel_edit_keeps_two_to_ten_cards() {
+    let components = |n| product_card_definition(n).components;
+    assert!(TemplateEdit::components(components(3)).validate().is_ok());
+    assert!(TemplateEdit::components(components(10)).validate().is_ok());
+    assert_eq!(
+        TemplateEdit::components(components(11))
+            .validate()
+            .unwrap_err()
+            .field,
+        "components[1].cards"
+    );
+}
+
+#[tokio::test]
+async fn a_media_card_carousel_with_three_cards_is_created() {
+    // templates/marketing-templates/media-card-carousel-templates: "minimum
+    // 2, maximum 10" cards, so the page's three-card example is created.
+    let (def, doc) = media_card_example();
+    let t = ScriptedTransport::new();
+    t.push_json(200, created_response());
+    let created = client(&t)
+        .templates("102290129340398")
+        .create(&def)
+        .await
+        .unwrap();
+    assert_eq!(created.id, TemplateId::new("1627019861106475"));
+    let req = t.last_request().unwrap();
+    assert_eq!(req.method, Method::POST);
+    assert_eq!(req.path(), "/v25.0/102290129340398/message_templates");
+    assert_eq!(req.bearer(), Some("TOKEN"));
+    // The page's body, with its lower-case enums upper-cased as we send them.
+    let body = req.json().unwrap();
+    assert_eq!(
+        body["components"][1]["cards"].as_array().map(Vec::len),
+        Some(3)
+    );
+    assert_eq!(body, normalize(doc));
+    assert_eq!(t.remaining(), 0);
+}
+
+/// catalogs/product-card-carousel-template-messages, send example, with
+/// `n` cards: the page's three products, then more from the same catalog.
+fn product_card_send(n: u32) -> (OutboundMessage, Value) {
+    let ids: Vec<String> = (0..n)
+        .map(|i| match i {
+            0 => "vrpj01fvwp".to_owned(),
+            1 => "va2l5ioeat".to_owned(),
+            2 => "sqpjv0mgde".to_owned(),
+            i => format!("product_{i}"),
+        })
+        .collect();
+    let message = TemplateMessage::new("carousel_template_product_cards_v1", "en_US")
+        .body([Parameter::text("Pablo")])
+        .carousel(ids.iter().zip(0..).map(|(id, i)| {
+            CarouselCardParameters::new(
+                i,
+                [SendComponent::header(Parameter::product(
+                    id.as_str(),
+                    "194836987003835",
+                ))],
+            )
+        }));
+    let cards: Vec<Value> = ids
+        .iter()
+        .zip(0_u32..)
+        .map(|(id, i)| {
+            json!({"card_index": i, "components": [{"type": "header", "parameters": [
+                {"type": "product", "product": {"product_retailer_id": id, "catalog_id": "194836987003835"}}
+            ]}]})
+        })
+        .collect();
+    let body = json!({
+      "messaging_product": "whatsapp",
+      "recipient_type": "individual",
+      "to": "+16505551234",
+      "type": "template",
+      "template": {
+        "name": "carousel_template_product_cards_v1",
+        "language": {"code": "en_US"},
+        "components": [
+          {"type": "body", "parameters": [{"type": "text", "text": "Pablo"}]},
+          {"type": "carousel", "cards": cards}
+        ]
+      }
+    });
+    (
+        OutboundMessage::template(Recipient::phone("+16505551234"), message),
+        body,
+    )
+}
+
+#[tokio::test]
+async fn a_product_card_carousel_send_takes_up_to_ten_cards() {
+    let t = ScriptedTransport::new();
+    // messages/text-messages, "Example response".
+    t.push_json(
+        200,
+        json!({
+          "messaging_product": "whatsapp",
+          "contacts": [{"input": "+16505551234", "wa_id": "16505551234"}],
+          "messages": [{"id": "wamid.HBgLMTY0NjcwNDM1OTUVAgARGBI1RjQyNUE3NEYxMzAzMzQ5MkEA"}]
+        }),
+    );
+    let messages = client(&t).messages("179776755229976");
+    let (ten, body) = product_card_send(10);
+    messages.send(&ten).await.unwrap();
+    let req = t.last_request().unwrap();
+    assert_eq!(req.method, Method::POST);
+    assert_eq!(req.path(), "/v25.0/179776755229976/messages");
+    assert_eq!(req.bearer(), Some("TOKEN"));
+    assert_eq!(req.json(), Some(body));
+
+    let (eleven, _) = product_card_send(11);
+    let err = messages.send(&eleven).await.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::InvalidParameter);
+    assert!(
+        matches!(err, meta_whatsapp_core::Error::Validation(ref v) if v.field == "template.components[1].cards"),
+        "{err}"
+    );
+    assert_eq!(t.requests().len(), 1, "the 11-card send is not sent");
+    assert_eq!(t.remaining(), 0);
 }
 
 #[tokio::test]

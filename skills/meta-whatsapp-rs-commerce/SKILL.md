@@ -103,6 +103,9 @@ key the order by the message id.
 - A retailer id that is not in the connected catalog is refused by Meta,
   not locally: meta-whatsapp-rs checks presence and counts only.
 - `item_price` is a float in Meta's example: never compute money from it.
+- A product-card carousel template is created with exactly two
+  `TemplateComponent::header_product()` cards (other counts are a
+  `Validation` error); once approved, a send carries up to 10.
 
 ## What meta-whatsapp-rs does not do
 
@@ -110,10 +113,6 @@ key the order by the message id.
   (payments are out of scope, see
   [coverage](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/coverage.md)),
   no order state machine.
-- Product-card carousel templates accept 2–10 cards where Meta's page says
-  "exactly two"
-  ([OPEN_QUESTIONS.md #22](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#product-details),
-  decided on 2026-09-26: creation will check exactly two, roadmap L20e).
 
 ## Related skills
 
