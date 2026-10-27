@@ -25,20 +25,31 @@ use meta_whatsapp_server::store::{
 use meta_whatsapp_server_core::housekeeping::{round, run};
 use tokio::sync::watch;
 
-/// A janitor counting its sweeps.
+/// A janitor counting its sweeps, and, given a `stop`, stopping
+/// housekeeping from within its sweep, which then lasts 5 ms more.
 #[derive(Debug, Default)]
-struct Counting(AtomicUsize);
+struct Counting {
+    sweeps: AtomicUsize,
+    stop: std::sync::Mutex<Option<watch::Sender<bool>>>,
+}
 
 impl Counting {
     fn sweeps(&self) -> usize {
-        self.0.load(Ordering::SeqCst)
+        self.sweeps.load(Ordering::SeqCst)
     }
 }
 
 #[async_trait]
 impl Janitor for Counting {
     async fn purge_expired(&self) -> StoreResult<u64> {
-        self.0.fetch_add(1, Ordering::SeqCst);
+        self.sweeps.fetch_add(1, Ordering::SeqCst);
+        let stopping = match self.stop.lock().unwrap().as_ref() {
+            Some(stop) => stop.send(true).is_ok(),
+            None => false,
+        };
+        if stopping {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         Ok(0)
     }
 }
@@ -329,4 +340,53 @@ async fn a_stopped_housekeeping_starts_no_round() {
     )
     .await;
     assert_eq!(backend.janitor.sweeps(), 0, "a round ran after the stop");
+}
+
+/// A zero interval is taken as one millisecond, round after round, rather
+/// than panicking in the timer (`tokio::time::interval` refuses zero).
+/// Decisive: the shortest interval in `run`.
+#[tokio::test]
+async fn a_zero_interval_runs_rounds_without_panicking() {
+    let backend = Swept::new();
+    let (stop, stop_rx) = watch::channel(false);
+    let task = tokio::spawn(run(
+        backend.clone(),
+        Duration::from_secs(60),
+        Duration::ZERO,
+        stopped(stop_rx),
+    ));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while backend.janitor.sweeps() < 2 {
+        assert!(!task.is_finished(), "housekeeping ended on a zero interval");
+        assert!(tokio::time::Instant::now() < deadline, "never swept twice");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    stop.send(true).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("stopped with the service")
+        .unwrap();
+}
+
+/// The round under way when `stop` completes is the last: once it ended,
+/// no other starts, though the next tick is due by then (the interval is
+/// a millisecond, the round lasts five). Decisive: `stop` polled before
+/// the tick in `run`.
+#[tokio::test]
+async fn the_round_under_way_at_the_stop_is_the_last() {
+    let backend = Swept::new();
+    let (stop, stop_rx) = watch::channel(false);
+    *backend.janitor.stop.lock().unwrap() = Some(stop);
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        run(
+            backend.clone(),
+            Duration::from_secs(60),
+            Duration::from_millis(1),
+            stopped(stop_rx),
+        ),
+    )
+    .await
+    .expect("stopped once the round ended");
+    assert_eq!(backend.janitor.sweeps(), 1, "a round started after the stop");
 }

@@ -35,7 +35,7 @@ use meta_whatsapp_rs::core::store::{
 use meta_whatsapp_server::api::admin::mint;
 use meta_whatsapp_server::config::{Config, Env, NotUnicode};
 use meta_whatsapp_server::model::{KeyOwner, Scope, TenantId};
-use meta_whatsapp_server::serve::serve_until;
+use meta_whatsapp_server::serve::{serve_until, serve_with};
 use meta_whatsapp_server::store::events::EventQuery;
 use meta_whatsapp_server::store::{
     Backend, BackendKind, IdempotencyRecords, Janitor, LeaderLock, MemoryBackend, Outbox,
@@ -466,4 +466,38 @@ async fn the_api_is_served_over_a_backend_defined_outside_the_server_crate() {
         .unwrap();
     assert!(backend.closed.load(Ordering::SeqCst), "never closed");
     assert!(http(internal, "GET", "/livez", &[], b"").await.is_none());
+}
+
+/// `WA_SERVER_MIGRATE=skip` is read from the configuration `serve_until`
+/// is given: the backend is served unmigrated (an operator migrates it
+/// first, `meta-whatsapp-server migrate`), and still closed at shutdown.
+/// Decisive: migrating whatever the setting says.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_backend_is_not_migrated_when_the_configuration_skips_it() {
+    let backend = Arc::new(Integrators::new());
+    let (public, internal) = two_ports();
+    let mut vars = Vars::development(public, internal);
+    vars.0.insert("WA_SERVER_MIGRATE", "skip".to_owned());
+    let config = Config::from_env(&vars).unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let served = tokio::spawn(serve_until(config, backend.clone(), async move {
+        let _ = stopped.await;
+    }));
+    live(internal).await;
+    assert_eq!(backend.migrator.count(), 0, "migrated against the setting");
+    stop.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), served)
+        .await
+        .expect("stopped on the signal")
+        .unwrap()
+        .unwrap();
+    assert!(backend.closed.load(Ordering::SeqCst), "never closed");
+}
+
+/// `serve_with`, the same as `serve_until` on the process's signals,
+/// takes an integrator's backend too: this compiles only while it takes
+/// an `Arc<dyn Backend>` (it is not run: it would serve until `SIGTERM`).
+#[allow(dead_code)]
+fn serve_with_takes_a_backend_of_an_integrators(config: Config) {
+    drop(serve_with(config, Arc::new(Integrators::new())));
 }

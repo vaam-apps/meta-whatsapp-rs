@@ -160,7 +160,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
 pub async fn serve_from(config: Config, factory: &dyn BackendFactory) -> anyhow::Result<()> {
     warn_about(&config);
     let backend = factory.open(&config.storage).await?;
-    run(config, backend, shutdown_signal()).await
+    run(config, backend, shutdown_signal).await
 }
 
 /// Run the service on `backend` until `SIGTERM` or `SIGINT`
@@ -171,7 +171,8 @@ pub async fn serve_from(config: Config, factory: &dyn BackendFactory) -> anyhow:
 ///
 /// As [`serve_until`].
 pub async fn serve_with(config: Config, backend: Arc<dyn Backend>) -> anyhow::Result<()> {
-    serve_until(config, backend, shutdown_signal()).await
+    warn_about(&config);
+    run(config, backend, shutdown_signal).await
 }
 
 /// Run the service on `backend`, and on nothing else of storage, until
@@ -192,7 +193,7 @@ pub async fn serve_until(
     signal: impl Future<Output = ()>,
 ) -> anyhow::Result<()> {
     warn_about(&config);
-    run(config, backend, signal).await
+    run(config, backend, move || signal).await
 }
 
 /// The settings an operator must not miss in production.
@@ -208,11 +209,13 @@ fn warn_about(config: &Config) {
     }
 }
 
-/// [`serve_until`] once the configuration's warnings are out.
-async fn run(
+/// [`serve_until`] once the configuration's warnings are out, stopping on
+/// the future `signal` makes: made before the listeners are bound, so
+/// that [`shutdown_signal`]'s handlers are in place once they answer.
+async fn run<S: Future<Output = ()>>(
     config: Config,
     backend: Arc<dyn Backend>,
-    signal: impl Future<Output = ()>,
+    signal: impl FnOnce() -> S,
 ) -> anyhow::Result<()> {
     if backend.kind().is_process_local() {
         tracing::warn!("memory storage: everything is lost on restart (development only)");
@@ -267,6 +270,10 @@ async fn run(
         );
     }
 
+    // `SIGTERM` and `SIGINT` are caught from here: one that comes once the
+    // listeners answer stops the service as any other does, rather than
+    // ending the process before `supervise` waits for it.
+    let signal = signal();
     let public = TcpListener::bind(public_bind)
         .await
         .with_context(|| format!("cannot listen on WA_SERVER_PUBLIC_BIND {public_bind}"))?;
@@ -423,26 +430,39 @@ pub async fn first_to_stop(
     }
 }
 
-/// `SIGTERM` or `SIGINT`.
-async fn shutdown_signal() {
-    let interrupt = tokio::signal::ctrl_c();
+/// Completes on `SIGTERM` or `SIGINT`, caught from this call on (not from
+/// the future's first poll): one that comes before the future is awaited
+/// is kept, and completes it at once. Without a `SIGINT` handler it
+/// completes at once (as `tokio::signal::ctrl_c` failing did); without a
+/// `SIGTERM` one it waits for `SIGINT` alone. Called in a runtime.
+fn shutdown_signal() -> impl Future<Output = ()> + Send + 'static {
     #[cfg(unix)]
     {
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut terminate) => {
-                tokio::select! {
-                    _ = interrupt => {}
-                    _ = terminate.recv() => {}
+        use tokio::signal::unix::{SignalKind, signal};
+        let interrupt = signal(SignalKind::interrupt());
+        let terminate = signal(SignalKind::terminate());
+        async move {
+            let Ok(mut interrupt) = interrupt else {
+                return;
+            };
+            match terminate {
+                Ok(mut terminate) => {
+                    tokio::select! {
+                        _ = interrupt.recv() => {}
+                        _ = terminate.recv() => {}
+                    }
                 }
-            }
-            Err(_) => {
-                let _ = interrupt.await;
+                Err(_) => {
+                    let _ = interrupt.recv().await;
+                }
             }
         }
     }
     #[cfg(not(unix))]
     {
-        let _ = interrupt.await;
+        async {
+            let _ = tokio::signal::ctrl_c().await;
+        }
     }
 }
 
@@ -576,6 +596,92 @@ mod tests {
         for addr in [public_addr, internal_addr] {
             assert!(tokio::net::TcpStream::connect(addr).await.is_err());
         }
+    }
+
+    /// `SIGTERM` is caught from the moment [`shutdown_signal`] is called,
+    /// before its future is first polled: `run` calls it before binding
+    /// the listeners, so a `SIGTERM` that comes once they answer, before
+    /// `supervise` awaits the signal, stops the service cleanly instead of
+    /// ending the process (`signal 15`, as
+    /// `binary::development_on_memory_prints_a_one_time_admin_key` saw on
+    /// a loaded machine). Decisive: the handlers registered in the future
+    /// (an `async fn`, as before): the `SIGTERM` below then ends this test
+    /// process.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sigterm_is_caught_before_the_signal_is_awaited() {
+        let signal = shutdown_signal();
+        let sent = std::process::Command::new("kill")
+            .args(["-TERM", &std::process::id().to_string()])
+            .status()
+            .unwrap();
+        assert!(sent.success());
+        tokio::time::timeout(Duration::from_secs(10), signal)
+            .await
+            .expect("the SIGTERM sent before the signal was awaited was lost");
+    }
+
+    /// A development configuration's variables, listening on `public`
+    /// and `internal`.
+    struct Vars(std::collections::HashMap<&'static str, String>);
+
+    impl crate::config::Env for Vars {
+        fn var(&self, name: &str) -> Result<Option<String>, crate::config::NotUnicode> {
+            Ok(self.0.get(name).cloned())
+        }
+        fn read_file(&self, _: &str) -> std::io::Result<String> {
+            Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+        }
+    }
+
+    /// `run` makes its stop signal before it binds either listener, so
+    /// that [`shutdown_signal`]'s handlers are in place before anything
+    /// answers (see the test above). Decisive: making it after the
+    /// listeners are bound (as awaiting `shutdown_signal()` in
+    /// `supervise` did).
+    #[tokio::test]
+    async fn the_stop_signal_is_made_before_the_listeners_are_bound() {
+        let free = || {
+            std::net::TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+        };
+        let (public, internal) = (free(), free());
+        let config = Config::from_env(&Vars(std::collections::HashMap::from([
+            ("WA_SERVER_ENV", "development".to_owned()),
+            ("WA_APP_SECRET", "app-secret-for-unit-tests".to_owned()),
+            ("WA_VERIFY_TOKEN", "verify-token-for-unit-tests".to_owned()),
+            ("WA_SERVER_PUBLIC_BIND", public.to_string()),
+            ("WA_SERVER_INTERNAL_BIND", internal.to_string()),
+        ])))
+        .unwrap();
+        let unbound = Arc::new(std::sync::Mutex::new(None));
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let made = unbound.clone();
+        let served = tokio::spawn(run(config, Arc::new(MemoryBackend::new()), move || {
+            let refused = |addr| std::net::TcpStream::connect(addr).is_err();
+            *made.lock().unwrap() = Some(refused(public) && refused(internal));
+            async move {
+                let _ = stopped.await;
+            }
+        }));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while tokio::net::TcpStream::connect(internal).await.is_err() {
+            assert!(tokio::time::Instant::now() < deadline, "never listened");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        stop.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), served)
+            .await
+            .expect("stopped on the signal")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            *unbound.lock().unwrap(),
+            Some(true),
+            "the stop signal was made once a listener was bound"
+        );
     }
 
     /// The signal stops serving while both listeners run.
