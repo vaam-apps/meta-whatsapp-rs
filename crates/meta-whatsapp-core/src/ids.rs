@@ -127,6 +127,18 @@ id_type!(
     CatalogId
 );
 id_type!(
+    /// A product item id (`{product-item-id}` in Meta's Catalog API): one
+    /// product, or one variant of a product, in a catalog. Not its
+    /// `retailer_id` (the business's own SKU, which product messages
+    /// address).
+    ProductItemId
+);
+id_type!(
+    /// A product set id (`{product_set_id}` in Meta's Catalog API): a
+    /// filtered group of a catalog's products.
+    ProductSetId
+);
+id_type!(
     /// Business-scoped user id (BSUID), e.g. `US.13491208655302741918`, or a
     /// parent BSUID (`US.ENT.…`). Stable per business portfolio; survives a
     /// username change but not a phone number change.

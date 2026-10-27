@@ -24,9 +24,20 @@
 //! the comma-separated `fields` parameter (empty: no parameter, Meta's
 //! defaults: `id` and `name` for a catalog, `id`, `name`, `filter` and
 //! `retailer_id` for a product set, `id`, `name` and `retailer_id` for a
-//! product). The response types type the fields a WhatsApp integrator
-//! needs; any other field requested lands, as Meta sent it, in their
-//! `other` map.
+//! product). The products edge's own example sends the list as a JSON
+//! array (`fields=["category","name","errors"]`); the comma-separated form
+//! is the one Meta's WhatsApp pages print (`fields=id,legal_entity_name`
+//! in `solution-providers/share-and-revoke-credit-lines`) and every other
+//! read of this crate sends. The response types type the fields a
+//! WhatsApp integrator needs; any other field requested lands, as Meta
+//! sent it, in their `other` map, and an enum value they do not know in
+//! its `Other` variant.
+//!
+//! One element of a page that does not decode (its `id` missing, a typed
+//! field of another type) fails a one-page read (`products`,
+//! `product_sets`); a stream yields it as one error item and goes on with
+//! the next element. A decode error never carries the body: Meta's
+//! `paging` links can carry the access token.
 //!
 //! # Docs
 //!
@@ -50,87 +61,17 @@
 //! (cursor-based pagination: `after`, `before`, `limit`, and the end of
 //! the list is a page without `next`).
 
-use std::fmt;
-
 use futures::Stream;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
-use meta_whatsapp_core::ids::CatalogId;
+use meta_whatsapp_core::ids::{CatalogId, ProductItemId, ProductSetId};
 use meta_whatsapp_core::paging::Page;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-use crate::request::{paginate_or_error, reject_cursors};
+use crate::request::{PAGING_WITHHELD, paginate_or_error, reject_cursors};
 use crate::templates::macros::string_enum;
 use crate::waba::Waba;
 use crate::{Client, GraphRequest};
-
-macro_rules! catalog_id_type {
-    ($(#[$meta:meta])* $name:ident) => {
-        $(#[$meta])*
-        #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-        #[serde(transparent)]
-        pub struct $name(String);
-
-        impl $name {
-            /// Wrap a raw id.
-            pub fn new(id: impl Into<String>) -> Self {
-                Self(id.into())
-            }
-
-            /// Borrow the raw id.
-            pub fn as_str(&self) -> &str {
-                &self.0
-            }
-
-            /// Take the raw id.
-            pub fn into_inner(self) -> String {
-                self.0
-            }
-        }
-
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str(&self.0)
-            }
-        }
-
-        impl fmt::Debug for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, concat!(stringify!($name), "({})"), self.0)
-            }
-        }
-
-        impl AsRef<str> for $name {
-            fn as_ref(&self) -> &str {
-                &self.0
-            }
-        }
-
-        impl From<String> for $name {
-            fn from(s: String) -> Self {
-                Self(s)
-            }
-        }
-
-        impl From<&str> for $name {
-            fn from(s: &str) -> Self {
-                Self(s.to_owned())
-            }
-        }
-    };
-}
-
-catalog_id_type!(
-    /// A product item id (`{product-item-id}`): one product, or one variant
-    /// of a product, in a catalog. Not its `retailer_id` (the business's
-    /// own SKU, which product messages address).
-    ProductItemId
-);
-catalog_id_type!(
-    /// A product set id (`{product_set_id}`): a filtered group of a
-    /// catalog's products.
-    ProductSetId
-);
 
 impl Client {
     /// [`Catalog`] API for `catalog_id`.
@@ -173,7 +114,7 @@ impl Waba {
             .get_at(&[waba_id, "product_catalogs"])
             .query_opt("fields", fields_param(fields))
             .context("WABA product catalogs response")
-            .send()
+            .send_withheld(PAGING_WITHHELD)
             .await
     }
 }
@@ -207,7 +148,7 @@ impl Catalog {
             .get_at(&[self.checked_id()?])
             .query_opt("fields", fields_param(fields))
             .context("product catalog response")
-            .send()
+            .send_withheld(PAGING_WITHHELD)
             .await
     }
 
@@ -221,7 +162,7 @@ impl Catalog {
         self.products_request(query)?
             .query_opt("after", query.after.as_deref())
             .query_opt("before", query.before.as_deref())
-            .send()
+            .send_withheld(PAGING_WITHHELD)
             .await
     }
 
@@ -258,7 +199,7 @@ impl Catalog {
         self.product_sets_request(query)?
             .query_opt("after", query.after.as_deref())
             .query_opt("before", query.before.as_deref())
-            .send()
+            .send_withheld(PAGING_WITHHELD)
             .await
     }
 
@@ -333,7 +274,7 @@ impl ProductSet {
             .get_at(&[self.checked_id()?])
             .query_opt("fields", fields_param(fields))
             .context("product set response")
-            .send()
+            .send_withheld(PAGING_WITHHELD)
             .await
     }
 
@@ -342,7 +283,7 @@ impl ProductSet {
         self.products_request(query)?
             .query_opt("after", query.after.as_deref())
             .query_opt("before", query.before.as_deref())
-            .send()
+            .send_withheld(PAGING_WITHHELD)
             .await
     }
 
@@ -402,7 +343,7 @@ impl Product {
             .get_at(&[id])
             .query_opt("fields", fields_param(fields))
             .context("product item response")
-            .send()
+            .send_withheld(PAGING_WITHHELD)
             .await
     }
 }
@@ -822,8 +763,9 @@ mod tests {
         json!({"id": id, "retailer_id": sku, "name": format!("Product {sku}"), "price": "$9.99"})
     }
 
-    /// A page of the catalog's products, with Meta's `paging` object; the
-    /// `next` link carries a token, as Meta's do, to show it is never used.
+    /// A page of the catalog's products, with the `paging` object of
+    /// `graph-api/results` (values ours); the `next` link carries a token,
+    /// as Meta's can, to show it is never used.
     fn products_page(items: &[(&str, &str)], cursor: &str, next: bool) -> serde_json::Value {
         let data: Vec<_> = items.iter().map(|(id, sku)| product(id, sku)).collect();
         let mut paging = json!({"cursors": {"before": format!("B-{cursor}"), "after": cursor}});
@@ -1173,6 +1115,7 @@ mod tests {
 
     #[tokio::test]
     async fn product_with_default_fields_sends_no_query_and_keeps_unknown_values() {
+        // Values ours; `back_soon` is no documented availability.
         let t = ScriptedTransport::new();
         t.push_json(
             200,
@@ -1208,6 +1151,8 @@ mod tests {
 
     #[tokio::test]
     async fn waba_product_catalogs_parses_a_connected_catalog() {
+        // Field names from product-catalog § Fields; values ours: the
+        // reference's example is an empty list.
         let t = ScriptedTransport::new();
         t.push_json(
             200,
@@ -1232,6 +1177,8 @@ mod tests {
 
     #[tokio::test]
     async fn catalog_get_reads_the_node() {
+        // Field names from product-catalog § Fields; values ours: the page
+        // shows no read response.
         let t = ScriptedTransport::new();
         t.push_json(
             200,
@@ -1293,6 +1240,8 @@ mod tests {
 
     #[tokio::test]
     async fn product_sets_stream_sends_the_filters_and_follows_cursors() {
+        // Names from product-catalog/product_sets § Parameters and
+        // product-set § Fields; values ours: neither page shows a response.
         let t = ScriptedTransport::new();
         t.push_json(
             200,
@@ -1348,6 +1297,7 @@ mod tests {
 
     #[tokio::test]
     async fn product_sets_page_sends_ancestor_and_cursors() {
+        // Values ours (product-catalog/product_sets shows no response).
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"data": [], "summary": {"total_count": 0}}));
         let page = client(&t)
@@ -1370,6 +1320,8 @@ mod tests {
 
     #[tokio::test]
     async fn product_set_get_and_its_products() {
+        // Field names from product-set § Fields; values ours: neither
+        // product-set nor product-set/products shows a response.
         let t = ScriptedTransport::new();
         t.push_json(
             200,
@@ -1432,11 +1384,15 @@ mod tests {
         let set = client(&t).product_set("2001");
         set.products(&ListSetProducts {
             after: Some("A".into()),
+            before: Some("B".into()),
             ..ListSetProducts::default()
         })
         .await
         .unwrap();
-        assert_eq!(t.last_request().unwrap().url.query(), Some("after=A"));
+        assert_eq!(
+            t.last_request().unwrap().url.query(),
+            Some("after=A&before=B")
+        );
         let items: Vec<Result<ProductInfo>> = set
             .products_stream(&ListSetProducts {
                 before: Some("B".into()),
@@ -1450,13 +1406,235 @@ mod tests {
         assert_eq!(t.remaining(), 0);
     }
 
+    #[tokio::test]
+    async fn products_stream_stops_on_an_empty_page_that_repeats_its_cursor() {
+        // An empty page that still carries `next` and the cursor just
+        // followed would be requested forever; the stream stops there.
+        let t = ScriptedTransport::new();
+        t.push_json(200, products_page(&[("1001", "SKU-1")], "c1", true));
+        t.push_json(200, products_page(&[], "c1", true));
+        t.push_json(200, products_page(&[("1002", "SKU-2")], "c2", false));
+        let products: Vec<ProductInfo> = client(&t)
+            .catalog(CATALOG)
+            .products_stream(&ListProducts::default())
+            .take(10)
+            .map(Result::unwrap)
+            .collect()
+            .await;
+        let ids: Vec<&str> = products.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["1001"]);
+        let reqs = t.requests();
+        assert_eq!(reqs.len(), 2, "the repeated cursor is not followed");
+        assert_eq!(reqs[1].url.query(), Some("after=c1"));
+        assert_eq!(t.remaining(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_bad_element_fails_its_page_but_not_the_stream() {
+        // `id` is the one required field: an element without it fails a
+        // single page read, and is one error item in a stream, which goes
+        // on with the next element. Values ours.
+        let page = || {
+            json!({
+                "data": [{"id": "1001"}, {"name": "no id"}, {"id": "1002"}],
+                "paging": {"cursors": {"after": "c1"}}
+            })
+        };
+        let t = ScriptedTransport::new();
+        t.push_json(200, page());
+        t.push_json(200, page());
+        let catalog = client(&t).catalog(CATALOG);
+        let err = catalog
+            .products(&ListProducts::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Decode { .. }), "{err:?}");
+        let items: Vec<Result<ProductInfo>> = catalog
+            .products_stream(&ListProducts::default())
+            .collect()
+            .await;
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].as_ref().unwrap().id.as_str(), "1001");
+        assert!(matches!(items[1], Err(Error::Decode { .. })));
+        assert_eq!(items[2].as_ref().unwrap().id.as_str(), "1002");
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_page_that_fails_to_decode_keeps_its_next_links_token_out_of_the_error() {
+        // Meta's `next` links carry the access token; a page that does not
+        // decode must not copy them into the error (its `Debug` is what
+        // callers log). Values ours.
+        let next = "https://graph.facebook.com/v25.0/1/products?access_token=LEAKED&after=c1";
+        let t = ScriptedTransport::new();
+        // One page read, one element without `id`.
+        t.push_json(
+            200,
+            json!({"data": [{"name": "no id"}], "paging": {"cursors": {"after": "c1"}, "next": next}}),
+        );
+        // A stream's page whose `data` is not a list.
+        t.push_json(
+            200,
+            json!({"data": {"id": "1"}, "paging": {"cursors": {"after": "c1"}, "next": next}}),
+        );
+        // A set's products, and the catalog's sets, the same way.
+        t.push_json(
+            200,
+            json!({"data": [{"name": "no id"}], "paging": {"cursors": {"after": "c1"}, "next": next}}),
+        );
+        t.push_json(
+            200,
+            json!({"data": [{"name": "no id"}], "paging": {"cursors": {"after": "c1"}, "next": next}}),
+        );
+        t.push_json(
+            200,
+            json!({"data": [{"name": "no id"}], "paging": {"cursors": {"after": "c1"}, "next": next}}),
+        );
+        let c = client(&t);
+        let catalog = c.catalog(CATALOG);
+        let mut errors = vec![
+            catalog
+                .products(&ListProducts::default())
+                .await
+                .unwrap_err(),
+        ];
+        let items: Vec<Result<ProductInfo>> = catalog
+            .products_stream(&ListProducts::default())
+            .collect()
+            .await;
+        assert_eq!(items.len(), 1);
+        errors.push(items.into_iter().next().unwrap().unwrap_err());
+        errors.push(
+            c.product_set("2001")
+                .products(&ListSetProducts::default())
+                .await
+                .unwrap_err(),
+        );
+        errors.push(
+            catalog
+                .product_sets(&ListProductSets::default())
+                .await
+                .unwrap_err(),
+        );
+        errors.push(c.waba(WABA).product_catalogs(&[]).await.unwrap_err());
+        for err in &errors {
+            assert!(matches!(err, Error::Decode { .. }), "{err:?}");
+            let shown = format!("{err:?} {err}");
+            assert!(!shown.contains("LEAKED"), "{shown}");
+        }
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn product_sets_stream_refuses_caller_cursors() {
+        let t = ScriptedTransport::new();
+        let catalog = client(&t).catalog(CATALOG);
+        for (field, query) in [
+            (
+                "after",
+                ListProductSets {
+                    after: Some("c".into()),
+                    ..ListProductSets::default()
+                },
+            ),
+            (
+                "before",
+                ListProductSets {
+                    before: Some("c".into()),
+                    ..ListProductSets::default()
+                },
+            ),
+        ] {
+            let items: Vec<Result<ProductSetInfo>> =
+                catalog.product_sets_stream(&query).collect().await;
+            assert_eq!(items.len(), 1);
+            assert_eq!(validation_field(items[0].as_ref().unwrap_err()), field);
+        }
+        assert!(t.requests().is_empty());
+    }
+
+    #[test]
+    fn enum_values_are_spelled_as_the_reference_lists_them() {
+        // product-item § Fields (availability, condition, review_status,
+        // visibility) and product-catalog/products § Parameters
+        // (error_priority), each value exactly as printed.
+        use ProductAvailability as A;
+        use ProductCondition as C;
+        use ProductErrorPriority as P;
+        use ProductReviewStatus as R;
+        use ProductVisibility as V;
+        fn check<T>(pairs: &[(T, &str)], as_str: fn(&T) -> &str)
+        where
+            T: std::fmt::Debug + PartialEq + serde::de::DeserializeOwned,
+        {
+            for (variant, value) in pairs {
+                assert_eq!(as_str(variant), *value, "{variant:?}");
+                let parsed: T = serde_json::from_value(json!(value)).unwrap();
+                assert_eq!(&parsed, variant, "{value:?}");
+            }
+        }
+        check(
+            &[
+                (A::InStock, "in stock"),
+                (A::OutOfStock, "out of stock"),
+                (A::Preorder, "preorder"),
+                (A::AvailableForOrder, "available for order"),
+                (A::Discontinued, "discontinued"),
+                (A::Pending, "pending"),
+                (A::MarkAsSold, "mark_as_sold"),
+                (A::MarkAsExpired, "mark_as_expired"),
+            ],
+            A::as_str,
+        );
+        check(
+            &[
+                (C::New, "new"),
+                (C::Refurbished, "refurbished"),
+                (C::Used, "used"),
+                (C::UsedLikeNew, "used_like_new"),
+                (C::UsedGood, "used_good"),
+                (C::UsedFair, "used_fair"),
+                (C::Cpo, "cpo"),
+                (C::OpenBoxNew, "open_box_new"),
+            ],
+            C::as_str,
+        );
+        check(
+            &[
+                (R::Empty, ""),
+                (R::Pending, "pending"),
+                (R::Rejected, "rejected"),
+                (R::Approved, "approved"),
+                (R::Outdated, "outdated"),
+            ],
+            R::as_str,
+        );
+        check(
+            &[(V::Staging, "staging"), (V::Published, "published")],
+            V::as_str,
+        );
+        check(
+            &[(P::High, "HIGH"), (P::Medium, "MEDIUM"), (P::Low, "LOW")],
+            P::as_str,
+        );
+    }
+
     // ── Local id checks ───────────────────────────────────────────────────
 
     #[tokio::test]
     async fn ids_that_are_not_digits_are_refused_before_any_request() {
         let t = ScriptedTransport::new();
         let c = client(&t);
-        for bad in ["", "123/products", "..", "SKU-1", "12 3", "%31"] {
+        for bad in [
+            "",
+            "123/products",
+            "..",
+            "SKU-1",
+            "abc",
+            "12 3",
+            "%31",
+            "١٢",
+        ] {
             let err = c.catalog(bad).get(&[]).await.unwrap_err();
             assert_eq!(validation_field(&err), "catalog_id", "{bad:?}");
             let err = c

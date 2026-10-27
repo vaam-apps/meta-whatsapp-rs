@@ -39,9 +39,9 @@ mod catalog;
 pub use catalog::{
     Catalog, CatalogInfo, ListProductSets, ListProducts, ListSetProducts, Product,
     ProductAvailability, ProductCondition, ProductError, ProductErrorPriority, ProductFilters,
-    ProductInfo, ProductItemId, ProductReviewStatus, ProductSet, ProductSetId, ProductSetInfo,
-    ProductVisibility,
+    ProductInfo, ProductReviewStatus, ProductSet, ProductSetInfo, ProductVisibility,
 };
+pub use meta_whatsapp_core::ids::{ProductItemId, ProductSetId};
 
 /// Entry point, see [`Client::commerce`].
 #[derive(Debug, Clone)]
