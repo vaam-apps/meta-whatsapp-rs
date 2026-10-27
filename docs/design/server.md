@@ -1072,12 +1072,13 @@ database's where it has one, else the service's `Clock`); contention is
 a typed error; a bundle's accessors return the same data on every call;
 listings are in byte order.
 
-**As built (roadmap S1, S2, S3, S4).** `crates/meta-whatsapp-server-core` exists,
-with the model, the keys, event routing and polling, the idempotency
-engine, the rate limiter, the error model, authorization and
-housekeeping (over a `Backend`, since S4); the operations (messages, media, templates, numbers, admin, the webhook
-pipeline) are still the axum crate's handlers (roadmap S5a–S5e). What
-it holds today, where it differs from the target above:
+**As built (roadmap S1, S2, S3, S4).** `crates/meta-whatsapp-server-core`
+exists, with the model, the keys, event routing and polling, the
+idempotency engine, the rate limiter, the error model, authorization
+and housekeeping (over a `Backend`, since S4); the operations
+(messages, media, templates, numbers, admin, the webhook pipeline) are
+still the axum crate's handlers (roadmap S5a–S5e). What it holds today,
+where it differs from the target above:
 
 - **The ports** are `RecordStore`, `IdempotencyRecords`, `Outbox`,
   `LeaderLock`, `Janitor` and `SchemaMigrator`, and their contracts carry
@@ -1175,9 +1176,11 @@ it holds today, where it differs from the target above:
   same commands on an integrator's), given the configuration's
   `Storage` (memory, or `DATABASE_URL`): `serve` through
   `serve::serve_from(config, factory)`, the other commands through
-  `serve::open`, which migrates it per `WA_SERVER_MIGRATE`. The server's `tests/composed.rs` serves the
-  API over real listeners on a `Backend` defined in the test, and checks
-  that every store the service uses is the bundle's.
+  `serve::open`, which migrates it per `WA_SERVER_MIGRATE`. The
+  server's `tests/composed.rs` serves the API over real listeners on a
+  `Backend` defined in the test, and checks that every store the
+  service uses is the bundle's, and that `WA_SERVER_MIGRATE=skip` is
+  honoured.
 - **`LeaderLock`** is a lease, `try_exclusive(name, lease)`: the turn
   for a name, ended by its release, its drop or its lease's expiry, with
   best-effort exclusion (work under a turn tolerates an overlap).

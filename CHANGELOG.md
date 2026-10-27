@@ -1159,7 +1159,32 @@ stored data, the owner's).
   test, and UI tests (`tests/visibility/fail/app_state_from_loose_ports.rs`,
   `app_state_new.rs`, `inbound_stores.rs`, `app_state_backend.rs`) pin
   that loose ports do not compose a state and that the state's backend
-  is crate-private.
+  is crate-private. Housekeeping's `run` takes a zero interval as one
+  millisecond (`tokio::time::interval` panicked on it), and once its
+  `stop` completed it starts no round, even with a tick due. The review
+  fixed a race older than S4: `serve` registered its `SIGTERM` and
+  `SIGINT` handlers only once both listeners were spawned, so a
+  `SIGTERM` that came as they started answering ended the process with
+  signal 15 rather than shutting it down; the handlers are now
+  registered before the listeners are bound. **Upgrade** (code calling
+  the service's crates): wrap your stores in a `Backend` (or use
+  `store::MemoryBackend`, `PgBackend`) and build the state with
+  `AppState::from_backend(Arc::new(backend), vault_keys, client,
+  Inbound::new(app_secrets, verify_token)?, Metrics::new(), settings)`,
+  passing the `VaultKeys` where a `TokenVault` was (the vault is built
+  on `backend.kv()`) and `Settings::default()` where `new` was called;
+  `serve::backends(&config)` is `serve::open(&BuiltinBackends,
+  &config.storage, config.migrate)`; `serve::housekeeping(outbox,
+  idempotency, Some(sweep), retention, every, stop)` is
+  `housekeeping::run(backend, retention, every, stop)` and
+  `serve::round(outbox, idempotency, Some(&sweep), retention)` is
+  `housekeeping::round(&*backend, retention)`. A round without a sweep
+  (`None`: no leader lock) has no replacement: a round always takes the
+  backend's `LeaderLock` (in one process, `MemoryLeaderLock`). To serve
+  a backend of your own, call `serve::serve_with(config,
+  Arc::new(backend))`, or run the whole command line on it with
+  `cli::run_with(cli, &factory)`, `factory` a `serve::BackendFactory`
+  of yours.
 - **Breaking — live events are shared as `Arc<WebhookEvent>`, not cloned
   per subscriber** (`meta_whatsapp_webhooks::sse`,
   `meta_whatsapp_adapters::sink::BroadcastSink`; roadmap L21b, decided as

@@ -336,9 +336,11 @@ and `store-postgres`.
     serve, run housekeeping and close over the bundle, and read no
     `config.storage`; `serve::serve_from(config, factory)` opens the
     backend a factory gives for `config.storage` and serves it
-    (`serve::serve`: the in-tree factory). Housekeeping is the core's, `housekeeping::run` and `round` over
-    a `Backend` (`serve::Sweep`, and a round without a leader lock, are
-    gone). The command line opens every backend through a
+    (`serve::serve`: the in-tree factory). Housekeeping is the core's,
+    `housekeeping::run` and `round` over a `Backend` (`serve::Sweep`, and
+    a round without a leader lock, are gone; a zero interval is taken as
+    a millisecond, and no round starts once `stop` completed). The
+    command line opens every backend through a
     `serve::BackendFactory` (`BuiltinBackends`: Postgres, memory;
     `cli::run_with` takes an integrator's), `serve::open` migrating per
     `WA_SERVER_MIGRATE`. The server's test harness serves its stores
@@ -363,7 +365,20 @@ and `store-postgres`.
     migration skipped and the close left out each fail an assertion of
     their own; `impl Backend for MemoryStore` makes
     `app_state_from_loose_ports` compile, and a loose `AppState::new`
-    again makes `app_state_new` mismatch. `openapi/v1.json` unchanged; the
+    again makes `app_state_new` mismatch. The sabotage review added the
+    cases four mutations survived: migrating whatever
+    `WA_SERVER_MIGRATE` says (`tests/composed.rs`, a second case),
+    `serve_with` alone taking an `Arc<MemoryBackend>` (a compile-only
+    use there), housekeeping polling its tick before `stop` and a zero
+    interval panicking in the timer (`tests/housekeeping.rs`). It also
+    fixed a race older than S4: the `SIGTERM` handler was registered
+    only once the listeners were spawned, so a `SIGTERM` as they began
+    answering ended the process (signal 15, seen once in
+    `binary::development_on_memory_prints_a_one_time_admin_key`); it is
+    registered before they are bound (`serve.rs`'s unit tests
+    `sigterm_is_caught_before_the_signal_is_awaited` and
+    `the_stop_signal_is_made_before_the_listeners_are_bound`).
+    `openapi/v1.json` unchanged; the
     server's suite passes on memory and, live, on Postgres. Row 112's
     service side stays partial for S2b, which changes the ports'
     contracts again. Left: `cli::run_with` is tested with the in-tree
