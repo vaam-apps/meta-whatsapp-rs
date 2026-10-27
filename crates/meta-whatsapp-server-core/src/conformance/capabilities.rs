@@ -16,11 +16,9 @@ use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_rs::core::secret::AccessToken;
 use meta_whatsapp_rs::core::store::KvStore;
 use meta_whatsapp_rs::core::testing::ScriptedTransport;
-use time::OffsetDateTime;
 
 use crate::authz::{Authorizer, Caller};
 use crate::backend::Backend;
-use crate::keys::MintedKey;
 use crate::model::{
     ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, KeyOwner, KeyScope, Listing,
     NewApiKey, NumberBinding, NumberStatus, PageRequest, Scope, Tenant, TenantId, TenantStatus,
@@ -28,31 +26,9 @@ use crate::model::{
 };
 use crate::store::{RecordStore, StoreResult};
 
-/// A new API key of `owner`'s, stored in `store`, as the service's admin
-/// API mints one (`meta_whatsapp_server::api::admin::mint`).
-async fn mint(
-    store: &dyn RecordStore,
-    owner: KeyOwner,
-    scopes: Vec<Scope>,
-    name: String,
-    expires_at: Option<OffsetDateTime>,
-) -> Result<(MintedKey, ApiKeyRecord), &'static str> {
-    for _ in 0..3 {
-        let minted = MintedKey::generate().map_err(|_| "no randomness")?;
-        let new = NewApiKey {
-            key_id: minted.key_id().to_owned(),
-            secret_sha256: minted.digest(),
-            owner: owner.clone(),
-            scopes: scopes.clone(),
-            name: name.clone(),
-            expires_at,
-        };
-        if let Some(record) = store.insert_key(&new).await.map_err(|_| "storage")? {
-            return Ok((minted, record));
-        }
-    }
-    Err("three key id collisions")
-}
+// A new API key of an owner's, stored in a store, as the service's admin
+// API and command line mint one.
+use crate::admin::mint;
 
 /// The tenant the capabilities are made for, and the one a WABA moves to.
 const A: &str = "cap-a";

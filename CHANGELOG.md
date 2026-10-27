@@ -1262,6 +1262,34 @@ stored data, the owner's).
   Arc::new(backend))`, or run the whole command line on it with
   `cli::run_with(cli, &factory)`, `factory` a `serve::BackendFactory`
   of yours.
+- **The admin operations are the service core's** (roadmap S5a;
+  `meta-whatsapp-server-core` and `meta-whatsapp-server`, both `publish =
+  false`), so another API adapter calls the same services the axum one
+  does. `meta_whatsapp_server_core::admin::Admin`, opened with
+  `Admin::new(&authorizer, &admin_caller)` (refused, `403 forbidden`,
+  for an `AdminCaller` another `Authorizer` made), runs every
+  `/v1/admin` operation over that `Authorizer`'s records, vault and
+  Graph client, taking the request's values as it carried them and
+  answering domain values (`Tenant`, `Listing`, `admin::Minted`,
+  `admin::Attached`, `admin::HeldWaba`, `VaultRotation`) or a
+  `ServiceError`: tenants, their deletion, keys, platform keys,
+  attaching a WABA (decision D4, the listing capped at
+  `admin::MAX_WABA_NUMBERS`, bind, store, subscribe), reading and
+  unbinding a binding, the vault's rotation. Audit events come from the
+  core (`meta_whatsapp_server_core::audit`: target `audit`, the same
+  fields), and failed Graph calls are reported to an
+  `observe::Observer`, which the server's `metrics::Metrics`
+  implements. `admin::mint`, `admin::MintError`, `admin::allowed_tenants`
+  and `admin::is_valid_name` (no capability: the command line's
+  bootstrap) and `authz::OwnedWaba::forget_or_busy` are new in the core;
+  the server's `api::admin::{mint, MintError, MAX_WABA_NUMBERS}` and
+  `telemetry::{audit, tenant_audit, Subject}` are now re-exports of
+  them, with the same signatures. The conformance suite gains `admin`
+  (in `conformance::run`): with no HTTP layer, attaching a WABA another
+  tenant holds is refused with nothing stored, subscribed or shared, on
+  every backend that runs the suite. No change to the HTTP API: every
+  status, body and audit event is as before, and `openapi/v1.json` is
+  byte-identical.
 - **Breaking — live events are shared as `Arc<WebhookEvent>`, not cloned
   per subscriber** (`meta_whatsapp_webhooks::sse`,
   `meta_whatsapp_adapters::sink::BroadcastSink`; roadmap L21b, decided as

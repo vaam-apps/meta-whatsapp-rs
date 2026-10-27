@@ -172,22 +172,23 @@ async fn admin(authz: &Authorizer, records: &dyn RecordStore) -> AdminCaller {
 /// another tenant holds is refused (`409 waba_owned_by_another_tenant`)
 /// with nothing stored, subscribed or shared.
 ///
-/// 1. The holder attaches [`WABA`] through the service: Meta lists its
+/// 1. The holder attaches a WABA through the service: Meta lists its
 ///    numbers, then the app is subscribed, in that order, with the
 ///    holder's token, which the vault now holds for both numbers.
-/// 2. The claimant's attach of [`WABA`] is refused before Meta is asked
+/// 2. The claimant's attach of that WABA is refused before Meta is asked
 ///    anything: no request is sent at all (a listing would also have
 ///    spent the claimant's token on the holder's WABA).
-/// 3. The claimant's attach of [`RACED_WABA`], unbound when it looks, is
+/// 3. The claimant's attach of a second WABA, unbound when it looks, is
 ///    refused by the binding's own D4 check once the holder bound it
 ///    while Meta listed its numbers: the listing is the only request (no
 ///    subscription), and the holder's token is not overwritten.
 ///
-/// Decisive: skipping the check before Meta fails step 2 (a listing is
-/// sent, and nothing answers it); storing before binding fails step 3
-/// (the claimant's token overwrites the holder's, or the store's own
-/// confirmation answers `503` instead), and so does ignoring the
-/// binding's refusal.
+/// Decisive: skipping the check before Meta, or moving it after the vault
+/// store, fails step 2 (a listing is sent, and nothing answers it);
+/// ignoring the binding's refusal fails step 3 (the store's own
+/// confirmation, the only guard left, answers `503`); storing before
+/// binding fails step 1 already (the store finds no binding of the
+/// holder's: `503`).
 pub async fn a_waba_another_tenant_holds_is_refused_with_nothing_stored(backend: &dyn Backend) {
     let records = backend.records();
     for id in [HOLDER, CLAIMANT] {
