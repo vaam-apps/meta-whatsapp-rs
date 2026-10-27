@@ -28,7 +28,7 @@ the design, the code); then it is deleted. A section heading stays when
 its last entry goes, with a line saying so: guides and skills link to
 its anchor.
 
-On 2026-10-26, 28 entries are decided and 2 stay open: #33 and #46
+On 2026-10-27, 27 entries are decided and 2 stay open: #33 and #46
 (each a data migration).
 
 Numbers are permanent (the code, docs and skills cite them) and not in
@@ -221,16 +221,6 @@ of its own, after an HTML comment; keep that when you add one.
     `deny.toml` entry. No other code.
 
 ## Product details
-
-22. **Product-card carousel templates.** The page says "define exactly two
-    cards"; the code allows 2–10 (the wording reads as guidance). Enforce 2?
-
-    **Decided 2026-09-26 (coordinator, owner's delegation):** the page,
-    now mirrored, settles it: a product-card carousel template is created
-    with exactly two cards, and an approved one sends up to 10. So
-    creation checks two cards when the cards carry a product header,
-    media-card carousels keep 2–10, and sends keep at most 10. Swappable:
-    one constant each. Roadmap L20e.
 
 23. **Groups `add_participants`.** In Meta's reference, but the groups guide
     says participants can't be added manually. Kept, with a warning.
