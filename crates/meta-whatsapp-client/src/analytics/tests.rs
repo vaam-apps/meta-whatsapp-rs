@@ -904,6 +904,27 @@ async fn group_analytics_needs_one_group_and_a_metric() {
 
 // ── Switches ────────────────────────────────────────────────────────────
 
+/// Roadmap L20c: the WABA id Meta echoes is kept as sent, whatever its
+/// shape (`WabaId::new` would refuse this one): a new id format must not
+/// turn a confirmation that took effect into an error.
+#[tokio::test]
+async fn enable_template_insights_keeps_the_id_meta_echoes() {
+    let t = ScriptedTransport::new();
+    t.push_json(200, json!({"id": "WABA-1/x"}));
+    let id = Client::builder()
+        .transport(t.clone())
+        .access_token("TOKEN")
+        .build()
+        .unwrap()
+        .analytics(WabaId::new(WABA).unwrap())
+        .enable_template_insights()
+        .await
+        .unwrap();
+    assert_eq!(id.as_str(), "WABA-1/x");
+    assert!(WabaId::new("WABA-1/x").is_err());
+    assert_eq!(t.remaining(), 0);
+}
+
 #[tokio::test]
 async fn enable_template_insights_matches_docs_and_is_idempotent() {
     let t = ScriptedTransport::new();

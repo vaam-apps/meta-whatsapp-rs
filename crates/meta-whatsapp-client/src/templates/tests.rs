@@ -2744,6 +2744,35 @@ async fn delete_group_and_graph_errors() {
     assert_eq!(t.remaining(), 0);
 }
 
+/// Roadmap L20c: the template ids an archive or unarchive answer names are
+/// kept as Meta sent them, whatever their shape (`TemplateId::new` would
+/// refuse these): a new id format must not blank an id in a call that
+/// already took effect.
+#[test]
+fn archive_answers_keep_template_ids_as_sent() {
+    let archived: ArchiveResult = serde_json::from_value(json!({
+        "archived_templates": ["HSM-1/x", 1387372356726668_u64],
+        "failed_templates": {"<TEMPLATE_ID>": "Only approved or rejected templates can be archived"}
+    }))
+    .unwrap();
+    let ids: Vec<&str> = archived
+        .archived_templates
+        .iter()
+        .map(TemplateId::as_str)
+        .collect();
+    assert_eq!(ids, ["HSM-1/x", "1387372356726668"]);
+    let failed: Vec<&str> = archived
+        .failed_templates
+        .keys()
+        .map(TemplateId::as_str)
+        .collect();
+    assert_eq!(failed, ["<TEMPLATE_ID>"]);
+    let unarchived: UnarchiveResult =
+        serde_json::from_value(json!({"unarchived_templates": ["HSM-1/x"]})).unwrap();
+    assert_eq!(unarchived.unarchived_templates[0].as_str(), "HSM-1/x");
+    assert!(TemplateId::new("HSM-1/x").is_err());
+}
+
 #[tokio::test]
 async fn archive_and_unarchive_send_the_documented_bodies() {
     let t = ScriptedTransport::new();

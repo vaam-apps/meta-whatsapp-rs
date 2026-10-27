@@ -719,6 +719,32 @@ mod tests {
         assert_eq!(dated(&body), None, "undated without it");
     }
 
+    /// Roadmap L20c: an untyped change's `metadata.phone_number_id` is kept
+    /// as Meta sent it, whatever its shape (`PhoneNumberId::new` would
+    /// refuse this one), so the event is still routed by its number.
+    /// Decisive: checking it in `event_number`.
+    #[test]
+    fn an_untyped_changes_number_is_kept_as_sent() {
+        use meta_whatsapp_rs::webhooks::WebhookPayload;
+        let body = serde_json::json!({"object": "whatsapp_business_account", "entry": [{
+            "id": "102290129340398", "time": 1_739_321_024,
+            "changes": [{"field": "a_field_meta_adds_later",
+                         "value": {"metadata": {"phone_number_id": "PN-1/x"}}}]
+        }]});
+        let events = WebhookPayload::from_slice(body.to_string().as_bytes())
+            .unwrap()
+            .into_events();
+        let [event] = events.as_slice() else {
+            panic!("{events:?}")
+        };
+        assert!(matches!(event, WebhookEvent::Unknown { .. }), "{event:?}");
+        assert_eq!(
+            event_number(event).as_ref().map(PhoneNumberId::as_str),
+            Some("PN-1/x")
+        );
+        assert!(PhoneNumberId::new("PN-1/x").is_err());
+    }
+
     /// The two lists split the library's kinds: none is both.
     #[test]
     fn tenant_and_operator_types_are_disjoint() {

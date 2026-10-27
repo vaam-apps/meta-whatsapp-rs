@@ -994,3 +994,22 @@ fn unknown_enum_values_round_trip() {
         json!({"status": "PAUSED", "call_icon_visibility": "SOMETIMES", "audio": {"additional_codecs": ["G722"]}})
     );
 }
+
+/// Roadmap L20c: a voicemail announcement's media id is kept as Meta sent
+/// it, string or number, whatever its shape (`MediaId::new` would refuse
+/// the first): a new id format must not fail or drop it.
+#[test]
+fn an_announcement_media_id_is_kept_as_sent() {
+    for (sent, kept) in [
+        (json!("MEDIA-1/x"), "MEDIA-1/x"),
+        (json!(938_884_519_013_664_u64), "938884519013664"),
+    ] {
+        let audio: VoicemailAudioConfig =
+            serde_json::from_value(json!({"announcement_media_id": sent})).unwrap();
+        assert_eq!(
+            audio.announcement_media_id.as_ref().map(MediaId::as_str),
+            Some(kept)
+        );
+    }
+    assert!(MediaId::new("MEDIA-1/x").is_err());
+}

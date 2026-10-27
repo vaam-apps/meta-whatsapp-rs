@@ -418,7 +418,9 @@ mod tests {
                 "1.0",
                 "12a",
                 "WABA_ID",
-                "１２", // non-ASCII digits
+                "１２", // non-ASCII digits: fullwidth
+                "١٢",   // and Arabic-Indic
+                "1\u{0}",
                 too_long.as_str(),
             ] {
                 for refused in [

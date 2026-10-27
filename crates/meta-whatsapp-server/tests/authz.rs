@@ -158,6 +158,61 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
     );
 }
 
+/// Roadmap L20c: a `{pn}` or `{waba_id}` that is not a numeric id names
+/// nothing a tenant can hold, so it is `404 not_found`, the answer for an
+/// unbound one (and every route's answer before ids were checked), with
+/// the vault and Meta untouched, on the owner's own key and the admin's.
+/// Decisive: answering the refused id with anything else (a `422`) fails
+/// here, on every route.
+#[tokio::test]
+async fn a_path_id_that_is_not_numeric_is_not_found() {
+    let h = two_tenants().await;
+    let a_key = h.tenant_key(A, &ALL_SCOPES).await;
+    let admin = h.admin_key().await;
+    let too_long = "1".repeat(65);
+    let routes = owned_routes();
+    let mut checked = 0;
+    // Percent-encoded where a path needs it: `1/2`, `+1`, ` 1`, `١٢`
+    // (Arabic-Indic digits); then 65 digits, one past the cap.
+    for bad in [
+        "WABA_ID",
+        "1%2F2",
+        "%2B1",
+        "%201",
+        "%D9%A1%D9%A2",
+        too_long.as_str(),
+    ] {
+        let sample = common::Sample {
+            tenant: A.to_owned(),
+            waba: bad.to_owned(),
+            pn: bad.to_owned(),
+            key_id: "placeholder".to_owned(),
+        };
+        for operation in &routes {
+            let key = if operation.admin() { &admin } else { &a_key };
+            let before = h.kv.vault_reads();
+            let reply = h
+                .call(common::sample_call(operation, &sample, Some(key)))
+                .await;
+            let label = operation.label();
+            assert_eq!(
+                (reply.status, reply.code().as_str()),
+                (StatusCode::NOT_FOUND, "not_found"),
+                "{label} on {bad:?}: {}",
+                reply.text
+            );
+            assert_eq!(
+                h.kv.vault_reads(),
+                before,
+                "{label} on {bad:?} read the vault"
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked >= 6 * 14, "only {checked} calls");
+    assert!(h.graph.requests().is_empty(), "no call reached Meta");
+}
+
 /// The control of M1.3: the counter counts, and A's own key does reach the
 /// vault on the same routes.
 #[tokio::test]

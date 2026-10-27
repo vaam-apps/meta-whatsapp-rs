@@ -249,6 +249,24 @@ mod tests {
         assert_eq!(d.expires_at_time(), None, "0 means never");
     }
 
+    /// Roadmap L20c: the WABAs `debug_token` names are kept as Meta sent
+    /// them, whatever their shape (`WabaId::new` would refuse these): a
+    /// new id format must not drop a grant.
+    #[test]
+    fn waba_ids_are_kept_as_sent() {
+        let d: DebugEnvelope = serde_json::from_value(serde_json::json!({"data": {
+            "is_valid": true,
+            "scopes": ["whatsapp_business_management"],
+            "granular_scopes": [{"scope": "whatsapp_business_management",
+                                 "target_ids": ["WABA-1/x", "102289599326934"]}]
+        }}))
+        .unwrap();
+        let ids = d.data.waba_ids();
+        let ids: Vec<&str> = ids.iter().map(WabaId::as_str).collect();
+        assert_eq!(ids, ["WABA-1/x", "102289599326934"]);
+        assert!(WabaId::new("WABA-1/x").is_err());
+    }
+
     #[test]
     fn code_and_token_are_redacted() {
         let code = SignupCode::new("AQBhlXsctMxJYbwbrpybxlo9").unwrap();
