@@ -129,8 +129,9 @@
 //!   `webhooks/override`), its length limit, whether the page's general
 //!   "callback URI verification … for external URLs" applies to it, and
 //!   how to clear it are not documented. The URL is checked before any
-//!   request: an absolute `https` URI (the schema's format; webhooks are
-//!   delivered over TLS), without user info or a fragment, and exactly as
+//!   request: an absolute URI (the schema's format), `https` (our choice:
+//!   the page says internal URLs are allowed for development, which this
+//!   refuses), without user info or a fragment, and exactly as
 //!   given (no whitespace or control character anywhere, nothing trimmed:
 //!   what is checked is what is sent). No length limit is documented, so
 //!   none is checked. [`CallbackOverride`] checks only its documented
@@ -1512,6 +1513,7 @@ mod tests {
             ("localhost:8080/hook", "`https`"),
             ("https://user:pass@hooks.shop.example/whatsapp", "user info"),
             ("https://user@hooks.shop.example/whatsapp", "user info"),
+            ("https://:secret@hooks.shop.example/whatsapp", "user info"),
             ("https://hooks.shop.example/whatsapp#frag", "fragment"),
             ("https://hooks.shop.example/whatsapp#", "fragment"),
             (" ", "whitespace"),
