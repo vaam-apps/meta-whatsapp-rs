@@ -1,14 +1,15 @@
 //! Reference code for the `meta-whatsapp-rs-commerce` skill: commerce settings,
-//! product and catalog messages (inside the 24-hour window), catalog and
-//! multi-product templates (any time), and carts coming back as `order`
-//! webhooks.
+//! product and catalog messages (inside the 24-hour window), catalog,
+//! multi-product and product-card carousel templates (any time), and carts
+//! coming back as `order` webhooks.
 //!
 //! meta-whatsapp-rs compiles this file and runs its tests in its own gate
 //! (`crates/meta-whatsapp-rs/tests/skills.rs`).
 
 use meta_whatsapp_rs::client::messages::{Messages, ProductSection};
 use meta_whatsapp_rs::client::templates::{
-    Button, MpmSection, TemplateCategory, TemplateComponent, TemplateDefinition,
+    Button, CarouselCard, CarouselCardParameters, MpmSection, SendComponent, TemplateCategory,
+    TemplateComponent, TemplateDefinition,
 };
 use meta_whatsapp_rs::core::ids::CatalogId;
 use meta_whatsapp_rs::prelude::*;
@@ -67,6 +68,32 @@ pub fn mpm_invocation() -> TemplateMessage {
         .mpm_button(0, "SKU-1", [MpmSection::new("Shirts", ["SKU-1", "SKU-2"])])
 }
 
+/// A product-card carousel template: created with exactly two cards.
+pub fn product_carousel_template() -> TemplateDefinition {
+    let card = || {
+        CarouselCard::new([
+            TemplateComponent::header_product(),
+            TemplateComponent::buttons([Button::spm("View")]),
+        ])
+    };
+    TemplateDefinition::new("autumn_carousel", "en_US", TemplateCategory::Marketing)
+        .component(TemplateComponent::body_positional(
+            "Hi {{1}}, picked for you.",
+            ["Alex"],
+        ))
+        .component(TemplateComponent::carousel([card(), card()])) // two, not one per product
+}
+
+/// Once approved, it is sent with up to 10 cards, one product each.
+pub fn product_carousel_invocation(catalog_id: &CatalogId, skus: &[&str]) -> TemplateMessage {
+    TemplateMessage::new("autumn_carousel", "en_US")
+        .body([Parameter::text("Alex")])
+        .carousel(skus.iter().zip(0..).map(|(sku, card_index)| {
+            let product = Parameter::product(*sku, catalog_id.clone());
+            CarouselCardParameters::new(card_index, [SendComponent::header(product)])
+        }))
+}
+
 /// A cart from the customer: re-check price and stock on your side.
 pub fn cart(event: &WebhookEvent) -> Option<(&MessageId, &OrderContent)> {
     let WebhookEvent::MessageReceived { message, .. } = event else {
@@ -123,6 +150,33 @@ mod tests {
     fn templates_validate() {
         assert!(mpm_template().validate().is_ok());
         assert!(mpm_invocation().validate().is_ok());
+    }
+
+    #[test]
+    fn a_product_card_carousel_is_created_with_two_cards() {
+        assert!(product_carousel_template().validate().is_ok());
+        // Three cards at creation are refused locally, before any request.
+        let mut three = product_carousel_template();
+        if let Some(TemplateComponent::Carousel { cards }) = three.components.last_mut() {
+            cards.push(cards[0].clone());
+        }
+        assert_eq!(three.validate().unwrap_err().field, "components[1].cards");
+        // The approved template then sends up to 10 cards.
+        let catalog = CatalogId::from("194836987003835");
+        let skus: Vec<String> = (1..=11).map(|i| format!("SKU-{i}")).collect();
+        let skus: Vec<&str> = skus.iter().map(String::as_str).collect();
+        assert!(
+            product_carousel_invocation(&catalog, &skus[..10])
+                .validate()
+                .is_ok()
+        );
+        assert_eq!(
+            product_carousel_invocation(&catalog, &skus)
+                .validate()
+                .unwrap_err()
+                .field,
+            "template.components[1].cards"
+        );
     }
 
     #[test]

@@ -1042,13 +1042,45 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     then empty).
     OPEN_QUESTIONS #16 is closed and deleted (CHANGELOG). No parity row
     changes: coverage row 2 already counted the verify token.
-- [ ] **L20e. Product-card carousel templates: two cards at creation**
+- [x] **L20e. Product-card carousel templates: two cards at creation**
   (`meta-whatsapp-client`, `client::templates`; OPEN_QUESTIONS #22).
   - **Kind:** breaking (creating one with 3–10 cards is refused).
   - **After:** nothing.
   - **Decisive:** a product-card carousel with three cards is refused
     before any request; a media-card carousel with three is created; a
     send with 10 cards is accepted.
+  - **Landed:** `TemplateDefinition::validate` (run by
+    `Templates::create` before any request) refuses a carousel whose
+    cards carry a `PRODUCT` header unless it has exactly two cards, on
+    `components[<i>].cards`, from one constant beside the media cards'
+    2–10 range (`templates/validate.rs`); the page's words are "Define
+    only two product cards when you create the template" and "An
+    approved template with two product cards can be used to send up to
+    10 cards" (`catalogs/product-card-carousel-template-messages`). The
+    page states the count for creation only, so `TemplateEdit::validate`
+    keeps 2–10 for both kinds. The decisive tests, in
+    `client/src/templates/tests.rs`, are
+    `a_product_card_carousel_is_created_with_exactly_two_cards` (0, 1,
+    3, 10 and 11 cards refused with nothing sent; 2 created, its exact
+    body asserted), `a_media_card_carousel_with_three_cards_is_created`
+    (the media-card page's own three-card example) and
+    `a_product_card_carousel_send_takes_up_to_ten_cards` (10 sent, 11
+    refused with nothing sent), with
+    `a_product_card_carousel_edit_keeps_two_to_ten_cards` and
+    `a_product_header_on_any_card_makes_a_product_card_carousel` (a
+    `PRODUCT` header on any card and in any case counts; mixed,
+    headerless and unknown-format carousels are refused by the card
+    checks). Disabling the check fails the first; applying it to edits
+    fails the edit test; applying it to every carousel fails the
+    media-card tests; detecting the header on the first card only, or
+    on every card, fails the header test. The service runs the same
+    check (`a_product_card_carousel_is_created_with_two_cards`,
+    `meta-whatsapp-server/tests/templates.rs`: Meta's example created,
+    1, 3 and 10 cards `422` on `components[1].cards`). No in-repo
+    construction needed changing: the only product-card carousels
+    (tests) had two cards. OPEN_QUESTIONS #22 is closed and deleted
+    (CHANGELOG). No parity row changes: rows 51 and 99 already counted
+    product-card carousels.
 - [ ] **L21a. Dead-lettering a permanently failing event**
   (`meta-whatsapp-webhooks`, `meta-whatsapp-adapters`; OPEN_QUESTIONS
   #30): sink errors classified transient or permanent (unclassified

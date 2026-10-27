@@ -1,11 +1,11 @@
 ---
 name: meta-whatsapp-rs-commerce
-description: "WhatsApp commerce with meta-whatsapp-rs - commerce settings (cart, catalog visibility), single-product, multi-product (up to 30 products) and catalog messages from a Meta catalog, catalog and multi-product templates to reach customers outside the 24-hour window, and carts coming back as order webhooks (OrderContent, product_items) to re-check and fulfil. Load when showing products or a catalog in WhatsApp, enabling the cart, handling orders placed in WhatsApp, or sending product templates."
+description: "WhatsApp commerce with meta-whatsapp-rs - commerce settings (cart, catalog visibility), single-product, multi-product (up to 30 products) and catalog messages from a Meta catalog, catalog, multi-product and product-card carousel templates (two cards at creation, up to 10 at send) to reach customers outside the 24-hour window, and carts coming back as order webhooks (OrderContent, product_items) to re-check and fulfil. Load when showing products or a catalog in WhatsApp, enabling the cart, handling orders placed in WhatsApp, or sending product templates."
 ---
 
 # meta-whatsapp-rs-commerce
 
-> **Verified against meta-whatsapp-rs b7211bc1f282f873b605e7a3a1126ce4e45e5677 (2026-09-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d39fa40097af625cb867f424d9af11340fe567a0 (2026-10-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/commerce.rs](examples/commerce.rs), compiled and
 tested by meta-whatsapp-rs's own gate.
@@ -78,6 +78,25 @@ at send time its header is
 `Parameter::product(product_retailer_id, catalog_id)`. Creating and
 approving them: `meta-whatsapp-rs-templates`.
 
+A product-card carousel template is created with exactly two cards,
+then sent with up to 10, one product each:
+
+```rust
+let card = || {
+    CarouselCard::new([
+        TemplateComponent::header_product(),
+        TemplateComponent::buttons([Button::spm("View")]),
+    ])
+};
+
+.component(TemplateComponent::carousel([card(), card()])) // two, not one per product
+
+.carousel(skus.iter().zip(0..).map(|(sku, card_index)| {
+    let product = Parameter::product(*sku, catalog_id.clone());
+    CarouselCardParameters::new(card_index, [SendComponent::header(product)])
+}))
+```
+
 ## Orders
 
 ```rust
@@ -103,6 +122,12 @@ key the order by the message id.
 - A retailer id that is not in the connected catalog is refused by Meta,
   not locally: meta-whatsapp-rs checks presence and counts only.
 - `item_price` is a float in Meta's example: never compute money from it.
+- A product-card carousel template (any card with
+  `TemplateComponent::header_product()`) is created with exactly two
+  cards: `create` refuses any other count with a `Validation` error on
+  `components[<i>].cards`, before any request (the test proves it). Once
+  approved, a send carries up to 10 cards (11 are refused locally). An
+  edit (`TemplateEdit`) of an existing one keeps the general 2–10.
 
 ## What meta-whatsapp-rs does not do
 
@@ -110,10 +135,6 @@ key the order by the message id.
   (payments are out of scope, see
   [coverage](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/coverage.md)),
   no order state machine.
-- Product-card carousel templates accept 2–10 cards where Meta's page says
-  "exactly two"
-  ([OPEN_QUESTIONS.md #22](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#product-details),
-  decided on 2026-09-26: creation will check exactly two, roadmap L20e).
 
 ## Related skills
 
