@@ -1066,9 +1066,17 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     (the media-card page's own three-card example) and
     `a_product_card_carousel_send_takes_up_to_ten_cards` (10 sent, 11
     refused with nothing sent), with
-    `a_product_card_carousel_edit_keeps_two_to_ten_cards`. Disabling the
-    check fails the first; applying it to edits fails the last; applying
-    it to every carousel fails the media-card tests. No in-repo
+    `a_product_card_carousel_edit_keeps_two_to_ten_cards` and
+    `a_product_header_on_any_card_makes_a_product_card_carousel` (a
+    `PRODUCT` header on any card and in any case counts; mixed,
+    headerless and unknown-format carousels are refused by the card
+    checks). Disabling the check fails the first; applying it to edits
+    fails the edit test; applying it to every carousel fails the
+    media-card tests; detecting the header on the first card only, or
+    on every card, fails the header test. The service runs the same
+    check (`a_product_card_carousel_is_created_with_two_cards`,
+    `meta-whatsapp-server/tests/templates.rs`: Meta's example created,
+    1, 3 and 10 cards `422` on `components[1].cards`). No in-repo
     construction needed changing: the only product-card carousels
     (tests) had two cards. OPEN_QUESTIONS #22 is closed and deleted
     (CHANGELOG). No parity row changes: rows 51 and 99 already counted

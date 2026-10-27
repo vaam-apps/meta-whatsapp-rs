@@ -1140,10 +1140,15 @@ stored data, the owner's).
   until now they accepted 2–10. Media-card carousels keep their 2–10;
   `TemplateEdit::validate` (an edit of an existing template's
   components, for which the page states no count) keeps 2–10 for both
-  kinds; a send (`TemplateMessage::carousel`) still takes up to 10
-  cards of either kind. Upgrading: create a product-card carousel
+  kinds; a send (`TemplateMessage::carousel`) is still checked for at
+  most 10 cards of either kind. The service's
+  `POST /v1/wabas/{waba_id}/templates` runs the same check: such a
+  definition is now `422 invalid_request` with `field`
+  `components[<i>].cards`, and nothing reaches Meta (no change to
+  `openapi/v1.json`). Upgrading: create a product-card carousel
   template with two cards, then send it with as many as you need, up
-  to 10.
+  to 10. Templates already created are untouched: sending or editing
+  one with 3–10 cards is checked as before.
 
 - **Breaking — live events are shared as `Arc<WebhookEvent>`, not cloned
   per subscriber** (`meta_whatsapp_webhooks::sse`,
