@@ -373,6 +373,108 @@ async fn the_documented_flat_body_text_reaches_meta() {
     assert_eq!(h.graph.remaining(), 0);
 }
 
+/// catalogs/product-card-carousel-template-messages, the creation example
+/// (verbatim, two product cards): created. With a third card it is the
+/// library's validation error on `components[1].cards` (roadmap L20e:
+/// "Define only two product cards when you create the template"), and
+/// nothing reaches Meta. Decisive: the library's two-card check, which the
+/// service runs before the request.
+#[tokio::test]
+async fn a_product_card_carousel_is_created_with_two_cards() {
+    let (h, key) = connected().await;
+    let example: Value = serde_json::from_str(
+        r#"{
+  "name": "carousel_template_product_cards_v1",
+  "language": "en_US",
+  "category": "marketing",
+  "components": [
+    {
+      "type": "body",
+      "text": "Rare succulents for sale! {{1}}, add these unique plants to your collection. All three of these rare succulents are available for purchase on our website, and they come with a 100% satisfaction guarantee. Whether you're a seasoned succulent enthusiast or just starting your plant collection, these rare succulents are sure to impress. Shop now and add some unique and beautiful plants to your collection!",
+      "example": {
+        "body_text": "Pablo"
+      }
+    },
+    {
+      "type": "carousel",
+      "cards": [
+        {
+          "components": [
+            { "type": "header", "format": "product" },
+            { "type": "buttons", "buttons": [ { "type": "spm", "text": "View" } ] }
+          ]
+        },
+        {
+          "components": [
+            { "type": "header", "format": "product" },
+            { "type": "buttons", "buttons": [ { "type": "spm", "text": "View" } ] }
+          ]
+        }
+      ]
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+    let create = |body: &Value| {
+        Call::new(Method::POST, format!("/v1/wabas/{WABA}/templates"))
+            .key(&key)
+            .json(body)
+    };
+    // custom-marketing-templates, example response (the product-card page
+    // prints none).
+    h.graph.push_json(
+        200,
+        json!({"id": "1627019861106475", "status": "PENDING", "category": "MARKETING"}),
+    );
+    let reply = h.call(create(&example)).await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.text);
+    let request = h.graph.last_request().unwrap();
+    assert_eq!(request.method, Method::POST);
+    assert_eq!(request.path(), format!("/v25.0/{WABA}/message_templates"));
+    assert_eq!(request.bearer(), Some(TOKEN));
+    let card = json!({"components": [
+        {"type": "HEADER", "format": "PRODUCT"},
+        {"type": "BUTTONS", "buttons": [{"type": "SPM", "text": "View"}]}
+    ]});
+    assert_eq!(
+        request.json().unwrap(),
+        json!({
+          "name": "carousel_template_product_cards_v1",
+          "language": "en_US",
+          "category": "MARKETING",
+          "components": [
+            {"type": "BODY", "text": example["components"][0]["text"],
+             "example": {"body_text": [["Pablo"]]}},
+            {"type": "CAROUSEL", "cards": [card, card]}
+          ]
+        })
+    );
+    let before = h.graph.requests().len();
+    for cards in [1, 3, 10] {
+        let mut other = example.clone();
+        let first = other["components"][1]["cards"][0].clone();
+        other["components"][1]["cards"] = Value::Array(vec![first; cards]);
+        let reply = h.call(create(&other)).await;
+        assert_eq!(
+            (
+                reply.status,
+                reply.code().as_str(),
+                reply.json()["error"]["field"].as_str()
+            ),
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_request",
+                Some("components[1].cards")
+            ),
+            "{cards} cards: {}",
+            reply.text
+        );
+    }
+    assert_eq!(h.graph.requests().len(), before, "nothing reached Meta");
+    assert_eq!(h.graph.remaining(), 0);
+}
+
 /// marketing-messages/deep-links, the request example (verbatim): a URL
 /// button's `app_deep_link` reaches Meta unchanged, `meta_app_id` a JSON
 /// number; the rest of the body is the library's spelling of the same

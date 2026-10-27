@@ -228,7 +228,9 @@ pub enum TemplateComponent {
     /// `catalogs/product-card-carousel-template-messages`).
     #[serde(alias = "carousel")]
     Carousel {
-        /// 2 to 10 cards, all with the same components.
+        /// 2 to 10 cards, all with the same components. A product-card
+        /// carousel template is created with exactly 2; once approved, a
+        /// send may carry up to 10 ([`super::TemplateMessage::carousel`]).
         cards: Vec<CarouselCard>,
     },
     /// Limited-time offer block

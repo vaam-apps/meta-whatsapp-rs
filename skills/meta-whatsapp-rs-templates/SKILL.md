@@ -5,7 +5,7 @@ description: "Managing WhatsApp message templates with meta-whatsapp-rs - Templa
 
 # meta-whatsapp-rs-templates
 
-> **Verified against meta-whatsapp-rs 5cf4de929d82737255a73a899386b9d0d3af98fa (2026-10-26).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs d39fa40097af625cb867f424d9af11340fe567a0 (2026-10-27).** On another revision, trust the code over this page.
 
 Reference code: [examples/manage.rs](examples/manage.rs), compiled and
 tested by meta-whatsapp-rs's own gate.
@@ -132,6 +132,10 @@ Ok(templates.create_group(&group).await?.id) // keep it: there is no list call
   format**. Positional placeholders read `{{1}}, {{2}}, …` in order;
   every placeholder needs an example; `{{first_name}}` without
   `ParameterFormat::Named` is a `Validation` error (the test proves it).
+- A product-card carousel (any card `TemplateComponent::header_product()`)
+  is created with exactly two cards (Meta's page); `create` refuses others,
+  a `Validation` error on `components[<i>].cards`. A send carries up to 10;
+  media-card carousels, and an `edit` of either kind, take 2–10.
 - A template exists per **language**: create each language you send in.
 - At most 100 creations per WABA per hour; the WABA total is limited too
   (`ErrorKind::TemplateLimitReached`, 2388019). Content rejections are
@@ -148,10 +152,6 @@ Ok(templates.create_group(&group).await?.id) // keep it: there is no list call
   `create_group` returns.
 - It does not store which templates are approved: keep your own table,
   updated from the webhooks.
-- Product-card carousels: the code allows 2–10 cards where Meta's page
-  says "exactly two"
-  ([OPEN_QUESTIONS.md #22](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#product-details),
-  decided on 2026-09-26: creation will check exactly two, roadmap L20e).
 
 ## Related skills
 
