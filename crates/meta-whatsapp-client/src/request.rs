@@ -2131,6 +2131,11 @@ mod id_shape_tests {
                 .await,
             ),
         ];
+        let sent: Vec<String> = t.requests().iter().map(|r| r.path().to_owned()).collect();
+        assert!(
+            sent.is_empty(),
+            "a numeric id holding `/` was sent: {sent:?}"
+        );
         for (field, outcome) in outcomes {
             let err = outcome.unwrap_err();
             assert!(
@@ -2138,7 +2143,6 @@ mod id_shape_tests {
                 "{field}: {err}"
             );
         }
-        assert!(t.requests().is_empty(), "a numeric id holding `/` was sent");
     }
 
     /// Decisive: a group id holding `/` (an opaque id: a standard-base64
