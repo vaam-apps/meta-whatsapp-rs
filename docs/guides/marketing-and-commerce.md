@@ -29,7 +29,10 @@ Agent skills: [`meta-whatsapp-rs-marketing`](../../skills/meta-whatsapp-rs-marke
   terms and is onboarded (check below). Cloud API sends marketing templates
   without it.
 - **Catalogs** are uploaded and connected to the WABA in Commerce Manager or
-  Meta's Catalog API, outside the WhatsApp API.
+  Meta's Catalog API, outside the WhatsApp API. Reading them is wrapped:
+  `client.waba(id).product_catalogs(&[])` finds the connected catalog,
+  and `client.catalog(id).products_stream(&query)` walks its products
+  (`client::commerce`).
 - **Marketing templates are not delivered to US numbers** (`+1` with a US
   area code) at the time of writing: expect errors there.
 

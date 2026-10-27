@@ -1,11 +1,13 @@
 //! Reference code for the `meta-whatsapp-rs-commerce` skill: commerce settings,
-//! product and catalog messages (inside the 24-hour window), catalog,
+//! reading the connected catalog's products, product and catalog messages (inside the 24-hour window), catalog,
 //! multi-product and product-card carousel templates (any time), and carts
 //! coming back as `order` webhooks.
 //!
 //! meta-whatsapp-rs compiles this file and runs its tests in its own gate
 //! (`crates/meta-whatsapp-rs/tests/skills.rs`).
 
+use futures::TryStreamExt;
+use meta_whatsapp_rs::client::commerce::{ListProducts, ProductFilters, ProductInfo};
 use meta_whatsapp_rs::client::messages::{Messages, ProductSection};
 use meta_whatsapp_rs::client::templates::{
     Button, CarouselCard, CarouselCardParameters, MpmSection, SendComponent, TemplateCategory,
@@ -23,6 +25,31 @@ pub async fn open_shop(
     let commerce = client.commerce(phone_number_id);
     commerce.set_catalog_visible(true).await?; // hidden by default
     commerce.set_cart_enabled(true).await // Meta's default
+}
+
+/// The approved products of the WABA's connected catalog, every page
+/// followed (the stream follows Meta's cursors to the last page).
+pub async fn approved_products(
+    client: &Client,
+    waba_id: WabaId,
+) -> meta_whatsapp_rs::Result<Vec<ProductInfo>> {
+    let catalogs = client.waba(waba_id).product_catalogs(&[]).await?;
+    let Some(catalog) = catalogs.data.into_iter().next() else {
+        return Ok(Vec::new()); // no catalog connected yet
+    };
+    let query = ListProducts {
+        common: ProductFilters {
+            fields: vec!["retailer_id".into(), "name".into(), "price".into()],
+            ..ProductFilters::default()
+        },
+        return_only_approved_products: Some(true),
+        ..ListProducts::default()
+    };
+    client
+        .catalog(catalog.id)
+        .products_stream(&query)
+        .try_collect()
+        .await
 }
 
 /// Free-form product messages: only inside the customer service window.
@@ -143,6 +170,39 @@ mod tests {
                 json!("catalog_message")
             ]
         );
+        assert_eq!(transport.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn the_connected_catalog_is_read_page_by_page() {
+        let transport = ScriptedTransport::new();
+        transport.push_json(
+            200,
+            json!({"data": [{"id": "194836987003835", "name": "Shop"}]}),
+        );
+        transport.push_json(
+            200,
+            json!({"data": [{"id": "1", "retailer_id": "SKU-1"}],
+                "paging": {"cursors": {"after": "QVFI"}, "next": "https://graph.facebook.com/next"}}),
+        );
+        transport.push_json(200, json!({"data": [{"id": "2", "retailer_id": "SKU-2"}]}));
+        let client = Client::builder()
+            .transport(transport.clone())
+            .access_token("TOKEN")
+            .build()
+            .unwrap();
+        let products = approved_products(&client, "102290129340398".into())
+            .await
+            .unwrap();
+        let skus: Vec<_> = products.iter().map(|p| p.retailer_id.as_deref()).collect();
+        assert_eq!(skus, [Some("SKU-1"), Some("SKU-2")]);
+        let requests = transport.requests();
+        assert_eq!(
+            requests[0].path(),
+            "/v25.0/102290129340398/product_catalogs"
+        );
+        assert_eq!(requests[2].path(), "/v25.0/194836987003835/products");
+        assert_eq!(requests[2].query("after").as_deref(), Some("QVFI"));
         assert_eq!(transport.remaining(), 0);
     }
 

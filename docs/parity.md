@@ -22,6 +22,8 @@ bundle alone (roadmap S4), against its code and its tests; row 155 with app deep
 with template archiving and template groups (roadmap L23), against its
 code and Meta's pages of 2026-10-26 (§ Sources); row 156 with the number
 settings L9 left (roadmap L26), against its code and Meta's pages of
+2026-10-27 (§ Sources); row 103 with the catalog and product reads
+(roadmap L17), against its code and Meta's Catalog API pages of
 2026-10-27 (§ Sources). Every cell about us was
 checked against the code: a cell that
 says a thing is done names the symbol that does it, and what the service
@@ -37,7 +39,7 @@ reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
-| Library | 102 | 22 | 7 | 1 |
+| Library | 103 | 22 | 6 | 1 |
 | Service | 39 | 25 | 67 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
@@ -45,7 +47,7 @@ reached.
   n/a column is a side that does not carry the capability at all: the
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
-- Each of the library's 29 partial or gap rows is cited by a
+- Each of the library's 28 partial or gap rows is cited by a
   [roadmap](roadmap.md) item. Each of the service's 92 names, in its
   status, the roadmap items that bring it; by family (a row can name
   two): M2 8, M3 11, M4 2, M5 70, S 2 (the modular split; S2b, undated
@@ -152,6 +154,17 @@ The owner's definition (2026-09-26):
   `reference/whatsapp-business-phone-number/whatsapp-business-account-phone-number-api`
   as Meta served them that day: both still document its fields by
   schema only, without an example.
+- **Meta's Catalog API**, outside the WhatsApp docs and the mirror, for
+  row 103: read on 2026-10-27 as Meta served it that day. From the
+  Marketing API reference
+  (`developers.facebook.com/documentation/ads-commerce/marketing-api/reference/`,
+  as Markdown): `product-catalog`, `product-catalog/products`,
+  `product-catalog/product_sets`, `product-set` and
+  `product-set/products`. From the Graph API reference
+  (`developers.facebook.com/docs/`, as HTML; the new documentation
+  serves no product item page): `marketing-api/reference/product-item`,
+  `graph-api/reference/whatsapp-business-account/product_catalogs` and
+  `graph-api/results` (cursor pagination).
 - **Us**: the code at b6fc893; for rows 17, 19 and 84–88, the bot
   framework's (B1).
 
@@ -300,7 +313,7 @@ The owner's definition (2026-09-26):
 | 100 | Templates | Time to live, the tap-target title override | — | — | `templates/time-to-live.md`, `templates/tap-target-url-title-override.md` | `client::templates::TemplateDefinition::message_send_ttl_seconds`; `TemplateMessage::tap_target` | through Meta's JSON (unverified: no test covers these keys through the service) | done / partial (M5b) |
 | 101 | Templates | Archiving and unarchiving templates | — | — | `templates/template-archival.md` (`POST /{WABA_ID}/message_templates/archive` and `…/unarchive`, up to 100 template ids each, answering with the ids done and a reason for each that failed; § Sources: read on 2026-10-26), `templates/template-management.md` (§ Archive and unarchive templates); archival and unarchival arrive as `ARCHIVED` and `UNARCHIVED` in `webhooks/reference/message_template_status_update.md` | `client::templates::Templates::archive`, `unarchive` (`ArchiveResult`, `UnarchiveResult`; 1 to 100 ids, each checked as digits before any request; not replayed on timeouts; sent to the Graph endpoint with its version, where the page prints `https://api.facebook.com/` with none; Graph routes the edge, probed on 2026-10-26 with a template id that does not exist; a real archive not yet run live); the status events are typed (`webhooks::WebhookEvent::TemplateStatusUpdated`) | the status events only (`template_status_updated`) | done / gap (M5b) |
 | 102 | Commerce | Commerce settings (cart, catalog visibility) | — | — | `catalogs/set-commerce-settings`; `reference/whatsapp-business-phone-number/commerce-settings-api.md` | `client::commerce::Commerce::settings`, `update_settings`, `set_cart_enabled`, `set_catalog_visible` | not exposed | done / gap (M5g) |
-| 103 | Commerce | List connected catalogs and their products | Yes | Yes (`commerce.catalogs()`, `commerce.products()`) | `catalogs/upload-inventory` sends integrators to Meta's Catalog API, outside the WhatsApp docs | gap: no catalog or product reads (inventory lives outside the WhatsApp API, coverage row 5) | gap | gap / gap (M5g) |
+| 103 | Commerce | List connected catalogs and their products | Yes | Yes (`commerce.catalogs()`, `commerce.products()`) | `catalogs/upload-inventory` sends integrators to Meta's Catalog API, outside the WhatsApp docs; read there (§ Sources, 2026-10-27): `GET /{WABA_ID}/product_catalogs`, `GET /{product_catalog_id}` and its `products` and `product_sets` edges, `GET /{product_set_id}` and its `products` edge, `GET /{product_item_id}` | `client::waba::Waba::product_catalogs` (the WABA's connected catalog); `client::commerce::Catalog::get`, `products`, `products_stream`, `product_sets`, `product_sets_stream`; `client::commerce::ProductSet::get`, `products`, `products_stream`; `client::commerce::Product::get` (`client::commerce::ListProducts`, `ListSetProducts`, `ListProductSets` carry the cursors and the edges' documented filters; the streams follow `paging.cursors.after` until a page without `next`; every id in a path checked as digits before any request). Reads only: catalog writes, and connecting a catalog to a WABA, are not wrapped (roadmap L17) | not exposed | done / gap (M5g) |
 | 104 | Commerce | Product messages (single, multi, catalog, product carousel) | Yes | Yes | `catalogs/single-product-messages`, `catalogs/multi-product-messages`, `catalogs/catalog-messages` | `OutboundMessage::product`, `product_list`, `catalog` | not in the send union | done / gap (M5a) |
 | 105 | Commerce | Order events | No | Yes | `webhooks/reference/messages/order.md` | `webhooks::fields::MessageContent::Order` | in `message_received` events | done / done |
 | 106 | Marketing | Click-to-chat QR codes and short links | No | Yes (create, list, delete) | `qr-codes.md`; `reference/whatsapp-business-phone-number/whatsapp-business-qr-code-api.md`, `reference/whatsapp-business-phone-number/whatsapp-business-qr-code-management-api.md` | `client::qr_codes::QrCodes::create`, `update`, `get`, `list`, `delete` | not exposed | done / gap (M5g) |
