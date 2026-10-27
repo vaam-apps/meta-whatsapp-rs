@@ -123,11 +123,11 @@ match number.set_username(username, None).await {
   `request_official_business_account(&ObaApplication::new(url, country))`
   applies, never replayed after a timeout, only when Meta refused it
   before processing it (`Error::may_resend`); 30 days after a rejection.
-- Also on the number: `set_search_visibility`, `set_security_notifications`,
-  `set_notify_user_change_number`, `business_compliance_info`,
+- Also on the number: `set_search_visibility`, `set_security_notifications`, `set_notify_user_change_number`, `set_connection_status`,
+  `set_webhook_url` (how it relates to `set_webhook_override` is undocumented), `business_compliance_info`,
   `set_business_compliance_info` (India), `health_status()` (a WABA's
-  too; the portfolio's own: `health.entity(&HealthEntityType::Business)`);
-  bot details: `Client::waba_bot(bot_id).get(&[])`.
+  too; the portfolio's own: `health.entity(&HealthEntityType::Business)`); bot details: `Client::waba_bot(bot_id).get(&[])`;
+  payload encryption: `enable_payload_encryption(&ClientEncryptionKey::new(key)?)` (base64; its `Debug` shows a length), `disable_payload_encryption()`, read back by `settings()` (Meta: schema only, no example).
 
 ## Pitfalls
 
@@ -145,7 +145,7 @@ match number.set_username(username, None).await {
   attempt
   ([OPEN_QUESTIONS.md #4](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants),
   decided on 2026-09-26).
-- Not wrapped: payload-encryption settings (roadmap L26), WABA creation,
+- Not wrapped: WABA creation,
   system users, withdrawing an Official Business Account application (no
   documented field).
 - Nothing stores the synced contacts (`smb_app_state_sync`); the inbox

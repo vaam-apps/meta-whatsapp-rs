@@ -19,7 +19,9 @@ row 112 again when the port suites moved into the core (roadmap S3),
 against its code; row 155 with app deep links on template URL buttons
 (roadmap L24), against its code and the service's test; rows 101 and 153
 with template archiving and template groups (roadmap L23), against its
-code and Meta's pages of 2026-10-26 (§ Sources). Every cell about us was
+code and Meta's pages of 2026-10-26 (§ Sources); row 156 with the number
+settings L9 left (roadmap L26), against its code and Meta's pages of
+2026-10-27 (§ Sources). Every cell about us was
 checked against the code: a cell that
 says a thing is done names the symbol that does it, and what the service
 (`meta-whatsapp-server`) does is read from its routes, not from its
@@ -34,7 +36,7 @@ reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
-| Library | 101 | 22 | 8 | 1 |
+| Library | 102 | 22 | 7 | 1 |
 | Service | 39 | 25 | 67 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
@@ -42,7 +44,7 @@ reached.
   n/a column is a side that does not carry the capability at all: the
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
-- Each of the library's 30 partial or gap rows is cited by a
+- Each of the library's 29 partial or gap rows is cited by a
   [roadmap](roadmap.md) item. Each of the service's 92 names, in its
   status, the roadmap items that bring it; by family (a row can name
   two): M2 8, M3 11, M4 2, M5 70, S 2 (the modular split; S2b, undated
@@ -143,7 +145,12 @@ The owner's definition (2026-09-26):
   against `templates/template-archival` and `templates/template-groups`
   as Meta served them that day, not against the mirror: the first now
   shows the archive and unarchive endpoints, and the second, absent
-  from Meta's page list at the crawl, is in it now.
+  from Meta's page list at the crawl, is in it now. Row 156 was checked
+  on 2026-10-27 against
+  `reference/whatsapp-business-phone-number/settings-api` and
+  `reference/whatsapp-business-phone-number/whatsapp-business-account-phone-number-api`
+  as Meta served them that day: both still document its fields by
+  schema only, without an example.
 - **Us**: the code at b6fc893; for rows 17, 19 and 84–88, the bot
   framework's (B1).
 
@@ -353,7 +360,7 @@ The owner's definition (2026-09-26):
 | 149 | Policy | Account, policy and security events (alerts, violations, reviews, capability, name, quality, security) | — | — | `webhooks/reference/account_alerts.md`, `webhooks/reference/account_update.md`, `webhooks/reference/account_review_update.md`, `webhooks/reference/business_capability_update.md`, `webhooks/reference/phone_number_name_update.md`, `webhooks/reference/security.md`; `policy-enforcement.md` | `webhooks::WebhookEvent::AccountAlert`, `AccountReviewUpdated`, `AccountUpdated`, `AccountSettingsUpdated`, `BusinessCapabilityUpdated`, `PhoneNumberNameUpdated`, `SecurityUpdated` | all seven are tenant event types | done / done |
 | 150 | Policy | Marketing opt-out (user preferences) | — | — | `webhooks/reference/user_preferences.md` | `webhooks::WebhookEvent::UserPreferenceChanged`; `core::ErrorKind::MarketingOptedOut` (131050) | `user_preference_changed` events; `409 marketing_opted_out` | done / done |
 | 152 | Accounts | Parent BSUID accounts: the portfolios that share parent BSUIDs | — | — | `business-scoped-user-ids` (§ Get parent BSUID account, served from `api.facebook.com`) | `client::waba::Business::parent_bsuid_account` (a `ParentBsuidAccount`): the one request the client's credential rules (`client::GraphRequest`) let take a token to `api.facebook.com`, `GET /{digits}/parent-bsuid-accounts` over https on the default port, with no version segment; every other path, method, scheme or port on that host is refused before any request (roadmap L10a) | — | done / gap (M5c4) |
-| 156 | Numbers | Payload encryption, connection status and webhook URL on a number | — | — | `reference/whatsapp-business-phone-number/settings-api.md` (`payload_encryption`: `status`, `client_encryption_key`, `client_encryption_key_fingerprint`, `cloud_encryption_key`); `reference/whatsapp-business-phone-number/whatsapp-business-account-phone-number-api.md` (`connection_status`, `webhook_url`) | not wrapped (L26) | — | gap / gap (M5c3) |
+| 156 | Numbers | Payload encryption, connection status and webhook URL on a number | — | — | `reference/whatsapp-business-phone-number/settings-api.md` (`payload_encryption`: `status`, `client_encryption_key`, `client_encryption_key_fingerprint`, `cloud_encryption_key`); `reference/whatsapp-business-phone-number/whatsapp-business-account-phone-number-api.md` (`connection_status`, `webhook_url`) | `client::phone_numbers::PhoneNumber::enable_payload_encryption` (`status` and the key, a `client::phone_numbers::ClientEncryptionKey` checked to be base64, whose `Debug` shows only its length), `disable_payload_encryption`, and the answer of `settings` (`client::phone_numbers::PayloadEncryption`: `status`, `client_encryption_key_fingerprint`, `cloud_encryption_key`, the last shown as a length in `Debug`); `set_connection_status` (`client::phone_numbers::ConnectionStatus`) and `set_webhook_url` (an absolute URI), fields of the number's own `POST`, one per call. Neither page has an example: the bodies follow the schemas, and the module docs name what the pages leave out (roadmap L26) | — | done / gap (M5c3) |
 
 ## Plan to parity
 

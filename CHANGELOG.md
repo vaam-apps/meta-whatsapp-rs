@@ -204,6 +204,30 @@ stored data, the owner's).
 
 ### Added
 
+- **Payload encryption, connection status and webhook URL on a number**
+  (`meta_whatsapp_client::phone_numbers`, roadmap L26, parity row 156):
+  `PhoneNumber::enable_payload_encryption(&ClientEncryptionKey)` sends
+  `{"payload_encryption": {"status": "enabled", "client_encryption_key":
+  …}}` to `POST /{PHONE_NUMBER_ID}/settings`, and
+  `disable_payload_encryption()` the status alone; `settings()` now
+  reads the `payload_encryption` answer as a `PayloadEncryption`
+  (`status`, a `PayloadEncryptionStatus`;
+  `client_encryption_key_fingerprint`; `cloud_encryption_key`).
+  `ClientEncryptionKey::new` refuses an empty or non-base64 key with an
+  `Error::Validation` that does not echo it; the key has no `Display` or
+  `Serialize`, and its `Debug`, like `PayloadEncryption`'s for the cloud
+  key, shows only a length. `set_connection_status(&ConnectionStatus)`
+  (the schema's eleven values, unknown ones kept in `Other`) and
+  `set_webhook_url(url)` (an absolute URI, checked before any request;
+  `https` is not required, as for `set_webhook_override`) post the
+  number's own `connection_status` and `webhook_url` fields, one per
+  call, replayed on transient errors like the other values set there.
+  Meta documents all of them by schema only, without an example: the
+  bodies follow the schemas, and the module docs list what the pages
+  leave out (the key's format, how the fingerprint is computed, what the
+  cloud key is, which connection statuses a business may set and to
+  what effect, how `webhook_url` relates to the callback override).
+
 - **A check for a blank verify token** (`meta_whatsapp_webhooks`, roadmap
   L20d, decided as OPEN_QUESTIONS #16, now closed):
   `WebhookHandler::check()` returns a `ConfigError` when the handler's
@@ -434,8 +458,9 @@ stored data, the owner's).
   Pages without examples (the number's `POST` fields, compliance
   information, bot details) are typed from their schemas, as the module
   docs say. Not offered: withdrawing an Official Business Account
-  application (no documented field), and the payload-encryption settings
-  and the number's `connection_status` and `webhook_url` (roadmap L26).
+  application (no documented field), and, until roadmap L26 (above), the
+  payload-encryption settings and the number's `connection_status` and
+  `webhook_url`.
   The username errors `147001`–`147005` are `ErrorKind::Unknown` for
   now.
 - **Window events, thread ownership and identity links in the CMS inbox**
@@ -1121,6 +1146,16 @@ stored data, the owner's).
   Use v4, which needs no `version`.
 
 ### Changed
+
+- **Breaking — `PhoneNumberSettings::payload_encryption` is typed**
+  (`meta_whatsapp_client::phone_numbers`, roadmap L26): an
+  `Option<PayloadEncryption>` instead of an `Option<serde_json::Value>`
+  (see Added). Code that read the raw JSON reads the fields instead
+  (`status`, `client_encryption_key_fingerprint`,
+  `cloud_encryption_key`); serializing `PhoneNumberSettings` writes the
+  same keys as before. An answer whose `payload_encryption` lacks
+  `status`, which the schema requires, now fails to parse. No code in
+  this repository read the field.
 
 - **Breaking — live events are shared as `Arc<WebhookEvent>`, not cloned
   per subscriber** (`meta_whatsapp_webhooks::sse`,
