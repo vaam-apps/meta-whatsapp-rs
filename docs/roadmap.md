@@ -1230,7 +1230,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** the pre-fill test's expected JSON is the helper's
     output, recorded with its date; a serializer that departs from it
     fails the test.
-- [ ] **L26. Number settings left** (`meta-whatsapp-client`,
+- [x] **L26. Number settings left** (`meta-whatsapp-client`,
   `client::phone_numbers`; row 156, category 20, coverage row 10): what L9 left
   of the number's settings. The payload-encryption settings of
   `/{PHONE_NUMBER_ID}/settings` (`payload_encryption`: `status` and
@@ -1242,12 +1242,41 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   them by schema only, without an example: the bodies follow the
   schemas, and the module docs name each gap. The encryption key goes
   through the security review (`wa-security-reviewer`).
-  - **Kind:** additive.
+  - **Kind:** additive, but for one field: `PhoneNumberSettings`'s
+    `payload_encryption`, raw JSON until now, is typed.
   - **After:** L9.
   - **Decisive:** exact JSON per field from the schemas; dropping any one
     field from its body fails its test; reading the settings parses a
     `payload_encryption` answer carrying every field of the response
     schema.
+  - **Landed:** row 156 done in the library; the service's side stays
+    a gap (M5c3). `PhoneNumber::enable_payload_encryption` sends
+    `status` and `client_encryption_key` (a `ClientEncryptionKey`,
+    checked to be base64 and not an obvious private key, `Debug`
+    showing its length only), `disable_payload_encryption` the status
+    alone, and `settings()` reads `PayloadEncryption` back (`status`,
+    optional so that an answer without it still parses;
+    `client_encryption_key_fingerprint`; and `cloud_encryption_key`, a
+    `CloudEncryptionKey` that `Debug` shows as a length), with decode
+    errors that withhold the body. `set_connection_status`
+    (`ConnectionStatus`, the schema's eleven values) and
+    `set_webhook_url` (an absolute `https` URI, no user info, no
+    fragment, sent exactly as given) post on the number, one field per
+    call. The four setters are not replayed after a timeout, only after
+    what Meta provably refused (`Error::may_resend`). Skipping any
+    one field, request or response, fails its test. None of these has
+    an example on Meta's pages: the bodies and the read answer follow
+    the schemas, and the module docs name what they leave out (the
+    key's format, the fingerprint's algorithm, what the cloud key is,
+    which connection statuses a business may set and to what effect,
+    how `webhook_url` relates to the override).
+    **Left:** `StorageConfiguration::status` (from L9) is still required
+    and `StorageStatus` has no catch-all, so a `storage_configuration`
+    answer without a status, or with a status Meta adds, fails the whole
+    `settings()` read, as `payload_encryption` did before this item
+    made its status optional (L20a's catch-all pass covers the enum);
+    and `CallbackOverride` does not check its URI's scheme, where
+    `set_webhook_url` requires `https`.
 
 ## 4. Service milestones
 
