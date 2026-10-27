@@ -1220,14 +1220,18 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Landed:** row 156 done in the library; the service's side stays
     a gap (M5c3). `PhoneNumber::enable_payload_encryption` sends
     `status` and `client_encryption_key` (a `ClientEncryptionKey`,
-    checked to be base64, `Debug` showing its length only),
-    `disable_payload_encryption` the status alone, and `settings()`
-    reads `PayloadEncryption` back (`status`,
-    `client_encryption_key_fingerprint`, and `cloud_encryption_key`,
-    which `Debug` shows as a length). `set_connection_status`
+    checked to be base64 and not an obvious private key, `Debug`
+    showing its length only), `disable_payload_encryption` the status
+    alone, and `settings()` reads `PayloadEncryption` back (`status`,
+    optional so that an answer without it still parses;
+    `client_encryption_key_fingerprint`; and `cloud_encryption_key`, a
+    `CloudEncryptionKey` that `Debug` shows as a length), with decode
+    errors that withhold the body. `set_connection_status`
     (`ConnectionStatus`, the schema's eleven values) and
-    `set_webhook_url` (an absolute URI, `https` not required, as for
-    the override) post on the number, one field per call. Skipping any
+    `set_webhook_url` (an absolute `https` URI, no user info, no
+    fragment, sent exactly as given) post on the number, one field per
+    call. The four setters are not replayed after a timeout, only after
+    what Meta provably refused (`Error::may_resend`). Skipping any
     one field, request or response, fails its test. None of these has
     an example on Meta's pages: the bodies and the read answer follow
     the schemas, and the module docs name what they leave out (the

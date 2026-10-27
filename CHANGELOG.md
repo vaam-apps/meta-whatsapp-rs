@@ -211,17 +211,28 @@ stored data, the owner's).
   …}}` to `POST /{PHONE_NUMBER_ID}/settings`, and
   `disable_payload_encryption()` the status alone; `settings()` now
   reads the `payload_encryption` answer as a `PayloadEncryption`
-  (`status`, a `PayloadEncryptionStatus`;
-  `client_encryption_key_fingerprint`; `cloud_encryption_key`).
-  `ClientEncryptionKey::new` refuses an empty or non-base64 key with an
-  `Error::Validation` that does not echo it; the key has no `Display` or
-  `Serialize`, and its `Debug`, like `PayloadEncryption`'s for the cloud
-  key, shows only a length. `set_connection_status(&ConnectionStatus)`
-  (the schema's eleven values, unknown ones kept in `Other`) and
-  `set_webhook_url(url)` (an absolute URI, checked before any request;
-  `https` is not required, as for `set_webhook_override`) post the
-  number's own `connection_status` and `webhook_url` fields, one per
-  call, replayed on transient errors like the other values set there.
+  (`status`, an `Option<PayloadEncryptionStatus>`, so that an answer
+  without it still parses, local storage included;
+  `client_encryption_key_fingerprint`; `cloud_encryption_key`, a
+  `CloudEncryptionKey`), and a `settings()` answer that fails to decode
+  gives an `Error::Decode` whose body snippet and message are withheld.
+  `ClientEncryptionKey::new` refuses an empty or non-base64 key (the
+  standard alphabet, strictly), and an obvious private key (a PEM
+  `PRIVATE KEY` block, or DER opening with a private key's version
+  `INTEGER`: PKCS#1, PKCS#8, SEC1), with an `Error::Validation` that
+  does not echo it; the key has no `Display` or `Serialize`, and its
+  `Debug`, like `CloudEncryptionKey`'s (which has no `Display` either),
+  shows only a length. `set_connection_status(&ConnectionStatus)` (the
+  schema's eleven values, unknown ones kept in `Other`) and
+  `set_webhook_url(url)` (an absolute `https` URI without user info or
+  a fragment, with no whitespace or control character, sent exactly as
+  given; checked before any request) post the number's own
+  `connection_status` and `webhook_url` fields, one per call. These
+  four setters are **not replayed after a timeout** (or any error that
+  may have reached Meta), unlike the other values set on a number: only
+  what Meta provably refused (`Error::may_resend`: a throttle,
+  maintenance) is retried; after an `Err`, read `settings()` back before
+  enabling or disabling encryption again.
   Meta documents all of them by schema only, without an example: the
   bodies follow the schemas, and the module docs list what the pages
   leave out (the key's format, how the fingerprint is computed, what the
@@ -1153,9 +1164,12 @@ stored data, the owner's).
   (see Added). Code that read the raw JSON reads the fields instead
   (`status`, `client_encryption_key_fingerprint`,
   `cloud_encryption_key`); serializing `PhoneNumberSettings` writes the
-  same keys as before. An answer whose `payload_encryption` lacks
-  `status`, which the schema requires, now fails to parse. No code in
-  this repository read the field.
+  same keys as before. Every field of `PayloadEncryption` is optional,
+  `status` too although the schema requires it, so any object Meta
+  sends there still parses; a `payload_encryption` that is not an
+  object, or a field of the wrong JSON type, now fails `settings()`
+  where the raw JSON did not. No code in this repository read the
+  field.
 
 - **Breaking — live events are shared as `Arc<WebhookEvent>`, not cloned
   per subscriber** (`meta_whatsapp_webhooks::sse`,
