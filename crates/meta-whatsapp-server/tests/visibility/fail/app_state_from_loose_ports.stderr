@@ -1,0 +1,17 @@
+error[E0277]: the trait bound `MemoryStore: meta_whatsapp_server::store::Backend` is not satisfied
+  --> tests/visibility/fail/app_state_from_loose_ports.rs:16:9
+   |
+16 |         Arc::new(MemoryStore::new()),
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `meta_whatsapp_server::store::Backend` is not implemented for `MemoryStore`
+   |
+help: the following other types implement trait `meta_whatsapp_server::store::Backend`
+  --> src/store/memory.rs
+   |
+   | impl Backend for MemoryBackend {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `MemoryBackend`
+   |
+  ::: src/store/postgres.rs
+   |
+   | impl Backend for PgBackend {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^ `PgBackend`
+   = note: required for the cast from `Arc<MemoryStore>` to `Arc<(dyn meta_whatsapp_server::store::Backend + 'static)>`

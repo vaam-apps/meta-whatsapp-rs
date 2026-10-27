@@ -30,9 +30,9 @@ pub use postgres::{
 
 /// The service's records on one database: its [`RecordStore`] and its
 /// [`IdempotencyRecords`], one value implementing both (as [`MemoryStore`]
-/// and [`PgStore`] do). [`crate::state::AppState::new`] takes one; a
-/// [`Backend`] gives the two ports apart
-/// ([`crate::state::AppState::from_backend`]).
+/// and [`PgStore`] do), for code that holds the two together. The service
+/// itself is composed from a [`Backend`] alone, which gives the two ports
+/// apart ([`crate::state::AppState::from_backend`]).
 pub trait Store: RecordStore + IdempotencyRecords {}
 
 impl<T: RecordStore + IdempotencyRecords + ?Sized> Store for T {}

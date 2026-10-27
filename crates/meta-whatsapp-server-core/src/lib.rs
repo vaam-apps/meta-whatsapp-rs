@@ -18,6 +18,7 @@
 //! | [`idempotency`] | `Idempotency-Key`: claim, settle, replay |
 //! | [`ratelimit`] | per-tenant token buckets by route class, transfer slots |
 //! | [`store`], [`outbox`], [`backend`] | the ports, and the bundle a backend gives |
+//! | [`housekeeping`] | the periodic purges, over a [`backend::Backend`], one replica at a time |
 //! | `conformance` (feature `conformance`) | the ports' contracts as executable suites, run over a [`backend::Backend`]: every backend's tests run them |
 //!
 //! # Ports
@@ -48,6 +49,7 @@ pub mod backend;
 pub mod conformance;
 pub mod error;
 pub mod events;
+pub mod housekeeping;
 pub mod idempotency;
 pub mod keys;
 pub mod model;

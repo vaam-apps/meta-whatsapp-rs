@@ -1,7 +1,12 @@
 //! [`Backend`]: every storage port the service runs on, over one
 //! database. The service composes one at start (memory in development,
-//! Postgres everywhere else); an integrator swaps it for their own (a
-//! MongoDB one, say) by implementing the ports and this bundle.
+//! Postgres everywhere else), and is composed from it alone: its state,
+//! its webhook pipeline and its housekeeping ([`crate::housekeeping`]) take
+//! every store from the bundle, and no constructor of the service takes a
+//! port on its own (the server's `AppState::from_backend` and
+//! `serve::serve_with`). An integrator swaps it for their own (a MongoDB
+//! one, say) by implementing the ports and this bundle, and checks it with
+//! the `conformance` suites (feature `conformance`).
 //!
 //! One bundle rather than loose ports, because the ports share their
 //! database's guarantees: deleting a tenant ([`RecordStore::delete_tenant`])

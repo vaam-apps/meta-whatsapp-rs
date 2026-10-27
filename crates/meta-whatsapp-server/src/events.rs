@@ -56,13 +56,13 @@ use meta_whatsapp_rs::core::clock::{Clock, SystemClock};
 use meta_whatsapp_rs::core::error::{SinkError, StorageError};
 use meta_whatsapp_rs::core::secret::{AppSecret, VerifyToken};
 use meta_whatsapp_rs::core::sink::EventSink;
-use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
 use meta_whatsapp_rs::inbox::InboxSink;
 use meta_whatsapp_rs::webhooks::axum::body::Bytes;
 use meta_whatsapp_rs::webhooks::{
     DEFAULT_MAX_BODY_BYTES, DedupGuard, DeliveryReport, SignatureVerifier, WebhookEvent,
     WebhookHandler,
 };
+use meta_whatsapp_server_core::backend::Backend;
 pub use meta_whatsapp_server_core::events::{
     DEFAULT_OUTBOX_RETENTION, EventIdKey, EventKey, HOUSEKEEPING_INTERVAL, KEYLESS_DEDUP_WINDOW,
     MAX_PAGE_DATA_BYTES, OPERATOR_EVENT_TYPES, Polled, Route, RowError, TENANT_EVENT_TYPES,
@@ -100,13 +100,16 @@ pub const MAX_DELIVERIES_RECORDING: usize = 4;
 /// How long a delivery waits for its turn to record: past it, `503`.
 pub const RECORDING_WAIT: Duration = Duration::from_secs(10);
 
-/// What the webhook pipeline is built from.
+/// What the webhook pipeline checks Meta's deliveries with, and reads
+/// "now" from. Its stores are not here: the pipeline is built on the
+/// backend the service runs on ([`crate::state::AppState::from_backend`]),
+/// its dedup leases in the bundle's `KvStore`, the inbox in its
+/// `ConversationStore`, the events in its `Outbox`, routed by its
+/// `RecordStore`, so that no store of another database is mixed in.
 pub struct Inbound {
     verifier: SignatureVerifier,
     ids: EventIdKey,
-    kv: Arc<dyn KvStore>,
-    conversations: Arc<dyn ConversationStore>,
-    outbox: Arc<dyn Outbox>,
+    verify_token: VerifyToken,
     clock: Arc<dyn Clock>,
 }
 
@@ -120,10 +123,10 @@ impl std::fmt::Debug for Inbound {
 
 impl Inbound {
     /// Verify deliveries against `app_secrets` (the active one, then the
-    /// previous one while rotating), lease dedup claims in `kv`, record
-    /// into `conversations` and `outbox`. Event ids are derived from the
-    /// first app secret ([`EventIdKey`]): after a rotation, an event
-    /// recorded again (its row purged) gets another id.
+    /// previous one while rotating), and Meta's subscription handshake
+    /// (`GET /webhooks/meta`) against `verify_token`. Event ids are
+    /// derived from the first app secret ([`EventIdKey`]): after a
+    /// rotation, an event recorded again (its row purged) gets another id.
     ///
     /// # Errors
     ///
@@ -131,9 +134,7 @@ impl Inbound {
     /// refuses them: an HMAC under a blank key is anyone's).
     pub fn new(
         app_secrets: Vec<AppSecret>,
-        kv: Arc<dyn KvStore>,
-        conversations: Arc<dyn ConversationStore>,
-        outbox: Arc<dyn Outbox>,
+        verify_token: VerifyToken,
     ) -> meta_whatsapp_rs::Result<Self> {
         let ids = app_secrets
             .first()
@@ -146,9 +147,7 @@ impl Inbound {
         Ok(Self {
             verifier: SignatureVerifier::new(app_secrets)?,
             ids,
-            kv,
-            conversations,
-            outbox,
+            verify_token,
             clock: Arc::new(SystemClock),
         })
     }
@@ -262,18 +261,17 @@ pub(crate) enum Refused {
 }
 
 impl Events {
-    /// The pipeline over `inbound`, routing with `store`.
-    pub(crate) fn new(
-        inbound: Inbound,
-        store: Arc<dyn RecordStore>,
-        verify_token: VerifyToken,
-        metrics: Metrics,
-    ) -> Self {
-        let dedup = DedupGuard::new(inbound.kv);
+    /// The pipeline `inbound` describes, on `backend`'s stores alone:
+    /// dedup leases in its `KvStore`, the inbox in its
+    /// `ConversationStore`, the events in its `Outbox`, routed by its
+    /// `RecordStore`.
+    pub(crate) fn new(inbound: Inbound, backend: &dyn Backend, metrics: Metrics) -> Self {
+        let outbox = backend.outbox();
+        let dedup = DedupGuard::new(backend.kv());
         let sink = ServiceSink {
-            store,
-            inbox: InboxSink::new(inbound.conversations),
-            outbox: inbound.outbox.clone(),
+            store: backend.records(),
+            inbox: InboxSink::new(backend.conversations()),
+            outbox: outbox.clone(),
             metrics,
             ids: inbound.ids,
             replay_window: dedup.ttl(),
@@ -281,10 +279,10 @@ impl Events {
         };
         Self {
             verifier: inbound.verifier,
-            verify_token,
+            verify_token: inbound.verify_token,
             dedup,
             sink,
-            outbox: inbound.outbox,
+            outbox,
             in_flight: Arc::new(Semaphore::new(MAX_DELIVERIES_IN_FLIGHT)),
             recording: Arc::new(Semaphore::new(MAX_DELIVERIES_RECORDING)),
             rejections: RejectionLog::new(),
@@ -355,6 +353,11 @@ impl Events {
     /// The outbox.
     pub(crate) fn outbox(&self) -> &dyn Outbox {
         self.outbox.as_ref()
+    }
+
+    /// Meta's webhook verify token.
+    pub(crate) fn verify_token(&self) -> &VerifyToken {
+        &self.verify_token
     }
 }
 

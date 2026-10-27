@@ -1,0 +1,10 @@
+error[E0624]: method `backend` is private
+ --> tests/visibility/fail/app_state_backend.rs:7:19
+  |
+7 |     let _ = state.backend();
+  |                   ^^^^^^^ private method
+  |
+ ::: src/state.rs
+  |
+  |     pub(crate) fn backend(&self) -> &Arc<dyn Backend> {
+  |     ------------------------------------------------- private method defined here

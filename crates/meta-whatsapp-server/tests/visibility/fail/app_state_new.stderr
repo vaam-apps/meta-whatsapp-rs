@@ -1,0 +1,40 @@
+error[E0599]: no associated function or constant named `new` found for struct `AppState` in the current scope
+  --> tests/visibility/fail/app_state_new.rs:22:23
+   |
+22 |     let _ = AppState::new(store, vault, client, token, Metrics::new(), inbound);
+   |                       ^^^ associated function or constant not found in `AppState`
+   |
+note: if you're trying to build a new `AppState`, consider using `AppState::from_backend` which returns `Result<AppState, meta_whatsapp_rs::Error>`
+  --> src/state.rs
+   |
+   | /     pub fn from_backend(
+   | |         backend: Arc<dyn Backend>,
+   | |         vault_keys: VaultKeys,
+   | |         client: Client,
+...  |
+   | |         settings: Settings,
+   | |     ) -> Result<Self, Error> {
+   | |____________________________^
+
+error[E0599]: no associated function or constant named `with_settings` found for struct `AppState` in the current scope
+  --> tests/visibility/fail/app_state_new.rs:32:23
+   |
+32 |     let _ = AppState::with_settings(
+   |                       ^^^^^^^^^^^^^ associated function or constant not found in `AppState`
+   |
+note: if you're trying to build a new `AppState`, consider using `AppState::from_backend` which returns `Result<AppState, meta_whatsapp_rs::Error>`
+  --> src/state.rs
+   |
+   | /     pub fn from_backend(
+   | |         backend: Arc<dyn Backend>,
+   | |         vault_keys: VaultKeys,
+   | |         client: Client,
+...  |
+   | |         settings: Settings,
+   | |     ) -> Result<Self, Error> {
+   | |____________________________^
+help: there is a method `settings` with a similar name, but with different arguments
+  --> src/state.rs
+   |
+   |     pub fn settings(&self) -> &Settings {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

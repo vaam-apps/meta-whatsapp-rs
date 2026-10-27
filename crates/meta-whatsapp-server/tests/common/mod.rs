@@ -36,7 +36,10 @@ use meta_whatsapp_server::model::{AllowedTenants, KeyOwner, Scope, TenantId};
 use meta_whatsapp_server::ratelimit::{Rate, RateLimits};
 use meta_whatsapp_server::state::{AppState, Settings};
 use meta_whatsapp_server::store::events::{EventPage, EventQuery, NewEvent};
-use meta_whatsapp_server::store::{MemoryStore, Outbox as EventStore, Store};
+use meta_whatsapp_server::store::{
+    Backend, BackendKind, IdempotencyRecords, Janitor, LeaderLock, MemoryBackend, MemoryStore,
+    Outbox as EventStore, RecordStore, SchemaMigrator, Store,
+};
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -229,6 +232,60 @@ impl EventStore for RecordingEvents {
     async fn purge(&self, older_than: std::time::Duration) -> Result<u64, StorageError> {
         self.inner.purge(older_than).await
     }
+}
+
+/// The bundle a [`Harness`] serves (the service is composed from a
+/// `Backend` alone): its [`Stores`], the vault's reads counted and the
+/// sink's inserts recorded, and memory's leader lock, janitor and
+/// migrator (the harness runs no housekeeping). A backend defined outside
+/// the service's crate, as an integrator's would be.
+pub struct HarnessBackend {
+    store: Arc<dyn Store>,
+    kv: Arc<CountingKv>,
+    conversations: Arc<dyn ConversationStore>,
+    outbox: Arc<RecordingEvents>,
+    memory: MemoryBackend,
+}
+
+#[async_trait]
+impl Backend for HarnessBackend {
+    fn kind(&self) -> BackendKind {
+        BackendKind::Other("test harness")
+    }
+    fn records(&self) -> Arc<dyn RecordStore> {
+        self.store.clone()
+    }
+    fn idempotency(&self) -> Arc<dyn IdempotencyRecords> {
+        self.store.clone()
+    }
+    fn outbox(&self) -> Arc<dyn EventStore> {
+        self.outbox.clone()
+    }
+    fn leader_lock(&self) -> Arc<dyn LeaderLock> {
+        self.memory.leader_lock()
+    }
+    fn janitor(&self) -> Arc<dyn Janitor> {
+        self.memory.janitor()
+    }
+    fn migrator(&self) -> Arc<dyn SchemaMigrator> {
+        self.memory.migrator()
+    }
+    fn kv(&self) -> Arc<dyn KvStore> {
+        self.kv.clone()
+    }
+    fn conversations(&self) -> Arc<dyn ConversationStore> {
+        self.conversations.clone()
+    }
+    async fn close(&self) {}
+}
+
+/// The vault key of every test service, and of the harness's own handle
+/// on its vault ([`Harness::vault`]): 32 bytes, in base64.
+pub const VAULT_KEY: &str = "dGVzdC12YXVsdC1rZXktb2YtMzItYnl0ZXMtZXhhY3Q=";
+
+/// [`VAULT_KEY`], under the id `test`.
+pub fn vault_keys() -> VaultKeys {
+    VaultKeys::new(VaultKey::from_base64("test", VAULT_KEY).unwrap())
 }
 
 /// The service under test.
@@ -510,11 +567,9 @@ impl Harness {
         } = stores;
         let kv = Arc::new(CountingKv::new(kv));
         let outbox = Arc::new(RecordingEvents::new(events));
-        let vault = TokenVault::new(
-            kv.clone(),
-            VaultKeys::new(VaultKey::generate("test").unwrap()),
-        )
-        .unwrap();
+        // The test's own handle on the service's vault: the same store and
+        // key.
+        let vault = TokenVault::new(kv.clone(), vault_keys()).unwrap();
         let graph = ScriptedTransport::new();
         let client = Client::builder()
             .shared_transport(wrap(graph.clone()))
@@ -524,19 +579,23 @@ impl Harness {
         let clock = ManualClock::new(time::OffsetDateTime::now_utc());
         let inbound = Inbound::new(
             app_secrets.iter().copied().map(AppSecret::new).collect(),
-            kv.clone(),
-            conversations.clone(),
-            outbox.clone(),
+            VerifyToken::new(VERIFY_TOKEN),
         )
         .unwrap()
         .with_clock(Arc::new(clock.clone()));
-        let state = AppState::with_settings(
-            store.clone(),
-            vault.clone(),
+        let backend = HarnessBackend {
+            store: store.clone(),
+            kv: kv.clone(),
+            conversations: conversations.clone(),
+            outbox: outbox.clone(),
+            memory: MemoryBackend::new(),
+        };
+        let state = AppState::from_backend(
+            Arc::new(backend),
+            vault_keys(),
             client,
-            VerifyToken::new(VERIFY_TOKEN),
-            Metrics::new(),
             inbound,
+            Metrics::new(),
             settings,
         )
         .unwrap();

@@ -1,0 +1,30 @@
+error[E0061]: this function takes 2 arguments but 4 arguments were supplied
+  --> tests/visibility/fail/inbound_stores.rs:13:13
+   |
+13 |     let _ = Inbound::new(
+   |             ^^^^^^^^^^^^
+...
+16 |         conversations,
+   |         ------------- unexpected argument #3 of type `Arc<(dyn ConversationStore + 'static)>`
+17 |         outbox,
+   |         ------ unexpected argument #4 of type `Arc<(dyn Outbox + 'static)>`
+   |
+note: expected `VerifyToken`, found `Arc<dyn KvStore>`
+  --> tests/visibility/fail/inbound_stores.rs:15:9
+   |
+15 |         kv,
+   |         ^^
+   = note: expected struct `VerifyToken`
+              found struct `Arc<(dyn KvStore + 'static)>`
+note: associated function defined here
+  --> src/events.rs
+   |
+   |     pub fn new(
+   |            ^^^
+help: remove the extra arguments
+   |
+15 -         kv,
+16 -         conversations,
+17 -         outbox,
+15 +         /* VerifyToken */,
+   |

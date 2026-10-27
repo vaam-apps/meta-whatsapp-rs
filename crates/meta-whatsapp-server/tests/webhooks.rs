@@ -231,13 +231,10 @@ async fn without_a_valid_signature_it_is_401_and_nothing_is_recorded() {
 /// blank one (configuration refuses them first: tests/config.rs).
 #[test]
 fn a_blank_or_missing_app_secret_builds_no_pipeline() {
-    let kv = Arc::new(meta_whatsapp_rs::adapters::store::MemoryKvStore::new());
     for secrets in [vec![], vec![AppSecret::new("")], vec![AppSecret::new("  ")]] {
         let built = Inbound::new(
             secrets,
-            kv.clone(),
-            Arc::new(meta_whatsapp_rs::adapters::store::MemoryConversationStore::new()),
-            meta_whatsapp_server::store::MemoryStore::new().outbox(),
+            meta_whatsapp_rs::core::secret::VerifyToken::new(common::VERIFY_TOKEN),
         );
         assert!(built.is_err());
     }

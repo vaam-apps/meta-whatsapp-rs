@@ -1,4 +1,5 @@
-//! What every route shares.
+//! What every route shares: [`AppState`], composed from one
+//! [`Backend`] alone ([`AppState::from_backend`]).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -9,9 +10,9 @@ use crate::auth::Authorizer;
 use crate::events::{Events, Inbound};
 use crate::metrics::Metrics;
 use crate::ratelimit::{RateLimiter, RateLimits, Slots};
-use crate::store::{Backend, IdempotencyRecords, RecordStore, Store};
+use crate::store::{Backend, IdempotencyRecords, RecordStore};
 use meta_whatsapp_rs::client::DEFAULT_TIMEOUT;
-use meta_whatsapp_rs::client::embedded_signup::TokenVault;
+use meta_whatsapp_rs::client::embedded_signup::{TokenVault, VaultKeys};
 use meta_whatsapp_rs::core::config::ApiVersion;
 use meta_whatsapp_rs::core::secret::VerifyToken;
 use meta_whatsapp_rs::{Client, Error};
@@ -85,10 +86,10 @@ pub struct AppState {
 }
 
 struct Inner {
+    backend: Arc<dyn Backend>,
     store: Arc<dyn RecordStore>,
     idempotency: Arc<dyn IdempotencyRecords>,
     authz: Authorizer,
-    verify_token: VerifyToken,
     metrics: Metrics,
     events: Events,
     shutting_down: AtomicBool,
@@ -106,109 +107,42 @@ impl std::fmt::Debug for AppState {
 }
 
 impl AppState {
-    /// State on `store` and `vault`, calling Graph with `client` (built
-    /// without a default token: each call runs with the tenant's token),
-    /// receiving Meta's webhooks into `inbound`'s stores, with the default
-    /// [`Settings`].
+    /// The service on `backend`, and on nothing else: its records and
+    /// idempotency records, the token vault on its `KvStore` under
+    /// `vault_keys`, and the webhook pipeline `inbound` describes, built
+    /// here on its `KvStore` (dedup leases), `ConversationStore` (the
+    /// inbox), `Outbox` and records (routing). Graph is called with
+    /// `client` (built without a default token: each call runs with the
+    /// tenant's), and "now" read from `inbound`'s clock, the service's
+    /// one. A backend is the unit of swapping (docs/design/server.md,
+    /// section 8.2): its ports share one database's guarantees, so there
+    /// is no constructor taking ports one by one, and a backend an
+    /// integrator brings is served as the in-tree ones are.
     ///
     /// # Errors
     ///
-    /// `client` carries a token (the core's `Authorizer::new` refuses it).
-    pub fn new(
-        store: Arc<dyn Store>,
-        vault: TokenVault,
-        client: Client,
-        verify_token: VerifyToken,
-        metrics: Metrics,
-        inbound: Inbound,
-    ) -> Result<Self, Error> {
-        Self::with_settings(
-            store,
-            vault,
-            client,
-            verify_token,
-            metrics,
-            inbound,
-            Settings::default(),
-        )
-    }
-
-    /// [`Self::new`] with `settings`.
-    ///
-    /// # Errors
-    ///
-    /// As [`Self::new`].
-    pub fn with_settings(
-        store: Arc<dyn Store>,
-        vault: TokenVault,
-        client: Client,
-        verify_token: VerifyToken,
-        metrics: Metrics,
-        inbound: Inbound,
-        settings: Settings,
-    ) -> Result<Self, Error> {
-        let records: Arc<dyn RecordStore> = store.clone();
-        let idempotency: Arc<dyn IdempotencyRecords> = store;
-        Self::build(
-            (records, idempotency),
-            vault,
-            client,
-            verify_token,
-            metrics,
-            inbound,
-            settings,
-        )
-    }
-
-    /// [`Self::with_settings`] on `backend`'s records and idempotency
-    /// records (`inbound` built on its other stores).
-    ///
-    /// # Errors
-    ///
-    /// As [`Self::new`].
+    /// `vault_keys` holds two keys with one id (the library's
+    /// `TokenVault::new` refuses them), or `client` carries a token (the
+    /// core's `Authorizer::new` refuses it).
     pub fn from_backend(
-        backend: &dyn Backend,
-        vault: TokenVault,
+        backend: Arc<dyn Backend>,
+        vault_keys: VaultKeys,
         client: Client,
-        verify_token: VerifyToken,
-        metrics: Metrics,
         inbound: Inbound,
+        metrics: Metrics,
         settings: Settings,
     ) -> Result<Self, Error> {
-        Self::build(
-            (backend.records(), backend.idempotency()),
-            vault,
-            client,
-            verify_token,
-            metrics,
-            inbound,
-            settings,
-        )
-    }
-
-    fn build(
-        (store, idempotency): (Arc<dyn RecordStore>, Arc<dyn IdempotencyRecords>),
-        vault: TokenVault,
-        client: Client,
-        verify_token: VerifyToken,
-        metrics: Metrics,
-        inbound: Inbound,
-        settings: Settings,
-    ) -> Result<Self, Error> {
+        let store = backend.records();
+        let vault = TokenVault::new(backend.kv(), vault_keys)?;
         // One clock for the whole service: the webhook pipeline's.
         let authz = Authorizer::new(store.clone(), vault, client)?.with_clock(inbound.clock());
-        let events = Events::new(
-            inbound,
-            store.clone(),
-            verify_token.clone(),
-            metrics.clone(),
-        );
+        let events = Events::new(inbound, backend.as_ref(), metrics.clone());
         Ok(Self {
             inner: Arc::new(Inner {
+                idempotency: backend.idempotency(),
+                backend,
                 authz,
                 store,
-                idempotency,
-                verify_token,
                 metrics,
                 events,
                 shutting_down: AtomicBool::new(false),
@@ -219,6 +153,13 @@ impl AppState {
                 settings,
             }),
         })
+    }
+
+    /// The backend the state was composed from. Crate-private, like
+    /// [`Self::store`]: its records decide who owns what, and its vault
+    /// holds the tokens.
+    pub(crate) fn backend(&self) -> &Arc<dyn Backend> {
+        &self.inner.backend
     }
 
     /// The service's records. Crate-private: the records decide who owns
@@ -247,7 +188,7 @@ impl AppState {
 
     /// Meta's webhook verify token.
     pub(crate) fn verify_token(&self) -> &VerifyToken {
-        &self.inner.verify_token
+        self.inner.events.verify_token()
     }
 
     /// The metrics.
@@ -306,41 +247,31 @@ impl AppState {
 
 #[cfg(test)]
 impl AppState {
-    /// A state on memory stores, with a Graph client scripted to answer
+    /// A state on a memory backend, with a Graph client scripted to answer
     /// nothing: for unit tests that never call Meta.
     #[allow(clippy::unwrap_used)] // test helper: a panic is the report
     pub(crate) fn for_tests() -> Self {
-        use meta_whatsapp_rs::adapters::store::MemoryKvStore;
-        use meta_whatsapp_rs::client::embedded_signup::{VaultKey, VaultKeys};
+        use meta_whatsapp_rs::client::embedded_signup::VaultKey;
         use meta_whatsapp_rs::core::testing::ScriptedTransport;
 
-        let kv = Arc::new(MemoryKvStore::new());
-        let vault = TokenVault::new(
-            kv.clone(),
-            VaultKeys::new(VaultKey::generate("test").unwrap()),
-        )
-        .unwrap();
         let client = Client::builder()
             .transport(ScriptedTransport::new())
             .build()
             .unwrap();
-        let store = crate::store::MemoryStore::new();
         let inbound = Inbound::new(
             vec![meta_whatsapp_rs::core::secret::AppSecret::new(
                 "app-secret-for-unit-tests",
             )],
-            kv,
-            Arc::new(meta_whatsapp_rs::adapters::store::MemoryConversationStore::new()),
-            store.outbox(),
+            VerifyToken::new("verify-token-for-unit-tests"),
         )
         .unwrap();
-        Self::new(
-            Arc::new(store),
-            vault,
+        Self::from_backend(
+            Arc::new(crate::store::MemoryBackend::new()),
+            VaultKeys::new(VaultKey::generate("test").unwrap()),
             client,
-            VerifyToken::new("verify-token-for-unit-tests"),
-            Metrics::new(),
             inbound,
+            Metrics::new(),
+            Settings::default(),
         )
         .unwrap()
     }
