@@ -637,7 +637,12 @@ async fn live_postgres_an_event_routed_before_its_tenant_was_recreated_is_nobody
     let store = h.store.clone();
     h.outbox.before_next_insert(Box::new(move || {
         Box::pin(async move {
-            assert!(store.unbind_waba(&WabaId::new(EXAMPLE_WABA)).await.unwrap());
+            assert!(
+                store
+                    .unbind_waba(&WabaId::new(EXAMPLE_WABA).unwrap())
+                    .await
+                    .unwrap()
+            );
             assert_eq!(
                 store.delete_tenant(&tenant).await.unwrap(),
                 DeleteTenantOutcome::Deleted
@@ -661,12 +666,17 @@ async fn live_postgres_an_event_routed_before_its_tenant_was_recreated_is_nobody
     let tenant = TenantId::parse("tenant-a").unwrap();
     h.outbox.before_next_insert(Box::new(move || {
         Box::pin(async move {
-            assert!(store.unbind_waba(&WabaId::new(EXAMPLE_WABA)).await.unwrap());
+            assert!(
+                store
+                    .unbind_waba(&WabaId::new(EXAMPLE_WABA).unwrap())
+                    .await
+                    .unwrap()
+            );
             store
                 .bind_waba(
                     &tenant,
-                    &WabaId::new("102290129349999"),
-                    &[meta_whatsapp_rs::core::ids::PhoneNumberId::new(EXAMPLE_PN)],
+                    &WabaId::new("102290129349999").unwrap(),
+                    &[meta_whatsapp_rs::core::ids::PhoneNumberId::new(EXAMPLE_PN).unwrap()],
                 )
                 .await
                 .unwrap();
@@ -830,7 +840,7 @@ async fn live_postgres_an_event_whose_binding_moved_before_its_insert_is_nobodys
         }
         let _ = h
             .store
-            .unbind_waba(&WabaId::new(EXAMPLE_WABA))
+            .unbind_waba(&WabaId::new(EXAMPLE_WABA).unwrap())
             .await
             .unwrap();
         h.connect("tenant-a", EXAMPLE_WABA, &[EXAMPLE_PN], "TOKEN-OF-A")
@@ -839,7 +849,7 @@ async fn live_postgres_an_event_whose_binding_moved_before_its_insert_is_nobodys
         let (body, numbers) = if names_a_number {
             (
                 text(EXAMPLE_WABA, EXAMPLE_PN, "wamid.MOVED-TO-B"),
-                vec![PhoneNumberId::new(EXAMPLE_PN)],
+                vec![PhoneNumberId::new(EXAMPLE_PN).unwrap()],
             )
         } else {
             (template_approved(EXAMPLE_WABA), vec![])
@@ -848,9 +858,14 @@ async fn live_postgres_an_event_whose_binding_moved_before_its_insert_is_nobodys
         let b = TenantId::parse("tenant-b").unwrap();
         h.outbox.before_next_insert(Box::new(move || {
             Box::pin(async move {
-                assert!(store.unbind_waba(&WabaId::new(EXAMPLE_WABA)).await.unwrap());
+                assert!(
+                    store
+                        .unbind_waba(&WabaId::new(EXAMPLE_WABA).unwrap())
+                        .await
+                        .unwrap()
+                );
                 store
-                    .bind_waba(&b, &WabaId::new(EXAMPLE_WABA), &numbers)
+                    .bind_waba(&b, &WabaId::new(EXAMPLE_WABA).unwrap(), &numbers)
                     .await
                     .unwrap();
             })
@@ -916,8 +931,9 @@ async fn live_postgres_an_unbinding_waits_for_an_insert_in_flight() {
         let admin = async move {
             // The insert reaches the stream's row and waits there.
             tokio::time::sleep(Duration::from_millis(500)).await;
-            let unbind =
-                tokio::spawn(async move { store.unbind_waba(&WabaId::new(EXAMPLE_WABA)).await });
+            let unbind = tokio::spawn(async move {
+                store.unbind_waba(&WabaId::new(EXAMPLE_WABA).unwrap()).await
+            });
             tokio::time::sleep(Duration::from_millis(500)).await;
             let waited = !unbind.is_finished();
             holder.rollback().await.unwrap();
@@ -979,7 +995,12 @@ async fn live_postgres_an_event_dated_before_its_tenant_was_bound_again_is_nobod
         let store = h.store.clone();
         h.outbox.before_next_insert(Box::new(move || {
             Box::pin(async move {
-                assert!(store.unbind_waba(&WabaId::new(EXAMPLE_WABA)).await.unwrap());
+                assert!(
+                    store
+                        .unbind_waba(&WabaId::new(EXAMPLE_WABA).unwrap())
+                        .await
+                        .unwrap()
+                );
                 assert_eq!(
                     store.delete_tenant(&tenant).await.unwrap(),
                     DeleteTenantOutcome::Deleted
@@ -988,8 +1009,8 @@ async fn live_postgres_an_event_dated_before_its_tenant_was_bound_again_is_nobod
                 store
                     .bind_waba(
                         &tenant,
-                        &WabaId::new(EXAMPLE_WABA),
-                        &[PhoneNumberId::new(EXAMPLE_PN)],
+                        &WabaId::new(EXAMPLE_WABA).unwrap(),
+                        &[PhoneNumberId::new(EXAMPLE_PN).unwrap()],
                     )
                     .await
                     .unwrap();
@@ -1086,7 +1107,12 @@ async fn live_postgres_an_event_dated_in_its_binding_s_first_second_is_nobodys()
             let (store, bound) = (h.store.clone(), pool.clone());
             h.outbox.before_next_insert(Box::new(move || {
                 Box::pin(async move {
-                    assert!(store.unbind_waba(&WabaId::new(EXAMPLE_WABA)).await.unwrap());
+                    assert!(
+                        store
+                            .unbind_waba(&WabaId::new(EXAMPLE_WABA).unwrap())
+                            .await
+                            .unwrap()
+                    );
                     assert_eq!(
                         store.delete_tenant(&tenant).await.unwrap(),
                         DeleteTenantOutcome::Deleted
@@ -1095,8 +1121,8 @@ async fn live_postgres_an_event_dated_in_its_binding_s_first_second_is_nobodys()
                     store
                         .bind_waba(
                             &tenant,
-                            &WabaId::new(EXAMPLE_WABA),
-                            &[PhoneNumberId::new(EXAMPLE_PN)],
+                            &WabaId::new(EXAMPLE_WABA).unwrap(),
+                            &[PhoneNumberId::new(EXAMPLE_PN).unwrap()],
                         )
                         .await
                         .unwrap();
@@ -1170,7 +1196,12 @@ async fn live_postgres_an_event_dated_the_second_before_its_binding_is_nobodys()
         let bound_again = pool.clone();
         h.outbox.before_next_insert(Box::new(move || {
             Box::pin(async move {
-                assert!(store.unbind_waba(&WabaId::new(EXAMPLE_WABA)).await.unwrap());
+                assert!(
+                    store
+                        .unbind_waba(&WabaId::new(EXAMPLE_WABA).unwrap())
+                        .await
+                        .unwrap()
+                );
                 assert_eq!(
                     store.delete_tenant(&tenant).await.unwrap(),
                     DeleteTenantOutcome::Deleted
@@ -1179,8 +1210,8 @@ async fn live_postgres_an_event_dated_the_second_before_its_binding_is_nobodys()
                 store
                     .bind_waba(
                         &tenant,
-                        &WabaId::new(EXAMPLE_WABA),
-                        &[PhoneNumberId::new(EXAMPLE_PN)],
+                        &WabaId::new(EXAMPLE_WABA).unwrap(),
+                        &[PhoneNumberId::new(EXAMPLE_PN).unwrap()],
                     )
                     .await
                     .unwrap();

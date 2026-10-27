@@ -170,7 +170,8 @@ async fn harness() -> Harness {
     ] {
         vault
             .store(
-                &StoredBusinessToken::new(waba, AccessToken::new(token)).phone_number_ids([number]),
+                &StoredBusinessToken::new(WabaId::new(waba).unwrap(), AccessToken::new(token))
+                    .phone_number_ids([PhoneNumberId::new(number).unwrap()]),
             )
             .await
             .unwrap();

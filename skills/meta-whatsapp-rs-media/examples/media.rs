@@ -104,7 +104,7 @@ mod tests {
         let png = vec![0x89, b'P', b'N', b'G'];
         let id = upload_and_send(
             &client(&transport),
-            NUMBER.into(),
+            PhoneNumberId::new(NUMBER).unwrap(),
             Recipient::phone("+16505551234"),
             png,
         )
@@ -135,9 +135,13 @@ mod tests {
             }),
         );
         transport.push_bytes(200, "image/jpeg", body.clone());
-        let got = download_small(&client(&transport), NUMBER.into(), &"1".into())
-            .await
-            .unwrap();
+        let got = download_small(
+            &client(&transport),
+            PhoneNumberId::new(NUMBER).unwrap(),
+            &MediaId::new("1").unwrap(),
+        )
+        .await
+        .unwrap();
         assert_eq!(got.data.as_ref(), body.as_slice());
         assert_eq!(transport.last_request().unwrap().bearer(), Some("TOKEN"));
 
@@ -149,9 +153,13 @@ mod tests {
                 "sha256": sha, "id": "2"
             }),
         );
-        let refused = download_small(&client(&transport), NUMBER.into(), &"2".into())
-            .await
-            .unwrap_err();
+        let refused = download_small(
+            &client(&transport),
+            PhoneNumberId::new(NUMBER).unwrap(),
+            &MediaId::new("2").unwrap(),
+        )
+        .await
+        .unwrap_err();
         assert!(
             matches!(&refused, Error::Validation(v) if v.field == "url"),
             "{refused}"
@@ -171,9 +179,13 @@ mod tests {
             }),
         );
         transport.push_bytes(200, "image/jpeg", b"tampered".to_vec());
-        let err = download_large(&client(&transport), NUMBER.into(), &"1".into())
-            .await
-            .unwrap_err();
+        let err = download_large(
+            &client(&transport),
+            PhoneNumberId::new(NUMBER).unwrap(),
+            &MediaId::new("1").unwrap(),
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, Error::Transport(_)), "{err}");
         assert!(err.is_retryable()); // fetch a fresh URL and try again
     }
@@ -185,8 +197,8 @@ mod tests {
         transport.push_json(200, json!({"h": "4::aW1hZ2UvcG5n:ARb"}));
         let handle = header_handle(
             &client(&transport),
-            NUMBER.into(),
-            &"1234".into(),
+            PhoneNumberId::new(NUMBER).unwrap(),
+            &AppId::new("1234").unwrap(),
             vec![1, 2, 3],
         )
         .await

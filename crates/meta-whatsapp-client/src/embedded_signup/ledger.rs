@@ -786,11 +786,12 @@ mod tests {
 
     fn credit(waba: &str) -> StoredCredit {
         StoredCredit {
-            business_id: Some(BusinessId::new("2729063490586005")),
+            business_id: Some(BusinessId::new("2729063490586005").unwrap()),
             allocation_config_id: Some(AllocationConfigId::new("58501441721238")),
             currency: Some(WabaCurrency::Eur),
             shared_at: Some(datetime!(2026-09-24 12:00 UTC)),
-            ..StoredCredit::new(WabaId::new(waba))
+            // Unchecked: the pinned record below predates numeric WABA ids.
+            ..StoredCredit::new(WabaId::new_unchecked(waba))
         }
     }
 
@@ -814,12 +815,12 @@ mod tests {
     async fn the_credit_record_is_sealed_bound_to_its_waba_and_outlives_the_token() {
         let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
         let v = vault(&kv, VaultKeys::new(key("k1", 7)));
-        let version = v.put_credit(&credit("W1"), None).await.unwrap();
+        let version = v.put_credit(&credit("101"), None).await.unwrap();
         assert_eq!(
-            v.credit(&WabaId::new("W1")).await.unwrap(),
-            Some(credit("W1"))
+            v.credit(&WabaId::new("101").unwrap()).await.unwrap(),
+            Some(credit("101"))
         );
-        let bytes = raw(&kv, "credit/W1").await;
+        let bytes = raw(&kv, "credit/101").await;
         for clear in ["2729063490586005", "58501441721238", "currency", "waba_id"] {
             assert!(
                 !String::from_utf8_lossy(&bytes).contains(clear),
@@ -828,30 +829,35 @@ mod tests {
         }
 
         // A second writer with a stale version loses, typed.
-        v.put_credit(&credit("W1"), Some(version)).await.unwrap();
+        v.put_credit(&credit("101"), Some(version)).await.unwrap();
         let err = v
-            .put_credit(&credit("W1"), Some(version))
+            .put_credit(&credit("101"), Some(version))
             .await
             .unwrap_err();
         assert!(EmbeddedSignupRefusal::busy(&err), "{err}");
-        let err = v.put_credit(&credit("W1"), None).await.unwrap_err();
+        let err = v.put_credit(&credit("101"), None).await.unwrap_err();
         assert!(EmbeddedSignupRefusal::busy(&err), "{err}");
 
         // Copied under another WABA's key: does not open.
-        put(&kv, "credit/W2", bytes.clone()).await;
+        put(&kv, "credit/102", bytes.clone()).await;
         assert!(matches!(
-            v.credit(&WabaId::new("W2")).await,
+            v.credit(&WabaId::new("102").unwrap()).await,
             Err(Error::Crypto(CryptoError::Decrypt))
         ));
         // Edited: does not open.
         let mut blob: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         blob["ciphertext"] = "AAAA".into();
-        put(&kv, "credit/W3", serde_json::to_vec(&blob).unwrap()).await;
-        assert!(v.credit(&WabaId::new("W3")).await.is_err());
+        put(&kv, "credit/103", serde_json::to_vec(&blob).unwrap()).await;
+        assert!(v.credit(&WabaId::new("103").unwrap()).await.is_err());
 
         // Deleting the token leaves the ledger.
-        v.delete(&WabaId::new("W1")).await.unwrap();
-        assert!(v.credit(&WabaId::new("W1")).await.unwrap().is_some());
+        v.delete(&WabaId::new("101").unwrap()).await.unwrap();
+        assert!(
+            v.credit(&WabaId::new("101").unwrap())
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 
     /// Ledger records exactly as the vault wrote them before the project
@@ -861,7 +867,8 @@ mod tests {
     /// change to the ledger's associated-data tag (which still says
     /// `wa-rs`), to the `wa.token` namespace or to the record format would
     /// strand every stored record, and fails here; the tests above seal
-    /// with today's code and cannot catch that.
+    /// with today's code and cannot catch that. Its WABA id, `W1`, predates
+    /// the numeric id check (roadmap L20c): a stored record keeps opening.
     #[tokio::test]
     async fn ledger_records_written_before_the_rename_still_open() {
         const CREDIT_16B61DB: &str = r#"{"v":1,"kid":"k1","nonce":"FSeqiaUt9ZFwkwXZ","ciphertext":"3squQAsqQKUTJC0/khvX6vjBN0GAX6XmZqhyOs8rQqma9iVyKjMkdkoIpOLymU/RfxLKusJDf0UF6OXQHPcR+XdETPh3FgWhnoWap5qswQ5V+52G41pL2ixox4wbqcXfJqsEvsXGgOUkoduUuSMGVrnSWBGthQZgR5uAFgcCBxpFIWCKkeOdHgeJSRh3wcZGCob+8KOdPyHHNhKyNuj1ozB9J/JiX3RJv62T8z20CuXDF+7e/XAm7Pe+s4/jinoapBXPAyzXoWtIB4GvNXu9B8my4DcwwDa6wn8="}"#;
@@ -883,11 +890,11 @@ mod tests {
         }
         let v = vault(&kv, VaultKeys::new(key("k1", 7)));
         assert_eq!(
-            v.credit(&WabaId::new("W1")).await.unwrap(),
+            v.credit(&WabaId::new_unchecked("W1")).await.unwrap(),
             Some(credit("W1"))
         );
         let marker = v
-            .revoked_business(&BusinessId::new("2729063490586005"))
+            .revoked_business(&BusinessId::new("2729063490586005").unwrap())
             .await
             .unwrap()
             .unwrap();
@@ -907,13 +914,13 @@ mod tests {
     fn a_sealed_record_opens_only_under_its_own_key() {
         let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
         let v = vault(&kv, VaultKeys::new(key("k1", 7)));
-        let here = StoreKey::new(TOKEN_NAMESPACE, "credit/W1");
+        let here = StoreKey::new(TOKEN_NAMESPACE, "credit/101");
         let blob = v.seal_blob(&here, b"{}").unwrap();
         assert_eq!(v.open_blob(&here, &blob).unwrap(), b"{}");
         for elsewhere in [
-            StoreKey::new(TOKEN_NAMESPACE, "credit/W2"),
-            StoreKey::new(TOKEN_NAMESPACE, "revoked/W1"),
-            StoreKey::new("wa.other", "credit/W1"),
+            StoreKey::new(TOKEN_NAMESPACE, "credit/102"),
+            StoreKey::new(TOKEN_NAMESPACE, "revoked/101"),
+            StoreKey::new("wa.other", "credit/101"),
         ] {
             assert!(
                 matches!(
@@ -932,7 +939,7 @@ mod tests {
         let v = TokenVault::new(Arc::clone(&kv), VaultKeys::new(key("k1", 7)))
             .unwrap()
             .with_clock(clock.clone());
-        let business = BusinessId::new("2729063490586005");
+        let business = BusinessId::new("2729063490586005").unwrap();
         v.mark_revoked(&business, &[]).await.unwrap();
         clock.advance(std::time::Duration::from_secs(3600));
         v.mark_revoked(
@@ -954,11 +961,15 @@ mod tests {
         // be forged by copying one).
         put(
             &kv,
-            "revoked/OTHER",
+            "revoked/399",
             raw(&kv, "revoked/2729063490586005").await,
         )
         .await;
-        assert!(v.revoked_business(&BusinessId::new("OTHER")).await.is_err());
+        assert!(
+            v.revoked_business(&BusinessId::new("399").unwrap())
+                .await
+                .is_err()
+        );
 
         // Cleared only at the version the re-share read: a revocation that
         // touched the marker since keeps it.
@@ -977,7 +988,7 @@ mod tests {
     async fn an_unreadable_marker_is_replaced() {
         let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
         let v = vault(&kv, VaultKeys::new(key("k1", 7)));
-        let business = BusinessId::new("2729063490586005");
+        let business = BusinessId::new("2729063490586005").unwrap();
         for garbage in [
             b"{}".to_vec(),
             b"not json".to_vec(),
@@ -1008,23 +1019,23 @@ mod tests {
     async fn updates_merge_into_the_current_record() {
         let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
         let v = vault(&kv, VaultKeys::new(key("k1", 7)));
-        let waba = WabaId::new("W1");
+        let waba = WabaId::new("101").unwrap();
         v.record_approval(&waba, Some(datetime!(2026-09-24 11:00 UTC)))
             .await
             .unwrap();
         let first = v.credit(&waba).await.unwrap().unwrap();
         assert_eq!(first.approved_at, Some(datetime!(2026-09-24 12:00 UTC)));
         assert!(!first.records_a_share(), "an approval is not a share");
-        v.note_business(&waba, &BusinessId::new("B1"))
+        v.note_business(&waba, &BusinessId::new("301").unwrap())
             .await
             .unwrap();
-        v.note_business(&waba, &BusinessId::new("B2"))
+        v.note_business(&waba, &BusinessId::new("302").unwrap())
             .await
             .unwrap();
         let noted = v.credit(&waba).await.unwrap().unwrap();
         assert_eq!(
             noted.business_id,
-            Some(BusinessId::new("B1")),
+            Some(BusinessId::new("301").unwrap()),
             "never replaced"
         );
         assert_eq!(noted.approved_at, first.approved_at, "kept");
@@ -1036,12 +1047,12 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(merged.business_id, Some(BusinessId::new("B1")));
+        assert_eq!(merged.business_id, Some(BusinessId::new("301").unwrap()));
         assert!(merged.records_a_share());
-        let mut pending = StoredCredit::new(WabaId::new("W2"));
+        let mut pending = StoredCredit::new(WabaId::new("102").unwrap());
         pending.pending_share = Some(datetime!(2026-09-24 12:00 UTC));
         assert!(pending.records_a_share(), "a post whose outcome is unknown");
-        let mut sealed = StoredCredit::new(WabaId::new("W2"));
+        let mut sealed = StoredCredit::new(WabaId::new("102").unwrap());
         sealed.currency = Some(WabaCurrency::Usd);
         assert!(
             !sealed.records_a_share(),
@@ -1055,17 +1066,21 @@ mod tests {
     async fn a_later_revisions_fields_survive_this_ones_writes() {
         let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
         let v = vault(&kv, VaultKeys::new(key("k1", 7)));
-        let k = credit_key(&WabaId::new("W1"));
-        let later = br#"{"waba_id":"W1","business_id":"B1","pending_share":1790251200,
+        let k = credit_key(&WabaId::new("101").unwrap());
+        let later = br#"{"waba_id":"101","business_id":"301","pending_share":1790251200,
             "cleared_shares":[{"cleared_by":"op_1","reviewed_by":"op_2"}],
             "later_field":{"kept":["as", "is"]},"secret_note":"not for Debug"}"#;
         put(
             &kv,
-            "credit/W1",
+            "credit/101",
             encode_json(&k, &v.seal_blob(&k, later).unwrap()).unwrap(),
         )
         .await;
-        let read = v.credit(&WabaId::new("W1")).await.unwrap().unwrap();
+        let read = v
+            .credit(&WabaId::new("101").unwrap())
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(read.pending_share, Some(datetime!(2026-09-24 12:00 UTC)));
         let entry = &read.cleared_shares[0];
         assert_eq!(entry.cleared_by, "op_1");
@@ -1079,7 +1094,9 @@ mod tests {
         assert!(!shown.contains("not for Debug"), "names only: {shown}");
 
         // This revision writes the record: the later field is still there.
-        v.record_approval(&WabaId::new("W1"), None).await.unwrap();
+        v.record_approval(&WabaId::new("101").unwrap(), None)
+            .await
+            .unwrap();
         let stored = kv.get(&k).await.unwrap().unwrap();
         let blob: SealedBlob = decode_json(&k, &stored).unwrap();
         let plain: serde_json::Value =
@@ -1091,7 +1108,11 @@ mod tests {
         assert_eq!(plain["secret_note"], "not for Debug");
         assert!(plain["approved_at"].is_i64(), "and the write happened");
         assert_eq!(plain["cleared_shares"][0]["reviewed_by"], "op_2");
-        let again = v.credit(&WabaId::new("W1")).await.unwrap().unwrap();
+        let again = v
+            .credit(&WabaId::new("101").unwrap())
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(again.cleared_shares, read.cleared_shares);
     }
 
@@ -1103,16 +1124,16 @@ mod tests {
         let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
         let v = vault(&kv, VaultKeys::new(key("k1", 7)));
         // The format before the trail: no `cleared_shares` at all.
-        let k = credit_key(&WabaId::new("W1"));
-        let old = br#"{"waba_id":"W1","business_id":"B1","pending_share":1790251200}"#;
+        let k = credit_key(&WabaId::new("101").unwrap());
+        let old = br#"{"waba_id":"101","business_id":"301","pending_share":1790251200}"#;
         put(
             &kv,
-            "credit/W1",
+            "credit/101",
             encode_json(&k, &v.seal_blob(&k, old).unwrap()).unwrap(),
         )
         .await;
         let (read, version) = v
-            .credit_versioned(&WabaId::new("W1"))
+            .credit_versioned(&WabaId::new("101").unwrap())
             .await
             .unwrap()
             .unwrap();
@@ -1138,22 +1159,30 @@ mod tests {
             .await
             .unwrap_err();
         assert!(EmbeddedSignupRefusal::busy(&err), "{err}");
-        let stored = v.credit(&WabaId::new("W1")).await.unwrap().unwrap();
+        let stored = v
+            .credit(&WabaId::new("101").unwrap())
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(stored, cleared);
         assert_eq!(stored.cleared_shares, [entry("first")]);
-        assert_eq!(stored.business_id, Some(BusinessId::new("B1")), "kept");
+        assert_eq!(
+            stored.business_id,
+            Some(BusinessId::new("301").unwrap()),
+            "kept"
+        );
 
         // A later clearance appends.
         let mut again = stored.clone();
         again.pending_share = Some(datetime!(2026-09-25 08:00 UTC));
         let (_, version) = v
-            .credit_versioned(&WabaId::new("W1"))
+            .credit_versioned(&WabaId::new("101").unwrap())
             .await
             .unwrap()
             .unwrap();
         v.put_credit(&again, Some(version)).await.unwrap();
         let (read, version) = v
-            .credit_versioned(&WabaId::new("W1"))
+            .credit_versioned(&WabaId::new("101").unwrap())
             .await
             .unwrap()
             .unwrap();
@@ -1161,7 +1190,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            v.credit(&WabaId::new("W1"))
+            v.credit(&WabaId::new("101").unwrap())
                 .await
                 .unwrap()
                 .unwrap()
@@ -1169,7 +1198,7 @@ mod tests {
             [entry("first"), entry("second")]
         );
         assert!(
-            !String::from_utf8_lossy(&raw(&kv, "credit/W1").await).contains("first"),
+            !String::from_utf8_lossy(&raw(&kv, "credit/101").await).contains("first"),
             "sealed"
         );
     }
@@ -1184,7 +1213,7 @@ mod tests {
         let v = TokenVault::new(Arc::clone(&kv), VaultKeys::new(key("k1", 7)))
             .unwrap()
             .with_clock(clock.clone());
-        let waba = WabaId::new("W1");
+        let waba = WabaId::new("101").unwrap();
         // Taken and never renewed: it expires on its own.
         let crashed = v.lease_credit(&waba).await.unwrap();
         clock.advance(CREDIT_LEASE + Duration::from_secs(1));
@@ -1210,7 +1239,7 @@ mod tests {
     async fn the_lease_is_exclusive_and_released_only_by_its_holder() {
         let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
         let v = vault(&kv, VaultKeys::new(key("k1", 7)));
-        let waba = WabaId::new("W1");
+        let waba = WabaId::new("101").unwrap();
         let held = v.lease_credit(&waba).await.unwrap();
         let err = v.lease_credit(&waba).await.unwrap_err();
         assert!(EmbeddedSignupRefusal::busy(&err), "{err}");
@@ -1226,28 +1255,31 @@ mod tests {
     async fn rotation_reseals_the_ledger_under_the_active_key() {
         let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
         let old = vault(&kv, VaultKeys::new(key("old", 1)));
-        old.put_credit(&credit("W1"), None).await.unwrap();
-        old.mark_revoked(&BusinessId::new("2729063490586005"), &[])
+        old.put_credit(&credit("101"), None).await.unwrap();
+        old.mark_revoked(&BusinessId::new("2729063490586005").unwrap(), &[])
             .await
             .unwrap();
         let new = vault(
             &kv,
             VaultKeys::new(key("new", 2)).with_previous(key("old", 1)),
         );
-        assert!(new.rotate(&WabaId::new("W1")).await.unwrap());
+        assert!(new.rotate(&WabaId::new("101").unwrap()).await.unwrap());
         let only_new = vault(&kv, VaultKeys::new(key("new", 2)));
         assert_eq!(
-            only_new.credit(&WabaId::new("W1")).await.unwrap(),
-            Some(credit("W1"))
+            only_new.credit(&WabaId::new("101").unwrap()).await.unwrap(),
+            Some(credit("101"))
         );
         assert!(
             only_new
-                .revoked_business(&BusinessId::new("2729063490586005"))
+                .revoked_business(&BusinessId::new("2729063490586005").unwrap())
                 .await
                 .unwrap()
                 .is_some()
         );
-        assert!(!new.rotate(&WabaId::new("W1")).await.unwrap(), "done once");
+        assert!(
+            !new.rotate(&WabaId::new("101").unwrap()).await.unwrap(),
+            "done once"
+        );
     }
 
     /// Reading a ledger record re-seals it under the active key, as reading
@@ -1256,19 +1288,23 @@ mod tests {
     async fn ledger_reads_reseal_under_the_active_key() {
         let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
         let old = vault(&kv, VaultKeys::new(key("old", 1)));
-        let business = BusinessId::new("2729063490586005");
-        old.put_credit(&credit("W1"), None).await.unwrap();
+        let business = BusinessId::new("2729063490586005").unwrap();
+        old.put_credit(&credit("101"), None).await.unwrap();
         old.mark_revoked(&business, &[]).await.unwrap();
         let replica = vault(
             &kv,
             VaultKeys::new(key("new", 2)).with_previous(key("old", 1)),
         )
         .rotate_on_read(false);
-        replica.credit(&WabaId::new("W1")).await.unwrap().unwrap();
+        replica
+            .credit(&WabaId::new("101").unwrap())
+            .await
+            .unwrap()
+            .unwrap();
         replica.revoked_business(&business).await.unwrap().unwrap();
         let only_new = vault(&kv, VaultKeys::new(key("new", 2)));
         assert!(
-            only_new.credit(&WabaId::new("W1")).await.is_err(),
+            only_new.credit(&WabaId::new("101").unwrap()).await.is_err(),
             "not rotated"
         );
 
@@ -1276,11 +1312,14 @@ mod tests {
             &kv,
             VaultKeys::new(key("new", 2)).with_previous(key("old", 1)),
         );
-        new.credit(&WabaId::new("W1")).await.unwrap().unwrap();
+        new.credit(&WabaId::new("101").unwrap())
+            .await
+            .unwrap()
+            .unwrap();
         new.revoked_business(&business).await.unwrap().unwrap();
         assert_eq!(
-            only_new.credit(&WabaId::new("W1")).await.unwrap(),
-            Some(credit("W1"))
+            only_new.credit(&WabaId::new("101").unwrap()).await.unwrap(),
+            Some(credit("101"))
         );
         assert!(
             only_new
@@ -1297,43 +1336,41 @@ mod tests {
     async fn rotation_reaches_every_ledger_record() {
         let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
         let old = vault(&kv, VaultKeys::new(key("old", 1)));
-        old.put_credit(&credit("OFFBOARDED"), None).await.unwrap();
-        let orphan = BusinessId::new("REVOKED_BY_BUSINESS_ID");
+        old.put_credit(&credit("401"), None).await.unwrap();
+        let orphan = BusinessId::new("994").unwrap();
         old.mark_revoked(&orphan, &[]).await.unwrap();
         old.store(&super::super::vault::StoredBusinessToken::new(
-            "CORRUPT",
+            WabaId::new("402").unwrap(),
             meta_whatsapp_core::secret::AccessToken::new("EAAB"),
         ))
         .await
         .unwrap();
-        put(&kv, "credit/CORRUPT", b"{}".to_vec()).await;
+        put(&kv, "credit/402", b"{}".to_vec()).await;
         // And the other way round: a corrupt token, a readable ledger.
-        old.put_credit(&credit("CORRUPT_TOKEN"), None)
-            .await
-            .unwrap();
-        put(&kv, "waba/CORRUPT_TOKEN", b"{}".to_vec()).await;
+        old.put_credit(&credit("403"), None).await.unwrap();
+        put(&kv, "waba/403", b"{}".to_vec()).await;
 
         let new = vault(
             &kv,
             VaultKeys::new(key("new", 2)).with_previous(key("old", 1)),
         )
         .rotate_on_read(false);
-        assert!(new.rotate(&WabaId::new("OFFBOARDED")).await.unwrap());
+        assert!(new.rotate(&WabaId::new("401").unwrap()).await.unwrap());
         assert!(new.rotate_business(&orphan).await.unwrap());
         assert!(!new.rotate_business(&orphan).await.unwrap(), "done once");
         assert!(
-            new.rotate(&WabaId::new("CORRUPT")).await.is_err(),
+            new.rotate(&WabaId::new("402").unwrap()).await.is_err(),
             "the corrupt record is reported"
         );
         assert!(
-            new.rotate(&WabaId::new("CORRUPT_TOKEN")).await.is_err(),
+            new.rotate(&WabaId::new("403").unwrap()).await.is_err(),
             "the corrupt token is reported"
         );
 
         let only_new = vault(&kv, VaultKeys::new(key("new", 2)));
         assert!(
             only_new
-                .credit(&WabaId::new("OFFBOARDED"))
+                .credit(&WabaId::new("401").unwrap())
                 .await
                 .unwrap()
                 .is_some()
@@ -1341,18 +1378,15 @@ mod tests {
         assert!(only_new.revoked_business(&orphan).await.unwrap().is_some());
         assert!(
             only_new
-                .get(&WabaId::new("CORRUPT"))
+                .get(&WabaId::new("402").unwrap())
                 .await
                 .unwrap()
                 .is_some(),
             "the token was rotated despite its corrupt credit record"
         );
         assert_eq!(
-            only_new
-                .credit(&WabaId::new("CORRUPT_TOKEN"))
-                .await
-                .unwrap(),
-            Some(credit("CORRUPT_TOKEN")),
+            only_new.credit(&WabaId::new("403").unwrap()).await.unwrap(),
+            Some(credit("403")),
             "the ledger was rotated despite its corrupt token"
         );
     }

@@ -108,7 +108,7 @@ From the runnable example
 
 ```rust
 let client = meta_whatsapp_rs::client(env("WA_TOKEN")?)?;
-let messages = client.messages(env("WA_PHONE_NUMBER_ID")?);
+let messages = client.messages(PhoneNumberId::new(env("WA_PHONE_NUMBER_ID")?)?);
 let to = Recipient::phone(env("WA_TO")?); // E.164, with `+`
 
 // Free-form: delivered only inside the 24-hour customer service window.

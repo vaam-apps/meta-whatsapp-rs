@@ -1,25 +1,62 @@
 //! Strongly-typed identifiers.
 //!
-//! Every Graph object id is an opaque string (numeric ids exceed `i64` in
-//! places and Meta reserves the right to change formats). Newtypes stop a
-//! phone number id being passed where a WABA id was meant — the single most
-//! common integration bug, since both are long digit strings.
+//! Newtypes stop a phone number id being passed where a WABA id was meant
+//! — the single most common integration bug, since both are long digit
+//! strings. Every id is kept as a string (numeric ids exceed `i64` in
+//! places).
+//!
+//! # Two shapes
+//!
+//! Each id is checked against the shape Meta documents for it, where Meta
+//! documents one (OPEN_QUESTIONS #20, roadmap L20c):
+//!
+//! - **Numeric ids** ([`AppId`], [`BusinessId`], [`WabaId`],
+//!   [`PhoneNumberId`], [`MediaId`], [`TemplateId`]): Meta's ids for these
+//!   objects are numeric strings (the WABA reference's own error example:
+//!   "must be a valid numeric string"). Their constructors
+//!   ([`WabaId::new`], [`FromStr`](std::str::FromStr), [`TryFrom`]) refuse
+//!   anything but 1 to [`MAX_NUMERIC_ID_LEN`] ASCII digits with a
+//!   [`ValidationError`] on the id's field (`waba_id`, `phone_number_id`,
+//!   …), so an id holding `/`, `?` or `..` is refused before any request is
+//!   built.
+//! - **Opaque ids** (every other type here: BSUIDs, group ids, message
+//!   ids, QR codes, …) wrap any string: Meta documents no shape that would
+//!   rule out a legitimate one (a group id may be base64). The client keeps
+//!   each one a single percent-encoded path segment instead, so a `/` in a
+//!   group id is sent as `%2F`, never as a separator.
+//!
+//! **Deserializing never checks.** A numeric id read from Meta's response
+//! or webhook is kept as Meta sent it (`Deserialize`, and
+//! [`WabaId::new_unchecked`] for one that arrives as a plain string, wrap
+//! it as is), so a new id format cannot break parsing; used in a path, it
+//! is still one percent-encoded segment. Read an id from an *untrusted*
+//! source (a form, a URL, your own API's request body) with the checked
+//! constructor, not with `serde`.
+//!
+//! Swapping one kind's rule is one line: the shape a type is declared with
+//! below (`numeric_id_type!` or `id_type!`).
 
 use std::fmt;
 
-macro_rules! id_type {
-    ($(#[$meta:meta])* $name:ident) => {
-        $(#[$meta])*
-        #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
-        #[serde(transparent)]
-        pub struct $name(String);
+use crate::error::ValidationError;
 
+/// Longest numeric id accepted, in digits. Meta states no limit; 64 is the
+/// service's (`meta-whatsapp-server`) cap on a Graph id in a path or a
+/// body, far above the 15 to 17 digits of Meta's ids today.
+pub const MAX_NUMERIC_ID_LEN: usize = 64;
+
+/// Whether `id` has the shape of a numeric id: 1 to
+/// [`MAX_NUMERIC_ID_LEN`] ASCII digits and nothing else (no sign, no
+/// whitespace, no non-ASCII digit). The check every numeric id type's
+/// constructor runs.
+pub fn is_numeric_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= MAX_NUMERIC_ID_LEN && id.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// What both kinds of id share: accessors and formatting.
+macro_rules! id_common {
+    ($name:ident) => {
         impl $name {
-            /// Wrap a raw id.
-            pub fn new(id: impl Into<String>) -> Self {
-                Self(id.into())
-            }
-
             /// Borrow the raw id.
             pub fn as_str(&self) -> &str {
                 &self.0
@@ -48,6 +85,27 @@ macro_rules! id_type {
                 &self.0
             }
         }
+    };
+}
+
+/// An opaque id: any string is wrapped.
+macro_rules! id_type {
+    ($(#[$meta:meta])* $name:ident) => {
+        $(#[$meta])*
+        #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+        #[serde(transparent)]
+        pub struct $name(String);
+
+        impl $name {
+            /// Wrap a raw id. Any string is accepted: this id is opaque
+            /// (see the [module docs](self)), and a path carries it as one
+            /// percent-encoded segment.
+            pub fn new(id: impl Into<String>) -> Self {
+                Self(id.into())
+            }
+        }
+
+        id_common!($name);
 
         impl From<String> for $name {
             fn from(s: String) -> Self {
@@ -70,33 +128,113 @@ macro_rules! id_type {
     };
 }
 
-id_type!(
+/// A numeric id: digits only, checked at construction, deserialized as is.
+macro_rules! numeric_id_type {
+    ($(#[$meta:meta])* $name:ident, $field:literal) => {
+        $(#[$meta])*
+        ///
+        /// A numeric id (see the [module docs](self)): [`Self::new`],
+        /// [`FromStr`](std::str::FromStr) and [`TryFrom`] refuse anything
+        /// but 1 to [`MAX_NUMERIC_ID_LEN`] ASCII digits, with a
+        #[doc = concat!("[`ValidationError`] on `", $field, "`.")]
+        /// `Deserialize` does not check: an id Meta sends is kept as sent.
+        #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+        #[serde(transparent)]
+        pub struct $name(String);
+
+        impl $name {
+            /// The field a refused id is reported on.
+            pub const FIELD: &'static str = $field;
+
+            /// Check and wrap a raw id.
+            ///
+            /// # Errors
+            ///
+            /// A [`ValidationError`] on [`Self::FIELD`] unless `id` is 1 to
+            /// [`MAX_NUMERIC_ID_LEN`] ASCII digits ([`is_numeric_id`]). The
+            /// refused value is not repeated in the error.
+            pub fn new(id: impl Into<String>) -> Result<Self, ValidationError> {
+                let id = id.into();
+                if is_numeric_id(&id) {
+                    Ok(Self(id))
+                } else {
+                    Err(ValidationError::new(
+                        Self::FIELD,
+                        format!("expected a numeric id: 1 to {MAX_NUMERIC_ID_LEN} ASCII digits"),
+                    ))
+                }
+            }
+
+            /// Wrap an id **Meta sent** (a response, a webhook) or one read
+            /// back from your own store, as sent, without the shape check:
+            /// what `Deserialize` does, for an id that arrives as a plain
+            /// string. Never for an id from an untrusted source (a form, a
+            /// URL, a request body): use [`Self::new`] there. Used in a path,
+            /// the id is still one percent-encoded segment.
+            pub fn new_unchecked(id: impl Into<String>) -> Self {
+                Self(id.into())
+            }
+        }
+
+        id_common!($name);
+
+        impl TryFrom<String> for $name {
+            type Error = ValidationError;
+            fn try_from(s: String) -> Result<Self, Self::Error> {
+                Self::new(s)
+            }
+        }
+
+        impl TryFrom<&str> for $name {
+            type Error = ValidationError;
+            fn try_from(s: &str) -> Result<Self, Self::Error> {
+                Self::new(s)
+            }
+        }
+
+        impl std::str::FromStr for $name {
+            type Err = ValidationError;
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                Self::new(s)
+            }
+        }
+    };
+}
+
+numeric_id_type!(
     /// Meta app id.
-    AppId
+    AppId,
+    "app_id"
 );
-id_type!(
+numeric_id_type!(
     /// Business portfolio (formerly Business Manager) id.
-    BusinessId
+    BusinessId,
+    "business_id"
 );
-id_type!(
+numeric_id_type!(
     /// WhatsApp Business Account id.
-    WabaId
+    WabaId,
+    "waba_id"
 );
-id_type!(
+numeric_id_type!(
     /// Business phone number id (not the phone number itself).
-    PhoneNumberId
+    PhoneNumberId,
+    "phone_number_id"
 );
 id_type!(
     /// WhatsApp message id (`wamid.…`).
     MessageId
 );
-id_type!(
-    /// Uploaded media id.
-    MediaId
+numeric_id_type!(
+    /// Uploaded media id (`POST /{PHONE_NUMBER_ID}/media`'s `id`, the `id`
+    /// of a received media message).
+    MediaId,
+    "media_id"
 );
-id_type!(
+numeric_id_type!(
     /// Message template id.
-    TemplateId
+    TemplateId,
+    "template_id"
 );
 id_type!(
     /// Template group id: the group `POST /{WABA_ID}/template_groups`
@@ -131,8 +269,8 @@ id_type!(
     /// parent BSUID (`US.ENT.…`). Stable per business portfolio; survives a
     /// username change but not a phone number change.
     ///
-    /// Anything can be wrapped, as with every id here: [`Self::is_bsuid`]
-    /// says whether a value has a standard BSUID's shape.
+    /// Anything can be wrapped, as with every opaque id here:
+    /// [`Self::is_bsuid`] says whether a value has a standard BSUID's shape.
     UserId
 );
 
@@ -238,11 +376,97 @@ mod tests {
 
     #[test]
     fn ids_are_transparent_in_json_and_readable_in_debug() {
-        let id = WabaId::new("1234567890");
+        let id = WabaId::new("1234567890").unwrap();
         assert_eq!(serde_json::to_string(&id).unwrap(), "\"1234567890\"");
         assert_eq!(format!("{id:?}"), "WabaId(1234567890)");
         let back: WabaId = serde_json::from_str("\"1234567890\"").unwrap();
         assert_eq!(back, id);
+    }
+
+    /// Every numeric id type, through each checked constructor: digits pass
+    /// (up to the cap), anything else is refused on the type's own field.
+    /// Decisive for L20c: a numeric id holding `/` cannot be built.
+    #[test]
+    fn a_numeric_id_is_one_to_sixty_four_ascii_digits() {
+        fn check<T>(field: &str)
+        where
+            T: std::str::FromStr<Err = ValidationError>
+                + TryFrom<String, Error = ValidationError>
+                + for<'a> TryFrom<&'a str, Error = ValidationError>
+                + AsRef<str>
+                + fmt::Debug,
+        {
+            let longest = "9".repeat(MAX_NUMERIC_ID_LEN);
+            for good in ["1", "0", "0123", "106540352242922", longest.as_str()] {
+                assert_eq!(good.parse::<T>().unwrap().as_ref(), good);
+                assert_eq!(T::try_from(good).unwrap().as_ref(), good);
+                assert_eq!(T::try_from(good.to_owned()).unwrap().as_ref(), good);
+            }
+            let too_long = "9".repeat(MAX_NUMERIC_ID_LEN + 1);
+            for bad in [
+                "",
+                "123/messages",
+                "1/../../OTHER",
+                "%2F",
+                "123?fields=x",
+                "123#x",
+                "..",
+                "-1",
+                "+1",
+                " 1",
+                "1 ",
+                "1.0",
+                "12a",
+                "WABA_ID",
+                "１２", // non-ASCII digits
+                too_long.as_str(),
+            ] {
+                for refused in [
+                    bad.parse::<T>().unwrap_err(),
+                    T::try_from(bad).unwrap_err(),
+                    T::try_from(bad.to_owned()).unwrap_err(),
+                ] {
+                    assert_eq!(refused.field, field, "{bad:?}");
+                    // The refused value is not echoed back.
+                    assert_eq!(
+                        refused.reason, "expected a numeric id: 1 to 64 ASCII digits",
+                        "{bad:?}"
+                    );
+                }
+            }
+        }
+        check::<AppId>("app_id");
+        check::<BusinessId>("business_id");
+        check::<WabaId>("waba_id");
+        check::<PhoneNumberId>("phone_number_id");
+        check::<MediaId>("media_id");
+        check::<TemplateId>("template_id");
+        assert_eq!(WabaId::new("1/2").unwrap_err().field, WabaId::FIELD);
+        assert!(is_numeric_id("1") && !is_numeric_id("1/2"));
+    }
+
+    /// A response or webhook must never fail to parse on an id's shape: a
+    /// numeric id deserializes as sent, whatever it holds.
+    #[test]
+    fn a_numeric_id_from_meta_is_deserialized_as_sent() {
+        for sent in ["123/messages", "WABA_ID", "", "wamid.x"] {
+            let json = serde_json::to_string(sent).unwrap();
+            let waba: WabaId = serde_json::from_str(&json).unwrap();
+            assert_eq!(waba.as_str(), sent);
+            let media: MediaId = serde_json::from_str(&json).unwrap();
+            assert_eq!(media.as_str(), sent);
+        }
+    }
+
+    /// Opaque ids keep wrapping anything: Meta documents no shape that
+    /// would refuse a legitimate one.
+    #[test]
+    fn an_opaque_id_wraps_any_string() {
+        for raw in ["abc/def==", "US.ENT.1", "", "wamid.HBg/x"] {
+            assert_eq!(GroupId::new(raw).as_str(), raw);
+            assert_eq!(raw.parse::<UserId>().unwrap().as_str(), raw);
+            assert_eq!(MessageId::from(raw).as_str(), raw);
+        }
     }
 
     /// `business-scoped-user-ids`: the page's own BSUID and parent BSUID

@@ -67,7 +67,10 @@ async fn group_operations_wait_for_the_numbers_slots() {
         }),
     );
     let clock = ManualClock::new(T0);
-    let groups = PacedGroups::new(client(&t).groups(NUMBER), one_a_second(&clock));
+    let groups = PacedGroups::new(
+        client(&t).groups(PhoneNumberId::new(NUMBER).unwrap()),
+        one_a_second(&clock),
+    );
 
     let created = groups
         .create(&CreateGroup::new("Watch Enthusiasts"))
@@ -77,7 +80,7 @@ async fn group_operations_wait_for_the_numbers_slots() {
     assert_eq!(elapsed(&clock), Duration::ZERO);
 
     let group = groups.group(GROUP);
-    assert_eq!(group.number(), &PhoneNumberId::new(NUMBER));
+    assert_eq!(group.number(), &PhoneNumberId::new(NUMBER).unwrap());
     let added = group
         .add_participants(&[Recipient::phone("+7669992245")])
         .await
@@ -154,7 +157,10 @@ fn refused<T>(result: &meta_whatsapp_core::Result<T>) -> bool {
 #[tokio::test]
 async fn every_group_operation_waits_for_its_slot_before_its_request() {
     let t = ScriptedTransport::new();
-    let groups = PacedGroups::new(client(&t).groups(NUMBER), Pacer::new(Unreachable));
+    let groups = PacedGroups::new(
+        client(&t).groups(PhoneNumberId::new(NUMBER).unwrap()),
+        Pacer::new(Unreachable),
+    );
     let group = groups.group(GROUP);
     let (id, message) = (GroupId::new(GROUP), MessageId::new("wamid.HBgLM..."));
     let users = [Recipient::phone("+7669992245")];
@@ -190,7 +196,7 @@ async fn typing_indicators_wait_for_the_numbers_slots() {
     t.push_json(200, json!({"success": true}));
     let clock = ManualClock::new(T0);
     let outbound = PacedOutbound::new(ClientOutbound::new(client(&t)), one_a_second(&clock));
-    let from = PhoneNumberId::new(NUMBER);
+    let from = PhoneNumberId::new(NUMBER).unwrap();
 
     outbound
         .mark_read(&from, &MessageId::new("wamid.A"), true)
@@ -239,7 +245,7 @@ async fn a_paced_outbound_retries_what_the_client_would_and_nothing_else() {
     };
     let outbound =
         PacedOutbound::new(ClientOutbound::new(client(&t)), one_a_second(&clock)).retry(retry);
-    let from = PhoneNumberId::new(NUMBER);
+    let from = PhoneNumberId::new(NUMBER).unwrap();
 
     t.push_json(500, server_error());
     let message = OutboundMessage::text(Recipient::phone("+16505551234"), "Your order shipped");

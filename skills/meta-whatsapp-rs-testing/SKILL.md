@@ -105,7 +105,12 @@ synced history timestamps), `TokenVault::with_clock`:
 ```rust
 let transport = ScriptedTransport::new(); // nothing scripted: no request may leave
 let clock = Arc::new(ManualClock::new(sent_at + Duration::from_hours(25)));
-let inbox = Inbox::new(scripted_client(&transport), NUMBER, store).with_clock(clock);
+let inbox = Inbox::new(
+    scripted_client(&transport),
+    PhoneNumberId::new(NUMBER).unwrap(),
+    store,
+)
+.with_clock(clock);
 let key = inbox.key(CUSTOMER);
 ```
 

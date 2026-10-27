@@ -144,9 +144,12 @@ mod tests {
             .access_token("TOKEN")
             .build()
             .unwrap();
-        send_cta_location_flow(&client.messages("106540352242922"), to())
-            .await
-            .unwrap();
+        send_cta_location_flow(
+            &client.messages(PhoneNumberId::new("106540352242922").unwrap()),
+            to(),
+        )
+        .await
+        .unwrap();
         let kinds: Vec<_> = transport
             .requests()
             .iter()

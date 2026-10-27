@@ -159,7 +159,7 @@ mod tests {
         // an earlier BSUID is linked to the current one.
         store
             .put_contact(StoredContact {
-                key: ConversationKey::new(NUMBER, "16505551234"),
+                key: ConversationKey::new(PhoneNumberId::new(NUMBER).unwrap(), "16505551234"),
                 full_name: None,
                 first_name: None,
                 phone_number: Some("16505551234".to_owned()),
@@ -172,7 +172,7 @@ mod tests {
             .unwrap();
         store
             .link_identity(IdentityLink::new(
-                NUMBER,
+                PhoneNumberId::new(NUMBER).unwrap(),
                 "US.1",
                 BSUID,
                 OffsetDateTime::now_utc(),
@@ -191,7 +191,7 @@ mod tests {
             .retry(RetryPolicy::NONE)
             .build()
             .unwrap();
-        let inbox = Inbox::new(merchant.clone(), NUMBER, store);
+        let inbox = Inbox::new(merchant.clone(), PhoneNumberId::new(NUMBER).unwrap(), store);
 
         // The procedure's order: step 1 collects every identity, step 2
         // erases them (after which the store connects nothing to the
@@ -200,7 +200,9 @@ mod tests {
         let identities: Vec<String> = inbox.identities(&key).await.unwrap().into_iter().collect();
         inbox.erase_all(&identities).await.unwrap();
         assert_eq!(inbox.identities(&key).await.unwrap().len(), 1);
-        let failed = delete_from_contact_book(&merchant, NUMBER.into(), &identities).await;
+        let failed =
+            delete_from_contact_book(&merchant, PhoneNumberId::new(NUMBER).unwrap(), &identities)
+                .await;
         assert_eq!(failed, [UserId::new("US.1")]); // Meta failed on it; the next one still went
         let requests = transport.requests();
         let asked: Vec<String> = requests.iter().map(|r| r.query("bsuid").unwrap()).collect();

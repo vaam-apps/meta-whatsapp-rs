@@ -129,7 +129,7 @@ Tokio's paused clock.
 
 ```rust
 fn pacer(clock: &ManualClock) -> Pacer {
-    shared_pacer("999".into()).with_timer(clock.clone())
+    shared_pacer(PhoneNumberId::new("999").unwrap()).with_timer(clock.clone())
 }
 ```
 

@@ -48,9 +48,10 @@
 //!     SignupState, TokenVault, VaultKey, VaultKeys,
 //! };
 //! use meta_whatsapp_client::phone_numbers::TwoStepPin;
+//! use meta_whatsapp_core::ids::AppId;
 //!
 //! // Once, at startup. The vault key comes from your secret manager.
-//! let es = client.embedded_signup(AppCredentials::new("<APP_ID>", "<APP_SECRET>"));
+//! let es = client.embedded_signup(AppCredentials::new(AppId::new("<APP_ID>")?, "<APP_SECRET>"));
 //! let vault = TokenVault::new(
 //!     kv.clone(),
 //!     VaultKeys::new(VaultKey::from_base64("2026-09", "<32 random bytes, base64>")?),
@@ -507,6 +508,7 @@ fn decode_business_token(body: &[u8]) -> Result<BusinessToken> {
 mod tests {
     use http::Method;
     use meta_whatsapp_core::ErrorKind;
+    use meta_whatsapp_core::ids::AppId;
     use meta_whatsapp_core::testing::ScriptedTransport;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -532,8 +534,10 @@ mod tests {
     }
 
     fn es(t: &ScriptedTransport) -> EmbeddedSignup {
-        client(t, RetryPolicy::NONE)
-            .embedded_signup(AppCredentials::new("236484624622562", APP_SECRET))
+        client(t, RetryPolicy::NONE).embedded_signup(AppCredentials::new(
+            AppId::new("236484624622562").unwrap(),
+            APP_SECRET,
+        ))
     }
 
     fn retrying() -> RetryPolicy {
@@ -582,7 +586,7 @@ mod tests {
             json!({"error": {"message": "This authorization code has been used.", "type": "OAuthException", "code": 100, "error_subcode": 36009, "fbtrace_id": "A"}}),
         );
         let e = client(&t, retrying())
-            .embedded_signup(AppCredentials::new("1", APP_SECRET))
+            .embedded_signup(AppCredentials::new(AppId::new("1").unwrap(), APP_SECRET))
             .exchange_code(&SignupCode::new(CODE).unwrap())
             .await
             .unwrap_err();
@@ -603,7 +607,8 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_error(leaky);
         t.push_json(200, json!({"access_token": BUSINESS_TOKEN}));
-        let es = client(&t, retrying()).embedded_signup(AppCredentials::new("1", APP_SECRET));
+        let es = client(&t, retrying())
+            .embedded_signup(AppCredentials::new(AppId::new("1").unwrap(), APP_SECRET));
         let token = es
             .exchange_code(&SignupCode::new(CODE).unwrap())
             .await
@@ -644,7 +649,8 @@ mod tests {
             500,
             json!({"error": {"message": "x", "code": 2, "is_transient": true}}),
         );
-        let es = client(&t, retrying()).embedded_signup(AppCredentials::new("1", APP_SECRET));
+        let es = client(&t, retrying())
+            .embedded_signup(AppCredentials::new(AppId::new("1").unwrap(), APP_SECRET));
         let e = es
             .exchange_code(&SignupCode::new(CODE).unwrap())
             .await
@@ -674,7 +680,7 @@ mod tests {
         );
         t.push_json(200, json!({"data": {"is_valid": true}}));
         let debug = client(&t, retrying())
-            .embedded_signup(AppCredentials::new("1", APP_SECRET))
+            .embedded_signup(AppCredentials::new(AppId::new("1").unwrap(), APP_SECRET))
             .debug_token(&AccessToken::new(BUSINESS_TOKEN))
             .await
             .unwrap();
@@ -687,7 +693,8 @@ mod tests {
     async fn debug_token_does_not_replay_permanent_or_already_throttled_errors() {
         let t = ScriptedTransport::new();
         t.push_json(400, json!({"error": {"message": "bad", "code": 100}}));
-        let es = client(&t, retrying()).embedded_signup(AppCredentials::new("1", APP_SECRET));
+        let es = client(&t, retrying())
+            .embedded_signup(AppCredentials::new(AppId::new("1").unwrap(), APP_SECRET));
         let e = es
             .debug_token(&AccessToken::new(BUSINESS_TOKEN))
             .await
@@ -725,7 +732,7 @@ mod tests {
             );
         }
         let e = client(&t, retrying())
-            .embedded_signup(AppCredentials::new("1", APP_SECRET))
+            .embedded_signup(AppCredentials::new(AppId::new("1").unwrap(), APP_SECRET))
             .debug_token(&AccessToken::new(BUSINESS_TOKEN))
             .await
             .unwrap_err();
@@ -735,7 +742,8 @@ mod tests {
     }
 
     fn es_no_retry(t: &ScriptedTransport) -> EmbeddedSignup {
-        client(t, RetryPolicy::NONE).embedded_signup(AppCredentials::new("1", APP_SECRET))
+        client(t, RetryPolicy::NONE)
+            .embedded_signup(AppCredentials::new(AppId::new("1").unwrap(), APP_SECRET))
     }
 
     #[tokio::test]

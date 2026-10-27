@@ -53,7 +53,7 @@ hours; a template reaches anyone who opted in. Errors are branched on
 
 ```rust
 let client = meta_whatsapp_rs::client(env("WA_TOKEN")?)?;
-let messages = client.messages(env("WA_PHONE_NUMBER_ID")?);
+let messages = client.messages(PhoneNumberId::new(env("WA_PHONE_NUMBER_ID")?)?);
 let to = Recipient::phone(env("WA_TO")?); // E.164, with `+`
 
 let text = OutboundMessage::text(to.clone(), "Your order has shipped.");
@@ -69,7 +69,7 @@ let hello = TemplateMessage::new(
 );
 let mut template = OutboundMessage::template(to, hello);
 if let Ok(id) = std::env::var("WA_MESSAGING_ACCOUNT_ID") {
-    template = template.messaging_account_id(id); // which account pays
+    template = template.messaging_account_id(WabaId::new(id)?); // which account pays
 }
 let sent = messages.send(&template).await?;
 ```
@@ -167,7 +167,7 @@ attempts are counted atomically:
 ```rust
 let otp = OtpService::new(
     meta_whatsapp_rs::client(env("WA_TOKEN")?)?,
-    env("WA_PHONE_NUMBER_ID")?,
+    PhoneNumberId::new(env("WA_PHONE_NUMBER_ID")?)?,
     OtpTemplate::new(env("WA_OTP_TEMPLATE")?, env_or("WA_OTP_LANGUAGE", "en_US")),
     Arc::new(MemoryKvStore::new()), // Postgres or Redis with several instances
     Arc::new(SystemClock),

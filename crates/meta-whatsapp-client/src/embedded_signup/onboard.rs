@@ -879,7 +879,7 @@ fn verify_grant(
         // Meta lists the newest grant first (`solution-providers/manage-accounts`).
         None => targets
             .first()
-            .map(|t| WabaId::new(t.as_str()))
+            .map(|t| WabaId::new_unchecked(t.as_str()))
             .ok_or_else(|| ValidationError::new("granular_scopes", "the token grants no WABA")),
     }
 }
@@ -990,7 +990,8 @@ mod tests {
         .unwrap()
         .with_clock(Arc::new(ManualClock::new(datetime!(2026-09-24 12:00 UTC))));
         Harness {
-            es: client.embedded_signup(AppCredentials::new(APP_ID, APP_SECRET)),
+            es: client
+                .embedded_signup(AppCredentials::new(AppId::new(APP_ID).unwrap(), APP_SECRET)),
             t,
             kv,
             vault,
@@ -1114,7 +1115,10 @@ mod tests {
         );
         assert_eq!(
             done.phone_number_ids,
-            vec![PhoneNumberId::new(PHONE), PhoneNumberId::new("999")],
+            vec![
+                PhoneNumberId::new(PHONE).unwrap(),
+                PhoneNumberId::new("999").unwrap()
+            ],
             "the onboarded number first, then the WABA's others"
         );
         assert_eq!(
@@ -1185,7 +1189,12 @@ mod tests {
             !bytes.windows(TOKEN.len()).any(|w| w == TOKEN.as_bytes()),
             "token stored in the clear"
         );
-        let stored = h.vault.get(&WabaId::new(WABA)).await.unwrap().unwrap();
+        let stored = h
+            .vault
+            .get(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(stored.token.expose_secret(), TOKEN);
         assert_eq!(
             stored.business_id.as_ref().map(BusinessId::as_str),
@@ -1194,7 +1203,7 @@ mod tests {
         for phone in phones {
             let by_phone = h
                 .vault
-                .get_by_phone_number(&PhoneNumberId::new(*phone))
+                .get_by_phone_number(&PhoneNumberId::new(*phone).unwrap())
                 .await
                 .unwrap()
                 .unwrap();
@@ -1256,7 +1265,10 @@ mod tests {
             ]
         );
         assert_eq!(done.phone_number_id, None);
-        assert_eq!(done.phone_number_ids, vec![PhoneNumberId::new(PHONE)]);
+        assert_eq!(
+            done.phone_number_ids,
+            vec![PhoneNumberId::new(PHONE).unwrap()]
+        );
         assert_eq!(
             h.t.requests()[4].body,
             RecordedBody::Empty,
@@ -1272,32 +1284,35 @@ mod tests {
         let h = harness();
         script_success(&h.t, TOKEN, WABA, &[PHONE]);
         h.es.onboard(&full_request(), &h.vault).await.unwrap();
-        script_success(&h.t, "EAAsecondToken", WABA, &["P2", PHONE]);
+        script_success(&h.t, "EAAsecondToken", WABA, &["202", PHONE]);
         let done =
-            h.es.onboard(&request_for(WABA, "P2"), &h.vault)
+            h.es.onboard(&request_for(WABA, "202"), &h.vault)
                 .await
                 .unwrap();
         assert_eq!(
             done.phone_number_ids,
-            vec![PhoneNumberId::new("P2"), PhoneNumberId::new(PHONE)]
+            vec![
+                PhoneNumberId::new("202").unwrap(),
+                PhoneNumberId::new(PHONE).unwrap()
+            ]
         );
-        for phone in [PHONE, "P2"] {
+        for phone in [PHONE, "202"] {
             let t = h
                 .vault
-                .get_by_phone_number(&PhoneNumberId::new(phone))
+                .get_by_phone_number(&PhoneNumberId::new(phone).unwrap())
                 .await
                 .unwrap()
                 .unwrap_or_else(|| panic!("{phone} no longer routes"));
             assert_eq!(t.token.expose_secret(), "EAAsecondToken");
         }
         // And a number Meta no longer lists on the WABA is unlinked.
-        script_success(&h.t, "EAAthirdToken", WABA, &["P2"]);
-        h.es.onboard(&request_for(WABA, "P2"), &h.vault)
+        script_success(&h.t, "EAAthirdToken", WABA, &["202"]);
+        h.es.onboard(&request_for(WABA, "202"), &h.vault)
             .await
             .unwrap();
         assert!(
             h.vault
-                .get_by_phone_number(&PhoneNumberId::new(PHONE))
+                .get_by_phone_number(&PhoneNumberId::new(PHONE).unwrap())
                 .await
                 .unwrap()
                 .is_none()
@@ -1352,7 +1367,7 @@ mod tests {
         );
         assert!(
             h.vault
-                .get_by_phone_number(&PhoneNumberId::new(PHONE))
+                .get_by_phone_number(&PhoneNumberId::new(PHONE).unwrap())
                 .await
                 .unwrap()
                 .is_some()
@@ -1587,13 +1602,19 @@ mod tests {
         assert_eq!(step(&err), SUBSCRIBE_APP);
         assert_eq!(err.kind(), ErrorKind::Permission);
         assert_eq!(h.t.requests().len(), 5, "register never ran");
-        assert!(h.vault.get(&WabaId::new(WABA)).await.unwrap().is_some());
+        assert!(
+            h.vault
+                .get(&WabaId::new(WABA).unwrap())
+                .await
+                .unwrap()
+                .is_some()
+        );
         assert_eq!(h.t.remaining(), 0);
 
         h.t.push_json(200, success());
         h.t.push_json(200, success());
         let done =
-            h.es.resume(&WabaId::new(WABA), &request, &h.vault)
+            h.es.resume(&WabaId::new(WABA).unwrap(), &request, &h.vault)
                 .await
                 .unwrap();
         assert_eq!(
@@ -1630,7 +1651,7 @@ mod tests {
         h.t.push_json(200, success());
         h.t.push_json(200, success());
         let fixed = full_request().register_with_pin(TwoStepPin::new("000111").unwrap());
-        h.es.resume(&WabaId::new(WABA), &fixed, &h.vault)
+        h.es.resume(&WabaId::new(WABA).unwrap(), &fixed, &h.vault)
             .await
             .unwrap();
         assert_eq!(
@@ -1643,7 +1664,7 @@ mod tests {
         h.t.push_json(200, success());
         h.t.push_json(400, graph_error(133016));
         let err =
-            h.es.resume(&WabaId::new(WABA), &fixed, &h.vault)
+            h.es.resume(&WabaId::new(WABA).unwrap(), &fixed, &h.vault)
                 .await
                 .unwrap_err();
         assert_eq!(step(&err), REGISTER_PHONE);
@@ -1663,14 +1684,20 @@ mod tests {
         let request = OnboardingRequest::new(
             SignupCode::new(CODE).unwrap(),
             SessionInfo {
-                waba_id: Some(WabaId::new(WABA)),
+                waba_id: Some(WabaId::new(WABA).unwrap()),
                 ..SessionInfo::default()
             },
         )
         .register_with_pin(TwoStepPin::new("123456").unwrap());
         let err = h.es.onboard(&request, &h.vault).await.unwrap_err();
         assert_eq!(step(&err), REGISTER_PHONE);
-        assert!(h.vault.get(&WabaId::new(WABA)).await.unwrap().is_some());
+        assert!(
+            h.vault
+                .get(&WabaId::new(WABA).unwrap())
+                .await
+                .unwrap()
+                .is_some()
+        );
         assert_eq!(h.t.remaining(), 0);
     }
 
@@ -1688,13 +1715,13 @@ mod tests {
             request_for("OTHER_WABA", PHONE),
         ] {
             let err =
-                h.es.resume(&WabaId::new(WABA), &request, &h.vault)
+                h.es.resume(&WabaId::new(WABA).unwrap(), &request, &h.vault)
                     .await
                     .unwrap_err();
             assert_eq!(step(&err), VERIFY_ASSETS);
         }
         let err =
-            h.es.resume(&WabaId::new("UNKNOWN"), &full_request(), &h.vault)
+            h.es.resume(&WabaId::new("999").unwrap(), &full_request(), &h.vault)
                 .await
                 .unwrap_err();
         assert_eq!(step(&err), LOAD_TOKEN);
@@ -1754,7 +1781,7 @@ mod tests {
         second.t.push_json(200, success());
         let done = second
             .es
-            .resume(&WabaId::new(saved_waba), &request, &second.vault)
+            .resume(&WabaId::new(saved_waba).unwrap(), &request, &second.vault)
             .await
             .unwrap();
         assert_eq!(
@@ -1827,7 +1854,7 @@ mod tests {
             .clone()
             .register_with_pin(TwoStepPin::new("000111").unwrap());
         let err =
-            h.es.resume(&WabaId::new(WABA), &refused, &h.vault)
+            h.es.resume(&WabaId::new(WABA).unwrap(), &refused, &h.vault)
                 .await
                 .unwrap_err();
         assert!(
@@ -1838,7 +1865,7 @@ mod tests {
 
         h.t.push_json(200, success());
         let done =
-            h.es.resume(&WabaId::new(WABA), &request, &h.vault)
+            h.es.resume(&WabaId::new(WABA).unwrap(), &request, &h.vault)
                 .await
                 .unwrap();
         assert_eq!(
@@ -1862,7 +1889,7 @@ mod tests {
     async fn a_code_less_request_never_reaches_the_code_exchange() {
         let h = harness();
         let request = OnboardingRequest::for_resume(SessionInfo {
-            waba_id: Some(WabaId::new(WABA)),
+            waba_id: Some(WabaId::new(WABA).unwrap()),
             ..SessionInfo::default()
         });
         assert!(!request.register && request.pin.is_none());
@@ -1986,7 +2013,7 @@ mod tests {
         );
         let routed = h
             .vault
-            .get_by_phone_number(&PhoneNumberId::new(PHONE_B))
+            .get_by_phone_number(&PhoneNumberId::new(PHONE_B).unwrap())
             .await
             .unwrap()
             .unwrap();
@@ -2085,7 +2112,7 @@ mod tests {
         h.t.push_json(200, success());
         h.t.push_json(400, graph_error(133005));
         let e2 =
-            h.es.resume(&WabaId::new(WABA), &request, &h.vault)
+            h.es.resume(&WabaId::new(WABA).unwrap(), &request, &h.vault)
                 .await
                 .unwrap_err();
         assert_eq!(h.t.remaining(), 0);

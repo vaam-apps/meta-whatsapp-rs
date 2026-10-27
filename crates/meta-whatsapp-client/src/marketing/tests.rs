@@ -1,6 +1,7 @@
 //! Request/response tests against the examples in `marketing-messages/*`,
 //! the MM API reference, and `support/error-codes`.
 
+use meta_whatsapp_core::ids::{BusinessId, PhoneNumberId, WabaId};
 use std::time::Duration;
 
 use http::Method;
@@ -53,7 +54,7 @@ async fn sends_the_documented_minimal_body() {
     let t = ScriptedTransport::new();
     t.push_json(200, doc_phone_response());
     let sent = client(&t)
-        .marketing("106540352242922")
+        .marketing(PhoneNumberId::new("106540352242922").unwrap())
         .send(
             &Recipient::phone("+16505551234"),
             &TemplateMessage::new("seasonal_sale_promo", "en"),
@@ -102,7 +103,7 @@ async fn sends_every_option_under_its_documented_name() {
         json!({"messaging_product": "whatsapp", "contacts": [], "messages": [{"id": "wamid.1", "message_status": "held_for_quality_assessment"}]}),
     );
     let sent = client(&t)
-        .marketing("P")
+        .marketing(PhoneNumberId::new("106540352242922").unwrap())
         .send(
             &Recipient::phone("+16505551234"),
             &TemplateMessage::new("seasonal_sale_promo", "en"),
@@ -133,7 +134,7 @@ async fn sends_every_option_under_its_documented_name() {
 
     t.push_json(200, doc_phone_response());
     client(&t)
-        .marketing("P")
+        .marketing(PhoneNumberId::new("106540352242922").unwrap())
         .send(
             &Recipient::phone("1"),
             &TemplateMessage::new("t", "en"),
@@ -161,7 +162,7 @@ async fn sends_by_bsuid_and_parses_the_documented_response() {
         }),
     );
     let sent = client(&t)
-        .marketing("P")
+        .marketing(PhoneNumberId::new("106540352242922").unwrap())
         .send(
             &Recipient::user("US.13491208655302741918"),
             &TemplateMessage::new("t", "en_US"),
@@ -184,7 +185,7 @@ async fn sends_by_bsuid_and_parses_the_documented_response() {
     // The guide's "Sending to a BSUID" request: both identifiers, `to` wins.
     t.push_json(200, doc_phone_response());
     client(&t)
-        .marketing("P")
+        .marketing(PhoneNumberId::new("106540352242922").unwrap())
         .send(
             &Recipient::PhoneAndUser {
                 phone: "+16505551234".into(),
@@ -212,7 +213,7 @@ async fn sends_by_bsuid_and_parses_the_documented_response() {
 #[tokio::test]
 async fn local_validation_happens_before_any_request() {
     let t = ScriptedTransport::new();
-    let m = client(&t).marketing("P");
+    let m = client(&t).marketing(PhoneNumberId::new("106540352242922").unwrap());
     let to = Recipient::phone("1");
     let err = m
         .send(
@@ -251,7 +252,7 @@ async fn an_unreadable_send_response_never_quotes_the_recipient() {
         r#"{"contacts":["+16505551234"],"messages":[{"id":"wamid.1"}]}"#,
     );
     let err = client(&t)
-        .marketing("P")
+        .marketing(PhoneNumberId::new("106540352242922").unwrap())
         .send(
             &Recipient::phone("+16505551234"),
             &TemplateMessage::new("t", "en"),
@@ -269,7 +270,7 @@ async fn sends_are_never_replayed_after_a_timeout() {
     let t = ScriptedTransport::new();
     t.push_error(|| TransportError::Timeout);
     let err = retrying_client(&t)
-        .marketing("P")
+        .marketing(PhoneNumberId::new("106540352242922").unwrap())
         .send(
             &Recipient::phone("1"),
             &TemplateMessage::new("t", "en"),
@@ -349,7 +350,7 @@ async fn mm_api_errors_map_to_their_kinds() {
             }}),
         );
         let err = retrying_client(&t)
-            .marketing("P")
+            .marketing(PhoneNumberId::new("106540352242922").unwrap())
             .send(
                 &Recipient::phone("1"),
                 &TemplateMessage::new("t", "en"),
@@ -377,7 +378,7 @@ async fn waba_onboarding_status_parses_the_documented_example() {
         json!({"marketing_messages_onboarding_status": "PENDING_REVIEW", "id": "1"}),
     );
     t.push_json(200, json!({"id": "1"}));
-    let account = client(&t).marketing_account("25002526842541");
+    let account = client(&t).marketing_account(WabaId::new("25002526842541").unwrap());
     assert_eq!(
         account.onboarding_status().await.unwrap(),
         Some(OnboardingStatus::Eligible)
@@ -409,7 +410,7 @@ async fn owner_business_info_parses_the_documented_example() {
         }}),
     );
     let info = client(&t)
-        .marketing_account("69843579834234")
+        .marketing_account(WabaId::new("69843579834234").unwrap())
         .owner_business_info()
         .await
         .unwrap()
@@ -432,7 +433,7 @@ async fn cloud_api_marketing_switch_round_trips() {
         200,
         json!({"disable_marketing_messages_on_cloud_api": true, "id": "102290129340398"}),
     );
-    let account = client(&t).marketing_account("102290129340398");
+    let account = client(&t).marketing_account(WabaId::new("102290129340398").unwrap());
     account
         .set_cloud_api_marketing_disabled(true)
         .await
@@ -464,7 +465,7 @@ async fn cloud_api_marketing_switch_is_replayed_and_rejects_success_false() {
     t.push_error(|| TransportError::Timeout);
     t.push_json(200, json!({"id": "102290129340398"}));
     retrying_client(&t)
-        .marketing_account("102290129340398")
+        .marketing_account(WabaId::new("102290129340398").unwrap())
         .set_cloud_api_marketing_disabled(false)
         .await
         .unwrap();
@@ -479,7 +480,7 @@ async fn cloud_api_marketing_switch_is_replayed_and_rejects_success_false() {
     let t = ScriptedTransport::new();
     t.push_json(200, json!({"success": true}));
     t.push_json(200, json!({"success": false}));
-    let account = client(&t).marketing_account("W");
+    let account = client(&t).marketing_account(WabaId::new("102290129340398").unwrap());
     account
         .set_cloud_api_marketing_disabled(true)
         .await
@@ -500,7 +501,7 @@ async fn business_onboarding_status_parses_the_documented_example() {
         json!({"marketing_messages_onboarding_status": {"status": "TERM_OF_SERVICE_SIGNED", "time": "2025-10-07"}}),
     );
     let status = client(&t)
-        .marketing_business("52002526842524351")
+        .marketing_business(BusinessId::new("52002526842524351").unwrap())
         .onboarding_status()
         .await
         .unwrap()
@@ -528,7 +529,7 @@ async fn lists_eligible_client_wabas_with_the_documented_filter() {
         }]}),
     );
     let page = client(&t)
-        .marketing_business("19502398688333")
+        .marketing_business(BusinessId::new("19502398688333").unwrap())
         .client_wabas_with_status(&ListClientWabas::new([OnboardingStatus::Eligible]))
         .await
         .unwrap();
@@ -550,7 +551,7 @@ async fn lists_eligible_client_wabas_with_the_documented_filter() {
 
     t.push_json(200, json!({"data": []}));
     client(&t)
-        .marketing_business("19502398688333")
+        .marketing_business(BusinessId::new("19502398688333").unwrap())
         .client_wabas_with_status(
             &ListClientWabas::new([OnboardingStatus::Eligible, OnboardingStatus::Onboarded])
                 .after("QVFI..."),
@@ -580,7 +581,7 @@ async fn client_wabas_with_status_stream_follows_cursors_with_the_filter() {
     );
     t.push_json(200, json!({"data": [{"id": "46302397361991"}]}));
     let ids: Vec<String> = client(&t)
-        .marketing_business("19502398688333")
+        .marketing_business(BusinessId::new("19502398688333").unwrap())
         .client_wabas_with_status_stream(&ListClientWabas::new([OnboardingStatus::Eligible]))
         .map(|w| w.unwrap().id.as_str().to_owned())
         .collect()
@@ -610,7 +611,7 @@ async fn client_wabas_with_status_stream_follows_cursors_with_the_filter() {
         ListClientWabas::new([OnboardingStatus::Eligible]).before("QVFI0"),
     ] {
         let refused: Vec<_> = client(&t)
-            .marketing_business("19502398688333")
+            .marketing_business(BusinessId::new("19502398688333").unwrap())
             .client_wabas_with_status_stream(&query)
             .collect()
             .await;
@@ -630,14 +631,14 @@ async fn intent_api_posts_and_returns_the_request_id() {
     let t = ScriptedTransport::new();
     t.push_json(200, json!({"request_id": "893436979557695"}));
     t.push_json(200, json!({"request_id": "893436979557696"}));
-    let business = client(&t).marketing_business("END_BUSINESS_ID");
+    let business = client(&t).marketing_business(BusinessId::new("2729063490586006").unwrap());
     let r = business.request_onboarding(None).await.unwrap();
     assert_eq!(r.request_id, "893436979557695");
     let req = &t.requests()[0];
     assert_eq!(req.method, Method::POST);
     assert_eq!(
         req.path(),
-        "/v25.0/END_BUSINESS_ID/onboard_partners_to_mm_lite"
+        "/v25.0/2729063490586006/onboard_partners_to_mm_lite"
     );
     assert_eq!(req.url.query(), None);
     assert_eq!(req.bearer(), Some("TOKEN"));
@@ -661,7 +662,7 @@ async fn intent_api_is_not_replayed_after_a_timeout() {
     let t = ScriptedTransport::new();
     t.push_error(|| TransportError::Timeout);
     let err = retrying_client(&t)
-        .marketing_business("B")
+        .marketing_business(BusinessId::new("2729063490586005").unwrap())
         .request_onboarding(None)
         .await
         .unwrap_err();
@@ -682,7 +683,7 @@ async fn intent_api_duplicate_request_is_classified() {
         }}),
     );
     let err = client(&t)
-        .marketing_business("B")
+        .marketing_business(BusinessId::new("2729063490586005").unwrap())
         .request_onboarding(None)
         .await
         .unwrap_err();

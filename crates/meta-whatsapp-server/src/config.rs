@@ -582,18 +582,14 @@ fn meta_app(r: &Reader<'_>) -> Result<MetaApp, ConfigError> {
         app_secrets.push(AppSecret::new(previous));
     }
     let verify_token = VerifyToken::new(r.required_secret("WA_VERIFY_TOKEN")?);
-    let app_id = match r.plain("WA_APP_ID")? {
-        None => None,
-        Some(id) if !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()) => {
-            Some(AppId::new(id))
-        }
-        Some(_) => {
-            return Err(ConfigError::Invalid {
-                name: "WA_APP_ID",
-                reason: "expected the numeric app id",
-            });
-        }
-    };
+    let app_id = r
+        .plain("WA_APP_ID")?
+        .map(AppId::new)
+        .transpose()
+        .map_err(|_| ConfigError::Invalid {
+            name: "WA_APP_ID",
+            reason: "expected the numeric app id",
+        })?;
     Ok(MetaApp {
         app_id,
         app_secrets,

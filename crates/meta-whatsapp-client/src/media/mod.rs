@@ -32,14 +32,14 @@
 //! use meta_whatsapp_core::recipient::Recipient;
 //!
 //! let media_id = client
-//!     .media("106540352242922")
+//!     .media(meta_whatsapp_core::ids::PhoneNumberId::new("106540352242922")?)
 //!     .upload(png, "image/png", "voucher.png") // type and size checked first
 //!     .await?;
 //! let msg = OutboundMessage::new(
 //!     Recipient::phone("+16505551234"),
 //!     Image::new(media_id).caption("Your voucher"),
 //! );
-//! client.messages("106540352242922").send(&msg).await?;
+//! client.messages(meta_whatsapp_core::ids::PhoneNumberId::new("106540352242922")?).send(&msg).await?;
 //! # Ok(()) }
 //! ```
 //!
@@ -50,8 +50,8 @@
 //! use futures::StreamExt;
 //! use meta_whatsapp_core::ids::MediaId;
 //!
-//! let media = client.media("106540352242922");
-//! let download = media.download(&MediaId::new("1037543291543636")).await?;
+//! let media = client.media(meta_whatsapp_core::ids::PhoneNumberId::new("106540352242922")?);
+//! let download = media.download(&MediaId::new("1037543291543636")?).await?;
 //! let mut verified = download.verified()?; // fails fast on a malformed digest
 //! let mut file = Vec::new(); // stand-in for a temporary file
 //! while let Some(chunk) = verified.body.next().await {

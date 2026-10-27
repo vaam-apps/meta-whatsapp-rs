@@ -235,11 +235,23 @@ async fn disconnecting_unsubscribes_first_and_deletes_only_after() {
         (failed.status, failed.code().as_str()),
         (StatusCode::BAD_GATEWAY, "service_unavailable")
     );
-    assert!(h.vault.get(&WabaId::new(WABA)).await.unwrap().is_some());
-    assert!(h.store.waba(&WabaId::new(WABA)).await.unwrap().is_some());
+    assert!(
+        h.vault
+            .get(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .is_some()
+    );
     assert!(
         h.store
-            .number(&PhoneNumberId::new(PN))
+            .waba(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        h.store
+            .number(&PhoneNumberId::new(PN).unwrap())
             .await
             .unwrap()
             .is_some()
@@ -259,11 +271,23 @@ async fn disconnecting_unsubscribes_first_and_deletes_only_after() {
         assert_eq!(request.bearer(), Some(TOKEN));
     }
     assert_eq!(h.graph.remaining(), 0);
-    assert!(h.vault.get(&WabaId::new(WABA)).await.unwrap().is_none());
-    assert!(h.store.waba(&WabaId::new(WABA)).await.unwrap().is_none());
+    assert!(
+        h.vault
+            .get(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert!(
         h.store
-            .number(&PhoneNumberId::new(PN))
+            .waba(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        h.store
+            .number(&PhoneNumberId::new(PN).unwrap())
             .await
             .unwrap()
             .is_none()
@@ -288,7 +312,11 @@ async fn a_timeout_may_have_taken_effect() {
     );
     assert_eq!(reply.json()["error"]["may_have_been_sent"], true);
     assert!(
-        h.vault.get(&WabaId::new(WABA)).await.unwrap().is_some(),
+        h.vault
+            .get(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .is_some(),
         "nothing deleted"
     );
     assert_eq!(h.graph.remaining(), 0);

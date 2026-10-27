@@ -285,6 +285,7 @@ impl PhoneNumber {
 mod tests {
     use http::Method;
     use meta_whatsapp_core::ErrorKind;
+    use meta_whatsapp_core::ids::PhoneNumberId;
     use meta_whatsapp_core::testing::{RecordedBody, ScriptedTransport};
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -314,7 +315,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"status": "approved"}));
         t.push_json(200, json!({"status": "reserved"}));
-        let pn = client(&t).phone_number(ID);
+        let pn = client(&t).phone_number(PhoneNumberId::new(ID).unwrap());
         let first = pn
             .set_username("lucky_shrub", Some(&TransferAction::ForceTransfer))
             .await
@@ -349,7 +350,7 @@ mod tests {
     #[tokio::test]
     async fn set_username_maps_errors_and_is_not_replayed() {
         let t = ScriptedTransport::new();
-        let pn = client(&t).phone_number(ID);
+        let pn = client(&t).phone_number(PhoneNumberId::new(ID).unwrap());
         t.push_json(400, graph_error(100));
         let err = pn.set_username("lucky_shrub", None).await.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidParameter);
@@ -375,7 +376,7 @@ mod tests {
             .build()
             .unwrap();
         assert!(
-            c.phone_number(ID)
+            c.phone_number(PhoneNumberId::new(ID).unwrap())
                 .set_username("lucky_shrub", None)
                 .await
                 .is_err()
@@ -386,7 +387,7 @@ mod tests {
     #[tokio::test]
     async fn set_username_checks_the_format_first() {
         let t = ScriptedTransport::new();
-        let pn = client(&t).phone_number(ID);
+        let pn = client(&t).phone_number(PhoneNumberId::new(ID).unwrap());
         for bad in [
             "ab",
             &"a".repeat(36),
@@ -425,7 +426,7 @@ mod tests {
         );
         t.push_json(200, json!({"status": "reserved"}));
         t.push_json(200, json!({"username": "x_y", "status": "active"}));
-        let pn = client(&t).phone_number(ID);
+        let pn = client(&t).phone_number(PhoneNumberId::new(ID).unwrap());
         let current = pn.username().await.unwrap();
         assert_eq!(current.username.as_deref(), Some("lucky_shrub"));
         assert_eq!(current.status, Some(BusinessUsernameStatus::Approved));
@@ -455,7 +456,7 @@ mod tests {
             json!({"data": [{"username_suggestions": ["lucky_shrub", "luckyshrub_store"]}]}),
         );
         let got = client(&t)
-            .phone_number(ID)
+            .phone_number(PhoneNumberId::new(ID).unwrap())
             .username_suggestions()
             .await
             .unwrap();
@@ -478,7 +479,7 @@ mod tests {
         );
         assert_eq!(
             client(&t)
-                .phone_number(ID)
+                .phone_number(PhoneNumberId::new(ID).unwrap())
                 .username_suggestions()
                 .await
                 .unwrap(),
@@ -489,7 +490,7 @@ mod tests {
         t.push_json(200, json!({"data": []}));
         assert!(
             client(&t)
-                .phone_number(ID)
+                .phone_number(PhoneNumberId::new(ID).unwrap())
                 .username_suggestions()
                 .await
                 .unwrap()
@@ -503,7 +504,11 @@ mod tests {
         // business-scoped-user-ids, "Delete a username".
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"success": true}));
-        client(&t).phone_number(ID).delete_username().await.unwrap();
+        client(&t)
+            .phone_number(PhoneNumberId::new(ID).unwrap())
+            .delete_username()
+            .await
+            .unwrap();
         let req = t.last_request().unwrap();
         assert_eq!(req.method, Method::DELETE);
         assert_eq!(req.path(), "/v25.0/106540352242922/username");
@@ -512,7 +517,13 @@ mod tests {
         assert_eq!(t.remaining(), 0);
 
         t.push_json(200, json!({"success": false}));
-        assert!(client(&t).phone_number(ID).delete_username().await.is_err());
+        assert!(
+            client(&t)
+                .phone_number(PhoneNumberId::new(ID).unwrap())
+                .delete_username()
+                .await
+                .is_err()
+        );
         assert_eq!(t.remaining(), 0);
     }
 
@@ -533,7 +544,12 @@ mod tests {
             })
             .build()
             .unwrap();
-        assert!(c.phone_number(ID).delete_username().await.is_err());
+        assert!(
+            c.phone_number(PhoneNumberId::new(ID).unwrap())
+                .delete_username()
+                .await
+                .is_err()
+        );
         let reqs = t.requests();
         assert_eq!(reqs.len(), 2);
         assert!(
@@ -556,7 +572,7 @@ mod tests {
             200,
             json!({"messaging_product": "whatsapp", "success": true, "deleted": false}),
         );
-        let pn = client(&t).phone_number(ID);
+        let pn = client(&t).phone_number(PhoneNumberId::new(ID).unwrap());
         assert!(
             pn.delete_contact_book_entry(&UserId::new(BSUID))
                 .await
@@ -611,7 +627,7 @@ mod tests {
             .build()
             .unwrap();
         let deleted = c
-            .phone_number(ID)
+            .phone_number(PhoneNumberId::new(ID).unwrap())
             .delete_contact_book_entry(&UserId::new(BSUID))
             .await
             .unwrap();
@@ -629,7 +645,7 @@ mod tests {
     #[tokio::test]
     async fn contact_book_deletion_refuses_other_ids_before_sending() {
         let t = ScriptedTransport::new();
-        let pn = client(&t).phone_number(ID);
+        let pn = client(&t).phone_number(PhoneNumberId::new(ID).unwrap());
         let long = format!("US.{}", "1".repeat(129));
         for bad in [
             "US.ENT.11815799212886844830",
@@ -666,7 +682,7 @@ mod tests {
         );
         t.push_json(200, json!({"data": []}));
         t.push_json(200, json!({"success": true}));
-        let pn = client(&t).phone_number(ID);
+        let pn = client(&t).phone_number(PhoneNumberId::new(ID).unwrap());
         pn.set_username("lucky_shrub", None).await.unwrap();
         pn.username().await.unwrap();
         pn.username_suggestions().await.unwrap();

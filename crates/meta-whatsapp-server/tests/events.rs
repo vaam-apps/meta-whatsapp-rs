@@ -32,7 +32,7 @@ async fn harness() -> Harness {
 async fn insert(h: &Harness, event: &NewEvent) -> i64 {
     use meta_whatsapp_server::store::Outbox as _;
     if let (Some(tenant), Some(pn)) = (&event.tenant, &event.phone_number_id) {
-        let waba = meta_whatsapp_rs::core::ids::WabaId::new(waba_of(pn.as_str()));
+        let waba = meta_whatsapp_rs::core::ids::WabaId::new(waba_of(pn.as_str())).unwrap();
         let _ = h.store.unbind_waba(&waba).await.unwrap();
         h.store
             .bind_waba(tenant, &waba, std::slice::from_ref(pn))

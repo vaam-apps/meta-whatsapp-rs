@@ -187,7 +187,7 @@ mod tests {
         assert_eq!(
             action(&events(&body)[0]),
             Action::Message {
-                number: "106540352242922".into(),
+                number: PhoneNumberId::new("106540352242922").unwrap(),
                 customer: "US.13491208655302741918".into(),
                 text: Some("Navy?".into())
             }
@@ -283,7 +283,7 @@ mod tests {
             assert_eq!(
                 action(&events(&handover(kind))[0]),
                 Action::Ownership {
-                    number: "106540352242922".into(),
+                    number: PhoneNumberId::new("106540352242922").unwrap(),
                     user: Some("16505551234".into()),
                     owner
                 }
@@ -297,7 +297,7 @@ mod tests {
         assert_eq!(
             action(&events(&standby)[0]),
             Action::Observed {
-                number: "106540352242922".into()
+                number: PhoneNumberId::new("106540352242922").unwrap()
             }
         );
     }

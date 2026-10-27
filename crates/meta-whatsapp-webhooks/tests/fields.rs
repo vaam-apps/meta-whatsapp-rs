@@ -429,8 +429,8 @@ fn account_update_every_example() {
     assert_eq!(
         info.solution_partner_business_ids,
         [
-            BusinessId::new("2949482758682047"),
-            BusinessId::new("520744086200222")
+            BusinessId::new("2949482758682047").unwrap(),
+            BusinessId::new("520744086200222").unwrap()
         ]
     );
 

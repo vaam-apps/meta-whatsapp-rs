@@ -511,7 +511,7 @@ mod tests {
             }),
         );
         let profile = client(&t)
-            .business_profile("106540352242922")
+            .business_profile(PhoneNumberId::new("106540352242922").unwrap())
             .get(&[
                 F::About,
                 F::Address,
@@ -546,7 +546,11 @@ mod tests {
             200,
             json!({"data": [{"business_profile": {"messaging_product": "whatsapp", "about": "Hi", "vertical": "SOMETHING_NEW"}}]}),
         );
-        let profile = client(&t).business_profile("1").get(&[]).await.unwrap();
+        let profile = client(&t)
+            .business_profile(PhoneNumberId::new("1").unwrap())
+            .get(&[])
+            .await
+            .unwrap();
         assert_eq!(t.last_request().unwrap().url.query(), None);
         assert_eq!(profile.about.as_deref(), Some("Hi"));
         assert_eq!(
@@ -563,10 +567,18 @@ mod tests {
             200,
             json!({"data": [{"business_profile": {"websites": "not-an-array"}}]}),
         );
-        let err = client(&t).business_profile("1").get(&[]).await.unwrap_err();
+        let err = client(&t)
+            .business_profile(PhoneNumberId::new("1").unwrap())
+            .get(&[])
+            .await
+            .unwrap_err();
         assert!(matches!(err, Error::Decode { .. }), "{err:?}");
         t.push_json(200, json!({"data": []}));
-        let err = client(&t).business_profile("1").get(&[]).await.unwrap_err();
+        let err = client(&t)
+            .business_profile(PhoneNumberId::new("1").unwrap())
+            .get(&[])
+            .await
+            .unwrap_err();
         assert!(matches!(err, Error::Decode { .. }), "{err:?}");
         assert_eq!(t.remaining(), 0);
     }
@@ -576,7 +588,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"success": true}));
         client(&t)
-            .business_profile("106540352242922")
+            .business_profile(PhoneNumberId::new("106540352242922").unwrap())
             .update(&ProfileUpdate {
                 about: Some("Succulent specialists!".into()),
                 address: Some("1 Hacker Way, Menlo Park, CA 94025".into()),
@@ -626,7 +638,7 @@ mod tests {
             })
             .build()
             .unwrap();
-        c.business_profile("1")
+        c.business_profile(PhoneNumberId::new("1").unwrap())
             .update(&ProfileUpdate {
                 about: Some("x".into()),
                 ..ProfileUpdate::default()
@@ -647,7 +659,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"success": false}));
         let err = client(&t)
-            .business_profile("1")
+            .business_profile(PhoneNumberId::new("1").unwrap())
             .update(&ProfileUpdate::default())
             .await
             .unwrap_err();
@@ -663,7 +675,11 @@ mod tests {
             401,
             json!({"error": {"message": "Invalid OAuth access token", "type": "OAuthException", "code": 190, "error_subcode": 463, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
         );
-        let err = client(&t).business_profile("1").get(&[]).await.unwrap_err();
+        let err = client(&t)
+            .business_profile(PhoneNumberId::new("1").unwrap())
+            .get(&[])
+            .await
+            .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Authentication);
         assert_eq!(t.remaining(), 0);
     }
@@ -677,7 +693,7 @@ mod tests {
         };
         assert!(ok.validate().is_ok());
         let err = client(&t)
-            .business_profile("1")
+            .business_profile(PhoneNumberId::new("1").unwrap())
             .update(&ProfileUpdate {
                 address: Some("a".repeat(257)),
                 ..ProfileUpdate::default()
@@ -693,7 +709,7 @@ mod tests {
         let t = ScriptedTransport::new();
         for v in [Vertical::Undefined, Vertical::NotABiz] {
             let err = client(&t)
-                .business_profile("1")
+                .business_profile(PhoneNumberId::new("1").unwrap())
                 .update(&ProfileUpdate {
                     vertical: Some(v),
                     ..ProfileUpdate::default()
@@ -719,7 +735,7 @@ mod tests {
         let t = ScriptedTransport::new();
         for f in [ProfileField::Id, ProfileField::VerifiedName] {
             let err = client(&t)
-                .business_profile("1")
+                .business_profile(PhoneNumberId::new("1").unwrap())
                 .get(&[ProfileField::About, f])
                 .await
                 .unwrap_err();

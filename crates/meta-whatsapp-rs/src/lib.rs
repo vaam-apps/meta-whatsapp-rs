@@ -35,7 +35,7 @@
 //! use meta_whatsapp_rs::prelude::*;
 //!
 //! let client = meta_whatsapp_rs::client(std::env::var("WA_TOKEN")?)?;
-//! let messages = client.messages(std::env::var("WA_PHONE_NUMBER_ID")?);
+//! let messages = client.messages(PhoneNumberId::new(std::env::var("WA_PHONE_NUMBER_ID")?)?);
 //! let to = Recipient::phone(std::env::var("WA_TO")?); // E.164, with `+`
 //!
 //! // Free-form: only inside the 24-hour customer service window.
@@ -117,7 +117,7 @@
 //!
 //! let otp = OtpService::new(
 //!     client,
-//!     std::env::var("WA_PHONE_NUMBER_ID")?,
+//!     PhoneNumberId::new(std::env::var("WA_PHONE_NUMBER_ID")?)?,
 //!     OtpTemplate::new("login_code", "en_US"), // an approved authentication template
 //!     Arc::new(MemoryKvStore::new()),
 //!     Arc::new(SystemClock),

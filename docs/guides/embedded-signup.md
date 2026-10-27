@@ -63,11 +63,12 @@ secret** stays on the server.
 use std::sync::Arc;
 use meta_whatsapp_rs::adapters::store::PostgresKvStore;
 use meta_whatsapp_rs::client::embedded_signup::{SignupSessions, TokenVault, VaultKey, VaultKeys};
+use meta_whatsapp_rs::core::ids::AppId;
 use meta_whatsapp_rs::prelude::*;
 
 let kv: Arc<dyn KvStore> = Arc::new(PostgresKvStore::new(pool.clone())); // shared by every instance
 let client = meta_whatsapp_rs::client_builder()?.build()?; // no default token: onboarding acts as the app, then as the merchant
-let es = client.embedded_signup(AppCredentials::new(app_id, app_secret));
+let es = client.embedded_signup(AppCredentials::new(AppId::new(app_id)?, app_secret)); // digits only
 let vault = TokenVault::new(kv.clone(), VaultKeys::new(VaultKey::from_base64("2026-09", &vault_key_b64)?))?;
 let sessions = SignupSessions::new(kv);
 ```
@@ -380,7 +381,7 @@ use meta_whatsapp_rs::client::credit_lines::WabaCurrency;
 use meta_whatsapp_rs::client::embedded_signup::{CreditSharing, SolutionPartner};
 
 let es = client
-    .embedded_signup(AppCredentials::new(app_id, app_secret))
+    .embedded_signup(AppCredentials::new(AppId::new(app_id)?, app_secret))
     .solution_partner(
         SolutionPartner::new(system_token, system_user_id, credit_line_id)
             .method(CreditSharing::ShareAndAttach) // Meta's current method, the default

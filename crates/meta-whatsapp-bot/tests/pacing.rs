@@ -239,7 +239,7 @@ async fn ten_thousand_sends_never_exceed_the_rate_in_any_second() {
                 .unwrap(),
         )
         .with_timer(clock.clone());
-        let report = Broadcast::builder(NUMBER)
+        let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
             .to((0..N).map(phone))
             .content(Text::new("Spring sale"))
             .outbound(outbound.clone())
@@ -286,7 +286,7 @@ async fn a_slow_down_holds_then_recovers_under_load() {
         }
     });
     let pacer = Pacer::new(TokenBucket::new(Rate::DEFAULT)).with_timer(clock.clone());
-    let report = Broadcast::builder(NUMBER)
+    let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to((0..N).map(phone))
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
@@ -329,7 +329,7 @@ async fn a_wall_clock_stepping_back_neither_pauses_nor_bursts() {
             clock.step_back(Duration::from_secs(3600));
         }
     };
-    let run = Broadcast::builder(NUMBER)
+    let run = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to((0..N).map(phone))
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
@@ -365,7 +365,7 @@ async fn a_minute_of_maintenance_loses_no_recipient() {
         (start < Duration::from_secs(60))
             .then(|| graph(131_057, "(#131057) Business Account is in maintenance mode"))
     });
-    let report = Broadcast::builder(NUMBER)
+    let report = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to((0..N).map(phone))
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
@@ -413,7 +413,7 @@ async fn a_retry_pending_when_the_wall_clock_steps_back_goes_when_due() {
             clock.step_back(Duration::from_secs(3600));
         }
     };
-    let run = Broadcast::builder(NUMBER)
+    let run = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to((0..N).map(phone))
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())
@@ -507,7 +507,7 @@ async fn a_cancel_racing_the_senders_never_puts_two_sends_in_one_slot() {
         });
         let pacer = Pacer::shared(limiter.clone()).with_timer(clock.clone());
         let outbound = Slow::new(&clock, Duration::from_millis(5 + seed * 7 % 60));
-        let broadcast = Broadcast::builder(NUMBER)
+        let broadcast = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
             .to((0..N).map(phone))
             .content(Text::new("Spring sale"))
             .outbound(outbound.clone())
@@ -531,7 +531,7 @@ async fn a_cancel_racing_the_senders_never_puts_two_sends_in_one_slot() {
         let bot = futures::future::join_all((0..3_u64).map(|task| {
             let (pacer, clock, starts) = (pacer.clone(), clock.clone(), Arc::clone(&bot_starts));
             async move {
-                let from = PhoneNumberId::new(NUMBER);
+                let from = PhoneNumberId::new(NUMBER).unwrap();
                 for i in 0..20_u64 {
                     pacer.acquire(&from).await.unwrap();
                     starts.lock().unwrap().push(clock.elapsed());
@@ -585,10 +585,13 @@ async fn a_rate_set_while_thirty_two_senders_wait_takes_effect() {
         let bucket = Arc::clone(&bucket);
         async move {
             tokio::time::sleep(Duration::from_secs(5)).await;
-            bucket.set_rate(NUMBER, Rate::per_second(100).unwrap());
+            bucket.set_rate(
+                PhoneNumberId::new(NUMBER).unwrap(),
+                Rate::per_second(100).unwrap(),
+            );
         }
     };
-    let run = Broadcast::builder(NUMBER)
+    let run = Broadcast::builder(PhoneNumberId::new(NUMBER).unwrap())
         .to((0..N).map(phone))
         .content(Text::new("Spring sale"))
         .outbound(outbound.clone())

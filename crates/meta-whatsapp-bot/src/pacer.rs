@@ -964,7 +964,7 @@ mod tests {
     const T0: OffsetDateTime = datetime!(2026-09-26 12:00 UTC);
 
     fn number() -> PhoneNumberId {
-        PhoneNumberId::new("106540352242922")
+        PhoneNumberId::new("106540352242922").unwrap()
     }
 
     fn at(now: OffsetDateTime) -> SlotRequest {
@@ -1083,7 +1083,7 @@ mod tests {
 
     #[tokio::test]
     async fn numbers_have_their_own_rates_and_budgets() {
-        let other = PhoneNumberId::new("2");
+        let other = PhoneNumberId::new("2").unwrap();
         let bucket = TokenBucket::new(Rate::per_second(10).unwrap())
             .rate_for(other.clone(), Rate::per_second(2).unwrap());
         assert_eq!(bucket.rate_of(&other).get(), 2);

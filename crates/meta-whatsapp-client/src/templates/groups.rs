@@ -469,8 +469,8 @@ mod numeric_ids {
     impl RawId {
         pub(super) fn into_id(self) -> TemplateId {
             match self {
-                Self::Number(n) => TemplateId::new(n.to_string()),
-                Self::Text(s) => TemplateId::new(s),
+                Self::Number(n) => TemplateId::new_unchecked(n.to_string()),
+                Self::Text(s) => TemplateId::new_unchecked(s),
             }
         }
     }
@@ -512,7 +512,7 @@ mod lenient {
                         Value::String(s) => s,
                         other => other.to_string(),
                     };
-                    (TemplateId::new(id), reason)
+                    (TemplateId::new_unchecked(id), reason)
                 })
                 .collect()),
             other => Err(D::Error::custom(format!(

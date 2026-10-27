@@ -30,7 +30,7 @@ use meta_whatsapp_rs::client::messages::{
     SendResponse, Sticker, Text, Video,
 };
 use meta_whatsapp_rs::client::templates::TemplateMessage;
-use meta_whatsapp_rs::core::ids::{GroupId, MessageId, UserId, WaId};
+use meta_whatsapp_rs::core::ids::{GroupId, MediaId, MessageId, UserId, WaId};
 use meta_whatsapp_rs::core::recipient::Recipient;
 use meta_whatsapp_rs::webhooks::axum::body::Bytes;
 use meta_whatsapp_rs::webhooks::axum::extract::{FromRequest, Path, Request, State};
@@ -672,7 +672,9 @@ fn media_source(
     link: Option<String>,
 ) -> Result<MediaSource, ApiError> {
     match (id, link) {
-        (Some(id), None) => Ok(MediaSource::id(id)),
+        // A body value, not a path segment: sent as given, for Meta to
+        // judge, as before ids were checked (v1's answers unchanged).
+        (Some(id), None) => Ok(MediaSource::id(MediaId::new_unchecked(id))),
         (None, Some(link))
             if link
                 .get(..8)

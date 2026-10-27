@@ -54,7 +54,7 @@ use serde_json::Value;
 use tokio::time::{Duration, Instant};
 use utoipa::ToSchema;
 
-use super::common::{ApiJson, PageParams, PageQuery, encode_cursor, graph_id, meta_object};
+use super::common::{ApiJson, PageParams, PageQuery, encode_cursor, meta_object, typed_graph_id};
 use crate::auth::{Caller, OwnedWaba};
 use crate::error::{ApiError, ErrorBody};
 use crate::idempotency::{self, Fingerprint, KeyHeader, Success};
@@ -447,8 +447,7 @@ pub(crate) async fn get_template(
     owned: OwnedWaba,
     Path((_, id)): Path<(String, String)>,
 ) -> Result<Json<TemplateView>, ApiError> {
-    graph_id("id", &id)?;
-    let id = TemplateId::new(id);
+    let id: TemplateId = typed_graph_id("id", &id)?;
     // Its name: what the WABA's edge finds templates by. Nothing else of
     // it is read before it is known to be the WABA's.
     let named = owned
@@ -625,15 +624,16 @@ pub(crate) async fn delete_templates(
     ApiQuery(deletion): ApiQuery<TemplateDeletion>,
 ) -> Result<StatusCode, ApiError> {
     template_name("name", &deletion.name)?;
-    if let Some(id) = &deletion.id {
-        graph_id("id", id)?;
-    }
+    let id: Option<TemplateId> = deletion
+        .id
+        .as_deref()
+        .map(|id| typed_graph_id("id", id))
+        .transpose()?;
     let templates = owned.client().templates(owned.waba_id().clone());
-    let deleted = match &deletion.id {
+    let deleted = match &id {
         Some(id) => {
             // One of the WABA's own, or nothing is deleted: Meta's page
             // does not say it checks an `hsm_id` against the WABA.
-            let id = TemplateId::new(id.clone());
             if in_waba(&state, &owned, &deletion.name, &id, &["name"])
                 .await?
                 .is_none()
@@ -714,7 +714,7 @@ mod tests {
         };
         assert!(cache.get(&other_tenant).is_none(), "another tenant's page");
         cache.put(key("2"), page("b"));
-        cache.invalidate(&WabaId::new("1"));
+        cache.invalidate(&WabaId::new("1").unwrap());
         assert!(cache.get(&key("1")).is_none());
         assert_eq!(cache.get(&key("2")).unwrap().data[0].id, "b");
         tokio::time::advance(Duration::from_secs(60)).await;
@@ -833,7 +833,7 @@ mod tests {
             assert!(template_name("name", bad).is_err(), "{bad:?}");
         }
         assert!(template_name("name", &"a".repeat(513)).is_err());
-        assert!(graph_id("id", "1407680676729941").is_ok());
-        assert!(graph_id("id", "../x").is_err());
+        assert!(super::super::common::graph_id("id", "1407680676729941").is_ok());
+        assert!(super::super::common::graph_id("id", "../x").is_err());
     }
 }

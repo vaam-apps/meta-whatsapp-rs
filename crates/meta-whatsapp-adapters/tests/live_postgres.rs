@@ -20,7 +20,7 @@ use meta_whatsapp_adapters::store::{
     PostgresConversationStore, PostgresKvStore, conformance, conversation_conformance,
 };
 use meta_whatsapp_core::error::StorageError;
-use meta_whatsapp_core::ids::{AppId, MessageId, UserId};
+use meta_whatsapp_core::ids::{AppId, MessageId, PhoneNumberId, UserId};
 use meta_whatsapp_core::store::{
     ConversationKey, ConversationStore, DeliveryStatus, Direction, Erased, ErasureMode, Expiry,
     IdentityLink, KvStore, Purged, Retention, StoreKey, StoredContact, StoredMessage, ThreadOwner,
@@ -196,7 +196,7 @@ async fn live_postgres_keeps_nul_in_content_and_refuses_it_in_ids() {
     let store = PostgresConversationStore::new(db.pool.clone());
     let message = |id: &str, pn: &str, contact: &str| StoredMessage {
         id: MessageId::new(id),
-        conversation: ConversationKey::new(pn, contact),
+        conversation: ConversationKey::new(PhoneNumberId::new_unchecked(pn), contact),
         direction: Direction::Inbound,
         kind: "te\0xt".to_owned(),
         text: Some("order\u{0}42".to_owned()),
@@ -206,7 +206,7 @@ async fn live_postgres_keeps_nul_in_content_and_refuses_it_in_ids() {
         status_at: None,
         error: None,
     };
-    let clean = message("wamid.nul", "pn-nul", "US.1");
+    let clean = message("wamid.nul", "1001", "US.1");
     assert!(store.append(clean.clone()).await.unwrap());
     assert_eq!(
         store.messages(&clean.conversation, None, 10).await.unwrap(),
@@ -214,8 +214,8 @@ async fn live_postgres_keeps_nul_in_content_and_refuses_it_in_ids() {
     );
 
     for (case, bad) in [
-        ("message id", message("wamid.\0", "pn-nul", "US.2")),
-        ("contact", message("wamid.c", "pn-nul", "US.\0")),
+        ("message id", message("wamid.\0", "1001", "US.2")),
+        ("contact", message("wamid.c", "1001", "US.\0")),
         ("phone number id", message("wamid.p", "pn-\0", "US.3")),
     ] {
         assert!(store.append(bad.clone()).await.is_err(), "append: {case}");
@@ -240,7 +240,7 @@ async fn live_postgres_keeps_nul_in_content_and_refuses_it_in_ids() {
     assert!(
         store
             .update_status(
-                &"pn-nul".into(),
+                &PhoneNumberId::new("1001").unwrap(),
                 &nul_id,
                 DeliveryStatus::Read,
                 datetime!(2026-09-24 12:01 UTC),
@@ -252,7 +252,7 @@ async fn live_postgres_keeps_nul_in_content_and_refuses_it_in_ids() {
     assert!(
         store
             .fill_media_placeholder(
-                &"pn-nul".into(),
+                &PhoneNumberId::new("1001").unwrap(),
                 &nul_id,
                 "image".to_owned(),
                 None,
@@ -498,7 +498,7 @@ async fn live_postgres_migration_4_keeps_the_previous_revision_working() {
     assert_eq!(db.applied_migrations().await, [1, 2, 3]);
     let store = PostgresConversationStore::new(db.pool.clone());
     let [inbound, outbound, other] = written_by_09db4aa();
-    let group = ConversationKey::new("pn-upgrade", "HBgGROUP");
+    let group = ConversationKey::new(PhoneNumberId::new("1002").unwrap(), "HBgGROUP");
     let in_group = StoredMessage {
         id: MessageId::new("wamid.before-group"),
         conversation: group.clone(),
@@ -656,7 +656,7 @@ async fn live_postgres_migration_4_backfills_senders_by_the_rust_rule() {
         return;
     };
     migrate_like_b66972c(&db.pool).await.unwrap();
-    let group = ConversationKey::new("pn-backfill", "HBgBACKFILL");
+    let group = ConversationKey::new(PhoneNumberId::new("1003").unwrap(), "HBgBACKFILL");
     let variants = [
         serde_json::json!({"from": "16505550001", "from_user_id": "US.1", "type": "text"}),
         serde_json::json!({"from": "16505550002"}),
@@ -921,7 +921,7 @@ async fn old_revision_is_locked_out(pool: &PgPool, inbound: &StoredMessage) {
 fn written_by_09db4aa() -> [StoredMessage; 3] {
     let inbound = StoredMessage {
         id: MessageId::new("wamid.before-1"),
-        conversation: ConversationKey::new("pn-upgrade", "US.1"),
+        conversation: ConversationKey::new(PhoneNumberId::new("1002").unwrap(), "US.1"),
         direction: Direction::Inbound,
         kind: "text".to_owned(),
         // What 09db4aa's inbox stored for a customer's "order\042".
@@ -950,7 +950,7 @@ fn written_by_09db4aa() -> [StoredMessage; 3] {
     };
     let other = StoredMessage {
         id: MessageId::new("wamid.before-3"),
-        conversation: ConversationKey::new("pn-upgrade", "US.2"),
+        conversation: ConversationKey::new(PhoneNumberId::new("1002").unwrap(), "US.2"),
         text: Some(String::new()),
         ..inbound.clone()
     };
@@ -1552,7 +1552,10 @@ async fn live_postgres_debug_is_redacted_and_missing_tables_are_errors() {
     // Not connection details, but a sanity check the store is usable.
     assert!(
         PostgresConversationStore::new(db.pool.clone())
-            .last_inbound_at(&meta_whatsapp_core::store::ConversationKey::new("x", "y"))
+            .last_inbound_at(&meta_whatsapp_core::store::ConversationKey::new(
+                PhoneNumberId::new("x").unwrap(),
+                "y"
+            ))
             .await
             .is_err(),
         "no tables yet: queries fail with a backend error, not a panic"
@@ -1706,7 +1709,7 @@ async fn record_a_contact(
                 ThreadOwnership {
                     owner: ThreadOwner::AnotherApp,
                     role: Some("escalation".to_owned()),
-                    app_id: Some(AppId::new("1234")),
+                    app_id: Some(AppId::new("1234").unwrap()),
                     since: datetime!(2026-09-24 12:06 UTC),
                 },
             )
@@ -1790,8 +1793,14 @@ async fn sweep_after_erasure(mode: ErasureMode) {
     };
     postgres::migrate(&db.pool).await.unwrap();
     let store = PostgresConversationStore::new(db.pool.clone()).with_erasure_mode(mode);
-    let erased = ConversationKey::new("106540352242922", "US.ERASED.13491208655302741918");
-    let kept = ConversationKey::new("106540352242922", "US.KEPT.13491208655302741918");
+    let erased = ConversationKey::new(
+        PhoneNumberId::new("106540352242922").unwrap(),
+        "US.ERASED.13491208655302741918",
+    );
+    let kept = ConversationKey::new(
+        PhoneNumberId::new("106540352242922").unwrap(),
+        "US.KEPT.13491208655302741918",
+    );
     let (erased_marker, kept_marker) = ("erase-me-7f3a", "keep-me-c21d");
     // The erased contact's group message is the group's latest.
     record_a_contact(&store, &kept, kept_marker, 9).await;
@@ -1948,7 +1957,7 @@ async fn live_postgres_apply_retention_purges_by_the_configured_retention() {
     assert_eq!(keep.retention(), Retention::Keep);
     assert!(format!("{thirty_days:?}").contains("retention: For("));
     let now = datetime!(2026-09-24 12:00 UTC);
-    let key = ConversationKey::new("pn-retention", "US.1");
+    let key = ConversationKey::new(PhoneNumberId::new("1004").unwrap(), "US.1");
     for (id, days) in [("old", 31), ("new", 29)] {
         keep.append(StoredMessage {
             id: MessageId::new(id),
@@ -1995,8 +2004,8 @@ async fn live_postgres_records_refuse_nul_in_ids() {
     let store = PostgresConversationStore::new(db.pool.clone());
     let at = datetime!(2026-09-24 12:00 UTC);
     for key in [
-        ConversationKey::new("pn-\0", "US.1"),
-        ConversationKey::new("pn-nul", "US.\0"),
+        ConversationKey::new(PhoneNumberId::new_unchecked("pn-\0"), "US.1"),
+        ConversationKey::new(PhoneNumberId::new("1001").unwrap(), "US.\0"),
     ] {
         let event = WindowEvent {
             conversation: key.clone(),
@@ -2044,7 +2053,7 @@ async fn live_postgres_records_refuse_nul_in_ids() {
         store
             .append(StoredMessage {
                 id: MessageId::new("wamid.group"),
-                conversation: ConversationKey::new("pn-nul", "HBgGROUP"),
+                conversation: ConversationKey::new(PhoneNumberId::new("1001").unwrap(), "HBgGROUP"),
                 direction: Direction::Inbound,
                 kind: "text".to_owned(),
                 text: None,
@@ -2058,7 +2067,7 @@ async fn live_postgres_records_refuse_nul_in_ids() {
             .unwrap()
     );
     let event = WindowEvent {
-        conversation: ConversationKey::new("pn-nul", "US.1"),
+        conversation: ConversationKey::new(PhoneNumberId::new("1001").unwrap(), "US.1"),
         kind: WindowEventKind::CustomerCall,
         id: "wacid.\0".to_owned(),
         at,
@@ -2222,7 +2231,10 @@ async fn live_postgres_erase_takes_an_append_in_flight_along() {
     for synced in [false, true] {
         let app = format!("race_{}", common::unique());
         let store = PostgresConversationStore::new(racing_pool(&db, &app, &[]).await);
-        let key = ConversationKey::new("106540352242922", format!("US.synced-{synced}"));
+        let key = ConversationKey::new(
+            PhoneNumberId::new("106540352242922").unwrap(),
+            format!("US.synced-{synced}"),
+        );
         assert!(
             store
                 .append(race_message(&key, &format!("{synced}-first"), 0))
@@ -2285,7 +2297,10 @@ async fn live_postgres_an_append_during_an_erasure_is_recorded_after_it() {
     postgres::migrate(&db.pool).await.unwrap();
     let app = format!("race_{}", common::unique());
     let store = PostgresConversationStore::new(racing_pool(&db, &app, &[]).await);
-    let key = ConversationKey::new("106540352242922", "US.13491208655302741918");
+    let key = ConversationKey::new(
+        PhoneNumberId::new("106540352242922").unwrap(),
+        "US.13491208655302741918",
+    );
     let first = race_message(&key, "first", 0);
     assert!(store.append(first.clone()).await.unwrap());
 
@@ -2341,7 +2356,10 @@ async fn live_postgres_erasures_racing_appends_keep_history_and_summary_together
     let a = PostgresConversationStore::new(db.pool.clone());
     let b = PostgresConversationStore::new(TestDb::pool_on(&db.url, &db.schema, 10).await);
     for round in 0..40 {
-        let key = ConversationKey::new("106540352242922", format!("US.{round}"));
+        let key = ConversationKey::new(
+            PhoneNumberId::new("106540352242922").unwrap(),
+            format!("US.{round}"),
+        );
         assert!(
             a.append(race_message(&key, &format!("{round}-0"), 0))
                 .await
@@ -2379,7 +2397,10 @@ async fn live_postgres_group_erasures_racing_appends_keep_the_group_summary() {
         let a = PostgresConversationStore::new(db.pool.clone()).with_erasure_mode(mode);
         let b = PostgresConversationStore::new(other_pool.clone()).with_erasure_mode(mode);
         for round in 0..20 {
-            let group = ConversationKey::new("106540352242922", format!("HBg{mode:?}{round}"));
+            let group = ConversationKey::new(
+                PhoneNumberId::new("106540352242922").unwrap(),
+                format!("HBg{mode:?}{round}"),
+            );
             let from = |who: &str, local: &str, minute: i64| StoredMessage {
                 payload: serde_json::json!({"from_user_id": who, "group_id": group.contact,
                     "type": "text", "text": {"body": local}}),
@@ -2454,7 +2475,10 @@ async fn live_postgres_two_purges_at_once_never_deadlock() {
         )
         .await,
     );
-    let key = ConversationKey::new("106540352242922", "US.13491208655302741918");
+    let key = ConversationKey::new(
+        PhoneNumberId::new("106540352242922").unwrap(),
+        "US.13491208655302741918",
+    );
     let rows: Vec<StoredMessage> = (1..=3)
         .rev()
         .map(|m| race_message(&key, &format!("t{m}"), m))
@@ -2509,7 +2533,10 @@ async fn live_postgres_an_erasure_and_a_purge_at_once_never_deadlock() {
         )
         .await,
     );
-    let key = ConversationKey::new("106540352242922", "US.13491208655302741918");
+    let key = ConversationKey::new(
+        PhoneNumberId::new("106540352242922").unwrap(),
+        "US.13491208655302741918",
+    );
     for m in 1..=3 {
         assert!(
             store
@@ -2565,7 +2592,10 @@ async fn live_postgres_fills_racing_erasures_and_purges() {
     ] {
         let app = format!("race_{}", common::unique());
         let store = PostgresConversationStore::new(racing_pool(&db, &app, &[]).await);
-        let key = ConversationKey::new("106540352242922", format!("US.{case}"));
+        let key = ConversationKey::new(
+            PhoneNumberId::new("106540352242922").unwrap(),
+            format!("US.{case}"),
+        );
         assert!(
             store
                 .append(race_message(&key, &format!("{case}-text"), 0))
@@ -2678,8 +2708,14 @@ async fn live_postgres_the_locks_are_the_documented_ones() {
     postgres::migrate(&db.pool).await.unwrap();
     let app = format!("race_{}", common::unique());
     let store = PostgresConversationStore::new(racing_pool(&db, &app, &[]).await);
-    let key = ConversationKey::new("106540352242922", "US.13491208655302741918");
-    let elsewhere = ConversationKey::new("106540352242923", "US.13491208655302741918");
+    let key = ConversationKey::new(
+        PhoneNumberId::new("106540352242922").unwrap(),
+        "US.13491208655302741918",
+    );
+    let elsewhere = ConversationKey::new(
+        PhoneNumberId::new("106540352242923").unwrap(),
+        "US.13491208655302741918",
+    );
     let cutoff = datetime!(2026-09-25 0:00 UTC);
 
     for (lock, held, number_lock) in [
@@ -2777,8 +2813,8 @@ async fn live_postgres_a_purge_and_a_history_chunk_never_deadlock() {
         .await,
     );
     let (first, second) = (
-        ConversationKey::new("106540352242922", "US.1"),
-        ConversationKey::new("106540352242922", "US.2"),
+        ConversationKey::new(PhoneNumberId::new("106540352242922").unwrap(), "US.1"),
+        ConversationKey::new(PhoneNumberId::new("106540352242922").unwrap(), "US.2"),
     );
     // US.2's conversation is the older: the purge's index visits it first.
     assert!(store.append(race_message(&first, "one", 2)).await.unwrap());

@@ -153,7 +153,7 @@ impl TokenDebug {
         self.target_ids(WHATSAPP_BUSINESS_MANAGEMENT)
             .unwrap_or_default()
             .iter()
-            .map(|id| WabaId::new(id.as_str()))
+            .map(|id| WabaId::new_unchecked(id.as_str()))
             .collect()
     }
 
@@ -213,8 +213,8 @@ mod tests {
         assert_eq!(
             d.waba_ids(),
             vec![
-                WabaId::new("102289599326934"),
-                WabaId::new("101569239400667")
+                WabaId::new("102289599326934").unwrap(),
+                WabaId::new("101569239400667").unwrap()
             ]
         );
         assert!(d.has_scope(WHATSAPP_BUSINESS_MESSAGING));

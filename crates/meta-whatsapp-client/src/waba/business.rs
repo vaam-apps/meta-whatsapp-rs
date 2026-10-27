@@ -367,7 +367,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, manage_accounts_example());
         let page = client(&t)
-            .business("805021500648488")
+            .business(BusinessId::new("805021500648488").unwrap())
             .client_whatsapp_business_accounts(&WabaListQuery::new())
             .await
             .unwrap();
@@ -388,7 +388,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, manage_accounts_example());
         client(&t)
-            .business("805021500648488")
+            .business(BusinessId::new("805021500648488").unwrap())
             .owned_whatsapp_business_accounts(
                 &WabaListQuery::new()
                     .filter(Filter::created_after(1604962813))
@@ -421,7 +421,7 @@ mod tests {
         );
         t.push_json(200, json!({"data": [{"id": "2"}]}));
         let ids: Vec<String> = client(&t)
-            .business("B")
+            .business(BusinessId::new("2729063490586005").unwrap())
             .owned_whatsapp_business_accounts_stream(&WabaListQuery::new())
             .map(|w| w.unwrap().id.into_inner())
             .collect()
@@ -438,7 +438,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, manage_accounts_example());
         t.push_json(200, manage_accounts_example());
-        let b = client(&t).business("805021500648488");
+        let b = client(&t).business(BusinessId::new("805021500648488").unwrap());
         let page = b
             .client_whatsapp_business_accounts(&WabaListQuery::new())
             .await
@@ -489,7 +489,7 @@ mod tests {
             200,
             json!({"messaging_customer_bases": [{"id": "456789012345678", "name": "Summer 2026 Subscribers"}]}),
         );
-        let b = client(&t).business("109876543210");
+        let b = client(&t).business(BusinessId::new("109876543210").unwrap());
         let created = b
             .create_messaging_customer_base("Summer 2026 Subscribers")
             .await
@@ -521,7 +521,7 @@ mod tests {
             json!({"id": "2729063490586005", "name": "Wind & Wool", "timezone_id": 1}),
         );
         let info = client(&t)
-            .business("2729063490586005")
+            .business(BusinessId::new("2729063490586005").unwrap())
             .get(&["id", "name", "timezone_id"])
             .await
             .unwrap();
@@ -553,7 +553,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, parent_bsuid_account_example());
         let account = client(&t)
-            .business("805021500648488")
+            .business(BusinessId::new("805021500648488").unwrap())
             .parent_bsuid_account()
             .await
             .unwrap();
@@ -561,8 +561,8 @@ mod tests {
         assert_eq!(
             account.enrolled_business_portfolios,
             [
-                BusinessId::new("<BUSINESS_PORTFOLIO_ID>"),
-                BusinessId::new("<BUSINESS_PORTFOLIO_ID>")
+                BusinessId::new_unchecked("<BUSINESS_PORTFOLIO_ID>"),
+                BusinessId::new_unchecked("<BUSINESS_PORTFOLIO_ID>")
             ]
         );
         let req = t.last_request().unwrap();
@@ -587,7 +587,7 @@ mod tests {
         );
         let account = client(&t)
             .with_token("MERCHANT".into())
-            .business(BusinessId::new("109876543210"))
+            .business(BusinessId::new("109876543210").unwrap())
             .parent_bsuid_account()
             .await
             .unwrap();
@@ -625,7 +625,7 @@ mod tests {
             .build()
             .unwrap();
         proxied
-            .business("805021500648488")
+            .business(BusinessId::new("805021500648488").unwrap())
             .parent_bsuid_account()
             .await
             .unwrap();
@@ -664,7 +664,13 @@ mod tests {
             "\u{661}\u{662}\u{663}", // Arabic-Indic digits
             "\u{ff11}\u{ff12}",      // fullwidth digits
         ] {
-            let err = c.business(id).parent_bsuid_account().await.unwrap_err();
+            // Refused when built, and by the call when built unchecked.
+            assert!(BusinessId::new(id).is_err(), "{id:?}");
+            let err = c
+                .business(BusinessId::new_unchecked(id))
+                .parent_bsuid_account()
+                .await
+                .unwrap_err();
             assert!(
                 matches!(&err, meta_whatsapp_core::Error::Validation(v) if v.field == "business_id"),
                 "{id:?}: {err}"
@@ -683,7 +689,7 @@ mod tests {
             json!({"error": {"message": "Invalid OAuth access token.", "type": "OAuthException", "code": 190}}),
         );
         let err = client(&t)
-            .business("805021500648488")
+            .business(BusinessId::new("805021500648488").unwrap())
             .parent_bsuid_account()
             .await
             .unwrap_err();
@@ -708,7 +714,7 @@ mod tests {
             .build()
             .unwrap();
         let account = retrying
-            .business("805021500648488")
+            .business(BusinessId::new("805021500648488").unwrap())
             .parent_bsuid_account()
             .await
             .unwrap();

@@ -57,7 +57,7 @@ async fn connect_matches_docs_example_with_bsuid() {
         json!({"messaging_product": "whatsapp", "calls": [{"id": "wacid.ABGGFjFVU2AfAgo6V"}]}),
     );
     let started = client(&ts)
-        .calling(PHONE)
+        .calling(PhoneNumberId::new(PHONE).unwrap())
         .connect(&ConnectCall {
             to: Recipient::PhoneAndUser {
                 phone: "14085551234".into(),
@@ -91,7 +91,7 @@ async fn connect_by_phone_or_bsuid_only() {
     let ts = ScriptedTransport::new();
     ts.push_json(200, json!({"calls": [{"id": "wacid.1"}]}));
     ts.push_json(200, json!({"calls": [{"id": "wacid.2"}]}));
-    let calling = client(&ts).calling(PHONE);
+    let calling = client(&ts).calling(PhoneNumberId::new(PHONE).unwrap());
     calling
         .connect(&ConnectCall::new(Recipient::phone("17863476655"), SDP))
         .await
@@ -129,7 +129,7 @@ async fn connect_is_never_replayed() {
         .build()
         .unwrap();
     let err = c
-        .calling(PHONE)
+        .calling(PhoneNumberId::new(PHONE).unwrap())
         .connect(&ConnectCall::new(Recipient::phone("1"), SDP))
         .await
         .unwrap_err();
@@ -146,7 +146,7 @@ async fn pre_accept_matches_docs_example() {
         json!({"messaging_product": "whatsapp", "success": true}),
     );
     client(&ts)
-        .calling(PHONE)
+        .calling(PhoneNumberId::new(PHONE).unwrap())
         .pre_accept(&CallId::new(CALL), SDP)
         .await
         .unwrap();
@@ -168,7 +168,7 @@ async fn accept_matches_docs_example() {
         200,
         json!({"messaging_product": "whatsapp", "success": true}),
     );
-    let calling = client(&ts).calling(PHONE);
+    let calling = client(&ts).calling(PhoneNumberId::new(PHONE).unwrap());
     calling
         .accept(&CallId::new(CALL), SDP, Some("random_string"))
         .await
@@ -196,7 +196,7 @@ async fn reject_and_terminate_match_docs_examples() {
         200,
         json!({"messaging_product": "whatsapp", "success": true}),
     );
-    let calling = client(&ts).calling(PHONE);
+    let calling = client(&ts).calling(PhoneNumberId::new(PHONE).unwrap());
     calling.reject(&CallId::new(CALL)).await.unwrap();
     assert_calls_post(
         &ts,
@@ -218,7 +218,7 @@ async fn success_false_on_an_action_is_an_error() {
         json!({"messaging_product": "whatsapp", "success": false}),
     );
     let err = client(&ts)
-        .calling(PHONE)
+        .calling(PhoneNumberId::new(PHONE).unwrap())
         .terminate(&CallId::new(CALL))
         .await
         .unwrap_err();
@@ -235,7 +235,7 @@ async fn missing_permission_error_is_decoded() {
         json!({"error": {"message": "(#138006) No approved call permission from the recipient", "type": "OAuthException", "code": 138006}}),
     );
     let err = client(&ts)
-        .calling(PHONE)
+        .calling(PhoneNumberId::new(PHONE).unwrap())
         .connect(&ConnectCall::new(Recipient::phone("1"), SDP))
         .await
         .unwrap_err();
@@ -247,7 +247,7 @@ async fn missing_permission_error_is_decoded() {
 #[tokio::test]
 async fn call_inputs_are_validated() {
     let ts = ScriptedTransport::new();
-    let calling = client(&ts).calling(PHONE);
+    let calling = client(&ts).calling(PhoneNumberId::new(PHONE).unwrap());
     let err = calling
         .connect(&ConnectCall::new(Recipient::group("Y2FwaV9ncm91cDox"), SDP))
         .await
@@ -327,7 +327,7 @@ async fn permissions_match_docs_example() {
         }),
     );
     let p = client(&ts)
-        .calling(PHONE)
+        .calling(PhoneNumberId::new(PHONE).unwrap())
         .permissions(&Recipient::phone("13057765456"))
         .await
         .unwrap();
@@ -376,7 +376,7 @@ async fn permissions_by_bsuid_and_permanent_status() {
         200,
         json!({"permission": {"status": "no_permission", "expiration": 1}}),
     );
-    let calling = client(&ts).calling(PHONE);
+    let calling = client(&ts).calling(PhoneNumberId::new(PHONE).unwrap());
     let p = calling
         .permissions(&Recipient::user("US.13491208655302741918"))
         .await
@@ -456,7 +456,7 @@ async fn settings_parse_docs_example() {
     let ts = ScriptedTransport::new();
     ts.push_json(200, docs_settings_json());
     let s = client(&ts)
-        .calling(PHONE)
+        .calling(PhoneNumberId::new(PHONE).unwrap())
         .settings(true)
         .await
         .unwrap()
@@ -500,7 +500,7 @@ async fn settings_parse_docs_example() {
     let audio = &vm.audio.as_ref().unwrap().default;
     assert_eq!(
         audio.announcement_media_id,
-        Some(MediaId::new("938884519013664"))
+        Some(MediaId::new("938884519013664").unwrap())
     );
     assert_eq!(audio.timeout_seconds, Some(20));
     let restriction = &s.restrictions.as_ref().unwrap().restrictions_list[0];
@@ -519,7 +519,11 @@ async fn settings_parse_docs_example() {
 async fn settings_without_credentials_or_calling_object() {
     let ts = ScriptedTransport::new();
     ts.push_json(200, json!({"storage_configuration": {"status": "DEFAULT"}}));
-    let s = client(&ts).calling(PHONE).settings(false).await.unwrap();
+    let s = client(&ts)
+        .calling(PhoneNumberId::new(PHONE).unwrap())
+        .settings(false)
+        .await
+        .unwrap();
     assert_eq!(ts.last_request().unwrap().url.query(), None);
     assert_eq!(s, None);
     assert_eq!(ts.remaining(), 0);
@@ -530,7 +534,7 @@ async fn read_then_write_round_trips_without_response_only_data() {
     let ts = ScriptedTransport::new();
     ts.push_json(200, docs_settings_json());
     ts.push_json(200, json!({"success": true}));
-    let calling = client(&ts).calling(PHONE);
+    let calling = client(&ts).calling(PhoneNumberId::new(PHONE).unwrap());
     let settings = calling.settings(true).await.unwrap().unwrap();
     calling.update_settings(&settings).await.unwrap();
     let mut expected = docs_settings_json()["calling"].clone();
@@ -596,7 +600,7 @@ fn docs_update() -> CallingSettings {
             triggers: vec![VoicemailTrigger::Reject, VoicemailTrigger::Timeout],
             audio: Some(VoicemailAudio {
                 default: VoicemailAudioConfig {
-                    announcement_media_id: Some(MediaId::new("938884519013664")),
+                    announcement_media_id: Some(MediaId::new("938884519013664").unwrap()),
                     timeout_seconds: Some(20),
                 },
             }),
@@ -620,7 +624,7 @@ async fn update_settings_matches_docs_request_body() {
         })
         .build()
         .unwrap();
-    c.calling(PHONE)
+    c.calling(PhoneNumberId::new(PHONE).unwrap())
         .update_settings(&docs_update())
         .await
         .unwrap();
@@ -668,7 +672,7 @@ async fn empty_arrays_are_sent_when_they_mean_clear() {
     ts.push_json(200, json!({"success": true}));
     // calling/sip "Reset SIP password": disable and delete the server.
     client(&ts)
-        .calling(PHONE)
+        .calling(PhoneNumberId::new(PHONE).unwrap())
         .update_settings(&CallingSettings {
             status: Some(FeatureStatus::Disabled),
             sip: Some(SipSettings {
@@ -729,7 +733,7 @@ fn new_year(start: ClockTime, end: ClockTime) -> HolidayHours {
 #[tokio::test]
 async fn call_hours_limits_are_enforced() {
     let ts = ScriptedTransport::new();
-    let calling = client(&ts).calling(PHONE);
+    let calling = client(&ts).calling(PhoneNumberId::new(PHONE).unwrap());
     let weekly = "calling.call_hours.weekly_operating_hours";
     let holiday = "calling.call_hours.holiday_schedule";
     let cases: Vec<(CallingSettings, String)> = vec![
@@ -830,7 +834,7 @@ async fn call_hours_limits_are_enforced() {
 #[tokio::test]
 async fn sip_limits_are_enforced() {
     let ts = ScriptedTransport::new();
-    let calling = client(&ts).calling(PHONE);
+    let calling = client(&ts).calling(PhoneNumberId::new(PHONE).unwrap());
     let server = |host: &str| SipServer {
         hostname: host.into(),
         ..SipServer::default()
@@ -877,7 +881,7 @@ async fn sip_limits_are_enforced() {
 async fn voicemail_requirements_are_enforced() {
     use VoicemailTrigger::{Reject, Timeout};
     let ts = ScriptedTransport::new();
-    let calling = client(&ts).calling(PHONE);
+    let calling = client(&ts).calling(PhoneNumberId::new(PHONE).unwrap());
     let vm = |triggers: Vec<VoicemailTrigger>, media: Option<&str>, timeout: Option<u8>| {
         CallingSettings {
             voicemail: Some(Voicemail {
@@ -885,7 +889,7 @@ async fn voicemail_requirements_are_enforced() {
                 triggers,
                 audio: Some(VoicemailAudio {
                     default: VoicemailAudioConfig {
-                        announcement_media_id: media.map(MediaId::new),
+                        announcement_media_id: media.map(|id| MediaId::new(id).unwrap()),
                         timeout_seconds: timeout,
                     },
                 }),

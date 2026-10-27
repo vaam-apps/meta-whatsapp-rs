@@ -690,7 +690,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"id": "9876543210123456"}));
         let created = client(&t)
-            .signups("102290129340398")
+            .signups(WabaId::new("102290129340398").unwrap())
             .create(&docs_signup())
             .await
             .unwrap();
@@ -720,7 +720,7 @@ mod tests {
     #[tokio::test]
     async fn create_validates_before_sending() {
         let t = ScriptedTransport::new();
-        let s = client(&t).signups("W");
+        let s = client(&t).signups(WabaId::new("102290129340398").unwrap());
         let cases = [
             (
                 NewSignup::new("m", "Code: {{promo_code}}", "https://p.example"),
@@ -814,7 +814,7 @@ mod tests {
               }
             }),
         );
-        let s = client(&t).signups("102290129340398");
+        let s = client(&t).signups(WabaId::new("102290129340398").unwrap());
         let one = s.get(&SignupId::new("9876543210123456")).await.unwrap();
         assert_eq!(one.status, Some(SignupStatus::Active));
         assert_eq!(
@@ -840,7 +840,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"data": []}));
         t.push_json(200, json!({"data": []}));
-        let s = client(&t).signups("102290129340398");
+        let s = client(&t).signups(WabaId::new("102290129340398").unwrap());
         s.list(&ListSignups::new().limit(10).after("abc123"))
             .await
             .unwrap();
@@ -879,7 +879,7 @@ mod tests {
         );
         t.push_json(200, json!({"data": [{"id": "2", "status": "DISABLED"}]}));
         let items: Vec<SignupInfo> = client(&t)
-            .signups("W")
+            .signups(WabaId::new("102290129340398").unwrap())
             .list_stream(&ListSignups::new().limit(10))
             .map(Result::unwrap)
             .collect()
@@ -897,7 +897,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"success": true}));
         t.push_json(200, json!({"success": true}));
-        let s = client(&t).signups("W");
+        let s = client(&t).signups(WabaId::new("102290129340398").unwrap());
         let id = SignupId::new("9876543210123456");
         s.update(
             &id,
@@ -938,7 +938,7 @@ mod tests {
         let body = json!({"default_messaging_customer_base_id": "456789012345678", "updated_time": "2026-06-03T19:20:00+0000"});
         t.push_json(200, body.clone());
         t.push_json(200, body);
-        let s = client(&t).signups("102290129340398");
+        let s = client(&t).signups(WabaId::new("102290129340398").unwrap());
         let set = s
             .set_default_messaging_customer_base("456789012345678")
             .await
@@ -1008,7 +1008,7 @@ mod tests {
     #[tokio::test]
     async fn terms_of_service_errors_are_classified() {
         let t = ScriptedTransport::new();
-        let s = client(&t).signups("W");
+        let s = client(&t).signups(WabaId::new("102290129340398").unwrap());
         for (code, kind) in [
             (2494168, meta_whatsapp_core::ErrorKind::InvalidParameter),
             (2494176, meta_whatsapp_core::ErrorKind::InvalidParameter),
@@ -1040,16 +1040,19 @@ mod tests {
         t.push_json(200, json!({"success": true}));
         t.push_json(200, json!({"id": "9"}));
         let c = client(&t);
-        c.signups("OTHER_WABA/signups")
+        c.signups(WabaId::new_unchecked("OTHER_WABA/signups"))
             .create(&docs_signup())
             .await
             .unwrap();
         // A signup id that tries to climb to another object.
-        c.signups("W")
+        c.signups(WabaId::new("102290129340398").unwrap())
             .disable(&SignupId::new("1/../../OTHER_WABA"))
             .await
             .unwrap();
-        c.signups("W").get(&SignupId::new("1?x=y")).await.unwrap();
+        c.signups(WabaId::new("102290129340398").unwrap())
+            .get(&SignupId::new("1?x=y"))
+            .await
+            .unwrap();
         let paths: Vec<String> = t.requests().iter().map(|r| r.path().to_owned()).collect();
         assert_eq!(
             paths,
@@ -1060,10 +1063,17 @@ mod tests {
             ]
         );
         assert!(matches!(
-            c.signups("W").get(&SignupId::new("..")).await,
+            c.signups(WabaId::new("102290129340398").unwrap())
+                .get(&SignupId::new(".."))
+                .await,
             Err(meta_whatsapp_core::Error::Validation(_))
         ));
-        assert!(c.signups("..").create(&docs_signup()).await.is_err());
+        assert!(
+            c.signups(WabaId::new_unchecked(".."))
+                .create(&docs_signup())
+                .await
+                .is_err()
+        );
         assert_eq!(t.requests().len(), 3, "invalid ids never reach the wire");
         assert_eq!(t.remaining(), 0);
     }

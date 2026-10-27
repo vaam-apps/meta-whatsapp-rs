@@ -102,9 +102,9 @@ mod tests {
         let vault = open_vault(kv.clone(), KEY_2026).unwrap();
         store_verified(
             &vault,
-            "102290129340398".into(),
+            WabaId::new("102290129340398").unwrap(),
             AccessToken::new("MERCHANT"),
-            vec!["106540352242922".into()],
+            vec![PhoneNumberId::new("106540352242922").unwrap()],
         )
         .await
         .unwrap();
@@ -113,15 +113,19 @@ mod tests {
             .transport(ScriptedTransport::new())
             .build()
             .unwrap();
-        let merchant = merchant_client(&platform, &vault, &"106540352242922".into())
-            .await
-            .unwrap()
-            .unwrap();
+        let merchant = merchant_client(
+            &platform,
+            &vault,
+            &PhoneNumberId::new("106540352242922").unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert_eq!(
             merchant.token().map(AccessToken::expose_secret),
             Some("MERCHANT")
         );
-        let unknown = merchant_client(&platform, &vault, &"999".into())
+        let unknown = merchant_client(&platform, &vault, &PhoneNumberId::new("999").unwrap())
             .await
             .unwrap();
         assert_eq!(unknown.unwrap_err(), NoMerchant::NotConnected);
@@ -133,9 +137,14 @@ mod tests {
             VaultKeys::new(VaultKey::generate("2025-01").unwrap()),
         )
         .unwrap();
-        store_verified(&lost, "LOST".into(), AccessToken::new("OLD"), vec![])
-            .await
-            .unwrap();
+        store_verified(
+            &lost,
+            WabaId::new("102290129340399").unwrap(),
+            AccessToken::new("OLD"),
+            vec![],
+        )
+        .await
+        .unwrap();
 
         // A new key: old records still open, and rotate re-encrypts them.
         let old = VaultKey::from_base64("2026-09", KEY_2026).unwrap();
@@ -144,30 +153,38 @@ mod tests {
             kv,
             new,
             old,
-            &["LOST".into(), "102290129340398".into()],
-            &["UNKNOWN_BUSINESS".into()],
+            &[
+                WabaId::new("102290129340399").unwrap(),
+                WabaId::new("102290129340398").unwrap(),
+            ],
+            &[BusinessId::new("2729063490586099").unwrap()],
         )
         .await
         .unwrap();
         assert_eq!(failed.len(), 1, "{failed:?}");
-        assert_eq!(failed[0].0, "LOST");
+        assert_eq!(failed[0].0, "102290129340399");
         assert!(matches!(failed[0].1, Error::Crypto(_)), "{:?}", failed[0].1);
         let again = rotated
-            .get(&"102290129340398".into())
+            .get(&WabaId::new("102290129340398").unwrap())
             .await
             .unwrap()
             .unwrap();
         assert_eq!(again.token.expose_secret(), "MERCHANT");
-        assert!(!rotated.rotate(&"102290129340398".into()).await.unwrap()); // already rotated
+        assert!(
+            !rotated
+                .rotate(&WabaId::new("102290129340398").unwrap())
+                .await
+                .unwrap()
+        ); // already rotated
 
         assert!(
-            disconnect(&rotated, &"102290129340398".into())
+            disconnect(&rotated, &WabaId::new("102290129340398").unwrap())
                 .await
                 .unwrap()
         );
         assert!(
             rotated
-                .get_by_phone_number(&"106540352242922".into())
+                .get_by_phone_number(&PhoneNumberId::new("106540352242922").unwrap())
                 .await
                 .unwrap()
                 .is_none()
@@ -178,13 +195,18 @@ mod tests {
     async fn the_wrong_key_does_not_decrypt() {
         let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
         let vault = open_vault(kv.clone(), KEY_2026).unwrap();
-        store_verified(&vault, "1".into(), AccessToken::new("T"), vec![])
-            .await
-            .unwrap();
+        store_verified(
+            &vault,
+            WabaId::new("1").unwrap(),
+            AccessToken::new("T"),
+            vec![],
+        )
+        .await
+        .unwrap();
         let other =
             TokenVault::new(kv, VaultKeys::new(VaultKey::generate("2026-09").unwrap())).unwrap();
         assert!(matches!(
-            other.get(&"1".into()).await,
+            other.get(&WabaId::new("1").unwrap()).await,
             Err(Error::Crypto(_))
         ));
     }

@@ -367,6 +367,7 @@ impl PhoneNumber {
 #[cfg(test)]
 mod tests {
     use http::Method;
+    use meta_whatsapp_core::ids::PhoneNumberId;
     use meta_whatsapp_core::testing::ScriptedTransport;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -410,7 +411,7 @@ mod tests {
         .entity_type_custom("Trust")
         .is_registered(true);
         client(&t)
-            .phone_number(ID)
+            .phone_number(PhoneNumberId::new(ID).unwrap())
             .set_business_compliance_info(&update)
             .await
             .unwrap();
@@ -457,7 +458,7 @@ mod tests {
             care(),
         );
         client(&t)
-            .phone_number(ID)
+            .phone_number(PhoneNumberId::new(ID).unwrap())
             .set_business_compliance_info(&update)
             .await
             .unwrap();
@@ -480,7 +481,7 @@ mod tests {
     #[tokio::test]
     async fn set_checks_the_documented_rules_first() {
         let t = ScriptedTransport::new();
-        let pn = client(&t).phone_number(ID);
+        let pn = client(&t).phone_number(PhoneNumberId::new(ID).unwrap());
         let base = |ty| ComplianceInfoUpdate::new("Lucky Shrub", ty, officer(), care());
         let mut no_officer_name = base(BusinessEntityType::PublicCompany);
         no_officer_name.grievance_officer_details.name = None;
@@ -575,7 +576,7 @@ mod tests {
     #[tokio::test]
     async fn set_checks_the_email_length_first() {
         let t = ScriptedTransport::new();
-        let pn = client(&t).phone_number(ID);
+        let pn = client(&t).phone_number(PhoneNumberId::new(ID).unwrap());
         let email = |chars: usize| format!("{}@x.example", "a".repeat(chars - "@x.example".len()));
         assert_eq!(email(128).chars().count(), 128);
         let update = |officer_email: String, care_email: String| {
@@ -623,7 +624,7 @@ mod tests {
             })
             .build()
             .unwrap();
-        c.phone_number(ID)
+        c.phone_number(PhoneNumberId::new(ID).unwrap())
             .set_business_compliance_info(&ComplianceInfoUpdate::new(
                 "Lucky Shrub Private Limited",
                 BusinessEntityType::PrivateCompany,
@@ -660,7 +661,7 @@ mod tests {
             }]}),
         );
         let got = client(&t)
-            .phone_number(ID)
+            .phone_number(PhoneNumberId::new(ID).unwrap())
             .business_compliance_info(&["entity_name", "entity_type"])
             .await
             .unwrap();
@@ -678,7 +679,7 @@ mod tests {
         let info = &got[0];
         assert_eq!(
             info.whatsapp_business_account_id,
-            Some(WabaId::new("102290129340398"))
+            Some(WabaId::new("102290129340398").unwrap())
         );
         assert_eq!(info.entity_type.as_deref(), Some("Partnership"));
         assert_eq!(info.is_registered, Some(true));
@@ -699,7 +700,7 @@ mod tests {
         t.push_json(200, json!({"data": []}));
         assert!(
             client(&t)
-                .phone_number(ID)
+                .phone_number(PhoneNumberId::new(ID).unwrap())
                 .business_compliance_info(&[])
                 .await
                 .unwrap()

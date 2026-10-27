@@ -14,6 +14,7 @@ use meta_whatsapp_rs::client::embedded_signup::{
     SessionInfo, SignupCode, SignupSessions, SignupState, TokenVault, VaultKey, VaultKeys, steps,
 };
 use meta_whatsapp_rs::client::phone_numbers::TwoStepPin;
+use meta_whatsapp_rs::core::ids::AppId;
 use meta_whatsapp_rs::prelude::*;
 
 /// Built once at startup, on a store every instance shares.
@@ -33,7 +34,7 @@ pub fn wire(
     config_id: &str,
 ) -> meta_whatsapp_rs::Result<Signup> {
     let client = meta_whatsapp_rs::client_builder()?.build()?; // no default token
-    let es = client.embedded_signup(AppCredentials::new(app_id, app_secret));
+    let es = client.embedded_signup(AppCredentials::new(AppId::new(app_id)?, app_secret));
     let vault = TokenVault::new(
         kv.clone(),
         VaultKeys::new(VaultKey::from_base64("2026-09", vault_key_b64)?),
@@ -204,7 +205,7 @@ mod tests {
         let signup = signup();
         let session = SessionInfo::default();
         // Nothing is stored for this WABA: refused before any request.
-        let unknown = WabaId::new("102290129340398");
+        let unknown = WabaId::new("102290129340398").unwrap();
         let err = resume_after_restart(&signup, &unknown, session.clone(), "581063")
             .await
             .unwrap_err();

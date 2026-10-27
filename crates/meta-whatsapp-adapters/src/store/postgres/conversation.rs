@@ -809,7 +809,7 @@ fn message_from_row(row: &PgRow) -> Result<StoredMessage, StorageError> {
     let kind: Vec<u8> = row.try_get("kind_utf8").map_err(backend)?;
     let text: Option<Vec<u8>> = row.try_get("text_utf8").map_err(backend)?;
     Ok(StoredMessage {
-        conversation: ConversationKey::new(phone_number_id, contact),
+        conversation: ConversationKey::new(PhoneNumberId::new_unchecked(phone_number_id), contact),
         direction: parse_direction(&direction)?,
         kind: utf8("kind_utf8", kind)?,
         text: text.map(|t| utf8("text_utf8", t)).transpose()?,
@@ -827,7 +827,7 @@ fn window_event_from_row(row: &PgRow) -> Result<WindowEvent, StorageError> {
     let contact: String = row.try_get("contact").map_err(backend)?;
     let kind: String = row.try_get("kind").map_err(backend)?;
     Ok(WindowEvent {
-        conversation: ConversationKey::new(phone_number_id, contact),
+        conversation: ConversationKey::new(PhoneNumberId::new_unchecked(phone_number_id), contact),
         kind: WindowEventKind::from_name(&kind),
         id: row.try_get("id").map_err(backend)?,
         at: row.try_get("ts").map_err(backend)?,
@@ -840,7 +840,7 @@ fn owner_from_row(row: &PgRow) -> Result<ThreadOwnership, StorageError> {
     Ok(ThreadOwnership {
         owner: parse_owner(owner)?,
         role: row.try_get("role").map_err(backend)?,
-        app_id: app_id.map(AppId::new),
+        app_id: app_id.map(AppId::new_unchecked),
         since: row.try_get("since").map_err(backend)?,
     })
 }
@@ -857,7 +857,7 @@ fn contact_from_row(row: &PgRow) -> Result<StoredContact, StorageError> {
     let user_id: Option<String> = row.try_get("user_id").map_err(backend)?;
     let parent_user_id: Option<String> = row.try_get("parent_user_id").map_err(backend)?;
     Ok(StoredContact {
-        key: ConversationKey::new(phone_number_id, contact),
+        key: ConversationKey::new(PhoneNumberId::new_unchecked(phone_number_id), contact),
         full_name: optional_utf8(row, "full_name_utf8")?,
         first_name: optional_utf8(row, "first_name_utf8")?,
         phone_number: row.try_get("phone_number").map_err(backend)?,
@@ -871,7 +871,7 @@ fn contact_from_row(row: &PgRow) -> Result<StoredContact, StorageError> {
 fn link_from_row(row: &PgRow) -> Result<IdentityLink, StorageError> {
     let phone_number_id: String = row.try_get("phone_number_id").map_err(backend)?;
     Ok(IdentityLink {
-        phone_number_id: PhoneNumberId::new(phone_number_id),
+        phone_number_id: PhoneNumberId::new_unchecked(phone_number_id),
         previous: row.try_get("previous").map_err(backend)?,
         current: row.try_get("current").map_err(backend)?,
         at: row.try_get("ts").map_err(backend)?,
@@ -883,7 +883,10 @@ fn link_from_row(row: &PgRow) -> Result<IdentityLink, StorageError> {
 fn inbound_sender(payload: serde_json::Value) -> Option<String> {
     let message = StoredMessage {
         id: MessageId::new(String::new()),
-        conversation: ConversationKey::new(String::new(), String::new()),
+        conversation: ConversationKey::new(
+            PhoneNumberId::new_unchecked(String::new()),
+            String::new(),
+        ),
         direction: Direction::Inbound,
         kind: String::new(),
         text: None,
@@ -908,7 +911,7 @@ fn summary_from_row(row: &PgRow) -> Result<ConversationSummary, StorageError> {
     let unread: i64 = row.try_get("unread").map_err(backend)?;
     let last_text: Option<Vec<u8>> = row.try_get("last_text_utf8").map_err(backend)?;
     Ok(ConversationSummary {
-        key: ConversationKey::new(phone_number_id, contact),
+        key: ConversationKey::new(PhoneNumberId::new_unchecked(phone_number_id), contact),
         last_message_at: row.try_get("last_message_at").map_err(backend)?,
         last_inbound_at: row.try_get("last_inbound_at").map_err(backend)?,
         last_text: last_text.map(|t| utf8("last_text_utf8", t)).transpose()?,

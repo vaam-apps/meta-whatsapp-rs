@@ -34,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
     let client = meta_whatsapp_rs::client(env("WA_TOKEN")?)?;
-    let messages = client.messages(env("WA_PHONE_NUMBER_ID")?);
+    let messages = client.messages(PhoneNumberId::new(env("WA_PHONE_NUMBER_ID")?)?);
     let to = Recipient::phone(env("WA_TO")?); // E.164, with `+`
 
     // Free-form: delivered only inside the 24-hour customer service window.
@@ -52,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
     );
     let mut template = OutboundMessage::template(to, hello);
     if let Ok(id) = std::env::var("WA_MESSAGING_ACCOUNT_ID") {
-        template = template.messaging_account_id(id); // which account pays
+        template = template.messaging_account_id(WabaId::new(id)?); // which account pays
     }
     let sent = messages.send(&template).await?;
     // A 200 means "accepted"; delivery arrives later as status webhooks

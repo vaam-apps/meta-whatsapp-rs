@@ -124,7 +124,7 @@ mod tests {
         transport.push_json(200, accepted());
         let id = reply_text(
             &client(&transport),
-            "106540352242922".into(),
+            PhoneNumberId::new("106540352242922").unwrap(),
             Recipient::user("US.13491208655302741918"),
             "wamid.IN".into(),
         )
@@ -157,11 +157,15 @@ mod tests {
         for _ in 0..5 {
             transport.push_json(200, accepted());
         }
-        let messages = client(&transport).messages("106540352242922");
+        let messages = client(&transport).messages(PhoneNumberId::new("106540352242922").unwrap());
         let to = Recipient::phone("+16505551234");
-        send_media(&messages, to.clone(), "1037543291543636".into())
-            .await
-            .unwrap();
+        send_media(
+            &messages,
+            to.clone(),
+            MediaId::new("1037543291543636").unwrap(),
+        )
+        .await
+        .unwrap();
         send_location_contact_reaction(&messages, to, "wamid.IN".into())
             .await
             .unwrap();
@@ -183,7 +187,7 @@ mod tests {
         transport.push_json(500, json!({"error": {"message": "(#1) x", "code": 1}}));
         transport.push_json(200, json!({"success": true}));
         transport.push_json(200, accepted());
-        let messages = client(&transport).messages("106540352242922");
+        let messages = client(&transport).messages(PhoneNumberId::new("106540352242922").unwrap());
         read_then_reply(
             &messages,
             Recipient::phone("+16505551234"),

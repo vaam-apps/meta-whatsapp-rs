@@ -423,8 +423,8 @@ pub async fn an_attach_whose_waba_moves_takes_back_its_token(
                 move_waba(
                     store.as_ref(),
                     &vault,
-                    &WabaId::new(waba),
-                    &PhoneNumberId::new(pn),
+                    &WabaId::new(waba).unwrap(),
+                    &PhoneNumberId::new(pn).unwrap(),
                     "merchant-b",
                     Some("TOKEN-OF-B"),
                 )
@@ -486,16 +486,16 @@ pub async fn an_attach_whose_waba_moves_takes_back_its_token(
         );
         let holder = h
             .store
-            .waba(&WabaId::new(waba))
+            .waba(&WabaId::new(waba).unwrap())
             .await
             .unwrap()
             .map(|b| b.tenant_id.as_str().to_owned());
         let stored =
             |token: Option<StoredBusinessToken>| token.map(|t| t.token.expose_secret().to_owned());
-        let token = stored(h.vault.get(&WabaId::new(waba)).await.unwrap());
+        let token = stored(h.vault.get(&WabaId::new(waba).unwrap()).await.unwrap());
         let by_number = stored(
             h.vault
-                .get_by_phone_number(&PhoneNumberId::new(pn))
+                .get_by_phone_number(&PhoneNumberId::new(pn).unwrap())
                 .await
                 .unwrap(),
         );

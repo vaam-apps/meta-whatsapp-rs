@@ -675,8 +675,11 @@ impl Harness {
     /// Bind `waba` and `numbers` to `tenant`, with `token` in the vault.
     pub async fn connect(&self, tenant: &str, waba: &str, numbers: &[&str], token: &str) {
         let tenant = TenantId::parse(tenant).unwrap();
-        let waba = WabaId::new(waba);
-        let numbers: Vec<PhoneNumberId> = numbers.iter().map(|n| PhoneNumberId::new(*n)).collect();
+        let waba = WabaId::new(waba).unwrap();
+        let numbers: Vec<PhoneNumberId> = numbers
+            .iter()
+            .map(|n| PhoneNumberId::new(*n).unwrap())
+            .collect();
         self.store
             .bind_waba(&tenant, &waba, &numbers)
             .await

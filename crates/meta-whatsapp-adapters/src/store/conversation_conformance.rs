@@ -193,6 +193,19 @@ fn unique() -> String {
     format!("{t:x}-{}-{n}", std::process::id())
 }
 
+/// A fresh business number id, unique as [`unique`] is: a phone number id
+/// is digits only (`meta_whatsapp_core::ids`), so the start time, process
+/// id and counter are written as fixed-width decimals (40 digits).
+fn unique_phone_number_id() -> PhoneNumberId {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let t = OffsetDateTime::now_utc()
+        .unix_timestamp_nanos()
+        .unsigned_abs();
+    let digits = format!("{t:020}{:010}{n:010}", std::process::id());
+    PhoneNumberId::new(digits).expect("fixed-width decimals are a numeric id")
+}
+
 /// One check's namespace: a fresh business number and an id prefix.
 struct Run {
     pn: PhoneNumberId,
@@ -203,7 +216,7 @@ impl Run {
     fn new(name: &str) -> Self {
         let tag = format!("{name}-{}", unique());
         Self {
-            pn: PhoneNumberId::new(format!("pn-{tag}")),
+            pn: unique_phone_number_id(),
             tag,
         }
     }
@@ -2160,7 +2173,7 @@ async fn thread_ownership_keeps_the_latest_record<S: ConversationStore + ?Sized>
     assert_eq!(store.thread_owner(&key).await.unwrap(), None);
 
     let passed = ThreadOwnership {
-        app_id: Some(AppId::new("1234567890")),
+        app_id: Some(AppId::new("1234567890").unwrap()),
         ..ownership(ThreadOwner::ThisApp, Some("customer_service"), at(10))
     };
     assert!(store.set_thread_owner(&key, passed.clone()).await.unwrap());

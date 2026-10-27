@@ -365,7 +365,7 @@ mod tests {
             }),
         );
         let resp = client(&t)
-            .block_users("106540352242922")
+            .block_users(PhoneNumberId::new("106540352242922").unwrap())
             .block(&two_users())
             .await
             .unwrap();
@@ -425,7 +425,7 @@ mod tests {
             }),
         );
         let resp = client(&t)
-            .block_users("1")
+            .block_users(PhoneNumberId::new("1").unwrap())
             .block(&two_users())
             .await
             .unwrap();
@@ -461,7 +461,7 @@ mod tests {
             }),
         );
         let resp = client(&t)
-            .block_users("106540352242922")
+            .block_users(PhoneNumberId::new("106540352242922").unwrap())
             .unblock(&two_users())
             .await
             .unwrap();
@@ -499,7 +499,7 @@ mod tests {
             }),
         );
         let resp = client(&t)
-            .block_users("1")
+            .block_users(PhoneNumberId::new("1").unwrap())
             .unblock(&two_users())
             .await
             .unwrap();
@@ -524,7 +524,7 @@ mod tests {
             }),
         );
         let resp = client(&t)
-            .block_users("1")
+            .block_users(PhoneNumberId::new("1").unwrap())
             .block(&[
                 Recipient::phone("+16505551234"),
                 Recipient::user("US.13491208655302741918"),
@@ -573,7 +573,7 @@ mod tests {
             }),
         );
         let page = client(&t)
-            .block_users("106540352242922")
+            .block_users(PhoneNumberId::new("106540352242922").unwrap())
             .list(&ListBlockedUsers {
                 limit: Some(10),
                 ..ListBlockedUsers::default()
@@ -600,7 +600,7 @@ mod tests {
             json!({"data": [{"messaging_product": "whatsapp", "user_id": "US.1", "parent_user_id": "US.ENT.2"}]}),
         );
         let page = client(&t)
-            .block_users("1")
+            .block_users(PhoneNumberId::new("1").unwrap())
             .list(&ListBlockedUsers {
                 limit: None,
                 after: Some("A".into()),
@@ -633,7 +633,7 @@ mod tests {
         );
         t.push_json(200, json!({"data": [{"wa_id": "2"}]}));
         let users: Vec<BlockedUser> = client(&t)
-            .block_users("1")
+            .block_users(PhoneNumberId::new("1").unwrap())
             .list_stream(&ListBlockedUsers {
                 limit: Some(1),
                 ..ListBlockedUsers::default()
@@ -665,8 +665,11 @@ mod tests {
                 "before",
             ),
         ] {
-            let items: Vec<Result<BlockedUser>> =
-                client(&t).block_users("1").list_stream(&q).collect().await;
+            let items: Vec<Result<BlockedUser>> = client(&t)
+                .block_users(PhoneNumberId::new("1").unwrap())
+                .list_stream(&q)
+                .collect()
+                .await;
             assert_eq!(items.len(), 1);
             assert_eq!(validation_field(items[0].as_ref().unwrap_err()), field);
         }
@@ -681,7 +684,7 @@ mod tests {
             json!({"error": {"message": "(#131021) Recipient cannot be sender", "type": "OAuthException", "code": 131021}}),
         );
         let err = client(&t)
-            .block_users("1")
+            .block_users(PhoneNumberId::new("1").unwrap())
             .block(&[Recipient::phone("+16505551234")])
             .await
             .unwrap_err();
@@ -692,7 +695,7 @@ mod tests {
     #[tokio::test]
     async fn empty_and_oversized_requests_are_rejected_locally() {
         let t = ScriptedTransport::new();
-        let api = client(&t).block_users("1");
+        let api = client(&t).block_users(PhoneNumberId::new("1").unwrap());
         let err = api.block(&[]).await.unwrap_err();
         assert_eq!(validation_field(&err), "block_users");
         let err = api.unblock(&[]).await.unwrap_err();
@@ -718,7 +721,7 @@ mod tests {
     async fn groups_cannot_be_blocked() {
         let t = ScriptedTransport::new();
         let err = client(&t)
-            .block_users("1")
+            .block_users(PhoneNumberId::new("1").unwrap())
             .block(&[Recipient::phone("+1"), Recipient::group("Y2FwaV9ncm91cDox")])
             .await
             .unwrap_err();
@@ -729,7 +732,7 @@ mod tests {
     #[tokio::test]
     async fn parent_bsuids_are_rejected() {
         let t = ScriptedTransport::new();
-        let api = client(&t).block_users("1");
+        let api = client(&t).block_users(PhoneNumberId::new("1").unwrap());
         let err = api
             .block(&[Recipient::user("US.ENT.11815799212886844830")])
             .await

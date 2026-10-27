@@ -599,7 +599,7 @@ mod tests {
         let v = r#"{"owner_business_info": {"name": "Wind & Wool", "id": "2729063490586005"}, "id": "102290129340398"}"#;
         let w: WabaInfo = serde_json::from_str(v).unwrap();
         let owner = w.owner_business_info.unwrap();
-        assert_eq!(owner.id, Some(BusinessId::new("2729063490586005")));
+        assert_eq!(owner.id, Some(BusinessId::new("2729063490586005").unwrap()));
         assert_eq!(owner.name.as_deref(), Some("Wind & Wool"));
     }
 

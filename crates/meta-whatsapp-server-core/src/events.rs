@@ -261,7 +261,7 @@ pub fn event_number(event: &WebhookEvent) -> Option<PhoneNumberId> {
         .get("phone_number_id")?
         .as_str()
         .filter(|pn| !pn.is_empty())
-        .map(PhoneNumberId::new)
+        .map(PhoneNumberId::new_unchecked)
 }
 
 /// The tenant holding `event`'s number or WABA, by the bindings, and the

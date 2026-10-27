@@ -1,6 +1,7 @@
 //! Request/response tests for the Flows management API, against the
 //! examples in `flows/guides/flowsapi`.
 
+use meta_whatsapp_core::ids::WabaId;
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -68,7 +69,7 @@ async fn create_sends_the_documented_body() {
         json!({"id": "<Flow-ID>", "success": true, "validation_errors": [doc_validation_error()]}),
     );
     let created = client(&t)
-        .flows("WABA-ID")
+        .flows(WabaId::new("102290129340398").unwrap())
         .create(
             &CreateFlow::new("My first flow", [FlowCategory::Other])
                 .flow_json(DOC_FLOW_JSON)
@@ -79,7 +80,7 @@ async fn create_sends_the_documented_body() {
 
     let req = t.last_request().unwrap();
     assert_eq!(req.method, Method::POST);
-    assert_eq!(req.path(), "/v25.0/WABA-ID/flows");
+    assert_eq!(req.path(), "/v25.0/102290129340398/flows");
     assert_eq!(req.bearer(), Some("TOKEN"));
     assert_eq!(
         req.json(),
@@ -108,7 +109,7 @@ async fn create_with_clone_and_endpoint() {
     let t = ScriptedTransport::new();
     t.push_json(200, json!({"id": "2"}));
     let created = client(&t)
-        .flows("W")
+        .flows(WabaId::new("100").unwrap())
         .create(
             &CreateFlow::new("copy", [FlowCategory::SignUp, FlowCategory::Survey])
                 .clone_flow_id("1")
@@ -135,7 +136,7 @@ async fn invalid_input_never_reaches_the_transport() {
     let t = ScriptedTransport::new();
     let c = client(&t);
     let err = c
-        .flows("W")
+        .flows(WabaId::new("100").unwrap())
         .create(&CreateFlow::new("f", []))
         .await
         .unwrap_err();
@@ -158,7 +159,7 @@ async fn create_is_never_replayed_but_metadata_updates_are() {
     let t = ScriptedTransport::new();
     t.push_error(|| TransportError::Timeout);
     let err = retrying_client(&t)
-        .flows("W")
+        .flows(WabaId::new("100").unwrap())
         .create(&CreateFlow::new("f", [FlowCategory::Survey]))
         .await
         .unwrap_err();
@@ -216,7 +217,7 @@ async fn list_parses_the_documented_page_and_passes_the_cursor() {
         }),
     );
     t.push_json(200, json!({"data": []}));
-    let flows = client(&t).flows("WABA-ID");
+    let flows = client(&t).flows(WabaId::new("102290129340398").unwrap());
     let page = flows.list(&ListFlows::new()).await.unwrap();
     assert_eq!(page.data.len(), 3);
     assert_eq!(page.data[1].status, Some(FlowStatus::Published));
@@ -224,7 +225,7 @@ async fn list_parses_the_documented_page_and_passes_the_cursor() {
     assert_eq!(page.data[0].name.as_deref(), Some("flow 1"));
     let first = t.last_request().unwrap();
     assert_eq!(first.method, Method::GET);
-    assert_eq!(first.path(), "/v25.0/WABA-ID/flows");
+    assert_eq!(first.path(), "/v25.0/102290129340398/flows");
     assert_eq!(first.url.query(), None);
 
     flows
@@ -249,14 +250,14 @@ async fn list_stream_follows_cursors() {
         json!({"data": [{"id": "2"}], "paging": {"cursors": {"after": "c2"}}}),
     );
     let ids: Vec<String> = client(&t)
-        .flows("W")
+        .flows(WabaId::new("100").unwrap())
         .list_stream(&ListFlows::new())
         .map(|f| f.unwrap().id.into_inner())
         .collect()
         .await;
     assert_eq!(ids, ["1", "2"]);
     let reqs = t.requests();
-    assert_eq!(reqs[1].path(), "/v25.0/W/flows");
+    assert_eq!(reqs[1].path(), "/v25.0/100/flows");
     assert_eq!(reqs[1].query("after").as_deref(), Some("c1"));
     assert_eq!(t.remaining(), 0);
 }
@@ -268,7 +269,11 @@ async fn flow_streams_refuse_caller_cursors() {
     let t = ScriptedTransport::new();
     let c = client(&t);
     for query in [ListFlows::new().after("c1"), ListFlows::new().before("c0")] {
-        let items: Vec<_> = c.flows("W").list_stream(&query).collect().await;
+        let items: Vec<_> = c
+            .flows(WabaId::new("100").unwrap())
+            .list_stream(&query)
+            .collect()
+            .await;
         assert_eq!(items.len(), 1);
         assert!(matches!(&items[0], Err(Error::Validation(_))), "{items:?}");
     }

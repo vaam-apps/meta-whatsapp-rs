@@ -114,7 +114,7 @@ mod tests {
             .unwrap();
         send_receipt(
             &client,
-            "106540352242922".into(),
+            PhoneNumberId::new("106540352242922").unwrap(),
             Recipient::phone("+16505551234"),
             sample_receipt(),
             date!(2026 - 09 - 24),

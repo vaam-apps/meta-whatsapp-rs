@@ -26,8 +26,12 @@ fn page(after: Option<&str>, limit: usize) -> PageRequest {
     }
 }
 
+/// Phone number ids as the store may hold them: unchecked, as one read
+/// back from a row or a webhook is (the byte-order case needs punctuation).
 fn pns(ids: &[&str]) -> Vec<PhoneNumberId> {
-    ids.iter().map(|n| PhoneNumberId::new(*n)).collect()
+    ids.iter()
+        .map(|n| PhoneNumberId::new_unchecked(*n))
+        .collect()
 }
 
 fn key(key_id: &str, owner: KeyOwner) -> NewApiKey {
@@ -102,14 +106,23 @@ pub async fn tenants(backend: &dyn Backend) {
         .unwrap();
 
     store
-        .bind_waba(&id("tenant-d"), &WabaId::new("waba-d"), &pns(&["pn-d"]))
+        .bind_waba(
+            &id("tenant-d"),
+            &WabaId::new_unchecked("waba-d"),
+            &pns(&["pn-d"]),
+        )
         .await
         .unwrap();
     assert_eq!(
         store.delete_tenant(&id("tenant-d")).await.unwrap(),
         DeleteTenantOutcome::HasWabas
     );
-    assert!(store.unbind_waba(&WabaId::new("waba-d")).await.unwrap());
+    assert!(
+        store
+            .unbind_waba(&WabaId::new_unchecked("waba-d"))
+            .await
+            .unwrap()
+    );
     assert_eq!(
         store.delete_tenant(&id("tenant-d")).await.unwrap(),
         DeleteTenantOutcome::Deleted
@@ -234,10 +247,10 @@ pub async fn bindings(backend: &dyn Backend) {
     let b = id("bind-b");
     store.create_tenant(&a, "").await.unwrap().unwrap();
     store.create_tenant(&b, "").await.unwrap().unwrap();
-    let waba = WabaId::new("w1");
+    let waba = WabaId::new("101").unwrap();
     assert_eq!(
         store
-            .bind_waba(&a, &waba, &pns(&["n1", "n2"]))
+            .bind_waba(&a, &waba, &pns(&["201", "202"]))
             .await
             .unwrap(),
         BindOutcome::Bound
@@ -245,19 +258,19 @@ pub async fn bindings(backend: &dyn Backend) {
     let bound = store.waba(&waba).await.unwrap().unwrap();
     assert_eq!(bound.tenant_id, a);
     let n1 = store
-        .number(&PhoneNumberId::new("n1"))
+        .number(&PhoneNumberId::new("201").unwrap())
         .await
         .unwrap()
         .unwrap();
     assert_eq!(
         (n1.waba_id.as_str(), &n1.tenant_id, n1.status),
-        ("w1", &a, NumberStatus::Connected)
+        ("101", &a, NumberStatus::Connected)
     );
 
     // D4: another tenant is refused, and nothing changes: whether it
     // names A's numbers, only numbers nobody has, or none (the WABA's own
     // check, not only the numbers').
-    for numbers in [&["n1", "n9"][..], &["n9"][..], &[][..]] {
+    for numbers in [&["201", "209"][..], &["209"][..], &[][..]] {
         assert_eq!(
             store.bind_waba(&b, &waba, &pns(numbers)).await.unwrap(),
             BindOutcome::OwnedByAnotherTenant,
@@ -267,7 +280,7 @@ pub async fn bindings(backend: &dyn Backend) {
     assert_eq!(store.waba(&waba).await.unwrap().unwrap().tenant_id, a);
     assert!(
         store
-            .number(&PhoneNumberId::new("n9"))
+            .number(&PhoneNumberId::new("209").unwrap())
             .await
             .unwrap()
             .is_none()
@@ -275,18 +288,22 @@ pub async fn bindings(backend: &dyn Backend) {
     // A number of A's under another WABA claimed by B: refused too.
     assert_eq!(
         store
-            .bind_waba(&b, &WabaId::new("w2"), &pns(&["n2"]))
+            .bind_waba(&b, &WabaId::new("102").unwrap(), &pns(&["202"]))
             .await
             .unwrap(),
         BindOutcome::OwnedByAnotherTenant
     );
     assert!(
-        store.waba(&WabaId::new("w2")).await.unwrap().is_none(),
+        store
+            .waba(&WabaId::new("102").unwrap())
+            .await
+            .unwrap()
+            .is_none(),
         "rolled back"
     );
     assert_eq!(
         store
-            .number(&PhoneNumberId::new("n2"))
+            .number(&PhoneNumberId::new("202").unwrap())
             .await
             .unwrap()
             .unwrap()
@@ -302,7 +319,7 @@ pub async fn bindings(backend: &dyn Backend) {
         .unwrap();
     assert_eq!(
         store
-            .number(&PhoneNumberId::new("n1"))
+            .number(&PhoneNumberId::new("201").unwrap())
             .await
             .unwrap()
             .unwrap()
@@ -311,14 +328,14 @@ pub async fn bindings(backend: &dyn Backend) {
     );
     assert_eq!(
         store
-            .bind_waba(&a, &waba, &pns(&["n2", "n3"]))
+            .bind_waba(&a, &waba, &pns(&["202", "203"]))
             .await
             .unwrap(),
         BindOutcome::Bound
     );
     assert!(
         store
-            .number(&PhoneNumberId::new("n1"))
+            .number(&PhoneNumberId::new("201").unwrap())
             .await
             .unwrap()
             .is_none(),
@@ -326,7 +343,7 @@ pub async fn bindings(backend: &dyn Backend) {
     );
     assert_eq!(
         store
-            .number(&PhoneNumberId::new("n2"))
+            .number(&PhoneNumberId::new("202").unwrap())
             .await
             .unwrap()
             .unwrap()
@@ -341,7 +358,7 @@ pub async fn bindings(backend: &dyn Backend) {
         .into_iter()
         .map(|n| n.phone_number_id.into_inner())
         .collect();
-    assert_eq!(numbers, ["n2", "n3"]);
+    assert_eq!(numbers, ["202", "203"]);
     assert!(
         store
             .numbers(&b, &page(None, 10))
@@ -359,31 +376,39 @@ pub async fn bindings(backend: &dyn Backend) {
         .into_iter()
         .map(|n| n.phone_number_id.into_inner())
         .collect();
-    assert_eq!(of_waba, ["n2", "n3"]);
+    assert_eq!(of_waba, ["202", "203"]);
     // Every tenant's, paged.
-    store.bind_waba(&b, &WabaId::new("w0"), &[]).await.unwrap();
+    store
+        .bind_waba(&b, &WabaId::new("100").unwrap(), &[])
+        .await
+        .unwrap();
     let first = store.all_wabas(&page(None, 1)).await.unwrap();
-    assert_eq!(first.items[0].waba_id.as_str(), "w0");
+    assert_eq!(first.items[0].waba_id.as_str(), "100");
     let rest = store
         .all_wabas(&page(first.next_after.as_deref(), 10))
         .await
         .unwrap();
     assert_eq!(rest.items.len(), 1);
     assert_eq!(rest.items[0].waba_id, waba);
-    assert!(store.unbind_waba(&WabaId::new("w0")).await.unwrap());
+    assert!(
+        store
+            .unbind_waba(&WabaId::new("100").unwrap())
+            .await
+            .unwrap()
+    );
 
     // Unbind frees the WABA for B.
     assert!(store.unbind_waba(&waba).await.unwrap());
     assert!(!store.unbind_waba(&waba).await.unwrap());
     assert!(
         store
-            .number(&PhoneNumberId::new("n2"))
+            .number(&PhoneNumberId::new("202").unwrap())
             .await
             .unwrap()
             .is_none()
     );
     assert_eq!(
-        store.bind_waba(&b, &waba, &pns(&["n2"])).await.unwrap(),
+        store.bind_waba(&b, &waba, &pns(&["202"])).await.unwrap(),
         BindOutcome::Bound
     );
     assert_eq!(store.waba(&waba).await.unwrap().unwrap().tenant_id, b);
@@ -641,7 +666,7 @@ pub async fn idempotency(backend: &dyn Backend) {
 pub async fn binding_to_a_missing_tenant_binds_nothing(backend: &dyn Backend) {
     let records = backend.records();
     let store = records.as_ref();
-    let waba = WabaId::new("w-nobody");
+    let waba = WabaId::new_unchecked("w-nobody");
     for tenant in ["never-created", "deleted-before"] {
         if tenant == "deleted-before" {
             store.create_tenant(&id(tenant), "").await.unwrap().unwrap();
@@ -661,7 +686,7 @@ pub async fn binding_to_a_missing_tenant_binds_nothing(backend: &dyn Backend) {
         assert!(store.waba(&waba).await.unwrap().is_none(), "{tenant}");
         assert!(
             store
-                .number(&PhoneNumberId::new("n-nobody"))
+                .number(&PhoneNumberId::new_unchecked("n-nobody"))
                 .await
                 .unwrap()
                 .is_none(),
@@ -681,7 +706,7 @@ pub async fn a_binding_and_a_deletion_of_one_tenant_serialize(backend: &dyn Back
     let store = records.as_ref();
     for round in 0..20 {
         let tenant = id(&format!("race-{round}"));
-        let waba = WabaId::new(format!("w-race-{round}"));
+        let waba = WabaId::new_unchecked(format!("w-race-{round}"));
         store.create_tenant(&tenant, "").await.unwrap().unwrap();
         let numbers = pns(&[&format!("n-race-{round}")]);
         let (bound, deleted) = tokio::join!(
@@ -757,11 +782,14 @@ pub async fn listings_are_in_byte_order(backend: &dyn Backend) {
     }
     // One WABA per id, and one number per id under a WABA of its own.
     store
-        .bind_waba(&owner, &WabaId::new("ord-numbers"), &pns(&ids))
+        .bind_waba(&owner, &WabaId::new_unchecked("ord-numbers"), &pns(&ids))
         .await
         .unwrap();
     for s in ids {
-        let bound = store.bind_waba(&owner, &WabaId::new(s), &[]).await.unwrap();
+        let bound = store
+            .bind_waba(&owner, &WabaId::new_unchecked(s), &[])
+            .await
+            .unwrap();
         assert_eq!(bound, BindOutcome::Bound);
     }
     let only_ord = |all: Vec<String>| -> Vec<String> {
@@ -809,7 +837,7 @@ pub async fn listings_are_in_byte_order(backend: &dyn Backend) {
     .await;
     assert_eq!(numbers, expected, "numbers");
     let of_waba: Vec<String> = store
-        .waba_numbers(&WabaId::new("ord-numbers"))
+        .waba_numbers(&WabaId::new_unchecked("ord-numbers"))
         .await
         .unwrap()
         .into_iter()
@@ -817,7 +845,7 @@ pub async fn listings_are_in_byte_order(backend: &dyn Backend) {
         .collect();
     assert_eq!(of_waba, expected, "waba_numbers");
     for s in ids.iter().copied().chain(["ord-numbers"]) {
-        let _ = store.unbind_waba(&WabaId::new(s)).await.unwrap();
+        let _ = store.unbind_waba(&WabaId::new_unchecked(s)).await.unwrap();
     }
 }
 

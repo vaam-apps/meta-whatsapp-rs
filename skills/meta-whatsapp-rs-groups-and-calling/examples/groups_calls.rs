@@ -126,7 +126,7 @@ mod tests {
         );
         let refused = block_customer(
             &merchant(&transport),
-            NUMBER.into(),
+            PhoneNumberId::new(NUMBER).unwrap(),
             Recipient::user(CUSTOMER),
         )
         .await
@@ -150,9 +150,13 @@ mod tests {
             200,
             json!({"messaging_product": "whatsapp", "request_id": "6a1f2c9e5b7d4e0f"}),
         );
-        let request_id = open_group(&merchant(&transport), NUMBER.into(), "Linen club")
-            .await
-            .unwrap();
+        let request_id = open_group(
+            &merchant(&transport),
+            PhoneNumberId::new(NUMBER).unwrap(),
+            "Linen club",
+        )
+        .await
+        .unwrap();
         assert_eq!(request_id.as_deref(), Some("6a1f2c9e5b7d4e0f"));
         assert_eq!(
             transport.last_request().unwrap().json().unwrap(),

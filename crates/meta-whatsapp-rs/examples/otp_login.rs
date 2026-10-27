@@ -58,7 +58,7 @@ async fn main() -> anyhow::Result<()> {
     // between codes, at most 5 codes per number and hour.
     let otp = OtpService::new(
         meta_whatsapp_rs::client(env("WA_TOKEN")?)?,
-        env("WA_PHONE_NUMBER_ID")?,
+        PhoneNumberId::new(env("WA_PHONE_NUMBER_ID")?)?,
         OtpTemplate::new(env("WA_OTP_TEMPLATE")?, env_or("WA_OTP_LANGUAGE", "en_US")),
         Arc::new(MemoryKvStore::new()), // Postgres or Redis with several instances
         Arc::new(SystemClock),

@@ -884,7 +884,11 @@ mod tests {
         // business-phone-numbers/phone-numbers, "Getting status via API".
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"status": "CONNECTED", "id": ID}));
-        let info = client(&t).phone_number(ID).get(&["status"]).await.unwrap();
+        let info = client(&t)
+            .phone_number(PhoneNumberId::new(ID).unwrap())
+            .get(&["status"])
+            .await
+            .unwrap();
         assert_eq!(info.status, Some(PhoneNumberStatus::Connected));
         let req = t.last_request().unwrap();
         assert_eq!(req.method, Method::GET);
@@ -894,7 +898,11 @@ mod tests {
         assert_eq!(t.remaining(), 0);
 
         t.push_json(200, json!({"id": ID}));
-        client(&t).phone_number(ID).get(&[]).await.unwrap();
+        client(&t)
+            .phone_number(PhoneNumberId::new(ID).unwrap())
+            .get(&[])
+            .await
+            .unwrap();
         assert_eq!(t.last_request().unwrap().query("fields"), None);
         assert_eq!(t.remaining(), 0);
     }
@@ -904,7 +912,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"success": true}));
         client(&t)
-            .phone_number("110200345501442")
+            .phone_number(PhoneNumberId::new("110200345501442").unwrap())
             .request_code(CodeMethod::Sms, "en_US")
             .await
             .unwrap();
@@ -918,7 +926,7 @@ mod tests {
         assert_eq!(t.remaining(), 0);
 
         let err = client(&t)
-            .phone_number(ID)
+            .phone_number(PhoneNumberId::new(ID).unwrap())
             .request_code(CodeMethod::Voice, " ")
             .await
             .unwrap_err();
@@ -932,7 +940,7 @@ mod tests {
         t.push_json(200, json!({"success": true}));
         let code = VerificationCode::new("123-830").unwrap();
         client(&t)
-            .phone_number("110200345501442")
+            .phone_number(PhoneNumberId::new("110200345501442").unwrap())
             .verify_code(&code)
             .await
             .unwrap();
@@ -949,7 +957,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"success": true}));
         t.push_json(200, json!({"success": true}));
-        let pn = client(&t).phone_number(ID);
+        let pn = client(&t).phone_number(PhoneNumberId::new(ID).unwrap());
         let pin = TwoStepPin::new("212834").unwrap();
         pn.register(&pin, None).await.unwrap();
         pn.register(&pin, Some(&DataLocalizationRegion::Ch))
@@ -974,7 +982,7 @@ mod tests {
     #[tokio::test]
     async fn register_rejects_a_malformed_region_and_maps_pin_errors() {
         let t = ScriptedTransport::new();
-        let pn = client(&t).phone_number(ID);
+        let pn = client(&t).phone_number(PhoneNumberId::new(ID).unwrap());
         let pin = TwoStepPin::new("212834").unwrap();
         let err = pn
             .register(&pin, Some(&DataLocalizationRegion::Other("ch".into())))
@@ -999,7 +1007,11 @@ mod tests {
     async fn deregister_posts_without_body() {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"success": true}));
-        client(&t).phone_number(ID).deregister().await.unwrap();
+        client(&t)
+            .phone_number(PhoneNumberId::new(ID).unwrap())
+            .deregister()
+            .await
+            .unwrap();
         let req = t.last_request().unwrap();
         assert_eq!(req.method, Method::POST);
         assert_eq!(req.path(), "/v25.0/106540352242922/deregister");
@@ -1013,7 +1025,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"success": true}));
         client(&t)
-            .phone_number(ID)
+            .phone_number(PhoneNumberId::new(ID).unwrap())
             .set_two_step_pin(&TwoStepPin::new("150954").unwrap())
             .await
             .unwrap();
@@ -1030,7 +1042,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"success": true}));
         client(&t)
-            .phone_number(ID)
+            .phone_number(PhoneNumberId::new(ID).unwrap())
             .request_display_name_change("Lucky Shrub")
             .await
             .unwrap();
@@ -1050,7 +1062,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"success": true}));
         t.push_json(200, json!({"success": true}));
-        let pn = client(&t).phone_number(ID);
+        let pn = client(&t).phone_number(PhoneNumberId::new(ID).unwrap());
         pn.set_webhook_override(&CallbackOverride::new(
             "https://my-phone-alternate-callback.com/webhook",
             "myvoiceismypassport?",
@@ -1086,7 +1098,7 @@ mod tests {
         for _ in 0..5 {
             t.push_json(200, json!({"success": true}));
         }
-        let pn = client(&t).phone_number(ID);
+        let pn = client(&t).phone_number(PhoneNumberId::new(ID).unwrap());
         pn.set_search_visibility(&SearchVisibility::Visible)
             .await
             .unwrap();
@@ -1142,7 +1154,7 @@ mod tests {
             })
             .build()
             .unwrap();
-        c.phone_number(ID)
+        c.phone_number(PhoneNumberId::new(ID).unwrap())
             .set_search_visibility(&SearchVisibility::Hidden)
             .await
             .unwrap();
@@ -1186,7 +1198,7 @@ mod tests {
               "id": "105154286024403"
             }),
         );
-        let pn = client(&t).phone_number(ID);
+        let pn = client(&t).phone_number(PhoneNumberId::new(ID).unwrap());
         let ok = pn.health_status().await.unwrap();
         let req = t.last_request().unwrap();
         assert_eq!(req.method, Method::GET);
@@ -1232,7 +1244,7 @@ mod tests {
         for _ in 0..3 {
             t.push_json(200, json!({"success": true}));
         }
-        let pn = client(&t).phone_number(ID);
+        let pn = client(&t).phone_number(PhoneNumberId::new(ID).unwrap());
         pn.enable_local_storage(&DataLocalizationRegion::Br)
             .await
             .unwrap();
@@ -1270,7 +1282,7 @@ mod tests {
             json!({"storage_configuration": {"status": "IN_COUNTRY_STORAGE_ENABLED", "data_localization_region": "BR"}}),
         );
         let s = client(&t)
-            .phone_number("179776755229976")
+            .phone_number(PhoneNumberId::new("179776755229976").unwrap())
             .settings()
             .await
             .unwrap();
@@ -1294,7 +1306,7 @@ mod tests {
         t.push_json(200, json!({"success": true}));
         let key = ClientEncryptionKey::new(CLIENT_KEY).unwrap();
         client(&t)
-            .phone_number(ID)
+            .phone_number(PhoneNumberId::new(ID).unwrap())
             .enable_payload_encryption(&key)
             .await
             .unwrap();
@@ -1318,7 +1330,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"success": true}));
         client(&t)
-            .phone_number(ID)
+            .phone_number(PhoneNumberId::new(ID).unwrap())
             .disable_payload_encryption()
             .await
             .unwrap();
@@ -1335,7 +1347,7 @@ mod tests {
 
         t.push_json(400, graph_error(100));
         let err = client(&t)
-            .phone_number(ID)
+            .phone_number(PhoneNumberId::new(ID).unwrap())
             .disable_payload_encryption()
             .await
             .unwrap_err();
@@ -1363,7 +1375,11 @@ mod tests {
               "storage_configuration": {"status": "default"}
             }),
         );
-        let s = client(&t).phone_number(ID).settings().await.unwrap();
+        let s = client(&t)
+            .phone_number(PhoneNumberId::new(ID).unwrap())
+            .settings()
+            .await
+            .unwrap();
         let req = t.last_request().unwrap();
         assert_eq!(req.method, Method::GET);
         assert_eq!(req.path(), "/v25.0/106540352242922/settings");
@@ -1394,7 +1410,11 @@ mod tests {
             200,
             json!({"payload_encryption": {"status": "disabled"}, "storage_configuration": {"status": "default"}}),
         );
-        let off = client(&t).phone_number(ID).settings().await.unwrap();
+        let off = client(&t)
+            .phone_number(PhoneNumberId::new(ID).unwrap())
+            .settings()
+            .await
+            .unwrap();
         let pe = off.payload_encryption.unwrap();
         assert_eq!(pe.status, Some(PayloadEncryptionStatus::Disabled));
         assert_eq!(pe.client_encryption_key_fingerprint, None);
@@ -1424,7 +1444,7 @@ mod tests {
               "storage_configuration": {"status": "default"}
             }),
         );
-        let pn = client(&t).phone_number(ID);
+        let pn = client(&t).phone_number(PhoneNumberId::new(ID).unwrap());
         let s = pn.settings().await.unwrap();
         let pe = s.payload_encryption.unwrap();
         assert_eq!(pe.status, None);
@@ -1458,7 +1478,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"success": true}));
         t.push_json(200, json!({"success": true}));
-        let pn = client(&t).phone_number(ID);
+        let pn = client(&t).phone_number(PhoneNumberId::new(ID).unwrap());
         pn.set_connection_status(&ConnectionStatus::Connected)
             .await
             .unwrap();
@@ -1489,7 +1509,7 @@ mod tests {
         // `PhoneNumberStatusUpdateRequest.webhook_url` (schema only).
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"success": true}));
-        let pn = client(&t).phone_number(ID);
+        let pn = client(&t).phone_number(PhoneNumberId::new(ID).unwrap());
         pn.set_webhook_url("https://hooks.shop.example/whatsapp?tenant=7")
             .await
             .unwrap();
@@ -1560,7 +1580,7 @@ mod tests {
             t.push_error(|| meta_whatsapp_core::error::TransportError::Timeout);
             t.push_json(200, json!({"success": true}));
             let c = retrying_client(&t);
-            let pn = c.phone_number(ID);
+            let pn = c.phone_number(PhoneNumberId::new(ID).unwrap());
             let err = match call {
                 0 => pn.enable_payload_encryption(&key).await,
                 1 => pn.disable_payload_encryption().await,
@@ -1584,7 +1604,7 @@ mod tests {
             t.push_json(400, graph_error(130_429));
             t.push_json(200, json!({"success": true}));
             let c = retrying_client(&t);
-            let pn = c.phone_number(ID);
+            let pn = c.phone_number(PhoneNumberId::new(ID).unwrap());
             match call {
                 0 => pn.enable_payload_encryption(&key).await,
                 1 => pn.disable_payload_encryption().await,
@@ -1614,7 +1634,7 @@ mod tests {
             200,
             json!({"payload_encryption": {"cloud_encryption_key": [secret]}}),
         );
-        let pn = client(&t).phone_number(ID);
+        let pn = client(&t).phone_number(PhoneNumberId::new(ID).unwrap());
         for _ in 0..2 {
             let err = pn.settings().await.unwrap_err();
             assert!(matches!(err, meta_whatsapp_core::Error::Decode { .. }));
@@ -1643,7 +1663,7 @@ mod tests {
               "id": "123456"
             }),
         );
-        let pn = client(&t).phone_number("123456");
+        let pn = client(&t).phone_number(PhoneNumberId::new("123456").unwrap());
         pn.configure_conversational_automation(
             &ConversationalAutomationConfig::new()
                 .commands([
@@ -1699,7 +1719,7 @@ mod tests {
             200,
             json!({"messaging_product": "whatsapp", "request_id": "R2"}),
         );
-        let pn = client(&t).phone_number(ID);
+        let pn = client(&t).phone_number(PhoneNumberId::new(ID).unwrap());
         let a = pn
             .sync_smb_app_data(SmbSyncType::SmbAppStateSync)
             .await
@@ -1743,7 +1763,7 @@ mod tests {
             .build()
             .unwrap();
         assert!(
-            c.phone_number(ID)
+            c.phone_number(PhoneNumberId::new(ID).unwrap())
                 .sync_smb_app_data(SmbSyncType::History)
                 .await
                 .is_err()
@@ -1762,7 +1782,7 @@ mod tests {
         );
         t.push_json(200, json!({"success": true}));
         t.push_json(200, json!({"data": []}));
-        let pn = client(&t).phone_number("OTHER/contact_book");
+        let pn = client(&t).phone_number(PhoneNumberId::new_unchecked("OTHER/contact_book"));
         pn.set_username("lucky_shrub", None).await.unwrap();
         pn.delete_contact_book_entry(&meta_whatsapp_core::ids::UserId::new(
             "US.13491208655302741918",
@@ -1794,7 +1814,13 @@ mod tests {
                 "/v25.0/OTHER%2Fcontact_book/settings",
             ]
         );
-        assert!(client(&t).phone_number("..").health_status().await.is_err());
+        assert!(
+            client(&t)
+                .phone_number(PhoneNumberId::new_unchecked(".."))
+                .health_status()
+                .await
+                .is_err()
+        );
         assert_eq!(t.requests().len(), 7);
         assert_eq!(t.remaining(), 0);
     }
@@ -1810,16 +1836,19 @@ mod tests {
         }
         let c = client(&t);
         // `/` stays inside the segment (percent-encoded) on every path shape.
-        c.phone_number("OTHER_WABA/subscribed_apps")
+        c.phone_number(PhoneNumberId::new_unchecked("OTHER_WABA/subscribed_apps"))
             .register(&pin, None)
             .await
             .unwrap();
-        c.phone_number("999/register")
+        c.phone_number(PhoneNumberId::new_unchecked("999/register"))
             .set_two_step_pin(&pin)
             .await
             .unwrap();
-        c.phone_number("1?fields=x").deregister().await.unwrap();
-        c.phone_number("1/settings")
+        c.phone_number(PhoneNumberId::new_unchecked("1?fields=x"))
+            .deregister()
+            .await
+            .unwrap();
+        c.phone_number(PhoneNumberId::new_unchecked("1/settings"))
             .set_identity_key_check(true)
             .await
             .unwrap();
@@ -1836,12 +1865,21 @@ mod tests {
         assert_eq!(t.requests()[2].url.query(), None);
         // `.` and `..` are refused before anything is sent.
         for id in ["..", ".", ""] {
-            let err = c.phone_number(id).register(&pin, None).await.unwrap_err();
+            let err = c
+                .phone_number(PhoneNumberId::new_unchecked(id))
+                .register(&pin, None)
+                .await
+                .unwrap_err();
             assert!(
                 matches!(err, meta_whatsapp_core::Error::Validation(_)),
                 "{id:?}"
             );
-            assert!(c.phone_number(id).get(&[]).await.is_err());
+            assert!(
+                c.phone_number(PhoneNumberId::new_unchecked(id))
+                    .get(&[])
+                    .await
+                    .is_err()
+            );
         }
         assert_eq!(t.requests().len(), 4, "invalid ids never reach the wire");
         assert_eq!(t.remaining(), 0);

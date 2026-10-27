@@ -93,3 +93,16 @@ pub(crate) fn unique() -> String {
     let t = time::OffsetDateTime::now_utc().unix_timestamp_nanos();
     format!("{t:x}_{}_{n}", std::process::id())
 }
+
+/// [`unique`] as digits, for a numeric id (a WABA or phone number id is
+/// digits only: `meta_whatsapp_rs::core::ids`): the time, the process id
+/// and a counter as fixed-width decimals, 40 digits, so the caller may
+/// append a few of its own within the 64 allowed.
+pub(crate) fn unique_digits() -> String {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let t = time::OffsetDateTime::now_utc()
+        .unix_timestamp_nanos()
+        .unsigned_abs();
+    format!("{t:020}{:010}{n:010}", std::process::id())
+}

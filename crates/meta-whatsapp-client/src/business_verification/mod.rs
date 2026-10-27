@@ -38,8 +38,8 @@
 //! use meta_whatsapp_core::secret::AccessToken;
 //!
 //! let system = client.with_token(AccessToken::new("<SYSTEM_USER_TOKEN>"));
-//! let partner = BusinessId::new("506914307656634");
-//! let customer = BusinessId::new("2729063490586005");
+//! let partner = BusinessId::new("506914307656634")?;
+//! let customer = BusinessId::new("2729063490586005")?;
 //!
 //! let document = VerificationDocument::from_file_name("bank_statement.pdf", statement)?;
 //! let receipt = system

@@ -169,8 +169,8 @@ mod tests {
         submit_for_verification(
             &client(transport),
             AccessToken::new("SYSTEM_TOKEN"),
-            &BusinessId::new(US),
-            &BusinessId::new(MERCHANT),
+            &BusinessId::new(US).unwrap(),
+            &BusinessId::new(MERCHANT).unwrap(),
             files(),
         )
         .await
@@ -235,8 +235,8 @@ mod tests {
         let err = submit_for_verification(
             &client(&t),
             AccessToken::new("SYSTEM_TOKEN"),
-            &BusinessId::new(US),
-            &BusinessId::new(MERCHANT),
+            &BusinessId::new(US).unwrap(),
+            &BusinessId::new(MERCHANT).unwrap(),
             vec![("statement.txt".into(), b"hello".to_vec())],
         )
         .await
@@ -270,7 +270,7 @@ mod tests {
         assert_eq!(
             verification_event(&decided),
             Some(VerificationEvent::Decided {
-                merchant: BusinessId::new(MERCHANT),
+                merchant: BusinessId::new(MERCHANT).unwrap(),
                 status: CertificationStatus::Failed,
                 reasons: vec![RejectionReason::LegalNameNotFoundInDocuments],
             })
@@ -296,7 +296,9 @@ mod tests {
         }));
         assert_eq!(
             verification_event(&needed),
-            Some(VerificationEvent::Needed(BusinessId::new(MERCHANT)))
+            Some(VerificationEvent::Needed(
+                BusinessId::new(MERCHANT).unwrap()
+            ))
         );
         let other = account_update(&json!({"event": "ACCOUNT_DELETED"}));
         assert_eq!(verification_event(&other), None);
@@ -314,8 +316,8 @@ mod tests {
             VaultKeys::new(VaultKey::from_base64("2026-09", KEY).unwrap()),
         )
         .unwrap();
-        let waba = WabaId::new(WABA);
-        let merchant = BusinessId::new(MERCHANT);
+        let waba = WabaId::new(WABA).unwrap();
+        let merchant = BusinessId::new(MERCHANT).unwrap();
         assert!(
             !is_verified(&client(&t), &vault, &waba, &merchant)
                 .await
@@ -323,7 +325,7 @@ mod tests {
         );
         vault
             .store(&StoredBusinessToken::new(
-                WABA,
+                WabaId::new(WABA).unwrap(),
                 AccessToken::new("BUSINESS_TOKEN"),
             ))
             .await

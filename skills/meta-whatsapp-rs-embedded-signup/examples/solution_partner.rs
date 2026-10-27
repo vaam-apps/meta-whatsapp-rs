@@ -316,7 +316,7 @@ pub async fn credit_lines(
         .with_token(system_token)
         .credit_lines()
         .list(
-            &BusinessId::new(partner_business_id),
+            &BusinessId::new(partner_business_id)?,
             &["id", "legal_entity_name"],
         )
         .await?;
@@ -330,6 +330,7 @@ mod tests {
         EmbeddedSignupEvent, SignupCode, StoredBusinessToken, VaultKey, VaultKeys, steps,
     };
     use meta_whatsapp_rs::core::error::TransportError;
+    use meta_whatsapp_rs::core::ids::AppId;
     use meta_whatsapp_rs::core::testing::ScriptedTransport;
     use meta_whatsapp_rs::webhooks::WebhookPayload;
     use serde_json::json;
@@ -344,7 +345,7 @@ mod tests {
     const US: &str = "2949482758682047";
 
     fn ours() -> BusinessId {
-        BusinessId::new(US)
+        BusinessId::new(US).unwrap()
     }
 
     fn settings(currency: Option<&str>) -> PartnerSettings {
@@ -362,7 +363,10 @@ mod tests {
             .retry(RetryPolicy::NONE)
             .build()
             .unwrap();
-        client.embedded_signup(AppCredentials::new(APP_ID, "app-secret"))
+        client.embedded_signup(AppCredentials::new(
+            AppId::new(APP_ID).unwrap(),
+            "app-secret",
+        ))
     }
 
     fn vault() -> TokenVault {
@@ -419,12 +423,20 @@ mod tests {
         let es = onboarding_mode(signup(&transport), Some(settings(Some("USD")))).unwrap();
         let vault = vault();
         let reservations: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
-        reserve(&reservations, &"102290129340398".into(), "m7")
-            .await
-            .unwrap();
-        reserve(&reservations, &"102290129340398".into(), "m7")
-            .await
-            .unwrap(); // the same tenant again
+        reserve(
+            &reservations,
+            &WabaId::new("102290129340398").unwrap(),
+            "m7",
+        )
+        .await
+        .unwrap();
+        reserve(
+            &reservations,
+            &WabaId::new("102290129340398").unwrap(),
+            "m7",
+        )
+        .await
+        .unwrap(); // the same tenant again
         transport.push_json(200, json!({"access_token": "EAAB"}));
         transport.push_json(
             200,
@@ -451,7 +463,7 @@ mod tests {
         );
         assert!(
             vault
-                .get(&"102290129340398".into())
+                .get(&WabaId::new("102290129340398").unwrap())
                 .await
                 .unwrap()
                 .is_none()
@@ -504,7 +516,10 @@ mod tests {
 
     async fn stored(vault: &TokenVault) {
         vault
-            .store(&StoredBusinessToken::new(WABA, AccessToken::new("EAAB")).business_id(OWNER))
+            .store(
+                &StoredBusinessToken::new(WabaId::new(WABA).unwrap(), AccessToken::new("EAAB"))
+                    .business_id(BusinessId::new(OWNER).unwrap()),
+            )
             .await
             .unwrap();
     }
@@ -555,7 +570,13 @@ mod tests {
         assert_eq!(requests[2].method.as_str(), "DELETE");
         assert_eq!(requests[2].bearer(), Some("SYSTEM_TOKEN"));
         assert_eq!(transport.remaining(), 0);
-        assert!(vault.get(&WABA.into()).await.unwrap().is_some());
+        assert!(
+            vault
+                .get(&WabaId::new(WABA).unwrap())
+                .await
+                .unwrap()
+                .is_some()
+        );
         assert_eq!(steps::SHARE_CREDIT_LINE, "share_credit_line");
     }
 
@@ -574,7 +595,13 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(action, PartnerAction::Offboarded(_)), "{action:?}");
-        assert!(vault.get(&WABA.into()).await.unwrap().is_none());
+        assert!(
+            vault
+                .get(&WabaId::new(WABA).unwrap())
+                .await
+                .unwrap()
+                .is_none()
+        );
         let business = json!({"id": OWNER});
         transport.push_json(
             200,
@@ -608,7 +635,13 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(action, PartnerAction::Ignored), "{action:?}");
-        assert!(vault.get(&WABA.into()).await.unwrap().is_some());
+        assert!(
+            vault
+                .get(&WabaId::new(WABA).unwrap())
+                .await
+                .unwrap()
+                .is_some()
+        );
         // Without a partner_app_id, an uninstall is nobody's in particular:
         // not ours either.
         let anonymous = partner_event(
@@ -619,7 +652,13 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(action, PartnerAction::Ignored), "{action:?}");
-        assert!(vault.get(&WABA.into()).await.unwrap().is_some());
+        assert!(
+            vault
+                .get(&WabaId::new(WABA).unwrap())
+                .await
+                .unwrap()
+                .is_some()
+        );
         // A removal from a Multi-Partner Solution we are not in.
         let theirs = partner_event(
             "PARTNER_REMOVED",
@@ -697,7 +736,9 @@ mod tests {
         let vault = vault();
         let reservations = table();
         stored(&vault).await;
-        reserve(&reservations, &WABA.into(), "m7").await.unwrap(); // onboarded by m7
+        reserve(&reservations, &WabaId::new(WABA).unwrap(), "m7")
+            .await
+            .unwrap(); // onboarded by m7
         script_revocation(&transport);
         // `embedded-signup/onboarding-business-app-users`: the WABA is the
         // entry id, with disconnection details.
@@ -775,7 +816,7 @@ mod tests {
         assert_eq!(done.allocation_config_id, Some("58501441721239".into()));
         assert!(
             vault
-                .revoked_business(&OWNER.into())
+                .revoked_business(&BusinessId::new(OWNER).unwrap())
                 .await
                 .unwrap()
                 .is_none(),
@@ -783,7 +824,7 @@ mod tests {
         );
         assert!(
             reservations
-                .get(&reconnect_key(&WABA.into(), "m7"))
+                .get(&reconnect_key(&WabaId::new(WABA).unwrap(), "m7"))
                 .await
                 .unwrap()
                 .is_none(),
@@ -801,18 +842,26 @@ mod tests {
         let es = onboarding_mode(signup(&transport), Some(settings(Some("USD")))).unwrap();
         let vault = vault();
         let reservations = table();
-        reserve(&reservations, &WABA.into(), "m7").await.unwrap();
+        reserve(&reservations, &WabaId::new(WABA).unwrap(), "m7")
+            .await
+            .unwrap();
         assert!(
-            grant_reconnect(&reservations, &WABA.into(), "reviewed by op_7f3a")
-                .await
-                .unwrap()
+            grant_reconnect(
+                &reservations,
+                &WabaId::new(WABA).unwrap(),
+                "reviewed by op_7f3a"
+            )
+            .await
+            .unwrap()
         );
         // The WABA is bound to m42 now (your CMS moved it).
         reservations
             .delete(&StoreKey::new("tenant.waba", WABA))
             .await
             .unwrap();
-        reserve(&reservations, &WABA.into(), "m42").await.unwrap();
+        reserve(&reservations, &WabaId::new(WABA).unwrap(), "m42")
+            .await
+            .unwrap();
         for tenant in ["m7", "m42"] {
             script_until_approval(&transport);
             let err = reconnect(&es, &vault, &reservations, reconnect_request(), tenant)
@@ -830,7 +879,11 @@ mod tests {
             );
         }
         assert!(
-            vault.get(&WABA.into()).await.unwrap().is_none(),
+            vault
+                .get(&WabaId::new(WABA).unwrap())
+                .await
+                .unwrap()
+                .is_none(),
             "nothing stored"
         );
         assert_eq!(transport.remaining(), 0);
@@ -846,7 +899,9 @@ mod tests {
         let vault = vault();
         let reservations = table();
         stored(&vault).await;
-        reserve(&reservations, &WABA.into(), "m7").await.unwrap();
+        reserve(&reservations, &WabaId::new(WABA).unwrap(), "m7")
+            .await
+            .unwrap();
         script_revocation(&transport);
         let action = on_account_update(&es, &vault, &reservations, &ours(), &removed())
             .await
@@ -876,7 +931,7 @@ mod tests {
         );
         assert!(
             vault
-                .revoked_business(&OWNER.into())
+                .revoked_business(&BusinessId::new(OWNER).unwrap())
                 .await
                 .unwrap()
                 .is_some(),
@@ -895,7 +950,9 @@ mod tests {
         let vault = vault();
         let reservations = table();
         stored(&vault).await;
-        reserve(&reservations, &WABA.into(), "m7").await.unwrap();
+        reserve(&reservations, &WabaId::new(WABA).unwrap(), "m7")
+            .await
+            .unwrap();
         script_revocation(&transport);
         // Meta's `account_update` example of a removal with
         // `disconnection_info` (`webhooks/reference/account_update`).
@@ -941,9 +998,13 @@ mod tests {
 
         // Your staff reviewed it and decided to fund the merchant again.
         assert!(
-            grant_reconnect(&reservations, &WABA.into(), "reviewed by op_7f3a")
-                .await
-                .unwrap()
+            grant_reconnect(
+                &reservations,
+                &WabaId::new(WABA).unwrap(),
+                "reviewed by op_7f3a"
+            )
+            .await
+            .unwrap()
         );
         script_until_share(&transport);
         script_reshare(&transport);
@@ -992,7 +1053,7 @@ mod tests {
         );
         let card = FundingId::new("MERCHANTS_CARD");
         assert_eq!(
-            clear_lost_share(&es, &vault, &WABA.into(), "op_7f3a", None)
+            clear_lost_share(&es, &vault, &WabaId::new(WABA).unwrap(), "op_7f3a", None)
                 .await
                 .unwrap(),
             Clearance::ConfirmFunding(card.clone())
@@ -1003,9 +1064,15 @@ mod tests {
             json!({"primary_funding_id": "MERCHANTS_CARD", "id": WABA}),
         );
         assert_eq!(
-            clear_lost_share(&es, &vault, &WABA.into(), "op_7f3a", Some(&card))
-                .await
-                .unwrap(),
+            clear_lost_share(
+                &es,
+                &vault,
+                &WabaId::new(WABA).unwrap(),
+                "op_7f3a",
+                Some(&card)
+            )
+            .await
+            .unwrap(),
             Clearance::Cleared
         );
         assert!(
@@ -1014,7 +1081,11 @@ mod tests {
                 .all(|r| r.method.as_str() == "GET"),
             "it checks, and posts nothing"
         );
-        let cleared = vault.credit(&WABA.into()).await.unwrap().unwrap();
+        let cleared = vault
+            .credit(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(cleared.cleared_shares[0].cleared_by, "op_7f3a");
         // The revocation finishes now; nothing is left to clear.
         transport.push_json(200, json!({"data": []}));
@@ -1027,7 +1098,7 @@ mod tests {
         };
         assert_eq!(done.all().count(), 0);
         assert!(
-            clear_lost_share(&es, &vault, &WABA.into(), "op_7f3a", None)
+            clear_lost_share(&es, &vault, &WabaId::new(WABA).unwrap(), "op_7f3a", None)
                 .await
                 .is_err()
         );
@@ -1060,7 +1131,7 @@ mod tests {
         assert_eq!(revoked.revoked.len(), 1);
         assert!(
             vault
-                .revoked_business(&OWNER.into())
+                .revoked_business(&BusinessId::new(OWNER).unwrap())
                 .await
                 .unwrap()
                 .is_some()

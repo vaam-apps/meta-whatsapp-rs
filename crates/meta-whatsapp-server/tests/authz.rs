@@ -135,16 +135,27 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
     assert!(h.graph.requests().is_empty(), "no call reached Meta");
     assert_eq!(h.graph.remaining(), 0);
     // Nothing of A's changed.
-    let waba = h.store.waba(&WabaId::new(WABA_A)).await.unwrap().unwrap();
+    let waba = h
+        .store
+        .waba(&WabaId::new(WABA_A).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(waba.tenant_id, tenant(A));
     let number = h
         .store
-        .number(&PhoneNumberId::new(PN_A))
+        .number(&PhoneNumberId::new(PN_A).unwrap())
         .await
         .unwrap()
         .unwrap();
     assert_eq!(number.status, NumberStatus::Connected);
-    assert!(h.vault.get(&WabaId::new(WABA_A)).await.unwrap().is_some());
+    assert!(
+        h.vault
+            .get(&WabaId::new(WABA_A).unwrap())
+            .await
+            .unwrap()
+            .is_some()
+    );
 }
 
 /// The control of M1.3: the counter counts, and A's own key does reach the
@@ -502,8 +513,8 @@ async fn the_vault_decides_last() {
     h.store
         .bind_waba(
             &tenant(A),
-            &WabaId::new(WABA_A),
-            &[PhoneNumberId::new(PN_A)],
+            &WabaId::new(WABA_A).unwrap(),
+            &[PhoneNumberId::new(PN_A).unwrap()],
         )
         .await
         .unwrap();
@@ -527,10 +538,10 @@ async fn the_vault_decides_last() {
     h.vault
         .store(
             &meta_whatsapp_rs::client::embedded_signup::StoredBusinessToken::new(
-                WABA_A,
+                WabaId::new(WABA_A).unwrap(),
                 meta_whatsapp_rs::core::secret::AccessToken::new("EXPIRED"),
             )
-            .phone_number_ids([PN_A])
+            .phone_number_ids([PhoneNumberId::new(PN_A).unwrap()])
             .expires_at(time::OffsetDateTime::now_utc() - time::Duration::hours(1)),
         )
         .await
@@ -546,7 +557,10 @@ async fn the_vault_decides_last() {
     // A number marked reconnect_required: refused before the vault is read.
     h.connect(A, WABA_A, &[PN_A], "TOKEN-OF-A").await;
     h.store
-        .set_waba_status(&WabaId::new(WABA_A), NumberStatus::ReconnectRequired)
+        .set_waba_status(
+            &WabaId::new(WABA_A).unwrap(),
+            NumberStatus::ReconnectRequired,
+        )
         .await
         .unwrap();
     let before = h.kv.vault_reads();
@@ -580,7 +594,7 @@ async fn a_190_marks_the_numbers_reconnect_required() {
     assert_eq!(reply.json()["error"]["graph"]["code"], 190);
     let number = h
         .store
-        .number(&PhoneNumberId::new(PN_A))
+        .number(&PhoneNumberId::new(PN_A).unwrap())
         .await
         .unwrap()
         .unwrap();
@@ -600,7 +614,7 @@ async fn a_190_marks_the_numbers_reconnect_required() {
     // B's number is untouched.
     let b = h
         .store
-        .number(&PhoneNumberId::new(PN_B))
+        .number(&PhoneNumberId::new(PN_B).unwrap())
         .await
         .unwrap()
         .unwrap();
@@ -620,10 +634,13 @@ async fn a_token_for_another_waba_is_never_used() {
     h.vault
         .store(
             &meta_whatsapp_rs::client::embedded_signup::StoredBusinessToken::new(
-                WABA_B,
+                WabaId::new(WABA_B).unwrap(),
                 meta_whatsapp_rs::core::secret::AccessToken::new("TOKEN-OF-B"),
             )
-            .phone_number_ids([PN_B, PN_A]),
+            .phone_number_ids([
+                PhoneNumberId::new(PN_B).unwrap(),
+                PhoneNumberId::new(PN_A).unwrap(),
+            ]),
         )
         .await
         .unwrap();
@@ -648,7 +665,7 @@ async fn a_disconnected_number_is_not_connected_before_the_vault() {
     let h = two_tenants().await;
     let key = h.tenant_key(A, &[Scope::Numbers]).await;
     h.store
-        .set_waba_status(&WabaId::new(WABA_A), NumberStatus::Disconnected)
+        .set_waba_status(&WabaId::new(WABA_A).unwrap(), NumberStatus::Disconnected)
         .await
         .unwrap();
     let before = h.kv.vault_reads();
@@ -941,7 +958,7 @@ async fn only_metas_refusal_of_the_object_is_not_found() {
         assert_eq!(reply.json()["error"]["graph"]["code"], 190, "{label}");
         let number = h
             .store
-            .number(&PhoneNumberId::new(PN_A))
+            .number(&PhoneNumberId::new(PN_A).unwrap())
             .await
             .unwrap()
             .unwrap();

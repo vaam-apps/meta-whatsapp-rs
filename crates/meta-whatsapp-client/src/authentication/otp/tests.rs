@@ -196,7 +196,7 @@ fn fixture_with(config: OtpConfig, retry: RetryPolicy, phone_number_id: &str) ->
     });
     let otp = OtpService::new(
         client(&transport, retry),
-        phone_number_id,
+        PhoneNumberId::new_unchecked(phone_number_id),
         OtpTemplate::new("verification_code", "en_US"),
         kv.clone(),
         Arc::new(clock.clone()),
@@ -454,7 +454,7 @@ fn neighbour(
     let transport = ScriptedTransport::new();
     let otp = OtpService::new(
         client(&transport, RetryPolicy::NONE),
-        phone_number_id,
+        PhoneNumberId::new_unchecked(phone_number_id),
         OtpTemplate::new("verification_code", "en_US"),
         f.kv.clone(),
         Arc::new(f.clock.clone()),
@@ -594,7 +594,7 @@ fn a_blank_namespace_is_a_config_error() {
         let t = ScriptedTransport::new();
         let e = OtpService::new(
             client(&t, RetryPolicy::NONE),
-            "105954558954427",
+            PhoneNumberId::new("105954558954427").unwrap(),
             OtpTemplate::new("verification_code", "en_US"),
             Arc::new(MemoryKvStore::new()),
             Arc::new(ManualClock::new(datetime!(2026-09-24 12:00 UTC))),
@@ -1128,6 +1128,8 @@ fn only_provable_rejections_count_as_not_sent() {
 #[tokio::test]
 async fn ids_cannot_escape_their_path_segment() {
     // An id with `/` stays one segment: it cannot address another object.
+    // The checked constructor refuses such an id (`meta_whatsapp_core::ids`);
+    // one built unchecked, as a deserialized id is, still cannot escape.
     let f = fixture_with(
         OtpConfig::new(TENANT),
         RetryPolicy::NONE,
@@ -1146,7 +1148,7 @@ async fn ids_cannot_escape_their_path_segment() {
         let clock = ManualClock::new(datetime!(2026-09-24 12:00 UTC));
         let e = OtpService::new(
             client(&t, RetryPolicy::NONE),
-            bad,
+            PhoneNumberId::new_unchecked(bad),
             OtpTemplate::new("verification_code", "en_US"),
             Arc::new(MemoryKvStore::with_clock(Arc::new(clock.clone()))),
             Arc::new(clock),
@@ -1532,7 +1534,7 @@ fn config_and_pepper_are_checked() {
         let t = ScriptedTransport::new();
         let built = OtpService::new(
             client(&t, RetryPolicy::NONE),
-            "105954558954427",
+            PhoneNumberId::new("105954558954427").unwrap(),
             OtpTemplate::new("verification_code", "en_US"),
             Arc::new(MemoryKvStore::new()),
             Arc::new(ManualClock::new(datetime!(2026-09-24 12:00 UTC))),

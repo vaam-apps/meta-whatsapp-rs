@@ -5,9 +5,15 @@
 //! and a value from a webhook body can be personal data.
 
 use meta_whatsapp_core::GraphApiError;
-use serde::de::Error;
+use serde::de::{DeserializeOwned, Error};
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
+
+/// An id newtype holding `id` as sent, through the type's `Deserialize`
+/// (a string always deserializes into one).
+fn as_sent<T: DeserializeOwned, E: Error>(id: String) -> Result<T, E> {
+    T::deserialize(Value::String(id)).map_err(|_| E::custom("expected an id"))
+}
 
 /// `"an object"`, `"a string"`, … for error messages.
 fn kind(value: &Value) -> &'static str {
@@ -24,18 +30,21 @@ fn kind(value: &Value) -> &'static str {
 /// Ids that Meta sends as a JSON number on some fields (template ids are
 /// `1689556908129832`, not `"1689556908129832"`) and as a string elsewhere.
 /// The id newtypes are strings, so a number is kept as its decimal text.
+/// Either is kept as sent, through the newtype's own `Deserialize`, which
+/// never checks a numeric id's shape (`meta_whatsapp_core::ids`): an id of
+/// a shape Meta never documented still parses.
 pub(crate) mod id {
-    use super::{Deserialize, Deserializer, Error, Value, kind};
+    use super::{Deserialize, DeserializeOwned, Deserializer, Error, Value, as_sent, kind};
 
     /// `#[serde(deserialize_with = "crate::serde_ext::id::deserialize")]`.
     pub(crate) fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
     where
         D: Deserializer<'de>,
-        T: From<String>,
+        T: DeserializeOwned,
     {
         match Value::deserialize(deserializer)? {
-            Value::String(s) => Ok(T::from(s)),
-            Value::Number(n) => Ok(T::from(n.to_string())),
+            Value::String(s) => as_sent(s),
+            Value::Number(n) => as_sent(n.to_string()),
             other => Err(D::Error::custom(format!(
                 "expected an id (string or number), found {}",
                 kind(&other)
@@ -46,18 +55,18 @@ pub(crate) mod id {
 
 /// Optional variant of [`id`]; `null` and a missing key are both `None`.
 pub(crate) mod id_option {
-    use super::{Deserialize, Deserializer, Error, Value, kind};
+    use super::{Deserialize, DeserializeOwned, Deserializer, Error, Value, as_sent, kind};
 
     /// `#[serde(default, deserialize_with = "crate::serde_ext::id_option::deserialize")]`.
     pub(crate) fn deserialize<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
     where
         D: Deserializer<'de>,
-        T: From<String>,
+        T: DeserializeOwned,
     {
         match Value::deserialize(deserializer)? {
             Value::Null => Ok(None),
-            Value::String(s) => Ok(Some(T::from(s))),
-            Value::Number(n) => Ok(Some(T::from(n.to_string()))),
+            Value::String(s) => as_sent(s).map(Some),
+            Value::Number(n) => as_sent(n.to_string()).map(Some),
             other => Err(D::Error::custom(format!(
                 "expected an id (string or number), found {}",
                 kind(&other)

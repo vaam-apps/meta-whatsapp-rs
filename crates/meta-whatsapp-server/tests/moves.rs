@@ -62,8 +62,8 @@ impl Setup {
             move_waba(
                 store.as_ref(),
                 &vault,
-                &WabaId::new(WABA),
-                &PhoneNumberId::new(PN),
+                &WabaId::new(WABA).unwrap(),
+                &PhoneNumberId::new(PN).unwrap(),
                 "merchant-b",
                 token,
             )
@@ -87,19 +87,29 @@ impl Setup {
     /// (none: its token not stored yet); Meta was never called.
     async fn held_by_b(&self, token: Option<&str>, case: &str) {
         assert!(!self.moving.armed(), "{case}: the move never ran");
-        let binding = self.h.store.waba(&WabaId::new(WABA)).await.unwrap();
+        let binding = self
+            .h
+            .store
+            .waba(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap();
         assert_eq!(
             binding.map(|b| b.tenant_id.as_str().to_owned()).as_deref(),
             Some("merchant-b"),
             "{case}: merchant-b's binding"
         );
-        let number = self.h.store.number(&PhoneNumberId::new(PN)).await.unwrap();
+        let number = self
+            .h
+            .store
+            .number(&PhoneNumberId::new(PN).unwrap())
+            .await
+            .unwrap();
         assert_eq!(
             number.map(|n| n.status),
             Some(NumberStatus::Connected),
             "{case}: merchant-b's number"
         );
-        let stored = self.h.vault.get(&WabaId::new(WABA)).await.unwrap();
+        let stored = self.h.vault.get(&WabaId::new(WABA).unwrap()).await.unwrap();
         assert_eq!(
             stored
                 .map(|t| t.token.expose_secret().to_owned())
@@ -176,8 +186,8 @@ async fn a_tenant_deletion_never_skips_a_waba_its_tenant_still_holds() {
             move_waba(
                 store.as_ref(),
                 &vault,
-                &WabaId::new(WABA),
-                &PhoneNumberId::new(PN),
+                &WabaId::new(WABA).unwrap(),
+                &PhoneNumberId::new(PN).unwrap(),
                 "merchant-a",
                 token,
             )
@@ -192,7 +202,7 @@ async fn a_tenant_deletion_never_skips_a_waba_its_tenant_still_holds() {
                 .unwrap();
         let holder =
             s.h.store
-                .waba(&WabaId::new(WABA))
+                .waba(&WabaId::new(WABA).unwrap())
                 .await
                 .unwrap()
                 .map(|b| b.tenant_id.as_str().to_owned());
@@ -200,7 +210,13 @@ async fn a_tenant_deletion_never_skips_a_waba_its_tenant_still_holds() {
             assert_eq!(deleted.status, StatusCode::NO_CONTENT, "{}", deleted.text);
             assert!(tenant.is_none());
             assert_eq!(holder, None, "disconnected before the tenant went");
-            assert!(s.h.vault.get(&WabaId::new(WABA)).await.unwrap().is_none());
+            assert!(
+                s.h.vault
+                    .get(&WabaId::new(WABA).unwrap())
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
             let [unsubscribe] = s.h.graph.requests().try_into().unwrap();
             assert_eq!(unsubscribe.method, Method::DELETE);
             assert_eq!(unsubscribe.bearer(), token);
@@ -297,10 +313,10 @@ async fn forgetting_a_waba_that_moved_warns_the_new_holder_may_have_lost_its_sub
                 vault
                     .store(
                         &StoredBusinessToken::new(
-                            WabaId::new(WABA),
+                            WabaId::new(WABA).unwrap(),
                             AccessToken::new("TOKEN-OF-A-REFRESHED"),
                         )
-                        .phone_number_ids([PhoneNumberId::new(PN)]),
+                        .phone_number_ids([PhoneNumberId::new(PN).unwrap()]),
                     )
                     .await
                     .unwrap();

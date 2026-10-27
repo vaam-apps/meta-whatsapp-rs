@@ -197,22 +197,38 @@ mod tests {
             .build()
             .unwrap();
         let store: Arc<dyn ConversationStore> = Arc::new(MemoryConversationStore::new());
-        let owned = HashSet::from([PhoneNumberId::new("other-number")]);
-        let refused = inbox_for(&owned, NUMBER.into(), &platform, &vault, store.clone()).await;
+        let owned = HashSet::from([PhoneNumberId::new_unchecked("other-number")]);
+        let refused = inbox_for(
+            &owned,
+            PhoneNumberId::new(NUMBER).unwrap(),
+            &platform,
+            &vault,
+            store.clone(),
+        )
+        .await;
         assert!(matches!(refused, Err(Refused::NotYourNumber)));
 
         vault
             .store(
-                &StoredBusinessToken::new("102290129340398", AccessToken::new("MERCHANT"))
-                    .phone_number_ids([NUMBER]),
+                &StoredBusinessToken::new(
+                    WabaId::new("102290129340398").unwrap(),
+                    AccessToken::new("MERCHANT"),
+                )
+                .phone_number_ids([PhoneNumberId::new(NUMBER).unwrap()]),
             )
             .await
             .unwrap();
-        let owned = HashSet::from([PhoneNumberId::new(NUMBER)]);
+        let owned = HashSet::from([PhoneNumberId::new(NUMBER).unwrap()]);
         assert!(
-            inbox_for(&owned, NUMBER.into(), &platform, &vault, store)
-                .await
-                .is_ok()
+            inbox_for(
+                &owned,
+                PhoneNumberId::new(NUMBER).unwrap(),
+                &platform,
+                &vault,
+                store
+            )
+            .await
+            .is_ok()
         );
     }
 
@@ -229,7 +245,11 @@ mod tests {
             .access_token("MERCHANT")
             .build()
             .unwrap();
-        let inbox = Inbox::new(client.clone(), NUMBER, store.clone());
+        let inbox = Inbox::new(
+            client.clone(),
+            PhoneNumberId::new(NUMBER).unwrap(),
+            store.clone(),
+        );
 
         reply_or_template(&inbox, CUSTOMER, "Yes, in navy too.")
             .await
@@ -244,7 +264,7 @@ mod tests {
         let later = Arc::new(ManualClock::new(
             OffsetDateTime::now_utc() + Duration::from_hours(25),
         ));
-        let late = Inbox::new(client, NUMBER, store).with_clock(later);
+        let late = Inbox::new(client, PhoneNumberId::new(NUMBER).unwrap(), store).with_clock(later);
         let refused = late
             .reply(&late.key(CUSTOMER), Text::new("Hello?").into())
             .await
@@ -283,7 +303,7 @@ mod tests {
             .access_token("MERCHANT")
             .build()
             .unwrap();
-        let inbox = Inbox::new(client, NUMBER, store.clone());
+        let inbox = Inbox::new(client, PhoneNumberId::new(NUMBER).unwrap(), store.clone());
         let sent = reply_unless_handled_elsewhere(&inbox, CUSTOMER, "We missed your call")
             .await
             .unwrap();
@@ -312,7 +332,7 @@ mod tests {
         assert_eq!(transport.remaining(), 1, "nothing sent for the refusals");
         escalation_partner_inbox(inbox)
             .reply(
-                &ConversationKey::new(NUMBER, CUSTOMER),
+                &ConversationKey::new(PhoneNumberId::new(NUMBER).unwrap(), CUSTOMER),
                 Text::new("Taking over").into(),
             )
             .await
@@ -347,7 +367,7 @@ mod tests {
             .access_token("MERCHANT")
             .build()
             .unwrap();
-        let inbox = Inbox::new(client, NUMBER, store);
+        let inbox = Inbox::new(client, PhoneNumberId::new(NUMBER).unwrap(), store);
         let sent = reply_unless_handled_elsewhere(&inbox, CUSTOMER, "Hi, I'm Ana")
             .await
             .unwrap();
@@ -381,7 +401,7 @@ mod tests {
     fn row(id: &str, contact: &str, from: &str) -> StoredMessage {
         StoredMessage {
             id: MessageId::new(id),
-            conversation: ConversationKey::new(NUMBER, contact),
+            conversation: ConversationKey::new(PhoneNumberId::new(NUMBER).unwrap(), contact),
             direction: Direction::Inbound,
             kind: "text".to_owned(),
             text: Some("my address is 1 Main St".to_owned()),
@@ -402,7 +422,7 @@ mod tests {
         // A history thread under their phone number, which the address book
         // ties to the BSUID; an earlier BSUID linked to it; a group message.
         let contact = StoredContact {
-            key: ConversationKey::new(NUMBER, "16505551234"),
+            key: ConversationKey::new(PhoneNumberId::new(NUMBER).unwrap(), "16505551234"),
             full_name: Some("Pablo Morales".to_owned()),
             first_name: None,
             phone_number: Some("16505551234".to_owned()),
@@ -414,7 +434,7 @@ mod tests {
         store.put_contact(contact).await.unwrap();
         store
             .link_identity(IdentityLink::new(
-                NUMBER,
+                PhoneNumberId::new(NUMBER).unwrap(),
                 "US.1",
                 CUSTOMER,
                 OffsetDateTime::now_utc(),
@@ -433,7 +453,7 @@ mod tests {
                 .transport(ScriptedTransport::new())
                 .build()
                 .unwrap(),
-            NUMBER,
+            PhoneNumberId::new(NUMBER).unwrap(),
             store.clone(),
         );
 

@@ -190,7 +190,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"success": true}));
         client(&t)
-            .business_encryption("PHONE_NUMBER_ID")
+            .business_encryption(PhoneNumberId::new("106540352242922").unwrap())
             .set_public_key(PEM)
             .await
             .unwrap();
@@ -198,7 +198,7 @@ mod tests {
         assert_eq!(req.method, Method::POST);
         assert_eq!(
             req.path(),
-            "/v25.0/PHONE_NUMBER_ID/whatsapp_business_encryption"
+            "/v25.0/106540352242922/whatsapp_business_encryption"
         );
         assert_eq!(req.bearer(), Some("TOKEN"));
         let RecordedBody::Bytes { content_type, data } = &req.body else {
@@ -218,7 +218,7 @@ mod tests {
     #[tokio::test]
     async fn refuses_private_keys_and_non_pem_before_sending() {
         let t = ScriptedTransport::new();
-        let enc = client(&t).business_encryption("1");
+        let enc = client(&t).business_encryption(PhoneNumberId::new("1").unwrap());
         for bad in [
             "",
             "   ",
@@ -250,7 +250,11 @@ mod tests {
                 "business_public_key_signature_status": "VALID"
             }),
         );
-        let key = client(&t).business_encryption("1").get().await.unwrap();
+        let key = client(&t)
+            .business_encryption(PhoneNumberId::new("1").unwrap())
+            .get()
+            .await
+            .unwrap();
         assert_eq!(
             key.business_public_key.as_deref(),
             Some("<2048_bit_RSA_key>")
@@ -276,7 +280,7 @@ mod tests {
             }]}),
         );
         t.push_json(200, json!({"data": []}));
-        let enc = client(&t).business_encryption("1");
+        let enc = client(&t).business_encryption(PhoneNumberId::new("1").unwrap());
         let key = enc.get().await.unwrap();
         assert_eq!(
             key.business_public_key_signature_status,
@@ -291,7 +295,11 @@ mod tests {
     async fn a_malformed_data_array_is_a_decode_error_not_a_missing_key() {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"data": [{"business_public_key": 42}]}));
-        let err = client(&t).business_encryption("1").get().await.unwrap_err();
+        let err = client(&t)
+            .business_encryption(PhoneNumberId::new("1").unwrap())
+            .get()
+            .await
+            .unwrap_err();
         assert!(
             matches!(err, meta_whatsapp_core::Error::Decode { .. }),
             "{err}"
@@ -316,7 +324,7 @@ mod tests {
             .build()
             .unwrap();
         retrying
-            .business_encryption("1")
+            .business_encryption(PhoneNumberId::new("1").unwrap())
             .set_public_key(PEM)
             .await
             .unwrap();
@@ -341,7 +349,7 @@ mod tests {
             }}),
         );
         let err = client(&t)
-            .business_encryption("1")
+            .business_encryption(PhoneNumberId::new("1").unwrap())
             .set_public_key(PEM)
             .await
             .unwrap_err();

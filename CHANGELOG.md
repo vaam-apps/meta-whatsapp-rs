@@ -91,6 +91,13 @@ volumes (Claude config, shell history, cargo caches) start empty
   raw bytes". This reverts fd4667e's provisional replacement of U+0000
   with U+FFFD in `InboxSink` and `Inbox::send`: message content keeps it,
   and the Postgres store holds it (below, Changed).
+- #20 (an id holding `/` was only percent-encoded, and whether Graph
+  decodes `%2F` before routing is unverified): decided on 2026-09-26
+  under the owner's delegation, each id checked against the shape Meta
+  documents, opaque ids kept one encoded segment; landed with roadmap
+  L20c (see Changed, breaking), and the entry is deleted from
+  OPEN_QUESTIONS.md. What stays unverified for opaque ids is recorded
+  in docs/architecture.md (rule 1 for every endpoint module).
 - #22 (product-card carousel templates were created with 2–10 cards
   where Meta's page says to define two): decided on 2026-09-26 under the
   owner's delegation, exactly two at creation; landed with roadmap L20e
@@ -178,7 +185,8 @@ stored data, the owner's).
 - Storage: #19, `rediss://` with an explicit aws-lc-rs provider, never
   the process default (L21c).
 - Security: #20, ids checked against their documented shape, opaque ids
-  still one encoded segment (L20c); #21, the scoped quick-xml ignore
+  still one encoded segment (L20c, landed: see Changed and "Open
+  questions closed"); #21, the scoped quick-xml ignore
   kept until typst upgrades (no other code).
 - Product details:
   - #22, product-card carousel templates created with exactly two cards
@@ -1162,6 +1170,58 @@ stored data, the owner's).
   Use v4, which needs no `version`.
 
 ### Changed
+
+- **Breaking — numeric ids are checked when they are built**
+  (`meta_whatsapp_core::ids`, roadmap L20c, decided as OPEN_QUESTIONS
+  #20, now closed). `AppId`, `BusinessId`, `WabaId`, `PhoneNumberId`,
+  `MediaId` and `TemplateId` are the ids Meta documents as numeric
+  strings; their `new` now returns `Result<Self, ValidationError>` and
+  refuses anything but 1 to 64 ASCII digits (`ids::MAX_NUMERIC_ID_LEN`,
+  `ids::is_numeric_id`; 64 is the service's existing cap, Meta states
+  none), with the error on the type's `FIELD` (`app_id`, `business_id`,
+  `waba_id`, `phone_number_id`, `media_id`, `template_id`) and the
+  refused value not repeated. `FromStr` fails with the same
+  `ValidationError` (it was `Infallible`), and `TryFrom<&str>` and
+  `TryFrom<String>` replace `From`. So an id holding `/`, `?`, `#` or
+  `..` is refused before any request is built. **Parsing never checks:**
+  `Deserialize` keeps an id as Meta sent it, so a response or webhook
+  with an id of another shape still parses, and the new
+  `new_unchecked` does the same for an id that arrives as a plain string
+  (the library uses it for Meta's values, such as webhook entry ids and
+  `debug_token` targets, and for rows read back from a store). Such an
+  id is still one percent-encoded path segment, and the endpoint modules
+  keep their own checks (empty, `.` and `..` segments; digits where a
+  page asks for them), which now guard unchecked ids. Every other id
+  type stays opaque and takes any string: BSUIDs (`UserId`), group ids,
+  message ids, Flow ids, QR codes, call ids, upload sessions and
+  handles, credit lines, allocation configurations, funding ids, system
+  users, verification submissions, bot ids, template group ids, catalog
+  ids, business profile ids, signups and `wa_id`s; a group id holding
+  `/` is sent as one segment with `%2F`. Upgrading: build a numeric id
+  with `WabaId::new("102290129340398")?` (or `"…".parse::<WabaId>()?`)
+  where a string was passed: `client.messages`, `media`, `waba`,
+  `business`, `templates`, `flows`, `marketing`, `signups` and every
+  other family that takes one, `AppCredentials::new`,
+  `OtpService::new`, `ConversationKey::new`, `IdentityLink::new`,
+  `StoredBusinessToken::new` and its `business_id` and
+  `phone_number_ids`, `LaunchOptions::pre_verified_phone_ids` and
+  `waba_ids`, `TemplateGroupCreate::new`, `OutboundMessage::messaging_account_id`,
+  `MediaSource::id`, `Header::image_id` and the like. Placeholder ids
+  such as `"WABA_ID"` no longer build: use digits. An id read back from
+  your own database takes `new` (which refuses one stored before this
+  check) or `new_unchecked` (which keeps it). No stored data changes:
+  the token vault, its credit ledger, the conversation stores and the
+  service's tables read ids back unchecked, so a record written under a
+  non-numeric id still opens. The service checks a Graph id as before
+  (its `graph_id` now runs `is_numeric_id`, plus its own rule that an id
+  does not start with `0`, decision D4); a `{pn}` or `{waba_id}` that is
+  not numeric is `404 not_found` as before, since nothing bound matches
+  it; a message's media `id` in a body is passed on as given, as
+  before; `openapi/v1.json` is unchanged. One startup check is
+  stricter: a `WA_APP_ID` of more than 64 digits is now refused. In the
+  `cms_inbox` example, `Tenants::tenant` takes the ids as strings and
+  refuses one that is not numeric, and a non-numeric `{phone_number_id}`
+  is `403` as before.
 
 - **Breaking — a product-card carousel template is created with exactly
   two cards** (`meta_whatsapp_client::templates`, roadmap L20e, decided

@@ -110,7 +110,7 @@ async fn with_a_tenant(backend: &dyn Backend) -> TenantId {
     let records = backend.records();
     records.create_tenant(&tenant, "").await.unwrap().unwrap();
     records
-        .bind_waba(&tenant, &WabaId::new(WABA), &[])
+        .bind_waba(&tenant, &WabaId::new(WABA).unwrap(), &[])
         .await
         .unwrap();
     tenant
@@ -124,11 +124,11 @@ fn row(id: &str) -> NewEvent {
         dedup_window: None,
         tenant: TenantId::parse(TENANT),
         route_guard: Some(RouteGuard {
-            binding: GuardedBinding::Waba(WabaId::new(WABA)),
+            binding: GuardedBinding::Waba(WabaId::new(WABA).unwrap()),
             not_after: None,
         }),
         phone_number_id: None,
-        waba_id: Some(WabaId::new(WABA)),
+        waba_id: Some(WabaId::new(WABA).unwrap()),
         event_type: "message_received".to_owned(),
         data: "{}".to_owned(),
     }

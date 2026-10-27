@@ -400,7 +400,7 @@ mod tests {
             }),
         );
         let qr = client(&t)
-            .qr_codes("106540352242922")
+            .qr_codes(PhoneNumberId::new("106540352242922").unwrap())
             .create(&CreateQrCode::new("Cyber Monday").with_image(QrImageFormat::Svg))
             .await
             .unwrap();
@@ -431,7 +431,7 @@ mod tests {
             json!({"code": "4O4YGZEG3RIVE1", "prefilled_message": "Hi", "deep_link_url": "https://wa.me/message/4O4YGZEG3RIVE1"}),
         );
         client(&t)
-            .qr_codes("1")
+            .qr_codes(PhoneNumberId::new("1").unwrap())
             .create(&CreateQrCode::new("Hi").with_image(QrImageFormat::Png))
             .await
             .unwrap();
@@ -444,7 +444,7 @@ mod tests {
             json!({"code": "4O4YGZEG3RIVE1", "prefilled_message": "Hi", "deep_link_url": "https://wa.me/message/4O4YGZEG3RIVE1"}),
         );
         let qr = client(&t)
-            .qr_codes("1")
+            .qr_codes(PhoneNumberId::new("1").unwrap())
             .create(&CreateQrCode::new("Hi"))
             .await
             .unwrap();
@@ -469,7 +469,7 @@ mod tests {
             }),
         );
         let qr = client(&t)
-            .qr_codes("106540352242922")
+            .qr_codes(PhoneNumberId::new("106540352242922").unwrap())
             .update(&UpdateQrCode {
                 code: code(),
                 prefilled_message: "Cyber Tuesday".into(),
@@ -510,7 +510,7 @@ mod tests {
         t.push_error(|| TransportError::Timeout);
         t.push_json(200, body.clone());
         retrying(&t)
-            .qr_codes("1")
+            .qr_codes(PhoneNumberId::new("1").unwrap())
             .update(&UpdateQrCode {
                 code: code(),
                 prefilled_message: "x".into(),
@@ -523,7 +523,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_error(|| TransportError::Timeout);
         let err = retrying(&t)
-            .qr_codes("1")
+            .qr_codes(PhoneNumberId::new("1").unwrap())
             .create(&CreateQrCode::new("x"))
             .await
             .unwrap_err();
@@ -548,7 +548,7 @@ mod tests {
             }),
         );
         let qr = client(&t)
-            .qr_codes("106540352242922")
+            .qr_codes(PhoneNumberId::new("106540352242922").unwrap())
             .get(
                 &code(),
                 &QrCodeFields {
@@ -583,7 +583,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"data": []}));
         let err = client(&t)
-            .qr_codes("1")
+            .qr_codes(PhoneNumberId::new("1").unwrap())
             .get(&code(), &QrCodeFields::default())
             .await
             .unwrap_err();
@@ -606,7 +606,7 @@ mod tests {
             }),
         );
         let page = client(&t)
-            .qr_codes("106540352242922")
+            .qr_codes(PhoneNumberId::new("106540352242922").unwrap())
             .list(&ListQrCodes {
                 code: Some(code()),
                 limit: Some(25),
@@ -648,7 +648,7 @@ mod tests {
             json!({"data": [{"code": "WOMVT6TJ2BP7A1", "prefilled_message": "b", "deep_link_url": "u2"}]}),
         );
         let codes: Vec<QrCode> = client(&t)
-            .qr_codes("1")
+            .qr_codes(PhoneNumberId::new("1").unwrap())
             .list_stream(&ListQrCodes {
                 limit: Some(1),
                 ..ListQrCodes::default()
@@ -668,7 +668,7 @@ mod tests {
         let t = ScriptedTransport::new();
         t.push_json(200, json!({"success": true}));
         client(&t)
-            .qr_codes("106540352242922")
+            .qr_codes(PhoneNumberId::new("106540352242922").unwrap())
             .delete(&code())
             .await
             .unwrap();
@@ -691,7 +691,11 @@ mod tests {
             404,
             json!({"error": {"message": "QR code not found", "type": "GraphMethodException", "code": 803}}),
         );
-        let err = client(&t).qr_codes("1").delete(&code()).await.unwrap_err();
+        let err = client(&t)
+            .qr_codes(PhoneNumberId::new("1").unwrap())
+            .delete(&code())
+            .await
+            .unwrap_err();
         assert_eq!(err.graph().map(|g| g.code), Some(803));
         assert_eq!(err.kind(), ErrorKind::Unknown);
         assert_eq!(t.remaining(), 0);
@@ -700,7 +704,7 @@ mod tests {
     #[tokio::test]
     async fn prefilled_message_over_140_chars_is_rejected_locally() {
         let t = ScriptedTransport::new();
-        let qr = client(&t).qr_codes("1");
+        let qr = client(&t).qr_codes(PhoneNumberId::new("1").unwrap());
         // 140 multi-byte characters are fine: the limit is characters.
         let ok = "é".repeat(140);
         assert!(validate_message(&ok).is_ok());
@@ -724,7 +728,7 @@ mod tests {
     async fn empty_prefilled_message_is_rejected_locally() {
         let t = ScriptedTransport::new();
         let err = client(&t)
-            .qr_codes("1")
+            .qr_codes(PhoneNumberId::new("1").unwrap())
             .create(&CreateQrCode::new(""))
             .await
             .unwrap_err();
@@ -735,7 +739,7 @@ mod tests {
     #[tokio::test]
     async fn malformed_code_is_rejected_before_it_reaches_the_path() {
         let t = ScriptedTransport::new();
-        let qr = client(&t).qr_codes("1");
+        let qr = client(&t).qr_codes(PhoneNumberId::new("1").unwrap());
         for bad in ["4O4YGZEG3RIVE", "4O4YGZEG3RIVE12", "4O4YGZEG3RIV/1", ""] {
             let err = qr.delete(&QrCodeId::new(bad)).await.unwrap_err();
             assert_eq!(validation_field(&err), "code", "{bad:?}");
@@ -767,7 +771,7 @@ mod tests {
     #[tokio::test]
     async fn list_limit_outside_1_to_25_is_rejected_locally() {
         let t = ScriptedTransport::new();
-        let qr = client(&t).qr_codes("1");
+        let qr = client(&t).qr_codes(PhoneNumberId::new("1").unwrap());
         for bad in [0, 26] {
             let err = qr
                 .list(&ListQrCodes {
@@ -784,7 +788,7 @@ mod tests {
     #[tokio::test]
     async fn list_stream_refuses_caller_cursors() {
         let t = ScriptedTransport::new();
-        let qr = client(&t).qr_codes("1");
+        let qr = client(&t).qr_codes(PhoneNumberId::new("1").unwrap());
         let items: Vec<Result<QrCode>> = qr
             .list_stream(&ListQrCodes {
                 after: Some("c".into()),

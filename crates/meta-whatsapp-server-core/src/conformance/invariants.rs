@@ -90,7 +90,7 @@ async fn every_other_accessor(backend: &dyn Backend, tenant: &TenantId) {
         "claimed through another idempotency() handle"
     );
 
-    let waba = WabaId::new("backend-same-data-waba");
+    let waba = WabaId::new_unchecked("backend-same-data-waba");
     assert_eq!(
         backend
             .records()
@@ -152,7 +152,10 @@ async fn every_other_accessor(backend: &dyn Backend, tenant: &TenantId) {
     );
     turn.release().await.unwrap();
 
-    let conversation = ConversationKey::new(PhoneNumberId::new("106540352242922"), "16505551234");
+    let conversation = ConversationKey::new(
+        PhoneNumberId::new("106540352242922").unwrap(),
+        "16505551234",
+    );
     let message = StoredMessage::tombstone(
         &conversation,
         &MessageId::new("wamid.same-data"),
@@ -191,7 +194,7 @@ pub async fn deleting_a_tenant_purges_its_stream(backend: &dyn Backend) {
     }
     let id = tenant("suite-t");
     tenants
-        .unbind_waba(&WabaId::new(waba_of("81")))
+        .unbind_waba(&WabaId::new(waba_of("81")).unwrap())
         .await
         .unwrap();
     assert_eq!(
@@ -245,8 +248,8 @@ pub async fn the_route_guard_is_checked_with_the_insert(backend: &dyn Backend) {
     let kept = NewEvent {
         route_guard: Some(RouteGuard {
             binding: GuardedBinding::Number {
-                phone_number_id: PhoneNumberId::new("31"),
-                waba_id: WabaId::new(waba_of("31")),
+                phone_number_id: PhoneNumberId::new("31").unwrap(),
+                waba_id: WabaId::new(waba_of("31")).unwrap(),
             },
             not_after: Some(now + Span::HOUR),
         }),
@@ -254,7 +257,7 @@ pub async fn the_route_guard_is_checked_with_the_insert(backend: &dyn Backend) {
     };
     let waba_kept = NewEvent {
         route_guard: Some(RouteGuard {
-            binding: GuardedBinding::Waba(WabaId::new(waba_of("31"))),
+            binding: GuardedBinding::Waba(WabaId::new(waba_of("31")).unwrap()),
             not_after: Some(now + Span::HOUR),
         }),
         ..row(Some("suite-g"), "template_status_updated", "31", None)
@@ -263,7 +266,7 @@ pub async fn the_route_guard_is_checked_with_the_insert(backend: &dyn Backend) {
     // hour before now: the binding is from this test's start).
     let dated_before = NewEvent {
         route_guard: Some(RouteGuard {
-            binding: GuardedBinding::Waba(WabaId::new(waba_of("31"))),
+            binding: GuardedBinding::Waba(WabaId::new(waba_of("31")).unwrap()),
             not_after: Some(now - Span::HOUR),
         }),
         ..row(Some("suite-g"), "template_status_updated", "31", None)
@@ -273,8 +276,8 @@ pub async fn the_route_guard_is_checked_with_the_insert(backend: &dyn Backend) {
     let other_waba = NewEvent {
         route_guard: Some(RouteGuard {
             binding: GuardedBinding::Number {
-                phone_number_id: PhoneNumberId::new("31"),
-                waba_id: WabaId::new(waba_of("32")),
+                phone_number_id: PhoneNumberId::new("31").unwrap(),
+                waba_id: WabaId::new(waba_of("32")).unwrap(),
             },
             not_after: None,
         }),
@@ -295,7 +298,7 @@ pub async fn the_route_guard_is_checked_with_the_insert(backend: &dyn Backend) {
     );
     // The WABA and its number move to suite-h between the routing (to
     // suite-g) and the insert: operator-only, neither tenant's.
-    let waba = WabaId::new(waba_of("31"));
+    let waba = WabaId::new(waba_of("31")).unwrap();
     assert!(tenants.unbind_waba(&waba).await.unwrap());
     tenants
         .create_tenant(&TenantId::parse("suite-h").unwrap(), "")
@@ -306,7 +309,7 @@ pub async fn the_route_guard_is_checked_with_the_insert(backend: &dyn Backend) {
             .bind_waba(
                 &TenantId::parse("suite-h").unwrap(),
                 &waba,
-                &[PhoneNumberId::new("31")]
+                &[PhoneNumberId::new("31").unwrap()]
             )
             .await
             .unwrap(),
@@ -353,8 +356,8 @@ pub async fn a_binding_begun_after_the_event_fails_the_number_guard(backend: &dy
     let guarded = |not_after: OffsetDateTime| NewEvent {
         route_guard: Some(RouteGuard {
             binding: GuardedBinding::Number {
-                phone_number_id: PhoneNumberId::new("35"),
-                waba_id: WabaId::new(waba_of("35")),
+                phone_number_id: PhoneNumberId::new("35").unwrap(),
+                waba_id: WabaId::new(waba_of("35")).unwrap(),
             },
             not_after: Some(not_after),
         }),
@@ -393,14 +396,14 @@ pub async fn a_binding_of_the_events_own_second_fails_the_guard(backend: &dyn Ba
     let records = backend.records();
     let tenants = records.as_ref();
     bind(records.as_ref(), "suite-e", "38").await;
-    let waba = WabaId::new(waba_of("38"));
+    let waba = WabaId::new(waba_of("38")).unwrap();
     let began = tenants.waba(&waba).await.unwrap().unwrap().attached_at;
     let second = OffsetDateTime::from_unix_timestamp(began.unix_timestamp()).unwrap();
     let guarded = |by_number: bool, not_after: OffsetDateTime| NewEvent {
         route_guard: Some(RouteGuard {
             binding: if by_number {
                 GuardedBinding::Number {
-                    phone_number_id: PhoneNumberId::new("38"),
+                    phone_number_id: PhoneNumberId::new("38").unwrap(),
                     waba_id: waba.clone(),
                 }
             } else {

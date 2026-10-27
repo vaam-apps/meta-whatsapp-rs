@@ -2598,7 +2598,8 @@ mod tests {
         );
         deliver_all(&sink, evs.clone()).await;
         deliver_all(&sink, evs).await; // Meta retry
-        let key = ConversationKey::new(PNID, "US.13491208655302741918");
+        let key =
+            ConversationKey::new(PhoneNumberId::new(PNID).unwrap(), "US.13491208655302741918");
         let rows = store.messages(&key, None, 10).await.unwrap();
         assert_eq!(rows.len(), 1, "redelivery must not duplicate");
         assert_eq!(rows[0].direction, Direction::Inbound);
@@ -2618,7 +2619,11 @@ mod tests {
         )
         .await;
         let rows = store
-            .messages(&ConversationKey::new(PNID, "16505551234"), None, 10)
+            .messages(
+                &ConversationKey::new(PhoneNumberId::new(PNID).unwrap(), "16505551234"),
+                None,
+                10,
+            )
             .await
             .unwrap();
         assert_eq!(rows.len(), 1);
@@ -2626,7 +2631,7 @@ mod tests {
         deliver_all(&sink, inbound("wamid.3", 1_760_000_001, None, None, "?")).await;
         assert_eq!(
             store
-                .conversations(&PNID.into(), None, 10)
+                .conversations(&PhoneNumberId::new(PNID).unwrap(), None, 10)
                 .await
                 .unwrap()
                 .len(),
@@ -2646,7 +2651,11 @@ mod tests {
         deliver_all(&sink, status("wamid.4", "read", 1_760_000_100)).await;
         deliver_all(&sink, status("wamid.4", "delivered", 1_760_000_050)).await; // late
         let rows = store
-            .messages(&ConversationKey::new(PNID, "US.1"), None, 1)
+            .messages(
+                &ConversationKey::new(PhoneNumberId::new(PNID).unwrap(), "US.1"),
+                None,
+                1,
+            )
             .await
             .unwrap();
         assert_eq!(rows[0].status, DeliveryStatus::Read);
@@ -2680,7 +2689,11 @@ mod tests {
         )
         .await;
         let rows = store
-            .messages(&ConversationKey::new(PNID, "US.1"), None, 10)
+            .messages(
+                &ConversationKey::new(PhoneNumberId::new(PNID).unwrap(), "US.1"),
+                None,
+                10,
+            )
             .await
             .unwrap();
         assert_eq!(rows.len(), 1, "the revoke itself is not a message");
@@ -2964,7 +2977,11 @@ mod tests {
         }));
         deliver_all(&sink, status).await;
         let rows = store
-            .messages(&ConversationKey::new(PNID, "US.1"), None, 10)
+            .messages(
+                &ConversationKey::new(PhoneNumberId::new(PNID).unwrap(), "US.1"),
+                None,
+                10,
+            )
             .await
             .unwrap();
         assert_eq!(rows.len(), 2, "both messages recorded");
@@ -3045,7 +3062,7 @@ mod tests {
             ),
         )
         .await;
-        let key = ConversationKey::new(PNID, "US.1");
+        let key = ConversationKey::new(PhoneNumberId::new(PNID).unwrap(), "US.1");
         let row = store.messages(&key, None, 10).await.unwrap().remove(0);
         assert_eq!(row.status, DeliveryStatus::Received, "{row:?}");
         assert_eq!(row.error, None);
@@ -3079,11 +3096,18 @@ mod tests {
             })),
         )
         .await;
-        let group = ConversationKey::new(PNID, "HBgLMTY1MDM4Nzk0MzkVAgASGBQ");
+        let group = ConversationKey::new(
+            PhoneNumberId::new(PNID).unwrap(),
+            "HBgLMTY1MDM4Nzk0MzkVAgASGBQ",
+        );
         assert_eq!(store.messages(&group, None, 10).await.unwrap().len(), 1);
         assert!(
             store
-                .messages(&ConversationKey::new(PNID, "US.1"), None, 10)
+                .messages(
+                    &ConversationKey::new(PhoneNumberId::new(PNID).unwrap(), "US.1"),
+                    None,
+                    10
+                )
                 .await
                 .unwrap()
                 .is_empty(),
@@ -3097,7 +3121,7 @@ mod tests {
 
     #[test]
     fn recipient_modes_follow_the_key() {
-        let k = |c: &str| ConversationKey::new(PNID, c);
+        let k = |c: &str| ConversationKey::new(PhoneNumberId::new(PNID).unwrap(), c);
         assert_eq!(
             recipient_for(&k("US.13491208655302741918")),
             Recipient::user("US.13491208655302741918")
@@ -3129,7 +3153,8 @@ mod tests {
             .retry(RetryPolicy::NONE)
             .build()
             .unwrap();
-        Inbox::new(client, PNID, store).with_clock(Arc::new(clock.clone()))
+        Inbox::new(client, PhoneNumberId::new(PNID).unwrap(), store)
+            .with_clock(Arc::new(clock.clone()))
     }
 
     fn sent(id: &str) -> serde_json::Value {
@@ -3198,7 +3223,8 @@ mod tests {
             .retry(RetryPolicy::NONE)
             .build()
             .unwrap();
-        let inbox = Inbox::new(client, PNID, store.clone()).with_clock(Arc::new(clock));
+        let inbox = Inbox::new(client, PhoneNumberId::new(PNID).unwrap(), store.clone())
+            .with_clock(Arc::new(clock));
         let key = inbox.key("US.1");
         inbox
             .reply(
@@ -3238,7 +3264,8 @@ mod tests {
             .retry(RetryPolicy::NONE)
             .build()
             .unwrap();
-        let inbox = Inbox::new(client, PNID, store.clone()).with_clock(Arc::new(clock));
+        let inbox = Inbox::new(client, PhoneNumberId::new(PNID).unwrap(), store.clone())
+            .with_clock(Arc::new(clock));
         let key = inbox.key("US.1");
         let message = OutboundMessage::template(
             inbox.recipient(&key),
@@ -3374,7 +3401,7 @@ mod tests {
         let clock = ManualClock::new(datetime!(2025-10-09 08:00 UTC));
         let t = ScriptedTransport::new();
         let inbox = inbox(&t, store, &clock);
-        let foreign = ConversationKey::new("999", "US.1");
+        let foreign = ConversationKey::new(PhoneNumberId::new("999").unwrap(), "US.1");
         assert!(inbox.history(&foreign, None, 10).await.is_err());
         assert!(
             inbox
@@ -3402,11 +3429,11 @@ mod tests {
             .retry(RetryPolicy::NONE)
             .build()
             .unwrap();
-        let inbox = Inbox::new(client, PNID, store.clone());
+        let inbox = Inbox::new(client, PhoneNumberId::new(PNID).unwrap(), store.clone());
         let at = datetime!(2026-09-24 12:00 UTC);
         let message = |number: &str, id: &str| StoredMessage {
             id: MessageId::new(id),
-            conversation: ConversationKey::new(number, "16505551234"),
+            conversation: ConversationKey::new(PhoneNumberId::new(number).unwrap(), "16505551234"),
             direction: Direction::Inbound,
             kind: "text".to_owned(),
             text: Some("my address".to_owned()),
@@ -3427,7 +3454,7 @@ mod tests {
             .append(message(PNID, "wamid.ours"))
             .await
             .unwrap();
-        let foreign = ConversationKey::new("999", "16505551234");
+        let foreign = ConversationKey::new(PhoneNumberId::new("999").unwrap(), "16505551234");
         for refused in [
             inbox.erase(&foreign).await.map(drop),
             inbox.identities(&foreign).await.map(drop),
@@ -3540,7 +3567,11 @@ mod tests {
     /// The whole conversation, oldest first.
     async fn thread(store: &dyn ConversationStore, contact: &str) -> Vec<StoredMessage> {
         let mut rows = store
-            .messages(&ConversationKey::new(PNID, contact), None, 100)
+            .messages(
+                &ConversationKey::new(PhoneNumberId::new(PNID).unwrap(), contact),
+                None,
+                100,
+            )
             .await
             .unwrap();
         rows.reverse();
@@ -3571,9 +3602,12 @@ mod tests {
         assert_eq!(echo.timestamp.unix_timestamp(), 1_739_321_024);
         assert_eq!(echo.payload["to"], "16505551234");
         // Sent from the app: it opens no customer service window.
-        let key = ConversationKey::new(PNID, "16505551234");
+        let key = ConversationKey::new(PhoneNumberId::new(PNID).unwrap(), "16505551234");
         assert_eq!(store.last_inbound_at(&key).await.unwrap(), None);
-        let summary = store.conversations(&PNID.into(), None, 10).await.unwrap();
+        let summary = store
+            .conversations(&PhoneNumberId::new(PNID).unwrap(), None, 10)
+            .await
+            .unwrap();
         assert_eq!(summary[0].unread, 0);
     }
 
@@ -3787,7 +3821,7 @@ mod tests {
         assert_eq!(rows[0].direction, Direction::Inbound);
         assert_eq!(rows[0].kind, "image");
         assert_eq!(rows[0].text.as_deref(), Some("Black Prince echeveria"));
-        let key = ConversationKey::new(PNID, "16505551234");
+        let key = ConversationKey::new(PhoneNumberId::new(PNID).unwrap(), "16505551234");
         assert_eq!(store.last_inbound_at(&key).await.unwrap(), None);
         assert_eq!(summary_of(store.as_ref(), &key).await.unwrap().unread, 0);
     }
@@ -3933,7 +3967,7 @@ mod tests {
     async fn synced_history_opens_no_window_and_is_never_unread() {
         let store = Arc::new(MemoryConversationStore::new());
         let sink = InboxSink::new(store.clone());
-        let key = ConversationKey::new(PNID, "16505551234");
+        let key = ConversationKey::new(PhoneNumberId::new(PNID).unwrap(), "16505551234");
         // "Thanks!" was received at 1739230970 (2025-02-10 23:42:50 UTC).
         deliver_all(&sink, body(HISTORY_THREADS)).await;
         let clock = ManualClock::new(datetime!(2025-02-10 23:50 UTC));
@@ -4039,7 +4073,7 @@ mod tests {
         deliver_all(&sink, body(HISTORY_DECLINED)).await;
         assert!(
             store
-                .conversations(&PNID.into(), None, 10)
+                .conversations(&PhoneNumberId::new(PNID).unwrap(), None, 10)
                 .await
                 .unwrap()
                 .is_empty()
@@ -4330,7 +4364,7 @@ mod tests {
         deliver_all(&sink, events).await;
         assert_eq!(
             store
-                .conversations(&PNID.into(), None, 10)
+                .conversations(&PhoneNumberId::new(PNID).unwrap(), None, 10)
                 .await
                 .unwrap()
                 .len(),
@@ -4461,7 +4495,7 @@ mod tests {
             "{}",
             rows[0].payload
         );
-        let key = ConversationKey::new(PNID, "US.1");
+        let key = ConversationKey::new(PhoneNumberId::new(PNID).unwrap(), "US.1");
         assert_eq!(store.last_inbound_at(&key).await.unwrap(), None);
     }
 
@@ -4524,7 +4558,7 @@ mod tests {
             ),
         )
         .await;
-        let key = ConversationKey::new(PNID, "16505551234");
+        let key = ConversationKey::new(PhoneNumberId::new(PNID).unwrap(), "16505551234");
         assert_eq!(
             summary_of(store.as_ref(), &key)
                 .await
@@ -4766,7 +4800,7 @@ mod tests {
             )
         };
         assert_eq!(calls(&store), (0, 1));
-        let key = ConversationKey::new(PNID, "16505551234");
+        let key = ConversationKey::new(PhoneNumberId::new(PNID).unwrap(), "16505551234");
         assert_eq!(
             store.inner.messages(&key, None, 1000).await.unwrap().len(),
             500

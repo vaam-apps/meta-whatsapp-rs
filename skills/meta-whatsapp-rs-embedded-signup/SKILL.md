@@ -33,7 +33,7 @@ required; partner-led business verification). [Guide](https://github.com/vaam-ap
 
 ```rust
 let client = meta_whatsapp_rs::client_builder()?.build()?; // no default token
-let es = client.embedded_signup(AppCredentials::new(app_id, app_secret));
+let es = client.embedded_signup(AppCredentials::new(AppId::new(app_id)?, app_secret));
 let vault = TokenVault::new(
     kv.clone(),
     VaultKeys::new(VaultKey::from_base64("2026-09", vault_key_b64)?),

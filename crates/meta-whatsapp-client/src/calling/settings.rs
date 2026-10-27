@@ -638,7 +638,7 @@ impl StrOrNum {
 fn lenient_opt_media_id<'de, D: Deserializer<'de>>(
     d: D,
 ) -> std::result::Result<Option<MediaId>, D::Error> {
-    Ok(Option::<StrOrNum>::deserialize(d)?.map(|v| MediaId::new(v.into_string())))
+    Ok(Option::<StrOrNum>::deserialize(d)?.map(|v| MediaId::new_unchecked(v.into_string())))
 }
 
 fn lenient_opt_string<'de, D: Deserializer<'de>>(

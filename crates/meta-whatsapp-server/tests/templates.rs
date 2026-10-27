@@ -686,7 +686,10 @@ async fn a_page_cached_for_one_tenant_is_never_answered_to_the_next() {
     h.graph.push_json(200, documented_list());
     assert_eq!(h.call(list(&key, WABA, "")).await.status, StatusCode::OK);
     // The operator unbinds the WABA; another tenant attaches it.
-    h.store.unbind_waba(&WabaId::new(WABA)).await.unwrap();
+    h.store
+        .unbind_waba(&WabaId::new(WABA).unwrap())
+        .await
+        .unwrap();
     h.tenant("merchant-43").await;
     h.connect("merchant-43", WABA, &[PN], "TOKEN-43").await;
     let theirs = h.tenant_key("merchant-43", &[Scope::Templates]).await;

@@ -39,11 +39,11 @@ pub fn victim() -> TenantId {
 }
 
 pub fn waba() -> WabaId {
-    WabaId::new(WABA.to_owned())
+    WabaId::new(WABA.to_owned()).unwrap()
 }
 
 pub fn pn() -> PhoneNumberId {
-    PhoneNumberId::new(PN.to_owned())
+    PhoneNumberId::new(PN.to_owned()).unwrap()
 }
 
 /// Every entry, by namespace and key: its value and its version.

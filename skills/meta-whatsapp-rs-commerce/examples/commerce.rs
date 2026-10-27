@@ -124,7 +124,7 @@ mod tests {
             .build()
             .unwrap();
         show_products(
-            &client.messages("106540352242922"),
+            &client.messages(PhoneNumberId::new("106540352242922").unwrap()),
             Recipient::phone("+16505551234"),
             "194836987003835".into(),
         )

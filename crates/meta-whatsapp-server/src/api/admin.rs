@@ -17,7 +17,9 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 
-use super::common::{ApiJson, PageParams, PageQuery, json, next_cursor, parse_rfc3339, rfc3339};
+use super::common::{
+    ApiJson, PageParams, PageQuery, json, next_cursor, parse_rfc3339, rfc3339, typed_graph_id,
+};
 use crate::auth::{AdminCaller, OwnedWaba, VaultRotation, graph_failed_for_admin};
 use crate::error::{ApiError, ErrorBody};
 use crate::keys::MintedKey;
@@ -952,26 +954,9 @@ pub struct AttachedWaba {
     pub phone_number_ids: Vec<String>,
 }
 
-/// Longest WABA id accepted in a body.
-const MAX_ID_LEN: usize = 64;
-
 /// Most numbers attach binds for one WABA (Meta allows far fewer): past
 /// it the listing is refused as `upstream` rather than followed for ever.
 pub const MAX_WABA_NUMBERS: usize = 1000;
-
-/// A Meta id from a body: digits only, as Meta writes them (D4 compares
-/// the exact string, so `0102…` and `102…` must not both pass).
-fn graph_id(field: &'static str, id: &str) -> Result<String, ApiError> {
-    let valid = !id.is_empty()
-        && id.len() <= MAX_ID_LEN
-        && id.bytes().all(|b| b.is_ascii_digit())
-        && !id.starts_with('0');
-    if valid {
-        Ok(id.to_owned())
-    } else {
-        Err(ApiError::invalid(field))
-    }
-}
 
 /// Attach one of the platform's own WABAs to a tenant: list its numbers
 /// from Meta with the given token (so no id is bound on the caller's word),
@@ -1008,7 +993,8 @@ pub(crate) async fn attach_waba(
     ApiJson(body): ApiJson<AttachWaba>,
 ) -> Result<(StatusCode, Json<AttachedWaba>), ApiError> {
     let tenant = path_tenant(&id)?;
-    let waba_id = WabaId::new(graph_id("waba_id", &body.waba_id)?);
+    // A Meta id from a body: digits only, as Meta writes them.
+    let waba_id: WabaId = typed_graph_id("waba_id", &body.waba_id)?;
     if body.token.trim().is_empty() {
         return Err(ApiError::invalid("token"));
     }
@@ -1141,7 +1127,8 @@ pub(crate) async fn get_waba(
     _admin: AdminCaller,
     Path(waba_id): Path<String>,
 ) -> Result<Json<WabaBindingView>, ApiError> {
-    let waba_id = WabaId::new(waba_id);
+    // Only a numeric id can be bound: anything else is not.
+    let waba_id = WabaId::new(waba_id).map_err(|_| ApiError::not_found())?;
     let binding = state
         .store()
         .waba(&waba_id)
@@ -1180,7 +1167,7 @@ pub(crate) async fn unbind_waba(
 ) -> Result<StatusCode, ApiError> {
     let binding = state
         .store()
-        .waba(&WabaId::new(waba_id))
+        .waba(&WabaId::new(waba_id).map_err(|_| ApiError::not_found())?)
         .await?
         .ok_or_else(ApiError::not_found)?;
     OwnedWaba::unbind_for_admin(&state, &admin, &binding).await?;

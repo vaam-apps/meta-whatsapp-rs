@@ -176,16 +176,25 @@ mod tests {
     async fn register_sends_the_pin_once() {
         let transport = ScriptedTransport::new();
         transport.push_json(200, json!({"success": true}));
-        register(&client(&transport), "106540352242922".into(), "581063")
-            .await
-            .unwrap();
+        register(
+            &client(&transport),
+            PhoneNumberId::new("106540352242922").unwrap(),
+            "581063",
+        )
+        .await
+        .unwrap();
         let request = transport.last_request().unwrap();
         assert_eq!(request.path(), "/v25.0/106540352242922/register");
         assert_eq!(
             request.json().unwrap(),
             json!({"messaging_product": "whatsapp", "pin": "581063"})
         );
-        let short = register(&client(&transport), "106540352242922".into(), "1234").await;
+        let short = register(
+            &client(&transport),
+            PhoneNumberId::new("106540352242922").unwrap(),
+            "1234",
+        )
+        .await;
         assert!(matches!(short, Err(Error::Validation(ref v)) if v.field == "pin"));
         assert_eq!(transport.remaining(), 0);
     }
@@ -195,9 +204,13 @@ mod tests {
         let transport = ScriptedTransport::new();
         transport.push_json(200, json!({"data": []}));
         transport.push_json(200, json!({"success": true}));
-        ensure_subscribed(&client(&transport), "102290129340398".into(), "1234")
-            .await
-            .unwrap();
+        ensure_subscribed(
+            &client(&transport),
+            WabaId::new("102290129340398").unwrap(),
+            "1234",
+        )
+        .await
+        .unwrap();
         let requests = transport.requests();
         assert_eq!(requests[1].method, "POST");
         assert_eq!(requests[1].path(), "/v25.0/102290129340398/subscribed_apps");
@@ -215,9 +228,12 @@ mod tests {
             200,
             json!({"messaging_product": "whatsapp", "request_id": "r2"}),
         );
-        start_coexistence_sync(&client(&transport), "106540352242922".into())
-            .await
-            .unwrap();
+        start_coexistence_sync(
+            &client(&transport),
+            PhoneNumberId::new("106540352242922").unwrap(),
+        )
+        .await
+        .unwrap();
         let kinds: Vec<_> = transport
             .requests()
             .iter()
@@ -236,7 +252,7 @@ mod tests {
         transport.push_json(200, json!({"status": "approved"}));
         let status = adopt_username(
             &client(&transport),
-            "106540352242922".into(),
+            PhoneNumberId::new("106540352242922").unwrap(),
             "lucky_shrub",
             true,
         )
@@ -257,7 +273,7 @@ mod tests {
         transport.push_json(400, in_use);
         let kept = adopt_username(
             &client(&transport),
-            "106540352242922".into(),
+            PhoneNumberId::new("106540352242922").unwrap(),
             "lucky_shrub",
             false,
         )
@@ -276,7 +292,7 @@ mod tests {
         );
         let taken = adopt_username(
             &client(&transport),
-            "106540352242922".into(),
+            PhoneNumberId::new("106540352242922").unwrap(),
             "lucky_shrub",
             true,
         )
@@ -300,9 +316,12 @@ mod tests {
                 {"entity_type": "APP", "id": "634974688087057", "can_send_message": "AVAILABLE"}
             ]}, "id": "106540352242922"}),
         );
-        let state = business_can_send(&client(&transport), "106540352242922".into())
-            .await
-            .unwrap();
+        let state = business_can_send(
+            &client(&transport),
+            PhoneNumberId::new("106540352242922").unwrap(),
+        )
+        .await
+        .unwrap();
         assert_eq!(state, Some(HealthState::Available));
         let request = transport.last_request().unwrap();
         assert_eq!(request.path(), "/v25.0/106540352242922");
@@ -326,9 +345,12 @@ mod tests {
         limited["health_status"]["entities"][2]["can_send_message"] = json!("BLOCKED");
         transport.push_json(200, limited);
         for expected in [HealthState::Available, HealthState::Blocked] {
-            let state = business_can_send(&client(&transport), "106540352242922".into())
-                .await
-                .unwrap();
+            let state = business_can_send(
+                &client(&transport),
+                PhoneNumberId::new("106540352242922").unwrap(),
+            )
+            .await
+            .unwrap();
             assert_eq!(state, Some(expected));
         }
         assert_eq!(transport.remaining(), 0);
@@ -339,9 +361,12 @@ mod tests {
         let transport = ScriptedTransport::new();
         transport.push_json(200, json!({"success": true}));
         transport.push_json(200, json!({"success": true}));
-        set_up_profile(&client(&transport), "106540352242922".into())
-            .await
-            .unwrap();
+        set_up_profile(
+            &client(&transport),
+            PhoneNumberId::new("106540352242922").unwrap(),
+        )
+        .await
+        .unwrap();
         let requests = transport.requests();
         let profile = requests[0].json().unwrap();
         assert_eq!(profile["messaging_product"], "whatsapp");

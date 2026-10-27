@@ -2,6 +2,7 @@
 //! (named above each test). Where a page only shows placeholders, the
 //! sample values from its parameter table are substituted.
 
+use meta_whatsapp_core::ids::{MediaId, WabaId};
 use std::time::Duration;
 
 use http::Method;
@@ -89,7 +90,7 @@ async fn send_posts_the_body_to_the_messages_edge_with_bearer_auth() {
     let t = ScriptedTransport::new();
     t.push_json(200, text_response());
     let resp = client(&t)
-        .messages("106540352242922")
+        .messages(PhoneNumberId::new("106540352242922").unwrap())
         .send(&OutboundMessage::text_with_preview(
             phone(),
             "As requested, here's the link to our latest product: https://www.meta.com/quest/quest-3/",
@@ -140,13 +141,13 @@ async fn messaging_account_id_is_sent_in_the_body() {
     let t = ScriptedTransport::new();
     t.push_json(200, text_response());
     client(&t)
-        .messages("106540352242922")
+        .messages(PhoneNumberId::new("106540352242922").unwrap())
         .send(
             &OutboundMessage::template(
                 phone(),
                 TemplateMessage::new("order_confirmation", "en_US"),
             )
-            .messaging_account_id("102290129340398"),
+            .messaging_account_id(WabaId::new("102290129340398").unwrap()),
         )
         .await
         .unwrap();
@@ -178,17 +179,22 @@ fn messaging_account_id_is_optional_and_checked_before_sending() {
     let wire = serde_json::to_value(OutboundMessage::text(phone(), "hi")).unwrap();
     assert!(wire.get("messaging_account_id").is_none());
     assert!(wire.get("paid_messaging_account_id").is_none());
-    // A Graph object id is digits; anything else fails locally.
+    // A Graph object id is digits; anything else fails locally: `WabaId::new`
+    // refuses it (roadmap L20c), and so does `validate` for one built
+    // unchecked, as a deserialized id may be.
     for bad in ["", "+16505551234", "1022 9012", "WABA-1", "١٢٣"] {
         assert_eq!(
-            invalid(&OutboundMessage::text(phone(), "hi").messaging_account_id(bad)),
+            invalid(
+                &OutboundMessage::text(phone(), "hi")
+                    .messaging_account_id(WabaId::new_unchecked(bad))
+            ),
             "messaging_account_id",
             "{bad:?}"
         );
     }
     assert!(
         OutboundMessage::text(phone(), "hi")
-            .messaging_account_id("102290129340398")
+            .messaging_account_id(WabaId::new("102290129340398").unwrap())
             .validate()
             .is_ok()
     );
@@ -198,8 +204,11 @@ fn messaging_account_id_is_optional_and_checked_before_sending() {
 async fn a_malformed_messaging_account_id_never_reaches_the_transport() {
     let t = ScriptedTransport::new();
     let err = client(&t)
-        .messages("1")
-        .send(&OutboundMessage::text(phone(), "hi").messaging_account_id("+49"))
+        .messages(PhoneNumberId::new("1").unwrap())
+        .send(
+            &OutboundMessage::text(phone(), "hi")
+                .messaging_account_id(WabaId::new_unchecked("+49")),
+        )
         .await
         .unwrap_err();
     assert!(matches!(&err, Error::Validation(v) if v.field == "messaging_account_id"));
@@ -210,7 +219,7 @@ async fn a_malformed_messaging_account_id_never_reaches_the_transport() {
 async fn invalid_messages_never_reach_the_transport() {
     let t = ScriptedTransport::new();
     let err = client(&t)
-        .messages("1")
+        .messages(PhoneNumberId::new("1").unwrap())
         .send(&OutboundMessage::text(phone(), ""))
         .await
         .unwrap_err();
@@ -222,11 +231,13 @@ async fn invalid_messages_never_reach_the_transport() {
 async fn a_phone_number_id_cannot_redirect_the_request() {
     // An id smuggling `/`, `?` or `#` stays one percent-encoded segment:
     // `123/subscribed_apps` must not become `POST /123/subscribed_apps/…`.
+    // `PhoneNumberId::new` refuses such an id (roadmap L20c): built
+    // unchecked, as a deserialized id may be, it is still one segment.
     let t = ScriptedTransport::new();
     for id in ["123/subscribed_apps", "123?fields=x#y"] {
         t.push_json(200, text_response());
         t.push_json(200, json!({"success": true}));
-        let m = client(&t).messages(id);
+        let m = client(&t).messages(PhoneNumberId::new_unchecked(id));
         m.send(&OutboundMessage::text(phone(), "hi")).await.unwrap();
         m.mark_read(&MessageId::new("wamid.A")).await.unwrap();
     }
@@ -246,7 +257,7 @@ async fn a_phone_number_id_cannot_redirect_the_request() {
     let c = client(&t);
     for bad in ["", ".", ".."] {
         let err = c
-            .messages(bad)
+            .messages(PhoneNumberId::new_unchecked(bad))
             .send(&OutboundMessage::text(phone(), "hi"))
             .await
             .unwrap_err();
@@ -255,7 +266,7 @@ async fn a_phone_number_id_cannot_redirect_the_request() {
             "{bad:?}: {err}"
         );
         let err = c
-            .messages(bad)
+            .messages(PhoneNumberId::new_unchecked(bad))
             .mark_read_with_typing_indicator(&MessageId::new("wamid.A"))
             .await
             .unwrap_err();
@@ -281,7 +292,7 @@ async fn closed_service_window_maps_to_its_kind() {
         }}),
     );
     let err = client(&t)
-        .messages("1")
+        .messages(PhoneNumberId::new("1").unwrap())
         .send(&OutboundMessage::text(phone(), "hi"))
         .await
         .unwrap_err();
@@ -297,7 +308,7 @@ async fn a_send_that_times_out_is_not_replayed_even_with_retries_enabled() {
     // Would be consumed by a (wrong) retry.
     t.push_json(200, text_response());
     let err = client_with(&t, RetryPolicy::default())
-        .messages("1")
+        .messages(PhoneNumberId::new("1").unwrap())
         .send(&OutboundMessage::text(phone(), "Your code is on its way"))
         .await
         .unwrap_err();
@@ -324,7 +335,7 @@ async fn a_throttled_send_is_replayed() {
         max_delay: Duration::ZERO,
     };
     client_with(&t, retry)
-        .messages("1")
+        .messages(PhoneNumberId::new("1").unwrap())
         .send(&OutboundMessage::text(phone(), "hi"))
         .await
         .unwrap();
@@ -345,7 +356,7 @@ async fn mark_read_matches_the_docs_and_is_idempotent() {
         max_delay: Duration::ZERO,
     };
     client_with(&t, retry)
-        .messages("106540352242922")
+        .messages(PhoneNumberId::new("106540352242922").unwrap())
         .mark_read(&MessageId::new(
             "wamid.HBgLMTY1MDM4Nzk0MzkVAgARGBJDQjZCMzlEQUE4OTJBMTE4RTUA",
         ))
@@ -370,7 +381,7 @@ async fn mark_read_matches_the_docs_and_is_idempotent() {
 async fn typing_indicator_matches_the_docs_and_is_not_replayed() {
     let t = ScriptedTransport::new();
     t.push_json(200, json!({"success": true}));
-    let m = client(&t).messages("106540352242922");
+    let m = client(&t).messages(PhoneNumberId::new("106540352242922").unwrap());
     let id = MessageId::new("wamid.HBgLMTY1MDM4Nzk0MzkVAgARGBJDQjZCMzlEQUE4OTJBMTE4RTUA");
     m.mark_read_with_typing_indicator(&id).await.unwrap();
     // typing-indicators, "Example request".
@@ -393,7 +404,7 @@ async fn typing_indicator_matches_the_docs_and_is_not_replayed() {
         max_delay: Duration::ZERO,
     };
     let err = client_with(&t, retry)
-        .messages("1")
+        .messages(PhoneNumberId::new("1").unwrap())
         .mark_read_with_typing_indicator(&id)
         .await
         .unwrap_err();
@@ -402,7 +413,7 @@ async fn typing_indicator_matches_the_docs_and_is_not_replayed() {
 
     assert!(matches!(
         client(&t)
-            .messages("1")
+            .messages(PhoneNumberId::new("1").unwrap())
             .mark_read(&MessageId::new(""))
             .await,
         Err(Error::Validation(_))
@@ -412,7 +423,7 @@ async fn typing_indicator_matches_the_docs_and_is_not_replayed() {
     let t = ScriptedTransport::new();
     t.push_json(200, json!({"success": false}));
     t.push_json(200, json!({"success": false}));
-    let m = client(&t).messages("1");
+    let m = client(&t).messages(PhoneNumberId::new("1").unwrap());
     assert!(m.mark_read(&id).await.is_err());
     assert!(m.mark_read_with_typing_indicator(&id).await.is_err());
     assert_eq!(t.remaining(), 0);
@@ -423,7 +434,7 @@ async fn react_sends_a_reaction() {
     let t = ScriptedTransport::new();
     t.push_json(200, text_response());
     client(&t)
-        .messages("106540352242922")
+        .messages(PhoneNumberId::new("106540352242922").unwrap())
         .react(
             phone(),
             "wamid.HBgLMTY0NjcwNDM1OTUVAgASGBQzQUZCMTY0MDc2MUYwNzBDNTY5MAA=",
@@ -531,7 +542,8 @@ fn media_messages_match_the_docs() {
     assert_wire(
         &OutboundMessage::new(
             phone(),
-            Image::new(MediaSource::id("1479537139650973")).caption("The best succulent ever?"),
+            Image::new(MediaSource::id(MediaId::new("1479537139650973").unwrap()))
+                .caption("The best succulent ever?"),
         ),
         &json!({"messaging_product": "whatsapp", "recipient_type": "individual", "to": PHONE, "type": "image",
                 "image": {"id": "1479537139650973", "caption": "The best succulent ever?"}}),
@@ -548,7 +560,7 @@ fn media_messages_match_the_docs() {
     assert_wire(
         &OutboundMessage::new(
             phone(),
-            Audio::new(MediaSource::id("1013859600285441")).voice(),
+            Audio::new(MediaSource::id(MediaId::new("1013859600285441").unwrap())).voice(),
         ),
         &json!({"messaging_product": "whatsapp", "recipient_type": "individual", "to": PHONE, "type": "audio",
                 "audio": {"id": "1013859600285441", "voice": true}}),
@@ -557,7 +569,8 @@ fn media_messages_match_the_docs() {
     assert_wire(
         &OutboundMessage::new(
             phone(),
-            Video::new(MediaSource::id("1166846181421424")).caption("A succulent eclipse!"),
+            Video::new(MediaSource::id(MediaId::new("1166846181421424").unwrap()))
+                .caption("A succulent eclipse!"),
         ),
         &json!({"messaging_product": "whatsapp", "recipient_type": "individual", "to": PHONE, "type": "video",
                 "video": {"id": "1166846181421424", "caption": "A succulent eclipse!"}}),
@@ -566,7 +579,7 @@ fn media_messages_match_the_docs() {
     assert_wire(
         &OutboundMessage::new(
             phone(),
-            Document::new(MediaSource::id("1376223850470843"))
+            Document::new(MediaSource::id(MediaId::new("1376223850470843").unwrap()))
                 .filename("order_abc123.pdf")
                 .caption("Your order confirmation (PDF)"),
         ),
@@ -574,19 +587,28 @@ fn media_messages_match_the_docs() {
                 "document": {"id": "1376223850470843", "filename": "order_abc123.pdf", "caption": "Your order confirmation (PDF)"}}),
     );
     assert_eq!(
-        OutboundMessage::document_id(phone(), "1376223850470843", "order_abc123.pdf").content,
+        OutboundMessage::document_id(
+            phone(),
+            MediaId::new("1376223850470843").unwrap(),
+            "order_abc123.pdf"
+        )
+        .content,
         MessageContent::Document(
-            Document::new(MediaSource::id("1376223850470843")).filename("order_abc123.pdf")
+            Document::new(MediaSource::id(MediaId::new("1376223850470843").unwrap()))
+                .filename("order_abc123.pdf")
         )
     );
     // messages/sticker-messages.
     assert_wire(
-        &OutboundMessage::sticker_id(phone(), "798882015472548"),
+        &OutboundMessage::sticker_id(phone(), MediaId::new("798882015472548").unwrap()),
         &json!({"messaging_product": "whatsapp", "recipient_type": "individual", "to": PHONE, "type": "sticker",
                 "sticker": {"id": "798882015472548"}}),
     );
     assert_eq!(
-        serde_json::to_value(OutboundMessage::image_id(phone(), "1").content).unwrap(),
+        serde_json::to_value(
+            OutboundMessage::image_id(phone(), MediaId::new("1").unwrap()).content
+        )
+        .unwrap(),
         json!({"type": "image", "image": {"id": "1"}})
     );
 }
@@ -709,7 +731,7 @@ fn reply_buttons_match_the_docs() {
             "Hi Pablo! Your gardening workshop is scheduled for 9am tomorrow. Use the buttons if you need to reschedule. Thank you!",
             [ReplyButton::new("change-button", "Change"), ReplyButton::new("cancel-button", "Cancel")],
         )
-        .header(Header::image_id("2762702990552401"))
+        .header(Header::image_id(MediaId::new("2762702990552401").unwrap()))
         .footer("Lucky Shrub: Your gateway to succulents!™"),
     );
     assert_wire(
@@ -744,12 +766,12 @@ fn reply_buttons_match_the_docs() {
         json!({"type": "image", "image": {"link": "https://www.luckyshrub.com/media/workshop-banner.png"}})
     );
     assert_eq!(
-        header(Header::video_id("1")),
+        header(Header::video_id(MediaId::new("1").unwrap())),
         json!({"type": "video", "video": {"id": "1"}})
     );
     assert_eq!(
         header(Header::Document {
-            source: MediaSource::id("1"),
+            source: MediaSource::id(MediaId::new("1").unwrap()),
             filename: Some("a.pdf".into())
         }),
         json!({"type": "document", "document": {"id": "1", "filename": "a.pdf"}})
@@ -1374,13 +1396,16 @@ fn sparse_contacts_media_and_headers_omit_what_is_absent() {
         json!({"link": "https://x/v.mp4"})
     );
     assert_eq!(
-        content(&OutboundMessage::audio_id(phone(), "1")),
+        content(&OutboundMessage::audio_id(
+            phone(),
+            MediaId::new("1").unwrap()
+        )),
         json!({"id": "1"})
     );
     assert_eq!(
         content(&OutboundMessage::new(
             phone(),
-            Document::new(MediaSource::id("1"))
+            Document::new(MediaSource::id(MediaId::new("1").unwrap()))
         )),
         json!({"id": "1"})
     );
@@ -1391,7 +1416,7 @@ fn sparse_contacts_media_and_headers_omit_what_is_absent() {
     // Headers: document without file name; text with the reference's sub_text.
     let header = |h: Header| serde_json::to_value(h).unwrap();
     assert_eq!(
-        header(Header::document_id("1")),
+        header(Header::document_id(MediaId::new("1").unwrap())),
         json!({"type": "document", "document": {"id": "1"}})
     );
     assert_eq!(
@@ -1569,21 +1594,39 @@ fn text_and_caption_limits() {
         OutboundMessage::text(phone(), s(n)).category(DirectSendCategory::Service)
     });
     assert_limit("image.caption", 1024, |n| {
-        OutboundMessage::new(phone(), Image::new(MediaSource::id("1")).caption(s(n)))
+        OutboundMessage::new(
+            phone(),
+            Image::new(MediaSource::id(MediaId::new("1").unwrap())).caption(s(n)),
+        )
     });
     assert_limit("video.caption", 1024, |n| {
-        OutboundMessage::new(phone(), Video::new(MediaSource::id("1")).caption(s(n)))
+        OutboundMessage::new(
+            phone(),
+            Video::new(MediaSource::id(MediaId::new("1").unwrap())).caption(s(n)),
+        )
     });
     assert_limit("document.caption", 1024, |n| {
-        OutboundMessage::new(phone(), Document::new(MediaSource::id("1")).caption(s(n)))
+        OutboundMessage::new(
+            phone(),
+            Document::new(MediaSource::id(MediaId::new("1").unwrap())).caption(s(n)),
+        )
     });
-    assert_eq!(invalid(&OutboundMessage::image_id(phone(), "")), "image.id");
+    assert_eq!(
+        invalid(&OutboundMessage::image_id(
+            phone(),
+            MediaId::new_unchecked("")
+        )),
+        "image.id"
+    );
     assert_eq!(
         invalid(&OutboundMessage::audio_link(phone(), "")),
         "audio.link"
     );
     assert_eq!(
-        invalid(&OutboundMessage::sticker_id(phone(), "")),
+        invalid(&OutboundMessage::sticker_id(
+            phone(),
+            MediaId::new_unchecked("")
+        )),
         "sticker.id"
     );
     assert_eq!(
@@ -2213,7 +2256,7 @@ fn raw_types_cannot_shadow_envelope_fields() {
             .category(DirectSendCategory::Utility)
             .ttl_seconds(60)
             .direct_send_template_name("n")
-            .messaging_account_id("102290129340398");
+            .messaging_account_id(WabaId::new("102290129340398").unwrap());
         m.recipient = Recipient::PhoneAndUser {
             phone: PHONE.into(),
             user: UserId::new(BSUID),
@@ -2268,7 +2311,7 @@ async fn an_unreadable_send_response_never_quotes_the_recipient() {
         let t = ScriptedTransport::new();
         t.push_bytes(200, "application/json", body.clone());
         let err = client(&t)
-            .messages("106540352242922")
+            .messages(PhoneNumberId::new("106540352242922").unwrap())
             .send(&OutboundMessage::text(phone(), "hi"))
             .await
             .unwrap_err();

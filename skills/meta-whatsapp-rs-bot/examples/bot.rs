@@ -301,7 +301,7 @@ mod tests {
 
     /// The shared pacer on a fake clock: nothing waits for real.
     fn pacer(clock: &ManualClock) -> Pacer {
-        shared_pacer("999".into()).with_timer(clock.clone())
+        shared_pacer(PhoneNumberId::new("999").unwrap()).with_timer(clock.clone())
     }
 
     fn sent() -> serde_json::Value {
@@ -318,7 +318,7 @@ mod tests {
         let bot = build_bot(
             client(&t),
             Arc::new(MemoryKvStore::new()),
-            NUMBER.into(),
+            PhoneNumberId::new(NUMBER).unwrap(),
             pacer(&clock),
         )
         .await
@@ -354,7 +354,7 @@ mod tests {
         let bot = build_bot(
             client(&t),
             Arc::new(MemoryKvStore::new()),
-            NUMBER.into(),
+            PhoneNumberId::new(NUMBER).unwrap(),
             pacer(&clock),
         )
         .await
@@ -388,8 +388,12 @@ mod tests {
         let conversations: Arc<dyn ConversationStore> = Arc::new(MemoryConversationStore::new());
         // The inbox's window check, a minute after the message was sent.
         let now = OffsetDateTime::from_unix_timestamp(1_750_030_073 + 60).unwrap();
-        let inbox = Inbox::new(client(&t), NUMBER, Arc::clone(&conversations))
-            .with_clock(Arc::new(ManualClock::new(now)));
+        let inbox = Inbox::new(
+            client(&t),
+            PhoneNumberId::new(NUMBER).unwrap(),
+            Arc::clone(&conversations),
+        )
+        .with_clock(Arc::new(ManualClock::new(now)));
         let sink = bot_in_the_inbox(
             inbox.clone(),
             client(&t),
@@ -423,9 +427,14 @@ mod tests {
         let clock = ManualClock::new(OffsetDateTime::UNIX_EPOCH);
         let customers = vec![Recipient::user(USER), Recipient::phone("+16505551234")];
 
-        let report = spring_sale(client(&t), pacer(&clock), NUMBER.into(), customers)
-            .await
-            .unwrap();
+        let report = spring_sale(
+            client(&t),
+            pacer(&clock),
+            PhoneNumberId::new(NUMBER).unwrap(),
+            customers,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.ended, BroadcastEnd::Completed);
         assert!(
@@ -461,9 +470,14 @@ mod tests {
             let t = ScriptedTransport::new();
             let clock = ManualClock::new(OffsetDateTime::UNIX_EPOCH);
             let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
-            let bot = build_bot(client(&t), kv.clone(), NUMBER.into(), pacer(&clock))
-                .await
-                .unwrap();
+            let bot = build_bot(
+                client(&t),
+                kv.clone(),
+                PhoneNumberId::new(NUMBER).unwrap(),
+                pacer(&clock),
+            )
+            .await
+            .unwrap();
             let handler = webhook_handler(
                 bot,
                 AppSecret::new("app-secret"),

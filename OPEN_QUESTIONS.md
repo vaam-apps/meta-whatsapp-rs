@@ -28,7 +28,7 @@ the design, the code); then it is deleted. A section heading stays when
 its last entry goes, with a line saying so: guides and skills link to
 its anchor.
 
-On 2026-10-27, 27 entries are decided and 2 stay open: #33 and #46
+On 2026-10-27, 26 entries are decided and 2 stay open: #33 and #46
 (each a data migration).
 
 Numbers are permanent (the code, docs and skills cite them) and not in
@@ -196,20 +196,6 @@ of its own, after an HTML comment; keep that when you add one.
     still pass its own connection. Roadmap L21c.
 
 ## Security posture
-
-20. **`%2F` in ids.** Ids are percent-encoded as whole path segments, so an
-    id containing `/` cannot change the path *client-side*. Whether Graph
-    decodes `%2F` before routing is unverified; if it does, an attacker who
-    controls an id could still reach another edge of an object the token can
-    access. Option: reject `/` in ids outright (risk: a legitimate id with
-    `/`, e.g. standard-base64 group ids, if Meta issues any).
-
-    **Decided 2026-09-26 (coordinator, owner's delegation):** check each
-    id against the shape Meta documents where it documents one (digits for
-    phone number, WABA, media and template ids, as the service already
-    does for media and template ids), and keep whole-segment
-    percent-encoding for opaque ids (BSUIDs, group ids), so no legitimate
-    id is refused. Swappable: one validator per kind of id. Roadmap L20c.
 
 21. **quick-xml advisories (RUSTSEC-2026-0194/0195)** are ignored in
     `deny.toml`, scoped and justified: reached only via typst's CSL parsing,

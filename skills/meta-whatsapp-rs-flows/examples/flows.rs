@@ -113,7 +113,7 @@ mod tests {
             .unwrap();
         let outcome = create_and_publish(
             &client,
-            "102290129340398".into(),
+            WabaId::new("102290129340398").unwrap(),
             &json!({"version": "7.1"}),
         )
         .await

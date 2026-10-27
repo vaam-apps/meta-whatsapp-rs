@@ -24,7 +24,12 @@ async fn a_forged_admin_unbinds_nothing_and_logs_no_unbinding() {
     let h = service().await;
     let (_, admin) = forged().await;
     for waba in [WABA, TOKENLESS_WABA] {
-        let binding = h.store.waba(&WabaId::new(waba)).await.unwrap().unwrap();
+        let binding = h
+            .store
+            .waba(&WabaId::new(waba).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
         let error = OwnedWaba::unbind_for_admin(&h.state, &admin, &binding)
             .await
             .unwrap_err();
@@ -34,13 +39,17 @@ async fn a_forged_admin_unbinds_nothing_and_logs_no_unbinding() {
             "{waba}"
         );
         assert!(
-            h.store.waba(&WabaId::new(waba)).await.unwrap().is_some(),
+            h.store
+                .waba(&WabaId::new(waba).unwrap())
+                .await
+                .unwrap()
+                .is_some(),
             "{waba}: unbound"
         );
     }
     let kept = h
         .vault
-        .get(&WabaId::new(WABA))
+        .get(&WabaId::new(WABA).unwrap())
         .await
         .unwrap()
         .expect("the victim's token");
@@ -67,7 +76,7 @@ async fn a_forged_admin_unbinds_nothing_and_logs_no_unbinding() {
     assert_eq!(reply.status, StatusCode::NO_CONTENT, "{}", reply.text);
     assert!(
         h.store
-            .waba(&WabaId::new(TOKENLESS_WABA))
+            .waba(&WabaId::new(TOKENLESS_WABA).unwrap())
             .await
             .unwrap()
             .is_none()

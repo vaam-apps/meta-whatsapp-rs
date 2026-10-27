@@ -3,6 +3,8 @@
 
 use std::collections::HashMap;
 
+use meta_whatsapp_rs::core::error::ValidationError;
+use meta_whatsapp_rs::core::ids::is_numeric_id;
 use meta_whatsapp_rs::webhooks::axum::Json;
 use meta_whatsapp_rs::webhooks::axum::extract::{FromRequest, Query, Request};
 use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
@@ -125,24 +127,30 @@ fn dropped_key(
     }
 }
 
-/// Longest Meta id a path or a query may name.
-const MAX_GRAPH_ID_LEN: usize = 64;
-
-/// A Meta object id from a path or a query (a media id, a template id):
-/// digits, not starting with `0`, else `422 invalid_request` on `field`.
-/// Checked before any request: an id is a Graph path segment, and a
-/// route for one kind of object must not reach another (`DELETE
+/// A Meta object id from a path, a query or a body (a media id, a
+/// template id, a WABA id): the library's numeric id shape (1 to
+/// `MAX_NUMERIC_ID_LEN` (64) ASCII digits, `meta_whatsapp_rs::core::ids`),
+/// and not starting with `0` (decision D4 compares the exact string, so
+/// `0102…` and `102…` must not both pass), else `422 invalid_request` on
+/// `field`. Checked before any request: an id is a Graph path segment,
+/// and a route for one kind of object must not reach another (`DELETE
 /// /{id}` deletes whatever node the id names).
 pub(crate) fn graph_id(field: &'static str, id: &str) -> Result<(), ApiError> {
-    let valid = !id.is_empty()
-        && id.len() <= MAX_GRAPH_ID_LEN
-        && id.bytes().all(|b| b.is_ascii_digit())
-        && !id.starts_with('0');
-    if valid {
+    if is_numeric_id(id) && !id.starts_with('0') {
         Ok(())
     } else {
         Err(ApiError::invalid(field))
     }
+}
+
+/// [`graph_id`], then the typed id it names (`TemplateId`, `MediaId`,
+/// `WabaId`, …), whose own check [`graph_id`] implies.
+pub(crate) fn typed_graph_id<T>(field: &'static str, id: &str) -> Result<T, ApiError>
+where
+    T: for<'a> TryFrom<&'a str, Error = ValidationError>,
+{
+    graph_id(field, id)?;
+    T::try_from(id).map_err(|_| ApiError::invalid(field))
 }
 
 /// Default page size.
