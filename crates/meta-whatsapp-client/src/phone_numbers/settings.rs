@@ -1,11 +1,20 @@
 //! Phone number settings that belong to the number's lifecycle: local
-//! storage (data-at-rest region) and the identity change check. Calling
-//! settings share the endpoint but are typed in [`crate::calling`].
+//! storage (data-at-rest region), the identity change check and payload
+//! encryption. Calling settings share the endpoint but are typed in
+//! [`crate::calling`].
 
+use std::fmt;
+
+use base64::Engine;
+use base64::alphabet;
+use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
+use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use serde::de::Deserializer;
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
+
+use crate::templates::macros::string_enum;
 
 /// Country where message data is stored at rest (local storage).
 ///
@@ -119,9 +128,8 @@ impl<'de> Deserialize<'de> for DataLocalizationRegion {
 
 /// `GET /{PHONE_NUMBER_ID}/settings`, the parts this module owns.
 ///
-/// `calling` and `payload_encryption` are kept raw: calling is typed in
-/// [`crate::calling`], and payload encryption has no guide page with an
-/// example to test against yet.
+/// `calling` is kept raw: it is typed in [`crate::calling`]
+/// ([`crate::calling::Calling::settings`]).
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct PhoneNumberSettings {
@@ -131,9 +139,127 @@ pub struct PhoneNumberSettings {
     /// Calling settings, untyped here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calling: Option<serde_json::Value>,
-    /// Payload encryption settings, untyped here.
+    /// Payload encryption settings (`PayloadEncryptionSettingsResponse`);
+    /// optional in the reference's schema.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub payload_encryption: Option<serde_json::Value>,
+    pub payload_encryption: Option<PayloadEncryption>,
+}
+
+string_enum! {
+    /// Whether payload encryption is on (`status` of `payload_encryption`,
+    /// `settings-api`: `enabled`, `disabled`).
+    pub enum PayloadEncryptionStatus {
+        /// Payload encryption on.
+        Enabled => "enabled",
+        /// Payload encryption off.
+        Disabled => "disabled",
+    }
+}
+
+/// `payload_encryption` object read back from `GET
+/// /{PHONE_NUMBER_ID}/settings` (`PayloadEncryptionSettingsResponse` in
+/// `settings-api`; the page has no example, so this follows its schema).
+///
+/// `Debug` shows the status and the fingerprint, and of the cloud key only
+/// its length: the reference does not say whether that key is public, so
+/// it is kept out of logs. `Serialize` writes every field, as read.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[non_exhaustive]
+pub struct PayloadEncryption {
+    /// Current status (required in the schema).
+    pub status: PayloadEncryptionStatus,
+    /// Fingerprint of the client key set with
+    /// [`PhoneNumber::enable_payload_encryption`](super::PhoneNumber::enable_payload_encryption)
+    /// ("when encryption is enabled"). How Meta computes it is not
+    /// documented.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_encryption_key_fingerprint: Option<String>,
+    /// Meta's key, "Cloud encryption key (when encryption is enabled)": the
+    /// reference says no more about its format or use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_encryption_key: Option<String>,
+}
+
+impl fmt::Debug for PayloadEncryption {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PayloadEncryption")
+            .field("status", &self.status)
+            .field(
+                "client_encryption_key_fingerprint",
+                &self.client_encryption_key_fingerprint,
+            )
+            .field(
+                "cloud_encryption_key",
+                &self.cloud_encryption_key.as_deref().map(KeyLength::of),
+            )
+            .finish()
+    }
+}
+
+/// The public key Meta encrypts payloads to (`client_encryption_key` of
+/// `payload_encryption`): "Base64-encoded public key for payload
+/// encryption", the reference's whole description.
+///
+/// It is public key material, but it is handled conservatively:
+/// [`Self::new`] checks it is base64 (the standard alphabet, padding
+/// optional) without echoing it in the error, `Debug` shows only its
+/// length, and there is no `Display` or `Serialize`, so it cannot reach a
+/// log or a JSON dump by accident. Which key type, and which encoding
+/// inside the base64, Meta accepts is not documented, so nothing more is
+/// checked here.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ClientEncryptionKey(String);
+
+/// Base64 with the standard alphabet; the reference does not say whether
+/// the key is padded, so both are accepted.
+const KEY_BASE64: GeneralPurpose = GeneralPurpose::new(
+    &alphabet::STANDARD,
+    GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::Indifferent),
+);
+
+impl ClientEncryptionKey {
+    /// Check and wrap a base64-encoded public key. Empty or not base64: a
+    /// [`ValidationError`] naming `client_encryption_key` (never the
+    /// value).
+    pub fn new(key: impl Into<String>) -> Result<Self> {
+        let key = key.into();
+        if key.is_empty() || KEY_BASE64.decode(key.as_bytes()).is_err() {
+            return Err(ValidationError::new(
+                "client_encryption_key",
+                "must be a base64-encoded public key",
+            )
+            .into());
+        }
+        Ok(Self(key))
+    }
+
+    /// The key, as sent to Meta.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for ClientEncryptionKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("ClientEncryptionKey")
+            .field(&KeyLength::of(&self.0))
+            .finish()
+    }
+}
+
+/// What `Debug` prints of a key: its length.
+struct KeyLength(usize);
+
+impl KeyLength {
+    fn of(key: &str) -> Self {
+        Self(key.len())
+    }
+}
+
+impl fmt::Debug for KeyLength {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "<{} bytes>", self.0)
+    }
 }
 
 /// `storage_configuration` object.
@@ -202,6 +328,22 @@ pub(crate) struct IdentityChange {
     pub(crate) enable_identity_key_check: bool,
 }
 
+/// Body of the payload encryption setting
+/// (`PayloadEncryptionSettingsRequest`, `settings-api`; schema only).
+#[derive(Serialize)]
+pub(crate) struct PayloadEncryptionSettingsRequest<'a> {
+    pub(crate) payload_encryption: PayloadEncryptionRequest<'a>,
+}
+
+/// `PayloadEncryptionSettings`: `status` is required, the key "required
+/// when enabling encryption".
+#[derive(Serialize)]
+pub(crate) struct PayloadEncryptionRequest<'a> {
+    pub(crate) status: PayloadEncryptionStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) client_encryption_key: Option<&'a str>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,5 +388,67 @@ mod tests {
             StorageStatus::Default
         );
         assert!(s.calling.is_some());
+        assert_eq!(s.payload_encryption, None);
+    }
+
+    #[test]
+    fn client_encryption_key_must_be_base64_and_is_never_echoed() {
+        for good in [
+            "TUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUE=",
+            "TUlJ",
+            "TUk",
+        ] {
+            assert_eq!(ClientEncryptionKey::new(good).unwrap().as_str(), good);
+        }
+        for bad in [
+            "",
+            "-----BEGIN PUBLIC KEY-----",
+            "TUlJ QklqQU5", // whitespace
+            "TUlJ_-Ba",     // the URL-safe alphabet
+            "TUlJQ===",
+        ] {
+            let err = ClientEncryptionKey::new(bad).unwrap_err();
+            assert!(
+                matches!(err, meta_whatsapp_core::Error::Validation(_)),
+                "{bad:?}"
+            );
+            let text = err.to_string();
+            assert!(text.contains("`client_encryption_key`"), "{text}");
+            assert!(bad.len() < 4 || !text.contains(bad), "{text}");
+        }
+    }
+
+    #[test]
+    fn keys_show_only_their_length_in_debug() {
+        let key = ClientEncryptionKey::new("TUlJQklqQU5CZ2txaGtpRzl3MEJB").unwrap();
+        assert_eq!(format!("{key:?}"), "ClientEncryptionKey(<28 bytes>)");
+        let read = PayloadEncryption {
+            status: PayloadEncryptionStatus::Enabled,
+            client_encryption_key_fingerprint: Some("FP-1".into()),
+            cloud_encryption_key: Some("Q0xPVURLRVk=".into()),
+        };
+        let dbg = format!("{read:?}");
+        assert_eq!(
+            dbg,
+            "PayloadEncryption { status: Enabled, client_encryption_key_fingerprint: Some(\"FP-1\"), cloud_encryption_key: Some(<12 bytes>) }"
+        );
+        let settings = PhoneNumberSettings {
+            storage_configuration: None,
+            calling: None,
+            payload_encryption: Some(read),
+        };
+        assert!(!format!("{settings:?}").contains("Q0xPVURLRVk="));
+    }
+
+    #[test]
+    fn payload_encryption_status_keeps_unknown_values() {
+        let s: PayloadEncryptionStatus = serde_json::from_str("\"disabled\"").unwrap();
+        assert_eq!(s, PayloadEncryptionStatus::Disabled);
+        let s: PayloadEncryptionStatus = serde_json::from_str("\"ENABLED\"").unwrap();
+        assert_eq!(s, PayloadEncryptionStatus::Enabled);
+        assert_eq!(serde_json::to_string(&s).unwrap(), "\"enabled\"");
+        let s: PayloadEncryptionStatus = serde_json::from_str("\"rotating\"").unwrap();
+        assert_eq!(s, PayloadEncryptionStatus::Other("rotating".into()));
+        assert_eq!(serde_json::to_string(&s).unwrap(), "\"rotating\"");
     }
 }
