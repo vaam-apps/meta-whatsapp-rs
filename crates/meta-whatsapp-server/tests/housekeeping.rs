@@ -328,7 +328,9 @@ async fn housekeeping_sweeps_the_expired_rows() {
 }
 
 /// Once `stop` completed, no round starts: housekeeping stopped before its
-/// first tick sweeps nothing. Decisive: `stop` polled before the tick.
+/// first tick sweeps nothing. Decisive: `run` returning once `stop`
+/// completed (its order against a due tick is
+/// `the_round_under_way_at_the_stop_is_the_last`'s).
 #[tokio::test]
 async fn a_stopped_housekeeping_starts_no_round() {
     let backend = Swept::new();
@@ -388,5 +390,9 @@ async fn the_round_under_way_at_the_stop_is_the_last() {
     )
     .await
     .expect("stopped once the round ended");
-    assert_eq!(backend.janitor.sweeps(), 1, "a round started after the stop");
+    assert_eq!(
+        backend.janitor.sweeps(),
+        1,
+        "a round started after the stop"
+    );
 }
