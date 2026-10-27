@@ -265,7 +265,11 @@ Rules for every endpoint module:
    a `/` into a path. Every other id is opaque (any string: BSUIDs, group
    ids, message ids, …) and relies on the whole-segment encoding alone:
    Meta documents no shape that would not refuse a legitimate one (a
-   standard-base64 group id may hold `/`). Deserializing never checks, so
+   standard-base64 group id may hold `/`). Some opaque ids are digits in
+   Meta's examples (Flow, catalog and template group ids, credit lines,
+   allocation configurations, verification submissions, bot ids), but
+   no page states their shape, so they stay opaque until one does (the
+   follow-up in roadmap L20c). Deserializing never checks, so
    a response or webhook never fails on an id's shape; `new_unchecked`
    does the same for Meta's values that arrive as plain strings and for
    rows read back from a store, and is never for untrusted input (a form,

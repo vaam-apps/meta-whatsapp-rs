@@ -1197,7 +1197,10 @@ stored data, the owner's).
   handles, credit lines, allocation configurations, funding ids, system
   users, verification submissions, bot ids, template group ids, catalog
   ids, business profile ids, signups and `wa_id`s; a group id holding
-  `/` is sent as one segment with `%2F`. Upgrading: build a numeric id
+  `/` is sent as one segment with `%2F`. Some of these are digits in
+  Meta's examples (Flow, catalog and template group ids among them), but
+  no page states their shape, so they stay opaque (the follow-up is
+  recorded in roadmap L20c). Upgrading: build a numeric id
   with `WabaId::new("102290129340398")?` (or `"…".parse::<WabaId>()?`)
   where a string was passed: `client.messages`, `media`, `waba`,
   `business`, `templates`, `flows`, `marketing`, `signups` and every

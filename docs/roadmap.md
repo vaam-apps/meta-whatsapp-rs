@@ -1110,11 +1110,29 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     untouched: the vault's and the ledger's pinned records, written
     under the WABA id `W1`, still open. The service's `graph_id` runs
     `is_numeric_id` plus its own no-leading-`0` rule (D4); a
-    non-numeric `{pn}` or `{waba_id}` is `404 not_found` as before, and
-    `openapi/v1.json` is unchanged. OPEN_QUESTIONS #20 is closed and
+    non-numeric `{pn}` or `{waba_id}` is `404 not_found` as before
+    (`tests/authz.rs`, `a_path_id_that_is_not_numeric_is_not_found`, on
+    every such route), a body's media `id` reaches Meta as given
+    (`tests/messages.rs`, `a_media_id_in_a_body_reaches_meta_as_given`),
+    and `openapi/v1.json` is unchanged. Each place an id Meta sent is
+    wrapped unchecked has a test that an id of another shape is kept as
+    sent (webhooks' `ids_meta_sends_are_kept_as_sent_whatever_their_shape`,
+    and the client's `debug_token` targets, template insights, archive
+    answers and voicemail media id; the service core's untyped-change
+    number): checking any of them fails its test. OPEN_QUESTIONS #20 is closed and
     deleted (CHANGELOG); what stays unverified for opaque ids (whether
     Graph decodes `%2F`) is in architecture.md's endpoint rule 1. No
     parity row changes: none cited L20c.
+  - **Follow-up:** the ids left opaque although Meta's examples show
+    them as digits (`FlowId`, `CatalogId`, `TemplateGroupId`,
+    `CreditLineId`, `AllocationConfigId`, `VerificationSubmissionId`,
+    `WabaBotId`, among others): no page states their shape, so the rule
+    OPEN_QUESTIONS #20 decided (the shape Meta documents) keeps them
+    opaque (a template group id is still checked as digits when its
+    request is built, by `client::templates`). Each moves to
+    `numeric_id_type!` once a reference page states digits for it (a
+    breaking change to its constructor, as here), with that page's
+    example as its test.
 - [x] **L20d. A check for a blank verify token** (`meta-whatsapp-webhooks`,
   `WebhookHandlerBuilder`; OPEN_QUESTIONS #16).
   - **Kind:** additive (the builder stays infallible).
