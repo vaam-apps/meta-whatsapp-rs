@@ -1553,7 +1553,7 @@ async fn live_postgres_debug_is_redacted_and_missing_tables_are_errors() {
     assert!(
         PostgresConversationStore::new(db.pool.clone())
             .last_inbound_at(&meta_whatsapp_core::store::ConversationKey::new(
-                PhoneNumberId::new("x").unwrap(),
+                PhoneNumberId::new("1").unwrap(),
                 "y"
             ))
             .await
