@@ -1072,10 +1072,10 @@ database's where it has one, else the service's `Clock`); contention is
 a typed error; a bundle's accessors return the same data on every call;
 listings are in byte order.
 
-**As built (roadmap S1, S2, S3).** `crates/meta-whatsapp-server-core` exists,
+**As built (roadmap S1, S2, S3, S4).** `crates/meta-whatsapp-server-core` exists,
 with the model, the keys, event routing and polling, the idempotency
-engine, the rate limiter, the error model and authorization; the
-operations (messages, media, templates, numbers, admin, the webhook
+engine, the rate limiter, the error model, authorization and
+housekeeping (over a `Backend`, since S4); the operations (messages, media, templates, numbers, admin, the webhook
 pipeline) are still the axum crate's handlers (roadmap S5a–S5e). What
 it holds today, where it differs from the target above:
 
@@ -1100,8 +1100,9 @@ it holds today, where it differs from the target above:
     one tenant serialize (Postgres: the tenant's row, `FOR KEY SHARE`
     against `FOR UPDATE`; memory: one lock).
   - Purges take no lock of their own, return a count, and are safe on
-    two replicas at once; a housekeeping round (`serve::round`) takes
-    one `LeaderLock` turn for all three.
+    two replicas at once; a housekeeping round (the core's
+    `housekeeping::round`, over a `Backend`) takes one `LeaderLock` turn
+    for all three.
   - Times: one clock all replicas agree on, the database's where it has
     one (Postgres: `now()`), else the service's `Clock`, its skew below
     the shortest lease it measures. The core's `Authorizer` takes an
@@ -1150,8 +1151,33 @@ it holds today, where it differs from the target above:
   Postgres, or another by name) and `close()`. Each accessor returns a
   handle to the same data on every call: what one call's handle writes,
   the next reads. The service has two, `MemoryBackend` and `PgBackend`,
-  still in `meta-whatsapp-server` (S7 splits them out), and is not yet
-  composed from a bundle alone (S4).
+  still in `meta-whatsapp-server` (S7 splits them out).
+- **The service is composed from a `Backend` alone** (S4), so a backend
+  an integrator brings is served as the in-tree ones are, with nothing
+  of the server changed for it. `AppState::from_backend(Arc<dyn
+  Backend>, VaultKeys, Client, Inbound, Metrics, Settings)` is the
+  state's only constructor: the vault is built on the bundle's
+  `KvStore`, and the webhook pipeline on its `KvStore` (dedup leases),
+  `ConversationStore` (the inbox), `Outbox` and records (routing);
+  `Inbound` holds what deliveries are checked with (the app secrets,
+  the verify token) and the service's clock, no store. No constructor
+  takes a port on its own, and the server's UI tests pin it (loose
+  ports do not compile into a state). `serve::serve_with(config,
+  Arc<dyn Backend>)` (`serve_until` with a shutdown future of the
+  caller's) migrates it unless `WA_SERVER_MIGRATE=skip`, mints the
+  development admin key when it is process-local, serves both
+  listeners, runs housekeeping over it (the core's `housekeeping::run`:
+  each round under its `LeaderLock`, purging its `Outbox`, its
+  idempotency records and what its `Janitor` sweeps) and closes it once
+  the listeners stopped; `config.storage` is not read there. The
+  command line opens every backend through a `serve::BackendFactory`
+  (the in-tree `BuiltinBackends` by default; `cli::run_with` runs the
+  same commands on an integrator's), given the configuration's
+  `Storage` (memory, or `DATABASE_URL`): `serve` through
+  `serve::serve_from(config, factory)`, the other commands through
+  `serve::open`, which migrates it per `WA_SERVER_MIGRATE`. The server's `tests/composed.rs` serves the
+  API over real listeners on a `Backend` defined in the test, and checks
+  that every store the service uses is the bundle's.
 - **`LeaderLock`** is a lease, `try_exclusive(name, lease)`: the turn
   for a name, ended by its release, its drop or its lease's expiry, with
   best-effort exclusion (work under a turn tolerates an overlap).

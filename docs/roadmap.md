@@ -314,7 +314,7 @@ and `store-postgres`.
     same-data and guard cases (the deletion's purge, commit order, the
     records', outbox's, capabilities' and races' cases) fails no test,
     as no permanent backend breaks only it.
-- [ ] **S4. Composed only through the bundle** (`meta-whatsapp-server`,
+- [x] **S4. Composed only through the bundle** (`meta-whatsapp-server`,
   `meta-whatsapp-server-core`): `serve_with(config, Arc<dyn Backend>)`;
   `AppState::from_backend(Arc<dyn Backend>, …)` building the inbound
   pipeline inside; housekeeping and the sweep in core over the bundle;
@@ -324,6 +324,56 @@ and `store-postgres`.
   - **Decisive:** a test serves the API over a `Backend` defined outside
     the server crate, with no edit to `serve.rs`; a doctest that builds
     the state from loose ports fails to compile.
+  - **Landed:** `AppState::from_backend(Arc<dyn Backend>, VaultKeys,
+    Client, Inbound, Metrics, Settings)` is the state's only constructor
+    (`new` and `with_settings`, which took the stores one by one, are
+    gone): it builds the vault on the bundle's `KvStore` and the webhook
+    pipeline on its `KvStore` (dedup), `ConversationStore` (the inbox),
+    `Outbox` and records; `Inbound` keeps the app secrets, the verify
+    token and the clock, and no store. `serve::serve_with(config,
+    Arc<dyn Backend>)`, and `serve_until`, the same with a shutdown
+    future of the caller's, migrate (unless `WA_SERVER_MIGRATE=skip`),
+    serve, run housekeeping and close over the bundle, and read no
+    `config.storage`; `serve::serve_from(config, factory)` opens the
+    backend a factory gives for `config.storage` and serves it
+    (`serve::serve`: the in-tree factory). Housekeeping is the core's, `housekeeping::run` and `round` over
+    a `Backend` (`serve::Sweep`, and a round without a leader lock, are
+    gone). The command line opens every backend through a
+    `serve::BackendFactory` (`BuiltinBackends`: Postgres, memory;
+    `cli::run_with` takes an integrator's), `serve::open` migrating per
+    `WA_SERVER_MIGRATE`. The server's test harness serves its stores
+    through a `Backend` of its own too. Decisive: `tests/composed.rs`
+    serves the API over real listeners on a `Backend` defined in the test
+    (memory's ports in a struct of its own, counting what it is asked),
+    with no change to `serve.rs`: the API reads and writes its records,
+    the vault rotation re-encrypts a token stored in its `KvStore`, Meta's
+    webhook takes its dedup lease there and lands in its inbox and its
+    outbox, housekeeping sweeps through its janitor, and it is migrated
+    at start and closed at shutdown. The other half is four UI cases in
+    the server's `tests/visibility` rather than a doctest (they pin the
+    compiler's error, which a `compile_fail` doctest cannot on stable):
+    `app_state_from_loose_ports` (a `MemoryStore` is not a `Backend`,
+    E0277), `app_state_new` (no `new`, no `with_settings`, E0599),
+    `inbound_stores` (the pipeline takes no store, E0061) and
+    `app_state_backend` (the state's backend is crate-private, as its
+    records are, E0624). By mutation: `serve_with` and `serve_until`
+    taking an `Arc<MemoryBackend>` fail `tests/composed.rs` to compile;
+    the outbox, the dedup store, the inbox, the vault's store or the
+    records taken past the bundle, housekeeping on another backend, the
+    migration skipped and the close left out each fail an assertion of
+    their own; `impl Backend for MemoryStore` makes
+    `app_state_from_loose_ports` compile, and a loose `AppState::new`
+    again makes `app_state_new` mismatch. `openapi/v1.json` unchanged; the
+    server's suite passes on memory and, live, on Postgres. Row 112's
+    service side stays partial for S2b, which changes the ports'
+    contracts again. Left: `cli::run_with` is tested with the in-tree
+    factory only (the binary's tests; the admin commands read the
+    process's environment, which a test cannot set); a factory is given
+    the configuration's `Storage`, whose database variant is
+    `Postgres(DATABASE_URL)`, so another database reads its URL from
+    `DATABASE_URL` until the configuration picks among the backends
+    compiled in (design §8.3: S7 composes them by Cargo features, and
+    S18 is the first to need the choice).
 - [ ] **S5a. Admin services into core** (`meta-whatsapp-server-core`;
   S5a–S5e move the operation services out of the axum handlers,
   returning domain values and `ServiceError`, so both API adapters stay

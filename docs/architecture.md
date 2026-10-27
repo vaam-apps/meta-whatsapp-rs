@@ -1214,8 +1214,15 @@ decisions and the delivery milestones, is
   they share its guarantees (deleting a tenant reaches its idempotency
   records and its event stream; every outbox insert checks the routing
   again against the bindings, atomically with the insert). The service
-  has two, memory and Postgres. No port names a database driver's, an
-  HTTP framework's or an API toolkit's type.
+  has two, memory and Postgres, and is composed from a backend alone
+  (roadmap S4): its state (`AppState::from_backend`) builds the token
+  vault and the webhook pipeline on the bundle's stores, `serve_with`
+  serves, migrates and closes it, housekeeping runs over it (the core's
+  `housekeeping`), and the command line opens it through a
+  `BackendFactory`, so no constructor takes a port on its own and a
+  backend an integrator brings needs no change to the server. No port
+  names a database driver's, an HTTP framework's or an API toolkit's
+  type.
 - **What every backend guarantees**, as the ports' contracts require it
   (roadmap S2, so that a MongoDB or a CrateStack-models backend cannot
   meet the traits without it; the `meta_whatsapp_server_core::store`
