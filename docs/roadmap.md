@@ -1232,12 +1232,49 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     reference names without saying what they do. `ProductItemId` and
     `ProductSetId` are `meta_whatsapp_core::ids` newtypes, re-exported
     by `client::commerce` (numeric since L20c).
-- [ ] **L18. A typed Flow JSON builder** (`meta-whatsapp-client`,
+- [x] **L18. A typed Flow JSON builder** (`meta-whatsapp-client`,
   `client::flows`; row 63).
   - **Kind:** additive.
   - **After:** nothing.
   - **Decisive:** every Flow JSON example in `flows/guides/flowjson`
     round-trips through the builder byte for byte (as JSON values).
+  - **Landed:** row 63 done in the library (the service has no side:
+    callers send Flow JSON as JSON). `client::flows::flow_json` models
+    the document (`FlowJson`, `Screen`, `Layout`, `DataField`), its
+    components (`Component`, tagged by `type`, one struct per component
+    of `flows/guides/components` and `flows/guides/media_upload`, plus
+    `Form`) and actions (`Action`, tagged by `name`); `Dynamic<T>` holds
+    a value or a reference. Unknown components and actions are kept
+    whole (`Unknown { raw }`) and unknown properties in flattened
+    `extra` maps. `FlowJson::builder` and `FlowJson::validate` check the
+    hard limits of the component pages and of the static validation
+    errors in `flows/reference/error-codes`, the first failure a
+    `ValidationError` with the path from the root;
+    `CreateFlow::flow_json_typed` and `Flow::upload_flow_json_typed`
+    validate and send it, the raw-JSON calls unchanged. The decisive test
+    is `every_flow_json_example_round_trips_through_the_typed_model`
+    (`crates/meta-whatsapp-client/tests/flow_json.rs`): the 27 JSON
+    examples of `flows/guides/flowjson` (3 whole Flows, 21 components, 2
+    actions, a data model), and the 28 of `components`, `media_upload`,
+    `flowsapi` and `flows-templates`, each parsed, serialized and
+    compared as a JSON value, with no unknown component, action or
+    property left (so a model that passed everything through `Unknown`
+    fails it); four of them come out of the builder identical
+    (`the_*_example_comes_out_of_the_builder`), and the error-code
+    samples round-trip or are refused, never altered, and fail local
+    validation, all but one (a global reference into an array schema,
+    Meta's to check). Dropping the catch-all, keeping only its tag, or
+    turning any `extra` into `#[serde(skip)]` fails
+    `unknown_components_actions_and_properties_are_kept_as_sent`; lifting
+    a limit fails its unit test in `flows::flow_json::tests`. Read on
+    2026-10-28. Not covered: the examples Meta renders in an interactive
+    preview, which the Markdown pages do not carry (most component
+    examples: the static and dynamic `data-source` ones, `If`, `Switch`,
+    `NavigationList`, `CalendarPicker`, `Image`, the media pickers, the
+    routing-model and form examples); checks that need the data model
+    resolved (references, payload schemas, `__example__` types, form
+    names), component types per Flow JSON version, and the limits the
+    docs call soft (`NavigationList` content truncated or not rendered).
 - [ ] **L19. Media conversion** (`meta-whatsapp-client`: a
   `MediaConverter` trait; `meta-whatsapp-adapters`: an implementation
   behind an `ffmpeg` feature, off by default; row 48): the

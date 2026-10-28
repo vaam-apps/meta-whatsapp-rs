@@ -24,7 +24,9 @@ code and Meta's pages of 2026-10-26 (§ Sources); row 156 with the number
 settings L9 left (roadmap L26), against its code and Meta's pages of
 2026-10-27 (§ Sources); row 103 with the catalog and product reads
 (roadmap L17), against its code and Meta's Catalog API pages of
-2026-10-27 (§ Sources). Every cell about us was
+2026-10-27 (§ Sources); row 63 with the typed Flow JSON builder (roadmap
+L18), against its code and Meta's Flows pages of 2026-10-28. Every cell
+about us was
 checked against the code: a cell that
 says a thing is done names the symbol that does it, and what the service
 (`meta-whatsapp-server`) does is read from its routes, not from its
@@ -39,7 +41,7 @@ reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
-| Library | 103 | 22 | 6 | 1 |
+| Library | 104 | 21 | 6 | 1 |
 | Service | 39 | 25 | 67 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
@@ -47,7 +49,7 @@ reached.
   n/a column is a side that does not carry the capability at all: the
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
-- Each of the library's 28 partial or gap rows is cited by a
+- Each of the library's 27 partial or gap rows is cited by a
   [roadmap](roadmap.md) item. Each of the service's 92 names, in its
   status, the roadmap items that bring it; by family (a row can name
   two): M2 8, M3 11, M4 2, M5 70, S 2 (the modular split; S2b, undated
@@ -165,6 +167,14 @@ The owner's definition (2026-09-26):
   serves no product item page): `marketing-api/reference/product-item`,
   `graph-api/reference/whatsapp-business-account/product_catalogs` and
   `graph-api/results` (cursor pagination).
+- **Meta's Flows pages**, for row 63: read on 2026-10-28 as Meta served
+  them that day, as Markdown, not against the mirror:
+  `flows/guides/flowjson`, `flows/guides/components`,
+  `flows/guides/media_upload`, `flows/guides/versioning`,
+  `flows/changelogs`, `flows/reference/error-codes`,
+  `flows/guides/flowsapi` and `flows/guides/flows-templates`. The
+  examples those pages show in an interactive preview are not in their
+  Markdown and were not read.
 - **Us**: the code at b6fc893; for rows 17, 19 and 84–88, the bot
   framework's (B1).
 
@@ -252,7 +262,7 @@ The owner's definition (2026-09-26):
 | 60 | Flows | Send a Flow, receive its answer | No | Yes (`flows.send`, a `flow-response` event) | `flows/guides/sendingaflow`, `flows/guides/flowswebhooks` | `OutboundMessage::flow`; `client::messages::FlowMessage`; answers as `InteractiveReply::NfmReply`; `webhooks::WebhookEvent::FlowUpdated` | answers in `message_received` events, `flow_updated` events; sending a Flow is not in the send union | done / partial (M5a) |
 | 61 | Flows | Manage Flows (create, upload the JSON, preview, publish, deprecate, delete, assets) | No | Partial (list only) | `flows/guides/flowsapi` | `client::flows::Flows::create`, `list`; `client::flows::Flow::update`, `upload_flow_json`, `publish`, `deprecate`, `delete` | not exposed | done / gap (M5d) |
 | 62 | Flows | The data endpoint: decrypt requests, seal responses, check signatures, decrypt uploaded media; the business public key | — | — | `flows/guides/implementingyourflowendpoint`, `flows/guides/whatsapp-business-encryption`; `reference/whatsapp-business-phone-number/business-encryption-api.md` | `client::flows::endpoint::FlowEndpointKey::decrypt_request`; `client::flows::endpoint::ResponseSealer`; `client::flows::BusinessEncryption::set_public_key` | not exposed | done / gap (M5d) |
-| 63 | Flows | A typed Flow JSON builder | — | — | `flows/guides/flowjson`, `flows/guides/components` | Flow JSON stays raw JSON (`Flow::upload_flow_json` takes the bytes) | n/a (callers send Flow JSON as JSON) | partial / n/a |
+| 63 | Flows | A typed Flow JSON builder | — | — | `flows/guides/flowjson`, `flows/guides/components`, `flows/guides/media_upload`, `flows/reference/error-codes` | `client::flows::flow_json::FlowJson::builder`, `FlowJson::validate`; `client::flows::flow_json::Component`; `client::flows::CreateFlow::flow_json_typed`; `client::flows::Flow::upload_flow_json_typed` | n/a (callers send Flow JSON as JSON) | done / n/a |
 
 ### E. Profile, chats, contacts, calls
 
