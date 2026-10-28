@@ -721,14 +721,173 @@ fn dynamic_values_parse_as_what_was_sent() {
     assert!(!is_expression("plain"));
 }
 
+/// Parse `value` as `T` and serialize it back: the same JSON value.
+#[track_caller]
+fn reparse<T: serde::de::DeserializeOwned + serde::Serialize>(value: &Value) -> T {
+    let typed: T = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(&serde_json::to_value(&typed).unwrap(), value);
+    let text = serde_json::to_string(&typed).unwrap();
+    assert_eq!(&serde_json::from_str::<Value>(&text).unwrap(), value);
+    typed
+}
+
 #[test]
-fn a_known_component_with_a_wrong_property_type_is_an_error_not_dropped() {
-    let e =
-        serde_json::from_value::<Component>(json!({"type": "TextHeading", "text": 3})).unwrap_err();
-    assert!(e.to_string().contains("TextHeading"), "{e}");
-    let e =
-        serde_json::from_value::<Component>(json!({"type": "Footer", "label": "x"})).unwrap_err();
-    assert!(e.to_string().contains("on-click-action"), "{e}");
+fn a_known_component_or_action_that_does_not_fit_its_struct_is_kept_whole() {
+    let unknown = |v: Value| {
+        let c: Component = reparse(&v);
+        assert_eq!(c, Component::Unknown { raw: v.clone() }, "{v}");
+    };
+    // A property of another type than the one modelled.
+    unknown(json!({"type": "TextHeading", "text": 3}));
+    unknown(json!({"type": "TextInput", "name": "n", "label": "L", "input-type": 7}));
+    unknown(json!({"type": "CheckboxGroup", "name": "c", "label": "L",
+        "data-source": [{"id": "1", "title": "One"}], "min-selected-items": -1}));
+    unknown(json!({"type": "Image", "src": "iVBO", "width": 1.5}));
+    // A required property missing.
+    unknown(json!({"type": "Footer", "label": "x"}));
+    // A `null`, which an optional field would read as absent and drop.
+    unknown(json!({"type": "TextHeading", "text": "Hi", "visible": null}));
+    // A list item that does not fit makes its component the unknown one,
+    // and nothing else.
+    let v = json!({"type": "Form", "name": "f", "children": [
+        {"type": "TextBody", "text": "ok"},
+        {"type": "Dropdown", "name": "d", "label": "L", "data-source": [{"id": 1, "title": "t"}]}
+    ]});
+    let Component::Form(form) = reparse::<Component>(&v) else {
+        panic!("not a Form");
+    };
+    assert!(matches!(form.children[0], Component::TextBody(_)));
+    assert_eq!(
+        form.children[1],
+        Component::Unknown {
+            raw: v["children"][1].clone()
+        }
+    );
+
+    let a: Action = reparse(&json!({"name": "navigate", "next": "END"}));
+    assert!(matches!(a, Action::Unknown { .. }), "{a:?}");
+    assert_eq!(a.tag(), Some("navigate"));
+    let a: Action = reparse(&json!({"name": "open_url", "url": 42}));
+    assert!(matches!(a, Action::Unknown { .. }), "{a:?}");
+    let a: Action = reparse(&json!({"name": "complete", "payload": null}));
+    assert!(matches!(a, Action::Unknown { .. }), "{a:?}");
+
+    // Inside a whole document: the rest is still typed and checked.
+    let v = json!({"version": "7.3", "screens": [{"id": "END", "terminal": true, "layout": {
+    "type": "SingleColumnLayout", "children": [
+        {"type": "TextHeading", "text": ["not", "a", "string"]},
+        {"type": "Footer", "label": "Done", "on-click-action": {"name": "complete", "payload": {}}}
+    ]}}]});
+    let flow: FlowJson = reparse(&v);
+    let children = &flow.screens[0].layout.children;
+    assert!(matches!(children[0], Component::Unknown { .. }));
+    assert_eq!(children[0].tag(), Some("TextHeading"));
+    assert!(matches!(children[1], Component::Footer(_)));
+    flow.validate().unwrap();
+}
+
+#[test]
+fn the_document_skeleton_stays_strict() {
+    let doc = |screen: Value| json!({"version": "7.3", "screens": [screen]});
+    let layout = json!({"type": "SingleColumnLayout", "children": []});
+    let fails = |v: Value| {
+        assert!(
+            serde_json::from_value::<FlowJson>(v.clone()).is_err(),
+            "{v}"
+        );
+    };
+    fails(json!({"screens": []}));
+    fails(json!({"version": 7.3, "screens": []}));
+    fails(json!({"version": "7.3"}));
+    fails(json!({"version": "7.3", "screens": {}}));
+    fails(json!({"version": "7.3", "screens": [], "routing_model": {"A": "B"}}));
+    fails(doc(json!({"layout": layout})));
+    fails(doc(json!({"id": "A"})));
+    fails(doc(
+        json!({"id": "A", "terminal": "true", "layout": layout}),
+    ));
+    fails(doc(
+        json!({"id": "A", "sensitive": "field", "layout": layout}),
+    ));
+    fails(doc(
+        json!({"id": "A", "layout": {"type": 1, "children": []}}),
+    ));
+    fails(doc(
+        json!({"id": "A", "layout": {"type": "SingleColumnLayout"}}),
+    ));
+    fails(doc(
+        json!({"id": "A", "layout": {"type": "SingleColumnLayout", "children": {}}}),
+    ));
+    // An unknown layout type is kept, as any extensible enum.
+    let v = doc(json!({"id": "A", "layout": {"type": "TwoColumnLayout", "children": []}}));
+    let flow: FlowJson = reparse(&v);
+    assert_eq!(
+        flow.screens[0].layout.kind,
+        LayoutType::Unknown("TwoColumnLayout".into())
+    );
+}
+
+#[test]
+fn deeply_nested_and_large_input_is_refused_without_panicking() {
+    // As deep as `serde_json`'s recursion limit lets a text go (each `If`
+    // is an object and a list).
+    let mut text = r#"{"type":"TextBody","text":"x"}"#.to_owned();
+    for _ in 0..60 {
+        text = format!(r#"{{"type":"If","condition":"${{data.a}}","then":[{text}]}}"#);
+    }
+    let doc = format!(
+        r#"{{"version":"7.3","screens":[{{"id":"END","terminal":true,"layout":{{"type":"SingleColumnLayout","children":[{text},{{"type":"Footer","label":"Done","on-click-action":{{"name":"complete","payload":{{}}}}}}]}}}}]}}"#
+    );
+    let flow: FlowJson = serde_json::from_str(&doc).unwrap();
+    assert!(matches!(
+        flow.screens[0].layout.children[0],
+        Component::If(_)
+    ));
+    refused_at(&flow, &format!("{C0}.then[0].then[0].then[0]"));
+    // One level deeper than the parser allows: an error, not a crash.
+    let deeper = doc.replacen(
+        r#"{"type":"TextBody","text":"x"}"#,
+        &format!("{}{}", "[".repeat(80), "]".repeat(80)),
+        1,
+    );
+    assert!(serde_json::from_str::<FlowJson>(&deeper).is_err());
+
+    // Many components and options: counted and refused, not walked forever.
+    let many = with((0..10_000).map(|_| TextBody::new("x").into()));
+    refused_at(&many, "screens[0].layout.children");
+    let wide = with([CheckboxGroup::new("c", options(100_000)).label("L").into()]);
+    refused_at(&wide, &format!("{C0}.data-source"));
+}
+
+#[test]
+fn radio_buttons_init_value_is_one_id_or_a_list_of_them() {
+    let radio = |init: Value| {
+        json!({"type": "RadioButtonsGroup", "name": "r", "label": "Pick",
+            "data-source": [{"id": "a", "title": "A"}, {"id": "b", "title": "B"}],
+            "init-value": init})
+    };
+    let parse = |init: Value| {
+        let Component::RadioButtonsGroup(g) = reparse::<Component>(&radio(init)) else {
+            panic!("not a RadioButtonsGroup");
+        };
+        g.init_value
+    };
+    assert_eq!(parse(json!("a")), Some(OneOrMany::One("a".into())));
+    assert_eq!(parse(json!(["a"])), Some(OneOrMany::Many(vec!["a".into()])));
+    assert_eq!(
+        parse(json!("${data.selected}")),
+        Some(OneOrMany::One("${data.selected}".into()))
+    );
+    let built = RadioButtonsGroup::new("r", options(2)).init_value(vec!["1".to_owned()]);
+    assert_eq!(
+        serde_json::to_value(Component::from(built)).unwrap()["init-value"],
+        json!(["1"])
+    );
+    let built = RadioButtonsGroup::new("r", options(2)).init_value("1");
+    assert_eq!(
+        serde_json::to_value(Component::from(built)).unwrap()["init-value"],
+        json!("1")
+    );
 }
 
 fn client(t: &ScriptedTransport) -> Client {
@@ -798,14 +957,37 @@ async fn upload_sends_the_typed_flow_json_and_refuses_an_invalid_one_locally() {
         (filename, content_type),
         (Some("flow.json"), Some("application/json"))
     );
+    assert_eq!(
+        serde_json::from_slice::<Value>(data).unwrap(),
+        json!({"version": "7.3", "screens": [{"id": "END", "terminal": true, "layout": {
+            "type": "SingleColumnLayout",
+            "children": [{"type": "Footer", "label": "Done",
+                "on-click-action": {"name": "complete", "payload": {}}}]}}]})
+    );
     assert_eq!(&data[..], flow.to_json_string().unwrap().as_bytes());
     assert_eq!(
         &req.multipart_field("asset_type").unwrap().2[..],
         b"FLOW_JSON"
     );
+    assert_eq!(req.bearer(), Some("TOKEN"));
     assert_eq!(t.remaining(), 0);
 
+    // The same request as the raw call with the same text, part for part.
+    let raw = ScriptedTransport::new();
+    raw.push_json(200, json!({"success": true, "validation_errors": []}));
+    client(&raw)
+        .flow("FLOW_ID")
+        .upload_flow_json(flow.to_json_string().unwrap())
+        .await
+        .unwrap();
+    let raw_req = raw.last_request().unwrap();
+    assert_eq!(raw_req.body, req.body);
+    assert_eq!(raw_req.url, req.url);
+    assert_eq!(raw.remaining(), 0);
+
+    // Refused locally: the response scripted for it is never asked for.
     let t = ScriptedTransport::new();
+    t.push_json(200, json!({"success": true, "validation_errors": []}));
     let mut bad = base();
     bad.screens[0].layout.children.clear();
     let err = client(&t)
@@ -818,4 +1000,17 @@ async fn upload_sends_the_typed_flow_json_and_refuses_an_invalid_one_locally() {
         "{err:?}"
     );
     assert!(t.requests().is_empty());
+    assert_eq!(t.remaining(), 1);
+}
+
+#[test]
+fn build_validates_and_build_unchecked_does_not() {
+    let empty = FlowJson::builder("7.3");
+    let e = empty.clone().build().unwrap_err();
+    assert_eq!(e.field, "screens");
+    assert_eq!(empty.build_unchecked(), FlowJson::new("7.3"));
+    let no_footer = FlowJson::builder("7.3").screen(Screen::new("END").terminal(true));
+    let e = no_footer.clone().build().unwrap_err();
+    assert_eq!(e.field, "screens[0].layout.children");
+    assert_eq!(no_footer.build_unchecked().screens.len(), 1);
 }

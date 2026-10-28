@@ -223,6 +223,17 @@ impl Modelled<'_> {
             }
             Component::NavigationList(x) => {
                 self.actions([&x.on_click_action]);
+                for item in x.list_items.as_static().into_iter().flatten() {
+                    self.extra("a list item", &item.extra);
+                    self.extra("main-content", &item.main_content.extra);
+                    if let Some(end) = &item.end {
+                        self.extra("end", &end.extra);
+                    }
+                    if let Some(start) = &item.start {
+                        self.extra("start", &start.extra);
+                    }
+                    self.actions([&item.on_click_action]);
+                }
                 &x.extra
             }
             Component::PhotoPicker(x) => &x.extra,
@@ -292,44 +303,86 @@ fn every_flow_json_example_round_trips_through_the_typed_model() {
 
 /// The error-code samples are deliberately wrong (and often elided), so
 /// they are not all Flow JSON. Each one either parses and serializes back
-/// unchanged, or is refused: never silently altered. Those that parse as a
-/// document are each refused by local validation, as Meta refuses them.
+/// unchanged, or is refused: never silently altered. A wrong property inside
+/// a component does not fail parsing (the component is kept whole as
+/// `Unknown`); a wrong document skeleton does.
 #[test]
 fn error_code_samples_round_trip_or_are_refused_and_fail_validation() {
-    let (mut parsed, mut accepted) = (Vec::new(), Vec::new());
+    let mut outcomes = BTreeMap::new();
     for (file, value) in page("error-codes") {
         let label = format!("error-codes/{file}");
-        let attempt = if value.get("screens").is_some() {
-            try_round_trip::<FlowJson>(&label, &value).map(|f| {
-                if f.validate().is_ok() {
-                    accepted.push(file.clone());
-                }
-            })
+        let outcome = if value.get("screens").is_some() {
+            match try_round_trip::<FlowJson>(&label, &value) {
+                Some(f) if f.validate().is_ok() => "document, locally accepted",
+                Some(_) => "document, locally refused",
+                None => "refused",
+            }
         } else if value.get("type").is_some() {
-            try_round_trip::<Component>(&label, &value).map(drop)
+            try_round_trip::<Component>(&label, &value).map_or("refused", |_| "component")
         } else if value.get("layout").is_some() {
-            try_round_trip::<Screen>(&label, &value).map(drop)
+            try_round_trip::<Screen>(&label, &value).map_or("refused", |_| "screen")
         } else {
-            None
+            "refused"
         };
-        if attempt.is_some() {
-            parsed.push(file);
-        }
+        outcomes.insert(file, outcome);
     }
+    let got: BTreeMap<&str, Vec<&str>> =
+        outcomes
+            .iter()
+            .fold(BTreeMap::new(), |mut acc, (file, outcome)| {
+                acc.entry(*outcome).or_default().push(file.as_str());
+                acc
+            });
     assert_eq!(
-        parsed,
-        [
-            "sample-06.json",
-            "sample-51.json",
-            "sample-60.json",
-            "sample-61.json",
-            "sample-62.json",
-            "sample-68.json",
-            "sample-75.json",
-            "sample-81.json",
-            "sample-82.json",
-            "sample-90.json",
-        ]
+        got,
+        BTreeMap::from([
+            // Elided: no `version`, or a layout without its `type`.
+            (
+                "refused",
+                vec![
+                    "sample-05.json",
+                    "sample-07.json",
+                    "sample-08.json",
+                    "sample-09.json",
+                    "sample-10.json",
+                    "sample-11.json",
+                    "sample-52.json",
+                    "sample-64.json",
+                    "sample-65.json",
+                    "sample-67.json",
+                    "sample-93.json",
+                    "sample-94.json",
+                    "sample-95.json",
+                    "sample-96.json",
+                ]
+            ),
+            (
+                "component",
+                vec!["sample-03.json", "sample-35.json", "sample-36.json"]
+            ),
+            ("screen", vec!["sample-60.json"]),
+            (
+                "document, locally refused",
+                vec![
+                    "sample-06.json",
+                    "sample-41.json",
+                    "sample-51.json",
+                    "sample-53.json",
+                    "sample-62.json",
+                    "sample-68.json",
+                    "sample-71.json",
+                    "sample-72.json",
+                    "sample-75.json",
+                    "sample-81.json",
+                    "sample-82.json",
+                    "sample-90.json",
+                ]
+            ),
+            // Its error is a global reference into a data model's schema
+            // (`${screen.ROOT.data.products.items…}`): references are Meta's
+            // to check, not the local checks'.
+            ("document, locally accepted", vec!["sample-61.json"]),
+        ])
     );
 }
 

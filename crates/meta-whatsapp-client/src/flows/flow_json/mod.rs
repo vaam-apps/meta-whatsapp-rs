@@ -10,11 +10,32 @@
 //! value).
 //!
 //! The model is lossless for what it parses: every struct keeps the
-//! properties it does not model in a flattened `extra` map, and an unknown
-//! component or action is kept whole (`Unknown { raw }`), so parsing a Flow
-//! JSON and serializing it gives back the same JSON value (key order
-//! aside). A property of the wrong type fails parsing instead of being
-//! dropped.
+//! properties it does not model in a flattened `extra` map, and a component
+//! or action it cannot type is kept whole (`Unknown { raw }`), so parsing a
+//! Flow JSON and serializing it gives back the same JSON value (key order
+//! aside).
+//!
+//! # What parses, and what fails
+//!
+//! Components and actions are the vocabulary Meta grows with each Flow JSON
+//! version, and the shape of a property sometimes changes or is documented
+//! two ways (`RadioButtonsGroup`'s `init-value` is a string in one table, a
+//! list in another). So a component or action never fails parsing: one of
+//! an unknown `type` or `name`, or of a known one whose properties do not
+//! fit its struct (a property of another type, a required one missing, a
+//! `null`), is [`Component::Unknown`] or [`Action::Unknown`], verbatim.
+//! [`FlowJson::validate`] does not check inside those: Meta does.
+//!
+//! The document around them stays strict, and fails parsing when it does
+//! not have the shape the docs give it: `version` and `screens` (required),
+//! `data_api_version`, `data_channel_uri` and `routing_model`; each
+//! screen's `id` and `layout` (required), `title`, `terminal`, `success`,
+//! `refresh_on_back`, `sensitive` and `data`; each layout's `type` (any
+//! string) and `children` (a list). Each has had one documented type since
+//! Flow JSON's first versions, Meta refuses another (`INVALID_PROPERTY_TYPE`,
+//! `flows/reference/error-codes`), and the checks and every caller navigate
+//! through them: a document without that shape is not one this model could
+//! hold, and keeping it opaque would only move the failure to them.
 //!
 //! # Build a Flow
 //!
@@ -85,8 +106,9 @@ pub use components::{
     Component, DataSourceItem, DatePicker, DateRange, DocumentPicker, Dropdown, EmbeddedLink,
     FontWeight, Footer, Form, If, Image, ImageCarousel, InputType, LabelVariant, MediaErrorMessage,
     MediaSize, NavigationItem, NavigationItemEnd, NavigationItemMainContent, NavigationItemStart,
-    NavigationList, OptIn, PhotoPicker, PhotoSource, RadioButtonsGroup, RichText, ScaleType,
-    Switch, TextArea, TextBody, TextCaption, TextHeading, TextInput, TextSubheading, Weekday,
+    NavigationList, OneOrMany, OptIn, PhotoPicker, PhotoSource, RadioButtonsGroup, RichText,
+    ScaleType, Switch, TextArea, TextBody, TextCaption, TextHeading, TextInput, TextSubheading,
+    Weekday,
 };
 pub use dynamic::{
     Dynamic, TextContent, data_ref, form_ref, is_expression, screen_data_ref, screen_form_ref,

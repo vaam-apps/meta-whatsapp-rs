@@ -1246,7 +1246,29 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     `Form`) and actions (`Action`, tagged by `name`); `Dynamic<T>` holds
     a value or a reference. Unknown components and actions are kept
     whole (`Unknown { raw }`) and unknown properties in flattened
-    `extra` maps. `FlowJson::builder` and `FlowJson::validate` check the
+    `extra` maps. Decided (AGENTS.md § Decisions): a component or action
+    whose known tag does not fit its struct (a property of another type,
+    a required one missing, a `null`) is `Unknown { raw }` too, verbatim,
+    instead of failing the document, because a new or changed Meta shape
+    must never break parsing and the docs disagree with themselves
+    (`RadioButtonsGroup`'s `init-value` is a string in one table and a
+    list in the other; it is now `OneOrMany`, either); the document
+    skeleton stays strict (`version`, `screens`, the screens' typed
+    properties and `layout`, a layout's `type` string and `children`
+    list), each with one documented type that Meta refuses others of
+    (`INVALID_PROPERTY_TYPE`). Pinned by
+    `a_known_component_or_action_that_does_not_fit_its_struct_is_kept_whole`
+    and `the_document_skeleton_stays_strict`; the decisive test still
+    refuses any `Unknown` in the documented examples, so the fallback
+    cannot hide a modelling mistake there. Also decided as proposed:
+    the local checks are strict, taking the reading that refuses less
+    where the docs can be read two ways; screen ids are ASCII letters
+    and underscores (the error codes' `PATTERN_MISMATCH`, and no
+    documented example has a digit); `SUCCESS` is refused in any case
+    (the guide spells it `SUCCESS`, the error codes `success`);
+    `Component` and `Action` are `#[non_exhaustive]`; `label-variant`
+    and `ChipsSelector`'s root actions are taken from the changelog;
+    category 11 is done for the library. `FlowJson::builder` and `FlowJson::validate` check the
     hard limits of the component pages and of the static validation
     errors in `flows/reference/error-codes`, the first failure a
     `ValidationError` with the path from the root;
@@ -1261,9 +1283,10 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     property left (so a model that passed everything through `Unknown`
     fails it); four of them come out of the builder identical
     (`the_*_example_comes_out_of_the_builder`), and the error-code
-    samples round-trip or are refused, never altered, and fail local
-    validation, all but one (a global reference into an array schema,
-    Meta's to check). Dropping the catch-all, keeping only its tag, or
+    samples round-trip or are refused, never altered, and those that
+    parse as a document fail local validation, all but one (a global
+    reference into an array schema, Meta's to check), each outcome
+    pinned per sample. Dropping the catch-all, keeping only its tag, or
     turning any `extra` into `#[serde(skip)]` fails
     `unknown_components_actions_and_properties_are_kept_as_sent`; lifting
     a limit fails its unit test in `flows::flow_json::tests`. Read on

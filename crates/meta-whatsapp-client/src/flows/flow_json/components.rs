@@ -4,7 +4,8 @@
 //! Each component is a struct holding the properties Meta documents, with
 //! their wire names (`on-click-action`, `helper-text`, …), plus a flattened
 //! `extra` map for any other property, so a property Meta adds later is
-//! kept as sent. A component type this version does not know parses into
+//! kept as sent. A component type this version does not know, or a known one
+//! whose properties do not fit its struct, parses into
 //! [`Component::Unknown`], verbatim.
 //!
 //! Build one with `new` (its required properties) and the setters of its
@@ -458,6 +459,36 @@ flow_object! {
     }
 }
 
+/// A property Meta documents both as one string and as a list of them
+/// (`RadioButtonsGroup`'s `init-value`): either parses, and serializes back
+/// as it was.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum OneOrMany {
+    /// One string (a value, or a reference such as `${data.selected}`).
+    One(String),
+    /// A list of strings.
+    Many(Vec<String>),
+}
+
+impl From<&str> for OneOrMany {
+    fn from(value: &str) -> Self {
+        Self::One(value.to_owned())
+    }
+}
+
+impl From<String> for OneOrMany {
+    fn from(value: String) -> Self {
+        Self::One(value)
+    }
+}
+
+impl From<Vec<String>> for OneOrMany {
+    fn from(value: Vec<String>) -> Self {
+        Self::Many(value)
+    }
+}
+
 flow_object! {
     /// `RadioButtonsGroup`. Label at most 30 characters; 1 to 20 options,
     /// each title 30, description 300, metadata 20.
@@ -482,10 +513,10 @@ flow_object! {
             /// `description` (Flow JSON 4.0+).
             description: String = "description",
             /// `init-value` (Flow JSON 4.0+, outside a `Form` only): the
-            /// selected option's id. The component table says an array of
-            /// strings; the Flow JSON guide's `init-values` table says a
-            /// string for this component, which is what is modelled.
-            init_value: String = "init-value",
+            /// selected option's id, or a reference. The component table
+            /// says an array of strings, the Flow JSON guide's `init-values`
+            /// table a string: both parse, and come back as sent.
+            init_value: OneOrMany = "init-value",
             /// `error-message` (Flow JSON 4.0+, outside a `Form` only).
             error_message: String = "error-message",
             /// `media-size` (Flow JSON 5.0+).

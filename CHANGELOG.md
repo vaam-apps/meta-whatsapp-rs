@@ -240,7 +240,14 @@ stored data, the owner's).
   `screen_form_ref`). Lossless for what it parses: an unknown component
   or action is `Unknown { raw }`, every struct keeps unknown properties
   in a flattened `extra`, so a parsed Flow JSON serializes back to the
-  same JSON value; a known property of the wrong type fails parsing.
+  same JSON value. A component or action whose known tag does not fit
+  its struct (a property of another type, a required one missing, a
+  `null`) is `Unknown { raw }` too, verbatim, rather than failing the
+  document: a changed Meta shape must never break parsing, and the docs
+  disagree on some (`RadioButtonsGroup`'s `init-value`, a string in one
+  table and a list in another, is `OneOrMany`, either). The document's
+  skeleton (`version`, `screens`, the screens' properties and `layout`,
+  a layout's `type` and `children`) stays strict.
   `FlowJson::builder(version)` (`route`, `screen`, `build`) with
   `Screen::new(id)` (`child`, `data_field`, …) and each component's
   `new` and setters; `build` and `FlowJson::validate` check the limits
