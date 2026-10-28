@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use crate::api::templates::TemplateCache;
 use crate::auth::Authorizer;
 use crate::events::{Events, Inbound};
 use crate::metrics::Metrics;
@@ -16,6 +15,7 @@ use meta_whatsapp_rs::client::embedded_signup::{TokenVault, VaultKeys};
 use meta_whatsapp_rs::core::config::ApiVersion;
 use meta_whatsapp_rs::core::secret::VerifyToken;
 use meta_whatsapp_rs::{Client, Error};
+use meta_whatsapp_server_core::templates::TemplateCache;
 
 /// Default `WA_SERVER_IDEMPOTENCY_TTL`: how long an idempotency key's
 /// record is kept (docs/design/server.md, section 5.4).

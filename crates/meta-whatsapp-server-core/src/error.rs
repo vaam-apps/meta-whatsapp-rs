@@ -801,7 +801,9 @@ mod tests {
             include_str!("events.rs"),
             include_str!("idempotency.rs"),
             include_str!("messages.rs"),
+            include_str!("numbers.rs"),
             include_str!("request.rs"),
+            include_str!("templates.rs"),
         ];
         let mut named = 0;
         for source in sources {

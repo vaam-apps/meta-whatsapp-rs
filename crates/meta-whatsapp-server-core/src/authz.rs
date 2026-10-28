@@ -427,6 +427,20 @@ impl Authorizer {
         self.check(&number.issuer, "admit_number")
     }
 
+    /// [`Self::admit`] for an [`OwnedWaba`]: what a service opened on one
+    /// asks first ([`Templates::new`](crate::templates::Templates::new),
+    /// [`Waba::new`](crate::numbers::Waba::new)), so that nothing is read,
+    /// created, deleted or unsubscribed with a WABA another
+    /// [`Authorizer`] made.
+    ///
+    /// # Errors
+    ///
+    /// `waba` another [`Authorizer`] made: `403 forbidden`, logged at
+    /// `warn`.
+    pub fn admit_waba(&self, waba: &OwnedWaba) -> Result<(), ServiceError> {
+        self.check(&waba.issuer, "admit_waba")
+    }
+
     /// The tokenless Graph client.
     pub fn client(&self) -> &Client {
         &self.client
@@ -909,6 +923,14 @@ impl OwnedWaba {
     /// A client acting with its token.
     pub fn client(&self) -> &Client {
         &self.client
+    }
+
+    /// The tenant whose binding this was made from: the caller's, for a
+    /// WABA [`Authorizer::owned_waba`] opened (what the core's services
+    /// compare with the [`Caller`] they act for). Crate-private: a
+    /// capability's fields are its maker's word.
+    pub(crate) fn tenant(&self) -> &TenantId {
+        &self.epoch.tenant_id
     }
 
     /// See [`OwnedNumber::failed`].
