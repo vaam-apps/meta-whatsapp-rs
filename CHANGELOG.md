@@ -2082,6 +2082,11 @@ them.
 
 ### Security
 
+`pulldown-cmark` (the bot's Markdown parser) is locked at 0.13.5 for
+RUSTSEC-2026-0414, exponential event growth from wikilinks with empty
+display text. The bot never enables `ENABLE_WIKILINKS`, so it was not
+exposed; `cargo deny` refuses the advisory all the same.
+
 Found and fixed during review, before any release: an OTP account takeover
 through Meta's country-code prefixing (OTPs now require E.164 with `+`); an
 inbox reply to a `wa_id` reaching the wrong person for the same reason;
