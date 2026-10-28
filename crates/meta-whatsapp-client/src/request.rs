@@ -14,7 +14,7 @@ use http::header::{
     AUTHORIZATION, COOKIE, HeaderName, HeaderValue, PROXY_AUTHORIZATION, RETRY_AFTER, USER_AGENT,
 };
 use http::{HeaderMap, Method};
-use meta_whatsapp_core::error::{GraphErrorEnvelope, TransportError, ValidationError, snippet};
+use meta_whatsapp_core::error::{GraphErrorEnvelope, TransportError, ValidationError};
 use meta_whatsapp_core::paging::Page;
 use meta_whatsapp_core::secret::AccessToken;
 use meta_whatsapp_core::transport::{
@@ -430,6 +430,12 @@ impl GraphRequest {
     }
 
     /// Send and decode a JSON response.
+    ///
+    /// A response that does not decode gives an [`Error::Decode`] with the
+    /// first bytes of the body, unless the body carries Meta's `paging`
+    /// object or names `access_token`: paging links can embed the access
+    /// token, so then the error keeps only serde's error category and
+    /// position.
     pub async fn send<T: DeserializeOwned>(self) -> Result<T> {
         let context = self.context;
         let resp = self.send_raw().await?;
@@ -469,7 +475,7 @@ impl GraphRequest {
         } else {
             Err(Error::Http {
                 status: resp.status.as_u16(),
-                body_snippet: snippet(&resp.body),
+                body_snippet: safe_snippet(&resp.body),
             })
         }
     }
@@ -514,8 +520,10 @@ impl GraphRequest {
         futures::stream::unfold(state, |mut st| async move {
             loop {
                 if let Some(raw) = st.buffer.next() {
+                    // serde's message quotes the item's values: withheld as
+                    // the page is.
                     let item = serde_json::from_value::<T>(raw)
-                        .map_err(|e| Error::decode(st.base.context, e, b"(page item)"));
+                        .map_err(|e| withheld_serde_error(st.base.context, &e, PAGING_WITHHELD));
                     return Some((item, st));
                 }
                 if st.done {
@@ -592,7 +600,7 @@ pub(crate) async fn send_checked<T: DeserializeOwned>(
     if flag.success == Some(false) {
         return Err(Error::Http {
             status: resp.status.as_u16(),
-            body_snippet: snippet(&resp.body),
+            body_snippet: safe_snippet(&resp.body),
         });
     }
     decode_json(context, &resp.body)
@@ -834,14 +842,61 @@ pub(crate) fn decode_error(resp: &HttpResponse) -> Error {
         }
         Err(_) => Error::Http {
             status: resp.status.as_u16(),
-            body_snippet: snippet(&resp.body),
+            body_snippet: safe_snippet(&resp.body),
         },
     }
 }
 
 /// Decode a JSON body, attaching context and a snippet on failure.
+///
+/// Every decode of a 2xx answer goes through here or through
+/// [`decode_json_withheld`] (`GraphRequest::send`, `send_success`,
+/// `send_checked` and the modules that read `send_raw` themselves). When
+/// the body [may carry the token](may_carry_token), the snippet and
+/// serde's message (which quotes values) are withheld, as
+/// [`decode_json_withheld`] with [`PAGING_WITHHELD`] does: Meta's
+/// `paging.next` and `paging.previous` links can embed the
+/// `access_token` the request was sent with. The rule reads the body, not
+/// the target type, so it covers every paged answer — a `Page<T>`, a
+/// struct of a module's own with a `paging` field, a page nested in an
+/// object — without the call site opting in. Any other answer keeps its
+/// snippet.
 pub(crate) fn decode_json<T: DeserializeOwned>(context: &'static str, body: &[u8]) -> Result<T> {
-    serde_json::from_slice(body).map_err(|e| Error::decode(context, e, body))
+    serde_json::from_slice(body).map_err(|e| {
+        if may_carry_token(body) {
+            withheld_serde_error(context, &e, PAGING_WITHHELD)
+        } else {
+            Error::decode(context, e, body)
+        }
+    })
+}
+
+/// Whether a body may carry the access token: it names a `paging` key
+/// (whose `next`/`previous` links can embed it) or `access_token`
+/// anywhere (a link outside `paging`, or a token). A byte scan of the
+/// whole body rather than a parse, since the body is one that just failed
+/// to parse; and the whole of it, since the links sit at the end of a
+/// page, past the snippet's 512 bytes, where serde's message can still
+/// quote them.
+fn may_carry_token(body: &[u8]) -> bool {
+    const MARKERS: [&[u8]; 2] = [b"\"paging\"", b"access_token"];
+    MARKERS
+        .iter()
+        .any(|marker| body.windows(marker.len()).any(|w| w == *marker))
+}
+
+/// The `body_snippet` of an [`Error::Http`] built from a response body:
+/// [`snippet`](meta_whatsapp_core::error::snippet)'s first bytes, or the
+/// [`PAGING_WITHHELD`] text when the body
+/// [may carry the token](may_carry_token). Every `Error::Http` of the
+/// crate takes its snippet from here, so that `Error::Http::body_snippet`
+/// never holds a paging link's token.
+pub(crate) fn safe_snippet(body: &[u8]) -> String {
+    if may_carry_token(body) {
+        String::from_utf8_lossy(PAGING_WITHHELD).into_owned()
+    } else {
+        meta_whatsapp_core::error::snippet(body)
+    }
 }
 
 /// A decode error for a response that names people: `why` replaces serde's
@@ -855,7 +910,8 @@ const RECIPIENT_WITHHELD: &[u8] = b"(withheld: the response names the recipient)
 
 /// The body snippet of a decode error for a response that can carry
 /// `paging` links: Meta's `next` and `previous` URLs can embed the access
-/// token the request was sent with.
+/// token the request was sent with. [`decode_json`] uses it on its own for
+/// any body that carries them.
 pub(crate) const PAGING_WITHHELD: &[u8] = b"(withheld: paging links can carry the access token)";
 
 fn withheld_decode_error_as(
@@ -889,18 +945,26 @@ pub(crate) fn decode_json_withheld<T: DeserializeOwned>(
     body: &[u8],
     placeholder: &'static [u8],
 ) -> Result<T> {
-    serde_json::from_slice(body).map_err(|e| {
-        withheld_decode_error_as(
-            context,
-            format_args!(
-                "{:?} error at line {} column {} (details withheld)",
-                e.classify(),
-                e.line(),
-                e.column()
-            ),
-            placeholder,
-        )
-    })
+    serde_json::from_slice(body).map_err(|e| withheld_serde_error(context, &e, placeholder))
+}
+
+/// A decode error that keeps serde's error category and position, and
+/// neither its message nor the body.
+fn withheld_serde_error(
+    context: &'static str,
+    e: &serde_json::Error,
+    placeholder: &'static [u8],
+) -> Error {
+    withheld_decode_error_as(
+        context,
+        format_args!(
+            "{:?} error at line {} column {} (details withheld)",
+            e.classify(),
+            e.line(),
+            e.column()
+        ),
+        placeholder,
+    )
 }
 
 #[cfg(test)]
@@ -2194,5 +2258,1069 @@ mod id_shape_tests {
             "/v25.0/123%2Fsubscribed_apps/subscribed_apps"
         );
         assert_eq!(t.remaining(), 0);
+    }
+}
+
+/// A paged answer that fails to decode keeps its body, and serde's
+/// message, out of the error: Meta's `paging.next` and `paging.previous`
+/// links can embed the access token, and `Error`'s `Debug` is what callers
+/// log. The rule is [`decode_json`]'s, so it holds for every one-page read
+/// without the call site opting in, and `body_guard_tests` keeps the
+/// modules from building an error from a body themselves.
+#[cfg(test)]
+mod paging_withheld_tests {
+    use futures::StreamExt;
+    use meta_whatsapp_core::ids::{
+        BusinessId, FlowId, GroupId, PhoneNumberId, QrCodeId, TemplateGroupId, TemplateId, UserId,
+        WabaId,
+    };
+    use meta_whatsapp_core::paging::Page;
+    use meta_whatsapp_core::testing::ScriptedTransport;
+    use time::OffsetDateTime;
+
+    use super::*;
+    use crate::analytics::{
+        GroupAnalyticsQuery, GroupMetric, TemplateAnalyticsQuery, TemplateGroupAnalyticsQuery,
+    };
+    use crate::authentication::PreviewQuery;
+    use crate::block_users::ListBlockedUsers;
+    use crate::business_verification::ListVerificationSubmissions;
+    use crate::flows::{ListFlowAssets, ListFlows};
+    use crate::groups::{ListGroups, ListJoinRequests};
+    use crate::marketing::{ListClientWabas, OnboardingStatus};
+    use crate::qr_codes::{ListQrCodes, QrCodeFields};
+    use crate::retry::RetryPolicy;
+    use crate::signups::ListSignups;
+    use crate::templates::{LibraryQuery, TemplateListQuery};
+    use crate::waba::{ListAssignedUsers, PhoneNumbersQuery, WabaListQuery};
+
+    /// A `next` link holding the token, as Meta can send it. Values ours.
+    const NEXT: &str = "https://graph.facebook.com/v25.0/1/x?access_token=LEAKED&after=c1";
+
+    fn client(t: &ScriptedTransport) -> Client {
+        Client::builder()
+            .transport(t.clone())
+            .access_token("TOKEN")
+            .retry(RetryPolicy::NONE)
+            .build()
+            .unwrap()
+    }
+
+    /// A page whose `data` is the `next` link instead of a list: without the
+    /// rule, serde's message would quote it and the snippet would hold it
+    /// twice.
+    fn leaky_page() -> String {
+        format!(r#"{{"data":"{NEXT}","paging":{{"cursors":{{"after":"c1"}},"next":"{NEXT}"}}}}"#)
+    }
+
+    /// `body`'s error is a `Decode` that keeps serde's category, line and
+    /// column, and shows neither the body nor the link. serde stops on the
+    /// `data` string, so the column is that of its closing quote.
+    fn assert_withheld(what: &str, err: &Error, body: &str) {
+        let shown = format!("{err} {err:?}");
+        assert!(!shown.contains("LEAKED"), "{what}: {shown}");
+        let Error::Decode {
+            context,
+            source,
+            body_snippet,
+        } = err
+        else {
+            panic!("{what}: not a decode error: {err:?}")
+        };
+        assert!(!context.is_empty(), "{what}");
+        assert_eq!(body_snippet.as_bytes(), PAGING_WITHHELD, "{what}");
+        let column = body.find(r#"","paging""#).unwrap() + 1;
+        assert_eq!(
+            source.to_string(),
+            format!("Data error at line 1 column {column} (details withheld)"),
+            "{what}"
+        );
+    }
+
+    fn at(secs: i64) -> OffsetDateTime {
+        OffsetDateTime::from_unix_timestamp(secs).unwrap()
+    }
+
+    #[allow(clippy::too_many_lines)] // one list of call sites, read top to bottom
+    #[tokio::test]
+    async fn every_one_page_read_of_a_paged_answer_withholds_a_body_that_fails_to_decode() {
+        let t = ScriptedTransport::new();
+        let c = client(&t);
+        let waba = || WabaId::new("1").unwrap();
+        let phone = || PhoneNumberId::new("2").unwrap();
+        let business = || BusinessId::new("3").unwrap();
+        let body = leaky_page();
+        let mut errors: Vec<(&str, Error)> = Vec::new();
+        macro_rules! read {
+            ($what:literal, $call:expr) => {{
+                t.push_bytes(200, "application/json", body.clone());
+                errors.push(($what, $call.await.unwrap_err()));
+            }};
+        }
+        read!(
+            "templates.list",
+            c.templates(waba()).list(&TemplateListQuery::new())
+        );
+        read!(
+            "templates.library",
+            c.templates(waba()).library(&LibraryQuery::default())
+        );
+        read!(
+            "waba.phone_numbers",
+            c.waba(waba()).phone_numbers(&PhoneNumbersQuery::new())
+        );
+        read!("waba.subscribed_apps", c.waba(waba()).subscribed_apps());
+        read!(
+            "waba.assigned_users",
+            c.waba(waba())
+                .assigned_users(&ListAssignedUsers::new(business()))
+        );
+        read!(
+            "business.client_whatsapp_business_accounts",
+            c.business(business())
+                .client_whatsapp_business_accounts(&WabaListQuery::new())
+        );
+        read!(
+            "business.owned_whatsapp_business_accounts",
+            c.business(business())
+                .owned_whatsapp_business_accounts(&WabaListQuery::new())
+        );
+        read!(
+            "analytics.template",
+            c.analytics(waba()).template(&TemplateAnalyticsQuery::new(
+                at(1),
+                at(2),
+                vec![TemplateId::new("4").unwrap()],
+            ))
+        );
+        read!(
+            "analytics.template_group",
+            c.analytics(waba())
+                .template_group(&TemplateGroupAnalyticsQuery::new(
+                    at(1),
+                    at(2),
+                    vec![TemplateGroupId::new("5")],
+                ))
+        );
+        read!(
+            "analytics.groups",
+            c.analytics(waba()).groups(&GroupAnalyticsQuery::new(
+                at(1),
+                at(2),
+                vec![GroupId::new("6")],
+                vec![GroupMetric::Sent],
+            ))
+        );
+        // A struct of the module's own (`{"data": {"groups": …}, "paging"}`).
+        read!(
+            "groups.list",
+            c.groups(phone()).list(&ListGroups::default())
+        );
+        read!(
+            "groups.join_requests",
+            c.group(GroupId::new("8"))
+                .join_requests(&ListJoinRequests::default())
+        );
+        read!("flows.list", c.flows(waba()).list(&ListFlows::new()));
+        read!(
+            "flow.assets",
+            c.flow(FlowId::new("7")).assets(&ListFlowAssets::new())
+        );
+        read!("signups.list", c.signups(waba()).list(&ListSignups::new()));
+        read!(
+            "block_users.list",
+            c.block_users(phone()).list(&ListBlockedUsers::default())
+        );
+        read!(
+            "qr_codes.list",
+            c.qr_codes(phone()).list(&ListQrCodes::default())
+        );
+        read!(
+            "marketing_business.client_wabas_with_status",
+            c.marketing_business(business())
+                .client_wabas_with_status(&ListClientWabas::new([OnboardingStatus::Eligible]))
+        );
+        read!("credit_lines.list", c.credit_lines().list(&business(), &[]));
+        read!(
+            "business_verification.submissions",
+            c.business_verification()
+                .submissions(&business(), &ListVerificationSubmissions::new())
+        );
+        // Documented as `{"data": [settings]}`, no paging; should Meta page
+        // it, the rule holds there too.
+        read!("commerce.settings", c.commerce(phone()).settings());
+        // The same for the other `{"data": [...]}` answers.
+        read!(
+            "phone_number.username_suggestions",
+            c.phone_number(phone()).username_suggestions()
+        );
+        read!(
+            "phone_number.business_compliance_info",
+            c.phone_number(phone()).business_compliance_info(&[])
+        );
+        read!(
+            "templates.compare",
+            c.templates(waba()).compare(
+                &TemplateId::new("4").unwrap(),
+                &TemplateId::new("9").unwrap(),
+                1,
+                2
+            )
+        );
+        read!(
+            "authentication.previews",
+            c.authentication(waba()).previews(&PreviewQuery::default())
+        );
+        read!(
+            "qr_codes.get",
+            c.qr_codes(phone())
+                .get(&QrCodeId::new("ANED2T5QRU7HG1"), &QrCodeFields::default())
+        );
+        read!("business_profile.get", c.business_profile(phone()).get(&[]));
+        assert_eq!(t.remaining(), 0);
+        assert_eq!(t.requests().len(), errors.len());
+        for (what, err) in &errors {
+            assert_withheld(what, err, &body);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_page_item_that_does_not_decode_is_withheld_too() {
+        // serde's message would quote the item, here the link itself.
+        let t = ScriptedTransport::new();
+        t.push_bytes(
+            200,
+            "application/json",
+            format!(r#"{{"data":["{NEXT}"],"paging":{{"cursors":{{"after":"c1"}}}}}}"#),
+        );
+        let items: Vec<_> = client(&t)
+            .qr_codes(PhoneNumberId::new("2").unwrap())
+            .list_stream(&ListQrCodes::default())
+            .collect()
+            .await;
+        let [Err(err)] = &items[..] else {
+            panic!("{items:?}")
+        };
+        let shown = format!("{err} {err:?}");
+        assert!(!shown.contains("LEAKED"), "{shown}");
+        assert!(
+            matches!(err, Error::Decode { body_snippet, .. } if body_snippet.as_bytes() == PAGING_WITHHELD),
+            "{err:?}"
+        );
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn an_http_error_built_from_a_body_withholds_it_when_it_may_carry_the_token() {
+        let withheld = String::from_utf8_lossy(PAGING_WITHHELD).into_owned();
+        assert_eq!(safe_snippet(leaky_page().as_bytes()), withheld);
+        assert_eq!(
+            safe_snippet(br#"{"data":[],"paging":{}}"#),
+            withheld,
+            "a `paging` key alone"
+        );
+        assert_eq!(
+            safe_snippet(br#"{"success":false}"#),
+            r#"{"success":false}"#
+        );
+
+        let t = ScriptedTransport::new();
+        let c = client(&t);
+        let refused = format!(r#"{{"success":false,"next":"{NEXT}"}}"#);
+        let html = format!("<html>Bad gateway for {NEXT}</html>");
+        // `send_success`, `send_checked`, a non-2xx answer, and a module's own.
+        t.push_bytes(200, "application/json", refused.clone());
+        t.push_bytes(200, "application/json", refused.clone());
+        t.push_bytes(502, "text/html", html);
+        t.push_bytes(
+            200,
+            "application/json",
+            format!(r#"{{"success":false,"deleted":false,"next":"{NEXT}"}}"#),
+        );
+        t.push_bytes(200, "application/json", r#"{"success":false}"#);
+        let errors = [
+            c.post_at(&["1", "x"]).send_success().await.unwrap_err(),
+            send_checked::<serde_json::Value>(c.post_at(&["1", "y"]), "checked")
+                .await
+                .unwrap_err(),
+            c.get_at(&["1"])
+                .send::<serde_json::Value>()
+                .await
+                .unwrap_err(),
+            c.phone_number(PhoneNumberId::new("2").unwrap())
+                .delete_contact_book_entry(&UserId::new("US.13491208655302741918"))
+                .await
+                .unwrap_err(),
+        ];
+        for err in &errors {
+            let shown = format!("{err} {err:?}");
+            assert!(!shown.contains("LEAKED"), "{shown}");
+            assert!(
+                matches!(err, Error::Http { body_snippet, .. } if *body_snippet == withheld),
+                "{err:?}"
+            );
+        }
+        // Without a marker the snippet stays, for debugging.
+        let err = c.post_at(&["1", "z"]).send_success().await.unwrap_err();
+        assert!(
+            matches!(&err, Error::Http { body_snippet, .. } if body_snippet == r#"{"success":false}"#),
+            "{err:?}"
+        );
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_page_nested_in_an_object_is_withheld_too() {
+        // `GET /{TEMPLATE_GROUP_ID}` answers the group with the first page
+        // of its templates.
+        let body = format!(
+            r#"{{"id":"5","whatsapp_business_templates":{{"data":"{NEXT}","paging":{{"next":"{NEXT}"}}}}}}"#
+        );
+        let t = ScriptedTransport::new();
+        t.push_bytes(200, "application/json", body.clone());
+        let err = client(&t)
+            .templates(WabaId::new("1").unwrap())
+            .get_group(&TemplateGroupId::new("5"))
+            .await
+            .unwrap_err();
+        assert_withheld("templates.get_group", &err, &body);
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[test]
+    fn a_link_past_the_snippet_is_withheld_from_serdes_message() {
+        // The snippet keeps 512 bytes; serde's message quotes the offending
+        // value wherever it sits. Here `paging` is the link itself.
+        let data = vec![1; 300];
+        let body = serde_json::to_vec(&serde_json::json!({"data": data, "paging": NEXT})).unwrap();
+        assert!(body.len() > 512);
+        let err = decode_json::<Page<serde_json::Value>>("page", &body).unwrap_err();
+        let shown = format!("{err} {err:?}");
+        assert!(!shown.contains("LEAKED"), "{shown}");
+        assert!(shown.contains("Data error at line 1 column"), "{shown}");
+    }
+
+    #[test]
+    fn a_paged_answer_is_withheld_whatever_its_links_hold() {
+        // No `access_token` in sight: the `paging` key alone decides, since
+        // what Meta puts in a link is not ours to predict.
+        let body = br#"{"data": {"id": "1"}, "paging": {"next": "https://graph.facebook.com/v25.0/1/x?after=c1"}}"#;
+        let err = decode_json::<Page<serde_json::Value>>("page", body).unwrap_err();
+        let shown = format!("{err} {err:?}");
+        assert!(!shown.contains("after=c1"), "{shown}");
+        assert!(
+            matches!(&err, Error::Decode { body_snippet, .. } if body_snippet.as_bytes() == PAGING_WITHHELD),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn a_body_naming_access_token_is_withheld_without_paging() {
+        let body = format!(r#"{{"data":"{NEXT}","next":"{NEXT}"}}"#);
+        let err = decode_json::<Page<serde_json::Value>>("page", body.as_bytes()).unwrap_err();
+        let shown = format!("{err} {err:?}");
+        assert!(!shown.contains("LEAKED"), "{shown}");
+        assert!(
+            matches!(&err, Error::Decode { body_snippet, .. } if body_snippet.as_bytes() == PAGING_WITHHELD),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn a_single_object_answer_keeps_its_snippet_and_message() {
+        let body = br#"{"id": 5, "name": "x"}"#;
+        let err =
+            decode_json::<std::collections::HashMap<String, String>>("node", body).unwrap_err();
+        let Error::Decode {
+            context,
+            source,
+            body_snippet,
+        } = &err
+        else {
+            panic!("{err:?}")
+        };
+        assert_eq!(*context, "node");
+        assert_eq!(body_snippet, r#"{"id": 5, "name": "x"}"#);
+        assert_eq!(
+            source.to_string(),
+            "invalid type: integer `5`, expected a string at line 1 column 8"
+        );
+    }
+}
+
+/// The rules in [`decode_json`] and [`safe_snippet`] hold only while no
+/// module builds an error from a response body some other way. This scan of
+/// the crate's sources (outside `#[cfg(test)]` code, comments and string
+/// literals) enforces it, one rule per way a body or serde's message can
+/// reach an error:
+///
+/// - **decode**: a three-argument `…::decode(` (`Error::decode`, or an
+///   alias of `Error`) passes a byte-string literal or a `SCREAMING_CASE`
+///   placeholder as its body;
+/// - **field**: a `body_snippet:` field is built with `safe_snippet(…)`, a
+///   literal or a placeholder (`String::new()`, `X.to_owned()` …), never in
+///   shorthand from a local;
+/// - **snippet**: `meta_whatsapp_core::error::snippet` is named nowhere but
+///   in `request.rs`'s `safe_snippet`;
+/// - **parse**: `serde_json::from_slice`/`from_str`/`from_reader` never
+///   read a `body` outside `decode_json*` (serde's message quotes values).
+///
+/// Each exception is listed in [`ALLOWED`] by file *and* enclosing
+/// function, with why it may; an exception no longer used fails too.
+#[cfg(test)]
+mod body_guard_tests {
+    use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
+
+    /// `(file, enclosing fn, rule, why)`.
+    const ALLOWED: [(&str, &str, &str, &str); 9] = [
+        ("request.rs", "decode_json", "decode", "the rule itself"),
+        ("request.rs", "decode_json", "parse", "the rule itself"),
+        ("request.rs", "decode_json_withheld", "parse", "withholds"),
+        (
+            "request.rs",
+            "withheld_decode_error_as",
+            "decode",
+            "`placeholder` is a `&'static` constant",
+        ),
+        ("request.rs", "safe_snippet", "snippet", "the rule itself"),
+        (
+            "request.rs",
+            "decode_error",
+            "parse",
+            "a non-2xx body; serde's error is discarded",
+        ),
+        (
+            "groups/mod.rs",
+            "send_lenient",
+            "parse",
+            "serde's error is discarded (`unwrap_or(Null)`)",
+        ),
+        (
+            "embedded_signup/mod.rs",
+            "decode_business_token",
+            "parse",
+            "withholds the body and serde's message itself",
+        ),
+        (
+            "embedded_signup/event.rs",
+            "from_json",
+            "decode",
+            "the browser's message event, not a Graph answer",
+        ),
+    ];
+
+    /// A file's code with comments blanked, and which characters sit in a
+    /// string or char literal.
+    struct Code {
+        text: Vec<char>,
+        literal: Vec<bool>,
+    }
+
+    fn is_ident(ch: char) -> bool {
+        ch.is_alphanumeric() || ch == '_'
+    }
+
+    fn lex(source: &str) -> Code {
+        let s: Vec<char> = source.chars().collect();
+        let mut text = Vec::with_capacity(s.len());
+        let mut literal = Vec::with_capacity(s.len());
+        let mut i = 0;
+        while i < s.len() {
+            if let Some(end) = comment_end(&s, i) {
+                text.extend(
+                    s[i..end]
+                        .iter()
+                        .map(|&c| if c == '\n' { '\n' } else { ' ' }),
+                );
+                literal.extend(std::iter::repeat_n(false, end - i));
+                i = end;
+            } else if let Some(end) = literal_end(&s, i) {
+                text.extend_from_slice(&s[i..end]);
+                literal.extend(std::iter::repeat_n(true, end - i));
+                i = end;
+            } else {
+                text.push(s[i]);
+                literal.push(false);
+                i += 1;
+            }
+        }
+        Code { text, literal }
+    }
+
+    /// The end of the comment starting at `i`, if one does (block comments
+    /// nest).
+    fn comment_end(s: &[char], i: usize) -> Option<usize> {
+        let at = |k: usize| s.get(k).copied();
+        match (at(i)?, at(i + 1)?) {
+            ('/', '/') => Some((i..s.len()).find(|&k| s[k] == '\n').unwrap_or(s.len())),
+            ('/', '*') => {
+                let mut depth = 0u32;
+                let mut k = i;
+                while k < s.len() {
+                    match (s[k], at(k + 1)) {
+                        ('/', Some('*')) => {
+                            depth += 1;
+                            k += 2;
+                        }
+                        ('*', Some('/')) => {
+                            depth -= 1;
+                            k += 2;
+                            if depth == 0 {
+                                return Some(k);
+                            }
+                        }
+                        _ => k += 1,
+                    }
+                }
+                Some(s.len())
+            }
+            _ => None,
+        }
+    }
+
+    /// The end of the string, raw string (`r#"…"#`, after `b` or `c` too)
+    /// or char literal starting at `i`, if one does; a lifetime is none.
+    fn literal_end(s: &[char], i: usize) -> Option<usize> {
+        let at = |k: usize| s.get(k).copied().unwrap_or('\0');
+        let ident_before = |k: usize| k > 0 && is_ident(s[k - 1]);
+        match s[i] {
+            'r' if !ident_before(i) || (matches!(s[i - 1], 'b' | 'c') && !ident_before(i - 1)) => {
+                let hashes = (i + 1..s.len()).take_while(|&k| s[k] == '#').count();
+                let open = i + 1 + hashes;
+                if at(open) != '"' {
+                    return None; // `r#ident`, or a plain `r`
+                }
+                let close = (open + 1..s.len())
+                    .find(|&k| s[k] == '"' && (1..=hashes).all(|h| at(k + h) == '#'))
+                    .unwrap_or(s.len());
+                Some((close + 1 + hashes).min(s.len()))
+            }
+            '"' => {
+                let mut k = i + 1;
+                while k < s.len() {
+                    match s[k] {
+                        '\\' => k += 2,
+                        '"' => return Some(k + 1),
+                        _ => k += 1,
+                    }
+                }
+                Some(s.len())
+            }
+            '\'' => {
+                let end = if at(i + 1) == '\\' {
+                    (i + 3..s.len().min(i + 12)).find(|&k| s[k] == '\'')
+                } else if at(i + 2) == '\'' {
+                    Some(i + 2)
+                } else {
+                    None
+                };
+                end.map(|e| e + 1)
+            }
+            _ => None,
+        }
+    }
+
+    impl Code {
+        fn code(&self, i: usize) -> Option<char> {
+            (!self.literal.get(i)?).then(|| self.text[i])
+        }
+
+        /// Where `word` stands as a whole identifier in code.
+        fn words(&self, word: &str) -> Vec<usize> {
+            let w: Vec<char> = word.chars().collect();
+            (0..self.text.len().saturating_sub(w.len() - 1))
+                .filter(|&i| {
+                    self.text[i..i + w.len()] == w[..]
+                        && (i..i + w.len()).all(|k| !self.literal[k])
+                        && (i == 0 || !is_ident(self.text[i - 1]))
+                        && self.text.get(i + w.len()).is_none_or(|&c| !is_ident(c))
+                })
+                .collect()
+        }
+
+        /// The next non-blank code character at or after `i`.
+        fn next_code(&self, mut i: usize) -> Option<(usize, char)> {
+            while i < self.text.len() {
+                if self.literal[i] {
+                    return Some((i, '"'));
+                }
+                if !self.text[i].is_whitespace() {
+                    return Some((i, self.text[i]));
+                }
+                i += 1;
+            }
+            None
+        }
+
+        /// The index of the bracket closing the one at `open`.
+        fn matching(&self, open: usize) -> Option<usize> {
+            let mut depth = 0u32;
+            for i in open..self.text.len() {
+                match self.code(i) {
+                    Some('(' | '[' | '{') => depth += 1,
+                    Some(')' | ']' | '}') => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(i);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
+
+        /// The comma-separated items from `start` to the first `,`, `)`,
+        /// `]` or `}` at depth 0 (`until_comma`) or to the bracket that
+        /// closes the list, trimmed.
+        fn items(&self, start: usize, until_comma: bool) -> Vec<String> {
+            let mut items = Vec::new();
+            let mut current = String::new();
+            let mut depth = 0u32;
+            for i in start..self.text.len() {
+                match self.code(i) {
+                    Some('(' | '[' | '{') => depth += 1,
+                    Some(')' | ']' | '}') if depth == 0 => break,
+                    Some(')' | ']' | '}') => depth -= 1,
+                    Some(',') if depth == 0 => {
+                        if until_comma {
+                            break;
+                        }
+                        items.push(std::mem::take(&mut current));
+                        continue;
+                    }
+                    _ => {}
+                }
+                current.push(self.text[i]);
+            }
+            items.push(current);
+            items
+                .into_iter()
+                .map(|a| a.trim().to_owned())
+                .filter(|a| !a.is_empty())
+                .collect()
+        }
+
+        /// `(name, start, end)` of every `fn` with a body.
+        fn fns(&self) -> Vec<(String, usize, usize)> {
+            let mut out = Vec::new();
+            for at in self.words("fn") {
+                let Some((name_at, first)) = self.next_code(at + 2) else {
+                    continue;
+                };
+                if !is_ident(first) {
+                    continue; // a `fn(…)` pointer type
+                }
+                let name: String = self.text[name_at..]
+                    .iter()
+                    .take_while(|&&c| is_ident(c))
+                    .collect();
+                let body =
+                    (name_at..self.text.len()).find(|&i| matches!(self.code(i), Some('{' | ';')));
+                if let Some(open) = body.filter(|&i| self.text[i] == '{')
+                    && let Some(close) = self.matching(open)
+                {
+                    out.push((name, open, close));
+                }
+            }
+            out
+        }
+
+        /// The spans of `#[cfg(test)]` items, and the names of the test
+        /// modules declared out of line (`#[cfg(test)] mod tests;`).
+        fn test_items(&self) -> (Vec<(usize, usize)>, Vec<String>) {
+            let mut spans = Vec::new();
+            let mut modules = Vec::new();
+            let text: String = self.text.iter().collect();
+            let starts: Vec<usize> = text
+                .match_indices("#[cfg(test)]")
+                .map(|(byte, _)| text[..byte].chars().count())
+                .filter(|&i| !self.literal[i])
+                .collect();
+            for start in starts {
+                let end = (start + 12..self.text.len())
+                    .find(|&i| matches!(self.code(i), Some('{' | ';')))
+                    .and_then(|i| {
+                        if self.text[i] == ';' {
+                            Some(i)
+                        } else {
+                            self.matching(i)
+                        }
+                    })
+                    .unwrap_or(self.text.len() - 1);
+                let item: String = self.text[start + 12..=end].iter().collect();
+                let words: Vec<&str> = item.split_whitespace().collect();
+                if let ["mod", name] = words[..] {
+                    modules.push(name.trim_end_matches(';').to_owned());
+                }
+                spans.push((start, end));
+            }
+            (spans, modules)
+        }
+    }
+
+    fn is_literal(arg: &str) -> bool {
+        let inner = arg
+            .strip_prefix("b\"")
+            .or_else(|| arg.strip_prefix('"'))
+            .and_then(|rest| rest.strip_suffix('"'));
+        inner.is_some_and(|inner| {
+            let mut escaped = false;
+            inner.chars().all(|ch| {
+                let ok = escaped || ch != '"';
+                escaped = !escaped && ch == '\\';
+                ok
+            })
+        })
+    }
+
+    fn is_placeholder(arg: &str) -> bool {
+        !arg.is_empty()
+            && arg.starts_with(|c: char| c.is_ascii_uppercase())
+            && arg
+                .chars()
+                .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
+    }
+
+    /// A value that holds no body: a literal or a placeholder, possibly
+    /// turned into a `String`.
+    fn is_constant(value: &str) -> bool {
+        let base = [".to_owned()", ".to_string()", ".into()"]
+            .iter()
+            .find_map(|suffix| value.strip_suffix(suffix))
+            .unwrap_or(value);
+        value == "String::new()" || is_literal(base) || is_placeholder(base)
+    }
+
+    /// `safe_snippet(…)`, under any path, and nothing after its `)`.
+    fn is_safe_snippet_call(value: &str) -> bool {
+        let Some(open) = value.find('(') else {
+            return false;
+        };
+        let name = &value[..open];
+        let code = lex(value);
+        let open = value[..open].chars().count();
+        (name == "safe_snippet" || name.ends_with("::safe_snippet"))
+            && code.matching(open) == Some(code.text.len() - 1)
+    }
+
+    /// One file's scan.
+    struct Scan {
+        /// `(rule, enclosing fn, detail)`.
+        found: Vec<(&'static str, String, String)>,
+        /// How many sites each rule looked at.
+        seen: [usize; 4],
+        /// The test modules it declares out of line.
+        test_modules: Vec<String>,
+    }
+
+    fn scan(source: &str) -> Scan {
+        let code = lex(source);
+        let (tests, test_modules) = code.test_items();
+        let in_tests = |i: usize| tests.iter().any(|&(a, b)| a <= i && i <= b);
+        let fns = code.fns();
+        let enclosing = |i: usize| {
+            fns.iter()
+                .filter(|(_, a, b)| *a <= i && i <= *b)
+                .min_by_key(|(_, a, b)| b - a)
+                .map_or_else(String::new, |(name, _, _)| name.clone())
+        };
+        let text = |a: usize, b: usize| code.text[a..b].iter().collect::<String>();
+        let mut found = Vec::new();
+        let mut seen = [0; 4];
+
+        // decode
+        for at in code.words("decode") {
+            let path = at >= 2 && text(at - 2, at) == "::";
+            let Some((open, '(')) = code.next_code(at + 6) else {
+                continue;
+            };
+            if !path || in_tests(at) {
+                continue;
+            }
+            let args = code.items(open + 1, false);
+            if args.len() != 3 {
+                continue;
+            }
+            seen[0] += 1;
+            let body = &args[2];
+            if !(is_literal(body) || is_placeholder(body)) {
+                found.push(("decode", enclosing(at), format!("body argument `{body}`")));
+            }
+        }
+        // field
+        for at in code.words("body_snippet") {
+            if in_tests(at) || (at > 0 && code.text[at - 1] == '.') {
+                continue;
+            }
+            let after = at + "body_snippet".len();
+            match code.next_code(after) {
+                Some((colon, ':')) if code.text.get(colon + 1) != Some(&':') => {
+                    seen[1] += 1;
+                    let value = code.items(colon + 1, true).concat();
+                    if !(is_safe_snippet_call(&value) || is_constant(&value)) {
+                        found.push(("field", enclosing(at), format!("`body_snippet: {value}`")));
+                    }
+                }
+                Some((_, ',' | '}')) => {
+                    seen[1] += 1;
+                    found.push((
+                        "field",
+                        enclosing(at),
+                        "`body_snippet` shorthand".to_owned(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+        // snippet
+        for at in code.words("snippet") {
+            if in_tests(at) {
+                continue;
+            }
+            seen[2] += 1;
+            found.push(("snippet", enclosing(at), "names `snippet`".to_owned()));
+        }
+        // parse
+        for word in ["from_slice", "from_str", "from_reader"] {
+            for at in code.words(word) {
+                if in_tests(at) {
+                    continue;
+                }
+                let mut open = at + word.len();
+                if text(open, (open + 2).min(code.text.len())) == "::" {
+                    // A turbofish: skip its `<…>`.
+                    let mut depth = 0u32;
+                    for i in open + 2..code.text.len() {
+                        match code.code(i) {
+                            Some('<') => depth += 1,
+                            Some('>') => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    open = i + 1;
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                let Some((open, '(')) = code.next_code(open) else {
+                    continue;
+                };
+                seen[3] += 1;
+                let args = code.items(open + 1, false).join(", ");
+                if !args.contains("body") {
+                    continue;
+                }
+                found.push(("parse", enclosing(at), format!("`{word}({args})`")));
+            }
+        }
+        Scan {
+            found,
+            seen,
+            test_modules,
+        }
+    }
+
+    /// The [`ALLOWED`] entry for a finding of `rule` in `file`'s fn
+    /// `function`.
+    fn allowed(file: &str, function: &str, rule: &str) -> Option<usize> {
+        ALLOWED
+            .iter()
+            .position(|&(f, func, r, _)| f == file && func == function && r == rule)
+    }
+
+    /// The crate's non-test sources, as `(name relative to src/, source)`.
+    fn sources() -> Vec<(String, String)> {
+        fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        let mut test_files = BTreeSet::new();
+        let mut out = Vec::new();
+        for file in &files {
+            let source = std::fs::read_to_string(file).unwrap();
+            let modules = scan(&source).test_modules;
+            // `a/mod.rs` and `lib.rs` hold `a/<m>.rs`; `a/b.rs` holds `a/b/<m>.rs`.
+            let dir = match file.file_stem().and_then(|s| s.to_str()) {
+                Some("mod" | "lib") => file.parent().unwrap().to_path_buf(),
+                _ => file.with_extension(""),
+            };
+            for m in modules {
+                test_files.insert(dir.join(format!("{m}.rs")));
+                test_files.insert(dir.join(&m).join("mod.rs"));
+            }
+            out.push((file.clone(), source));
+        }
+        out.into_iter()
+            .filter(|(file, _)| !test_files.contains(file))
+            .map(|(file, source)| {
+                let name = file
+                    .strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                (name, source)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn no_module_builds_an_error_from_a_response_body_itself() {
+        let files = sources();
+        assert!(files.len() > 20, "{}", files.len());
+        assert!(
+            !files.iter().any(|(name, _)| name.ends_with("tests.rs")),
+            "test modules are not scanned"
+        );
+        let mut seen = [0; 4];
+        let mut used = BTreeSet::new();
+        let mut offending = Vec::new();
+        for (name, source) in &files {
+            let Scan {
+                found,
+                seen: counts,
+                ..
+            } = scan(source);
+            for (rule, count) in seen.iter_mut().zip(counts) {
+                *rule += count;
+            }
+            for (rule, function, detail) in found {
+                match allowed(name, &function, rule) {
+                    Some(i) => {
+                        used.insert(i);
+                    }
+                    None => offending.push(format!("{name} in fn {function}: {rule}: {detail}")),
+                }
+            }
+        }
+        assert!(
+            offending.is_empty(),
+            "an error built from a response body bypasses decode_json/safe_snippet: {offending:#?}"
+        );
+        // Each rule saw the sites it is about, so a broken scan cannot pass
+        // by finding nothing.
+        let [decode, field, snippet, parse] = seen;
+        assert!(decode >= 9, "decode calls: {decode}");
+        assert!(field >= 9, "body_snippet fields: {field}");
+        assert_eq!(snippet, 1, "names of `snippet`");
+        assert!(parse >= 15, "serde parses: {parse}");
+        let stale: Vec<_> = (0..ALLOWED.len()).filter(|i| !used.contains(i)).collect();
+        assert!(stale.is_empty(), "unused exceptions: {stale:?}");
+    }
+
+    fn rules(source: &str) -> Vec<(&'static str, String)> {
+        scan(source)
+            .found
+            .into_iter()
+            .map(|(rule, function, _)| (rule, function))
+            .collect()
+    }
+
+    #[test]
+    fn the_scan_finds_each_way_round_the_rule() {
+        let fns = |rule: &'static str, f: &str| vec![(rule, f.to_owned())];
+        // decode: through an alias, over several lines, and a literal that
+        // only starts the argument.
+        assert_eq!(
+            rules("fn a() { E::decode(\n    C,\n    e,\n    &resp.body,\n) }"),
+            fns("decode", "a")
+        );
+        assert_eq!(
+            rules(r#"fn b() { Error::decode(C, e, b"x".iter().chain(&resp.body)) }"#),
+            fns("decode", "b")
+        );
+        // field: a struct literal, and the shorthand from a local.
+        assert_eq!(
+            rules("fn c() { Error::Http { status: 1, body_snippet: format!(\"{b:?}\") } }"),
+            fns("field", "c")
+        );
+        assert_eq!(
+            rules("fn d() { Error::Decode { context, source, body_snippet } }"),
+            fns("field", "d")
+        );
+        assert_eq!(
+            rules(
+                "fn h() { Error::Http { status, body_snippet: safe_snippet(&b).replace(P, &r) } }"
+            ),
+            fns("field", "h")
+        );
+        // snippet: called, or imported under another name.
+        assert_eq!(
+            rules("fn e() { Error::Http { status: 1, body_snippet: snippet(&r.body) } }"),
+            vec![("field", "e".to_owned()), ("snippet", "e".to_owned())]
+        );
+        assert_eq!(
+            rules("use meta_whatsapp_core::error::snippet as s;"),
+            fns("snippet", "")
+        );
+        // parse: serde's message wrapped into another error.
+        assert_eq!(
+            rules(
+                "fn f() { serde_json::from_slice::<Vec<u8>>(&resp.body).map_err(|e| Error::Other(e.into())) }"
+            ),
+            fns("parse", "f")
+        );
+        // What passes: placeholders, literals and the helpers.
+        assert_eq!(
+            rules(
+                r#"fn g() {
+                    Error::decode(C, e, REDACTED);
+                    Error::decode(C, e, b"(page item)");
+                    Error::Http { status, body_snippet: WITHHELD.to_owned() };
+                    Error::Http { status, body_snippet: crate::request::safe_snippet(&r.body) };
+                    let n = e.body_snippet.len();
+                    hex::decode(s);
+                    serde_json::from_slice::<V>(&plain);
+                }"#
+            ),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn an_exception_holds_in_its_own_function_only() {
+        assert!(allowed("request.rs", "decode_json", "decode").is_some());
+        assert_eq!(allowed("request.rs", "send", "decode"), None);
+        assert_eq!(allowed("request.rs", "decode_json", "field"), None);
+        assert_eq!(allowed("groups/mod.rs", "decode_json", "decode"), None);
+    }
+
+    #[test]
+    fn the_scan_skips_comments_literals_and_test_code() {
+        let source = r##"
+            // Error::decode(C, e, &resp.body)
+            /// Never `Error::decode(…, &resp.body)`: use `decode_json`.
+            /* serde_json::from_slice(&resp.body) /* nested */ snippet(x) */
+            fn a() {
+                let s = "Error::decode(C, e, &resp.body) // not a comment";
+                let r = r#"{"body_snippet": snippet(b)}"#;
+                let q = '"';
+                let ok = Error::decode(C, e, b"still \" literal");
+            }
+            #[cfg(test)]
+            mod tests {
+                fn t() { Error::decode(C, e, &resp.body); snippet(&b); }
+            }
+            #[cfg(test)]
+            mod more;
+            fn after_tests() { Error::decode(C, e, &resp.body) }
+        "##;
+        let scan = scan(source);
+        let found: Vec<_> = scan.found.into_iter().map(|(r, f, _)| (r, f)).collect();
+        assert_eq!(found, vec![("decode", "after_tests".to_owned())]);
+        assert_eq!(scan.seen, [2, 0, 0, 0]);
+        assert_eq!(scan.test_modules, vec!["more".to_owned()]);
     }
 }

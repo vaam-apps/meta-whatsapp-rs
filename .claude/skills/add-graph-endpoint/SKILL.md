@@ -114,7 +114,11 @@ metadata:
    (`PhoneNumbersQuery`, `WabaListQuery`, `TemplateListQuery`,
    `LibraryQuery`, and the three paged analytics queries,
    `TemplateAnalyticsQuery`, `TemplateGroupAnalyticsQuery` and
-   `GroupAnalyticsQuery`) are known exceptions that stay. Follow the module's struct style (builders on
+   `GroupAnalyticsQuery`) are known exceptions that stay. A page that
+   fails to decode is withheld by `decode_json` on its own (its links can
+   carry the token); decode a `send_raw()` page with `decode_json`, never
+   `Error::decode` on the body (`error-tree` skill), and add the new list
+   to the enumeration in `request::paging_withheld_tests`. Follow the module's struct style (builders on
    `#[non_exhaustive]` queries, pub fields elsewhere); a stream always
    takes the query, even when it has nothing but cursors.
 6. **Tests** (in the module, `#[cfg(test)]`), with the docs' examples:

@@ -2198,6 +2198,48 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   response of `Messages::send` or `Marketing::send` (which echo the
   recipient's number) is reported without the body snippet and without
   serde's message.
+- **A paged answer that fails to decode no longer shows its paging
+  links.** Meta's `paging.next` and `paging.previous` URLs can carry the
+  request's `access_token`, and `Error::Decode` kept the first 512 bytes
+  of the body (and serde's message, which quotes values), which its
+  `Debug` prints. Roadmap L17's review (PR #48) found it and fixed the
+  catalog reads and every stream; every other one-page read of a list
+  still leaked: templates (`list`, `library`, a template group's first
+  page), a WABA's phone numbers, subscribed apps and assigned users, a
+  business's WABAs, analytics, groups and join requests, flows and flow
+  assets, signups, blocked users, QR codes, client WABAs, credit lines
+  and verification submissions. The rule is now structural, in
+  `meta-whatsapp-client`'s shared decoder behind `GraphRequest::send`:
+  a body that fails to decode and names a `paging` key or `access_token`
+  gives an `Error::Decode` with a placeholder snippet and only serde's
+  error category, line and column. It reads the body, not the target
+  type, so it covers a page nested in an object and a module's own paged
+  struct; any other answer keeps its snippet. The review of that change
+  found, and fixed before it merged:
+  - **The token stayed in every page that decoded.**
+    `meta_whatsapp_core::paging::Paging` kept Meta's `next` and
+    `previous` links as sent, and its `Debug` and `Serialize` printed
+    them. Deserializing now removes their `access_token` and
+    `appsecret_proof` query parameters (the rest of the link, `after`
+    and `limit` among it, stays). Nothing followed the links: streams
+    re-issue the request with `after`.
+  - **`HttpResponse`'s `Debug` printed the whole body**, and
+    `StreamingResponse`'s the header values. Both now print the status
+    and the header names, and `HttpResponse` the body's length.
+  - **An `Error::Http` built from a 2xx body kept its snippet** (a
+    `"success": false` answer of `send_success`, `send_checked`, and five
+    modules) and so did one from a non-2xx body that is not a Graph
+    error. They take the same rule as `Decode`, through one helper.
+  - **A stream item that did not decode kept serde's message**, which
+    quotes the item; it is withheld as the page is. `Flow::preview`'s
+    answer is withheld too: its link's `token` lets anyone view the
+    Flow.
+  - A test scans the client crate's sources (outside comments, string
+    literals and test code) so that no module builds an error from a
+    body itself: a decode error with a body that is not a constant (an
+    alias of `Error` included), a `body_snippet` not from the shared
+    helper, a call of `snippet`, or a serde parse of a body outside the
+    shared decoder. Its few exceptions are pinned to their function.
 - The security review of `meta-whatsapp-server-core` (on the branch that
   extracted it) found, and fixed before it merged:
   - **H1 — a capability one `Authorizer` made was accepted by another.**

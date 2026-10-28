@@ -118,7 +118,10 @@ pub fn after_failed_send(e: &Error) -> Resend {
   the code is the contract.
 - `Error::Decode` from `Messages::send` means Meta answered 2xx: treat the
   message as sent. Its snippet is withheld (the response names the
-  recipient); only the error category and position remain.
+  recipient); only the error category and position remain. A list
+  read's `Error::Decode`, and an `Error::Http` whose body names `paging`
+  or `access_token`, withhold theirs too (Meta's paging links can embed
+  the token): debug a list call from its request, not the snippet.
 - A free-form send outside the window can also be accepted (`Ok`) and
   fail later, in its `failed` status webhook: `GraphApiError::kind`
   classifies `Status::errors` the same way.

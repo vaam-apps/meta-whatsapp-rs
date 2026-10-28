@@ -8,13 +8,13 @@
 //! on Cloud API"), `support/error-codes` (MM API section).
 
 use futures::Stream;
-use meta_whatsapp_core::error::snippet;
 use meta_whatsapp_core::ids::{BusinessId, WabaId};
 use meta_whatsapp_core::paging::Page;
 use meta_whatsapp_core::{Error, Result};
 use serde::{Deserialize, Serialize};
 
 use super::wire_enum;
+use crate::request::{decode_json, safe_snippet};
 use crate::{Client, GraphRequest};
 
 /// MM API settings and status of one WhatsApp Business Account. See
@@ -266,12 +266,11 @@ impl MarketingAccount {
             .context(CONTEXT)
             .send_raw()
             .await?;
-        let parsed: Response = serde_json::from_slice(&response.body)
-            .map_err(|e| Error::decode(CONTEXT, e, &response.body))?;
+        let parsed: Response = decode_json(CONTEXT, &response.body)?;
         if parsed.success == Some(false) {
             return Err(Error::Http {
                 status: response.status.as_u16(),
-                body_snippet: snippet(&response.body),
+                body_snippet: safe_snippet(&response.body),
             });
         }
         Ok(())

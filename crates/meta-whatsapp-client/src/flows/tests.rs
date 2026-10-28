@@ -332,6 +332,28 @@ endpoint_uri,whatsapp_business_account,application"
 }
 
 #[tokio::test]
+async fn a_preview_that_does_not_decode_keeps_its_link_out_of_the_error() {
+    // The link's `token` opens the Flow to anyone: neither the snippet nor
+    // serde's message (here it would quote the string) may show it.
+    let t = ScriptedTransport::new();
+    t.push_json(
+        200,
+        json!({"preview": "https://business.facebook.com/wa/manage/flows/1/preview/?token=V1EW3R", "id": "1"}),
+    );
+    let err = client(&t).flow("flow-1").preview(false).await.unwrap_err();
+    let shown = format!("{err} {err:?}");
+    assert!(!shown.contains("V1EW3R"), "{shown}");
+    let Error::Decode { body_snippet, .. } = &err else {
+        panic!("{err:?}")
+    };
+    assert_eq!(
+        body_snippet,
+        "(withheld: the preview link carries a viewing token)"
+    );
+    assert_eq!(t.remaining(), 0);
+}
+
+#[tokio::test]
 async fn preview_passes_invalidate_and_parses_the_documented_response() {
     let t = ScriptedTransport::new();
     let doc = json!({
