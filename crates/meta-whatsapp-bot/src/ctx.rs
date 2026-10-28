@@ -160,6 +160,10 @@ impl fmt::Debug for Ctx {
         f.debug_struct("Ctx")
             .field("event", &self.event.kind())
             .field("command", &self.invocation().map(|i| i.command.as_str()))
+            .field(
+                "subcommand",
+                &self.invocation().and_then(|i| i.subcommand.as_deref()),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -286,9 +290,30 @@ impl Ctx {
         self.unknown.as_deref()
     }
 
-    /// The command's arguments; empty outside a command.
+    /// The command's arguments (a subcommand's: those after its name);
+    /// empty outside a command.
     pub fn args(&self) -> &Args {
         self.invocation().map_or(&NO_ARGS, |i| &i.args)
+    }
+
+    /// The invoked command, or subcommand, in the bot's registry, with its
+    /// path as typed after the prefix (`order status`); `None` outside a
+    /// command or for a context built by hand.
+    pub(crate) fn invoked_command(&self) -> Option<(String, &CommandInfo)> {
+        let invocation = self.invocation()?;
+        let named = |info: &&CommandInfo, name: &str| {
+            info.name == name || info.aliases.iter().any(|a| a == name)
+        };
+        let command = self
+            .catalog
+            .commands
+            .iter()
+            .find(|c| named(c, &invocation.command))?;
+        let Some(sub) = &invocation.subcommand else {
+            return Some((command.name.clone(), command));
+        };
+        let sub = command.subcommands.iter().find(|c| named(c, sub))?;
+        Some((format!("{} {}", command.name, sub.name), sub))
     }
 
     /// Every command of the bot, hidden ones included, in registration
