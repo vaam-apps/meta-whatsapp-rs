@@ -15,6 +15,7 @@ use meta_whatsapp_core::{Error, Result};
 use serde::{Deserialize, Serialize};
 
 use super::wire_enum;
+use crate::request::decode_json;
 use crate::{Client, GraphRequest};
 
 /// MM API settings and status of one WhatsApp Business Account. See
@@ -266,8 +267,7 @@ impl MarketingAccount {
             .context(CONTEXT)
             .send_raw()
             .await?;
-        let parsed: Response = serde_json::from_slice(&response.body)
-            .map_err(|e| Error::decode(CONTEXT, e, &response.body))?;
+        let parsed: Response = decode_json(CONTEXT, &response.body)?;
         if parsed.success == Some(false) {
             return Err(Error::Http {
                 status: response.status.as_u16(),

@@ -430,6 +430,12 @@ impl GraphRequest {
     }
 
     /// Send and decode a JSON response.
+    ///
+    /// A response that does not decode gives an [`Error::Decode`] with the
+    /// first bytes of the body, unless the body carries Meta's `paging`
+    /// object or names `access_token`: paging links can embed the access
+    /// token, so then the error keeps only serde's error category and
+    /// position.
     pub async fn send<T: DeserializeOwned>(self) -> Result<T> {
         let context = self.context;
         let resp = self.send_raw().await?;
@@ -840,8 +846,41 @@ pub(crate) fn decode_error(resp: &HttpResponse) -> Error {
 }
 
 /// Decode a JSON body, attaching context and a snippet on failure.
+///
+/// Every decode of a 2xx answer goes through here or through
+/// [`decode_json_withheld`] (`GraphRequest::send`, `send_success`,
+/// `send_checked` and the modules that read `send_raw` themselves). When
+/// the body [may carry the token](may_carry_token), the snippet and
+/// serde's message (which quotes values) are withheld, as
+/// [`decode_json_withheld`] with [`PAGING_WITHHELD`] does: Meta's
+/// `paging.next` and `paging.previous` links can embed the
+/// `access_token` the request was sent with. The rule reads the body, not
+/// the target type, so it covers every paged answer — a `Page<T>`, a
+/// struct of a module's own with a `paging` field, a page nested in an
+/// object — without the call site opting in. Any other answer keeps its
+/// snippet.
 pub(crate) fn decode_json<T: DeserializeOwned>(context: &'static str, body: &[u8]) -> Result<T> {
-    serde_json::from_slice(body).map_err(|e| Error::decode(context, e, body))
+    serde_json::from_slice(body).map_err(|e| {
+        if may_carry_token(body) {
+            withheld_serde_error(context, &e, PAGING_WITHHELD)
+        } else {
+            Error::decode(context, e, body)
+        }
+    })
+}
+
+/// Whether a body may carry the access token: it names a `paging` key
+/// (whose `next`/`previous` links can embed it) or `access_token`
+/// anywhere (a link outside `paging`, or a token). A byte scan of the
+/// whole body rather than a parse, since the body is one that just failed
+/// to parse; and the whole of it, since the links sit at the end of a
+/// page, past the snippet's 512 bytes, where serde's message can still
+/// quote them.
+fn may_carry_token(body: &[u8]) -> bool {
+    const MARKERS: [&[u8]; 2] = [b"\"paging\"", b"access_token"];
+    MARKERS
+        .iter()
+        .any(|marker| body.windows(marker.len()).any(|w| w == *marker))
 }
 
 /// A decode error for a response that names people: `why` replaces serde's
@@ -855,7 +894,8 @@ const RECIPIENT_WITHHELD: &[u8] = b"(withheld: the response names the recipient)
 
 /// The body snippet of a decode error for a response that can carry
 /// `paging` links: Meta's `next` and `previous` URLs can embed the access
-/// token the request was sent with.
+/// token the request was sent with. [`decode_json`] uses it on its own for
+/// any body that carries them.
 pub(crate) const PAGING_WITHHELD: &[u8] = b"(withheld: paging links can carry the access token)";
 
 fn withheld_decode_error_as(
@@ -889,18 +929,26 @@ pub(crate) fn decode_json_withheld<T: DeserializeOwned>(
     body: &[u8],
     placeholder: &'static [u8],
 ) -> Result<T> {
-    serde_json::from_slice(body).map_err(|e| {
-        withheld_decode_error_as(
-            context,
-            format_args!(
-                "{:?} error at line {} column {} (details withheld)",
-                e.classify(),
-                e.line(),
-                e.column()
-            ),
-            placeholder,
-        )
-    })
+    serde_json::from_slice(body).map_err(|e| withheld_serde_error(context, &e, placeholder))
+}
+
+/// A decode error that keeps serde's error category and position, and
+/// neither its message nor the body.
+fn withheld_serde_error(
+    context: &'static str,
+    e: &serde_json::Error,
+    placeholder: &'static [u8],
+) -> Error {
+    withheld_decode_error_as(
+        context,
+        format_args!(
+            "{:?} error at line {} column {} (details withheld)",
+            e.classify(),
+            e.line(),
+            e.column()
+        ),
+        placeholder,
+    )
 }
 
 #[cfg(test)]
@@ -2194,5 +2242,386 @@ mod id_shape_tests {
             "/v25.0/123%2Fsubscribed_apps/subscribed_apps"
         );
         assert_eq!(t.remaining(), 0);
+    }
+}
+
+/// A paged answer that fails to decode keeps its body, and serde's
+/// message, out of the error: Meta's `paging.next` and `paging.previous`
+/// links can embed the access token, and `Error`'s `Debug` is what callers
+/// log. The rule is [`decode_json`]'s, so it holds for every one-page read
+/// without the call site opting in, and
+/// `every_decode_error_built_here_withholds_or_goes_through_decode_json`
+/// keeps the modules from building a decode error from a body themselves.
+#[cfg(test)]
+mod paging_withheld_tests {
+    use std::path::{Path, PathBuf};
+
+    use meta_whatsapp_core::ids::{
+        BusinessId, FlowId, GroupId, PhoneNumberId, TemplateGroupId, TemplateId, WabaId,
+    };
+    use meta_whatsapp_core::paging::Page;
+    use meta_whatsapp_core::testing::ScriptedTransport;
+    use time::OffsetDateTime;
+
+    use super::*;
+    use crate::analytics::{
+        GroupAnalyticsQuery, GroupMetric, TemplateAnalyticsQuery, TemplateGroupAnalyticsQuery,
+    };
+    use crate::block_users::ListBlockedUsers;
+    use crate::business_verification::ListVerificationSubmissions;
+    use crate::flows::{ListFlowAssets, ListFlows};
+    use crate::groups::{ListGroups, ListJoinRequests};
+    use crate::marketing::{ListClientWabas, OnboardingStatus};
+    use crate::qr_codes::ListQrCodes;
+    use crate::retry::RetryPolicy;
+    use crate::signups::ListSignups;
+    use crate::templates::{LibraryQuery, TemplateListQuery};
+    use crate::waba::{ListAssignedUsers, PhoneNumbersQuery, WabaListQuery};
+
+    /// A `next` link holding the token, as Meta can send it. Values ours.
+    const NEXT: &str = "https://graph.facebook.com/v25.0/1/x?access_token=LEAKED&after=c1";
+
+    fn client(t: &ScriptedTransport) -> Client {
+        Client::builder()
+            .transport(t.clone())
+            .access_token("TOKEN")
+            .retry(RetryPolicy::NONE)
+            .build()
+            .unwrap()
+    }
+
+    /// A page whose `data` is the `next` link instead of a list: without the
+    /// rule, serde's message would quote it and the snippet would hold it
+    /// twice.
+    fn leaky_page() -> String {
+        format!(r#"{{"data":"{NEXT}","paging":{{"cursors":{{"after":"c1"}},"next":"{NEXT}"}}}}"#)
+    }
+
+    /// `body`'s error is a `Decode` that keeps serde's category, line and
+    /// column, and shows neither the body nor the link. serde stops on the
+    /// `data` string, so the column is that of its closing quote.
+    fn assert_withheld(what: &str, err: &Error, body: &str) {
+        let shown = format!("{err} {err:?}");
+        assert!(!shown.contains("LEAKED"), "{what}: {shown}");
+        let Error::Decode {
+            context,
+            source,
+            body_snippet,
+        } = err
+        else {
+            panic!("{what}: not a decode error: {err:?}")
+        };
+        assert!(!context.is_empty(), "{what}");
+        assert_eq!(body_snippet.as_bytes(), PAGING_WITHHELD, "{what}");
+        let column = body.find(r#"","paging""#).unwrap() + 1;
+        assert_eq!(
+            source.to_string(),
+            format!("Data error at line 1 column {column} (details withheld)"),
+            "{what}"
+        );
+    }
+
+    fn at(secs: i64) -> OffsetDateTime {
+        OffsetDateTime::from_unix_timestamp(secs).unwrap()
+    }
+
+    #[allow(clippy::too_many_lines)] // one list of call sites, read top to bottom
+    #[tokio::test]
+    async fn every_one_page_read_of_a_paged_answer_withholds_a_body_that_fails_to_decode() {
+        let t = ScriptedTransport::new();
+        let c = client(&t);
+        let waba = || WabaId::new("1").unwrap();
+        let phone = || PhoneNumberId::new("2").unwrap();
+        let business = || BusinessId::new("3").unwrap();
+        let body = leaky_page();
+        let mut errors: Vec<(&str, Error)> = Vec::new();
+        macro_rules! read {
+            ($what:literal, $call:expr) => {{
+                t.push_bytes(200, "application/json", body.clone());
+                errors.push(($what, $call.await.unwrap_err()));
+            }};
+        }
+        read!(
+            "templates.list",
+            c.templates(waba()).list(&TemplateListQuery::new())
+        );
+        read!(
+            "templates.library",
+            c.templates(waba()).library(&LibraryQuery::default())
+        );
+        read!(
+            "waba.phone_numbers",
+            c.waba(waba()).phone_numbers(&PhoneNumbersQuery::new())
+        );
+        read!("waba.subscribed_apps", c.waba(waba()).subscribed_apps());
+        read!(
+            "waba.assigned_users",
+            c.waba(waba())
+                .assigned_users(&ListAssignedUsers::new(business()))
+        );
+        read!(
+            "business.client_whatsapp_business_accounts",
+            c.business(business())
+                .client_whatsapp_business_accounts(&WabaListQuery::new())
+        );
+        read!(
+            "business.owned_whatsapp_business_accounts",
+            c.business(business())
+                .owned_whatsapp_business_accounts(&WabaListQuery::new())
+        );
+        read!(
+            "analytics.template",
+            c.analytics(waba()).template(&TemplateAnalyticsQuery::new(
+                at(1),
+                at(2),
+                vec![TemplateId::new("4").unwrap()],
+            ))
+        );
+        read!(
+            "analytics.template_group",
+            c.analytics(waba())
+                .template_group(&TemplateGroupAnalyticsQuery::new(
+                    at(1),
+                    at(2),
+                    vec![TemplateGroupId::new("5")],
+                ))
+        );
+        read!(
+            "analytics.groups",
+            c.analytics(waba()).groups(&GroupAnalyticsQuery::new(
+                at(1),
+                at(2),
+                vec![GroupId::new("6")],
+                vec![GroupMetric::Sent],
+            ))
+        );
+        // A struct of the module's own (`{"data": {"groups": …}, "paging"}`).
+        read!(
+            "groups.list",
+            c.groups(phone()).list(&ListGroups::default())
+        );
+        read!(
+            "groups.join_requests",
+            c.group(GroupId::new("8"))
+                .join_requests(&ListJoinRequests::default())
+        );
+        read!("flows.list", c.flows(waba()).list(&ListFlows::new()));
+        read!(
+            "flow.assets",
+            c.flow(FlowId::new("7")).assets(&ListFlowAssets::new())
+        );
+        read!("signups.list", c.signups(waba()).list(&ListSignups::new()));
+        read!(
+            "block_users.list",
+            c.block_users(phone()).list(&ListBlockedUsers::default())
+        );
+        read!(
+            "qr_codes.list",
+            c.qr_codes(phone()).list(&ListQrCodes::default())
+        );
+        read!(
+            "marketing_business.client_wabas_with_status",
+            c.marketing_business(business())
+                .client_wabas_with_status(&ListClientWabas::new([OnboardingStatus::Eligible]))
+        );
+        read!("credit_lines.list", c.credit_lines().list(&business(), &[]));
+        read!(
+            "business_verification.submissions",
+            c.business_verification()
+                .submissions(&business(), &ListVerificationSubmissions::new())
+        );
+        // Documented as `{"data": [settings]}`, no paging; should Meta page
+        // it, the rule holds there too.
+        read!("commerce.settings", c.commerce(phone()).settings());
+        assert_eq!(t.remaining(), 0);
+        assert_eq!(t.requests().len(), errors.len());
+        for (what, err) in &errors {
+            assert_withheld(what, err, &body);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_page_nested_in_an_object_is_withheld_too() {
+        // `GET /{TEMPLATE_GROUP_ID}` answers the group with the first page
+        // of its templates.
+        let body = format!(
+            r#"{{"id":"5","whatsapp_business_templates":{{"data":"{NEXT}","paging":{{"next":"{NEXT}"}}}}}}"#
+        );
+        let t = ScriptedTransport::new();
+        t.push_bytes(200, "application/json", body.clone());
+        let err = client(&t)
+            .templates(WabaId::new("1").unwrap())
+            .get_group(&TemplateGroupId::new("5"))
+            .await
+            .unwrap_err();
+        assert_withheld("templates.get_group", &err, &body);
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[test]
+    fn a_link_past_the_snippet_is_withheld_from_serdes_message() {
+        // The snippet keeps 512 bytes; serde's message quotes the offending
+        // value wherever it sits. Here `paging` is the link itself.
+        let data = vec![1; 300];
+        let body = serde_json::to_vec(&serde_json::json!({"data": data, "paging": NEXT})).unwrap();
+        assert!(body.len() > 512);
+        let err = decode_json::<Page<serde_json::Value>>("page", &body).unwrap_err();
+        let shown = format!("{err} {err:?}");
+        assert!(!shown.contains("LEAKED"), "{shown}");
+        assert!(shown.contains("Data error at line 1 column"), "{shown}");
+    }
+
+    #[test]
+    fn a_paged_answer_is_withheld_whatever_its_links_hold() {
+        // No `access_token` in sight: the `paging` key alone decides, since
+        // what Meta puts in a link is not ours to predict.
+        let body = br#"{"data": {"id": "1"}, "paging": {"next": "https://graph.facebook.com/v25.0/1/x?after=c1"}}"#;
+        let err = decode_json::<Page<serde_json::Value>>("page", body).unwrap_err();
+        let shown = format!("{err} {err:?}");
+        assert!(!shown.contains("after=c1"), "{shown}");
+        assert!(
+            matches!(&err, Error::Decode { body_snippet, .. } if body_snippet.as_bytes() == PAGING_WITHHELD),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn a_body_naming_access_token_is_withheld_without_paging() {
+        let body = format!(r#"{{"data":"{NEXT}","next":"{NEXT}"}}"#);
+        let err = decode_json::<Page<serde_json::Value>>("page", body.as_bytes()).unwrap_err();
+        let shown = format!("{err} {err:?}");
+        assert!(!shown.contains("LEAKED"), "{shown}");
+        assert!(
+            matches!(&err, Error::Decode { body_snippet, .. } if body_snippet.as_bytes() == PAGING_WITHHELD),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn a_single_object_answer_keeps_its_snippet_and_message() {
+        let body = br#"{"id": 5, "name": "x"}"#;
+        let err =
+            decode_json::<std::collections::HashMap<String, String>>("node", body).unwrap_err();
+        let Error::Decode {
+            context,
+            source,
+            body_snippet,
+        } = &err
+        else {
+            panic!("{err:?}")
+        };
+        assert_eq!(*context, "node");
+        assert_eq!(body_snippet, r#"{"id": 5, "name": "x"}"#);
+        assert_eq!(
+            source.to_string(),
+            "invalid type: integer `5`, expected a string at line 1 column 8"
+        );
+    }
+
+    /// The structural rule holds only while every decode error built from a
+    /// response body goes through [`decode_json`] (or a `decode_json_*`
+    /// that withholds). This scan of the crate's sources finds each call of
+    /// `Error::decode` and requires its body argument to be a byte string
+    /// literal or a `SCREAMING_CASE` placeholder; the few that pass a body
+    /// are listed, each with why it may. A module that decodes a
+    /// `send_raw()` body itself, with the body in the error, fails here and
+    /// should call `decode_json` instead. (Building `Error::Decode` as a
+    /// struct literal would escape the scan; no module does.)
+    #[test]
+    fn every_decode_error_built_here_withholds_or_goes_through_decode_json() {
+        // Split so that this file's own needle is not a match.
+        const NEEDLE: &str = concat!("Error::", "decode(");
+        const ALLOWED: [(&str, &str); 3] = [
+            // The rule itself.
+            ("request.rs", "body"),
+            ("request.rs", "placeholder"),
+            // The browser's Embedded Signup message event, not a Graph answer.
+            ("embedded_signup/event.rs", "json.as_bytes()"),
+        ];
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        rust_files(&root, &mut files);
+        assert!(files.len() > 20, "{files:?}");
+        let mut seen = 0;
+        let mut offending = Vec::new();
+        for file in &files {
+            let source = std::fs::read_to_string(file).unwrap();
+            let name = file
+                .strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            for (at, _) in source.match_indices(NEEDLE) {
+                seen += 1;
+                let args = call_args(&source[at + NEEDLE.len()..]);
+                assert_eq!(args.len(), 3, "{name}: {args:?}");
+                let body = args[2].as_str();
+                let literal = body.starts_with("b\"");
+                let placeholder = !body.is_empty()
+                    && body
+                        .chars()
+                        .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_');
+                if !(literal || placeholder || ALLOWED.contains(&(name.as_str(), body))) {
+                    offending.push(format!("{name}: body argument `{body}`"));
+                }
+            }
+        }
+        assert!(seen >= 8, "the scan found only {seen} calls");
+        assert!(
+            offending.is_empty(),
+            "a decode error built from a body bypasses decode_json's paging rule: {offending:#?}"
+        );
+    }
+
+    fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                rust_files(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+
+    /// The top-level, comma-separated arguments of a call, from just after
+    /// its `(` to its matching `)`, trimmed (string literals and nested
+    /// brackets respected).
+    fn call_args(rest: &str) -> Vec<String> {
+        let mut args = Vec::new();
+        let mut current = String::new();
+        let mut depth = 0u32;
+        let mut chars = rest.chars();
+        while let Some(ch) = chars.next() {
+            match ch {
+                '"' => {
+                    current.push(ch);
+                    while let Some(inner) = chars.next() {
+                        current.push(inner);
+                        match inner {
+                            '\\' => current.extend(chars.next()),
+                            '"' => break,
+                            _ => {}
+                        }
+                    }
+                }
+                '(' | '[' | '{' | '<' => {
+                    depth += 1;
+                    current.push(ch);
+                }
+                ')' if depth == 0 => break,
+                ')' | ']' | '}' | '>' => {
+                    depth -= 1;
+                    current.push(ch);
+                }
+                ',' if depth == 0 => args.push(std::mem::take(&mut current)),
+                _ => current.push(ch),
+            }
+        }
+        args.push(current);
+        args.into_iter()
+            .map(|a| a.trim().to_owned())
+            .filter(|a| !a.is_empty())
+            .collect()
     }
 }

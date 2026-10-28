@@ -320,7 +320,18 @@ Rules for every endpoint module:
    and `Marketing::send` echo the recipient's number) decode with
    `GraphRequest::send_private`: a decode error carries a placeholder
    instead of the body snippet, and the error category and position instead
-   of serde's message (which quotes the offending value).
+   of serde's message (which quotes the offending value). **Paged answers**
+   are withheld the same way without the call site asking: Meta's
+   `paging.next` and `paging.previous` links can embed the `access_token`
+   the request was sent with, so `GraphRequest::send` (and every other
+   decode of a 2xx body, through `request::decode_json`) withholds the
+   snippet and serde's message of any body that names a `paging` key or
+   `access_token`. The rule reads the body, not the target type: it holds
+   for `Page<T>`, for a module's own struct with a `paging` field, and for
+   a page nested in an object. Other answers keep their snippet. A module
+   that decodes a `send_raw()` body itself calls `decode_json` rather than
+   passing the body to `Error::decode`; a test in `request.rs` scans the
+   crate for such calls.
 9. **One type per concept.** A type two endpoint families share is
    defined once in `meta_whatsapp_client::common` (`MediaSource`, `FlowAction`,
    `QualityRating`) and re-exported by each module that uses it; a type
