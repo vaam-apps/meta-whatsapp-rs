@@ -13,7 +13,9 @@
 //! | [`model`] | tenants, API keys, bindings, idempotency records: the validated domain types |
 //! | [`admin`] | the admin operations as services: tenants, keys, platform keys, attaching a WABA (decision D4), reading and unbinding a binding, the vault's rotation |
 //! | [`messages`] | the message operations as services: the send request (free of any API toolkit), the recipient and E.164 rules, sending (the accepted message) and marking read |
-//! | [`request`] | what the requests share: a Meta object read into the library's type, no key dropped |
+//! | [`numbers`] | the number operations as services: a number's live details, its business profile read and changed, disconnecting a WABA |
+//! | [`templates`] | the template operations as services: the list (cached per WABA, [`templates::TemplateCache`]), the lookup of an id in a WABA, creation (the definition checked first), deletion |
+//! | [`request`] | what the requests share: a Meta object read into the library's type, no key dropped; a Meta object id checked before it reaches a Graph path |
 //! | [`keys`] | the API key format, digests, constant-time comparison |
 //! | [`error`] | the error model as data: codes, statuses as numbers, `retryable`, `may_have_been_sent`, Meta's `details` |
 //! | [`authz`] | the authorization order: key, tenant, scope, ownership, vault |
@@ -60,10 +62,12 @@ pub mod idempotency;
 pub mod keys;
 pub mod messages;
 pub mod model;
+pub mod numbers;
 pub mod observe;
 pub mod outbox;
 pub mod ratelimit;
 pub mod request;
 pub mod store;
+pub mod templates;
 
 pub use error::ServiceError;

@@ -1,10 +1,12 @@
 //! A memory backend of the core's own tests, with no server crate: the
-//! ports the admin and messages suites (`conformance::admin`,
-//! `conformance::messages`) reach. Its records keep decision D4
-//! (`bind_waba` refuses a WABA another tenant holds), its idempotency
-//! records lease and expire keys on the process's monotonic clock, and its
-//! vault's key/value store is `support::Kv`. The ports neither suite
-//! reaches are not there.
+//! ports the admin, messages, templates and numbers suites
+//! (`conformance::admin`, `conformance::messages`,
+//! `conformance::templates`, `conformance::numbers`) reach. Its records
+//! keep decision D4 (`bind_waba` refuses a WABA another tenant holds) and
+//! condition an unbind and a status change on the binding's epoch, its
+//! idempotency records lease and expire keys on the process's monotonic
+//! clock, and its vault's key/value store is `support::Kv`. The ports no
+//! suite reaches are not there.
 #![allow(dead_code)] // each test binary uses a different subset
 
 use std::collections::BTreeMap;
@@ -36,7 +38,7 @@ pub struct State {
     numbers: BTreeMap<String, NumberBinding>,
 }
 
-/// Records in memory, as far as the admin and messages suites reach them:
+/// Records in memory, as far as the suites this backend runs reach them:
 /// tenants, keys and bindings, with D4 kept by `bind_waba`.
 #[derive(Default)]
 pub struct Records(Mutex<State>);
@@ -81,10 +83,10 @@ impl RecordStore for Records {
         _: Option<&str>,
         _: Option<TenantStatus>,
     ) -> StoreResult<Option<Tenant>> {
-        unimplemented!("not used by the admin and messages suites")
+        unimplemented!("not used by the suites this backend runs")
     }
     async fn delete_tenant(&self, _: &TenantId) -> StoreResult<DeleteTenantOutcome> {
-        unimplemented!("not used by the admin and messages suites")
+        unimplemented!("not used by the suites this backend runs")
     }
     async fn insert_key(&self, key: &NewApiKey) -> StoreResult<Option<ApiKeyRecord>> {
         let mut state = self.state();
@@ -109,10 +111,10 @@ impl RecordStore for Records {
         Ok(self.state().keys.get(key_id).cloned())
     }
     async fn keys(&self, _: &KeyScope, _: &PageRequest) -> StoreResult<Listing<ApiKeyRecord>> {
-        unimplemented!("not used by the admin and messages suites")
+        unimplemented!("not used by the suites this backend runs")
     }
     async fn revoke_key(&self, _: &KeyScope, _: &str) -> StoreResult<bool> {
-        unimplemented!("not used by the admin and messages suites")
+        unimplemented!("not used by the suites this backend runs")
     }
     async fn touch_key(&self, _: &str) -> StoreResult<()> {
         Ok(())
@@ -171,10 +173,22 @@ impl RecordStore for Records {
         Ok(BindOutcome::Bound)
     }
     async fn unbind_waba(&self, _: &WabaId) -> StoreResult<bool> {
-        unimplemented!("not used by the admin and messages suites")
+        unimplemented!("not used by the suites this backend runs")
     }
-    async fn unbind_waba_if(&self, _: &BindingEpoch) -> StoreResult<bool> {
-        unimplemented!("not used by the admin and messages suites")
+    async fn unbind_waba_if(&self, epoch: &BindingEpoch) -> StoreResult<bool> {
+        // The numbers suite's disconnection: the binding and its numbers,
+        // only while the binding is the one `epoch` read.
+        let mut state = self.state();
+        let held = state
+            .wabas
+            .get(epoch.waba_id.as_str())
+            .is_some_and(|w| w.epoch() == *epoch);
+        if !held {
+            return Ok(false);
+        }
+        state.wabas.remove(epoch.waba_id.as_str());
+        state.numbers.retain(|_, n| n.waba_id != epoch.waba_id);
+        Ok(true)
     }
     async fn waba(&self, waba_id: &WabaId) -> StoreResult<Option<WabaBinding>> {
         Ok(self.state().wabas.get(waba_id.as_str()).cloned())
@@ -183,7 +197,7 @@ impl RecordStore for Records {
         Ok(self.state().numbers.get(pn.as_str()).cloned())
     }
     async fn all_wabas(&self, _: &PageRequest) -> StoreResult<Listing<WabaBinding>> {
-        unimplemented!("not used by the admin and messages suites")
+        unimplemented!("not used by the suites this backend runs")
     }
     async fn wabas(
         &self,
@@ -227,10 +241,31 @@ impl RecordStore for Records {
         }))
     }
     async fn set_waba_status(&self, _: &WabaId, _: NumberStatus) -> StoreResult<()> {
-        unimplemented!("not used by the admin and messages suites")
+        unimplemented!("not used by the suites this backend runs")
     }
-    async fn set_waba_status_if(&self, _: &BindingEpoch, _: NumberStatus) -> StoreResult<bool> {
-        unimplemented!("not used by the admin and messages suites")
+    async fn set_waba_status_if(
+        &self,
+        epoch: &BindingEpoch,
+        status: NumberStatus,
+    ) -> StoreResult<bool> {
+        // A `190` marking the numbers of the binding a capability was made
+        // from (the numbers and templates suites), only while it holds.
+        let mut state = self.state();
+        let held = state
+            .wabas
+            .get(epoch.waba_id.as_str())
+            .is_some_and(|w| w.epoch() == *epoch);
+        if !held {
+            return Ok(false);
+        }
+        let now = OffsetDateTime::now_utc();
+        for number in state.numbers.values_mut() {
+            if number.waba_id == epoch.waba_id {
+                number.status = status;
+                number.updated_at = now;
+            }
+        }
+        Ok(true)
     }
 }
 
@@ -363,22 +398,22 @@ impl Backend for Memory {
         self.idempotency.clone()
     }
     fn outbox(&self) -> Arc<dyn Outbox> {
-        unimplemented!("not used by the admin and messages suites")
+        unimplemented!("not used by the suites this backend runs")
     }
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
-        unimplemented!("not used by the admin and messages suites")
+        unimplemented!("not used by the suites this backend runs")
     }
     fn janitor(&self) -> Arc<dyn Janitor> {
-        unimplemented!("not used by the admin and messages suites")
+        unimplemented!("not used by the suites this backend runs")
     }
     fn migrator(&self) -> Arc<dyn SchemaMigrator> {
-        unimplemented!("not used by the admin and messages suites")
+        unimplemented!("not used by the suites this backend runs")
     }
     fn kv(&self) -> Arc<dyn KvStore> {
         self.kv.clone()
     }
     fn conversations(&self) -> Arc<dyn ConversationStore> {
-        unimplemented!("not used by the admin and messages suites")
+        unimplemented!("not used by the suites this backend runs")
     }
     async fn close(&self) {}
 }

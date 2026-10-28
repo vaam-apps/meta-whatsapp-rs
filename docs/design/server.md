@@ -1072,15 +1072,15 @@ database's where it has one, else the service's `Clock`); contention is
 a typed error; a bundle's accessors return the same data on every call;
 listings are in byte order.
 
-**As built (roadmap S1, S2, S3, S4, S5a, S5b).** `crates/meta-whatsapp-server-core`
+**As built (roadmap S1, S2, S3, S4, S5a, S5b, S5c).** `crates/meta-whatsapp-server-core`
 exists, with the model, the keys, event routing and polling, the
 idempotency engine, the rate limiter, the error model, authorization,
 housekeeping (over a `Backend`, since S4), the admin operations
-(since S5a), and the message operations and the idempotency engine's
-run (since S5b); the other operations (media, templates, numbers, the
-webhook pipeline) are still the axum crate's handlers (roadmap
-S5c–S5e). What it holds today, where it differs from the target
-above:
+(since S5a), the message operations and the idempotency engine's
+run (since S5b), and the number and template operations (since S5c);
+the other operations (media, the webhook pipeline) are still the axum
+crate's handlers (roadmap S5d, S5e). What it holds today, where it
+differs from the target above:
 
 - **The ports** are `RecordStore`, `IdempotencyRecords`, `Outbox`,
   `LeaderLock`, `Janitor` and `SchemaMigrator`, and their contracts carry
@@ -1265,6 +1265,38 @@ above:
   before any request, a scripted timeout `may_have_been_sent` and its
   key replaying it with no second request, a `131047` releasing its key,
   another `Authorizer`'s caller refused.
+- **The numbers and the templates are services** (S5c). `numbers`
+  holds `Numbers` on an `OwnedNumber` (`Numbers::new`, which admits
+  it: `Authorizer::admit_number`): `details` (`numbers::NumberDetails`,
+  Meta's fields `NUMBER_FIELDS`), `profile` and `update_profile` (a
+  `numbers::ProfileChange`, as the request carried it: an empty one only
+  reads, `numbers::BusinessProfile`); and `Waba` on an `OwnedWaba`
+  (`Waba::new`, which admits it: the new `Authorizer::admit_waba`), whose
+  `disconnect` asks `still_bound`, unsubscribes the app, then forgets
+  the token and the bindings (`503` for a WABA that moved, nothing
+  deleted when Meta refuses). `templates` holds the cache
+  (`TemplateCache`, per WABA, query and tenant, bounded, its TTL the
+  adapter's: the service's 60 seconds, one per replica), the checks
+  before any request (the filters, the name, the id, by
+  `request::graph_id`, which moved into the core too; and
+  `templates::definition` for a creation, no key dropped, every
+  documented limit), and `Templates` on an `OwnedWaba`
+  for a `Caller` (`Templates::new` admits both and opens only on a WABA
+  of the caller's own tenant, else `404 not_found`): `list` (cached),
+  `get` (the bare id asked for its name only, then looked for in the
+  WABA's own list of that name: another WABA's is `404`), `create` and
+  `delete` (each dropping the WABA's cached pages; a deletion audited
+  as the tenant's, `template_deleted` or `templates_deleted`). Their
+  answers are domain values free of utoipa, which the axum adapter
+  converts into its OpenAPI types field by field; failed Graph calls
+  are told to the `Observer`, a refused template id by Meta's code
+  though it is answered `404`. The conformance suites `templates` and
+  `numbers` hold them with no HTTP layer: tenant B's caller on tenant
+  A's template id is not found with zero vault reads (A's WABA refused
+  at step 4, A's capability refused by `Templates::new`, A's id not in
+  B's WABA, nothing deleted), and the services send Meta's documented
+  requests. The tenant's listings (`GET /v1/wabas`, `GET /v1/numbers`)
+  stay the axum handlers' reads of the records for the admitted caller.
 - **`ServiceError`** is the §5 error model as data: a code of `CODES`
   (§5.2), its status as a number, `retryable`, `may_have_been_sent`, the
   field for `invalid`, the step and `resumable` of a multi-step call, and
@@ -1354,10 +1386,13 @@ above:
   `failed` race, M1), `races` (S2's races), `admin` (S5a: the admin
   services' D4 refusal, with nothing stored, subscribed or shared; the
   core's own `tests/admin.rs` runs it on a memory backend of its own,
-  with no server crate) and `messages` (S5b: M1.4's case through the
+  with no server crate), `messages` (S5b: M1.4's case through the
   message services and the idempotency engine; the core's own
   `tests/messages.rs` runs it on that memory backend, with idempotency
-  records of its own). The memory backend runs
+  records of its own), and `templates` and `numbers` (S5c: another
+  tenant's template id not found with zero vault reads, and Meta's
+  documented requests; the core's `tests/templates.rs` and
+  `tests/numbers.rs` run them on that memory backend). The memory backend runs
   it in the service's `tests/store.rs`, the Postgres one live in
   `tests/live_postgres.rs`; the service's tests also show what it
   refuses: a backend whose `kv()` is a new store on each call, an

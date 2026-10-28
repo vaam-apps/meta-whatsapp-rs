@@ -1,12 +1,58 @@
 //! What the operations' requests share, whatever adapter carried them: a
 //! Meta object (a send's `template`, a template definition) read into the
 //! library's type without a key of the request silently dropped
-//! ([`meta_object`]).
+//! ([`meta_object`]); a Meta object id checked before it becomes a Graph
+//! path segment ([`graph_id`], [`typed_graph_id`]).
 
+use meta_whatsapp_rs::core::error::ValidationError;
+use meta_whatsapp_rs::core::ids::is_numeric_id;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::error::ServiceError;
+
+/// A Meta object id from a path, a query or a body (a media id, a
+/// template id, a WABA id): the library's numeric id shape (1 to
+/// `MAX_NUMERIC_ID_LEN` (64) ASCII digits, `meta_whatsapp_rs::core::ids`),
+/// and not starting with `0` (decision D4 compares the exact string, so
+/// `0102…` and `102…` must not both pass). Checked before any request: an
+/// id is a Graph path segment, and an operation on one kind of object
+/// must not reach another (`DELETE /{id}` deletes whatever node the id
+/// names).
+///
+/// # Errors
+///
+/// `422 invalid_request` on `field`.
+pub fn graph_id(field: &'static str, id: &str) -> Result<(), ServiceError> {
+    if is_numeric_id(id) && !id.starts_with('0') {
+        Ok(())
+    } else {
+        Err(ServiceError::invalid(field))
+    }
+}
+
+/// [`graph_id`], then the typed id it names (`TemplateId`, `MediaId`,
+/// `WabaId`, …), whose own check [`graph_id`] implies.
+///
+/// # Errors
+///
+/// `422 invalid_request` on `field`.
+pub fn typed_graph_id<T>(field: &'static str, id: &str) -> Result<T, ServiceError>
+where
+    T: for<'a> TryFrom<&'a str, Error = ValidationError>,
+{
+    graph_id(field, id)?;
+    T::try_from(id).map_err(|_| ServiceError::invalid(field))
+}
+
+/// A value of one of Meta's enums (a quality rating, a template status),
+/// as its wire string: what the answers carry, so that a value the
+/// library does not name is answered as Meta wrote it.
+pub(crate) fn wire<T: Serialize>(value: Option<&T>) -> Option<String> {
+    value
+        .and_then(|v| serde_json::to_value(v).ok())
+        .and_then(|v| v.as_str().map(str::to_owned))
+}
 
 /// A Meta object carried by a request (a send's `template`, a template
 /// definition), read into the library's type `T`. Request bodies reject
@@ -107,6 +153,30 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// A Meta id is 1 to 64 digits, not starting with `0`. Decisive: each
+    /// clause, the length cap included.
+    #[test]
+    fn a_graph_id_is_up_to_64_digits() {
+        use meta_whatsapp_rs::core::ids::TemplateId;
+        assert!(graph_id("id", "1").is_ok());
+        assert!(graph_id("id", &"9".repeat(64)).is_ok());
+        for bad in [
+            String::new(),
+            "9".repeat(65),
+            "0123".to_owned(),
+            "12a".to_owned(),
+            "1/2".to_owned(),
+            "../x".to_owned(),
+        ] {
+            let refused = graph_id("media_id", &bad).unwrap_err();
+            assert_eq!(refused.field(), Some("media_id"), "{bad:?}");
+        }
+        let id: TemplateId = typed_graph_id("id", "1407680676729941").unwrap();
+        assert_eq!(id.as_str(), "1407680676729941");
+        let refused = typed_graph_id::<TemplateId>("id", "x1").unwrap_err();
+        assert_eq!(refused.field(), Some("id"));
+    }
 
     /// The field a refused Meta object names.
     fn refused<T>(field: &'static str, value: &serde_json::Value) -> Option<String>

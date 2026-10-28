@@ -61,7 +61,7 @@ pub async fn run(backend: &dyn Backend) {
 /// What the operations told the adapter's metrics, in order: each Graph
 /// error's code, and each repeat's outcome.
 #[derive(Default)]
-struct Told {
+pub(crate) struct Told {
     graph_errors: Mutex<Vec<&'static str>>,
     repeats: Mutex<Vec<&'static str>>,
 }
@@ -83,14 +83,14 @@ impl Observer for Told {
 }
 
 impl Told {
-    fn graph_errors(&self) -> Vec<&'static str> {
+    pub(crate) fn graph_errors(&self) -> Vec<&'static str> {
         self.graph_errors
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
 
-    fn repeats(&self) -> Vec<&'static str> {
+    pub(crate) fn repeats(&self) -> Vec<&'static str> {
         self.repeats
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

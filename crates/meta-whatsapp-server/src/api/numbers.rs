@@ -8,12 +8,20 @@
 //! | `GET /v1/numbers/{pn}/profile` | `GET /{pn}/whatsapp_business_profile?fields=about,address,description,email,websites,vertical` |
 //! | `PATCH /v1/numbers/{pn}/profile` | `POST /{pn}/whatsapp_business_profile`, then the `GET` above |
 //! | `DELETE /v1/wabas/{waba_id}` | `DELETE /{waba_id}/subscribed_apps`; then the token and bindings are deleted |
+//!
+//! Since roadmap S5c a number's details, its profile's read and change,
+//! and the disconnection are the core's
+//! ([`meta_whatsapp_server_core::numbers`]: the `Numbers` service on an
+//! owned number, the `Waba` service on an owned WABA). This module keeps
+//! the routes, the request and answer types with their OpenAPI schema,
+//! converts them to and from the core's (every field named on both
+//! sides), and lists the tenant's bindings for the admitted caller.
 
-use meta_whatsapp_rs::client::business_profile::{Profile, ProfileField, ProfileUpdate, Vertical};
-use meta_whatsapp_rs::client::phone_numbers::PhoneNumberInfo;
 use meta_whatsapp_rs::webhooks::axum::Json;
 use meta_whatsapp_rs::webhooks::axum::extract::State;
 use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
+use meta_whatsapp_server_core::numbers::{self as domain, Numbers, Waba};
+pub use meta_whatsapp_server_core::numbers::{NUMBER_FIELDS, PROFILE_FIELDS};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -22,25 +30,6 @@ use crate::auth::{Caller, OwnedNumber, OwnedWaba};
 use crate::error::{ApiError, ErrorBody};
 use crate::model::{NumberBinding, NumberStatus, WabaBinding};
 use crate::state::AppState;
-
-/// The fields `GET /v1/numbers/{pn}` asks Meta for.
-pub const NUMBER_FIELDS: [&str; 5] = [
-    "display_phone_number",
-    "verified_name",
-    "quality_rating",
-    "name_status",
-    "throughput",
-];
-
-/// The profile fields the service reads and writes.
-pub const PROFILE_FIELDS: [ProfileField; 6] = [
-    ProfileField::About,
-    ProfileField::Address,
-    ProfileField::Description,
-    ProfileField::Email,
-    ProfileField::Websites,
-    ProfileField::Vertical,
-];
 
 /// A WABA of the tenant.
 #[derive(Debug, Serialize, ToSchema)]
@@ -209,35 +198,80 @@ pub struct ProfilePatch {
     pub vertical: Option<String>,
 }
 
-/// A value of Meta's enum, as its wire string.
-fn wire<T: Serialize>(value: Option<&T>) -> Option<String> {
-    value
-        .and_then(|v| serde_json::to_value(v).ok())
-        .and_then(|v| v.as_str().map(str::to_owned))
-}
+// ─── To and from the core's types ────────────────────────────────────────
 
-fn profile_view(profile: Profile) -> ProfileView {
-    ProfileView {
-        vertical: wire(profile.vertical.as_ref()),
-        about: profile.about,
-        address: profile.address,
-        description: profile.description,
-        email: profile.email,
-        websites: profile.websites,
+impl From<domain::NumberDetails> for NumberDetails {
+    fn from(details: domain::NumberDetails) -> Self {
+        let domain::NumberDetails {
+            phone_number_id,
+            waba_id,
+            status,
+            display_phone_number,
+            verified_name,
+            quality_rating,
+            name_status,
+            throughput,
+        } = details;
+        Self {
+            phone_number_id: phone_number_id.into_inner(),
+            waba_id: waba_id.into_inner(),
+            status: status.into(),
+            display_phone_number,
+            verified_name,
+            quality_rating,
+            name_status,
+            throughput: throughput.map(|domain::Throughput { level }| ThroughputView { level }),
+        }
     }
 }
 
-fn details(owned: &OwnedNumber, info: PhoneNumberInfo) -> NumberDetails {
-    NumberDetails {
-        phone_number_id: owned.phone_number_id().as_str().to_owned(),
-        waba_id: owned.waba_id().as_str().to_owned(),
-        status: NumberStatusName::Connected,
-        quality_rating: wire(info.quality_rating.as_ref()),
-        name_status: wire(info.name_status.as_ref()),
-        throughput: info.throughput.map(|t| ThroughputView { level: t.level }),
-        display_phone_number: info.display_phone_number,
-        verified_name: info.verified_name,
+impl From<domain::BusinessProfile> for ProfileView {
+    fn from(profile: domain::BusinessProfile) -> Self {
+        let domain::BusinessProfile {
+            about,
+            address,
+            description,
+            email,
+            websites,
+            vertical,
+        } = profile;
+        Self {
+            about,
+            address,
+            description,
+            email,
+            websites,
+            vertical,
+        }
     }
+}
+
+impl From<ProfilePatch> for domain::ProfileChange {
+    fn from(patch: ProfilePatch) -> Self {
+        let ProfilePatch {
+            about,
+            address,
+            description,
+            email,
+            websites,
+            vertical,
+        } = patch;
+        Self {
+            about,
+            address,
+            description,
+            email,
+            websites,
+            vertical,
+        }
+    }
+}
+
+/// The core's number operations on `owned`, counted in `state`'s metrics
+/// (`owned` is the state's own: the extractor made it with
+/// `state.authz()`, which admits it).
+fn numbers<'a>(state: &'a AppState, owned: &'a OwnedNumber) -> Result<Numbers<'a>, ApiError> {
+    Ok(Numbers::new(state.authz(), owned.capability())?.observed_by(state.metrics()))
 }
 
 /// `GET /v1/wabas`: the tenant's WABAs.
@@ -327,27 +361,8 @@ pub(crate) async fn get_number(
     State(state): State<AppState>,
     owned: OwnedNumber,
 ) -> Result<Json<NumberDetails>, ApiError> {
-    let info = owned
-        .client()
-        .phone_number(owned.phone_number_id().clone())
-        .get(&NUMBER_FIELDS)
-        .await;
-    match info {
-        Ok(info) => Ok(Json(details(&owned, info))),
-        Err(error) => Err(owned.failed(&state, &error).await.with_details(&error)),
-    }
-}
-
-async fn read_profile(state: &AppState, owned: &OwnedNumber) -> Result<ProfileView, ApiError> {
-    let profile = owned
-        .client()
-        .business_profile(owned.phone_number_id().clone())
-        .get(&PROFILE_FIELDS)
-        .await;
-    match profile {
-        Ok(profile) => Ok(profile_view(profile)),
-        Err(error) => Err(owned.failed(state, &error).await.with_details(&error)),
-    }
+    let details = numbers(&state, &owned)?.details().await?;
+    Ok(Json(NumberDetails::from(details)))
 }
 
 /// `GET /v1/numbers/{pn}/profile`: the business profile.
@@ -375,7 +390,8 @@ pub(crate) async fn get_profile(
     State(state): State<AppState>,
     owned: OwnedNumber,
 ) -> Result<Json<ProfileView>, ApiError> {
-    read_profile(&state, &owned).await.map(Json)
+    let profile = numbers(&state, &owned)?.profile().await?;
+    Ok(Json(ProfileView::from(profile)))
 }
 
 /// `PATCH /v1/numbers/{pn}/profile`: change the given fields, answer the
@@ -407,32 +423,10 @@ pub(crate) async fn update_profile(
     owned: OwnedNumber,
     ApiJson(patch): ApiJson<ProfilePatch>,
 ) -> Result<Json<ProfileView>, ApiError> {
-    let vertical = patch
-        .vertical
-        .map(|v| serde_json::from_value::<Vertical>(serde_json::Value::String(v)))
-        .transpose()
-        .map_err(|_| ApiError::invalid("vertical"))?;
-    let update = ProfileUpdate {
-        about: patch.about,
-        address: patch.address,
-        description: patch.description,
-        email: patch.email,
-        websites: patch.websites,
-        vertical,
-        ..ProfileUpdate::default()
-    };
-    // Nothing to change: no write, just the profile.
-    if update != ProfileUpdate::default() {
-        let updated = owned
-            .client()
-            .business_profile(owned.phone_number_id().clone())
-            .update(&update)
-            .await;
-        if let Err(error) = updated {
-            return Err(owned.failed(&state, &error).await.with_details(&error));
-        }
-    }
-    read_profile(&state, &owned).await.map(Json)
+    let profile = numbers(&state, &owned)?
+        .update_profile(patch.into())
+        .await?;
+    Ok(Json(ProfileView::from(profile)))
 }
 
 /// `DELETE /v1/wabas/{waba_id}`: disconnect. Unsubscribes the app from the
@@ -462,20 +456,87 @@ pub(crate) async fn disconnect_waba(
     State(state): State<AppState>,
     owned: OwnedWaba,
 ) -> Result<StatusCode, ApiError> {
-    // Moved since the capability was made (the WABA unbound, maybe bound to
-    // another tenant): its token must not unsubscribe the new holder's
-    // app. `503`, retryable: the repeat finds what the tenant holds now.
-    if !owned.still_bound(&state).await? {
-        return Err(crate::auth::moved());
-    }
-    let unsubscribed = owned
-        .client()
-        .waba(owned.waba_id().clone())
-        .unsubscribe_app()
-        .await;
-    if let Err(error) = unsubscribed {
-        return Err(owned.failed(&state, &error).await.with_details(&error));
-    }
-    owned.forget_or_busy(&state).await?;
+    // The core's `Waba::disconnect`: a WABA moved since the capability was
+    // made is `503`, retryable, and nothing is unsubscribed or deleted.
+    Waba::new(state.authz(), owned.capability())?
+        .observed_by(state.metrics())
+        .disconnect()
+        .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+    use serde_json::json;
+
+    use super::*;
+
+    /// Every field of the core's answers reaches the service's, and every
+    /// field of a patch reaches the core (roadmap S5c: the operations are
+    /// the core's, `meta_whatsapp_server_core::numbers`). Decisive: each
+    /// field of the conversions.
+    #[test]
+    fn every_field_crosses_to_and_from_the_core() {
+        let details = domain::NumberDetails {
+            phone_number_id: PhoneNumberId::new("106540352242922").unwrap(),
+            waba_id: WabaId::new("102290129340398").unwrap(),
+            status: NumberStatus::Connected,
+            display_phone_number: Some("+1 631-555-1111".to_owned()),
+            verified_name: Some("John's Cake Shop".to_owned()),
+            quality_rating: Some("GREEN".to_owned()),
+            name_status: Some("APPROVED".to_owned()),
+            throughput: Some(domain::Throughput {
+                level: Some("STANDARD".to_owned()),
+            }),
+        };
+        assert_eq!(
+            serde_json::to_value(NumberDetails::from(details)).unwrap(),
+            json!({
+                "phone_number_id": "106540352242922",
+                "waba_id": "102290129340398",
+                "status": "connected",
+                "display_phone_number": "+1 631-555-1111",
+                "verified_name": "John's Cake Shop",
+                "quality_rating": "GREEN",
+                "name_status": "APPROVED",
+                "throughput": {"level": "STANDARD"}
+            })
+        );
+        let profile = domain::BusinessProfile {
+            about: Some("Succulent specialists!".to_owned()),
+            address: Some("1 Hacker Way, Menlo Park, CA 94025".to_owned()),
+            description: Some("At Lucky Shrub, we specialize in providing a...".to_owned()),
+            email: Some("lucky@luckyshrub.com".to_owned()),
+            websites: vec!["https://www.luckyshrub.com/".to_owned()],
+            vertical: Some("RETAIL".to_owned()),
+        };
+        assert_eq!(
+            serde_json::to_value(ProfileView::from(profile)).unwrap(),
+            json!({
+                "about": "Succulent specialists!",
+                "address": "1 Hacker Way, Menlo Park, CA 94025",
+                "description": "At Lucky Shrub, we specialize in providing a...",
+                "email": "lucky@luckyshrub.com",
+                "websites": ["https://www.luckyshrub.com/"],
+                "vertical": "RETAIL"
+            })
+        );
+        let patch: ProfilePatch = serde_json::from_value(json!({
+            "about": "a", "address": "b", "description": "c", "email": "d@e.f",
+            "websites": ["https://g.example/"], "vertical": "RETAIL"
+        }))
+        .unwrap();
+        assert_eq!(
+            domain::ProfileChange::from(patch),
+            domain::ProfileChange {
+                about: Some("a".to_owned()),
+                address: Some("b".to_owned()),
+                description: Some("c".to_owned()),
+                email: Some("d@e.f".to_owned()),
+                websites: Some(vec!["https://g.example/".to_owned()]),
+                vertical: Some("RETAIL".to_owned()),
+            }
+        );
+    }
 }

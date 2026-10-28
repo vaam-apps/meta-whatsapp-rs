@@ -575,7 +575,7 @@ and `store-postgres`.
     `messages::MessageType::ALL` is the list); media and template
     creation run under the core's `run` too, their operations still the
     server's until S5c and S5d.
-- [ ] **S5c. Numbers and templates into core**
+- [x] **S5c. Numbers and templates into core**
   (`meta-whatsapp-server-core`): number details, the profile's read and
   update, disconnecting a WABA; the template list, the lookup in a WABA,
   create, delete, and the template cache.
@@ -583,6 +583,80 @@ and `store-postgres`.
   - **Decisive:** called with no HTTP layer, tenant B's caller on A's
     template id is not found with zero vault reads; `openapi/v1.json`
     byte-identical.
+  - **Landed:** `meta_whatsapp_server_core::numbers`: `Numbers` on an
+    `OwnedNumber` (`Numbers::new`, which admits it,
+    `Authorizer::admit_number`): `details` (`numbers::NumberDetails`,
+    `NUMBER_FIELDS`), `profile` and `update_profile` (a
+    `numbers::ProfileChange` as the request carried it, answering
+    `numbers::BusinessProfile`; an empty change only reads), and `Waba`
+    on an `OwnedWaba` (`Waba::new`, which admits it through the new
+    `Authorizer::admit_waba`): `disconnect` (`still_bound`, then Meta
+    unsubscribes the app, then the token and bindings go; `503` for a
+    WABA that moved, nothing deleted when Meta refuses).
+    `meta_whatsapp_server_core::templates`: the `TemplateCache` (per
+    tenant, WABA and query, bounded per WABA and in all, least recently
+    used first; its TTL the adapter's, the service's 60 seconds, one per
+    replica), the checks (the status filter, the name, the id: the core's
+    `request::graph_id`, moved from the server; `templates::definition`
+    for a creation's body), and `Templates` on an `OwnedWaba` for a
+    `Caller` (`Templates::new` admits both and opens only on a WABA of
+    that caller's own tenant, else `404 not_found`): `list` (cached),
+    `get` (the bare id asked for its name only, then looked for in the
+    WABA's own list of that name, at most 5 pages of 100), `create` and
+    `delete` (each dropping the WABA's cached pages; a deletion audited
+    as the tenant's, target `audit`), answering domain values free of
+    utoipa (`Template`, `TemplatePage` with Meta's raw cursor,
+    `TemplateCreated`). Failed Graph calls are told to the `Observer`
+    (`wa_server_graph_errors_total`, the same codes; a refused template
+    id by Meta's code though it is answered `404`). The handlers parse,
+    convert (every field named on both sides, no `..`), call and
+    render; template creation still runs under `idempotency::run`
+    (`Idempotent-Replayed` on a replay). Decisive:
+    `conformance::templates::another_tenants_template_id_is_not_found_with_zero_vault_reads`
+    (in `conformance::run`), with a `ScriptedTransport` and a vault
+    whose every read is recorded, no HTTP layer: B's caller naming A's
+    WABA is `404` (step 4) with zero vault reads and no request; B's
+    caller handed A's capability is refused by `Templates::new`, `404`,
+    zero vault reads; through B's own WABA, A's template id is `404`
+    without Meta's code or text (Meta asked with B's token only: the
+    name, then B's WABA's list), and Meta refusing the bare id is `404`
+    too; a deletion of A's template by id through B's WABA deletes
+    nothing (no `DELETE`); another `Authorizer`'s caller or capability
+    is `403`; and A's vault record and phone index are never read
+    through any of it. It runs on the core's memory backend
+    (`tests/templates.rs`, its records now conditioning an unbind and a
+    status change on the binding's epoch), on the service's
+    `MemoryBackend` (`tests/store.rs`) and live on Postgres
+    (`tests/live_postgres.rs`). By mutation: the ownership filter of
+    `Authorizer::owned_waba` dropped fails its step 2 on all three
+    backends (no earlier suite of `conformance::run` caught it); the
+    tenant check of `Templates::new` dropped fails step 3; its
+    admission of the caller, or of the WABA, dropped fails step 6; the id
+    check in the WABA's list dropped fails step 4; the lookup before a
+    deletion by id dropped fails step 5. A second case,
+    `the_template_services_send_metas_documented_requests`, pins the
+    list's requests, the cache, its invalidation by a creation and a
+    deletion, and the checks before any request; `conformance::numbers`
+    (`the_number_services_read_change_and_disconnect_as_meta_documents`)
+    the number services' requests, the admission of both capabilities,
+    the empty change, and a disconnection that deletes nothing until
+    Meta unsubscribed the app. The service's `tests/templates.rs` and
+    `tests/numbers.rs` pass unchanged, and gain
+    `metas_failures_on_templates_are_counted` and
+    `metas_failures_on_numbers_are_counted` (the handlers'
+    `observed_by(state.metrics())` dropped fails each); `openapi/v1.json`
+    is byte-identical (the request and answer types, their documentation
+    and the handlers' annotations untouched). Left: the tenant's
+    listings (`GET /v1/wabas`, `GET /v1/numbers`) stay the handlers' reads
+    of the records for the admitted caller (no Graph call, not in this
+    item's list); `numbers::ProfileChange`'s `vertical` reads into the
+    library's `Vertical`, whose catch-all takes a name it does not know,
+    which goes to Meta as before; a list's `limit` is the adapter's to
+    bound (the server's `PageQuery`: 1 to 100), as before; the one log
+    line that moved keeps its old target by naming it
+    (`meta_whatsapp_server::api::templates`); the server's `auth::OwnedWaba`
+    keeps `failed`, `failed_on_object`, `still_bound`, `forget` and
+    `forget_or_busy` (public, now unused by the handlers).
 - [ ] **S5d. Media into core** (`meta-whatsapp-server-core`): upload,
   download as a framework-free byte stream, delete.
   - **After:** S4.

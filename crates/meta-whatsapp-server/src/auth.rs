@@ -35,7 +35,6 @@ use std::collections::HashMap;
 use meta_whatsapp_rs::Client;
 use meta_whatsapp_rs::Error;
 use meta_whatsapp_rs::client::embedded_signup::TokenVault;
-use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_rs::webhooks::axum::extract::{FromRequestParts, Path, Request, State};
 use meta_whatsapp_rs::webhooks::axum::http::request::Parts;
@@ -308,6 +307,14 @@ impl OwnedWaba {
         self.0.client()
     }
 
+    /// The core's capability, for the core's services
+    /// (`meta_whatsapp_server_core::templates::Templates`,
+    /// `meta_whatsapp_server_core::numbers::Waba`). Crate-private, as the
+    /// handlers that hand it on are.
+    pub(crate) fn capability(&self) -> &core_authz::OwnedWaba {
+        &self.0
+    }
+
     /// See [`OwnedNumber::failed`].
     pub async fn failed(&self, state: &AppState, error: &Error) -> ApiError {
         counted(state, self.0.failed(state.authz(), error).await, error)
@@ -394,13 +401,6 @@ impl FromRequestParts<AppState> for OwnedWaba {
         let waba_id = WabaId::new(waba_id).map_err(|_| ApiError::not_found())?;
         Ok(Self(state.authz().owned_waba(&caller, waba_id).await?))
     }
-}
-
-/// The answer for a WABA whose binding moved while a request was acting
-/// on it: `503 storage_unavailable`, retryable (the repeat sees it as it
-/// is now).
-pub(crate) fn moved() -> ApiError {
-    ApiError::from(ServiceError::from(StorageError::Busy))
 }
 
 /// `api`, the error of a failed Graph call on an object named by id

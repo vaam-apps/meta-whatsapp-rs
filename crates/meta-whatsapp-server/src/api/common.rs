@@ -4,7 +4,6 @@
 use std::collections::HashMap;
 
 use meta_whatsapp_rs::core::error::ValidationError;
-use meta_whatsapp_rs::core::ids::is_numeric_id;
 use meta_whatsapp_rs::webhooks::axum::Json;
 use meta_whatsapp_rs::webhooks::axum::extract::{FromRequest, Query, Request};
 use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
@@ -40,42 +39,20 @@ where
     }
 }
 
-/// A Meta object carried by a request (a template definition), read into
-/// the library's type `T` with no key of the request dropped: the core's
-/// [`meta_whatsapp_server_core::request::meta_object`], whose rules its
-/// documentation gives (since roadmap S5b; a send's `template` is read
-/// there by the core's message building).
-pub(crate) fn meta_object<T>(field: &'static str, value: &serde_json::Value) -> Result<T, ApiError>
-where
-    T: DeserializeOwned + serde::Serialize,
-{
-    meta_whatsapp_server_core::request::meta_object(field, value).map_err(ApiError::from)
-}
-
-/// A Meta object id from a path, a query or a body (a media id, a
-/// template id, a WABA id): the library's numeric id shape (1 to
-/// `MAX_NUMERIC_ID_LEN` (64) ASCII digits, `meta_whatsapp_rs::core::ids`),
-/// and not starting with `0` (decision D4 compares the exact string, so
-/// `0102…` and `102…` must not both pass), else `422 invalid_request` on
-/// `field`. Checked before any request: an id is a Graph path segment,
-/// and a route for one kind of object must not reach another (`DELETE
-/// /{id}` deletes whatever node the id names).
-pub(crate) fn graph_id(field: &'static str, id: &str) -> Result<(), ApiError> {
-    if is_numeric_id(id) && !id.starts_with('0') {
-        Ok(())
-    } else {
-        Err(ApiError::invalid(field))
-    }
-}
-
-/// [`graph_id`], then the typed id it names (`TemplateId`, `MediaId`,
-/// `WabaId`, …), whose own check [`graph_id`] implies.
+/// A Meta object id from a path, a query or a body (a media id), as the
+/// typed id it names (`MediaId`, …): 1 to 64 ASCII digits, not starting
+/// with `0`, else `422 invalid_request` on `field`, checked before any
+/// request. The core's
+/// [`meta_whatsapp_server_core::request::typed_graph_id`], whose rules its
+/// documentation gives (since roadmap S5c, with
+/// [`meta_whatsapp_server_core::request::graph_id`]; a template id is
+/// checked there by the core's template services, and a template
+/// definition read there, `meta_whatsapp_server_core::templates::definition`).
 pub(crate) fn typed_graph_id<T>(field: &'static str, id: &str) -> Result<T, ApiError>
 where
     T: for<'a> TryFrom<&'a str, Error = ValidationError>,
 {
-    graph_id(field, id)?;
-    T::try_from(id).map_err(|_| ApiError::invalid(field))
+    meta_whatsapp_server_core::request::typed_graph_id(field, id).map_err(ApiError::from)
 }
 
 /// Default page size.
@@ -151,14 +128,19 @@ pub(crate) fn json<T: serde::Serialize>(status: StatusCode, body: T) -> (StatusC
 
 #[cfg(test)]
 mod tests {
+    use meta_whatsapp_rs::core::ids::MediaId;
+
     use super::*;
 
-    /// A Meta id is 1 to 64 digits, not starting with `0`. Decisive: each
-    /// clause, the length cap included.
+    /// A Meta id is 1 to 64 digits, not starting with `0` (the core's
+    /// rule, `meta_whatsapp_server_core::request::graph_id`'s tests), and
+    /// its refusal names the caller's field. Decisive: each clause, the
+    /// length cap included.
     #[test]
     fn a_graph_id_is_up_to_64_digits() {
-        assert!(graph_id("id", "1").is_ok());
-        assert!(graph_id("id", &"9".repeat(64)).is_ok());
+        let id = |id: &str| typed_graph_id::<MediaId>("media_id", id);
+        assert!(id("1").is_ok());
+        assert!(id(&"9".repeat(64)).is_ok());
         for bad in [
             String::new(),
             "9".repeat(65),
@@ -166,7 +148,7 @@ mod tests {
             "12a".to_owned(),
             "1/2".to_owned(),
         ] {
-            let refused = graph_id("media_id", &bad).unwrap_err();
+            let refused = id(&bad).unwrap_err();
             assert_eq!(refused.field(), Some("media_id"), "{bad:?}");
         }
     }
