@@ -1484,9 +1484,11 @@ stored data, the owner's).
   by `Templates::new`, A's id looked for in B's own WABA and not found,
   nothing deleted, A's vault record never read), another `Authorizer`'s
   caller or capability is refused, and the number and template services
-  send Meta's documented requests (the cache and its invalidation, the
-  empty profile change that only reads, the disconnection that deletes
-  nothing until Meta unsubscribed the app). In the server,
+  send Meta's documented requests (the cache and its invalidation, by a
+  creation or deletion Meta refuses too; the lookup's 5-page cap; the
+  empty profile change that only reads; Meta's `details` on the number
+  services' errors; the disconnection that deletes nothing until Meta
+  unsubscribed the app). In the server,
   `api::templates::TemplateCache`, `TEMPLATE_FIELDS`,
   `TEMPLATE_CACHE_ENTRIES`, `TEMPLATE_CACHE_PER_WABA` and
   `api::numbers::NUMBER_FIELDS`, `PROFILE_FIELDS` are re-exports of the

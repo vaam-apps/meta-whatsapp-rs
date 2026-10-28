@@ -640,7 +640,16 @@ and `store-postgres`.
     (`the_number_services_read_change_and_disconnect_as_meta_documents`)
     the number services' requests, the admission of both capabilities,
     the empty change, and a disconnection that deletes nothing until
-    Meta unsubscribed the app. The service's `tests/templates.rs` and
+    Meta unsubscribed the app. The sabotage review found five changes no
+    test caught, now pinned: the cached pages dropped only on Meta's
+    success, and the lookup's 5-page cap changed
+    (`a_refused_creation_or_deletion_drops_the_wabas_cached_pages`,
+    `a_template_id_past_the_lookups_five_pages_is_not_found`, both in
+    `conformance::run`); the lookup's log line under another target (the
+    core's `tests/templates_logs.rs`); Meta's `details` dropped from the
+    number services' and the disconnection's errors, and a profile
+    change's `email` dropped on its way to the library
+    (`conformance::numbers`, now posting all six fields). The service's `tests/templates.rs` and
     `tests/numbers.rs` pass unchanged, and gain
     `metas_failures_on_templates_are_counted` and
     `metas_failures_on_numbers_are_counted` (the handlers'
