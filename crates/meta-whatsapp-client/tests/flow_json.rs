@@ -392,22 +392,16 @@ fn try_round_trip<T: DeserializeOwned + Serialize>(label: &str, value: &Value) -
     Some(typed)
 }
 
-/// Most components have no JSON example in the Markdown pages (Meta renders
-/// them as previews), so the decisive test never sees their wire names.
-/// Here every property of each component's table in
-/// `flows/guides/components` and `flows/guides/media_upload` (and the
-/// changelog's `label-variant` and `ChipsSelector` root actions) is set
-/// once, with its documented name: each must land in a typed field, none
-/// in `extra`, and the object must come back unchanged.
-#[test]
-fn every_documented_property_of_every_component_is_modelled() {
+/// One object per component (two where a property takes two shapes), with
+/// every property of its table.
+fn every_documented_property() -> Vec<Value> {
     let update = json!({"name": "update_data", "payload": {"x": "${form.a}"}});
     let exchange = json!({"name": "data_exchange", "payload": {}});
     let option = json!({"id": "a", "title": "A", "description": "d", "metadata": "m",
         "enabled": true, "image": "iVBO", "alt-text": "alt", "color": "#ff0000",
         "on-select-action": update, "on-unselect-action": update});
     let range = |v: Value| json!({"start-date": v, "end-date": v});
-    let components = [
+    [
         json!({"type": "TextHeading", "text": "t", "visible": true}),
         json!({"type": "TextSubheading", "text": "t", "visible": "${data.v}"}),
         json!({"type": "TextBody", "text": "t", "font-weight": "bold", "strikethrough": false,
@@ -493,9 +487,21 @@ fn every_documented_property_of_every_component_is_modelled() {
         json!({"type": "Form", "name": "f", "init-values": {"n": "v"},
             "error-messages": "${data.errors}",
             "children": [{"type": "TextInput", "name": "n", "label": "L"}]}),
-    ];
+    ]
+    .into()
+}
+
+/// Most components have no JSON example in the Markdown pages (Meta renders
+/// them as previews), so the decisive test never sees their wire names.
+/// Here every property of each component's table in
+/// `flows/guides/components` and `flows/guides/media_upload` (and the
+/// changelog's `label-variant` and `ChipsSelector` root actions) is set
+/// once, with its documented name: each must land in a typed field, none
+/// in `extra`, and the object must come back unchanged.
+#[test]
+fn every_documented_property_of_every_component_is_modelled() {
     let mut tags = std::collections::BTreeSet::new();
-    for value in &components {
+    for value in &every_documented_property() {
         let label = format!("{}", value["type"]);
         let c: Component = round_trip(&label, value);
         Modelled(&label).component(&c);
