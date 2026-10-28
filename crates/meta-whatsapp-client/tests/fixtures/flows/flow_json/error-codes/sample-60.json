@@ -1,0 +1,18 @@
+{
+  "id": "MAIN",
+  "title": "Title",
+  "terminal": true,
+  "layout": {
+    "type": "SingleColumnLayout",
+    "children": [
+      {
+        "type": "Footer",
+        "label": "${screen.ROOT.form.intro_text.type}",
+        "on-click-action": {
+          "name": "complete",
+          "payload": {}
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "type": "TextCaption",
+  "markdown": true,
+  "text": [
+    "This text is ~~***really important***~~"
+  ]
+}

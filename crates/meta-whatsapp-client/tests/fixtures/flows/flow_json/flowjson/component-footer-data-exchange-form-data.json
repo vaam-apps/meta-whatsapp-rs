@@ -1,0 +1,11 @@
+{
+  "type": "Footer",
+  "label": "Submit data",
+  "on-click-action": {
+    "name": "data_exchange",
+    "payload": {
+      "name": "${form.first_name}",
+      "lang": "${form.favourite_language}"
+    }
+  }
+}

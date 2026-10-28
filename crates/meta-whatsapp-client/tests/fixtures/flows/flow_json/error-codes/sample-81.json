@@ -1,0 +1,47 @@
+{
+  "version": "4.0",
+  "screens": [
+    {
+      "id": "PATH_SIMULATION",
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "Switch",
+            "value": "${data.ti}",
+            "cases": {
+              "case1": [
+                {
+                  "type": "Footer",
+                  "label": "PASS_CUSTOM_VALUE",
+                  "on-click-action": {
+                    "name": "complete",
+                    "payload": {}
+                  }
+                }
+              ],
+              "case2": [
+                {
+                  "type": "Footer",
+                  "label": "PASS_CUSTOM_VALUE",
+                  "on-click-action": {
+                    "name": "complete",
+                    "payload": {}
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "type": "Footer",
+            "label": "PASS_CUSTOM_VALUE",
+            "on-click-action": {
+              "name": "complete",
+              "payload": {}
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

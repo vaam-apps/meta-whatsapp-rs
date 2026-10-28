@@ -1,0 +1,7 @@
+{
+  "name": "data_exchange",
+  "payload": {
+    "date": "${form.date}",
+    "component_action": "update_date"
+  }
+}

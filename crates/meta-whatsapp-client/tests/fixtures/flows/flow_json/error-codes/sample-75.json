@@ -1,0 +1,19 @@
+{
+  "version": "2.1",
+  "screens": [
+    {
+      "id": "screenA",
+      "title": "Screen Title",
+      "terminal": true,
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextHeading",
+            "text": "Heading"
+          }
+        ]
+      }
+    }
+  ]
+}

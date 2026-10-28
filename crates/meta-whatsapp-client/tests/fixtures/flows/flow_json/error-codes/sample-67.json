@@ -1,0 +1,22 @@
+{
+  "version": "2.1",
+  "screens": [
+    {
+      "id": "screenA",
+      "title": "screenTitle",
+      "type": "SingleColumnLayout",
+      "layout": {
+        "children": [
+          {
+            "type": "Footer",
+            "label": "Submit",
+            "on-click-action": {
+              "name": "data_exchange",
+              "payload": {}
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

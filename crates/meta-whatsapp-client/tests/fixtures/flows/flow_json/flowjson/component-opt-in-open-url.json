@@ -1,0 +1,9 @@
+{
+  "type": "OptIn",
+  "label": "I agree to the terms.",
+  "name": "T&Cs",
+  "on-click-action": {
+    "name": "open_url",
+    "url": "https://www.whatsapp.com/"
+  }
+}

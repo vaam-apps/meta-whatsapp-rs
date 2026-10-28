@@ -1,0 +1,8 @@
+{
+  "type": "EmbeddedLink",
+  "text": "This is an external link.",
+  "on-click-action": {
+    "name": "open_url",
+    "url": "https://www.whatsapp.com/"
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "type": "TextBody",
+  "text": "You have accepted the T&C and subscribed for our newsletter!",
+  "visible": "`${form.accept} && ${form.subscribe}`"
+}

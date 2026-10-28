@@ -1,0 +1,18 @@
+{
+  "version": "4.0",
+  "screens": [
+    {
+      "id": "SCREEN_A",
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "If",
+            "condition": "${data.val}",
+            "then": []
+          }
+        ]
+      }
+    }
+  ]
+}

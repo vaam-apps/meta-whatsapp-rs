@@ -1,0 +1,9 @@
+{
+  "type": "RichText",
+  "text": [
+    "| Column Header 1     | Column Header 2                                             |",
+    "| -------------       |  -------------                                              |",
+    "| **Bold** text 1     | [Link](<URI>)                                               |",
+    "| **Bold** text 1     | ![Image alt text](data:image/png;base64,<base64 content>)   |"
+  ]
+}

@@ -1,0 +1,4 @@
+{
+  "type": "TextBody",
+  "text": "${screen.SCREEN_ONE.data.field1}"
+}

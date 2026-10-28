@@ -1,0 +1,5 @@
+{
+  "type": "TextBody",
+  "text": "You provided at least your first or last name.",
+  "visible": "`(${form.first_name} != '') || (${form.last_name} != '')`"
+}

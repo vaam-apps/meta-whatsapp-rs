@@ -1,0 +1,8 @@
+{
+  "name": "data_exchange",
+  "payload": {
+    "media": {
+      "photo": "${form.photo_picker}"
+    }
+  }
+}

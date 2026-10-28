@@ -1,0 +1,8 @@
+{
+  "type": "RichText",
+  "text": [
+    "| Column Header 1 - Extended width  | Column Header 2       |",
+    "| -------------                     |  -------------        |",
+    "| **Bold** text 1                   | Cell text 2           |"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "type": "Footer",
+  "label": "Submit data",
+  "on-click-action": {
+    "name": "data_exchange",
+    "payload": {
+      "discount_code": "${data.discount_code}",
+      "items": "${form.selected_items}"
+    }
+  }
+}

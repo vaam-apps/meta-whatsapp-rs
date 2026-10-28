@@ -1,0 +1,65 @@
+{
+  "version": "4.0",
+  "screens": [
+    {
+      "id": "ROOT",
+      "title": "Test",
+      "data": {
+        "products": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            }
+          },
+          "__example__": []
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "Footer",
+            "label": "PASS_CUSTOM_VALUE",
+            "on-click-action": {
+              "name": "navigate",
+              "next": {
+                "type": "screen",
+                "name": "MAIN_SCREEN"
+              },
+              "payload": {}
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "MAIN_SCREEN",
+      "title": "Test",
+      "terminal": true,
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextSubheading",
+            "text": "${screen.ROOT.data.products.items.properties.title}"
+          },
+          {
+            "type": "Footer",
+            "label": "PASS_CUSTOM_VALUE",
+            "on-click-action": {
+              "name": "complete",
+              "payload": {}
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

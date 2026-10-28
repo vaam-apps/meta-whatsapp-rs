@@ -1,0 +1,37 @@
+{
+  "version": "2.1",
+  "screens": [
+    {
+      "id": "SCREEN_A",
+      "data": {
+        "products": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            }
+          },
+          "__example__": []
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "Form",
+            "children": [
+              {
+                "type": "CheckboxGroup",
+                "name": "PASS_CUSTOM_VALUE",
+                "data-source": "${data.products}"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

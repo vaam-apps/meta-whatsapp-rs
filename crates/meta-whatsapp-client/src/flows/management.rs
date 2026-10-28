@@ -9,6 +9,7 @@ use meta_whatsapp_core::ids::{FlowId, WabaId};
 use meta_whatsapp_core::paging::Page;
 use meta_whatsapp_core::transport::Multipart;
 
+use super::flow_json::FlowJson;
 use super::types::{
     CreateFlow, CreatedFlow, FlowAsset, FlowDetails, FlowJsonUpload, FlowPreview, ListFlowAssets,
     ListFlows, UpdateFlow, validate_flow_json_len,
@@ -203,6 +204,15 @@ impl Flow {
             .context("upload flow json response")
             .send()
             .await
+    }
+
+    /// [`Self::upload_flow_json`] with the typed model, once
+    /// [`FlowJson::validate`] accepts it (its error's `field` is a path
+    /// inside the Flow JSON; nothing is sent). To skip the local checks,
+    /// upload [`FlowJson::to_json_string`] with [`Self::upload_flow_json`].
+    pub async fn upload_flow_json_typed(&self, flow_json: &FlowJson) -> Result<FlowJsonUpload> {
+        flow_json.validate()?;
+        self.upload_flow_json(flow_json.to_json_string()?).await
     }
 
     /// One page of the Flow's assets (`GET /{FLOW_ID}/assets`). The next

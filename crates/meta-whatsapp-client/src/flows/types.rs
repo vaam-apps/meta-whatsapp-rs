@@ -2,10 +2,10 @@
 //!
 //! Source: `flows/guides/flowsapi` (field names, categories, statuses, the
 //! validation-error shape, assets) and `flows/guides/lifecycle` (what each
-//! status allows). Flow JSON itself is deliberately *not* modelled: it is
-//! versioned independently of the Graph API (`flows/guides/versioning`) and
-//! Meta validates it server-side, returning [`FlowValidationError`]s, so the
-//! crate carries it as an opaque JSON string.
+//! status allows). The calls carry Flow JSON as a JSON string; the typed
+//! model is [`super::flow_json`], whose [`FlowJson`](super::FlowJson) the
+//! `…_typed` calls serialize. Meta validates it server-side either way,
+//! returning [`FlowValidationError`]s.
 
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::FlowId;
@@ -249,6 +249,17 @@ impl CreateFlow {
     pub fn flow_json_value(mut self, json: &serde_json::Value) -> Self {
         self.flow_json = Some(json.to_string());
         self
+    }
+
+    /// Set the Flow JSON from the typed model, once
+    /// [`FlowJson::validate`](super::FlowJson::validate) accepts it (its
+    /// error's `field` is a path inside the Flow JSON). To skip the local
+    /// checks, pass [`FlowJson::to_json_string`](super::FlowJson::to_json_string)
+    /// to [`Self::flow_json`].
+    pub fn flow_json_typed(mut self, flow_json: &super::FlowJson) -> Result<Self, ValidationError> {
+        flow_json.validate()?;
+        self.flow_json = Some(flow_json.to_json_string()?);
+        Ok(self)
     }
 
     /// Publish immediately after creation.

@@ -1,0 +1,19 @@
+{
+  "screens": [
+    {
+      "id": "FIRST_SCREEN",
+      "layout": {
+        "children": [
+          {
+            "type": "EmbeddedLink",
+            "text": "link",
+            "on-click-action": {
+              "name": "complete",
+              "payload": {}
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

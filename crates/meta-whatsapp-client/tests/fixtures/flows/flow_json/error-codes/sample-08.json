@@ -1,0 +1,17 @@
+{
+  "screens": [
+    {
+      "id": "FIRST_1",
+      "layout": {
+        "children": [
+          {
+            "type": "TextInput",
+            "name": "Description",
+            "label": "Enter decsription",
+            "max-chars": "Hundred"
+          }
+        ]
+      }
+    }
+  ]
+}

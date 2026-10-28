@@ -1,0 +1,29 @@
+{
+  "version": "2.1",
+  "screens": [
+    {
+      "id": "screenA",
+      "refresh_on_back": true,
+      "layout": {
+        "children": [
+          {
+            "type": "Footer",
+            "label": "Submit",
+            "on-click-action": {
+              "name": "complete",
+              "payload": {}
+            }
+          },
+          {
+            "type": "Footer",
+            "label": "Submit",
+            "on-click-action": {
+              "name": "complete",
+              "payload": {}
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

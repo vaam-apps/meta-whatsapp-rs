@@ -1,0 +1,6 @@
+{
+  "type": "RichText",
+  "text": [
+    "![Image alt text](data:image/png;base64,<base64 content>)"
+  ]
+}
