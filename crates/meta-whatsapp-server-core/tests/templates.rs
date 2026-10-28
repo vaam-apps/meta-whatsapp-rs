@@ -39,3 +39,20 @@ async fn the_template_services_send_metas_documented_requests() {
     let backend = memory::Memory::default();
     conformance::templates::the_template_services_send_metas_documented_requests(&backend).await;
 }
+
+/// A creation or a deletion Meta refuses drops the WABA's cached pages
+/// too, as a successful one does.
+#[tokio::test]
+async fn a_refused_creation_or_deletion_drops_the_wabas_cached_pages() {
+    let backend = memory::Memory::default();
+    conformance::templates::a_refused_creation_or_deletion_drops_the_wabas_cached_pages(&backend)
+        .await;
+}
+
+/// A template id is looked for in at most 5 pages of its name's
+/// templates: past them, `404 not_found`, and nothing deleted.
+#[tokio::test]
+async fn a_template_id_past_the_lookups_five_pages_is_not_found() {
+    let backend = memory::Memory::default();
+    conformance::templates::a_template_id_past_the_lookups_five_pages_is_not_found(&backend).await;
+}

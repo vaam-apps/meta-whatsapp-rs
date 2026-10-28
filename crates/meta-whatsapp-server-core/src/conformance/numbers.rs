@@ -100,11 +100,13 @@ async fn caller_of(backend: &dyn Backend, authz: &Authorizer, tenant: &str) -> C
 /// 3. The profile: `GET /{pn}/whatsapp_business_profile` with the
 ///    profile fields; Meta's documented answer, field by field.
 /// 4. A change: `POST /{pn}/whatsapp_business_profile` with the given
-///    fields only, then the profile read again; an empty change only
-///    reads; a vertical that can be read but not set (`NOT_A_BIZ`,
-///    `UNDEFINED`), or an address over 256 characters, is refused on its
-///    field before any request (a name the library does not know goes to
-///    Meta, which judges it).
+///    fields only (each of the six reaching Meta), then the profile read
+///    again; an empty change only reads; a vertical that can be read but
+///    not set (`NOT_A_BIZ`, `UNDEFINED`), or an address over 256
+///    characters, is refused on its field before any request (a name the
+///    library does not know goes to Meta, which judges it). Meta refusing
+///    the details, the profile or a change answers its error with its
+///    `details`.
 /// 5. Disconnecting: Meta failing (`502`) or refusing (its error, with
 ///    its `details`, told to the [`Observer`](crate::observe::Observer))
 ///    to unsubscribe the app deletes nothing: the token, the binding and
@@ -117,8 +119,11 @@ async fn caller_of(backend: &dyn Backend, authz: &Authorizer, tenant: &str) -> C
 /// Decisive: `Numbers::new`'s or `Waba::new`'s admission dropped fails
 /// step 1; the empty change's guard dropped fails step 4 (a `POST`,
 /// which nothing answers); the change's checks skipped fail step 4 (a
-/// request sent); deleting before Meta unsubscribed, or `still_bound`
-/// dropped, fails step 5.
+/// request sent), as does a field of the change dropped on its way to
+/// the library's update; Meta's `details` dropped from the number
+/// services' errors fails step 4, from the disconnection's step 5;
+/// deleting before Meta unsubscribed, or `still_bound` dropped, fails
+/// step 5.
 pub async fn the_number_services_read_change_and_disconnect_as_meta_documents(
     backend: &dyn Backend,
 ) {
@@ -250,9 +255,11 @@ pub async fn the_number_services_read_change_and_disconnect_as_meta_documents(
     let changed = numbers
         .update_profile(ProfileChange {
             about: Some("Succulent specialists!".to_owned()),
+            address: Some("1 Hacker Way, Menlo Park, CA 94025".to_owned()),
+            description: Some("At Lucky Shrub, we specialize in providing a...".to_owned()),
+            email: Some("lucky@luckyshrub.com".to_owned()),
             websites: Some(vec!["https://www.luckyshrub.com/".to_owned()]),
             vertical: Some("RETAIL".to_owned()),
-            ..ProfileChange::default()
         })
         .await
         .unwrap();
@@ -269,6 +276,9 @@ pub async fn the_number_services_read_change_and_disconnect_as_meta_documents(
     assert_eq!(
         posted.json().unwrap(),
         json!({"messaging_product": "whatsapp", "about": "Succulent specialists!",
+               "address": "1 Hacker Way, Menlo Park, CA 94025",
+               "description": "At Lucky Shrub, we specialize in providing a...",
+               "email": "lucky@luckyshrub.com",
                "websites": ["https://www.luckyshrub.com/"], "vertical": "RETAIL"})
     );
     assert_eq!(
@@ -317,6 +327,35 @@ pub async fn the_number_services_read_change_and_disconnect_as_meta_documents(
     assert_eq!(script.requests().len(), before, "a refused change was sent");
     assert_eq!(script.remaining(), 0);
     assert!(told.graph_errors().is_empty());
+    // Meta refusing a read or a change: its error, with its `details`.
+    let unobserved = Numbers::new(&authz, &number).unwrap();
+    let refusal = json!({"error": {"message": "(#100) Invalid parameter", "type": "OAuthException",
+                                   "code": 100, "error_data": {"messaging_product": "whatsapp",
+                                   "details": "NUMBERS-DETAILS-SENTINEL"},
+                                   "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}});
+    for _ in 0..3 {
+        script.push_json(400, refusal.clone());
+    }
+    let refusals = [
+        unobserved.details().await.map(drop),
+        unobserved.profile().await.map(drop),
+        unobserved
+            .update_profile(ProfileChange {
+                about: Some("Succulent specialists!".to_owned()),
+                ..ProfileChange::default()
+            })
+            .await
+            .map(drop),
+    ];
+    for (refused, which) in refusals.into_iter().zip(["details", "profile", "change"]) {
+        let refused = refused.unwrap_err();
+        assert_eq!(
+            refused.graph().map(|g| (g.code, g.details.as_deref())),
+            Some((100, Some("NUMBERS-DETAILS-SENTINEL"))),
+            "{which}"
+        );
+    }
+    assert_eq!(script.remaining(), 0);
 
     // 5. Disconnecting: only once Meta unsubscribed the app.
     let unsubscribe_path = format!("/v25.0/{WABA}/subscribed_apps");
@@ -336,10 +375,16 @@ pub async fn the_number_services_read_change_and_disconnect_as_meta_documents(
     script.push_json(
         403,
         json!({"error": {"message": "(#200) Permissions error", "type": "OAuthException",
-                         "code": 200, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+                         "code": 200, "error_data": {"messaging_product": "whatsapp",
+                         "details": "DISCONNECT-DETAILS-SENTINEL"},
+                         "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
     );
     let refused = disconnect.disconnect().await.unwrap_err();
-    assert_eq!(refused.graph().map(|g| g.code), Some(200), "Meta's details");
+    assert_eq!(
+        refused.graph().map(|g| (g.code, g.details.as_deref())),
+        Some((200, Some("DISCONNECT-DETAILS-SENTINEL"))),
+        "Meta's details"
+    );
     assert_eq!(told.graph_errors(), [refused.code()]);
     assert!(vault.get(&waba_id).await.unwrap().is_some(), "token kept");
     assert!(records.waba(&waba_id).await.unwrap().is_some(), "WABA kept");

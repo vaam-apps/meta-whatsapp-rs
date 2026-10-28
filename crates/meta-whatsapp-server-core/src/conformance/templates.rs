@@ -59,6 +59,21 @@ const MANAGER: Tenant = Tenant {
     pn: "106540352242924",
     token: "EAAG-the-managers-token",
 };
+/// The tenant of the third case, whose changes Meta refuses.
+const REFUSED: Tenant = Tenant {
+    id: "tpl-refused",
+    waba: "102290129340401",
+    pn: "106540352242925",
+    token: "EAAG-the-refused-tenants-token",
+};
+/// The tenant of the fourth case, whose template ids are past the
+/// lookup's pages.
+const PAGED: Tenant = Tenant {
+    id: "tpl-paged",
+    waba: "102290129340402",
+    pn: "106540352242926",
+    token: "EAAG-the-paged-tenants-token",
+};
 /// templates/template-management, "Get all templates": its first
 /// template's id and name.
 const TEMPLATE_ID: &str = "1304694804498707";
@@ -68,6 +83,8 @@ const TEMPLATE_NAME: &str = "coupon_expiration_reminder_number_vars";
 pub async fn run(backend: &dyn Backend) {
     another_tenants_template_id_is_not_found_with_zero_vault_reads(backend).await;
     the_template_services_send_metas_documented_requests(backend).await;
+    a_refused_creation_or_deletion_drops_the_wabas_cached_pages(backend).await;
+    a_template_id_past_the_lookups_five_pages_is_not_found(backend).await;
 }
 
 /// A tenant of a case: its id, its WABA and number, and its token.
@@ -768,6 +785,148 @@ pub async fn the_template_services_send_metas_documented_requests(backend: &dyn 
         script.requests().len(),
         before + 1,
         "the deletion kept the cache"
+    );
+    assert_eq!(script.remaining(), 0);
+    assert!(service.told.graph_errors().is_empty());
+}
+
+/// A creation or a deletion Meta refuses drops the WABA's cached pages
+/// too: a refusal can follow a change Meta did make (a timeout, an answer
+/// lost), so the next list asks Meta again.
+///
+/// 1. A list, cached: the same query again asks nothing.
+/// 2. A creation Meta refuses (its error, told to the
+///    [`Observer`](crate::observe::Observer)); the list asks Meta again.
+/// 3. A deletion Meta refuses; the list asks Meta again.
+///
+/// Decisive: the cache dropped only on Meta's success (in `create` or in
+/// `delete`) fails step 2 or 3 (a page answered from the cache, the
+/// script's answer left over).
+pub async fn a_refused_creation_or_deletion_drops_the_wabas_cached_pages(backend: &dyn Backend) {
+    let service = service(backend);
+    let script = &service.script;
+    let caller = tenant(backend, &service, REFUSED).await;
+    let waba = service
+        .authz
+        .owned_waba(&caller, WabaId::new(REFUSED.waba).unwrap())
+        .await
+        .unwrap();
+    let templates = service.templates(&caller, &waba);
+    let list = || templates.list(TemplateFilter::default(), None, 50);
+    let refusal = json!({"error": {"message": "(#100) Invalid parameter", "type": "OAuthException",
+                                   "code": 100, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}});
+
+    // 1. Cached.
+    script.push_json(200, documented_list());
+    list().await.unwrap();
+    list().await.unwrap();
+    assert_eq!(script.requests().len(), 1, "the cache asked Meta");
+
+    // 2. A refused creation: the next list asks Meta.
+    let definition = templates::definition(&json!({
+        "name": "spring_sale", "language": "en_US", "category": "MARKETING",
+        "components": [{"type": "BODY", "text": "Shop now through the end of April."}]
+    }))
+    .unwrap();
+    script.push_json(400, refusal.clone());
+    let refused = templates.create(&definition).await.unwrap_err();
+    assert_eq!(refused.graph().map(|g| g.code), Some(100), "{refused:?}");
+    let creation_refused = refused.code();
+    script.push_json(200, documented_list());
+    list().await.unwrap();
+    assert_eq!(
+        script.requests().len(),
+        3,
+        "a refused creation kept the cache"
+    );
+
+    // 3. A refused deletion: the next list asks Meta.
+    script.push_json(400, refusal);
+    let refused = templates.delete(TEMPLATE_NAME, None).await.unwrap_err();
+    assert_eq!(refused.graph().map(|g| g.code), Some(100), "{refused:?}");
+    script.push_json(200, documented_list());
+    list().await.unwrap();
+    assert_eq!(
+        script.requests().len(),
+        5,
+        "a refused deletion kept the cache"
+    );
+    assert_eq!(script.remaining(), 0);
+    assert_eq!(
+        service.told.graph_errors(),
+        [creation_refused, refused.code()]
+    );
+}
+
+/// A template id is looked for in at most 5 pages of 100 of its name's
+/// templates in the WABA (the module's documentation): past them it is
+/// `404 not_found`, and nothing is deleted.
+///
+/// 1. A get: the bare id's name, then 5 pages of that name, each with a
+///    next page and without the id: `404`, without Meta's code, and no
+///    sixth page asked for; each page after the first asks for Meta's
+///    cursor of the one before.
+/// 2. A deletion by name and id: the same 5 pages, `404`, no `DELETE`.
+///
+/// Decisive: the page cap (`LOOKUP_PAGES`) changed fails step 1 (a page
+/// left over, or one more asked for, which nothing answers).
+pub async fn a_template_id_past_the_lookups_five_pages_is_not_found(backend: &dyn Backend) {
+    let service = service(backend);
+    let script = &service.script;
+    let caller = tenant(backend, &service, PAGED).await;
+    let waba = service
+        .authz
+        .owned_waba(&caller, WabaId::new(PAGED.waba).unwrap())
+        .await
+        .unwrap();
+    let templates = service.templates(&caller, &waba);
+    let list_path = format!("/v25.0/{}/message_templates", PAGED.waba);
+    let push_pages = || {
+        for page in 1..=5 {
+            script.push_json(
+                200,
+                json!({"data": [{"id": format!("13046948044987{page:02}"), "name": TEMPLATE_NAME}],
+                       "paging": {"cursors": {"after": format!("PAGE{page}")},
+                                  "next": "https://graph.facebook.com/v25.0/x"}}),
+            );
+        }
+    };
+
+    // 1. A get.
+    script.push_json(200, json!({"name": TEMPLATE_NAME, "id": TEMPLATE_ID}));
+    push_pages();
+    let missing = templates.get(TEMPLATE_ID).await.unwrap_err();
+    assert_eq!((missing.status(), missing.code()), (404, "not_found"));
+    assert!(missing.graph().is_none(), "Meta's error: {missing:?}");
+    let requests = script.requests();
+    let [_, pages @ ..] = &requests[..] else {
+        panic!("{requests:?}")
+    };
+    assert_eq!(pages.len(), 5, "{requests:?}");
+    for (n, page) in (0..).zip(pages) {
+        assert_eq!(
+            (page.method.as_str(), page.path()),
+            ("GET", list_path.as_str())
+        );
+        assert_eq!(page.query("name").as_deref(), Some(TEMPLATE_NAME));
+        assert_eq!(page.query("limit").as_deref(), Some("100"));
+        let after = (n > 0).then(|| format!("PAGE{n}"));
+        assert_eq!(page.query("after"), after, "page {}", n + 1);
+    }
+    assert_eq!(script.remaining(), 0);
+
+    // 2. A deletion by name and id.
+    push_pages();
+    let missing = templates
+        .delete(TEMPLATE_NAME, Some(TEMPLATE_ID))
+        .await
+        .unwrap_err();
+    assert_eq!((missing.status(), missing.code()), (404, "not_found"));
+    let requests = script.requests();
+    assert_eq!(requests.len(), 11, "{requests:?}");
+    assert!(
+        requests.iter().all(|r| r.method.as_str() == "GET"),
+        "a DELETE was sent: {requests:?}"
     );
     assert_eq!(script.remaining(), 0);
     assert!(service.told.graph_errors().is_empty());
