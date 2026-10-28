@@ -392,6 +392,119 @@ fn try_round_trip<T: DeserializeOwned + Serialize>(label: &str, value: &Value) -
     Some(typed)
 }
 
+/// Most components have no JSON example in the Markdown pages (Meta renders
+/// them as previews), so the decisive test never sees their wire names.
+/// Here every property of each component's table in
+/// `flows/guides/components` and `flows/guides/media_upload` (and the
+/// changelog's `label-variant` and `ChipsSelector` root actions) is set
+/// once, with its documented name: each must land in a typed field, none
+/// in `extra`, and the object must come back unchanged.
+#[test]
+fn every_documented_property_of_every_component_is_modelled() {
+    let update = json!({"name": "update_data", "payload": {"x": "${form.a}"}});
+    let exchange = json!({"name": "data_exchange", "payload": {}});
+    let option = json!({"id": "a", "title": "A", "description": "d", "metadata": "m",
+        "enabled": true, "image": "iVBO", "alt-text": "alt", "color": "#ff0000",
+        "on-select-action": update, "on-unselect-action": update});
+    let range = |v: Value| json!({"start-date": v, "end-date": v});
+    let components = [
+        json!({"type": "TextHeading", "text": "t", "visible": true}),
+        json!({"type": "TextSubheading", "text": "t", "visible": "${data.v}"}),
+        json!({"type": "TextBody", "text": "t", "font-weight": "bold", "strikethrough": false,
+            "visible": true, "markdown": false}),
+        json!({"type": "TextCaption", "text": ["t"], "font-weight": "${data.fw}",
+            "strikethrough": true, "visible": true, "markdown": true}),
+        json!({"type": "RichText", "text": ["# T"], "visible": true}),
+        json!({"type": "TextInput", "name": "n", "label": "L", "input-type": "passcode",
+            "pattern": "^[0-9]+$", "required": true, "min-chars": 1, "max-chars": "${data.max}",
+            "helper-text": "h", "visible": true, "init-value": "i", "error-message": "e",
+            "label-variant": "large"}),
+        json!({"type": "TextArea", "name": "n", "label": "L", "required": true,
+            "max-length": 600, "helper-text": "h", "enabled": true, "visible": true,
+            "init-value": "i", "error-message": "e", "label-variant": "large"}),
+        json!({"type": "CheckboxGroup", "name": "n", "label": "L", "data-source": [option],
+            "min-selected-items": 1, "max-selected-items": 2, "enabled": true,
+            "required": true, "visible": true, "on-select-action": exchange,
+            "description": "d", "init-value": ["a"], "error-message": "e",
+            "media-size": "large"}),
+        json!({"type": "RadioButtonsGroup", "name": "n", "label": "L", "data-source": [option],
+            "enabled": true, "required": true, "visible": true, "on-select-action": exchange,
+            "description": "d", "init-value": "a", "error-message": "e",
+            "media-size": "regular"}),
+        json!({"type": "Dropdown", "name": "n", "label": "L", "data-source": "${data.opts}",
+            "required": true, "enabled": true, "visible": true,
+            "on-select-action": exchange, "init-value": "a", "error-message": "e"}),
+        json!({"type": "ChipsSelector", "name": "n", "label": "L",
+            "data-source": [{"id": "a", "title": "A", "enabled": true,
+                "on-select-action": update, "on-unselect-action": update}],
+            "min-selected-items": 1, "max-selected-items": 2, "enabled": true,
+            "required": true, "visible": true, "description": "d", "init-value": ["a"],
+            "error-message": "e", "on-select-action": update, "on-unselect-action": update}),
+        json!({"type": "Footer", "label": "Go", "left-caption": "l", "right-caption": "r",
+            "enabled": true, "on-click-action": {"name": "complete", "payload": {}}}),
+        json!({"type": "Footer", "label": "Go", "center-caption": "c",
+            "on-click-action": {"name": "navigate", "next": {"type": "screen", "name": "B"},
+                "payload": {}}}),
+        json!({"type": "OptIn", "name": "n", "label": "L", "required": true,
+            "on-click-action": {"name": "open_url", "url": "https://example.com"},
+            "visible": true, "init-value": true}),
+        json!({"type": "EmbeddedLink", "text": "t", "visible": true,
+            "on-click-action": exchange}),
+        json!({"type": "DatePicker", "name": "n", "label": "L", "min-date": "2024-01-01",
+            "max-date": "2024-12-31", "unavailable-dates": ["2024-06-01"], "visible": true,
+            "helper-text": "h", "enabled": true, "on-select-action": exchange,
+            "init-value": "2024-03-01", "error-message": "e"}),
+        json!({"type": "CalendarPicker", "name": "n", "title": "T", "description": "d",
+            "label": range(json!("L")), "helper-text": range(json!("h")),
+            "required": range(json!(true)), "visible": true, "enabled": true, "mode": "range",
+            "min-date": "2024-01-01", "max-date": "2024-12-31",
+            "unavailable-dates": ["2024-06-01"], "include-days": ["Mon", "Fri"],
+            "min-days": 1, "max-days": 7, "on-select-action": exchange,
+            "init-value": range(json!("2024-03-01")), "error-message": range(json!("e"))}),
+        json!({"type": "CalendarPicker", "name": "n", "label": "L", "helper-text": "h",
+            "required": "${data.r}", "mode": "single", "init-value": "2024-03-01",
+            "error-message": "e"}),
+        json!({"type": "Image", "src": "iVBO", "width": 100, "height": 50,
+            "scale-type": "cover", "aspect-ratio": 1.5, "alt-text": "alt"}),
+        json!({"type": "ImageCarousel", "images": [{"src": "iVBO", "alt-text": "alt"}],
+            "aspect-ratio": "16:9", "scale-type": "contain"}),
+        json!({"type": "If", "condition": "${data.a}",
+            "then": [{"type": "TextBody", "text": "t"}],
+            "else": [{"type": "TextBody", "text": "f"}]}),
+        json!({"type": "Switch", "value": "${data.k}",
+            "cases": {"a": [{"type": "TextBody", "text": "t"}]}}),
+        json!({"type": "NavigationList", "name": "n", "label": "L", "description": "d",
+            "media-size": "regular", "on-click-action": exchange,
+            "list-items": [{"id": "a",
+                "main-content": {"title": "T", "description": "d", "metadata": "m"},
+                "end": {"title": "T", "description": "d", "metadata": "m"},
+                "start": {"image": "iVBO", "alt-text": "alt"},
+                "badge": "New", "tags": ["x"]}]}),
+        json!({"type": "NavigationList", "name": "n",
+            "list-items": [{"main-content": {"title": "T"}, "on-click-action": exchange}]}),
+        json!({"type": "PhotoPicker", "name": "n", "label": "L", "description": "d",
+            "photo-source": "camera", "max-file-size-kb": 1024, "min-uploaded-photos": 1,
+            "max-uploaded-photos": 3, "enabled": true, "visible": "${data.v}",
+            "error-message": "e"}),
+        json!({"type": "DocumentPicker", "name": "n", "label": "L", "description": "d",
+            "max-file-size-kb": 1024, "min-uploaded-documents": 0,
+            "max-uploaded-documents": 3, "allowed-mime-types": ["application/pdf"],
+            "enabled": true, "visible": true, "error-message": {"media_1": "e"}}),
+        json!({"type": "Form", "name": "f", "init-values": {"n": "v"},
+            "error-messages": "${data.errors}",
+            "children": [{"type": "TextInput", "name": "n", "label": "L"}]}),
+    ];
+    let mut tags = std::collections::BTreeSet::new();
+    for value in &components {
+        let label = format!("{}", value["type"]);
+        let c: Component = round_trip(&label, value);
+        Modelled(&label).component(&c);
+        tags.insert(c.tag().unwrap().to_owned());
+    }
+    // Every variant of `Component` but `Unknown`.
+    assert_eq!(tags.len(), 24, "{tags:?}");
+}
+
 #[test]
 fn the_flowsapi_example_comes_out_of_the_builder() {
     let built = FlowJson::builder("5.0")
