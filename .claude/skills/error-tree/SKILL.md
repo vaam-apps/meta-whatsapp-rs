@@ -94,14 +94,20 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
   `Error::Other`).
 - Messages never contain secrets or full bodies (`snippet()` caps at 512
   bytes).
-- `Decode`'s `body_snippet` is the body's first bytes only when the body
-  can hold nothing secret. In `meta-whatsapp-client`, decode a 2xx body
-  with `request::decode_json` (what `GraphRequest::send` does), never
-  `Error::decode(…, &resp.body)`: `decode_json` withholds the snippet and
-  serde's message, which quotes values, for any body naming `paging` or
-  `access_token`, because Meta's paging links can embed the token. A
-  response that names people uses `send_private`; one with other secrets
-  (key material) uses `send_withheld(placeholder)`. A scan in
-  `request.rs` (`every_decode_error_built_here_withholds_or_goes_through_decode_json`)
-  fails on any `Error::decode` call whose body argument is not a literal
-  or a placeholder constant.
+- `Decode`'s and `Http`'s `body_snippet` is the body's first bytes only
+  when the body can hold nothing secret. In `meta-whatsapp-client`,
+  decode a 2xx body with `request::decode_json` (what
+  `GraphRequest::send` does), never `Error::decode(…, &resp.body)`, and
+  build an `Error::Http` from a body with
+  `body_snippet: request::safe_snippet(&resp.body)`, never `snippet(…)`:
+  both withhold the snippet (and `decode_json` serde's message, which
+  quotes values) for any body naming `paging` or `access_token`, because
+  Meta's paging links can embed the token. A response that names people
+  uses `send_private`; one with other secrets (key material, a Flow
+  preview link) uses `send_withheld(placeholder)`. `request::body_guard_tests`
+  scans the crate's sources (comments, literals and `#[cfg(test)]` code
+  aside) and fails on a `…::decode(` whose body argument is not a literal
+  or a placeholder constant, a `body_snippet` not from `safe_snippet` or a
+  constant, any use of `snippet`, or a serde parse of a `body` outside
+  `decode_json*`; an exception goes in its `ALLOWED` list, pinned to the
+  enclosing function, with the reason.

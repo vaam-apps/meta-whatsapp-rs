@@ -3205,6 +3205,10 @@ mod body_guard_tests {
                 }
             }
         }
+        assert!(
+            offending.is_empty(),
+            "an error built from a response body bypasses decode_json/safe_snippet: {offending:#?}"
+        );
         // Each rule saw the sites it is about, so a broken scan cannot pass
         // by finding nothing.
         let [decode, field, snippet, parse] = seen;
@@ -3212,10 +3216,6 @@ mod body_guard_tests {
         assert!(field >= 9, "body_snippet fields: {field}");
         assert_eq!(snippet, 1, "names of `snippet`");
         assert!(parse >= 15, "serde parses: {parse}");
-        assert!(
-            offending.is_empty(),
-            "an error built from a response body bypasses decode_json/safe_snippet: {offending:#?}"
-        );
         let stale: Vec<_> = (0..ALLOWED.len()).filter(|i| !used.contains(i)).collect();
         assert!(stale.is_empty(), "unused exceptions: {stale:?}");
     }

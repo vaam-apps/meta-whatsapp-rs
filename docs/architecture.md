@@ -328,10 +328,20 @@ Rules for every endpoint module:
    snippet and serde's message of any body that names a `paging` key or
    `access_token`. The rule reads the body, not the target type: it holds
    for `Page<T>`, for a module's own struct with a `paging` field, and for
-   a page nested in an object. Other answers keep their snippet. A module
-   that decodes a `send_raw()` body itself calls `decode_json` rather than
-   passing the body to `Error::decode`; a test in `request.rs` scans the
-   crate for such calls.
+   a page nested in an object, and for a stream's items. An `Error::Http`
+   built from a body (a `"success": false` answer, a non-Graph error body)
+   takes its snippet from `request::safe_snippet`, under the same rule.
+   Other answers keep their snippet and serde's message. A module that
+   decodes a `send_raw()` body itself calls `decode_json` rather than
+   passing the body to `Error::decode`, and builds `body_snippet` with
+   `safe_snippet`; `request::body_guard_tests` scans the crate's sources
+   (outside comments, literals and test code) for any other way, each
+   exception pinned to its function. A decoded `Paging` keeps no
+   credentials: its `next` and `previous` links lose their `access_token`
+   and `appsecret_proof` parameters, and `HttpResponse`'s `Debug` prints
+   the body's length only. A response that carries another secret
+   decodes with `send_withheld(placeholder)` (`Flow::preview`: its link's
+   `token` opens the Flow).
 9. **One type per concept.** A type two endpoint families share is
    defined once in `meta_whatsapp_client::common` (`MediaSource`, `FlowAction`,
    `QualityRating`) and re-exported by each module that uses it; a type

@@ -142,7 +142,7 @@ the HTTP status. `ErrorKind` is non-exhaustive: keep a `_` arm.
 | `Error::Validation(v)` | refused locally; **nothing was sent**; `v.field` names the JSON path | fix the input |
 | `Error::Api(_)` | Meta answered with a Graph error; `err.graph()` gives it | branch on `kind()` |
 | `Error::Transport(_)`, `Error::Http { .. }` 5xx | no usable answer | a send *may* have gone out |
-| `Error::Decode { .. }` | a 2xx body of an unexpected shape (for sends, without the body: it names the recipient) | Meta accepted it: treat a send as sent |
+| `Error::Decode { .. }` | a 2xx body of an unexpected shape (for sends without the body, which names the recipient; for lists too, since paging links can carry the token) | Meta accepted it: treat a send as sent |
 | `Error::Step { step, .. }` | a multi-step flow (onboarding) stopped at `step` | see [embedded-signup.md](embedded-signup.md) |
 | `Error::Credit(_)` | a Solution Partner credit line step stopped (refused, busy, to reconcile, a revocation part-way); `err.credit()` gives it, also through `Step` | its own `is_retryable()` and `may_have_been_sent()`: see [embedded-signup.md](embedded-signup.md#solution-partner-mode) |
 
