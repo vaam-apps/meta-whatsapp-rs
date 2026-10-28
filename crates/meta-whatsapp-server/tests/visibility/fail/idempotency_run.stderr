@@ -9,7 +9,7 @@ note: the function `run` is defined here
   |
   | / pub(crate) async fn run(
   | |     state: &AppState,
-  | |     tenant: &TenantId,
+  | |     caller: &Caller,
   | |     key: Option<IdempotencyKey>,
   | |     fingerprint: Fingerprint,
   | |     operation: impl Future<Output = Result<Success, ApiError>>,

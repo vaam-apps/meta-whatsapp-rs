@@ -1404,6 +1404,54 @@ stored data, the owner's).
   `meta_whatsapp_server_core::admin` or `::authz` instead. A JSON log's
   `target` changes the same way; the audit events keep the target
   `audit`.
+- **Idempotency and the messages are the service core's** (roadmap S5b;
+  `meta-whatsapp-server-core` and `meta-whatsapp-server`, both `publish =
+  false`). `meta_whatsapp_server_core::idempotency::run(&keeper,
+  &authorizer, &caller, key, &fingerprint, operation)` runs an operation
+  under an `Idempotency-Key` and answers an `idempotency::Answer` (a
+  status, a body, and `replayed()`) or a `ServiceError`, for a `Caller`
+  its `Authorizer` admits (another's is `403 forbidden`, before the key
+  is read); `idempotency::Keeper` holds the records, the lease, the
+  expiry and the error renderer. `meta_whatsapp_server_core::messages`
+  holds the send request free of utoipa (`SendMessage` and its objects),
+  `refuse_unsupported`, `message` (the checked `OutboundMessage`),
+  `recipient`, `is_e164` and `E164_MAX_DIGITS`, and the `Messages`
+  service on an `OwnedNumber`, opened with `Messages::new(&authorizer,
+  &owned_number)` (refused, `403 forbidden`, for a number another
+  `Authorizer` made: the new `Authorizer::admit_number`, beside `admit`
+  and `admit_admin`), with `send` (answering `messages::Accepted`) and
+  `mark_read` (with or without the typing indicator).
+  `meta_whatsapp_server_core::request::meta_object` (a Meta object read
+  with no key dropped) moved from the server's `api::common`, which wraps
+  it. `observe::Observer` gains a required method, `idempotency(outcome)`
+  (a repeat that met a key's record; `()` and the server's `Metrics`
+  implement it, the latter as `wa_server_idempotency_total`). The
+  conformance suite gains `messages` (in `conformance::run`): with no
+  HTTP layer, a scripted timeout reports `may_have_been_sent` and the
+  same key replays it with no second request, a `131047` releases its
+  key, another `Authorizer`'s caller is refused (with a key or without
+  one), and what the metrics count is told to the `Observer`; the
+  services open only on their own `Authorizer`'s number, and marking
+  read sends Meta's request (a blank id refused first, the typing
+  indicator when asked), on every backend that runs the suite. In the
+  server, `idempotency::run` (crate-private)
+  takes the `Caller` instead of a `TenantId`, the request types of
+  `api::messages` are converted into the core's, and
+  `api::messages::MessageType::ALL` is removed (the list is the core's
+  `messages::MessageType::ALL`). No change to the HTTP API: every
+  status, body, header (`Idempotent-Replayed`) and metric is as before,
+  and `openapi/v1.json` is byte-identical. No log line changes target:
+  the handlers that moved logged nothing of their own. The review added
+  the tests that pin what moved: the metrics a send, a read receipt and
+  a repeat count (`wa_server_idempotency_total` by outcome,
+  `wa_server_graph_errors_total` by code, a replayed error's code on
+  `wa_server_http_requests_total`), a kept answer expiring after the TTL
+  and not the lease, a blank message id refused on the read route, and
+  every field of a send's objects and of the accepted message carried
+  through the conversion. **Upgrade** (code implementing the core's
+  `observe::Observer`): add `fn idempotency(&self, outcome: &'static
+  str)`, an empty body to count nothing (as `()` does), or your metrics'
+  counter of repeats by outcome.
 - **Breaking — live events are shared as `Arc<WebhookEvent>`, not cloned
   per subscriber** (`meta_whatsapp_webhooks::sse`,
   `meta_whatsapp_adapters::sink::BroadcastSink`; roadmap L21b, decided as

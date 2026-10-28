@@ -26,8 +26,9 @@
 //! service's [`Authorizer`] did not make is `403 forbidden`. And the
 //! handlers, which act on [`Caller::tenant`] without asking the
 //! [`Authorizer`] again, are crate-private (`api::*`), as is
-//! `idempotency::run`, which takes a tenant as given: another crate
-//! reaches them only through the routers, behind these guards.
+//! `idempotency::run`, which runs over the service's own idempotency
+//! records: another crate reaches them only through the routers, behind
+//! these guards.
 
 use std::collections::HashMap;
 
@@ -246,6 +247,13 @@ impl OwnedNumber {
     /// A client acting with the WABA's token.
     pub fn client(&self) -> &Client {
         self.0.client()
+    }
+
+    /// The core's capability, for the core's services
+    /// (`meta_whatsapp_server_core::messages::Messages`). Crate-private,
+    /// as the handlers that hand it on are.
+    pub(crate) fn capability(&self) -> &core_authz::OwnedNumber {
+        &self.0
     }
 
     /// The API error for a failed Graph call made with this number's

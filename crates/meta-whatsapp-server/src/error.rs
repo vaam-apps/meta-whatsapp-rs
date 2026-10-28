@@ -406,9 +406,10 @@ mod tests {
                 }
             }
         }
-        // The admin operations name theirs in the core since roadmap S5a
-        // (its own `every_code_the_source_names_exists` reads them).
-        assert!(named >= 16, "{named}");
+        // The admin operations name theirs in the core since roadmap S5a,
+        // and the message operations since S5b (its own
+        // `every_code_the_source_names_exists` reads them).
+        assert!(named >= 14, "{named}");
     }
 
     #[test]

@@ -2353,6 +2353,7 @@ dependencies = [
  "hex",
  "hmac 0.12.1",
  "meta-whatsapp-rs",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "subtle",

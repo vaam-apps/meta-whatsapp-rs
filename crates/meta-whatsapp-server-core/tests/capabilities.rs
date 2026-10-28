@@ -20,6 +20,7 @@
 mod support;
 
 use meta_whatsapp_server_core::admin::Admin;
+use meta_whatsapp_server_core::messages::Messages;
 use support::*;
 
 /// The control: each `Authorizer` accepts what it made, and the service
@@ -225,30 +226,42 @@ async fn owned_waba_forget_refuses_another_authorizer_and_deletes_nothing() {
     );
 }
 
-/// `admit` and `admit_admin`, what an API adapter asks before it acts on
-/// a capability it took from outside its own code (a request's
-/// extensions): each `Authorizer` admits what it made and refuses what the
-/// other made, reading and writing nothing. Decisive: the check in each.
+/// `admit`, `admit_admin` and `admit_number`, what an API adapter (or a
+/// core service: `Messages::new`) asks before it acts on a capability it
+/// took from outside its own code (a request's extensions): each
+/// `Authorizer` admits what it made and refuses what the other made,
+/// reading and writing nothing. Decisive: the check in each.
 #[tokio::test]
 async fn admit_accepts_only_the_authorizers_own_capabilities() {
     let (service, forger) = service_and_forger().await;
     let (own, own_admin) = (service.caller().await, service.admin().await);
     let (foreign, foreign_admin) = (forger.caller().await, forger.admin().await);
+    let (own_number, foreign_number) = (service.number().await, forger.number().await);
     let before = Before::of(&service);
     assert_forbidden(&service.authz.admit(&foreign).unwrap_err(), "admit");
     assert_forbidden(
         &service.authz.admit_admin(&foreign_admin).unwrap_err(),
         "admit_admin",
     );
+    assert_forbidden(
+        &service.authz.admit_number(&foreign_number).unwrap_err(),
+        "admit_number",
+    );
     before.unchanged(&service, "admit").await;
     service.authz.admit(&own).unwrap();
     service.authz.admit_admin(&own_admin).unwrap();
+    service.authz.admit_number(&own_number).unwrap();
     forger.authz.admit(&foreign).unwrap();
     forger.authz.admit_admin(&foreign_admin).unwrap();
+    forger.authz.admit_number(&foreign_number).unwrap();
     assert_forbidden(&forger.authz.admit(&own).unwrap_err(), "admit, reversed");
     assert_forbidden(
         &forger.authz.admit_admin(&own_admin).unwrap_err(),
         "admit_admin, reversed",
+    );
+    assert_forbidden(
+        &forger.authz.admit_number(&own_number).unwrap_err(),
+        "admit_number, reversed",
     );
 }
 
@@ -307,4 +320,26 @@ async fn the_admin_services_refuse_another_authorizers_admin() {
     before.unchanged(&service, "Admin::new").await;
     let own = service.admin().await;
     assert!(Admin::new(&service.authz, &own).is_ok());
+}
+
+/// The message services (roadmap S5b) open only on an `OwnedNumber` their
+/// own `Authorizer` made: `Messages::new` with the forger's is `403
+/// forbidden`, before anything is sent with its client, and the service's
+/// records and vault are neither read nor written. The control: the
+/// service's own number opens them. Decisive: `Messages::new`'s
+/// `admit_number` (without it, a send with the forger's number goes out
+/// with the forger's client and token, and only a failure would be
+/// refused, by `OwnedNumber::failed`).
+#[tokio::test]
+async fn the_message_services_refuse_another_authorizers_number() {
+    let (service, forger) = service_and_forger().await;
+    let foreign = forger.number().await;
+    let before = Before::of(&service);
+    let error = Messages::new(&service.authz, &foreign)
+        .map(|_| ())
+        .unwrap_err();
+    assert_forbidden(&error, "Messages::new");
+    before.unchanged(&service, "Messages::new").await;
+    let own = service.number().await;
+    assert!(Messages::new(&service.authz, &own).is_ok());
 }

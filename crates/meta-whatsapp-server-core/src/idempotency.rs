@@ -1,8 +1,10 @@
 //! The idempotency engine (docs/design/server.md, section 5.4): claiming
 //! a caller's `Idempotency-Key`, settling it by what the answer proves,
 //! and answering a repeat. The records are an [`IdempotencyRecords`]
-//! port; an API adapter reads the key from its request and renders the
-//! answers (the HTTP one: `meta_whatsapp_server::idempotency`).
+//! port; an API adapter reads the key from its request, runs the
+//! operation under it ([`run`]: an [`Answer`], a status and a body, and
+//! whether it was replayed) and renders the answers (the HTTP one:
+//! `meta_whatsapp_server::idempotency`).
 //!
 //! The key is **scoped to the tenant**: two tenants may use the same one.
 //! A request carrying one:
@@ -35,16 +37,19 @@
 //! runs out and the key reads as unknown. The key is never logged: it
 //! names the caller's records.
 
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
 use meta_whatsapp_rs::core::error::StorageError;
 use sha2::{Digest, Sha256};
 
+use crate::authz::{Authorizer, Caller};
 use crate::error::ServiceError;
 use crate::model::{
     IdempotencyClaim, IdempotencyKey, IdempotencyRecord, IdempotencyState, TenantId,
 };
+use crate::observe::Observer;
 use crate::store::IdempotencyRecords;
 
 /// SHA-256 of what a request asks: its method, its path and its body.
@@ -396,6 +401,199 @@ impl Drop for Claim {
     }
 }
 
+// ─── Running an operation under a key ────────────────────────────────────
+
+/// A successful answer of an idempotent operation, as the adapter sends
+/// it and a key keeps it: a status and a body (the adapter's bytes: the
+/// HTTP one's JSON), and whether it is a kept answer given again
+/// ([`Self::replayed`]), which a kept failure's may be too. `Debug` shows
+/// the body's length (`body_len`), never its bytes: a kept answer names
+/// the tenant's customers.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Answer {
+    status: u16,
+    body: Vec<u8>,
+    replayed: bool,
+}
+
+impl std::fmt::Debug for Answer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Answer")
+            .field("status", &self.status)
+            .field("body_len", &self.body.len())
+            .field("replayed", &self.replayed)
+            .finish()
+    }
+}
+
+impl Answer {
+    /// An operation's answer: `status` and `body`, not replayed.
+    pub fn new(status: u16, body: Vec<u8>) -> Self {
+        Self {
+            status,
+            body,
+            replayed: false,
+        }
+    }
+
+    /// The status.
+    pub fn status(&self) -> u16 {
+        self.status
+    }
+
+    /// The body, byte for byte.
+    pub fn body(&self) -> &[u8] {
+        &self.body
+    }
+
+    /// The body.
+    pub fn into_body(self) -> Vec<u8> {
+        self.body
+    }
+
+    /// Whether this is an earlier request's kept answer, given again
+    /// without running the operation (the HTTP adapter says so with
+    /// `Idempotent-Replayed: true`).
+    pub fn replayed(&self) -> bool {
+        self.replayed
+    }
+}
+
+/// Where and how [`run`] keeps keys: the records, the lease (twice the
+/// Graph timeout, section 5.4), the expiry (24 hours by default,
+/// `WA_SERVER_IDEMPOTENCY_TTL`), how the adapter renders an error (the
+/// body a failure that may have been sent keeps), and who is told a
+/// repeat's outcome ([`Observer::idempotency`], once
+/// [`Self::observed_by`]). Cheap: a few references.
+#[derive(Clone, Copy)]
+pub struct Keeper<'a> {
+    records: &'a Arc<dyn IdempotencyRecords>,
+    lease: Duration,
+    ttl: Duration,
+    render: RenderError,
+    observer: &'a dyn Observer,
+}
+
+impl std::fmt::Debug for Keeper<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Keeper")
+            .field("lease", &self.lease)
+            .field("ttl", &self.ttl)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a> Keeper<'a> {
+    /// Keys in `records`, leased for `lease` and kept for `ttl`, a failure
+    /// kept as `render` writes it; repeats are told to nobody until
+    /// [`Self::observed_by`].
+    pub fn new(
+        records: &'a Arc<dyn IdempotencyRecords>,
+        lease: Duration,
+        ttl: Duration,
+        render: RenderError,
+    ) -> Self {
+        Self {
+            records,
+            lease,
+            ttl,
+            render,
+            observer: &(),
+        }
+    }
+
+    /// Tell `observer` (the adapter's metrics) each repeat's outcome.
+    #[must_use]
+    pub fn observed_by(mut self, observer: &'a dyn Observer) -> Self {
+        self.observer = observer;
+        self
+    }
+}
+
+/// Run `operation` for `caller`'s tenant under `key` (see the
+/// [module](self)), or plainly without one. `caller` must be one `authz`
+/// made ([`Authorizer::admit`]): the key is scoped to its tenant, which a
+/// forged [`Caller`] could name at will. `fingerprint` is what the request
+/// asks ([`Fingerprint`]); `operation` must do nothing before it is
+/// polled: a repeat of a kept or running request never polls it.
+///
+/// With a key:
+///
+/// - free: the operation runs, and its answer is kept (and returned), or
+///   its error is returned, kept as `keeper` renders it when it may have
+///   been sent, the key released when it proves nothing was;
+/// - another request's record: the operation never runs; the kept answer
+///   comes back [`Answer::replayed`] (a kept failure's status and body
+///   included), or the repeat's error (`422 idempotency_key_reused`,
+///   `409 idempotency_in_progress`, `409 outcome_unknown`), its outcome
+///   told to `keeper`'s observer either way.
+///
+/// Dropped while the operation runs (the request cut at its deadline),
+/// the key is settled as a `504 timeout` that may have been sent, from a
+/// task of its own ([`Claim`]).
+///
+/// # Errors
+///
+/// `caller` another [`Authorizer`] made: `403 forbidden`, before the key
+/// is read. A repeat's error, as above; no random claim id (`500
+/// internal`) or the store failing (`503 storage_unavailable`), before
+/// the operation runs; the operation's own error.
+pub async fn run<F>(
+    keeper: &Keeper<'_>,
+    authz: &Authorizer,
+    caller: &Caller,
+    key: Option<IdempotencyKey>,
+    fingerprint: &Fingerprint,
+    operation: F,
+) -> Result<Answer, ServiceError>
+where
+    F: Future<Output = Result<Answer, ServiceError>>,
+{
+    authz.admit(caller)?;
+    let Some(key) = key else {
+        return operation.await;
+    };
+    let admission = claim(
+        keeper.records,
+        caller.tenant(),
+        key,
+        fingerprint,
+        keeper.lease,
+        keeper.ttl,
+        keeper.render,
+    )
+    .await?;
+    match admission {
+        Admission::Repeat(repeat) => {
+            keeper.observer.idempotency(repeat.outcome());
+            let (status, body) = repeat.into_answer()?;
+            Ok(Answer {
+                status,
+                body,
+                replayed: true,
+            })
+        }
+        Admission::Claimed(claim) => match operation.await {
+            Ok(answer) => {
+                claim
+                    .settle(Outcome::Answered {
+                        status: answer.status,
+                        body: &answer.body,
+                    })
+                    .await;
+                Ok(Answer {
+                    replayed: false,
+                    ..answer
+                })
+            }
+            Err(error) => {
+                claim.settle(Outcome::Failed(&error)).await;
+                Err(error)
+            }
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
@@ -689,6 +887,7 @@ mod tests {
                     body: &body,
                 }
             ),
+            format!("{:?}", Answer::new(200, body.clone())),
         ];
         for debug in &printed {
             assert!(debug.contains("status: 200"), "{debug}");

@@ -40,6 +40,9 @@ getrandom.workspace = true
 hex.workspace = true
 # Event ids: a keyed hash of the event's outbox key.
 hmac.workspace = true
+# The requests' Meta objects are read into the library's types and written
+# back (`request::meta_object`).
+serde.workspace = true
 serde_json.workspace = true
 # API keys are stored as SHA-256 digests and compared in constant time.
 sha2.workspace = true
