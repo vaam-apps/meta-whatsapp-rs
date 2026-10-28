@@ -153,7 +153,8 @@ pub fn order_command() -> Command {
   cooldown is kept under its own key (`order status`, beside `order`'s,
   which is unchanged). One level only: a subcommand with subcommands
   fails `build`. Meta's command menu lists commands, not subcommands.
-- **Flags.** `--name` and `--name=value` are flags, read with
+- **Flags.** A command that declares a flag (`Command::flag`) reads
+  flags: `--name` and `--name=value` are then flags, read with
   `ctx.args().has_flag(name)` and `ctx.args().flag(name)` (the last value
   given; `--limit=` is the empty value) or all of them in order with
   `ctx.args().flags()`; `ctx.args().get(i)` counts the positional
@@ -164,15 +165,22 @@ pub fn order_command() -> Command {
   alone ends the flags. The value may be quoted (`--note="two words"`).
   An em dash (`—limit=5`) reads as `--`: iPhone keyboards type one for two
   hyphens; an em dash alone is punctuation, an argument.
-- **Unknown flags are refused.** A command declares the flags it reads
-  (`Command::flag`); typed with any other, it does not run, and
-  `ReplyRefusals` answers `Unknown option --x.` with the usage hint and
-  the flags it takes (`Refusal::UnknownFlag`). A typo such as `--dryrun`
-  must not run the real thing. This holds for every command, so a
-  command that takes free text where a word may start with `--` either
-  declares `Command::pass_unknown_flags` (the flags are handed over in
-  `ctx.args().flags()`) or has users quote the word or put it after
-  `--`. Write the flags in `Command::usage` for the help to show them.
+- **A command without flags reads none.** One that declares no flag
+  (and does not take any, below) reads every word as a positional
+  argument, as typed: `/say --hi there` runs `say` with `--hi` and
+  `there`, so free text keeps its `--` words and is never refused. Each
+  command and subcommand has its own set: `/order` declaring `--all`
+  does not make `/order cancel` read flags, nor the reverse. To unit-test
+  a handler, build its arguments as the command reads them:
+  `Args::parse` (no flags) or `Args::parse_with_flags`.
+- **Unknown flags are refused.** A command that declares flags and is
+  typed with one it does not declare does not run, and `ReplyRefusals`
+  answers `Unknown option --x.` with the usage hint and the flags it
+  takes (`Refusal::UnknownFlag`): a typo such as `--dryrun` must not run
+  the real thing. `Command::pass_unknown_flags` turns that off for one
+  command (the flags are handed over in `ctx.args().flags()`; alone, it
+  makes a command read flags without declaring any). Write the flags in
+  `Command::usage` for the help to show them.
 
 ## 2. Guards
 
@@ -185,7 +193,7 @@ goes to the bot's `Refusals` (by default, `ReplyRefusals`):
 | banned sender | `AccessList::ban` (BSUID) or `AccessList::ban_phone` | silent; nothing runs, so no read receipt, typing indicator, command or listener either |
 | wrong chat | `Command::group_only`, `Command::private_only` | a short reply |
 | not an owner | `Command::owner_only` + `AccessList::owner` | silent |
-| a flag it does not declare | `Command::flag` (`Command::pass_unknown_flags` turns it off) | "Unknown option --x.", the usage hint and the flags it takes |
+| a flag it does not declare, on a command that declares flags | `Command::flag` (`Command::pass_unknown_flags` turns it off; a command with no flag reads none, so this never refuses it) | "Unknown option --x.", the usage hint and the flags it takes |
 | cooldown running | `Command::cooldown` | "Please wait N s …", once per cooldown |
 
 For a subcommand, the parent's scope and owner-only are checked first,
@@ -669,7 +677,9 @@ with a pacer on a `ManualClock` never waits for real.
 A handler is a function of its context, so it can be tested without a
 bot: `Ctx::new(event, outbound, renderer)`, then
 `.with_invocation(Invocation::new(name, trigger, args))` for a command
-(and `.with_pacer(pacer)` for one that uses `Ctx::pacer`), and call it.
+(`args` from `Args::parse`, or `Args::parse_with_flags` for a command that
+reads flags; `.with_subcommand(sub)` for a subcommand), and
+`.with_pacer(pacer)` for one that uses `Ctx::pacer`, and call it.
 
 ## Not here yet
 

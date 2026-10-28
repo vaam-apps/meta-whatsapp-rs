@@ -1092,9 +1092,10 @@ order:
    `Ctx::unknown_command`.
 3. **Middleware**, in registration order; each gets the context (the
    match included) and `Next`, and not calling it stops the event.
-4. **The command's guards**, in order (scope, owner, undeclared flags,
-   cooldown last so a refusal starts none; for a subcommand, its
-   parent's scope and owner first), then its handler; else the
+4. **The command's guards**, in order (scope, owner, undeclared flags
+   on a command that declares any, cooldown last so a refusal starts
+   none; for a subcommand, its parent's scope and owner first; a command
+   that declares no flag reads none), then its handler; else the
    unknown-command handler, if one is registered; else the listeners,
    which get every other event too. A subcommand's cooldown is kept
    under the key of its path (`order status`), the same digest over

@@ -406,10 +406,12 @@ mod tests {
 
     /// `/order status 1234 --refresh` runs the subcommand with `1234` and
     /// the flag; a mistyped flag is refused with the usage, and runs
-    /// nothing.
+    /// nothing; `/order`, which declares no flag, reads `--x` as an
+    /// argument and runs.
     #[tokio::test]
     async fn a_subcommand_reads_its_arguments_and_flags() {
         let t = ScriptedTransport::new();
+        t.push_json(200, sent());
         t.push_json(200, sent());
         t.push_json(200, sent());
         let bot = Bot::builder()
@@ -426,6 +428,7 @@ mod tests {
         bot.deliver(text("/order status 1234 --refesh"))
             .await
             .unwrap();
+        bot.deliver(text("/order --x")).await.unwrap();
 
         let requests = t.requests();
         assert_eq!(
@@ -443,6 +446,10 @@ mod tests {
             requests[1].json().unwrap()["text"]["body"],
             "Unknown option --refesh.\nUsage: /order status <order number> [--refresh]\n\
              Options: --refresh"
+        );
+        assert_eq!(
+            requests[2].json().unwrap()["text"]["body"],
+            "Try /order status <order number>"
         );
         assert_eq!(t.remaining(), 0);
         assert_eq!(

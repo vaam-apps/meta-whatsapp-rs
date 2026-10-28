@@ -111,17 +111,20 @@ impl Router {
 
     /// The invocation of command `index` with `args`: of its subcommand
     /// when the first argument, typed outside quotes, names one (with the
-    /// arguments after it), else of the command itself.
-    fn invocation(&self, index: usize, trigger: Trigger, args: Args) -> Invocation {
+    /// arguments after it), else of the command itself; the arguments
+    /// read with flags or without, as that command reads them.
+    fn invocation(&self, index: usize, trigger: Trigger, args: &Args) -> Invocation {
+        let info = &self.catalog.commands[index];
         let subs = &self.handlers[index].sub_by_name;
         if !subs.is_empty()
             && let Some((word, rest)) = args.split_first()
             && let Some(&sub) = subs.get(&self.parser.normalize(&word))
         {
-            let name = self.catalog.commands[index].subcommands[sub].name.clone();
-            return Invocation::new(self.name(index), trigger, rest).with_subcommand(name);
+            let sub = &info.subcommands[sub];
+            return Invocation::new(self.name(index), trigger, sub.args(rest))
+                .with_subcommand(sub.name.clone());
         }
-        Invocation::new(self.name(index), trigger, args)
+        Invocation::new(self.name(index), trigger, info.args(args.raw()))
     }
 
     /// Typed text or (unless turned off) an image or video caption the
@@ -153,7 +156,11 @@ impl Router {
             } else {
                 Trigger::Text { prefix, name }
             };
-            Some(Found::Command(self.invocation(index, trigger, parsed.args)))
+            Some(Found::Command(self.invocation(
+                index,
+                trigger,
+                &parsed.args,
+            )))
         };
         match &ctx.message()?.content {
             MessageContent::Text(text) => typed(&text.body, false),
@@ -202,9 +209,19 @@ impl Router {
     /// The command's guards, in order, then its handler; for subcommand
     /// `sub`, the parent's scope and owner-only first, then the
     /// subcommand's guards and handler.
-    async fn run(&self, index: usize, sub: Option<usize>, ctx: Ctx) -> Result<()> {
+    async fn run(&self, index: usize, sub: Option<usize>, mut ctx: Ctx) -> Result<()> {
         let parent = &self.catalog.commands[index];
         let info = sub.map_or(parent, |sub| &parent.subcommands[sub]);
+        // Read as this command reads its arguments, with flags or without,
+        // whoever built the invocation (a middleware may have).
+        if let Some(invocation) = ctx.invocation() {
+            let args = info.args(invocation.args.raw());
+            if args != invocation.args {
+                let mut invocation = invocation.clone();
+                invocation.args = args;
+                ctx = ctx.with_invocation(invocation);
+            }
+        }
         let group = ctx.chat().is_some_and(crate::Chat::is_group);
         let wrong_chat = |scope: Scope| match scope {
             Scope::GroupOnly if !group => Some(Refusal::GroupOnly),

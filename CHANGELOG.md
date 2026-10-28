@@ -234,10 +234,16 @@ stored data, the owner's).
   (every one, in order, as `Flag`); `--` ends the flags, a word quoted
   from its start (`"--limit=5"`) stays a positional argument, and an em
   dash reads as `--` (phone keyboards type one for two hyphens). No short
-  `-n` and no space-separated `--limit 5`. A typed flag the command does
-  not declare refuses it (`Refusal::UnknownFlag`, checked after the
-  owner guard and before the cooldown; `ReplyRefusals` answers with the
-  usage hint and the flags it takes) unless `Command::pass_unknown_flags`.
+  `-n` and no space-separated `--limit 5`. Only a command that declares
+  a flag (or takes any, `Command::pass_unknown_flags`) reads flags, each
+  command and subcommand by its own set: one that declares none reads
+  every word as a positional argument, as before, so `/say --hi there`
+  still runs with `--hi` and `there`, and nothing changes for existing
+  commands (`Args::parse` reads no flags; `Args::parse_with_flags`
+  does). A command that declares flags, typed with one it does not
+  declare, is refused (`Refusal::UnknownFlag`, checked after the owner
+  guard and before the cooldown; `ReplyRefusals` answers with the usage
+  hint and the flags it takes) unless `Command::pass_unknown_flags`.
   `CommandInfo` gains `subcommands`, `flags` and `pass_unknown_flags`;
   `CategoryHelp` writes a line per visible subcommand under its command.
   `BotBuilder::build` refuses nested subcommands, a subcommand word
@@ -1231,17 +1237,6 @@ stored data, the owner's).
 
 ### Changed
 
-- **Breaking — `--flags` in a bot command's arguments** (`meta-whatsapp-bot`,
-  roadmap B1b; see Added). An argument typed as `--name` or
-  `--name=value`, outside quotes and before a lone `--`, is now a flag:
-  `Args::get`, `Args::as_slice`, `Args::len`, `Args::is_empty` and
-  `Args::iter` count the positional arguments only (`Args::raw` is
-  unchanged), and a command typed with a flag it does not declare
-  (`Command::flag`) is refused instead of run, so `/say --hi` no longer
-  reaches a handler that never declared `hi`. Declare the flags, set
-  `Command::pass_unknown_flags` on a command that takes free text, or
-  have users quote the word or put it after `--`. Commands typed
-  without `--` words run as before, under the same cooldown keys.
 - **Breaking — numeric ids are checked when they are built**
   (`meta_whatsapp_core::ids`, roadmap L20c, decided as OPEN_QUESTIONS
   #20, now closed). `AppId`, `BusinessId`, `WabaId`, `PhoneNumberId`,

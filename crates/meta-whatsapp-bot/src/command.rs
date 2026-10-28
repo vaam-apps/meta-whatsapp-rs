@@ -17,10 +17,16 @@
 //!
 //! # Flags
 //!
-//! An argument typed as `--name` or `--name=value` is a flag ([`Flag`]),
-//! read with [`Args::has_flag`], [`Args::flag`] and [`Args::flags`]; the
-//! positional arguments ([`Args::get`]) are the rest. The rules, kept
-//! small on purpose:
+//! A command that declares a flag ([`Command::flag`]), or takes any
+//! ([`Command::pass_unknown_flags`]), reads flags: an argument typed as
+//! `--name` or `--name=value` is then a flag ([`Flag`]), read with
+//! [`Args::has_flag`], [`Args::flag`] and [`Args::flags`], and the
+//! positional arguments ([`Args::get`]) are the rest. A command that does
+//! neither reads none: every word is a positional argument, as typed, so
+//! free text keeps its `--` words (`/say --hi there` has the arguments
+//! `--hi` and `there`). Each command and subcommand has its own set: a
+//! parent's flags do not make its subcommands read flags, nor the
+//! reverse. The rules, kept small on purpose:
 //!
 //! - only the long form: `-n` is a positional argument (so is a negative
 //!   number), and `--limit 5` is the flag `limit` without a value then the
@@ -37,8 +43,8 @@
 //! - names compare exactly, as typed; a flag given twice is kept twice
 //!   ([`Args::flags`]), and [`Args::flag`] reads the last value.
 //!
-//! A command declares the flags it reads ([`Command::flag`]); one typed
-//! with a flag it does not declare is refused
+//! A command that declares flags and is typed with one it does not
+//! declare is refused
 //! ([`Refusal::UnknownFlag`](crate::Refusal::UnknownFlag), told with its
 //! usage by the default [`Refusals`](crate::Refusals)) unless it takes any
 //! ([`Command::pass_unknown_flags`]): a mistyped `--dryrun` must not run
@@ -268,18 +274,22 @@ impl Command {
 
     /// Declare the flag `--name` (or `--name=value`), `name` written
     /// without the dashes; read it with [`Args::has_flag`] or
-    /// [`Args::flag`]. A typed flag the command does not declare refuses
-    /// it (unless [`Self::pass_unknown_flags`]). Write the flags in
-    /// [`Self::usage`] for the help to show them, e.g.
+    /// [`Args::flag`]. A command with a declared flag reads flags (see the
+    /// [module docs](self#flags)), and a typed flag it does not declare
+    /// refuses it (unless [`Self::pass_unknown_flags`]); a command without
+    /// one reads every word as a positional argument. A subcommand's
+    /// flags are its own: declare them on it, not on its parent. Write the
+    /// flags in [`Self::usage`] for the help to show them, e.g.
     /// `<order number> [--dry-run]`.
     pub fn flag(mut self, name: impl Into<String>) -> Self {
         self.flags.push(name.into());
         self
     }
 
-    /// Run with flags the command does not declare too (they are in
-    /// [`Args::flags`]) instead of refusing it: for a command that reads
-    /// them itself, or hands them on.
+    /// Read flags, and run with ones the command does not declare too
+    /// (they are in [`Args::flags`]) instead of refusing it: for a command
+    /// that reads them itself, or hands them on. Without a declared flag,
+    /// this alone makes the command read flags.
     pub fn pass_unknown_flags(mut self) -> Self {
         self.pass_unknown_flags = true;
         self
@@ -306,9 +316,17 @@ pub struct Flag {
 /// A command's arguments: the text after its name (after its
 /// subcommand's, for a subcommand), split on whitespace, with
 /// `"double quoted strings"` (or `“curly quoted”` ones, as phone keyboards
-/// type them) kept as one argument; the flags (`--dry-run`, `--limit=5`)
-/// apart from the positional arguments. The flag rules are in the
-/// [module docs](self#flags).
+/// type them) kept as one argument.
+///
+/// For a command that reads flags (it declares one, [`Command::flag`], or
+/// takes any, [`Command::pass_unknown_flags`]), the flags (`--dry-run`,
+/// `--limit=5`) are read apart ([`Self::flags`]) and [`Self::get`],
+/// [`Self::len`] and [`Self::iter`] count the positional arguments only;
+/// for any other command there are no flags and every word is an
+/// argument. The bot reads a command's arguments in its mode, whichever
+/// constructor built them; to unit-test a handler, build them with
+/// [`Self::parse`] or [`Self::parse_with_flags`] as the command would. The
+/// flag rules are in the [module docs](self#flags).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Args {
     raw: String,
@@ -406,13 +424,25 @@ fn words(raw: &str) -> Vec<Word> {
 }
 
 impl Args {
-    /// Split `raw` (see the type docs). An unterminated quote runs to the
-    /// end; `""` is an empty argument.
+    /// Split `raw` (see the type docs), every word a positional argument:
+    /// the arguments of a command that reads no flags. An unterminated
+    /// quote runs to the end; `""` is an empty argument.
     pub fn parse(raw: &str) -> Self {
+        Self::split(raw, false)
+    }
+
+    /// Split `raw` as [`Self::parse`] does, reading the flags apart (the
+    /// rules are in the [module docs](self#flags)): the arguments of a
+    /// command that reads flags.
+    pub fn parse_with_flags(raw: &str) -> Self {
+        Self::split(raw, true)
+    }
+
+    fn split(raw: &str, read_flags: bool) -> Self {
         let raw = raw.trim();
         let mut items = Vec::new();
         let mut flags = Vec::new();
-        let mut flags_ended = false;
+        let mut flags_ended = !read_flags;
         for word in words(raw) {
             if !flags_ended {
                 if !word.quoted && word.text == "--" {
@@ -433,14 +463,14 @@ impl Args {
         }
     }
 
-    /// The first word, when typed outside quotes, and the arguments after
-    /// it: a subcommand's name and its arguments.
-    pub(crate) fn split_first(&self) -> Option<(String, Self)> {
+    /// The first word, when typed outside quotes, and the text after it: a
+    /// subcommand's name and its arguments, unparsed.
+    pub(crate) fn split_first(&self) -> Option<(String, &str)> {
         let first = words(&self.raw).into_iter().next()?;
         if first.quoted {
             return None;
         }
-        Some((first.text, Self::parse(&self.raw[first.end..])))
+        Some((first.text, &self.raw[first.end..]))
     }
 
     /// The text after the command name (after the subcommand's, for a
@@ -474,7 +504,8 @@ impl Args {
         self.items.iter().map(String::as_str)
     }
 
-    /// The flags, in the order typed, repeats included.
+    /// The flags, in the order typed, repeats included (none when read
+    /// without flags, [`Self::parse`]).
     pub fn flags(&self) -> &[Flag] {
         &self.flags
     }
@@ -606,12 +637,29 @@ pub struct CommandInfo {
     pub subcommands: Vec<CommandInfo>,
 }
 
+impl CommandInfo {
+    /// Whether the command reads flags: it declares one or takes any.
+    pub(crate) fn reads_flags(&self) -> bool {
+        !self.flags.is_empty() || self.pass_unknown_flags
+    }
+
+    /// `raw` read as this command's arguments: with flags or without.
+    pub(crate) fn args(&self, raw: &str) -> Args {
+        if self.reads_flags() {
+            Args::parse_with_flags(raw)
+        } else {
+            Args::parse(raw)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The positional arguments, flags read apart.
     fn items(raw: &str) -> Vec<String> {
-        Args::parse(raw).as_slice().to_vec()
+        Args::parse_with_flags(raw).as_slice().to_vec()
     }
 
     #[test]
@@ -638,9 +686,39 @@ mod tests {
         assert_eq!(args.iter().collect::<Vec<_>>(), ["one", "two"]);
     }
 
+    /// Decisive: read without flags (a command that declares none), every
+    /// word is a positional argument exactly as before flags existed. Make
+    /// `Args::parse` read flags and this fails.
+    #[test]
+    fn without_flags_every_word_is_positional() {
+        let raw = r#"--hi there -- --x=1 —y "--q" -n --"#;
+        let args = Args::parse(raw);
+        assert_eq!(
+            args.as_slice(),
+            ["--hi", "there", "--", "--x=1", "—y", "--q", "-n", "--"]
+        );
+        assert_eq!(args.len(), 8);
+        assert_eq!(args.get(0), Some("--hi"));
+        assert_eq!(args.iter().next(), Some("--hi"));
+        assert!(args.flags().is_empty());
+        assert!(!args.has_flag("hi"));
+        assert_eq!(args.flag("x"), None);
+        assert_eq!(args.raw(), raw);
+        // The same text, read with flags.
+        let with = Args::parse_with_flags(raw);
+        assert_eq!(with.as_slice(), ["there", "--x=1", "—y", "--q", "-n", "--"]);
+        assert_eq!(
+            with.flags(),
+            [Flag {
+                name: "hi".into(),
+                value: None
+            }]
+        );
+    }
+
     /// `(name, value)` of each flag, in order.
     fn flags(raw: &str) -> Vec<(String, Option<String>)> {
-        Args::parse(raw)
+        Args::parse_with_flags(raw)
             .flags()
             .iter()
             .map(|f| (f.name.clone(), f.value.clone()))
@@ -653,7 +731,7 @@ mod tests {
 
     #[test]
     fn flags_are_read_apart_from_the_positional_arguments() {
-        let args = Args::parse("42 --dry-run --limit=5 x");
+        let args = Args::parse_with_flags("42 --dry-run --limit=5 x");
         assert_eq!(args.as_slice(), ["42", "x"]);
         assert_eq!(args.len(), 2);
         assert_eq!(args.get(1), Some("x"));
@@ -665,7 +743,7 @@ mod tests {
         // `raw` keeps everything as typed.
         assert_eq!(args.raw(), "42 --dry-run --limit=5 x");
         // Flags only: no positional argument.
-        let only = Args::parse("--all");
+        let only = Args::parse_with_flags("--all");
         assert!(only.is_empty());
         assert!(only.has_flag("all"));
     }
@@ -674,7 +752,7 @@ mod tests {
     /// word) and `"--limit=5"` becomes a flag.
     #[test]
     fn a_quoted_flag_stays_a_positional_argument() {
-        let args = Args::parse(r#""--limit=5" --x"#);
+        let args = Args::parse_with_flags(r#""--limit=5" --x"#);
         assert_eq!(args.as_slice(), ["--limit=5"]);
         assert!(!args.has_flag("limit"));
         assert_eq!(flags(r#""--limit=5" --x"#), [flag("x", None)]);
@@ -689,35 +767,35 @@ mod tests {
             flags(r#"--note="two words" --empty="""#),
             [flag("note", Some("two words")), flag("empty", Some(""))]
         );
-        assert!(Args::parse(r#"--note="two words""#).is_empty());
+        assert!(Args::parse_with_flags(r#"--note="two words""#).is_empty());
         // Quoted, `--` is an argument, not the end of the flags.
-        let args = Args::parse(r#""--" --x"#);
+        let args = Args::parse_with_flags(r#""--" --x"#);
         assert_eq!(args.as_slice(), ["--"]);
         assert!(args.has_flag("x"));
     }
 
     #[test]
     fn a_double_dash_ends_the_flags() {
-        let args = Args::parse("--a -- --b=1 -- c");
+        let args = Args::parse_with_flags("--a -- --b=1 -- c");
         assert_eq!(flags("--a -- --b=1 -- c"), [flag("a", None)]);
         // The first `--` is not an argument; later ones are.
         assert_eq!(args.as_slice(), ["--b=1", "--", "c"]);
-        let trailing = Args::parse("x --");
+        let trailing = Args::parse_with_flags("x --");
         assert_eq!(trailing.as_slice(), ["x"]);
         assert!(trailing.flags().is_empty());
-        assert!(Args::parse("--").is_empty());
+        assert!(Args::parse_with_flags("--").is_empty());
     }
 
     #[test]
     fn empty_values_repeats_and_what_is_not_a_flag() {
         // An empty value is a value.
-        let args = Args::parse("--limit=");
+        let args = Args::parse_with_flags("--limit=");
         assert_eq!(args.flag("limit"), Some(""));
         assert!(args.is_empty());
         // Only the first `=` splits.
         assert_eq!(flags("--q=a=b"), [flag("q", Some("a=b"))]);
         // Repeats are kept in order; `flag` reads the last value given.
-        let args = Args::parse("--limit=5 --tag=a --limit=7 --limit --tag=b");
+        let args = Args::parse_with_flags("--limit=5 --tag=a --limit=7 --limit --tag=b");
         assert_eq!(
             flags("--limit=5 --tag=a --limit=7 --limit --tag=b"),
             [
@@ -731,7 +809,7 @@ mod tests {
         assert_eq!(args.flag("limit"), Some("7"));
         assert_eq!(args.flag("tag"), Some("b"));
         // A space does not give a value: `5` is positional.
-        let args = Args::parse("--limit 5");
+        let args = Args::parse_with_flags("--limit 5");
         assert_eq!(args.flag("limit"), None);
         assert!(args.has_flag("limit"));
         assert_eq!(args.as_slice(), ["5"]);
@@ -740,9 +818,13 @@ mod tests {
             items("-n -5 - --=5 --- ---x"),
             ["-n", "-5", "-", "--=5", "---", "---x"]
         );
-        assert!(Args::parse("-n -5 - --=5 --- ---x").flags().is_empty());
+        assert!(
+            Args::parse_with_flags("-n -5 - --=5 --- ---x")
+                .flags()
+                .is_empty()
+        );
         // Names compare as typed.
-        let args = Args::parse("--Limit=5");
+        let args = Args::parse_with_flags("--Limit=5");
         assert_eq!(args.flag("limit"), None);
         assert_eq!(args.flag("Limit"), Some("5"));
     }
@@ -758,17 +840,24 @@ mod tests {
             ]
         );
         // A phone keyboard's em dash for `--`.
-        let args = Args::parse("—dry-run —limit=5 42");
+        let args = Args::parse_with_flags("—dry-run —limit=5 42");
         assert!(args.has_flag("dry-run"));
         assert_eq!(args.flag("limit"), Some("5"));
         assert_eq!(args.as_slice(), ["42"]);
         // A lone em dash is punctuation: positional, and flags go on.
-        let args = Args::parse("a — b --x");
+        let args = Args::parse_with_flags("a — b --x");
         assert_eq!(args.as_slice(), ["a", "—", "b"]);
         assert!(args.has_flag("x"));
         assert_eq!(items("——x —-x —=1"), ["——x", "—-x", "—=1"]);
-        // The en dash is not read as `--`.
+        // The en dash is not read as `--`, nor an em dash inside a word.
         assert_eq!(items("–x"), ["–x"]);
+        assert_eq!(items("a—x b—limit=5 -—x"), ["a—x", "b—limit=5", "-—x"]);
+        assert!(Args::parse_with_flags("a—x b—limit=5").flags().is_empty());
+        // `--` inside a quoted value, or quoted mid-word, ends nothing.
+        let args = Args::parse_with_flags(r#"--note="a -- b" x"--" --y"#);
+        assert_eq!(args.flag("note"), Some("a -- b"));
+        assert_eq!(args.as_slice(), ["x--"]);
+        assert!(args.has_flag("y"));
         // A multibyte value in quotes after a multibyte name.
         assert_eq!(flags("—ü=\u{201C}ä ö\u{201D}"), [flag("ü", Some("ä ö"))]);
     }
@@ -778,17 +867,18 @@ mod tests {
         let args = Args::parse("status 42 --all");
         let (word, rest) = args.split_first().unwrap();
         assert_eq!(word, "status");
-        assert_eq!(rest.as_slice(), ["42"]);
-        assert!(rest.has_flag("all"));
-        assert_eq!(rest.raw(), "42 --all");
+        assert_eq!(rest, " 42 --all");
         // A quoted first word is no subcommand.
         assert!(Args::parse(r#""status" 42"#).split_first().is_none());
+        assert!(Args::parse(r#"st"atus" 42"#).split_first().is_none());
         assert!(Args::parse("").split_first().is_none());
         // A multibyte first word and its rest.
-        let (word, rest) = Args::parse("état  ü").split_first().unwrap();
-        assert_eq!((word.as_str(), rest.raw()), ("état", "ü"));
-        let (word, rest) = Args::parse("only").split_first().unwrap();
+        let args = Args::parse("état  ü");
+        let (word, rest) = args.split_first().unwrap();
+        assert_eq!((word.as_str(), Args::parse(rest).raw()), ("état", "ü"));
+        let args = Args::parse("only");
+        let (word, rest) = args.split_first().unwrap();
         assert_eq!(word, "only");
-        assert_eq!(rest, Args::default());
+        assert_eq!(Args::parse(rest), Args::default());
     }
 }

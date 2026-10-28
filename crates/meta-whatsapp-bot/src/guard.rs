@@ -9,9 +9,10 @@
 //!
 //! 2. its [`Scope`](crate::Scope) (private or group only);
 //! 3. owner-only ([`AccessPolicy::is_owner`]);
-//! 4. its flags: a typed flag it does not declare
-//!    ([`Refusal::UnknownFlag`]), after the owner check so a non-owner is
-//!    never told an owner command's usage;
+//! 4. its flags, for a command that declares any: a typed flag it does
+//!    not declare ([`Refusal::UnknownFlag`]), after the owner check so a
+//!    non-owner is never told an owner command's usage (a command that
+//!    declares no flag reads none, so nothing is refused);
 //! 5. the per-user cooldown ([`Cooldowns`]), checked last so a refused
 //!    attempt does not start one.
 //!
@@ -318,8 +319,10 @@ pub enum Refusal {
     GroupOnly,
     /// A private-only command in a group.
     PrivateOnly,
-    /// A flag the command does not declare (`Command::flag`) was typed:
-    /// `ctx.args().flags()[index]`, the first such.
+    /// A command that declares flags (`Command::flag`) was typed with one
+    /// it does not declare: `ctx.args().flags()[index]`, the first such.
+    /// Never for a command that declares none (it reads no flags) or that
+    /// takes any (`Command::pass_unknown_flags`).
     UnknownFlag {
         /// Its position in `ctx.args().flags()`.
         index: usize,
@@ -383,9 +386,7 @@ fn unknown_flag(ctx: &Ctx, index: usize) -> String {
             text.push(' ');
             text.push_str(usage);
         }
-        if info.flags.is_empty() {
-            text.push_str("\nThis command takes no options.");
-        } else {
+        if !info.flags.is_empty() {
             let flags: Vec<String> = info.flags.iter().map(|f| format!("--{f}")).collect();
             text.push_str("\nOptions: ");
             text.push_str(&flags.join(", "));

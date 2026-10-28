@@ -47,7 +47,7 @@ async fn setup(&self, registrar: &mut Registrar) -> meta_whatsapp_rs::Result<()>
 - `Plugin` needs `Debug`; `Plugin::category`: `Some("Orders")` (`None`: `BotBuilder::default_category`).
   `PrefixParser` ignores case (`PrefixParser::ignore_case`); `Args` keeps `"quoted strings"` whole.
 - `Command::subcommand` (one level, example `order_command`): `/order status 42` runs `status` with `42`; the parent's scope and owner guards apply, not its cooldown.
-  `Command::flag` declares `--refresh` or `--limit=5` (`Args::has_flag`, `Args::flag`); an undeclared one refuses the command with its usage (`Command::pass_unknown_flags` takes any); `"--x"` and words after `--` stay positional.
+  `Command::flag` declares `--refresh` or `--limit=5` (`Args::has_flag`, `Args::flag`); an undeclared one then refuses the command with its usage (`Command::pass_unknown_flags` takes any). A command with no flag reads `--x` as an argument; `"--x"` and words after `--` stay arguments too.
 - `BotSender::key` is the BSUID first: list owners and bans by BSUID (`AccessList::owner`,
   `AccessList::ban`); a phone-only ban misses users without a number.
 
