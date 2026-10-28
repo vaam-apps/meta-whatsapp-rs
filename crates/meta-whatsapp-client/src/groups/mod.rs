@@ -35,7 +35,7 @@
 use bytes::Bytes;
 use futures::{Stream, stream};
 use http::Method;
-use meta_whatsapp_core::error::{ValidationError, snippet};
+use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{GroupId, MessageId, PhoneNumberId, UserId, WaId};
 use meta_whatsapp_core::paging::{Page, Paging};
 use meta_whatsapp_core::recipient::Recipient;
@@ -44,7 +44,7 @@ use meta_whatsapp_core::{Error, GraphApiError, Result};
 use serde::{Deserialize, Deserializer, Serialize};
 use time::OffsetDateTime;
 
-use crate::request::{paginate_or_error, reject_cursors, stream_or_error};
+use crate::request::{paginate_or_error, reject_cursors, safe_snippet, stream_or_error};
 use crate::{Client, GraphRequest};
 
 #[cfg(test)]
@@ -582,7 +582,7 @@ async fn send_lenient(request: GraphRequest) -> Result<(u16, serde_json::Value)>
     if refused {
         return Err(Error::Http {
             status,
-            body_snippet: snippet(&resp.body),
+            body_snippet: safe_snippet(&resp.body),
         });
     }
     Ok((status, body))

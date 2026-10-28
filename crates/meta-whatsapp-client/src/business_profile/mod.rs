@@ -19,13 +19,13 @@
 //! `https://developers.facebook.com/documentation/business-messaging/whatsapp/`
 //! (append `.md` for Markdown; `just meta-docs` mirrors them locally).
 
-use meta_whatsapp_core::error::{ValidationError, snippet};
+use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{BusinessProfileId, PhoneNumberId, UploadHandle};
 use meta_whatsapp_core::{Error, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::Client;
-use crate::request::decode_json;
+use crate::request::{decode_json, safe_snippet};
 
 /// Maximum length of `address`, in characters (`business-profiles`, "Field
 /// notes").
@@ -183,7 +183,7 @@ impl BusinessProfileNode {
         if updated.success == Some(false) {
             return Err(Error::Http {
                 status: resp.status.as_u16(),
-                body_snippet: snippet(&resp.body),
+                body_snippet: safe_snippet(&resp.body),
             });
         }
         Ok(updated)

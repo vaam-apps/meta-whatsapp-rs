@@ -230,7 +230,12 @@ impl fmt::Debug for Part {
 }
 
 /// A fully buffered response.
-#[derive(Debug, Clone)]
+///
+/// `Debug` prints the status, the header names (a value can be a cookie,
+/// or a redirect's `Location` with its query) and the body's length, never
+/// the body: a 2xx answer can hold a paging link with the access token, a
+/// token exchange the token itself.
+#[derive(Clone)]
 pub struct HttpResponse {
     /// Status.
     pub status: StatusCode,
@@ -240,7 +245,28 @@ pub struct HttpResponse {
     pub body: Bytes,
 }
 
+impl fmt::Debug for HttpResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HttpResponse")
+            .field("status", &self.status)
+            .field("headers", &HeaderNames(&self.headers))
+            .field("body_len", &self.body.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// A header map's names, for `Debug`: a value can be a credential.
+struct HeaderNames<'a>(&'a HeaderMap);
+
+impl fmt::Debug for HeaderNames<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.0.keys()).finish()
+    }
+}
+
 /// A response whose body is still streaming (media download).
+///
+/// `Debug` prints the status and the header names, as for [`HttpResponse`].
 pub struct StreamingResponse {
     /// Status.
     pub status: StatusCode,
@@ -254,7 +280,7 @@ impl fmt::Debug for StreamingResponse {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StreamingResponse")
             .field("status", &self.status)
-            .field("headers", &self.headers)
+            .field("headers", &HeaderNames(&self.headers))
             .finish_non_exhaustive()
     }
 }
@@ -333,6 +359,42 @@ impl<T: HttpTransport + ?Sized> HttpTransport for std::sync::Arc<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_response_debug_shows_neither_its_body_nor_header_values() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::header::SET_COOKIE,
+            http::HeaderValue::from_static("session=C00KIE"),
+        );
+        headers.insert(
+            http::header::LOCATION,
+            http::HeaderValue::from_static("https://graph.facebook.com/x?access_token=L0CATI0N"),
+        );
+        let body = Bytes::from_static(
+            br#"{"data":[],"paging":{"next":"https://graph.facebook.com/x?access_token=LEAKED"}}"#,
+        );
+        let resp = HttpResponse {
+            status: StatusCode::OK,
+            headers: headers.clone(),
+            body: body.clone(),
+        };
+        let streaming = StreamingResponse {
+            status: StatusCode::OK,
+            headers,
+            body: Box::pin(futures::stream::empty()),
+        };
+        let out = format!("{resp:?} {resp:#?} {streaming:?} {streaming:#?}");
+        for secret in ["LEAKED", "C00KIE", "L0CATI0N", "paging"] {
+            assert!(!out.contains(secret), "{secret} leaked: {out}");
+        }
+        assert!(out.contains("200"), "{out}");
+        assert!(
+            out.contains("set-cookie") && out.contains("location"),
+            "{out}"
+        );
+        assert!(out.contains(&format!("body_len: {}", body.len())), "{out}");
+    }
 
     #[test]
     fn debug_never_prints_the_query() {

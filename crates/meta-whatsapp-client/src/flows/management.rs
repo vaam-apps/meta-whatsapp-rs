@@ -16,6 +16,10 @@ use super::types::{
 use crate::Client;
 use crate::request::{paginate_or_error, reject_cursors};
 
+/// The body snippet of a preview answer that does not decode: its link
+/// carries a viewing token.
+const PREVIEW_WITHHELD: &[u8] = b"(withheld: the preview link carries a viewing token)";
+
 /// Every field `GET /{FLOW_ID}` documents except `preview` (which has its own
 /// call, [`Flow::preview`], because asking for it mints a link) and the
 /// `data_channel_uri` field deprecated since Graph v19.0 in favour of
@@ -142,7 +146,10 @@ impl Flow {
     /// The Flow's web preview link (`GET /{FLOW_ID}?fields=preview.invalidate(..)`).
     ///
     /// Links last 30 days. `invalidate = true` revokes the current link and
-    /// returns a new one — use it when a link was shared too widely.
+    /// returns a new one — use it when a link was shared too widely. The
+    /// link's `token` lets anyone holding it view the Flow, so an answer
+    /// that fails to decode is reported without its body or serde's
+    /// message.
     pub async fn preview(&self, invalidate: bool) -> Result<FlowPreview> {
         #[derive(serde::Deserialize)]
         struct PreviewResponse {
@@ -153,7 +160,7 @@ impl Flow {
             .get_at(&[self.flow_id.as_str()])
             .query("fields", format!("preview.invalidate({invalidate})"))
             .context("flow preview response")
-            .send()
+            .send_withheld(PREVIEW_WITHHELD)
             .await?;
         Ok(response.preview)
     }

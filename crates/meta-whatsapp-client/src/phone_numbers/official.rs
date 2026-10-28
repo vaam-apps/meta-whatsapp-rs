@@ -240,7 +240,7 @@ impl PhoneNumber {
         } else {
             Err(meta_whatsapp_core::Error::Http {
                 status: resp.status.as_u16(),
-                body_snippet: meta_whatsapp_core::error::snippet(&resp.body),
+                body_snippet: crate::request::safe_snippet(&resp.body),
             })
         }
     }
