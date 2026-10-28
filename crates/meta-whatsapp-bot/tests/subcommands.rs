@@ -678,6 +678,53 @@ async fn bot_with_owner_parent(runs: &Runs, seen: &Seen) -> Bot {
     .await
 }
 
+/// The middleware sees the arguments as the matched command reads them:
+/// flags apart for one that declares them, every word positional for one
+/// that declares none.
+#[tokio::test]
+async fn the_middleware_sees_the_commands_own_reading_of_its_arguments() {
+    #[derive(Debug, Clone, Default)]
+    struct Peek(Arc<Mutex<Vec<(Vec<String>, Vec<String>)>>>);
+    #[async_trait]
+    impl Middleware for Peek {
+        async fn handle(&self, ctx: Ctx, next: Next<'_>) -> meta_whatsapp_core::Result<()> {
+            let args = ctx.args();
+            self.0.lock().unwrap().push((
+                args.as_slice().to_vec(),
+                args.flags().iter().map(|f| f.name.clone()).collect(),
+            ));
+            next.run(ctx).await
+        }
+    }
+    let peek = Peek::default();
+    let runs = Runs::default();
+    let bot = bot(Bot::builder()
+        .outbound(Recording::default())
+        .middleware(peek.clone())
+        .command(order(&runs))
+        .command(Command::new("say", runs.handler("say"))))
+    .await;
+    for body in [
+        "/order --all 1",
+        "/order status 42 --dry-run",
+        "/order cancel --all",
+        "/say --hi there",
+    ] {
+        bot.handle(text_event(TEXT, body)).await.unwrap();
+    }
+    let strings = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+    assert_eq!(
+        *peek.0.lock().unwrap(),
+        [
+            (strings(&["1"]), strings(&["all"])),
+            (strings(&["42"]), strings(&["dry-run"])),
+            (strings(&["--all"]), strings(&[])),
+            (strings(&["--hi", "there"]), strings(&[])),
+        ]
+    );
+    assert_eq!(runs.names(), ["order", "status", "cancel", "say"]);
+}
+
 // ─── The help ────────────────────────────────────────────────────────────
 
 /// Each visible subcommand gets a line under its command, named under
