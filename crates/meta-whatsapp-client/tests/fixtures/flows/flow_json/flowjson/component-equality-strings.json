@@ -1,0 +1,5 @@
+{
+  "type": "TextBody",
+  "text": "Your first name should be different from your last name.",
+  "visible": "`${form.first_name} == ${form.last_name}`"
+}

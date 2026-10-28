@@ -1,0 +1,11 @@
+{
+  "version": "2.1",
+  "data_api_version": "3.0",
+  "routing_model": {
+    "MY_FIRST_SCREEN": [
+      "MY_SECOND_SCREEN"
+    ]
+  },
+  "screens": [],
+  "data_channel_uri": "https://example.com"
+}

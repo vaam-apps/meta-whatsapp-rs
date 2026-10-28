@@ -1,0 +1,8 @@
+{
+  "name": "navigate",
+  "next": {
+    "type": "screen",
+    "name": "SCREEN_TWO"
+  },
+  "payload": {}
+}

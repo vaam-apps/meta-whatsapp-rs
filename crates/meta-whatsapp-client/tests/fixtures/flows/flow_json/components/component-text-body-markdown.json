@@ -1,0 +1,7 @@
+{
+  "type": "TextBody",
+  "markdown": true,
+  "text": [
+    "This text is ~~***really important***~~"
+  ]
+}

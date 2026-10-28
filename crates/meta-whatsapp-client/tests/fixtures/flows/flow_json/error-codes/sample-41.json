@@ -1,0 +1,20 @@
+{
+  "version": "2.1",
+  "screens": [
+    {
+      "id": "FIRST_SCREEN",
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "Footer",
+            "on-click-action": {
+              "name": "complete",
+              "payload": {}
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

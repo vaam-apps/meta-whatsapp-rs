@@ -1,0 +1,8 @@
+{
+  "name": "data_exchange",
+  "payload": {
+    "media": {
+      "document": "${form.document_picker}"
+    }
+  }
+}

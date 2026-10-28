@@ -1,0 +1,26 @@
+{
+  "children": [
+    {
+      "type": "DocumentPicker",
+      "name": "doc",
+      "label": "Add ID proof"
+    },
+    {
+      "type": "Footer",
+      "label": "Submit",
+      "on-click-action": {
+        "name": "navigate",
+        "payload": {
+          "doc": {
+            "first": {
+              "second": [
+                "in_array",
+                "${screen.FIRST_SCREEN.form.doc}"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
+}

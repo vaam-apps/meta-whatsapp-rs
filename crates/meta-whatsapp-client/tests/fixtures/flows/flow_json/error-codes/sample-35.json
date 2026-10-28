@@ -1,0 +1,15 @@
+{
+  "type": "Form",
+  "name": "PASS_CUSTOM_VALUE",
+  "children": [
+    {
+      "type": "Footer",
+      "on-click-action": {
+        "name": "complete",
+        "payload": {
+          "input": "${form.not_present}"
+        }
+      }
+    }
+  ]
+}

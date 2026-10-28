@@ -1,0 +1,5 @@
+{
+  "type": "TextBody",
+  "text": "You have not accepted the T&C!",
+  "visible": "`${form.accept} != true`"
+}

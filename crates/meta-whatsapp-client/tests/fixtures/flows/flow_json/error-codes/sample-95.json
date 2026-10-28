@@ -1,0 +1,32 @@
+{
+  "screens": [
+    {
+      "id": "FIRST_SCREEN",
+      "layout": {
+        "children": [
+          {
+            "type": "PhotoPicker",
+            "name": "photoPicker",
+            "label": "photoLabel"
+          },
+          {
+            "type": "DocumentPicker",
+            "name": "DocumentPicker",
+            "label": "DocLabel",
+            "max-uploaded-documents": 3
+          },
+          {
+            "type": "Footer",
+            "on-click-action": {
+              "name": "complete",
+              "payload": {
+                "photo": "${form.photoPicker}",
+                "doc": "${form.DocumentPicker}"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

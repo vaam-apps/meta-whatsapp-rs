@@ -1,0 +1,5 @@
+{
+  "type": "TextBody",
+  "text": "You are above 18 and have accepted our T&C!",
+  "visible": "`(${form.age} > 18) && ${form.accept}`"
+}

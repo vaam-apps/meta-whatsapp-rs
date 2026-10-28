@@ -1,0 +1,29 @@
+{
+  "version": "4.0",
+  "data_api_version": "3.0",
+  "routing_model": {},
+  "screens": [
+    {
+      "id": "screenA",
+      "title": "Screen Title",
+      "terminal": true,
+      "data": {
+        "error": {
+          "type": "boolean",
+          "__example__": true
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "PhotoPicker",
+            "name": "photo",
+            "label": "Add ID proof",
+            "error-message": "${data.error}"
+          }
+        ]
+      }
+    }
+  ]
+}

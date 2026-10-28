@@ -1,0 +1,6 @@
+{
+  "type": "RichText",
+  "text": [
+    "This text is ~~***really important***~~"
+  ]
+}

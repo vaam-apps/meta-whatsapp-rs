@@ -217,6 +217,60 @@ stored data, the owner's).
 
 ### Added
 
+- **A typed Flow JSON model and builder**
+  (`meta_whatsapp_client::flows::flow_json`, roadmap L18, parity row 63),
+  from `flows/guides/flowjson`, `flows/guides/components`,
+  `flows/guides/media_upload` and the static validation errors of
+  `flows/reference/error-codes` (read on 2026-10-28). `FlowJson`
+  (`version`, `data_api_version`, `routing_model`, `data_channel_uri`,
+  `screens`) holds `Screen`s (`id`, `title`, `terminal`, `success`,
+  `data`, `refresh_on_back`, `sensitive`, `layout`), whose `Layout` holds
+  `Component`s, a tagged enum by `type` with one struct per documented
+  component (the text components and `RichText`, `TextInput`,
+  `TextArea`, `CheckboxGroup`, `RadioButtonsGroup`, `Dropdown`,
+  `ChipsSelector`, `Footer`, `OptIn`, `EmbeddedLink`, `DatePicker`,
+  `CalendarPicker`, `Image`, `ImageCarousel`, `If`, `Switch`,
+  `NavigationList`, `PhotoPicker`, `DocumentPicker`, `Form`); an `Action`
+  is tagged by `name` (`navigate`, `complete`, `data_exchange`,
+  `update_data`, `open_url`); a screen's data model is `DataField`s. A
+  property that may be bound to data is a `Dynamic<T>` (a value, or an
+  `${data.…}`/`${form.…}`/`${screen.…}` reference or a backticked
+  expression, kept verbatim); string properties hold a reference as
+  their value (`data_ref`, `form_ref`, `screen_data_ref`,
+  `screen_form_ref`). Lossless for what it parses: an unknown component
+  or action is `Unknown { raw }`, every struct keeps unknown properties
+  in a flattened `extra`, so a parsed Flow JSON serializes back to the
+  same JSON value (an explicit `null` on an optional property of the
+  document, a screen or a data field reads as absent: Flows refuse
+  `null`). A component or action whose known tag does not fit
+  its struct (a property of another type, a required one missing, a
+  `null`) is `Unknown { raw }` too, verbatim, rather than failing the
+  document: a changed Meta shape must never break parsing, and the docs
+  disagree on some (`RadioButtonsGroup`'s `init-value`, a string in one
+  table and a list in another, is `OneOrMany`, either). The document's
+  skeleton (`version`, `screens`, the screens' properties and `layout`,
+  a layout's `type` and `children`) stays strict.
+  `FlowJson::builder(version)` (`route`, `screen`, `build`) with
+  `Screen::new(id)` (`child`, `data_field`, …) and each component's
+  `new` and setters; `build` and `FlowJson::validate` check the limits
+  the docs give (version format; 1 to 100 screens; screen ids of letters
+  and underscores, unique, not `SUCCESS`; a terminal screen, with a
+  `Footer`; `success` only on terminal screens; the routing model's
+  screens, self and backward routes and 10 branches; `refresh_on_back`,
+  `data_exchange` and a routing model tied to `data_api_version`; 50
+  components and the per-screen maxima of `Footer`, `EmbeddedLink`,
+  `Image`, `OptIn`, `NavigationList`, `ImageCarousel` and the media
+  pickers; each component's character and option limits; `If` and
+  `Switch` branch rules; `NavigationList` placement; actions' targets,
+  screens and versions), the first failure a `ValidationError` whose
+  `field` is a path from the root (`screens[0].layout.children[1].label`).
+  `CreateFlow::flow_json_typed(&FlowJson)` and
+  `Flow::upload_flow_json_typed(&FlowJson)` validate and send it; the
+  raw-JSON calls stay, and `FlowJson::to_json_string` feeds them a
+  document the local checks refuse. Every JSON example of those pages is
+  a fixture (`crates/meta-whatsapp-client/tests/fixtures/flows/flow_json/`)
+  that round-trips as the same JSON value with nothing left unmodelled;
+  four come out of the builder identical.
 - **Subcommands and flags** in `meta-whatsapp-bot` (roadmap B1b,
   parity row 85, now done in the library). `Command::subcommand` nests
   a command one level: `/order status 42` runs `status` with `42` as its

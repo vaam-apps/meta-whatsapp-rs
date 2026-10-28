@@ -1,0 +1,26 @@
+{
+  "children": [
+    {
+      "type": "PhotoPicker",
+      "name": "photo",
+      "label": "Add your picture"
+    },
+    {
+      "type": "Footer",
+      "label": "Submit",
+      "on-click-action": {
+        "name": "navigate",
+        "payload": {
+          "photo": {
+            "first": {
+              "second": [
+                "in_array",
+                "${screen.FIRST_SCREEN.form.photo}"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
+}

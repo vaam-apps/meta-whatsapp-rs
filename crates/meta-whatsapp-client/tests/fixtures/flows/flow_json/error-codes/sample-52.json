@@ -1,0 +1,31 @@
+{
+  "version": "2.1",
+  "screens": [
+    {
+      "id": "SCREEN_A",
+      "data": {
+        "top": {
+          "type": "object",
+          "properties": {
+            "secondLevel": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      },
+      "layout": {
+        "children": [
+          {
+            "type": "TextHeading",
+            "text": "${data.top.secondLevel.target}"
+          }
+        ]
+      }
+    }
+  ]
+}

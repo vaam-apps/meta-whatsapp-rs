@@ -1,0 +1,20 @@
+{
+  "screens": [
+    {
+      "id": "FIRST_SCREEN",
+      "layout": {
+        "children": [
+          {
+            "type": "Footer",
+            "left-caption": "left",
+            "center-caption": "center",
+            "on-click-action": {
+              "name": "complete",
+              "payloadx": {}
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+{
+  "type": "RichText",
+  "text": "${data.text}"
+}

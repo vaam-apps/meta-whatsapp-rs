@@ -1347,12 +1347,77 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     reference names without saying what they do. `ProductItemId` and
     `ProductSetId` are `meta_whatsapp_core::ids` newtypes, re-exported
     by `client::commerce` (numeric since L20c).
-- [ ] **L18. A typed Flow JSON builder** (`meta-whatsapp-client`,
+- [x] **L18. A typed Flow JSON builder** (`meta-whatsapp-client`,
   `client::flows`; row 63).
   - **Kind:** additive.
   - **After:** nothing.
   - **Decisive:** every Flow JSON example in `flows/guides/flowjson`
     round-trips through the builder byte for byte (as JSON values).
+  - **Landed:** row 63 done in the library (the service has no side:
+    callers send Flow JSON as JSON). `client::flows::flow_json` models
+    the document (`FlowJson`, `Screen`, `Layout`, `DataField`), its
+    components (`Component`, tagged by `type`, one struct per component
+    of `flows/guides/components` and `flows/guides/media_upload`, plus
+    `Form`) and actions (`Action`, tagged by `name`); `Dynamic<T>` holds
+    a value or a reference. Unknown components and actions are kept
+    whole (`Unknown { raw }`) and unknown properties in flattened
+    `extra` maps. Decided (AGENTS.md § Decisions): a component or action
+    whose known tag does not fit its struct (a property of another type,
+    a required one missing, a `null`) is `Unknown { raw }` too, verbatim,
+    instead of failing the document, because a new or changed Meta shape
+    must never break parsing and the docs disagree with themselves
+    (`RadioButtonsGroup`'s `init-value` is a string in one table and a
+    list in the other; it is now `OneOrMany`, either); the document
+    skeleton stays strict (`version`, `screens`, the screens' typed
+    properties and `layout`, a layout's `type` string and `children`
+    list), each with one documented type that Meta refuses others of
+    (`INVALID_PROPERTY_TYPE`). Pinned by
+    `a_known_component_or_action_that_does_not_fit_its_struct_is_kept_whole`
+    and `the_document_skeleton_stays_strict`; the decisive test still
+    refuses any `Unknown` in the documented examples, so the fallback
+    cannot hide a modelling mistake there. Also decided as proposed:
+    the local checks are strict, taking the reading that refuses less
+    where the docs can be read two ways; screen ids are ASCII letters
+    and underscores (the error codes' `PATTERN_MISMATCH`, and no
+    documented example has a digit); `SUCCESS` is refused in any case
+    (the guide spells it `SUCCESS`, the error codes `success`);
+    `Component` and `Action` are `#[non_exhaustive]`; `label-variant`
+    and `ChipsSelector`'s root actions are taken from the changelog;
+    category 11 is done for the library. `FlowJson::builder` and `FlowJson::validate` check the
+    hard limits of the component pages and of the static validation
+    errors in `flows/reference/error-codes`, the first failure a
+    `ValidationError` with the path from the root;
+    `CreateFlow::flow_json_typed` and `Flow::upload_flow_json_typed`
+    validate and send it, the raw-JSON calls unchanged. The decisive test
+    is `every_flow_json_example_round_trips_through_the_typed_model`
+    (`crates/meta-whatsapp-client/tests/flow_json.rs`): the 27 JSON
+    examples of `flows/guides/flowjson` (3 whole Flows, 21 components, 2
+    actions, a data model), and the 28 of `components`, `media_upload`,
+    `flowsapi` and `flows-templates`, each parsed, serialized and
+    compared as a JSON value, with no unknown component, action or
+    property left (so a model that passed everything through `Unknown`
+    fails it); four of them come out of the builder identical
+    (`the_*_example_comes_out_of_the_builder`), and the error-code
+    samples round-trip or are refused, never altered, and those that
+    parse as a document fail local validation, all but one (a global
+    reference into an array schema, Meta's to check), each outcome
+    pinned per sample. The components the Markdown pages give no
+    example of are pinned by
+    `every_documented_property_of_every_component_is_modelled`: each
+    property of each component's table, under its documented name,
+    lands in a typed field (a misspelt wire name fails it). Dropping the
+    catch-all, keeping only its tag, or
+    turning any `extra` into `#[serde(skip)]` fails
+    `unknown_components_actions_and_properties_are_kept_as_sent`; lifting
+    a limit fails its unit test in `flows::flow_json::tests`. Read on
+    2026-10-28. Not covered: the examples Meta renders in an interactive
+    preview, which the Markdown pages do not carry (most component
+    examples: the static and dynamic `data-source` ones, `If`, `Switch`,
+    `NavigationList`, `CalendarPicker`, `Image`, the media pickers, the
+    routing-model and form examples); checks that need the data model
+    resolved (references, payload schemas, `__example__` types, form
+    names), component types per Flow JSON version, and the limits the
+    docs call soft (`NavigationList` content truncated or not rendered).
 - [ ] **L19. Media conversion** (`meta-whatsapp-client`: a
   `MediaConverter` trait; `meta-whatsapp-adapters`: an implementation
   behind an `ffmpeg` feature, off by default; row 48): the

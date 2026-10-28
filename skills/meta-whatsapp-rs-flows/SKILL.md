@@ -1,6 +1,6 @@
 ---
 name: meta-whatsapp-rs-flows
-description: "WhatsApp Flows with meta-whatsapp-rs - creating a Flow from its JSON (CreateFlow, categories, validation errors), publishing, previews and assets, uploading the business public key, sending a Flow message, and the Flow data endpoint (feature flows-endpoint) - verify X-Hub-Signature-256 first, decrypt with FlowEndpointKey (RSA-OAEP + AES-GCM), answer ping, INIT, data_exchange and error notifications with FlowResponse, and the 421 and 432 status codes. Load when building WhatsApp Flows (forms, bookings, sign-ups) or the HTTPS endpoint a Flow calls."
+description: "WhatsApp Flows with meta-whatsapp-rs - building Flow JSON with the typed builder (FlowJson, Screen, components, checked locally), creating a Flow from its JSON (CreateFlow, categories, validation errors), publishing, previews and assets, uploading the business public key, sending a Flow message, and the Flow data endpoint (feature flows-endpoint) - verify X-Hub-Signature-256 first, decrypt with FlowEndpointKey (RSA-OAEP + AES-GCM), answer ping, INIT, data_exchange and error notifications with FlowResponse, and the 421 and 432 status codes. Load when building WhatsApp Flows (forms, bookings, sign-ups) or the HTTPS endpoint a Flow calls."
 ---
 
 # meta-whatsapp-rs-flows
@@ -41,6 +41,38 @@ Also on `Flow`: `get`, `preview(invalidate)`, `update(&UpdateFlow)`,
 `upload_flow_json(bytes)` (≤ 10 MiB, `MAX_FLOW_JSON_BYTES`), `assets`,
 `deprecate`, `delete` (drafts only). Status changes arrive as
 `WebhookEvent::FlowUpdated`.
+
+## Build the Flow JSON
+
+`client::flows::flow_json` types it: `Component` is one struct per Meta
+component, tagged by `type`; a `Dynamic<T>` holds a value or a
+`${data.…}`/`${form.…}` reference. Unknown components, and known ones
+whose properties do not fit their struct (`Unknown { raw }`), and unknown
+properties (`extra`) survive a parse and a re-serialize unchanged: a
+component never fails parsing, the document's skeleton (`version`,
+`screens`, `layout`) can.
+
+```rust
+let book = CompleteAction::new()
+    .payload("date", form_ref("date")) // "${form.date}"
+    .payload("name", form_ref("name"));
+FlowJson::builder("7.3")
+    .screen(
+        Screen::new("BOOKING")
+            .title("Book a fitting")
+            .terminal(true)
+            .child(DatePicker::new("date", "Date"))
+            .child(TextInput::new("name", "Your name").required(true))
+            .child(Footer::new("Book", book)),
+    )
+    .build()
+```
+
+`build` and `FlowJson::validate` refuse what the docs forbid, with the
+path (`screens[0].layout.children[1].label`); send it with
+`CreateFlow::flow_json_typed` or `Flow::upload_flow_json_typed`. Meta's
+validator stays the authority: to send what the local checks refuse,
+pass `FlowJson::to_json_string` to the raw calls.
 
 ## The business public key
 
@@ -113,8 +145,9 @@ Answer 200 with `sealer.seal(&response)?` as `text/plain`
 
 ## What meta-whatsapp-rs does not do
 
-- No Flow JSON builder or validator: write the JSON (Meta's Flow
-  Builder) and read `validation_errors`.
+- Local Flow JSON checks do not resolve references against the data
+  model (payload schemas, `__example__` types), nor look inside a
+  component kept as `Unknown`: Meta's `validation_errors` report those.
 - The Flows metrics API is not wrapped (deprecated by Meta 2026-04-30).
 - No HTTP server for the endpoint: wire `flow_endpoint` into your
   framework, like the webhook endpoint (`meta-whatsapp-rs-webhook-endpoint`).

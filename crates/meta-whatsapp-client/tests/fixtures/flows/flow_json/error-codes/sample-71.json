@@ -1,0 +1,56 @@
+{
+  "version": "4.0",
+  "screens": [
+    {
+      "id": "PATH_SIMULATION",
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "If",
+            "then": [
+              {
+                "type": "OptIn",
+                "name": "name"
+              }
+            ],
+            "else": [
+              {
+                "type": "TextInput",
+                "name": "name1"
+              }
+            ]
+          },
+          {
+            "type": "Switch",
+            "cases": {
+              "case1": [
+                {
+                  "type": "DatePicker",
+                  "name": "name"
+                }
+              ],
+              "case2": [
+                {
+                  "type": "TextArea",
+                  "name": "name1"
+                }
+              ]
+            }
+          },
+          {
+            "type": "Form",
+            "children": [
+              {
+                "name": "name"
+              },
+              {
+                "name": "name1"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

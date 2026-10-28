@@ -10,7 +10,11 @@ use meta_whatsapp_rs::client::flows::endpoint::{
     EncryptedFlowRequest, EndpointAction, EndpointStatus, FlowEndpointKey, FlowResponse,
     verify_request_signature,
 };
+use meta_whatsapp_rs::client::flows::flow_json::{
+    CompleteAction, DatePicker, FlowJson, Footer, Screen, TextInput, form_ref,
+};
 use meta_whatsapp_rs::client::flows::{CreateFlow, FlowCategory};
+use meta_whatsapp_rs::core::error::ValidationError;
 use meta_whatsapp_rs::core::ids::FlowId;
 use meta_whatsapp_rs::prelude::*;
 use serde_json::json;
@@ -36,6 +40,24 @@ pub async fn create_and_publish(
     }
     client.flow(created.id.clone()).publish().await?; // published Flows cannot be edited
     Ok(Ok(created.id))
+}
+
+/// The Flow JSON, typed: `build` checks Meta's documented limits locally
+/// (screen ids, a terminal screen's `Footer`, character limits…).
+pub fn booking_flow_json() -> Result<FlowJson, ValidationError> {
+    let book = CompleteAction::new()
+        .payload("date", form_ref("date")) // "${form.date}"
+        .payload("name", form_ref("name"));
+    FlowJson::builder("7.3")
+        .screen(
+            Screen::new("BOOKING")
+                .title("Book a fitting")
+                .terminal(true)
+                .child(DatePicker::new("date", "Date"))
+                .child(TextInput::new("name", "Your name").required(true))
+                .child(Footer::new("Book", book)),
+        )
+        .build()
 }
 
 /// Once per phone number: the public half of the endpoint's RSA key.
@@ -122,6 +144,23 @@ mod tests {
         let body = transport.last_request().unwrap().json().unwrap();
         assert_eq!(body["categories"], json!(["APPOINTMENT_BOOKING"]));
         assert_eq!(transport.remaining(), 0);
+    }
+
+    #[test]
+    fn the_typed_flow_json_is_checked_and_sent_as_json() {
+        let flow_json = booking_flow_json().unwrap();
+        let create = CreateFlow::new("fitting_booking", [FlowCategory::AppointmentBooking])
+            .flow_json_typed(&flow_json)
+            .unwrap();
+        let sent: serde_json::Value =
+            serde_json::from_str(create.flow_json.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            sent["screens"][0]["layout"]["children"][2]["type"],
+            "Footer"
+        );
+        let mut bad = flow_json;
+        bad.screens[0].id = "BOOKING_2".into(); // screen ids take letters and `_` only
+        assert_eq!(bad.validate().unwrap_err().field, "screens[0].id");
     }
 
     #[test]

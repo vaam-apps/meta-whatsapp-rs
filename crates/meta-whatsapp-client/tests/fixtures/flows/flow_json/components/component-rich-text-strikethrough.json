@@ -1,0 +1,6 @@
+{
+  "type": "RichText",
+  "text": [
+    "Let's make this text ~~Strikethrough~~"
+  ]
+}

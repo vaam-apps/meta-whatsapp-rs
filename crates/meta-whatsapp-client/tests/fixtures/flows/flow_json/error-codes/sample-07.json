@@ -1,0 +1,14 @@
+{
+  "screens": [
+    {
+      "id": "FIRST",
+      "layout": {
+        "children": [
+          {
+            "text": "Description"
+          }
+        ]
+      }
+    }
+  ]
+}

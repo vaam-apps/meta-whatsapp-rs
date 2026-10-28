@@ -1,0 +1,11 @@
+{
+  "name": "navigate",
+  "next": {
+    "type": "screen",
+    "name": "SCREEN_TWO"
+  },
+  "payload": {
+    "field1": "${data.field_one}",
+    "field2": "${form.field_two}"
+  }
+}

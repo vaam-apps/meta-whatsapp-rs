@@ -1,9 +1,11 @@
 //! WhatsApp Flows: the management API (create, list, read, edit, upload Flow
-//! JSON, preview, publish, deprecate, delete), the business public key a
-//! data endpoint's traffic is encrypted to, and — with the `flows-endpoint`
-//! feature — the data endpoint's own crypto (`flows::endpoint`).
+//! JSON, preview, publish, deprecate, delete), a typed Flow JSON model and
+//! builder ([`flow_json`]), the business public key a data endpoint's
+//! traffic is encrypted to, and — with the `flows-endpoint` feature — the
+//! data endpoint's own crypto (`flows::endpoint`).
 //!
 //! Docs: `flows/guides/flowsapi`, `flows/guides/lifecycle`,
+//! `flows/guides/flowjson`, `flows/guides/components`,
 //! `flows/guides/whatsapp-business-encryption`,
 //! `reference/whatsapp-business-phone-number/business-encryption-api`,
 //! `flows/guides/implementingyourflowendpoint`, `flows/guides/media_upload`.
@@ -15,13 +17,12 @@
 //! | Accessor | Scope | Calls |
 //! | --- | --- | --- |
 //! | [`Client::flows`](crate::Client::flows) | WABA | [`Flows::create`], [`Flows::list`], [`Flows::list_stream`] |
-//! | [`Client::flow`](crate::Client::flow) | one Flow | [`Flow::get`], [`Flow::update`], [`Flow::upload_flow_json`], [`Flow::assets`], [`Flow::preview`], [`Flow::publish`], [`Flow::deprecate`], [`Flow::delete`] |
+//! | [`Client::flow`](crate::Client::flow) | one Flow | [`Flow::get`], [`Flow::update`], [`Flow::upload_flow_json`], [`Flow::upload_flow_json_typed`], [`Flow::assets`], [`Flow::preview`], [`Flow::publish`], [`Flow::deprecate`], [`Flow::delete`] |
 //! | [`Client::business_encryption`](crate::Client::business_encryption) | phone number | [`BusinessEncryption::set_public_key`], [`BusinessEncryption::get`] |
 //!
 //! Not covered: sending a Flow (an interactive `flow` message or a template
 //! with a `FLOW` button — see the messages and templates modules), Flow
-//! webhooks (`meta-whatsapp-webhooks`), Flow JSON itself (opaque here; Meta validates
-//! it), and the Flow metrics API (`flows/guides/metrics_api`), which Meta
+//! webhooks (`meta-whatsapp-webhooks`), and the Flow metrics API (`flows/guides/metrics_api`), which Meta
 //! deprecated on 2026-04-30 in favour of the Flow health webhooks.
 //!
 //! # Create, fill and publish a Flow
@@ -49,6 +50,28 @@
 //!     }
 //! }
 //! # Ok(()) }
+//! ```
+//!
+//! The same Flow JSON built with [`flow_json`] (checked locally before
+//! anything is sent):
+//!
+//! ```no_run
+//! # async fn demo(flow: meta_whatsapp_client::flows::Flow) -> meta_whatsapp_client::Result<()> {
+//! use meta_whatsapp_client::flows::flow_json::{Action, Footer, FlowJson, Screen, TextHeading};
+//!
+//! let flow_json = FlowJson::builder("5.0")
+//!     .screen(
+//!         Screen::new("WELCOME_SCREEN")
+//!             .title("Welcome")
+//!             .terminal(true)
+//!             .success(true)
+//!             .empty_data()
+//!             .child(TextHeading::new("Hello World"))
+//!             .child(Footer::new("Complete", Action::complete())),
+//!     )
+//!     .build()?;
+//! let upload = flow.upload_flow_json_typed(&flow_json).await?;
+//! # let _ = upload; Ok(()) }
 //! ```
 //!
 //! # Serve a data endpoint
@@ -89,6 +112,7 @@
 //! ```
 
 mod encryption;
+pub mod flow_json;
 mod management;
 mod types;
 
@@ -99,6 +123,7 @@ pub mod endpoint;
 mod tests;
 
 pub use encryption::{BusinessEncryption, BusinessPublicKey, PublicKeySignatureStatus};
+pub use flow_json::FlowJson;
 pub use management::{Flow, Flows};
 pub use types::{
     CreateFlow, CreatedFlow, FlowAsset, FlowAssetType, FlowCategory, FlowDetails, FlowJsonUpload,

@@ -1,0 +1,26 @@
+{
+  "available_slots": {
+    "type": "array",
+    "items": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      }
+    },
+    "__example__": [
+      {
+        "id": "1",
+        "title": "08:00"
+      },
+      {
+        "id": "2",
+        "title": "09:00"
+      }
+    ]
+  }
+}

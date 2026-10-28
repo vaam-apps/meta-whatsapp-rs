@@ -1,0 +1,15 @@
+{
+  "type": "Footer",
+  "label": "Continue",
+  "on-click-action": {
+    "name": "navigate",
+    "next": {
+      "type": "screen",
+      "name": "NEXT_SCREEN"
+    },
+    "payload": {
+      "name": "${form.first_name}",
+      "lang": "${form.favourite_language}"
+    }
+  }
+}

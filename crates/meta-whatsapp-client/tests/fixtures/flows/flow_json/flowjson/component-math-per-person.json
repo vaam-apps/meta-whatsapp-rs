@@ -1,0 +1,4 @@
+{
+  "type": "TextBody",
+  "text": "`'The amount per person is: ' ${data.total} / ${form.group_size}`"
+}
