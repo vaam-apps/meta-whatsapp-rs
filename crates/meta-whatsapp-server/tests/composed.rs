@@ -215,11 +215,35 @@ impl Env for Vars {
     }
 }
 
-/// Two free local ports.
-fn two_ports() -> (SocketAddr, SocketAddr) {
+/// The ports of this file's tests, held by each for its whole run.
+/// [`two_ports`] frees the two it finds for `serve_until`, and until it
+/// binds them they are free for any bind on port 0: without this lock
+/// the other test's `two_ports`, run at once, could be handed one, and
+/// the test whose service lost the bind would talk to the other's (as
+/// `tests/binary.rs` did on PR #47's CI). Held to the end, it also keeps
+/// a stopped service's ports from being handed out before the test
+/// checks they refuse.
+static PORTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Two free local ports, and [`PORTS`]: keep it to the end of the test.
+async fn two_ports() -> (SocketAddr, SocketAddr, tokio::sync::MutexGuard<'static, ()>) {
+    let held = PORTS.lock().await;
     let a = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let b = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    (a.local_addr().unwrap(), b.local_addr().unwrap())
+    (a.local_addr().unwrap(), b.local_addr().unwrap(), held)
+}
+
+/// The task running `serve_until`.
+type Served = tokio::task::JoinHandle<anyhow::Result<()>>;
+
+/// Fail the test with `served`'s error if it has stopped: what answers on
+/// its ports is then not this test's service (one that could not bind
+/// them, say).
+async fn assert_serving(served: &mut Served) {
+    if served.is_finished() {
+        let ended = served.await;
+        panic!("serve_until stopped before its test was done: {ended:?}");
+    }
 }
 
 /// `method path` over plain HTTP/1.1: the status and the body, or `None`
@@ -255,13 +279,18 @@ async fn http(
     Some((status, body))
 }
 
-/// Wait until `addr` answers `GET /livez`.
-async fn live(addr: SocketAddr) {
+/// Wait until `addr` answers `GET /livez`, from `served`.
+async fn live(addr: SocketAddr, served: &mut Served) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while http(addr, "GET", "/livez", &[], b"").await.map(|(s, _)| s) != Some(200) {
+    loop {
+        assert_serving(served).await;
+        if http(addr, "GET", "/livez", &[], b"").await.map(|(s, _)| s) == Some(200) {
+            break;
+        }
         assert!(tokio::time::Instant::now() < deadline, "never served");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    assert_serving(served).await;
 }
 
 /// Roadmap S4, decisive: a `Backend` defined here, outside the server
@@ -324,13 +353,13 @@ async fn the_api_is_served_over_a_backend_defined_outside_the_server_crate() {
     // Meta's example, dated a second after the binding's.
     let delivery = example_text();
 
-    let (public, internal) = two_ports();
+    let (public, internal, _held) = two_ports().await;
     let config = Config::from_env(&Vars::development(public, internal)).unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
-    let served = tokio::spawn(serve_until(config, backend.clone(), async move {
+    let mut served = tokio::spawn(serve_until(config, backend.clone(), async move {
         let _ = stopped.await;
     }));
-    live(internal).await;
+    live(internal, &mut served).await;
     assert_eq!(backend.migrator.count(), 1, "migrated through the bundle");
 
     // The API reads the bundle's records, and writes them.
@@ -482,15 +511,15 @@ async fn the_api_is_served_over_a_backend_defined_outside_the_server_crate() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_backend_is_not_migrated_when_the_configuration_skips_it() {
     let backend = Arc::new(Integrators::new());
-    let (public, internal) = two_ports();
+    let (public, internal, _held) = two_ports().await;
     let mut vars = Vars::development(public, internal);
     vars.0.insert("WA_SERVER_MIGRATE", "skip".to_owned());
     let config = Config::from_env(&vars).unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
-    let served = tokio::spawn(serve_until(config, backend.clone(), async move {
+    let mut served = tokio::spawn(serve_until(config, backend.clone(), async move {
         let _ = stopped.await;
     }));
-    live(internal).await;
+    live(internal, &mut served).await;
     assert_eq!(backend.migrator.count(), 0, "migrated against the setting");
     stop.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(10), served)
