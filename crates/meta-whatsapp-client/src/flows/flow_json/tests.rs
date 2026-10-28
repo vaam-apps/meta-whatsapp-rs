@@ -303,6 +303,10 @@ fn text_limits_apply_to_static_text_only() {
     with([TextHeading::new("é".repeat(80)).into()])
         .validate()
         .unwrap();
+    // A nested expression (Flow JSON 6.0+) is not static text either.
+    let nested = format!("`'{}' ${{data.name}}`", chars(100));
+    assert!(is_expression(&nested));
+    with([TextHeading::new(nested).into()]).validate().unwrap();
 }
 
 #[test]
@@ -397,6 +401,19 @@ fn selection_limits() {
     refused_at(
         &with([ChipsSelector::new("c", "Pick", options(1)).into()]),
         &format!("{C0}.data-source"),
+    );
+    // Its page gives no limit for an option's title: none is applied.
+    let long_chips = vec![
+        DataSourceItem::new("1", chars(31)),
+        DataSourceItem::new("2", "Two"),
+    ];
+    with([ChipsSelector::new("c", "Pick", long_chips).into()])
+        .validate()
+        .unwrap();
+    let long_title = vec![DataSourceItem::new("1", chars(31))];
+    refused_at(
+        &with([Dropdown::new("d", "Pick", long_title).into()]),
+        &format!("{C0}.data-source[0].title"),
     );
 }
 

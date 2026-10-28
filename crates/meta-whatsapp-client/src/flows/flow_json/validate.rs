@@ -414,12 +414,18 @@ fn range(path: &str, value: Option<u32>, lo: u32, hi: u32) -> Check {
     }
 }
 
+/// The item limits of `CheckboxGroup`, `RadioButtonsGroup` and `Dropdown`
+/// (title 30, description 300, metadata 20). `ChipsSelector`'s page gives
+/// none for its options.
+const ITEM_LIMITS: Option<(usize, usize, usize)> = Some((30, 300, 20));
+
 /// The options of a selection component: `min..=max` of them when static,
-/// each within the item limits (title 30, description 300, metadata 20).
+/// each within `item_limits` (title, description, metadata) when given.
 fn data_source(
     path: &str,
     source: &Dynamic<Vec<DataSourceItem>>,
     (min, max): (usize, usize),
+    item_limits: Option<(usize, usize, usize)>,
     place: Place<'_>,
     ctx: &Ctx<'_>,
 ) -> Check {
@@ -434,9 +440,15 @@ fn data_source(
     }
     for (i, item) in items.iter().enumerate() {
         let p = format!("{path}[{i}]");
-        text(&format!("{p}.title"), &item.title, 30, false)?;
-        opt_text(&format!("{p}.description"), item.description.as_ref(), 300)?;
-        opt_text(&format!("{p}.metadata"), item.metadata.as_ref(), 20)?;
+        if let Some((title, description, metadata)) = item_limits {
+            text(&format!("{p}.title"), &item.title, title, false)?;
+            opt_text(
+                &format!("{p}.description"),
+                item.description.as_ref(),
+                description,
+            )?;
+            opt_text(&format!("{p}.metadata"), item.metadata.as_ref(), metadata)?;
+        }
         opt_action(
             &format!("{p}.on-select-action"),
             item.on_select_action.as_ref(),
@@ -533,7 +545,14 @@ fn component(path: &str, c: &Component, place: Place<'_>, ctx: &Ctx<'_>) -> Chec
         }
         Component::CheckboxGroup(g) => {
             opt_text(&p("label"), g.label.as_ref(), 30)?;
-            data_source(&p("data-source"), &g.data_source, (1, 20), place, ctx)?;
+            data_source(
+                &p("data-source"),
+                &g.data_source,
+                (1, 20),
+                ITEM_LIMITS,
+                place,
+                ctx,
+            )?;
             opt_action(
                 &p("on-select-action"),
                 g.on_select_action.as_ref(),
@@ -555,7 +574,14 @@ fn component(path: &str, c: &Component, place: Place<'_>, ctx: &Ctx<'_>) -> Chec
         }
         Component::RadioButtonsGroup(g) => {
             opt_text(&p("label"), g.label.as_ref(), 30)?;
-            data_source(&p("data-source"), &g.data_source, (1, 20), place, ctx)?;
+            data_source(
+                &p("data-source"),
+                &g.data_source,
+                (1, 20),
+                ITEM_LIMITS,
+                place,
+                ctx,
+            )?;
             opt_action(
                 &p("on-select-action"),
                 g.on_select_action.as_ref(),
@@ -571,7 +597,14 @@ fn component(path: &str, c: &Component, place: Place<'_>, ctx: &Ctx<'_>) -> Chec
                 .as_static()
                 .is_some_and(|items| items.iter().any(|i| i.image.is_some()));
             let max = if with_images { 100 } else { 200 };
-            data_source(&p("data-source"), &d.data_source, (1, max), place, ctx)?;
+            data_source(
+                &p("data-source"),
+                &d.data_source,
+                (1, max),
+                ITEM_LIMITS,
+                place,
+                ctx,
+            )?;
             opt_action(
                 &p("on-select-action"),
                 d.on_select_action.as_ref(),
@@ -583,7 +616,7 @@ fn component(path: &str, c: &Component, place: Place<'_>, ctx: &Ctx<'_>) -> Chec
         Component::ChipsSelector(g) => {
             text(&p("label"), &g.label, 80, false)?;
             opt_text(&p("description"), g.description.as_ref(), 300)?;
-            data_source(&p("data-source"), &g.data_source, (2, 20), place, ctx)?;
+            data_source(&p("data-source"), &g.data_source, (2, 20), None, place, ctx)?;
             opt_action(
                 &p("on-select-action"),
                 g.on_select_action.as_ref(),

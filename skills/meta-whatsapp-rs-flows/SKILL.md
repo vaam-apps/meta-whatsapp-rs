@@ -46,8 +46,11 @@ Also on `Flow`: `get`, `preview(invalidate)`, `update(&UpdateFlow)`,
 
 `client::flows::flow_json` types it: `Component` is one struct per Meta
 component, tagged by `type`; a `Dynamic<T>` holds a value or a
-`${data.…}`/`${form.…}` reference. Unknown components (`Unknown { raw }`)
-and properties (`extra`) survive a parse and a re-serialize unchanged.
+`${data.…}`/`${form.…}` reference. Unknown components, and known ones
+whose properties do not fit their struct (`Unknown { raw }`), and unknown
+properties (`extra`) survive a parse and a re-serialize unchanged: a
+component never fails parsing, the document's skeleton (`version`,
+`screens`, `layout`) can.
 
 ```rust
 let book = CompleteAction::new()
@@ -143,8 +146,8 @@ Answer 200 with `sealer.seal(&response)?` as `text/plain`
 ## What meta-whatsapp-rs does not do
 
 - Local Flow JSON checks do not resolve references against the data
-  model (payload schemas, `__example__` types): Meta's
-  `validation_errors` report those.
+  model (payload schemas, `__example__` types), nor look inside a
+  component kept as `Unknown`: Meta's `validation_errors` report those.
 - The Flows metrics API is not wrapped (deprecated by Meta 2026-04-30).
 - No HTTP server for the endpoint: wire `flow_endpoint` into your
   framework, like the webhook endpoint (`meta-whatsapp-rs-webhook-endpoint`).
