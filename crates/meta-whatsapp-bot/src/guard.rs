@@ -9,8 +9,15 @@
 //!
 //! 2. its [`Scope`](crate::Scope) (private or group only);
 //! 3. owner-only ([`AccessPolicy::is_owner`]);
-//! 4. the per-user cooldown ([`Cooldowns`]), checked last so a refused
+//! 4. its flags: a typed flag it does not declare
+//!    ([`Refusal::UnknownFlag`]), after the owner check so a non-owner is
+//!    never told an owner command's usage;
+//! 5. the per-user cooldown ([`Cooldowns`]), checked last so a refused
 //!    attempt does not start one.
+//!
+//! For a subcommand, the parent's scope and owner-only are checked first,
+//! then the subcommand's own guards; the cooldown is the subcommand's
+//! alone, under a key of its own ([`CooldownKey::command`]).
 //!
 //! A refused command goes to [`Refusals`], which decides what (if anything)
 //! the user is told.
@@ -153,7 +160,10 @@ pub const COOLDOWN_NOTICE_NAMESPACE: &str = "wa.bot.cooldown.notice";
 pub struct CooldownKey<'a> {
     /// The business phone number the command arrived on.
     pub phone_number_id: &'a PhoneNumberId,
-    /// The command's name.
+    /// The command's name; for a subcommand, the parent's name, a space
+    /// and the subcommand's (`order status`). A name never holds
+    /// whitespace, so a subcommand's key never meets a command's, and a
+    /// command's key is the same with or without subcommands.
     pub command: &'a str,
     /// The user's key ([`BotSender::key`]: BSUID first).
     pub user: &'a str,
@@ -308,6 +318,12 @@ pub enum Refusal {
     GroupOnly,
     /// A private-only command in a group.
     PrivateOnly,
+    /// A flag the command does not declare (`Command::flag`) was typed:
+    /// `ctx.args().flags()[index]`, the first such.
+    UnknownFlag {
+        /// Its position in `ctx.args().flags()`.
+        index: usize,
+    },
     /// The command's cooldown is running for this user.
     CoolingDown {
         /// Time left.
@@ -334,12 +350,49 @@ impl<T: Refusals + ?Sized> Refusals for Arc<T> {
     }
 }
 
-/// The default [`Refusals`]: a short English reply for a wrong chat, and
-/// for a running cooldown once per period (`notify`); nothing for banned
-/// users or non-owners (the reply would tell them the bot noticed, or that
-/// an owner command exists).
+/// The default [`Refusals`]: a short English reply for a wrong chat, for
+/// an unknown flag (with the command's usage hint and its flags), and for
+/// a running cooldown once per period (`notify`); nothing for banned users
+/// or non-owners (the reply would tell them the bot noticed, or that an
+/// owner command exists).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ReplyRefusals;
+
+/// The longest flag name an unknown-flag reply repeats.
+const ECHOED_FLAG_MAX_CHARS: usize = 32;
+
+/// `Unknown option --x.`, then the command's usage line and the flags it
+/// takes, when the context knows the command (a context the bot built).
+fn unknown_flag(ctx: &Ctx, index: usize) -> String {
+    let typed = ctx
+        .args()
+        .flags()
+        .get(index)
+        .map_or("", |flag| flag.name.as_str());
+    // Repeated only when short: a reply stays well under the text limit.
+    let mut text = if typed.chars().count() <= ECHOED_FLAG_MAX_CHARS {
+        format!("Unknown option --{typed}.")
+    } else {
+        "Unknown option.".to_owned()
+    };
+    if let Some((path, info)) = ctx.invoked_command() {
+        if let Some(usage) = &info.usage {
+            text.push_str("\nUsage: ");
+            text.push_str(&ctx.catalog.help_prefix);
+            text.push_str(&path);
+            text.push(' ');
+            text.push_str(usage);
+        }
+        if info.flags.is_empty() {
+            text.push_str("\nThis command takes no options.");
+        } else {
+            let flags: Vec<String> = info.flags.iter().map(|f| format!("--{f}")).collect();
+            text.push_str("\nOptions: ");
+            text.push_str(&flags.join(", "));
+        }
+    }
+    text
+}
 
 #[async_trait]
 impl Refusals for ReplyRefusals {
@@ -347,6 +400,7 @@ impl Refusals for ReplyRefusals {
         let text = match refusal {
             Refusal::GroupOnly => "This command only works in a group.".to_owned(),
             Refusal::PrivateOnly => "This command only works in a private chat.".to_owned(),
+            Refusal::UnknownFlag { index } => unknown_flag(ctx, *index),
             Refusal::CoolingDown { notify: false, .. } | Refusal::Banned | Refusal::NotOwner => {
                 return Ok(());
             }
@@ -456,6 +510,27 @@ mod tests {
             hex::encode(Sha256::digest(
                 "15:106540352242922,7:imagine,11:16505551234,"
             ))
+        );
+    }
+
+    /// A subcommand's key is the same format, over its path: a key of its
+    /// own, and its parent's unchanged.
+    #[test]
+    fn a_subcommands_cooldown_key_is_over_its_path() {
+        let pn = PhoneNumberId::new("106540352242922").unwrap();
+        let sub = CooldownKey::new(&pn, "order status", "16505551234").store_key();
+        assert_eq!(sub.namespace(), COOLDOWN_NAMESPACE);
+        assert_eq!(
+            sub.key(),
+            hex::encode(Sha256::digest(
+                "15:106540352242922,12:order status,11:16505551234,"
+            ))
+        );
+        let parent = CooldownKey::new(&pn, "order", "16505551234").store_key();
+        assert_ne!(sub, parent);
+        assert_eq!(
+            parent.key(),
+            hex::encode(Sha256::digest("15:106540352242922,5:order,11:16505551234,"))
         );
     }
 }

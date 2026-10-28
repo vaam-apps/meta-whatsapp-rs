@@ -39,7 +39,7 @@ reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
-| Library | 103 | 22 | 6 | 1 |
+| Library | 104 | 21 | 6 | 1 |
 | Service | 39 | 25 | 67 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
@@ -47,7 +47,7 @@ reached.
   n/a column is a side that does not carry the capability at all: the
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
-- Each of the library's 28 partial or gap rows is cited by a
+- Each of the library's 27 partial or gap rows is cited by a
   [roadmap](roadmap.md) item. Each of the service's 92 names, in its
   status, the roadmap items that bring it; by family (a row can name
   two): M2 8, M3 11, M4 2, M5 70, S 2 (the modular split; S2b, undated
@@ -55,9 +55,9 @@ reached.
 - The largest gaps: the service routes for the modules the design once
   left "on demand" (M5), the inbox, live events and onboarding over HTTP
   (M2, M3), and the rest of the bot framework (section G: its commands,
-  middleware, plugins, access lists and Markdown replies exist, B1, and
-  paced broadcast, B2; subcommands and flags, rich replies beyond text,
-  scheduling and auto-delete do not, B1b, B1c, B3, B4).
+  middleware, plugins, access lists and Markdown replies exist, B1, with
+  subcommands and flags, B1b, and paced broadcast, B2; rich replies
+  beyond text, scheduling and auto-delete do not, B1c, B3, B4).
 
 ## What parity means
 
@@ -290,7 +290,7 @@ The owner's definition (2026-09-26):
 | # | Area | Capability | Zaileys (Web) | Zaileys (Cloud) | Meta Cloud API | Library | Service | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 84 | Bots | Typed message events | Yes | Partial (text, media, location, contacts, reactions, button and list taps) | `webhooks/reference/messages.md` and its pages, one per type | `webhooks::WebhookEvent` (34 variants, `Unknown` and `Unparsed` included); `webhooks::fields::MessageContent`; in a bot, listeners by message type or event kind: `Listen::MessageType`, `Listen::Event` (a kind not in `WebhookEvent::KINDS` fails the build) | every reviewed type on `GET /v1/events` (`server_core::events::TENANT_EVENT_TYPES`, 28 types); the standby, handover and click types in M2d (design D25) | done / partial (M2d) |
-| 85 | Bots | Commands: prefixes, arguments and flags, aliases, subcommands, guards (group, private, admin), cooldowns, generated help, error events | Yes | No (parse by hand) | Meta shows a command menu, but dispatch is ours: `business-phone-numbers/conversational-components`; `reference/whatsapp-business-account/conversational-automation-api.md` | in `meta-whatsapp-bot`: prefixes (`PrefixParser`, `BotBuilder::prefixes`; names case-insensitive by default), aliases (`Command::alias`), arguments split on whitespace with quoted strings kept whole (`Args::parse`), image and video captions (`BotBuilder::commands_from_captions`), reply buttons, list rows and quick-reply buttons by payload (`Command::payload`), usage hints and metadata (`Command::usage`, `Command::metadata`), guards (`Command::private_only`, `Command::group_only`, `Command::owner_only`: Meta's group info lists participants by `wa_id` alone, with no role, so the bot's owners stand in for Zaileys' group admins), per-user cooldowns (`Command::cooldown`, `KvCooldowns` on `KvStore`), a generated help (`BotBuilder::help_command`, `CategoryHelp`), an unknown-command hook (`BotBuilder::unknown_command`), error events (`ErrorHandler`, `BotBuilder::errors`), and Meta's command menu (`Bot::sync_command_menu`, over `client::phone_numbers::PhoneNumber::configure_conversational_automation`). Not yet: subcommands and `--flag` arguments (B1b) | gap (the bot API, M5k) | partial / gap (M5k) |
+| 85 | Bots | Commands: prefixes, arguments and flags, aliases, subcommands, guards (group, private, admin), cooldowns, generated help, error events | Yes | No (parse by hand) | Meta shows a command menu, but dispatch is ours: `business-phone-numbers/conversational-components`; `reference/whatsapp-business-account/conversational-automation-api.md` | in `meta-whatsapp-bot`: prefixes (`PrefixParser`, `BotBuilder::prefixes`; names case-insensitive by default), aliases (`Command::alias`), arguments split on whitespace with quoted strings kept whole (`Args::parse`), image and video captions (`BotBuilder::commands_from_captions`), reply buttons, list rows and quick-reply buttons by payload (`Command::payload`), usage hints and metadata (`Command::usage`, `Command::metadata`), guards (`Command::private_only`, `Command::group_only`, `Command::owner_only`: Meta's group info lists participants by `wa_id` alone, with no role, so the bot's owners stand in for Zaileys' group admins), per-user cooldowns (`Command::cooldown`, `KvCooldowns` on `KvStore`), a generated help (`BotBuilder::help_command`, `CategoryHelp`), an unknown-command hook (`BotBuilder::unknown_command`), error events (`ErrorHandler`, `BotBuilder::errors`), Meta's command menu (`Bot::sync_command_menu`, over `client::phone_numbers::PhoneNumber::configure_conversational_automation`), subcommands one level deep with their own guards, usage, help line and cooldown (`Command::subcommand`, `Invocation::subcommand`; B1b), and flags beside the positional arguments (`Command::flag`, `Args::has_flag`, `Args::flag`, `Args::flags`; `--name` or `--name=value`, `--` ends them, a quoted one is an argument, an undeclared one refuses the command with its usage, `Refusal::UnknownFlag`, unless `Command::pass_unknown_flags`) | gap (the bot API, M5k) | done / gap (M5k) |
 | 86 | Bots | Middleware: ordered, `next()`, short-circuit, wraps the handler | Yes | No | none (ours to build) | `Middleware` in `meta-whatsapp-bot`, run in registration order (`BotBuilder::middleware`, `Registrar::middleware`) with `Next::run`: one that does not call it stops the event, and what follows the call runs after the handler (`Logging` times it); built in: `Logging`, `MarkRead`. Unlike Zaileys', it runs for every event, after the ban and the command match and before the command's guards | gap (M5k) | done / gap (M5k) |
 | 87 | Bots | Plugins: setup and unload hooks; loaded from a folder with hot reload | Yes | No | none | compile-time plugins in `meta-whatsapp-bot`: `Plugin::setup` registers commands, middleware and listeners through a `Registrar`, `Plugin::on_unload` runs at `Bot::unload`, `Plugin::category` names the help section; added with `BotBuilder::plugin`. Loading from a folder and hot reload are not offered, by design (D28): dynamic loading of Rust code is neither idiomatic nor safe, so a plugin is a crate | gap (M5k) | done / gap (M5k) |
 | 88 | Bots | Sender allow and deny lists (owners, banned users) | Yes | Yes | none (ours; row 71 is Meta's block list) | in `meta-whatsapp-bot`: an `AccessPolicy` (the default `AccessList`: owners and bans by BSUID, `AccessList::owner`, `AccessList::ban`, or by phone number, `AccessList::owner_phone`, `AccessList::ban_phone`), set with `BotBuilder::access`; a banned sender's message stops before the command match and the middleware (`Refusal::Banned`), and owners pass `Command::owner_only` | gap (M5k) | done / gap (M5k) |
@@ -388,7 +388,7 @@ item, each naming its crate, what it comes after and its decisive test:
   ground every service milestone below builds on.
 - **The bot framework**, a new library crate `meta-whatsapp-bot`:
   commands, middleware, compile-time plugins and markdown replies (B1,
-  done; rows 17, 85–88), subcommands and flags (B1b; row 85), rich
+  done; rows 17, 85–88), subcommands and flags (B1b, done; row 85), rich
   replies beyond text (B1c; row 17), paced broadcast (B2, done; rows
   89, 92; D29), then durable scheduling (B3; row 90; D29), then retention and
   auto-delete after the `ConversationStore` port change (B4, after L5;

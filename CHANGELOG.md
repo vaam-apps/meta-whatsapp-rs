@@ -217,6 +217,33 @@ stored data, the owner's).
 
 ### Added
 
+- **Subcommands and flags** in `meta-whatsapp-bot` (roadmap B1b,
+  parity row 85, now done in the library). `Command::subcommand` nests
+  a command one level: `/order status 42` runs `status` with `42` as its
+  only argument (`Invocation::subcommand` names it;
+  `Invocation::with_subcommand` builds one), and `/order` alone,
+  `/order 42` or a quoted `/order "status"` run the parent. A
+  subcommand has its own aliases, usage, description, payloads, flags,
+  scope and owner guards and cooldown; the parent's scope and
+  owner-only apply to it too, its cooldown does not. A subcommand's
+  cooldown is kept in `wa.bot.cooldown` under the same digest over its
+  path (`order status`), so no existing key changes. Flags:
+  `Command::flag` declares `--name` (`--name=value` for a value; the
+  value may be quoted, `--name=` is the empty value), read with
+  `Args::has_flag`, `Args::flag` (the last value) and `Args::flags`
+  (every one, in order, as `Flag`); `--` ends the flags, a word quoted
+  from its start (`"--limit=5"`) stays a positional argument, and an em
+  dash reads as `--` (phone keyboards type one for two hyphens). No short
+  `-n` and no space-separated `--limit 5`. A typed flag the command does
+  not declare refuses it (`Refusal::UnknownFlag`, checked after the
+  owner guard and before the cooldown; `ReplyRefusals` answers with the
+  usage hint and the flags it takes) unless `Command::pass_unknown_flags`.
+  `CommandInfo` gains `subcommands`, `flags` and `pass_unknown_flags`;
+  `CategoryHelp` writes a line per visible subcommand under its command.
+  `BotBuilder::build` refuses nested subcommands, a subcommand word
+  taken twice under one command, and a flag declared twice or that
+  cannot be typed. Guide: [docs/guides/bots.md](docs/guides/bots.md)
+  § 1; skill: `meta-whatsapp-rs-bot` (example `order_command`).
 - **Catalog and product reads** (`meta_whatsapp_client::commerce`,
   roadmap L17, parity row 103), through Meta's Catalog API, whose pages
   sit outside the WhatsApp docs (read on 2026-10-27).
@@ -1204,6 +1231,17 @@ stored data, the owner's).
 
 ### Changed
 
+- **Breaking — `--flags` in a bot command's arguments** (`meta-whatsapp-bot`,
+  roadmap B1b; see Added). An argument typed as `--name` or
+  `--name=value`, outside quotes and before a lone `--`, is now a flag:
+  `Args::get`, `Args::as_slice`, `Args::len`, `Args::is_empty` and
+  `Args::iter` count the positional arguments only (`Args::raw` is
+  unchanged), and a command typed with a flag it does not declare
+  (`Command::flag`) is refused instead of run, so `/say --hi` no longer
+  reaches a handler that never declared `hi`. Declare the flags, set
+  `Command::pass_unknown_flags` on a command that takes free text, or
+  have users quote the word or put it after `--`. Commands typed
+  without `--` words run as before, under the same cooldown keys.
 - **Breaking — numeric ids are checked when they are built**
   (`meta_whatsapp_core::ids`, roadmap L20c, decided as OPEN_QUESTIONS
   #20, now closed). `AppId`, `BusinessId`, `WabaId`, `PhoneNumberId`,

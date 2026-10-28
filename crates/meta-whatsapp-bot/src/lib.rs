@@ -1,20 +1,23 @@
 //! A bot framework over WhatsApp Cloud API webhooks: commands with
-//! prefixes, aliases, guards, cooldowns and a generated help, middleware,
-//! compile-time plugins, Markdown replies in WhatsApp formatting, and
-//! paced broadcasts ([`broadcast`], [`pacer`]).
+//! prefixes, aliases, subcommands, `--flags`, guards, cooldowns and a
+//! generated help, middleware, compile-time plugins, Markdown replies in
+//! WhatsApp formatting, and paced broadcasts ([`broadcast`], [`pacer`]).
 //!
 //! Each event goes through these steps, in this order:
 //!
 //! ```text
 //! WebhookHandler ─► DedupGuard ─► Bot (an EventSink<WebhookEvent>)
 //!   1. ban:    a received message from a banned sender stops here; nothing below runs
-//!   2. match:  typed `/name args` (or an image or video caption), or a tapped
+//!   2. match:  typed `/name [sub] args` (or an image or video caption), or a tapped
 //!              button / list row whose id is a payload → ctx.invocation();
 //!              a `/name` no command has → ctx.unknown_command()
 //!   3. middleware, in order (any may stop the event; they see the match)
-//!   4. the command's guards: scope → owner → cooldown → its handler;
+//!   4. the command's guards: scope → owner → flags → cooldown → its handler
+//!      (a subcommand: its parent's scope and owner first);
 //!      else the unknown-command handler, if any; else the listeners
 //! ```
+//!
+//! Subcommands and flags: see [`command`].
 //!
 //! Coming from Zaileys: there, middleware runs for commands only, after
 //! their guards; here it runs for every event (listeners' too) after the
@@ -115,7 +118,7 @@ pub use broadcast::{
     BroadcastProgress, BroadcastReport, FailureVerdict, RecipientReport, ReportSink, SendFailure,
     SendOutcome,
 };
-pub use command::{Args, Command, CommandHandler, CommandInfo, Invocation, Scope, Trigger};
+pub use command::{Args, Command, CommandHandler, CommandInfo, Flag, Invocation, Scope, Trigger};
 pub use ctx::{BotSender, Chat, Ctx};
 pub use errors::{ErrorHandler, LogErrors, PropagateErrors};
 pub use groups::{PacedGroup, PacedGroups};

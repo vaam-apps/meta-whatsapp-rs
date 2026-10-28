@@ -39,6 +39,15 @@ enum Found {
     Unknown(ParsedCommand),
 }
 
+/// A registered command's handler and its subcommands', parallel to its
+/// `CommandInfo` and its `subcommands`.
+struct Handlers {
+    handler: Arc<dyn CommandHandler>,
+    subcommands: Vec<Arc<dyn CommandHandler>>,
+    /// The subcommands' names and aliases, as the parser normalizes them.
+    sub_by_name: HashMap<String, usize>,
+}
+
 /// The ban check and the match (before the middleware), then the guards
 /// and the handler, the unknown-command handler, or the listeners (after
 /// it).
@@ -46,9 +55,10 @@ pub(crate) struct Router {
     parser: Arc<dyn CommandParser>,
     catalog: Arc<Catalog>,
     /// Parallel to `catalog.commands`.
-    handlers: Vec<Arc<dyn CommandHandler>>,
+    handlers: Vec<Handlers>,
     by_name: HashMap<String, usize>,
-    by_payload: HashMap<String, usize>,
+    /// The command, and the subcommand if it is one's, a payload runs.
+    by_payload: HashMap<String, (usize, Option<usize>)>,
     listeners: Vec<(Listen, Arc<dyn CommandHandler>)>,
     unknown: Option<Arc<dyn CommandHandler>>,
     access: Arc<dyn AccessPolicy>,
@@ -99,18 +109,38 @@ impl Router {
         self.catalog.commands[index].name.clone()
     }
 
+    /// The invocation of command `index` with `args`: of its subcommand
+    /// when the first argument, typed outside quotes, names one (with the
+    /// arguments after it), else of the command itself.
+    fn invocation(&self, index: usize, trigger: Trigger, args: Args) -> Invocation {
+        let subs = &self.handlers[index].sub_by_name;
+        if !subs.is_empty()
+            && let Some((word, rest)) = args.split_first()
+            && let Some(&sub) = subs.get(&self.parser.normalize(&word))
+        {
+            let name = self.catalog.commands[index].subcommands[sub].name.clone();
+            return Invocation::new(self.name(index), trigger, rest).with_subcommand(name);
+        }
+        Invocation::new(self.name(index), trigger, args)
+    }
+
     /// Typed text or (unless turned off) an image or video caption the
     /// parser accepts (a registered name, else an unknown one), or a
     /// tapped reply button, list row or template quick-reply button whose
     /// id is a registered payload.
     fn find(&self, ctx: &Ctx) -> Option<Found> {
         let payload = |id: &str| {
-            let index = *self.by_payload.get(id)?;
-            Some(Found::Command(Invocation::new(
+            let (index, sub) = *self.by_payload.get(id)?;
+            let invocation = Invocation::new(
                 self.name(index),
                 Trigger::Payload(id.to_owned()),
                 Args::default(),
-            )))
+            );
+            Some(Found::Command(match sub {
+                Some(sub) => invocation
+                    .with_subcommand(self.catalog.commands[index].subcommands[sub].name.clone()),
+                None => invocation,
+            }))
         };
         let typed = |text: &str, caption: bool| {
             let parsed = self.parser.parse(text)?;
@@ -123,11 +153,7 @@ impl Router {
             } else {
                 Trigger::Text { prefix, name }
             };
-            Some(Found::Command(Invocation::new(
-                self.name(index),
-                trigger,
-                parsed.args,
-            )))
+            Some(Found::Command(self.invocation(index, trigger, parsed.args)))
         };
         match &ctx.message()?.content {
             MessageContent::Text(text) => typed(&text.body, false),
@@ -151,7 +177,19 @@ impl Router {
                 )
                 .into());
             };
-            return self.run(index, ctx).await;
+            let sub = match &invocation.subcommand {
+                None => None,
+                Some(name) => match self.handlers[index].sub_by_name.get(name) {
+                    Some(&sub) => Some(sub),
+                    None => {
+                        return Err(ConfigError::new(
+                            "the context's invocation names no registered subcommand of its command",
+                        )
+                        .into());
+                    }
+                },
+            };
+            return self.run(index, sub, ctx).await;
         }
         if ctx.unknown_command().is_some()
             && let Some(handler) = &self.unknown
@@ -161,19 +199,22 @@ impl Router {
         self.listen(ctx).await
     }
 
-    /// The command's guards, in order, then its handler.
-    async fn run(&self, index: usize, ctx: Ctx) -> Result<()> {
-        let info = &self.catalog.commands[index];
+    /// The command's guards, in order, then its handler; for subcommand
+    /// `sub`, the parent's scope and owner-only first, then the
+    /// subcommand's guards and handler.
+    async fn run(&self, index: usize, sub: Option<usize>, ctx: Ctx) -> Result<()> {
+        let parent = &self.catalog.commands[index];
+        let info = sub.map_or(parent, |sub| &parent.subcommands[sub]);
         let group = ctx.chat().is_some_and(crate::Chat::is_group);
-        let wrong_chat = match info.scope {
+        let wrong_chat = |scope: Scope| match scope {
             Scope::GroupOnly if !group => Some(Refusal::GroupOnly),
             Scope::PrivateOnly if group => Some(Refusal::PrivateOnly),
             _ => None,
         };
-        if let Some(refusal) = wrong_chat {
+        if let Some(refusal) = wrong_chat(parent.scope).or_else(|| wrong_chat(info.scope)) {
             return self.refusals.refused(&ctx, &refusal).await;
         }
-        if info.owner_only {
+        if parent.owner_only || info.owner_only {
             let owner = match ctx.sender() {
                 Some(sender) => self.access.is_owner(sender).await?,
                 None => false,
@@ -181,6 +222,18 @@ impl Router {
             if !owner {
                 return self.refusals.refused(&ctx, &Refusal::NotOwner).await;
             }
+        }
+        if !info.pass_unknown_flags
+            && let Some(index) = ctx
+                .args()
+                .flags()
+                .iter()
+                .position(|flag| !info.flags.contains(&flag.name))
+        {
+            return self
+                .refusals
+                .refused(&ctx, &Refusal::UnknownFlag { index })
+                .await;
         }
         if let Some(period) = info.cooldown {
             let (Some(cooldowns), Some(user), Some(number)) = (
@@ -196,7 +249,13 @@ impl Router {
                 )
                 .into());
             };
-            let key = CooldownKey::new(number, &info.name, user);
+            // A subcommand's own key: `parent sub`, which no command name
+            // can be (names hold no whitespace).
+            let path = match sub {
+                Some(_) => format!("{} {}", parent.name, info.name),
+                None => info.name.clone(),
+            };
+            let key = CooldownKey::new(number, &path, user);
             if let CooldownOutcome::CoolingDown {
                 retry_after,
                 notify,
@@ -214,7 +273,9 @@ impl Router {
                     .await;
             }
         }
-        self.handlers[index].call(ctx).await
+        let handlers = &self.handlers[index];
+        let handler = sub.map_or(&handlers.handler, |sub| &handlers.subcommands[sub]);
+        handler.call(ctx).await
     }
 
     /// Every listener for this event, in registration order; they all run,
@@ -305,10 +366,12 @@ impl Bot {
     ///
     /// 1. a received message from a banned sender stops here (told to the
     ///    [`Refusals`] as [`Refusal::Banned`]);
-    /// 2. the command match: `ctx.invocation()`, or
-    ///    `ctx.unknown_command()` for a name no command has;
+    /// 2. the command match: `ctx.invocation()` (with its subcommand, if
+    ///    one is named), or `ctx.unknown_command()` for a name no command
+    ///    has;
     /// 3. the middleware chain (any may stop the event);
-    /// 4. the command's guards (scope, owner, cooldown) and its handler,
+    /// 4. the command's guards (scope, owner, flags, cooldown; for a
+    ///    subcommand, its parent's scope and owner first) and its handler,
     ///    else the unknown-command handler, else the listeners.
     ///
     /// An error goes to the bot's [`ErrorHandler`] (by default logged and
@@ -713,8 +776,11 @@ impl BotBuilder {
     }
 
     /// Run the plugins' `setup` and check the registrations: a name, alias
-    /// or payload registered twice, an empty or blank one, a zero cooldown,
-    /// a cooldown without a store, a listener for an event kind that is
+    /// or payload registered twice (a subcommand's name or alias twice
+    /// under one command), an empty or blank one, a zero cooldown, a
+    /// cooldown without a store, a subcommand with subcommands, a flag
+    /// declared twice or one that cannot be typed (blank, with dashes,
+    /// whitespace, `=` or quotes), a listener for an event kind that is
     /// not in `WebhookEvent::KINDS` or for a blank message type, two
     /// plugins of one name, or no outbound is a `ConfigError`; a failed
     /// `setup` is its error in the step `"plugin_setup"`.
@@ -861,6 +927,107 @@ fn command_word(
     Ok(normalized)
 }
 
+/// A command's name then its aliases, in the parser's form, each checked
+/// ([`command_word`]); `path` names it in errors. Repeats are kept: the
+/// caller refuses a word taken twice.
+fn command_words(parser: &dyn CommandParser, command: &Command, path: &str) -> Result<Vec<String>> {
+    let mut words = vec![command_word(parser, &command.name, "the name", path)?];
+    for alias in &command.aliases {
+        words.push(command_word(parser, alias, "a name or alias", path)?);
+    }
+    Ok(words)
+}
+
+/// A cooldown that cannot work, or a flag that can never be typed: refused
+/// at build.
+fn check_guards(command: &Command, path: &str, has_store: bool) -> Result<()> {
+    if let Some(period) = command.cooldown {
+        if period.is_zero() {
+            return Err(ConfigError::new(format!("command `{path}`: a zero cooldown")).into());
+        }
+        if !has_store {
+            return Err(ConfigError::new(format!(
+                "command `{path}` has a cooldown but the bot has no cooldown store \
+                 (`BotBuilder::cooldowns`)"
+            ))
+            .into());
+        }
+    }
+    for (i, flag) in command.flags.iter().enumerate() {
+        let typeable = !flag.is_empty()
+            && !flag.starts_with(['-', '\u{2014}'])
+            && !flag
+                .chars()
+                .any(|c| c.is_whitespace() || matches!(c, '=' | '"' | '\u{201C}' | '\u{201D}'));
+        if !typeable {
+            return Err(ConfigError::new(format!(
+                "command `{path}`: the flag `{flag}` cannot be typed (write it without the \
+                 dashes, with no whitespace, `=` or quotes)"
+            ))
+            .into());
+        }
+        if command.flags[..i].contains(flag) {
+            return Err(ConfigError::new(format!(
+                "command `{path}`: the flag `{flag}` is declared twice"
+            ))
+            .into());
+        }
+    }
+    Ok(())
+}
+
+/// Register `payload` as running `target`; refused when blank or taken.
+fn take_payload(
+    by_payload: &mut HashMap<String, (usize, Option<usize>)>,
+    payload: &str,
+    target: (usize, Option<usize>),
+    path: &str,
+) -> Result<()> {
+    if payload.trim().is_empty() {
+        return Err(ConfigError::new(format!("command `{path}`: an empty payload")).into());
+    }
+    if by_payload.insert(payload.to_owned(), target).is_some() {
+        return Err(ConfigError::new(format!("the payload `{payload}` is taken twice")).into());
+    }
+    Ok(())
+}
+
+/// Where a command was registered: its help section and plugin.
+struct Place<'a> {
+    category: &'a str,
+    plugin: Option<&'a str>,
+    plugin_hidden: bool,
+}
+
+/// What the bot keeps about `command`, named `words[0]` with the aliases
+/// after it.
+fn command_info(
+    command: Command,
+    mut words: Vec<String>,
+    place: &Place<'_>,
+    subcommands: Vec<CommandInfo>,
+) -> CommandInfo {
+    let aliases = words.split_off(1);
+    CommandInfo {
+        name: words.remove(0),
+        aliases,
+        description: command.description,
+        usage: command.usage,
+        category: place.category.to_owned(),
+        plugin: place.plugin.map(str::to_owned),
+        hidden: command.hidden || place.plugin_hidden,
+        in_menu: command.in_menu,
+        scope: command.scope,
+        owner_only: command.owner_only,
+        cooldown: command.cooldown,
+        payloads: command.payloads,
+        metadata: command.metadata,
+        flags: command.flags,
+        pass_unknown_flags: command.pass_unknown_flags,
+        subcommands,
+    }
+}
+
 fn router(
     commands: Vec<Registered>,
     listeners: Vec<(Listen, Arc<dyn CommandHandler>)>,
@@ -875,59 +1042,60 @@ fn router(
     let mut by_name = HashMap::new();
     let mut by_payload = HashMap::new();
     for registered in commands {
-        let command = registered.command;
+        let mut command = registered.command;
         let index = infos.len();
-        let name = command_word(parser.as_ref(), &command.name, "the name", &command.name)?;
-        let mut aliases = Vec::new();
-        for word in std::iter::once(&command.name).chain(&command.aliases) {
-            let word = command_word(parser.as_ref(), word, "a name or alias", &command.name)?;
+        let words = command_words(parser.as_ref(), &command, &command.name)?;
+        let name = words[0].clone();
+        for word in &words {
             if by_name.insert(word.clone(), index).is_some() {
                 return Err(
                     ConfigError::new(format!("the command word `{word}` is taken twice")).into(),
                 );
             }
-            if word != name {
-                aliases.push(word);
-            }
         }
-        for payload in &command.payloads {
-            if payload.trim().is_empty() {
-                return Err(ConfigError::new(format!("command `{name}`: an empty payload")).into());
-            }
-            if by_payload.insert(payload.clone(), index).is_some() {
-                return Err(
-                    ConfigError::new(format!("the payload `{payload}` is taken twice")).into(),
-                );
-            }
-        }
-        if let Some(period) = command.cooldown {
-            if period.is_zero() {
-                return Err(ConfigError::new(format!("command `{name}`: a zero cooldown")).into());
-            }
-            if cooldowns.is_none() {
+        let place = Place {
+            category: &registered.category,
+            plugin: registered.plugin.as_deref(),
+            plugin_hidden: registered.plugin_hidden,
+        };
+        let mut subcommands = Vec::new();
+        let mut sub_handlers = Vec::new();
+        let mut sub_by_name = HashMap::new();
+        for sub in std::mem::take(&mut command.subcommands) {
+            let path = format!("{name} {}", sub.name);
+            if !sub.subcommands.is_empty() {
                 return Err(ConfigError::new(format!(
-                    "command `{name}` has a cooldown but the bot has no cooldown store \
-                     (`BotBuilder::cooldowns`)"
+                    "subcommand `{path}` has subcommands: they nest one level"
                 ))
                 .into());
             }
+            let sub_index = subcommands.len();
+            let sub_words = command_words(parser.as_ref(), &sub, &path)?;
+            for word in &sub_words {
+                if sub_by_name.insert(word.clone(), sub_index).is_some() {
+                    return Err(ConfigError::new(format!(
+                        "the subcommand word `{word}` of `{name}` is taken twice"
+                    ))
+                    .into());
+                }
+            }
+            check_guards(&sub, &path, cooldowns.is_some())?;
+            for payload in &sub.payloads {
+                take_payload(&mut by_payload, payload, (index, Some(sub_index)), &path)?;
+            }
+            sub_handlers.push(Arc::clone(&sub.handler));
+            subcommands.push(command_info(sub, sub_words, &place, Vec::new()));
         }
-        infos.push(CommandInfo {
-            name,
-            aliases,
-            description: command.description,
-            usage: command.usage,
-            category: registered.category,
-            plugin: registered.plugin,
-            hidden: command.hidden || registered.plugin_hidden,
-            in_menu: command.in_menu,
-            scope: command.scope,
-            owner_only: command.owner_only,
-            cooldown: command.cooldown,
-            payloads: command.payloads,
-            metadata: command.metadata,
+        check_guards(&command, &name, cooldowns.is_some())?;
+        for payload in &command.payloads {
+            take_payload(&mut by_payload, payload, (index, None), &name)?;
+        }
+        handlers.push(Handlers {
+            handler: Arc::clone(&command.handler),
+            subcommands: sub_handlers,
+            sub_by_name,
         });
-        handlers.push(command.handler);
+        infos.push(command_info(command, words, &place, subcommands));
     }
     let catalog = Arc::new(Catalog {
         commands: infos,
